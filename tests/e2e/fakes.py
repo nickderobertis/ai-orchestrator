@@ -36,7 +36,7 @@ def make_writing_dispatch(
     """
 
     def dispatch_fn(persona: str, task: str, *, project_dir: str, **_: object) -> Report:
-        if filename is not None and completed:
+        if filename is not None:
             (Path(project_dir) / filename).write_text(f"{content} by {persona}\n", encoding="utf-8")
         return Report(
             persona=persona,

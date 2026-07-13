@@ -169,7 +169,8 @@ This repo runs on agents, so the suite is the only QA loop.
   onejudge dispatch (completes / hits the turn cap / persona-merged / a parallel
   DAG that skips a failed node's dependents), and the **repo lifecycle** against a
   real bare git origin — local direct-merge and GitHub PR+auto-merge, plus
-  gate-failure, not-completed, no-changes, checks-failed, and a multi-PR DAG. Only
+  gate-failure, not-completed (including recovery of partial work committed on
+  its unmerged branch), no-changes, checks-failed, and a multi-PR DAG. Only
   the paid harness and GitHub's PR/CI decisioning are faked; git and the merge are
   real (`docs/repo-lifecycle.md`).
 - **unit** (`tests/`) covers the pure logic: base⊕persona merge, plan topological

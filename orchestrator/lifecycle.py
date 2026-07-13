@@ -136,6 +136,14 @@ def _step_commit_message(step: Step) -> str:
     )
 
 
+def _incomplete_commit_message(step: Step) -> str:
+    return (
+        f"wip: {_default_title(step.persona, step.task)} (incomplete step)\n\n"
+        f"Partial work from step {step.id} (persona: {step.persona}), preserved by "
+        "ai-orchestrator after the dispatch did not complete."
+    )
+
+
 def _workstream_branch_name(steps: list[Step]) -> str:
     lead = steps[0]
     key = "\x00".join(f"{s.persona}:{s.task}" for s in steps)
@@ -197,6 +205,15 @@ def _run_steps(
         )
         reports[sid] = report
         if not report.completed:
+            if gitops.is_dirty(worktree):
+                gitops.add_all(worktree)
+                gitops.commit(worktree, _incomplete_commit_message(step))
+                return NodeRun(
+                    "failed",
+                    f"step {sid!r} hit the turn cap; partial work was committed to branch "
+                    f"{branch!r}",
+                    report,
+                )
             return NodeRun("failed", f"step {sid!r} hit the turn cap", report)
         if gitops.is_dirty(worktree):
             gitops.add_all(worktree)
@@ -218,7 +235,7 @@ def _run_steps(
     detail = ""
     if not all_done:
         bad = next(r for r in results if r.status != "done")
-        detail = f"step {bad.id!r} {bad.status}"
+        detail = runs[bad.id].error or f"step {bad.id!r} {bad.status}"
     return all_done, results, detail
 
 

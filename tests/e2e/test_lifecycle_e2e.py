@@ -17,7 +17,7 @@ from fakes import FakeGitHub, make_writing_dispatch
 from orchestrator.dispatch import Report
 from orchestrator.lifecycle import RepoPlan, RepoPlanNode, Step, run_repo_plan, run_repo_task
 from orchestrator.merge import GitHubMergeStrategy
-from orchestrator.workspace import Workspace
+from orchestrator.workspace import Workspace, normalize_repo
 
 
 def _per_step_dispatch(fail_step: str | None = None):
@@ -123,16 +123,30 @@ def test_skip_verify_bypasses_the_gate(tmp_path, bare_origin) -> None:
 
 def test_agent_not_completed_stops_early(tmp_path, bare_origin) -> None:
     origin = bare_origin()
+    ws = Workspace(tmp_path / "ws")
     result = run_repo_task(
         str(origin),
         "Task the agent will not finish.",
         "backend-engineer",
-        workspace=Workspace(tmp_path / "ws"),
-        dispatch_fn=make_writing_dispatch(completed=False),
+        workspace=ws,
+        dispatch_fn=make_writing_dispatch(filename="partial.txt", completed=False),
         verify_cmd=["true"],
     )
     assert result.outcome == "not-completed"
     assert not result.ok
+    assert f"committed to branch '{result.branch}'" in result.detail
+
+    clone = ws.clone_dir(normalize_repo(str(origin)))
+    assert _has_file(clone, result.branch, "partial.txt")
+    subject = subprocess.run(
+        ["git", "-C", str(clone), "log", "-1", "--format=%s", result.branch],
+        check=True,
+        text=True,
+        capture_output=True,
+    ).stdout.strip()
+    assert subject.startswith("wip:") and "incomplete step" in subject
+    assert not _has_file(origin, "main", "partial.txt")
+    assert not _has_file(origin, result.branch, "partial.txt")  # incomplete work is not pushed
 
 
 def test_no_changes_produces_no_pr(tmp_path, bare_origin) -> None:
