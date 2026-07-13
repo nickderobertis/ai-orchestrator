@@ -4,8 +4,15 @@ from __future__ import annotations
 
 import pytest
 
-from orchestrator import BASE_CONFIG
-from orchestrator.dispatch import DispatchError, Report, _build_report, _parse_report, run_onejudge
+from orchestrator import BASE_CONFIG, REPO_ROOT
+from orchestrator.dispatch import (
+    DispatchError,
+    Report,
+    _agent_run_context,
+    _build_report,
+    _parse_report,
+    run_onejudge,
+)
 from orchestrator.dispatch import main as dispatch_main
 from orchestrator.plan import PlanNode, PlanResult, TaskResult, _render
 from orchestrator.plan import main as plan_main
@@ -94,6 +101,36 @@ def test_plan_node_defaults() -> None:
     node = PlanNode("a", "planner", "do it")
     assert node.deps == []
     assert node.session is None
+
+
+def test_agent_run_context_defaults() -> None:
+    cfg: dict = {"provider": {"kind": "oneharness"}}
+    run_cwd, env = _agent_run_context(cfg, cwd="/repo", project_dir=None, oneharness_mode=None)
+    assert run_cwd == "/repo"
+    assert env == {}
+
+
+def test_agent_run_context_forwards_mode() -> None:
+    cfg: dict = {"provider": {}}
+    _, env = _agent_run_context(cfg, cwd="/repo", project_dir=None, oneharness_mode="bypass")
+    assert env["ONEHARNESS_MODE"] == "bypass"
+
+
+def test_agent_run_context_project_dir_absolutizes_judge_config() -> None:
+    cfg: dict = {"provider": {"kind": "oneharness", "judge_config": "oneharness.judge.toml"}}
+    run_cwd, env = _agent_run_context(
+        cfg, cwd="/repo", project_dir="/work/target", oneharness_mode="bypass"
+    )
+    assert run_cwd == "/work/target"
+    assert env["ONEHARNESS_CONFIG"] == str(REPO_ROOT / "oneharness.toml")
+    assert env["ONEHARNESS_MODE"] == "bypass"
+    assert cfg["provider"]["judge_config"] == str((REPO_ROOT / "oneharness.judge.toml").resolve())
+
+
+def test_agent_run_context_keeps_absolute_judge_config() -> None:
+    cfg: dict = {"provider": {"judge_config": "/abs/oneharness.judge.toml"}}
+    _agent_run_context(cfg, cwd="/repo", project_dir="/work", oneharness_mode=None)
+    assert cfg["provider"]["judge_config"] == "/abs/oneharness.judge.toml"
 
 
 def test_run_onejudge_missing_binary_raises() -> None:

@@ -225,6 +225,7 @@ def make_dispatch_runner(
     project_dir: str | None,
     onejudge_bin: str,
     provider: str | None,
+    oneharness_mode: str | None,
     timeout: float | None,
 ) -> Callable[[PlanNode], Report]:
     """Build the production runner that dispatches each node through onejudge."""
@@ -242,6 +243,7 @@ def make_dispatch_runner(
             cwd=cwd,
             onejudge_bin=onejudge_bin,
             provider=provider,
+            oneharness_mode=oneharness_mode,
             timeout=timeout,
         )
 
@@ -281,6 +283,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--cwd", default=None, help="working dir for onejudge (default: repo root)")
     parser.add_argument("--onejudge-bin", default="onejudge")
     parser.add_argument("--provider", default=None, choices=["oneharness", "command", "split"])
+    parser.add_argument(
+        "--oneharness-mode",
+        default=None,
+        choices=["read-only", "plan", "default", "edit", "auto", "bypass"],
+        help="approval/sandbox mode for the harness (via ONEHARNESS_MODE); "
+        "use 'bypass' where codex's OS sandbox can't run",
+    )
     parser.add_argument("--timeout", type=float, default=None)
     parser.add_argument("--format", choices=["human", "json"], default="human")
     parser.add_argument("-o", "--output", type=Path, default=None)
@@ -299,6 +308,7 @@ def main(argv: list[str] | None = None) -> int:
         project_dir=args.project_dir,
         onejudge_bin=args.onejudge_bin,
         provider=args.provider,
+        oneharness_mode=args.oneharness_mode,
         timeout=args.timeout,
     )
     # run_plan turns a per-node dispatch failure into that node's `failed` status

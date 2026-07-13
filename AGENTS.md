@@ -71,7 +71,13 @@ oneharness **0.3.20+**, installed as the `oneharness-cli` PyPI wheel by
 `scripts/session-setup.sh`). The committed configs are that output with two
 customizations — a cheaper judge model and the `IS_SANDBOX` env — and
 `config/onejudge.base.yaml` supersedes init's starter `onejudge.yaml`. Regenerate
-with `onejudge init --force`. See `docs/onejudge-integration.md`.
+with `onejudge init --force`.
+
+**Live dispatch** picks a harness via `oneharness.toml`'s fallback (codex primary).
+On a host without unprivileged user namespaces, codex's sandbox can't run, so
+dispatch with **`--oneharness-mode bypass`** and rely on the **allowlister**
+`repo-write` gate wired as codex's hook (`scripts/session-setup.sh`). Full
+rationale and the claude-code caveat: `docs/onejudge-integration.md`.
 
 ## Command surface
 

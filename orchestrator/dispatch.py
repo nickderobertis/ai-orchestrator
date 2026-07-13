@@ -133,6 +133,35 @@ def run_onejudge(
     return _build_report(persona, proc.returncode, proc.stdout, proc.stderr)
 
 
+def _agent_run_context(
+    config: dict[str, Any],
+    *,
+    cwd: str | Path,
+    project_dir: str | None,
+    oneharness_mode: str | None,
+) -> tuple[str | Path, dict[str, str]]:
+    """Compute the (cwd, env) for the onejudge run, mutating `config` as needed.
+
+    onejudge runs the agent in its OWN cwd, so when `project_dir` is set the agent
+    is put there and the repo's oneharness configs are made resolvable from that
+    cwd: the agent side via `ONEHARNESS_CONFIG`, the judge side by absolutizing a
+    relative `provider.judge_config`. `oneharness_mode` is forwarded as
+    `ONEHARNESS_MODE` (e.g. "bypass" where codex's OS sandbox can't initialize).
+    """
+    run_cwd: str | Path = cwd
+    env: dict[str, str] = {}
+    if oneharness_mode is not None:
+        env["ONEHARNESS_MODE"] = oneharness_mode
+    if project_dir is not None:
+        run_cwd = project_dir
+        env["ONEHARNESS_CONFIG"] = str(REPO_ROOT / "oneharness.toml")
+        prov = config.get("provider", {})
+        judge_config = prov.get("judge_config")
+        if isinstance(judge_config, str) and not Path(judge_config).is_absolute():
+            prov["judge_config"] = str((REPO_ROOT / judge_config).resolve())
+    return run_cwd, env
+
+
 def dispatch(
     persona: str,
     task: str,
@@ -146,9 +175,17 @@ def dispatch(
     cwd: str | Path = REPO_ROOT,
     onejudge_bin: str = "onejudge",
     provider: str | None = None,
+    oneharness_mode: str | None = None,
     timeout: float | None = None,
 ) -> Report:
-    """Merge base ⊕ persona and drive the subtask to completion via onejudge."""
+    """Merge base ⊕ persona and drive the subtask to completion via onejudge.
+
+    `oneharness_mode` (e.g. "bypass") is forwarded to oneharness via
+    `ONEHARNESS_MODE` — needed to let codex write where its OS sandbox can't
+    initialize (see docs/onejudge-integration.md). When `project_dir` is set the
+    agent runs there (onejudge runs the agent in its own cwd), and the repo's
+    oneharness configs are made resolvable from that cwd.
+    """
     base = load_yaml(base_path)
     persona_path = Path(persona_dir) / f"{persona}.yaml"
     if not persona_path.is_file():
@@ -165,13 +202,18 @@ def dispatch(
         max_turns=max_turns,
         done_when=done_when,
     )
+
+    run_cwd, env = _agent_run_context(
+        config, cwd=cwd, project_dir=project_dir, oneharness_mode=oneharness_mode
+    )
     return run_onejudge(
         config,
         task,
         persona=persona,
-        cwd=cwd,
+        cwd=run_cwd,
         onejudge_bin=onejudge_bin,
         provider=provider,
+        env=env or None,
         timeout=timeout,
     )
 
@@ -198,6 +240,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--cwd", default=None, help="working dir for onejudge (default: repo root)")
     parser.add_argument("--onejudge-bin", default="onejudge")
     parser.add_argument("--provider", default=None, choices=["oneharness", "command", "split"])
+    parser.add_argument(
+        "--oneharness-mode",
+        default=None,
+        choices=["read-only", "plan", "default", "edit", "auto", "bypass"],
+        help="approval/sandbox mode for the harness (via ONEHARNESS_MODE); "
+        "use 'bypass' where codex's OS sandbox can't run",
+    )
     parser.add_argument("--timeout", type=float, default=None)
     parser.add_argument("--format", choices=["human", "json"], default="human")
     parser.add_argument("-o", "--output", type=Path, default=None)
@@ -216,6 +265,7 @@ def main(argv: list[str] | None = None) -> int:
             cwd=args.cwd or REPO_ROOT,
             onejudge_bin=args.onejudge_bin,
             provider=args.provider,
+            oneharness_mode=args.oneharness_mode,
             timeout=args.timeout,
         )
     except (DispatchError, ConfigError) as exc:

@@ -86,6 +86,20 @@ ensure_oneharness() {
   fi
 }
 
+ensure_codex_gate() {
+  # allowlister gates codex's tool calls via its PreToolUse hook, so codex can run
+  # in `--oneharness-mode bypass` (needed where its OS sandbox can't initialize —
+  # e.g. a host that disallows unprivileged user namespaces) without losing a
+  # guardrail. Wire the repo-write profile when both codex and allowlister exist.
+  command -v codex >/dev/null 2>&1 || return 0
+  if command -v allowlister >/dev/null 2>&1; then
+    allowlister init --harness codex --profile repo-write -y --no-history >&2 2>&1 \
+      || log "allowlister codex-hook wiring failed (continuing)"
+  else
+    log "allowlister not found — codex bypass mode would be ungated (install: https://github.com/nickderobertis/allowlister)"
+  fi
+}
+
 persist_session_env() {
   [ -n "${CLAUDE_ENV_FILE:-}" ] || return 0
   case ":${PATH}:" in
@@ -97,6 +111,7 @@ persist_session_env() {
 install_onejudge
 ensure_oneharness
 ensure_codex
+ensure_codex_gate
 persist_session_env
 
 # Install the llmlint LLM-judge tier (llmlint + its bundled oneharness).

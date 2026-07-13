@@ -79,23 +79,26 @@ live path does, and each harness has an **environment requirement** for its tool
 to actually execute:
 
 - **codex** runs as its own process and executes tools directly, so it is the
-  preferred nested harness. But it sandboxes via **bubblewrap**, which needs
-  **unprivileged user namespaces**. Where the host disallows them (e.g. Ubuntu's
-  AppArmor `restrict_unprivileged_userns`), codex can't create its sandbox and
-  falls back to read-only — file/shell writes are blocked. The loop still runs
-  (agent turns, supervisor, judge, report all work — verified live), only the
-  agent's writes fail. Fixes: run on a host that allows unprivileged userns, or
-  set codex to a no-OS-sandbox mode (`~/.codex/config.toml sandbox_mode =
-  "danger-full-access"`) — a deliberate safety reduction, so opt in knowingly.
+  preferred nested harness (the fallback primary). It sandboxes via **bubblewrap**,
+  which needs **unprivileged user namespaces**; where the host disallows them (e.g.
+  Ubuntu's AppArmor `restrict_unprivileged_userns`), codex can't create its sandbox
+  and falls back to read-only. **The fix is `--oneharness-mode bypass`** (codex's
+  `--dangerously-bypass-approvals-and-sandbox`): no OS sandbox, so writes work
+  regardless of the kernel. To keep a guardrail in place of the sandbox, wire
+  **allowlister** as codex's PreToolUse hook with the `repo-write` profile
+  (`scripts/session-setup.sh` does this): it auto-allows repo edits and the
+  project's build/test, and holds dangerous commands (`rm -rf`, force-push,
+  publish) for approval. Verified live end-to-end: a dispatched agent created and
+  verified a file in its `--project-dir`, gated by allowlister.
 - **claude-code** works standalone, but **inside a bridged/managed Claude Code
   session its nested tool calls are deferred to the outer controller**
   (`stop_reason: tool_deferred`) and never execute — so an orchestrator running
   *inside* such a session cannot dispatch tool-using claude-code agents. Run the
-  orchestrator from a standalone shell (or CI) for claude-code dispatch to work.
+  orchestrator from a standalone shell (or CI), or use codex per above.
 
-Net: the orchestration setup is harness-agnostic and correct; whether live
-tool-using work completes depends on running in an environment that satisfies one
-harness's requirement above.
+Net: the orchestration setup is harness-agnostic and correct. On a
+no-unprivileged-userns host, dispatch codex with
+`--oneharness-mode bypass` and the allowlister gate; run-plan takes the same flag.
 
 ## Testing against onejudge without a paid model
 
