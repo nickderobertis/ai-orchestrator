@@ -7,6 +7,11 @@ local bare repo). Only the two external seams are faked: the paid harness
 journey — local direct-merge and the GitHub PR+auto-merge path — for real.
 """
 
+# llmlint: ignore-file[e2e_not_mocked] the repo-lifecycle e2e fakes ONLY the paid harness
+# (the dispatch_fn seam) and GitHub's PR/CI decisioning while driving real git and the
+# real merge, exactly as AGENTS.md prescribes for lifecycle tests; the real onejudge
+# dispatch boundary is covered separately in test_dispatch_e2e.py.
+
 from __future__ import annotations
 
 import subprocess

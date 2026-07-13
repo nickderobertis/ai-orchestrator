@@ -10,6 +10,14 @@ PR/CI decisioning* are faked, each at its own seam:
   the merge is never mocked, only GitHub's PR-object and check *decisioning* is.
 """
 
+# llmlint: ignore-file[e2e_not_mocked, protocol_based_seams] these are the two
+# deliberately-faked seams for the repo-lifecycle e2e (see the module docstring and
+# AGENTS.md "Tests are context engineering"): only the paid harness (the dispatch_fn
+# callable) and GitHub's PR/CI decisioning are faked — git and the merge stay real, and
+# the real onejudge dispatch boundary is exercised in test_dispatch_e2e.py. dispatch_fn
+# is an intentional injected callable seam (typed as DispatchFn in lifecycle), not an
+# ad-hoc dependency.
+
 from __future__ import annotations
 
 import subprocess

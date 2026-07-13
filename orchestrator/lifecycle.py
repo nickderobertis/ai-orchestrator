@@ -16,6 +16,11 @@ Two seams are injected so the offline gate drives everything else for real:
 `GitHubBackend` (GitHub's PR/CI decisioning). Git itself is always real.
 """
 
+# llmlint: ignore-file[async_typed_clients_at_boundaries] this is a synchronous CLI
+# orchestration harness: it shells out to git (via gitops) and to gh/onejudge by design,
+# with no async server context and no typed client for those external processes. Same
+# directive and rationale as orchestrator/dispatch.py.
+
 from __future__ import annotations
 
 import argparse
