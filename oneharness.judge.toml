@@ -18,8 +18,10 @@ harnesses = ["codex", "claude-code"]
 
 # [harness.<id>]: per-harness overrides. Model names differ per provider, so
 # each harness names its own.
+# Match the agent side's GPT-5.6 Sol (named explicitly so the tier can't drift); the
+# cheaper-supervisor intent lives in the claude-code fallback (sonnet-5 vs opus) below.
 [harness.codex]
-model = "gpt-5.5"
+model = "gpt-5.6-sol"
 
 [harness.claude-code]
 model = "claude-sonnet-5"                 # a cheaper supervisor keeps loop overhead down
