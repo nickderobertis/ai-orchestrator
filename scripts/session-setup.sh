@@ -19,7 +19,7 @@
 #
 # `set -e` is omitted on purpose: a flaky install must never abort session
 # startup. The script owns its exit codes and always exits 0.
-# llmlint: ignore-file[robust_shell, tool_output_is_signal] deliberate for a session-startup installer: `set -e` is omitted so a flaky install can't abort the hook (the script owns its exit codes and always exits 0), and progress is logged to stderr while failures log-and-continue rather than block startup.
+# llmlint: ignore-file[robust_shell, tool_output_is_signal, boundary_inputs_validated] deliberate for a session-startup installer: `set -e` is omitted so a flaky install can't abort the hook (the script owns its exit codes and always exits 0), and progress is logged to stderr while failures log-and-continue rather than block startup. CLAUDE_ENV_FILE is a path Claude Code itself provides for the session (a trusted platform input, not external/untrusted data); persist_session_env reads and appends to it exactly as the harness intends, so there is no untrusted boundary to validate.
 set -uo pipefail
 
 readonly BIN_DIR="$HOME/.local/bin"
