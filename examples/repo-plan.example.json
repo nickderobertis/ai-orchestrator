@@ -1,0 +1,52 @@
+{
+  "concurrency": 4,
+  "tasks": [
+    {
+      "id": "api",
+      "repo": "nickderobertis/some-service",
+      "persona": "backend-engineer",
+      "task": "Add a POST /health endpoint that returns build metadata, with tests that drive real requests. Keep the change scoped to the endpoint.",
+      "title": "Add /health endpoint"
+    },
+    {
+      "id": "docs",
+      "repo": "nickderobertis/some-docs",
+      "persona": "docs-writer",
+      "task": "Document the new /health endpoint (request/response, examples). Verify every example against the API.",
+      "title": "Document /health"
+    },
+    {
+      "id": "client",
+      "repo": "nickderobertis/some-client",
+      "persona": "backend-engineer",
+      "task": "Add a typed health() method to the client that calls GET /health, with a test against a real local server.",
+      "deps": ["api"],
+      "title": "Add health() to the client"
+    },
+    {
+      "id": "dashboard",
+      "repo": "nickderobertis/some-service",
+      "deps": ["api"],
+      "title": "Add an admin dashboard (implement → test → review, one PR)",
+      "steps": [
+        {
+          "id": "impl",
+          "persona": "backend-engineer",
+          "task": "Implement a read-only /admin dashboard page that surfaces the health metadata."
+        },
+        {
+          "id": "test",
+          "persona": "test-engineer",
+          "task": "Add tests that render the /admin page and assert the health fields, driving real requests.",
+          "deps": ["impl"]
+        },
+        {
+          "id": "review",
+          "persona": "reviewer",
+          "task": "Review the dashboard for correctness, access control, and missing edge cases; fix what you find.",
+          "deps": ["test"]
+        }
+      ]
+    }
+  ]
+}

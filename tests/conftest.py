@@ -9,6 +9,7 @@ deterministic double; everything else (the merge, the effective config, the real
 from __future__ import annotations
 
 import shutil
+import subprocess
 import sys
 from collections.abc import Callable
 from pathlib import Path
@@ -20,6 +21,59 @@ from orchestrator import BASE_CONFIG, PERSONA_DIR, REPO_ROOT
 from orchestrator.config import load_yaml
 
 FAKE_BACKEND = REPO_ROOT / "tests" / "e2e" / "fake_backend.py"
+
+
+def git(*args: str, cwd: str | Path | None = None) -> str:
+    """Run a real git command in a test, failing loudly; return stdout."""
+    proc = subprocess.run(
+        ["git", *args],
+        cwd=str(cwd) if cwd is not None else None,
+        text=True,
+        capture_output=True,
+    )
+    if proc.returncode != 0:
+        raise AssertionError(f"git {' '.join(args)} failed: {proc.stderr or proc.stdout}")
+    return proc.stdout
+
+
+@pytest.fixture(autouse=True)
+def _git_identity(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Give git a committer identity via env so test commits never depend on ~/.gitconfig."""
+    for key, val in {
+        "GIT_AUTHOR_NAME": "ai-orchestrator-test",
+        "GIT_AUTHOR_EMAIL": "test@example.com",
+        "GIT_COMMITTER_NAME": "ai-orchestrator-test",
+        "GIT_COMMITTER_EMAIL": "test@example.com",
+    }.items():
+        monkeypatch.setenv(key, val)
+
+
+@pytest.fixture
+def bare_origin(tmp_path: Path) -> Callable[..., Path]:
+    """Return a factory that seeds a bare git 'origin' (a real remote, no network).
+
+    The bare repo has one commit on ``main`` plus any extra ``files`` (relpath →
+    content). A bare remote accepts pushes to any branch, which is what the
+    lifecycle's push + merge need.
+    """
+    counter = {"n": 0}
+
+    def _make(files: dict[str, str] | None = None) -> Path:
+        counter["n"] += 1
+        seed = tmp_path / f"seed-{counter['n']}"
+        git("init", "-b", "main", str(seed))
+        (seed / "README.md").write_text("seed\n", encoding="utf-8")
+        for rel, content in (files or {}).items():
+            p = seed / rel
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(content, encoding="utf-8")
+        git("add", "-A", cwd=seed)
+        git("commit", "-m", "init", cwd=seed)
+        bare = tmp_path / f"origin-{counter['n']}.git"
+        git("clone", "--bare", str(seed), str(bare))
+        return bare
+
+    return _make
 
 
 @pytest.fixture(scope="session")

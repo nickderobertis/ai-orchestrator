@@ -71,6 +71,13 @@ wheel** (a manylinux build) is the one that both runs on the host's glibc and
 carries `init`, so `scripts/session-setup.sh` installs it with
 `uv tool install --upgrade 'oneharness-cli>=0.3.20'`.
 
+**Watch for a stale cargo oneharness.** An earlier `cargo install oneharness`
+leaves a 0.2.x binary in `~/.cargo/bin`; its `run` lacks `--mode`, which onejudge's
+oneharness provider needs. If it precedes the wheel on `PATH`, live dispatch dies
+with a confusing `provider error ... Broken pipe` (the harness process rejects the
+flags and exits before the prompt is written). `session-setup.sh` removes it once
+the wheel is installed; keep `~/.local/bin` ahead of `~/.cargo/bin` regardless.
+
 ## Harnesses and the live path
 
 Live dispatch drives a real harness, chosen by `oneharness.toml`'s fallback chain

@@ -10,6 +10,9 @@ dependencies = [
 [project.scripts]
 orchestrator-dispatch = "orchestrator.dispatch:main"
 orchestrator-run-plan = "orchestrator.plan:main"
+orchestrator-repo-task = "orchestrator.lifecycle:main_task"
+orchestrator-repo-plan = "orchestrator.lifecycle:main_plan"
+orchestrator-replan = "orchestrator.replan:main"
 orchestrator-new-persona = "orchestrator.personas:main_new"
 orchestrator-validate-personas = "orchestrator.personas:main_validate"
 

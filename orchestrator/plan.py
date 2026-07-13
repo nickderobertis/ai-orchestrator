@@ -75,6 +75,73 @@ class PlanResult:
         return "\n".join(lines)
 
 
+@dataclass
+class NodeRun:
+    """One node's scheduling outcome: its status and the runner's payload."""
+
+    status: str  # "done" | "failed" | "skipped"
+    error: str | None = None
+    payload: Any = None
+
+
+def schedule_dag(
+    node_ids: list[str],
+    deps: dict[str, list[str]],
+    run_one: Callable[[str], NodeRun],
+    *,
+    concurrency: int,
+) -> tuple[dict[str, NodeRun], list[str]]:
+    """Run a DAG of nodes concurrently, honoring deps and cascading failures.
+
+    A node runs once every dep is ``done``; if any dep ``failed``/``skipped`` the
+    node is ``skipped`` (the failure cascades). `run_one` returns the node's
+    `NodeRun`; if it raises, the node is ``failed`` with the exception text. All
+    ready nodes are submitted to a `concurrency`-worker pool, which is what bounds
+    parallelism. Returns each node's `NodeRun` plus the order nodes were started.
+
+    This is the shared engine under `run_plan` (onejudge dispatch) and
+    `lifecycle.run_repo_plan` (full repo lifecycle) — one scheduler, two payloads.
+    """
+    status = {nid: "pending" for nid in node_ids}
+    results: dict[str, NodeRun] = {}
+    started_order: list[str] = []
+
+    def resolve_skips() -> None:
+        changed = True
+        while changed:
+            changed = False
+            for nid in node_ids:
+                if status[nid] == "pending" and any(
+                    status[d] in ("failed", "skipped") for d in deps[nid]
+                ):
+                    status[nid] = "skipped"
+                    results[nid] = NodeRun("skipped", "a dependency did not complete")
+                    changed = True
+
+    with ThreadPoolExecutor(max_workers=concurrency) as pool:
+        futures: dict[Any, str] = {}
+        while any(s in ("pending", "running") for s in status.values()):
+            resolve_skips()
+            for nid in node_ids:
+                if status[nid] == "pending" and all(status[d] == "done" for d in deps[nid]):
+                    status[nid] = "running"
+                    started_order.append(nid)
+                    futures[pool.submit(run_one, nid)] = nid
+            if not futures:
+                break
+            done, _ = wait(futures, return_when=FIRST_COMPLETED)
+            for fut in done:
+                nid = futures.pop(fut)
+                try:
+                    run = fut.result()
+                except Exception as exc:  # a runner failure is a node failure, not a crash
+                    run = NodeRun("failed", str(exc))
+                status[nid] = run.status
+                results[nid] = run
+
+    return results, started_order
+
+
 def _topological_order(nodes: dict[str, PlanNode]) -> list[str]:
     """Return ids in dependency order; raise PlanError on a cycle."""
     WHITE, GREY, BLACK = 0, 1, 2
@@ -168,53 +235,26 @@ def run_plan(
     """
     conc = concurrency if concurrency is not None else plan.concurrency
     nodes = {n.id: n for n in plan.tasks}
-    status = {nid: "pending" for nid in nodes}
-    results: dict[str, TaskResult] = {}
-    started_order: list[str] = []
+    deps = {nid: nodes[nid].deps for nid in nodes}
 
-    def resolve_skips() -> None:
-        changed = True
-        while changed:
-            changed = False
-            for nid, node in nodes.items():
-                if status[nid] == "pending" and any(
-                    status[d] in ("failed", "skipped") for d in node.deps
-                ):
-                    status[nid] = "skipped"
-                    results[nid] = TaskResult(nid, "skipped", error="a dependency did not complete")
-                    changed = True
+    def run_one(nid: str) -> NodeRun:
+        report = runner(nodes[nid])
+        if report.completed:
+            return NodeRun("done", None, report)
+        return NodeRun("failed", "did not complete (hit the turn cap)", report)
 
-    with ThreadPoolExecutor(max_workers=conc) as pool:
-        futures: dict[Any, str] = {}
-        while any(s in ("pending", "running") for s in status.values()):
-            resolve_skips()
-            for nid, node in nodes.items():
-                if status[nid] == "pending" and all(status[d] == "done" for d in node.deps):
-                    status[nid] = "running"
-                    started_order.append(nid)
-                    futures[pool.submit(runner, node)] = nid
-            if not futures:
-                break
-            done, _ = wait(futures, return_when=FIRST_COMPLETED)
-            for fut in done:
-                nid = futures.pop(fut)
-                try:
-                    report = fut.result()
-                except Exception as exc:  # runner failure is a node failure, not a crash
-                    status[nid] = "failed"
-                    results[nid] = TaskResult(nid, "failed", error=str(exc))
-                else:
-                    completed = report.completed
-                    status[nid] = "done" if completed else "failed"
-                    results[nid] = TaskResult(
-                        nid,
-                        "done" if completed else "failed",
-                        report=report,
-                        error=None if completed else "did not complete (hit the turn cap)",
-                    )
-
-    ordered = {nid: results[nid] for nid in nodes if nid in results}
-    return PlanResult(results=ordered, started_order=started_order)
+    runs, started_order = schedule_dag(list(nodes), deps, run_one, concurrency=conc)
+    results = {
+        nid: TaskResult(
+            nid,
+            runs[nid].status,
+            report=runs[nid].payload if isinstance(runs[nid].payload, Report) else None,
+            error=runs[nid].error,
+        )
+        for nid in nodes
+        if nid in runs
+    }
+    return PlanResult(results=results, started_order=started_order)
 
 
 def make_dispatch_runner(

@@ -81,6 +81,14 @@ ensure_oneharness() {
   log "ensuring oneharness (init-capable) via uv tool"
   uv tool install --upgrade 'oneharness-cli>=0.3.20' >&2 \
     || log "oneharness-cli install failed (offline gate unaffected; live path needs it)"
+  # Remove any stale cargo-installed oneharness. The 0.2.x crates.io build lags the
+  # init-capable wheel and its `run` lacks `--mode`, which onejudge's provider
+  # needs; if it shadows the wheel on PATH, live dispatch dies with a confusing
+  # "provider error ... Broken pipe". Keep only the wheel (on ~/.local/bin).
+  if [ -x "$CARGO_BIN/oneharness" ] && [ -x "$BIN_DIR/oneharness" ]; then
+    log "removing stale cargo oneharness ($("$CARGO_BIN/oneharness" --version 2>/dev/null || echo unknown)); the wheel supersedes it"
+    rm -f "$CARGO_BIN/oneharness"
+  fi
   if command -v oneharness >/dev/null 2>&1; then
     log "oneharness ready ($(oneharness --version 2>/dev/null || echo unknown))"
   fi

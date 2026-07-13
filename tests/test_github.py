@@ -1,0 +1,168 @@
+"""Unit tests for the gh-backed GitHub backend, driven with a fake `run` seam."""
+
+from __future__ import annotations
+
+import json
+from types import SimpleNamespace
+
+import pytest
+
+import orchestrator.github as gh
+from orchestrator.github import (
+    AutoMergeUnavailable,
+    Check,
+    CliGitHubBackend,
+    GitHubError,
+    PRStatus,
+    PullRequest,
+    _normalize_check,
+)
+
+
+class RecordingRun:
+    """A fake `run` seam: returns queued outputs (or raises) and records argv."""
+
+    def __init__(self, outputs: list) -> None:
+        self.outputs = outputs
+        self.calls: list[list[str]] = []
+        self._i = 0
+
+    def __call__(self, argv: list[str]) -> str:
+        self.calls.append(argv)
+        out = self.outputs[self._i]
+        self._i += 1
+        if isinstance(out, Exception):
+            raise out
+        return out
+
+
+def _pr() -> PullRequest:
+    return PullRequest(number=3, url="u", repo="o/r", head="feat", base="main")
+
+
+def test_default_branch() -> None:
+    run = RecordingRun(["main\n"])
+    assert CliGitHubBackend(run=run).default_branch("o/r") == "main"
+    assert run.calls[0][:2] == ["repo", "view"]
+
+
+def test_create_pr_parses_number() -> None:
+    run = RecordingRun(["Warning: ...\nhttps://github.com/o/r/pull/42\n"])
+    pr = CliGitHubBackend(run=run).create_pr("o/r", head="f", base="main", title="t", body="b")
+    assert pr.number == 42
+    assert pr.repo == "o/r"
+
+
+def test_create_pr_bad_output_raises() -> None:
+    run = RecordingRun(["not a url"])
+    with pytest.raises(GitHubError, match="could not parse PR number"):
+        CliGitHubBackend(run=run).create_pr("o/r", head="f", base="main", title="t", body="b")
+
+
+def test_enable_auto_merge_ok() -> None:
+    run = RecordingRun([""])
+    CliGitHubBackend(run=run).enable_auto_merge(_pr(), method="squash")
+    assert "--auto" in run.calls[0]
+
+
+def test_enable_auto_merge_unavailable_maps_to_typed_error() -> None:
+    run = RecordingRun([GitHubError("gh pr merge failed: Auto-merge is not enabled for repo")])
+    with pytest.raises(AutoMergeUnavailable):
+        CliGitHubBackend(run=run).enable_auto_merge(_pr(), method="squash")
+
+
+def test_enable_auto_merge_other_error_reraised() -> None:
+    run = RecordingRun([GitHubError("gh pr merge failed: network is down")])
+    with pytest.raises(GitHubError, match="network is down"):
+        CliGitHubBackend(run=run).enable_auto_merge(_pr(), method="squash")
+
+
+def test_merge_calls_gh() -> None:
+    run = RecordingRun([""])
+    CliGitHubBackend(run=run).merge(_pr(), method="merge")
+    assert run.calls[0][0] == "pr" and "--merge" in run.calls[0]
+
+
+def test_status_parses_rollup() -> None:
+    payload = {
+        "number": 3,
+        "state": "OPEN",
+        "mergeStateStatus": "BLOCKED",
+        "statusCheckRollup": [
+            {
+                "__typename": "CheckRun",
+                "name": "ci",
+                "status": "COMPLETED",
+                "conclusion": "SUCCESS",
+                "isRequired": True,
+            },
+            {
+                "__typename": "CheckRun",
+                "name": "lint",
+                "status": "IN_PROGRESS",
+                "isRequired": False,
+            },
+            {
+                "__typename": "StatusContext",
+                "context": "legacy",
+                "state": "FAILURE",
+                "isRequired": True,
+            },
+        ],
+    }
+    status = CliGitHubBackend(run=RecordingRun([json.dumps(payload)])).status(_pr())
+    assert status.number == 3 and not status.merged
+    assert len(status.blocking) == 2  # ci + legacy
+    assert status.blocking_failed  # legacy failed
+    assert not status.blocking_green
+
+
+def test_status_merged() -> None:
+    payload = {"number": 3, "state": "MERGED", "mergeStateStatus": "CLEAN", "statusCheckRollup": []}
+    status = CliGitHubBackend(run=RecordingRun([json.dumps(payload)])).status(_pr())
+    assert status.merged and status.blocking_green  # no required checks → vacuously green
+
+
+def test_normalize_check_variants() -> None:
+    pending = _normalize_check({"__typename": "CheckRun", "name": "c", "status": "QUEUED"})
+    assert pending.state == "PENDING" and not pending.required
+    done = _normalize_check(
+        {
+            "__typename": "CheckRun",
+            "name": "c",
+            "status": "COMPLETED",
+            "conclusion": "FAILURE",
+            "isRequired": True,
+        }
+    )
+    assert done.state == "FAILURE" and done.required and done.red
+    ctx = _normalize_check({"__typename": "StatusContext", "context": "x", "state": "success"})
+    assert ctx.name == "x" and ctx.state == "SUCCESS" and ctx.green
+
+
+def test_check_green_red_helpers() -> None:
+    assert Check("a", "SUCCESS", True).green
+    assert Check("a", "ERROR", True).red
+    assert not Check("a", "PENDING", True).green
+
+
+def test_prstatus_no_required_is_vacuously_green() -> None:
+    status = PRStatus(1, "OPEN", False, "CLEAN", (Check("opt", "PENDING", False),))
+    assert status.blocking == ()
+    assert status.blocking_green and not status.blocking_failed
+
+
+def test_default_run_success_and_failure(monkeypatch) -> None:
+    monkeypatch.setattr(
+        gh.subprocess,
+        "run",
+        lambda *a, **k: SimpleNamespace(returncode=0, stdout="ok", stderr=""),
+    )
+    assert gh._default_run(["--version"]) == "ok"
+    monkeypatch.setattr(
+        gh.subprocess,
+        "run",
+        lambda *a, **k: SimpleNamespace(returncode=1, stdout="", stderr="boom"),
+    )
+    with pytest.raises(GitHubError, match="boom"):
+        gh._default_run(["bogus"])

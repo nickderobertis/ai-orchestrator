@@ -70,6 +70,23 @@ dispatch *args:
 run-plan *args:
     uv run orchestrator-run-plan {{args}}
 
+# Drive one subtask through a repo's full lifecycle (clone→gate→PR/merge):
+# `just repo-task <repo> <persona> "<task>"`. `<repo>` is a GitHub name/slug/URL
+# or a LOCAL path (local paths merge straight into the base branch after checks).
+repo-task *args:
+    uv run orchestrator-repo-task {{args}}
+
+# Run a repo-plan: many isolated PRs across repos, coordinated by a DAG:
+# `just repo-plan <repo-plan.json>`. A node may carry a `steps` sub-DAG to run
+# several onejudge on ONE PR (shared branch, merged once).
+repo-plan *args:
+    uv run orchestrator-repo-plan {{args}}
+
+# Derive the next round's plan from the last round's results + edits (across-round
+# replanning): `just replan <prev-plan.json> <repo-plan-result.json> [edits.json]`.
+replan *args:
+    uv run orchestrator-replan {{args}}
+
 # Scaffold a new persona: `just new-persona <name>`.
 new-persona *args:
     uv run orchestrator-new-persona {{args}}

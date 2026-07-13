@@ -27,6 +27,9 @@
       "Bash(just validate-personas)",
       "Bash(just dispatch:*)",
       "Bash(just run-plan:*)",
+      "Bash(just repo-task:*)",
+      "Bash(just repo-plan:*)",
+      "Bash(just replan:*)",
       "Bash(just new-persona:*)",
       "Bash(just session-setup)",
       "Bash(just setup-llmlint)",
@@ -47,6 +50,8 @@
       "Bash(git status)",
       "Bash(git diff:*)",
       "Bash(git log:*)",
+      "Bash(git show:*)",
+      "Bash(git clone:*)",
       "Bash(git add:*)",
       "Bash(git commit:*)"
     ],

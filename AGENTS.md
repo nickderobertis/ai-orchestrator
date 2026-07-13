@@ -17,6 +17,16 @@ Your job is the *decomposition, scheduling, and persona choice*; the mechanics o
 running onejudge in parallel are scripts. The deliverable is this setup itself —
 config, personas, scripts, docs — not a shipped binary.
 
+Beyond dispatching at a directory, the orchestrator manages a change's **full
+life cycle** against any repo (GitHub or a local path): clone it, do the work in
+an isolated worktree, verify it with the repo's own gate, and merge it — for
+GitHub via a PR that auto-merges once required checks are green, for a local repo
+via a direct merge into the base branch after the checks pass. One larger task
+becomes **multiple isolated PRs** coordinated by a DAG; a single PR can itself run
+**several onejudge in sequence on one branch** (a node's `steps` sub-DAG). The DAG
+is static within a run — you **adapt between rounds**, reading each round's results
+and deriving the next plan (`just replan`). See `docs/repo-lifecycle.md`.
+
 ## Your loop as orchestrator
 
 1. **Decompose.** Break the task into the smallest subtasks that are still worth
@@ -74,18 +84,27 @@ customizations — a cheaper judge model and the `IS_SANDBOX` env — and
 with `onejudge init --force`.
 
 **Live dispatch** picks a harness via `oneharness.toml`'s fallback (codex primary).
-On a host without unprivileged user namespaces, codex's sandbox can't run, so
-dispatch with **`--oneharness-mode bypass`** and rely on the **allowlister**
-`repo-write` gate wired as codex's hook (`scripts/session-setup.sh`). Full
-rationale and the claude-code caveat: `docs/onejudge-integration.md`.
+The lifecycle dispatches in **`bypass`** mode by default — the no-approval mode —
+which is correct here because the **whole environment is a sandbox** (a container):
+codex's own `workspace-write` sandbox (`auto` mode) needs unprivileged user
+namespaces this host disables, so `bypass` (no approvals, no inner sandbox) is the
+working no-approval mode and the container is the boundary. The **allowlister**
+`repo-write` hook stays wired (`scripts/session-setup.sh`) as belt-and-suspenders.
+Full rationale, the merge strategies, and the claude-code caveat:
+`docs/repo-lifecycle.md` and `docs/onejudge-integration.md`.
 
 ## Command surface
 
 Use the `just` recipes (`just --list` is the index); do not hand-roll
 equivalents. `just bootstrap` sets up from a clean clone (installs the toolchain,
 activates the git hooks); `just check` is the deterministic gate and must pass
-before any commit. `just dispatch`, `just run-plan`, `just new-persona`,
-`just validate-personas` are the orchestrator verbs. `just lint-llm` /
+before any commit. `just dispatch` / `just run-plan` dispatch onejudge at a
+directory; `just repo-task <repo> <persona> "<task>"` and
+`just repo-plan <repo-plan.json>` drive the full repo life cycle
+(clone→gate→PR/merge, multi-PR DAGs, and `steps` workstreams on one PR);
+`just replan <prev-plan> <result> [edits]` derives the next round from the last —
+see `docs/repo-lifecycle.md`. `just new-persona` / `just validate-personas` round
+out the orchestrator verbs. `just lint-llm` /
 `lint-llm-diff` / `lint-llm-validate` are the **llmlint** LLM-judge tier — kept
 out of `check` (non-deterministic, harness-backed) and enforced at pre-push.
 
@@ -97,7 +116,10 @@ How this repo was built up from the create-repo reference pieces:
   (determinism-vs-judgment split, validate-in-gate, narrow allowlist), applied to
   onejudge configs + personas rather than skills.
 - **Language(s):** Python (uv, ruff, mypy, pytest) for the orchestration package
-  in `orchestrator/`; Bash for `scripts/session-setup.sh`; YAML/TOML for configs.
+  in `orchestrator/` — including the repo-lifecycle layer (`workspace`, `gitops`,
+  `verify`, `github`, `merge`, `lifecycle`, `replan`) that shells to real
+  `git`/`gh`; Bash
+  for `scripts/session-setup.sh`; YAML/TOML for configs.
 - **Composed:** `base.md` (always) + `shapes/skills-repo.md`.
 - **Excluded, and why:** **CI** — deliberately, per the repo's charter: this is a
   local, private proof-of-concept ("local config/scripts/docs at this point"). The
@@ -134,10 +156,13 @@ How this repo was built up from the create-repo reference pieces:
 
 This repo runs on agents, so the suite is the only QA loop.
 
-- **e2e** (`tests/e2e/`) proves the real journeys against the real onejudge
-  boundary: a single dispatch that completes (exit 0), one that hits the turn cap
-  without finishing (exit 1), a persona-merged dispatch, and a multi-node DAG that
-  runs branches in parallel and skips a failed node's dependents.
+- **e2e** (`tests/e2e/`) proves the real journeys against the real boundaries:
+  onejudge dispatch (completes / hits the turn cap / persona-merged / a parallel
+  DAG that skips a failed node's dependents), and the **repo lifecycle** against a
+  real bare git origin — local direct-merge and GitHub PR+auto-merge, plus
+  gate-failure, not-completed, no-changes, checks-failed, and a multi-PR DAG. Only
+  the paid harness and GitHub's PR/CI decisioning are faked; git and the merge are
+  real (`docs/repo-lifecycle.md`).
 - **unit** (`tests/`) covers the pure logic: base⊕persona merge, plan topological
   scheduling / concurrency / skip-on-failure, persona scaffolding, and validation
   rejecting malformed configs.

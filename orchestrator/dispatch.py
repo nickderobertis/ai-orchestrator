@@ -127,8 +127,12 @@ def run_onejudge(
             raise DispatchError(f"onejudge timed out after {timeout}s") from exc
 
     if proc.returncode == EXIT_CONFIG_ERROR:
+        # Exit 2 covers both a rejected config AND a provider/runtime failure (e.g.
+        # the harness process dying → "provider error ... Broken pipe"). Don't
+        # assume "bad config" — surface onejudge's own stderr, which says which.
         raise DispatchError(
-            f"onejudge rejected the config (exit 2): {proc.stderr.strip() or '<no stderr>'}"
+            f"onejudge failed (exit 2 — bad config or provider/runtime error): "
+            f"{proc.stderr.strip() or '<no stderr>'}"
         )
     return _build_report(persona, proc.returncode, proc.stdout, proc.stderr)
 
