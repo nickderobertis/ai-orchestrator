@@ -19,6 +19,8 @@ bootstrap:
     ./scripts/session-setup.sh
     uv sync
     git config core.hooksPath .githooks
+    # Allow local-mode lifecycle pushes into this non-bare checkout.
+    git config receive.denyCurrentBranch updateInstead
 
 # Full quality gate: format check, lint, type check, persona validation, tests
 # (unit + e2e, coverage enforced). Must pass before any commit.
