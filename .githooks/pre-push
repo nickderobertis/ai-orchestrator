@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# Pre-push gate. With no CI, this is the enforcement point: nothing lands on the
+# remote without passing the deterministic gate AND the llmlint LLM-judge tier.
+# Activated by `just bootstrap` (git config core.hooksPath .githooks).
+set -euo pipefail
+
+echo "pre-push: deterministic gate (just check)..." >&2
+just check
+
+if ! command -v llmlint >/dev/null 2>&1; then
+  echo "pre-push: llmlint not installed — run 'just setup-llmlint' to enable the LLM-judge gate" >&2
+  exit 1
+fi
+
+echo "pre-push: llmlint gate (validate, then diff vs origin/main)..." >&2
+just lint-llm-validate --diff-base origin/main
+just lint-llm-diff

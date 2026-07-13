@@ -39,44 +39,39 @@ def main() -> int:
     task = _task_text(messages)
     fail = "should-fail" in task
 
-    if op == "respond":
-        # `complete-now` finishes on the first turn; otherwise the agent stays "not
-        # done" and completion is decided by the supervisor's done_when judge below,
-        # which only passes on the second turn — exercising the two-sided loop.
-        done = (not fail) and ("complete-now" in task)
-        msg = "done" if done else "working on it"
-        resp = {
-            "message": msg,
-            "done": done,
-            "usage": {"input_tokens": 10, "output_tokens": 5},
-            "events": [
-                {
-                    "kind": "tool_call",
-                    "name": "bash",
-                    "input": {"command": "just check"},
-                    "index": 0,
-                }
-            ],
-        }
-    elif op == "user":
-        resp = {"message": "verify it before you call it done", "stop": False}
-    elif op == "judge":
-        if req.get("kind") == "boolean":
+    match op:
+        case "respond":
+            # `complete-now` finishes on the first turn; otherwise the agent stays
+            # "not done" and completion is decided by the supervisor's done_when
+            # judge below, which only passes on the second turn — exercising the
+            # two-sided loop.
+            done = (not fail) and ("complete-now" in task)
+            resp = {
+                "message": "done" if done else "working on it",
+                "done": done,
+                "usage": {"input_tokens": 10, "output_tokens": 5},
+                "events": [
+                    {
+                        "kind": "tool_call",
+                        "name": "bash",
+                        "input": {"command": "just check"},
+                        "index": 0,
+                    }
+                ],
+            }
+        case "user":
+            resp = {"message": "verify it before you call it done", "stop": False}
+        case "judge" if req.get("kind") == "boolean":
             # onejudge re-judges done_when both mid-run (ending the loop early when
             # satisfied) and at the end. Withhold satisfaction until two assistant
             # turns have happened so the normal path runs a real supervisor round.
-            if fail:
-                value = False
-            elif "complete-now" in task:
-                value = True
-            else:
-                value = _assistant_turns(messages) >= 2
+            value = (not fail) and ("complete-now" in task or _assistant_turns(messages) >= 2)
             resp = {"value": value, "reason": "fake judge verdict"}
-        else:
+        case "judge":
             resp = {"value": req.get("max", 5), "reason": "fake numeric verdict"}
-    else:
-        sys.stderr.write(f"fake_backend: unknown op {op!r}\n")
-        return 1
+        case _:
+            sys.stderr.write(f"fake_backend: unknown op {op!r}\n")
+            return 1
 
     sys.stdout.write(json.dumps(resp))
     return 0

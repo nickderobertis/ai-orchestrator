@@ -13,10 +13,12 @@ coverage_min := "95"
 default:
     @just --list
 
-# Set up from a clean clone: install onejudge, then sync the Python env.
+# Set up from a clean clone: install the toolchain, sync the Python env, and
+# activate the committed git hooks (the pre-push llmlint gate).
 bootstrap:
     ./scripts/session-setup.sh
     uv sync
+    git config core.hooksPath .githooks
 
 # Full quality gate: format check, lint, type check, persona validation, tests
 # (unit + e2e, coverage enforced). Must pass before any commit.
@@ -33,8 +35,8 @@ test-e2e:
 # Lint Python (ruff) and the shell script (shellcheck); fail on findings.
 lint:
     uv run ruff check .
-    @command -v shellcheck >/dev/null 2>&1 || { echo "shellcheck not installed (needed to lint scripts/*.sh) — https://github.com/koalaman/shellcheck#installing"; exit 1; }
-    shellcheck scripts/*.sh
+    @command -v shellcheck >/dev/null 2>&1 || { echo "shellcheck not installed (needed to lint the shell scripts) — https://github.com/koalaman/shellcheck#installing"; exit 1; }
+    shellcheck scripts/*.sh .githooks/pre-push
 
 # Static type check.
 typecheck:
@@ -72,7 +74,33 @@ run-plan *args:
 new-persona *args:
     uv run orchestrator-new-persona {{args}}
 
-# Provision the session toolchain (installs onejudge; ensures oneharness).
+# Provision the session toolchain (installs onejudge; ensures oneharness; llmlint).
 # Idempotent; runs automatically via the SessionStart hook. No-ops in CI.
 session-setup:
     ./scripts/session-setup.sh
+
+# --- llmlint (LLM-judge tier) --------------------------------------------
+# Non-deterministic, harness-backed, and kept OUT of `just check`. It runs at
+# pre-push (.githooks/pre-push) and on demand. Config is the composed llmlint.yml.
+
+# Install/refresh the llmlint toolchain (llmlint + its oneharness). Idempotent.
+setup-llmlint:
+    ./scripts/setup-llmlint.sh
+
+# LLM-judge lint over the whole tree (or pass paths to narrow). Run once with
+# `just setup-llmlint` first in a plain terminal.
+lint-llm *paths:
+    @command -v llmlint >/dev/null 2>&1 || { echo "llmlint not installed — run 'just setup-llmlint'"; exit 1; }
+    llmlint {{paths}}
+
+# Deterministic, model-free llmlint gate: config structure, ignore directives name
+# real rules, edited fragments bumped their version. The fast pre-flight.
+lint-llm-validate *args:
+    @command -v llmlint >/dev/null 2>&1 || { echo "llmlint not installed — run 'just setup-llmlint'"; exit 1; }
+    llmlint validate {{args}}
+
+# llmlint scoped to the merge-base diff with main — judges only what the branch
+# changed. This is the blocking pre-push check.
+lint-llm-diff base="origin/main":
+    @command -v llmlint >/dev/null 2>&1 || { echo "llmlint not installed — run 'just setup-llmlint'"; exit 1; }
+    llmlint --diff --diff-base "{{base}}"

@@ -76,10 +76,12 @@ with `onejudge init --force`. See `docs/onejudge-integration.md`.
 ## Command surface
 
 Use the `just` recipes (`just --list` is the index); do not hand-roll
-equivalents. `just bootstrap` sets up from a clean clone (installs `onejudge`);
-`just check` is the full gate and must pass before any commit. `just dispatch`,
-`just run-plan`, `just new-persona`, `just validate-personas` are the orchestrator
-verbs.
+equivalents. `just bootstrap` sets up from a clean clone (installs the toolchain,
+activates the git hooks); `just check` is the deterministic gate and must pass
+before any commit. `just dispatch`, `just run-plan`, `just new-persona`,
+`just validate-personas` are the orchestrator verbs. `just lint-llm` /
+`lint-llm-diff` / `lint-llm-validate` are the **llmlint** LLM-judge tier — kept
+out of `check` (non-deterministic, harness-backed) and enforced at pre-push.
 
 ## Stack and composition
 
@@ -93,11 +95,14 @@ How this repo was built up from the create-repo reference pieces:
 - **Composed:** `base.md` (always) + `shapes/skills-repo.md`.
 - **Excluded, and why:** **CI** — deliberately, per the repo's charter: this is a
   local, private proof-of-concept ("local config/scripts/docs at this point"). The
-  full gate still runs locally as `just check`; add `.github/workflows/` running
-  `just bootstrap && just check` when this graduates past PoC. `releasing.md` —
-  nothing versioned is published. `monorepo.md` — single deliverable. `llmlint`
-  tier — heavyweight (needs a harness credential); not warranted for a local PoC.
-  asdf / direnv / `src` layout — unneeded ceremony for a small Python package.
+  full gate still runs locally as `just check` and at pre-push; add
+  `.github/workflows/` running `just bootstrap && just check` (plus the llmlint
+  job) when this graduates past PoC. `releasing.md` — nothing versioned is
+  published. `monorepo.md` — single deliverable. asdf / direnv / `src` layout —
+  unneeded ceremony for a small Python package.
+- **Composed additionally:** the `llmlint` LLM-judge tier (`ci.md`'s companion) —
+  `llmlint.yml` + the `lint-llm*` recipes, enforced at **pre-push**
+  (`.githooks/pre-push`) since there is no CI.
 
 ## Invariants (non-negotiable)
 
@@ -135,11 +140,12 @@ This repo runs on agents, so the suite is the only QA loop.
 ## Commits and merging
 
 Squash-merge via PR is the intended model; PRs follow
-`.github/pull_request_template.md` (terse **What** / **Why**). Branch protection
-and required checks are deferred with CI (see the exclusion above) — until then
-`just check` is the gate, run locally before every commit. Keep the
-`.claude/settings.json` allowlist current: add a new routine command there instead
-of re-approving it each session.
+`.github/pull_request_template.md` (terse **What** / **Why**). With no CI, the
+**pre-push hook** (`.githooks/pre-push`, activated by `just bootstrap`) is the
+enforcement point: it runs `just check` then the llmlint gate, so nothing reaches
+the remote unproven. Branch protection and a CI mirror of this gate are deferred
+with CI. Keep the `.claude/settings.json` allowlist current: add a new routine
+command there instead of re-approving it each session.
 
 ## After the main task
 

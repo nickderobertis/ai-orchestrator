@@ -1,7 +1,6 @@
 # tests/AGENTS.md
 
-Conventions for this repo's tests. (Folder-scoped; the root `AGENTS.md` has the
-rest.)
+Conventions for this repo's tests.
 
 - **e2e (`tests/e2e/`) drives the real onejudge CLI.** Use the `command_base`
   fixture: it builds a base whose provider is onejudge's `command` provider,

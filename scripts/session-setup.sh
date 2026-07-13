@@ -13,9 +13,11 @@
 #      init` need it (the offline gate does not). The wheel is used because it
 #      runs on older glibc and carries `init`, unlike the prebuilt release binary.
 #      See docs/onejudge-integration.md.
+#   3. Hands off to `setup-llmlint.sh` to install the llmlint LLM-judge tier.
 #
 # `set -e` is omitted on purpose: a flaky install must never abort session
-# startup. The script owns its exit codes and always exits 0. Quiet on success.
+# startup. The script owns its exit codes and always exits 0.
+# llmlint: ignore-file[robust_shell, tool_output_is_signal] deliberate for a session-startup installer: `set -e` is omitted so a flaky install can't abort the hook (the script owns its exit codes and always exits 0), and progress is logged to stderr while failures log-and-continue rather than block startup.
 set -uo pipefail
 
 readonly BIN_DIR="$HOME/.local/bin"
@@ -76,6 +78,10 @@ persist_session_env() {
 install_onejudge
 ensure_oneharness
 persist_session_env
+
+# Install the llmlint LLM-judge tier (llmlint + its bundled oneharness).
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+bash "$script_dir/setup-llmlint.sh" || log "setup-llmlint failed (continuing)"
 
 if command -v onejudge >/dev/null 2>&1; then
   log "ready (onejudge: $(onejudge --version 2>/dev/null || echo unknown))"
