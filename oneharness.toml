@@ -18,8 +18,10 @@ harnesses = ["codex", "claude-code"]
 
 # [harness.<id>]: per-harness overrides. Model names differ per provider, so
 # each harness names its own.
+# Sol is the flagship tier of the GPT-5.6 family (Sol > Terra > Luna); `gpt-5.6`
+# aliases to it, but name it explicitly so the tier can't drift under us.
 [harness.codex]
-model = "gpt-5.5"
+model = "gpt-5.6-sol"
 
 [harness.claude-code]
 model = "claude-opus-4-8"
