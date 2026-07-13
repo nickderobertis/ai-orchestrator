@@ -167,3 +167,12 @@ def test_run_onejudge_sets_per_turn_timeout(
 
     assert report.raw is not None
     assert report.usage["oneharness_timeout"] == expected_timeout
+
+
+@pytest.mark.parametrize("bad_timeout", ["", "abc", "12.5", "0", "-5"])
+def test_run_onejudge_rejects_invalid_timeout(monkeypatch, bad_timeout: str) -> None:
+    # ONEHARNESS_TIMEOUT crosses in from the environment; a non-positive-integer value
+    # must fail loudly at the boundary rather than reach oneharness.
+    monkeypatch.setenv("ONEHARNESS_TIMEOUT", bad_timeout)
+    with pytest.raises(DispatchError, match="ONEHARNESS_TIMEOUT must be a positive integer"):
+        run_onejudge({}, "task")

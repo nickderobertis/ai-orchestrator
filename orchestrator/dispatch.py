@@ -87,6 +87,25 @@ def _build_report(persona: str, exit_code: int, stdout: str, stderr: str) -> Rep
     )
 
 
+def _validate_oneharness_timeout(value: str) -> None:
+    """Reject a non-positive-integer ``ONEHARNESS_TIMEOUT`` (seconds) at the boundary.
+
+    The value crosses in from the process environment; validate it here so a typo
+    fails loudly rather than reaching oneharness as an opaque per-turn timeout error
+    mid-dispatch.
+    """
+    try:
+        seconds = int(value)
+    except (TypeError, ValueError):
+        raise DispatchError(
+            f"ONEHARNESS_TIMEOUT must be a positive integer number of seconds, got {value!r}"
+        ) from None
+    if seconds <= 0:
+        raise DispatchError(
+            f"ONEHARNESS_TIMEOUT must be a positive integer number of seconds, got {value!r}"
+        )
+
+
 def run_onejudge(
     config: dict[str, Any],
     task: str,
@@ -112,6 +131,7 @@ def run_onejudge(
             cmd += ["--provider", provider]
         process_env = {**os.environ, **(env or {})}
         process_env.setdefault("ONEHARNESS_TIMEOUT", DEFAULT_ONEHARNESS_TIMEOUT)
+        _validate_oneharness_timeout(process_env["ONEHARNESS_TIMEOUT"])
         try:
             proc = subprocess.run(
                 cmd,
