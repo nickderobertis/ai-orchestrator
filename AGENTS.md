@@ -108,6 +108,15 @@ out the orchestrator verbs. `just lint-llm` /
 `lint-llm-diff` / `lint-llm-validate` are the **llmlint** LLM-judge tier — kept
 out of `check` (non-deterministic, harness-backed) and enforced at pre-push.
 
+## Dogfooding rule
+
+Make future changes to this repository through the orchestrator harness itself,
+not by editing files by hand. For one isolated change, run
+`just repo-task <path-to-this-repo> <persona> "<task>"`; local mode gives the
+agent a worktree, runs `just check`, and direct-merges into `main`. For multi-part
+work, write a repo plan and run `just repo-plan <plan.json>`. This keeps the repo
+lifecycle continuously exercised by its own development.
+
 ## Stack and composition
 
 How this repo was built up from the create-repo reference pieces:
