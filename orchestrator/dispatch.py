@@ -1,0 +1,230 @@
+"""Dispatch one subtask: merge base ⊕ persona, then run the real onejudge CLI.
+
+`dispatch()` is the single unit of orchestrated work. It builds the effective
+onejudge config for a persona, passes the task to `onejudge run` over the CLI
+(`--task -`), and parses the versioned JSON report back into a `Report`. The
+orchestrator calls this for one-off subtasks; `plan.run_plan` calls it for each
+node of a DAG.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import subprocess
+import sys
+import tempfile
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+import yaml
+
+from . import BASE_CONFIG, PERSONA_DIR, REPO_ROOT
+from .config import ConfigError, build_effective_config, load_yaml
+
+# onejudge's own exit codes (see docs/cli.md): 0 completed + boolean evals passed,
+# 1 hit the turn cap / a boolean eval failed, 2 bad config or usage.
+EXIT_COMPLETED = 0
+EXIT_INCOMPLETE = 1
+EXIT_CONFIG_ERROR = 2
+
+
+class DispatchError(Exception):
+    """onejudge could not be run, or rejected the config (a loud failure)."""
+
+
+@dataclass
+class Report:
+    """The outcome of one dispatched subtask, parsed from onejudge's report."""
+
+    persona: str
+    exit_code: int
+    completed: bool
+    stopped_early: bool
+    assistant_turns: int
+    verdicts: list[dict[str, Any]]
+    usage: dict[str, Any]
+    raw: dict[str, Any] | None
+    stderr: str
+
+    def summary(self) -> str:
+        state = "completed" if self.completed else "NOT completed"
+        line = f"{self.persona}: {state} ({self.assistant_turns} assistant turn(s))"
+        for v in self.verdicts:
+            verdict = v.get("verdict", {})
+            line += f"\n  - [{v.get('kind')}] {v.get('criterion')}: {verdict.get('value')}"
+        return line
+
+
+def _parse_report(stdout: str) -> dict[str, Any] | None:
+    stdout = stdout.strip()
+    if not stdout:
+        return None
+    try:
+        data = json.loads(stdout)
+    except json.JSONDecodeError:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _build_report(persona: str, exit_code: int, stdout: str, stderr: str) -> Report:
+    data = _parse_report(stdout)
+    messages = ((data or {}).get("transcript") or {}).get("messages") or []
+    turns = sum(1 for m in messages if isinstance(m, dict) and m.get("role") == "assistant")
+    return Report(
+        persona=persona,
+        exit_code=exit_code,
+        completed=exit_code == EXIT_COMPLETED,
+        stopped_early=bool((data or {}).get("stopped_early", False)),
+        assistant_turns=turns,
+        verdicts=list((data or {}).get("verdicts") or []),
+        usage=dict((data or {}).get("usage") or {}),
+        raw=data,
+        stderr=stderr,
+    )
+
+
+def run_onejudge(
+    config: dict[str, Any],
+    task: str,
+    *,
+    persona: str = "agent",
+    cwd: str | Path = REPO_ROOT,
+    onejudge_bin: str = "onejudge",
+    provider: str | None = None,
+    env: dict[str, str] | None = None,
+    timeout: float | None = None,
+) -> Report:
+    """Run an already-merged effective config through onejudge; return a Report.
+
+    The task is passed over the CLI via ``--task -`` (stdin) so arbitrarily long,
+    multi-line tasks need no shell quoting. A config/usage error (exit 2) is
+    raised as a DispatchError rather than returned as a normal outcome.
+    """
+    with tempfile.TemporaryDirectory() as td:
+        cfg_path = Path(td) / "effective.onejudge.yaml"
+        cfg_path.write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
+        cmd = [onejudge_bin, "run", str(cfg_path), "--task", "-", "--format", "json"]
+        if provider is not None:
+            cmd += ["--provider", provider]
+        try:
+            proc = subprocess.run(
+                cmd,
+                cwd=str(cwd),
+                input=task,
+                text=True,
+                capture_output=True,
+                env={**os.environ, **(env or {})},
+                timeout=timeout,
+            )
+        except FileNotFoundError as exc:
+            raise DispatchError(
+                f"onejudge binary not found: {onejudge_bin!r} — run 'just bootstrap'"
+            ) from exc
+        except subprocess.TimeoutExpired as exc:  # pragma: no cover - timing-dependent
+            raise DispatchError(f"onejudge timed out after {timeout}s") from exc
+
+    if proc.returncode == EXIT_CONFIG_ERROR:
+        raise DispatchError(
+            f"onejudge rejected the config (exit 2): {proc.stderr.strip() or '<no stderr>'}"
+        )
+    return _build_report(persona, proc.returncode, proc.stdout, proc.stderr)
+
+
+def dispatch(
+    persona: str,
+    task: str,
+    *,
+    base_path: str | Path = BASE_CONFIG,
+    persona_dir: str | Path = PERSONA_DIR,
+    session: str | None = None,
+    project_dir: str | None = None,
+    max_turns: int | None = None,
+    done_when: str | None = None,
+    cwd: str | Path = REPO_ROOT,
+    onejudge_bin: str = "onejudge",
+    provider: str | None = None,
+    timeout: float | None = None,
+) -> Report:
+    """Merge base ⊕ persona and drive the subtask to completion via onejudge."""
+    base = load_yaml(base_path)
+    persona_path = Path(persona_dir) / f"{persona}.yaml"
+    if not persona_path.is_file():
+        raise DispatchError(
+            f"unknown persona {persona!r}: no {persona_path} "
+            f"(create one with 'just new-persona {persona}')"
+        )
+    persona_data = load_yaml(persona_path)
+    config = build_effective_config(
+        base,
+        persona_data,
+        session=session if session is not None else f"dispatch-{persona}",
+        project_dir=project_dir,
+        max_turns=max_turns,
+        done_when=done_when,
+    )
+    return run_onejudge(
+        config,
+        task,
+        persona=persona,
+        cwd=cwd,
+        onejudge_bin=onejudge_bin,
+        provider=provider,
+        timeout=timeout,
+    )
+
+
+def _read_task(value: str | None) -> str:
+    """Resolve the task from the CLI arg, reading stdin when omitted or ``-``."""
+    if value is None or value == "-":
+        return sys.stdin.read()
+    return value
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Dispatch one subtask to onejudge with a persona.")
+    parser.add_argument("persona", help="persona name (see personas/)")
+    parser.add_argument(
+        "task", nargs="?", default=None, help="the task ('-' or omitted reads stdin)"
+    )
+    parser.add_argument("--base", type=Path, default=BASE_CONFIG)
+    parser.add_argument("--persona-dir", type=Path, default=PERSONA_DIR)
+    parser.add_argument("--project-dir", default=None, help="the target project dir (agent.dir)")
+    parser.add_argument("--session", default=None)
+    parser.add_argument("--max-turns", type=int, default=None)
+    parser.add_argument("--done-when", default=None)
+    parser.add_argument("--cwd", default=None, help="working dir for onejudge (default: repo root)")
+    parser.add_argument("--onejudge-bin", default="onejudge")
+    parser.add_argument("--provider", default=None, choices=["oneharness", "command", "split"])
+    parser.add_argument("--timeout", type=float, default=None)
+    parser.add_argument("--format", choices=["human", "json"], default="human")
+    parser.add_argument("-o", "--output", type=Path, default=None)
+    args = parser.parse_args(argv)
+
+    try:
+        report = dispatch(
+            args.persona,
+            _read_task(args.task),
+            base_path=args.base,
+            persona_dir=args.persona_dir,
+            session=args.session,
+            project_dir=args.project_dir,
+            max_turns=args.max_turns,
+            done_when=args.done_when,
+            cwd=args.cwd or REPO_ROOT,
+            onejudge_bin=args.onejudge_bin,
+            provider=args.provider,
+            timeout=args.timeout,
+        )
+    except (DispatchError, ConfigError) as exc:
+        print(f"dispatch: {exc}", file=sys.stderr)
+        return EXIT_CONFIG_ERROR
+
+    rendered = json.dumps(report.raw, indent=2) if args.format == "json" else report.summary()
+    if args.output:
+        args.output.write_text(rendered + "\n", encoding="utf-8")
+    else:
+        print(rendered)
+    return report.exit_code

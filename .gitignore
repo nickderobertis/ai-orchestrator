@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+# uv
+# (uv.lock IS committed)
+
+# Test / coverage
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# Editor / OS
+.DS_Store
+*.swp
+
+# Orchestrator run artifacts (reports written with -o land wherever the caller
+# points; keep any local scratch out of the tree)
+/scratch/

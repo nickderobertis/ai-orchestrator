@@ -1,0 +1,47 @@
+# The ONE base onejudge config: settings common to every dispatched subtask.
+#
+# This is a onejudge config *fragment* (schema: `onejudge schema`) that carries
+# only what every persona shares. It is never run directly — `dispatch` merges it
+# with a persona delta from `personas/` and the CLI `--task`, then runs
+# `onejudge run` on the effective result. See docs/onejudge-integration.md.
+#
+# What a persona adds on top: the agent's role (`agent.instructions`, appended
+# after the shared preamble below) and the supervisor `user.persona` — plus an
+# optional `user.done_when` / `user.max_turns` override. Keep shared settings here
+# so they live in one place; keep role-specific settings in the persona.
+
+# Which backend runs the harness and plays the judge / simulated user. Harness and
+# model SELECTION for both sides lives in the oneharness config files, not here.
+provider:
+  kind: oneharness
+  bin: oneharness
+  judge_config: oneharness.judge.toml   # the judge / simulated-user side
+
+# System framing shared by every dispatched agent. The persona's own
+# `agent.instructions` are appended after this preamble.
+agent:
+  name: orchestrated-agent
+  dir: .                                # the target project dir (override per dispatch)
+  instructions: |
+    You are one worker in a larger orchestrated effort: you own exactly the
+    subtask you were given — do it fully and well, and do not expand scope into
+    sibling subtasks that other agents own.
+
+    Standing bar for every subtask:
+    - Verify before you claim done. Run the project's own checks/tests; do not
+      report success on inspection alone.
+    - Keep the change tightly scoped to the subtask. Match the surrounding code's
+      conventions.
+    - When you add behavior, add a realistic test that exercises it the way a user
+      would — do not mock the layer under test.
+    - Leave the tree clean: no stray files, no half-applied edits.
+
+# The simulated supervisor's shared defaults. A persona overrides `persona`
+# (required, role-specific) and may override these two.
+user:
+  done_when: "the subtask is fully implemented, verified, and the project's checks pass"
+  max_turns: 12
+
+# Caller-owned session name, threaded across turns. `dispatch` gives each subtask
+# a distinct session so parallel runs never collide.
+session: orchestrated

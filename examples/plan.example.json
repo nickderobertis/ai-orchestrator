@@ -1,0 +1,34 @@
+{
+  "concurrency": 4,
+  "tasks": [
+    {
+      "id": "design",
+      "persona": "planner",
+      "task": "Design a URL-shortener service: define the HTTP API (create + resolve), the storage schema, and the module boundaries the api and ui subtasks will build against. Write the design to docs/design.md."
+    },
+    {
+      "id": "api",
+      "persona": "backend-engineer",
+      "task": "Implement the URL-shortener HTTP API per docs/design.md: the create and resolve endpoints, validation, and persistence. Cover the endpoints with tests that drive real requests.",
+      "deps": ["design"]
+    },
+    {
+      "id": "ui",
+      "persona": "frontend-engineer",
+      "task": "Build the URL-shortener web UI per docs/design.md: a form to create a short link and a view of the result. Match the existing component patterns and keep it accessible.",
+      "deps": ["design"]
+    },
+    {
+      "id": "docs",
+      "persona": "docs-writer",
+      "task": "Write the README for the URL shortener: what it is, how to run it, and the API surface. Verify every command against the code.",
+      "deps": ["api", "ui"]
+    },
+    {
+      "id": "review",
+      "persona": "reviewer",
+      "task": "Review the URL shortener end to end (api + ui + docs) for correctness, missing edge cases, and security. Report verified, severity-ranked findings.",
+      "deps": ["api", "ui"]
+    }
+  ]
+}

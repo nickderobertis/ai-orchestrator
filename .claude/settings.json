@@ -1,0 +1,49 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/scripts/session-setup.sh\"",
+            "timeout": 300
+          }
+        ]
+      }
+    ]
+  },
+  "permissions": {
+    "allow": [
+      "Bash(just bootstrap)",
+      "Bash(just check)",
+      "Bash(just test)",
+      "Bash(just test-e2e)",
+      "Bash(just lint)",
+      "Bash(just format)",
+      "Bash(just format-check)",
+      "Bash(just typecheck)",
+      "Bash(just upgrade)",
+      "Bash(just validate-personas)",
+      "Bash(just dispatch:*)",
+      "Bash(just run-plan:*)",
+      "Bash(just new-persona:*)",
+      "Bash(just session-setup)",
+      "Bash(uv run:*)",
+      "Bash(uv sync:*)",
+      "Bash(uv lock:*)",
+      "Bash(onejudge run:*)",
+      "Bash(onejudge schema)",
+      "Bash(onejudge init:*)",
+      "Bash(oneharness detect)",
+      "Bash(oneharness config:*)",
+      "Bash(./scripts/session-setup.sh)",
+      "Bash(git status)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)"
+    ],
+    "deny": []
+  }
+}

@@ -1,0 +1,22 @@
+# Agent side of the onejudge conversation: WHICH harness + model does the work.
+#
+# This is the file `onejudge init` scaffolds via `oneharness init oneharness.toml`.
+# It is hand-maintained here because this box has no init-capable oneharness that
+# runs on its glibc (see docs/onejudge-integration.md). oneharness discovers it by
+# walking up from the working directory, so it lives at the repo root.
+#
+# Fallback mode: oneharness tries the harnesses in order and stops at the first
+# that can actually run, falling through only candidates that cannot run at all
+# (not installed, unauthenticated). A real task failure does NOT fall through. So
+# the same committed config works in a Codex session and in a Claude Code session.
+run_mode = "fallback"
+harnesses = ["codex", "claude-code"]
+
+[harness.codex]
+model = "gpt-5.5"
+
+[harness.claude-code]
+model = "claude-opus-4-8"
+# IS_SANDBOX lets claude-code run under root without --dangerously-skip-permissions
+# refusing; harmless elsewhere.
+env = { IS_SANDBOX = "1" }

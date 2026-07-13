@@ -1,0 +1,27 @@
+# Persona template. `just new-persona <name>` copies this to personas/<name>.yaml.
+#
+# A persona is a DELTA over config/onejudge.base.yaml — put only what makes this
+# role different here. Everything else (provider, session, the shared agent
+# preamble, default turn cap) is inherited from the base at dispatch time.
+#
+# Contract (enforced by `just validate-personas`):
+#   REQUIRED  agent.instructions   the worker's role, appended after the base preamble
+#   REQUIRED  user.persona         how the supervisor reviews this kind of work
+#   optional  agent.name           a label for the role (defaults to the base name)
+#   optional  user.done_when       role-specific completion bar (else base default)
+#   optional  user.max_turns       role-specific turn cap (else base default)
+#   optional  evals                extra transcript checks for this role
+# No other top-level keys — task comes from `--task`, shared settings from base.
+
+agent:
+  name: <role-name>
+  instructions: |
+    <What this worker specializes in and how it should approach its subtasks.
+    Be specific about the role; the shared quality bar is already in the base.>
+
+user:
+  persona: |
+    <The supervisor's stance for reviewing this role's work — what to push on,
+    what "not done yet" looks like for this kind of task.>
+  # done_when: "<override the base completion bar if this role needs a stricter one>"
+  # max_turns: 12
