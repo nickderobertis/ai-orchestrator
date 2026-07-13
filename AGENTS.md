@@ -110,12 +110,12 @@ out of `check` (non-deterministic, harness-backed) and enforced at pre-push.
 
 ## Dogfooding rule
 
-Make future changes to this repository through the orchestrator harness itself,
-not by editing files by hand. For one isolated change, run
-`just repo-task <path-to-this-repo> <persona> "<task>"`; local mode gives the
-agent a worktree, runs `just check`, and direct-merges into `main`. For multi-part
-work, write a repo plan and run `just repo-plan <plan.json>`. This keeps the repo
-lifecycle continuously exercised by its own development.
+Use the orchestrator harness for **all tasks of sufficient complexity**, in any
+repo or project. Decompose the work and drive each substantial piece through
+`just repo-task <repo> <persona> "<task>"` or `just repo-plan <plan.json>`; the
+lifecycle clones the target, works in an isolated worktree, verifies with its
+gate, and merges. Trivial or small changes can still be done directly under the
+granularity rule. This repo is one local-mode case of the same rule.
 
 ## Stack and composition
 
