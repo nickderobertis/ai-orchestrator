@@ -107,6 +107,11 @@ Net: the orchestration setup is harness-agnostic and correct. On a
 no-unprivileged-userns host, dispatch codex with
 `--oneharness-mode bypass` and the allowlister gate; run-plan takes the same flag.
 
+Dispatch gives each oneharness agent turn a default timeout of 1800 seconds so a
+build-heavy turn can finish. Set `ONEHARNESS_TIMEOUT` in the environment to
+override that default. onejudge's `max_turns` and the lifecycle `--timeout` still
+bound the complete run independently.
+
 ## Testing against onejudge without a paid model
 
 onejudge's `command` provider speaks a small JSON-lines protocol

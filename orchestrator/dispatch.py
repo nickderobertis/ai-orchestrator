@@ -29,6 +29,7 @@ from .config import ConfigError, build_effective_config, load_yaml
 EXIT_COMPLETED = 0
 EXIT_INCOMPLETE = 1
 EXIT_CONFIG_ERROR = 2
+DEFAULT_ONEHARNESS_TIMEOUT = "1800"
 
 
 class DispatchError(Exception):
@@ -109,6 +110,8 @@ def run_onejudge(
         cmd = [onejudge_bin, "run", str(cfg_path), "--task", "-", "--format", "json"]
         if provider is not None:
             cmd += ["--provider", provider]
+        process_env = {**os.environ, **(env or {})}
+        process_env.setdefault("ONEHARNESS_TIMEOUT", DEFAULT_ONEHARNESS_TIMEOUT)
         try:
             proc = subprocess.run(
                 cmd,
@@ -116,7 +119,7 @@ def run_onejudge(
                 input=task,
                 text=True,
                 capture_output=True,
-                env={**os.environ, **(env or {})},
+                env=process_env,
                 timeout=timeout,
             )
         except FileNotFoundError as exc:

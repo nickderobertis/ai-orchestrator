@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 import pytest
 
 from orchestrator import BASE_CONFIG, REPO_ROOT
@@ -141,3 +143,27 @@ def test_run_onejudge_missing_binary_raises() -> None:
     }
     with pytest.raises(DispatchError, match="not found"):
         run_onejudge(cfg, "t", onejudge_bin="onejudge-does-not-exist-xyz")
+
+
+@pytest.mark.parametrize(
+    ("configured_timeout", "expected_timeout"),
+    [(None, "1800"), ("73", "73")],
+)
+def test_run_onejudge_sets_per_turn_timeout(
+    tmp_path, monkeypatch, configured_timeout: str | None, expected_timeout: str
+) -> None:
+    onejudge = tmp_path / "onejudge"
+    onejudge.write_text(
+        '#!/bin/sh\nprintf \'{"usage": {"oneharness_timeout": "%s"}}\' "$ONEHARNESS_TIMEOUT"\n',
+        encoding="utf-8",
+    )
+    onejudge.chmod(0o755)
+    if configured_timeout is None:
+        monkeypatch.delenv("ONEHARNESS_TIMEOUT", raising=False)
+    else:
+        monkeypatch.setenv("ONEHARNESS_TIMEOUT", configured_timeout)
+
+    report = run_onejudge({}, "task", onejudge_bin=os.fspath(onejudge))
+
+    assert report.raw is not None
+    assert report.usage["oneharness_timeout"] == expected_timeout
