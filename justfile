@@ -30,9 +30,11 @@ test:
 test-e2e:
     uv run pytest tests/e2e
 
-# Lint; fail on findings.
+# Lint Python (ruff) and the shell script (shellcheck); fail on findings.
 lint:
     uv run ruff check .
+    @command -v shellcheck >/dev/null 2>&1 || { echo "shellcheck not installed (needed to lint scripts/*.sh) — https://github.com/koalaman/shellcheck#installing"; exit 1; }
+    shellcheck scripts/*.sh
 
 # Static type check.
 typecheck:

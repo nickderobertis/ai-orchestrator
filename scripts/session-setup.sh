@@ -8,9 +8,11 @@
 #      the prebuilt install.sh where a release archive exists (x86_64 Linux,
 #      macOS); otherwise builds from source (`cargo install`), which is the path
 #      on Linux aarch64.
-#   2. `oneharness` presence is reported — the LIVE dispatch path needs it (the
-#      offline gate does not). `onejudge init` additionally needs oneharness
-#      0.3.20+; see docs/onejudge-integration.md.
+#   2. `oneharness` (0.3.20+, init-capable) is installed via the PyPI
+#      `oneharness-cli` manylinux wheel — the LIVE dispatch path and `onejudge
+#      init` need it (the offline gate does not). The wheel is used because it
+#      runs on older glibc and carries `init`, unlike the prebuilt release binary.
+#      See docs/onejudge-integration.md.
 #
 # `set -e` is omitted on purpose: a flaky install must never abort session
 # startup. The script owns its exit codes and always exits 0. Quiet on success.
@@ -47,11 +49,19 @@ install_onejudge() {
   fi
 }
 
-report_oneharness() {
+ensure_oneharness() {
+  # The manylinux `oneharness-cli` wheel both runs on the host glibc and carries
+  # `init` (the prebuilt release binary does not on both counts). uv is a
+  # clean-clone prerequisite; if absent, leave any existing oneharness in place.
+  if ! command -v uv >/dev/null 2>&1; then
+    log "uv not found; cannot install oneharness (offline gate unaffected; live path needs it)"
+    return 0
+  fi
+  log "ensuring oneharness (init-capable) via uv tool"
+  uv tool install --upgrade 'oneharness-cli>=0.3.20' >&2 \
+    || log "oneharness-cli install failed (offline gate unaffected; live path needs it)"
   if command -v oneharness >/dev/null 2>&1; then
-    log "oneharness present ($(oneharness --version 2>/dev/null || echo unknown)) — live dispatch available"
-  else
-    log "oneharness not found — the offline gate is unaffected; the LIVE dispatch path needs it"
+    log "oneharness ready ($(oneharness --version 2>/dev/null || echo unknown))"
   fi
 }
 
@@ -64,7 +74,7 @@ persist_session_env() {
 }
 
 install_onejudge
-report_oneharness
+ensure_oneharness
 persist_session_env
 
 if command -v onejudge >/dev/null 2>&1; then

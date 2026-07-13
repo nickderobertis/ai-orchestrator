@@ -50,20 +50,26 @@ hit the turn cap, `2` bad config (raised as a `DispatchError`).
 ## The init process
 
 `onejudge init` scaffolds all three files — `oneharness.toml`,
-`oneharness.judge.toml`, and `onejudge.yaml` — by shelling out to `oneharness init`
-(needs **oneharness 0.3.20+**):
+`oneharness.judge.toml`, and a starter `onejudge.yaml` — by shelling out to
+`oneharness init` (needs **oneharness 0.3.20+**):
 
 ```sh
-onejudge init            # writes the two oneharness configs + a starter onejudge.yaml
+onejudge init --force    # writes the two oneharness configs + a starter onejudge.yaml
 onejudge schema          # the annotated, authoritative config reference
 ```
 
-**Why the configs here are hand-maintained.** This box has no init-capable
-oneharness that runs on its glibc: the prebuilt oneharness 0.3.21 needs a newer
-glibc than the host provides, and the crates.io build lags behind the 0.3.x
-releases that added `init`. So `oneharness.toml` / `oneharness.judge.toml` /
-`config/onejudge.base.yaml` are committed as the equivalent of `init`'s output.
-Where a newer oneharness is available, `onejudge init --force` regenerates them.
+The committed `oneharness.toml` / `oneharness.judge.toml` are **that init output**
+with two deliberate edits: the judge side runs a cheaper model than the agent, and
+both add an `IS_SANDBOX` env so claude-code runs under root. init's starter
+`onejudge.yaml` is not kept — `config/onejudge.base.yaml` supersedes it as the base
+this repo merges personas onto.
+
+**Getting an init-capable oneharness on this box.** The prebuilt oneharness
+release binary needs a newer glibc than the host provides, and the crates.io build
+lags behind the 0.3.x releases that added `init`. The **PyPI `oneharness-cli`
+wheel** (a manylinux build) is the one that both runs on the host's glibc and
+carries `init`, so `scripts/session-setup.sh` installs it with
+`uv tool install --upgrade 'oneharness-cli>=0.3.20'`.
 
 ## Testing against onejudge without a paid model
 

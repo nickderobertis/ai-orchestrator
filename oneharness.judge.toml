@@ -1,19 +1,29 @@
 # Judge / simulated-user side of the onejudge conversation: WHICH harness + model
-# supervises the work and scores the transcript.
-#
-# Referenced by `config/onejudge.base.yaml`'s `provider.judge_config` and passed to
-# `oneharness run --config`. This is the file `onejudge init` scaffolds via
-# `oneharness init oneharness.judge.toml`; hand-maintained here for the same reason
-# as `oneharness.toml`.
-#
-# The supervisor does not need the strongest coding model — a capable, cheaper
-# model keeps the loop's overhead down. Adjust to taste (or via ONEHARNESS_* env).
+# supervises the work and scores the transcript. Referenced by
+# `config/onejudge.base.yaml`'s `provider.judge_config`. Scaffolded by
+# `onejudge init` (`oneharness init oneharness.judge.toml`) and then customized:
+# the supervisor uses a cheaper model than the agent, and the IS_SANDBOX env.
+
+# run_mode: how the selected harnesses are run.
+#   "parallel" (default) runs them all at once and reports each.
+#   "fallback" tries them in priority order and stops at the first that can
+#   actually run, falling through only harnesses that cannot run at all (not
+#   installed, unspawnable, or an auth/quota rejection) — so one committed file
+#   works wherever a given harness happens to be authenticated.
 run_mode = "fallback"
+
+# harnesses: the selection, in priority order (the first is preferred under
+# fallback). See `oneharness list` for every supported id.
 harnesses = ["codex", "claude-code"]
 
+# [harness.<id>]: per-harness overrides. Model names differ per provider, so
+# each harness names its own.
 [harness.codex]
 model = "gpt-5.5"
 
 [harness.claude-code]
-model = "claude-sonnet-5"
+model = "claude-sonnet-5"                 # a cheaper supervisor keeps loop overhead down
 env = { IS_SANDBOX = "1" }
+
+# Inspect the effective, fully layered config (and where each value came from)
+# with `oneharness config`.

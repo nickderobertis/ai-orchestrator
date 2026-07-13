@@ -1,22 +1,31 @@
 # Agent side of the onejudge conversation: WHICH harness + model does the work.
-#
-# This is the file `onejudge init` scaffolds via `oneharness init oneharness.toml`.
-# It is hand-maintained here because this box has no init-capable oneharness that
-# runs on its glibc (see docs/onejudge-integration.md). oneharness discovers it by
-# walking up from the working directory, so it lives at the repo root.
-#
-# Fallback mode: oneharness tries the harnesses in order and stops at the first
-# that can actually run, falling through only candidates that cannot run at all
-# (not installed, unauthenticated). A real task failure does NOT fall through. So
-# the same committed config works in a Codex session and in a Claude Code session.
+# Scaffolded by `onejudge init` (`oneharness init oneharness.toml`) and then
+# customized (the IS_SANDBOX env below). oneharness discovers it by walking up
+# from the working directory, so it stays at the repo root. See
+# docs/onejudge-integration.md.
+
+# run_mode: how the selected harnesses are run.
+#   "parallel" (default) runs them all at once and reports each.
+#   "fallback" tries them in priority order and stops at the first that can
+#   actually run, falling through only harnesses that cannot run at all (not
+#   installed, unspawnable, or an auth/quota rejection) — so one committed file
+#   works wherever a given harness happens to be authenticated.
 run_mode = "fallback"
+
+# harnesses: the selection, in priority order (the first is preferred under
+# fallback). See `oneharness list` for every supported id.
 harnesses = ["codex", "claude-code"]
 
+# [harness.<id>]: per-harness overrides. Model names differ per provider, so
+# each harness names its own.
 [harness.codex]
 model = "gpt-5.5"
 
 [harness.claude-code]
 model = "claude-opus-4-8"
 # IS_SANDBOX lets claude-code run under root without --dangerously-skip-permissions
-# refusing; harmless elsewhere.
+# refusing; harmless on other harnesses.
 env = { IS_SANDBOX = "1" }
+
+# Inspect the effective, fully layered config (and where each value came from)
+# with `oneharness config`.
