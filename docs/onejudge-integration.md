@@ -71,6 +71,32 @@ wheel** (a manylinux build) is the one that both runs on the host's glibc and
 carries `init`, so `scripts/session-setup.sh` installs it with
 `uv tool install --upgrade 'oneharness-cli>=0.3.20'`.
 
+## Harnesses and the live path
+
+Live dispatch drives a real harness, chosen by `oneharness.toml`'s fallback chain
+(`codex` primary, `claude-code` secondary). The offline gate needs neither; the
+live path does, and each harness has an **environment requirement** for its tools
+to actually execute:
+
+- **codex** runs as its own process and executes tools directly, so it is the
+  preferred nested harness. But it sandboxes via **bubblewrap**, which needs
+  **unprivileged user namespaces**. Where the host disallows them (e.g. Ubuntu's
+  AppArmor `restrict_unprivileged_userns`), codex can't create its sandbox and
+  falls back to read-only — file/shell writes are blocked. The loop still runs
+  (agent turns, supervisor, judge, report all work — verified live), only the
+  agent's writes fail. Fixes: run on a host that allows unprivileged userns, or
+  set codex to a no-OS-sandbox mode (`~/.codex/config.toml sandbox_mode =
+  "danger-full-access"`) — a deliberate safety reduction, so opt in knowingly.
+- **claude-code** works standalone, but **inside a bridged/managed Claude Code
+  session its nested tool calls are deferred to the outer controller**
+  (`stop_reason: tool_deferred`) and never execute — so an orchestrator running
+  *inside* such a session cannot dispatch tool-using claude-code agents. Run the
+  orchestrator from a standalone shell (or CI) for claude-code dispatch to work.
+
+Net: the orchestration setup is harness-agnostic and correct; whether live
+tool-using work completes depends on running in an environment that satisfies one
+harness's requirement above.
+
 ## Testing against onejudge without a paid model
 
 onejudge's `command` provider speaks a small JSON-lines protocol

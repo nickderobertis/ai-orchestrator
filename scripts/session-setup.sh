@@ -13,7 +13,9 @@
 #      init` need it (the offline gate does not). The wheel is used because it
 #      runs on older glibc and carries `init`, unlike the prebuilt release binary.
 #      See docs/onejudge-integration.md.
-#   3. Hands off to `setup-llmlint.sh` to install the llmlint LLM-judge tier.
+#   3. `codex` (the fallback PRIMARY harness) is installed via npm. Auth is a
+#      one-time manual `codex login`. See docs/onejudge-integration.md.
+#   4. Hands off to `setup-llmlint.sh` to install the llmlint LLM-judge tier.
 #
 # `set -e` is omitted on purpose: a flaky install must never abort session
 # startup. The script owns its exit codes and always exits 0.
@@ -22,7 +24,8 @@ set -uo pipefail
 
 readonly BIN_DIR="$HOME/.local/bin"
 readonly CARGO_BIN="$HOME/.cargo/bin"
-export PATH="$BIN_DIR:$CARGO_BIN:$PATH"
+readonly NODE_BIN="$HOME/.local/node/bin"   # npm global prefix (codex lands here)
+export PATH="$BIN_DIR:$CARGO_BIN:$NODE_BIN:$PATH"
 
 log() { printf 'session-setup: %s\n' "$*" >&2; }
 
@@ -51,6 +54,22 @@ install_onejudge() {
   fi
 }
 
+ensure_codex() {
+  # codex is the fallback PRIMARY harness in oneharness.toml — it runs as its own
+  # process, so its tools execute directly (nested claude-code defers them; see
+  # docs/onejudge-integration.md "Harnesses and the live path"). Install the CLI;
+  # authentication is a one-time manual step (`codex login`).
+  if command -v codex >/dev/null 2>&1; then
+    return 0
+  fi
+  if command -v npm >/dev/null 2>&1; then
+    log "installing @openai/codex via npm"
+    npm install -g @openai/codex >&2 2>&1 || log "codex install failed (continuing)"
+  else
+    log "npm not found; cannot install codex (live path can still use claude-code)"
+  fi
+}
+
 ensure_oneharness() {
   # The manylinux `oneharness-cli` wheel both runs on the host glibc and carries
   # `init` (the prebuilt release binary does not on both counts). uv is a
@@ -70,13 +89,14 @@ ensure_oneharness() {
 persist_session_env() {
   [ -n "${CLAUDE_ENV_FILE:-}" ] || return 0
   case ":${PATH}:" in
-    *":${CARGO_BIN}:"*) ;;
-    *) printf 'export PATH=%q\n' "${CARGO_BIN}:${PATH}" >>"$CLAUDE_ENV_FILE" ;;
+    *":${NODE_BIN}:"*) ;;
+    *) printf 'export PATH=%q\n' "${PATH}" >>"$CLAUDE_ENV_FILE" ;;
   esac
 }
 
 install_onejudge
 ensure_oneharness
+ensure_codex
 persist_session_env
 
 # Install the llmlint LLM-judge tier (llmlint + its bundled oneharness).
