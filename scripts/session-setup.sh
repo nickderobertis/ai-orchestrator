@@ -110,11 +110,19 @@ ensure_codex_gate() {
 
 persist_session_env() {
   [ -n "${CLAUDE_ENV_FILE:-}" ] || return 0
-  case ":${PATH}:" in
-    *":${NODE_BIN}:"*) ;;
-    *) printf 'export PATH=%q\n' "${PATH}" >>"$CLAUDE_ENV_FILE" ;;
-  esac
+  local path_export
+  while IFS= read -r path_export; do
+    case "$path_export" in
+      "export PATH="*"$NODE_BIN"*) return 0 ;;
+    esac
+  done <"$CLAUDE_ENV_FILE" 2>/dev/null
+  printf -v path_export 'export PATH=%q' "$PATH"
+  printf '%s\n' "$path_export" >>"$CLAUDE_ENV_FILE"
 }
+
+if [[ ${BASH_SOURCE[0]} != "$0" ]]; then
+  return 0
+fi
 
 install_onejudge
 ensure_oneharness
