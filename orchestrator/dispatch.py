@@ -7,12 +7,6 @@ orchestrator calls this for one-off subtasks; `plan.run_plan` calls it for each
 node of a DAG.
 """
 
-# llmlint: ignore-file[async_typed_clients_at_boundaries] this is a synchronous CLI
-# orchestration harness: it drives the real onejudge CLI here (and git/gh in the sibling
-# modules) via subprocess.run by design — there is no async server context and no typed
-# client for an external process. The whole orchestrator/ package shells out synchronously
-# and the tests drive the real CLIs (see AGENTS.md "Tests are realistic, not mocked").
-
 from __future__ import annotations
 
 import argparse

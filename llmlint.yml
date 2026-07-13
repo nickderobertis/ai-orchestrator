@@ -23,3 +23,14 @@ plugins:
   - "https://raw.githubusercontent.com/nickderobertis/dero-skills/main/skills/bootstrap/create-repo/assets/llmlint/languages/python.llmlint.yml@1"
   - "https://raw.githubusercontent.com/nickderobertis/dero-skills/main/skills/bootstrap/create-repo/assets/llmlint/languages/bash.llmlint.yml@1"
   - "https://raw.githubusercontent.com/nickderobertis/dero-skills/main/skills/bootstrap/create-repo/assets/llmlint/ci.llmlint.yml@1"
+
+# Statically disable a plugin rule that cannot apply to this repo. This is a
+# synchronous CLI orchestration harness: every module shells out to git/gh/onejudge via
+# subprocess by design (and the e2e suite drives real git/subprocess), with no async
+# server context and no typed client for an external process. `relevance: false` marks
+# `async_typed_clients_at_boundaries` not-relevant repo-wide instead of re-suppressing it
+# per file across every module it touches.
+rules:
+  - name: async_typed_clients_at_boundaries
+    override: true
+    relevance: false
