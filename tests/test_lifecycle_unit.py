@@ -58,16 +58,19 @@ def test_default_body_mentions_persona_and_turns() -> None:
 
 
 def test_summary_includes_pr_and_gate() -> None:
+    from orchestrator.dispatch import Report
     from orchestrator.verify import VerifyResult
 
     result = _result(
         "gate-failed",
         pr=PullRequest(7, "u", "o/r", "b", "main"),
+        report=Report("p", 0, True, False, 1, [], {}, {}, "", "- Add an edge-case test."),
         verify=VerifyResult(False, ["just", "check"], "boom"),
         detail="local gate failed",
     )
     text = result.summary()
     assert "PR #7" in text and "gate:" in text and "local gate failed" in text
+    assert "follow-ups: - Add an edge-case test." in text
 
 
 def test_select_merge_strategy() -> None:

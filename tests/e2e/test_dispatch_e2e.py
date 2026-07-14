@@ -64,6 +64,7 @@ def test_dispatch_completes_via_supervisor_loop(command_base, onejudge_bin) -> N
     assert report.assistant_turns >= 2  # exercised the two-sided loop
     assert report.usage.get("output_tokens", 0) > 0
     assert report.verdicts and report.verdicts[0]["verdict"]["value"] is True
+    assert report.assessment == "- Add a regression test for the adjacent edge case."
 
 
 def test_dispatch_complete_now_single_turn(command_base, onejudge_bin) -> None:

@@ -83,6 +83,8 @@ def main() -> int:
             resp = {"value": value, "reason": "fake judge verdict"}
         case "judge":
             resp = {"value": req.get("max", 5), "reason": "fake numeric verdict"}
+        case "assess":
+            resp = {"text": "- Add a regression test for the adjacent edge case."}
         case _:
             sys.stderr.write(f"fake_backend: unknown op {op!r}\n")
             return 1

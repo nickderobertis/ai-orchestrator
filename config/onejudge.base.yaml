@@ -29,6 +29,9 @@ agent:
     subtask you were given — do it fully and well, and do not expand scope into
     sibling subtasks that other agents own.
 
+    If you notice follow-up work outside your subtask, do not do it; briefly note
+    it in your final message so the orchestrator can surface it.
+
     Standing bar for every subtask:
     - Verify before you claim done. Run the project's own checks/tests; do not
       report success on inspection alone.
@@ -55,3 +58,11 @@ user:
 # Caller-owned session name, threaded across turns. `dispatch` gives each subtask
 # a distinct session so parallel runs never collide.
 session: orchestrated
+
+# Ask the judge to preserve useful adjacent work without expanding this run's scope.
+assessment: |
+  Concisely list concrete follow-up work surfaced by this run but intentionally
+  left out of scope, including bugs noticed, missing tests, refactors, or adjacent
+  tasks revealed by the change. Ground each item in what the agent stated and the
+  transcript's tool actions. Return a short list with one line per item, or exactly
+  `None` when there is genuinely nothing. Do not restate completed work.

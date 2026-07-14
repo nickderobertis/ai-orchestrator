@@ -50,6 +50,7 @@ class Report:
     usage: dict[str, Any]
     raw: dict[str, Any] | None
     stderr: str
+    assessment: str | None = None
 
     def summary(self) -> str:
         state = "completed" if self.completed else "NOT completed"
@@ -57,6 +58,8 @@ class Report:
         for v in self.verdicts:
             verdict = v.get("verdict", {})
             line += f"\n  - [{v.get('kind')}] {v.get('criterion')}: {verdict.get('value')}"
+        if self.assessment:
+            line += f"\n  follow-ups: {self.assessment}"
         return line
 
 
@@ -75,6 +78,12 @@ def _build_report(persona: str, exit_code: int, stdout: str, stderr: str) -> Rep
     data = _parse_report(stdout)
     messages = ((data or {}).get("transcript") or {}).get("messages") or []
     turns = sum(1 for m in messages if isinstance(m, dict) and m.get("role") == "assistant")
+    raw_assessment = (data or {}).get("assessment")
+    assessment = (
+        raw_assessment.strip()
+        if isinstance(raw_assessment, str) and raw_assessment.strip()
+        else None
+    )
     return Report(
         persona=persona,
         exit_code=exit_code,
@@ -85,6 +94,7 @@ def _build_report(persona: str, exit_code: int, stdout: str, stderr: str) -> Rep
         usage=dict((data or {}).get("usage") or {}),
         raw=data,
         stderr=stderr,
+        assessment=assessment,
     )
 
 

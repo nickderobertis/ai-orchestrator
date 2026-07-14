@@ -112,6 +112,8 @@ class LifecycleResult:
             head += f"\n  - {self.detail}"
         if self.verify is not None and not self.verify.ok:
             head += f"\n  - gate: {' '.join(self.verify.command)} failed"
+        if self.report is not None and self.report.assessment:
+            head += f"\n  - follow-ups: {self.report.assessment}"
         return head
 
 
@@ -736,6 +738,7 @@ def _result_payload(result: LifecycleResult) -> dict[str, Any]:
         "ok": result.ok,
         "pr": result.pr.url if result.pr else None,
         "detail": result.detail,
+        "follow_ups": result.report.assessment if result.report else None,
     }
 
 

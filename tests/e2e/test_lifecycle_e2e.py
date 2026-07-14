@@ -34,6 +34,7 @@ from orchestrator.lifecycle import (
 )
 from orchestrator.merge import GitHubMergeStrategy
 from orchestrator.next_round import main as next_round_main
+from orchestrator.next_round import main_runs
 from orchestrator.workspace import Workspace, normalize_repo
 
 
@@ -129,6 +130,7 @@ def test_repo_plan_ledger_and_guided_next_round(
     first = runs_dir / "fixed-run" / "round-01"
     assert json.loads((first / "plan.json").read_text()) == first_plan
     assert (first / "result.json").is_file()
+    follow_up = "- Add a regression test for the adjacent edge case."
     assert "just next-round fixed-run [edits.json]" in captured.err
 
     edits = tmp_path / "edits.json"
@@ -140,7 +142,12 @@ def test_repo_plan_ledger_and_guided_next_round(
     captured = capsys.readouterr()
     second = runs_dir / "fixed-run" / "round-02"
     assert rc == 0 and (second / "plan.json").is_file() and (second / "result.json").is_file()
-    assert json.loads((second / "result.json").read_text())["results"]["change"]["status"] == "done"
+    second_result = json.loads((second / "result.json").read_text())
+    assert second_result["results"]["change"]["status"] == "done"
+    assert second_result["results"]["change"]["follow_ups"] == follow_up
+    assert follow_up in captured.out
+    assert main_runs(["--runs-dir", str(runs_dir)]) == 0
+    assert follow_up in capsys.readouterr().out
     assert "nothing to iterate" in captured.err
 
 
