@@ -56,6 +56,7 @@ def test_default_branch_uses_sole_remote_ref_when_remote_head_missing(
     tmp_path, bare_origin
 ) -> None:
     clone = gitops.clone(str(bare_origin(branch="master")), tmp_path / "clone")
+    gitops._git(["checkout", "--detach"], cwd=clone)
     gitops._git(["symbolic-ref", "--delete", "refs/remotes/origin/HEAD"], cwd=clone)
     assert gitops.default_branch(clone) == "master"
 
@@ -76,6 +77,31 @@ def test_default_branch_ignores_stale_remote_head(tmp_path, bare_origin) -> None
     clone = gitops.clone(str(bare_origin(branch="master")), tmp_path / "clone")
     gitops._git(["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/gone"], cwd=clone)
     assert gitops.default_branch(clone) == "master"
+
+
+def test_default_branch_uses_checked_out_branch_upstream_on_named_remote(
+    tmp_path, bare_origin
+) -> None:
+    origin = bare_origin(branch="trunk")
+    clone = gitops.clone(str(origin), tmp_path / "clone")
+    gitops._git(["remote", "rename", "origin", "upstream"], cwd=clone)
+    gitops._git(["symbolic-ref", "--delete", "refs/remotes/upstream/HEAD"], cwd=clone)
+
+    assert gitops.default_branch(clone, remote="upstream") == "trunk"
+
+
+def test_default_branch_rejects_empty_configured_remote(tmp_path) -> None:
+    repo = tmp_path / "repo"
+    empty_remote = tmp_path / "empty.git"
+    gitops._git(["init", "-b", "trunk", str(repo)])
+    gitops._git(["init", "--bare", str(empty_remote)])
+    (repo / "README.md").write_text("local only\n", encoding="utf-8")
+    gitops.add_all(repo)
+    gitops.commit(repo, "seed local branch")
+    gitops._git(["remote", "add", "origin", str(empty_remote)], cwd=repo)
+
+    with pytest.raises(gitops.GitError, match="plausible remote branches are none"):
+        gitops.default_branch(repo)
 
 
 def test_force_push(tmp_path, bare_origin) -> None:
@@ -107,3 +133,17 @@ def test_merge_fast_forward_without_no_ff(tmp_path, bare_origin) -> None:
 def test_git_error_on_non_repo(tmp_path) -> None:
     with pytest.raises(gitops.GitError, match="git rev-parse"):
         gitops.head_sha(tmp_path)
+
+
+def test_merge_base_invalid_ref_is_not_reported_as_conflict(tmp_path, bare_origin) -> None:
+    clone = gitops.clone(str(bare_origin()), tmp_path / "clone")
+
+    with pytest.raises(gitops.GitError, match="not something we can merge"):
+        gitops.merge_base_into_branch(clone, "missing-ref", message="sync missing ref")
+
+
+def test_is_ancestor_rejects_invalid_ref(tmp_path, bare_origin) -> None:
+    clone = gitops.clone(str(bare_origin()), tmp_path / "clone")
+
+    with pytest.raises(gitops.GitError, match="Not a valid object name"):
+        gitops.is_ancestor(clone, "missing-ref", "HEAD")
