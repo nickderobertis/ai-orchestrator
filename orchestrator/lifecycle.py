@@ -26,7 +26,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from . import BASE_CONFIG, PERSONA_DIR, gitops
 from .config import ConfigError, load_yaml
@@ -35,6 +35,15 @@ from .github import CliGitHubBackend, GitHubBackend, GitHubError, PullRequest
 from .gitops import GitError
 from .merge import GitHubMergeStrategy, LocalMergeStrategy, MergeContext, MergeStrategy
 from .plan import NodeRun, schedule_dag
+from .runs import (
+    RepoPlanPayload,
+    RepoPlanResultItem,
+    prepare_round,
+    resolve_run_dir,
+    status_counts,
+    status_summary,
+    write_result,
+)
 from .verify import VerifyResult, detect_gate, run_gate
 from .workspace import RepoRef, Workspace, normalize_repo
 
@@ -752,12 +761,21 @@ def main_plan(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("plan", type=Path, help="repo-plan file (JSON or YAML)")
     parser.add_argument("--concurrency", type=int, default=None)
+    parser.add_argument("--run", default=None, help="record into this validated run id")
+    parser.add_argument("--no-record", action="store_true", help="do not record this round")
+    parser.add_argument("--runs-dir", type=Path, default=Path("runs"), help="run ledger root")
     _add_common_args(parser)
     args = parser.parse_args(argv)
 
     try:
-        plan = load_repo_plan(args.plan)
-    except PlanError as exc:
+        plan_mapping = load_yaml(args.plan)
+        plan = parse_repo_plan(plan_mapping)
+        run_dir = (
+            resolve_run_dir(args.runs_dir, plan_mapping, args.plan, args.run)
+            if not args.no_record
+            else None
+        )
+    except (ConfigError, PlanError) as exc:
         print(f"repo-plan: {exc}", file=sys.stderr)
         return 2
 
@@ -774,24 +792,53 @@ def main_plan(argv: list[str] | None = None) -> int:
     )
     result = run_repo_plan(plan, runner, concurrency=args.concurrency)
 
-    if args.format == "json":
-        payload = {
-            "ok": result.ok,
-            "started_order": result.started_order,
-            "results": {
-                nid: {
+    payload: RepoPlanPayload = {
+        "ok": result.ok,
+        "started_order": result.started_order,
+        "results": {
+            nid: cast(
+                RepoPlanResultItem,
+                {
                     "status": r.status,
                     **({} if r.result is None else _result_payload(r.result)),
                     "error": r.error,
-                }
-                for nid, r in result.results.items()
-            },
-        }
-        rendered = json.dumps(payload, indent=2)
-    else:
-        rendered = result.summary()
+                },
+            )
+            for nid, r in result.results.items()
+        },
+    }
+    rendered = json.dumps(payload, indent=2) if args.format == "json" else result.summary()
     _emit(rendered, args.output)
+    if run_dir is not None:
+        try:
+            number, round_dir = prepare_round(run_dir, plan_mapping)
+            write_result(round_dir, payload)
+        except ConfigError as exc:
+            print(f"repo-plan: could not record run: {exc}", file=sys.stderr)
+            return 2
+        _print_continuation(run_dir.name, number, round_dir, payload, args.runs_dir)
     return 0 if result.ok else 1
+
+
+def _print_continuation(
+    run_id: str,
+    number: int,
+    round_dir: Path,
+    payload: RepoPlanPayload,
+    runs_dir: Path,
+) -> None:
+    """Print the repo-plan continuation guidance without contaminating stdout."""
+    print(
+        f"Round {number:02d} recorded -> {round_dir}/  ({status_summary(payload)})",
+        file=sys.stderr,
+    )
+    counts = status_counts(payload)
+    if counts and counts["done"] == sum(counts.values()):
+        print("All nodes are done; there is nothing to iterate.", file=sys.stderr)
+        return
+    print("Iterate: write an edits.json (retry/split/add/drop), then", file=sys.stderr)
+    suffix = "" if runs_dir == Path("runs") else f" --runs-dir {runs_dir}"
+    print(f"  just next-round {run_id} [edits.json]{suffix}", file=sys.stderr)
 
 
 if __name__ == "__main__":  # pragma: no cover

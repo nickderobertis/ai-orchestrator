@@ -103,9 +103,34 @@ mechanics: given the prior plan, its results, and a small **edits** mapping
 plan — carrying **merged nodes out** (done, not re-run) and dropping a new node's
 dependency on a merged node as *satisfied* (its predecessor is on the base branch
 now). The produced plan is validated, so a bad edit fails loudly.
-`just replan <prev-plan.json> <result.json> [edits.json]` → next plan; feed it back
-to `just repo-plan`. The judgment (what to retry/split/add) stays with the
-orchestrator; `replan` just applies it correctly.
+
+`repo-plan` records every round by default:
+
+```
+runs/<run-id>/round-01/plan.json
+runs/<run-id>/round-01/result.json
+```
+
+The plan mapping is preserved exactly and the result is the command's JSON
+payload. Pass `--run <id>` to name a run; without it, a fresh unique run id comes
+from the plan's top-level `name` or filename. The continuation trailer is written
+to stderr, so `--format json` stdout remains machine-readable. Use `--no-record`
+to opt out or `--runs-dir` to move the ledger.
+
+After inspecting a round, put retry/split/add/drop decisions in `edits.json` and
+continue without manually locating the prior files:
+
+```
+just runs
+just next-round <run-id> [edits.json]
+just next-round <run-id> [edits.json] --plan-only
+```
+
+`next-round` calls the existing replanner, writes `round-02/plan.json`, runs it,
+and records its result. `--plan-only` stops after writing the derived plan. The
+lower-level `just replan <prev-plan.json> <result.json> [edits.json]` remains
+available. The judgment stays with the orchestrator; these commands only apply
+and persist it.
 
 ## Auto mode without approvals — and why bypass
 
