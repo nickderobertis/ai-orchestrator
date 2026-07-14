@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import NewType, cast
 
 from . import gitops
+from .coordination import advisory_lock, atomic_json
 from .workspace import RepoRef, Workflow, normalize_repo
 
 Slug = NewType("Slug", str)
@@ -131,9 +132,12 @@ class Registry:
         return result
 
     def save(self) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        data = {slug: asdict(entry) for slug, entry in sorted(self.entries.items())}
-        self.path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        with advisory_lock(f"registry:{self.path.resolve()}"):
+            current = self._load()
+            current.update(self.entries)
+            self.entries = current
+            data = {str(slug): asdict(entry) for slug, entry in sorted(current.items())}
+            atomic_json(self.path, data)
 
     @staticmethod
     def _valid_checkout(path: Path, expected_origin: str) -> bool:
@@ -177,6 +181,23 @@ class Registry:
         default_workflow: Workflow = "remote",
     ) -> Path:
         repo = normalize_repo(spec)
+        with advisory_lock(f"registry-resolve:{self.path.resolve()}:{repo.slug}"):
+            self.entries = self._load()
+            return self._resolve_unlocked(
+                repo,
+                search_roots=search_roots,
+                clone_into=clone_into,
+                default_workflow=default_workflow,
+            )
+
+    def _resolve_unlocked(
+        self,
+        repo: RepoRef,
+        *,
+        search_roots: Sequence[str | Path] | None,
+        clone_into: str | Path | None,
+        default_workflow: Workflow,
+    ) -> Path:
         if repo.local:
             path = Path(repo.url)
             if not path.is_dir() or not gitops.is_repo(path):
@@ -231,6 +252,13 @@ class Registry:
         return self._store(repo, chosen, workflow or ("local" if repo.local else "remote"))
 
     def refresh(self, slug: str | None = None) -> list[RefreshResult]:
+        with advisory_lock(f"registry:{self.path.resolve()}"):
+            current = self._load()
+            current.update(self.entries)
+            self.entries = current
+            return self._refresh_entries(slug)
+
+    def _refresh_entries(self, slug: str | None) -> list[RefreshResult]:
         requested_slug = Slug(slug) if slug is not None else None
         if requested_slug is not None and requested_slug not in self.entries:
             raise RegistryError(f"repo {slug!r} is not registered")
@@ -257,26 +285,30 @@ class Registry:
                 results.append(RefreshResult(key, entry.path, False, "checkout is dirty"))
                 continue
             try:
-                gitops.fetch(path)
-                branch = gitops.default_branch(path)
-                if gitops.current_branch(path) != branch:
-                    results.append(
-                        RefreshResult(
-                            key, entry.path, False, f"default branch {branch} is not checked out"
+                with advisory_lock(f"git:{gitops.common_dir(path)}"):
+                    gitops.fetch(path)
+                    branch = gitops.default_branch(path)
+                    if gitops.current_branch(path) != branch:
+                        results.append(
+                            RefreshResult(
+                                key,
+                                entry.path,
+                                False,
+                                f"default branch {branch} is not checked out",
+                            )
                         )
-                    )
-                    continue
-                if not gitops.is_ancestor(path, gitops.head_sha(path), f"origin/{branch}"):
-                    results.append(
-                        RefreshResult(
-                            key,
-                            entry.path,
-                            False,
-                            f"checkout has diverged from origin/{branch}; fast-forward refused",
+                        continue
+                    if not gitops.is_ancestor(path, gitops.head_sha(path), f"origin/{branch}"):
+                        results.append(
+                            RefreshResult(
+                                key,
+                                entry.path,
+                                False,
+                                f"checkout has diverged from origin/{branch}; fast-forward refused",
+                            )
                         )
-                    )
-                    continue
-                gitops.merge_ff_only(path, f"origin/{branch}")
+                        continue
+                    gitops.merge_ff_only(path, f"origin/{branch}")
             except gitops.GitError as exc:
                 results.append(RefreshResult(key, entry.path, False, str(exc)))
             else:

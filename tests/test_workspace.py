@@ -82,9 +82,9 @@ def test_workspace_clone_worktree_lifecycle(tmp_path, bare_origin) -> None:
 
     wt = ws.worktree(ref, "feat", base="origin/main")
     assert gitops.current_branch(wt) == "feat"
-    # Re-requesting the same branch removes the stale worktree and recreates it.
-    wt2 = ws.worktree(ref, "feat", base="origin/main")
-    assert wt2 == wt and gitops.current_branch(wt2) == "feat"
+    # An active branch belongs to its run and is never reset out from under it.
+    with pytest.raises(RuntimeError, match="branch 'feat' is active.*resume"):
+        ws.worktree(ref, "feat", base="origin/main")
 
     ws.remove_worktree(ref, wt)
     assert not wt.exists()

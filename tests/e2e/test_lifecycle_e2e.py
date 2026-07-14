@@ -15,7 +15,9 @@ journey — local direct-merge and the GitHub PR+auto-merge path — for real.
 from __future__ import annotations
 
 import json
+import shlex
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import cast
 
@@ -165,13 +167,81 @@ def test_local_repo_direct_merge(tmp_path, bare_origin) -> None:
         dispatch_fn=make_writing_dispatch(filename="feature.txt"),
         verify_cmd=["true"],  # explicit gate so the test never depends on make/just
     )
-    assert result.ok
+    assert result.ok, result.detail
     assert result.outcome == "merged"
     assert result.base_branch == "main"
     assert _has_file(origin, "main", "feature.txt")  # the change really landed on origin main
     canonical = ws.clone_dir(normalize_repo(str(origin)))
     assert gitops.current_branch(canonical) == "main"
     assert gitops.head_sha(canonical) == _tip(origin, "main")
+
+
+def test_local_repo_non_main_default_and_gate_context(tmp_path, bare_origin) -> None:
+    origin = bare_origin(branch="master")
+    ws = _workspace(tmp_path, origin)
+    result = run_repo_task(
+        str(origin),
+        "Add a portable change.",
+        "backend-engineer",
+        workspace=ws,
+        dispatch_fn=make_writing_dispatch(filename="portable.txt"),
+        verify_cmd=[
+            "sh",
+            "-c",
+            'test "$ORCHESTRATOR_COMPARISON_REMOTE/$ORCHESTRATOR_COMPARISON_BASE" = origin/master',
+        ],
+    )
+    assert result.ok, result.detail
+    assert result.base_branch == "master"
+    assert _has_file(origin, "master", "portable.txt")
+
+
+def test_competing_local_publishers_rebuild_and_reverify_after_push_race(
+    tmp_path, bare_origin
+) -> None:
+    origin = bare_origin()
+    initial = _tip(origin, "main")
+    ready = tmp_path / "publisher-b-ready"
+    verification_log = tmp_path / "publication-gates.log"
+    quoted_ready = shlex.quote(str(ready))
+    quoted_log = shlex.quote(str(verification_log))
+    quoted_origin = shlex.quote(str(origin))
+    gate = [
+        "sh",
+        "-c",
+        "if git symbolic-ref -q HEAD >/dev/null; then exit 0; fi; "
+        f"if test -f machine-b.txt && test ! -f machine-a.txt; then "
+        f"touch {quoted_ready}; "
+        f'while test "$(git ls-remote {quoted_origin} refs/heads/main | cut -f1)" = {initial}; '
+        "do sleep 0.01; done; "
+        f"echo b-stale >> {quoted_log}; "
+        f"elif test -f machine-b.txt; then echo b-rebuilt >> {quoted_log}; "
+        f"else while test ! -f {quoted_ready}; do sleep 0.01; done; "
+        f"echo a >> {quoted_log}; fi",
+    ]
+
+    def publish(machine: str):
+        workspace_root = tmp_path / machine
+        ws = _workspace(workspace_root, origin)
+        return run_repo_task(
+            str(origin),
+            f"Publish from {machine}.",
+            "backend-engineer",
+            workspace=ws,
+            branch=f"feature/{machine}",
+            dispatch_fn=make_writing_dispatch(filename=f"{machine}.txt"),
+            verify_cmd=gate,
+            publication_attempts=3,
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(publish, ("machine-a", "machine-b")))
+
+    assert all(result.ok and result.outcome == "merged" for result in results)
+    assert _has_file(origin, "main", "machine-a.txt")
+    assert _has_file(origin, "main", "machine-b.txt")
+    assert verification_log.read_text(encoding="utf-8").splitlines().count("b-stale") == 1
+    assert verification_log.read_text(encoding="utf-8").splitlines().count("b-rebuilt") == 1
 
 
 def test_local_repo_gate_failure_blocks_merge(tmp_path, bare_origin) -> None:

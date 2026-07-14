@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Literal
 
 from . import gitops
+from .coordination import advisory_lock
 from .verify import run_gate
 
 __all__ = ["IntegrateError", "IntegrationResult", "BranchResult", "integrate", "plan"]
@@ -83,7 +84,7 @@ def _remove_candidate_worktree(repo: Path, path: Path, temporary_parent: Path | 
     temporary_parent.rmdir()
 
 
-def integrate(
+def _integrate_locked(
     repo: str | Path,
     candidates: list[str] | None = None,
     *,
@@ -157,6 +158,32 @@ def integrate(
         gitops.push(root, base, remote=remote, set_upstream=False)
         pushed = True
     return IntegrationResult(base, tuple(results), advanced, pushed)
+
+
+def integrate(
+    repo: str | Path,
+    candidates: list[str] | None = None,
+    *,
+    base: str | None = None,
+    pattern: str = "claude/*",
+    gate_command: list[str] | None = None,
+    refresh: bool = False,
+    push: bool = False,
+    remote: str = "origin",
+) -> IntegrationResult:
+    """Serialize a complete integration mutation against the repository identity."""
+    root = Path(repo).resolve()
+    with advisory_lock(f"git:{gitops.common_dir(root)}"):
+        return _integrate_locked(
+            root,
+            candidates,
+            base=base,
+            pattern=pattern,
+            gate_command=gate_command,
+            refresh=refresh,
+            push=push,
+            remote=remote,
+        )
 
 
 def _render_readable(result: IntegrationResult) -> str:

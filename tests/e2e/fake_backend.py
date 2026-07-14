@@ -15,9 +15,13 @@ Outcome is steered by sentinels in the task (the first user message):
                        supervisor push, exercising the two-sided loop (exit 0).
 """
 
+# llmlint: ignore-file[boundary_inputs_validated] this deterministic test backend validates the
+# request mapping and every message field it consumes below; unsupported operations fail closed.
+
 from __future__ import annotations
 
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -39,6 +43,9 @@ def main() -> int:
         sys.stderr.write("fake_backend: request must be a JSON object\n")
         return 1
     op = req.get("op")
+    if not isinstance(op, str):
+        sys.stderr.write("fake_backend: op must be a string\n")
+        return 1
     messages = req.get("messages") or []
     if not isinstance(messages, list) or not all(
         isinstance(item, dict)
@@ -55,6 +62,11 @@ def main() -> int:
         case "respond":
             if "write-change" in task:
                 (Path.cwd() / "CHANGE.txt").write_text("change from fake agent\n", encoding="utf-8")
+            if "write-unique-change" in task:
+                identity = re.sub(r"[^A-Za-z0-9._-]+", "-", Path.cwd().name)
+                (Path.cwd() / f"CHANGE-{identity}.txt").write_text(
+                    "change from fake agent\n", encoding="utf-8"
+                )
             # `complete-now` finishes on the first turn; otherwise the agent stays
             # "not done" and completion is decided by the supervisor's done_when
             # judge below, which only passes on the second turn — exercising the

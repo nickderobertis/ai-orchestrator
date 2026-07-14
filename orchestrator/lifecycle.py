@@ -23,6 +23,7 @@ import hashlib
 import json
 import sys
 import time
+import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -159,7 +160,7 @@ def _incomplete_commit_message(step: Step) -> str:
 def _workstream_branch_name(steps: list[Step]) -> str:
     lead = steps[0]
     key = "\x00".join(f"{s.persona}:{s.task}" for s in steps)
-    return f"ai-orchestrator/{lead.persona}/{_short_hash(key)}"
+    return f"ai-orchestrator/{lead.persona}/{_short_hash(key)}-{uuid.uuid4().hex[:10]}"
 
 
 def _workstream_body(steps: list[Step], results: list[StepResult]) -> str:
@@ -290,6 +291,7 @@ def run_repo_task(
     max_turns: int | None = None,
     done_when: str | None = None,
     gate_timeout: float | None = None,
+    publication_attempts: int = 3,
     poll_interval: float = 15.0,
     timeout: float = 3600.0,
     sleep: Callable[[float], None] = time.sleep,
@@ -334,7 +336,7 @@ def run_repo_task(
     )
     worktree: Path | None = None
     try:
-        clone = workspace.ensure_clone(ref, url=url)
+        clone = workspace.ensure_clone(ref, url=url, base_branch=base_branch)
         strategy = _select_merge_strategy(ref, merge, github, workflow or workspace.workflow(ref))
         base = base_branch or gitops.default_branch(clone)
         result.base_branch = base
@@ -376,7 +378,15 @@ def run_repo_task(
         if not skip_verify:
             cmd = verify_cmd or detect_gate(worktree)
             if cmd is not None:
-                verify = run_gate(worktree, cmd, timeout=gate_timeout)
+                verify = run_gate(
+                    worktree,
+                    cmd,
+                    timeout=gate_timeout,
+                    env={
+                        "ORCHESTRATOR_COMPARISON_REMOTE": "origin",
+                        "ORCHESTRATOR_COMPARISON_BASE": base,
+                    },
+                )
                 result.verify = verify
                 if not verify.ok:
                     result.outcome = "gate-failed"
@@ -406,6 +416,13 @@ def run_repo_task(
             timeout=timeout,
             sleep=sleep,
             clock=clock,
+            verify_command=None if skip_verify else (verify_cmd or detect_gate(worktree)),
+            gate_timeout=gate_timeout,
+            verify_env={
+                "ORCHESTRATOR_COMPARISON_REMOTE": "origin",
+                "ORCHESTRATOR_COMPARISON_BASE": base,
+            },
+            publication_attempts=publication_attempts,
         )
         merge_outcome = strategy.publish_and_merge(ctx)
         if merge_outcome.outcome == "merged":
@@ -657,6 +674,7 @@ def make_repo_runner(
     skip_verify: bool,
     poll_interval: float,
     timeout: float,
+    publication_attempts: int = 3,
 ) -> Callable[[RepoPlanNode], LifecycleResult]:
     """Build the production runner that drives each node through `run_repo_task`."""
 
@@ -683,6 +701,7 @@ def make_repo_runner(
             done_when=node.done_when,
             poll_interval=poll_interval,
             timeout=timeout,
+            publication_attempts=publication_attempts,
         )
 
     return runner
@@ -695,6 +714,13 @@ def _read_task(value: str | None) -> str:
     if value is None or value == "-":
         return sys.stdin.read()
     return value
+
+
+def _positive_int(value: str) -> int:
+    parsed = int(value)
+    if parsed < 1:
+        raise argparse.ArgumentTypeError("must be at least 1")
+    return parsed
 
 
 def _add_common_args(parser: argparse.ArgumentParser) -> None:
@@ -718,6 +744,12 @@ def _add_common_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--skip-verify", action="store_true", help="skip the local gate")
     parser.add_argument("--poll-interval", type=float, default=15.0)
     parser.add_argument("--timeout", type=float, default=3600.0)
+    parser.add_argument(
+        "--publication-attempts",
+        type=_positive_int,
+        default=3,
+        help="maximum verified attempts to publish a local base (default: 3)",
+    )
     parser.add_argument("--format", choices=["human", "json"], default="human")
     parser.add_argument("-o", "--output", type=Path, default=None)
 
@@ -775,6 +807,7 @@ def main_task(argv: list[str] | None = None) -> int:
         max_turns=args.max_turns,
         done_when=args.done_when,
         poll_interval=args.poll_interval,
+        publication_attempts=args.publication_attempts,
         timeout=args.timeout,
     )
     rendered = (
@@ -794,6 +827,7 @@ def main_plan(argv: list[str] | None = None) -> int:
     parser.add_argument("--concurrency", type=int, default=None)
     parser.add_argument("--run", default=None, help="record into this validated run id")
     parser.add_argument("--no-record", action="store_true", help="do not record this round")
+    parser.add_argument("--recover", action="store_true", help="claim an abandoned running round")
     parser.add_argument("--runs-dir", type=Path, default=Path("runs"), help="run ledger root")
     _add_common_args(parser)
     args = parser.parse_args(argv)
@@ -810,6 +844,14 @@ def main_plan(argv: list[str] | None = None) -> int:
         print(f"repo-plan: {exc}", file=sys.stderr)
         return 2
 
+    round_record: tuple[int, Path] | None = None
+    if run_dir is not None:
+        try:
+            round_record = prepare_round(run_dir, plan_mapping, recover=args.recover)
+        except ConfigError as exc:
+            print(f"repo-plan: could not claim run: {exc}", file=sys.stderr)
+            return 2
+
     runner = make_repo_runner(
         workspace=Workspace(args.workspace),
         base_path=args.base_config,
@@ -820,6 +862,7 @@ def main_plan(argv: list[str] | None = None) -> int:
         skip_verify=args.skip_verify,
         poll_interval=args.poll_interval,
         timeout=args.timeout,
+        publication_attempts=args.publication_attempts,
     )
     result = run_repo_plan(plan, runner, concurrency=args.concurrency)
 
@@ -840,9 +883,9 @@ def main_plan(argv: list[str] | None = None) -> int:
     }
     rendered = json.dumps(payload, indent=2) if args.format == "json" else result.summary()
     _emit(rendered, args.output)
-    if run_dir is not None:
+    if run_dir is not None and round_record is not None:
         try:
-            number, round_dir = prepare_round(run_dir, plan_mapping)
+            number, round_dir = round_record
             write_result(round_dir, payload)
         except ConfigError as exc:
             print(f"repo-plan: could not record run: {exc}", file=sys.stderr)

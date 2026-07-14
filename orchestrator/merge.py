@@ -23,7 +23,9 @@ from pathlib import Path
 from typing import Protocol
 
 from . import gitops
+from .coordination import advisory_lock
 from .github import AutoMergeUnavailable, GitHubBackend, PullRequest
+from .verify import run_gate
 
 __all__ = [
     "GitHubMergeStrategy",
@@ -50,6 +52,10 @@ class MergeContext:
     timeout: float = 3600.0
     sleep: Callable[[float], None] = time.sleep
     clock: Callable[[], float] = time.monotonic
+    verify_command: list[str] | None = None
+    verify_env: dict[str, str] | None = None
+    gate_timeout: float | None = None
+    publication_attempts: int = 3
 
 
 @dataclass
@@ -123,15 +129,46 @@ class LocalMergeStrategy:
     """
 
     def publish_and_merge(self, ctx: MergeContext) -> MergeOutcome:
-        gitops.fetch(ctx.clone_dir)
-        with tempfile.TemporaryDirectory(prefix="orchestrator-merge-") as parent:
-            scratch = Path(parent) / "worktree"
-            gitops.worktree_add_detached(ctx.clone_dir, scratch, f"origin/{ctx.base}")
-            try:
-                gitops.merge(scratch, f"origin/{ctx.branch}", message=ctx.title)
-                gitops.push(scratch, f"HEAD:{ctx.base}", set_upstream=False)
-            finally:
-                gitops.worktree_remove(ctx.clone_dir, scratch)
+        if ctx.publication_attempts < 1:
+            raise ValueError("publication_attempts must be at least 1")
+        identity = f"git:{gitops.common_dir(ctx.clone_dir)}"
+        with advisory_lock(identity):
+            for attempt in range(1, ctx.publication_attempts + 1):
+                gitops.fetch(ctx.clone_dir)
+                with tempfile.TemporaryDirectory(prefix="orchestrator-merge-") as parent:
+                    scratch = Path(parent) / "worktree"
+                    gitops.worktree_add_detached(ctx.clone_dir, scratch, f"origin/{ctx.base}")
+                    try:
+                        gitops.merge(scratch, f"origin/{ctx.branch}", message=ctx.title)
+                        if ctx.verify_command is not None:
+                            verified = run_gate(
+                                scratch,
+                                ctx.verify_command,
+                                timeout=ctx.gate_timeout,
+                                env=ctx.verify_env,
+                            )
+                            if not verified.ok:
+                                return MergeOutcome(
+                                    outcome="gate-failed",
+                                    detail="rebuilt local publication failed verification",
+                                )
+                        try:
+                            gitops.push(scratch, f"HEAD:{ctx.base}", set_upstream=False)
+                        except gitops.GitError as exc:
+                            if not _is_push_race(exc):
+                                raise
+                            if attempt == ctx.publication_attempts:
+                                return MergeOutcome(
+                                    outcome="publication-retries-exhausted",
+                                    detail=(
+                                        "local base publication lost a concurrent push race "
+                                        f"on all {ctx.publication_attempts} attempts"
+                                    ),
+                                )
+                            continue
+                        break
+                    finally:
+                        gitops.worktree_remove(ctx.clone_dir, scratch)
         pr = PullRequest(
             number=0,
             url=f"local:{ctx.repo_slug}#{ctx.branch}",
@@ -144,3 +181,9 @@ class LocalMergeStrategy:
             detail=f"local direct-merge of {ctx.branch} into {ctx.base} after checks",
             pr=pr,
         )
+
+
+def _is_push_race(exc: gitops.GitError) -> bool:
+    """Classify the rejection emitted by git for a stale non-force ref update."""
+    message = str(exc).lower()
+    return "[rejected]" in message and ("non-fast-forward" in message or "fetch first" in message)

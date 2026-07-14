@@ -28,9 +28,10 @@ bootstrap:
 check: format-check lint typecheck validate-personas test
 
 # Complete pre-push gate: deterministic checks followed by llmlint on this branch.
-gate:
+gate remote="${ORCHESTRATOR_COMPARISON_REMOTE:-origin}" base="${ORCHESTRATOR_COMPARISON_BASE:-}":
+    @comparison=$(scripts/comparison-base.sh "$1" "$2")
     @log=$(mktemp); trap 'rm -f "$log"' EXIT; just check >"$log" 2>&1 || { cat "$log" >&2; echo "gate: deterministic checks failed; fix the reported findings and rerun 'just gate'" >&2; exit 1; }
-    @log=$(mktemp); trap 'rm -f "$log"' EXIT; just lint-llm-diff origin/main >"$log" 2>&1 || { cat "$log" >&2; echo "gate: llmlint failed; clear the reported findings and rerun 'just gate'" >&2; exit 1; }
+    @comparison=$(scripts/comparison-base.sh "$1" "$2"); log=$(mktemp); trap 'rm -f "$log"' EXIT; just lint-llm-diff "$comparison" >"$log" 2>&1 || { cat "$log" >&2; echo "gate: llmlint failed; clear the reported findings and rerun 'just gate $1 $2'" >&2; exit 1; }
 
 # Whole suite (unit + e2e) with coverage enforced on the orchestrator package.
 test:
@@ -71,9 +72,8 @@ upgrade:
 # Local-first runs no CI, but origin is the shared source of truth: push every
 # change that lands on main. The pre-push hook gates this like any push; if git
 # refuses a non-fast-forward, fetch and rebase before retrying.
-sync branch="main":
-    @git check-ref-format --branch "$1" >/dev/null 2>&1 || { echo "sync: '$1' is not a valid branch name; retry with a valid local branch" >&2; exit 2; }
-    @git push --quiet origin "$1" || { echo "sync: push failed; fetch origin and rebase '$1', then retry" >&2; exit 1; }
+sync branch="" remote="origin":
+    @comparison=$(scripts/comparison-base.sh "$2" "$1"); branch=${comparison#"$2/"}; git push --quiet -- "$2" "$branch" || { echo "sync: push failed; fetch '$2' and rebase '$branch', then retry" >&2; exit 1; }
 
 # --- orchestrator verbs ---------------------------------------------------
 

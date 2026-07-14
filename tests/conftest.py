@@ -76,10 +76,10 @@ def bare_origin(tmp_path: Path) -> Callable[..., Path]:
     """
     counter = {"n": 0}
 
-    def _make(files: dict[str, str] | None = None) -> Path:
+    def _make(files: dict[str, str] | None = None, *, branch: str = "main") -> Path:
         counter["n"] += 1
         seed = tmp_path / f"seed-{counter['n']}"
-        git("init", "-b", "main", str(seed))
+        git("init", "-b", branch, str(seed))
         (seed / "README.md").write_text("seed\n", encoding="utf-8")
         for rel, content in (files or {}).items():
             p = seed / rel

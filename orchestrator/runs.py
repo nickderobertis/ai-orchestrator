@@ -2,15 +2,17 @@
 
 from __future__ import annotations
 
-import json
+import os
 import re
+import socket
 from collections import Counter
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, NamedTuple, NewType, TypedDict, cast
+from typing import Any, Literal, NamedTuple, NewType, TypedDict, cast
 
 from .config import ConfigError, load_yaml
+from .coordination import advisory_lock, atomic_json
 
 _RUN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 _ROUND = re.compile(r"^round-(\d+)$")
@@ -47,6 +49,21 @@ class RepoPlanPayload(TypedDict):
     ok: bool
     started_order: list[str]
     results: dict[str, RepoPlanResultItem]
+
+
+class RoundStatus(TypedDict, total=False):
+    status: Literal["running", "completed"]
+    pid: int
+    host: str
+    started: str
+    finished: str
+
+
+def _round_status(status: Literal["running", "completed"]) -> RoundStatus:
+    timestamp = datetime.now(UTC).isoformat()
+    record = RoundStatus(status=status, pid=os.getpid(), host=socket.gethostname())
+    record["started" if status == "running" else "finished"] = timestamp
+    return record
 
 
 def validate_run_id(run_id: str) -> RunId:
@@ -96,33 +113,77 @@ def latest_round(run_dir: Path) -> tuple[int, Path] | None:
 
 def write_next_plan(run_dir: Path, plan: dict[str, Any]) -> tuple[int, Path]:
     """Create the next numbered round and persist its exact plan mapping."""
-    latest = latest_round(run_dir)
-    number = 1 if latest is None else latest[0] + 1
-    round_dir = run_dir / f"round-{number:02d}"
-    round_dir.mkdir(parents=True, exist_ok=False)
-    _write_json(round_dir / "plan.json", plan)
-    return number, round_dir
+    with advisory_lock(f"ledger:{run_dir.resolve()}"):
+        latest = latest_round(run_dir)
+        number = 1 if latest is None else latest[0] + 1
+        round_dir = run_dir / f"round-{number:02d}"
+        round_dir.mkdir(parents=True, exist_ok=False)
+        _write_json(round_dir / "plan.json", plan)
+        return number, round_dir
 
 
-def prepare_round(run_dir: Path, plan: dict[str, Any]) -> tuple[int, Path]:
+def prepare_round(
+    run_dir: Path, plan: dict[str, Any], *, recover: bool = False
+) -> tuple[int, Path]:
     """Use a pending plan-only round when identical, otherwise create the next round."""
-    latest = latest_round(run_dir)
-    if latest is not None:
-        number, round_dir = latest
-        if not (round_dir / "result.json").exists():
-            existing = load_mapping(round_dir / "plan.json")
-            if existing != plan:
-                raise ConfigError(f"{round_dir} has a pending different plan")
-            return number, round_dir
-    return write_next_plan(run_dir, plan)
+    with advisory_lock(f"ledger:{run_dir.resolve()}"):
+        latest = latest_round(run_dir)
+        if latest is not None:
+            number, round_dir = latest
+            if not (round_dir / "result.json").exists():
+                existing = load_mapping(round_dir / "plan.json")
+                if existing != plan:
+                    raise ConfigError(f"{round_dir} has a pending different plan")
+                state_path = round_dir / "status.json"
+                if state_path.exists():
+                    state = load_mapping(state_path)
+                    if not recover or _owner_is_live(state):
+                        action = (
+                            "the recorded owner is still alive; recovery refused"
+                            if recover
+                            else "inspect its worktrees, then use --recover if its owner is gone"
+                        )
+                        raise ConfigError(f"{round_dir} is already running ({state}); {action}")
+                atomic_json(state_path, _round_status("running"))
+                return number, round_dir
+        number = 1 if latest is None else latest[0] + 1
+        round_dir = run_dir / f"round-{number:02d}"
+        round_dir.mkdir(parents=True, exist_ok=False)
+        _write_json(round_dir / "plan.json", plan)
+        atomic_json(round_dir / "status.json", _round_status("running"))
+        return number, round_dir
+
+
+def _owner_is_live(state: Mapping[str, Any]) -> bool:
+    """Conservatively identify a recorded owner on this host."""
+    pid = state.get("pid")
+    host = state.get("host")
+    if (
+        state.get("status") != "running"
+        or not isinstance(host, str)
+        or not isinstance(pid, int)
+        or pid < 1
+    ):
+        raise ConfigError("running round has invalid owner metadata; recovery refused")
+    if host != socket.gethostname():
+        return True
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
 
 
 def write_result(round_dir: Path, result: Mapping[str, Any]) -> None:
     """Persist a repo-plan JSON result for an already-created round."""
-    path = round_dir / "result.json"
-    if path.exists():
-        raise ConfigError(f"round already has a result: {path}")
-    _write_json(path, result)
+    with advisory_lock(f"ledger:{round_dir.parent.resolve()}"):
+        path = round_dir / "result.json"
+        if path.exists():
+            raise ConfigError(f"round already has a result: {path}")
+        _write_json(path, result)
+        atomic_json(round_dir / "status.json", _round_status("completed"))
 
 
 def load_mapping(path: Path) -> dict[str, Any]:
@@ -182,7 +243,7 @@ def _rounds(run_dir: Path) -> list[tuple[int, Path]]:
 
 
 def _write_json(path: Path, value: Mapping[str, Any]) -> None:
-    path.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
+    atomic_json(path, value)
 
 
 def _as_result_payload(value: dict[str, Any]) -> RepoPlanPayload:

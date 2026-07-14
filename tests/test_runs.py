@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import os
+import socket
 
 import pytest
 
@@ -53,6 +55,40 @@ def test_round_numbering_latest_and_pending_reuse(tmp_path) -> None:
     assert number == 2 and second.name == "round-02"
     with pytest.raises(ConfigError, match="pending different"):
         prepare_round(run_dir, {"tasks": []})
+
+
+def test_recovery_refuses_live_owner_and_claims_abandoned_round(tmp_path) -> None:
+    run_dir = tmp_path / "run"
+    _, round_dir = prepare_round(run_dir, PLAN)
+    with pytest.raises(ConfigError, match="owner is still alive; recovery refused"):
+        prepare_round(run_dir, PLAN, recover=True)
+
+    status = round_dir / "status.json"
+    status.write_text(
+        json.dumps(
+            {"status": "running", "pid": os.getpid() + 10_000_000, "host": socket.gethostname()}
+        ),
+        encoding="utf-8",
+    )
+    assert prepare_round(run_dir, PLAN, recover=True) == (1, round_dir)
+    recovered = json.loads(status.read_text(encoding="utf-8"))
+    assert recovered["pid"] == os.getpid()
+
+
+@pytest.mark.parametrize(
+    "owner",
+    [
+        {"status": "running", "pid": "not-a-pid", "host": "host"},
+        {"status": "completed", "pid": 123, "host": "host"},
+    ],
+)
+def test_recovery_refuses_invalid_owner_metadata(tmp_path, owner) -> None:
+    run_dir = tmp_path / "run"
+    _, round_dir = prepare_round(run_dir, PLAN)
+    (round_dir / "status.json").write_text(json.dumps(owner), encoding="utf-8")
+
+    with pytest.raises(ConfigError, match="invalid owner metadata; recovery refused"):
+        prepare_round(run_dir, PLAN, recover=True)
 
 
 def test_list_runs_uses_latest_completed_round(tmp_path) -> None:

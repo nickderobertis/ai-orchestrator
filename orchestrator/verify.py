@@ -11,6 +11,7 @@ with the captured output kept for the report.
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 from dataclasses import dataclass
@@ -88,6 +89,7 @@ def run_gate(
     command: list[str],
     *,
     timeout: float | None = None,
+    env: dict[str, str] | None = None,
 ) -> VerifyResult:
     """Run ``command`` in ``project_dir``; ok iff it exits 0."""
     try:
@@ -97,6 +99,7 @@ def run_gate(
             text=True,
             capture_output=True,
             timeout=timeout,
+            env={**os.environ, **(env or {})},
         )
     except FileNotFoundError:
         return VerifyResult(

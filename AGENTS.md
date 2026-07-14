@@ -75,7 +75,9 @@ a trivial merge. Before merging or pushing, independently confirm that the gate
 exercised the change: relevant tests did not skip and their fixtures, specs, and
 inputs were present. The lifecycle fetches and merges the current `origin/<base>`
 into the dispatched branch before this final gate, so the proof covers the same
-branch-plus-base diff enforced at pre-push; a sync conflict is aborted and reported
+branch-plus-base diff enforced at pre-push. Lifecycle verification must pass its
+resolved comparison remote/base through every gate and re-verification so an
+override is never judged against an unrelated default. A sync conflict is aborted and reported
 without pushing. A green report or judge verdict without that evidence is not green.
 
 ## The granularity rule (the core judgment)
@@ -260,11 +262,11 @@ enforcement point: it runs `just gate`, so nothing reaches the remote unproven.
 Every dispatched agent must clear its own findings before committing. Branch
 protection and a CI mirror of this gate are deferred with CI. Keep the
 `.claude/settings.json` allowlist current: add a new routine command there instead
-of re-approving it each session. Local-first is not local-only: keep `main` in
-sync with `origin`, and push every change that reaches `main` immediately rather
+of re-approving it each session. Local-first is not local-only: keep the registered
+base branch in sync with its origin, and push every change that reaches it immediately rather
 than leaving verified work only in the local checkout. A dispatched `local` merge
 already pushes to origin; publish a direct commit with `just sync`. The pre-push
-gate guards every push. Never force-push or rewrite history on `main`.
+gate guards every push. Never force-push or rewrite history on the registered base.
 
 ## After the main task
 

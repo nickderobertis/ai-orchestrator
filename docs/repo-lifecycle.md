@@ -39,8 +39,17 @@ object store. N parallel subtasks against a repo get N isolated trees without N
 clones, which is how parallelism scales without re-paying clone cost. The canonical
 checkout is **never worked in directly and only ever fast-forwarded**; it is fetched
 and fast-forwarded to stay current before a worktree is cut from it. Worktree
-creation is serialized per repo (a lock) because concurrent `git worktree add` races
-on the checkout's git metadata; the slow part (the dispatch) always runs unlocked.
+creation, removal, refresh, publication, and integration are serialized across
+processes by an OS advisory lock keyed by the checkout's resolved git common-dir.
+Locks have bounded waits and report the owning PID/host on timeout. The slow agent
+dispatch remains unlocked. Default lifecycle branches include a unique run suffix;
+an explicit `--branch` is the intentional resume/override path. An active branch or
+occupied worktree is never reset or forcibly removed: inspect the reported path and
+recover that run, or remove it manually only after confirming its owner is gone.
+
+The registry uses its own process-shared locks for resolution and first clone. Its
+JSON is reloaded and merged while locked, then atomically replaced, so concurrent
+registrations are retained and interruption cannot leave partial JSON.
 
 ### Self-dispatch hazard: worktrees share the canonical `.git`
 
@@ -60,7 +69,7 @@ real work is intact at its last commit *before* the `init`-commit corruption.
 ## Local verification before push
 
 Before the final gate, the lifecycle fetches `origin` and merges the current
-`origin/<base>` (normally `origin/main`) into the dispatched branch. It then runs
+`origin/<base>` into the dispatched branch. It then runs
 the target repo's gate on that merged result and pushes only after the gate
 passes. If the sync conflicts, the lifecycle aborts the merge, reports a
 `gate-failed` result with `sync-conflict` detail, and does not push.
@@ -72,6 +81,16 @@ an explicit `just check`, then `make check`, `npm test`, `cargo test`, `pytest` 
 and runs it in the worktree. A failing gate stops the lifecycle at `gate-failed`
 (nothing is pushed). Pass an explicit `verify_cmd`, or `--skip-verify` to skip the
 gate; the pre-handoff sync still occurs.
+
+This repository's complete gate resolves that same comparison ref with
+`scripts/comparison-base.sh`. `just gate` discovers the base from a valid remote
+HEAD (or a sole remote branch); use `just gate <remote> <base>` when discovery is
+ambiguous. The lifecycle exports `ORCHESTRATOR_COMPARISON_REMOTE` and
+`ORCHESTRATOR_COMPARISON_BASE` to both verification passes, and the pre-push hook
+uses the remote name Git passes as its first argument. Invalid names, missing
+refs, and ambiguous remote branches fail with a remediation instead of falling
+back to `main`. `just sync` discovers the same branch; `just sync <branch>
+<remote>` is the explicit form.
 
 ## Merge strategies (where the change lands)
 
@@ -142,11 +161,16 @@ now). The produced plan is validated, so a bad edit fails loudly.
 
 ```
 runs/<run-id>/round-01/plan.json
+runs/<run-id>/round-01/status.json
 runs/<run-id>/round-01/result.json
 ```
 
 The plan mapping is preserved exactly and the result is the command's JSON
-payload. Pass `--run <id>` to name a run; without it, a fresh unique run id comes
+payload. The round directory and `running` status are committed before dispatch;
+the result and `completed` status are atomic updates. A second process cannot claim
+the same explicit run/round. If a process died, inspect its recorded worktrees and
+then use `just repo-plan ... --run <id> --recover`; recovery is explicit and never
+silently overwrites a result. Pass `--run <id>` to name a run; without it, a fresh unique run id comes
 from the plan's top-level `name` or filename. The continuation trailer is written
 to stderr, so `--format json` stdout remains machine-readable. Use `--no-record`
 to opt out or `--runs-dir` to move the ledger.
@@ -194,6 +218,41 @@ skips. `--push` updates `origin` only when the base advanced. Omit branch names 
 discover checked-out worktree branches and local branches matching `claude/*`;
 use `--pattern` to change the glob or `--gate` to inject a different gate command.
 The base and candidate worktrees must be clean.
+
+## Operating across workers and machines
+
+- **Several agents in one process:** the repo-plan scheduler owns concurrency.
+  Per-repo in-process locks serialize short canonical-checkout operations; agent
+  dispatches in separate worktrees remain concurrent.
+- **Several processes on one machine:** OS advisory locks serialize registry,
+  ledger-claim, and shared-git-common-dir mutations. Locks live under
+  `$AI_ORCHESTRATOR_HOME/locks` (normally `~/.ai-orchestrator/locks`) and protect
+  only that machine. On timeout, inspect the reported PID and host rather than
+  deleting a live lock or worktree.
+- **Several machines, remote-first:** GitHub is the remote coordinator. Local
+  locks and ledgers are independent; unique branches, PR state, required checks,
+  and merge/auto-merge coordinate publication globally.
+- **Several machines, local-first:** there is no cross-machine lock. Publication
+  is optimistic: fetch, rebuild and re-verify the merge, then attempt a non-force
+  base update. A loser fetches the winner and retries up to the configured limit.
+  A non-bare local origin must set `receive.denyCurrentBranch=updateInstead`;
+  otherwise use a bare origin.
+
+The ledger is machine-local, not a global liveness source. On the launching
+machine use `just runs`, `just status --all`, and `just history` /
+`just history-show <id>`. The recorded branch and worktree are the recovery source
+of truth. Resume an intentional branch with `--branch <branch>`. For an interrupted
+round, inspect its worktrees and remote branch, then run `just repo-plan <plan>
+--run <id> --recover`. Recovery may reclaim a `running` record, so use it only
+after proving its owner is gone; never remove or reset an active worktree.
+
+Switch registry workflow metadata only between runs. First finish or recover
+active publication, fetch, and confirm the canonical checkout is clean and
+fast-forwarded. Before switching to `remote`, configure GitHub permissions,
+branch protection, and required checks. Before switching to `local`, confirm all
+machines can reach the origin and it accepts safe base updates. Do not switch
+metadata to bypass an in-flight PR or failed gate; close or recover that run under
+its original workflow.
 
 ## Auto mode without approvals — and why bypass
 
