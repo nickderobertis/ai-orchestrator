@@ -80,6 +80,18 @@ def _tip(origin: Path, ref: str) -> str:
     ).stdout.strip()
 
 
+def _advance_origin(tmp_path: Path, origin: Path, filename: str, content: str) -> str:
+    """Commit one concurrent base-branch change through a separate real clone."""
+    checkout = gitops.clone(origin, tmp_path / f"advance-{filename.replace('/', '-')}")
+    path = checkout / filename
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding="utf-8")
+    gitops.add_all(checkout)
+    sha = gitops.commit(checkout, f"advance main with {filename}")
+    gitops.push(checkout, "main", set_upstream=False)
+    return sha
+
+
 def test_repo_plan_ledger_and_guided_next_round(
     tmp_path, bare_origin, command_base, personas_dir, capsys
 ) -> None:
@@ -170,6 +182,81 @@ def test_local_repo_gate_failure_blocks_merge(tmp_path, bare_origin) -> None:
     assert result.outcome == "gate-failed"
     assert result.pr is None
     assert _tip(origin, "main") == before  # origin main untouched
+
+
+def test_local_repo_syncs_advanced_base_before_gate(tmp_path, bare_origin) -> None:
+    origin = bare_origin()
+    ws = _workspace(tmp_path, origin)
+    writing_dispatch = make_writing_dispatch(filename="feature.txt")
+    advanced_sha = ""
+
+    def dispatch_after_base_advances(
+        persona: str, task: str, *, project_dir: str, **kwargs: object
+    ) -> Report:
+        nonlocal advanced_sha
+        report = writing_dispatch(persona, task, project_dir=project_dir, **kwargs)
+        advanced_sha = _advance_origin(tmp_path, origin, "base.txt", "new base\n")
+        return report
+
+    result = run_repo_task(
+        str(origin),
+        "Add a feature while main advances.",
+        "backend-engineer",
+        workspace=ws,
+        dispatch_fn=dispatch_after_base_advances,
+        verify_cmd=[
+            "sh",
+            "-c",
+            "test -f base.txt && git merge-base --is-ancestor origin/main HEAD",
+        ],
+    )
+
+    assert result.ok and result.outcome == "merged"
+    assert result.verify is not None and result.verify.ok
+    assert _has_file(origin, "main", "base.txt")
+    assert _has_file(origin, "main", "feature.txt")
+    assert (
+        subprocess.run(
+            ["git", "-C", str(origin), "merge-base", "--is-ancestor", advanced_sha, "main"]
+        ).returncode
+        == 0
+    )
+
+
+def test_local_repo_sync_conflict_aborts_before_gate_or_push(tmp_path, bare_origin) -> None:
+    origin = bare_origin({"shared.txt": "original\n"})
+    branch_dispatch = make_writing_dispatch(filename="shared.txt", content="agent")
+
+    def conflicting_dispatch(
+        persona: str, task: str, *, project_dir: str, **kwargs: object
+    ) -> Report:
+        report = branch_dispatch(persona, task, project_dir=project_dir, **kwargs)
+        _advance_origin(tmp_path, origin, "shared.txt", "concurrent base\n")
+        return report
+
+    result = run_repo_task(
+        str(origin),
+        "Edit the same file as a concurrent main change.",
+        "backend-engineer",
+        workspace=_workspace(tmp_path, origin),
+        dispatch_fn=conflicting_dispatch,
+        verify_cmd=["sh", "-c", "touch GATE_RAN && false"],
+    )
+
+    assert not result.ok and result.outcome == "gate-failed"
+    assert "sync-conflict" in result.detail
+    assert result.verify is None
+    assert not _has_file(origin, result.branch, "shared.txt")
+    assert not _has_file(origin, "main", "GATE_RAN")
+    assert (
+        subprocess.run(
+            ["git", "-C", str(origin), "show", "main:shared.txt"],
+            check=True,
+            text=True,
+            capture_output=True,
+        ).stdout
+        == "concurrent base\n"
+    )
 
 
 def test_local_repo_no_gate_detected_proceeds(tmp_path, bare_origin) -> None:

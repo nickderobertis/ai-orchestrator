@@ -36,6 +36,7 @@ __all__ = [
     "is_repo",
     "log_delta",
     "merge",
+    "merge_base_into_branch",
     "merge_ff_only",
     "merge_abort",
     "push",
@@ -234,6 +235,29 @@ def is_ancestor(cwd: str | Path, ancestor: str, descendant: str) -> bool:
     if proc.returncode not in (0, 1):
         raise GitError(proc.stderr.strip() or "git merge-base failed")
     return proc.returncode == 0
+
+
+def merge_base_into_branch(
+    cwd: str | Path,
+    base: str,
+    *,
+    message: str,
+) -> bool:
+    """Merge ``base`` into the checked-out branch, aborting on conflict.
+
+    Return ``False`` only when the merge conflicts. Other git failures remain
+    errors so callers do not mistake an invalid ref or broken repository for a
+    normal synchronization conflict.
+    """
+    try:
+        merge(cwd, base, message=message, no_ff=False)
+    except GitError:
+        unmerged = _git(["diff", "--name-only", "--diff-filter=U"], cwd=cwd, check=False)
+        if unmerged.returncode != 0 or not unmerged.stdout.strip():
+            raise
+        merge_abort(cwd)
+        return False
+    return True
 
 
 def push(

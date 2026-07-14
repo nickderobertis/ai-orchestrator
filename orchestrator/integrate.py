@@ -127,15 +127,11 @@ def integrate(
         try:
             if gitops.is_dirty(worktree):
                 raise IntegrateError(f"candidate worktree for {branch!r} is dirty")
-            try:
-                gitops.merge(
-                    worktree,
-                    base,
-                    message=f"Merge {base} into {branch}",
-                    no_ff=False,
-                )
-            except gitops.GitError:
-                gitops.merge_abort(worktree)
+            if not gitops.merge_base_into_branch(
+                worktree,
+                base,
+                message=f"Merge {base} into {branch}",
+            ):
                 results.append(BranchResult(branch, "skipped", "conflict"))
                 continue
 

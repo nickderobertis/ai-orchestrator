@@ -357,6 +357,20 @@ def run_repo_task(
             result.detail = f"workstream did not complete: {step_detail}"
             return result
 
+        gitops.fetch(worktree)
+        remote_base = f"origin/{base}"
+        if not gitops.merge_base_into_branch(
+            worktree,
+            remote_base,
+            message=f"Merge {remote_base} into {branch}",
+        ):
+            result.outcome = "gate-failed"
+            result.detail = (
+                f"sync-conflict: could not merge current {remote_base} into {branch}; "
+                "merge aborted and branch was not pushed"
+            )
+            return result
+
         if not skip_verify:
             cmd = verify_cmd or detect_gate(worktree)
             if cmd is not None:
@@ -371,7 +385,7 @@ def run_repo_task(
 
         # Each step commits its own work in _run_steps, so the worktree is clean
         # here; if no step produced a commit, there is nothing to open a PR for.
-        if not gitops.has_commits_ahead(worktree, f"origin/{base}"):
+        if not gitops.has_commits_ahead(worktree, remote_base):
             result.outcome = "no-changes"
             result.detail = "agent completed but produced no commits to open a PR"
             return result
