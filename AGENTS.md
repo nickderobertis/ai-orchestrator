@@ -110,30 +110,14 @@ out of `check` (non-deterministic, harness-backed) and enforced at pre-push.
 
 ## Dispatching playbook
 
-- Run `just repo-task-auto` for a one-command lifecycle dispatch. It prepares the
-  harness environment and reports the branch's commit delta afterward, so work
-  left on an unmerged branch is visible. Fall back to `just repo-task` or
-  `orchestrator-repo-task` when the wrapper is unavailable.
-- Keep `~/.local/node/bin` on `PATH`: codex installs there and is oneharness's
-  preferred agent harness; without it, the fallback silently selects
-  claude-code. `scripts/session-setup.sh` persists the path. Dispatch also gives
-  oneharness turns a timeout well above its 120-second default; override it with
-  `ONEHARNESS_TIMEOUT` for exceptional workloads.
-- Treat `not-completed` as a timing signal until proven otherwise. An agent can
-  hit the turn cap just as it finishes; the lifecycle preserves its incremental
-  commits, so inspect the branch before concluding the work was lost.
-- GitHub repositories use a PR that auto-merges after required checks pass.
-  Local-path repositories merge directly into the base branch and require
-  `git config receive.denyCurrentBranch updateInstead` for that push to land.
-- llmlint checks the diff, so touching a file can surface a latent finding. Fix
-  it or add a justified in-file ignore-file suppression (name the rule and the
-  reason; see `scripts/session-setup.sh` for the directive syntax); disable an
-  architecturally irrelevant rule once in `llmlint.yml` with `override: true`
-  and `relevance: false`, as this synchronous CLI does for
-  `async_typed_clients_at_boundaries`.
-
-See `docs/onejudge-integration.md` for harness details and
-`docs/repo-lifecycle.md` for lifecycle mechanics.
+Prefer `just repo-task-auto` for a one-command dispatch — it sets up the harness
+environment and, afterward, points at the branch holding the agent's commits so a
+`not-completed` run's preserved work is never invisible. The judgment that matters:
+keep `~/.local/node/bin` on `PATH` or the harness silently falls back off codex, and
+read `not-completed` as a turn-cap timing signal rather than a failure — inspect the
+branch before concluding work was lost. The deterministic details — env, timeout,
+GitHub-vs-local merge (and its `updateInstead` setup), and llmlint suppression — live
+in `docs/onejudge-integration.md`; lifecycle mechanics in `docs/repo-lifecycle.md`.
 
 ## Dogfooding rule
 

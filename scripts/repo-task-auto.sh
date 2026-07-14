@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Run one repo lifecycle task with the preferred harness available, then make
 # any commits preserved from an incomplete agent run visible to the operator.
+# llmlint: ignore-file[robust_shell, boundary_inputs_validated, tool_output_is_signal, work_goes_through_command_surface] this IS a command-surface recipe (`just repo-task-auto`) wrapping the `orchestrator-repo-task` entry point to add env setup + post-run reporting. It deliberately omits `set -e` so it can still report the preserved-commit delta AFTER a non-zero (not-completed) dispatch — the very case it exists for; failure paths are checked explicitly. The fields it consumes are this project's own orchestrator-repo-task JSON result (a trusted internal boundary), and the branch is guarded by `git show-ref` before any ref use. Printing the outcome + preserved-commit delta on success IS the signal (operator visibility is the whole point), not incidental chatter.
 set -uo pipefail
 
 readonly NODE_BIN="$HOME/.local/node/bin"
@@ -50,7 +51,7 @@ dispatch_status=$?
 
 if ! jq -e 'type == "object" and (.outcome | type == "string")' \
   "$result_file" >/dev/null 2>&1; then
-  printf 'repo-task-auto: dispatch failed without a valid JSON result\n' >&2
+  printf 'repo-task-auto: dispatch produced no valid JSON result. See the orchestrator-repo-task diagnostics above, or re-run `just repo-task <args>` directly to surface the error.\n' >&2
   ((dispatch_status != 0)) || dispatch_status=1
   exit "$dispatch_status"
 fi
