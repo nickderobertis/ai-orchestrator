@@ -159,7 +159,7 @@ The plan mapping is preserved exactly and the result is the command's JSON
 payload. The round directory and `running` status are committed before dispatch;
 the result and `completed` status are atomic updates. A second process cannot claim
 the same explicit run/round. If a process died, inspect its recorded worktrees and
-then use `repo-plan ... --run <id> --recover`; recovery is explicit and never
+then use `just repo-plan ... --run <id> --recover`; recovery is explicit and never
 silently overwrites a result. Pass `--run <id>` to name a run; without it, a fresh unique run id comes
 from the plan's top-level `name` or filename. The continuation trailer is written
 to stderr, so `--format json` stdout remains machine-readable. Use `--no-record`
