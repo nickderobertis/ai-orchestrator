@@ -153,10 +153,14 @@ read `not-completed` as a turn-cap timing signal rather than a failure — inspe
 branch before concluding work was lost. See `docs/onejudge-integration.md` for the
 operational details and `docs/repo-lifecycle.md` for lifecycle mechanics.
 
-Treat the branch, not the running conversation, as the source of truth. Once the
-needed work is committed and directly verifiable, harvest those commits and stop
-the dispatch immediately; letting agent and judge turns continue after the useful
-output is in hand only adds cost.
+When a dispatch looks done but is still running, read its history before acting —
+the branch, not the running conversation, is the source of truth, but a live run
+may be doing work the plan didn't foresee. If it is still pursuing the task
+(implementation surfaced changes the orchestrator couldn't see up front), let it
+finish. If it has wandered onto unrelated or follow-up work outside the subtask's
+scope, stop it — no sense paying for turns past the useful output — and triage that
+follow-up: fold it into the plan if it is clearly in scope and worthwhile,
+otherwise ask before pursuing it.
 
 ## Dogfooding rule
 
