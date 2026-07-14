@@ -88,10 +88,8 @@ def test_bad_edit_fails_validation() -> None:
         )
 
 
-def test_empty_next_round_is_rejected() -> None:
-    # Everything merged and nothing added → an empty plan, which is invalid.
-    with pytest.raises(PlanError, match="non-empty 'tasks'"):
-        next_round(_plan(A, B), _result(a="done", b="done"))
+def test_empty_next_round_signals_nothing_to_iterate() -> None:
+    assert next_round(_plan(A, B), _result(a="done", b="done"))["tasks"] == []
 
 
 # --- CLI -------------------------------------------------------------------
@@ -125,6 +123,7 @@ def test_main_no_edits_and_output_file(tmp_path) -> None:
 
 def test_main_bad_edit_exit_2(tmp_path, capsys) -> None:
     prev = _write(tmp_path, "plan.json", _plan(A, B))
-    res = _write(tmp_path, "res.json", _result(a="done", b="done"))  # empty → invalid
-    rc = main([prev, res])
+    res = _write(tmp_path, "res.json", _result(a="failed", b="failed"))
+    edits = _write(tmp_path, "edits.json", {"add": [A]})
+    rc = main([prev, res, edits])
     assert rc == 2 and "replan:" in capsys.readouterr().err

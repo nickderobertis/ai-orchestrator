@@ -20,3 +20,4 @@ htmlcov/
 # Orchestrator run artifacts (reports written with -o land wherever the caller
 # points; keep any local scratch out of the tree)
 /scratch/
+/runs/

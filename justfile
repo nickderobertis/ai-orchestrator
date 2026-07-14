@@ -106,6 +106,16 @@ replan *args:
 integrate *args:
     @uv run orchestrator-integrate "$@"
 
+# Derive and run the next recorded repo-plan round, optionally applying edits.
+# llmlint: ignore[tool_output_is_signal] the repo-plan result and continuation guidance are this command's product.
+next-round *args:
+    @uv run orchestrator-next-round "$@"
+
+# List recorded repo-plan runs and their latest status.
+# llmlint: ignore[tool_output_is_signal] the requested multi-line run ledger is this viewing command's product.
+runs *args:
+    @uv run orchestrator-runs "$@"
+
 # List recent dispatched worker sessions across every target repo.
 # llmlint: ignore[tool_output_is_signal] human-readable history is this viewing command's product.
 history *args:

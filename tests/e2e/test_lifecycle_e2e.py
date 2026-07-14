@@ -14,6 +14,7 @@ journey — local direct-merge and the GitHub PR+auto-merge path — for real.
 
 from __future__ import annotations
 
+import json
 import subprocess
 from pathlib import Path
 from typing import cast
@@ -22,8 +23,16 @@ from fakes import FakeGitHub, make_writing_dispatch
 
 from orchestrator.dispatch import Report
 from orchestrator.github import PullRequest
-from orchestrator.lifecycle import RepoPlan, RepoPlanNode, Step, run_repo_plan, run_repo_task
+from orchestrator.lifecycle import (
+    RepoPlan,
+    RepoPlanNode,
+    Step,
+    main_plan,
+    run_repo_plan,
+    run_repo_task,
+)
 from orchestrator.merge import GitHubMergeStrategy
+from orchestrator.next_round import main as next_round_main
 from orchestrator.workspace import Workspace, normalize_repo
 
 
@@ -56,6 +65,57 @@ def _tip(origin: Path, ref: str) -> str:
     return subprocess.run(
         ["git", "-C", str(origin), "rev-parse", ref], text=True, capture_output=True
     ).stdout.strip()
+
+
+def test_repo_plan_ledger_and_guided_next_round(
+    tmp_path, bare_origin, command_base, personas_dir, capsys
+) -> None:
+    """The real CLI + onejudge + git lifecycle records and retries an unresolved node."""
+    origin = bare_origin()
+    runs_dir = tmp_path / "runs"
+    plan_path = tmp_path / "repo-plan.json"
+    first_plan = {
+        "name": "ledger e2e",
+        "tasks": [
+            {
+                "id": "change",
+                "repo": str(origin),
+                "persona": "backend-engineer",
+                "task": "should-fail write-change: preserve this partial attempt",
+                "skip_verify": True,
+            }
+        ],
+    }
+    plan_path.write_text(json.dumps(first_plan), encoding="utf-8")
+    common = [
+        "--base",
+        str(command_base()),
+        "--persona-dir",
+        str(personas_dir),
+        "--workspace",
+        str(tmp_path / "workspace"),
+        "--format",
+        "json",
+    ]
+    rc = main_plan([str(plan_path), "--run", "fixed-run", "--runs-dir", str(runs_dir), *common])
+    captured = capsys.readouterr()
+    assert rc == 1 and json.loads(captured.out)["results"]["change"]["status"] == "failed"
+    first = runs_dir / "fixed-run" / "round-01"
+    assert json.loads((first / "plan.json").read_text()) == first_plan
+    assert (first / "result.json").is_file()
+    assert "just next-round fixed-run [edits.json]" in captured.err
+
+    edits = tmp_path / "edits.json"
+    edits.write_text(
+        json.dumps({"retry": {"change": {"task": "complete-now write-change: finish"}}}),
+        encoding="utf-8",
+    )
+    rc = next_round_main(["fixed-run", str(edits), "--runs-dir", str(runs_dir), *common])
+    captured = capsys.readouterr()
+    second = runs_dir / "fixed-run" / "round-02"
+    assert rc == 0 and (second / "plan.json").is_file() and (second / "result.json").is_file()
+    assert json.loads((second / "result.json").read_text())["results"]["change"]["status"] == "done"
+    assert "nothing to iterate" in captured.err
 
 
 # --- local repo: direct merge into main after checks -----------------------

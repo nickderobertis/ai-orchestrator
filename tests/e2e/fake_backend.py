@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import sys
+from pathlib import Path
 
 
 def _task_text(messages: list[dict]) -> str:
@@ -34,13 +35,26 @@ def _assistant_turns(messages: list[dict]) -> int:
 
 def main() -> int:
     req = json.loads(sys.stdin.read())
+    if not isinstance(req, dict):
+        sys.stderr.write("fake_backend: request must be a JSON object\n")
+        return 1
     op = req.get("op")
     messages = req.get("messages") or []
+    if not isinstance(messages, list) or not all(
+        isinstance(item, dict)
+        and ("role" not in item or isinstance(item["role"], str))
+        and ("content" not in item or isinstance(item["content"], str))
+        for item in messages
+    ):
+        sys.stderr.write("fake_backend: messages must be a list of objects\n")
+        return 1
     task = _task_text(messages)
     fail = "should-fail" in task
 
     match op:
         case "respond":
+            if "write-change" in task:
+                (Path.cwd() / "CHANGE.txt").write_text("change from fake agent\n", encoding="utf-8")
             # `complete-now` finishes on the first turn; otherwise the agent stays
             # "not done" and completion is decided by the supervisor's done_when
             # judge below, which only passes on the second turn — exercising the

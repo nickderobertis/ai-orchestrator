@@ -53,10 +53,11 @@ dispatch onejudge.
    It topologically schedules the DAG, running every subtask whose deps are done
    concurrently (bounded by the plan's `concurrency`), so independent branches go
    in parallel and dependents wait only for what they actually need.
-4. **Read the results, then decide.** Each subtask returns a onejudge report
-   (completed? / verdicts / usage). Re-plan the next layer from what came back —
-   a failed subtask skips its dependents; adjust granularity or persona and
-   redispatch. One subtask at a time is `just dispatch <persona> "<task>"`.
+4. **Read the results, then decide.** `repo-plan` records each plan and result in
+   `runs/<run-id>/round-NN/`; use `just runs` to find the latest round. Put any
+   retry/split/add/drop decisions in `edits.json`, then run
+   `just next-round <run-id> [edits.json]`. A failed subtask skips its dependents;
+   adjust granularity or persona before redispatching.
 
 The orchestrator does orchestration and planning only: decomposition, scheduling,
 persona choice, and merge/integration coordination. Dispatch all target-project
@@ -127,8 +128,10 @@ is the complete pre-push bar: `check` plus the llmlint diff tier. `just dispatch
 directory; `just repo-task <repo> <persona> "<task>"` and
 `just repo-plan <repo-plan.json>` drive the full repo life cycle
 (clone→gate→PR/merge, multi-PR DAGs, and `steps` workstreams on one PR);
-`just replan <prev-plan> <result> [edits]` derives the next round from the last —
-see `docs/repo-lifecycle.md`. `just new-persona` / `just validate-personas` round
+`repo-plan` auto-records under `runs/` (`--no-record` opts out); `just runs` lists
+the ledger and `just next-round <run-id> [edits]` derives, runs, and records the
+next round. `just replan <prev-plan> <result> [edits]` is the lower-level derivation
+command — see `docs/repo-lifecycle.md`. `just new-persona` / `just validate-personas` round
 out the orchestrator verbs. `just lint-llm` /
 `lint-llm-diff` / `lint-llm-validate` are the **llmlint** LLM-judge tier — kept
 out of `check` (non-deterministic, harness-backed) and enforced at pre-push.

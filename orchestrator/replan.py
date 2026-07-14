@@ -84,7 +84,8 @@ def next_round(
             node["deps"] = [d for d in node["deps"] if d in kept_ids]
 
     plan: dict[str, Any] = {"concurrency": prev_plan.get("concurrency", 4), "tasks": next_tasks}
-    parse_repo_plan(plan)  # validate — a bad edit (dup id, cycle, missing field) raises PlanError
+    if next_tasks:
+        parse_repo_plan(plan)  # bad edits (duplicate ids, cycles, missing fields) fail loudly
     return plan
 
 
