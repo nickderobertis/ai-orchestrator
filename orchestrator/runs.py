@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import re
+import socket
 from collections import Counter
 from collections.abc import Mapping
 from datetime import UTC, datetime
@@ -53,13 +54,14 @@ class RepoPlanPayload(TypedDict):
 class RoundStatus(TypedDict, total=False):
     status: Literal["running", "completed"]
     pid: int
+    host: str
     started: str
     finished: str
 
 
 def _round_status(status: Literal["running", "completed"]) -> RoundStatus:
     timestamp = datetime.now(UTC).isoformat()
-    record = RoundStatus(status=status, pid=os.getpid())
+    record = RoundStatus(status=status, pid=os.getpid(), host=socket.gethostname())
     record["started" if status == "running" else "finished"] = timestamp
     return record
 
@@ -133,12 +135,15 @@ def prepare_round(
                 if existing != plan:
                     raise ConfigError(f"{round_dir} has a pending different plan")
                 state_path = round_dir / "status.json"
-                if state_path.exists() and not recover:
+                if state_path.exists():
                     state = load_mapping(state_path)
-                    raise ConfigError(
-                        f"{round_dir} is already running ({state}); inspect its worktrees, "
-                        "then use --recover if its owner is gone"
-                    )
+                    if not recover or _owner_is_live(state):
+                        action = (
+                            "the recorded owner is still alive; recovery refused"
+                            if recover
+                            else "inspect its worktrees, then use --recover if its owner is gone"
+                        )
+                        raise ConfigError(f"{round_dir} is already running ({state}); {action}")
                 atomic_json(state_path, _round_status("running"))
                 return number, round_dir
         number = 1 if latest is None else latest[0] + 1
@@ -147,6 +152,20 @@ def prepare_round(
         _write_json(round_dir / "plan.json", plan)
         atomic_json(round_dir / "status.json", _round_status("running"))
         return number, round_dir
+
+
+def _owner_is_live(state: Mapping[str, Any]) -> bool:
+    """Conservatively identify a recorded owner on this host."""
+    pid = state.get("pid")
+    if state.get("host") != socket.gethostname() or not isinstance(pid, int) or pid < 1:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
 
 
 def write_result(round_dir: Path, result: Mapping[str, Any]) -> None:
