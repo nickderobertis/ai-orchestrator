@@ -14,7 +14,6 @@ import pytest
 
 from orchestrator import gitops
 from orchestrator.config import ConfigError
-from orchestrator.dispatch import Report
 from orchestrator.lifecycle import run_repo_task
 from orchestrator.registry import Registry
 from orchestrator.runs import prepare_round
@@ -36,26 +35,25 @@ def _worktree_process(
     workspace.remove_worktree(repo, worktree)
 
 
-def _writing_dispatch(persona: str, _task: str, *, project_dir: str, **_kwargs: object) -> Report:
-    (Path(project_dir) / f"result-{os.getpid()}.txt").write_text("landed\n", encoding="utf-8")
-    return Report(persona, 0, True, False, 1, [], {}, {}, "")
-
-
 def _lifecycle_process(
-    origin: str, canonical: str, root: str, results: multiprocessing.Queue[dict[str, object]]
+    origin: str,
+    canonical: str,
+    root: str,
+    base_config: str,
+    persona_dir: str,
+    results: multiprocessing.Queue[dict[str, object]],
 ) -> None:
     workspace = Workspace(root, resolver=lambda _spec: Path(canonical))
     result = run_repo_task(
         origin,
-        "the same lifecycle task",
+        "complete-now write-unique-change: the same lifecycle task",
         "backend-engineer",
         workspace=workspace,
-        dispatch_fn=_writing_dispatch,
+        base_path=base_config,
+        persona_dir=persona_dir,
         verify_cmd=["true"],
     )
-    results.put(
-        {"ok": result.ok, "outcome": result.outcome, "branch": result.branch, "pid": os.getpid()}
-    )
+    results.put({"ok": result.ok, "outcome": result.outcome, "branch": result.branch})
 
 
 def _register_process(registry_path: str, checkout: str) -> None:
@@ -109,7 +107,10 @@ def test_separate_processes_create_and_remove_distinct_worktrees(
 
 
 def test_identical_simultaneous_lifecycles_get_unique_branches_and_both_land(
-    tmp_path: Path, bare_origin: Callable[..., Path]
+    tmp_path: Path,
+    bare_origin: Callable[..., Path],
+    command_base: Callable[..., Path],
+    personas_dir: Path,
 ) -> None:
     origin = bare_origin()
     canonical = gitops.clone(origin, tmp_path / "canonical")
@@ -117,7 +118,14 @@ def test_identical_simultaneous_lifecycles_get_unique_branches_and_both_land(
     processes = [
         multiprocessing.Process(
             target=_lifecycle_process,
-            args=(str(origin), str(canonical), str(tmp_path / "worktrees"), queue),
+            args=(
+                str(origin),
+                str(canonical),
+                str(tmp_path / "worktrees"),
+                str(command_base()),
+                str(personas_dir),
+                queue,
+            ),
         )
         for _ in range(2)
     ]
@@ -129,8 +137,8 @@ def test_identical_simultaneous_lifecycles_get_unique_branches_and_both_land(
 
     assert all(result["ok"] and result["outcome"] == "merged" for result in results)
     assert len({result["branch"] for result in results}) == 2
-    for result in results:
-        assert _git(origin, "show", f"main:result-{result['pid']}.txt") == "landed"
+    landed = _git(origin, "ls-tree", "--name-only", "main").splitlines()
+    assert len([name for name in landed if name.startswith("CHANGE-")]) == 2
     assert _git(canonical, "config", "--bool", "core.bare") == "false"
 
 

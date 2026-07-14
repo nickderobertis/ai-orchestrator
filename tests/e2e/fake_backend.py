@@ -18,6 +18,7 @@ Outcome is steered by sentinels in the task (the first user message):
 from __future__ import annotations
 
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -55,6 +56,11 @@ def main() -> int:
         case "respond":
             if "write-change" in task:
                 (Path.cwd() / "CHANGE.txt").write_text("change from fake agent\n", encoding="utf-8")
+            if "write-unique-change" in task:
+                identity = re.sub(r"[^A-Za-z0-9._-]+", "-", Path.cwd().name)
+                (Path.cwd() / f"CHANGE-{identity}.txt").write_text(
+                    "change from fake agent\n", encoding="utf-8"
+                )
             # `complete-now` finishes on the first turn; otherwise the agent stays
             # "not done" and completion is decided by the supervisor's done_when
             # judge below, which only passes on the second turn — exercising the
