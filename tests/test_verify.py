@@ -73,6 +73,23 @@ def test_run_gate_pass_and_fail(tmp_path) -> None:
     assert not bad.ok
 
 
+def test_run_gate_passes_comparison_context(tmp_path) -> None:
+    result = run_gate(
+        tmp_path,
+        [
+            "sh",
+            "-c",
+            'test "$ORCHESTRATOR_COMPARISON_REMOTE/'
+            '$ORCHESTRATOR_COMPARISON_BASE" = upstream/master',
+        ],
+        env={
+            "ORCHESTRATOR_COMPARISON_REMOTE": "upstream",
+            "ORCHESTRATOR_COMPARISON_BASE": "master",
+        },
+    )
+    assert result.ok
+
+
 def test_run_gate_missing_command(tmp_path) -> None:
     result = run_gate(tmp_path, ["definitely-not-a-real-command-xyz"])
     assert not result.ok and "not found" in result.output

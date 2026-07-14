@@ -53,6 +53,7 @@ class MergeContext:
     sleep: Callable[[float], None] = time.sleep
     clock: Callable[[], float] = time.monotonic
     verify_command: list[str] | None = None
+    verify_env: dict[str, str] | None = None
     gate_timeout: float | None = None
     publication_attempts: int = 3
 
@@ -141,7 +142,10 @@ class LocalMergeStrategy:
                         gitops.merge(scratch, f"origin/{ctx.branch}", message=ctx.title)
                         if ctx.verify_command is not None:
                             verified = run_gate(
-                                scratch, ctx.verify_command, timeout=ctx.gate_timeout
+                                scratch,
+                                ctx.verify_command,
+                                timeout=ctx.gate_timeout,
+                                env=ctx.verify_env,
                             )
                             if not verified.ok:
                                 return MergeOutcome(

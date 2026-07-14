@@ -46,11 +46,36 @@ def test_clone_with_depth(tmp_path, bare_origin) -> None:
     assert (clone / ".git").exists()
 
 
-def test_default_branch_falls_back_to_main(tmp_path) -> None:
-    # A repo with no remote has no origin/HEAD; default_branch falls back to main.
+def test_default_branch_uses_unborn_head_as_explicit_empty_repo_rule(tmp_path) -> None:
     repo = tmp_path / "solo"
-    gitops._git(["init", "-b", "main", str(repo)])
-    assert gitops.default_branch(repo) == "main"
+    gitops._git(["init", "-b", "fresh", str(repo)])
+    assert gitops.default_branch(repo) == "fresh"
+
+
+def test_default_branch_uses_sole_remote_ref_when_remote_head_missing(
+    tmp_path, bare_origin
+) -> None:
+    clone = gitops.clone(str(bare_origin(branch="master")), tmp_path / "clone")
+    gitops._git(["symbolic-ref", "--delete", "refs/remotes/origin/HEAD"], cwd=clone)
+    assert gitops.default_branch(clone) == "master"
+
+
+def test_default_branch_rejects_missing_head_with_ambiguous_refs(tmp_path, bare_origin) -> None:
+    clone = gitops.clone(str(bare_origin()), tmp_path / "clone")
+    gitops._git(["branch", "other", "origin/main"], cwd=clone)
+    gitops.push(clone, "other", set_upstream=False)
+    gitops.fetch(clone)
+    gitops._git(["symbolic-ref", "--delete", "refs/remotes/origin/HEAD"], cwd=clone)
+    gitops._git(["config", "--unset-all", "branch.main.remote"], cwd=clone, check=False)
+    gitops._git(["config", "--unset-all", "branch.main.merge"], cwd=clone, check=False)
+    with pytest.raises(gitops.GitError, match="pass an explicit base_branch"):
+        gitops.default_branch(clone)
+
+
+def test_default_branch_ignores_stale_remote_head(tmp_path, bare_origin) -> None:
+    clone = gitops.clone(str(bare_origin(branch="master")), tmp_path / "clone")
+    gitops._git(["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/gone"], cwd=clone)
+    assert gitops.default_branch(clone) == "master"
 
 
 def test_force_push(tmp_path, bare_origin) -> None:

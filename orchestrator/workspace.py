@@ -150,14 +150,16 @@ class Workspace:
     def _worktree_root(self, repo: RepoRef) -> Path:
         return self.root / repo.dir_key
 
-    def ensure_clone(self, repo: RepoRef, *, url: str | None = None) -> Path:
+    def ensure_clone(
+        self, repo: RepoRef, *, url: str | None = None, base_branch: str | None = None
+    ) -> Path:
         """Resolve and fast-forward the repo's canonical default checkout."""
         with self._repo_lock(repo):
             checkout = self._resolver(url or repo.url)
             self._checkouts[repo.dir_key] = checkout
             with advisory_lock(f"git:{gitops.common_dir(checkout)}"):
                 gitops.fetch(checkout)
-                base = gitops.default_branch(checkout)
+                base = base_branch or gitops.default_branch(checkout)
                 gitops.checkout(checkout, base)
                 gitops.merge_ff_only(checkout, f"origin/{base}")
             return checkout

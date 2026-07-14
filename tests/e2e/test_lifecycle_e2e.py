@@ -167,13 +167,33 @@ def test_local_repo_direct_merge(tmp_path, bare_origin) -> None:
         dispatch_fn=make_writing_dispatch(filename="feature.txt"),
         verify_cmd=["true"],  # explicit gate so the test never depends on make/just
     )
-    assert result.ok
+    assert result.ok, result.detail
     assert result.outcome == "merged"
     assert result.base_branch == "main"
     assert _has_file(origin, "main", "feature.txt")  # the change really landed on origin main
     canonical = ws.clone_dir(normalize_repo(str(origin)))
     assert gitops.current_branch(canonical) == "main"
     assert gitops.head_sha(canonical) == _tip(origin, "main")
+
+
+def test_local_repo_non_main_default_and_gate_context(tmp_path, bare_origin) -> None:
+    origin = bare_origin(branch="master")
+    ws = _workspace(tmp_path, origin)
+    result = run_repo_task(
+        str(origin),
+        "Add a portable change.",
+        "backend-engineer",
+        workspace=ws,
+        dispatch_fn=make_writing_dispatch(filename="portable.txt"),
+        verify_cmd=[
+            "sh",
+            "-c",
+            'test "$ORCHESTRATOR_COMPARISON_REMOTE/$ORCHESTRATOR_COMPARISON_BASE" = origin/master',
+        ],
+    )
+    assert result.ok, result.detail
+    assert result.base_branch == "master"
+    assert _has_file(origin, "master", "portable.txt")
 
 
 def test_competing_local_publishers_rebuild_and_reverify_after_push_race(

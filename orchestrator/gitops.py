@@ -105,17 +105,66 @@ def fetch(cwd: str | Path, *, remote: str = "origin", prune: bool = True) -> Non
 
 
 def default_branch(cwd: str | Path, *, remote: str = "origin") -> str:
-    """The remote's default branch (e.g. ``main``), read from ``origin/HEAD``.
+    """Return the remote's default branch, refusing to guess when ambiguous.
 
-    Falls back to ``main`` when the symbolic ref is not set (a freshly created
-    bare remote with no HEAD), which keeps offline tests robust.
+    The remote HEAD is authoritative when it names an existing tracking ref. If
+    it is unavailable, an upstream configured on the checked-out branch or a
+    sole remote branch is sufficient.  The only no-ref fallback is an unborn
+    repository: its symbolic local HEAD is Git's explicit initial-branch choice.
     """
     proc = _git(["symbolic-ref", "--short", f"refs/remotes/{remote}/HEAD"], cwd=cwd, check=False)
     ref = proc.stdout.strip()
     prefix = f"{remote}/"
-    if ref.startswith(prefix):
+    if (
+        ref.startswith(prefix)
+        and _git(
+            ["show-ref", "--verify", "--quiet", f"refs/remotes/{ref}"], cwd=cwd, check=False
+        ).returncode
+        == 0
+    ):
         return ref[len(prefix) :]
-    return "main"
+
+    current = _git(
+        ["symbolic-ref", "--quiet", "--short", "HEAD"], cwd=cwd, check=False
+    ).stdout.strip()
+    if current:
+        upstream_remote = _git(
+            ["config", "--get", f"branch.{current}.remote"], cwd=cwd, check=False
+        ).stdout.strip()
+        upstream_merge = _git(
+            ["config", "--get", f"branch.{current}.merge"], cwd=cwd, check=False
+        ).stdout.strip()
+        candidate = upstream_merge.removeprefix("refs/heads/")
+        if (
+            upstream_remote == remote
+            and candidate
+            and _git(
+                ["show-ref", "--verify", "--quiet", f"refs/remotes/{remote}/{candidate}"],
+                cwd=cwd,
+                check=False,
+            ).returncode
+            == 0
+        ):
+            return candidate
+
+    refs = _git(
+        ["for-each-ref", "--format=%(refname:strip=3)", f"refs/remotes/{remote}"],
+        cwd=cwd,
+        check=False,
+    ).stdout.splitlines()
+    candidates = sorted(ref for ref in refs if ref and ref != "HEAD")
+    if len(candidates) == 1:
+        return candidates[0]
+    if not candidates and current:
+        remote_exists = _git(["remote", "get-url", remote], cwd=cwd, check=False).returncode == 0
+        unborn = _git(["rev-parse", "--verify", "HEAD"], cwd=cwd, check=False).returncode != 0
+        if unborn or not remote_exists:
+            return current
+    detail = ", ".join(candidates) if candidates else "none"
+    raise GitError(
+        f"cannot determine default branch for remote {remote!r}: origin/HEAD is missing or stale "
+        f"and plausible remote branches are {detail}; pass an explicit base_branch"
+    )
 
 
 def worktree_add(

@@ -336,7 +336,7 @@ def run_repo_task(
     )
     worktree: Path | None = None
     try:
-        clone = workspace.ensure_clone(ref, url=url)
+        clone = workspace.ensure_clone(ref, url=url, base_branch=base_branch)
         strategy = _select_merge_strategy(ref, merge, github, workflow or workspace.workflow(ref))
         base = base_branch or gitops.default_branch(clone)
         result.base_branch = base
@@ -378,7 +378,15 @@ def run_repo_task(
         if not skip_verify:
             cmd = verify_cmd or detect_gate(worktree)
             if cmd is not None:
-                verify = run_gate(worktree, cmd, timeout=gate_timeout)
+                verify = run_gate(
+                    worktree,
+                    cmd,
+                    timeout=gate_timeout,
+                    env={
+                        "ORCHESTRATOR_COMPARISON_REMOTE": "origin",
+                        "ORCHESTRATOR_COMPARISON_BASE": base,
+                    },
+                )
                 result.verify = verify
                 if not verify.ok:
                     result.outcome = "gate-failed"
@@ -410,6 +418,10 @@ def run_repo_task(
             clock=clock,
             verify_command=None if skip_verify else (verify_cmd or detect_gate(worktree)),
             gate_timeout=gate_timeout,
+            verify_env={
+                "ORCHESTRATOR_COMPARISON_REMOTE": "origin",
+                "ORCHESTRATOR_COMPARISON_BASE": base,
+            },
             publication_attempts=publication_attempts,
         )
         merge_outcome = strategy.publish_and_merge(ctx)

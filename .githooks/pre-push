@@ -9,5 +9,7 @@ if ! command -v llmlint >/dev/null 2>&1; then
   exit 1
 fi
 
-echo "pre-push: complete gate (just check + llmlint diff vs origin/main)..." >&2
-just gate
+remote=${1:-origin}
+base=${ORCHESTRATOR_COMPARISON_BASE:-}
+echo "pre-push: complete gate (comparison remote=$remote${base:+ base=$base})..." >&2
+just gate "$remote" "$base"
