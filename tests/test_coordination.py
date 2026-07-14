@@ -6,25 +6,25 @@ import json
 import multiprocessing
 import os
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from orchestrator.coordination import LockTimeout, advisory_lock, atomic_json
 
 
-def _hold(identity: str, ready: multiprocessing.Event, release: multiprocessing.Event) -> None:
+def _hold(identity: str, connection: Any) -> None:
     with advisory_lock(identity):
-        ready.set()
-        release.wait(5)
+        connection.send("locked")
+        connection.recv()
 
 
 def test_advisory_lock_reports_live_owner(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("AI_ORCHESTRATOR_HOME", str(tmp_path))
-    ready = multiprocessing.Event()
-    release = multiprocessing.Event()
-    process = multiprocessing.Process(target=_hold, args=("shared", ready, release))
+    parent, child = multiprocessing.Pipe()
+    process = multiprocessing.Process(target=_hold, args=("shared", child))
     process.start()
-    assert ready.wait(2)
+    assert parent.poll(2) and parent.recv() == "locked"
     try:
         with (
             pytest.raises(LockTimeout, match=rf"timed out.*pid={process.pid}.*host="),
@@ -32,7 +32,7 @@ def test_advisory_lock_reports_live_owner(monkeypatch, tmp_path) -> None:
         ):
             pytest.fail("concurrent process acquired an owned lock")
     finally:
-        release.set()
+        parent.send("release")
     process.join(2)
     assert process.exitcode == 0
 
