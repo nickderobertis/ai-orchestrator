@@ -78,6 +78,11 @@ run-plan *args:
 repo-task *args:
     uv run orchestrator-repo-task {{args}}
 
+# Add preferred-harness PATH setup and preserved-commit recovery reporting to
+# repo-task. Omit task (or pass `-`) to read a long task from stdin.
+repo-task-auto *args:
+    ./scripts/repo-task-auto.sh {{args}}
+
 # Run a repo-plan: many isolated PRs across repos, coordinated by a DAG:
 # `just repo-plan <repo-plan.json>`. A node may carry a `steps` sub-DAG to run
 # several onejudge on ONE PR (shared branch, merged once).
