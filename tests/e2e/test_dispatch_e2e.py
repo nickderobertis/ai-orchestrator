@@ -8,14 +8,19 @@ in our layer (merge, dispatch, report parsing) is mocked.
 from __future__ import annotations
 
 import json
+import os
+import subprocess
 import sys
+from pathlib import Path
 
 import pytest
+import yaml
 
 from orchestrator import PERSONA_DIR, REPO_ROOT
 from orchestrator.dispatch import DispatchError, dispatch, main, run_onejudge
 
 FAKE_BACKEND = REPO_ROOT / "tests" / "e2e" / "fake_backend.py"
+FAKE_HARNESS = REPO_ROOT / "tests" / "e2e" / "fake_harness.py"
 
 
 def test_dispatch_completes_via_supervisor_loop(command_base, onejudge_bin) -> None:
@@ -125,6 +130,78 @@ def test_dispatch_cli_writes_output_file(command_base, onejudge_bin, tmp_path) -
     )
     assert rc == 0
     assert '"schema_version"' in out.read_text(encoding="utf-8")
+
+
+def test_dispatch_cli_applies_ordered_models_to_real_oneharness(
+    tmp_path: Path, onejudge_bin: str
+) -> None:
+    target = tmp_path / "target"
+    target.mkdir()
+    (target / "oneharness.toml").write_text(
+        'run_mode = "fallback"\n'
+        'harnesses = ["codex", "claude-code"]\n'
+        '[harness.codex]\nmodel = "gpt-5.5"\n'
+        '[harness.claude-code]\nmodel = "claude-sonnet-4-5"\n',
+        encoding="utf-8",
+    )
+    judge = {"kind": "command", "command": [sys.executable, str(FAKE_BACKEND)]}
+    base = yaml.safe_load((REPO_ROOT / "config" / "onejudge.base.yaml").read_text())
+    base["provider"] = {
+        "kind": "split",
+        "skill": {"kind": "oneharness", "bin": "oneharness"},
+        "judge": judge,
+    }
+    base["user"]["max_turns"] = 1
+    base_path = tmp_path / "split.base.yaml"
+    base_path.write_text(yaml.safe_dump(base, sort_keys=False), encoding="utf-8")
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    for harness in ("codex", "claude"):
+        (bin_dir / harness).symlink_to(FAKE_HARNESS)
+    log_path = tmp_path / "harness.jsonl"
+    env = {
+        **os.environ,
+        "ONEHARNESS_BIN_CODEX": str(bin_dir / "codex"),
+        "ONEHARNESS_BIN_CLAUDE_CODE": str(bin_dir / "claude"),
+        "FAKE_HARNESS_LOG": str(log_path),
+    }
+    env.pop("ONEHARNESS_MODELS", None)
+    proc = subprocess.run(
+        [
+            "orchestrator-dispatch",
+            "backend-engineer",
+            "complete-now: prove model fallback",
+            "--base",
+            str(base_path),
+            "--cwd",
+            str(target),
+            "--project-dir",
+            str(target),
+            "--onejudge-bin",
+            onejudge_bin,
+        ],
+        cwd=target,
+        env=env,
+        text=True,
+        capture_output=True,
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    attempts = [json.loads(line) for line in log_path.read_text().splitlines()]
+    assert attempts == [
+        {"harness": "codex", "model": "gpt-5.6-sol"},
+    ]
+    effective = subprocess.run(
+        ["oneharness", "config", "--config", str(REPO_ROOT / "oneharness.toml"), "--compact"],
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    effective_config = json.loads(effective.stdout)
+    assert effective_config["run_mode"]["value"] == "fallback"
+    assert effective_config["harnesses"]["value"] == ["codex", "claude-code"]
+    assert effective_config["harness"]["claude-code"]["model"]["value"] == "claude-opus-4-8"
 
 
 def test_run_onejudge_config_error_raises(onejudge_bin) -> None:

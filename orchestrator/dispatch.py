@@ -30,7 +30,7 @@ EXIT_COMPLETED = 0
 EXIT_INCOMPLETE = 1
 EXIT_CONFIG_ERROR = 2
 DEFAULT_ONEHARNESS_TIMEOUT = "1800"
-DEFAULT_ONEHARNESS_MODELS = ("gpt-5.6-sol", "claude-opus-4-8")
+AGENT_ONEHARNESS_BIN = REPO_ROOT / "scripts" / "oneharness-agent.sh"
 
 
 class DispatchError(Exception):
@@ -107,15 +107,6 @@ def _validate_oneharness_timeout(value: str) -> None:
         )
 
 
-def _validate_oneharness_models(value: str) -> None:
-    """Reject an empty entry in oneharness's comma-separated model chain."""
-    if not value or any(not model.strip() for model in value.split(",")):
-        raise DispatchError(
-            "ONEHARNESS_MODELS must be a comma-separated list of non-empty model names, "
-            f"got {value!r}"
-        )
-
-
 def run_onejudge(
     config: dict[str, Any],
     task: str,
@@ -141,9 +132,7 @@ def run_onejudge(
             cmd += ["--provider", provider]
         process_env = {**os.environ, **(env or {})}
         process_env.setdefault("ONEHARNESS_TIMEOUT", DEFAULT_ONEHARNESS_TIMEOUT)
-        process_env.setdefault("ONEHARNESS_MODELS", ",".join(DEFAULT_ONEHARNESS_MODELS))
         _validate_oneharness_timeout(process_env["ONEHARNESS_TIMEOUT"])
-        _validate_oneharness_models(process_env["ONEHARNESS_MODELS"])
         try:
             proc = subprocess.run(
                 cmd,
@@ -183,8 +172,8 @@ def _agent_run_context(
 
     onejudge runs the agent in its OWN cwd, so when `project_dir` is set the agent
     is put there and the repo's oneharness configs are made resolvable from that
-    cwd: the agent side via `ONEHARNESS_CONFIG`, the judge side by absolutizing a
-    relative `provider.judge_config`. `oneharness_mode` is forwarded as
+    cwd: the agent provider uses a wrapper that passes oneharness `--config`, and
+    the judge side gets an absolute `provider.judge_config`. `oneharness_mode` is forwarded as
     `ONEHARNESS_MODE` (e.g. "bypass" where codex's OS sandbox can't initialize).
     """
     run_cwd: str | Path = cwd
@@ -193,8 +182,13 @@ def _agent_run_context(
         env["ONEHARNESS_MODE"] = oneharness_mode
     if project_dir is not None:
         run_cwd = project_dir
-        env["ONEHARNESS_CONFIG"] = str(REPO_ROOT / "oneharness.toml")
         prov = config.get("provider", {})
+        if prov.get("kind") == "oneharness":
+            prov["bin"] = str(AGENT_ONEHARNESS_BIN)
+        elif prov.get("kind") == "split" and isinstance(prov.get("skill"), dict):
+            skill = prov["skill"]
+            if skill.get("kind") == "oneharness":
+                skill["bin"] = str(AGENT_ONEHARNESS_BIN)
         judge_config = prov.get("judge_config")
         if isinstance(judge_config, str) and not Path(judge_config).is_absolute():
             prov["judge_config"] = str((REPO_ROOT / judge_config).resolve())

@@ -116,7 +116,11 @@ no-unprivileged-userns host, dispatch codex with
   `ONEHARNESS_TIMEOUT` well above oneharness's 120-second default so build-heavy
   turns are not terminated with `SIGTERM`. Set the variable explicitly to
   override it; onejudge's `max_turns` and the lifecycle `--timeout` still bound
-  the whole run independently.
+  the whole run independently. Project dispatch also pins the agent-side
+  oneharness `--config` to this repo's config, which forces codex to
+  `gpt-5.6-sol` while retaining claude-code's Claude fallback model. A global
+  `ONEHARNESS_MODELS` chain cannot be used here: onejudge supplies `--session`,
+  and oneharness rejects multi-model runs combined with a named session.
 - **Prefer the one-command wrapper.** Use
   `just repo-task-auto <repo> <persona> "<task>"`. It sets the dispatch
   environment and reports the branch's commit delta after the run, making

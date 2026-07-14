@@ -6,10 +6,17 @@ import json
 import os
 import subprocess
 from pathlib import Path
+from typing import NamedTuple
 
 from orchestrator import REPO_ROOT
 
 FIXTURE = REPO_ROOT / "tests" / "fixtures" / "history" / "worker.jsonl"
+
+
+class SessionSpec(NamedTuple):
+    filename: str
+    name: str
+    start_hour: int
 
 
 def _run(*args: str, history_dir: Path) -> subprocess.CompletedProcess[str]:
@@ -49,22 +56,22 @@ def _history_store(tmp_path: Path) -> Path:
 
     # Two non-unique worker names prove substring resolution chooses the newest.
     sessions = (
-        (
+        SessionSpec(
             "build-history-command-20260714T090000Z-111.jsonl",
             "build-history-command",
             9,
         ),
-        (
+        SessionSpec(
             "build-history-command-20260714T100000Z-222.jsonl",
             "build-history-command",
             10,
         ),
-        (
+        SessionSpec(
             "you-are-a-strict-careful-evaluator-20260714T100100Z-333.jsonl",
             "you-are-a-strict-careful-evaluator",
             11,
         ),
-        (
+        SessionSpec(
             "you-are-roleplaying-the-user-in-20260714T100200Z-444.jsonl",
             "you-are-roleplaying-the-user-in",
             12,

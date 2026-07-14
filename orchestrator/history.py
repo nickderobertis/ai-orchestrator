@@ -41,7 +41,8 @@ class HistorySession:
         project = value.get("project")
         started = value.get("started")
         path = value.get("path")
-        if not all(isinstance(field, str) for field in (session_id, name, project, started, path)):
+        fields = (session_id, name, project, started, path)
+        if not all(isinstance(field, str) and field.strip() for field in fields):
             return None
         assert isinstance(session_id, str)
         assert isinstance(name, str)

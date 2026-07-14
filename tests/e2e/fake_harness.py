@@ -1,0 +1,38 @@
+#!/usr/bin/env python3
+"""Deterministic codex/claude-code executable for oneharness fallback tests."""
+
+from __future__ import annotations
+
+import json
+import os
+import sys
+from pathlib import Path
+
+
+def main() -> int:
+    harness = Path(sys.argv[0]).name
+    args = sys.argv[1:]
+    model = args[args.index("--model") + 1]
+    log_path = Path(os.environ["FAKE_HARNESS_LOG"])
+    with log_path.open("a", encoding="utf-8") as log:
+        log.write(json.dumps({"harness": harness, "model": model}) + "\n")
+
+    compatible = model.startswith("gpt-") if harness == "codex" else model.startswith("claude-")
+    if not compatible:
+        print(f"unknown model: {model}", file=sys.stderr)
+        return 1
+    if harness == "codex":
+        print(json.dumps({"type": "thread.started", "thread_id": "fake-codex-thread"}))
+        print(
+            json.dumps(
+                {"type": "item.completed", "item": {"type": "agent_message", "text": "done"}}
+            )
+        )
+        return 0
+
+    print(json.dumps({"result": "done", "session_id": "fake-claude-session"}))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

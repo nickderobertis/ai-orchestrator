@@ -8,6 +8,7 @@ import pytest
 
 from orchestrator import BASE_CONFIG, REPO_ROOT
 from orchestrator.dispatch import (
+    AGENT_ONEHARNESS_BIN,
     DispatchError,
     Report,
     _agent_run_context,
@@ -124,7 +125,7 @@ def test_agent_run_context_project_dir_absolutizes_judge_config() -> None:
         cfg, cwd="/repo", project_dir="/work/target", oneharness_mode="bypass"
     )
     assert run_cwd == "/work/target"
-    assert env["ONEHARNESS_CONFIG"] == str(REPO_ROOT / "oneharness.toml")
+    assert cfg["provider"]["bin"] == str(AGENT_ONEHARNESS_BIN)
     assert env["ONEHARNESS_MODE"] == "bypass"
     assert cfg["provider"]["judge_config"] == str((REPO_ROOT / "oneharness.judge.toml").resolve())
 
@@ -133,6 +134,12 @@ def test_agent_run_context_keeps_absolute_judge_config() -> None:
     cfg: dict = {"provider": {"judge_config": "/abs/oneharness.judge.toml"}}
     _agent_run_context(cfg, cwd="/repo", project_dir="/work", oneharness_mode=None)
     assert cfg["provider"]["judge_config"] == "/abs/oneharness.judge.toml"
+
+
+def test_agent_run_context_pins_split_skill_harness() -> None:
+    cfg: dict = {"provider": {"kind": "split", "skill": {"kind": "oneharness"}}}
+    _agent_run_context(cfg, cwd="/repo", project_dir="/work", oneharness_mode=None)
+    assert cfg["provider"]["skill"]["bin"] == str(AGENT_ONEHARNESS_BIN)
 
 
 def test_run_onejudge_missing_binary_raises() -> None:
@@ -146,27 +153,15 @@ def test_run_onejudge_missing_binary_raises() -> None:
 
 
 @pytest.mark.parametrize(
-    ("configured_timeout", "configured_models", "expected_timeout", "expected_models"),
-    [
-        (None, None, "1800", "gpt-5.6-sol,claude-opus-4-8"),
-        ("73", "custom-codex,custom-claude", "73", "custom-codex,custom-claude"),
-    ],
+    ("configured_timeout", "expected_timeout"),
+    [(None, "1800"), ("73", "73")],
 )
-def test_run_onejudge_sets_agent_harness_defaults(
-    tmp_path,
-    monkeypatch,
-    configured_timeout: str | None,
-    configured_models: str | None,
-    expected_timeout: str,
-    expected_models: str,
+def test_run_onejudge_sets_per_turn_timeout(
+    tmp_path, monkeypatch, configured_timeout: str | None, expected_timeout: str
 ) -> None:
     onejudge = tmp_path / "onejudge"
     onejudge.write_text(
-        "#!/bin/sh\n"
-        "printf "
-        '\'{"usage": {"oneharness_timeout": "%s", '
-        '"oneharness_models": "%s"}}\' '
-        '"$ONEHARNESS_TIMEOUT" "$ONEHARNESS_MODELS"\n',
+        '#!/bin/sh\nprintf \'{"usage": {"oneharness_timeout": "%s"}}\' "$ONEHARNESS_TIMEOUT"\n',
         encoding="utf-8",
     )
     onejudge.chmod(0o755)
@@ -174,16 +169,10 @@ def test_run_onejudge_sets_agent_harness_defaults(
         monkeypatch.delenv("ONEHARNESS_TIMEOUT", raising=False)
     else:
         monkeypatch.setenv("ONEHARNESS_TIMEOUT", configured_timeout)
-    if configured_models is None:
-        monkeypatch.delenv("ONEHARNESS_MODELS", raising=False)
-    else:
-        monkeypatch.setenv("ONEHARNESS_MODELS", configured_models)
-
     report = run_onejudge({}, "task", onejudge_bin=os.fspath(onejudge))
 
     assert report.raw is not None
     assert report.usage["oneharness_timeout"] == expected_timeout
-    assert report.usage["oneharness_models"] == expected_models
 
 
 @pytest.mark.parametrize("bad_timeout", ["", "abc", "12.5", "0", "-5"])
@@ -192,11 +181,4 @@ def test_run_onejudge_rejects_invalid_timeout(monkeypatch, bad_timeout: str) -> 
     # must fail loudly at the boundary rather than reach oneharness.
     monkeypatch.setenv("ONEHARNESS_TIMEOUT", bad_timeout)
     with pytest.raises(DispatchError, match="ONEHARNESS_TIMEOUT must be a positive integer"):
-        run_onejudge({}, "task")
-
-
-@pytest.mark.parametrize("bad_models", ["", ",", "codex,", ",claude", "codex,,claude"])
-def test_run_onejudge_rejects_invalid_model_chain(monkeypatch, bad_models: str) -> None:
-    monkeypatch.setenv("ONEHARNESS_MODELS", bad_models)
-    with pytest.raises(DispatchError, match="ONEHARNESS_MODELS must be a comma-separated list"):
         run_onejudge({}, "task")
