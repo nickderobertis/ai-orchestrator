@@ -146,15 +146,27 @@ def test_run_onejudge_missing_binary_raises() -> None:
 
 
 @pytest.mark.parametrize(
-    ("configured_timeout", "expected_timeout"),
-    [(None, "1800"), ("73", "73")],
+    ("configured_timeout", "configured_models", "expected_timeout", "expected_models"),
+    [
+        (None, None, "1800", "gpt-5.6-sol,claude-opus-4-8"),
+        ("73", "custom-codex,custom-claude", "73", "custom-codex,custom-claude"),
+    ],
 )
-def test_run_onejudge_sets_per_turn_timeout(
-    tmp_path, monkeypatch, configured_timeout: str | None, expected_timeout: str
+def test_run_onejudge_sets_agent_harness_defaults(
+    tmp_path,
+    monkeypatch,
+    configured_timeout: str | None,
+    configured_models: str | None,
+    expected_timeout: str,
+    expected_models: str,
 ) -> None:
     onejudge = tmp_path / "onejudge"
     onejudge.write_text(
-        '#!/bin/sh\nprintf \'{"usage": {"oneharness_timeout": "%s"}}\' "$ONEHARNESS_TIMEOUT"\n',
+        "#!/bin/sh\n"
+        "printf "
+        '\'{"usage": {"oneharness_timeout": "%s", '
+        '"oneharness_models": "%s"}}\' '
+        '"$ONEHARNESS_TIMEOUT" "$ONEHARNESS_MODELS"\n',
         encoding="utf-8",
     )
     onejudge.chmod(0o755)
@@ -162,11 +174,16 @@ def test_run_onejudge_sets_per_turn_timeout(
         monkeypatch.delenv("ONEHARNESS_TIMEOUT", raising=False)
     else:
         monkeypatch.setenv("ONEHARNESS_TIMEOUT", configured_timeout)
+    if configured_models is None:
+        monkeypatch.delenv("ONEHARNESS_MODELS", raising=False)
+    else:
+        monkeypatch.setenv("ONEHARNESS_MODELS", configured_models)
 
     report = run_onejudge({}, "task", onejudge_bin=os.fspath(onejudge))
 
     assert report.raw is not None
     assert report.usage["oneharness_timeout"] == expected_timeout
+    assert report.usage["oneharness_models"] == expected_models
 
 
 @pytest.mark.parametrize("bad_timeout", ["", "abc", "12.5", "0", "-5"])
@@ -175,4 +192,11 @@ def test_run_onejudge_rejects_invalid_timeout(monkeypatch, bad_timeout: str) -> 
     # must fail loudly at the boundary rather than reach oneharness.
     monkeypatch.setenv("ONEHARNESS_TIMEOUT", bad_timeout)
     with pytest.raises(DispatchError, match="ONEHARNESS_TIMEOUT must be a positive integer"):
+        run_onejudge({}, "task")
+
+
+@pytest.mark.parametrize("bad_models", ["", ",", "codex,", ",claude", "codex,,claude"])
+def test_run_onejudge_rejects_invalid_model_chain(monkeypatch, bad_models: str) -> None:
+    monkeypatch.setenv("ONEHARNESS_MODELS", bad_models)
+    with pytest.raises(DispatchError, match="ONEHARNESS_MODELS must be a comma-separated list"):
         run_onejudge({}, "task")

@@ -30,6 +30,7 @@ EXIT_COMPLETED = 0
 EXIT_INCOMPLETE = 1
 EXIT_CONFIG_ERROR = 2
 DEFAULT_ONEHARNESS_TIMEOUT = "1800"
+DEFAULT_ONEHARNESS_MODELS = ("gpt-5.6-sol", "claude-opus-4-8")
 
 
 class DispatchError(Exception):
@@ -106,6 +107,15 @@ def _validate_oneharness_timeout(value: str) -> None:
         )
 
 
+def _validate_oneharness_models(value: str) -> None:
+    """Reject an empty entry in oneharness's comma-separated model chain."""
+    if not value or any(not model.strip() for model in value.split(",")):
+        raise DispatchError(
+            "ONEHARNESS_MODELS must be a comma-separated list of non-empty model names, "
+            f"got {value!r}"
+        )
+
+
 def run_onejudge(
     config: dict[str, Any],
     task: str,
@@ -131,7 +141,9 @@ def run_onejudge(
             cmd += ["--provider", provider]
         process_env = {**os.environ, **(env or {})}
         process_env.setdefault("ONEHARNESS_TIMEOUT", DEFAULT_ONEHARNESS_TIMEOUT)
+        process_env.setdefault("ONEHARNESS_MODELS", ",".join(DEFAULT_ONEHARNESS_MODELS))
         _validate_oneharness_timeout(process_env["ONEHARNESS_TIMEOUT"])
+        _validate_oneharness_models(process_env["ONEHARNESS_MODELS"])
         try:
             proc = subprocess.run(
                 cmd,
