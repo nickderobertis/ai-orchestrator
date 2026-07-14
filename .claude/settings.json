@@ -30,6 +30,8 @@
       "Bash(just repo-task:*)",
       "Bash(just repo-plan:*)",
       "Bash(just replan:*)",
+      "Bash(just history:*)",
+      "Bash(just history-show:*)",
       "Bash(just new-persona:*)",
       "Bash(just session-setup)",
       "Bash(just setup-llmlint)",

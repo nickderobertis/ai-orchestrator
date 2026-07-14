@@ -119,6 +119,9 @@ an inapplicable rule in `llmlint.yml`—rather than leaving closeout to integrat
 
 ## Dispatching playbook
 
+Watch a dispatched agent with `just history`, then `just history-show <id>`.
+History needs `ONEHARNESS_HISTORY=1`; the dispatch wrappers set it.
+
 Prefer `just repo-task-auto` for a one-command dispatch — it sets up the harness
 environment and, afterward, points at the branch holding the agent's commits so a
 `not-completed` run's preserved work is never invisible. The judgment that matters:

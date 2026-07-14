@@ -99,6 +99,16 @@ repo-plan *args:
 replan *args:
     uv run orchestrator-replan {{args}}
 
+# List recent dispatched worker sessions across every target repo.
+# llmlint: ignore[tool_output_is_signal] human-readable history is this viewing command's product.
+history *args:
+    uv run orchestrator-history {{args}}
+
+# Show a readable progress digest for the newest matching worker session.
+# llmlint: ignore[tool_output_is_signal] the requested multi-line digest is this viewing command's product.
+history-show *args:
+    uv run orchestrator-history-show {{args}}
+
 # Scaffold a new persona: `just new-persona <name>`.
 new-persona *args:
     uv run orchestrator-new-persona {{args}}
