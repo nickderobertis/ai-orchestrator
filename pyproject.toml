@@ -15,6 +15,8 @@ orchestrator-repo-plan = "orchestrator.lifecycle:main_plan"
 orchestrator-replan = "orchestrator.replan:main"
 orchestrator-new-persona = "orchestrator.personas:main_new"
 orchestrator-validate-personas = "orchestrator.personas:main_validate"
+orchestrator-history = "orchestrator.history:main_list"
+orchestrator-history-show = "orchestrator.history:main_show"
 
 [dependency-groups]
 dev = [
