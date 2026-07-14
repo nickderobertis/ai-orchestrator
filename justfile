@@ -116,6 +116,15 @@ next-round *args:
 runs *args:
     @uv run orchestrator-runs "$@"
 
+# Register an existing canonical repo checkout.
+register-repo *args:
+    @uv run orchestrator-register-repo "$@"
+
+# List canonical repo checkouts, optionally fetching and fast-forwarding them.
+# llmlint: ignore[tool_output_is_signal] the requested repo registry listing is this viewing command's product.
+repos *args:
+    @uv run orchestrator-repos "$@"
+
 # List recent dispatched worker sessions across every target repo.
 # llmlint: ignore[tool_output_is_signal] human-readable history is this viewing command's product.
 history *args:

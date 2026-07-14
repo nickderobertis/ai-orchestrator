@@ -33,11 +33,14 @@ __all__ = [
     "is_bare",
     "is_ancestor",
     "is_dirty",
+    "is_repo",
     "log_delta",
     "merge",
+    "merge_ff_only",
     "merge_abort",
     "push",
     "remotes",
+    "remote_url",
     "reset_hard",
     "worktree_add",
     "worktree_add_existing",
@@ -243,6 +246,20 @@ def remotes(cwd: str | Path) -> list[str]:
     return [line for line in _git(["remote"], cwd=cwd).stdout.splitlines() if line]
 
 
+def remote_url(cwd: str | Path, *, remote: str = "origin") -> str:
+    """Return the configured URL for ``remote``."""
+    value = _git(["remote", "get-url", remote], cwd=cwd).stdout.strip()
+    if not value or "\0" in value or "\n" in value or "\r" in value:
+        raise GitError(f"git remote {remote!r} returned an invalid URL")
+    return value
+
+
+def is_repo(cwd: str | Path) -> bool:
+    """Whether ``cwd`` is the working tree of a non-bare git repository."""
+    proc = _git(["rev-parse", "--is-inside-work-tree"], cwd=cwd, check=False)
+    return proc.returncode == 0 and proc.stdout.strip() == "true"
+
+
 def checkout(cwd: str | Path, ref: str) -> None:
     """Check out ``ref`` (a branch/commit) in the working tree at ``cwd``."""
     _git(["checkout", ref], cwd=cwd)
@@ -264,6 +281,12 @@ def merge(cwd: str | Path, ref: str, *, message: str, no_ff: bool = True) -> str
         args.append("--no-ff")
     args.append(ref)
     _git(args, cwd=cwd)
+    return head_sha(cwd)
+
+
+def merge_ff_only(cwd: str | Path, ref: str) -> str:
+    """Fast-forward the current branch to ``ref`` or raise `GitError`."""
+    _git(["merge", "--ff-only", ref], cwd=cwd)
     return head_sha(cwd)
 
 
