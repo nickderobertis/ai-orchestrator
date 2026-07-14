@@ -182,6 +182,14 @@ gate, and merges. Dispatch smaller project work with a single task rather than
 doing it directly; only the slight-tweak exception above applies. This repo is one
 local-mode case of the same rule.
 
+**Self-dispatch caveat (this repo).** Do not dispatch changes to the
+git-manipulating subsystems (`gitops`/`workspace`/`lifecycle`/`integrate`) *onto
+this checkout* through the lifecycle: the agent's worktree shares this checkout's
+`.git`, so its in-progress code and `just check` runs can corrupt the canonical
+checkout. Develop those subsystems against an isolated clone and fast-forward the
+verified commit in; confirm `git config core.bare` is `false` before trusting any
+self-dispatch result. Mechanism and recovery: `docs/repo-lifecycle.md`.
+
 ## Stack and composition
 
 How this repo was built up from the create-repo reference pieces:

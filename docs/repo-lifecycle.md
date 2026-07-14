@@ -42,6 +42,21 @@ and fast-forwarded to stay current before a worktree is cut from it. Worktree
 creation is serialized per repo (a lock) because concurrent `git worktree add` races
 on the checkout's git metadata; the slow part (the dispatch) always runs unlocked.
 
+### Self-dispatch hazard: worktrees share the canonical `.git`
+
+A worktree shares its canonical checkout's `.git` common dir (config, refs, object
+store). That is safe for ordinary changes, but hazardous when the *dispatched agent
+edits the git-manipulating subsystems of this repo itself* (`gitops`, `workspace`,
+`lifecycle`, `integrate`): the agent's in-progress code runs through its own
+`just check` (whose e2e drives real worktree/merge operations), and a bug there can
+mutate the shared `.git` — observed as `core.bare` flipping to `true`, which makes
+the canonical checkout report itself bare and mangles the agent's branch history
+into spurious `init` commits and mass deletions. Develop those subsystems against an
+**isolated clone** (its own `.git`) and fast-forward the verified commit into the
+canonical checkout instead of self-dispatching onto it. Recovery is cheap because no
+data is lost: `git config core.bare false` restores the checkout, and the agent's
+real work is intact at its last commit *before* the `init`-commit corruption.
+
 ## Local verification before push
 
 Before the final gate, the lifecycle fetches `origin` and merges the current
