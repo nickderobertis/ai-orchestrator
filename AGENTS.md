@@ -153,6 +153,11 @@ read `not-completed` as a turn-cap timing signal rather than a failure — inspe
 branch before concluding work was lost. See `docs/onejudge-integration.md` for the
 operational details and `docs/repo-lifecycle.md` for lifecycle mechanics.
 
+Treat the branch, not the running conversation, as the source of truth. Once the
+needed work is committed and directly verifiable, harvest those commits and stop
+the dispatch immediately; letting agent and judge turns continue after the useful
+output is in hand only adds cost.
+
 ## Dogfooding rule
 
 Use the orchestrator harness for **all tasks of sufficient complexity**, in any
