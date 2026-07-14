@@ -38,24 +38,19 @@ def test_comparison_base_discovers_non_main_and_accepts_explicit_base(
     assert _resolve(clone, "origin", "master").stdout.strip() == "origin/master"
 
 
-def test_pre_push_hook_forwards_git_remote_and_explicit_base(tmp_path, bare_origin) -> None:
-    clone = gitops.clone(str(bare_origin(branch="master")), tmp_path / "clone")
-    bindir = tmp_path / "bin"
-    bindir.mkdir()
-    log = tmp_path / "just.args"
-    fake = bindir / "just"
-    fake.write_text(f'#!/bin/sh\nprintf "%s\\n" "$@" > "{log}"\n', encoding="utf-8")
-    fake.chmod(0o755)
+def test_pre_push_hook_forwards_git_remote_and_explicit_base(tmp_path) -> None:
+    clone = gitops.clone(str(ROOT), tmp_path / "clone")
+    gitops._git(["remote", "rename", "origin", "upstream"], cwd=clone)
     proc = subprocess.run(
-        [str(ROOT / ".githooks/pre-push"), "upstream", str(bare_origin())],
+        [str(clone / ".githooks/pre-push"), "upstream", str(ROOT)],
         cwd=clone,
         env={
             **os.environ,
-            "PATH": f"{bindir}:{os.environ['PATH']}",
-            "ORCHESTRATOR_COMPARISON_BASE": "master",
+            "ORCHESTRATOR_COMPARISON_BASE": "invalid..base",
         },
         text=True,
         capture_output=True,
     )
-    assert proc.returncode == 0
-    assert log.read_text(encoding="utf-8").splitlines() == ["gate", "upstream", "master"]
+    assert proc.returncode == 2
+    assert "comparison remote=upstream base=invalid..base" in proc.stderr
+    assert "comparison-base: 'invalid..base' is not a valid branch name" in proc.stderr
