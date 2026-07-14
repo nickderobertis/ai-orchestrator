@@ -115,9 +115,8 @@ environment and, afterward, points at the branch holding the agent's commits so 
 `not-completed` run's preserved work is never invisible. The judgment that matters:
 keep `~/.local/node/bin` on `PATH` or the harness silently falls back off codex, and
 read `not-completed` as a turn-cap timing signal rather than a failure — inspect the
-branch before concluding work was lost. The deterministic details — env, timeout,
-GitHub-vs-local merge (and its `updateInstead` setup), and llmlint suppression — live
-in `docs/onejudge-integration.md`; lifecycle mechanics in `docs/repo-lifecycle.md`.
+branch before concluding work was lost. See `docs/onejudge-integration.md` for the
+operational details and `docs/repo-lifecycle.md` for lifecycle mechanics.
 
 ## Dogfooding rule
 

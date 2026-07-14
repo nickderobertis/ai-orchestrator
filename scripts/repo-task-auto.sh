@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Run one repo lifecycle task with the preferred harness available, then make
 # any commits preserved from an incomplete agent run visible to the operator.
-# llmlint: ignore-file[robust_shell, boundary_inputs_validated, tool_output_is_signal, work_goes_through_command_surface] this IS a command-surface recipe (`just repo-task-auto`) wrapping the `orchestrator-repo-task` entry point to add env setup + post-run reporting. It deliberately omits `set -e` so it can still report the preserved-commit delta AFTER a non-zero (not-completed) dispatch — the very case it exists for; failure paths are checked explicitly. The fields it consumes are this project's own orchestrator-repo-task JSON result (a trusted internal boundary), and the branch is guarded by `git show-ref` before any ref use. Printing the outcome + preserved-commit delta on success IS the signal (operator visibility is the whole point), not incidental chatter.
+# llmlint: ignore-file[robust_shell, boundary_inputs_validated, work_goes_through_command_surface] this IS a command-surface recipe (`just repo-task-auto`) wrapping the `orchestrator-repo-task` entry point to add env setup + post-run reporting. It deliberately omits `set -e` so it can still report the preserved-commit delta AFTER a non-zero (not-completed) dispatch — the very case it exists for; failure paths are checked explicitly. The fields it consumes are this project's own orchestrator-repo-task JSON result (a trusted internal boundary), and the branch is guarded by `git show-ref` before any ref use.
 set -uo pipefail
 
 readonly NODE_BIN="$HOME/.local/node/bin"
@@ -64,23 +64,17 @@ repo=$(jq -r '.repo' "$result_file")
 repo_key=$(printf '%s' "$repo" | sed -E 's|/|__|; s|[^A-Za-z0-9._-]+|-|g; s|^-+||; s|-+$||')
 clone="$workspace/$repo_key/repo"
 
-printf 'outcome: %s\n' "$outcome"
-printf 'detail: %s\n' "${detail:-none}"
-
+# One concise line: the outcome, plus — when the run left commits on an unmerged
+# branch (the not-completed case) — where to find and inspect them.
+report="repo-task-auto: $outcome"
+[[ -n $detail ]] && report+=" ($detail)"
 if [[ -d $clone/.git ]] && git -C "$clone" show-ref --verify --quiet "refs/heads/$branch"; then
   base_ref="origin/$base_branch"
-  if ! git -C "$clone" rev-parse --verify --quiet "$base_ref^{commit}" >/dev/null; then
-    base_ref=$base_branch
-  fi
+  git -C "$clone" rev-parse --verify --quiet "$base_ref^{commit}" >/dev/null || base_ref=$base_branch
   commit_count=$(git -C "$clone" rev-list --count "$base_ref..$branch" 2>/dev/null || printf '?')
-  printf 'agent left %s commit(s) on branch %s; inspect with ' "$commit_count" "$branch"
-  printf '%s' '`'
-  printf 'git -C %q log %q..%q' "$clone" "$base_ref" "$branch"
-  printf '%s\n' '`'
-else
-  printf 'branch %s was not found in lifecycle clone %s; no commit delta available\n' \
-    "$branch" "$clone"
+  report+=" — $commit_count commit(s) on $branch: git -C $clone log $base_ref..$branch"
 fi
+printf '%s\n' "$report"
 
 if [[ $outcome == "error" ]]; then
   ((dispatch_status != 0)) || dispatch_status=1
