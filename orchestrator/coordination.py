@@ -20,7 +20,10 @@ class LockTimeout(TimeoutError):
 
 
 def _lock_root() -> Path:
-    root = Path(os.environ.get("AI_ORCHESTRATOR_HOME", Path.home() / ".ai-orchestrator"))
+    override = os.environ.get("AI_ORCHESTRATOR_HOME")
+    if override is not None and not override.strip():
+        raise ValueError("AI_ORCHESTRATOR_HOME must not be empty")
+    root = Path(override) if override is not None else Path.home() / ".ai-orchestrator"
     return root / "locks"
 
 
