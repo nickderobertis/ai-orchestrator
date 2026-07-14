@@ -31,6 +31,7 @@ __all__ = [
     "is_bare",
     "is_ancestor",
     "is_dirty",
+    "log_delta",
     "merge",
     "merge_abort",
     "push",
@@ -186,6 +187,20 @@ def has_commits_ahead(cwd: str | Path, base: str) -> bool:
     """True if the current branch has commits ``base`` does not (something to PR)."""
     proc = _git(["rev-list", "--count", f"{base}..HEAD"], cwd=cwd)
     return int(proc.stdout.strip() or "0") > 0
+
+
+def log_delta(cwd: str | Path, base: str, branch: str) -> list[tuple[str, str]]:
+    """Return short SHA and subject for commits in ``branch`` but not ``base``."""
+    proc = _git(
+        ["log", "--format=%h%x00%s", f"{base}..{branch}"],
+        cwd=cwd,
+    )
+    commits: list[tuple[str, str]] = []
+    for line in proc.stdout.splitlines():
+        sha, separator, subject = line.partition("\0")
+        if separator:
+            commits.append((sha, subject))
+    return commits
 
 
 def is_ancestor(cwd: str | Path, ancestor: str, descendant: str) -> bool:

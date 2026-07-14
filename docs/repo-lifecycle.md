@@ -132,6 +132,16 @@ lower-level `just replan <prev-plan.json> <result.json> [edits.json]` remains
 available. The judgment stays with the orchestrator; these commands only apply
 and persist it.
 
+Use `just status` for the joined operational view: worker history, its latest
+agent output and commands, commits on the checked-out lifecycle branch, and the
+latest ledger round that names that branch. By default it shows only running
+tasks. A task is running when its latest history status is explicitly
+non-terminal (`pending`, `started`, `running`, or `in_progress`) **and** its
+branch is still checked out in the recorded project worktree. This conservative,
+testable rule avoids treating an abandoned branch as a live process. Pass a
+positive limit (`just status 10`) or `--all` to include recent finished sessions;
+use `--format json` for pure machine-readable stdout.
+
 ## Integrating completed workstreams
 
 When several dispatched local branches are ready, `just integrate` runs their
