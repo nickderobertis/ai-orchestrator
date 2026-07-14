@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import multiprocessing
 import os
-import time
 from pathlib import Path
 
 import pytest
@@ -13,23 +12,27 @@ import pytest
 from orchestrator.coordination import LockTimeout, advisory_lock, atomic_json
 
 
-def _hold(identity: str, ready: multiprocessing.Event) -> None:
+def _hold(identity: str, ready: multiprocessing.Event, release: multiprocessing.Event) -> None:
     with advisory_lock(identity):
         ready.set()
-        time.sleep(0.4)
+        release.wait(5)
 
 
 def test_advisory_lock_reports_live_owner(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("AI_ORCHESTRATOR_HOME", str(tmp_path))
     ready = multiprocessing.Event()
-    process = multiprocessing.Process(target=_hold, args=("shared", ready))
+    release = multiprocessing.Event()
+    process = multiprocessing.Process(target=_hold, args=("shared", ready, release))
     process.start()
     assert ready.wait(2)
-    with (
-        pytest.raises(LockTimeout, match=rf"timed out.*pid={process.pid}.*host="),
-        advisory_lock("shared", timeout=0.05),
-    ):
-        pytest.fail("concurrent process acquired an owned lock")
+    try:
+        with (
+            pytest.raises(LockTimeout, match=rf"timed out.*pid={process.pid}.*host="),
+            advisory_lock("shared", timeout=0.05),
+        ):
+            pytest.fail("concurrent process acquired an owned lock")
+    finally:
+        release.set()
     process.join(2)
     assert process.exitcode == 0
 
