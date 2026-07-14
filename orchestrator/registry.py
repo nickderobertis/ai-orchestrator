@@ -136,7 +136,7 @@ class Registry:
             current = self._load()
             current.update(self.entries)
             self.entries = current
-            data = {slug: asdict(entry) for slug, entry in sorted(current.items())}
+            data = {str(slug): asdict(entry) for slug, entry in sorted(current.items())}
             atomic_json(self.path, data)
 
     @staticmethod
