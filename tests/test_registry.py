@@ -68,22 +68,33 @@ def test_resolve_clones_when_no_checkout_exists(
 
 
 @pytest.mark.parametrize(
-    "payload, message",
+    "payload, expected",
     [
-        ("not json", "could not load registry"),
-        (json.dumps({"x/y": {"path": 3, "origin": "url", "workflow": "remote"}}), "path must be"),
+        (
+            "not json",
+            "could not load registry {path}: Expecting value: line 1 column 1 (char 0)",
+        ),
+        (
+            json.dumps({"x/y": {"path": 3, "origin": "url", "workflow": "remote"}}),
+            "registry entry 'x/y' path must be an absolute string",
+        ),
         (
             json.dumps({"x/y": {"path": "/tmp/x", "origin": "url", "workflow": "other"}}),
-            "workflow must be",
+            "registry entry 'x/y' workflow must be 'local' or 'remote'",
+        ),
+        (
+            json.dumps({"x/y": {"path": "/tmp/x", "origin": "bad\norigin", "workflow": "remote"}}),
+            "registry entry 'x/y' origin must be a non-empty string",
         ),
     ],
 )
-def test_malformed_registry_is_rejected(tmp_path: Path, payload: str, message: str) -> None:
+def test_malformed_registry_is_rejected(tmp_path: Path, payload: str, expected: str) -> None:
     path = tmp_path / "registry.json"
     path.write_text(payload, encoding="utf-8")
 
-    with pytest.raises(RegistryError, match=message):
+    with pytest.raises(RegistryError) as caught:
         Registry(path)
+    assert str(caught.value) == expected.format(path=path)
 
 
 def test_workflow_round_trips(tmp_path: Path, bare_origin: Callable[..., Path]) -> None:
@@ -116,7 +127,14 @@ def test_refresh_refuses_dirty_and_non_ff_checkouts(
     dirty_registry = Registry(tmp_path / "dirty.json")
     dirty_registry.register(str(dirty))
     (dirty / "untracked").write_text("dirty", encoding="utf-8")
-    assert dirty_registry.refresh()[0].reason == "checkout is dirty"
+    dirty_head = gitops.head_sha(dirty)
+
+    dirty_result = dirty_registry.refresh()[0]
+
+    assert not dirty_result.refreshed
+    assert dirty_result.reason == "checkout is dirty"
+    assert gitops.head_sha(dirty) == dirty_head
+    assert (dirty / "untracked").read_text(encoding="utf-8") == "dirty"
 
     origin = bare_origin()
     checkout = _clone(origin, tmp_path / "diverged")
@@ -125,12 +143,14 @@ def test_refresh_refuses_dirty_and_non_ff_checkouts(
     (checkout / "local.txt").write_text("local", encoding="utf-8")
     git("add", "local.txt", cwd=checkout)
     git("commit", "-m", "local", cwd=checkout)
+    local_head = gitops.head_sha(checkout)
     _commit_and_push(origin, tmp_path / "other", "remote")
 
     result = registry.refresh()[0]
 
     assert not result.refreshed
     assert "fast-forward" in result.reason
+    assert gitops.head_sha(checkout) == local_head
     assert (checkout / "local.txt").exists()
 
 
@@ -157,6 +177,20 @@ def test_refresh_reports_missing_checkout(tmp_path: Path) -> None:
 
     assert not result.refreshed
     assert "missing" in result.reason
+
+
+def test_refresh_reports_changed_origin_without_fetching(
+    tmp_path: Path, bare_origin: Callable[..., Path]
+) -> None:
+    checkout = _clone(bare_origin(), tmp_path / "checkout")
+    registry = Registry(tmp_path / "registry.json")
+    registry.register(str(checkout))
+    git("remote", "set-url", "origin", str(tmp_path / "different.git"), cwd=checkout)
+
+    result = registry.refresh()[0]
+
+    assert not result.refreshed
+    assert result.reason == "origin does not match registered origin"
 
 
 def test_repo_cli_text_json_and_register_errors(

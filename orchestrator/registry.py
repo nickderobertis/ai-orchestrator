@@ -12,12 +12,13 @@ import sys
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Literal, cast
+from typing import Literal, NewType, cast
 
 from . import gitops
 from .workspace import RepoRef, normalize_repo
 
 Workflow = Literal["local", "remote"]
+Slug = NewType("Slug", str)
 
 
 class RegistryError(ValueError):
@@ -33,7 +34,7 @@ class RegistryEntry:
 
 @dataclass(frozen=True)
 class RefreshResult:
-    slug: str
+    slug: Slug
     path: str
     refreshed: bool
     reason: str
@@ -75,7 +76,7 @@ class Registry:
         )
         self.entries = self._load()
 
-    def _load(self) -> dict[str, RegistryEntry]:
+    def _load(self) -> dict[Slug, RegistryEntry]:
         if not self.path.exists():
             return {}
         try:
@@ -84,7 +85,7 @@ class Registry:
             raise RegistryError(f"could not load registry {self.path}: {exc}") from exc
         if not isinstance(raw, dict):
             raise RegistryError(f"registry {self.path} must contain a JSON object")
-        result: dict[str, RegistryEntry] = {}
+        result: dict[Slug, RegistryEntry] = {}
         for slug, value in raw.items():
             if not isinstance(slug, str) or not slug or not isinstance(value, dict):
                 raise RegistryError(f"registry {self.path} has an invalid entry for {slug!r}")
@@ -95,11 +96,15 @@ class Registry:
             path, origin, workflow = value["path"], value["origin"], value["workflow"]
             if not isinstance(path, str) or not Path(path).is_absolute():
                 raise RegistryError(f"registry entry {slug!r} path must be an absolute string")
-            if not isinstance(origin, str) or not origin:
+            if (
+                not isinstance(origin, str)
+                or not origin
+                or any(character in origin for character in ("\0", "\n", "\r"))
+            ):
                 raise RegistryError(f"registry entry {slug!r} origin must be a non-empty string")
             if workflow not in ("local", "remote"):
                 raise RegistryError(f"registry entry {slug!r} workflow must be 'local' or 'remote'")
-            result[slug] = RegistryEntry(path, origin, cast(Workflow, workflow))
+            result[Slug(slug)] = RegistryEntry(path, origin, cast(Workflow, workflow))
         return result
 
     def save(self) -> None:
@@ -136,7 +141,7 @@ class Registry:
     ) -> Path:
         resolved = path.expanduser().resolve()
         actual_origin = origin if origin is not None else gitops.remote_url(resolved)
-        self.entries[repo.slug] = RegistryEntry(str(resolved), actual_origin, workflow)
+        self.entries[Slug(repo.slug)] = RegistryEntry(str(resolved), actual_origin, workflow)
         self.save()
         return resolved
 
@@ -154,7 +159,7 @@ class Registry:
             if not path.is_dir() or not gitops.is_repo(path):
                 raise RegistryError(f"local repo {path} is not a git checkout")
             return self._store(repo, path, "local")
-        existing = self.entries.get(repo.slug)
+        existing = self.entries.get(Slug(repo.slug))
         if existing is not None:
             try:
                 if self._valid_checkout(Path(existing.path), existing.origin) and _url_identity(
@@ -203,15 +208,26 @@ class Registry:
         return self._store(repo, chosen, workflow or ("local" if repo.local else "remote"))
 
     def refresh(self, slug: str | None = None) -> list[RefreshResult]:
-        if slug is not None and slug not in self.entries:
+        requested_slug = Slug(slug) if slug is not None else None
+        if requested_slug is not None and requested_slug not in self.entries:
             raise RegistryError(f"repo {slug!r} is not registered")
         results: list[RefreshResult] = []
-        for key in sorted([slug] if slug is not None else self.entries):
+        for key in sorted([requested_slug] if requested_slug is not None else self.entries):
             entry = self.entries[key]
             path = Path(entry.path)
             if not path.exists() or not gitops.is_repo(path):
                 results.append(
                     RefreshResult(key, entry.path, False, "checkout is missing or not a git repo")
+                )
+                continue
+            try:
+                origin_matches = self._valid_checkout(path, entry.origin)
+            except gitops.GitError as exc:
+                results.append(RefreshResult(key, entry.path, False, str(exc)))
+                continue
+            if not origin_matches:
+                results.append(
+                    RefreshResult(key, entry.path, False, "origin does not match registered origin")
                 )
                 continue
             if gitops.is_dirty(path):
