@@ -157,8 +157,16 @@ def prepare_round(
 def _owner_is_live(state: Mapping[str, Any]) -> bool:
     """Conservatively identify a recorded owner on this host."""
     pid = state.get("pid")
-    if state.get("host") != socket.gethostname() or not isinstance(pid, int) or pid < 1:
-        return False
+    host = state.get("host")
+    if (
+        state.get("status") != "running"
+        or not isinstance(host, str)
+        or not isinstance(pid, int)
+        or pid < 1
+    ):
+        raise ConfigError("running round has invalid owner metadata; recovery refused")
+    if host != socket.gethostname():
+        return True
     try:
         os.kill(pid, 0)
     except ProcessLookupError:

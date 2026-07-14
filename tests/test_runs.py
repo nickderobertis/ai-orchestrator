@@ -75,6 +75,22 @@ def test_recovery_refuses_live_owner_and_claims_abandoned_round(tmp_path) -> Non
     assert recovered["pid"] == os.getpid()
 
 
+@pytest.mark.parametrize(
+    "owner",
+    [
+        {"status": "running", "pid": "not-a-pid", "host": "host"},
+        {"status": "completed", "pid": 123, "host": "host"},
+    ],
+)
+def test_recovery_refuses_invalid_owner_metadata(tmp_path, owner) -> None:
+    run_dir = tmp_path / "run"
+    _, round_dir = prepare_round(run_dir, PLAN)
+    (round_dir / "status.json").write_text(json.dumps(owner), encoding="utf-8")
+
+    with pytest.raises(ConfigError, match="invalid owner metadata; recovery refused"):
+        prepare_round(run_dir, PLAN, recover=True)
+
+
 def test_list_runs_uses_latest_completed_round(tmp_path) -> None:
     run = tmp_path / "demo"
     _, round_dir = write_next_plan(run, PLAN)
