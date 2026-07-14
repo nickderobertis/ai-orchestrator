@@ -46,9 +46,17 @@ and deriving the next plan (`just replan`). See `docs/repo-lifecycle.md`.
    a failed subtask skips its dependents; adjust granularity or persona and
    redispatch. One subtask at a time is `just dispatch <persona> "<task>"`.
 
-Delegate substantial integration and closeout—merging branches, running the gate,
-fixing findings, and pushing—to an agent too. Prefer each agent proving its own
-change with `just gate`, leaving integration as a trivial merge.
+The orchestrator does orchestration and planning only: decomposition, scheduling,
+persona choice, and merge/integration coordination. Dispatch all target-project
+work and research, including integration and closeout. A slight direct tweak to a
+dispatched result is allowed only when planning has already made the fix clear and
+it is quick to test; otherwise redispatch it.
+
+Prefer each agent proving its own change with `just gate`, leaving integration as
+a trivial merge. Before merging or pushing, independently confirm that the gate
+exercised the change: relevant tests did not skip and their fixtures, specs, and
+inputs were present. A green report or judge verdict without that evidence is not
+green.
 
 ## The granularity rule (the core judgment)
 
@@ -122,6 +130,11 @@ an inapplicable rule in `llmlint.yml`—rather than leaving closeout to integrat
 Watch a dispatched agent with `just history`, then `just history-show <id>`.
 History needs `ONEHARNESS_HISTORY=1`; the dispatch wrappers set it.
 
+Do not pass complex task or `--done-when` prose inline: dispatch expands its
+trailing `*args` unquoted, so shell metacharacters break. Until dispatch
+quote-forwards them, supply such criteria through a file/stdin or a small wrapper
+script.
+
 Prefer `just repo-task-auto` for a one-command dispatch — it sets up the harness
 environment and, afterward, points at the branch holding the agent's commits so a
 `not-completed` run's preserved work is never invisible. The judgment that matters:
@@ -136,8 +149,9 @@ Use the orchestrator harness for **all tasks of sufficient complexity**, in any
 repo or project. Decompose the work and drive each substantial piece through
 `just repo-task <repo> <persona> "<task>"` or `just repo-plan <plan.json>`; the
 lifecycle clones the target, works in an isolated worktree, verifies with its
-gate, and merges. Trivial or small changes can still be done directly under the
-granularity rule. This repo is one local-mode case of the same rule.
+gate, and merges. Dispatch smaller project work with a single task rather than
+doing it directly; only the slight-tweak exception above applies. This repo is one
+local-mode case of the same rule.
 
 ## Stack and composition
 
