@@ -36,9 +36,7 @@ def _worktree_process(
     workspace.remove_worktree(repo, worktree)
 
 
-def _writing_dispatch(
-    persona: str, _task: str, *, project_dir: str, **_kwargs: object
-) -> Report:
+def _writing_dispatch(persona: str, _task: str, *, project_dir: str, **_kwargs: object) -> Report:
     (Path(project_dir) / f"result-{os.getpid()}.txt").write_text("landed\n", encoding="utf-8")
     return Report(persona, 0, True, False, 1, [], {}, {}, "")
 
