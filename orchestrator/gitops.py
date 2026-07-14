@@ -39,6 +39,7 @@ __all__ = [
     "merge_ff_only",
     "merge_abort",
     "push",
+    "ref_sha",
     "remotes",
     "remote_url",
     "reset_hard",
@@ -156,6 +157,11 @@ def commit(cwd: str | Path, message: str) -> str:
 def head_sha(cwd: str | Path) -> str:
     """The current HEAD commit sha."""
     return _git(["rev-parse", "HEAD"], cwd=cwd).stdout.strip()
+
+
+def ref_sha(cwd: str | Path, ref: str) -> str:
+    """Resolve ``ref`` to its commit SHA."""
+    return _git(["rev-parse", "--verify", f"{ref}^{{commit}}"], cwd=cwd).stdout.strip()
 
 
 def current_branch(cwd: str | Path) -> str:

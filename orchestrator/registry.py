@@ -243,6 +243,16 @@ class Registry:
                         )
                     )
                     continue
+                if not gitops.is_ancestor(path, gitops.head_sha(path), f"origin/{branch}"):
+                    results.append(
+                        RefreshResult(
+                            key,
+                            entry.path,
+                            False,
+                            f"checkout has diverged from origin/{branch}; fast-forward refused",
+                        )
+                    )
+                    continue
                 gitops.merge_ff_only(path, f"origin/{branch}")
             except gitops.GitError as exc:
                 results.append(RefreshResult(key, entry.path, False, str(exc)))

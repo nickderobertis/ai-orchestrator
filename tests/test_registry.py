@@ -128,12 +128,16 @@ def test_refresh_refuses_dirty_and_non_ff_checkouts(
     dirty_registry.register(str(dirty))
     (dirty / "untracked").write_text("dirty", encoding="utf-8")
     dirty_head = gitops.head_sha(dirty)
+    dirty_tracking = gitops.ref_sha(dirty, "origin/main")
+    _commit_and_push(dirty_origin, tmp_path / "dirty-writer", "dirty-upstream")
+    assert gitops.ref_sha(dirty_origin, "main") != dirty_tracking
 
     dirty_result = dirty_registry.refresh()[0]
 
     assert not dirty_result.refreshed
     assert dirty_result.reason == "checkout is dirty"
     assert gitops.head_sha(dirty) == dirty_head
+    assert gitops.ref_sha(dirty, "origin/main") == dirty_tracking
     assert (dirty / "untracked").read_text(encoding="utf-8") == "dirty"
 
     origin = bare_origin()
@@ -144,14 +148,20 @@ def test_refresh_refuses_dirty_and_non_ff_checkouts(
     git("add", "local.txt", cwd=checkout)
     git("commit", "-m", "local", cwd=checkout)
     local_head = gitops.head_sha(checkout)
+    local_branch = gitops.current_branch(checkout)
+    tracking_before = gitops.ref_sha(checkout, "origin/main")
     _commit_and_push(origin, tmp_path / "other", "remote")
 
     result = registry.refresh()[0]
 
     assert not result.refreshed
-    assert "fast-forward" in result.reason
+    assert result.reason == "checkout has diverged from origin/main; fast-forward refused"
+    assert gitops.ref_sha(checkout, "origin/main") != tracking_before
+    assert gitops.ref_sha(checkout, "origin/main") == gitops.ref_sha(origin, "main")
+    assert gitops.current_branch(checkout) == local_branch
     assert gitops.head_sha(checkout) == local_head
-    assert (checkout / "local.txt").exists()
+    assert not gitops.is_dirty(checkout)
+    assert (checkout / "local.txt").read_text(encoding="utf-8") == "local"
 
 
 def test_registry_rejects_invalid_shapes_and_missing_slug(tmp_path: Path) -> None:
