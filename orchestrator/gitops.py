@@ -19,6 +19,8 @@ __all__ = [
     "GitError",
     "add_all",
     "checkout",
+    "branch_exists",
+    "branches",
     "clone",
     "commit",
     "current_branch",
@@ -27,11 +29,16 @@ __all__ = [
     "has_commits_ahead",
     "head_sha",
     "is_bare",
+    "is_ancestor",
     "is_dirty",
     "merge",
+    "merge_abort",
     "push",
+    "remotes",
     "reset_hard",
     "worktree_add",
+    "worktree_add_existing",
+    "worktrees",
     "worktree_remove",
 ]
 
@@ -108,6 +115,12 @@ def worktree_add(
     return Path(path)
 
 
+def worktree_add_existing(cwd: str | Path, path: str | Path, branch: str) -> Path:
+    """Check out an existing local ``branch`` in a new worktree."""
+    _git(["worktree", "add", str(path), branch], cwd=cwd)
+    return Path(path)
+
+
 def worktree_remove(cwd: str | Path, path: str | Path, *, force: bool = True) -> None:
     """Remove a worktree created by `worktree_add` (best-effort cleanup)."""
     args = ["worktree", "remove"]
@@ -144,10 +157,43 @@ def current_branch(cwd: str | Path) -> str:
     return _git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=cwd).stdout.strip()
 
 
+def branches(cwd: str | Path) -> list[str]:
+    """Return local branch names in git's deterministic ref order."""
+    proc = _git(["for-each-ref", "--format=%(refname:short)", "refs/heads"], cwd=cwd)
+    return [line for line in proc.stdout.splitlines() if line]
+
+
+def branch_exists(cwd: str | Path, branch: str) -> bool:
+    """Whether ``branch`` names an exact local branch."""
+    proc = _git(["show-ref", "--verify", "--quiet", f"refs/heads/{branch}"], cwd=cwd, check=False)
+    return proc.returncode == 0
+
+
+def worktrees(cwd: str | Path) -> dict[str, Path]:
+    """Map checked-out local branches to their worktree paths."""
+    proc = _git(["worktree", "list", "--porcelain"], cwd=cwd)
+    result: dict[str, Path] = {}
+    path: Path | None = None
+    for line in proc.stdout.splitlines():
+        if line.startswith("worktree "):
+            path = Path(line.removeprefix("worktree "))
+        elif line.startswith("branch refs/heads/") and path is not None:
+            result[line.removeprefix("branch refs/heads/")] = path
+    return result
+
+
 def has_commits_ahead(cwd: str | Path, base: str) -> bool:
     """True if the current branch has commits ``base`` does not (something to PR)."""
     proc = _git(["rev-list", "--count", f"{base}..HEAD"], cwd=cwd)
     return int(proc.stdout.strip() or "0") > 0
+
+
+def is_ancestor(cwd: str | Path, ancestor: str, descendant: str) -> bool:
+    """Whether ``ancestor`` is reachable from ``descendant``."""
+    proc = _git(["merge-base", "--is-ancestor", ancestor, descendant], cwd=cwd, check=False)
+    if proc.returncode not in (0, 1):
+        raise GitError(proc.stderr.strip() or "git merge-base failed")
+    return proc.returncode == 0
 
 
 def push(
@@ -166,6 +212,11 @@ def push(
         args.append("--force-with-lease")
     args += [remote, branch]
     _git(args, cwd=cwd)
+
+
+def remotes(cwd: str | Path) -> list[str]:
+    """Return configured remote names."""
+    return [line for line in _git(["remote"], cwd=cwd).stdout.splitlines() if line]
 
 
 def checkout(cwd: str | Path, ref: str) -> None:
@@ -190,6 +241,11 @@ def merge(cwd: str | Path, ref: str, *, message: str, no_ff: bool = True) -> str
     args.append(ref)
     _git(args, cwd=cwd)
     return head_sha(cwd)
+
+
+def merge_abort(cwd: str | Path) -> None:
+    """Abort an in-progress conflicted merge, restoring the pre-merge tree."""
+    _git(["merge", "--abort"], cwd=cwd, check=False)
 
 
 def is_bare(cwd: str | Path) -> bool:

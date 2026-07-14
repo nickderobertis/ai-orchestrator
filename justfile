@@ -100,6 +100,12 @@ repo-plan *args:
 replan *args:
     @uv run orchestrator-replan "$@"
 
+# Update, verify, fast-forward, and optionally push completed workstream branches:
+# `just integrate claude/a claude/b --push`; omit branches to auto-discover them.
+# llmlint: ignore[tool_output_is_signal] the requested readable per-branch train summary is this verb's product.
+integrate *args:
+    @uv run orchestrator-integrate "$@"
+
 # List recent dispatched worker sessions across every target repo.
 # llmlint: ignore[tool_output_is_signal] human-readable history is this viewing command's product.
 history *args:

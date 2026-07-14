@@ -107,6 +107,25 @@ now). The produced plan is validated, so a bad edit fails loudly.
 to `just repo-plan`. The judgment (what to retry/split/add) stays with the
 orchestrator; `replan` just applies it correctly.
 
+## Integrating completed workstreams
+
+When several dispatched local branches are ready, `just integrate` runs their
+merge train without letting one failure block the others:
+
+```sh
+just integrate claude/api claude/docs --push
+just integrate --refresh                 # update discovered claude/* branches only
+just integrate --format json             # machine-readable result
+```
+
+Each candidate first merges the current checked-out base into its own worktree.
+The normal `just gate` then runs on that updated branch, and a passing branch
+fast-forwards the base. Conflicts and gate failures are restored and reported as
+skips. `--push` updates `origin` only when the base advanced. Omit branch names to
+discover checked-out worktree branches and local branches matching `claude/*`;
+use `--pattern` to change the glob or `--gate` to inject a different gate command.
+The base and candidate worktrees must be clean.
+
 ## Auto mode without approvals — and why bypass
 
 The lifecycle dispatches with `oneharness_mode` defaulting to **`bypass`** — the

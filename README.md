@@ -22,6 +22,9 @@ just dispatch backend-engineer "Add a /health endpoint and test it."
 
 # Run a whole task DAG in parallel:
 just run-plan examples/plan.example.json
+
+# Integrate completed local workstreams and keep origin/main current:
+just integrate claude/api claude/docs --push
 ```
 
 ## How it fits together
