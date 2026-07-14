@@ -59,6 +59,8 @@ def test_create_pr_reuses_open_pr_for_head() -> None:
             "o/r",
             "--head",
             "f",
+            "--base",
+            "main",
             "--state",
             "open",
             "--json",

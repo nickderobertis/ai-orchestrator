@@ -154,10 +154,12 @@ class CliGitHubBackend:
         return out.strip() or "main"
 
     def create_pr(self, repo: str, *, head: str, base: str, title: str, body: str) -> PullRequest:
-        """Return the open PR for ``head``, or create one if none exists.
+        """Return the open PR for ``head`` → ``base``, or create one if none exists.
 
         Reusing the PR lets later orchestration rounds continue work on the same
-        branch without failing cosmetically after their push succeeds.
+        branch without failing cosmetically after their push succeeds. The lookup
+        filters by ``base`` too, so a same-head PR targeting a different base is
+        never mistaken for this one.
         """
         existing_out = self._run(
             [
@@ -167,6 +169,8 @@ class CliGitHubBackend:
                 repo,
                 "--head",
                 head,
+                "--base",
+                base,
                 "--state",
                 "open",
                 "--json",
