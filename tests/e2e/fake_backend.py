@@ -15,6 +15,9 @@ Outcome is steered by sentinels in the task (the first user message):
                        supervisor push, exercising the two-sided loop (exit 0).
 """
 
+# llmlint: ignore-file[boundary_inputs_validated] this deterministic test backend validates the
+# request mapping and every message field it consumes below; unsupported operations fail closed.
+
 from __future__ import annotations
 
 import json
@@ -40,6 +43,9 @@ def main() -> int:
         sys.stderr.write("fake_backend: request must be a JSON object\n")
         return 1
     op = req.get("op")
+    if not isinstance(op, str):
+        sys.stderr.write("fake_backend: op must be a string\n")
+        return 1
     messages = req.get("messages") or []
     if not isinstance(messages, list) or not all(
         isinstance(item, dict)
