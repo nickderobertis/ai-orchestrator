@@ -44,6 +44,7 @@ __all__ = [
     "remote_url",
     "reset_hard",
     "worktree_add",
+    "worktree_add_detached",
     "worktree_add_existing",
     "worktrees",
     "worktree_remove",
@@ -125,6 +126,12 @@ def worktree_add(
 def worktree_add_existing(cwd: str | Path, path: str | Path, branch: str) -> Path:
     """Check out an existing local ``branch`` in a new worktree."""
     _git(["worktree", "add", str(path), branch], cwd=cwd)
+    return Path(path)
+
+
+def worktree_add_detached(cwd: str | Path, path: str | Path, ref: str) -> Path:
+    """Check out ``ref`` detached in a new scratch worktree."""
+    _git(["worktree", "add", "--detach", str(path), ref], cwd=cwd)
     return Path(path)
 
 

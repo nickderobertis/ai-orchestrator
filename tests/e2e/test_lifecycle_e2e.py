@@ -150,6 +150,9 @@ def test_local_repo_direct_merge(tmp_path, bare_origin) -> None:
     assert result.outcome == "merged"
     assert result.base_branch == "main"
     assert _has_file(origin, "main", "feature.txt")  # the change really landed on origin main
+    canonical = ws.clone_dir(normalize_repo(str(origin)))
+    assert gitops.current_branch(canonical) == "main"
+    assert gitops.head_sha(canonical) == _tip(origin, "main")
 
 
 def test_local_repo_gate_failure_blocks_merge(tmp_path, bare_origin) -> None:
@@ -250,11 +253,12 @@ def test_no_changes_produces_no_pr(tmp_path, bare_origin) -> None:
 def test_github_auto_merge_on_required_checks(tmp_path, bare_origin) -> None:
     origin = bare_origin()
     github = FakeGitHub(origin, required=("ci",))
+    workspace = _workspace(tmp_path, origin)
     result = run_repo_task(
         "acme/widget",  # a GitHub-style slug → GitHub strategy
         "Add a feature file.",
         "backend-engineer",
-        workspace=_workspace(tmp_path, origin),
+        workspace=workspace,
         merge=GitHubMergeStrategy(github),
         url=str(origin),  # but clone/push the real bare repo
         dispatch_fn=make_writing_dispatch(filename="feature.txt"),
@@ -265,6 +269,8 @@ def test_github_auto_merge_on_required_checks(tmp_path, bare_origin) -> None:
     assert result.outcome == "merged"
     assert result.pr is not None and result.pr.number == 1
     assert _has_file(origin, "main", "feature.txt")
+    canonical = workspace.clone_dir(normalize_repo("acme/widget"))
+    assert gitops.head_sha(canonical) == _tip(origin, "main")
 
 
 def test_github_second_run_reuses_open_pr_and_merges(tmp_path, bare_origin) -> None:

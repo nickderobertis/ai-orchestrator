@@ -46,7 +46,7 @@ from .runs import (
     write_result,
 )
 from .verify import VerifyResult, detect_gate, run_gate
-from .workspace import RepoRef, Workspace, normalize_repo
+from .workspace import RepoRef, Workflow, Workspace, normalize_repo
 
 # A merge only completes when the PR's blocking (required) checks are green. The
 # default `auto` policy uses GitHub native auto-merge (which by construction
@@ -250,11 +250,14 @@ def _run_steps(
 
 
 def _select_merge_strategy(
-    ref: RepoRef, merge: MergeStrategy | None, github: GitHubBackend | None
+    ref: RepoRef,
+    merge: MergeStrategy | None,
+    github: GitHubBackend | None,
+    workflow: Workflow | None = None,
 ) -> MergeStrategy:
     if merge is not None:
         return merge
-    if ref.local:
+    if workflow == "local" or (workflow is None and ref.local):
         return LocalMergeStrategy()
     return GitHubMergeStrategy(github or CliGitHubBackend())
 
@@ -267,6 +270,7 @@ def run_repo_task(
     workspace: Workspace,
     steps: list[Step] | None = None,
     merge: MergeStrategy | None = None,
+    workflow: Workflow | None = None,
     github: GitHubBackend | None = None,
     base_branch: str | None = None,
     branch: str | None = None,
@@ -318,7 +322,6 @@ def run_repo_task(
     lead = effective_steps[0]
 
     ref = normalize_repo(repo)
-    strategy = _select_merge_strategy(ref, merge, github)
     result = LifecycleResult(
         repo=ref.slug,
         task=lead.task,
@@ -330,6 +333,7 @@ def run_repo_task(
     worktree: Path | None = None
     try:
         clone = workspace.ensure_clone(ref, url=url)
+        strategy = _select_merge_strategy(ref, merge, github, workflow or workspace.workflow(ref))
         base = base_branch or gitops.default_branch(clone)
         result.base_branch = base
         branch = result.branch
@@ -388,6 +392,8 @@ def run_repo_task(
             clock=clock,
         )
         merge_outcome = strategy.publish_and_merge(ctx)
+        if merge_outcome.outcome == "merged":
+            workspace.fast_forward(ref, base)
         result.pr = merge_outcome.pr
         result.outcome = merge_outcome.outcome
         result.detail = merge_outcome.detail
@@ -419,6 +425,7 @@ class RepoPlanNode:
     verify_cmd: list[str] | None = None
     skip_verify: bool = False
     merge_policy: str | None = None
+    workflow: Workflow | None = None
     max_turns: int | None = None
     done_when: str | None = None
     steps: list[Step] | None = None
@@ -505,6 +512,10 @@ def parse_repo_plan(data: dict[str, Any]) -> RepoPlan:
         policy = t.get("merge_policy")
         if policy is not None and policy not in MERGE_POLICIES:
             raise PlanError(f"task {nid!r} 'merge_policy' must be one of {MERGE_POLICIES}")
+        raw_workflow = t.get("workflow")
+        if raw_workflow is not None and raw_workflow not in ("local", "remote"):
+            raise PlanError(f"task {nid!r} 'workflow' must be 'local' or 'remote'")
+        workflow = cast(Workflow | None, raw_workflow)
         nodes[nid] = RepoPlanNode(
             id=nid,
             repo=t["repo"],
@@ -517,6 +528,7 @@ def parse_repo_plan(data: dict[str, Any]) -> RepoPlan:
             verify_cmd=t.get("verify_cmd"),
             skip_verify=bool(t.get("skip_verify", False)),
             merge_policy=policy,
+            workflow=workflow,
             max_turns=t.get("max_turns"),
             done_when=t.get("done_when"),
             steps=node_steps,
@@ -640,6 +652,7 @@ def make_repo_runner(
             workspace=workspace,
             steps=node.steps,
             github=github,
+            workflow=node.workflow,
             base_branch=node.base_branch,
             branch=node.branch,
             title=node.title,

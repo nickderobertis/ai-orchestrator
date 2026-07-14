@@ -47,7 +47,9 @@ explicit `verify_cmd`, or `--skip-verify` to rely on CI alone.
 
 ## Merge strategies (where the change lands)
 
-Selected automatically from the repo; override with an explicit strategy.
+Selected from the canonical registry entry's `workflow` (`local` or `remote`),
+with an explicit per-task/plan-node override available. Unregistered GitHub URLs
+default to remote and local paths default to local.
 
 - **`GitHubMergeStrategy`** (GitHub repos) — opens a PR, then merges it **only
   once the repo's required (blocking) checks are green**. The default policy is
@@ -57,18 +59,22 @@ Selected automatically from the repo; override with an explicit strategy.
   direct if the repo disallows it), `direct` (poll and merge ourselves on green
   required checks), `none` (open the PR and stop). Required-vs-optional comes from
   `statusCheckRollup.isRequired`; a failed required check ends at `checks-failed`.
-- **`LocalMergeStrategy`** (local-path repos) — there is no PR/CI to wait on, so
-  it **merges the verified branch straight into the base branch** with real git
-  (`--no-ff`, a revertable merge commit) and pushes it to the local origin. This
-  is the model for a local repo: *direct merge into main after the checks pass*.
+- **`LocalMergeStrategy`** (`workflow: local`) — there is no PR/CI to wait on, so
+  it builds the verified branch-to-base merge in a detached scratch worktree and
+  pushes the result to the origin. This is the model for direct merge into main
+  after the checks pass, including GitHub origins intentionally marked local.
   A **bare** local origin accepts the push directly; a non-bare origin needs
   `receive.denyCurrentBranch=updateInstead` so its working tree updates too.
+
+After either strategy reports a merge, the canonical checkout fetches and
+fast-forwards its checked-out default branch with `--ff-only`. No merge assembly,
+checkout, or hard reset occurs in that canonical working tree.
 
 ## Many PRs for one task: `run_repo_plan`
 
 A repo-plan is a DAG whose nodes each carry a `repo` and either a `persona`+`task`
 or a `steps` workstream, plus `deps` (and optional `base_branch`, `branch`,
-`title`, `verify_cmd`, `skip_verify`, `merge_policy`). `run_repo_plan` schedules it
+`title`, `verify_cmd`, `skip_verify`, `merge_policy`, `workflow`). `run_repo_plan` schedules it
 on the **same engine as `run_plan`** (`plan.schedule_dag`): independent nodes run
 concurrently (their PRs open in parallel), a dependent node waits for the one it
 needs to **merge** first and then branches off the updated base (each node

@@ -12,15 +12,17 @@ from __future__ import annotations
 
 import re
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
+from typing import Literal, Protocol
 
 from . import gitops
 
-__all__ = ["DEFAULT_OWNER", "RepoRef", "Workspace", "normalize_repo"]
+__all__ = ["DEFAULT_OWNER", "RepoRef", "Workflow", "Workspace", "normalize_repo"]
 
 DEFAULT_OWNER = "nickderobertis"
+Workflow = Literal["local", "remote"]
 
 
 class RepoResolver(Protocol):
@@ -105,12 +107,22 @@ class Workspace:
 
     def __init__(self, root: str | Path, *, resolver: RepoResolver | None = None) -> None:
         self.root = Path(root)
+        self._workflow: Callable[[RepoRef], Workflow | None]
         if resolver is None:
             # Lazy import avoids registry -> workspace normalization becoming an
             # import cycle.
-            from .registry import Registry
+            from .registry import Registry, Slug
 
-            resolver = Registry().resolve
+            registry = Registry()
+            resolver = registry.resolve
+
+            def registered_workflow(repo: RepoRef) -> Workflow | None:
+                entry = registry.entries.get(Slug(repo.slug))
+                return entry.workflow if entry is not None else None
+
+            self._workflow = registered_workflow
+        else:
+            self._workflow = lambda repo: None
         self._resolver = resolver
         self._checkouts: dict[str, Path] = {}
         # Clone/worktree creation touches a repo's shared git metadata, so those
@@ -119,6 +131,10 @@ class Workspace:
         # (the dispatch) is never held.
         self._locks_guard = threading.Lock()
         self._locks: dict[str, threading.Lock] = {}
+
+    def workflow(self, repo: RepoRef) -> Workflow | None:
+        """Return the registered workflow, if the resolver exposes registry metadata."""
+        return self._workflow(repo)
 
     def _repo_lock(self, repo: RepoRef) -> threading.Lock:
         with self._locks_guard:
@@ -159,6 +175,13 @@ class Workspace:
             # reset=True so a re-dispatch of the same branch starts clean at base
             # (removing the stale worktree leaves its branch ref behind).
             return gitops.worktree_add(clone, path, branch, base=base, reset=True)
+
+    def fast_forward(self, repo: RepoRef, branch: str) -> None:
+        """Fetch and fast-forward the canonical checkout's current base branch."""
+        checkout = self.clone_dir(repo)
+        with self._repo_lock(repo):
+            gitops.fetch(checkout)
+            gitops.merge_ff_only(checkout, f"origin/{branch}")
 
     def remove_worktree(self, repo: RepoRef, path: str | Path) -> None:
         """Tear down a worktree once its subtask is done."""

@@ -1,7 +1,7 @@
 """Persistent canonical repo checkout registry.
 
-This module is intentionally not wired into the lifecycle yet; the next change
-will consume it when constructing worktrees and choosing merge behavior.
+The lifecycle uses each entry's canonical checkout for worktrees and its
+``workflow`` metadata to choose local direct merge or remote pull requests.
 """
 
 from __future__ import annotations
@@ -13,12 +13,11 @@ import sys
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Literal, NewType, cast
+from typing import NewType, cast
 
 from . import gitops
-from .workspace import RepoRef, normalize_repo
+from .workspace import RepoRef, Workflow, normalize_repo
 
-Workflow = Literal["local", "remote"]
 Slug = NewType("Slug", str)
 _SLUG_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 

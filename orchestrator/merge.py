@@ -15,6 +15,7 @@ Both are `MergeStrategy`, so `run_repo_task` calls one method and stays uniform.
 
 from __future__ import annotations
 
+import tempfile
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -115,17 +116,22 @@ class GitHubMergeStrategy:
 class LocalMergeStrategy:
     """Merge the verified branch straight into base with real git (the local path).
 
-    The branch is already pushed to the local origin by the lifecycle. Here we sync
-    the clone's base to ``origin/base``, merge the branch in, and push base back —
-    so the local origin's default branch advances. A bare origin accepts this
-    directly; a non-bare origin needs ``receive.denyCurrentBranch=updateInstead``.
+    The branch is already pushed to the local origin by the lifecycle. The merge is
+    built in a detached scratch worktree and pushed to the base ref, leaving the
+    canonical checkout untouched. The lifecycle subsequently fast-forwards that
+    checkout after either local or remote merging succeeds.
     """
 
     def publish_and_merge(self, ctx: MergeContext) -> MergeOutcome:
-        gitops.checkout(ctx.clone_dir, ctx.base)
-        gitops.reset_hard(ctx.clone_dir, f"origin/{ctx.base}")
-        gitops.merge(ctx.clone_dir, ctx.branch, message=ctx.title)
-        gitops.push(ctx.clone_dir, ctx.base, set_upstream=False)
+        gitops.fetch(ctx.clone_dir)
+        with tempfile.TemporaryDirectory(prefix="orchestrator-merge-") as parent:
+            scratch = Path(parent) / "worktree"
+            gitops.worktree_add_detached(ctx.clone_dir, scratch, f"origin/{ctx.base}")
+            try:
+                gitops.merge(scratch, f"origin/{ctx.branch}", message=ctx.title)
+                gitops.push(scratch, f"HEAD:{ctx.base}", set_upstream=False)
+            finally:
+                gitops.worktree_remove(ctx.clone_dir, scratch)
         pr = PullRequest(
             number=0,
             url=f"local:{ctx.repo_slug}#{ctx.branch}",

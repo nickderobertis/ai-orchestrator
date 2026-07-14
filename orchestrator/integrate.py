@@ -146,7 +146,7 @@ def integrate(
                 results.append(BranchResult(branch, "skipped", "gate-failed"))
                 continue
             try:
-                gitops.merge(root, branch, message=f"Integrate {branch}", no_ff=False)
+                gitops.merge_ff_only(root, branch)
             except gitops.GitError:
                 gitops.merge_abort(root)
                 results.append(BranchResult(branch, "skipped", "not-ready"))

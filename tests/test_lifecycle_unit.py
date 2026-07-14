@@ -76,6 +76,8 @@ def test_select_merge_strategy() -> None:
     remote = normalize_repo("o/r")
     assert isinstance(_select_merge_strategy(remote, None, CliGitHubBackend()), GitHubMergeStrategy)
     assert isinstance(_select_merge_strategy(remote, None, None), GitHubMergeStrategy)
+    assert isinstance(_select_merge_strategy(remote, None, None, "local"), LocalMergeStrategy)
+    assert isinstance(_select_merge_strategy(local, None, None, "remote"), GitHubMergeStrategy)
     explicit = LocalMergeStrategy()
     assert _select_merge_strategy(remote, explicit, None) is explicit
 
@@ -104,6 +106,7 @@ def test_load_valid_repo_plan(tmp_path) -> None:
                         "task": "B",
                         "deps": ["a"],
                         "merge_policy": "direct",
+                        "workflow": "local",
                         "skip_verify": True,
                     },
                 ],
@@ -113,6 +116,7 @@ def test_load_valid_repo_plan(tmp_path) -> None:
     assert plan.concurrency == 2
     assert [t.id for t in plan.tasks] == ["a", "b"]
     assert plan.tasks[1].merge_policy == "direct" and plan.tasks[1].skip_verify
+    assert plan.tasks[1].workflow == "local"
 
 
 @pytest.mark.parametrize(
@@ -135,6 +139,10 @@ def test_load_valid_repo_plan(tmp_path) -> None:
         (
             {"tasks": [{"id": "a", "repo": "r", "persona": "p", "task": "t", "merge_policy": "x"}]},
             "merge_policy",
+        ),
+        (
+            {"tasks": [{"id": "a", "repo": "r", "persona": "p", "task": "t", "workflow": "x"}]},
+            "workflow",
         ),
         (
             {"tasks": [{"id": "a", "repo": "r", "persona": "p", "task": "t", "deps": ["z"]}]},
