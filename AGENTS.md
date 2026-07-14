@@ -108,6 +108,32 @@ out the orchestrator verbs. `just lint-llm` /
 `lint-llm-diff` / `lint-llm-validate` are the **llmlint** LLM-judge tier — kept
 out of `check` (non-deterministic, harness-backed) and enforced at pre-push.
 
+## Dispatching playbook
+
+- Run `just repo-task-auto` for a one-command lifecycle dispatch. It prepares the
+  harness environment and reports the branch's commit delta afterward, so work
+  left on an unmerged branch is visible. Fall back to `just repo-task` or
+  `orchestrator-repo-task` when the wrapper is unavailable.
+- Keep `~/.local/node/bin` on `PATH`: codex installs there and is oneharness's
+  preferred agent harness; without it, the fallback silently selects
+  claude-code. `scripts/session-setup.sh` persists the path. Dispatch also gives
+  oneharness turns a timeout well above its 120-second default; override it with
+  `ONEHARNESS_TIMEOUT` for exceptional workloads.
+- Treat `not-completed` as a timing signal until proven otherwise. An agent can
+  hit the turn cap just as it finishes; the lifecycle preserves its incremental
+  commits, so inspect the branch before concluding the work was lost.
+- GitHub repositories use a PR that auto-merges after required checks pass.
+  Local-path repositories merge directly into the base branch and require
+  `git config receive.denyCurrentBranch updateInstead` for that push to land.
+- llmlint checks the diff, so touching a file can surface a latent finding. Fix
+  it or add a justified `# llmlint: ignore-file[rule] <why>`; disable an
+  architecturally irrelevant rule once in `llmlint.yml` with `override: true`
+  and `relevance: false`, as this synchronous CLI does for
+  `async_typed_clients_at_boundaries`.
+
+See `docs/onejudge-integration.md` for harness details and
+`docs/repo-lifecycle.md` for lifecycle mechanics.
+
 ## Dogfooding rule
 
 Use the orchestrator harness for **all tasks of sufficient complexity**, in any

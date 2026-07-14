@@ -107,10 +107,41 @@ Net: the orchestration setup is harness-agnostic and correct. On a
 no-unprivileged-userns host, dispatch codex with
 `--oneharness-mode bypass` and the allowlister gate; run-plan takes the same flag.
 
-Dispatch gives each oneharness agent turn a default timeout of 1800 seconds so a
-build-heavy turn can finish. Set `ONEHARNESS_TIMEOUT` in the environment to
-override that default. onejudge's `max_turns` and the lifecycle `--timeout` still
-bound the complete run independently.
+## Dispatching playbook
+
+- **Prepare the harness environment.** codex is oneharness's preferred agent
+  harness, but its executable installs in `~/.local/node/bin`. Keep that
+  directory on `PATH` or oneharness silently falls back to claude-code;
+  `scripts/session-setup.sh` persists the path. The dispatch code also sets
+  `ONEHARNESS_TIMEOUT` well above oneharness's 120-second default so build-heavy
+  turns are not terminated with `SIGTERM`. Set the variable explicitly to
+  override it; onejudge's `max_turns` and the lifecycle `--timeout` still bound
+  the whole run independently.
+- **Prefer the one-command wrapper.** Use
+  `just repo-task-auto <repo> <persona> "<task>"`. It sets the dispatch
+  environment and reports the branch's commit delta after the run, making
+  stranded work visible. Use `just repo-task` or `orchestrator-repo-task` when
+  the wrapper is unavailable.
+- **Inspect a `not-completed` branch.** This status commonly means the agent hit
+  the turn cap at the moment it finished, not that its work failed or vanished.
+  Agents commit incrementally, and the lifecycle preserves those commits on the
+  branch. Check its commit delta before deciding whether to recover or redispatch.
+- **Choose the merge path by repository type.** A GitHub repository opens a PR
+  and enables auto-merge after required checks pass. A local-path repository
+  creates no PR; it pushes a direct merge into the base branch. Configure its
+  working repository with
+  `git config receive.denyCurrentBranch updateInstead` so that push can update
+  the checked-out base branch.
+- **Resolve llmlint findings on touched files.** llmlint evaluates the diff, so
+  it can expose a pre-existing pattern in any file the change touches. Fix the
+  finding or add a narrow, justified
+  `# llmlint: ignore-file[rule] <why>`. If a rule is architecturally inapplicable,
+  disable it once in `llmlint.yml` with `override: true` and `relevance: false`;
+  `async_typed_clients_at_boundaries` is disabled this way because this harness
+  is a synchronous CLI.
+
+See [the repository lifecycle](repo-lifecycle.md) for clone, gate, recovery, and
+merge mechanics.
 
 ## Testing against onejudge without a paid model
 
