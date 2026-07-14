@@ -7,10 +7,13 @@
 from __future__ import annotations
 
 import json
+import shlex
 import subprocess
 from pathlib import Path
 
-from orchestrator.integrate import integrate
+import pytest
+
+from orchestrator.integrate import IntegrateError, integrate, main
 
 
 def _git(repo: Path, *args: str) -> str:
@@ -126,6 +129,40 @@ def test_refresh_updates_discovered_branch_without_merging(tmp_path, bare_origin
     assert not (repo / "feature.txt").exists()
 
 
+def test_dirty_candidate_worktree_is_rejected(tmp_path, bare_origin) -> None:
+    repo = _clone(tmp_path, bare_origin())
+    _branch(repo, "claude/dirty", {"feature.txt": "feature\n"})
+    candidate = tmp_path / "candidate"
+    _git(repo, "worktree", "add", str(candidate), "claude/dirty")
+    (candidate / "untracked").write_text("dirty\n", encoding="utf-8")
+
+    with pytest.raises(IntegrateError, match="candidate worktree.*is dirty"):
+        integrate(repo, ["claude/dirty"], gate_command=["true"])
+
+    assert _git(repo, "status", "--porcelain") == ""
+
+
+def test_base_merge_failure_is_aborted_and_skipped(tmp_path, bare_origin) -> None:
+    repo = _clone(tmp_path, bare_origin())
+    _branch(repo, "claude/racing", {"shared.txt": "candidate\n"})
+    quoted_repo = shlex.quote(str(repo))
+    gate = [
+        "sh",
+        "-c",
+        (
+            f"printf 'concurrent\\n' > {quoted_repo}/shared.txt && "
+            f"git -C {quoted_repo} add shared.txt && "
+            f"git -C {quoted_repo} commit -m 'advance base during gate'"
+        ),
+    ]
+
+    result = integrate(repo, ["claude/racing"], gate_command=gate)
+
+    assert [(item.status, item.reason) for item in result.branches] == [("skipped", "not-ready")]
+    assert (repo / "shared.txt").read_text(encoding="utf-8") == "concurrent\n"
+    assert _git(repo, "status", "--porcelain") == ""
+
+
 def test_installed_console_entry_runs_real_git_journey(tmp_path, bare_origin) -> None:
     repo = _clone(tmp_path, bare_origin())
     _branch(repo, "claude/cli", {"cli.txt": "cli\n"})
@@ -134,3 +171,22 @@ def test_installed_console_entry_runs_real_git_journey(tmp_path, bare_origin) ->
 
     assert result["branches"] == [{"branch": "claude/cli", "status": "merged", "reason": None}]
     assert (repo / "cli.txt").read_text(encoding="utf-8") == "cli\n"
+
+
+def test_cli_readable_success(tmp_path, bare_origin, capsys) -> None:
+    repo = _clone(tmp_path, bare_origin())
+    _branch(repo, "claude/readable", {"readable.txt": "readable\n"})
+
+    assert (
+        main(
+            [
+                "--repo",
+                str(repo),
+                "--gate",
+                "true",
+                "claude/readable",
+            ]
+        )
+        == 0
+    )
+    assert "claude/readable: merged" in capsys.readouterr().out
