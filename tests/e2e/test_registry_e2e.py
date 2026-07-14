@@ -70,6 +70,10 @@ def test_registry_register_discover_and_refresh_journey(
         ),
         ("[]", "registry {path} must contain a JSON object"),
         (
+            json.dumps({"not-a-slug": {"path": "/tmp", "origin": "url", "workflow": "remote"}}),
+            "registry key 'not-a-slug' must be a normalized owner/name slug",
+        ),
+        (
             json.dumps({"x/y": {"path": "/tmp"}}),
             "registry entry 'x/y' must contain path, origin, and workflow",
         ),

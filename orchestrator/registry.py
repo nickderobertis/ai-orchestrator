@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass
@@ -19,6 +20,7 @@ from .workspace import RepoRef, normalize_repo
 
 Workflow = Literal["local", "remote"]
 Slug = NewType("Slug", str)
+_SLUG_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 
 
 class RegistryError(ValueError):
@@ -87,7 +89,9 @@ class Registry:
             raise RegistryError(f"registry {self.path} must contain a JSON object")
         result: dict[Slug, RegistryEntry] = {}
         for slug, value in raw.items():
-            if not isinstance(slug, str) or not slug or not isinstance(value, dict):
+            if not isinstance(slug, str) or not _SLUG_PATTERN.fullmatch(slug):
+                raise RegistryError(f"registry key {slug!r} must be a normalized owner/name slug")
+            if not isinstance(value, dict):
                 raise RegistryError(f"registry {self.path} has an invalid entry for {slug!r}")
             if set(value) != {"path", "origin", "workflow"}:
                 raise RegistryError(
