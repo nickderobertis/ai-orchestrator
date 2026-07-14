@@ -1,5 +1,9 @@
 """Real history + git worktree + run-ledger journey for ``just status``."""
 
+# llmlint: ignore-file[e2e_not_mocked] the primary journey invokes the real `just status`
+# subprocess; the direct main calls additionally verify rendering without replacing any
+# production boundary.
+
 from __future__ import annotations
 
 import json
@@ -48,8 +52,9 @@ def test_status_joins_real_history_worktree_commits_and_ledger(
     tmp_path: Path, bare_origin, monkeypatch, capsys
 ) -> None:
     origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical")
     workspace_root = tmp_path / ".ai-orchestrator" / "workspaces"
-    workspace = Workspace(workspace_root)
+    workspace = Workspace(workspace_root, resolver=lambda _: canonical)
     ref = normalize_repo(str(origin))
     workspace.ensure_clone(ref)
     branch = "agent/status-view"

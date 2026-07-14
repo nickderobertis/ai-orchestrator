@@ -21,6 +21,7 @@ from typing import cast
 
 from fakes import FakeGitHub, make_writing_dispatch
 
+from orchestrator import gitops
 from orchestrator.dispatch import Report
 from orchestrator.github import PullRequest
 from orchestrator.lifecycle import (
@@ -34,6 +35,18 @@ from orchestrator.lifecycle import (
 from orchestrator.merge import GitHubMergeStrategy
 from orchestrator.next_round import main as next_round_main
 from orchestrator.workspace import Workspace, normalize_repo
+
+
+def _workspace(tmp_path: Path, *origins: Path) -> Workspace:
+    """Build a registry-like resolver over real canonical test checkouts."""
+    checkouts = {
+        str(origin.resolve()): gitops.clone(origin, tmp_path / f"canonical-{index}")
+        for index, origin in enumerate(origins)
+    }
+    return Workspace(
+        tmp_path / "worktrees",
+        resolver=lambda spec: checkouts[str(Path(spec).resolve())],
+    )
 
 
 def _per_step_dispatch(fail_step: str | None = None):
@@ -72,6 +85,7 @@ def test_repo_plan_ledger_and_guided_next_round(
 ) -> None:
     """The real CLI + onejudge + git lifecycle records and retries an unresolved node."""
     origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-ledger")
     runs_dir = tmp_path / "runs"
     plan_path = tmp_path / "repo-plan.json"
     first_plan = {
@@ -79,7 +93,7 @@ def test_repo_plan_ledger_and_guided_next_round(
         "tasks": [
             {
                 "id": "change",
-                "repo": str(origin),
+                "repo": str(canonical),
                 "persona": "backend-engineer",
                 "task": "should-fail write-change: preserve this partial attempt",
                 "skip_verify": True,
@@ -123,7 +137,7 @@ def test_repo_plan_ledger_and_guided_next_round(
 
 def test_local_repo_direct_merge(tmp_path, bare_origin) -> None:
     origin = bare_origin()
-    ws = Workspace(tmp_path / "ws")
+    ws = _workspace(tmp_path, origin)
     result = run_repo_task(
         str(origin),  # a local path → local direct-merge strategy is auto-selected
         "Add a change file.",
@@ -145,7 +159,7 @@ def test_local_repo_gate_failure_blocks_merge(tmp_path, bare_origin) -> None:
         str(origin),
         "Add a change that fails the gate.",
         "backend-engineer",
-        workspace=Workspace(tmp_path / "ws"),
+        workspace=_workspace(tmp_path, origin),
         dispatch_fn=make_writing_dispatch(filename="feature.txt"),
         verify_cmd=["false"],  # gate fails → never pushes or merges
     )
@@ -163,7 +177,7 @@ def test_local_repo_no_gate_detected_proceeds(tmp_path, bare_origin) -> None:
         str(origin),
         "Add a change with no detectable local gate.",
         "backend-engineer",
-        workspace=Workspace(tmp_path / "ws"),
+        workspace=_workspace(tmp_path, origin),
         dispatch_fn=make_writing_dispatch(filename="feature.txt"),
         # no verify_cmd → detect_gate finds nothing (only README in the repo)
     )
@@ -178,7 +192,7 @@ def test_skip_verify_bypasses_the_gate(tmp_path, bare_origin) -> None:
         str(origin),
         "Add a change with the gate skipped.",
         "backend-engineer",
-        workspace=Workspace(tmp_path / "ws"),
+        workspace=_workspace(tmp_path, origin),
         dispatch_fn=make_writing_dispatch(filename="feature.txt"),
         skip_verify=True,  # no local gate runs at all
         verify_cmd=["false"],  # would fail if it ran — proving it is skipped
@@ -190,7 +204,7 @@ def test_skip_verify_bypasses_the_gate(tmp_path, bare_origin) -> None:
 
 def test_agent_not_completed_stops_early(tmp_path, bare_origin) -> None:
     origin = bare_origin()
-    ws = Workspace(tmp_path / "ws")
+    ws = _workspace(tmp_path, origin)
     result = run_repo_task(
         str(origin),
         "Task the agent will not finish.",
@@ -222,7 +236,7 @@ def test_no_changes_produces_no_pr(tmp_path, bare_origin) -> None:
         str(origin),
         "A task the agent completes without editing anything.",
         "reviewer",
-        workspace=Workspace(tmp_path / "ws"),
+        workspace=_workspace(tmp_path, origin),
         dispatch_fn=make_writing_dispatch(filename=None),
         verify_cmd=["true"],
     )
@@ -240,7 +254,7 @@ def test_github_auto_merge_on_required_checks(tmp_path, bare_origin) -> None:
         "acme/widget",  # a GitHub-style slug → GitHub strategy
         "Add a feature file.",
         "backend-engineer",
-        workspace=Workspace(tmp_path / "ws"),
+        workspace=_workspace(tmp_path, origin),
         merge=GitHubMergeStrategy(github),
         url=str(origin),  # but clone/push the real bare repo
         dispatch_fn=make_writing_dispatch(filename="feature.txt"),
@@ -271,7 +285,7 @@ def test_github_second_run_reuses_open_pr_and_merges(tmp_path, bare_origin) -> N
 
     origin = bare_origin()
     github = FindOrCreateFakeGitHub(origin)
-    workspace = Workspace(tmp_path / "ws")
+    workspace = _workspace(tmp_path, origin)
     branch = "orchestrator/continue-pr"
     first = run_repo_task(
         "acme/widget",
@@ -325,7 +339,7 @@ def test_github_auto_merge_unavailable_falls_back_to_direct(tmp_path, bare_origi
         "acme/widget",
         "Add a feature file.",
         "backend-engineer",
-        workspace=Workspace(tmp_path / "ws"),
+        workspace=_workspace(tmp_path, origin),
         merge=GitHubMergeStrategy(github),
         url=str(origin),
         dispatch_fn=make_writing_dispatch(filename="feature.txt"),
@@ -344,7 +358,7 @@ def test_github_required_check_failure_blocks_merge(tmp_path, bare_origin) -> No
         "acme/widget",
         "Add a feature file.",
         "backend-engineer",
-        workspace=Workspace(tmp_path / "ws"),
+        workspace=_workspace(tmp_path, origin),
         merge=GitHubMergeStrategy(github),
         url=str(origin),
         dispatch_fn=make_writing_dispatch(filename="feature.txt"),
@@ -363,7 +377,7 @@ def test_github_required_check_failure_blocks_merge(tmp_path, bare_origin) -> No
 def test_multi_pr_dag_across_repos(tmp_path, bare_origin) -> None:
     repo_x = bare_origin()
     repo_y = bare_origin()
-    ws = Workspace(tmp_path / "ws")
+    ws = _workspace(tmp_path, repo_x, repo_y)
 
     def runner(node: RepoPlanNode):
         return run_repo_task(
@@ -407,7 +421,7 @@ def test_workstream_multiple_onejudge_one_pr(tmp_path, bare_origin) -> None:
     ]
     result = run_repo_task(
         str(origin),
-        workspace=Workspace(tmp_path / "ws"),
+        workspace=_workspace(tmp_path, origin),
         steps=steps,
         dispatch_fn=_per_step_dispatch(),
         verify_cmd=["true"],
@@ -428,7 +442,7 @@ def test_workstream_step_failure_stops_and_skips_dependents(tmp_path, bare_origi
     ]
     result = run_repo_task(
         str(origin),
-        workspace=Workspace(tmp_path / "ws"),
+        workspace=_workspace(tmp_path, origin),
         steps=steps,
         dispatch_fn=_per_step_dispatch(fail_step="impl"),  # first step hits the turn cap
         verify_cmd=["true"],
@@ -441,7 +455,7 @@ def test_workstream_step_failure_stops_and_skips_dependents(tmp_path, bare_origi
 
 def test_multi_pr_failure_skips_dependents(tmp_path, bare_origin) -> None:
     repo_x = bare_origin()
-    ws = Workspace(tmp_path / "ws")
+    ws = _workspace(tmp_path, repo_x)
 
     def runner(node: RepoPlanNode):
         # node 'a' fails its gate; 'b' depends on it and must be skipped.

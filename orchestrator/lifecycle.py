@@ -35,6 +35,7 @@ from .github import CliGitHubBackend, GitHubBackend, GitHubError, PullRequest
 from .gitops import GitError
 from .merge import GitHubMergeStrategy, LocalMergeStrategy, MergeContext, MergeStrategy
 from .plan import NodeRun, schedule_dag
+from .registry import RegistryError
 from .runs import (
     RepoPlanPayload,
     RepoPlanResultItem,
@@ -391,7 +392,7 @@ def run_repo_task(
         result.outcome = merge_outcome.outcome
         result.detail = merge_outcome.detail
         return result
-    except (GitError, GitHubError, ConfigError) as exc:
+    except (GitError, GitHubError, ConfigError, RegistryError) as exc:
         result.outcome = "error"
         result.detail = str(exc)
         return result
@@ -673,8 +674,8 @@ def _add_common_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--workspace",
         type=Path,
-        default=Path.home() / ".ai-orchestrator" / "workspaces",
-        help="root dir for repo clones/worktrees",
+        default=Path.home() / ".ai-orchestrator" / "worktrees",
+        help="root directory for isolated task worktrees",
     )
     parser.add_argument("--merge-policy", choices=MERGE_POLICIES, default="auto")
     parser.add_argument("--merge-method", choices=MERGE_METHODS, default="squash")

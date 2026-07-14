@@ -1,10 +1,8 @@
-"""A clone/worktree pool for driving the lifecycle across arbitrary repos.
+"""A canonical-checkout/worktree pool for driving repo lifecycles.
 
-`Workspace` acquires each repo once (a clone under its root) and hands out a
-fresh **worktree per branch**, so N parallel subtasks against a repo get N
-isolated working directories over one shared object store — the efficient
-isolation for maximizing parallelism without re-cloning. Different repos get
-different clones. All git is real (`gitops`); nothing here talks to GitHub.
+`Workspace` resolves each repo through the persistent registry and hands out a
+fresh **worktree per branch** outside that canonical checkout. Parallel tasks
+share its object store without ever using its working tree for task work.
 
 A repo is named loosely — ``"onejudge"`` (the default owner is filled in),
 ``"someone/thing"``, or a full clone URL — and normalized once at the boundary.
@@ -16,12 +14,19 @@ import re
 import threading
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Protocol
 
 from . import gitops
 
 __all__ = ["DEFAULT_OWNER", "RepoRef", "Workspace", "normalize_repo"]
 
 DEFAULT_OWNER = "nickderobertis"
+
+
+class RepoResolver(Protocol):
+    """Resolve a repository spec to its canonical local checkout."""
+
+    def __call__(self, spec: str) -> Path: ...
 
 
 @dataclass(frozen=True)
@@ -96,10 +101,18 @@ def _safe_branch_dir(branch: str) -> str:
 
 
 class Workspace:
-    """Owns clones and worktrees under a single root directory."""
+    """Cuts isolated worktrees from registry-resolved canonical checkouts."""
 
-    def __init__(self, root: str | Path) -> None:
+    def __init__(self, root: str | Path, *, resolver: RepoResolver | None = None) -> None:
         self.root = Path(root)
+        if resolver is None:
+            # Lazy import avoids registry -> workspace normalization becoming an
+            # import cycle.
+            from .registry import Registry
+
+            resolver = Registry().resolve
+        self._resolver = resolver
+        self._checkouts: dict[str, Path] = {}
         # Clone/worktree creation touches a repo's shared git metadata, so those
         # ops are serialized per repo (concurrent `git worktree add` on one clone
         # races on its lock). Different repos proceed in parallel; the slow part
@@ -112,20 +125,24 @@ class Workspace:
             return self._locks.setdefault(repo.dir_key, threading.Lock())
 
     def clone_dir(self, repo: RepoRef) -> Path:
-        return self.root / repo.dir_key / "repo"
+        """Return the canonical checkout (kept as a lifecycle compatibility name)."""
+        if repo.dir_key not in self._checkouts:
+            self._checkouts[repo.dir_key] = self._resolver(repo.url)
+        return self._checkouts[repo.dir_key]
 
     def _worktree_root(self, repo: RepoRef) -> Path:
-        return self.root / repo.dir_key / "worktrees"
+        return self.root / repo.dir_key
 
     def ensure_clone(self, repo: RepoRef, *, url: str | None = None) -> Path:
-        """Clone the repo if absent (else fetch to refresh ``origin/*``)."""
-        dest = self.clone_dir(repo)
+        """Resolve and fast-forward the repo's canonical default checkout."""
         with self._repo_lock(repo):
-            if (dest / ".git").exists():
-                gitops.fetch(dest)
-                return dest
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            return gitops.clone(url or repo.url, dest)
+            checkout = self._resolver(url or repo.url)
+            self._checkouts[repo.dir_key] = checkout
+            gitops.fetch(checkout)
+            base = gitops.default_branch(checkout)
+            gitops.checkout(checkout, base)
+            gitops.merge_ff_only(checkout, f"origin/{base}")
+            return checkout
 
     def worktree(self, repo: RepoRef, branch: str, *, base: str) -> Path:
         """Add a fresh worktree for ``branch`` cut off ``base`` (e.g. ``origin/main``).

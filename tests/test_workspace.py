@@ -69,11 +69,13 @@ def test_safe_branch_dir() -> None:
 def test_workspace_clone_worktree_lifecycle(tmp_path, bare_origin) -> None:
     origin = bare_origin()
     ref = normalize_repo(str(origin))
-    ws = Workspace(tmp_path / "ws")
+    canonical = gitops.clone(origin, tmp_path / "canonical")
+    ws = Workspace(tmp_path / "worktrees", resolver=lambda _: canonical)
 
     clone = ws.ensure_clone(ref)
-    assert (clone / ".git").exists()
-    # A second ensure_clone reuses the clone (fetch path, no re-clone).
+    assert clone == canonical
+    assert not str(ws._worktree_root(ref)).startswith(str(canonical))
+    # A second resolution reuses and refreshes the canonical checkout.
     assert ws.ensure_clone(ref) == clone
     # The per-repo lock is memoized.
     assert ws._repo_lock(ref) is ws._repo_lock(ref)
@@ -86,6 +88,24 @@ def test_workspace_clone_worktree_lifecycle(tmp_path, bare_origin) -> None:
 
     ws.remove_worktree(ref, wt)
     assert not wt.exists()
+
+
+def test_workspace_fast_forwards_canonical_before_cutting_worktree(tmp_path, bare_origin) -> None:
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical")
+    writer = gitops.clone(origin, tmp_path / "writer")
+    (writer / "new.txt").write_text("current\n", encoding="utf-8")
+    gitops.add_all(writer)
+    gitops.commit(writer, "feat: advance main")
+    gitops.push(writer, "main", set_upstream=False)
+
+    ref = normalize_repo(str(origin))
+    ws = Workspace(tmp_path / "worktrees", resolver=lambda _: canonical)
+    ws.ensure_clone(ref)
+    worktree = ws.worktree(ref, "feat/current", base="origin/main")
+
+    assert (canonical / "new.txt").read_text(encoding="utf-8") == "current\n"
+    assert (worktree / "new.txt").read_text(encoding="utf-8") == "current\n"
 
 
 def test_repo_ref_defaults() -> None:
