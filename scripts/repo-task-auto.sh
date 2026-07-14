@@ -51,7 +51,7 @@ dispatch_status=$?
 
 if ! jq -e 'type == "object" and (.outcome | type == "string")' \
   "$result_file" >/dev/null 2>&1; then
-  printf 'repo-task-auto: dispatch produced no valid JSON result. See the orchestrator-repo-task diagnostics above, or re-run `just repo-task <args>` directly to surface the error.\n' >&2
+  printf 'repo-task-auto: dispatch produced no valid JSON result. See the orchestrator-repo-task diagnostics above, or re-run just repo-task <args> directly to surface the error.\n' >&2
   ((dispatch_status != 0)) || dispatch_status=1
   exit "$dispatch_status"
 fi
