@@ -27,15 +27,18 @@ step differs by where the repo lives (see *Merge strategies*). The result is a
 `just repo-task <repo> <persona> "<task>"` runs one. `<repo>` is a GitHub
 `name` / `owner/name` / URL, **or a local filesystem path**.
 
-## Isolation: one clone per repo, one worktree per branch
+## Isolation: one canonical checkout per repo, one worktree per branch
 
-`Workspace` (`orchestrator/workspace.py`) clones each repo once under its root and
-hands out a **git worktree per branch** — a separate working directory over the
-same object store. N parallel subtasks against a repo get N isolated trees
-without N clones, which is how parallelism scales without re-paying clone cost.
-Different repos get different clones. Clone/worktree creation is serialized per
-repo (a lock) because concurrent `git worktree add` races on the clone's git
-metadata; the slow part (the dispatch) always runs unlocked.
+`Workspace` (`orchestrator/workspace.py`) resolves each repo through the persistent
+registry (`orchestrator/registry.py`) to ONE **canonical local checkout** — found on
+disk, else cloned, then registered — and hands out a **git worktree per branch**
+*outside* that checkout: a separate working directory over the canonical checkout's
+object store. N parallel subtasks against a repo get N isolated trees without N
+clones, which is how parallelism scales without re-paying clone cost. The canonical
+checkout is **never worked in directly and only ever fast-forwarded**; it is fetched
+and fast-forwarded to stay current before a worktree is cut from it. Worktree
+creation is serialized per repo (a lock) because concurrent `git worktree add` races
+on the checkout's git metadata; the slow part (the dispatch) always runs unlocked.
 
 ## Local verification before push
 

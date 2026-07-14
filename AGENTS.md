@@ -18,14 +18,19 @@ running onejudge in parallel are scripts. The deliverable is this setup itself �
 config, personas, scripts, docs — not a shipped binary.
 
 Beyond dispatching at a directory, the orchestrator manages a change's **full
-life cycle** against any repo (GitHub or a local path): clone it, do the work in
-an isolated worktree, verify it with the repo's own gate, and merge it — for
-GitHub via a PR that auto-merges once required checks are green, for a local repo
-via a direct merge into the base branch after the checks pass. One larger task
-becomes **multiple isolated PRs** coordinated by a DAG; a single PR can itself run
-**several onejudge in sequence on one branch** (a node's `steps` sub-DAG). The DAG
-is static within a run — you **adapt between rounds**, reading each round's results
-and deriving the next plan (`just replan`). See `docs/repo-lifecycle.md`.
+life cycle** against any repo (GitHub or a local path): resolve it to one
+**canonical local checkout** (found on disk, else cloned, then registered), do the
+work in an **isolated worktree cut from that checkout**, verify it with the repo's
+own gate, and merge it. The merge path is chosen by the repo's registered
+`workflow` metadata: `remote` opens a PR that auto-merges once required checks are
+green; `local` merges the branch into the base directly after the checks pass (a
+local-first single-developer repo uses this even with a GitHub origin). The
+canonical checkout itself is **never worked in directly and only ever
+fast-forwarded** after a merge lands. One larger task becomes **multiple isolated
+PRs** coordinated by a DAG; a single PR can itself run **several onejudge in
+sequence on one branch** (a node's `steps` sub-DAG). The DAG is static within a run
+— you **adapt between rounds**, reading each round's results and deriving the next
+plan (`just replan`). See `docs/repo-lifecycle.md`.
 
 ## What "agent" means here
 
