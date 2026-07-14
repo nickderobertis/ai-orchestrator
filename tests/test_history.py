@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from orchestrator.history import HistoryError, _records, digest, recent_runs, show_run
+from orchestrator.history import HistoryError, SessionId, _records, digest, recent_runs, show_run
 
 FIXTURE = Path(__file__).parent / "fixtures" / "history" / "worker.jsonl"
 
@@ -41,7 +41,7 @@ elif args[0] == "show":
 
 
 def test_digest_parses_fixture_defensively() -> None:
-    result = digest(_records(FIXTURE), "worker-id")
+    result = digest(_records(FIXTURE), SessionId("worker-id"))
     assert result.turns == 2
     assert (result.input_tokens, result.output_tokens) == (300, 50)
     assert result.commands == ["rg history", "just test"]

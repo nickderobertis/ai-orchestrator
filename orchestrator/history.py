@@ -8,7 +8,7 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, NewType
 
 
 class HistoryError(Exception):
@@ -19,6 +19,42 @@ JUDGE_PREFIXES = (
     "you-are-a-strict-careful-evaluator",
     "you-are-roleplaying-the-user-in",
 )
+SessionId = NewType("SessionId", str)
+
+
+@dataclass(frozen=True)
+class HistorySession:
+    """Validated session metadata returned by ``oneharness history list``."""
+
+    session_id: SessionId
+    name: str
+    project: Path
+    started: str
+    path: Path
+
+    @classmethod
+    def from_value(cls, value: Any) -> HistorySession | None:
+        if not isinstance(value, dict):
+            return None
+        session_id = value.get("id")
+        name = value.get("name")
+        project = value.get("project")
+        started = value.get("started")
+        path = value.get("path")
+        if not all(isinstance(field, str) for field in (session_id, name, project, started, path)):
+            return None
+        assert isinstance(session_id, str)
+        assert isinstance(name, str)
+        assert isinstance(project, str)
+        assert isinstance(started, str)
+        assert isinstance(path, str)
+        return cls(
+            session_id=SessionId(session_id),
+            name=name,
+            project=Path(project),
+            started=started,
+            path=Path(path),
+        )
 
 
 def _run_history(*args: str, oneharness_bin: str = "oneharness") -> Any:
@@ -55,41 +91,39 @@ def _records(path: Path) -> list[dict[str, Any]]:
     return records
 
 
-def _is_worker(session: dict[str, Any]) -> bool:
-    name = session.get("name")
-    return isinstance(name, str) and not name.startswith(JUDGE_PREFIXES)
+def _is_worker(session: HistorySession) -> bool:
+    return not session.name.startswith(JUDGE_PREFIXES)
 
 
-def _session_records(session: dict[str, Any]) -> list[dict[str, Any]]:
-    path = session.get("path")
-    if not isinstance(path, str):
-        raise HistoryError("oneharness history entry has no usable path")
-    return _records(Path(path))
+def _sessions(value: Any) -> list[HistorySession]:
+    if not isinstance(value, list):
+        raise HistoryError("oneharness history list returned an unexpected response")
+    return [session for item in value if (session := HistorySession.from_value(item))]
 
 
 def recent_runs(limit: int, *, oneharness_bin: str = "oneharness") -> str:
     """Return a compact table of the newest worker sessions across projects."""
     if limit <= 0:
         raise HistoryError("N must be a positive integer")
-    value = _run_history("list", oneharness_bin=oneharness_bin)
-    if not isinstance(value, list):
-        raise HistoryError("oneharness history list returned an unexpected response")
-    rows = [item for item in value if isinstance(item, dict) and _is_worker(item)][:limit]
+    rows = [
+        session
+        for session in _sessions(_run_history("list", oneharness_bin=oneharness_bin))
+        if _is_worker(session)
+    ][:limit]
     header = (
         "UTC TIME              ID             PROJECT              TASK"
         "                         HARNESS/MODEL        STATUS"
     )
     output = [header]
     for item in rows:
-        records = _session_records(item)
+        records = _records(item.path)
         latest = records[-1] if records else {}
-        project = Path(str(item.get("project", "?"))).name or "?"
-        session_id = str(item.get("id", "?"))
+        project = item.project.name or "?"
         harness = str(latest.get("harness", "?"))
         model = str(latest.get("model", "?"))
         output.append(
-            f"{str(item.get('started', '?'))[:20]:20}  {session_id[-14:]:14} "
-            f" {project[:20]:20} {str(item.get('name', '?'))[:28]:28} "
+            f"{item.started[:20]:20}  {item.session_id[-14:]:14} "
+            f" {project[:20]:20} {item.name[:28]:28} "
             f"{f'{harness}/{model}'[:20]:20} {latest.get('status', '?')}"
         )
     if not rows:
@@ -112,7 +146,7 @@ def _command(event: Any) -> str | None:
 
 @dataclass(frozen=True)
 class Digest:
-    session_id: str
+    session_id: SessionId
     turns: int
     input_tokens: int
     output_tokens: int
@@ -122,7 +156,7 @@ class Digest:
     text: str
 
 
-def digest(records: list[dict[str, Any]], session_id: str) -> Digest:
+def digest(records: list[dict[str, Any]], session_id: SessionId) -> Digest:
     """Defensively summarize normalized oneharness records."""
     commands: list[str] = []
     input_tokens = output_tokens = 0
@@ -157,20 +191,15 @@ def show_run(query: str, *, oneharness_bin: str = "oneharness") -> str:
     """Resolve a substring to the newest worker session and render its digest."""
     if not query.strip():
         raise HistoryError("id-or-substring must not be empty")
-    value = _run_history("list", oneharness_bin=oneharness_bin)
-    if not isinstance(value, list):
-        raise HistoryError("oneharness history list returned an unexpected response")
     matches = [
-        item
-        for item in value
-        if isinstance(item, dict)
-        and _is_worker(item)
-        and any(query in str(item.get(key, "")) for key in ("id", "name"))
+        session
+        for session in _sessions(_run_history("list", oneharness_bin=oneharness_bin))
+        if _is_worker(session) and (query in session.session_id or query in session.name)
     ]
     if not matches:
         raise HistoryError(f"no worker history session matches {query!r}")
     item = matches[0]
-    session_id = str(item.get("id", ""))
+    session_id = item.session_id
     records = _run_history("show", session_id, oneharness_bin=oneharness_bin)
     if not isinstance(records, list):
         raise HistoryError("oneharness history show returned an unexpected response")
