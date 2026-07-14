@@ -264,9 +264,10 @@ def test_run_repo_task_requires_task_or_steps(tmp_path) -> None:
         run_repo_task("o/r", workspace=Workspace(tmp_path / "ws"))
 
 
-def test_workstream_branch_name_deterministic_and_distinct() -> None:
+def test_workstream_branch_name_unique_and_task_identifiable() -> None:
     a = _workstream_branch_name([Step("impl", "backend-engineer", "x")])
-    assert a == _workstream_branch_name([Step("impl", "backend-engineer", "x")])
+    assert a != _workstream_branch_name([Step("impl", "backend-engineer", "x")])
+    assert "/979f9ea4-" in a
     b = _workstream_branch_name(
         [Step("impl", "backend-engineer", "x"), Step("test", "test-engineer", "y")]
     )

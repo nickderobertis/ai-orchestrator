@@ -39,8 +39,17 @@ object store. N parallel subtasks against a repo get N isolated trees without N
 clones, which is how parallelism scales without re-paying clone cost. The canonical
 checkout is **never worked in directly and only ever fast-forwarded**; it is fetched
 and fast-forwarded to stay current before a worktree is cut from it. Worktree
-creation is serialized per repo (a lock) because concurrent `git worktree add` races
-on the checkout's git metadata; the slow part (the dispatch) always runs unlocked.
+creation, removal, refresh, publication, and integration are serialized across
+processes by an OS advisory lock keyed by the checkout's resolved git common-dir.
+Locks have bounded waits and report the owning PID/host on timeout. The slow agent
+dispatch remains unlocked. Default lifecycle branches include a unique run suffix;
+an explicit `--branch` is the intentional resume/override path. An active branch or
+occupied worktree is never reset or forcibly removed: inspect the reported path and
+recover that run, or remove it manually only after confirming its owner is gone.
+
+The registry uses its own process-shared locks for resolution and first clone. Its
+JSON is reloaded and merged while locked, then atomically replaced, so concurrent
+registrations are retained and interruption cannot leave partial JSON.
 
 ### Self-dispatch hazard: worktrees share the canonical `.git`
 
@@ -142,11 +151,16 @@ now). The produced plan is validated, so a bad edit fails loudly.
 
 ```
 runs/<run-id>/round-01/plan.json
+runs/<run-id>/round-01/status.json
 runs/<run-id>/round-01/result.json
 ```
 
 The plan mapping is preserved exactly and the result is the command's JSON
-payload. Pass `--run <id>` to name a run; without it, a fresh unique run id comes
+payload. The round directory and `running` status are committed before dispatch;
+the result and `completed` status are atomic updates. A second process cannot claim
+the same explicit run/round. If a process died, inspect its recorded worktrees and
+then use `repo-plan ... --run <id> --recover`; recovery is explicit and never
+silently overwrites a result. Pass `--run <id>` to name a run; without it, a fresh unique run id comes
 from the plan's top-level `name` or filename. The continuation trailer is written
 to stderr, so `--format json` stdout remains machine-readable. Use `--no-record`
 to opt out or `--runs-dir` to move the ledger.

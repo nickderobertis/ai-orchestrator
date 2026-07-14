@@ -23,6 +23,7 @@ import hashlib
 import json
 import sys
 import time
+import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -159,7 +160,7 @@ def _incomplete_commit_message(step: Step) -> str:
 def _workstream_branch_name(steps: list[Step]) -> str:
     lead = steps[0]
     key = "\x00".join(f"{s.persona}:{s.task}" for s in steps)
-    return f"ai-orchestrator/{lead.persona}/{_short_hash(key)}"
+    return f"ai-orchestrator/{lead.persona}/{_short_hash(key)}-{uuid.uuid4().hex[:10]}"
 
 
 def _workstream_body(steps: list[Step], results: list[StepResult]) -> str:
@@ -406,6 +407,8 @@ def run_repo_task(
             timeout=timeout,
             sleep=sleep,
             clock=clock,
+            verify_command=None if skip_verify else (verify_cmd or detect_gate(worktree)),
+            gate_timeout=gate_timeout,
         )
         merge_outcome = strategy.publish_and_merge(ctx)
         if merge_outcome.outcome == "merged":
@@ -794,6 +797,7 @@ def main_plan(argv: list[str] | None = None) -> int:
     parser.add_argument("--concurrency", type=int, default=None)
     parser.add_argument("--run", default=None, help="record into this validated run id")
     parser.add_argument("--no-record", action="store_true", help="do not record this round")
+    parser.add_argument("--recover", action="store_true", help="claim an abandoned running round")
     parser.add_argument("--runs-dir", type=Path, default=Path("runs"), help="run ledger root")
     _add_common_args(parser)
     args = parser.parse_args(argv)
@@ -809,6 +813,14 @@ def main_plan(argv: list[str] | None = None) -> int:
     except (ConfigError, PlanError) as exc:
         print(f"repo-plan: {exc}", file=sys.stderr)
         return 2
+
+    round_record: tuple[int, Path] | None = None
+    if run_dir is not None:
+        try:
+            round_record = prepare_round(run_dir, plan_mapping, recover=args.recover)
+        except ConfigError as exc:
+            print(f"repo-plan: could not claim run: {exc}", file=sys.stderr)
+            return 2
 
     runner = make_repo_runner(
         workspace=Workspace(args.workspace),
@@ -840,9 +852,9 @@ def main_plan(argv: list[str] | None = None) -> int:
     }
     rendered = json.dumps(payload, indent=2) if args.format == "json" else result.summary()
     _emit(rendered, args.output)
-    if run_dir is not None:
+    if run_dir is not None and round_record is not None:
         try:
-            number, round_dir = prepare_round(run_dir, plan_mapping)
+            number, round_dir = round_record
             write_result(round_dir, payload)
         except ConfigError as exc:
             print(f"repo-plan: could not record run: {exc}", file=sys.stderr)

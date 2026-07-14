@@ -23,7 +23,9 @@ from pathlib import Path
 from typing import Protocol
 
 from . import gitops
+from .coordination import advisory_lock
 from .github import AutoMergeUnavailable, GitHubBackend, PullRequest
+from .verify import run_gate
 
 __all__ = [
     "GitHubMergeStrategy",
@@ -50,6 +52,8 @@ class MergeContext:
     timeout: float = 3600.0
     sleep: Callable[[float], None] = time.sleep
     clock: Callable[[], float] = time.monotonic
+    verify_command: list[str] | None = None
+    gate_timeout: float | None = None
 
 
 @dataclass
@@ -123,15 +127,24 @@ class LocalMergeStrategy:
     """
 
     def publish_and_merge(self, ctx: MergeContext) -> MergeOutcome:
-        gitops.fetch(ctx.clone_dir)
-        with tempfile.TemporaryDirectory(prefix="orchestrator-merge-") as parent:
-            scratch = Path(parent) / "worktree"
-            gitops.worktree_add_detached(ctx.clone_dir, scratch, f"origin/{ctx.base}")
-            try:
-                gitops.merge(scratch, f"origin/{ctx.branch}", message=ctx.title)
-                gitops.push(scratch, f"HEAD:{ctx.base}", set_upstream=False)
-            finally:
-                gitops.worktree_remove(ctx.clone_dir, scratch)
+        identity = f"git:{gitops.common_dir(ctx.clone_dir)}"
+        with advisory_lock(identity):
+            gitops.fetch(ctx.clone_dir)
+            with tempfile.TemporaryDirectory(prefix="orchestrator-merge-") as parent:
+                scratch = Path(parent) / "worktree"
+                gitops.worktree_add_detached(ctx.clone_dir, scratch, f"origin/{ctx.base}")
+                try:
+                    gitops.merge(scratch, f"origin/{ctx.branch}", message=ctx.title)
+                    if ctx.verify_command is not None:
+                        verified = run_gate(scratch, ctx.verify_command, timeout=ctx.gate_timeout)
+                        if not verified.ok:
+                            return MergeOutcome(
+                                outcome="gate-failed",
+                                detail="rebuilt local publication failed verification",
+                            )
+                    gitops.push(scratch, f"HEAD:{ctx.base}", set_upstream=False)
+                finally:
+                    gitops.worktree_remove(ctx.clone_dir, scratch)
         pr = PullRequest(
             number=0,
             url=f"local:{ctx.repo_slug}#{ctx.branch}",

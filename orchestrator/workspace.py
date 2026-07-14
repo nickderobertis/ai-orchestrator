@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Literal, Protocol
 
 from . import gitops
+from .coordination import advisory_lock
 
 __all__ = ["DEFAULT_OWNER", "RepoRef", "Workflow", "Workspace", "normalize_repo"]
 
@@ -154,10 +155,11 @@ class Workspace:
         with self._repo_lock(repo):
             checkout = self._resolver(url or repo.url)
             self._checkouts[repo.dir_key] = checkout
-            gitops.fetch(checkout)
-            base = gitops.default_branch(checkout)
-            gitops.checkout(checkout, base)
-            gitops.merge_ff_only(checkout, f"origin/{base}")
+            with advisory_lock(f"git:{gitops.common_dir(checkout)}"):
+                gitops.fetch(checkout)
+                base = gitops.default_branch(checkout)
+                gitops.checkout(checkout, base)
+                gitops.merge_ff_only(checkout, f"origin/{base}")
             return checkout
 
     def worktree(self, repo: RepoRef, branch: str, *, base: str) -> Path:
@@ -168,21 +170,32 @@ class Workspace:
         """
         clone = self.clone_dir(repo)
         path = self._worktree_root(repo) / _safe_branch_dir(branch)
-        with self._repo_lock(repo):
+        with self._repo_lock(repo), advisory_lock(f"git:{gitops.common_dir(clone)}"):
+            active = gitops.worktrees(clone)
+            if branch in active:
+                raise RuntimeError(
+                    f"branch {branch!r} is active in {active[branch]}; use a unique run or "
+                    "resume that worktree explicitly"
+                )
             if path.exists():
-                gitops.worktree_remove(clone, path)
+                raise RuntimeError(
+                    f"worktree path {path} already exists; inspect and remove it only after "
+                    "confirming its run is abandoned"
+                )
             path.parent.mkdir(parents=True, exist_ok=True)
-            # reset=True so a re-dispatch of the same branch starts clean at base
-            # (removing the stale worktree leaves its branch ref behind).
-            return gitops.worktree_add(clone, path, branch, base=base, reset=True)
+            if gitops.branch_exists(clone, branch):
+                return gitops.worktree_add_existing(clone, path, branch)
+            return gitops.worktree_add(clone, path, branch, base=base, reset=False)
 
     def fast_forward(self, repo: RepoRef, branch: str) -> None:
         """Fetch and fast-forward the canonical checkout's current base branch."""
         checkout = self.clone_dir(repo)
-        with self._repo_lock(repo):
+        with self._repo_lock(repo), advisory_lock(f"git:{gitops.common_dir(checkout)}"):
             gitops.fetch(checkout)
             gitops.merge_ff_only(checkout, f"origin/{branch}")
 
     def remove_worktree(self, repo: RepoRef, path: str | Path) -> None:
         """Tear down a worktree once its subtask is done."""
-        gitops.worktree_remove(self.clone_dir(repo), path)
+        clone = self.clone_dir(repo)
+        with advisory_lock(f"git:{gitops.common_dir(clone)}"):
+            gitops.worktree_remove(clone, path)

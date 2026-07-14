@@ -25,6 +25,7 @@ __all__ = [
     "branches",
     "clone",
     "commit",
+    "common_dir",
     "current_branch",
     "default_branch",
     "fetch",
@@ -54,6 +55,15 @@ __all__ = [
 
 class GitError(Exception):
     """A git command exited non-zero (carries git's own stderr)."""
+
+
+def common_dir(cwd: str | Path) -> Path:
+    """Return the canonical shared git common directory for any linked worktree."""
+    proc = _git(["rev-parse", "--git-common-dir"], cwd=cwd)
+    value = Path(proc.stdout.strip())
+    if not value.is_absolute():
+        value = Path(cwd) / value
+    return value.resolve()
 
 
 def _git(
