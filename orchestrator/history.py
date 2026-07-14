@@ -107,15 +107,25 @@ def _sessions(value: Any) -> list[HistorySession]:
     return [session for item in value if (session := HistorySession.from_value(item))]
 
 
+def worker_sessions(*, oneharness_bin: str = "oneharness") -> list[HistorySession]:
+    """Return validated worker sessions, newest first, across every project."""
+    return [
+        session
+        for session in _sessions(_run_history("list", oneharness_bin=oneharness_bin))
+        if _is_worker(session)
+    ]
+
+
+def session_records(session: HistorySession) -> list[dict[str, Any]]:
+    """Read the normalized records belonging to ``session``."""
+    return _records(session.path)
+
+
 def recent_runs(limit: int, *, oneharness_bin: str = "oneharness") -> str:
     """Return a compact table of the newest worker sessions across projects."""
     if limit <= 0:
         raise HistoryError("N must be a positive integer")
-    rows = [
-        session
-        for session in _sessions(_run_history("list", oneharness_bin=oneharness_bin))
-        if _is_worker(session)
-    ][:limit]
+    rows = worker_sessions(oneharness_bin=oneharness_bin)[:limit]
     header = (
         "UTC TIME              ID             PROJECT              TASK"
         "                         HARNESS/MODEL        STATUS"

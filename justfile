@@ -126,6 +126,11 @@ history *args:
 history-show *args:
     uv run orchestrator-history-show {{args}}
 
+# Show running tasks joined with recent output, branch commits, and ledger rounds.
+# Pass N or --all to include recently finished tasks.
+status *args:
+    @uv run orchestrator-status {{args}}
+
 # Scaffold a new persona: `just new-persona <name>`.
 new-persona *args:
     @uv run orchestrator-new-persona "$@"
