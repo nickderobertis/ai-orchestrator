@@ -291,6 +291,7 @@ def run_repo_task(
     max_turns: int | None = None,
     done_when: str | None = None,
     gate_timeout: float | None = None,
+    publication_attempts: int = 3,
     poll_interval: float = 15.0,
     timeout: float = 3600.0,
     sleep: Callable[[float], None] = time.sleep,
@@ -409,6 +410,7 @@ def run_repo_task(
             clock=clock,
             verify_command=None if skip_verify else (verify_cmd or detect_gate(worktree)),
             gate_timeout=gate_timeout,
+            publication_attempts=publication_attempts,
         )
         merge_outcome = strategy.publish_and_merge(ctx)
         if merge_outcome.outcome == "merged":
@@ -660,6 +662,7 @@ def make_repo_runner(
     skip_verify: bool,
     poll_interval: float,
     timeout: float,
+    publication_attempts: int = 3,
 ) -> Callable[[RepoPlanNode], LifecycleResult]:
     """Build the production runner that drives each node through `run_repo_task`."""
 
@@ -686,6 +689,7 @@ def make_repo_runner(
             done_when=node.done_when,
             poll_interval=poll_interval,
             timeout=timeout,
+            publication_attempts=publication_attempts,
         )
 
     return runner
@@ -698,6 +702,13 @@ def _read_task(value: str | None) -> str:
     if value is None or value == "-":
         return sys.stdin.read()
     return value
+
+
+def _positive_int(value: str) -> int:
+    parsed = int(value)
+    if parsed < 1:
+        raise argparse.ArgumentTypeError("must be at least 1")
+    return parsed
 
 
 def _add_common_args(parser: argparse.ArgumentParser) -> None:
@@ -721,6 +732,12 @@ def _add_common_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--skip-verify", action="store_true", help="skip the local gate")
     parser.add_argument("--poll-interval", type=float, default=15.0)
     parser.add_argument("--timeout", type=float, default=3600.0)
+    parser.add_argument(
+        "--publication-attempts",
+        type=_positive_int,
+        default=3,
+        help="maximum verified attempts to publish a local base (default: 3)",
+    )
     parser.add_argument("--format", choices=["human", "json"], default="human")
     parser.add_argument("-o", "--output", type=Path, default=None)
 
@@ -778,6 +795,7 @@ def main_task(argv: list[str] | None = None) -> int:
         max_turns=args.max_turns,
         done_when=args.done_when,
         poll_interval=args.poll_interval,
+        publication_attempts=args.publication_attempts,
         timeout=args.timeout,
     )
     rendered = (
@@ -832,6 +850,7 @@ def main_plan(argv: list[str] | None = None) -> int:
         skip_verify=args.skip_verify,
         poll_interval=args.poll_interval,
         timeout=args.timeout,
+        publication_attempts=args.publication_attempts,
     )
     result = run_repo_plan(plan, runner, concurrency=args.concurrency)
 

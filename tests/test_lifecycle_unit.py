@@ -365,6 +365,13 @@ def test_main_task_json_output(monkeypatch, capsys) -> None:
     assert payload["outcome"] == "merged" and payload["pr"] == "url"
 
 
+def test_main_task_rejects_nonpositive_publication_attempts(capsys) -> None:
+    with pytest.raises(SystemExit) as exc:
+        lc.main_task(["acme/widget", "backend-engineer", "do it", "--publication-attempts", "0"])
+    assert exc.value.code == 2
+    assert "must be at least 1" in capsys.readouterr().err
+
+
 def test_main_task_human_nonzero_on_failure(monkeypatch, capsys) -> None:
     monkeypatch.setattr(lc, "run_repo_task", lambda *a, **k: _result("gate-failed"))
     rc = lc.main_task(["acme/widget", "backend-engineer", "do it"])
