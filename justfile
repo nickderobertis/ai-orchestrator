@@ -1,9 +1,9 @@
 # Command surface for ai-orchestrator. `just --list` is the index.
 #
-# `just bootstrap` must work from a clean clone; `just check` is the full quality
-# gate (fails on any issue, no warnings-only mode). The gate is deterministic and
-# offline: the e2e drives the real `onejudge` CLI with only the paid model faked
-# (onejudge's `command` provider → tests/e2e/fake_backend.py).
+# `just bootstrap` must work from a clean clone; `just check` is the deterministic
+# quality tier (fails on any issue, no warnings-only mode). The e2e drives the real
+# `onejudge` CLI with only the paid model faked (onejudge's `command` provider →
+# tests/e2e/fake_backend.py).
 
 set shell := ["bash", "-euo", "pipefail", "-c"]
 
@@ -25,6 +25,11 @@ bootstrap:
 # Full quality gate: format check, lint, type check, persona validation, tests
 # (unit + e2e, coverage enforced). Must pass before any commit.
 check: format-check lint typecheck validate-personas test
+
+# Complete pre-push gate: deterministic checks followed by llmlint on this branch.
+gate:
+    @log=$(mktemp); trap 'rm -f "$log"' EXIT; just check >"$log" 2>&1 || { cat "$log" >&2; echo "gate: deterministic checks failed; fix the reported findings and rerun 'just gate'" >&2; exit 1; }
+    @log=$(mktemp); trap 'rm -f "$log"' EXIT; just lint-llm-diff origin/main >"$log" 2>&1 || { cat "$log" >&2; echo "gate: llmlint failed; clear the reported findings and rerun 'just gate'" >&2; exit 1; }
 
 # Whole suite (unit + e2e) with coverage enforced on the orchestrator package.
 test:

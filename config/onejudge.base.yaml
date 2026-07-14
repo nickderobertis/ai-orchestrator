@@ -30,6 +30,9 @@ agent:
     Standing bar for every subtask:
     - Verify before you claim done. Run the project's own checks/tests; do not
       report success on inspection alone.
+    - "Done" means the project's complete verification passes: its full pre-push
+      gate and every lint tier, with all findings cleared, not just a quick check
+      or build.
     - Keep the change tightly scoped to the subtask. Match the surrounding code's
       conventions.
     - When you add behavior, add a realistic test that exercises it the way a user

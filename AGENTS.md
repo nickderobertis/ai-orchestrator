@@ -46,6 +46,10 @@ and deriving the next plan (`just replan`). See `docs/repo-lifecycle.md`.
    a failed subtask skips its dependents; adjust granularity or persona and
    redispatch. One subtask at a time is `just dispatch <persona> "<task>"`.
 
+Delegate substantial integration and closeout—merging branches, running the gate,
+fixing findings, and pushing—to an agent too. Prefer each agent proving its own
+change with `just gate`, leaving integration as a trivial merge.
+
 ## The granularity rule (the core judgment)
 
 Maximize parallelism, but **do not over-split**. Every onejudge is a fresh agent
@@ -97,8 +101,9 @@ Full rationale, the merge strategies, and the claude-code caveat:
 
 Use the `just` recipes (`just --list` is the index); do not hand-roll
 equivalents. `just bootstrap` sets up from a clean clone (installs the toolchain,
-activates the git hooks); `just check` is the deterministic gate and must pass
-before any commit. `just dispatch` / `just run-plan` dispatch onejudge at a
+activates the git hooks); `just check` is the deterministic tier, while `just gate`
+is the complete pre-push bar: `check` plus the llmlint diff tier. `just dispatch` /
+`just run-plan` dispatch onejudge at a
 directory; `just repo-task <repo> <persona> "<task>"` and
 `just repo-plan <repo-plan.json>` drive the full repo life cycle
 (clone→gate→PR/merge, multi-PR DAGs, and `steps` workstreams on one PR);
@@ -107,6 +112,10 @@ see `docs/repo-lifecycle.md`. `just new-persona` / `just validate-personas` roun
 out the orchestrator verbs. `just lint-llm` /
 `lint-llm-diff` / `lint-llm-validate` are the **llmlint** LLM-judge tier — kept
 out of `check` (non-deterministic, harness-backed) and enforced at pre-push.
+
+A dispatched change is not done until `just gate` is green. Its agent clears its
+own llmlint findings—by fixing them, adding a justified `ignore-file`, or disabling
+an inapplicable rule in `llmlint.yml`—rather than leaving closeout to integration.
 
 ## Dispatching playbook
 
@@ -142,9 +151,9 @@ How this repo was built up from the create-repo reference pieces:
 - **Composed:** `base.md` (always) + `shapes/skills-repo.md`.
 - **Excluded, and why:** **CI** — deliberately, per the repo's charter: this is a
   local, private proof-of-concept ("local config/scripts/docs at this point"). The
-  full gate still runs locally as `just check` and at pre-push; add
-  `.github/workflows/` running `just bootstrap && just check` (plus the llmlint
-  job) when this graduates past PoC. `releasing.md` — nothing versioned is
+  full gate still runs locally as `just gate` and at pre-push; add
+  `.github/workflows/` mirroring it when this graduates past PoC. `releasing.md` —
+  nothing versioned is
   published. `monorepo.md` — single deliverable. asdf / direnv / `src` layout —
   unneeded ceremony for a small Python package.
 - **Composed additionally:** the `llmlint` LLM-judge tier (`ci.md`'s companion) —
@@ -193,10 +202,11 @@ This repo runs on agents, so the suite is the only QA loop.
 Squash-merge via PR is the intended model; PRs follow
 `.github/pull_request_template.md` (terse **What** / **Why**). With no CI, the
 **pre-push hook** (`.githooks/pre-push`, activated by `just bootstrap`) is the
-enforcement point: it runs `just check` then the llmlint gate, so nothing reaches
-the remote unproven. Branch protection and a CI mirror of this gate are deferred
-with CI. Keep the `.claude/settings.json` allowlist current: add a new routine
-command there instead of re-approving it each session.
+enforcement point: it runs `just gate`, so nothing reaches the remote unproven.
+Every dispatched agent must clear its own findings before committing. Branch
+protection and a CI mirror of this gate are deferred with CI. Keep the
+`.claude/settings.json` allowlist current: add a new routine command there instead
+of re-approving it each session.
 
 ## After the main task
 
