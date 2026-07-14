@@ -14,8 +14,10 @@ from __future__ import annotations
 
 import subprocess
 from pathlib import Path
+from typing import NamedTuple
 
 __all__ = [
+    "Commit",
     "GitError",
     "add_all",
     "checkout",
@@ -189,17 +191,24 @@ def has_commits_ahead(cwd: str | Path, base: str) -> bool:
     return int(proc.stdout.strip() or "0") > 0
 
 
-def log_delta(cwd: str | Path, base: str, branch: str) -> list[tuple[str, str]]:
+class Commit(NamedTuple):
+    """One commit's short SHA and subject line, for display."""
+
+    sha: str
+    subject: str
+
+
+def log_delta(cwd: str | Path, base: str, branch: str) -> list[Commit]:
     """Return short SHA and subject for commits in ``branch`` but not ``base``."""
     proc = _git(
         ["log", "--format=%h%x00%s", f"{base}..{branch}"],
         cwd=cwd,
     )
-    commits: list[tuple[str, str]] = []
+    commits: list[Commit] = []
     for line in proc.stdout.splitlines():
         sha, separator, subject = line.partition("\0")
         if separator:
-            commits.append((sha, subject))
+            commits.append(Commit(sha, subject))
     return commits
 
 

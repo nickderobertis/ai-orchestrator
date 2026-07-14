@@ -15,6 +15,7 @@ from .config import ConfigError
 # A history record describes one harness invocation, not the whole onejudge task.
 # Therefore only an explicitly live state counts as running, and only while its
 # project remains a checked-out worktree. Everything else is available via N/--all.
+# llmlint: ignore[modern_domain_modeling] matches codebase string-status convention
 NON_TERMINAL_STATUSES = frozenset({"pending", "started", "running", "in_progress"})
 
 
@@ -22,20 +23,20 @@ NON_TERMINAL_STATUSES = frozenset({"pending", "started", "running", "in_progress
 class GitState:
     branch: str
     base: str
-    commits: list[tuple[str, str]]
+    commits: list[gitops.Commit]
     checked_out: bool
 
 
 @dataclass(frozen=True)
 class LedgerState:
-    run_id: str
+    run_id: runs.RunId
     round: int
     summary: str
 
 
 @dataclass(frozen=True)
 class TaskStatus:
-    session_id: str
+    session_id: history.SessionId
     project: str
     task: str
     harness: str
@@ -48,7 +49,7 @@ class TaskStatus:
     commands: list[str]
     branch: str | None
     base: str | None
-    commits: list[tuple[str, str]]
+    commits: list[gitops.Commit]
     ledger: LedgerState | None
 
 
@@ -93,7 +94,9 @@ def _ledger_for_branch(runs_dir: Path, branch: str | None) -> LedgerState | None
         except (ConfigError, OSError):
             continue
         if any(item.get("branch") == branch for item in payload["results"].values()):
-            matches.append(LedgerState(run_dir.name, latest[0], runs.status_summary(payload)))
+            matches.append(
+                LedgerState(runs.RunId(run_dir.name), latest[0], runs.status_summary(payload))
+            )
     return max(matches, default=None, key=lambda item: (item.round, item.run_id))
 
 
@@ -108,7 +111,7 @@ def collect(*, runs_dir: Path, oneharness_bin: str = "oneharness") -> list[TaskS
         branch = git.branch if git else None
         result.append(
             TaskStatus(
-                session_id=str(session.session_id),
+                session_id=session.session_id,
                 project=str(session.project),
                 task=session.name,
                 harness=str(latest.get("harness", "?")),
@@ -151,7 +154,7 @@ def _human(tasks: list[TaskStatus]) -> str:
             lines.append(
                 f"  Branch: {task.branch} — {len(task.commits)} commit(s) over {task.base}"
             )
-            lines.extend(f"    {sha} {subject}" for sha, subject in task.commits[:5])
+            lines.extend(f"    {commit.sha} {commit.subject}" for commit in task.commits[:5])
         else:
             lines.append("  Branch: unavailable (worktree/branch is gone)")
         if task.ledger:
@@ -166,7 +169,7 @@ def _human(tasks: list[TaskStatus]) -> str:
 
 def _json_value(task: TaskStatus) -> dict[str, Any]:
     value = asdict(task)
-    value["commits"] = [{"sha": sha, "subject": subject} for sha, subject in task.commits]
+    value["commits"] = [{"sha": commit.sha, "subject": commit.subject} for commit in task.commits]
     return value
 
 

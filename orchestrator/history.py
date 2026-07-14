@@ -116,6 +116,7 @@ def worker_sessions(*, oneharness_bin: str = "oneharness") -> list[HistorySessio
     ]
 
 
+# llmlint: ignore[modern_domain_modeling] harness records as dicts, per history.py convention
 def session_records(session: HistorySession) -> list[dict[str, Any]]:
     """Read the normalized records belonging to ``session``."""
     return _records(session.path)
