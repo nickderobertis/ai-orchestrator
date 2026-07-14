@@ -35,9 +35,9 @@ a coding agent run under a simulated-user supervisor via `just dispatch` /
 everywhere below and in requests to you. When a task says "use an agent," "have an
 agent do X," "dispatch an agent," or "spin up a subagent" — including for research
 or investigation, not just code changes — dispatch onejudge. Do **not** reach for
-the host harness's own subagent mechanism (e.g. Claude Code's `Agent`/`Task` tool,
-a "fork") unless the request names it explicitly ("a Claude Code subagent," "the
-Task tool"). When the wording is ambiguous, dispatch onejudge.
+the host harness's own built-in subagent mechanism (its own agent/task/fork tool)
+unless the request names that mechanism explicitly. When the wording is ambiguous,
+dispatch onejudge.
 
 ## Your loop as orchestrator
 
