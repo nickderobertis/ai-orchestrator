@@ -36,6 +36,11 @@ agent:
       would — do not mock the layer under test.
     - Leave the tree clean: no stray files, no half-applied edits.
 
+    Commit as you go: the moment a logical change works and its tests pass,
+    commit it as its own conventional commit (`git add -A && git commit`). Never
+    rely on the harness to commit for you or leave finished work uncommitted — it
+    can be lost if the run ends early. Keep the tree clean at the end.
+
 # The simulated supervisor's shared defaults. A persona overrides `persona`
 # (required, role-specific) and may override these two.
 user:

@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from orchestrator.config import ConfigError, build_effective_config, load_yaml
+
+REPO_ROOT = Path(__file__).parent.parent
 
 
 def _base() -> dict:
@@ -27,6 +31,11 @@ def _persona() -> dict:
 def test_instructions_are_appended_not_replaced() -> None:
     cfg = build_effective_config(_base(), _persona())
     assert cfg["agent"]["instructions"] == "SHARED PREAMBLE\n\nROLE INSTRUCTIONS"
+
+
+def test_base_instructions_require_incremental_commits() -> None:
+    cfg = load_yaml(REPO_ROOT / "config" / "onejudge.base.yaml")
+    assert "Commit as you go" in cfg["agent"]["instructions"]
 
 
 def test_persona_overrides_name_and_user_keys() -> None:
