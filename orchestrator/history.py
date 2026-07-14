@@ -1,5 +1,10 @@
 """Human-facing views over oneharness' cross-project run history."""
 
+# llmlint: ignore-file[boundary_inputs_validated] the `path` and other fields come
+# from `oneharness history list --format json` — a local tool this module invokes
+# itself, reporting paths inside oneharness' own history store, not an untrusted
+# network/user boundary. `from_value` type-checks every field before use.
+
 from __future__ import annotations
 
 import argparse
