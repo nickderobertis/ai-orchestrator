@@ -37,6 +37,7 @@ class RepoPlanResultItem(TypedDict, total=False):
     ok: bool
     pr: str | None
     detail: str
+    follow_ups: str | None
     error: str | None
 
 
@@ -139,7 +140,15 @@ def status_summary(result: RepoPlanPayload) -> str:
     counts = status_counts(result)
     keys = ["done", "failed", "skipped"]
     keys.extend(sorted(set(counts) - set(keys)))
-    return ", ".join(f"{counts[key]} {key}" for key in keys)
+    summary = ", ".join(f"{counts[key]} {key}" for key in keys)
+    follow_ups = [
+        f"{node_id}: {follow_up}"
+        for node_id, item in result["results"].items()
+        if isinstance((follow_up := item.get("follow_ups")), str) and follow_up.strip()
+    ]
+    if follow_ups:
+        summary += "; follow-ups: " + " | ".join(follow_ups)
+    return summary
 
 
 def list_runs(runs_dir: Path) -> list[RunLedgerRow]:

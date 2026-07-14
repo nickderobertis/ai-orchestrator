@@ -51,6 +51,21 @@ def test_build_report_counts_assistant_turns() -> None:
     assert report.usage == {"output_tokens": 3}
 
 
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("- Investigate the adjacent bug. ", "- Investigate the adjacent bug."),
+        (None, None),
+        ("  ", None),
+    ],
+)
+def test_build_report_parses_optional_assessment(value, expected) -> None:
+    import json
+
+    report = _build_report("p", 0, json.dumps({"assessment": value}), "")
+    assert report.assessment == expected
+
+
 def test_report_summary_lists_verdicts() -> None:
     report = Report(
         persona="reviewer",
@@ -66,6 +81,11 @@ def test_report_summary_lists_verdicts() -> None:
     text = report.summary()
     assert "reviewer: completed" in text
     assert "done: True" in text
+
+
+def test_report_summary_lists_follow_ups() -> None:
+    report = Report("p", 0, True, False, 1, [], {}, {}, "", "- Add a missing test.")
+    assert "follow-ups: - Add a missing test." in report.summary()
 
 
 def test_dispatch_main_unknown_persona_exit_2(capsys) -> None:
