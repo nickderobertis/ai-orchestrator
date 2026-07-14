@@ -8,12 +8,22 @@ from collections import Counter
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, TypedDict, cast
+from typing import Any, NamedTuple, NewType, TypedDict, cast
 
 from .config import ConfigError, load_yaml
 
 _RUN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 _ROUND = re.compile(r"^round-(\d+)$")
+
+RunId = NewType("RunId", str)
+
+
+class RunLedgerRow(NamedTuple):
+    """Summary of the latest completed round for one recorded run."""
+
+    run_id: str
+    round: int
+    summary: str
 
 
 class RepoPlanResultItem(TypedDict, total=False):
@@ -38,13 +48,13 @@ class RepoPlanPayload(TypedDict):
     results: dict[str, RepoPlanResultItem]
 
 
-def validate_run_id(run_id: str) -> str:
+def validate_run_id(run_id: str) -> RunId:
     """Validate a run id before using it as a directory name."""
     if run_id in {".", ".."} or not _RUN_ID.fullmatch(run_id):
         raise ConfigError(
             "run id must contain only letters, numbers, '.', '_', or '-' and cannot be '.' or '..'"
         )
-    return run_id
+    return RunId(run_id)
 
 
 def slugify(value: str) -> str:
@@ -132,11 +142,11 @@ def status_summary(result: RepoPlanPayload) -> str:
     return ", ".join(f"{counts[key]} {key}" for key in keys)
 
 
-def list_runs(runs_dir: Path) -> list[tuple[str, int, str]]:
+def list_runs(runs_dir: Path) -> list[RunLedgerRow]:
     """List runs that have at least one completed round."""
     if not runs_dir.is_dir():
         return []
-    rows: list[tuple[str, int, str]] = []
+    rows: list[RunLedgerRow] = []
     for run_dir in sorted(entry for entry in runs_dir.iterdir() if entry.is_dir()):
         completed = [
             (number, path) for number, path in _rounds(run_dir) if (path / "result.json").exists()
@@ -145,10 +155,10 @@ def list_runs(runs_dir: Path) -> list[tuple[str, int, str]]:
             continue
         latest = max(completed, key=lambda item: item[0])
         rows.append(
-            (
-                run_dir.name,
-                latest[0],
-                status_summary(_as_result_payload(load_mapping(latest[1] / "result.json"))),
+            RunLedgerRow(
+                run_id=run_dir.name,
+                round=latest[0],
+                summary=status_summary(_as_result_payload(load_mapping(latest[1] / "result.json"))),
             )
         )
     return rows
