@@ -6,6 +6,7 @@
 # tests/e2e/fake_backend.py).
 
 set shell := ["bash", "-euo", "pipefail", "-c"]
+set positional-arguments
 
 coverage_min := "95"
 
@@ -71,33 +72,33 @@ upgrade:
 
 # Dispatch one subtask: `just dispatch <persona> "<task>"`.
 dispatch *args:
-    uv run orchestrator-dispatch {{args}}
+    @uv run orchestrator-dispatch "$@"
 
 # Run a plan (task DAG): `just run-plan <plan.json>`.
 run-plan *args:
-    uv run orchestrator-run-plan {{args}}
+    @uv run orchestrator-run-plan "$@"
 
 # Drive one subtask through a repo's full lifecycle (clone→gate→PR/merge):
 # `just repo-task <repo> <persona> "<task>"`. `<repo>` is a GitHub name/slug/URL
 # or a LOCAL path (local paths merge straight into the base branch after checks).
 repo-task *args:
-    uv run orchestrator-repo-task {{args}}
+    @uv run orchestrator-repo-task "$@"
 
 # Add preferred-harness PATH setup and preserved-commit recovery reporting to
 # repo-task. Omit task (or pass `-`) to read a long task from stdin.
 repo-task-auto *args:
-    ./scripts/repo-task-auto.sh {{args}}
+    @./scripts/repo-task-auto.sh "$@"
 
 # Run a repo-plan: many isolated PRs across repos, coordinated by a DAG:
 # `just repo-plan <repo-plan.json>`. A node may carry a `steps` sub-DAG to run
 # several onejudge on ONE PR (shared branch, merged once).
 repo-plan *args:
-    uv run orchestrator-repo-plan {{args}}
+    @uv run orchestrator-repo-plan "$@"
 
 # Derive the next round's plan from the last round's results + edits (across-round
 # replanning): `just replan <prev-plan.json> <repo-plan-result.json> [edits.json]`.
 replan *args:
-    uv run orchestrator-replan {{args}}
+    @uv run orchestrator-replan "$@"
 
 # List recent dispatched worker sessions across every target repo.
 # llmlint: ignore[tool_output_is_signal] human-readable history is this viewing command's product.
@@ -111,7 +112,7 @@ history-show *args:
 
 # Scaffold a new persona: `just new-persona <name>`.
 new-persona *args:
-    uv run orchestrator-new-persona {{args}}
+    @uv run orchestrator-new-persona "$@"
 
 # Provision the session toolchain (installs onejudge; ensures oneharness; llmlint).
 # Idempotent; runs automatically via the SessionStart hook. No-ops in CI.
@@ -130,13 +131,13 @@ setup-llmlint:
 # `just setup-llmlint` first in a plain terminal.
 lint-llm *paths:
     @command -v llmlint >/dev/null 2>&1 || { echo "llmlint not installed — run 'just setup-llmlint'"; exit 1; }
-    llmlint {{paths}}
+    @llmlint "$@"
 
 # Deterministic, model-free llmlint gate: config structure, ignore directives name
 # real rules, edited fragments bumped their version. The fast pre-flight.
 lint-llm-validate *args:
     @command -v llmlint >/dev/null 2>&1 || { echo "llmlint not installed — run 'just setup-llmlint'"; exit 1; }
-    llmlint validate {{args}}
+    @llmlint validate "$@"
 
 # llmlint scoped to the merge-base diff with main — judges only what the branch
 # changed. This is the blocking pre-push check.

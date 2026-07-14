@@ -23,6 +23,34 @@ FAKE_BACKEND = REPO_ROOT / "tests" / "e2e" / "fake_backend.py"
 FAKE_HARNESS = REPO_ROOT / "tests" / "e2e" / "fake_harness.py"
 
 
+def test_just_dispatch_preserves_metacharacter_laden_arguments(command_base, onejudge_bin) -> None:
+    task = 'complete-now: preserve spaces, (parentheses), and "quotes".'
+    done_when = 'matches when (a) and (b), including "quoted text"'
+
+    subject = subprocess.run(
+        [
+            "just",
+            "dispatch",
+            "backend-engineer",
+            task,
+            "--done-when",
+            done_when,
+            "--base",
+            str(command_base()),
+            "--onejudge-bin",
+            onejudge_bin,
+            "--format",
+            "json",
+        ],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+    )
+
+    assert subject.returncode == 0, subject.stderr
+    assert json.loads(subject.stdout)["schema_version"] == 2
+
+
 def test_dispatch_completes_via_supervisor_loop(command_base, onejudge_bin) -> None:
     report = dispatch(
         "backend-engineer",
