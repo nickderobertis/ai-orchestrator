@@ -12,6 +12,10 @@
 #   works wherever a given harness happens to be authenticated.
 run_mode = "fallback"
 
+# Record judge-side runs to disk too (see the note in oneharness.toml); onejudge's
+# `--config` for this file skips the user-level config.toml, so enable it here.
+history = true
+
 # harnesses: the selection, in priority order (the first is preferred under
 # fallback). See `oneharness list` for every supported id.
 harnesses = ["codex", "claude-code"]

@@ -12,6 +12,12 @@
 #   works wherever a given harness happens to be authenticated.
 run_mode = "fallback"
 
+# Record a normalized cross-harness transcript of every run to disk (viewable with
+# `oneharness history`). onejudge pins this file via `--config`, which skips the
+# user-level config.toml — so history must be enabled HERE (or via ONEHARNESS_HISTORY)
+# to capture dispatched runs, not just in a user config.
+history = true
+
 # harnesses: the selection, in priority order (the first is preferred under
 # fallback). See `oneharness list` for every supported id.
 harnesses = ["codex", "claude-code"]
