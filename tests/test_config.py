@@ -30,7 +30,9 @@ def _persona() -> dict:
 
 def test_instructions_are_appended_not_replaced() -> None:
     cfg = build_effective_config(_base(), _persona())
-    assert cfg["agent"]["instructions"] == "SHARED PREAMBLE\n\nROLE INSTRUCTIONS"
+    assert cfg["system_prompt"] == "SHARED PREAMBLE\n\nROLE INSTRUCTIONS"
+    # The internal `agent` vocabulary is adapted away; onejudge never sees it.
+    assert "agent" not in cfg
 
 
 def test_base_instructions_require_incremental_commits() -> None:
@@ -38,9 +40,8 @@ def test_base_instructions_require_incremental_commits() -> None:
     assert "Commit as you go" in cfg["agent"]["instructions"]
 
 
-def test_persona_overrides_name_and_user_keys() -> None:
+def test_persona_overrides_user_keys() -> None:
     cfg = build_effective_config(_base(), _persona())
-    assert cfg["agent"]["name"] == "backend"
     assert cfg["user"]["persona"] == "a tech lead"
     assert cfg["user"]["max_turns"] == 6  # persona wins
     assert cfg["user"]["done_when"] == "base done"  # inherited from base
@@ -56,19 +57,17 @@ def test_cli_overrides_win_over_both() -> None:
         _base(),
         _persona(),
         session="node-1",
-        project_dir="/work/target",
         max_turns=20,
         done_when="cli done",
     )
     assert cfg["session"] == "node-1"
-    assert cfg["agent"]["dir"] == "/work/target"
     assert cfg["user"]["max_turns"] == 20
     assert cfg["user"]["done_when"] == "cli done"
 
 
 def test_persona_without_instructions_keeps_preamble() -> None:
     cfg = build_effective_config(_base(), {"agent": {}, "user": {"persona": "p"}})
-    assert cfg["agent"]["instructions"] == "SHARED PREAMBLE"
+    assert cfg["system_prompt"] == "SHARED PREAMBLE"
 
 
 def test_persona_evals_replace_base() -> None:

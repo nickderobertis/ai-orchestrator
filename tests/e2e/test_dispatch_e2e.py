@@ -48,7 +48,7 @@ def test_just_dispatch_preserves_metacharacter_laden_arguments(command_base, one
     )
 
     assert subject.returncode == 0, subject.stderr
-    assert json.loads(subject.stdout)["schema_version"] == 2
+    assert json.loads(subject.stdout)["schema_version"] == 3
 
 
 def test_dispatch_completes_via_supervisor_loop(command_base, onejudge_bin) -> None:
@@ -111,7 +111,7 @@ def test_dispatch_cli_json_output(command_base, onejudge_bin, capsys) -> None:
     )
     assert rc == 0
     report = json.loads(capsys.readouterr().out)
-    assert report["schema_version"] == 2
+    assert report["schema_version"] == 3
 
 
 def test_dispatch_cli_human_reads_task_from_stdin(command_base, onejudge_bin, capsys) -> None:

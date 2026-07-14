@@ -230,7 +230,6 @@ def dispatch(
         base,
         persona_data,
         session=session if session is not None else f"dispatch-{persona}",
-        project_dir=project_dir,
         max_turns=max_turns,
         done_when=done_when,
     )
@@ -265,7 +264,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--base", type=Path, default=BASE_CONFIG)
     parser.add_argument("--persona-dir", type=Path, default=PERSONA_DIR)
-    parser.add_argument("--project-dir", default=None, help="the target project dir (agent.dir)")
+    parser.add_argument(
+        "--project-dir", default=None, help="the target project dir (onejudge run cwd)"
+    )
     parser.add_argument("--session", default=None)
     parser.add_argument("--max-turns", type=int, default=None)
     parser.add_argument("--done-when", default=None)

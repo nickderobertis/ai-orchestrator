@@ -17,11 +17,13 @@ provider:
   bin: oneharness
   judge_config: oneharness.judge.toml   # the judge / simulated-user side
 
-# System framing shared by every dispatched agent. The persona's own
-# `agent.instructions` are appended after this preamble.
+# System framing shared by every dispatched agent, kept in ai-orchestrator's own
+# persona vocabulary: `agent.instructions` is the shared preamble, and each
+# persona's `agent.instructions` role is appended after it. `dispatch` adapts this
+# to onejudge's `system_prompt` at run time (onejudge dropped its own `agent`
+# block; see the adapter in orchestrator/config.py). The run cwd is set per
+# dispatch, so no `dir` lives here.
 agent:
-  name: orchestrated-agent
-  dir: .                                # the target project dir (override per dispatch)
   instructions: |
     You are one worker in a larger orchestrated effort: you own exactly the
     subtask you were given — do it fully and well, and do not expand scope into

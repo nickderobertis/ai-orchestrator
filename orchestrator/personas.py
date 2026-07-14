@@ -6,6 +6,11 @@ matches the delta contract — the deterministic, offline gate wired into
 `just check`. It never calls onejudge.
 """
 
+# llmlint: ignore-file[modern_domain_modeling] this module validates open-ended
+# persona/config YAML as dicts at the trust boundary (the same convention as
+# config.py / history.py); a typed model would presuppose the very structure the
+# validation exists to check.
+
 from __future__ import annotations
 
 import argparse
@@ -99,14 +104,14 @@ def validate_all(persona_dir: Path, base_path: Path) -> dict[str, list[str]]:
         errors = validate_persona(data)
         if not errors:
             merged = build_effective_config(base, data)
-            for field, holder in (
-                ("agent.instructions", merged.get("agent", {})),
-                ("user.persona", merged.get("user", {})),
-                ("user.done_when", merged.get("user", {})),
-                ("user.max_turns", merged.get("user", {})),
-            ):
+            if not merged.get("system_prompt"):
+                errors.append(
+                    "merged config is missing system_prompt (check the base config's "
+                    "agent.instructions preamble)"
+                )
+            for field in ("user.persona", "user.done_when", "user.max_turns"):
                 key = field.split(".")[1]
-                if not holder.get(key):
+                if not merged.get("user", {}).get(key):
                     errors.append(f"merged config is missing {field} (check the base config)")
         results[path.stem] = errors
     return results
