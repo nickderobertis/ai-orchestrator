@@ -27,6 +27,18 @@ becomes **multiple isolated PRs** coordinated by a DAG; a single PR can itself r
 is static within a run — you **adapt between rounds**, reading each round's results
 and deriving the next plan (`just replan`). See `docs/repo-lifecycle.md`.
 
+## What "agent" means here
+
+In this repo, an **agent** (or **subagent**) is a **dispatched onejudge process** —
+a coding agent run under a simulated-user supervisor via `just dispatch` /
+`just repo-task` / `just run-plan`. This is the default sense of the word
+everywhere below and in requests to you. When a task says "use an agent," "have an
+agent do X," "dispatch an agent," or "spin up a subagent" — including for research
+or investigation, not just code changes — dispatch onejudge. Do **not** reach for
+the host harness's own subagent mechanism (e.g. Claude Code's `Agent`/`Task` tool,
+a "fork") unless the request names it explicitly ("a Claude Code subagent," "the
+Task tool"). When the wording is ambiguous, dispatch onejudge.
+
 ## Your loop as orchestrator
 
 1. **Decompose.** Break the task into the smallest subtasks that are still worth
@@ -130,10 +142,8 @@ an inapplicable rule in `llmlint.yml`—rather than leaving closeout to integrat
 Watch a dispatched agent with `just history`, then `just history-show <id>`.
 History needs `ONEHARNESS_HISTORY=1`; the dispatch wrappers set it.
 
-Do not pass complex task or `--done-when` prose inline: dispatch expands its
-trailing `*args` unquoted, so shell metacharacters break. Until dispatch
-quote-forwards them, supply such criteria through a file/stdin or a small wrapper
-script.
+Pass long or multi-line task and `--done-when` prose through a file or stdin, not
+inline — the same channel the task prose already uses.
 
 Prefer `just repo-task-auto` for a one-command dispatch — it sets up the harness
 environment and, afterward, points at the branch holding the agent's commits so a
