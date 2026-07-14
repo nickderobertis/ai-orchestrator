@@ -24,6 +24,7 @@
       "Bash(just format-check)",
       "Bash(just typecheck)",
       "Bash(just upgrade)",
+      "Bash(just sync:*)",
       "Bash(just validate-personas)",
       "Bash(just dispatch:*)",
       "Bash(just run-plan:*)",

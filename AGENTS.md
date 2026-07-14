@@ -260,7 +260,11 @@ enforcement point: it runs `just gate`, so nothing reaches the remote unproven.
 Every dispatched agent must clear its own findings before committing. Branch
 protection and a CI mirror of this gate are deferred with CI. Keep the
 `.claude/settings.json` allowlist current: add a new routine command there instead
-of re-approving it each session.
+of re-approving it each session. Local-first is not local-only: keep `main` in
+sync with `origin`, and push every change that reaches `main` immediately rather
+than leaving verified work only in the local checkout. A dispatched `local` merge
+already pushes to origin; publish a direct commit with `just sync`. The pre-push
+gate guards every push. Never force-push or rewrite history on `main`.
 
 ## After the main task
 

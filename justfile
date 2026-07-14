@@ -68,6 +68,12 @@ upgrade:
     uv sync
     @just check
 
+# Local-first runs no CI, but origin is the shared source of truth: push every
+# change that lands on main. The pre-push hook gates this like any push; if git
+# refuses a non-fast-forward, fetch and rebase before retrying.
+sync branch="main":
+    git push origin "{{branch}}"
+
 # --- orchestrator verbs ---------------------------------------------------
 
 # Dispatch one subtask: `just dispatch <persona> "<task>"`.
