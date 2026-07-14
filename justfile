@@ -72,7 +72,8 @@ upgrade:
 # change that lands on main. The pre-push hook gates this like any push; if git
 # refuses a non-fast-forward, fetch and rebase before retrying.
 sync branch="main":
-    git push origin "{{branch}}"
+    @git check-ref-format --branch "$1" >/dev/null 2>&1 || { echo "sync: '$1' is not a valid branch name" >&2; exit 2; }
+    @git push --quiet origin "$1" || { echo "sync: push failed; fetch origin and rebase '$1', then retry" >&2; exit 1; }
 
 # --- orchestrator verbs ---------------------------------------------------
 
