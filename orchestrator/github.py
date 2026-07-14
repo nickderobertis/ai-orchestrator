@@ -154,6 +154,43 @@ class CliGitHubBackend:
         return out.strip() or "main"
 
     def create_pr(self, repo: str, *, head: str, base: str, title: str, body: str) -> PullRequest:
+        """Return the open PR for ``head``, or create one if none exists.
+
+        Reusing the PR lets later orchestration rounds continue work on the same
+        branch without failing cosmetically after their push succeeds.
+        """
+        existing_out = self._run(
+            [
+                "pr",
+                "list",
+                "--repo",
+                repo,
+                "--head",
+                head,
+                "--state",
+                "open",
+                "--json",
+                "number,url",
+            ]
+        )
+        try:
+            existing = json.loads(existing_out)
+            if not isinstance(existing, list):
+                raise TypeError
+            if existing:
+                first = existing[0]
+                if not isinstance(first, dict):
+                    raise TypeError
+                number = first["number"]
+                url = first["url"]
+                if not isinstance(number, int) or isinstance(number, bool):
+                    raise TypeError
+                if not isinstance(url, str) or not url:
+                    raise TypeError
+                return PullRequest(number=number, url=url, repo=repo, head=head, base=base)
+        except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+            raise GitHubError(f"could not parse PR from gh output: {existing_out!r}") from exc
+
         out = self._run(
             [
                 "pr",

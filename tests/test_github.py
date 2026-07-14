@@ -46,16 +46,71 @@ def test_default_branch() -> None:
     assert run.calls[0][:2] == ["repo", "view"]
 
 
-def test_create_pr_parses_number() -> None:
-    run = RecordingRun(["Warning: ...\nhttps://github.com/o/r/pull/42\n"])
+def test_create_pr_reuses_open_pr_for_head() -> None:
+    existing = '[{"number": 41, "url": "https://github.com/o/r/pull/41"}]'
+    run = RecordingRun([existing])
+    pr = CliGitHubBackend(run=run).create_pr("o/r", head="f", base="main", title="t", body="b")
+    assert pr == PullRequest(41, "https://github.com/o/r/pull/41", "o/r", "f", "main")
+    assert run.calls == [
+        [
+            "pr",
+            "list",
+            "--repo",
+            "o/r",
+            "--head",
+            "f",
+            "--state",
+            "open",
+            "--json",
+            "number,url",
+        ]
+    ]
+
+
+def test_create_pr_creates_when_head_has_no_open_pr() -> None:
+    run = RecordingRun(["[]", "Warning: ...\nhttps://github.com/o/r/pull/42\n"])
     pr = CliGitHubBackend(run=run).create_pr("o/r", head="f", base="main", title="t", body="b")
     assert pr.number == 42
     assert pr.repo == "o/r"
+    assert run.calls == [
+        [
+            "pr",
+            "list",
+            "--repo",
+            "o/r",
+            "--head",
+            "f",
+            "--state",
+            "open",
+            "--json",
+            "number,url",
+        ],
+        [
+            "pr",
+            "create",
+            "--repo",
+            "o/r",
+            "--head",
+            "f",
+            "--base",
+            "main",
+            "--title",
+            "t",
+            "--body",
+            "b",
+        ],
+    ]
 
 
 def test_create_pr_bad_output_raises() -> None:
-    run = RecordingRun(["not a url"])
+    run = RecordingRun(["[]", "not a url"])
     with pytest.raises(GitHubError, match="could not parse PR number"):
+        CliGitHubBackend(run=run).create_pr("o/r", head="f", base="main", title="t", body="b")
+
+
+def test_create_pr_bad_list_output_raises() -> None:
+    run = RecordingRun(['{"number": 42}'])
+    with pytest.raises(GitHubError, match="could not parse PR from gh output"):
         CliGitHubBackend(run=run).create_pr("o/r", head="f", base="main", title="t", body="b")
 
 

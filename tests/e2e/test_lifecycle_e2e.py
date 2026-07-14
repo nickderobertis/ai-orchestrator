@@ -16,10 +16,12 @@ from __future__ import annotations
 
 import subprocess
 from pathlib import Path
+from typing import cast
 
 from fakes import FakeGitHub, make_writing_dispatch
 
 from orchestrator.dispatch import Report
+from orchestrator.github import PullRequest
 from orchestrator.lifecycle import RepoPlan, RepoPlanNode, Step, run_repo_plan, run_repo_task
 from orchestrator.merge import GitHubMergeStrategy
 from orchestrator.workspace import Workspace, normalize_repo
@@ -189,6 +191,71 @@ def test_github_auto_merge_on_required_checks(tmp_path, bare_origin) -> None:
     assert result.outcome == "merged"
     assert result.pr is not None and result.pr.number == 1
     assert _has_file(origin, "main", "feature.txt")
+
+
+def test_github_second_run_reuses_open_pr_and_merges(tmp_path, bare_origin) -> None:
+    class FindOrCreateFakeGitHub(FakeGitHub):
+        def create_pr(
+            self, repo: str, *, head: str, base: str, title: str, body: str
+        ) -> PullRequest:
+            for number, state in self._prs.items():
+                if state["head"] == head and not state["merged"]:
+                    return PullRequest(
+                        number=number,
+                        url=f"https://github.com/{repo}/pull/{number}",
+                        repo=repo,
+                        head=head,
+                        base=base,
+                    )
+            return super().create_pr(repo, head=head, base=base, title=title, body=body)
+
+    origin = bare_origin()
+    github = FindOrCreateFakeGitHub(origin)
+    workspace = Workspace(tmp_path / "ws")
+    branch = "orchestrator/continue-pr"
+    first = run_repo_task(
+        "acme/widget",
+        "Start a feature.",
+        "backend-engineer",
+        workspace=workspace,
+        merge=GitHubMergeStrategy(github),
+        url=str(origin),
+        branch=branch,
+        dispatch_fn=make_writing_dispatch(filename="first.txt"),
+        verify_cmd=["true"],
+        merge_policy="none",
+    )
+    assert first.outcome == "pr-open"
+    assert first.pr is not None
+
+    continue_dispatch = make_writing_dispatch(filename="second.txt")
+
+    def resume_open_pr(persona: str, task: str, *, project_dir: str, **kwargs: object) -> Report:
+        subprocess.run(
+            ["git", "reset", "--hard", f"origin/{branch}"],
+            cwd=project_dir,
+            check=True,
+            capture_output=True,
+        )
+        return cast(Report, continue_dispatch(persona, task, project_dir=project_dir, **kwargs))
+
+    second = run_repo_task(
+        "acme/widget",
+        "Continue the feature.",
+        "backend-engineer",
+        workspace=workspace,
+        merge=GitHubMergeStrategy(github),
+        url=str(origin),
+        branch=branch,
+        dispatch_fn=resume_open_pr,
+        verify_cmd=["true"],
+        sleep=lambda _: None,
+    )
+    assert second.ok and second.outcome == "merged"
+    assert second.pr is not None and second.pr.number == first.pr.number
+    assert github._n == 1
+    assert _has_file(origin, "main", "first.txt")
+    assert _has_file(origin, "main", "second.txt")
 
 
 def test_github_auto_merge_unavailable_falls_back_to_direct(tmp_path, bare_origin) -> None:
