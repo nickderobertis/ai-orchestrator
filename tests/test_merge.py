@@ -4,8 +4,15 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from orchestrator import gitops
 from orchestrator.github import AutoMergeUnavailable, Check, PRStatus, PullRequest
-from orchestrator.merge import GitHubMergeStrategy, MergeContext
+from orchestrator.gitops import GitError
+from orchestrator.merge import (
+    GitHubMergeStrategy,
+    LocalMergeStrategy,
+    MergeContext,
+    _is_push_race,
+)
 
 
 class PolicyBackend:
@@ -138,3 +145,39 @@ def test_timeout_when_never_merges() -> None:
         _ctx(policy="auto", timeout=10.0, clock=lambda: next(ticks))
     )
     assert out.outcome == "timeout"
+
+
+def test_push_race_classification_is_narrow() -> None:
+    assert _is_push_race(GitError("! [rejected] HEAD -> main (fetch first)"))
+    assert _is_push_race(GitError("! [rejected] HEAD -> main (non-fast-forward)"))
+    assert not _is_push_race(GitError("remote: permission denied"))
+
+
+def test_local_publication_classifies_retry_exhaustion(tmp_path, bare_origin, monkeypatch) -> None:
+    origin = bare_origin()
+    clone = gitops.clone(origin, tmp_path / "clone")
+    feature = gitops.worktree_add(clone, tmp_path / "feature", "feature", base="origin/main")
+    (feature / "feature.txt").write_text("change\n", encoding="utf-8")
+    gitops.add_all(feature)
+    gitops.commit(feature, "feat: add feature")
+    gitops.push(feature, "feature")
+    attempts = 0
+
+    def reject_push(*args, **kwargs):
+        nonlocal attempts
+        attempts += 1
+        raise GitError("! [rejected] HEAD -> main (fetch first)")
+
+    monkeypatch.setattr(gitops, "push", reject_push)
+    outcome = LocalMergeStrategy().publish_and_merge(
+        _ctx(
+            clone_dir=clone,
+            branch="feature",
+            publication_attempts=2,
+            verify_command=["true"],
+        )
+    )
+
+    assert attempts == 2
+    assert outcome.outcome == "publication-retries-exhausted"
+    assert "all 2 attempts" in outcome.detail
