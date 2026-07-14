@@ -17,6 +17,7 @@ role-specific parts live here.
 | `test-engineer` | Closing coverage gaps and writing realistic, un-mocked e2e tests. |
 | `docs-writer` | READMEs, reference docs, durable AGENTS.md notes. |
 | `reviewer` | Finding and reporting verified, severity-ranked issues in a change. |
+| `researcher` | Answering questions with evidence cited from the actual source. |
 
 ## Adding a persona
 
