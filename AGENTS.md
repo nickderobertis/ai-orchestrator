@@ -73,8 +73,10 @@ it is quick to test; otherwise redispatch it.
 Prefer each agent proving its own change with `just gate`, leaving integration as
 a trivial merge. Before merging or pushing, independently confirm that the gate
 exercised the change: relevant tests did not skip and their fixtures, specs, and
-inputs were present. A green report or judge verdict without that evidence is not
-green.
+inputs were present. The lifecycle fetches and merges the current `origin/<base>`
+into the dispatched branch before this final gate, so the proof covers the same
+branch-plus-base diff enforced at pre-push; a sync conflict is aborted and reported
+without pushing. A green report or judge verdict without that evidence is not green.
 
 ## The granularity rule (the core judgment)
 

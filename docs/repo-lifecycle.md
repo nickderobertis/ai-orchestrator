@@ -12,8 +12,10 @@ onejudge dispatch mechanics are in [onejudge-integration.md](./onejudge-integrat
 ```
 ensure clone (once per repo)  →  fresh worktree on a new branch off base
    →  dispatch onejudge in the worktree  (agent makes the change, bypass mode)
-   →  run the repo's own gate in the worktree  (local verification)
-   →  commit + push the branch
+   →  commit the agent's changes
+   →  fetch + merge the current origin/base into the branch  (pre-handoff sync)
+   →  run the repo's own gate on the merged result  (local verification)
+   →  push the branch
    →  publish + merge  (strategy: GitHub PR / local direct-merge)
    →  remove the worktree
 ```
@@ -42,11 +44,19 @@ on the checkout's git metadata; the slow part (the dispatch) always runs unlocke
 
 ## Local verification before push
 
-The orchestrator never pushes a change it hasn't proven locally. `verify.py`
-detects the target repo's own gate — preferring an explicit `just check`, then
-`make check`, `npm test`, `cargo test`, `pytest` — and runs it in the worktree.
-A failing gate stops the lifecycle at `gate-failed` (nothing is pushed). Pass an
-explicit `verify_cmd`, or `--skip-verify` to rely on CI alone.
+Before the final gate, the lifecycle fetches `origin` and merges the current
+`origin/<base>` (normally `origin/main`) into the dispatched branch. It then runs
+the target repo's gate on that merged result and pushes only after the gate
+passes. If the sync conflicts, the lifecycle aborts the merge, reports a
+`gate-failed` result with `sync-conflict` detail, and does not push.
+
+This ordering makes the agent's gate exercise the same branch-plus-current-base
+diff that the target repo's pre-push boundary enforces, rather than proving a
+stale view of the base. `verify.py` detects the target repo's own gate — preferring
+an explicit `just check`, then `make check`, `npm test`, `cargo test`, `pytest` —
+and runs it in the worktree. A failing gate stops the lifecycle at `gate-failed`
+(nothing is pushed). Pass an explicit `verify_cmd`, or `--skip-verify` to skip the
+gate; the pre-handoff sync still occurs.
 
 ## Merge strategies (where the change lands)
 
