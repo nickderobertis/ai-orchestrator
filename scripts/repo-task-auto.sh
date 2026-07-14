@@ -6,6 +6,11 @@ set -uo pipefail
 readonly NODE_BIN="$HOME/.local/node/bin"
 export PATH="$NODE_BIN:$PATH"
 
+# Record dispatched runs to oneharness history (viewable with `oneharness history`)
+# even against repos whose oneharness.toml doesn't enable it: the env override beats
+# onejudge's `--config`, which otherwise skips history. Respect an explicit value.
+export ONEHARNESS_HISTORY="${ONEHARNESS_HISTORY:-1}"
+
 usage() {
   cat <<'EOF'
 Usage: repo-task-auto <repo> <persona> [task] [options]
