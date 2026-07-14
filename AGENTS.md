@@ -126,7 +126,8 @@ out of `check` (non-deterministic, harness-backed) and enforced at pre-push.
   Local-path repositories merge directly into the base branch and require
   `git config receive.denyCurrentBranch updateInstead` for that push to land.
 - llmlint checks the diff, so touching a file can surface a latent finding. Fix
-  it or add a justified `# llmlint: ignore-file[rule] <why>`; disable an
+  it or add a justified in-file ignore-file suppression (name the rule and the
+  reason; see `scripts/session-setup.sh` for the directive syntax); disable an
   architecturally irrelevant rule once in `llmlint.yml` with `override: true`
   and `relevance: false`, as this synchronous CLI does for
   `async_typed_clients_at_boundaries`.
