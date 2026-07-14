@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from collections.abc import Callable
 from pathlib import Path
 
@@ -223,3 +224,25 @@ def test_repo_cli_text_json_and_register_errors(
 
     with pytest.raises(SystemExit):
         main_register(["acme/missing", str(tmp_path / "absent")])
+
+
+def test_env_overrides_base_dir_and_search_roots(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from orchestrator import registry as reg
+
+    base = tmp_path / "state"
+    roots = tmp_path / "roots"
+    roots.mkdir()
+    monkeypatch.setenv("AI_ORCHESTRATOR_HOME", str(base))
+    monkeypatch.setenv("AI_ORCHESTRATOR_SEARCH_ROOTS", str(roots))
+    assert Registry().path == base / "repos.json"
+    assert reg._default_search_roots() == (roots,)
+
+
+def test_default_state_is_isolated_from_the_real_home() -> None:
+    # Proves the autouse isolation fixture redirects the default registry away from
+    # the real ~/.ai-orchestrator, so the suite can never touch a developer's state.
+    isolated = Path(os.environ["AI_ORCHESTRATOR_HOME"]) / "repos.json"
+    assert Registry().path == isolated
+    assert (Path.home() / ".ai-orchestrator") not in Registry().path.parents

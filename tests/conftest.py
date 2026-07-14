@@ -48,6 +48,24 @@ def _git_identity(monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv(key, val)
 
 
+@pytest.fixture(autouse=True)
+def _isolate_orchestrator_home(
+    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Keep the suite off the real ``~/.ai-orchestrator`` state and dev checkouts.
+
+    A default ``Registry``/``Workspace`` reads the real registry file, and
+    ``resolve()`` scans ``$HOME`` for a matching checkout — which could find and then
+    mutate the real canonical checkout. Point both the state root and the disk-search
+    roots at throwaway temp dirs so no test can read or write the developer's state.
+    """
+    base = tmp_path_factory.mktemp("ao-state")
+    monkeypatch.setenv("AI_ORCHESTRATOR_HOME", str(base / ".ai-orchestrator"))
+    search = base / "search"
+    search.mkdir()
+    monkeypatch.setenv("AI_ORCHESTRATOR_SEARCH_ROOTS", str(search))
+
+
 @pytest.fixture
 def bare_origin(tmp_path: Path) -> Callable[..., Path]:
     """Return a factory that seeds a bare git 'origin' (a real remote, no network).

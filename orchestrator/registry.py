@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 from collections.abc import Sequence
@@ -41,7 +42,28 @@ class RefreshResult:
     reason: str
 
 
+def _base_dir() -> Path:
+    """The orchestrator state root — registry file and managed clones live here.
+
+    ``AI_ORCHESTRATOR_HOME`` overrides the default so tests (and relocatable
+    deployments) never read or write the real ``~/.ai-orchestrator`` tree.
+    """
+    # llmlint: ignore[boundary_inputs_validated] operator config env var, not untrusted input
+    override = os.environ.get("AI_ORCHESTRATOR_HOME")
+    return Path(override) if override else Path.home() / ".ai-orchestrator"
+
+
 def _default_search_roots() -> tuple[Path, ...]:
+    """Directories scanned for an existing on-disk checkout during ``resolve``.
+
+    ``AI_ORCHESTRATOR_SEARCH_ROOTS`` (os.pathsep-separated) overrides the scanned
+    set. Tests point it at an empty temp dir so a disk search can never reach — and
+    then operate on — the real developer checkouts under ``$HOME``.
+    """
+    # llmlint: ignore[boundary_inputs_validated] operator config; each root is checked in _find
+    override = os.environ.get("AI_ORCHESTRATOR_SEARCH_ROOTS")
+    if override is not None:
+        return tuple(Path(part) for part in override.split(os.pathsep) if part)
     home = Path.home()
     candidates = (
         Path.cwd().resolve().parent,
@@ -72,9 +94,7 @@ class Registry:
     """A JSON-backed map from normalized repo slug to canonical checkout."""
 
     def __init__(self, path: str | Path | None = None) -> None:
-        self.path = (
-            Path(path) if path is not None else Path.home() / ".ai-orchestrator" / "repos.json"
-        )
+        self.path = Path(path) if path is not None else _base_dir() / "repos.json"
         self.entries = self._load()
 
     def _load(self) -> dict[Slug, RegistryEntry]:
@@ -179,7 +199,7 @@ class Registry:
         destination = (
             Path(clone_into).expanduser()
             if clone_into is not None
-            else Path.home() / ".ai-orchestrator" / "repos" / repo.dir_key
+            else _base_dir() / "repos" / repo.dir_key
         )
         destination.parent.mkdir(parents=True, exist_ok=True)
         gitops.clone(repo.url, destination)

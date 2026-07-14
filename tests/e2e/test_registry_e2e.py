@@ -24,7 +24,7 @@ def test_registry_register_discover_and_refresh_journey(
 ) -> None:
     home = tmp_path / "home"
     home.mkdir()
-    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("AI_ORCHESTRATOR_HOME", str(home / ".ai-orchestrator"))
     origin = bare_origin()
     checkout = tmp_path / "dev" / "widget"
     git("clone", str(origin), str(checkout))
@@ -101,7 +101,7 @@ def test_repos_cli_reports_invalid_registry_without_traceback(
     registry_path = home / ".ai-orchestrator" / "repos.json"
     registry_path.parent.mkdir(parents=True)
     registry_path.write_text(payload, encoding="utf-8")
-    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("AI_ORCHESTRATOR_HOME", str(home / ".ai-orchestrator"))
 
     result = _cli("orchestrator-repos", check=False)
 
