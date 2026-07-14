@@ -183,11 +183,10 @@ def _agent_run_context(
     if project_dir is not None:
         run_cwd = project_dir
         prov = config.get("provider", {})
-        if prov.get("kind") == "oneharness":
-            prov["bin"] = str(AGENT_ONEHARNESS_BIN)
-        elif prov.get("kind") == "split" and isinstance(prov.get("skill"), dict):
-            skill = prov["skill"]
-            if skill.get("kind") == "oneharness":
+        match prov:
+            case {"kind": "oneharness"}:
+                prov["bin"] = str(AGENT_ONEHARNESS_BIN)
+            case {"kind": "split", "skill": {"kind": "oneharness"} as skill}:
                 skill["bin"] = str(AGENT_ONEHARNESS_BIN)
         judge_config = prov.get("judge_config")
         if isinstance(judge_config, str) and not Path(judge_config).is_absolute():

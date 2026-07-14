@@ -12,8 +12,17 @@ from pathlib import Path
 def main() -> int:
     harness = Path(sys.argv[0]).name
     args = sys.argv[1:]
-    model = args[args.index("--model") + 1]
-    log_path = Path(os.environ["FAKE_HARNESS_LOG"])
+    try:
+        model_index = args.index("--model")
+        model = args[model_index + 1]
+    except (ValueError, IndexError):
+        print("fake_harness: --model requires a value", file=sys.stderr)
+        return 2
+    log_value = os.environ.get("FAKE_HARNESS_LOG")
+    if not log_value:
+        print("fake_harness: FAKE_HARNESS_LOG must name an output file", file=sys.stderr)
+        return 2
+    log_path = Path(log_value)
     with log_path.open("a", encoding="utf-8") as log:
         log.write(json.dumps({"harness": harness, "model": model}) + "\n")
 
