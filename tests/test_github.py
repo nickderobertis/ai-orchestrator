@@ -82,6 +82,8 @@ def test_create_pr_creates_when_head_has_no_open_pr() -> None:
             "o/r",
             "--head",
             "f",
+            "--base",
+            "main",
             "--state",
             "open",
             "--json",
