@@ -3,28 +3,31 @@
 from __future__ import annotations
 
 import json
-import multiprocessing
 import os
+import subprocess
+import sys
 from pathlib import Path
-from typing import Any
 
 import pytest
 
 from orchestrator.coordination import LockTimeout, advisory_lock, atomic_json
 
 
-def _hold(identity: str, connection: Any) -> None:
-    with advisory_lock(identity):
-        connection.send("locked")
-        connection.recv()
-
-
 def test_advisory_lock_reports_live_owner(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("AI_ORCHESTRATOR_HOME", str(tmp_path))
-    parent, child = multiprocessing.Pipe()
-    process = multiprocessing.Process(target=_hold, args=("shared", child))
-    process.start()
-    assert parent.poll(2) and parent.recv() == "locked"
+    script = (
+        "from orchestrator.coordination import advisory_lock; import sys; "
+        "lock = advisory_lock('shared'); lock.__enter__(); "
+        "print('locked', flush=True); sys.stdin.readline(); lock.__exit__(None, None, None)"
+    )
+    process = subprocess.Popen(
+        [sys.executable, "-c", script],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    assert process.stdout is not None
+    assert process.stdout.readline() == "locked\n"
     try:
         with (
             pytest.raises(LockTimeout, match=rf"timed out.*pid={process.pid}.*host="),
@@ -32,9 +35,10 @@ def test_advisory_lock_reports_live_owner(monkeypatch, tmp_path) -> None:
         ):
             pytest.fail("concurrent process acquired an owned lock")
     finally:
-        parent.send("release")
-    process.join(2)
-    assert process.exitcode == 0
+        assert process.stdin is not None
+        process.stdin.write("release\n")
+        process.stdin.flush()
+    assert process.wait(timeout=2) == 0
 
 
 def test_atomic_json_interrupted_replace_preserves_old_file(monkeypatch, tmp_path) -> None:
