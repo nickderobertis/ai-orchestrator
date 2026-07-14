@@ -77,6 +77,7 @@ fi
 printf '%s\n' "$report"
 
 if [[ $outcome == "error" ]]; then
+  printf 'repo-task-auto: the dispatch errored; re-run just repo-task <args> directly to surface the underlying error, or see the diagnostics above.\n' >&2
   ((dispatch_status != 0)) || dispatch_status=1
   exit "$dispatch_status"
 fi
