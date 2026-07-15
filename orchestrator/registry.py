@@ -625,10 +625,8 @@ def main_register(argv: list[str] | None = None) -> int:
     try:
         registry = Registry()
         path = registry.register(args.spec, args.path, workflow=args.workflow)
-        matched = registry.entry_for_checkout(path)
-        if matched is None:
-            raise RegistryError(f"registered checkout {path} could not be resolved")
-        alias, entry = matched
+        alias = Slug(normalize_repo(args.spec).slug)
+        entry = registry.entries[alias]
     except RegistryError as exc:
         parser.error(str(exc))
     print(f"checkout={path}")
