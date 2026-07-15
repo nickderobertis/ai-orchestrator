@@ -256,6 +256,32 @@ def test_explicit_workflow_migration_updates_every_alias_in_one_write(
     assert list(payload["identities"].values())[0]["workflow"] == "local"
 
 
+def test_interrupted_workflow_migration_preserves_every_alias(
+    tmp_path: Path,
+    bare_origin: Callable[..., Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    origin = bare_origin()
+    canonical = _clone(origin, tmp_path / "canonical")
+    safety = _clone(origin, tmp_path / "safety")
+    path = tmp_path / "registry.json"
+    registry = Registry(path)
+    registry.register(str(canonical), workflow="remote")
+    registry.register(str(safety))
+    before = path.read_text(encoding="utf-8")
+
+    def interrupted(_source: str, _destination: Path) -> None:
+        raise OSError("simulated migration interruption")
+
+    monkeypatch.setattr(os, "replace", interrupted)
+    with pytest.raises(OSError, match="simulated migration interruption"):
+        Registry.migrate_identity_workflow("local/canonical", "local", path=path)
+
+    assert path.read_text(encoding="utf-8") == before
+    assert {entry.workflow for entry in Registry(path).entries.values()} == {"remote"}
+    assert not list(tmp_path.glob(".registry.json.*"))
+
+
 def test_legacy_agreeing_aliases_normalize_and_keep_all_checkout_paths(
     tmp_path: Path, bare_origin: Callable[..., Path]
 ) -> None:
