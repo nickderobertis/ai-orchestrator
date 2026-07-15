@@ -21,6 +21,7 @@ orchestrator-history = "orchestrator.history:main_list"
 orchestrator-history-show = "orchestrator.history:main_show"
 orchestrator-status = "orchestrator.status:main"
 orchestrator-integrate = "orchestrator.integrate:main"
+orchestrator-repo-recover = "orchestrator.recover:main"
 orchestrator-register-repo = "orchestrator.registry:main_register"
 orchestrator-repos = "orchestrator.registry:main_repos"
 

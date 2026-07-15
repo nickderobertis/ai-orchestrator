@@ -221,6 +221,12 @@ def commit(cwd: str | Path, message: str) -> str:
     return head_sha(cwd)
 
 
+def commit_empty(cwd: str | Path, message: str) -> str:
+    """Create an explicit metadata-only commit and return its SHA."""
+    _git(["commit", "--allow-empty", "-m", message], cwd=cwd)
+    return head_sha(cwd)
+
+
 def head_sha(cwd: str | Path) -> str:
     """The current HEAD commit sha."""
     return _git(["rev-parse", "HEAD"], cwd=cwd).stdout.strip()
@@ -274,6 +280,13 @@ class Commit(NamedTuple):
     subject: str
 
 
+class CommitMessage(NamedTuple):
+    """One commit's full SHA and message, for provenance validation."""
+
+    sha: str
+    message: str
+
+
 def log_delta(cwd: str | Path, base: str, branch: str) -> list[Commit]:
     """Return short SHA and subject for commits in ``branch`` but not ``base``."""
     proc = _git(
@@ -285,6 +298,20 @@ def log_delta(cwd: str | Path, base: str, branch: str) -> list[Commit]:
         sha, separator, subject = line.partition("\0")
         if separator:
             commits.append(Commit(sha, subject))
+    return commits
+
+
+def log_messages(cwd: str | Path, base: str, branch: str) -> list[CommitMessage]:
+    """Return full commit messages in ``branch`` but not ``base``, oldest first."""
+    proc = _git(["log", "--reverse", "--format=%H%x00%B%x00%x1e", f"{base}..{branch}"], cwd=cwd)
+    commits: list[CommitMessage] = []
+    for record in proc.stdout.split("\x1e"):
+        value = record.strip("\n\x00")
+        if not value:
+            continue
+        sha, separator, message = value.partition("\0")
+        if separator:
+            commits.append(CommitMessage(sha, message.rstrip()))
     return commits
 
 

@@ -30,17 +30,19 @@ def test_cli_rejects_unknown_branch(tmp_path, capsys) -> None:
 
 def test_cli_rejects_empty_gate(tmp_path, bare_origin, capsys) -> None:
     from orchestrator import gitops
+    from orchestrator.registry import Registry
 
     repo = gitops.clone(str(bare_origin()), tmp_path / "clone")
+    Registry().register(str(repo), workflow="local")
     assert main(["--repo", str(repo), "--gate", ""]) == 2
     assert "gate command must not be empty" in capsys.readouterr().err
 
 
-def test_cli_json_success(tmp_path, bare_origin, capsys) -> None:
+def test_cli_json_refresh_success(tmp_path, bare_origin, capsys) -> None:
     from orchestrator import gitops
 
     repo = gitops.clone(str(bare_origin()), tmp_path / "clone")
-    assert main(["--repo", str(repo), "--format", "json"]) == 0
+    assert main(["--repo", str(repo), "--refresh", "--format", "json"]) == 0
     assert json.loads(capsys.readouterr().out) == {
         "base": "main",
         "branches": [],
@@ -52,8 +54,10 @@ def test_cli_json_success(tmp_path, bare_origin, capsys) -> None:
 def test_push_rejects_unknown_remote(tmp_path, bare_origin) -> None:
     from orchestrator import gitops
     from orchestrator.integrate import integrate
+    from orchestrator.registry import Registry
 
     repo = gitops.clone(str(bare_origin()), tmp_path / "clone")
+    Registry().register(str(repo), workflow="local")
     with pytest.raises(IntegrateError, match="unknown git remote"):
         integrate(repo, refresh=True, push=True, remote="missing")
 

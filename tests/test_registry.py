@@ -9,7 +9,14 @@ import pytest
 from conftest import git
 
 from orchestrator import gitops
-from orchestrator.registry import Registry, RegistryEntry, RegistryError, main_register, main_repos
+from orchestrator.registry import (
+    Registry,
+    RegistryEntry,
+    RegistryError,
+    Slug,
+    main_register,
+    main_repos,
+)
 
 
 def _clone(origin: Path, path: Path) -> Path:
@@ -105,6 +112,27 @@ def test_workflow_round_trips(tmp_path: Path, bare_origin: Callable[..., Path]) 
     registry.register(str(checkout), workflow="remote")
 
     assert Registry(path).entries[f"local/{checkout.name}"].workflow == "remote"
+
+
+def test_checkout_lookup_resolves_unique_origin_and_rejects_ambiguity(
+    tmp_path: Path, bare_origin: Callable[..., Path]
+) -> None:
+    origin = bare_origin()
+    first = gitops.clone(origin, tmp_path / "first")
+    auxiliary = gitops.clone(origin, tmp_path / "auxiliary")
+    registry = Registry(tmp_path / "registry.json")
+    registry.register(str(first), workflow="local")
+    exact = registry.entry_for_checkout(first)
+    assert exact is not None and Path(exact[1].path) == first
+    matched = registry.entry_for_checkout(auxiliary)
+    assert matched is not None and Path(matched[1].path) == first
+
+    second_slug = "other/checkout"
+    registry.entries[Slug(second_slug)] = RegistryEntry(
+        str((tmp_path / "other").resolve()), str(origin), "remote"
+    )
+    assert registry.entry_for_checkout(auxiliary) is None
+    assert registry.entry_for_checkout(tmp_path / "not-a-repo") is None
 
 
 def test_refresh_fast_forwards(tmp_path: Path, bare_origin: Callable[..., Path]) -> None:

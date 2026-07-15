@@ -106,7 +106,13 @@ def _safe_branch_dir(branch: str) -> str:
 class Workspace:
     """Cuts isolated worktrees from registry-resolved canonical checkouts."""
 
-    def __init__(self, root: str | Path, *, resolver: RepoResolver | None = None) -> None:
+    def __init__(
+        self,
+        root: str | Path,
+        *,
+        resolver: RepoResolver | None = None,
+        workflow: Workflow | None = None,
+    ) -> None:
         self.root = Path(root)
         self._workflow: Callable[[RepoRef], Workflow | None]
         if resolver is None:
@@ -123,7 +129,7 @@ class Workspace:
 
             self._workflow = registered_workflow
         else:
-            self._workflow = lambda repo: None
+            self._workflow = lambda repo: workflow
         self._resolver = resolver
         self._checkouts: dict[str, Path] = {}
         # Clone/worktree creation touches a repo's shared git metadata, so those

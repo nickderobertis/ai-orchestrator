@@ -25,6 +25,13 @@ own gate, and merge it. The merge path is chosen by the repo's registered
 `workflow` metadata: `remote` opens a PR that auto-merges once required checks are
 green; `local` merges the branch into the base directly after the checks pass (a
 local-first single-developer repo uses this even with a GitHub origin). The
+stored workflow has precedence. Treat unregistered and ambiguous repositories as
+remote; classify one as local only from an explicit operator choice or affirmative
+no-CI/local-first evidence, never merely because metadata is absent or its spec is
+a filesystem path. Direct `integrate` is local-only. Recover incomplete preserved
+branches with `just repo-recover`, which verifies and publishes through the
+registered workflow; do not bypass an incomplete provenance marker with a normal
+commit.
 canonical checkout itself is **never worked in directly and only ever
 fast-forwarded** after a merge lands. One larger task becomes **multiple isolated
 PRs** coordinated by a DAG; a single PR can itself run **several onejudge in
@@ -162,7 +169,8 @@ environment and, afterward, points at the branch holding the agent's commits so 
 `not-completed` run's preserved work is never invisible. The judgment that matters:
 keep `~/.local/node/bin` on `PATH` or the harness silently falls back off codex, and
 read `not-completed` as a turn-cap timing signal rather than a failure — inspect the
-branch before concluding work was lost. See `docs/onejudge-integration.md` for the
+branch before concluding work was lost, then use `just repo-recover` for verified
+publication through its registered workflow. See `docs/onejudge-integration.md` for the
 operational details and `docs/repo-lifecycle.md` for lifecycle mechanics.
 
 When a dispatch looks done but is still running, read its history before acting —

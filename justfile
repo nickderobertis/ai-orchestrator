@@ -28,7 +28,7 @@ bootstrap:
 check: format-check lint typecheck validate-personas test
 
 # Complete pre-push gate: deterministic checks followed by llmlint on this branch.
-gate remote="${ORCHESTRATOR_COMPARISON_REMOTE:-origin}" base="${ORCHESTRATOR_COMPARISON_BASE:-}":
+gate remote=env_var_or_default("ORCHESTRATOR_COMPARISON_REMOTE", "origin") base=env_var_or_default("ORCHESTRATOR_COMPARISON_BASE", ""):
     @comparison=$(scripts/comparison-base.sh "$1" "$2")
     @log=$(mktemp); trap 'rm -f "$log"' EXIT; just check >"$log" 2>&1 || { cat "$log" >&2; echo "gate: deterministic checks failed; fix the reported findings and rerun 'just gate'" >&2; exit 1; }
     @comparison=$(scripts/comparison-base.sh "$1" "$2"); log=$(mktemp); trap 'rm -f "$log"' EXIT; just lint-llm-diff "$comparison" >"$log" 2>&1 || { cat "$log" >&2; echo "gate: llmlint failed; clear the reported findings and rerun 'just gate $1 $2'" >&2; exit 1; }
@@ -87,7 +87,7 @@ run-plan *args:
 
 # Drive one subtask through a repo's full lifecycle (clone→gate→PR/merge):
 # `just repo-task <repo> <persona> "<task>"`. `<repo>` is a GitHub name/slug/URL
-# or a LOCAL path (local paths merge straight into the base branch after checks).
+# or a local path; direct base merge requires an explicit registered local workflow.
 repo-task *args:
     @uv run orchestrator-repo-task "$@"
 
@@ -95,6 +95,11 @@ repo-task *args:
 # repo-task. Omit task (or pass `-`) to read a long task from stdin.
 repo-task-auto *args:
     @./scripts/repo-task-auto.sh "$@"
+
+# Verify and publish a lifecycle-preserved branch through its registered workflow.
+# `just repo-recover <branch> --repo <canonical-checkout>`.
+repo-recover *args:
+    @uv run orchestrator-repo-recover "$@"
 
 # Run a repo-plan: many isolated PRs across repos, coordinated by a DAG:
 # `just repo-plan <repo-plan.json>`. A node may carry a `steps` sub-DAG to run

@@ -73,6 +73,9 @@ if [[ -d $clone/.git ]] && git -C "$clone" show-ref --verify --quiet "refs/heads
   git -C "$clone" rev-parse --verify --quiet "$base_ref^{commit}" >/dev/null || base_ref=$base_branch
   commit_count=$(git -C "$clone" rev-list --count "$base_ref..$branch" 2>/dev/null || printf '?')
   report+=" — $commit_count commit(s) on $branch: git -C $clone log $base_ref..$branch"
+  if [[ $outcome == "not-completed" ]]; then
+    report+="; recover safely: just repo-recover $branch --repo $clone"
+  fi
 fi
 printf '%s\n' "$report"
 

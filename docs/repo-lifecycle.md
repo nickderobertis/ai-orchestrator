@@ -95,8 +95,10 @@ back to `main`. `just sync` discovers the same branch; `just sync <branch>
 ## Merge strategies (where the change lands)
 
 Selected from the canonical registry entry's `workflow` (`local` or `remote`),
-with an explicit per-task/plan-node override available. Unregistered GitHub URLs
-default to remote and local paths default to local.
+with an explicit per-task/plan-node override available. A stored registry value
+always wins. New registrations and unresolved/ambiguous repositories default to
+`remote`; a filesystem path is not by itself evidence that direct base updates
+are intended. Choose `local` explicitly only for a known no-CI/local-first repo.
 
 - **`GitHubMergeStrategy`** (GitHub repos) — opens a PR, then merges it **only
   once the repo's required (blocking) checks are green**. The default policy is
@@ -202,8 +204,8 @@ use `--format json` for pure machine-readable stdout.
 
 ## Integrating completed workstreams
 
-When several dispatched local branches are ready, `just integrate` runs their
-merge train without letting one failure block the others:
+For a repository explicitly registered with `workflow: local`, `just integrate`
+runs a merge train without letting one failure block the others:
 
 ```sh
 just integrate claude/api claude/docs --push
@@ -211,13 +213,38 @@ just integrate --refresh                 # update discovered claude/* branches o
 just integrate --format json             # machine-readable result
 ```
 
-Each candidate first merges the current checked-out base into its own worktree.
-The normal `just gate` then runs on that updated branch, and a passing branch
-fast-forwards the base. Conflicts and gate failures are restored and reported as
-skips. `--push` updates `origin` only when the base advanced. Omit branch names to
+Before any mutation, integration resolves the supplied checkout back to its
+canonical registry entry. Remote and unregistered repositories reject normal
+integration and `--push` with exit 2; there is no routine bypass. `--refresh`
+remains available because it updates candidate branches without advancing base.
+
+Each permitted candidate fetches the selected remote, merges current
+`<remote>/<base>` (then earlier train candidates) in its own worktree, and runs
+the gate with `ORCHESTRATOR_COMPARISON_REMOTE` and
+`ORCHESTRATOR_COMPARISON_BASE`. A passing branch fast-forwards the local base.
+Conflicts and gate failures are reported as skips. `--push` updates the remote
+only when the base advanced. Omit branch names to
 discover checked-out worktree branches and local branches matching `claude/*`;
 use `--pattern` to change the glob or `--gate` to inject a different gate command.
 The base and candidate worktrees must be clean.
+
+An incomplete dispatch commit carries the stable trailer
+`Orchestrator-Status: incomplete`; legacy `wip: ... (incomplete step)` commits are
+also recognized. Integration rejects any candidate whose base-relative history
+contains an incomplete marker without a matching lifecycle recovery attestation.
+An ordinary later commit cannot clear it. Recover the preserved branch through
+its registered workflow:
+
+```sh
+just repo-recover <branch> --repo <canonical-checkout>
+```
+
+Recovery retains the source branch on failure. It uses an isolated worktree,
+fetches and merges current `origin/<base>`, runs the lifecycle gate with the
+resolved comparison environment, writes an attestation, and pushes the feature
+branch. A remote workflow opens/reuses a PR and enables auto-merge; a local
+workflow uses the verified direct-merge strategy. `repo-task-auto` prints this
+command when it reports `not-completed`.
 
 ## Operating across workers and machines
 
