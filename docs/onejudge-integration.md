@@ -130,9 +130,12 @@ no-unprivileged-userns host, dispatch codex with
   the turn cap at the moment it finished, not that its work failed or vanished.
   Agents commit incrementally, and the lifecycle preserves those commits on the
   branch. Check its commit delta before deciding whether to recover or redispatch.
-- **Choose the merge path by repository type.** A GitHub repository opens a PR
-  and enables auto-merge after required checks pass. A local-path repository
-  creates no PR; it pushes a direct merge into the base branch. Configure its
+  The wrapper prints `just repo-recover <branch> --repo <checkout>`; that command
+  verifies and publishes the preserved branch through its registered workflow.
+- **Choose the merge path from affirmative workflow metadata.** Remote is the
+  conservative default, including unregistered and ambiguous repositories. A
+  repository explicitly registered `local` creates no PR; it pushes a verified
+  direct merge into the base branch. Configure its
   working repository with
   `git config receive.denyCurrentBranch updateInstead` so that push can update
   the checked-out base branch.

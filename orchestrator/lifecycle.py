@@ -31,11 +31,13 @@ from typing import Any, cast
 
 from . import BASE_CONFIG, PERSONA_DIR, gitops
 from .config import ConfigError, load_yaml
+from .coordination import advisory_lock
 from .dispatch import Report, dispatch
 from .github import CliGitHubBackend, GitHubBackend, GitHubError, PullRequest
 from .gitops import GitError
 from .merge import GitHubMergeStrategy, LocalMergeStrategy, MergeContext, MergeStrategy
 from .plan import NodeRun, schedule_dag
+from .provenance import INCOMPLETE_TRAILER
 from .registry import RegistryError
 from .runs import (
     RepoPlanPayload,
@@ -153,7 +155,8 @@ def _incomplete_commit_message(step: Step) -> str:
     return (
         f"wip: {_default_title(step.persona, step.task)} (incomplete step)\n\n"
         f"Partial work from step {step.id} (persona: {step.persona}), preserved by "
-        "ai-orchestrator after the dispatch did not complete."
+        "ai-orchestrator after the dispatch did not complete.\n\n"
+        f"{INCOMPLETE_TRAILER}"
     )
 
 
@@ -260,7 +263,7 @@ def _select_merge_strategy(
 ) -> MergeStrategy:
     if merge is not None:
         return merge
-    if workflow == "local" or (workflow is None and ref.local):
+    if workflow == "local":
         return LocalMergeStrategy()
     return GitHubMergeStrategy(github or CliGitHubBackend())
 
@@ -302,9 +305,9 @@ def run_repo_task(
 
     The merge step is a `MergeStrategy`: for a GitHub repo, open a PR and let
     GitHub auto-merge on green required checks; for a **local** repo (a path), a
-    direct merge into the base branch after the checks pass. It is auto-selected
-    from the repo (override with ``merge``); ``github`` supplies the backend for
-    the GitHub path.
+    direct merge into the base branch after the checks pass. It is selected only
+    from affirmative ``workflow=local`` metadata (or an explicit ``merge``
+    strategy); ``github`` supplies the backend for the remote path.
 
     ``oneharness_mode`` defaults to ``"bypass"`` (no approvals, no inner sandbox):
     the container is the sandbox, so this is the "complete tasks without approvals"
@@ -361,7 +364,8 @@ def run_repo_task(
             result.detail = f"workstream did not complete: {step_detail}"
             return result
 
-        gitops.fetch(worktree)
+        with advisory_lock(f"git:{gitops.common_dir(worktree)}"):
+            gitops.fetch(worktree)
         remote_base = f"origin/{base}"
         if not gitops.merge_base_into_branch(
             worktree,

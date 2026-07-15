@@ -19,6 +19,8 @@ from typing import Literal
 
 from . import gitops
 from .coordination import advisory_lock
+from .provenance import unattested_incomplete
+from .registry import Registry, RegistryError
 from .verify import run_gate
 
 __all__ = ["IntegrateError", "IntegrationResult", "BranchResult", "integrate", "plan"]
@@ -96,7 +98,21 @@ def _integrate_locked(
     remote: str = "origin",
 ) -> IntegrationResult:
     """Run a merge train (or update-only refresh) against a real git repository."""
-    root = Path(repo).resolve()
+    requested = Path(repo).resolve()
+    registry = Registry()
+    registered = registry.entry_for_checkout(requested)
+    root = Path(registered[1].path) if registered is not None else requested
+    workflow = registered[1].workflow if registered is not None else "remote"
+    if workflow == "remote" and (not refresh or push):
+        remediation = (
+            "registered workflow=remote"
+            if registered is not None
+            else "no affirmative local workflow"
+        )
+        raise IntegrateError(
+            f"direct integration refused ({remediation}); use 'just repo-recover --repo "
+            f"{shlex.quote(str(root))} <branch>' for preserved work, or the repo lifecycle/PR path"
+        )
     base = base or gitops.current_branch(root)
     if gitops.current_branch(root) != base:
         raise IntegrateError(f"repository must have base branch {base!r} checked out")
@@ -124,14 +140,33 @@ def _integrate_locked(
             results.append(item)
             continue
         branch = item.branch
+        incomplete = unattested_incomplete(root, f"{remote}/{base}", branch)
+        if incomplete and not refresh:
+            results.append(
+                BranchResult(
+                    branch,
+                    "skipped",
+                    "incomplete-provenance; recover with just repo-recover",
+                )
+            )
+            continue
         worktree, temporary_parent = _candidate_worktree(root, branch)
         try:
             if gitops.is_dirty(worktree):
                 raise IntegrateError(f"candidate worktree for {branch!r} is dirty")
+            gitops.fetch(worktree, remote=remote)
+            remote_base = f"{remote}/{base}"
             if not gitops.merge_base_into_branch(
                 worktree,
+                remote_base,
+                message=f"Merge {remote_base} into {branch}",
+            ):
+                results.append(BranchResult(branch, "skipped", "conflict"))
+                continue
+            if not refresh and not gitops.merge_base_into_branch(
+                worktree,
                 base,
-                message=f"Merge {base} into {branch}",
+                message=f"Merge integration train {base} into {branch}",
             ):
                 results.append(BranchResult(branch, "skipped", "conflict"))
                 continue
@@ -139,7 +174,14 @@ def _integrate_locked(
             if refresh:
                 results.append(BranchResult(branch, "updated"))
                 continue
-            if not run_gate(worktree, gate_command).ok:
+            if not run_gate(
+                worktree,
+                gate_command,
+                env={
+                    "ORCHESTRATOR_COMPARISON_REMOTE": remote,
+                    "ORCHESTRATOR_COMPARISON_BASE": base,
+                },
+            ).ok:
                 results.append(BranchResult(branch, "skipped", "gate-failed"))
                 continue
             try:
@@ -225,7 +267,7 @@ def main(argv: list[str] | None = None) -> int:
             push=args.push,
             remote=args.remote,
         )
-    except (IntegrateError, gitops.GitError) as exc:
+    except (IntegrateError, RegistryError, gitops.GitError) as exc:
         print(f"integrate: {exc}", file=sys.stderr)
         return 2
     if args.format == "json":

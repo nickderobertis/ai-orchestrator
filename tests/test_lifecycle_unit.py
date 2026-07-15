@@ -75,7 +75,7 @@ def test_summary_includes_pr_and_gate() -> None:
 
 def test_select_merge_strategy() -> None:
     local = normalize_repo("/tmp")
-    assert isinstance(_select_merge_strategy(local, None, None), LocalMergeStrategy)
+    assert isinstance(_select_merge_strategy(local, None, None), GitHubMergeStrategy)
     remote = normalize_repo("o/r")
     assert isinstance(_select_merge_strategy(remote, None, CliGitHubBackend()), GitHubMergeStrategy)
     assert isinstance(_select_merge_strategy(remote, None, None), GitHubMergeStrategy)

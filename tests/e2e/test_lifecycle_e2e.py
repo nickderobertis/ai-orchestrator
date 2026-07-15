@@ -49,6 +49,7 @@ def _workspace(tmp_path: Path, *origins: Path) -> Workspace:
     return Workspace(
         tmp_path / "worktrees",
         resolver=lambda spec: checkouts[str(Path(spec).resolve())],
+        workflow="local",
     )
 
 
@@ -112,6 +113,7 @@ def test_repo_plan_ledger_and_guided_next_round(
                 "persona": "backend-engineer",
                 "task": "should-fail write-change: preserve this partial attempt",
                 "skip_verify": True,
+                "workflow": "local",
             }
         ],
     }

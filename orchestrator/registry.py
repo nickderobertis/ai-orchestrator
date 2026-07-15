@@ -139,6 +139,24 @@ class Registry:
             data = {str(slug): asdict(entry) for slug, entry in sorted(current.items())}
             atomic_json(self.path, data)
 
+    def entry_for_checkout(self, path: str | Path) -> tuple[Slug, RegistryEntry] | None:
+        """Return the canonical entry matching a checkout, preferring its exact path.
+
+        A unique origin match also resolves an auxiliary clone/worktree back to the
+        registered canonical checkout. Ambiguous or absent evidence intentionally
+        returns ``None`` so callers apply the conservative remote workflow.
+        """
+        resolved = Path(path).expanduser().resolve()
+        exact = [item for item in self.entries.items() if Path(item[1].path) == resolved]
+        if len(exact) == 1:
+            return exact[0]
+        try:
+            origin = _url_identity(gitops.remote_url(resolved))
+        except (OSError, gitops.GitError):
+            return None
+        matches = [item for item in self.entries.items() if _url_identity(item[1].origin) == origin]
+        return matches[0] if len(matches) == 1 else None
+
     @staticmethod
     def _valid_checkout(path: Path, expected_origin: str) -> bool:
         return (
@@ -202,7 +220,13 @@ class Registry:
             path = Path(repo.url)
             if not path.is_dir() or not gitops.is_repo(path):
                 raise RegistryError(f"local repo {path} is not a git checkout")
-            return self._store(repo, path, "local")
+            existing = self.entries.get(Slug(repo.slug))
+            workflow = (
+                existing.workflow
+                if existing is not None and Path(existing.path) == path.resolve()
+                else default_workflow
+            )
+            return self._store(repo, path, workflow)
         existing = self.entries.get(Slug(repo.slug))
         if existing is not None:
             try:
@@ -249,7 +273,7 @@ class Registry:
                 )
         except gitops.GitError as exc:
             raise RegistryError(f"could not validate checkout {chosen}: {exc}") from exc
-        return self._store(repo, chosen, workflow or ("local" if repo.local else "remote"))
+        return self._store(repo, chosen, workflow or "remote")
 
     def refresh(self, slug: str | None = None) -> list[RefreshResult]:
         with advisory_lock(f"registry:{self.path.resolve()}"):

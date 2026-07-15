@@ -23,8 +23,11 @@ just dispatch backend-engineer "Add a /health endpoint and test it."
 # Run a whole task DAG in parallel:
 just run-plan examples/plan.example.json
 
-# Integrate completed local workstreams and keep origin/main current:
+# Integrate completed workstreams for a repo explicitly registered local:
 just integrate claude/api claude/docs --push
+
+# Verify and publish a lifecycle-preserved branch through its registered workflow:
+just repo-recover ai-orchestrator/backend-engineer/abc123 --repo /path/to/checkout
 ```
 
 ## How it fits together

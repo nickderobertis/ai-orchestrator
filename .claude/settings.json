@@ -29,6 +29,7 @@
       "Bash(just dispatch:*)",
       "Bash(just run-plan:*)",
       "Bash(just repo-task:*)",
+      "Bash(just repo-recover:*)",
       "Bash(just repo-plan:*)",
       "Bash(just replan:*)",
       "Bash(just next-round:*)",

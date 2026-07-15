@@ -29,7 +29,7 @@ def _worktree_process(
     canonical: str, root: str, branch: str, ready: multiprocessing.Queue[str]
 ) -> None:
     repo = normalize_repo(canonical)
-    workspace = Workspace(root, resolver=lambda _spec: Path(canonical))
+    workspace = Workspace(root, resolver=lambda _spec: Path(canonical), workflow="local")
     worktree = workspace.worktree(repo, branch, base="origin/main")
     ready.put(str(worktree))
     workspace.remove_worktree(repo, worktree)
@@ -43,7 +43,7 @@ def _lifecycle_process(
     persona_dir: str,
     results: multiprocessing.Queue[dict[str, object]],
 ) -> None:
-    workspace = Workspace(root, resolver=lambda _spec: Path(canonical))
+    workspace = Workspace(root, resolver=lambda _spec: Path(canonical), workflow="local")
     result = run_repo_task(
         origin,
         "complete-now write-unique-change: the same lifecycle task",
@@ -53,7 +53,14 @@ def _lifecycle_process(
         persona_dir=persona_dir,
         verify_cmd=["true"],
     )
-    results.put({"ok": result.ok, "outcome": result.outcome, "branch": result.branch})
+    results.put(
+        {
+            "ok": result.ok,
+            "outcome": result.outcome,
+            "branch": result.branch,
+            "detail": result.detail,
+        }
+    )
 
 
 def _register_process(registry_path: str, checkout: str) -> None:
@@ -135,7 +142,7 @@ def test_identical_simultaneous_lifecycles_get_unique_branches_and_both_land(
     for process in processes:
         _join(process)
 
-    assert all(result["ok"] and result["outcome"] == "merged" for result in results)
+    assert all(result["ok"] and result["outcome"] == "merged" for result in results), results
     assert len({result["branch"] for result in results}) == 2
     landed = _git(origin, "ls-tree", "--name-only", "main").splitlines()
     assert len([name for name in landed if name.startswith("CHANGE-")]) == 2

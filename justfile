@@ -87,7 +87,7 @@ run-plan *args:
 
 # Drive one subtask through a repo's full lifecycle (clone→gate→PR/merge):
 # `just repo-task <repo> <persona> "<task>"`. `<repo>` is a GitHub name/slug/URL
-# or a LOCAL path (local paths merge straight into the base branch after checks).
+# or a local path; direct base merge requires an explicit registered local workflow.
 repo-task *args:
     @uv run orchestrator-repo-task "$@"
 
@@ -95,6 +95,11 @@ repo-task *args:
 # repo-task. Omit task (or pass `-`) to read a long task from stdin.
 repo-task-auto *args:
     @./scripts/repo-task-auto.sh "$@"
+
+# Verify and publish a lifecycle-preserved branch through its registered workflow.
+# `just repo-recover <branch> --repo <canonical-checkout>`.
+repo-recover *args:
+    @uv run orchestrator-repo-recover "$@"
 
 # Run a repo-plan: many isolated PRs across repos, coordinated by a DAG:
 # `just repo-plan <repo-plan.json>`. A node may carry a `steps` sub-DAG to run
