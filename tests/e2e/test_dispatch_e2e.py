@@ -23,6 +23,24 @@ FAKE_BACKEND = REPO_ROOT / "tests" / "e2e" / "fake_backend.py"
 FAKE_HARNESS = REPO_ROOT / "tests" / "e2e" / "fake_harness.py"
 
 
+def test_real_onejudge_cli_matches_adopted_contract(
+    onejudge_bin: str, adopted_onejudge_version: str
+) -> None:
+    version = subprocess.run(
+        [onejudge_bin, "--version"], text=True, capture_output=True, check=True
+    )
+    schema = subprocess.run([onejudge_bin, "schema"], text=True, capture_output=True, check=True)
+    run_help = subprocess.run(
+        [onejudge_bin, "run", "--help"], text=True, capture_output=True, check=True
+    )
+
+    assert version.stdout.strip() == f"onejudge {adopted_onejudge_version}"
+    assert "system_prompt:" in schema.stdout
+    assert "assessment:" in schema.stdout
+    assert "--task <TASK>" in run_help.stdout
+    assert "--format <FORMAT>" in run_help.stdout
+
+
 def test_just_dispatch_preserves_metacharacter_laden_arguments(command_base, onejudge_bin) -> None:
     task = 'complete-now: preserve spaces, (parentheses), and "quotes".'
     done_when = 'matches when (a) and (b), including "quoted text"'
@@ -48,7 +66,7 @@ def test_just_dispatch_preserves_metacharacter_laden_arguments(command_base, one
     )
 
     assert subject.returncode == 0, subject.stderr
-    assert json.loads(subject.stdout)["schema_version"] == 3
+    assert json.loads(subject.stdout)["schema_version"] == 4
 
 
 def test_dispatch_completes_via_supervisor_loop(command_base, onejudge_bin) -> None:
@@ -112,7 +130,7 @@ def test_dispatch_cli_json_output(command_base, onejudge_bin, capsys) -> None:
     )
     assert rc == 0
     report = json.loads(capsys.readouterr().out)
-    assert report["schema_version"] == 3
+    assert report["schema_version"] == 4
 
 
 def test_dispatch_cli_human_reads_task_from_stdin(command_base, onejudge_bin, capsys) -> None:

@@ -3,6 +3,14 @@
 How this repo calls [onejudge](https://github.com/nickderobertis/onejudge) and how
 the two conversation sides are wired.
 
+This repository adopts exactly **onejudge 0.3.0**, declared once in
+`config/onejudge.version`. `just bootstrap` compares the resolved CLI's exact
+`onejudge --version` output before doing any install. A compliant binary is left
+alone; a missing or different version is replaced using v0.3.0's tagged installer
+and `ONEJUDGE_VERSION=v0.3.0`, with an exact `cargo install --version 0.3.0`
+fallback for platforms without an archive. Both paths verify the binary they
+leave on `PATH`; setup exits non-zero if neither produces v0.3.0.
+
 ## The layering
 
 ```
@@ -45,7 +53,9 @@ effective onejudge config   →  onejudge run <cfg> --task -   →  JSON report
 `onejudge run <cfg> --task - --format json`, feeding the task on stdin so long,
 multi-line tasks need no shell quoting. The report is parsed back into a `Report`
 (completed? / verdicts / usage). Exit codes mirror onejudge: `0` completed, `1`
-hit the turn cap, `2` bad config (raised as a `DispatchError`).
+hit the turn cap, `2` bad config (raised as a `DispatchError`). onejudge v0.3.0
+emits report schema v4, including the unified supervisor's completion reason and
+the optional final `assessment` this repository uses to surface follow-up work.
 
 ## The init process
 
@@ -63,6 +73,13 @@ with two deliberate edits: the judge side runs a cheaper model than the agent, a
 both add an `IS_SANDBOX` env so claude-code runs under root. init's starter
 `onejudge.yaml` is not kept — `config/onejudge.base.yaml` supersedes it as the base
 this repo merges personas onto.
+
+The committed base and adapter follow the v0.3.0 schema: persona-authored
+`agent.instructions` is internal ai-orchestrator vocabulary and is translated to
+onejudge's `system_prompt`; no obsolete onejudge `agent` block reaches the CLI.
+The wrapper's `run <config> --task - --format json` arguments remain valid in
+v0.3.0. The real-CLI e2e suite checks these schema and CLI surfaces before it
+drives dispatch.
 
 **Getting an init-capable oneharness on this box.** The prebuilt oneharness
 release binary needs a newer glibc than the host provides, and the crates.io build
@@ -157,10 +174,12 @@ merge mechanics.
 ## Testing against onejudge without a paid model
 
 onejudge's `command` provider speaks a small JSON-lines protocol
-([docs/protocol.md](https://github.com/nickderobertis/onejudge/blob/main/docs/protocol.md)),
+([v0.3.0 docs/protocol.md](https://github.com/nickderobertis/onejudge/blob/v0.3.0/docs/protocol.md)),
 so any command can stand in for the harness. The e2e suite points it at
 `tests/e2e/fake_backend.py` — a deterministic backend — so the gate drives the
 **real** onejudge CLI and loop across a real subprocess boundary, faking only the
 paid model/harness. This is the one sanctioned mock (a genuinely external service),
 and it is confined to the provider seam; the merge, dispatch, and report parsing
-all run for real.
+all run for real. That backend implements v0.3.0's protocol v4 unified
+`supervisor` operation; the e2e fixture rejects any real CLI whose version is not
+the adopted `config/onejudge.version` value.

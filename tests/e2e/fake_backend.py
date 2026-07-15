@@ -11,8 +11,8 @@ Outcome is steered by sentinels in the task (the first user message):
   * "should-fail"   -> the agent never declares done and the done_when judge
                        returns false, so the run hits the turn cap (exit 1).
   * "complete-now"  -> the agent completes on its first turn (exit 0).
-  * otherwise       -> the agent completes on its second turn, after one
-                       supervisor push, exercising the two-sided loop (exit 0).
+  * otherwise       -> the unified supervisor completes on the second agent turn,
+                       after one push, exercising the two-sided loop (exit 0).
 """
 
 # llmlint: ignore-file[boundary_inputs_validated] this deterministic test backend validates the
@@ -24,6 +24,24 @@ import json
 import re
 import sys
 from pathlib import Path
+from typing import Literal, TypedDict, cast
+
+
+class SupervisorRequest(TypedDict):
+    """Validated fields consumed from onejudge's protocol-v4 supervisor request."""
+
+    task: str
+
+
+class SupervisorCompleted(TypedDict):
+    completion: Literal[True]
+    reason: str
+
+
+class SupervisorContinue(TypedDict):
+    completion: Literal[False]
+    message: str
+    reason: str
 
 
 def _task_text(messages: list[dict]) -> str:
@@ -68,9 +86,8 @@ def main() -> int:
                     "change from fake agent\n", encoding="utf-8"
                 )
             # `complete-now` finishes on the first turn; otherwise the agent stays
-            # "not done" and completion is decided by the supervisor's done_when
-            # judge below, which only passes on the second turn — exercising the
-            # two-sided loop.
+            # "not done" and completion is decided by the unified supervisor
+            # below, which only passes on the second turn — exercising the loop.
             done = (not fail) and ("complete-now" in task)
             resp = {
                 "message": "done" if done else "working on it",
@@ -87,10 +104,28 @@ def main() -> int:
             }
         case "user":
             resp = {"message": "verify it before you call it done", "stop": False}
+        case "supervisor":
+            original_task = req.get("task")
+            if not isinstance(original_task, str):
+                sys.stderr.write("fake_backend: supervisor task must be a string\n")
+                return 1
+            supervisor = cast(SupervisorRequest, req)
+            complete = (not fail) and _assistant_turns(messages) >= 2
+            if complete:
+                supervisor_resp: SupervisorCompleted | SupervisorContinue = {
+                    "completion": True,
+                    "reason": "fake supervisor verified completion",
+                }
+            else:
+                supervisor_resp = {
+                    "completion": False,
+                    "message": "verify it before you call it done",
+                    "reason": f"fake supervisor requires another turn for {supervisor['task']}",
+                }
+            resp = supervisor_resp
         case "judge" if req.get("kind") == "boolean":
-            # onejudge re-judges done_when both mid-run (ending the loop early when
-            # satisfied) and at the end. Withhold satisfaction until two assistant
-            # turns have happened so the normal path runs a real supervisor round.
+            # Final evals still use the standalone judge operation. The loop's
+            # completion decision itself goes through `supervisor` above in v0.3.0.
             value = (not fail) and ("complete-now" in task or _assistant_turns(messages) >= 2)
             resp = {"value": value, "reason": "fake judge verdict"}
         case "judge":

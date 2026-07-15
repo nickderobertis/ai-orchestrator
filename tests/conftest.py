@@ -8,6 +8,7 @@ deterministic double; everything else (the merge, the effective config, the real
 
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 import sys
@@ -95,11 +96,28 @@ def bare_origin(tmp_path: Path) -> Callable[..., Path]:
 
 
 @pytest.fixture(scope="session")
-def onejudge_bin() -> str:
-    """Resolve the onejudge binary, failing loudly if the gate's dep is missing."""
+def adopted_onejudge_version() -> str:
+    """Read and validate the repository's exact onejudge version declaration."""
+    adopted = (REPO_ROOT / "config" / "onejudge.version").read_text(encoding="utf-8").strip()
+    if re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", adopted) is None:
+        pytest.fail(f"config/onejudge.version must contain one semantic version, got {adopted!r}")
+    return adopted
+
+
+@pytest.fixture(scope="session")
+def onejudge_bin(adopted_onejudge_version: str) -> str:
+    """Resolve the adopted real onejudge CLI, rejecting a stale gate dependency."""
     found = shutil.which("onejudge")
     if not found:
         pytest.fail("onejudge not on PATH — run 'just bootstrap' (the e2e gate needs it)")
+    version = subprocess.run([found, "--version"], text=True, capture_output=True, check=False)
+    expected = f"onejudge {adopted_onejudge_version}"
+    if version.returncode != 0 or version.stdout.strip() != expected:
+        actual = version.stdout.strip() or version.stderr.strip() or "<no version output>"
+        pytest.fail(
+            f"wrong onejudge on PATH: expected {expected!r}, got {actual!r} from {found} — "
+            "run 'just bootstrap'"
+        )
     return found
 
 

@@ -4,10 +4,11 @@
 # (`just session-setup` / `just bootstrap`).
 #
 # What it ensures:
-#   1. `onejudge` is installed — the offline gate drives it as a subprocess. Uses
-#      the prebuilt install.sh where a release archive exists (x86_64 Linux,
-#      macOS); otherwise builds from source (`cargo install`), which is the path
-#      on Linux aarch64.
+#   1. The exact `onejudge` version adopted in `config/onejudge.version` is
+#      installed — the offline gate drives it as a subprocess. Uses that release's
+#      prebuilt install.sh where an archive exists (x86_64 Linux, macOS); otherwise
+#      builds the same version from crates.io (`cargo install`), which is the path
+#      on Linux aarch64. Every path verifies the resolved binary before continuing.
 #   2. `oneharness` (0.3.20+, init-capable) is installed via the PyPI
 #      `oneharness-cli` manylinux wheel — the LIVE dispatch path and `onejudge
 #      init` need it (the offline gate does not). The wheel is used because it
@@ -17,17 +18,36 @@
 #      one-time manual `codex login`. See docs/onejudge-integration.md.
 #   4. Hands off to `setup-llmlint.sh` to install the llmlint LLM-judge tier.
 #
-# `set -e` is omitted on purpose: a flaky install must never abort session
-# startup. The script owns its exit codes and always exits 0.
-# llmlint: ignore-file[robust_shell, tool_output_is_signal, boundary_inputs_validated] deliberate for a session-startup installer: `set -e` is omitted so a flaky install can't abort the hook (the script owns its exit codes and always exits 0), and progress is logged to stderr while failures log-and-continue rather than block startup. CLAUDE_ENV_FILE is a path Claude Code itself provides for the session (a trusted platform input, not external/untrusted data); persist_session_env reads and appends to it exactly as the harness intends, so there is no untrusted boundary to validate.
+# `set -e` is omitted so optional tool failures do not prevent the remaining
+# setup steps. A missing or wrong onejudge is different: the script finishes the
+# other setup work, then exits non-zero because dispatch and the gate require it.
+# llmlint: ignore-file[robust_shell, tool_output_is_signal, boundary_inputs_validated] deliberate for a session-startup installer: `set -e` is omitted so optional tool failures don't abort later setup; progress is logged to stderr; the required onejudge dependency is verified explicitly and controls the final exit status. CLAUDE_ENV_FILE is a path Claude Code itself provides for the session (a trusted platform input, not external/untrusted data); persist_session_env reads and appends to it exactly as the harness intends, so there is no untrusted boundary to validate.
 set -uo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+readonly SCRIPT_DIR
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+readonly REPO_ROOT
+readonly ONEJUDGE_VERSION_FILE="$REPO_ROOT/config/onejudge.version"
+ADOPTED_ONEJUDGE_VERSION="$(tr -d '[:space:]' <"$ONEJUDGE_VERSION_FILE")"
+readonly ADOPTED_ONEJUDGE_VERSION
+readonly ONEJUDGE_RELEASE="v$ADOPTED_ONEJUDGE_VERSION"
+readonly ONEJUDGE_INSTALL_SCRIPT="https://raw.githubusercontent.com/nickderobertis/onejudge/$ONEJUDGE_RELEASE/install.sh"
+readonly LOCAL_ROOT="$HOME/.local"
 readonly BIN_DIR="$HOME/.local/bin"
 readonly CARGO_BIN="$HOME/.cargo/bin"
 readonly NODE_BIN="$HOME/.local/node/bin"   # npm global prefix (codex lands here)
 export PATH="$BIN_DIR:$CARGO_BIN:$NODE_BIN:$PATH"
 
 log() { printf 'session-setup: %s\n' "$*" >&2; }
+
+if [[ ! $ADOPTED_ONEJUDGE_VERSION =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  log "invalid adopted onejudge version in $ONEJUDGE_VERSION_FILE: '$ADOPTED_ONEJUDGE_VERSION'"
+  if [[ ${BASH_SOURCE[0]} != "$0" ]]; then
+    return 1
+  fi
+  exit 1
+fi
 
 # CI never needs this provisioning; keep it a no-op there.
 if [ -n "${CI:-}" ]; then
@@ -36,22 +56,60 @@ if [ -n "${CI:-}" ]; then
 fi
 
 install_onejudge() {
+  local current="not installed"
   if command -v onejudge >/dev/null 2>&1; then
+    current="$(onejudge --version 2>&1 || echo unusable)"
+  fi
+  if verify_onejudge >/dev/null 2>&1; then
     return 0
   fi
-  log "installing onejudge"
+  log "installing onejudge $ADOPTED_ONEJUDGE_VERSION (current: $current)"
   # Prefer the prebuilt archive; fall back to building from source (e.g. aarch64
   # Linux, which has no prebuilt onejudge archive).
-  if curl -fsSL https://raw.githubusercontent.com/nickderobertis/onejudge/main/install.sh | bash >&2 \
-    && command -v onejudge >/dev/null 2>&1; then
-    return 0
+  if curl -fsSL "$ONEJUDGE_INSTALL_SCRIPT" \
+    | ONEJUDGE_INSTALL_DIR="$BIN_DIR" ONEJUDGE_VERSION="$ONEJUDGE_RELEASE" bash >&2; then
+    hash -r
+    if verify_onejudge; then
+      return 0
+    fi
+    log "the pinned release installer did not produce the required binary; trying crates.io"
+  else
+    log "the pinned release archive is unavailable for this platform; trying crates.io"
   fi
   if command -v cargo >/dev/null 2>&1; then
-    log "no prebuilt archive for this platform; building onejudge from source (this can take a few minutes)"
-    cargo install onejudge --features cli --locked >&2 || log "onejudge build failed (continuing)"
+    log "building onejudge $ADOPTED_ONEJUDGE_VERSION from crates.io (this can take a few minutes)"
+    if cargo install onejudge --version "$ADOPTED_ONEJUDGE_VERSION" --features cli --locked \
+      --force --root "$LOCAL_ROOT" >&2; then
+      hash -r
+      if verify_onejudge; then
+        return 0
+      fi
+    else
+      log "onejudge $ADOPTED_ONEJUDGE_VERSION source build failed"
+    fi
   else
-    log "cannot install onejudge: no prebuilt archive and no cargo — install a Rust toolchain, then rerun"
+    log "cannot build onejudge $ADOPTED_ONEJUDGE_VERSION: cargo is not installed"
   fi
+  log "required onejudge $ADOPTED_ONEJUDGE_VERSION is unavailable after pinned release and crates.io install attempts"
+  return 1
+}
+
+verify_onejudge() {
+  local binary actual expected
+  expected="onejudge $ADOPTED_ONEJUDGE_VERSION"
+  if ! binary="$(command -v onejudge 2>/dev/null)"; then
+    log "onejudge verification failed: expected '$expected', but no binary is on PATH"
+    return 1
+  fi
+  if ! actual="$("$binary" --version 2>&1)"; then
+    log "onejudge verification failed: $binary could not report its version"
+    return 1
+  fi
+  if [[ $actual != "$expected" ]]; then
+    log "onejudge verification failed: expected '$expected', got '$actual' from $binary"
+    return 1
+  fi
+  return 0
 }
 
 ensure_codex() {
@@ -124,19 +182,20 @@ if [[ ${BASH_SOURCE[0]} != "$0" ]]; then
   return 0
 fi
 
-install_onejudge
+onejudge_failed=0
+install_onejudge || onejudge_failed=1
 ensure_oneharness
 ensure_codex
 ensure_codex_gate
 persist_session_env
 
 # Install the llmlint LLM-judge tier (llmlint + its bundled oneharness).
-script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-bash "$script_dir/setup-llmlint.sh" || log "setup-llmlint failed (continuing)"
+bash "$SCRIPT_DIR/setup-llmlint.sh" || log "setup-llmlint failed (continuing)"
 
-if command -v onejudge >/dev/null 2>&1; then
-  log "ready (onejudge: $(onejudge --version 2>/dev/null || echo unknown))"
+if verify_onejudge; then
+  log "ready (onejudge: $(onejudge --version))"
 else
-  log "onejudge is not installed — 'just check' will fail until it is (see above)"
+  log "onejudge $ADOPTED_ONEJUDGE_VERSION is required — 'just check' will fail until setup succeeds"
+  onejudge_failed=1
 fi
-exit 0
+exit "$onejudge_failed"
