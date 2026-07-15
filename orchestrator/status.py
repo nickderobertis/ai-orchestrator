@@ -11,6 +11,7 @@ from typing import Any
 
 from . import gitops, history, runs
 from .config import ConfigError
+from .registry import Registry, RegistryError
 
 # A history record describes one harness invocation, not the whole onejudge task.
 # Therefore only an explicitly live state counts as running, and only while its
@@ -47,6 +48,10 @@ class TaskStatus:
     elapsed_ms: int
     output: str
     commands: list[str]
+    execution_checkout: str
+    publication_checkout: str | None
+    publication_identity: str | None
+    publication_workflow: str | None
     branch: str | None
     base: str | None
     commits: list[gitops.Commit]
@@ -103,12 +108,14 @@ def _ledger_for_branch(runs_dir: Path, branch: str | None) -> LedgerState | None
 def collect(*, runs_dir: Path, oneharness_bin: str = "oneharness") -> list[TaskStatus]:
     """Join all validated worker history sessions to their git and ledger state."""
     result: list[TaskStatus] = []
+    registry = Registry()
     for session in history.worker_sessions(oneharness_bin=oneharness_bin):
         records = history.session_records(session)
         summary = history.digest(records, session.session_id)
         latest = records[-1] if records else {}
         git = _git_state(session.project)
         branch = git.branch if git else None
+        publication = registry.identity_for_checkout(session.project)
         result.append(
             TaskStatus(
                 session_id=session.session_id,
@@ -126,6 +133,10 @@ def collect(*, runs_dir: Path, oneharness_bin: str = "oneharness") -> list[TaskS
                 ),
                 output=summary.text,
                 commands=summary.commands,
+                execution_checkout=str(session.project),
+                publication_checkout=str(publication[2]) if publication else None,
+                publication_identity=str(publication[0]) if publication else None,
+                publication_workflow=publication[1] if publication else None,
                 branch=branch,
                 base=git.base if git else None,
                 commits=git.commits if git else [],
@@ -150,6 +161,14 @@ def _human(tasks: list[TaskStatus]) -> str:
         commands = "; ".join(f"$ {command}" for command in task.commands) or "(none)"
         lines.append(f"  Output: {task.output or '(none)'}")
         lines.append(f"  Commands: {commands}")
+        lines.append(f"  Execution checkout: {task.execution_checkout}")
+        if task.publication_identity:
+            lines.append(
+                f"  Publication: {task.publication_identity} via "
+                f"workflow={task.publication_workflow} ({task.publication_checkout})"
+            )
+        else:
+            lines.append("  Publication: unknown identity; conservative workflow=remote")
         if task.branch:
             lines.append(
                 f"  Branch: {task.branch} — {len(task.commits)} commit(s) over {task.base}"
@@ -184,7 +203,7 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("N must be a positive integer")
     try:
         tasks = collect(runs_dir=args.runs_dir)
-    except history.HistoryError as exc:
+    except (history.HistoryError, RegistryError) as exc:
         print(f"status: {exc}", file=sys.stderr)
         return 2
     include_recent = args.all or args.limit is not None

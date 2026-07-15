@@ -37,6 +37,7 @@ from orchestrator.lifecycle import (
 from orchestrator.merge import GitHubMergeStrategy
 from orchestrator.next_round import main as next_round_main
 from orchestrator.next_round import main_runs
+from orchestrator.registry import Registry
 from orchestrator.workspace import Workspace, normalize_repo
 
 
@@ -102,6 +103,7 @@ def test_repo_plan_ledger_and_guided_next_round(
     """The real CLI + onejudge + git lifecycle records and retries an unresolved node."""
     origin = bare_origin()
     canonical = gitops.clone(origin, tmp_path / "canonical-ledger")
+    Registry().register(str(canonical), workflow="local")
     runs_dir = tmp_path / "runs"
     plan_path = tmp_path / "repo-plan.json"
     first_plan = {
@@ -156,6 +158,66 @@ def test_repo_plan_ledger_and_guided_next_round(
 
 
 # --- local repo: direct merge into main after checks -----------------------
+
+
+def test_local_identity_executes_in_safety_clone_and_publishes_without_pr(
+    tmp_path, bare_origin
+) -> None:
+    """The self-dispatch safety clone does not alter the identity's local workflow."""
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "ai-orchestrator")
+    safety = gitops.clone(origin, tmp_path / "ai-orchestrator-isolated")
+    registry = Registry()
+    registry.register(str(canonical), workflow="local")
+    registry.register(str(safety))
+    github = FakeGitHub(origin)
+
+    result = run_repo_task(
+        str(canonical),
+        "Change the git subsystem from an isolated safety clone.",
+        "backend-engineer",
+        workspace=Workspace(tmp_path / "worktrees"),
+        execution_checkout=safety,
+        github=github,
+        dispatch_fn=make_writing_dispatch(filename="git-subsystem-change.txt"),
+        verify_cmd=["true"],
+    )
+
+    assert result.ok and result.outcome == "merged", result.detail
+    assert github._n == 0
+    assert Path(result.execution_checkout) == safety
+    assert Path(result.publication_checkout) == canonical
+    assert result.publication_workflow == "local"
+    assert result.publication_identity == str(origin).removesuffix(".git")
+    assert _has_file(origin, "main", "git-subsystem-change.txt")
+    assert gitops.head_sha(canonical) == _tip(origin, "main")
+    rendered = result.summary()
+    assert f"execution checkout: {safety}" in rendered
+    assert "publication workflow: local" in rendered
+
+
+def test_registered_remote_identity_keeps_pr_flow(tmp_path, bare_origin) -> None:
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-remote")
+    Registry().register(str(canonical), workflow="remote")
+    github = FakeGitHub(origin)
+
+    result = run_repo_task(
+        str(canonical),
+        "Publish this identity through review.",
+        "backend-engineer",
+        workspace=Workspace(tmp_path / "remote-worktrees"),
+        github=github,
+        dispatch_fn=make_writing_dispatch(filename="reviewed.txt"),
+        verify_cmd=["true"],
+        sleep=lambda _: None,
+    )
+
+    assert result.ok and result.outcome == "merged", result.detail
+    assert result.publication_workflow == "remote"
+    assert result.pr is not None and result.pr.number == 1
+    assert github._n == 1
+    assert _has_file(origin, "main", "reviewed.txt")
 
 
 def test_local_repo_direct_merge(tmp_path, bare_origin) -> None:

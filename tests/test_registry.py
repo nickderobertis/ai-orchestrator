@@ -14,6 +14,9 @@ from orchestrator.registry import (
     RegistryEntry,
     RegistryError,
     Slug,
+    _default_search_roots,
+    _url_identity,
+    main_migrate_workflow,
     main_register,
     main_repos,
 )
@@ -41,6 +44,7 @@ def test_resolve_returns_valid_registered_checkout(
     registry.register(str(checkout))
 
     assert registry.resolve(str(checkout)) == checkout.resolve()
+    assert registry.entries[f"local/{checkout.name}"].workflow == "remote"
 
 
 def test_resolve_finds_checkout_by_origin_and_registers(
@@ -105,6 +109,100 @@ def test_malformed_registry_is_rejected(tmp_path: Path, payload: str, expected: 
     assert str(caught.value) == expected.format(path=path)
 
 
+@pytest.mark.parametrize(
+    "payload, match",
+    [
+        (
+            {"version": 3, "identities": {}, "checkouts": {}},
+            "versioned format must contain",
+        ),
+        (
+            {"version": 2, "identities": [], "checkouts": {}},
+            "identities and checkouts must be JSON objects",
+        ),
+        (
+            {
+                "version": 2,
+                "identities": {"": {"origin": "/repo", "workflow": "remote"}},
+                "checkouts": {},
+            },
+            "identity key must be a non-empty string",
+        ),
+        (
+            {"version": 2, "identities": {"/repo": {}}, "checkouts": {}},
+            "must contain origin and workflow",
+        ),
+        (
+            {
+                "version": 2,
+                "identities": {"/repo": {"origin": "", "workflow": "remote"}},
+                "checkouts": {},
+            },
+            "origin must be non-empty",
+        ),
+        (
+            {
+                "version": 2,
+                "identities": {"/repo": {"origin": "/repo", "workflow": "invalid"}},
+                "checkouts": {},
+            },
+            "workflow must be 'local' or 'remote'",
+        ),
+        (
+            {
+                "version": 2,
+                "identities": {"/wrong": {"origin": "/repo", "workflow": "remote"}},
+                "checkouts": {},
+            },
+            "does not match normalized origin",
+        ),
+        (
+            {
+                "version": 2,
+                "identities": {"/repo": {"origin": "/repo", "workflow": "remote"}},
+                "checkouts": {"x/y": {}},
+            },
+            "must contain path and identity",
+        ),
+        (
+            {
+                "version": 2,
+                "identities": {"/repo": {"origin": "/repo", "workflow": "remote"}},
+                "checkouts": {"x/y": {"path": "relative", "identity": "/repo"}},
+            },
+            "path must be an absolute string",
+        ),
+        (
+            {
+                "version": 2,
+                "identities": {"/repo": {"origin": "/repo", "workflow": "remote"}},
+                "checkouts": {"x/y": {"path": "/tmp/repo", "identity": "/missing"}},
+            },
+            "references unknown identity",
+        ),
+    ],
+)
+def test_version_two_registry_validation(
+    tmp_path: Path, payload: dict[str, object], match: str
+) -> None:
+    path = tmp_path / "registry.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(RegistryError, match=match):
+        Registry(path)
+
+
+def test_origin_identity_normalizes_clone_spellings_and_default_roots(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    assert _url_identity("git@github.com:Owner/Repo.git") == "https://github.com/owner/repo"
+    assert _url_identity("ssh://git@github.com/Owner/Repo.git") == "https://github.com/owner/repo"
+    assert _url_identity(f"file://{tmp_path}/origin.git") == str(tmp_path / "origin")
+    monkeypatch.delenv("AI_ORCHESTRATOR_SEARCH_ROOTS")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    roots = _default_search_roots()
+    assert tmp_path in roots and tmp_path / "repos" in roots
+
+
 def test_workflow_round_trips(tmp_path: Path, bare_origin: Callable[..., Path]) -> None:
     checkout = _clone(bare_origin(), tmp_path / "checkout")
     path = tmp_path / "registry.json"
@@ -114,7 +212,121 @@ def test_workflow_round_trips(tmp_path: Path, bare_origin: Callable[..., Path]) 
     assert Registry(path).entries[f"local/{checkout.name}"].workflow == "remote"
 
 
-def test_checkout_lookup_resolves_unique_origin_and_rejects_ambiguity(
+def test_registration_inherits_identity_workflow_and_rejects_conflict_atomically(
+    tmp_path: Path, bare_origin: Callable[..., Path]
+) -> None:
+    origin = bare_origin()
+    canonical = _clone(origin, tmp_path / "canonical")
+    safety = _clone(origin, tmp_path / "safety")
+    path = tmp_path / "registry.json"
+    registry = Registry(path)
+    registry.register(str(canonical), workflow="local")
+    before = path.read_text(encoding="utf-8")
+
+    with pytest.raises(RegistryError, match="conflicts with registered identity.*migrate"):
+        registry.register(str(safety), workflow="remote")
+    assert path.read_text(encoding="utf-8") == before
+
+    registry.register(str(safety))
+    reloaded = Registry(path)
+    assert reloaded.entries["local/canonical"].workflow == "local"
+    assert reloaded.entries["local/safety"].workflow == "local"
+    assert len(reloaded.identities) == 1
+
+
+def test_explicit_workflow_migration_updates_every_alias_in_one_write(
+    tmp_path: Path, bare_origin: Callable[..., Path]
+) -> None:
+    origin = bare_origin()
+    canonical = _clone(origin, tmp_path / "canonical")
+    safety = _clone(origin, tmp_path / "safety")
+    path = tmp_path / "registry.json"
+    registry = Registry(path)
+    registry.register(str(canonical), workflow="remote")
+    registry.register(str(safety))
+
+    result = Registry.migrate_identity_workflow("local/canonical", "local", path=path)
+
+    assert result.workflow == "local"
+    assert result.aliases == ("local/canonical", "local/safety")
+    migrated = Registry(path)
+    assert {entry.workflow for entry in migrated.entries.values()} == {"local"}
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["version"] == 2
+    assert list(payload["identities"].values())[0]["workflow"] == "local"
+
+
+def test_legacy_agreeing_aliases_normalize_and_keep_all_checkout_paths(
+    tmp_path: Path, bare_origin: Callable[..., Path]
+) -> None:
+    origin = bare_origin()
+    canonical = _clone(origin, tmp_path / "canonical")
+    safety = _clone(origin, tmp_path / "safety")
+    auxiliary = _clone(origin, tmp_path / "auxiliary")
+    path = tmp_path / "registry.json"
+    path.write_text(
+        json.dumps(
+            {
+                "local/canonical": {
+                    "path": str(canonical.resolve()),
+                    "origin": str(origin),
+                    "workflow": "local",
+                },
+                "local/safety": {
+                    "path": str(safety.resolve()),
+                    "origin": str(origin),
+                    "workflow": "local",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    registry = Registry(path)
+    assert len(registry.identities) == 1
+    assert {Path(entry.path) for entry in registry.entries.values()} == {canonical, safety}
+    auxiliary_match = registry.entry_for_checkout(auxiliary)
+    assert auxiliary_match is not None and auxiliary_match[1].workflow == "local"
+    registry.save()
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert set(payload["checkouts"]) == {"local/canonical", "local/safety"}
+
+
+def test_legacy_conflict_names_exact_entries_and_migration_command(
+    tmp_path: Path, bare_origin: Callable[..., Path]
+) -> None:
+    origin = bare_origin()
+    path = tmp_path / "registry.json"
+    path.write_text(
+        json.dumps(
+            {
+                "local/canonical": {
+                    "path": str((tmp_path / "canonical").resolve()),
+                    "origin": str(origin),
+                    "workflow": "local",
+                },
+                "owner/repo": {
+                    "path": str((tmp_path / "safety").resolve()),
+                    "origin": str(origin),
+                    "workflow": "remote",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(RegistryError) as caught:
+        Registry(path)
+    error = str(caught.value)
+    assert "local/canonical: workflow=local" in error
+    assert "owner/repo: workflow=remote" in error
+    assert "just migrate-repo-workflow local/canonical --workflow <local|remote>" in error
+
+    Registry.migrate_identity_workflow("owner/repo", "local", path=path)
+    assert {entry.workflow for entry in Registry(path).entries.values()} == {"local"}
+
+
+def test_checkout_lookup_resolves_shared_identity_despite_multiple_aliases(
     tmp_path: Path, bare_origin: Callable[..., Path]
 ) -> None:
     origin = bare_origin()
@@ -129,10 +341,38 @@ def test_checkout_lookup_resolves_unique_origin_and_rejects_ambiguity(
 
     second_slug = "other/checkout"
     registry.entries[Slug(second_slug)] = RegistryEntry(
-        str((tmp_path / "other").resolve()), str(origin), "remote"
+        str((tmp_path / "other").resolve()), str(origin), "local"
     )
-    assert registry.entry_for_checkout(auxiliary) is None
+    shared = registry.entry_for_checkout(auxiliary)
+    assert shared is not None and shared[1].workflow == "local"
     assert registry.entry_for_checkout(tmp_path / "not-a-repo") is None
+    assert registry.identity_for_checkout(tmp_path / "not-a-repo") is None
+
+
+def test_selection_rejects_missing_and_different_execution_checkouts(
+    tmp_path: Path, bare_origin: Callable[..., Path]
+) -> None:
+    canonical = _clone(bare_origin(), tmp_path / "canonical")
+    other = _clone(bare_origin(), tmp_path / "other")
+    registry = Registry(tmp_path / "registry.json")
+    registry.register(str(canonical), workflow="local")
+
+    with pytest.raises(RegistryError, match="execution checkout .* is not a git checkout"):
+        registry.select(str(canonical), execution_checkout=tmp_path / "missing")
+    with pytest.raises(RegistryError, match="not publication identity"):
+        registry.select(str(canonical), execution_checkout=other)
+
+
+def test_alias_cannot_be_reassigned_to_another_identity(
+    tmp_path: Path, bare_origin: Callable[..., Path]
+) -> None:
+    first = _clone(bare_origin(), tmp_path / "one" / "checkout")
+    second = _clone(bare_origin(), tmp_path / "two" / "checkout")
+    registry = Registry(tmp_path / "registry.json")
+    registry.register(str(first))
+
+    with pytest.raises(RegistryError, match="already belongs to identity"):
+        registry.register(str(second))
 
 
 def test_refresh_fast_forwards(tmp_path: Path, bare_origin: Callable[..., Path]) -> None:
@@ -232,6 +472,40 @@ def test_refresh_reports_changed_origin_without_fetching(
     assert result.reason == "origin does not match registered origin"
 
 
+def test_refresh_reports_non_default_checkout_and_migration_errors(
+    tmp_path: Path, bare_origin: Callable[..., Path]
+) -> None:
+    checkout = _clone(bare_origin(), tmp_path / "checkout")
+    registry_path = tmp_path / "registry.json"
+    registry = Registry(registry_path)
+    registry.register(str(checkout), workflow="remote")
+    git("switch", "-c", "feature", cwd=checkout)
+
+    result = registry.refresh()[0]
+    assert not result.refreshed and "default branch main is not checked out" in result.reason
+
+    with pytest.raises(RegistryError, match="does not exist"):
+        Registry.migrate_identity_workflow("x/y", "local", path=tmp_path / "missing.json")
+    with pytest.raises(RegistryError, match="is not registered"):
+        Registry.migrate_identity_workflow("unknown/repo", "local", path=registry_path)
+
+
+def test_migration_accepts_checkout_path_and_cli_reports_errors(
+    tmp_path: Path,
+    bare_origin: Callable[..., Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    checkout = _clone(bare_origin(), tmp_path / "checkout")
+    home = tmp_path / "home"
+    monkeypatch.setenv("AI_ORCHESTRATOR_HOME", str(home))
+    Registry().register(str(checkout), workflow="remote")
+
+    migrated = Registry.migrate_identity_workflow(str(checkout), "local")
+    assert migrated.workflow == "local"
+    with pytest.raises(SystemExit):
+        main_migrate_workflow(["missing/repo", "--workflow", "local"])
+
+
 def test_repo_cli_text_json_and_register_errors(
     tmp_path: Path,
     bare_origin: Callable[..., Path],
@@ -241,14 +515,19 @@ def test_repo_cli_text_json_and_register_errors(
     home = tmp_path / "home"
     home.mkdir()
     monkeypatch.setenv("HOME", str(home))
-    checkout = _clone(bare_origin(), tmp_path / "checkout")
+    origin = bare_origin()
+    checkout = _clone(origin, tmp_path / "checkout")
     assert main_register([str(checkout), "--workflow", "remote"]) == 0
     capsys.readouterr()
 
     assert main_repos([]) == 0
-    assert f"local/{checkout.name}\t{checkout.resolve()}\tremote" in capsys.readouterr().out
+    output = capsys.readouterr().out
+    assert f"identity\t{str(origin).removesuffix('.git')}\tremote" in output
+    assert f"checkout\tlocal/{checkout.name}\t{checkout.resolve()}" in output
     assert main_repos(["--format", "json"]) == 0
-    assert '"repos"' in capsys.readouterr().out
+    assert '"identities"' in capsys.readouterr().out
+    assert main_repos(["--refresh", "--format", "json"]) == 0
+    assert '"refresh"' in capsys.readouterr().out
 
     with pytest.raises(SystemExit):
         main_register(["acme/missing", str(tmp_path / "absent")])

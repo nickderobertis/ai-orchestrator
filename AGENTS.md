@@ -18,22 +18,24 @@ running onejudge in parallel are scripts. The deliverable is this setup itself �
 config, personas, scripts, docs — not a shipped binary.
 
 Beyond dispatching at a directory, the orchestrator manages a change's **full
-life cycle** against any repo (GitHub or a local path): resolve it to one
-**canonical local checkout** (found on disk, else cloned, then registered), do the
-work in an **isolated worktree cut from that checkout**, verify it with the repo's
-own gate, and merge it. The merge path is chosen by the repo's registered
-`workflow` metadata: `remote` opens a PR that auto-merges once required checks are
-green; `local` merges the branch into the base directly after the checks pass (a
-local-first single-developer repo uses this even with a GitHub origin). The
-stored workflow has precedence. Treat unregistered and ambiguous repositories as
-remote; classify one as local only from an explicit operator choice or affirmative
-no-CI/local-first evidence, never merely because metadata is absent or its spec is
-a filesystem path. Direct `integrate` is local-only. Recover incomplete preserved
-branches with `just repo-recover`, which verifies and publishes through the
-registered workflow; do not bypass an incomplete provenance marker with a normal
-commit.
-canonical checkout itself is **never worked in directly and only ever
-fast-forwarded** after a merge lands. One larger task becomes **multiple isolated
+life cycle** against any repo (GitHub or a local path): resolve its normalized
+origin to one **repository identity**, choose a registered publication checkout,
+do the work in an **isolated worktree cut from an execution checkout**, verify it
+with the repo's own gate, and merge it. Checkout aliases and publication workflow
+are independent: every canonical, safety, and execution clone of one identity
+shares the identity's `workflow`. `remote` opens a PR that auto-merges once required
+checks are green; `local` merges the branch into the base directly after the checks
+pass (a local-first single-developer repo uses this even with a GitHub origin).
+Treat unregistered identities as remote; classify one as local only from an
+explicit operator choice or affirmative no-CI/local-first evidence, never merely
+because metadata is absent, aliases are numerous, or its spec is a filesystem
+path. A conflicting registration is an error; switch the whole identity between
+runs with `just migrate-repo-workflow <alias> --workflow <local|remote>`. Direct
+`integrate` is local-only. Recover incomplete preserved branches with `just
+repo-recover`, which verifies and publishes through the registered workflow; do
+not bypass an incomplete provenance marker with a normal commit. The selected
+publication checkout is **never worked in directly and only ever fast-forwarded**
+after a merge lands. One larger task becomes **multiple isolated
 PRs** coordinated by a DAG; a single PR can itself run **several onejudge in
 sequence on one branch** (a node's `steps` sub-DAG). The DAG is static within a run
 — you **adapt between rounds**, reading each round's results and deriving the next
@@ -194,11 +196,15 @@ local-mode case of the same rule.
 
 **Self-dispatch caveat (this repo).** Do not dispatch changes to the
 git-manipulating subsystems (`gitops`/`workspace`/`lifecycle`/`integrate`) *onto
-this checkout* through the lifecycle: the agent's worktree shares this checkout's
-`.git`, so its in-progress code and `just check` runs can corrupt the canonical
-checkout. Develop those subsystems against an isolated clone and fast-forward the
-verified commit in; confirm `git config core.bare` is `false` before trusting any
-self-dispatch result. Mechanism and recovery: `docs/repo-lifecycle.md`.
+this checkout*: the agent's worktree shares its execution checkout's `.git`, so
+its in-progress code and `just check` runs can corrupt that checkout. Keep the
+canonical checkout as the positional publication repository and select the
+isolated safety clone with `--execution-checkout`; publication still uses the
+shared identity's local workflow and the canonical checkout is fast-forwarded
+afterward. Confirm `git config core.bare` is `false` before trusting any
+self-dispatch result. If legacy aliases for this repository conflict, first run
+`just migrate-repo-workflow local/ai-orchestrator --workflow local`. Mechanism and
+recovery: `docs/repo-lifecycle.md`.
 
 ## Stack and composition
 

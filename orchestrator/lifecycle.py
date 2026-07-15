@@ -95,6 +95,10 @@ class LifecycleResult:
     branch: str
     outcome: str  # merged | pr-open | not-completed | gate-failed | no-changes
     #             | checks-failed | closed | timeout | error
+    execution_checkout: str = ""
+    publication_checkout: str = ""
+    publication_identity: str = ""
+    publication_workflow: Workflow | None = None
     pr: PullRequest | None = None
     report: Report | None = None
     verify: VerifyResult | None = None
@@ -111,6 +115,13 @@ class LifecycleResult:
             head += f" (PR #{self.pr.number})"
         if len(self.steps) > 1:
             head += f" [{sum(s.status == 'done' for s in self.steps)}/{len(self.steps)} steps]"
+        if self.execution_checkout:
+            head += (
+                f"\n  - execution checkout: {self.execution_checkout}"
+                f"\n  - publication identity: {self.publication_identity}"
+                f"\n  - publication checkout: {self.publication_checkout}"
+                f"\n  - publication workflow: {self.publication_workflow}"
+            )
         if self.detail:
             head += f"\n  - {self.detail}"
         if self.verify is not None and not self.verify.ok:
@@ -277,6 +288,7 @@ def run_repo_task(
     steps: list[Step] | None = None,
     merge: MergeStrategy | None = None,
     workflow: Workflow | None = None,
+    execution_checkout: str | Path | None = None,
     github: GitHubBackend | None = None,
     base_branch: str | None = None,
     branch: str | None = None,
@@ -339,8 +351,30 @@ def run_repo_task(
     )
     worktree: Path | None = None
     try:
-        clone = workspace.ensure_clone(ref, url=url, base_branch=base_branch)
-        strategy = _select_merge_strategy(ref, merge, github, workflow or workspace.workflow(ref))
+        clone = workspace.ensure_clone(
+            ref,
+            url=url,
+            base_branch=base_branch,
+            execution_checkout=execution_checkout,
+        )
+        selection = workspace.selection(ref)
+        registered_workflow = selection.workflow
+        if (
+            workflow is not None
+            and registered_workflow is not None
+            and workflow != registered_workflow
+        ):
+            raise RegistryError(
+                f"task workflow={workflow} conflicts with repository identity workflow="
+                f"{registered_workflow}; use 'just migrate-repo-workflow {repo} "
+                f"--workflow {workflow}' between runs"
+            )
+        publication_workflow = registered_workflow or workflow
+        result.execution_checkout = str(selection.execution_checkout)
+        result.publication_checkout = str(selection.publication_checkout)
+        result.publication_identity = selection.publication_identity
+        result.publication_workflow = publication_workflow
+        strategy = _select_merge_strategy(ref, merge, github, publication_workflow)
         base = base_branch or gitops.default_branch(clone)
         result.base_branch = base
         branch = result.branch
@@ -463,6 +497,7 @@ class RepoPlanNode:
     skip_verify: bool = False
     merge_policy: str | None = None
     workflow: Workflow | None = None
+    execution_checkout: str | None = None
     max_turns: int | None = None
     done_when: str | None = None
     steps: list[Step] | None = None
@@ -553,6 +588,11 @@ def parse_repo_plan(data: dict[str, Any]) -> RepoPlan:
         if raw_workflow is not None and raw_workflow not in ("local", "remote"):
             raise PlanError(f"task {nid!r} 'workflow' must be 'local' or 'remote'")
         workflow = cast(Workflow | None, raw_workflow)
+        raw_execution = t.get("execution_checkout")
+        if raw_execution is not None and (
+            not isinstance(raw_execution, str) or not raw_execution.strip()
+        ):
+            raise PlanError(f"task {nid!r} 'execution_checkout' must be a non-empty path")
         nodes[nid] = RepoPlanNode(
             id=nid,
             repo=t["repo"],
@@ -566,6 +606,7 @@ def parse_repo_plan(data: dict[str, Any]) -> RepoPlan:
             skip_verify=bool(t.get("skip_verify", False)),
             merge_policy=policy,
             workflow=workflow,
+            execution_checkout=raw_execution,
             max_turns=t.get("max_turns"),
             done_when=t.get("done_when"),
             steps=node_steps,
@@ -691,6 +732,7 @@ def make_repo_runner(
             steps=node.steps,
             github=github,
             workflow=node.workflow,
+            execution_checkout=node.execution_checkout,
             base_branch=node.base_branch,
             branch=node.branch,
             title=node.title,
@@ -768,6 +810,10 @@ def _emit(rendered: str, output: Path | None) -> None:
 def _result_payload(result: LifecycleResult) -> dict[str, Any]:
     return {
         "repo": result.repo,
+        "execution_checkout": result.execution_checkout,
+        "publication_checkout": result.publication_checkout,
+        "publication_identity": result.publication_identity,
+        "publication_workflow": result.publication_workflow,
         "branch": result.branch,
         "base_branch": result.base_branch,
         "outcome": result.outcome,
@@ -788,6 +834,15 @@ def main_task(argv: list[str] | None = None) -> int:
     parser.add_argument("--base-branch", default=None, help="branch to target (default: repo HEAD)")
     parser.add_argument("--branch", default=None, help="feature branch name (default: derived)")
     parser.add_argument("--title", default=None)
+    parser.add_argument(
+        "--execution-checkout",
+        type=Path,
+        default=None,
+        help=(
+            "exact isolated clone used to create the task worktree; publication identity and "
+            "workflow still come from REPO"
+        ),
+    )
     parser.add_argument("--max-turns", type=int, default=None)
     parser.add_argument("--done-when", default=None)
     _add_common_args(parser)
@@ -801,6 +856,7 @@ def main_task(argv: list[str] | None = None) -> int:
         base_branch=args.base_branch,
         branch=args.branch,
         title=args.title,
+        execution_checkout=args.execution_checkout,
         verify_cmd=None,
         skip_verify=args.skip_verify,
         merge_policy=args.merge_policy,

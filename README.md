@@ -28,6 +28,13 @@ just integrate claude/api claude/docs --push
 
 # Verify and publish a lifecycle-preserved branch through its registered workflow:
 just repo-recover ai-orchestrator/backend-engineer/abc123 --repo /path/to/checkout
+
+# Self-dispatch from a safety clone while publishing through the canonical identity:
+just repo-task /path/to/canonical backend-engineer - \
+  --execution-checkout /path/to/safety-clone
+
+# Deliberately change publication policy for every alias of one repository identity:
+just migrate-repo-workflow local/ai-orchestrator --workflow local
 ```
 
 ## How it fits together

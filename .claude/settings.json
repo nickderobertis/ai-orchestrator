@@ -31,6 +31,8 @@
       "Bash(just repo-task:*)",
       "Bash(just repo-recover:*)",
       "Bash(just repo-plan:*)",
+      "Bash(just register-repo:*)",
+      "Bash(just migrate-repo-workflow:*)",
       "Bash(just replan:*)",
       "Bash(just next-round:*)",
       "Bash(just runs:*)",

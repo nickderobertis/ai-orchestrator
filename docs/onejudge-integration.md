@@ -133,9 +133,12 @@ no-unprivileged-userns host, dispatch codex with
   The wrapper prints `just repo-recover <branch> --repo <checkout>`; that command
   verifies and publishes the preserved branch through its registered workflow.
 - **Choose the merge path from affirmative workflow metadata.** Remote is the
-  conservative default, including unregistered and ambiguous repositories. A
-  repository explicitly registered `local` creates no PR; it pushes a verified
-  direct merge into the base branch. Configure its
+  conservative default for an unregistered identity. Multiple aliases with the
+  same normalized origin share one identity and are not ambiguous. A repository
+  identity explicitly registered `local` creates no PR; it pushes a verified
+  direct merge into the base branch. A conflicting checkout registration fails;
+  migrate every alias atomically with `just migrate-repo-workflow <alias>
+  --workflow <local|remote>`. Configure its
   working repository with
   `git config receive.denyCurrentBranch updateInstead` so that push can update
   the checked-out base branch.

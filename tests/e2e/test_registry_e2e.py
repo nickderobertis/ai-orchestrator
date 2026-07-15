@@ -61,6 +61,53 @@ def test_registry_register_discover_and_refresh_journey(
     assert (checkout / "new.txt").read_text(encoding="utf-8") == "new\n"
 
 
+def test_conflicting_legacy_aliases_require_and_support_cli_identity_migration(
+    tmp_path: Path,
+    bare_origin: Callable[..., Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    home = tmp_path / "home"
+    registry_path = home / ".ai-orchestrator" / "repos.json"
+    registry_path.parent.mkdir(parents=True)
+    origin = bare_origin()
+    canonical = tmp_path / "canonical"
+    safety = tmp_path / "safety"
+    git("clone", str(origin), str(canonical))
+    git("clone", str(origin), str(safety))
+    registry_path.write_text(
+        json.dumps(
+            {
+                "local/widget": {
+                    "path": str(canonical.resolve()),
+                    "origin": str(origin),
+                    "workflow": "local",
+                },
+                "acme/widget": {
+                    "path": str(safety.resolve()),
+                    "origin": str(origin),
+                    "workflow": "remote",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("AI_ORCHESTRATOR_HOME", str(registry_path.parent))
+
+    failed = _cli("orchestrator-repos", check=False)
+    assert failed.returncode == 2
+    assert "local/widget: workflow=local" in failed.stderr
+    assert "acme/widget: workflow=remote" in failed.stderr
+    assert "just migrate-repo-workflow acme/widget --workflow <local|remote>" in failed.stderr
+
+    migrated = _cli("orchestrator-migrate-repo-workflow", "local/widget", "--workflow", "local")
+    assert "publication_workflow=local" in migrated.stdout
+    assert "acme/widget,local/widget" in migrated.stdout
+    registry = Registry()
+    assert len(registry.identities) == 1
+    assert {entry.workflow for entry in registry.entries.values()} == {"local"}
+    assert {Path(entry.path) for entry in registry.entries.values()} == {canonical, safety}
+
+
 @pytest.mark.parametrize(
     "payload, error",
     [

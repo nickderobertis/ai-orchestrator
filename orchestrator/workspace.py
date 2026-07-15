@@ -1,8 +1,9 @@
-"""A canonical-checkout/worktree pool for driving repo lifecycles.
+"""A checkout/worktree pool for driving repo lifecycles.
 
-`Workspace` resolves each repo through the persistent registry and hands out a
-fresh **worktree per branch** outside that canonical checkout. Parallel tasks
-share its object store without ever using its working tree for task work.
+`Workspace` independently resolves the checkout used for execution and the
+repository identity used for publication. It hands out a fresh **worktree per
+branch** outside the execution checkout. Parallel tasks share its object store
+without ever using its working tree for task work.
 
 A repo is named loosely — ``"onejudge"`` (the default owner is filled in),
 ``"someone/thing"``, or a full clone URL — and normalized once at the boundary.
@@ -15,12 +16,22 @@ import threading
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal, Protocol
+from typing import TYPE_CHECKING, Literal, Protocol
 
 from . import gitops
 from .coordination import advisory_lock
 
-__all__ = ["DEFAULT_OWNER", "RepoRef", "Workflow", "Workspace", "normalize_repo"]
+if TYPE_CHECKING:
+    from .registry import Registry
+
+__all__ = [
+    "DEFAULT_OWNER",
+    "RepoRef",
+    "Workflow",
+    "Workspace",
+    "WorkspaceSelection",
+    "normalize_repo",
+]
 
 DEFAULT_OWNER = "nickderobertis"
 Workflow = Literal["local", "remote"]
@@ -30,6 +41,16 @@ class RepoResolver(Protocol):
     """Resolve a repository spec to its canonical local checkout."""
 
     def __call__(self, spec: str) -> Path: ...
+
+
+@dataclass(frozen=True)
+class WorkspaceSelection:
+    """The checkout roles and identity-level publication decision for one repo."""
+
+    publication_checkout: Path
+    execution_checkout: Path
+    publication_identity: str
+    workflow: Workflow | None
 
 
 @dataclass(frozen=True)
@@ -104,7 +125,7 @@ def _safe_branch_dir(branch: str) -> str:
 
 
 class Workspace:
-    """Cuts isolated worktrees from registry-resolved canonical checkouts."""
+    """Cuts task worktrees from a selected execution checkout."""
 
     def __init__(
         self,
@@ -115,23 +136,26 @@ class Workspace:
     ) -> None:
         self.root = Path(root)
         self._workflow: Callable[[RepoRef], Workflow | None]
+        self._registry: Registry | None = None
         if resolver is None:
             # Lazy import avoids registry -> workspace normalization becoming an
             # import cycle.
-            from .registry import Registry, Slug
+            from .registry import Registry
 
             registry = Registry()
+            self._registry = registry
             resolver = registry.resolve
 
             def registered_workflow(repo: RepoRef) -> Workflow | None:
-                entry = registry.entries.get(Slug(repo.slug))
-                return entry.workflow if entry is not None else None
+                selected = self._selections.get(repo.dir_key)
+                return selected.workflow if selected is not None else None
 
             self._workflow = registered_workflow
         else:
             self._workflow = lambda repo: workflow
         self._resolver = resolver
         self._checkouts: dict[str, Path] = {}
+        self._selections: dict[str, WorkspaceSelection] = {}
         # Clone/worktree creation touches a repo's shared git metadata, so those
         # ops are serialized per repo (concurrent `git worktree add` on one clone
         # races on its lock). Different repos proceed in parallel; the slow part
@@ -143,12 +167,19 @@ class Workspace:
         """Return the registered workflow, if the resolver exposes registry metadata."""
         return self._workflow(repo)
 
+    def selection(self, repo: RepoRef) -> WorkspaceSelection:
+        """Return the resolved checkout roles and publication decision."""
+        try:
+            return self._selections[repo.dir_key]
+        except KeyError as exc:
+            raise RuntimeError(f"repository {repo.slug} has not been resolved") from exc
+
     def _repo_lock(self, repo: RepoRef) -> threading.Lock:
         with self._locks_guard:
             return self._locks.setdefault(repo.dir_key, threading.Lock())
 
     def clone_dir(self, repo: RepoRef) -> Path:
-        """Return the canonical checkout (kept as a lifecycle compatibility name)."""
+        """Return the execution checkout (kept as a lifecycle compatibility name)."""
         if repo.dir_key not in self._checkouts:
             self._checkouts[repo.dir_key] = self._resolver(repo.url)
         return self._checkouts[repo.dir_key]
@@ -157,12 +188,44 @@ class Workspace:
         return self.root / repo.dir_key
 
     def ensure_clone(
-        self, repo: RepoRef, *, url: str | None = None, base_branch: str | None = None
+        self,
+        repo: RepoRef,
+        *,
+        url: str | None = None,
+        base_branch: str | None = None,
+        execution_checkout: str | Path | None = None,
     ) -> Path:
-        """Resolve and fast-forward the repo's canonical default checkout."""
+        """Resolve and fast-forward the selected execution checkout."""
         with self._repo_lock(repo):
-            checkout = self._resolver(url or repo.url)
+            if self._registry is not None:
+                selected = self._registry.select(
+                    repo.url,
+                    execution_checkout=execution_checkout,
+                )
+                selection = WorkspaceSelection(
+                    publication_checkout=selected.publication_checkout,
+                    execution_checkout=selected.execution_checkout,
+                    publication_identity=str(selected.identity),
+                    workflow=selected.workflow,
+                )
+                checkout = selection.execution_checkout
+            else:
+                publication = self._resolver(url or repo.url)
+                checkout = (
+                    Path(execution_checkout).expanduser().resolve()
+                    if execution_checkout is not None
+                    else publication
+                )
+                selection = WorkspaceSelection(
+                    publication_checkout=publication,
+                    execution_checkout=checkout,
+                    publication_identity=url or repo.url,
+                    workflow=self._workflow(repo),
+                )
+            if not checkout.is_dir() or not gitops.is_repo(checkout):
+                raise RuntimeError(f"execution checkout {checkout} is not a git checkout")
             self._checkouts[repo.dir_key] = checkout
+            self._selections[repo.dir_key] = selection
             with advisory_lock(f"git:{gitops.common_dir(checkout)}"):
                 gitops.fetch(checkout)
                 base = base_branch or gitops.default_branch(checkout)
@@ -196,8 +259,9 @@ class Workspace:
             return gitops.worktree_add(clone, path, branch, base=base, reset=False)
 
     def fast_forward(self, repo: RepoRef, branch: str) -> None:
-        """Fetch and fast-forward the canonical checkout's current base branch."""
-        checkout = self.clone_dir(repo)
+        """Fetch and fast-forward the caller-selected publication checkout."""
+        selected = self._selections.get(repo.dir_key)
+        checkout = selected.publication_checkout if selected is not None else self.clone_dir(repo)
         with self._repo_lock(repo), advisory_lock(f"git:{gitops.common_dir(checkout)}"):
             gitops.fetch(checkout)
             gitops.merge_ff_only(checkout, f"origin/{branch}")

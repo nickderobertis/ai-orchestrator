@@ -12,6 +12,7 @@ import subprocess
 from pathlib import Path
 
 from orchestrator import REPO_ROOT, gitops
+from orchestrator.registry import Registry
 from orchestrator.status import main as status_main
 from orchestrator.workspace import Workspace, normalize_repo
 
@@ -53,6 +54,7 @@ def test_status_joins_real_history_worktree_commits_and_ledger(
 ) -> None:
     origin = bare_origin()
     canonical = gitops.clone(origin, tmp_path / "canonical")
+    Registry().register(str(canonical), workflow="local")
     workspace_root = tmp_path / ".ai-orchestrator" / "workspaces"
     workspace = Workspace(workspace_root, resolver=lambda _: canonical)
     ref = normalize_repo(str(origin))
@@ -90,6 +92,8 @@ def test_status_joins_real_history_worktree_commits_and_ledger(
         "feat: add status view",
         "status-run round-01",
         "1 done, 0 failed, 0 skipped",
+        f"Execution checkout: {worktree}",
+        "workflow=local",
     ):
         assert expected in shown.stdout
 
@@ -99,6 +103,8 @@ def test_status_joins_real_history_worktree_commits_and_ledger(
     assert payload[0]["running"] is True
     assert payload[0]["commits"][0]["subject"] == "feat: add status view"
     assert payload[0]["ledger"]["run_id"] == "status-run"
+    assert payload[0]["execution_checkout"] == str(worktree)
+    assert payload[0]["publication_workflow"] == "local"
 
     monkeypatch.setenv("ONEHARNESS_HISTORY_DIR", str(history_dir))
     assert status_main(["--runs-dir", str(runs_dir), "--format", "json"]) == 0

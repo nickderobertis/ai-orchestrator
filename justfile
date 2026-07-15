@@ -128,11 +128,15 @@ next-round *args:
 runs *args:
     @uv run orchestrator-runs "$@"
 
-# Register an existing canonical repo checkout.
+# Register a repository checkout alias. Workflow belongs to its shared identity.
 register-repo *args:
     @uv run orchestrator-register-repo "$@"
 
-# List canonical repo checkouts, optionally fetching and fast-forwarding them.
+# Atomically migrate publication workflow for every checkout alias of one identity.
+migrate-repo-workflow *args:
+    @uv run orchestrator-migrate-repo-workflow "$@"
+
+# List repository identities and checkout aliases, optionally refreshing them.
 # llmlint: ignore[tool_output_is_signal] the requested repo registry listing is this viewing command's product.
 repos *args:
     @uv run orchestrator-repos "$@"

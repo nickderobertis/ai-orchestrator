@@ -27,18 +27,35 @@ step differs by where the repo lives (see *Merge strategies*). The result is a
 `checks-failed`, `closed`, `timeout`, `error`.
 
 `just repo-task <repo> <persona> "<task>"` runs one. `<repo>` is a GitHub
-`name` / `owner/name` / URL, **or a local filesystem path**.
+`name` / `owner/name` / URL, **or a local filesystem path**. It selects the
+publication repository identity and checkout. For self-dispatch safety, pass
+`--execution-checkout <isolated-clone>` to cut the task worktree from that exact
+clone while keeping `<repo>`'s publication workflow and post-merge fast-forward.
 
-## Isolation: one canonical checkout per repo, one worktree per branch
+## Repository identity, checkout roles, and isolation
 
-`Workspace` (`orchestrator/workspace.py`) resolves each repo through the persistent
-registry (`orchestrator/registry.py`) to ONE **canonical local checkout** — found on
-disk, else cloned, then registered — and hands out a **git worktree per branch**
-*outside* that checkout: a separate working directory over the canonical checkout's
-object store. N parallel subtasks against a repo get N isolated trees without N
-clones, which is how parallelism scales without re-paying clone cost. The canonical
-checkout is **never worked in directly and only ever fast-forwarded**; it is fetched
-and fast-forwarded to stay current before a worktree is cut from it. Worktree
+`Workspace` (`orchestrator/workspace.py`) resolves two independent decisions through
+the persistent registry (`orchestrator/registry.py`): the **publication checkout**
+selected by the repository argument and the **execution checkout** used to create
+the task worktree. Normally they are the same. `--execution-checkout` deliberately
+separates them for a safety clone. The lifecycle reports the exact execution path,
+publication path, normalized identity, and publication workflow in both human and
+JSON output.
+
+The registry's version 2 format stores `identities` keyed by normalized origin and
+stores alias-to-path records separately under `checkouts`. Workflow exists only on
+the identity. Thus GitHub/SSH URL spellings, canonical clones, safety clones, linked
+worktrees, and auxiliary clones resolve to one workflow even when several aliases
+share the origin. Legacy flat registries load deterministically when duplicate
+aliases agree and are written as version 2 on the next save. Conflicting legacy
+entries fail with every alias/path/workflow and the exact migration command; no
+workflow is selected implicitly.
+
+The execution checkout hands out a **git worktree per branch** *outside* itself.
+N parallel subtasks against a repo get N isolated trees without N clones. The
+publication checkout is **never worked in directly and only ever fast-forwarded**
+after publication; the execution checkout is fetched and fast-forwarded before a
+worktree is cut from it. Worktree
 creation, removal, refresh, publication, and integration are serialized across
 processes by an OS advisory lock keyed by the checkout's resolved git common-dir.
 Locks have bounded waits and report the owning PID/host on timeout. The slow agent
@@ -61,10 +78,33 @@ edits the git-manipulating subsystems of this repo itself* (`gitops`, `workspace
 mutate the shared `.git` — observed as `core.bare` flipping to `true`, which makes
 the canonical checkout report itself bare and mangles the agent's branch history
 into spurious `init` commits and mass deletions. Develop those subsystems against an
-**isolated clone** (its own `.git`) and fast-forward the verified commit into the
-canonical checkout instead of self-dispatching onto it. Recovery is cheap because no
+**isolated clone** (its own `.git`) while preserving the canonical checkout as the
+publication selection:
+
+```sh
+just repo-task /path/to/ai-orchestrator backend-engineer - \
+  --execution-checkout /path/to/ai-orchestrator-isolated
+```
+
+The branch is pushed and locally merged because the shared identity is local, then
+the positional canonical checkout is fast-forwarded. Recovery is cheap because no
 data is lost: `git config core.bare false` restores the checkout, and the agent's
 real work is intact at its last commit *before* the `init`-commit corruption.
+
+Register another clone without repeating workflow; it inherits from its origin:
+
+```sh
+just register-repo /path/to/ai-orchestrator --workflow local
+just register-repo /path/to/ai-orchestrator-isolated
+```
+
+A contradictory `--workflow` is rejected. Change publication policy only through
+the identity-wide migration command. For the current ai-orchestrator aliases, the
+remediation is:
+
+```sh
+just migrate-repo-workflow local/ai-orchestrator --workflow local
+```
 
 ## Local verification before push
 
@@ -94,11 +134,13 @@ back to `main`. `just sync` discovers the same branch; `just sync <branch>
 
 ## Merge strategies (where the change lands)
 
-Selected from the canonical registry entry's `workflow` (`local` or `remote`),
-with an explicit per-task/plan-node override available. A stored registry value
-always wins. New registrations and unresolved/ambiguous repositories default to
-`remote`; a filesystem path is not by itself evidence that direct base updates
-are intended. Choose `local` explicitly only for a known no-CI/local-first repo.
+Selected from normalized repository identity metadata (`local` or `remote`). A
+task/plan workflow value may assert the expected workflow but cannot contradict a
+registered identity; use the migration command between runs to change it. New and
+genuinely unknown identities default to `remote`; multiple aliases for one known
+origin are not ambiguity, and a filesystem path is not by itself evidence that
+direct base updates are intended. Choose `local` explicitly only for a known
+no-CI/local-first repo.
 
 - **`GitHubMergeStrategy`** (GitHub repos) — opens a PR, then merges it **only
   once the repo's required (blocking) checks are green**. The default policy is
@@ -123,7 +165,8 @@ checkout, or hard reset occurs in that canonical working tree.
 
 A repo-plan is a DAG whose nodes each carry a `repo` and either a `persona`+`task`
 or a `steps` workstream, plus `deps` (and optional `base_branch`, `branch`,
-`title`, `verify_cmd`, `skip_verify`, `merge_policy`, `workflow`). `run_repo_plan` schedules it
+`title`, `verify_cmd`, `skip_verify`, `merge_policy`, `workflow`,
+`execution_checkout`). `run_repo_plan` schedules it
 on the **same engine as `run_plan`** (`plan.schedule_dag`): independent nodes run
 concurrently (their PRs open in parallel), a dependent node waits for the one it
 needs to **merge** first and then branches off the updated base (each node
@@ -273,7 +316,9 @@ round, inspect its worktrees and remote branch, then run `just repo-plan <plan>
 --run <id> --recover`. Recovery may reclaim a `running` record, so use it only
 after proving its owner is gone; never remove or reset an active worktree.
 
-Switch registry workflow metadata only between runs. First finish or recover
+Switch registry workflow metadata only between runs and only with `just
+migrate-repo-workflow <alias-or-checkout> --workflow <local|remote>`, which updates
+every alias of the normalized identity in one atomic replacement. First finish or recover
 active publication, fetch, and confirm the canonical checkout is clean and
 fast-forwarded. Before switching to `remote`, configure GitHub permissions,
 branch protection, and required checks. Before switching to `local`, confirm all

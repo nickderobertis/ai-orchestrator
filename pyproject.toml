@@ -23,6 +23,7 @@ orchestrator-status = "orchestrator.status:main"
 orchestrator-integrate = "orchestrator.integrate:main"
 orchestrator-repo-recover = "orchestrator.recover:main"
 orchestrator-register-repo = "orchestrator.registry:main_register"
+orchestrator-migrate-repo-workflow = "orchestrator.registry:main_migrate_workflow"
 orchestrator-repos = "orchestrator.registry:main_repos"
 
 [dependency-groups]
