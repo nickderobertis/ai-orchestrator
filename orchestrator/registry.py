@@ -59,6 +59,15 @@ class RegistrySelection:
 
 
 @dataclass(frozen=True)
+class CheckoutIdentity:
+    """Identity-level publication metadata resolved from any checkout or worktree."""
+
+    identity: IdentityKey
+    workflow: Workflow
+    publication_checkout: Path
+
+
+@dataclass(frozen=True)
 class WorkflowMigration:
     identity: IdentityKey
     workflow: Workflow
@@ -302,13 +311,13 @@ class Registry:
         )
         return matches[0] if matches else None
 
-    def identity_for_checkout(self, path: str | Path) -> tuple[IdentityKey, Workflow, Path] | None:
+    def identity_for_checkout(self, path: str | Path) -> CheckoutIdentity | None:
         """Return identity workflow and registered publication path for any clone/worktree."""
         matched = self.entry_for_checkout(path)
         if matched is None:
             return None
         _, entry = matched
-        return _url_identity(entry.origin), entry.workflow, Path(entry.path)
+        return CheckoutIdentity(_url_identity(entry.origin), entry.workflow, Path(entry.path))
 
     @staticmethod
     def _valid_checkout(path: Path, expected_origin: str) -> bool:
@@ -629,10 +638,10 @@ def main_register(argv: list[str] | None = None) -> int:
         entry = registry.entries[alias]
     except RegistryError as exc:
         parser.error(str(exc))
-    print(f"checkout={path}")
-    print(f"alias={alias}")
-    print(f"identity={_url_identity(entry.origin)}")
-    print(f"publication_workflow={entry.workflow}")
+    print(
+        f"registered checkout={path} alias={alias} identity={_url_identity(entry.origin)} "
+        f"publication_workflow={entry.workflow}"
+    )
     return 0
 
 
@@ -647,9 +656,11 @@ def main_migrate_workflow(argv: list[str] | None = None) -> int:
         result = Registry.migrate_identity_workflow(args.spec, args.workflow)
     except (RegistryError, gitops.GitError, ValueError) as exc:
         parser.error(str(exc))
-    print(f"identity={result.identity}")
-    print(f"publication_workflow={result.workflow}")
-    print("aliases=" + ",".join(str(alias) for alias in result.aliases))
+    aliases = ",".join(str(alias) for alias in result.aliases)
+    print(
+        f"migrated identity={result.identity} publication_workflow={result.workflow} "
+        f"aliases={aliases}"
+    )
     return 0
 
 
