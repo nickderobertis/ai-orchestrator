@@ -16,7 +16,7 @@ import threading
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, Protocol
+from typing import TYPE_CHECKING, Literal, NewType, Protocol
 
 from . import gitops
 from .coordination import advisory_lock
@@ -26,6 +26,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     "DEFAULT_OWNER",
+    "IdentityKey",
     "RepoRef",
     "Workflow",
     "Workspace",
@@ -35,6 +36,7 @@ __all__ = [
 
 DEFAULT_OWNER = "nickderobertis"
 Workflow = Literal["local", "remote"]
+IdentityKey = NewType("IdentityKey", str)
 
 
 class RepoResolver(Protocol):
@@ -49,7 +51,7 @@ class WorkspaceSelection:
 
     publication_checkout: Path
     execution_checkout: Path
-    publication_identity: str
+    publication_identity: IdentityKey
     workflow: Workflow | None
 
 
@@ -205,7 +207,7 @@ class Workspace:
                 selection = WorkspaceSelection(
                     publication_checkout=selected.publication_checkout,
                     execution_checkout=selected.execution_checkout,
-                    publication_identity=str(selected.identity),
+                    publication_identity=selected.identity,
                     workflow=selected.workflow,
                 )
                 checkout = selection.execution_checkout
@@ -219,7 +221,7 @@ class Workspace:
                 selection = WorkspaceSelection(
                     publication_checkout=publication,
                     execution_checkout=checkout,
-                    publication_identity=url or repo.url,
+                    publication_identity=IdentityKey(url or repo.url),
                     workflow=self._workflow(repo),
                 )
             if not checkout.is_dir() or not gitops.is_repo(checkout):

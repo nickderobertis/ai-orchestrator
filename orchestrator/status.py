@@ -12,7 +12,7 @@ from typing import Any
 from . import gitops, history, runs
 from .config import ConfigError
 from .registry import Registry, RegistryError
-from .workspace import Workflow
+from .workspace import IdentityKey, Workflow
 
 # A history record describes one harness invocation, not the whole onejudge task.
 # Therefore only an explicitly live state counts as running, and only while its
@@ -51,7 +51,7 @@ class TaskStatus:
     commands: list[str]
     execution_checkout: str
     publication_checkout: str | None
-    publication_identity: str | None
+    publication_identity: IdentityKey | None
     publication_workflow: Workflow | None
     branch: str | None
     base: str | None
@@ -138,7 +138,7 @@ def collect(*, runs_dir: Path, oneharness_bin: str = "oneharness") -> list[TaskS
                 publication_checkout=(
                     str(publication.publication_checkout) if publication else None
                 ),
-                publication_identity=str(publication.identity) if publication else None,
+                publication_identity=publication.identity if publication else None,
                 publication_workflow=publication.workflow if publication else None,
                 branch=branch,
                 base=git.base if git else None,

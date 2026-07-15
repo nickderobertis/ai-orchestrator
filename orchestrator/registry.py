@@ -20,10 +20,9 @@ from typing import NewType, cast
 
 from . import gitops
 from .coordination import advisory_lock, atomic_json
-from .workspace import RepoRef, Workflow, normalize_repo
+from .workspace import IdentityKey, RepoRef, Workflow, normalize_repo
 
 Slug = NewType("Slug", str)
-IdentityKey = NewType("IdentityKey", str)
 _SLUG_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 _REGISTRY_VERSION = 2
 
@@ -533,7 +532,10 @@ class Registry:
         registry_path = Path(path) if path is not None else _base_dir() / "repos.json"
         with advisory_lock(f"registry:{registry_path.resolve()}"):
             if not registry_path.exists():
-                raise RegistryError(f"registry {registry_path} does not exist")
+                raise RegistryError(
+                    f"registry {registry_path} does not exist; register the repository first "
+                    "with: just register-repo <repo> --workflow <local|remote>"
+                )
             entries, _ = _parse_raw(
                 registry_path, _read_registry(registry_path), allow_conflicts=True
             )
@@ -552,7 +554,10 @@ class Registry:
                 if _url_identity(entry.origin) == target
             )
             if not aliases:
-                raise RegistryError(f"repository identity for {spec!r} is not registered")
+                raise RegistryError(
+                    f"repository identity for {spec!r} is not registered; register it first "
+                    "with: just register-repo <repo> --workflow <local|remote>"
+                )
             migrated = dict(entries)
             for alias in aliases:
                 migrated[alias] = replace(migrated[alias], workflow=workflow)

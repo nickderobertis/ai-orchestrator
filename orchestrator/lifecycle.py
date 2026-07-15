@@ -49,7 +49,7 @@ from .runs import (
     write_result,
 )
 from .verify import VerifyResult, detect_gate, run_gate
-from .workspace import RepoRef, Workflow, Workspace, normalize_repo
+from .workspace import IdentityKey, RepoRef, Workflow, Workspace, normalize_repo
 
 # A merge only completes when the PR's blocking (required) checks are green. The
 # default `auto` policy uses GitHub native auto-merge (which by construction
@@ -97,7 +97,7 @@ class LifecycleResult:
     #             | checks-failed | closed | timeout | error
     execution_checkout: str = ""
     publication_checkout: str = ""
-    publication_identity: str = ""
+    publication_identity: IdentityKey | None = None
     publication_workflow: Workflow | None = None
     pr: PullRequest | None = None
     report: Report | None = None
