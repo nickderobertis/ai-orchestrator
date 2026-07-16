@@ -9,7 +9,7 @@ import pytest
 
 import orchestrator.lifecycle as lc
 from orchestrator.config import ConfigError
-from orchestrator.github import CliGitHubBackend, PullRequest
+from orchestrator.github import CliGitHubBackend, PRStatus, PullRequest
 from orchestrator.lifecycle import (
     LifecycleResult,
     RepoPlan,
@@ -812,6 +812,97 @@ def test_run_repo_task_remote_pause_does_not_create_empty_draft(tmp_path, bare_o
 
     assert result.outcome == "waiting-human"
     assert result.resume is not None and result.resume.pr is None
+
+
+def test_run_repo_task_resume_fails_when_branch_is_missing(tmp_path, bare_origin) -> None:
+    from orchestrator import gitops
+
+    origin = bare_origin()
+    publication = gitops.clone(origin, tmp_path / "publication")
+    result = run_repo_task(
+        str(origin),
+        workspace=Workspace(
+            tmp_path / "ws",
+            resolver=lambda _url: publication,
+            workflow="local",
+            repo_type="single-owner",
+        ),
+        steps=[Step("approve", task="approve", kind="human")],
+        verify_cmd=["true"],
+        resume=Resume(
+            "feature/missing", "main", "main", gitops.head_sha(publication), ("approve",)
+        ),
+    )
+
+    assert result.outcome == "resume-failed"
+    assert "no longer exists" in result.detail
+
+
+def test_run_repo_task_resume_fails_when_checkpoint_is_missing(tmp_path, bare_origin) -> None:
+    from orchestrator import gitops
+
+    origin = bare_origin()
+    publication = gitops.clone(origin, tmp_path / "publication")
+    worktree = gitops.worktree_add(
+        publication, tmp_path / "branch", "feature/resume", base="origin/main"
+    )
+    gitops.worktree_remove(publication, worktree)
+
+    result = run_repo_task(
+        str(origin),
+        workspace=Workspace(
+            tmp_path / "ws",
+            resolver=lambda _url: publication,
+            workflow="local",
+            repo_type="single-owner",
+        ),
+        steps=[Step("approve", task="approve", kind="human")],
+        verify_cmd=["true"],
+        resume=Resume("feature/resume", "main", "main", "abcdef1", ("approve",)),
+    )
+
+    assert result.outcome == "resume-failed"
+    assert "checkpoint" in result.detail
+
+
+def test_run_repo_task_resume_fails_when_recorded_draft_is_closed(tmp_path, bare_origin) -> None:
+    from orchestrator import gitops
+
+    origin = bare_origin()
+    publication = gitops.clone(origin, tmp_path / "publication")
+    worktree = gitops.worktree_add(
+        publication, tmp_path / "branch", "feature/resume", base="origin/main"
+    )
+    checkpoint = gitops.head_sha(worktree)
+    gitops.worktree_remove(publication, worktree)
+
+    class ClosedDraftGitHub:
+        def status(self, pr):
+            return PRStatus(pr.number, "CLOSED", False, "CLEAN", ())
+
+    result = run_repo_task(
+        str(origin),
+        workspace=Workspace(
+            tmp_path / "ws",
+            resolver=lambda _url: publication,
+            workflow="remote",
+            repo_type="single-owner",
+        ),
+        steps=[Step("approve", task="approve", kind="human")],
+        verify_cmd=["true"],
+        github=ClosedDraftGitHub(),
+        resume=Resume(
+            "feature/resume",
+            "main",
+            "main",
+            checkpoint,
+            ("approve",),
+            "https://github.com/o/r/pull/9",
+        ),
+    )
+
+    assert result.outcome == "resume-failed"
+    assert "closed without merging" in result.detail
 
 
 # --- scheduling ------------------------------------------------------------
