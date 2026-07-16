@@ -153,20 +153,12 @@ Full rationale, the merge strategies, and the claude-code caveat:
 Use the `just` recipes (`just --list` is the index); do not hand-roll
 equivalents. `just bootstrap` sets up from a clean clone (installs the toolchain,
 activates the git hooks); `just check` is the deterministic tier, while `just gate`
-is the complete pre-push bar: `check` plus the llmlint diff tier. `just dispatch`
-runs one direct agent; `just repo-task` drives one lifecycle; `just run-plan`
-records and executes the canonical mixed graph (direct, lifecycle, and human
-nodes, including lifecycle `steps`). `just repo-plan` remains only as a deprecated
-compatibility alias to `run-plan`. Recording is the default (`--no-record` opts
-out); `--run`, `--runs-dir`, and `--recover` control the ledger. `just runs` lists
-it, and `just next-round <run-id> [edits] [--complete-human <ref>]` derives, runs,
-and records the next round. `just replan <prev-plan> <result> [edits]` is the
-lower-level derivation command — see `docs/repo-lifecycle.md`. `just new-persona` / `just validate-personas` round
-out the orchestrator verbs. `just migrate-repo-type <repo> --repo-type
-<single-owner|team>` atomically changes identity type (team normalizes workflow to
-remote). `just lint-llm` /
-`lint-llm-diff` / `lint-llm-validate` are the **llmlint** LLM-judge tier — kept
-out of `check` (non-deterministic, harness-backed) and enforced at pre-push.
+is the complete pre-push bar: `check` plus the llmlint diff tier. `just run-plan`
+is the canonical recorded mixed-graph executor; `repo-plan` exists only for
+compatibility. Human completion is never inferred and enters the graph only as an
+explicit `next-round` attestation. Keep operational syntax and result contracts in
+`docs/orchestration.md` and lifecycle policy in `docs/repo-lifecycle.md` rather
+than duplicating command help here.
 
 A dispatched change is not done until `just gate` is green. Its agent clears its
 own llmlint findings—by fixing them, adding a justified `ignore-file`, or disabling
