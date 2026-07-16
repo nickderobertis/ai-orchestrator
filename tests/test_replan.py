@@ -447,6 +447,23 @@ def test_bad_edit_fails_validation() -> None:
         )
 
 
+@pytest.mark.parametrize(
+    "edits, match",
+    [
+        ({"retry": []}, "'retry' must be a mapping"),
+        ({"retry": {"a": []}}, "override mappings"),
+        ({"split": []}, "'split' must be a mapping"),
+        ({"split": {"a": {}}}, "replacement nodes"),
+        ({"add": {}}, "list of task mappings"),
+        ({"drop": "a"}, "unique list"),
+        ({"drop": ["a", "a"]}, "unique list"),
+    ],
+)
+def test_malformed_edits_fail_as_invalid_input(edits, match) -> None:
+    with pytest.raises(PlanError, match=match):
+        next_round(_plan(A), _result(a="failed"), edits)
+
+
 def test_empty_next_round_signals_nothing_to_iterate() -> None:
     assert next_round(_plan(A, B), _result(a="done", b="done"))["tasks"] == []
 

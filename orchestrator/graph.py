@@ -473,6 +473,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         plan_mapping = load_yaml(args.plan)
         graph = parse_graph(plan_mapping)
+        if args.concurrency is not None and args.concurrency < 1:
+            raise PlanError("'--concurrency' must be a positive integer")
         run_dir = (
             None
             if args.no_record

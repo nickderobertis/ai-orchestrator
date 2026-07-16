@@ -41,15 +41,38 @@ def next_round(
     The result is validated via the canonical graph parser.
     """
     from .graph import parse_graph
+    from .plan import PlanError
 
     edits = edits or {}
-    retry = edits.get("retry") or {}
-    split = edits.get("split") or {}
-    add = edits.get("add") or []
-    drop = set(edits.get("drop") or [])
+    retry = _mapping_edit(edits, "retry")
+    if not all(isinstance(nid, str) and isinstance(value, dict) for nid, value in retry.items()):
+        raise PlanError("'retry' must map task ids to override mappings")
+    split = _mapping_edit(edits, "split")
+    if not all(
+        isinstance(nid, str)
+        and isinstance(nodes, list)
+        and all(isinstance(node, dict) for node in nodes)
+        for nid, nodes in split.items()
+    ):
+        raise PlanError("'split' must map task ids to lists of replacement nodes")
+    add = edits.get("add")
+    add = [] if add is None else add
+    if not isinstance(add, list) or not all(isinstance(node, dict) for node in add):
+        raise PlanError("'add' must be a list of task mappings")
+    raw_drop = edits.get("drop")
+    raw_drop = [] if raw_drop is None else raw_drop
+    if (
+        not isinstance(raw_drop, list)
+        or not all(isinstance(nid, str) and nid for nid in raw_drop)
+        or len(set(raw_drop)) != len(raw_drop)
+    ):
+        raise PlanError("'drop' must be a unique list of task ids")
+    drop = set(raw_drop)
     completed_humans = _completed_humans(edits)
 
-    results = prev_result.get("results") or {}
+    results = prev_result.get("results")
+    if not isinstance(results, dict):
+        raise PlanError("previous result must contain a 'results' mapping")
     done_ids = {
         nid for nid, r in results.items() if isinstance(r, dict) and r.get("status") == "done"
     }
@@ -165,6 +188,17 @@ def next_round(
     if next_tasks:
         parse_graph(plan)  # bad edits (duplicate ids, cycles, missing fields) fail loudly
     return plan
+
+
+def _mapping_edit(edits: dict[str, Any], field: str) -> dict[Any, Any]:
+    from .plan import PlanError
+
+    value = edits.get(field)
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise PlanError(f"'{field}' must be a mapping")
+    return value
 
 
 def _completed_humans(edits: dict[str, Any]) -> set[str]:

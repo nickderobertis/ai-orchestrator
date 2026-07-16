@@ -411,6 +411,17 @@ def test_run_plan_cli_invalid_input_exits_2(tmp_path, capsys) -> None:
     assert "run-plan:" in capsys.readouterr().err
 
 
+def test_run_plan_cli_invalid_concurrency_override_exits_2(tmp_path, capsys) -> None:
+    plan = tmp_path / "plan.json"
+    plan.write_text(
+        json.dumps({"tasks": [{"id": "review", "kind": "human", "task": "Approve"}]}),
+        encoding="utf-8",
+    )
+
+    assert main([str(plan), "--concurrency", "0", "--no-record"]) == 2
+    assert "positive integer" in capsys.readouterr().err
+
+
 def test_run_plan_cli_reports_pending_round_claim_failure(tmp_path, capsys) -> None:
     from orchestrator.runs import prepare_round
 
