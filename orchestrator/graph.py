@@ -18,7 +18,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Literal, cast
 
-from . import BASE_CONFIG, PERSONA_DIR, REPO_ROOT
+from . import REPO_ROOT
 from .config import ConfigError, load_yaml
 from .dispatch import Report
 from .lifecycle import (
