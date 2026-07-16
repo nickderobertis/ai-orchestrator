@@ -24,15 +24,23 @@ from .runs import (
 
 
 def main(argv: list[str] | None = None) -> int:
+    raw_args = list(sys.argv[1:] if argv is None else argv)
     parser = argparse.ArgumentParser(
         description="Derive and run the next round from a tracked-graph run ledger."
     )
     parser.add_argument("run_id")
-    parser.add_argument("edits", type=Path, nargs="?", default=None)
     parser.add_argument("--complete-human", action="append", default=[])
     parser.add_argument("--runs-dir", type=Path, default=Path("runs"))
     parser.add_argument("--plan-only", action="store_true")
-    args, repo_plan_args = parser.parse_known_args(argv)
+    edits_path: Path | None = None
+    # ``parse_known_args`` cannot know that a forwarded graph flag such as
+    # ``--base`` consumes the following token; an optional positional therefore
+    # stole that flag's value as the edits path.  The documented command shape is
+    # ``next-round RUN [EDITS] [OPTIONS]``, so claim EDITS before parsing options
+    # and leave every later unknown token intact for run-plan.
+    if len(raw_args) > 1 and not raw_args[1].startswith("-"):
+        edits_path = Path(raw_args.pop(1))
+    args, repo_plan_args = parser.parse_known_args(raw_args)
 
     completed_refs: list[str] = []
     try:
@@ -46,7 +54,7 @@ def main(argv: list[str] | None = None) -> int:
         if not result_path.exists():
             raise ConfigError(f"latest round has no result yet: {round_dir}")
         result = load_mapping(result_path)
-        edits = load_mapping(args.edits) if args.edits else {}
+        edits = load_mapping(edits_path) if edits_path else {}
         completed_refs = _completion_refs(edits, args.complete_human)
         _validate_completions(run_dir, result, completed_refs)
         if completed_refs:
@@ -98,6 +106,10 @@ def _completion_refs(edits: dict[str, Any], cli_refs: list[str]) -> list[str]:
 def _validate_completions(run_dir: Path, result: dict[str, Any], refs: list[str]) -> None:
     if not refs:
         return
+    completed = {item["ref"] for item in load_completions(run_dir)}
+    repeated = [ref for ref in refs if ref in completed]
+    if repeated:
+        raise ConfigError(f"human task(s) already completed: {', '.join(sorted(repeated))}")
     payload = as_result_payload(result)
     waiting = {action["ref"] for action in human_actions(payload)}
     unknown = [ref for ref in refs if ref not in waiting]
@@ -105,10 +117,6 @@ def _validate_completions(run_dir: Path, result: dict[str, Any], refs: list[str]
         raise ConfigError(
             "can only complete recorded waiting human task refs: " + ", ".join(sorted(unknown))
         )
-    completed = {item["ref"] for item in load_completions(run_dir)}
-    repeated = [ref for ref in refs if ref in completed]
-    if repeated:
-        raise ConfigError(f"human task(s) already completed: {', '.join(sorted(repeated))}")
 
 
 def main_runs(argv: list[str] | None = None) -> int:
