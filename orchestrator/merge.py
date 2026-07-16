@@ -20,7 +20,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
+from typing import Literal, Protocol
 
 from . import gitops
 from .coordination import advisory_lock
@@ -32,8 +32,11 @@ __all__ = [
     "LocalMergeStrategy",
     "MergeContext",
     "MergeOutcome",
+    "MergePolicy",
     "MergeStrategy",
 ]
+
+MergePolicy = Literal["auto", "direct", "none"]
 
 
 @dataclass
@@ -47,7 +50,7 @@ class MergeContext:
     title: str
     body: str
     method: str = "squash"  # GitHub merge method; ignored by the local strategy
-    policy: str = "auto"  # auto | direct | none (GitHub only)
+    policy: MergePolicy = "auto"  # GitHub only
     poll_interval: float = 15.0
     timeout: float = 3600.0
     sleep: Callable[[float], None] = time.sleep

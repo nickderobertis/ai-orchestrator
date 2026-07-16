@@ -35,7 +35,13 @@ from .coordination import advisory_lock
 from .dispatch import Report, dispatch
 from .github import CliGitHubBackend, GitHubBackend, GitHubError, PullRequest
 from .gitops import GitError
-from .merge import GitHubMergeStrategy, LocalMergeStrategy, MergeContext, MergeStrategy
+from .merge import (
+    GitHubMergeStrategy,
+    LocalMergeStrategy,
+    MergeContext,
+    MergePolicy,
+    MergeStrategy,
+)
 from .plan import NodeRun, schedule_dag
 from .provenance import INCOMPLETE_TRAILER
 from .registry import RegistryError
@@ -118,7 +124,7 @@ class LifecycleResult:
     publication_identity: IdentityKey | None = None
     publication_workflow: Workflow | None = None
     repository_type: RepositoryType | None = None
-    merge_policy: str | None = None
+    merge_policy: MergePolicy | None = None
     pr_base: str = ""
     synthetic_stack_base: str | None = None
     stack_bases: list[StackBase] = field(default_factory=list)
@@ -230,8 +236,8 @@ def _effective_publication(
     repo_type: RepositoryType,
     stored_workflow: Workflow | None,
     requested_workflow: Workflow | None,
-    merge_policy: str | None,
-) -> tuple[Workflow, str]:
+    merge_policy: MergePolicy | None,
+) -> tuple[Workflow, MergePolicy]:
     """Resolve workflow/policy after node and command precedence has selected inputs."""
     workflow = stored_workflow or requested_workflow or "remote"
     if repo_type == "team":
@@ -393,7 +399,7 @@ def run_repo_task(
     url: str | None = None,
     verify_cmd: list[str] | None = None,
     skip_verify: bool = False,
-    merge_policy: str | None = None,
+    merge_policy: MergePolicy | None = None,
     merge_method: str = "squash",
     oneharness_mode: str | None = "bypass",
     dispatch_fn: DispatchFn = dispatch,
@@ -623,7 +629,7 @@ class RepoPlanNode:
     title: str | None = None
     verify_cmd: list[str] | None = None
     skip_verify: bool = False
-    merge_policy: str | None = None
+    merge_policy: MergePolicy | None = None
     workflow: Workflow | None = None
     repo_type: RepositoryType | None = None
     execution_checkout: str | None = None
@@ -716,6 +722,7 @@ def parse_repo_plan(data: dict[str, Any]) -> RepoPlan:
         policy = t.get("merge_policy")
         if policy is not None and policy not in MERGE_POLICIES:
             raise PlanError(f"task {nid!r} 'merge_policy' must be one of {MERGE_POLICIES}")
+        merge_policy = cast(MergePolicy | None, policy)
         raw_workflow = t.get("workflow")
         if raw_workflow is not None and raw_workflow not in ("local", "remote"):
             raise PlanError(f"task {nid!r} 'workflow' must be 'local' or 'remote'")
@@ -740,7 +747,7 @@ def parse_repo_plan(data: dict[str, Any]) -> RepoPlan:
             title=t.get("title"),
             verify_cmd=t.get("verify_cmd"),
             skip_verify=bool(t.get("skip_verify", False)),
-            merge_policy=policy,
+            merge_policy=merge_policy,
             workflow=workflow,
             repo_type=repo_type,
             execution_checkout=raw_execution,
@@ -914,7 +921,7 @@ def make_repo_runner(
     github: GitHubBackend | None = None,
     base_path: str | Path,
     persona_dir: str | Path,
-    merge_policy: str | None,
+    merge_policy: MergePolicy | None,
     merge_method: str,
     oneharness_mode: str | None,
     skip_verify: bool,

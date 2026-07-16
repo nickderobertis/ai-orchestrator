@@ -13,7 +13,7 @@ from . import gitops
 from .coordination import advisory_lock
 from .github import CliGitHubBackend, GitHubBackend, GitHubError
 from .lifecycle import _effective_publication
-from .merge import GitHubMergeStrategy, LocalMergeStrategy, MergeContext
+from .merge import GitHubMergeStrategy, LocalMergeStrategy, MergeContext, MergePolicy
 from .provenance import RECOVERY_TRAILER, incomplete_commits, unattested_incomplete
 from .registry import Registry, RegistryEntry, RegistryError, Slug
 from .verify import detect_gate, run_gate
@@ -27,7 +27,7 @@ class RecoveryResult:
     base: str
     workflow: str
     repo_type: RepositoryType
-    merge_policy: str
+    merge_policy: MergePolicy
     outcome: str
     detail: str
     pr: str | None = None
@@ -64,7 +64,7 @@ def recover_repo(
     base: str | None = None,
     verify_cmd: list[str] | None = None,
     github: GitHubBackend | None = None,
-    merge_policy: str | None = None,
+    merge_policy: MergePolicy | None = None,
     repo_type: RepositoryType | None = None,
     merge_method: str = "squash",
     cleanup: bool = True,

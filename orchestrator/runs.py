@@ -13,6 +13,7 @@ from typing import Any, Literal, NamedTuple, NewType, TypedDict, cast
 
 from .config import ConfigError, load_yaml
 from .coordination import advisory_lock, atomic_json
+from .merge import MergePolicy
 
 _RUN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 _ROUND = re.compile(r"^round-(\d+)$")
@@ -42,7 +43,7 @@ class RepoPlanResultItem(TypedDict, total=False):
     repo_type: str | None
     publication_workflow: str | None
     workflow: str | None
-    merge_policy: str | None
+    merge_policy: MergePolicy | None
     outcome: str
     ok: bool
     pr: str | None
