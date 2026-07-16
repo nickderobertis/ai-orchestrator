@@ -44,7 +44,7 @@ from .merge import (
     MergeStrategy,
 )
 from .plan import NODE_KINDS, NodeRun, schedule_dag
-from .provenance import INCOMPLETE_TRAILER, PR_BASE_TRAILER
+from .provenance import INCOMPLETE_TRAILER, PR_BASE_TRAILER, incomplete_commits
 from .registry import RegistryError, validate_identity_key
 from .runs import (
     RepoPlanPayload,
@@ -559,6 +559,7 @@ def _run_steps(
             return NodeRun("done", None, None)
         if step.human:
             return NodeRun("waiting", f"step {sid!r} is awaiting human action", None)
+        dispatch_head = gitops.head_sha(worktree)
         report = dispatch_fn(
             step.persona,
             step.task,
@@ -572,9 +573,21 @@ def _run_steps(
         )
         reports[sid] = report
         if not report.completed:
+            preserved = False
             if gitops.is_dirty(worktree):
                 gitops.add_all(worktree)
                 gitops.commit(worktree, _incomplete_commit_message(step, pr_base))
+                preserved = True
+            else:
+                dispatch_committed = gitops.head_sha(worktree) != dispatch_head
+                ahead_of_pr_base = gitops.has_commits_ahead(worktree, f"origin/{pr_base}")
+                already_marked = bool(incomplete_commits(worktree, dispatch_head, "HEAD"))
+                if dispatch_committed and ahead_of_pr_base and not already_marked:
+                    gitops.commit_empty(worktree, _incomplete_commit_message(step, pr_base))
+                    preserved = True
+                elif dispatch_committed and ahead_of_pr_base:
+                    preserved = True
+            if preserved:
                 return NodeRun(
                     "failed",
                     f"step {sid!r} hit the turn cap; partial work was committed to branch "

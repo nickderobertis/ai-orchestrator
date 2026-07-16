@@ -37,11 +37,12 @@ not bypass an incomplete provenance marker with a normal commit. The selected
 publication checkout is **never worked in directly and only ever fast-forwarded**
 after a merge lands; it must be clean with the selected root checked out before
 dispatch. Preserved stacked branches record their PR base so recovery targets the
-stack rather than the root. One larger task becomes **multiple isolated
-PRs** coordinated by a DAG; a single PR can itself run **several onejudge in
-sequence on one branch** (a node's `steps` sub-DAG). The DAG is static within a run
-— you **adapt between rounds**, reading each round's results and deriving the next
-plan (`just replan`). See `docs/repo-lifecycle.md`.
+stack rather than the root. `just run-plan` is the one tracked hierarchical graph
+executor: its top-level DAG may mix direct agents, lifecycle agents, and explicit
+human actions; a lifecycle node may itself run **several agent and human steps in
+sequence on one branch**. The DAG is static within a round — you **adapt between
+recorded rounds**, attesting completed human work or changing the plan with `just
+next-round`. See `docs/orchestration.md` and `docs/repo-lifecycle.md`.
 
 ## What "agent" means here
 
@@ -58,9 +59,10 @@ dispatch onejudge.
 ## Your loop as orchestrator
 
 1. **Decompose.** Break the task into the smallest subtasks that are still worth
-   a fresh agent — see the granularity rule below. Capture them as a plan (a DAG):
-   each node has an `id`, a `persona`, the `task` prose, and `deps` (ids it needs
-   finished first). Start from `examples/plan.example.json`.
+   a fresh agent — see the granularity rule below. Capture them as a tracked DAG.
+   Agent nodes carry `persona` + `task` (and optionally `repo`/`steps` for a
+   lifecycle); `kind: human` nodes carry only the action prose; `deps` names real
+   prerequisites. Start from `examples/tracked-graph.example.json`.
 2. **Pick or create personas.** Match each subtask to a persona in `personas/`.
    If none fits, create one: `just new-persona <name>` scaffolds
    `personas/<name>.yaml` from the template — fill in the agent role and the
@@ -69,11 +71,12 @@ dispatch onejudge.
    It topologically schedules the DAG, running every subtask whose deps are done
    concurrently (bounded by the plan's `concurrency`), so independent branches go
    in parallel and dependents wait only for what they actually need.
-4. **Read the results, then decide.** `repo-plan` records each plan and result in
-   `runs/<run-id>/round-NN/`; use `just runs` to find the latest round. Put any
-   retry/split/add/drop decisions in `edits.json`, then run
-   `just next-round <run-id> [edits.json]`. A failed subtask skips its dependents;
-   adjust granularity or persona before redispatching.
+4. **Read the results, then decide.** `run-plan` records each invocation in
+   `runs/<run-id>/round-NN/`; use `just runs` to find the latest round. A ready
+   human action is `waiting`, its dependents are transitively `blocked`, and the
+   harness proceeds only after `just next-round <run-id> --complete-human <ref>`
+   durably records the person's attestation. Put retry/split/add/drop decisions in
+   `edits.json`. A failed subtask takes precedence and skips its dependents.
 
 Treat unresolved same-identity dependencies as stack prerequisites, not merely
 scheduling edges, and preserve them across replans until their content reaches
@@ -150,20 +153,12 @@ Full rationale, the merge strategies, and the claude-code caveat:
 Use the `just` recipes (`just --list` is the index); do not hand-roll
 equivalents. `just bootstrap` sets up from a clean clone (installs the toolchain,
 activates the git hooks); `just check` is the deterministic tier, while `just gate`
-is the complete pre-push bar: `check` plus the llmlint diff tier. `just dispatch` /
-`just run-plan` dispatch onejudge at a
-directory; `just repo-task <repo> <persona> "<task>"` and
-`just repo-plan <repo-plan.json>` drive the full repo life cycle
-(clone→gate→PR/merge, multi-PR DAGs, and `steps` workstreams on one PR);
-`repo-plan` auto-records under `runs/` (`--no-record` opts out); `just runs` lists
-the ledger and `just next-round <run-id> [edits]` derives, runs, and records the
-next round. `just replan <prev-plan> <result> [edits]` is the lower-level derivation
-command — see `docs/repo-lifecycle.md`. `just new-persona` / `just validate-personas` round
-out the orchestrator verbs. `just migrate-repo-type <repo> --repo-type
-<single-owner|team>` atomically changes identity type (team normalizes workflow to
-remote). `just lint-llm` /
-`lint-llm-diff` / `lint-llm-validate` are the **llmlint** LLM-judge tier — kept
-out of `check` (non-deterministic, harness-backed) and enforced at pre-push.
+is the complete pre-push bar: `check` plus the llmlint diff tier. `just run-plan`
+is the canonical recorded mixed-graph executor; `repo-plan` exists only for
+compatibility. Human completion is never inferred and enters the graph only as an
+explicit `next-round` attestation. Keep operational syntax and result contracts in
+`docs/orchestration.md` and lifecycle policy in `docs/repo-lifecycle.md` rather
+than duplicating command help here.
 
 A dispatched change is not done until `just gate` is green. Its agent clears its
 own llmlint findings—by fixing them, adding a justified `ignore-file`, or disabling
@@ -198,11 +193,11 @@ otherwise ask before pursuing it.
 ## Dogfooding rule
 
 Use the orchestrator harness for **all tasks of sufficient complexity**, in any
-repo or project. Decompose the work and drive each substantial piece through
-`just repo-task <repo> <persona> "<task>"` or `just repo-plan <plan.json>`; the
-lifecycle clones the target, works in an isolated worktree, verifies with its
-gate, and merges. Dispatch smaller project work with a single task rather than
-doing it directly; only the slight-tweak exception above applies. This repo is one
+repo or project. Decompose multi-node work into `just run-plan <plan.json>`; use
+`just repo-task <repo> <persona> "<task>"` for a single lifecycle node. Lifecycle
+nodes clone the target, work in an isolated worktree, verify with its gate, and
+publish. Dispatch smaller project work with a single task rather than doing it
+directly; only the slight-tweak exception above applies. This repo is one
 local-mode case of the same rule.
 
 **Self-dispatch caveat (this repo).** Do not dispatch changes to the
@@ -266,11 +261,12 @@ How this repo was built up from the create-repo reference pieces:
 This repo runs on agents, so the suite is the only QA loop.
 
 - **e2e** (`tests/e2e/`) proves the real journeys against the real boundaries:
-  onejudge dispatch (completes / hits the turn cap / persona-merged / a parallel
-  DAG that skips a failed node's dependents), and the **repo lifecycle** against a
-  real bare git origin — local direct-merge and GitHub PR+auto-merge, plus
-  gate-failure, not-completed (including recovery of partial work committed on
-  its unmerged branch), no-changes, checks-failed, and a multi-PR DAG. Only
+  onejudge dispatch and tracked direct graphs (including recorded human pause /
+  attestation / release and compatibility inputs), and the **repo lifecycle**
+  against a real bare git origin — local direct-merge, resumable local human
+  workstreams, remote draft checkpoints, GitHub PR+auto-merge, gate-failure,
+  not-completed (including recovery of partial work committed on its unmerged
+  branch), no-changes, checks-failed, and a multi-PR DAG. Only
   the paid harness and GitHub's PR/CI decisioning are faked; git and the merge are
   real (`docs/repo-lifecycle.md`).
 - **unit** (`tests/`) covers the pure logic: base⊕persona merge, plan topological

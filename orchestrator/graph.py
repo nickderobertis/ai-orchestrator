@@ -445,9 +445,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--concurrency", type=int, default=None, help="override the plan's concurrency"
     )
-    parser.add_argument("--run", default=None, help="record into this validated run id")
+    parser.add_argument(
+        "--run", default=None, help="record into this run id instead of deriving one from the plan"
+    )
     parser.add_argument("--no-record", action="store_true", help="do not record this round")
-    parser.add_argument("--recover", action="store_true", help="claim an abandoned running round")
+    parser.add_argument(
+        "--recover",
+        action="store_true",
+        help="claim a recorded running round only after confirming its owner is gone",
+    )
     parser.add_argument("--runs-dir", type=Path, default=Path("runs"), help="run ledger root")
     parser.add_argument(
         "--project-dir", default=None, help="default target project dir for direct agent nodes"

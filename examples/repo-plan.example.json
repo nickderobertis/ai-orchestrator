@@ -46,10 +46,16 @@
           "deps": ["impl"]
         },
         {
+          "id": "approval",
+          "kind": "human",
+          "task": "Exercise the dashboard in staging and approve final review.",
+          "deps": ["test"]
+        },
+        {
           "id": "review",
           "persona": "reviewer",
           "task": "Review the dashboard for correctness, access control, and missing edge cases; fix what you find.",
-          "deps": ["test"]
+          "deps": ["approval"]
         }
       ]
     }

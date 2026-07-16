@@ -21,8 +21,11 @@ just gate               # complete pre-push gate, including llmlint
 # Dispatch one subtask with a persona (task passed over the CLI):
 just dispatch backend-engineer "Add a /health endpoint and test it."
 
-# Run a whole task DAG in parallel:
-just run-plan examples/plan.example.json
+# Run one recorded graph mixing agents, repos, and human gates:
+just run-plan examples/tracked-graph.example.json
+
+# After doing a reported human action, attest it and release its dependents:
+just next-round <run-id> --complete-human release-approval
 
 # Integrate completed workstreams for a repo explicitly registered local:
 just integrate claude/api claude/docs --push
@@ -48,8 +51,24 @@ just migrate-repo-type local/ai-orchestrator --repo-type single-owner
 | `config/onejudge.version` | The exact supported onejudge CLI version (`0.3.0`). |
 | `personas/` | Per-persona onejudge deltas (roles). See [`personas/README.md`](personas/README.md). |
 | `oneharness.toml` / `oneharness.judge.toml` | The two conversation sides (agent / judge) — harness + model selection. |
-| `orchestrator/` | The mechanics: base⊕persona merge, single dispatch, DAG scheduler. |
-| `docs/` | [Orchestration model](docs/orchestration.md) · [onejudge integration](docs/onejudge-integration.md) |
+| `orchestrator/` | The mechanics: base⊕persona merge, tracked mixed-graph scheduling, lifecycle publication, and run ledger. |
+| `docs/` | [Tracked graph model](docs/orchestration.md) · [repository lifecycle](docs/repo-lifecycle.md) · [onejudge integration](docs/onejudge-integration.md) |
+
+## One tracked graph
+
+`just run-plan` is the canonical executor. Omitted `kind` means `agent`: without
+`repo` it dispatches onejudge directly, while with `repo` it runs the isolated
+clone→gate→publish lifecycle. `kind: human` records an action for a person and
+never invokes a harness. Lifecycle nodes may contain a nested `steps` DAG mixing
+agent and human steps on one resumable branch.
+
+Every invocation is recorded under `runs/<run-id>/round-NN` unless `--no-record`
+is passed. Results have top-level state `complete`, `waiting`, or `failed` and
+node statuses `done`, `waiting`, `blocked`, `failed`, or `skipped`. Waiting output
+names the action and what it directly unblocks; blocked nodes name the transitive
+human references in `blocked_by`. A complete graph exits 0, waiting or failed
+exits 1, and invalid input exits 2. See the
+[orchestration model](docs/orchestration.md) for tracking and attestation details.
 
 ## Status
 
