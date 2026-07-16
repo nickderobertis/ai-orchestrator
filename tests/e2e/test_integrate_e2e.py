@@ -592,6 +592,25 @@ def test_repo_recover_rejects_missing_branch_and_missing_gate(tmp_path, bare_ori
             workspace_root=tmp_path / "conflicting-base-worktrees",
             verify_cmd=["true"],
         )
+
+    _branch(repo, "claude/empty-base", {"partial.txt": "partial\n"})
+    _git(repo, "checkout", "claude/empty-base")
+    _git(
+        repo,
+        "commit",
+        "--amend",
+        "-m",
+        "wip: empty base\n\nOrchestrator-Status: incomplete\nOrchestrator-PR-Base:",
+    )
+    _git(repo, "checkout", "main")
+    with pytest.raises(ValueError, match="records an empty PR base"):
+        recover_repo(
+            repo,
+            "claude/empty-base",
+            workspace_root=tmp_path / "empty-base-worktrees",
+            verify_cmd=["true"],
+        )
+
     with pytest.raises(ValueError, match="does not exist"):
         recover_repo(
             repo,

@@ -37,6 +37,8 @@ def recorded_pr_base(repo: str | Path, base: str, branch: str) -> str | None:
             for line in commit.message.splitlines()
             if line.startswith(PR_BASE_TRAILER)
         }
+        if "" in values:
+            raise ValueError(f"incomplete commit {commit.sha} records an empty PR base")
         if len(values) > 1:
             raise ValueError(
                 f"incomplete commit {commit.sha} records conflicting PR bases: "
