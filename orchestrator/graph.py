@@ -203,7 +203,7 @@ def _parse_node(nid: str, raw: dict[str, Any]) -> GraphNode:
         task = raw.get("task")
         if not isinstance(task, str) or not task.strip():
             raise PlanError(f"human task {nid!r} needs a non-empty 'task'")
-        present = [key for key in _AGENT_NODE_FIELDS if raw.get(key) is not None]
+        present = [key for key in _AGENT_NODE_FIELDS if key in raw]
         if present:
             raise PlanError(
                 f"human task {nid!r} cannot set {', '.join(map(repr, present))}: "

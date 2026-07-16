@@ -72,11 +72,10 @@ def test_parse_graph_accepts_old_direct_and_lifecycle_nodes() -> None:
     assert graph.tasks[1].deps == ["direct"]
 
 
-def test_human_node_validation_is_strict() -> None:
-    with pytest.raises(PlanError, match="cannot set 'persona'"):
-        parse_graph(
-            {"tasks": [{"id": "review", "kind": "human", "task": "Review", "persona": "p"}]}
-        )
+@pytest.mark.parametrize("field, value", [("persona", "p"), ("persona", None), ("repo", None)])
+def test_human_node_validation_is_strict(field, value) -> None:
+    with pytest.raises(PlanError, match=f"cannot set '{field}'"):
+        parse_graph({"tasks": [{"id": "review", "kind": "human", "task": "Review", field: value}]})
 
 
 @pytest.mark.parametrize(
@@ -296,6 +295,25 @@ def test_parse_graph_accepts_human_steps_and_rejects_agent_fields() -> None:
                                 "kind": "human",
                                 "task": "Approve",
                                 "persona": "backend-engineer",
+                            }
+                        ],
+                    }
+                ]
+            }
+        )
+    with pytest.raises(PlanError, match="human step 'approve' cannot set 'persona'"):
+        parse_graph(
+            {
+                "tasks": [
+                    {
+                        "id": "work",
+                        "repo": "o/r",
+                        "steps": [
+                            {
+                                "id": "approve",
+                                "kind": "human",
+                                "task": "Approve",
+                                "persona": None,
                             }
                         ],
                     }

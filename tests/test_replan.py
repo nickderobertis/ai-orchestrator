@@ -67,6 +67,58 @@ def test_done_open_dependency_becomes_stack_anchor_across_rounds() -> None:
     ]
 
 
+def test_open_dependency_stack_anchor_passes_through_completed_human_gate() -> None:
+    parent = {**A, "branch": "feature/a"}
+    approval = {**H, "deps": ["a"]}
+    child = {**B, "deps": ["h"]}
+    result = {
+        "results": {
+            "a": {
+                "status": "done",
+                "outcome": "pr-open",
+                "repo": "o/r",
+                "publication_identity": "https://github.com/o/r",
+                "branch": "feature/a",
+                "base_branch": "main",
+                "pr_base": "main",
+                "pr": "https://github.com/o/r/pull/1",
+            },
+            "h": {
+                "kind": "human",
+                "status": "waiting",
+                "human_actions": [
+                    {
+                        "ref": "h",
+                        "task": "Review the change",
+                        "unblocks": ["b"],
+                        "unblocks_publication": False,
+                    }
+                ],
+            },
+            "b": {"status": "blocked", "blocked_by": ["h"]},
+        }
+    }
+
+    plan = next_round(_plan(parent, approval, child), result, {"complete_human": ["h"]})
+
+    assert plan["tasks"] == [
+        {
+            **child,
+            "deps": [],
+            "stack_bases": [
+                {
+                    "branch": "feature/a",
+                    "repo": "o/r",
+                    "identity": "https://github.com/o/r",
+                    "base_branch": "main",
+                    "pr": "https://github.com/o/r/pull/1",
+                    "pr_base": "main",
+                }
+            ],
+        }
+    ]
+
+
 def test_merged_dependency_landed_on_synthetic_base_carries_that_base() -> None:
     result = {
         "results": {
@@ -257,6 +309,28 @@ def test_invalid_complete_human_ref_fails_validation() -> None:
         next_round(_plan(H), result, {"complete_human": ["not-h"]})
 
 
+def test_complete_human_rejects_fabricated_agent_action() -> None:
+    result = {
+        "results": {
+            "a": {
+                "kind": "agent",
+                "status": "waiting",
+                "human_actions": [
+                    {
+                        "ref": "a",
+                        "task": "Pretend this agent is human",
+                        "unblocks": [],
+                        "unblocks_publication": False,
+                    }
+                ],
+            }
+        }
+    }
+
+    with pytest.raises(PlanError, match="recorded waiting human"):
+        next_round(_plan(A), result, {"complete_human": ["a"]})
+
+
 def test_complete_human_edits_must_be_a_unique_list() -> None:
     with pytest.raises(PlanError, match="must be a list"):
         next_round(_plan(H), {"results": {}}, {"complete_human": "h"})
@@ -334,6 +408,29 @@ def test_waiting_lifecycle_resume_completed_steps_must_be_list() -> None:
 
     with pytest.raises(PlanError, match="completed_steps"):
         next_round(_plan(work), result, {"complete_human": ["work/approve"]})
+
+
+def test_failed_human_pause_can_be_retried_without_resume_metadata() -> None:
+    work = {
+        "id": "work",
+        "repo": "o/r",
+        "steps": [
+            {"id": "prepare", "persona": "backend-engineer", "task": "Prepare"},
+            {"id": "approve", "kind": "human", "task": "Approve", "deps": ["prepare"]},
+        ],
+    }
+    result = {
+        "results": {
+            "work": {
+                "status": "failed",
+                "outcome": "gate-failed",
+                "waiting_steps": ["approve"],
+                "resume": None,
+            }
+        }
+    }
+
+    assert next_round(_plan(work), result)["tasks"] == [work]
 
 
 def test_drop_removes_a_node() -> None:

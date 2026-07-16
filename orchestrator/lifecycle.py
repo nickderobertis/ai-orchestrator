@@ -1404,7 +1404,7 @@ def _parse_steps(nid: str, raw_steps: object) -> list[Step]:
         if not isinstance(s.get("task"), str) or not str(s.get("task")).strip():
             raise PlanError(f"task {nid!r} step {sid!r} needs a non-empty 'task'")
         if kind == "human":
-            present = [key for key in _AGENT_STEP_FIELDS if s.get(key) is not None]
+            present = [key for key in _AGENT_STEP_FIELDS if key in s]
             if present:
                 raise PlanError(
                     f"task {nid!r} human step {sid!r} cannot set {', '.join(map(repr, present))}"

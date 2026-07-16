@@ -60,7 +60,7 @@ def next_round(
         for task in prev_plan.get("tasks") or []
         if isinstance(task, dict) and isinstance(task.get("id"), str)
     }
-    _validate_completed_humans(results, completed_humans)
+    _validate_completed_humans(prior_tasks, results, completed_humans)
 
     def _anchor(nid: str) -> StackBasePayload | None:
         item = results.get(nid)
@@ -89,6 +89,32 @@ def next_round(
             "pr_base": pr_base,
         }
         return anchor
+
+    def _anchors_through(nid: str, seen: frozenset[str] = frozenset()) -> list[StackBasePayload]:
+        """Carry unresolved publication ancestry through removed non-repo gates."""
+        if nid in seen:
+            return []
+        if anchor := _anchor(nid):
+            return [anchor]
+        item = results.get(nid)
+        if (
+            isinstance(item, dict)
+            and item.get("status") == "done"
+            and item.get("outcome") == "merged"
+            and item.get("pr_base") == item.get("base_branch")
+        ):
+            return []
+        source = prior_tasks.get(nid)
+        if not isinstance(source, dict):
+            return []
+        deps = source.get("deps") or []
+        if not isinstance(deps, list):
+            return []
+        found: list[StackBasePayload] = []
+        for dep in deps:
+            if isinstance(dep, str):
+                found.extend(_anchors_through(dep, seen | {nid}))
+        return found
 
     next_tasks: list[dict[str, Any]] = []
     kept_ids: set[str] = set()
@@ -123,7 +149,9 @@ def next_round(
             previous_deps = node["deps"]
             anchors = list(node.get("stack_bases") or [])
             for dep in previous_deps:
-                if dep in done_ids and (anchor := _anchor(dep)) is not None:
+                if dep in kept_ids:
+                    continue
+                for anchor in _anchors_through(dep):
                     anchors = [
                         existing
                         for existing in anchors
@@ -153,21 +181,47 @@ def _completed_humans(edits: dict[str, Any]) -> set[str]:
     return set(refs)
 
 
-def _validate_completed_humans(results: dict[str, Any], refs: set[str]) -> None:
+def _validate_completed_humans(
+    prior_tasks: dict[str, Any], results: dict[str, Any], refs: set[str]
+) -> None:
     if not refs:
         return
     from .plan import PlanError
 
+    human_refs = {
+        ref
+        for nid, task in prior_tasks.items()
+        if isinstance(task, dict)
+        for ref in _node_human_refs(nid, task)
+    }
     waiting_refs = {
         action["ref"]
-        for item in results.values()
-        if isinstance(item, dict)
+        for nid, item in results.items()
+        if isinstance(item, dict) and item.get("status") == "waiting"
         for action in item.get("human_actions") or []
-        if isinstance(action, dict) and isinstance(action.get("ref"), str)
+        if isinstance(action, dict)
+        and isinstance(action.get("ref"), str)
+        and (action["ref"] == nid or action["ref"].startswith(f"{nid}/"))
+        and action["ref"] in human_refs
     }
     unknown = sorted(ref for ref in refs if ref not in waiting_refs)
     if unknown:
         raise PlanError("can only complete recorded waiting human task refs: " + ", ".join(unknown))
+
+
+def _node_human_refs(nid: str, task: dict[str, Any]) -> set[str]:
+    if task.get("kind", "agent") == "human":
+        return {nid}
+    steps = task.get("steps") or []
+    if not isinstance(steps, list):
+        return set()
+    return {
+        f"{nid}/{step['id']}"
+        for step in steps
+        if isinstance(step, dict)
+        and step.get("kind", "agent") == "human"
+        and isinstance(step.get("id"), str)
+    }
 
 
 def _apply_lifecycle_resume(
@@ -184,7 +238,7 @@ def _apply_lifecycle_resume(
     completed_steps = sorted(
         ref.split("/", 1)[1] for ref in completed_humans if ref.startswith(f"{nid}/") and "/" in ref
     )
-    if resume is None and not waiting_steps:
+    if item.get("status") != "waiting" or (resume is None and not waiting_steps):
         return
     if not isinstance(resume, dict):
         from .plan import PlanError
