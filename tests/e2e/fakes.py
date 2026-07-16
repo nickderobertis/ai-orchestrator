@@ -21,10 +21,21 @@ PR/CI decisioning* are faked, each at its own seam:
 from __future__ import annotations
 
 import subprocess
+from dataclasses import dataclass
 from pathlib import Path
 
 from orchestrator.dispatch import Report
 from orchestrator.github import AutoMergeUnavailable, Check, PRStatus, PullRequest
+
+
+@dataclass
+class FakePRState:
+    head: str
+    base: str
+    title: str
+    body: str
+    merged: bool = False
+    auto: bool = False
 
 
 def _git(*args: str, cwd: str | Path) -> str:
@@ -83,7 +94,7 @@ class FakeGitHub:
         self.required = required
         self.fail_checks = fail_checks
         self.auto_available = auto_available
-        self._prs: dict[int, dict[str, object]] = {}
+        self._prs: dict[int, FakePRState] = {}
         self._n = 0
 
     def default_branch(self, repo: str) -> str:
@@ -91,14 +102,7 @@ class FakeGitHub:
 
     def create_pr(self, repo: str, *, head: str, base: str, title: str, body: str) -> PullRequest:
         self._n += 1
-        self._prs[self._n] = {
-            "head": head,
-            "base": base,
-            "title": title,
-            "body": body,
-            "merged": False,
-            "auto": False,
-        }
+        self._prs[self._n] = FakePRState(head, base, title, body)
         return PullRequest(
             number=self._n,
             url=f"https://github.com/{repo}/pull/{self._n}",
@@ -110,7 +114,7 @@ class FakeGitHub:
     def enable_auto_merge(self, pr: PullRequest, *, method: str) -> None:
         if not self.auto_available:
             raise AutoMergeUnavailable("auto-merge is not enabled for this repository")
-        self._prs[pr.number]["auto"] = True
+        self._prs[pr.number].auto = True
 
     def merge(self, pr: PullRequest, *, method: str) -> None:
         self._do_merge(pr)
@@ -120,9 +124,9 @@ class FakeGitHub:
         state = "FAILURE" if self.fail_checks else "SUCCESS"
         checks = tuple(Check(name=c, state=state, required=True) for c in self.required)
         green = all(c.green for c in checks)
-        if st["auto"] and green and not st["merged"]:
+        if st.auto and green and not st.merged:
             self._do_merge(pr)  # native auto-merge fires once required checks are green
-        merged = bool(st["merged"])
+        merged = st.merged
         return PRStatus(
             number=pr.number,
             state="MERGED" if merged else "OPEN",
@@ -133,10 +137,10 @@ class FakeGitHub:
 
     def _do_merge(self, pr: PullRequest) -> None:
         st = self._prs[pr.number]
-        if st["merged"]:
+        if st.merged:
             return
-        head_sha = _git("rev-parse", f"refs/heads/{st['head']}", cwd=self.origin).strip()
+        head_sha = _git("rev-parse", f"refs/heads/{st.head}", cwd=self.origin).strip()
         # Fast-forward base to the PR head in the bare origin — a real ref update
         # (head was branched from base, so this is always a valid fast-forward).
-        _git("update-ref", f"refs/heads/{st['base']}", head_sha, cwd=self.origin)
-        st["merged"] = True
+        _git("update-ref", f"refs/heads/{st.base}", head_sha, cwd=self.origin)
+        st.merged = True

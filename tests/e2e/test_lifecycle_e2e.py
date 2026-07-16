@@ -582,7 +582,7 @@ def test_github_second_run_reuses_open_pr_and_merges(tmp_path, bare_origin) -> N
             self, repo: str, *, head: str, base: str, title: str, body: str
         ) -> PullRequest:
             for number, state in self._prs.items():
-                if state["head"] == head and not state["merged"]:
+                if state.head == head and not state.merged:
                     return PullRequest(
                         number=number,
                         url=f"https://github.com/{repo}/pull/{number}",
@@ -766,7 +766,7 @@ def test_linear_team_stack_targets_open_dependency_and_includes_pr_link(
     assert parent.outcome == child.outcome == "pr-open"
     assert child.pr_base == parent.branch
     assert child.pr is not None and child.pr.base == parent.branch
-    assert parent.pr is not None and parent.pr.url in str(github._prs[2]["body"])
+    assert parent.pr is not None and parent.pr.url in github._prs[2].body
     assert _has_file(origin, child.branch, "parent.txt")
     assert _has_file(origin, child.branch, "child.txt")
     assert not _has_file(origin, "main", "parent.txt")
@@ -829,7 +829,7 @@ def test_multi_parent_stack_uses_synthetic_base_and_child_only_diff(tmp_path, ba
         capture_output=True,
     ).stdout.splitlines()
     assert changed == ["child.txt"]
-    assert all(state["head"] != synthetic for state in github._prs.values())
+    assert all(state.head != synthetic for state in github._prs.values())
 
 
 def test_stack_conflict_aborts_before_child_dispatch_and_skips_descendant(

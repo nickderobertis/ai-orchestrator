@@ -24,6 +24,7 @@ from typing import Any
 
 from .config import ConfigError, load_yaml
 from .lifecycle import parse_repo_plan
+from .runs import StackBasePayload
 
 __all__ = ["next_round"]
 
@@ -57,7 +58,7 @@ def next_round(
         if isinstance(task, dict) and isinstance(task.get("id"), str)
     }
 
-    def _anchor(nid: str) -> dict[str, Any] | None:
+    def _anchor(nid: str) -> StackBasePayload | None:
         item = results.get(nid)
         source = prior_tasks.get(nid)
         if not isinstance(item, dict) or not isinstance(source, dict):
@@ -66,21 +67,23 @@ def next_round(
         branch = item.get("branch")
         root = item.get("base_branch")
         pr_base = item.get("pr_base")
-        if outcome == "pr-open":
-            landed = branch
-        elif outcome == "merged" and isinstance(pr_base, str) and pr_base != root:
-            landed = pr_base
-        else:
-            return None
+        match outcome:
+            case "pr-open":
+                landed = branch
+            case "merged" if isinstance(pr_base, str) and pr_base != root:
+                landed = pr_base
+            case _:
+                return None
         if not isinstance(landed, str) or not landed:
             return None
-        return {
+        anchor: StackBasePayload = {
             "branch": landed,
             "repo": item.get("repo") or source.get("repo"),
             "identity": item.get("publication_identity"),
             "base_branch": root,
             "pr": item.get("pr"),
         }
+        return anchor
 
     next_tasks: list[dict[str, Any]] = []
     kept_ids: set[str] = set()

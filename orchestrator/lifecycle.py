@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 import sys
 import time
 import uuid
@@ -811,6 +812,29 @@ def _parse_stack_bases(nid: str, raw: object) -> list[StackBase]:
                 raise PlanError(
                     f"task {nid!r} stack_bases #{index} {field_name!r} must be a non-empty string"
                 )
+        raw_repo = item.get("repo")
+        if isinstance(raw_repo, str):
+            try:
+                normalized_repo = normalize_repo(raw_repo)
+            except ValueError as exc:
+                raise PlanError(f"task {nid!r} stack_bases #{index} has an invalid 'repo'") from exc
+            if raw_repo != normalized_repo.slug:
+                raise PlanError(
+                    f"task {nid!r} stack_bases #{index} 'repo' must be a normalized owner/name"
+                )
+        raw_base = item.get("base_branch")
+        if isinstance(raw_base, str) and not gitops.is_valid_branch_name(raw_base):
+            raise PlanError(
+                f"task {nid!r} stack_bases #{index} 'base_branch' is not a valid Git branch"
+            )
+        raw_pr = item.get("pr")
+        if (
+            isinstance(raw_pr, str)
+            and re.fullmatch(r"https://github\.com/[^/]+/[^/]+/pull/[1-9][0-9]*", raw_pr) is None
+        ):
+            raise PlanError(
+                f"task {nid!r} stack_bases #{index} 'pr' must be a GitHub pull-request URL"
+            )
         raw_identity = item.get("identity")
         try:
             identity = (
@@ -896,13 +920,13 @@ def run_repo_plan(
     completed: dict[str, LifecycleResult] = {}
 
     def dependency_anchor(result: LifecycleResult) -> StackBase | None:
-        branch: str | None = None
-        if result.outcome == "pr-open":
-            branch = result.branch
-        elif result.outcome == "merged" and result.pr_base != result.base_branch:
-            branch = result.pr_base
-        if not branch:
-            return None
+        match result.outcome:
+            case "pr-open":
+                branch = result.branch
+            case "merged" if result.pr_base != result.base_branch:
+                branch = result.pr_base
+            case _:
+                return None
         return StackBase(
             branch=branch,
             repo=result.repo,

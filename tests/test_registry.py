@@ -448,7 +448,10 @@ def test_repo_type_registration_conflict_requires_type_migration(
 
 
 def test_migrate_legacy_missing_registry_is_a_noop(tmp_path: Path) -> None:
-    Registry(tmp_path / "missing.json").migrate_legacy()
+    path = tmp_path / "missing.json"
+    registry = Registry(path)
+    assert registry.migrate_legacy() is None
+    assert not path.exists() and registry.entries == {}
 
 
 def test_repository_type_override_is_run_only_and_team_migration_normalizes_workflow(

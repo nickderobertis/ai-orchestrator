@@ -310,6 +310,55 @@ def test_load_valid_repo_plan(tmp_path) -> None:
             "not a normalized origin",
         ),
         (
+            {
+                "tasks": [
+                    {
+                        "id": "a",
+                        "repo": "r",
+                        "persona": "p",
+                        "task": "t",
+                        "stack_bases": [
+                            {
+                                "branch": "feature/parent",
+                                "repo": "https://github.com/o/r",
+                            }
+                        ],
+                    }
+                ]
+            },
+            "normalized owner/name",
+        ),
+        (
+            {
+                "tasks": [
+                    {
+                        "id": "a",
+                        "repo": "r",
+                        "persona": "p",
+                        "task": "t",
+                        "stack_bases": [{"branch": "feature/parent", "base_branch": "bad..base"}],
+                    }
+                ]
+            },
+            "base_branch.*not a valid Git branch",
+        ),
+        (
+            {
+                "tasks": [
+                    {
+                        "id": "a",
+                        "repo": "r",
+                        "persona": "p",
+                        "task": "t",
+                        "stack_bases": [
+                            {"branch": "feature/parent", "pr": "https://example.com/1"}
+                        ],
+                    }
+                ]
+            },
+            "pull-request URL",
+        ),
+        (
             {"tasks": [{"id": "a", "repo": "r", "persona": "p", "task": "t", "deps": ["z"]}]},
             "unknown task",
         ),
