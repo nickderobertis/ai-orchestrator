@@ -25,7 +25,7 @@ import sys
 import time
 import uuid
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, cast
 
@@ -49,7 +49,14 @@ from .runs import (
     write_result,
 )
 from .verify import VerifyResult, detect_gate, run_gate
-from .workspace import IdentityKey, RepoRef, Workflow, Workspace, normalize_repo
+from .workspace import (
+    IdentityKey,
+    RepoRef,
+    RepositoryType,
+    Workflow,
+    Workspace,
+    normalize_repo,
+)
 
 # A merge only completes when the PR's blocking (required) checks are green. The
 # default `auto` policy uses GitHub native auto-merge (which by construction
@@ -84,6 +91,17 @@ class StepResult:
     report: Report | None = None
 
 
+@dataclass(frozen=True)
+class StackBase:
+    """A dependency branch whose content has not reached the root base."""
+
+    branch: str
+    repo: str | None = None
+    identity: IdentityKey | None = None
+    base_branch: str | None = None
+    pr: str | None = None
+
+
 @dataclass
 class LifecycleResult:
     """The outcome of driving one subtask (or a step workstream) through a repo."""
@@ -99,6 +117,11 @@ class LifecycleResult:
     publication_checkout: str = ""
     publication_identity: IdentityKey | None = None
     publication_workflow: Workflow | None = None
+    repository_type: RepositoryType | None = None
+    merge_policy: str | None = None
+    pr_base: str = ""
+    synthetic_stack_base: str | None = None
+    stack_bases: list[StackBase] = field(default_factory=list)
     pr: PullRequest | None = None
     report: Report | None = None
     verify: VerifyResult | None = None
@@ -108,6 +131,10 @@ class LifecycleResult:
     @property
     def ok(self) -> bool:
         return self.outcome in _SUCCESS_OUTCOMES
+
+    @property
+    def repo_type(self) -> RepositoryType | None:
+        return self.repository_type
 
     def summary(self) -> str:
         head = f"{self.repo} [{self.persona}] {self.branch}: {self.outcome}"
@@ -120,7 +147,11 @@ class LifecycleResult:
                 f"\n  - execution checkout: {self.execution_checkout}"
                 f"\n  - publication identity: {self.publication_identity}"
                 f"\n  - publication checkout: {self.publication_checkout}"
+                f"\n  - repository type: {self.repository_type}"
                 f"\n  - publication workflow: {self.publication_workflow}"
+                f"\n  - merge policy: {self.merge_policy}"
+                f"\n  - PR base: {self.pr_base}"
+                f"\n  - synthetic stack base: {self.synthetic_stack_base or '-'}"
             )
         if self.detail:
             head += f"\n  - {self.detail}"
@@ -192,6 +223,39 @@ def _workstream_body(steps: list[Step], results: list[StepResult]) -> str:
         "committing in turn, and the change was verified locally before merge.",
         "",
     ]
+    return "\n".join(lines)
+
+
+def _effective_publication(
+    repo_type: RepositoryType,
+    stored_workflow: Workflow | None,
+    requested_workflow: Workflow | None,
+    merge_policy: str | None,
+) -> tuple[Workflow, str]:
+    """Resolve workflow/policy after node and command precedence has selected inputs."""
+    workflow = stored_workflow or requested_workflow or "remote"
+    if repo_type == "team":
+        if requested_workflow == "local":
+            raise RegistryError("repo_type=team cannot use workflow=local")
+        workflow = "remote"
+        return workflow, merge_policy or "none"
+    if merge_policy == "none":
+        return "remote", "none"
+    return workflow, merge_policy or ("direct" if workflow == "local" else "auto")
+
+
+def _stack_body(anchors: list[StackBase], synthetic: str | None) -> str:
+    if not anchors:
+        return ""
+    lines = ["", "## Stack", "This change is stacked on:"]
+    for anchor in anchors:
+        label = f"`{anchor.branch}`"
+        if anchor.pr:
+            label += f" ({anchor.pr})"
+        lines.append(f"- {label}")
+    if synthetic:
+        lines += ["", f"Synthetic stack base: `{synthetic}`."]
+    lines.append("")
     return "\n".join(lines)
 
 
@@ -279,6 +343,37 @@ def _select_merge_strategy(
     return GitHubMergeStrategy(github or CliGitHubBackend())
 
 
+def _build_synthetic_stack_base(
+    ref: RepoRef,
+    workspace: Workspace,
+    root_base: str,
+    anchors: list[StackBase],
+) -> tuple[str | None, str | None]:
+    """Build and push a multi-parent base, or return a stack-conflict detail."""
+    key = "\x00".join(anchor.branch for anchor in anchors)
+    digest = _short_hash(ref.slug, root_base, key)
+    branch = f"ai-orchestrator/stack-base/{digest}-{uuid.uuid4().hex[:10]}"
+    worktree = workspace.worktree(ref, branch, base=f"origin/{root_base}")
+    try:
+        for anchor in anchors:
+            dependency = f"origin/{anchor.branch}"
+            if gitops.is_ancestor(worktree, dependency, "HEAD"):
+                continue
+            if not gitops.merge_base_into_branch(
+                worktree,
+                dependency,
+                message=f"Merge stack prerequisite {anchor.branch}",
+            ):
+                return None, (
+                    f"stack-conflict: could not merge prerequisite {anchor.branch!r} "
+                    f"into synthetic base from {root_base!r}"
+                )
+        gitops.push(worktree, branch)
+        return branch, None
+    finally:
+        workspace.remove_worktree(ref, worktree)
+
+
 def run_repo_task(
     repo: str,
     task: str | None = None,
@@ -288,6 +383,7 @@ def run_repo_task(
     steps: list[Step] | None = None,
     merge: MergeStrategy | None = None,
     workflow: Workflow | None = None,
+    repo_type: RepositoryType | None = None,
     execution_checkout: str | Path | None = None,
     github: GitHubBackend | None = None,
     base_branch: str | None = None,
@@ -297,7 +393,7 @@ def run_repo_task(
     url: str | None = None,
     verify_cmd: list[str] | None = None,
     skip_verify: bool = False,
-    merge_policy: str = "auto",
+    merge_policy: str | None = None,
     merge_method: str = "squash",
     oneharness_mode: str | None = "bypass",
     dispatch_fn: DispatchFn = dispatch,
@@ -312,6 +408,7 @@ def run_repo_task(
     sleep: Callable[[float], None] = time.sleep,
     clock: Callable[[], float] = time.monotonic,
     cleanup: bool = True,
+    stack_bases: list[StackBase] | None = None,
 ) -> LifecycleResult:
     """Take one subtask from a fresh branch to a merged change on ``repo``.
 
@@ -356,6 +453,7 @@ def run_repo_task(
             url=url,
             base_branch=base_branch,
             execution_checkout=execution_checkout,
+            repo_type=repo_type,
         )
         selection = workspace.selection(ref)
         registered_workflow = selection.workflow
@@ -369,16 +467,45 @@ def run_repo_task(
                 f"{registered_workflow}; use 'just migrate-repo-workflow {repo} "
                 f"--workflow {workflow}' between runs"
             )
-        publication_workflow = registered_workflow or workflow
+        effective_type = repo_type or selection.repo_type
+        if effective_type is None:
+            raise RegistryError("repository type is unclassified; pass --repo-type explicitly")
+        publication_workflow, effective_policy = _effective_publication(
+            effective_type, registered_workflow, workflow, merge_policy
+        )
         result.execution_checkout = str(selection.execution_checkout)
         result.publication_checkout = str(selection.publication_checkout)
         result.publication_identity = selection.publication_identity
         result.publication_workflow = publication_workflow
+        result.repository_type = effective_type
+        result.merge_policy = effective_policy
         strategy = _select_merge_strategy(ref, merge, github, publication_workflow)
-        base = base_branch or gitops.default_branch(clone)
-        result.base_branch = base
+        root_base = base_branch or gitops.default_branch(clone)
+        result.base_branch = root_base
+        applicable_stack = [
+            anchor
+            for anchor in (stack_bases or [])
+            if anchor.identity is None or anchor.identity == selection.publication_identity
+        ]
+        result.stack_bases = applicable_stack
+        if len(applicable_stack) > 1:
+            synthetic, conflict = _build_synthetic_stack_base(
+                ref, workspace, root_base, applicable_stack
+            )
+            if conflict is not None:
+                result.outcome = "stack-conflict"
+                result.detail = conflict
+                return result
+            assert synthetic is not None
+            pr_base = synthetic
+            result.synthetic_stack_base = synthetic
+        elif applicable_stack:
+            pr_base = applicable_stack[0].branch
+        else:
+            pr_base = root_base
+        result.pr_base = pr_base
         branch = result.branch
-        worktree = workspace.worktree(ref, branch, base=f"origin/{base}")
+        worktree = workspace.worktree(ref, branch, base=f"origin/{pr_base}")
 
         all_done, step_results, step_detail = _run_steps(
             effective_steps,
@@ -400,7 +527,7 @@ def run_repo_task(
 
         with advisory_lock(f"git:{gitops.common_dir(worktree)}"):
             gitops.fetch(worktree)
-        remote_base = f"origin/{base}"
+        remote_base = f"origin/{pr_base}"
         if not gitops.merge_base_into_branch(
             worktree,
             remote_base,
@@ -422,7 +549,7 @@ def run_repo_task(
                     timeout=gate_timeout,
                     env={
                         "ORCHESTRATOR_COMPARISON_REMOTE": "origin",
-                        "ORCHESTRATOR_COMPARISON_BASE": base,
+                        "ORCHESTRATOR_COMPARISON_BASE": pr_base,
                     },
                 )
                 result.verify = verify
@@ -444,12 +571,13 @@ def run_repo_task(
         ctx = MergeContext(
             repo_slug=ref.slug,
             clone_dir=clone,
-            base=base,
+            base=pr_base,
             branch=branch,
             title=title or _default_title(lead.persona, lead.task),
-            body=body or _workstream_body(effective_steps, step_results),
+            body=(body or _workstream_body(effective_steps, step_results))
+            + _stack_body(applicable_stack, result.synthetic_stack_base),
             method=merge_method,
-            policy=merge_policy,
+            policy=effective_policy,
             poll_interval=poll_interval,
             timeout=timeout,
             sleep=sleep,
@@ -458,13 +586,13 @@ def run_repo_task(
             gate_timeout=gate_timeout,
             verify_env={
                 "ORCHESTRATOR_COMPARISON_REMOTE": "origin",
-                "ORCHESTRATOR_COMPARISON_BASE": base,
+                "ORCHESTRATOR_COMPARISON_BASE": pr_base,
             },
             publication_attempts=publication_attempts,
         )
         merge_outcome = strategy.publish_and_merge(ctx)
-        if merge_outcome.outcome == "merged":
-            workspace.fast_forward(ref, base)
+        if merge_outcome.outcome == "merged" and pr_base == root_base:
+            workspace.fast_forward(ref, root_base)
         result.pr = merge_outcome.pr
         result.outcome = merge_outcome.outcome
         result.detail = merge_outcome.detail
@@ -497,10 +625,12 @@ class RepoPlanNode:
     skip_verify: bool = False
     merge_policy: str | None = None
     workflow: Workflow | None = None
+    repo_type: RepositoryType | None = None
     execution_checkout: str | None = None
     max_turns: int | None = None
     done_when: str | None = None
     steps: list[Step] | None = None
+    stack_bases: list[StackBase] = field(default_factory=list)
 
 
 @dataclass
@@ -527,7 +657,9 @@ class RepoPlanResult:
         return all(r.status == "done" for r in self.results.values())
 
     def summary(self) -> str:
-        lines = [f"repo-plan: {'all PRs merged' if self.ok else 'some subtasks did not complete'}"]
+        lines = [
+            f"repo-plan: {'all changes published' if self.ok else 'some subtasks did not complete'}"
+        ]
         for nid, r in self.results.items():
             outcome = r.result.outcome if r.result else r.status
             detail = f" ({r.error})" if r.error else ""
@@ -588,6 +720,10 @@ def parse_repo_plan(data: dict[str, Any]) -> RepoPlan:
         if raw_workflow is not None and raw_workflow not in ("local", "remote"):
             raise PlanError(f"task {nid!r} 'workflow' must be 'local' or 'remote'")
         workflow = cast(Workflow | None, raw_workflow)
+        raw_repo_type = t.get("repo_type")
+        if raw_repo_type is not None and raw_repo_type not in ("single-owner", "team"):
+            raise PlanError(f"task {nid!r} 'repo_type' must be 'single-owner' or 'team'")
+        repo_type = cast(RepositoryType | None, raw_repo_type)
         raw_execution = t.get("execution_checkout")
         if raw_execution is not None and (
             not isinstance(raw_execution, str) or not raw_execution.strip()
@@ -606,10 +742,12 @@ def parse_repo_plan(data: dict[str, Any]) -> RepoPlan:
             skip_verify=bool(t.get("skip_verify", False)),
             merge_policy=policy,
             workflow=workflow,
+            repo_type=repo_type,
             execution_checkout=raw_execution,
             max_turns=t.get("max_turns"),
             done_when=t.get("done_when"),
             steps=node_steps,
+            stack_bases=_parse_stack_bases(nid, t.get("stack_bases", [])),
         )
 
     for nid, node in nodes.items():
@@ -621,6 +759,39 @@ def parse_repo_plan(data: dict[str, Any]) -> RepoPlan:
     _topological_order({nid: _to_plan_node(n) for nid, n in nodes.items()})  # cycle check
 
     return RepoPlan(tasks=list(nodes.values()), concurrency=concurrency)
+
+
+def _parse_stack_bases(nid: str, raw: object) -> list[StackBase]:
+    from .plan import PlanError
+
+    if not isinstance(raw, list):
+        raise PlanError(f"task {nid!r} 'stack_bases' must be a list of anchors")
+    anchors: list[StackBase] = []
+    for index, item in enumerate(raw):
+        if not isinstance(item, dict):
+            raise PlanError(f"task {nid!r} stack_bases #{index} must be a mapping")
+        allowed = {"branch", "repo", "identity", "base_branch", "pr"}
+        if set(item) - allowed:
+            raise PlanError(f"task {nid!r} stack_bases #{index} has unknown fields")
+        branch = item.get("branch")
+        if not isinstance(branch, str) or not branch.strip():
+            raise PlanError(f"task {nid!r} stack_bases #{index} needs a non-empty 'branch'")
+        for field_name in ("repo", "identity", "base_branch", "pr"):
+            value = item.get(field_name)
+            if value is not None and (not isinstance(value, str) or not value.strip()):
+                raise PlanError(
+                    f"task {nid!r} stack_bases #{index} {field_name!r} must be a non-empty string"
+                )
+        anchors.append(
+            StackBase(
+                branch=branch,
+                repo=item.get("repo"),
+                identity=cast(IdentityKey | None, item.get("identity")),
+                base_branch=item.get("base_branch"),
+                pr=item.get("pr"),
+            )
+        )
+    return anchors
 
 
 def _parse_steps(nid: str, raw_steps: object) -> list[Step]:
@@ -686,10 +857,40 @@ def run_repo_plan(
     conc = concurrency if concurrency is not None else plan.concurrency
     nodes = {n.id: n for n in plan.tasks}
     deps = {nid: nodes[nid].deps for nid in nodes}
+    completed: dict[str, LifecycleResult] = {}
+
+    def dependency_anchor(result: LifecycleResult) -> StackBase | None:
+        branch: str | None = None
+        if result.outcome == "pr-open":
+            branch = result.branch
+        elif result.outcome == "merged" and result.pr_base != result.base_branch:
+            branch = result.pr_base
+        if not branch:
+            return None
+        return StackBase(
+            branch=branch,
+            repo=result.repo,
+            identity=result.publication_identity,
+            base_branch=result.base_branch,
+            pr=result.pr.url if result.pr else None,
+        )
 
     def run_one(nid: str) -> NodeRun:
-        result = runner(nodes[nid])
+        node = nodes[nid]
+        dynamic = [
+            anchor
+            for dep in node.deps
+            if dep in completed
+            for anchor in (dependency_anchor(completed[dep]),)
+            if anchor is not None
+        ]
+        combined = list(node.stack_bases)
+        for anchor in dynamic:
+            if all(existing.branch != anchor.branch for existing in combined):
+                combined.append(anchor)
+        result = runner(replace(node, stack_bases=combined))
         if result.ok:
+            completed[nid] = result
             return NodeRun("done", None, result)
         return NodeRun("failed", result.detail or result.outcome, result)
 
@@ -713,13 +914,14 @@ def make_repo_runner(
     github: GitHubBackend | None = None,
     base_path: str | Path,
     persona_dir: str | Path,
-    merge_policy: str,
+    merge_policy: str | None,
     merge_method: str,
     oneharness_mode: str | None,
     skip_verify: bool,
     poll_interval: float,
     timeout: float,
     publication_attempts: int = 3,
+    repo_type: RepositoryType | None = None,
 ) -> Callable[[RepoPlanNode], LifecycleResult]:
     """Build the production runner that drives each node through `run_repo_task`."""
 
@@ -732,13 +934,14 @@ def make_repo_runner(
             steps=node.steps,
             github=github,
             workflow=node.workflow,
+            repo_type=node.repo_type or repo_type,
             execution_checkout=node.execution_checkout,
             base_branch=node.base_branch,
             branch=node.branch,
             title=node.title,
             verify_cmd=node.verify_cmd,
             skip_verify=node.skip_verify or skip_verify,
-            merge_policy=node.merge_policy or merge_policy,
+            merge_policy=(node.merge_policy if node.merge_policy is not None else merge_policy),
             merge_method=merge_method,
             oneharness_mode=oneharness_mode,
             base_path=base_path,
@@ -748,6 +951,7 @@ def make_repo_runner(
             poll_interval=poll_interval,
             timeout=timeout,
             publication_attempts=publication_attempts,
+            stack_bases=node.stack_bases,
         )
 
     return runner
@@ -778,7 +982,8 @@ def _add_common_args(parser: argparse.ArgumentParser) -> None:
         default=Path.home() / ".ai-orchestrator" / "worktrees",
         help="root directory for isolated task worktrees",
     )
-    parser.add_argument("--merge-policy", choices=MERGE_POLICIES, default="auto")
+    parser.add_argument("--merge-policy", choices=MERGE_POLICIES, default=None)
+    parser.add_argument("--repo-type", choices=("single-owner", "team"), default=None)
     parser.add_argument("--merge-method", choices=MERGE_METHODS, default="squash")
     parser.add_argument(
         "--oneharness-mode",
@@ -813,9 +1018,25 @@ def _result_payload(result: LifecycleResult) -> dict[str, Any]:
         "execution_checkout": result.execution_checkout,
         "publication_checkout": result.publication_checkout,
         "publication_identity": result.publication_identity,
+        "repo_type": result.repository_type,
+        "repository_type": result.repository_type,
         "publication_workflow": result.publication_workflow,
+        "workflow": result.publication_workflow,
+        "merge_policy": result.merge_policy,
         "branch": result.branch,
         "base_branch": result.base_branch,
+        "pr_base": result.pr_base,
+        "synthetic_stack_base": result.synthetic_stack_base,
+        "stack_bases": [
+            {
+                "branch": anchor.branch,
+                "repo": anchor.repo,
+                "identity": anchor.identity,
+                "base_branch": anchor.base_branch,
+                "pr": anchor.pr,
+            }
+            for anchor in result.stack_bases
+        ],
         "outcome": result.outcome,
         "ok": result.ok,
         "pr": result.pr.url if result.pr else None,
@@ -857,6 +1078,7 @@ def main_task(argv: list[str] | None = None) -> int:
         branch=args.branch,
         title=args.title,
         execution_checkout=args.execution_checkout,
+        repo_type=args.repo_type,
         verify_cmd=None,
         skip_verify=args.skip_verify,
         merge_policy=args.merge_policy,
@@ -923,6 +1145,7 @@ def main_plan(argv: list[str] | None = None) -> int:
         poll_interval=args.poll_interval,
         timeout=args.timeout,
         publication_attempts=args.publication_attempts,
+        repo_type=args.repo_type,
     )
     result = run_repo_plan(plan, runner, concurrency=args.concurrency)
 

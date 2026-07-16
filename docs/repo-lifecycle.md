@@ -22,9 +22,10 @@ ensure clone (once per repo)  →  fresh worktree on a new branch off base
 
 Everything up to "publish + merge" is identical for every repo; only the last
 step differs by where the repo lives (see *Merge strategies*). The result is a
-`LifecycleResult` whose `outcome` is one of: `merged`, `pr-open` (policy `none`),
+`LifecycleResult` whose `outcome` is one of: `merged`, `pr-open` (successful
+publication with policy `none`),
 `not-completed` (agent hit the turn cap), `gate-failed`, `no-changes`,
-`checks-failed`, `closed`, `timeout`, `error`.
+`checks-failed`, `closed`, `timeout`, `stack-conflict`, `error`.
 
 `just repo-task <repo> <persona> "<task>"` runs one. `<repo>` is a GitHub
 `name` / `owner/name` / URL, **or a local filesystem path**. It selects the
@@ -39,17 +40,27 @@ the persistent registry (`orchestrator/registry.py`): the **publication checkout
 selected by the repository argument and the **execution checkout** used to create
 the task worktree. Normally they are the same. `--execution-checkout` deliberately
 separates them for a safety clone. The lifecycle reports the exact execution path,
-publication path, normalized identity, and publication workflow in both human and
-JSON output.
+publication path, normalized identity, effective repository type, workflow,
+merge policy, PR base, and synthetic stack base in human output, JSON, and the
+recorded run ledger.
 
-The registry's version 2 format stores `identities` keyed by normalized origin and
+The registry's version 3 format stores `identities` keyed by normalized origin and
 stores alias-to-path records separately under `checkouts`. Workflow exists only on
-the identity. Thus GitHub/SSH URL spellings, canonical clones, safety clones, linked
+the identity alongside `repo_type` (`single-owner` or `team`). Thus GitHub/SSH URL spellings, canonical clones, safety clones, linked
 worktrees, and auxiliary clones resolve to one workflow even when several aliases
-share the origin. Legacy flat registries load deterministically when duplicate
-aliases agree and are written as version 2 on the next save. Conflicting legacy
+share the origin. Flat and v2 registries migrate lazily in one atomic replacement:
+`local` is affirmative single-owner evidence; `remote` is inferred by comparing
+the normalized GitHub origin owner case-insensitively with `gh api user --jq
+.login`. Missing authentication or a non-GitHub origin fails before dispatch
+unless the run supplies `--repo-type`. Conflicting legacy
 entries fail with every alias/path/workflow and the exact migration command; no
 workflow is selected implicitly.
+
+`--repo-type` on `register-repo` persists. The same option on `repo-task`,
+`repo-recover`, or `repo-plan` is run-only. A plan node's `repo_type` beats the
+command option, which beats stored or inferred type. Change stored type with
+`just migrate-repo-type <repo> --repo-type <single-owner|team>`; choosing team
+also normalizes workflow to `remote`.
 
 The execution checkout hands out a **git worktree per branch** *outside* itself.
 N parallel subtasks against a repo get N isolated trees without N clones. The
@@ -94,7 +105,7 @@ real work is intact at its last commit *before* the `init`-commit corruption.
 Register another clone without repeating workflow; it inherits from its origin:
 
 ```sh
-just register-repo /path/to/ai-orchestrator --workflow local
+just register-repo /path/to/ai-orchestrator --workflow local --repo-type single-owner
 just register-repo /path/to/ai-orchestrator-isolated
 ```
 
@@ -134,13 +145,21 @@ back to `main`. `just sync` discovers the same branch; `just sync <branch>
 
 ## Merge strategies (where the change lands)
 
-Selected from normalized repository identity metadata (`local` or `remote`). A
+Selected from normalized identity type plus workflow. A
 task/plan workflow value may assert the expected workflow but cannot contradict a
 registered identity; use the migration command between runs to change it. New and
-genuinely unknown identities default to `remote`; multiple aliases for one known
-origin are not ambiguity, and a filesystem path is not by itself evidence that
-direct base updates are intended. Choose `local` explicitly only for a known
-no-CI/local-first repo.
+genuinely unknown identities must infer from authenticated GitHub ownership or
+receive an explicit type; a filesystem path is not ownership evidence. Merge-policy
+CLI defaults are intentionally unspecified: node policy beats command policy,
+then repository-type defaults apply.
+
+- **Team** — always effective workflow `remote`. Omitted policy opens an ordinary
+  ready-for-review PR and returns `pr-open` immediately, without polling checks.
+  Explicit `auto` or `direct` merges the PR by that policy. Team plus local
+  registration/workflow migration/direct integration is rejected.
+- **Single owner** — omitted policy preserves `local` direct publication or
+  `remote` auto-merge. Explicit `none` forces remote PR publication for that run
+  and leaves the PR open without mutating a stored local workflow.
 
 - **`GitHubMergeStrategy`** (GitHub repos) — opens a PR, then merges it **only
   once the repo's required (blocking) checks are green**. The default policy is
@@ -157,21 +176,35 @@ no-CI/local-first repo.
   A **bare** local origin accepts the push directly; a non-bare origin needs
   `receive.denyCurrentBranch=updateInstead` so its working tree updates too.
 
-After either strategy reports a merge, the canonical checkout fetches and
-fast-forwards its checked-out default branch with `--ff-only`. No merge assembly,
+Only after content lands on the canonical checkout's checked-out root does that
+checkout fetch and fast-forward with `--ff-only`. A merge into a feature or
+synthetic stack base does not advance it. No merge assembly,
 checkout, or hard reset occurs in that canonical working tree.
 
 ## Many PRs for one task: `run_repo_plan`
 
 A repo-plan is a DAG whose nodes each carry a `repo` and either a `persona`+`task`
 or a `steps` workstream, plus `deps` (and optional `base_branch`, `branch`,
-`title`, `verify_cmd`, `skip_verify`, `merge_policy`, `workflow`,
+`title`, `verify_cmd`, `skip_verify`, `merge_policy`, `workflow`, `repo_type`,
+validated `stack_bases`,
 `execution_checkout`). `run_repo_plan` schedules it
 on the **same engine as `run_plan`** (`plan.schedule_dag`): independent nodes run
-concurrently (their PRs open in parallel), a dependent node waits for the one it
-needs to **merge** first and then branches off the updated base (each node
-re-fetches at start), and a node whose dependency failed is skipped — its PR is
-never opened against a broken precondition. `just repo-plan <repo-plan.json>`; see
+concurrently, and a node whose dependency failed is skipped. Cross-repository
+dependencies only schedule. A successful same-identity dependency not landed on
+the root base becomes a stack prerequisite:
+
+- one prerequisite is the child's checkout and PR base;
+- several prerequisites are merged in declared order (ancestor duplicates are
+  skipped) into a pushed `ai-orchestrator/stack-base/*` branch cut from the root;
+  that synthetic branch has no PR and remains remote while it is a PR base;
+- stack prerequisites override an explicit `base_branch` as checkout/PR base,
+  while that explicit/default branch remains the root for multi-parent assembly;
+- a merge conflict aborts before child dispatch/publication as `stack-conflict`,
+  so descendants skip.
+
+The child PR body lists dependency PR links and stack bases. Its final gate runs
+against the complete stack, but the PR diff against its stack base is child-only.
+`just repo-plan <repo-plan.json>`; see
 `examples/repo-plan.example.json`.
 
 ## Several onejudge on ONE PR: workstreams
@@ -198,9 +231,10 @@ decides the next round from them. `orchestrator.replan.next_round` formalizes th
 mechanics: given the prior plan, its results, and a small **edits** mapping
 (`retry` a failed node with overrides, `split` a too-big node into sub-nodes,
 `add` follow-up work, `drop` what's no longer needed), it emits the next round's
-plan — carrying **merged nodes out** (done, not re-run) and dropping a new node's
-dependency on a merged node as *satisfied* (its predecessor is on the base branch
-now). The produced plan is validated, so a bad edit fails loudly.
+plan. Completed nodes landed on root are removed as satisfied. Completed-but-open
+dependencies become `stack_bases` anchors before their IDs are removed; a merge
+into a feature or synthetic base carries that landed base until the content
+reaches root. The produced plan is validated, so a bad edit fails loudly.
 
 `repo-plan` records every round by default:
 
@@ -285,8 +319,10 @@ just repo-recover <branch> --repo <canonical-checkout>
 Recovery retains the source branch on failure. It uses an isolated worktree,
 fetches and merges current `origin/<base>`, runs the lifecycle gate with the
 resolved comparison environment, writes an attestation, and pushes the feature
-branch. A remote workflow opens/reuses a PR and enables auto-merge; a local
-workflow uses the verified direct-merge strategy. `repo-task-auto` prints this
+branch. Recovery uses the same type defaults and accepts run-only `--repo-type`;
+team omission leaves its ready-for-review PR open, remote single-owner omission
+enables auto-merge, and local single-owner omission uses direct merge.
+`repo-task-auto` prints this
 command when it reports `not-completed`.
 
 ## Operating across workers and machines
@@ -326,6 +362,10 @@ machines can reach the origin and it accepts safe base updates. Do not switch
 metadata to bypass an in-flight PR or failed gate; close or recover that run under
 its original workflow.
 
+Switch identity type only between runs with `just migrate-repo-type
+<alias-or-checkout> --repo-type <single-owner|team>`. Team selection atomically
+normalizes workflow to remote. Finish or recover active publication first.
+
 ## Auto mode without approvals — and why bypass
 
 The lifecycle dispatches with `oneharness_mode` defaulting to **`bypass`** — the
@@ -351,6 +391,7 @@ for free are injected, each at its own seam:
 
 So the lifecycle e2e (`tests/e2e/test_lifecycle_e2e.py`) drives the whole journey
 — clone, worktree, branch, commit, push, and merge — against a real bare git
-origin, for both the local direct-merge and the GitHub PR+auto-merge paths, plus
+origin, for team open PRs, team/single-owner merged PRs, local direct and
+run-only-open publication, linear and synthetic stacks, conflict safety,
 gate-failure, not-completed, no-changes, checks-failed, and a multi-PR DAG. The
 merge is never mocked; only GitHub's decisioning and the paid model are.

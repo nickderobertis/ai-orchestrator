@@ -199,7 +199,7 @@ def test_local_identity_executes_in_safety_clone_and_publishes_without_pr(
 def test_registered_remote_identity_keeps_pr_flow(tmp_path, bare_origin) -> None:
     origin = bare_origin()
     canonical = gitops.clone(origin, tmp_path / "canonical-remote")
-    Registry().register(str(canonical), workflow="remote")
+    Registry().register(str(canonical), workflow="remote", repo_type="single-owner")
     github = FakeGitHub(origin)
 
     result = run_repo_task(
@@ -218,6 +218,81 @@ def test_registered_remote_identity_keeps_pr_flow(tmp_path, bare_origin) -> None
     assert result.pr is not None and result.pr.number == 1
     assert github._n == 1
     assert _has_file(origin, "main", "reviewed.txt")
+    assert result.repository_type == "single-owner"
+    assert result.merge_policy == "auto"
+    assert result.pr_base == "main"
+
+
+def test_team_default_opens_ready_for_review_pr_without_polling(tmp_path, bare_origin) -> None:
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-team")
+    Registry().register(str(canonical), workflow="remote", repo_type="team")
+    github = FakeGitHub(origin, fail_checks=True)
+
+    result = run_repo_task(
+        str(canonical),
+        "Open a team-owned change for review.",
+        "backend-engineer",
+        workspace=Workspace(tmp_path / "team-worktrees"),
+        github=github,
+        dispatch_fn=make_writing_dispatch(filename="team.txt"),
+        verify_cmd=["true"],
+    )
+
+    assert result.ok and result.outcome == "pr-open", result.detail
+    assert result.repository_type == "team"
+    assert result.publication_workflow == "remote" and result.merge_policy == "none"
+    assert result.pr is not None and result.pr.base == "main"
+    assert not _has_file(origin, "main", "team.txt")
+    assert _has_file(origin, result.branch, "team.txt")
+
+
+def test_team_explicit_auto_merges_remote_pr(tmp_path, bare_origin) -> None:
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-team-auto")
+    Registry().register(str(canonical), workflow="remote", repo_type="team")
+
+    result = run_repo_task(
+        str(canonical),
+        "Merge an explicitly automated team change.",
+        "backend-engineer",
+        workspace=Workspace(tmp_path / "team-auto-worktrees"),
+        github=FakeGitHub(origin),
+        dispatch_fn=make_writing_dispatch(filename="team-auto.txt"),
+        verify_cmd=["true"],
+        merge_policy="auto",
+        sleep=lambda _: None,
+    )
+
+    assert result.ok and result.outcome == "merged", result.detail
+    assert result.merge_policy == "auto" and result.publication_workflow == "remote"
+    assert _has_file(origin, "main", "team-auto.txt")
+
+
+def test_local_single_owner_none_opens_pr_without_mutating_stored_workflow(
+    tmp_path, bare_origin
+) -> None:
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-local-none")
+    registry = Registry()
+    registry.register(str(canonical), workflow="local", repo_type="single-owner")
+
+    result = run_repo_task(
+        str(canonical),
+        "Temporarily publish local work for review.",
+        "backend-engineer",
+        workspace=Workspace(tmp_path / "local-none-worktrees"),
+        github=FakeGitHub(origin),
+        dispatch_fn=make_writing_dispatch(filename="local-none.txt"),
+        verify_cmd=["true"],
+        merge_policy="none",
+    )
+
+    assert result.ok and result.outcome == "pr-open", result.detail
+    assert result.publication_workflow == "remote" and result.merge_policy == "none"
+    stored = Registry().identity_for_checkout(canonical)
+    assert stored is not None and stored.workflow == "local"
+    assert not _has_file(origin, "main", "local-none.txt")
 
 
 def test_local_repo_direct_merge(tmp_path, bare_origin) -> None:
@@ -641,6 +716,208 @@ def test_multi_pr_dag_across_repos(tmp_path, bare_origin) -> None:
     assert _has_file(repo_x, "main", "a.txt")
     assert _has_file(repo_x, "main", "c.txt")
     assert _has_file(repo_y, "main", "b.txt")
+
+
+def test_linear_team_stack_targets_open_dependency_and_includes_pr_link(
+    tmp_path, bare_origin
+) -> None:
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-linear-stack")
+    Registry().register(str(canonical), workflow="remote", repo_type="team")
+    workspace = Workspace(tmp_path / "linear-stack-worktrees")
+    github = FakeGitHub(origin)
+
+    def runner(node: RepoPlanNode):
+        return run_repo_task(
+            node.repo,
+            node.task,
+            node.persona,
+            workspace=workspace,
+            github=github,
+            branch=node.branch,
+            dispatch_fn=make_writing_dispatch(filename=f"{node.id}.txt"),
+            verify_cmd=["true"],
+            stack_bases=node.stack_bases,
+        )
+
+    result = run_repo_plan(
+        RepoPlan(
+            [
+                RepoPlanNode(
+                    "parent", str(canonical), "backend-engineer", "parent", branch="feature/parent"
+                ),
+                RepoPlanNode(
+                    "child",
+                    str(canonical),
+                    "backend-engineer",
+                    "child",
+                    deps=["parent"],
+                    branch="feature/child",
+                ),
+            ]
+        ),
+        runner,
+    )
+
+    assert result.ok
+    parent = result.results["parent"].result
+    child = result.results["child"].result
+    assert parent is not None and child is not None
+    assert parent.outcome == child.outcome == "pr-open"
+    assert child.pr_base == parent.branch
+    assert child.pr is not None and child.pr.base == parent.branch
+    assert parent.pr is not None and parent.pr.url in str(github._prs[2]["body"])
+    assert _has_file(origin, child.branch, "parent.txt")
+    assert _has_file(origin, child.branch, "child.txt")
+    assert not _has_file(origin, "main", "parent.txt")
+
+
+def test_multi_parent_stack_uses_synthetic_base_and_child_only_diff(tmp_path, bare_origin) -> None:
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-multi-stack")
+    Registry().register(str(canonical), workflow="remote", repo_type="team")
+    workspace = Workspace(tmp_path / "multi-stack-worktrees")
+    github = FakeGitHub(origin)
+
+    def runner(node: RepoPlanNode):
+        return run_repo_task(
+            node.repo,
+            node.task,
+            node.persona,
+            workspace=workspace,
+            github=github,
+            branch=node.branch,
+            dispatch_fn=make_writing_dispatch(filename=f"{node.id}.txt"),
+            verify_cmd=["true"],
+            stack_bases=node.stack_bases,
+        )
+
+    result = run_repo_plan(
+        RepoPlan(
+            [
+                RepoPlanNode(
+                    "left", str(canonical), "backend-engineer", "left", branch="feature/left"
+                ),
+                RepoPlanNode(
+                    "right", str(canonical), "backend-engineer", "right", branch="feature/right"
+                ),
+                RepoPlanNode(
+                    "child",
+                    str(canonical),
+                    "backend-engineer",
+                    "child",
+                    deps=["left", "right"],
+                    branch="feature/combined-child",
+                ),
+            ],
+            concurrency=2,
+        ),
+        runner,
+    )
+
+    child = result.results["child"].result
+    assert result.ok and child is not None and child.outcome == "pr-open"
+    synthetic = child.synthetic_stack_base
+    assert synthetic is not None and synthetic.startswith("ai-orchestrator/stack-base/")
+    assert child.pr_base == synthetic and child.pr is not None and child.pr.base == synthetic
+    assert _has_file(origin, synthetic, "left.txt")
+    assert _has_file(origin, synthetic, "right.txt")
+    changed = subprocess.run(
+        ["git", "-C", str(origin), "diff", "--name-only", synthetic, child.branch],
+        check=True,
+        text=True,
+        capture_output=True,
+    ).stdout.splitlines()
+    assert changed == ["child.txt"]
+    assert all(state["head"] != synthetic for state in github._prs.values())
+
+
+def test_stack_conflict_aborts_before_child_dispatch_and_skips_descendant(
+    tmp_path, bare_origin
+) -> None:
+    origin = bare_origin({"shared.txt": "root\n"})
+    canonical = gitops.clone(origin, tmp_path / "canonical-conflict-stack")
+    Registry().register(str(canonical), workflow="remote", repo_type="team")
+    workspace = Workspace(tmp_path / "conflict-stack-worktrees")
+    github = FakeGitHub(origin)
+    dispatched: list[str] = []
+
+    def writing_dispatch(persona: str, task: str, *, project_dir: str, **_: object) -> Report:
+        dispatched.append(task)
+        path = Path(project_dir) / "shared.txt"
+        path.write_text(f"{task}\n", encoding="utf-8")
+        return Report(persona, 0, True, False, 1, [], {}, {}, "")
+
+    def runner(node: RepoPlanNode):
+        return run_repo_task(
+            node.repo,
+            node.task,
+            node.persona,
+            workspace=workspace,
+            github=github,
+            branch=node.branch,
+            dispatch_fn=writing_dispatch,
+            verify_cmd=["true"],
+            stack_bases=node.stack_bases,
+        )
+
+    result = run_repo_plan(
+        RepoPlan(
+            [
+                RepoPlanNode(
+                    "left",
+                    str(canonical),
+                    "backend-engineer",
+                    "left",
+                    branch="feature/conflict-left",
+                ),
+                RepoPlanNode(
+                    "right",
+                    str(canonical),
+                    "backend-engineer",
+                    "right",
+                    branch="feature/conflict-right",
+                ),
+                RepoPlanNode(
+                    "child",
+                    str(canonical),
+                    "backend-engineer",
+                    "child",
+                    deps=["left", "right"],
+                    branch="feature/conflict-child",
+                ),
+                RepoPlanNode(
+                    "descendant",
+                    str(canonical),
+                    "backend-engineer",
+                    "descendant",
+                    deps=["child"],
+                ),
+            ],
+            concurrency=2,
+        ),
+        runner,
+    )
+
+    child = result.results["child"].result
+    assert child is not None and child.outcome == "stack-conflict"
+    assert result.results["child"].status == "failed"
+    assert result.results["descendant"].status == "skipped"
+    assert "child" not in dispatched and "descendant" not in dispatched
+    refs = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(origin),
+            "for-each-ref",
+            "--format=%(refname:short)",
+            "refs/heads/ai-orchestrator/stack-base",
+        ],
+        check=True,
+        text=True,
+        capture_output=True,
+    ).stdout
+    assert not refs.strip()
 
 
 # --- workstream: several onejudge on ONE PR -------------------------------

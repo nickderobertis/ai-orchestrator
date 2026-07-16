@@ -4,6 +4,7 @@
     {
       "id": "api",
       "repo": "nickderobertis/some-service",
+      "repo_type": "team",
       "persona": "backend-engineer",
       "task": "Add a POST /health endpoint that returns build metadata, with tests that drive real requests. Keep the change scoped to the endpoint.",
       "title": "Add /health endpoint"
@@ -11,6 +12,8 @@
     {
       "id": "docs",
       "repo": "nickderobertis/some-docs",
+      "repo_type": "team",
+      "merge_policy": "auto",
       "persona": "docs-writer",
       "task": "Document the new /health endpoint (request/response, examples). Verify every example against the API.",
       "title": "Document /health"
@@ -18,6 +21,7 @@
     {
       "id": "client",
       "repo": "nickderobertis/some-client",
+      "repo_type": "team",
       "persona": "backend-engineer",
       "task": "Add a typed health() method to the client that calls GET /health, with a test against a real local server.",
       "deps": ["api"],
@@ -26,6 +30,7 @@
     {
       "id": "dashboard",
       "repo": "nickderobertis/some-service",
+      "repo_type": "team",
       "deps": ["api"],
       "title": "Add an admin dashboard (implement → test → review, one PR)",
       "steps": [

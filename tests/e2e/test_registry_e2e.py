@@ -29,7 +29,7 @@ def test_registry_register_discover_and_refresh_journey(
     checkout = tmp_path / "dev" / "widget"
     git("clone", str(origin), str(checkout))
 
-    registered = _cli("orchestrator-register-repo", str(checkout))
+    registered = _cli("orchestrator-register-repo", str(checkout), "--repo-type", "single-owner")
     assert str(checkout.resolve()) in registered.stdout
 
     registry_path = home / ".ai-orchestrator" / "repos.json"

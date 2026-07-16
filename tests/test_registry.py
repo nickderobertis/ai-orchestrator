@@ -4,6 +4,7 @@ import json
 import os
 from collections.abc import Callable
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from conftest import git
@@ -14,8 +15,13 @@ from orchestrator.registry import (
     RegistryEntry,
     RegistryError,
     Slug,
+    _authenticated_login,
+    _coalesce,
     _default_search_roots,
+    _serialize,
     _url_identity,
+    infer_repository_type,
+    main_migrate_type,
     main_migrate_workflow,
     main_register,
     main_repos,
@@ -41,7 +47,7 @@ def test_resolve_returns_valid_registered_checkout(
     origin = bare_origin()
     checkout = _clone(origin, tmp_path / "checkout")
     registry = Registry(tmp_path / "registry.json")
-    registry.register(str(checkout))
+    registry.register(str(checkout), repo_type="single-owner")
 
     assert registry.resolve(str(checkout)) == checkout.resolve()
     assert registry.entries[f"local/{checkout.name}"].workflow == "remote"
@@ -72,7 +78,7 @@ def test_resolve_clones_when_no_checkout_exists(
     destination = tmp_path / "canonical"
 
     resolved = Registry(tmp_path / "registry.json").resolve(
-        "acme/cloned", search_roots=[], clone_into=destination
+        "acme/cloned", search_roots=[], clone_into=destination, repo_type="single-owner"
     )
 
     assert resolved == destination
@@ -113,7 +119,7 @@ def test_malformed_registry_is_rejected(tmp_path: Path, payload: str, expected: 
     "payload, match",
     [
         (
-            {"version": 3, "identities": {}, "checkouts": {}},
+            {"version": 4, "identities": {}, "checkouts": {}},
             "versioned format must contain",
         ),
         (
@@ -203,13 +209,277 @@ def test_origin_identity_normalizes_clone_spellings_and_default_roots(
     assert tmp_path in roots and tmp_path / "repos" in roots
 
 
+def test_repository_type_inference_uses_authenticated_owner_case_insensitively() -> None:
+    origin = "git@github.com:Alice/Widget.git"
+    assert infer_repository_type(origin, login=lambda: "aLiCe\n") == "single-owner"
+    assert infer_repository_type(origin, login=lambda: "bob") == "team"
+
+
+def test_authenticated_inference_queries_current_gh_login(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: list[str] = []
+
+    def run(argv, **kwargs):
+        seen.extend(argv)
+        assert kwargs == {"text": True, "capture_output": True}
+        return SimpleNamespace(returncode=0, stdout="alice\n", stderr="")
+
+    monkeypatch.setattr("orchestrator.registry.subprocess.run", run)
+    assert _authenticated_login() == "alice"
+    assert seen == ["gh", "api", "user", "--jq", ".login"]
+
+
+def test_authenticated_login_failure_and_registry_error_passthrough(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "orchestrator.registry.subprocess.run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=1, stdout="", stderr="login first"),
+    )
+    with pytest.raises(RegistryError, match="login first"):
+        _authenticated_login()
+    expected = RegistryError("explicit failure")
+    with pytest.raises(RegistryError) as caught:
+        infer_repository_type(
+            "https://github.com/alice/widget.git",
+            login=lambda: (_ for _ in ()).throw(expected),
+        )
+    assert caught.value is expected
+
+
+def test_identity_coalescing_rejects_type_conflicts_and_team_local() -> None:
+    origin = "https://github.com/acme/widget.git"
+    with pytest.raises(RegistryError, match="conflicting repo types"):
+        _coalesce(
+            {
+                Slug("acme/one"): RegistryEntry("/one", origin, "remote", "single-owner"),
+                Slug("acme/two"): RegistryEntry("/two", origin, "remote", "team"),
+            }
+        )
+    with pytest.raises(RegistryError, match="cannot combine.*team.*local"):
+        _coalesce({Slug("acme/widget"): RegistryEntry("/one", origin, "local", "team")})
+    with pytest.raises(RegistryError, match="unclassified"):
+        _serialize({Slug("acme/widget"): RegistryEntry("/one", origin, "remote", None)})
+
+
+@pytest.mark.parametrize(
+    "metadata, match",
+    [
+        ({"origin": "https://github.com/acme/widget.git", "workflow": "remote"}, "repo_type"),
+        (
+            {
+                "origin": "https://github.com/acme/widget.git",
+                "workflow": "remote",
+                "repo_type": "other",
+            },
+            "repo_type must be",
+        ),
+        (
+            {
+                "origin": "https://github.com/acme/widget.git",
+                "workflow": "local",
+                "repo_type": "team",
+            },
+            "cannot combine",
+        ),
+    ],
+)
+def test_schema_v3_rejects_invalid_repository_type_metadata(
+    tmp_path: Path, metadata: dict[str, str], match: str
+) -> None:
+    identity = "https://github.com/acme/widget"
+    path = tmp_path / "registry.json"
+    path.write_text(
+        json.dumps(
+            {
+                "version": 3,
+                "identities": {identity: metadata},
+                "checkouts": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(RegistryError, match=match):
+        Registry(path)
+
+
+@pytest.mark.parametrize(
+    "origin, login, match",
+    [
+        ("/not/github", lambda: "alice", "not GitHub"),
+        ("https://github.com/alice/widget.git", lambda: "", "login is empty"),
+        (
+            "https://github.com/alice/widget.git",
+            lambda: (_ for _ in ()).throw(OSError("gh unavailable")),
+            "authenticated GitHub user",
+        ),
+    ],
+)
+def test_repository_type_inference_fails_closed(
+    origin: str, login: Callable[[], str], match: str
+) -> None:
+    with pytest.raises(RegistryError, match=match):
+        infer_repository_type(origin, login=login)
+
+
+@pytest.mark.parametrize("legacy_version", [None, 2])
+def test_flat_and_v2_registries_upgrade_atomically_to_v3(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, legacy_version: int | None
+) -> None:
+    path = tmp_path / "registry.json"
+    origin = "https://github.com/acme/widget.git"
+    entry = {"path": str((tmp_path / "checkout").resolve()), "origin": origin, "workflow": "remote"}
+    if legacy_version is None:
+        payload: dict[str, object] = {"acme/widget": entry}
+    else:
+        identity = "https://github.com/acme/widget"
+        payload = {
+            "version": 2,
+            "identities": {identity: {"origin": origin, "workflow": "remote"}},
+            "checkouts": {"acme/widget": {"path": entry["path"], "identity": identity}},
+        }
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    monkeypatch.setattr("orchestrator.registry.infer_repository_type", lambda _origin: "team")
+
+    Registry(path).migrate_legacy()
+
+    upgraded = json.loads(path.read_text(encoding="utf-8"))
+    assert upgraded["version"] == 3
+    metadata = next(iter(upgraded["identities"].values()))
+    assert metadata["repo_type"] == "team" and metadata["workflow"] == "remote"
+
+
+def test_workflow_migration_also_classifies_other_legacy_remote_metadata(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "registry.json"
+    identity = "https://github.com/acme/widget"
+    path.write_text(
+        json.dumps(
+            {
+                "version": 2,
+                "identities": {
+                    identity: {
+                        "origin": "https://github.com/acme/widget.git",
+                        "workflow": "remote",
+                    }
+                },
+                "checkouts": {
+                    "acme/widget": {
+                        "path": str((tmp_path / "checkout").resolve()),
+                        "identity": identity,
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "orchestrator.registry.infer_repository_type", lambda _origin: "single-owner"
+    )
+
+    Registry.migrate_identity_workflow("acme/widget", "remote", path=path)
+
+    metadata = json.loads(path.read_text(encoding="utf-8"))["identities"][identity]
+    assert metadata["repo_type"] == "single-owner"
+
+
+def test_legacy_migration_failure_keeps_original_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "registry.json"
+    payload = {
+        "acme/widget": {
+            "path": str((tmp_path / "checkout").resolve()),
+            "origin": "https://github.com/acme/widget.git",
+            "workflow": "remote",
+        }
+    }
+    original = json.dumps(payload)
+    path.write_text(original, encoding="utf-8")
+    monkeypatch.setattr(
+        "orchestrator.registry.infer_repository_type",
+        lambda _origin: (_ for _ in ()).throw(RegistryError("no login")),
+    )
+
+    with pytest.raises(RegistryError, match="no login"):
+        Registry(path).migrate_legacy()
+    assert path.read_text(encoding="utf-8") == original
+
+
 def test_workflow_round_trips(tmp_path: Path, bare_origin: Callable[..., Path]) -> None:
     checkout = _clone(bare_origin(), tmp_path / "checkout")
     path = tmp_path / "registry.json"
     registry = Registry(path)
-    registry.register(str(checkout), workflow="remote")
+    registry.register(str(checkout), workflow="remote", repo_type="single-owner")
 
     assert Registry(path).entries[f"local/{checkout.name}"].workflow == "remote"
+
+
+def test_registration_infers_and_persists_type_from_normalized_github_origin(
+    tmp_path: Path,
+    bare_origin: Callable[..., Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    checkout = _clone(bare_origin(), tmp_path / "checkout")
+    git("remote", "set-url", "origin", "https://github.com/acme/widget.git", cwd=checkout)
+    monkeypatch.setattr("orchestrator.registry.infer_repository_type", lambda _origin: "team")
+    path = tmp_path / "registry.json"
+
+    Registry(path).register(str(checkout))
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    metadata = next(iter(payload["identities"].values()))
+    assert payload["version"] == 3
+    assert metadata["repo_type"] == "team" and metadata["workflow"] == "remote"
+
+
+def test_repo_type_registration_conflict_requires_type_migration(
+    tmp_path: Path, bare_origin: Callable[..., Path]
+) -> None:
+    origin = bare_origin()
+    canonical = _clone(origin, tmp_path / "canonical")
+    safety = _clone(origin, tmp_path / "safety")
+    registry = Registry(tmp_path / "registry.json")
+    registry.register(str(canonical), repo_type="single-owner")
+    with pytest.raises(RegistryError, match="migrate-repo-type"):
+        registry.register(str(safety), repo_type="team")
+    with pytest.raises(RegistryError, match="not registered"):
+        registry.repository_type("https://github.com/missing/repo")
+
+
+def test_migrate_legacy_missing_registry_is_a_noop(tmp_path: Path) -> None:
+    Registry(tmp_path / "missing.json").migrate_legacy()
+
+
+def test_repository_type_override_is_run_only_and_team_migration_normalizes_workflow(
+    tmp_path: Path, bare_origin: Callable[..., Path]
+) -> None:
+    checkout = _clone(bare_origin(), tmp_path / "checkout")
+    path = tmp_path / "registry.json"
+    registry = Registry(path)
+    registry.register(str(checkout), workflow="remote", repo_type="single-owner")
+    identity = next(iter(registry.identities))
+
+    assert registry.repository_type(identity, override="team") == "team"
+    assert Registry(path).identities[identity].repo_type == "single-owner"
+
+    migrated = Registry.migrate_identity_type(str(checkout), "team", path=path)
+    assert migrated.repo_type == "team" and migrated.workflow == "remote"
+    stored = Registry(path).identities[identity]
+    assert stored.repo_type == "team" and stored.workflow == "remote"
+
+    with pytest.raises(RegistryError, match="cannot migrate workflow to local"):
+        Registry.migrate_identity_workflow(str(checkout), "local", path=path)
+
+
+def test_team_registration_rejects_local_workflow(
+    tmp_path: Path, bare_origin: Callable[..., Path]
+) -> None:
+    checkout = _clone(bare_origin(), tmp_path / "checkout")
+    with pytest.raises(RegistryError, match="team.*workflow=local"):
+        Registry(tmp_path / "registry.json").register(
+            str(checkout), workflow="local", repo_type="team"
+        )
 
 
 def test_registration_inherits_identity_workflow_and_rejects_conflict_atomically(
@@ -242,7 +512,7 @@ def test_explicit_workflow_migration_updates_every_alias_in_one_write(
     safety = _clone(origin, tmp_path / "safety")
     path = tmp_path / "registry.json"
     registry = Registry(path)
-    registry.register(str(canonical), workflow="remote")
+    registry.register(str(canonical), workflow="remote", repo_type="single-owner")
     registry.register(str(safety))
 
     result = Registry.migrate_identity_workflow("local/canonical", "local", path=path)
@@ -252,7 +522,7 @@ def test_explicit_workflow_migration_updates_every_alias_in_one_write(
     migrated = Registry(path)
     assert {entry.workflow for entry in migrated.entries.values()} == {"local"}
     payload = json.loads(path.read_text(encoding="utf-8"))
-    assert payload["version"] == 2
+    assert payload["version"] == 3
     assert list(payload["identities"].values())[0]["workflow"] == "local"
 
 
@@ -266,7 +536,7 @@ def test_interrupted_workflow_migration_preserves_every_alias(
     safety = _clone(origin, tmp_path / "safety")
     path = tmp_path / "registry.json"
     registry = Registry(path)
-    registry.register(str(canonical), workflow="remote")
+    registry.register(str(canonical), workflow="remote", repo_type="single-owner")
     registry.register(str(safety))
     before = path.read_text(encoding="utf-8")
 
@@ -395,17 +665,17 @@ def test_alias_cannot_be_reassigned_to_another_identity(
     first = _clone(bare_origin(), tmp_path / "one" / "checkout")
     second = _clone(bare_origin(), tmp_path / "two" / "checkout")
     registry = Registry(tmp_path / "registry.json")
-    registry.register(str(first))
+    registry.register(str(first), repo_type="single-owner")
 
     with pytest.raises(RegistryError, match="already belongs to identity"):
-        registry.register(str(second))
+        registry.register(str(second), repo_type="single-owner")
 
 
 def test_refresh_fast_forwards(tmp_path: Path, bare_origin: Callable[..., Path]) -> None:
     origin = bare_origin()
     checkout = _clone(origin, tmp_path / "checkout")
     registry = Registry(tmp_path / "registry.json")
-    registry.register(str(checkout))
+    registry.register(str(checkout), repo_type="single-owner")
     _commit_and_push(origin, tmp_path / "writer", "upstream")
 
     result = registry.refresh()
@@ -420,7 +690,7 @@ def test_refresh_refuses_dirty_and_non_ff_checkouts(
     dirty_origin = bare_origin()
     dirty = _clone(dirty_origin, tmp_path / "dirty")
     dirty_registry = Registry(tmp_path / "dirty.json")
-    dirty_registry.register(str(dirty))
+    dirty_registry.register(str(dirty), repo_type="single-owner")
     (dirty / "untracked").write_text("dirty", encoding="utf-8")
     dirty_head = gitops.head_sha(dirty)
     dirty_tracking = gitops.ref_sha(dirty, "origin/main")
@@ -438,7 +708,7 @@ def test_refresh_refuses_dirty_and_non_ff_checkouts(
     origin = bare_origin()
     checkout = _clone(origin, tmp_path / "diverged")
     registry = Registry(tmp_path / "diverged.json")
-    registry.register(str(checkout))
+    registry.register(str(checkout), repo_type="single-owner")
     (checkout / "local.txt").write_text("local", encoding="utf-8")
     git("add", "local.txt", cwd=checkout)
     git("commit", "-m", "local", cwd=checkout)
@@ -489,7 +759,7 @@ def test_refresh_reports_changed_origin_without_fetching(
 ) -> None:
     checkout = _clone(bare_origin(), tmp_path / "checkout")
     registry = Registry(tmp_path / "registry.json")
-    registry.register(str(checkout))
+    registry.register(str(checkout), repo_type="single-owner")
     git("remote", "set-url", "origin", str(tmp_path / "different.git"), cwd=checkout)
 
     result = registry.refresh()[0]
@@ -504,7 +774,7 @@ def test_refresh_reports_non_default_checkout_and_migration_errors(
     checkout = _clone(bare_origin(), tmp_path / "checkout")
     registry_path = tmp_path / "registry.json"
     registry = Registry(registry_path)
-    registry.register(str(checkout), workflow="remote")
+    registry.register(str(checkout), workflow="remote", repo_type="single-owner")
     git("switch", "-c", "feature", cwd=checkout)
 
     result = registry.refresh()[0]
@@ -524,12 +794,23 @@ def test_migration_accepts_checkout_path_and_cli_reports_errors(
     checkout = _clone(bare_origin(), tmp_path / "checkout")
     home = tmp_path / "home"
     monkeypatch.setenv("AI_ORCHESTRATOR_HOME", str(home))
-    Registry().register(str(checkout), workflow="remote")
+    Registry().register(str(checkout), workflow="remote", repo_type="single-owner")
 
     migrated = Registry.migrate_identity_workflow(str(checkout), "local")
     assert migrated.workflow == "local"
     with pytest.raises(SystemExit):
         main_migrate_workflow(["missing/repo", "--workflow", "local"])
+    with pytest.raises(SystemExit):
+        main_migrate_type(["missing/repo", "--repo-type", "team"])
+
+
+def test_type_migration_requires_registry_and_known_identity(tmp_path: Path) -> None:
+    with pytest.raises(RegistryError, match="does not exist"):
+        Registry.migrate_identity_type("acme/widget", "team", path=tmp_path / "missing.json")
+    path = tmp_path / "registry.json"
+    path.write_text(json.dumps({"version": 3, "identities": {}, "checkouts": {}}))
+    with pytest.raises(RegistryError, match="not registered"):
+        Registry.migrate_identity_type("acme/widget", "team", path=path)
 
 
 def test_repo_cli_text_json_and_register_errors(
@@ -543,17 +824,21 @@ def test_repo_cli_text_json_and_register_errors(
     monkeypatch.setenv("HOME", str(home))
     origin = bare_origin()
     checkout = _clone(origin, tmp_path / "checkout")
-    assert main_register([str(checkout), "--workflow", "remote"]) == 0
+    assert (
+        main_register([str(checkout), "--workflow", "remote", "--repo-type", "single-owner"]) == 0
+    )
     capsys.readouterr()
 
     assert main_repos([]) == 0
     output = capsys.readouterr().out
-    assert f"identity\t{str(origin).removesuffix('.git')}\tremote" in output
+    assert f"identity\t{str(origin).removesuffix('.git')}\tsingle-owner\tremote" in output
     assert f"checkout\tlocal/{checkout.name}\t{checkout.resolve()}" in output
     assert main_repos(["--format", "json"]) == 0
     assert '"identities"' in capsys.readouterr().out
     assert main_repos(["--refresh", "--format", "json"]) == 0
     assert '"refresh"' in capsys.readouterr().out
+    assert main_migrate_type([str(checkout), "--repo-type", "team"]) == 0
+    assert "repository_type=team" in capsys.readouterr().out
 
     with pytest.raises(SystemExit):
         main_register(["acme/missing", str(tmp_path / "absent")])

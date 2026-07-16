@@ -12,11 +12,12 @@ from pathlib import Path
 from . import gitops
 from .coordination import advisory_lock
 from .github import CliGitHubBackend, GitHubBackend, GitHubError
+from .lifecycle import _effective_publication
 from .merge import GitHubMergeStrategy, LocalMergeStrategy, MergeContext
 from .provenance import RECOVERY_TRAILER, incomplete_commits, unattested_incomplete
 from .registry import Registry, RegistryEntry, RegistryError, Slug
 from .verify import detect_gate, run_gate
-from .workspace import RepoRef, Workspace
+from .workspace import RepoRef, RepositoryType, Workspace
 
 
 @dataclass(frozen=True)
@@ -25,9 +26,17 @@ class RecoveryResult:
     branch: str
     base: str
     workflow: str
+    repo_type: RepositoryType
+    merge_policy: str
     outcome: str
     detail: str
     pr: str | None = None
+    pr_base: str = ""
+    synthetic_stack_base: str | None = None
+
+    def __post_init__(self) -> None:
+        if not self.pr_base:
+            object.__setattr__(self, "pr_base", self.base)
 
     @property
     def ok(self) -> bool:
@@ -55,7 +64,8 @@ def recover_repo(
     base: str | None = None,
     verify_cmd: list[str] | None = None,
     github: GitHubBackend | None = None,
-    merge_policy: str = "auto",
+    merge_policy: str | None = None,
+    repo_type: RepositoryType | None = None,
     merge_method: str = "squash",
     cleanup: bool = True,
 ) -> RecoveryResult:
@@ -63,6 +73,12 @@ def recover_repo(
     registry = registry or Registry()
     slug, entry = _registered(repo, registry)
     clone = Path(entry.path)
+    identity = registry.identity_for_checkout(clone, repo_type=repo_type)
+    if identity is None:
+        raise RegistryError(f"registered checkout {clone} has no repository identity")
+    effective_workflow, effective_policy = _effective_publication(
+        identity.repo_type, identity.workflow, None, merge_policy
+    )
     owner, name = str(slug).split("/", 1)
     ref = RepoRef(owner, name, entry.origin)
     workspace = Workspace(
@@ -91,7 +107,9 @@ def recover_repo(
                 str(slug),
                 branch,
                 target,
-                entry.workflow,
+                effective_workflow,
+                identity.repo_type,
+                effective_policy,
                 "sync-conflict",
                 f"merge current {remote_base} into {branch!r}, resolve the conflict, then retry",
             )
@@ -108,7 +126,9 @@ def recover_repo(
                 str(slug),
                 branch,
                 target,
-                entry.workflow,
+                effective_workflow,
+                identity.repo_type,
+                effective_policy,
                 "gate-failed",
                 f"recovery gate failed; fix {branch!r} in its preserved branch and retry",
             )
@@ -122,7 +142,7 @@ def recover_repo(
         gitops.push(worktree, branch)
         strategy = (
             LocalMergeStrategy()
-            if entry.workflow == "local"
+            if effective_workflow == "local"
             else GitHubMergeStrategy(github or CliGitHubBackend())
         )
         context = MergeContext(
@@ -137,7 +157,7 @@ def recover_repo(
                 "a verified recovery attestation.\n"
             ),
             method=merge_method,
-            policy=merge_policy,
+            policy=effective_policy,
             verify_command=command,
             verify_env=env,
         )
@@ -148,7 +168,9 @@ def recover_repo(
             str(slug),
             branch,
             target,
-            entry.workflow,
+            effective_workflow,
+            identity.repo_type,
+            effective_policy,
             published.outcome,
             published.detail,
             published.pr.url if published.pr else None,
@@ -171,7 +193,8 @@ def main(argv: list[str] | None = None) -> int:
         "--gate", help="gate command, parsed like a shell line (default: auto-detect)"
     )
     parser.add_argument("--workspace", type=Path)
-    parser.add_argument("--merge-policy", choices=("auto", "direct", "none"), default="auto")
+    parser.add_argument("--merge-policy", choices=("auto", "direct", "none"), default=None)
+    parser.add_argument("--repo-type", choices=("single-owner", "team"), default=None)
     parser.add_argument("--merge-method", choices=("squash", "merge", "rebase"), default="squash")
     parser.add_argument("--format", choices=("text", "json"), default="text")
     args = parser.parse_args(argv)
@@ -183,6 +206,7 @@ def main(argv: list[str] | None = None) -> int:
             base=args.base,
             verify_cmd=shlex.split(args.gate) if args.gate else None,
             merge_policy=args.merge_policy,
+            repo_type=args.repo_type,
             merge_method=args.merge_method,
         )
     except (RegistryError, gitops.GitError, GitHubError, ValueError) as exc:
@@ -191,7 +215,12 @@ def main(argv: list[str] | None = None) -> int:
     if args.format == "json":
         print(json.dumps(asdict(result), indent=2))
     else:
-        print(f"{result.repo} {result.branch}: {result.outcome} — {result.detail}")
+        print(
+            f"{result.repo} {result.branch}: {result.outcome} "
+            f"[type={result.repo_type} workflow={result.workflow} "
+            f"merge_policy={result.merge_policy} pr_base={result.pr_base} "
+            f"synthetic_stack_base={result.synthetic_stack_base or '-'}] — {result.detail}"
+        )
     return 0 if result.ok else 1
 
 

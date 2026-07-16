@@ -31,6 +31,60 @@ def test_done_node_is_carried_out_and_dep_satisfied() -> None:
     assert plan["tasks"][0]["deps"] == []  # dep on merged 'a' satisfied
 
 
+def test_done_open_dependency_becomes_stack_anchor_across_rounds() -> None:
+    result = {
+        "results": {
+            "a": {
+                "status": "done",
+                "outcome": "pr-open",
+                "repo": "o/r",
+                "publication_identity": "https://github.com/o/r",
+                "branch": "feature/a",
+                "base_branch": "main",
+                "pr_base": "main",
+                "pr": "https://github.com/o/r/pull/1",
+            },
+            "b": {"status": "failed", "outcome": "gate-failed"},
+        }
+    }
+
+    plan = next_round(_plan(A, B), result)
+
+    b = plan["tasks"][0]
+    assert b["deps"] == []
+    assert b["stack_bases"] == [
+        {
+            "branch": "feature/a",
+            "repo": "o/r",
+            "identity": "https://github.com/o/r",
+            "base_branch": "main",
+            "pr": "https://github.com/o/r/pull/1",
+        }
+    ]
+
+
+def test_merged_dependency_landed_on_synthetic_base_carries_that_base() -> None:
+    result = {
+        "results": {
+            "a": {
+                "status": "done",
+                "outcome": "merged",
+                "repo": "o/r",
+                "publication_identity": "identity",
+                "branch": "feature/a",
+                "base_branch": "main",
+                "pr_base": "ai-orchestrator/stack-base/parents",
+                "pr": "https://github.com/o/r/pull/1",
+            },
+            "b": {"status": "failed"},
+        }
+    }
+
+    plan = next_round(_plan(A, B), result)
+
+    assert plan["tasks"][0]["stack_bases"][0]["branch"] == ("ai-orchestrator/stack-base/parents")
+
+
 def test_retry_overrides_fields() -> None:
     plan = next_round(
         _plan(A, B),

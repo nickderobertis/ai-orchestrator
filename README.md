@@ -15,7 +15,8 @@ the config, personas, and deterministic scripts to do the mechanical parts.
 
 ```sh
 just bootstrap          # install adopted onejudge v0.3.0 + sync the Python env
-just check              # the full gate (format, lint, types, personas, tests)
+just check              # deterministic gate (format, lint, types, personas, tests)
+just gate               # complete pre-push gate, including llmlint
 
 # Dispatch one subtask with a persona (task passed over the CLI):
 just dispatch backend-engineer "Add a /health endpoint and test it."
@@ -35,6 +36,7 @@ just repo-task /path/to/canonical backend-engineer - \
 
 # Deliberately change publication policy for every alias of one repository identity:
 just migrate-repo-workflow local/ai-orchestrator --workflow local
+just migrate-repo-type local/ai-orchestrator --repo-type single-owner
 ```
 
 ## How it fits together

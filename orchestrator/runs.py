@@ -35,6 +35,14 @@ class RepoPlanResultItem(TypedDict, total=False):
     repo: str
     branch: str
     base_branch: str
+    pr_base: str
+    synthetic_stack_base: str | None
+    stack_bases: list[dict[str, str | None]]
+    repository_type: str | None
+    repo_type: str | None
+    publication_workflow: str | None
+    workflow: str | None
+    merge_policy: str | None
     outcome: str
     ok: bool
     pr: str | None

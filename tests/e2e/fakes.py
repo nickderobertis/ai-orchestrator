@@ -91,7 +91,14 @@ class FakeGitHub:
 
     def create_pr(self, repo: str, *, head: str, base: str, title: str, body: str) -> PullRequest:
         self._n += 1
-        self._prs[self._n] = {"head": head, "base": base, "merged": False, "auto": False}
+        self._prs[self._n] = {
+            "head": head,
+            "base": base,
+            "title": title,
+            "body": body,
+            "merged": False,
+            "auto": False,
+        }
         return PullRequest(
             number=self._n,
             url=f"https://github.com/{repo}/pull/{self._n}",

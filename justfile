@@ -136,6 +136,10 @@ register-repo *args:
 migrate-repo-workflow *args:
     @uv run orchestrator-migrate-repo-workflow "$@"
 
+# Atomically migrate repository type for an identity; team also selects remote workflow.
+migrate-repo-type *args:
+    @uv run orchestrator-migrate-repo-type "$@"
+
 # List repository identities and checkout aliases, optionally refreshing them.
 # llmlint: ignore[tool_output_is_signal] the requested repo registry listing is this viewing command's product.
 repos *args:

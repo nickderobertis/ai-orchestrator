@@ -103,6 +103,11 @@ def _integrate_locked(
     registered = registry.entry_for_checkout(requested)
     root = Path(registered[1].path) if registered is not None else requested
     workflow = registered[1].workflow if registered is not None else "remote"
+    identity = registry.identity_for_checkout(root) if registered is not None else None
+    if identity is not None and identity.repo_type == "team":
+        raise IntegrateError(
+            "direct integration refused (repo_type=team); use the repo lifecycle/PR path"
+        )
     if workflow == "remote" and (not refresh or push):
         remediation = (
             "registered workflow=remote"

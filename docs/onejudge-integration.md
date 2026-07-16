@@ -149,13 +149,14 @@ no-unprivileged-userns host, dispatch codex with
   branch. Check its commit delta before deciding whether to recover or redispatch.
   The wrapper prints `just repo-recover <branch> --repo <checkout>`; that command
   verifies and publishes the preserved branch through its registered workflow.
-- **Choose the merge path from affirmative workflow metadata.** Remote is the
-  conservative default for an unregistered identity. Multiple aliases with the
-  same normalized origin share one identity and are not ambiguous. A repository
-  identity explicitly registered `local` creates no PR; it pushes a verified
-  direct merge into the base branch. A conflicting checkout registration fails;
-  migrate every alias atomically with `just migrate-repo-workflow <alias>
-  --workflow <local|remote>`. Configure its
+- **Choose publication from identity type and workflow.** Omitted type is inferred
+  from authenticated GitHub login versus normalized origin owner; pass
+  `--repo-type` when that cannot resolve. Team defaults to a ready-for-review open
+  PR; single-owner preserves local direct or remote auto publication. Multiple
+  aliases share one identity. Migrate every alias atomically with `just
+  migrate-repo-type <alias> --repo-type <single-owner|team>` or `just
+  migrate-repo-workflow <alias> --workflow <local|remote>`. Configure a local
+  single-owner repository's
   working repository with
   `git config receive.denyCurrentBranch updateInstead` so that push can update
   the checked-out base branch.

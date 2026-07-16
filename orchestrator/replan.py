@@ -51,6 +51,36 @@ def next_round(
         nid for nid, r in results.items() if isinstance(r, dict) and r.get("status") == "done"
     }
     removed = drop | set(split)  # split replaces a node → its id goes away
+    prior_tasks = {
+        task.get("id"): task
+        for task in prev_plan.get("tasks") or []
+        if isinstance(task, dict) and isinstance(task.get("id"), str)
+    }
+
+    def _anchor(nid: str) -> dict[str, Any] | None:
+        item = results.get(nid)
+        source = prior_tasks.get(nid)
+        if not isinstance(item, dict) or not isinstance(source, dict):
+            return None
+        outcome = item.get("outcome")
+        branch = item.get("branch")
+        root = item.get("base_branch")
+        pr_base = item.get("pr_base")
+        if outcome == "pr-open":
+            landed = branch
+        elif outcome == "merged" and isinstance(pr_base, str) and pr_base != root:
+            landed = pr_base
+        else:
+            return None
+        if not isinstance(landed, str) or not landed:
+            return None
+        return {
+            "branch": landed,
+            "repo": item.get("repo") or source.get("repo"),
+            "identity": item.get("publication_identity"),
+            "base_branch": root,
+            "pr": item.get("pr"),
+        }
 
     next_tasks: list[dict[str, Any]] = []
     kept_ids: set[str] = set()
@@ -81,7 +111,14 @@ def next_round(
     # gone — drop it so the node runs against the updated base.
     for node in next_tasks:
         if "deps" in node:
-            node["deps"] = [d for d in node["deps"] if d in kept_ids]
+            previous_deps = node["deps"]
+            anchors = list(node.get("stack_bases") or [])
+            for dep in previous_deps:
+                if dep in done_ids and (anchor := _anchor(dep)) is not None:
+                    anchors.append(anchor)
+            if anchors:
+                node["stack_bases"] = anchors
+            node["deps"] = [d for d in previous_deps if d in kept_ids]
 
     plan: dict[str, Any] = {"concurrency": prev_plan.get("concurrency", 4), "tasks": next_tasks}
     if next_tasks:

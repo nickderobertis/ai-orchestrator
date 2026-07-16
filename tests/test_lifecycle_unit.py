@@ -13,10 +13,12 @@ from orchestrator.lifecycle import (
     LifecycleResult,
     RepoPlan,
     RepoPlanNode,
+    StackBase,
     Step,
     _default_body,
     _default_branch_name,
     _default_title,
+    _effective_publication,
     _select_merge_strategy,
     _workstream_branch_name,
     load_repo_plan,
@@ -85,6 +87,31 @@ def test_select_merge_strategy() -> None:
     assert _select_merge_strategy(remote, explicit, None) is explicit
 
 
+@pytest.mark.parametrize(
+    "repo_type, workflow, policy, expected",
+    [
+        ("single-owner", "local", None, ("local", "direct")),
+        ("single-owner", "remote", None, ("remote", "auto")),
+        ("team", "remote", None, ("remote", "none")),
+        ("team", "remote", "auto", ("remote", "auto")),
+        ("team", "remote", "direct", ("remote", "direct")),
+        ("single-owner", "local", "none", ("remote", "none")),
+        ("single-owner", "remote", "none", ("remote", "none")),
+    ],
+)
+def test_repository_type_policy_matrix(repo_type, workflow, policy, expected) -> None:
+    assert _effective_publication(repo_type, workflow, None, policy) == expected
+
+
+def test_team_run_override_normalizes_stored_local_workflow() -> None:
+    assert _effective_publication("team", "local", None, None) == ("remote", "none")
+
+
+def test_team_explicit_local_workflow_is_invalid() -> None:
+    with pytest.raises(ValueError, match="team.*workflow=local"):
+        _effective_publication("team", None, "local", None)
+
+
 # --- repo-plan loading -----------------------------------------------------
 
 
@@ -110,6 +137,16 @@ def test_load_valid_repo_plan(tmp_path) -> None:
                         "deps": ["a"],
                         "merge_policy": "direct",
                         "workflow": "local",
+                        "repo_type": "single-owner",
+                        "stack_bases": [
+                            {
+                                "branch": "feature/parent",
+                                "repo": "o/r",
+                                "identity": "https://github.com/o/r",
+                                "base_branch": "main",
+                                "pr": "https://github.com/o/r/pull/1",
+                            }
+                        ],
                         "skip_verify": True,
                     },
                 ],
@@ -120,6 +157,8 @@ def test_load_valid_repo_plan(tmp_path) -> None:
     assert [t.id for t in plan.tasks] == ["a", "b"]
     assert plan.tasks[1].merge_policy == "direct" and plan.tasks[1].skip_verify
     assert plan.tasks[1].workflow == "local"
+    assert plan.tasks[1].repo_type == "single-owner"
+    assert plan.tasks[1].stack_bases[0].branch == "feature/parent"
 
 
 @pytest.mark.parametrize(
@@ -146,6 +185,94 @@ def test_load_valid_repo_plan(tmp_path) -> None:
         (
             {"tasks": [{"id": "a", "repo": "r", "persona": "p", "task": "t", "workflow": "x"}]},
             "workflow",
+        ),
+        (
+            {"tasks": [{"id": "a", "repo": "r", "persona": "p", "task": "t", "repo_type": "x"}]},
+            "repo_type",
+        ),
+        (
+            {
+                "tasks": [
+                    {
+                        "id": "a",
+                        "repo": "r",
+                        "persona": "p",
+                        "task": "t",
+                        "stack_bases": [{"repo": "r"}],
+                    }
+                ]
+            },
+            "stack_bases",
+        ),
+        (
+            {
+                "tasks": [
+                    {
+                        "id": "a",
+                        "repo": "r",
+                        "persona": "p",
+                        "task": "t",
+                        "execution_checkout": "",
+                    }
+                ]
+            },
+            "execution_checkout",
+        ),
+        (
+            {
+                "tasks": [
+                    {
+                        "id": "a",
+                        "repo": "r",
+                        "persona": "p",
+                        "task": "t",
+                        "stack_bases": "branch",
+                    }
+                ]
+            },
+            "stack_bases",
+        ),
+        (
+            {
+                "tasks": [
+                    {
+                        "id": "a",
+                        "repo": "r",
+                        "persona": "p",
+                        "task": "t",
+                        "stack_bases": ["branch"],
+                    }
+                ]
+            },
+            "must be a mapping",
+        ),
+        (
+            {
+                "tasks": [
+                    {
+                        "id": "a",
+                        "repo": "r",
+                        "persona": "p",
+                        "task": "t",
+                        "stack_bases": [{"branch": "parent", "unexpected": "x"}],
+                    }
+                ]
+            },
+            "unknown fields",
+        ),
+        (
+            {
+                "tasks": [
+                    {
+                        "id": "a",
+                        "repo": "r",
+                        "persona": "p",
+                        "task": "t",
+                        "stack_bases": [{"branch": "parent", "pr": ""}],
+                    }
+                ]
+            },
+            "must be a non-empty string",
         ),
         (
             {"tasks": [{"id": "a", "repo": "r", "persona": "p", "task": "t", "deps": ["z"]}]},
@@ -307,6 +434,70 @@ def test_run_repo_plan_cascades(tmp_path) -> None:
     assert "repo-plan" in result.summary()
 
 
+def test_run_repo_plan_turns_open_same_identity_dependency_into_stack_base() -> None:
+    seen: dict[str, list[StackBase]] = {}
+
+    def runner(node: RepoPlanNode) -> LifecycleResult:
+        seen[node.id] = node.stack_bases
+        if node.id == "parent":
+            return _result(
+                "pr-open",
+                repo=node.repo,
+                branch="feature/parent",
+                pr_base="main",
+                publication_identity="https://github.com/o/r",
+                pr=PullRequest(1, "https://github.com/o/r/pull/1", "o/r", "feature/parent", "main"),
+            )
+        return _result("pr-open", repo=node.repo, pr_base="feature/parent")
+
+    result = run_repo_plan(
+        RepoPlan(
+            [
+                RepoPlanNode("parent", "o/r", "p", "parent"),
+                RepoPlanNode("child", "o/r", "p", "child", deps=["parent"]),
+            ]
+        ),
+        runner,
+    )
+
+    assert result.ok
+    assert seen["child"] == [
+        StackBase(
+            "feature/parent",
+            repo="o/r",
+            identity="https://github.com/o/r",
+            base_branch="main",
+            pr="https://github.com/o/r/pull/1",
+        )
+    ]
+
+
+def test_run_repo_plan_carries_landed_nonroot_base() -> None:
+    seen: dict[str, list[StackBase]] = {}
+
+    def runner(node: RepoPlanNode) -> LifecycleResult:
+        seen[node.id] = node.stack_bases
+        if node.id == "parent":
+            return _result(
+                "merged",
+                repo=node.repo,
+                pr_base="ai-orchestrator/stack-base/x",
+                publication_identity="identity",
+            )
+        return _result("merged", repo=node.repo, pr_base="main")
+
+    run_repo_plan(
+        RepoPlan(
+            [
+                RepoPlanNode("parent", "o/r", "p", "parent"),
+                RepoPlanNode("child", "o/r", "p", "child", deps=["parent"]),
+            ]
+        ),
+        runner,
+    )
+    assert seen["child"][0].branch == "ai-orchestrator/stack-base/x"
+
+
 def test_make_repo_runner_threads_node_fields(monkeypatch) -> None:
     captured = {}
 
@@ -325,12 +516,22 @@ def test_make_repo_runner_threads_node_fields(monkeypatch) -> None:
         skip_verify=False,
         poll_interval=1.0,
         timeout=9.0,
+        repo_type="team",
     )
-    node = RepoPlanNode("n", "o/r", "reviewer", "task", merge_policy="direct", skip_verify=True)
+    node = RepoPlanNode(
+        "n",
+        "o/r",
+        "reviewer",
+        "task",
+        merge_policy="direct",
+        skip_verify=True,
+        repo_type="single-owner",
+    )
     out = runner(node)
     assert out.outcome == "merged"
     assert captured["repo"] == "o/r" and captured["persona"] == "reviewer"
     assert captured["merge_policy"] == "direct"  # node override wins
+    assert captured["repo_type"] == "single-owner"
     assert captured["skip_verify"] is True
     assert captured["oneharness_mode"] == "bypass"
 

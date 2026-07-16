@@ -12,19 +12,21 @@ import json
 import os
 import re
 import shlex
+import subprocess
 import sys
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import NewType, cast
 
 from . import gitops
 from .coordination import advisory_lock, atomic_json
-from .workspace import IdentityKey, RepoRef, Workflow, normalize_repo
+from .workspace import IdentityKey, RepoRef, RepositoryType, Workflow, normalize_repo
 
 Slug = NewType("Slug", str)
 _SLUG_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
-_REGISTRY_VERSION = 2
+_REGISTRY_VERSION = 3
+_REPOSITORY_TYPES = ("single-owner", "team")
 
 
 class RegistryError(ValueError):
@@ -38,12 +40,14 @@ class RegistryEntry:
     path: str
     origin: str
     workflow: Workflow
+    repo_type: RepositoryType | None = "single-owner"
 
 
 @dataclass(frozen=True)
 class RepositoryIdentity:
     origin: str
     workflow: Workflow
+    repo_type: RepositoryType | None
 
 
 @dataclass(frozen=True)
@@ -55,6 +59,7 @@ class RegistrySelection:
     execution_checkout: Path
     identity: IdentityKey
     workflow: Workflow
+    repo_type: RepositoryType
 
 
 @dataclass(frozen=True)
@@ -63,12 +68,21 @@ class CheckoutIdentity:
 
     identity: IdentityKey
     workflow: Workflow
+    repo_type: RepositoryType
     publication_checkout: Path
 
 
 @dataclass(frozen=True)
 class WorkflowMigration:
     identity: IdentityKey
+    workflow: Workflow
+    aliases: tuple[Slug, ...]
+
+
+@dataclass(frozen=True)
+class RepositoryTypeMigration:
+    identity: IdentityKey
+    repo_type: RepositoryType
     workflow: Workflow
     aliases: tuple[Slug, ...]
 
@@ -124,6 +138,55 @@ def _url_identity(url: str) -> IdentityKey:
     return IdentityKey(value)
 
 
+def _github_owner(origin: str) -> str:
+    """Return the owner from a normalized GitHub origin, never from a spec default."""
+    normalized = str(_url_identity(origin))
+    match = re.fullmatch(r"https://github\.com/([^/]+)/[^/]+", normalized, re.IGNORECASE)
+    if match is None:
+        raise RegistryError(
+            f"cannot infer repository type: normalized origin {normalized!r} is not GitHub; "
+            "pass --repo-type explicitly"
+        )
+    return match.group(1)
+
+
+def _authenticated_login() -> str:
+    proc = subprocess.run(
+        ["gh", "api", "user", "--jq", ".login"],
+        text=True,
+        capture_output=True,
+    )
+    if proc.returncode != 0 or not proc.stdout.strip():
+        detail = proc.stderr.strip() or proc.stdout.strip() or "no login returned"
+        raise RegistryError(
+            "cannot infer repository type from the authenticated GitHub user: "
+            f"{detail}; pass --repo-type explicitly"
+        )
+    return proc.stdout.strip()
+
+
+def infer_repository_type(
+    origin: str, *, login: Callable[[], str] = _authenticated_login
+) -> RepositoryType:
+    """Classify a GitHub identity by authenticated login versus origin owner."""
+    owner = _github_owner(origin)
+    try:
+        authenticated = login().strip()
+    except RegistryError:
+        raise
+    except Exception as exc:
+        raise RegistryError(
+            "cannot infer repository type from the authenticated GitHub user; "
+            "pass --repo-type explicitly"
+        ) from exc
+    if not authenticated:
+        raise RegistryError(
+            "cannot infer repository type: authenticated GitHub login is empty; "
+            "pass --repo-type explicitly"
+        )
+    return "single-owner" if authenticated.casefold() == owner.casefold() else "team"
+
+
 def _valid_origin(value: object) -> bool:
     return (
         isinstance(value, str)
@@ -150,7 +213,7 @@ def _parse_entry(slug: Slug, value: object) -> RegistryEntry:
         raise RegistryError(f"registry entry {str(slug)!r} origin must be a non-empty string")
     if workflow not in ("local", "remote"):
         raise RegistryError(f"registry entry {str(slug)!r} workflow must be 'local' or 'remote'")
-    return RegistryEntry(path, cast(str, origin), cast(Workflow, workflow))
+    return RegistryEntry(path, cast(str, origin), cast(Workflow, workflow), None)
 
 
 def _conflict_message(identity: IdentityKey, items: Sequence[tuple[Slug, RegistryEntry]]) -> str:
@@ -178,7 +241,17 @@ def _coalesce(
             if allow_conflicts:
                 continue
             raise RegistryError(_conflict_message(identity, items))
-        identities[identity] = RepositoryIdentity(items[0][1].origin, workflows.pop())
+        repo_types = {entry.repo_type for _, entry in items if entry.repo_type is not None}
+        if len(repo_types) > 1:
+            raise RegistryError(f"registry identity {str(identity)!r} has conflicting repo types")
+        repo_type = next(iter(repo_types), None)
+        workflow = workflows.pop()
+        if repo_type == "team" and workflow == "local":
+            raise RegistryError(
+                f"registry identity {str(identity)!r} cannot combine repo_type=team "
+                "with workflow=local"
+            )
+        identities[identity] = RepositoryIdentity(items[0][1].origin, workflow, repo_type)
     return identities
 
 
@@ -195,15 +268,19 @@ def _parse_raw(
     if not isinstance(raw, dict):
         raise RegistryError(f"registry {path} must contain a JSON object")
     if "version" not in raw:
-        legacy_entries = {
-            slug: _parse_entry(slug, value)
-            for raw_slug, value in raw.items()
-            for slug in (_validate_alias(raw_slug),)
-        }
+        legacy_entries: dict[Slug, RegistryEntry] = {}
+        for raw_slug, value in raw.items():
+            slug = _validate_alias(raw_slug)
+            entry = _parse_entry(slug, value)
+            legacy_entries[slug] = replace(
+                entry, repo_type=("single-owner" if entry.workflow == "local" else None)
+            )
         return legacy_entries, _coalesce(legacy_entries, allow_conflicts=allow_conflicts)
-    if set(raw) != {"version", "identities", "checkouts"} or raw.get("version") != 2:
+    version = raw.get("version")
+    if set(raw) != {"version", "identities", "checkouts"} or version not in (2, 3):
         raise RegistryError(
-            f"registry {path} versioned format must contain version=2, identities, and checkouts"
+            f"registry {path} versioned format must contain version=2 or version=3, "
+            "identities, and checkouts"
         )
     raw_identities = raw["identities"]
     raw_checkouts = raw["checkouts"]
@@ -213,8 +290,10 @@ def _parse_raw(
     for raw_key, value in raw_identities.items():
         if not isinstance(raw_key, str) or not _valid_origin(raw_key):
             raise RegistryError("registry identity key must be a non-empty string")
-        if not isinstance(value, dict) or set(value) != {"origin", "workflow"}:
-            raise RegistryError(f"registry identity {raw_key!r} must contain origin and workflow")
+        expected = {"origin", "workflow"} | ({"repo_type"} if version == 3 else set())
+        if not isinstance(value, dict) or set(value) != expected:
+            fields = "origin, workflow, and repo_type" if version == 3 else "origin and workflow"
+            raise RegistryError(f"registry identity {raw_key!r} must contain {fields}")
         origin, workflow = value["origin"], value["workflow"]
         if not _valid_origin(origin):
             raise RegistryError(f"registry identity {raw_key!r} origin must be non-empty")
@@ -222,12 +301,26 @@ def _parse_raw(
             raise RegistryError(
                 f"registry identity {raw_key!r} workflow must be 'local' or 'remote'"
             )
+        raw_repo_type = value.get("repo_type")
+        if version == 3 and raw_repo_type not in _REPOSITORY_TYPES:
+            raise RegistryError(
+                f"registry identity {raw_key!r} repo_type must be 'single-owner' or 'team'"
+            )
+        repo_type = cast(RepositoryType | None, raw_repo_type)
+        if version == 2 and workflow == "local":
+            repo_type = "single-owner"
+        if repo_type == "team" and workflow == "local":
+            raise RegistryError(
+                f"registry identity {raw_key!r} cannot combine repo_type=team with workflow=local"
+            )
         identity = IdentityKey(raw_key)
         if identity != _url_identity(cast(str, origin)):
             raise RegistryError(
                 f"registry identity key {raw_key!r} does not match normalized origin"
             )
-        identities[identity] = RepositoryIdentity(cast(str, origin), cast(Workflow, workflow))
+        identities[identity] = RepositoryIdentity(
+            cast(str, origin), cast(Workflow, workflow), repo_type
+        )
     entries: dict[Slug, RegistryEntry] = {}
     for raw_slug, value in raw_checkouts.items():
         slug = _validate_alias(raw_slug)
@@ -241,12 +334,23 @@ def _parse_raw(
                 f"registry checkout {str(slug)!r} references unknown identity {raw_identity!r}"
             )
         metadata = identities[IdentityKey(raw_identity)]
-        entries[slug] = RegistryEntry(checkout_path, metadata.origin, metadata.workflow)
+        entries[slug] = RegistryEntry(
+            checkout_path, metadata.origin, metadata.workflow, metadata.repo_type
+        )
     return entries, identities
 
 
 def _serialize(entries: Mapping[Slug, RegistryEntry]) -> dict[str, object]:
     identities = _coalesce(entries)
+    missing = [
+        str(identity) for identity, metadata in identities.items() if metadata.repo_type is None
+    ]
+    if missing:
+        raise RegistryError(
+            "cannot persist unclassified repository identities: "
+            + ", ".join(sorted(missing))
+            + "; pass --repo-type explicitly"
+        )
     return {
         "version": _REGISTRY_VERSION,
         "identities": {
@@ -257,6 +361,37 @@ def _serialize(entries: Mapping[Slug, RegistryEntry]) -> dict[str, object]:
             for slug, entry in sorted(entries.items())
         },
     }
+
+
+def _classify_legacy_entries(
+    entries: Mapping[Slug, RegistryEntry],
+) -> dict[Slug, RegistryEntry]:
+    """Return fully classified entries, preserving all-or-nothing callers."""
+    classified = dict(entries)
+    identities = _coalesce(classified)
+    for identity, metadata in identities.items():
+        if metadata.repo_type is not None:
+            continue
+        repo_type: RepositoryType = (
+            "single-owner"
+            if metadata.workflow == "local"
+            else infer_repository_type(metadata.origin)
+        )
+        workflow: Workflow = "remote" if repo_type == "team" else metadata.workflow
+        for alias, entry in list(classified.items()):
+            if _url_identity(entry.origin) == identity:
+                classified[alias] = replace(entry, workflow=workflow, repo_type=repo_type)
+    return classified
+
+
+def _target_identity(entries: Mapping[Slug, RegistryEntry], spec: str) -> IdentityKey:
+    direct = entries.get(Slug(spec))
+    if direct is not None:
+        return _url_identity(direct.origin)
+    candidate = Path(spec).expanduser()
+    if candidate.exists() and gitops.is_repo(candidate):
+        return _url_identity(gitops.remote_url(candidate.resolve()))
+    return _url_identity(normalize_repo(spec).url)
 
 
 class Registry:
@@ -274,14 +409,72 @@ class Registry:
     def _reload(self) -> None:
         self.entries, self.identities = self._load()
 
+    def _set_identity_type(
+        self, identity: IdentityKey, repo_type: RepositoryType, *, workflow: Workflow | None = None
+    ) -> None:
+        metadata = self.identities[identity]
+        selected_workflow = workflow or metadata.workflow
+        if repo_type == "team":
+            selected_workflow = "remote"
+        for alias, entry in self._entries_for_identity(identity):
+            self.entries[alias] = replace(entry, workflow=selected_workflow, repo_type=repo_type)
+        self.identities[identity] = RepositoryIdentity(
+            metadata.origin, selected_workflow, repo_type
+        )
+
+    def _classify_missing(self) -> None:
+        """Classify every legacy identity in memory so schema v3 can be written."""
+        for identity, metadata in list(self.identities.items()):
+            if metadata.repo_type is not None:
+                continue
+            repo_type: RepositoryType = (
+                "single-owner"
+                if metadata.workflow == "local"
+                else infer_repository_type(metadata.origin)
+            )
+            self._set_identity_type(identity, repo_type)
+
+    def migrate_legacy(self) -> None:
+        """Lazily upgrade a flat/v2 registry to v3 in one atomic replacement."""
+        if not self.path.exists():
+            return
+        with advisory_lock(f"registry:{self.path.resolve()}"):
+            raw = _read_registry(self.path)
+            if isinstance(raw, dict) and raw.get("version") == _REGISTRY_VERSION:
+                self._reload()
+                return
+            self._reload()
+            self._classify_missing()
+            atomic_json(self.path, _serialize(self.entries))
+
+    def repository_type(
+        self, identity: IdentityKey, *, override: RepositoryType | None = None
+    ) -> RepositoryType:
+        """Resolve a run override or the stored/inferred identity type."""
+        if override is not None:
+            return override
+        metadata = self.identities.get(identity)
+        if metadata is None:
+            raise RegistryError(f"repository identity {str(identity)!r} is not registered")
+        raw = _read_registry(self.path) if self.path.exists() else None
+        if metadata.repo_type is None or not (
+            isinstance(raw, dict) and raw.get("version") == _REGISTRY_VERSION
+        ):
+            self.migrate_legacy()
+            metadata = self.identities[identity]
+        assert metadata.repo_type is not None
+        return metadata.repo_type
+
     def save(self) -> None:
         with advisory_lock(f"registry:{self.path.resolve()}"):
             current, _ = self._load()
             current.update(self.entries)
-            payload = _serialize(current)
-            atomic_json(self.path, payload)
             self.entries = current
             self.identities = _coalesce(current)
+            self._classify_missing()
+            payload = _serialize(self.entries)
+            atomic_json(self.path, payload)
+            self.identities = _coalesce(self.entries)
 
     def entry_for_checkout(self, path: str | Path) -> tuple[Slug, RegistryEntry] | None:
         """Resolve an exact or auxiliary checkout without alias-count ambiguity."""
@@ -310,13 +503,18 @@ class Registry:
         )
         return matches[0] if matches else None
 
-    def identity_for_checkout(self, path: str | Path) -> CheckoutIdentity | None:
+    def identity_for_checkout(
+        self, path: str | Path, *, repo_type: RepositoryType | None = None
+    ) -> CheckoutIdentity | None:
         """Return identity workflow and registered publication path for any clone/worktree."""
         matched = self.entry_for_checkout(path)
         if matched is None:
             return None
         _, entry = matched
-        return CheckoutIdentity(_url_identity(entry.origin), entry.workflow, Path(entry.path))
+        identity = _url_identity(entry.origin)
+        effective_type = self.repository_type(identity, override=repo_type)
+        metadata = self.identities[identity]
+        return CheckoutIdentity(identity, metadata.workflow, effective_type, Path(entry.path))
 
     @staticmethod
     def _valid_checkout(path: Path, expected_origin: str) -> bool:
@@ -353,6 +551,7 @@ class Registry:
         repo: RepoRef,
         path: Path,
         workflow: Workflow | None,
+        repo_type: RepositoryType | None,
         *,
         origin: str | None = None,
     ) -> Path:
@@ -369,7 +568,33 @@ class Registry:
                 "alias atomically with: "
                 f"just migrate-repo-workflow {target} --workflow {workflow}"
             )
+        if (
+            known is not None
+            and known.repo_type is not None
+            and repo_type is not None
+            and known.repo_type != repo_type
+        ):
+            items = self._entries_for_identity(identity)
+            target = shlex.quote(str(items[0][0]))
+            raise RegistryError(
+                f"repo_type={repo_type} conflicts with registered identity {str(identity)!r} "
+                f"repo_type={known.repo_type}; omit --repo-type to inherit it, or migrate "
+                f"atomically with: just migrate-repo-type {target} --repo-type {repo_type}"
+            )
         selected_workflow = known.workflow if known is not None else workflow or "remote"
+        selected_type = (
+            known.repo_type if known is not None and known.repo_type is not None else repo_type
+        )
+        if selected_type is None:
+            selected_type = (
+                "single-owner"
+                if selected_workflow == "local"
+                else infer_repository_type(actual_origin)
+            )
+        if selected_type == "team" and selected_workflow == "local":
+            raise RegistryError("repo_type=team cannot be registered with workflow=local")
+        if selected_type == "team":
+            selected_workflow = "remote"
         alias = Slug(repo.slug)
         previous = self.entries.get(alias)
         if previous is not None and _url_identity(previous.origin) != identity:
@@ -378,9 +603,15 @@ class Registry:
                 f"{str(_url_identity(previous.origin))!r}"
             )
         for known_alias, entry in self._entries_for_identity(identity):
-            self.entries[known_alias] = replace(entry, workflow=selected_workflow)
-        self.entries[alias] = RegistryEntry(str(resolved), actual_origin, selected_workflow)
-        self.identities[identity] = RepositoryIdentity(actual_origin, selected_workflow)
+            self.entries[known_alias] = replace(
+                entry, workflow=selected_workflow, repo_type=selected_type
+            )
+        self.entries[alias] = RegistryEntry(
+            str(resolved), actual_origin, selected_workflow, selected_type
+        )
+        self.identities[identity] = RepositoryIdentity(
+            actual_origin, selected_workflow, selected_type
+        )
         self.save()
         return resolved
 
@@ -391,6 +622,7 @@ class Registry:
         search_roots: Sequence[str | Path] | None = None,
         clone_into: str | Path | None = None,
         default_workflow: Workflow = "remote",
+        repo_type: RepositoryType | None = None,
     ) -> Path:
         repo = normalize_repo(spec)
         with advisory_lock(f"registry-resolve:{self.path.resolve()}:{repo.slug}"):
@@ -400,6 +632,7 @@ class Registry:
                 search_roots=search_roots,
                 clone_into=clone_into,
                 default_workflow=default_workflow,
+                repo_type=repo_type,
             )
 
     def _resolve_unlocked(
@@ -409,6 +642,7 @@ class Registry:
         search_roots: Sequence[str | Path] | None,
         clone_into: str | Path | None,
         default_workflow: Workflow,
+        repo_type: RepositoryType | None,
     ) -> Path:
         if repo.local:
             path = Path(repo.url)
@@ -416,7 +650,7 @@ class Registry:
                 raise RegistryError(f"local repo {path} is not a git checkout")
             identity = _url_identity(gitops.remote_url(path))
             inherited = None if identity in self.identities else default_workflow
-            return self._store(repo, path, inherited)
+            return self._store(repo, path, inherited, repo_type)
         expected_identity = _url_identity(repo.url)
         existing = self.entries.get(Slug(repo.slug))
         if existing is not None:
@@ -431,14 +665,16 @@ class Registry:
         for _, candidate in self._entries_for_identity(expected_identity):
             try:
                 if self._valid_checkout(Path(candidate.path), candidate.origin):
-                    return self._store(repo, Path(candidate.path), None, origin=candidate.origin)
+                    return self._store(
+                        repo, Path(candidate.path), None, repo_type, origin=candidate.origin
+                    )
             except gitops.GitError:
                 continue
         found = self._find(
             repo, search_roots if search_roots is not None else _default_search_roots()
         )
         if found is not None:
-            return self._store(repo, found, default_workflow)
+            return self._store(repo, found, default_workflow, repo_type)
         destination = (
             Path(clone_into).expanduser()
             if clone_into is not None
@@ -446,7 +682,7 @@ class Registry:
         )
         destination.parent.mkdir(parents=True, exist_ok=True)
         gitops.clone(repo.url, destination)
-        return self._store(repo, destination, default_workflow)
+        return self._store(repo, destination, default_workflow, repo_type)
 
     def select(
         self,
@@ -455,18 +691,49 @@ class Registry:
         execution_checkout: str | Path | None = None,
         search_roots: Sequence[str | Path] | None = None,
         clone_into: str | Path | None = None,
+        repo_type: RepositoryType | None = None,
     ) -> RegistrySelection:
         """Select publication identity/path and an optional exact execution clone."""
         repo = normalize_repo(spec)
-        publication = self.resolve(
-            spec, search_roots=search_roots, clone_into=clone_into, default_workflow="remote"
+        self._reload()
+        try:
+            expected = (
+                _url_identity(gitops.remote_url(Path(repo.url)))
+                if repo.local
+                else _url_identity(repo.url)
+            )
+        except (OSError, gitops.GitError):
+            expected = _url_identity(repo.url)
+        candidates = self._entries_for_identity(expected)
+        preferred = self.entries.get(Slug(repo.slug))
+        ordered = (
+            [(Slug(repo.slug), preferred)] + [item for item in candidates if item[0] != repo.slug]
+            if preferred is not None and _url_identity(preferred.origin) == expected
+            else candidates
         )
+        publication = next(
+            (
+                Path(entry.path)
+                for _, entry in ordered
+                if self._valid_checkout(Path(entry.path), entry.origin)
+            ),
+            None,
+        )
+        if publication is None:
+            publication = self.resolve(
+                spec,
+                search_roots=search_roots,
+                clone_into=clone_into,
+                default_workflow="remote",
+                repo_type=repo_type,
+            )
         self._reload()
         publication_match = self.entry_for_checkout(publication)
         if publication_match is None:
             raise RegistryError(f"resolved checkout {publication} has no repository identity")
         alias, entry = publication_match
         identity = _url_identity(entry.origin)
+        effective_type = self.repository_type(identity, override=repo_type)
         execution = (
             Path(execution_checkout).expanduser().resolve()
             if execution_checkout is not None
@@ -491,10 +758,16 @@ class Registry:
             execution_checkout=execution,
             identity=identity,
             workflow=self.identities[identity].workflow,
+            repo_type=effective_type,
         )
 
     def register(
-        self, spec: str, path: str | Path | None = None, *, workflow: Workflow | None = None
+        self,
+        spec: str,
+        path: str | Path | None = None,
+        *,
+        workflow: Workflow | None = None,
+        repo_type: RepositoryType | None = None,
     ) -> Path:
         repo = normalize_repo(spec)
         chosen = (
@@ -518,7 +791,7 @@ class Registry:
             raise RegistryError(f"could not validate checkout {chosen}: {exc}") from exc
         with advisory_lock(f"registry-resolve:{self.path.resolve()}:{repo.slug}"):
             self._reload()
-            return self._store(repo, chosen, workflow)
+            return self._store(repo, chosen, workflow, repo_type)
 
     @classmethod
     def migrate_identity_workflow(
@@ -560,9 +833,54 @@ class Registry:
                 )
             migrated = dict(entries)
             for alias in aliases:
-                migrated[alias] = replace(migrated[alias], workflow=workflow)
+                entry = migrated[alias]
+                if workflow == "local" and entry.repo_type == "team":
+                    raise RegistryError(
+                        "cannot migrate workflow to local for repo_type=team; migrate the "
+                        "repository type to single-owner first"
+                    )
+                migrated[alias] = replace(
+                    entry,
+                    workflow=workflow,
+                    repo_type=("single-owner" if workflow == "local" else entry.repo_type),
+                )
+            migrated = _classify_legacy_entries(migrated)
             atomic_json(registry_path, _serialize(migrated))
         return WorkflowMigration(target, workflow, aliases)
+
+    @classmethod
+    def migrate_identity_type(
+        cls,
+        spec: str,
+        repo_type: RepositoryType,
+        *,
+        path: str | Path | None = None,
+    ) -> RepositoryTypeMigration:
+        """Atomically change type for one identity; team always uses remote workflow."""
+        registry_path = Path(path) if path is not None else _base_dir() / "repos.json"
+        with advisory_lock(f"registry:{registry_path.resolve()}"):
+            if not registry_path.exists():
+                raise RegistryError(
+                    f"registry {registry_path} does not exist; register the repository first"
+                )
+            entries, _ = _parse_raw(registry_path, _read_registry(registry_path))
+            target = _target_identity(entries, spec)
+            aliases = tuple(
+                slug
+                for slug, entry in sorted(entries.items())
+                if _url_identity(entry.origin) == target
+            )
+            if not aliases:
+                raise RegistryError(f"repository identity for {spec!r} is not registered")
+            migrated = dict(entries)
+            workflow = migrated[aliases[0]].workflow
+            if repo_type == "team":
+                workflow = "remote"
+            for alias in aliases:
+                migrated[alias] = replace(migrated[alias], repo_type=repo_type, workflow=workflow)
+            migrated = _classify_legacy_entries(migrated)
+            atomic_json(registry_path, _serialize(migrated))
+        return RepositoryTypeMigration(target, repo_type, workflow, aliases)
 
     def refresh(self, slug: str | None = None) -> list[RefreshResult]:
         with advisory_lock(f"registry:{self.path.resolve()}"):
@@ -635,17 +953,20 @@ def main_register(argv: list[str] | None = None) -> int:
     parser.add_argument("spec")
     parser.add_argument("path", nargs="?")
     parser.add_argument("--workflow", choices=("local", "remote"))
+    parser.add_argument("--repo-type", choices=_REPOSITORY_TYPES)
     args = parser.parse_args(argv)
     try:
         registry = Registry()
-        path = registry.register(args.spec, args.path, workflow=args.workflow)
+        path = registry.register(
+            args.spec, args.path, workflow=args.workflow, repo_type=args.repo_type
+        )
         alias = Slug(normalize_repo(args.spec).slug)
         entry = registry.entries[alias]
     except RegistryError as exc:
         parser.error(str(exc))
     print(
         f"registered checkout={path} alias={alias} identity={_url_identity(entry.origin)} "
-        f"publication_workflow={entry.workflow}"
+        f"repository_type={entry.repo_type} publication_workflow={entry.workflow}"
     )
     return 0
 
@@ -669,6 +990,25 @@ def main_migrate_workflow(argv: list[str] | None = None) -> int:
     return 0
 
 
+def main_migrate_type(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        description="Atomically migrate repository type for a repository identity"
+    )
+    parser.add_argument("spec", help="registered alias, checkout path, or repository identity")
+    parser.add_argument("--repo-type", choices=_REPOSITORY_TYPES, required=True)
+    args = parser.parse_args(argv)
+    try:
+        result = Registry.migrate_identity_type(args.spec, args.repo_type)
+    except (RegistryError, gitops.GitError, ValueError) as exc:
+        parser.error(str(exc))
+    aliases = ",".join(str(alias) for alias in result.aliases)
+    print(
+        f"migrated identity={result.identity} repository_type={result.repo_type} "
+        f"publication_workflow={result.workflow} aliases={aliases}"
+    )
+    return 0
+
+
 def main_repos(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="List repository identities and checkout aliases")
     parser.add_argument("--refresh", action="store_true")
@@ -676,13 +1016,21 @@ def main_repos(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         registry = Registry()
+        registry.migrate_legacy()
         refresh = registry.refresh() if args.refresh else []
     except RegistryError as exc:
         parser.error(str(exc))
     if args.format == "json":
         payload: dict[str, object] = {
             "identities": {
-                str(identity): asdict(metadata)
+                str(identity): {
+                    **asdict(metadata),
+                    "default_merge_policy": (
+                        "none"
+                        if metadata.repo_type == "team"
+                        else ("direct" if metadata.workflow == "local" else "auto")
+                    ),
+                }
                 for identity, metadata in sorted(registry.identities.items())
             },
             "checkouts": {
@@ -699,7 +1047,15 @@ def main_repos(argv: list[str] | None = None) -> int:
         print()
     else:
         for identity, metadata in sorted(registry.identities.items()):
-            print(f"identity\t{identity}\t{metadata.workflow}\t{metadata.origin}")
+            policy = (
+                "none"
+                if metadata.repo_type == "team"
+                else ("direct" if metadata.workflow == "local" else "auto")
+            )
+            print(
+                f"identity\t{identity}\t{metadata.repo_type}\t{metadata.workflow}\t"
+                f"{policy}\t{metadata.origin}"
+            )
         for slug, entry in sorted(registry.entries.items()):
             print(f"checkout\t{slug}\t{entry.path}\t{_url_identity(entry.origin)}")
         for result in refresh:

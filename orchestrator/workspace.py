@@ -28,6 +28,7 @@ __all__ = [
     "DEFAULT_OWNER",
     "IdentityKey",
     "RepoRef",
+    "RepositoryType",
     "Workflow",
     "Workspace",
     "WorkspaceSelection",
@@ -36,6 +37,7 @@ __all__ = [
 
 DEFAULT_OWNER = "nickderobertis"
 Workflow = Literal["local", "remote"]
+RepositoryType = Literal["single-owner", "team"]
 IdentityKey = NewType("IdentityKey", str)
 
 
@@ -53,6 +55,7 @@ class WorkspaceSelection:
     execution_checkout: Path
     publication_identity: IdentityKey
     workflow: Workflow | None
+    repo_type: RepositoryType | None
 
 
 @dataclass(frozen=True)
@@ -135,8 +138,10 @@ class Workspace:
         *,
         resolver: RepoResolver | None = None,
         workflow: Workflow | None = None,
+        repo_type: RepositoryType | None = None,
     ) -> None:
         self.root = Path(root)
+        self._repo_type = repo_type
         self._workflow: Callable[[RepoRef], Workflow | None]
         self._registry: Registry | None = None
         if resolver is None:
@@ -196,6 +201,7 @@ class Workspace:
         url: str | None = None,
         base_branch: str | None = None,
         execution_checkout: str | Path | None = None,
+        repo_type: RepositoryType | None = None,
     ) -> Path:
         """Resolve and fast-forward the selected execution checkout."""
         with self._repo_lock(repo):
@@ -203,12 +209,14 @@ class Workspace:
                 selected = self._registry.select(
                     repo.url,
                     execution_checkout=execution_checkout,
+                    repo_type=repo_type or self._repo_type,
                 )
                 selection = WorkspaceSelection(
                     publication_checkout=selected.publication_checkout,
                     execution_checkout=selected.execution_checkout,
                     publication_identity=selected.identity,
                     workflow=selected.workflow,
+                    repo_type=selected.repo_type,
                 )
                 checkout = selection.execution_checkout
             else:
@@ -223,6 +231,11 @@ class Workspace:
                     execution_checkout=checkout,
                     publication_identity=IdentityKey(url or repo.url),
                     workflow=self._workflow(repo),
+                    repo_type=(
+                        repo_type
+                        or self._repo_type
+                        or ("single-owner" if self._workflow(repo) == "local" else None)
+                    ),
                 )
             if not checkout.is_dir() or not gitops.is_repo(checkout):
                 raise RuntimeError(f"execution checkout {checkout} is not a git checkout")

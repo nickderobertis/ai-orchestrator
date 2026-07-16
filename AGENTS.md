@@ -21,17 +21,17 @@ Beyond dispatching at a directory, the orchestrator manages a change's **full
 life cycle** against any repo (GitHub or a local path): resolve its normalized
 origin to one **repository identity**, choose a registered publication checkout,
 do the work in an **isolated worktree cut from an execution checkout**, verify it
-with the repo's own gate, and merge it. Checkout aliases and publication workflow
-are independent: every canonical, safety, and execution clone of one identity
-shares the identity's `workflow`. `remote` opens a PR that auto-merges once required
-checks are green; `local` merges the branch into the base directly after the checks
-pass (a local-first single-developer repo uses this even with a GitHub origin).
-Treat unregistered identities as remote; classify one as local only from an
-explicit operator choice or affirmative no-CI/local-first evidence, never merely
-because metadata is absent, aliases are numerous, or its spec is a filesystem
-path. A conflicting registration is an error; switch the whole identity between
-runs with `just migrate-repo-workflow <alias> --workflow <local|remote>`. Direct
-`integrate` is local-only. Recover incomplete preserved branches with `just
+with the repo's own gate, and merge it. Checkout aliases share identity-level
+`workflow` and `repo_type` (`single-owner` or `team`). Schema-v3 identities infer
+an omitted type from `gh api user --jq .login` versus the normalized GitHub origin
+owner; legacy `local` workflow is affirmative single-owner evidence. Type and
+workflow migrations are atomic (`just migrate-repo-type` /
+`migrate-repo-workflow`). Team repositories default to an ordinary ready-for-review
+open PR; explicit `auto` or `direct` merges their remote PR. Single-owner
+repositories preserve local direct or remote auto behavior, while explicit `none`
+forces remote open-PR publication for that run without changing stored local
+workflow. Team identities cannot use local workflow or direct integration.
+Recover incomplete preserved branches with `just
 repo-recover`, which verifies and publishes through the registered workflow; do
 not bypass an incomplete provenance marker with a normal commit. The selected
 publication checkout is **never worked in directly and only ever fast-forwarded**
@@ -72,6 +72,12 @@ dispatch onejudge.
    retry/split/add/drop decisions in `edits.json`, then run
    `just next-round <run-id> [edits.json]`. A failed subtask skips its dependents;
    adjust granularity or persona before redispatching.
+
+Same-identity dependencies not yet landed on the root base are stacked. One
+parent becomes the child's checkout and PR base; several parents are merged in
+declared order into a pushed `ai-orchestrator/stack-base/*` branch with no PR.
+`stack-conflict` stops before child dispatch. Replanning preserves completed open
+dependencies as validated `stack_bases` anchors until their content reaches root.
 
 The orchestrator does orchestration and planning only: decomposition, scheduling,
 persona choice, and merge/integration coordination. Dispatch all target-project
@@ -153,7 +159,9 @@ directory; `just repo-task <repo> <persona> "<task>"` and
 the ledger and `just next-round <run-id> [edits]` derives, runs, and records the
 next round. `just replan <prev-plan> <result> [edits]` is the lower-level derivation
 command — see `docs/repo-lifecycle.md`. `just new-persona` / `just validate-personas` round
-out the orchestrator verbs. `just lint-llm` /
+out the orchestrator verbs. `just migrate-repo-type <repo> --repo-type
+<single-owner|team>` atomically changes identity type (team normalizes workflow to
+remote). `just lint-llm` /
 `lint-llm-diff` / `lint-llm-validate` are the **llmlint** LLM-judge tier — kept
 out of `check` (non-deterministic, harness-backed) and enforced at pre-push.
 

@@ -230,9 +230,10 @@ def test_remote_incomplete_integration_is_immutable_then_recovers_via_pr(
         workspace=workspace,
         dispatch_fn=make_writing_dispatch(filename="partial.txt", completed=False),
         verify_cmd=["true"],
+        repo_type="single-owner",
     )
     assert incomplete.outcome == "not-completed"
-    Registry().register(str(canonical), workflow="remote")
+    Registry().register(str(canonical), workflow="remote", repo_type="single-owner")
     local_before = _git(canonical, "rev-parse", "main")
     origin_before = _git(origin, "rev-parse", "main")
     branch_before = _git(canonical, "rev-parse", incomplete.branch)
@@ -304,7 +305,7 @@ def test_incomplete_history_needs_recovery_attestation_even_after_normal_commit(
 
 def test_registered_remote_refresh_is_allowed_without_base_mutation(tmp_path, bare_origin) -> None:
     repo = _clone(tmp_path, bare_origin())
-    Registry().register(str(repo), workflow="remote")
+    Registry().register(str(repo), workflow="remote", repo_type="single-owner")
     _branch(repo, "claude/refresh-only", {"feature.txt": "feature\n"})
     base_before = _git(repo, "rev-parse", "main")
 
@@ -384,6 +385,36 @@ def test_repo_recover_cli_uses_explicit_local_workflow(tmp_path, bare_origin, ca
         == 0
     )
     assert "claude/text-recovery: merged" in capsys.readouterr().out
+
+
+def test_team_recovery_default_opens_pr_without_polling(tmp_path, bare_origin) -> None:
+    origin = bare_origin()
+    repo = _clone(tmp_path, origin)
+    Registry().register(str(repo), workflow="remote", repo_type="team")
+    _branch(repo, "feature/team-recovery", {"team.txt": "partial\n"})
+    _git(repo, "checkout", "feature/team-recovery")
+    _git(
+        repo,
+        "commit",
+        "--amend",
+        "-m",
+        "wip: team recovery\n\nOrchestrator-Status: incomplete",
+    )
+    _git(repo, "checkout", "main")
+
+    result = recover_repo(
+        repo,
+        "feature/team-recovery",
+        workspace_root=tmp_path / "team-recovery-worktrees",
+        verify_cmd=["true"],
+        github=FakeGitHub(origin, fail_checks=True),
+    )
+
+    assert result.ok and result.outcome == "pr-open"
+    assert result.repo_type == "team" and result.merge_policy == "none"
+    assert result.workflow == "remote" and result.pr_base == "main"
+    with pytest.raises(subprocess.CalledProcessError):
+        _git(origin, "show", "main:team.txt")
 
 
 def test_repo_recover_gate_failure_preserves_source_branch(tmp_path, bare_origin) -> None:

@@ -64,7 +64,7 @@ def _lifecycle_process(
 
 
 def _register_process(registry_path: str, checkout: str) -> None:
-    Registry(registry_path).register(checkout)
+    Registry(registry_path).register(checkout, repo_type="single-owner")
 
 
 def _own_round(run_dir: str, ready: Any, release: Any) -> None:
@@ -167,7 +167,7 @@ def test_concurrent_registry_initialization_retains_both_entries(
         _join(process)
 
     payload = json.loads(registry_path.read_text(encoding="utf-8"))
-    assert payload["version"] == 2
+    assert payload["version"] == 3
     assert set(payload["checkouts"]) == {"local/alpha", "local/beta"}
     assert len(Registry(registry_path).entries) == 2
 
