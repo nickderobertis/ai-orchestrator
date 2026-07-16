@@ -868,7 +868,8 @@ class Registry:
         with advisory_lock(f"registry:{registry_path.resolve()}"):
             if not registry_path.exists():
                 raise RegistryError(
-                    f"registry {registry_path} does not exist; register the repository first"
+                    f"registry {registry_path} does not exist; register the repository first "
+                    "with: just register-repo <repo> --repo-type <single-owner|team>"
                 )
             entries, _ = _parse_raw(registry_path, _read_registry(registry_path))
             target = _target_identity(entries, spec)
@@ -878,7 +879,10 @@ class Registry:
                 if _url_identity(entry.origin) == target
             )
             if not aliases:
-                raise RegistryError(f"repository identity for {spec!r} is not registered")
+                raise RegistryError(
+                    f"repository identity for {spec!r} is not registered; register it first "
+                    "with: just register-repo <repo> --repo-type <single-owner|team>"
+                )
             migrated = dict(entries)
             workflow = migrated[aliases[0]].workflow
             if repo_type == "team":
