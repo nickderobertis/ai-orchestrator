@@ -405,6 +405,12 @@ def test_legacy_migration_failure_keeps_original_file(
         Registry(path).migrate_legacy()
     assert path.read_text(encoding="utf-8") == original
 
+    monkeypatch.setattr("orchestrator.registry.infer_repository_type", lambda _origin: "team")
+    Registry(path).migrate_legacy()
+    recovered = json.loads(path.read_text(encoding="utf-8"))
+    assert recovered["version"] == 3
+    assert next(iter(recovered["identities"].values()))["repo_type"] == "team"
+
 
 def test_workflow_round_trips(tmp_path: Path, bare_origin: Callable[..., Path]) -> None:
     checkout = _clone(bare_origin(), tmp_path / "checkout")
