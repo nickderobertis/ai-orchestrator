@@ -268,8 +268,9 @@ def _apply_lifecycle_resume(
         return
     resume = item.get("resume")
     waiting_steps = item.get("waiting_steps") or []
+    prefix = f"{nid}/"
     completed_steps = sorted(
-        ref.split("/", 1)[1] for ref in completed_humans if ref.startswith(f"{nid}/") and "/" in ref
+        ref.removeprefix(prefix) for ref in completed_humans if ref.startswith(prefix)
     )
     if item.get("status") != "waiting" or (resume is None and not waiting_steps):
         return

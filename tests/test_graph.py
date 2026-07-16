@@ -100,6 +100,10 @@ def test_human_node_validation_is_strict(field, value) -> None:
         ({"tasks": [{"id": "a", "kind": "robot", "task": "t"}]}, "kind"),
         ({"tasks": [{"id": "a", "kind": "human", "task": ""}]}, "non-empty 'task'"),
         (
+            {"tasks": [{"id": "release/approval", "kind": "human", "task": "Approve"}]},
+            "reserved for NODE_ID/STEP_ID",
+        ),
+        (
             {"tasks": [{"id": "a", "kind": "human", "task": "t", "deps": "b"}]},
             "deps",
         ),
@@ -282,6 +286,24 @@ def test_parse_graph_accepts_human_steps_and_rejects_agent_fields() -> None:
 
     assert graph.tasks[0].lifecycle is not None
     assert graph.tasks[0].lifecycle.steps == [Step("approve", None, "Approve", "human")]
+    with pytest.raises(PlanError, match="reserved for NODE_ID/STEP_ID"):
+        parse_graph(
+            {
+                "tasks": [
+                    {
+                        "id": "work",
+                        "repo": "o/r",
+                        "steps": [
+                            {
+                                "id": "security/approval",
+                                "kind": "human",
+                                "task": "Approve",
+                            }
+                        ],
+                    }
+                ]
+            }
+        )
     with pytest.raises(PlanError, match="human step 'approve' cannot set 'persona'"):
         parse_graph(
             {

@@ -292,6 +292,43 @@ def test_complete_nested_human_step_updates_resume() -> None:
     assert plan["tasks"][0]["resume"]["completed_steps"] == ["prepare", "approve"]
 
 
+def test_nested_completion_handles_legacy_lifecycle_node_id_with_slash() -> None:
+    work = {
+        "id": "release/work",
+        "repo": "o/r",
+        "steps": [{"id": "approve", "kind": "human", "task": "Approve"}],
+    }
+    result = {
+        "results": {
+            "release/work": {
+                "status": "waiting",
+                "outcome": "waiting-human",
+                "waiting_steps": ["approve"],
+                "human_actions": [
+                    {
+                        "ref": "release/work/approve",
+                        "task": "Approve",
+                        "unblocks": [],
+                        "unblocks_publication": True,
+                    }
+                ],
+                "resume": {
+                    "branch": "feature/work",
+                    "base_branch": "main",
+                    "pr_base": "main",
+                    "checkpoint": "abcdef1",
+                    "completed_steps": [],
+                    "pr": None,
+                },
+            }
+        }
+    }
+
+    plan = next_round(_plan(work), result, {"complete_human": ["release/work/approve"]})
+
+    assert plan["tasks"][0]["resume"]["completed_steps"] == ["approve"]
+
+
 def test_invalid_complete_human_ref_fails_validation() -> None:
     result = {
         "results": {
