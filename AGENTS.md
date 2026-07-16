@@ -73,11 +73,9 @@ dispatch onejudge.
    `just next-round <run-id> [edits.json]`. A failed subtask skips its dependents;
    adjust granularity or persona before redispatching.
 
-Same-identity dependencies not yet landed on the root base are stacked. One
-parent becomes the child's checkout and PR base; several parents are merged in
-declared order into a pushed `ai-orchestrator/stack-base/*` branch with no PR.
-`stack-conflict` stops before child dispatch. Replanning preserves completed open
-dependencies as validated `stack_bases` anchors until their content reaches root.
+Treat unresolved same-identity dependencies as stack prerequisites, not merely
+scheduling edges, and preserve them across replans until their content reaches
+the root base. The deterministic mechanics live in `docs/repo-lifecycle.md`.
 
 The orchestrator does orchestration and planning only: decomposition, scheduling,
 persona choice, and merge/integration coordination. Dispatch all target-project

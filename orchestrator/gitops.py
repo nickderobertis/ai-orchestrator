@@ -256,8 +256,10 @@ def branch_exists(cwd: str | Path, branch: str) -> bool:
 
 
 def is_valid_branch_name(branch: str) -> bool:
-    """Validate an external branch name with Git's authoritative ref parser."""
-    return _git(["check-ref-format", "--branch", branch], check=False).returncode == 0
+    """Validate a literal local branch name with Git's authoritative ref parser."""
+    if not branch or branch.startswith("-"):
+        return False
+    return _git(["check-ref-format", f"refs/heads/{branch}"], check=False).returncode == 0
 
 
 def worktrees(cwd: str | Path) -> dict[str, Path]:

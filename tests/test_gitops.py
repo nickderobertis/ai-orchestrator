@@ -147,3 +147,13 @@ def test_is_ancestor_rejects_invalid_ref(tmp_path, bare_origin) -> None:
 
     with pytest.raises(gitops.GitError, match="Not a valid object name"):
         gitops.is_ancestor(clone, "missing-ref", "HEAD")
+
+
+@pytest.mark.parametrize("branch", ["", "-option", "@{-1}", "feature..branch", "feature.lock"])
+def test_branch_name_validation_rejects_nonliteral_refs(branch: str) -> None:
+    assert not gitops.is_valid_branch_name(branch)
+
+
+@pytest.mark.parametrize("branch", ["main", "feature/team-workflow", "stack-base/123"])
+def test_branch_name_validation_accepts_literal_refs(branch: str) -> None:
+    assert gitops.is_valid_branch_name(branch)
