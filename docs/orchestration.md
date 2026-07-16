@@ -94,6 +94,8 @@ action happened. Each accepted attestation is durably appended to `humans.json`
 with its reference, the waiting round number, and a UTC timestamp. Replanning
 removes a completed top-level human or adds a nested human to the lifecycle
 resume's `completed_steps`; already-done agents are removed and never replayed.
+If a top-level human is the final node, the attestation records a completed
+continuation round so `just runs` no longer reports the finished run as waiting.
 
 ## Replanning
 

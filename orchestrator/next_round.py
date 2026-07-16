@@ -18,8 +18,10 @@ from .runs import (
     load_completions,
     load_mapping,
     record_completions,
+    status_summary,
     validate_run_id,
     write_next_plan,
+    write_result,
 )
 
 
@@ -66,11 +68,8 @@ def main(argv: list[str] | None = None) -> int:
         _validate_completions(run_dir, result, completed_refs)
         if completed_refs:
             edits = {**edits, "complete_human": completed_refs}
-        plan = next_round(
-            load_mapping(round_dir / "plan.json"),
-            result,
-            edits,
-        )
+        previous_plan = load_mapping(round_dir / "plan.json")
+        plan = next_round(previous_plan, result, edits)
     except (ConfigError, PlanError) as exc:
         print(f"next-round: {exc}", file=sys.stderr)
         return 2
@@ -83,6 +82,19 @@ def main(argv: list[str] | None = None) -> int:
             return 2
 
     if not plan["tasks"]:
+        if completed_refs:
+            next_number, next_dir = write_next_plan(run_dir, plan)
+            terminal = _terminal_completion(previous_plan, completed_refs)
+            try:
+                write_result(next_dir, terminal)
+            except ConfigError as exc:
+                print(f"next-round: {exc}", file=sys.stderr)
+                return 2
+            print(
+                f"Round {next_number:02d} recorded -> {next_dir}/  "
+                f"({status_summary(as_result_payload(terminal))})",
+                file=sys.stderr,
+            )
         print("All nodes are done or dropped; there is nothing to iterate.")
         return 0
 
@@ -108,6 +120,25 @@ def _completion_refs(edits: dict[str, Any], cli_refs: list[str]) -> list[str]:
     if len(set(refs)) != len(refs):
         raise ConfigError("human task completion refs must be unique")
     return refs
+
+
+def _terminal_completion(previous_plan: dict[str, Any], refs: list[str]) -> dict[str, Any]:
+    """Record top-level humans as done when their attestation ends the graph."""
+    completed = {ref for ref in refs if "/" not in ref}
+    results = {
+        task["id"]: {
+            "kind": "human",
+            "status": "done",
+            "task": task["task"],
+            "error": None,
+        }
+        for task in previous_plan.get("tasks") or []
+        if isinstance(task, dict)
+        and task.get("kind") == "human"
+        and task.get("id") in completed
+        and isinstance(task.get("task"), str)
+    }
+    return {"ok": True, "state": "complete", "started_order": [], "results": results}
 
 
 def _validate_completions(run_dir: Path, result: dict[str, Any], refs: list[str]) -> None:
