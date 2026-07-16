@@ -200,10 +200,15 @@ def _parse_node(nid: str, raw: dict[str, Any]) -> GraphNode:
     if not isinstance(deps, list) or not all(isinstance(d, str) for d in deps):
         raise PlanError(f"task {nid!r} 'deps' must be a list of ids")
     if kind == "human":
+        if "/" in nid:
+            raise PlanError(
+                f"human task {nid!r} cannot contain '/': that separator is reserved for "
+                "NODE_ID/STEP_ID references"
+            )
         task = raw.get("task")
         if not isinstance(task, str) or not task.strip():
             raise PlanError(f"human task {nid!r} needs a non-empty 'task'")
-        present = [key for key in _AGENT_NODE_FIELDS if raw.get(key) is not None]
+        present = [key for key in _AGENT_NODE_FIELDS if key in raw]
         if present:
             raise PlanError(
                 f"human task {nid!r} cannot set {', '.join(map(repr, present))}: "
@@ -473,6 +478,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         plan_mapping = load_yaml(args.plan)
         graph = parse_graph(plan_mapping)
+        if args.concurrency is not None and args.concurrency < 1:
+            raise PlanError("'--concurrency' must be a positive integer")
         run_dir = (
             None
             if args.no_record

@@ -246,7 +246,9 @@ carries that validated resume metadata. Continuation fetches the branch,
 fast-forwards safely, requires the recorded checkpoint to remain in its history,
 and skips every recorded completed agent/human step. A missing or rewritten
 branch/checkpoint fails as `resume-failed`; a recorded draft closed without merge
-also fails explicitly. The harness never infers the human completion.
+also fails explicitly. A draft made ready or merged before final workstream
+success is likewise rejected so unfinished work cannot publish while paused. The
+harness never infers the human completion.
 
 For `workflow: local`, a pause remains only on the isolated local branch: no gate,
 push, or base publication occurs until the final agent steps complete. For a
@@ -267,7 +269,9 @@ actions. `orchestrator.replan.next_round` applies a small **edits** mapping:
 `retry`, `split`, `add`, `drop`, and `complete_human`. Completed nodes landed on
 root are removed as satisfied. Completed-but-open dependencies become
 `stack_bases` anchors before their IDs are removed; a merge into a feature or
-synthetic base carries that landed base until the content reaches root. Waiting
+synthetic base carries that landed base until the content reaches root. Those
+anchors also pass through a completed top-level human gate or other removed
+non-publication node, preserving same-repository ancestry across rounds. Waiting
 lifecycle nodes carry their resume checkpoint forward. The produced graph is
 validated, so bad edits and human references fail loudly.
 

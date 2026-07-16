@@ -28,6 +28,7 @@ from fakes import FakeGitHub, make_writing_dispatch
 from orchestrator import gitops
 from orchestrator.dispatch import Report
 from orchestrator.github import PullRequest
+from orchestrator.graph import graph_payload, parse_graph, run_graph
 from orchestrator.lifecycle import (
     RepoPlan,
     RepoPlanNode,
@@ -43,6 +44,7 @@ from orchestrator.next_round import main_runs
 from orchestrator.provenance import INCOMPLETE_TRAILER, PR_BASE_TRAILER, incomplete_commits
 from orchestrator.recover import recover_repo
 from orchestrator.registry import Registry
+from orchestrator.replan import next_round
 from orchestrator.workspace import Workspace, normalize_repo
 
 
@@ -1053,6 +1055,23 @@ def test_remote_human_workstream_draft_checkpoint_and_safe_resume(tmp_path, bare
     assert dispatched == ["prepare", "implement"]
     github._prs[paused.pr.number].closed = False
 
+    github._prs[paused.pr.number].draft = False
+    prematurely_ready = run_repo_task(
+        "acme/widget",
+        workspace=workspace,
+        url=str(origin),
+        github=github,
+        steps=steps,
+        dispatch_fn=writing_step,
+        verify_cmd=gate,
+        resume=final_resume,
+    )
+    assert prematurely_ready.outcome == "resume-failed" and "ready for review" in (
+        prematurely_ready.detail
+    )
+    assert dispatched == ["prepare", "implement"]
+    github._prs[paused.pr.number].draft = True
+
     saved_tip = _tip(origin, second.branch)
     subprocess.run(
         ["git", "-C", str(origin), "update-ref", f"refs/heads/{second.branch}", advanced_sha],
@@ -1072,6 +1091,32 @@ def test_remote_human_workstream_draft_checkpoint_and_safe_resume(tmp_path, bare
     assert dispatched == ["prepare", "implement"]
     subprocess.run(
         ["git", "-C", str(origin), "update-ref", f"refs/heads/{second.branch}", saved_tip],
+        check=True,
+    )
+
+    rogue = workspace.worktree(
+        normalize_repo("acme/widget"), second.branch, base=f"origin/{second.branch}"
+    )
+    (rogue / "unpublished.txt").write_text("must not enter the resumed draft\n", encoding="utf-8")
+    gitops.add_all(rogue)
+    gitops.commit(rogue, "unpublished local branch mutation")
+    workspace.remove_worktree(normalize_repo("acme/widget"), rogue)
+    local_ahead = run_repo_task(
+        "acme/widget",
+        workspace=workspace,
+        url=str(origin),
+        github=github,
+        steps=steps,
+        dispatch_fn=writing_step,
+        verify_cmd=gate,
+        resume=final_resume,
+    )
+    assert local_ahead.outcome == "resume-failed" and "unpublished or divergent" in (
+        local_ahead.detail
+    )
+    assert dispatched == ["prepare", "implement"]
+    subprocess.run(
+        ["git", "-C", str(canonical), "update-ref", f"refs/heads/{second.branch}", saved_tip],
         check=True,
     )
 
@@ -1188,6 +1233,90 @@ def test_linear_team_stack_targets_open_dependency_and_includes_pr_link(
     assert child.pr_base == parent.branch
     assert child.pr is not None and child.pr.base == parent.branch
     assert parent.pr is not None and parent.pr.url in github._prs[2].body
+    assert _has_file(origin, child.branch, "parent.txt")
+    assert _has_file(origin, child.branch, "child.txt")
+    assert not _has_file(origin, "main", "parent.txt")
+
+
+def test_cross_round_human_gate_preserves_open_same_repo_stack(tmp_path, bare_origin) -> None:
+    """Attesting a human between two repo nodes retains the parent's real PR base."""
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-human-stack")
+    Registry().register(str(canonical), workflow="remote", repo_type="team")
+    workspace = Workspace(tmp_path / "human-stack-worktrees")
+    github = FakeGitHub(origin)
+
+    plan_mapping = {
+        "tasks": [
+            {
+                "id": "parent",
+                "repo": str(canonical),
+                "persona": "backend-engineer",
+                "task": "parent",
+                "branch": "feature/human-stack-parent",
+            },
+            {
+                "id": "approval",
+                "kind": "human",
+                "task": "Approve the parent before the child starts.",
+                "deps": ["parent"],
+            },
+            {
+                "id": "child",
+                "repo": str(canonical),
+                "persona": "backend-engineer",
+                "task": "child",
+                "branch": "feature/human-stack-child",
+                "deps": ["approval"],
+            },
+        ]
+    }
+
+    def lifecycle_runner(node: RepoPlanNode):
+        return run_repo_task(
+            node.repo,
+            node.task,
+            node.persona,
+            workspace=workspace,
+            github=github,
+            branch=node.branch,
+            dispatch_fn=make_writing_dispatch(filename=f"{node.id}.txt"),
+            verify_cmd=["true"],
+            stack_bases=node.stack_bases,
+        )
+
+    def no_direct_agent(_node):
+        raise AssertionError("this graph contains no direct agent")
+
+    first = run_graph(
+        parse_graph(plan_mapping),
+        agent_runner=no_direct_agent,
+        lifecycle_runner=lifecycle_runner,
+    )
+    first_payload = graph_payload(first)
+    parent = first.results["parent"].lifecycle
+    assert first.state == "waiting" and parent is not None and parent.outcome == "pr-open"
+    assert first.results["approval"].status == "waiting"
+    assert first.results["child"].status == "blocked"
+
+    continued_mapping = next_round(
+        plan_mapping,
+        first_payload,
+        {"complete_human": ["approval"]},
+    )
+    child_mapping = continued_mapping["tasks"][0]
+    assert child_mapping["id"] == "child" and child_mapping["deps"] == []
+    assert child_mapping["stack_bases"][0]["branch"] == parent.branch
+
+    second = run_graph(
+        parse_graph(continued_mapping),
+        agent_runner=no_direct_agent,
+        lifecycle_runner=lifecycle_runner,
+    )
+    child = second.results["child"].lifecycle
+    assert second.ok and child is not None and child.outcome == "pr-open"
+    assert child.pr_base == parent.branch
+    assert child.pr is not None and child.pr.base == parent.branch
     assert _has_file(origin, child.branch, "parent.txt")
     assert _has_file(origin, child.branch, "child.txt")
     assert not _has_file(origin, "main", "parent.txt")

@@ -72,11 +72,10 @@ def test_parse_graph_accepts_old_direct_and_lifecycle_nodes() -> None:
     assert graph.tasks[1].deps == ["direct"]
 
 
-def test_human_node_validation_is_strict() -> None:
-    with pytest.raises(PlanError, match="cannot set 'persona'"):
-        parse_graph(
-            {"tasks": [{"id": "review", "kind": "human", "task": "Review", "persona": "p"}]}
-        )
+@pytest.mark.parametrize("field, value", [("persona", "p"), ("persona", None), ("repo", None)])
+def test_human_node_validation_is_strict(field, value) -> None:
+    with pytest.raises(PlanError, match=f"cannot set '{field}'"):
+        parse_graph({"tasks": [{"id": "review", "kind": "human", "task": "Review", field: value}]})
 
 
 @pytest.mark.parametrize(
@@ -100,6 +99,10 @@ def test_human_node_validation_is_strict() -> None:
         ),
         ({"tasks": [{"id": "a", "kind": "robot", "task": "t"}]}, "kind"),
         ({"tasks": [{"id": "a", "kind": "human", "task": ""}]}, "non-empty 'task'"),
+        (
+            {"tasks": [{"id": "release/approval", "kind": "human", "task": "Approve"}]},
+            "reserved for NODE_ID/STEP_ID",
+        ),
         (
             {"tasks": [{"id": "a", "kind": "human", "task": "t", "deps": "b"}]},
             "deps",
@@ -283,6 +286,24 @@ def test_parse_graph_accepts_human_steps_and_rejects_agent_fields() -> None:
 
     assert graph.tasks[0].lifecycle is not None
     assert graph.tasks[0].lifecycle.steps == [Step("approve", None, "Approve", "human")]
+    with pytest.raises(PlanError, match="reserved for NODE_ID/STEP_ID"):
+        parse_graph(
+            {
+                "tasks": [
+                    {
+                        "id": "work",
+                        "repo": "o/r",
+                        "steps": [
+                            {
+                                "id": "security/approval",
+                                "kind": "human",
+                                "task": "Approve",
+                            }
+                        ],
+                    }
+                ]
+            }
+        )
     with pytest.raises(PlanError, match="human step 'approve' cannot set 'persona'"):
         parse_graph(
             {
@@ -296,6 +317,25 @@ def test_parse_graph_accepts_human_steps_and_rejects_agent_fields() -> None:
                                 "kind": "human",
                                 "task": "Approve",
                                 "persona": "backend-engineer",
+                            }
+                        ],
+                    }
+                ]
+            }
+        )
+    with pytest.raises(PlanError, match="human step 'approve' cannot set 'persona'"):
+        parse_graph(
+            {
+                "tasks": [
+                    {
+                        "id": "work",
+                        "repo": "o/r",
+                        "steps": [
+                            {
+                                "id": "approve",
+                                "kind": "human",
+                                "task": "Approve",
+                                "persona": None,
                             }
                         ],
                     }
@@ -391,6 +431,17 @@ def test_run_plan_cli_invalid_input_exits_2(tmp_path, capsys) -> None:
     plan.write_text(json.dumps({"tasks": []}), encoding="utf-8")
     assert main([str(plan)]) == 2
     assert "run-plan:" in capsys.readouterr().err
+
+
+def test_run_plan_cli_invalid_concurrency_override_exits_2(tmp_path, capsys) -> None:
+    plan = tmp_path / "plan.json"
+    plan.write_text(
+        json.dumps({"tasks": [{"id": "review", "kind": "human", "task": "Approve"}]}),
+        encoding="utf-8",
+    )
+
+    assert main([str(plan), "--concurrency", "0", "--no-record"]) == 2
+    assert "positive integer" in capsys.readouterr().err
 
 
 def test_run_plan_cli_reports_pending_round_claim_failure(tmp_path, capsys) -> None:

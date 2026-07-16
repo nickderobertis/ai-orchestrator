@@ -22,6 +22,12 @@ as `NODE_ID/STEP_ID`. Steps share one branch and run serially in topological ord
 because concurrent writers cannot safely share a worktree. See
 [`tracked-graph.example.json`](../examples/tracked-graph.example.json) for direct,
 lifecycle, top-level human, and nested human nodes in one graph.
+The `/` separator is reserved: top-level human ids and human step ids cannot
+contain it. Existing lifecycle node ids may contain `/`; nested completion strips
+that node's exact prefix rather than assuming the first slash separates the step.
+Resume metadata is accepted only on a workstream containing a human step. Its
+explicit branch/base must agree with the node, completed steps must be unique and
+dependency-closed, and a GitHub PR URL must name the lifecycle repository.
 
 ## Decomposition and scheduling
 
@@ -94,6 +100,8 @@ action happened. Each accepted attestation is durably appended to `humans.json`
 with its reference, the waiting round number, and a UTC timestamp. Replanning
 removes a completed top-level human or adds a nested human to the lifecycle
 resume's `completed_steps`; already-done agents are removed and never replayed.
+If a top-level human is the final node, the attestation records a completed
+continuation round so `just runs` no longer reports the finished run as waiting.
 
 ## Replanning
 
@@ -102,7 +110,10 @@ next numbered plan, runs it, and records the result. `--plan-only` stops after
 derivation. Edits may `retry` with overrides, `split`, `add`, `drop`, or
 `complete_human`. Completed nodes fall out of the next plan, satisfied dependency
 ids are removed, and unresolved lifecycle stack anchors/resume checkpoints are
-preserved. The derived graph is validated before an attestation is recorded.
+preserved. An unresolved same-repository publication anchor passes through removed
+human gates (and other non-publication nodes), so attestation cannot silently cut a
+downstream lifecycle branch from the root. The derived graph is validated before
+an attestation is recorded.
 
 `just replan PREV_PLAN PREV_RESULT [edits.json]` exposes the lower-level pure
 derivation command. Old direct plans, old lifecycle-only repo plans, and recorded

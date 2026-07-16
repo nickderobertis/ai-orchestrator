@@ -67,6 +67,58 @@ def test_done_open_dependency_becomes_stack_anchor_across_rounds() -> None:
     ]
 
 
+def test_open_dependency_stack_anchor_passes_through_completed_human_gate() -> None:
+    parent = {**A, "branch": "feature/a"}
+    approval = {**H, "deps": ["a"]}
+    child = {**B, "deps": ["h"]}
+    result = {
+        "results": {
+            "a": {
+                "status": "done",
+                "outcome": "pr-open",
+                "repo": "o/r",
+                "publication_identity": "https://github.com/o/r",
+                "branch": "feature/a",
+                "base_branch": "main",
+                "pr_base": "main",
+                "pr": "https://github.com/o/r/pull/1",
+            },
+            "h": {
+                "kind": "human",
+                "status": "waiting",
+                "human_actions": [
+                    {
+                        "ref": "h",
+                        "task": "Review the change",
+                        "unblocks": ["b"],
+                        "unblocks_publication": False,
+                    }
+                ],
+            },
+            "b": {"status": "blocked", "blocked_by": ["h"]},
+        }
+    }
+
+    plan = next_round(_plan(parent, approval, child), result, {"complete_human": ["h"]})
+
+    assert plan["tasks"] == [
+        {
+            **child,
+            "deps": [],
+            "stack_bases": [
+                {
+                    "branch": "feature/a",
+                    "repo": "o/r",
+                    "identity": "https://github.com/o/r",
+                    "base_branch": "main",
+                    "pr": "https://github.com/o/r/pull/1",
+                    "pr_base": "main",
+                }
+            ],
+        }
+    ]
+
+
 def test_merged_dependency_landed_on_synthetic_base_carries_that_base() -> None:
     result = {
         "results": {
@@ -240,6 +292,43 @@ def test_complete_nested_human_step_updates_resume() -> None:
     assert plan["tasks"][0]["resume"]["completed_steps"] == ["prepare", "approve"]
 
 
+def test_nested_completion_handles_legacy_lifecycle_node_id_with_slash() -> None:
+    work = {
+        "id": "release/work",
+        "repo": "o/r",
+        "steps": [{"id": "approve", "kind": "human", "task": "Approve"}],
+    }
+    result = {
+        "results": {
+            "release/work": {
+                "status": "waiting",
+                "outcome": "waiting-human",
+                "waiting_steps": ["approve"],
+                "human_actions": [
+                    {
+                        "ref": "release/work/approve",
+                        "task": "Approve",
+                        "unblocks": [],
+                        "unblocks_publication": True,
+                    }
+                ],
+                "resume": {
+                    "branch": "feature/work",
+                    "base_branch": "main",
+                    "pr_base": "main",
+                    "checkpoint": "abcdef1",
+                    "completed_steps": [],
+                    "pr": None,
+                },
+            }
+        }
+    }
+
+    plan = next_round(_plan(work), result, {"complete_human": ["release/work/approve"]})
+
+    assert plan["tasks"][0]["resume"]["completed_steps"] == ["approve"]
+
+
 def test_invalid_complete_human_ref_fails_validation() -> None:
     result = {
         "results": {
@@ -255,6 +344,28 @@ def test_invalid_complete_human_ref_fails_validation() -> None:
 
     with pytest.raises(PlanError, match="recorded waiting human"):
         next_round(_plan(H), result, {"complete_human": ["not-h"]})
+
+
+def test_complete_human_rejects_fabricated_agent_action() -> None:
+    result = {
+        "results": {
+            "a": {
+                "kind": "agent",
+                "status": "waiting",
+                "human_actions": [
+                    {
+                        "ref": "a",
+                        "task": "Pretend this agent is human",
+                        "unblocks": [],
+                        "unblocks_publication": False,
+                    }
+                ],
+            }
+        }
+    }
+
+    with pytest.raises(PlanError, match="recorded waiting human"):
+        next_round(_plan(A), result, {"complete_human": ["a"]})
 
 
 def test_complete_human_edits_must_be_a_unique_list() -> None:
@@ -336,6 +447,29 @@ def test_waiting_lifecycle_resume_completed_steps_must_be_list() -> None:
         next_round(_plan(work), result, {"complete_human": ["work/approve"]})
 
 
+def test_failed_human_pause_can_be_retried_without_resume_metadata() -> None:
+    work = {
+        "id": "work",
+        "repo": "o/r",
+        "steps": [
+            {"id": "prepare", "persona": "backend-engineer", "task": "Prepare"},
+            {"id": "approve", "kind": "human", "task": "Approve", "deps": ["prepare"]},
+        ],
+    }
+    result = {
+        "results": {
+            "work": {
+                "status": "failed",
+                "outcome": "gate-failed",
+                "waiting_steps": ["approve"],
+                "resume": None,
+            }
+        }
+    }
+
+    assert next_round(_plan(work), result)["tasks"] == [work]
+
+
 def test_drop_removes_a_node() -> None:
     plan = next_round(_plan(A, B), _result(a="failed", b="failed"), {"drop": ["b"]})
     assert [t["id"] for t in plan["tasks"]] == ["a"]
@@ -348,6 +482,23 @@ def test_bad_edit_fails_validation() -> None:
             _result(a="failed", b="failed"),
             {"add": [{"id": "a", "repo": "o/r", "persona": "p", "task": "dup"}]},
         )
+
+
+@pytest.mark.parametrize(
+    "edits, match",
+    [
+        ({"retry": []}, "'retry' must be a mapping"),
+        ({"retry": {"a": []}}, "override mappings"),
+        ({"split": []}, "'split' must be a mapping"),
+        ({"split": {"a": {}}}, "replacement nodes"),
+        ({"add": {}}, "list of task mappings"),
+        ({"drop": "a"}, "unique list"),
+        ({"drop": ["a", "a"]}, "unique list"),
+    ],
+)
+def test_malformed_edits_fail_as_invalid_input(edits, match) -> None:
+    with pytest.raises(PlanError, match=match):
+        next_round(_plan(A), _result(a="failed"), edits)
 
 
 def test_empty_next_round_signals_nothing_to_iterate() -> None:

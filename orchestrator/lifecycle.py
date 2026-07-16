@@ -433,15 +433,30 @@ def _validate_resume(clone: Path, resume: Resume, github: GitHubBackend | None) 
             f"resume-failed: branch {resume.branch!r} was rewritten; recorded checkpoint "
             f"{resume.checkpoint} is no longer in the history of {tip}"
         )
+    if published and local and not gitops.is_ancestor(clone, resume.branch, tip):
+        return (
+            f"resume-failed: local branch {resume.branch!r} has unpublished or divergent "
+            f"commits and cannot be fast-forwarded safely to {tip}"
+        )
     if resume.pr is not None:
         pr = _pr_from_url(resume.pr, head=resume.branch, base=resume.pr_base)
         if pr is None:
             return f"resume-failed: recorded draft {resume.pr!r} is not a GitHub pull-request URL"
         status = (github or CliGitHubBackend()).status(pr)
-        if status.state == "CLOSED" and not status.merged:
+        if status.merged:
+            return (
+                f"resume-failed: draft PR {resume.pr} merged before the human-gated "
+                "workstream completed"
+            )
+        if status.state == "CLOSED":
             return (
                 f"resume-failed: draft PR {resume.pr} was closed without merging; reopen it or "
                 "drop the node before continuing"
+            )
+        if not status.draft:
+            return (
+                f"resume-failed: recorded draft PR {resume.pr} is ready for review before the "
+                "human-gated workstream completed; convert it back to draft or drop the node"
             )
     return ResumePrep(worktree_base=tip, published=published)
 
@@ -1222,6 +1237,26 @@ def parse_repo_node(nid: str, t: dict[str, Any]) -> RepoPlanNode:
         not isinstance(raw_execution, str) or not raw_execution.strip()
     ):
         raise PlanError(f"task {nid!r} 'execution_checkout' must be a non-empty path")
+    resume = _parse_resume(nid, t.get("resume"), node_steps)
+    if resume is not None:
+        if not node_steps or not any(step.human for step in node_steps):
+            raise PlanError(f"task {nid!r} 'resume' requires a steps workstream with a human step")
+        for field_name, recorded in (
+            ("branch", resume.branch),
+            ("base_branch", resume.base_branch),
+        ):
+            explicit = t.get(field_name)
+            if explicit is not None and explicit != recorded:
+                raise PlanError(f"task {nid!r} {field_name!r} conflicts with resume {field_name!r}")
+        if resume.pr is not None:
+            ref = normalize_repo(t["repo"])
+            matched = _PR_URL.fullmatch(resume.pr)
+            if (
+                not ref.local
+                and matched is not None
+                and matched.group(1).casefold() != ref.slug.casefold()
+            ):
+                raise PlanError(f"task {nid!r} resume 'pr' repository does not match 'repo'")
     return RepoPlanNode(
         id=nid,
         repo=t["repo"],
@@ -1241,7 +1276,7 @@ def parse_repo_node(nid: str, t: dict[str, Any]) -> RepoPlanNode:
         done_when=t.get("done_when"),
         steps=node_steps,
         stack_bases=_parse_stack_bases(nid, t.get("stack_bases", [])),
-        resume=_parse_resume(nid, t.get("resume"), node_steps),
+        resume=resume,
     )
 
 
@@ -1270,12 +1305,21 @@ def _parse_resume(nid: str, raw: object, steps: list[Step] | None) -> Resume | N
     completed = raw.get("completed_steps", [])
     if not isinstance(completed, list) or not all(isinstance(s, str) for s in completed):
         raise PlanError(f"task {nid!r} resume 'completed_steps' must be a list of step ids")
+    if len(set(completed)) != len(completed):
+        raise PlanError(f"task {nid!r} resume 'completed_steps' must be unique")
     known = {s.id for s in steps or []}
     if unknown_steps := set(completed) - known:
         raise PlanError(
             f"task {nid!r} resume 'completed_steps' names unknown steps: "
             f"{', '.join(sorted(unknown_steps))}"
         )
+    completed_set = set(completed)
+    for step in steps or []:
+        if step.id in completed_set and (missing := set(step.deps) - completed_set):
+            raise PlanError(
+                f"task {nid!r} resume completed step {step.id!r} is missing completed "
+                f"dependencies: {', '.join(sorted(missing))}"
+            )
     pr = raw.get("pr")
     if pr is not None and (not isinstance(pr, str) or _PR_URL.fullmatch(pr) is None):
         raise PlanError(f"task {nid!r} resume 'pr' must be a GitHub pull-request URL")
@@ -1404,7 +1448,12 @@ def _parse_steps(nid: str, raw_steps: object) -> list[Step]:
         if not isinstance(s.get("task"), str) or not str(s.get("task")).strip():
             raise PlanError(f"task {nid!r} step {sid!r} needs a non-empty 'task'")
         if kind == "human":
-            present = [key for key in _AGENT_STEP_FIELDS if s.get(key) is not None]
+            if "/" in sid:
+                raise PlanError(
+                    f"task {nid!r} human step {sid!r} cannot contain '/': that separator is "
+                    "reserved for NODE_ID/STEP_ID references"
+                )
+            present = [key for key in _AGENT_STEP_FIELDS if key in s]
             if present:
                 raise PlanError(
                     f"task {nid!r} human step {sid!r} cannot set {', '.join(map(repr, present))}"

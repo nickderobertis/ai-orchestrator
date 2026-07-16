@@ -337,6 +337,56 @@ def test_next_round_complete_human_records_attestation_and_releases_dep(tmp_path
     assert "just run-plan" in capsys.readouterr().out
 
 
+def test_terminal_human_attestation_records_completed_run_state(tmp_path, capsys) -> None:
+    run = tmp_path / "demo"
+    plan = {"tasks": [{"id": "h", "kind": "human", "task": "Give final approval"}]}
+    _, round_dir = write_next_plan(run, plan)
+    write_result(
+        round_dir,
+        {
+            "ok": False,
+            "state": "waiting",
+            "started_order": ["h"],
+            "results": {
+                "h": {
+                    "kind": "human",
+                    "status": "waiting",
+                    "task": "Give final approval",
+                    "human_actions": [
+                        {
+                            "ref": "h",
+                            "task": "Give final approval",
+                            "unblocks": [],
+                            "unblocks_publication": False,
+                        }
+                    ],
+                }
+            },
+        },
+    )
+
+    assert main(["demo", "--runs-dir", str(tmp_path), "--complete-human", "h"]) == 0
+
+    second = run / "round-02"
+    assert json.loads((second / "plan.json").read_text(encoding="utf-8"))["tasks"] == []
+    result = json.loads((second / "result.json").read_text(encoding="utf-8"))
+    assert result == {
+        "ok": True,
+        "state": "complete",
+        "started_order": [],
+        "results": {
+            "h": {
+                "kind": "human",
+                "status": "done",
+                "task": "Give final approval",
+                "error": None,
+            }
+        },
+    }
+    assert list_runs(tmp_path) == [("demo", 2, "1 done")]
+    assert "Round 02 recorded" in capsys.readouterr().err
+
+
 def test_next_round_rejects_invalid_human_completion_refs(tmp_path, capsys) -> None:
     run = tmp_path / "demo"
     _, round_dir = write_next_plan(run, {"tasks": [{"id": "h", "kind": "human", "task": "Review"}]})
