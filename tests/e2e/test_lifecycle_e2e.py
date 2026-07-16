@@ -40,6 +40,8 @@ from orchestrator.lifecycle import (
 from orchestrator.merge import GitHubMergeStrategy
 from orchestrator.next_round import main as next_round_main
 from orchestrator.next_round import main_runs
+from orchestrator.provenance import INCOMPLETE_TRAILER, PR_BASE_TRAILER, incomplete_commits
+from orchestrator.recover import recover_repo
 from orchestrator.registry import Registry
 from orchestrator.workspace import Workspace, normalize_repo
 
@@ -658,6 +660,72 @@ def test_agent_not_completed_stops_early(tmp_path, bare_origin) -> None:
     assert subject.startswith("wip:") and "incomplete step" in subject
     assert not _has_file(origin, "main", "partial.txt")
     assert not _has_file(origin, result.branch, "partial.txt")  # incomplete work is not pushed
+
+
+def test_clean_committed_partial_work_is_marked_and_recoverable(tmp_path, bare_origin) -> None:
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-clean-partial")
+    Registry().register(str(canonical), workflow="local", repo_type="single-owner")
+    workspace = Workspace(tmp_path / "clean-partial-worktrees")
+    partial_shas: list[str] = []
+
+    def committing_dispatch(persona: str, task: str, *, project_dir: str, **_: object) -> Report:
+        worktree = Path(project_dir)
+        (worktree / "partial.txt").write_text("agent-owned partial work\n", encoding="utf-8")
+        gitops.add_all(worktree)
+        partial_shas.append(gitops.commit(worktree, "wip: agent commits partial work"))
+        assert not gitops.is_dirty(worktree)
+        return Report(persona, 1, False, False, 2, [], {}, {}, "")
+
+    result = run_repo_task(
+        str(canonical),
+        "Commit partial work, then hit the turn cap.",
+        "backend-engineer",
+        workspace=workspace,
+        branch="feature/clean-committed-partial",
+        dispatch_fn=committing_dispatch,
+        verify_cmd=["true"],
+    )
+
+    assert result.outcome == "not-completed" and not result.ok
+    assert "partial work was committed" in result.detail
+    assert result.branch not in gitops.worktrees(canonical)
+    assert partial_shas and gitops.is_ancestor(canonical, partial_shas[0], result.branch)
+    marker_sha = gitops.ref_sha(canonical, result.branch)
+    marker_message = gitops.log_messages(canonical, partial_shas[0], result.branch)[0].message
+    assert INCOMPLETE_TRAILER in marker_message
+    assert f"{PR_BASE_TRAILER} main" in marker_message
+    assert (
+        subprocess.run(
+            ["git", "-C", str(canonical), "diff-tree", "--quiet", f"{marker_sha}^", marker_sha]
+        ).returncode
+        == 0
+    )
+    assert not _has_file(origin, "main", "partial.txt")
+    assert not _has_file(origin, result.branch, "partial.txt")
+
+    gate_log = tmp_path / "clean-partial-recovery-gates.log"
+    gate = [
+        "sh",
+        "-c",
+        f"echo gate >> {shlex.quote(str(gate_log))}; test -f partial.txt",
+    ]
+    recovered = recover_repo(
+        canonical,
+        result.branch,
+        workspace_root=tmp_path / "clean-partial-recovery-worktrees",
+        verify_cmd=gate,
+    )
+
+    assert recovered.ok and recovered.outcome == "merged"
+    assert recovered.workflow == "local" and recovered.pr_base == "main"
+    assert result.branch not in gitops.worktrees(canonical)
+    assert gate_log.read_text(encoding="utf-8").splitlines() == ["gate", "gate"]
+    attestation = gitops.log_messages(canonical, marker_sha, result.branch)
+    assert len(attestation) == 1
+    assert f"Orchestrator-Recovered-Incomplete: {marker_sha}" in attestation[0].message
+    assert gitops.is_ancestor(canonical, attestation[0].sha, "origin/main")
+    assert _has_file(origin, "main", "partial.txt")
 
 
 def test_no_changes_produces_no_pr(tmp_path, bare_origin) -> None:
@@ -1656,13 +1724,14 @@ def test_workstream_multiple_onejudge_one_pr(tmp_path, bare_origin) -> None:
 def test_workstream_step_failure_stops_and_skips_dependents(tmp_path, bare_origin) -> None:
     origin = bare_origin()
     before = _tip(origin, "main")
+    workspace = _workspace(tmp_path, origin)
     steps = [
         Step("impl", "backend-engineer", "implement"),
         Step("test", "test-engineer", "add tests", deps=["impl"]),
     ]
     result = run_repo_task(
         str(origin),
-        workspace=_workspace(tmp_path, origin),
+        workspace=workspace,
         steps=steps,
         dispatch_fn=_per_step_dispatch(fail_step="impl"),  # first step hits the turn cap
         verify_cmd=["true"],
@@ -1671,6 +1740,9 @@ def test_workstream_step_failure_stops_and_skips_dependents(tmp_path, bare_origi
     by_id = {s.id: s.status for s in result.steps}
     assert by_id["impl"] == "not-completed" and by_id["test"] == "skipped"
     assert _tip(origin, "main") == before  # nothing pushed or merged
+    clone = workspace.clone_dir(normalize_repo(str(origin)))
+    assert gitops.ref_sha(clone, result.branch) == gitops.ref_sha(clone, "origin/main")
+    assert incomplete_commits(clone, "origin/main", result.branch) == set()
 
 
 def test_multi_pr_failure_skips_dependents(tmp_path, bare_origin) -> None:
