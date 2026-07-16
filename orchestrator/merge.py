@@ -118,6 +118,8 @@ class GitHubMergeStrategy:
         pr = self._github.create_pr(
             ctx.repo_slug, head=ctx.branch, base=ctx.base, title=ctx.title, body=ctx.body
         )
+        if self._github.status(pr).draft:
+            self._github.mark_ready(pr)
         outcome, detail = _drive_github_merge(self._github, pr, ctx)
         return MergeOutcome(outcome=outcome, detail=detail, pr=pr)
 

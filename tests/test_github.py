@@ -106,6 +106,15 @@ def test_create_pr_creates_when_head_has_no_open_pr() -> None:
     ]
 
 
+def test_create_pr_can_create_draft() -> None:
+    run = RecordingRun(["[]", "https://github.com/o/r/pull/43\n"])
+    pr = CliGitHubBackend(run=run).create_pr(
+        "o/r", head="f", base="main", title="t", body="b", draft=True
+    )
+    assert pr.number == 43
+    assert "--draft" in run.calls[1]
+
+
 def test_create_pr_bad_output_raises() -> None:
     run = RecordingRun(["[]", "not a url"])
     with pytest.raises(GitHubError, match="could not parse PR number"):
@@ -142,10 +151,17 @@ def test_merge_calls_gh() -> None:
     assert run.calls[0][0] == "pr" and "--merge" in run.calls[0]
 
 
+def test_mark_ready_calls_gh() -> None:
+    run = RecordingRun([""])
+    CliGitHubBackend(run=run).mark_ready(_pr())
+    assert run.calls[0] == ["pr", "ready", "3", "--repo", "o/r"]
+
+
 def test_status_parses_rollup() -> None:
     payload = {
         "number": 3,
         "state": "OPEN",
+        "isDraft": True,
         "mergeStateStatus": "BLOCKED",
         "statusCheckRollup": [
             {
@@ -171,6 +187,7 @@ def test_status_parses_rollup() -> None:
     }
     status = CliGitHubBackend(run=RecordingRun([json.dumps(payload)])).status(_pr())
     assert status.number == 3 and not status.merged
+    assert status.draft
     assert len(status.blocking) == 2  # ci + legacy
     assert status.blocking_failed  # legacy failed
     assert not status.blocking_green

@@ -702,7 +702,7 @@ def test_github_auto_merge_on_required_checks(tmp_path, bare_origin) -> None:
 def test_github_second_run_reuses_open_pr_and_merges(tmp_path, bare_origin) -> None:
     class FindOrCreateFakeGitHub(FakeGitHub):
         def create_pr(
-            self, repo: str, *, head: str, base: str, title: str, body: str
+            self, repo: str, *, head: str, base: str, title: str, body: str, draft: bool = False
         ) -> PullRequest:
             for number, state in self._prs.items():
                 if state.head == head and not state.merged:
@@ -713,7 +713,9 @@ def test_github_second_run_reuses_open_pr_and_merges(tmp_path, bare_origin) -> N
                         head=head,
                         base=base,
                     )
-            return super().create_pr(repo, head=head, base=base, title=title, body=body)
+            return super().create_pr(
+                repo, head=head, base=base, title=title, body=body, draft=draft
+            )
 
     origin = bare_origin()
     github = FindOrCreateFakeGitHub(origin)

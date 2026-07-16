@@ -26,7 +26,7 @@ import sys
 import time
 import uuid
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, cast
 
@@ -380,20 +380,70 @@ def _validate_runtime_stack_bases(anchors: list[StackBase]) -> None:
                 )
 
 
+def _pr_from_url(url: str, *, head: str, base: str) -> PullRequest | None:
+    """Rebuild a stable PR identity from a recorded URL."""
+    matched = _PR_URL.fullmatch(url)
+    if matched is None:
+        return None
+    return PullRequest(int(matched.group(2)), url, matched.group(1), head, base)
+
+
 def _stack_pr(anchor: StackBase) -> PullRequest | None:
     """Rebuild the stable PR identity carried by a cross-round anchor."""
     if anchor.pr is None:
         return None
-    matched = re.fullmatch(r"https://github\.com/([^/]+/[^/]+)/pull/([1-9][0-9]*)", anchor.pr)
-    if matched is None:  # runtime validation reports this before stack resolution
-        return None
-    return PullRequest(
-        int(matched.group(2)),
-        anchor.pr,
-        matched.group(1),
-        anchor.branch,
-        anchor.pr_base or anchor.base_branch or "",
+    return _pr_from_url(
+        anchor.pr, head=anchor.branch, base=anchor.pr_base or anchor.base_branch or ""
     )
+
+
+def _ref_exists(cwd: Path, ref: str) -> bool:
+    try:
+        gitops.ref_sha(cwd, ref)
+    except GitError:
+        return False
+    return True
+
+
+@dataclass(frozen=True)
+class ResumePrep:
+    """Validated continuation point for a paused workstream."""
+
+    worktree_base: str
+    published: bool
+
+
+def _validate_resume(clone: Path, resume: Resume, github: GitHubBackend | None) -> ResumePrep | str:
+    """Validate that a recorded pause still describes reachable branch history."""
+    published = _ref_exists(clone, f"origin/{resume.branch}")
+    local = gitops.branch_exists(clone, resume.branch)
+    if not published and not local:
+        return (
+            f"resume-failed: branch {resume.branch!r} no longer exists locally or on origin; "
+            "the paused workstream's commits are unreachable"
+        )
+    if not _ref_exists(clone, resume.checkpoint):
+        return (
+            f"resume-failed: recorded checkpoint {resume.checkpoint} is missing from the "
+            f"repository; branch {resume.branch!r} was rewritten"
+        )
+    tip = f"origin/{resume.branch}" if published else resume.branch
+    if not gitops.is_ancestor(clone, resume.checkpoint, tip):
+        return (
+            f"resume-failed: branch {resume.branch!r} was rewritten; recorded checkpoint "
+            f"{resume.checkpoint} is no longer in the history of {tip}"
+        )
+    if resume.pr is not None:
+        pr = _pr_from_url(resume.pr, head=resume.branch, base=resume.pr_base)
+        if pr is None:
+            return f"resume-failed: recorded draft {resume.pr!r} is not a GitHub pull-request URL"
+        status = (github or CliGitHubBackend()).status(pr)
+        if status.state == "CLOSED" and not status.merged:
+            return (
+                f"resume-failed: draft PR {resume.pr} was closed without merging; reopen it or "
+                "drop the node before continuing"
+            )
+    return ResumePrep(worktree_base=tip, published=published)
 
 
 def _resolve_stack_bases(
@@ -470,6 +520,16 @@ def _resolve_stack_bases(
     return resolved
 
 
+@dataclass
+class StepRun:
+    """Aggregate step-run outcome plus every step's recorded result."""
+
+    status: str  # done | not-completed | waiting
+    results: list[StepResult]
+    detail: str = ""
+    waiting: list[str] = field(default_factory=list)
+
+
 def _run_steps(
     steps: list[Step],
     *,
@@ -480,14 +540,14 @@ def _run_steps(
     oneharness_mode: str | None,
     base_path: str | Path,
     persona_dir: str | Path,
-) -> tuple[bool, list[StepResult], str]:
+    completed: frozenset[str] = frozenset(),
+) -> StepRun:
     """Run a step sub-DAG in the shared worktree, committing per step.
 
     Execution is **serialized in topological order** (concurrency 1): the steps
     share one working tree, so running two dispatches into it at once would corrupt
-    it — deps express ordering, and each step sees its predecessors' commits. A
-    step that does not complete fails the workstream and skips its dependents.
-    Returns ``(all_done, per-step results, detail)``.
+    it. A step that does not complete fails the workstream and skips dependents.
+    A ``human`` step pauses the workstream and blocks its dependents.
     """
     by_id = {s.id: s for s in steps}
     deps = {s.id: s.deps for s in steps}
@@ -495,6 +555,10 @@ def _run_steps(
 
     def run_step(sid: str) -> NodeRun:
         step = by_id[sid]
+        if sid in completed:
+            return NodeRun("done", None, None)
+        if step.human:
+            return NodeRun("waiting", f"step {sid!r} is awaiting human action", None)
         report = dispatch_fn(
             step.persona,
             step.task,
@@ -524,22 +588,37 @@ def _run_steps(
         return NodeRun("done", None, report)
 
     runs, _order = schedule_dag(list(by_id), deps, run_step, concurrency=1)
-    status_map = {"done": "done", "failed": "not-completed", "skipped": "skipped"}
+    status_map = {"failed": "not-completed"}
     results = [
         StepResult(
             id=sid,
             persona=by_id[sid].persona,
-            status=status_map.get(runs[sid].status, "skipped") if sid in runs else "skipped",
+            kind=by_id[sid].kind,
+            status=(
+                status_map.get(runs[sid].status, runs[sid].status) if sid in runs else "skipped"
+            ),
             report=reports.get(sid),
         )
         for sid in by_id
     ]
-    all_done = all(r.status == "done" for r in results)
-    detail = ""
-    if not all_done:
-        bad = next(r for r in results if r.status != "done")
-        detail = runs[bad.id].error or f"step {bad.id!r} {bad.status}"
-    return all_done, results, detail
+    waiting = [r.id for r in results if r.status == "waiting"]
+    unfinished = [r for r in results if r.status in ("not-completed", "skipped")]
+    if unfinished:
+        bad = unfinished[0]
+        return StepRun(
+            status="not-completed",
+            results=results,
+            detail=runs[bad.id].error or f"step {bad.id!r} {bad.status}",
+            waiting=waiting,
+        )
+    if waiting:
+        return StepRun(
+            status="waiting",
+            results=results,
+            detail="awaiting human action on " + ", ".join(repr(sid) for sid in waiting),
+            waiting=waiting,
+        )
+    return StepRun(status="done", results=results)
 
 
 def _select_merge_strategy(
@@ -590,6 +669,94 @@ def _build_synthetic_stack_base(
         workspace.remove_worktree(ref, worktree)
         if not pushed:
             workspace.delete_branch(ref, branch)
+
+
+def _pause_at_human_step(
+    result: LifecycleResult,
+    step_run: StepRun,
+    *,
+    worktree: Path,
+    branch: str,
+    root_base: str,
+    pr_base: str,
+    steps: list[Step],
+    workflow: Workflow,
+    github: GitHubBackend | None,
+    title: str | None,
+    body: str | None,
+    applicable_stack: list[StackBase],
+    verify_cmd: list[str] | None,
+    skip_verify: bool,
+    gate_timeout: float | None,
+    recorded_pr: str | None,
+) -> LifecycleResult:
+    """Preserve a human-gated workstream and record how to continue it."""
+    lead = steps[0]
+    result.waiting_steps = list(step_run.waiting)
+    result.outcome = _WAITING_OUTCOME
+    result.detail = f"workstream paused: {step_run.detail}"
+    completed = tuple(r.id for r in step_run.results if r.status == "done")
+
+    def pause(checkpoint: str, pr_url: str | None) -> LifecycleResult:
+        result.resume = Resume(
+            branch=branch,
+            base_branch=root_base,
+            pr_base=pr_base,
+            checkpoint=checkpoint,
+            completed_steps=completed,
+            pr=pr_url,
+        )
+        return result
+
+    remote_base = f"origin/{pr_base}"
+    with advisory_lock(f"git:{gitops.common_dir(worktree)}"):
+        gitops.fetch(worktree)
+    checkpoint = gitops.head_sha(worktree)
+    if workflow == "local" or not gitops.has_commits_ahead(worktree, remote_base):
+        return pause(checkpoint, recorded_pr)
+
+    if not gitops.merge_base_into_branch(
+        worktree, remote_base, message=f"Merge {remote_base} into {branch}"
+    ):
+        result.outcome = "gate-failed"
+        result.detail = (
+            f"sync-conflict: could not merge current {remote_base} into {branch}; merge aborted "
+            "and no draft was published"
+        )
+        return result
+    if not skip_verify:
+        cmd = verify_cmd or detect_gate(worktree)
+        if cmd is not None:
+            verify = run_gate(
+                worktree,
+                cmd,
+                timeout=gate_timeout,
+                env={
+                    "ORCHESTRATOR_COMPARISON_REMOTE": "origin",
+                    "ORCHESTRATOR_COMPARISON_BASE": pr_base,
+                },
+            )
+            result.verify = verify
+            if not verify.ok:
+                result.outcome = "gate-failed"
+                result.detail = (
+                    f"local gate failed at the human pause: {' '.join(cmd)}; no draft was published"
+                )
+                return result
+    checkpoint = gitops.head_sha(worktree)
+    gitops.push(worktree, branch)
+    reused = _pr_from_url(recorded_pr, head=branch, base=pr_base) if recorded_pr else None
+    pr = reused or (github or CliGitHubBackend()).create_pr(
+        result.repo,
+        head=branch,
+        base=pr_base,
+        title=title or _default_title(_step_label(lead), lead.task),
+        body=(body or _workstream_body(steps, step_run.results))
+        + _stack_body(applicable_stack, result.synthetic_stack_base),
+        draft=True,
+    )
+    result.pr = pr
+    return pause(checkpoint, pr.url)
 
 
 def run_repo_task(
@@ -661,8 +828,8 @@ def run_repo_task(
         repo=ref.slug,
         task=lead.task,
         persona=lead.persona or lead.kind,
-        base_branch=base_branch or "",
-        branch=branch or _workstream_branch_name(effective_steps),
+        base_branch=base_branch or (resume.base_branch if resume else ""),
+        branch=resume.branch if resume else (branch or _workstream_branch_name(effective_steps)),
         outcome="error",
     )
     worktree: Path | None = None
@@ -674,7 +841,7 @@ def run_repo_task(
         clone = workspace.ensure_clone(
             ref,
             url=url,
-            base_branch=base_branch,
+            base_branch=base_branch or (resume.base_branch if resume else None),
             execution_checkout=execution_checkout,
             repo_type=repo_type,
         )
@@ -703,7 +870,16 @@ def run_repo_task(
         result.repository_type = effective_type
         result.merge_policy = decision.merge_policy
         strategy = _select_merge_strategy(ref, merge, github, decision.workflow)
-        root_base = base_branch or gitops.default_branch(clone)
+        root_base = (
+            base_branch or (resume.base_branch if resume else None) or gitops.default_branch(clone)
+        )
+        if resume is not None and root_base != resume.base_branch:
+            result.outcome = "resume-failed"
+            result.detail = (
+                f"resume-failed: requested base {root_base!r} does not match recorded "
+                f"base {resume.base_branch!r}"
+            )
+            return result
         result.base_branch = root_base
         result.pr_base = root_base
         stack_resolution = _resolve_stack_bases(
@@ -721,7 +897,9 @@ def run_repo_task(
             return result
         applicable_stack = stack_resolution
         result.stack_bases = applicable_stack
-        if len(applicable_stack) > 1:
+        if resume is not None:
+            pr_base = resume.pr_base
+        elif len(applicable_stack) > 1:
             stack_result = _build_synthetic_stack_base(ref, workspace, root_base, applicable_stack)
             if isinstance(stack_result, StackConflict):
                 result.outcome = "stack-conflict"
@@ -735,9 +913,29 @@ def run_repo_task(
             pr_base = root_base
         result.pr_base = pr_base
         branch = result.branch
-        worktree = workspace.worktree(ref, branch, base=f"origin/{pr_base}")
+        worktree_base = f"origin/{pr_base}"
+        prepared: ResumePrep | None = None
+        if resume is not None:
+            validated = _validate_resume(clone, resume, github)
+            if isinstance(validated, str):
+                result.outcome = "resume-failed"
+                result.detail = validated
+                return result
+            prepared = validated
+            worktree_base = prepared.worktree_base
+        worktree = workspace.worktree(ref, branch, base=worktree_base)
+        if resume is not None and prepared is not None and prepared.published:
+            try:
+                gitops.merge_ff_only(worktree, f"origin/{branch}")
+            except GitError as exc:
+                result.outcome = "resume-failed"
+                result.detail = (
+                    f"resume-failed: local branch {branch!r} diverged from origin and cannot be "
+                    f"fast-forwarded: {exc}"
+                )
+                return result
 
-        all_done, step_results, step_detail = _run_steps(
+        step_run = _run_steps(
             effective_steps,
             worktree=worktree,
             branch=branch,
@@ -746,14 +944,38 @@ def run_repo_task(
             oneharness_mode=oneharness_mode,
             base_path=base_path,
             persona_dir=persona_dir,
+            completed=frozenset(resume.completed_steps) if resume else frozenset(),
         )
-        result.steps = step_results
+        result.steps = step_run.results
         result.report = next(
-            (r.report for r in reversed(step_results) if r.status == "done" and r.report), None
+            (r.report for r in reversed(step_run.results) if r.status == "done" and r.report), None
         )
-        if not all_done:
+        if step_run.status == "not-completed":
             result.outcome = "not-completed"
-            result.detail = f"workstream did not complete: {step_detail}"
+            result.detail = f"workstream did not complete: {step_run.detail}"
+            return result
+        if step_run.status == "waiting":
+            return _pause_at_human_step(
+                result,
+                step_run,
+                worktree=worktree,
+                branch=branch,
+                root_base=root_base,
+                pr_base=pr_base,
+                steps=effective_steps,
+                workflow=decision.workflow,
+                github=github,
+                title=title,
+                body=body,
+                applicable_stack=applicable_stack,
+                verify_cmd=verify_cmd,
+                skip_verify=skip_verify,
+                gate_timeout=gate_timeout,
+                recorded_pr=resume.pr if resume else None,
+            )
+        if step_run.status != "done":
+            result.outcome = "error"
+            result.detail = f"unexpected step status: {step_run.status}"
             return result
 
         with advisory_lock(f"git:{gitops.common_dir(worktree)}"):
@@ -804,8 +1026,8 @@ def run_repo_task(
             clone_dir=clone,
             base=pr_base,
             branch=branch,
-            title=title or _default_title(lead.persona, lead.task),
-            body=(body or _workstream_body(effective_steps, step_results))
+            title=title or _default_title(_step_label(lead), lead.task),
+            body=(body or _workstream_body(effective_steps, step_run.results))
             + _stack_body(applicable_stack, result.synthetic_stack_base),
             method=merge_method,
             policy=decision.merge_policy,
@@ -1212,66 +1434,33 @@ def run_repo_plan(
     *,
     concurrency: int | None = None,
 ) -> RepoPlanResult:
-    """Schedule the DAG, driving each node through its repo lifecycle via `runner`.
+    """Run an all-lifecycle plan through the canonical tracked graph executor."""
+    from .graph import Graph, GraphNode, run_graph
 
-    A node is ``done`` when its `LifecycleResult.ok`, else ``failed``; a failed or
-    skipped dependency skips the node (its PR is never opened against a broken
-    precondition). `runner` is injected so the scheduler is unit-tested without
-    git/GitHub while the e2e drives the real lifecycle.
-    """
-    conc = concurrency if concurrency is not None else plan.concurrency
-    nodes = {n.id: n for n in plan.tasks}
-    deps = {nid: nodes[nid].deps for nid in nodes}
-    completed: dict[str, LifecycleResult] = {}
+    def no_direct(node: Any) -> Report:
+        raise AssertionError("a repo plan has no direct agent nodes")
 
-    def dependency_anchor(result: LifecycleResult) -> StackBase | None:
-        match result.outcome:
-            case "pr-open":
-                branch = result.branch
-            case "merged" if result.pr_base != result.base_branch:
-                branch = result.pr_base
-            case _:
-                return None
-        return StackBase(
-            branch=branch,
-            repo=result.repo,
-            identity=result.publication_identity,
-            base_branch=result.base_branch,
-            pr=result.pr.url if result.pr else None,
-            pr_base=result.pr_base,
-        )
-
-    def run_one(nid: str) -> NodeRun:
-        node = nodes[nid]
-        dynamic = [
-            anchor
-            for dep in node.deps
-            if dep in completed
-            for anchor in (dependency_anchor(completed[dep]),)
-            if anchor is not None
-        ]
-        combined = list(node.stack_bases)
-        for anchor in dynamic:
-            if all(existing.branch != anchor.branch for existing in combined):
-                combined.append(anchor)
-        result = runner(replace(node, stack_bases=combined))
-        if result.ok:
-            completed[nid] = result
-            return NodeRun("done", None, result)
-        return NodeRun("failed", result.detail or result.outcome, result)
-
-    runs, started_order = schedule_dag(list(nodes), deps, run_one, concurrency=conc)
-    results = {
-        nid: RepoTaskResult(
-            nid,
-            runs[nid].status,
-            result=runs[nid].payload if isinstance(runs[nid].payload, LifecycleResult) else None,
-            error=runs[nid].error,
-        )
-        for nid in nodes
-        if nid in runs
-    }
-    return RepoPlanResult(results=results, started_order=started_order)
+    result = run_graph(
+        Graph(
+            tasks=[
+                GraphNode(
+                    id=node.id, task=node.task or "", deps=node.deps, repo=node.repo, lifecycle=node
+                )
+                for node in plan.tasks
+            ],
+            concurrency=plan.concurrency,
+        ),
+        agent_runner=no_direct,
+        lifecycle_runner=runner,
+        concurrency=concurrency,
+    )
+    return RepoPlanResult(
+        results={
+            nid: RepoTaskResult(nid, item.status, result=item.lifecycle, error=item.error)
+            for nid, item in result.results.items()
+        },
+        started_order=result.started_order,
+    )
 
 
 def dependency_anchor(result: LifecycleResult) -> StackBase | None:
