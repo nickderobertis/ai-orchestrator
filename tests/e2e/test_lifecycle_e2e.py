@@ -18,6 +18,7 @@ import json
 import shlex
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from pathlib import Path
 from typing import cast
 
@@ -1314,6 +1315,94 @@ def test_stack_conflict_aborts_before_child_dispatch_and_skips_descendant(
 
 
 # --- workstream: several onejudge on ONE PR -------------------------------
+
+
+def test_local_human_workstream_removes_worktree_and_resumes_same_branch(
+    tmp_path, bare_origin
+) -> None:
+    """A local agent → human → agent workstream publishes only after resume."""
+    origin = bare_origin()
+    before = _tip(origin, "main")
+    workspace = _workspace(tmp_path, origin)
+    dispatched: list[str] = []
+
+    def writing_step(
+        persona: str, task: str, *, project_dir: str, session: str, **_: object
+    ) -> Report:
+        sid = session.rsplit(":", 1)[-1]
+        dispatched.append(sid)
+        (Path(project_dir) / f"{sid}.txt").write_text(f"{task} by {persona}\n", encoding="utf-8")
+        return Report(persona, 0, True, False, 1, [], {}, {}, "")
+
+    gate_log = tmp_path / "local-human-gates.log"
+    gate = [
+        "sh",
+        "-c",
+        f"echo gate >> {shlex.quote(str(gate_log))}; test -f prepare.txt && test -f finalize.txt",
+    ]
+    steps = [
+        Step("prepare", "backend-engineer", "prepare the change"),
+        Step("approve", task="Approve the prepared change.", kind="human", deps=["prepare"]),
+        Step("finalize", "test-engineer", "finalize the change", deps=["approve"]),
+    ]
+
+    paused = run_repo_task(
+        str(origin),
+        workspace=workspace,
+        steps=steps,
+        branch="feature/local-human-resume",
+        dispatch_fn=writing_step,
+        verify_cmd=gate,
+    )
+
+    assert paused.outcome == "waiting-human" and paused.resume is not None
+    assert dispatched == ["prepare"]
+    assert [step.status for step in paused.steps] == ["done", "waiting", "blocked"]
+    assert paused.waiting_steps == ["approve"]
+    assert paused.resume.branch == paused.branch == "feature/local-human-resume"
+    assert paused.resume.base_branch == paused.resume.pr_base == "main"
+    assert paused.resume.completed_steps == ("prepare",)
+    clone = workspace.clone_dir(normalize_repo(str(origin)))
+    assert paused.resume.checkpoint == gitops.ref_sha(clone, paused.branch)
+    assert gitops.branch_exists(clone, paused.branch)
+    assert not _has_file(origin, paused.branch, "prepare.txt")
+    assert _tip(origin, "main") == before
+    assert not gate_log.exists()
+    worktrees = subprocess.run(
+        ["git", "-C", str(clone), "worktree", "list", "--porcelain"],
+        check=True,
+        text=True,
+        capture_output=True,
+    ).stdout
+    assert "local-human-resume" not in worktrees
+
+    resume = replace(
+        paused.resume,
+        completed_steps=(*paused.resume.completed_steps, "approve"),
+    )
+    completed = run_repo_task(
+        str(origin),
+        workspace=workspace,
+        steps=steps,
+        dispatch_fn=writing_step,
+        verify_cmd=gate,
+        resume=resume,
+    )
+
+    assert completed.ok and completed.outcome == "merged", completed.detail
+    assert completed.branch == paused.branch
+    assert dispatched == ["prepare", "finalize"]
+    assert [step.status for step in completed.steps] == ["done", "done", "done"]
+    assert _has_file(origin, "main", "prepare.txt")
+    assert _has_file(origin, "main", "finalize.txt")
+    assert gate_log.read_text(encoding="utf-8").splitlines() == ["gate", "gate"]
+    final_worktrees = subprocess.run(
+        ["git", "-C", str(clone), "worktree", "list", "--porcelain"],
+        check=True,
+        text=True,
+        capture_output=True,
+    ).stdout
+    assert "local-human-resume" not in final_worktrees
 
 
 def test_workstream_multiple_onejudge_one_pr(tmp_path, bare_origin) -> None:
