@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shlex
 import subprocess
 from pathlib import Path
@@ -20,6 +21,8 @@ from orchestrator.recover import main as recover_main
 from orchestrator.recover import recover_repo
 from orchestrator.registry import Registry
 from orchestrator.workspace import Workspace
+
+ROOT = Path(__file__).parents[2]
 
 
 def _git(repo: Path, *args: str) -> str:
@@ -85,6 +88,51 @@ def test_merge_train_pushes_all_branches_and_rerun_is_idempotent(tmp_path, bare_
     rerun = integrate(repo, ["claude/a", "claude/b"], gate_command=["true"], push=True)
     assert [item.status for item in rerun.branches] == ["already-merged", "already-merged"]
     assert not rerun.base_advanced and not rerun.pushed
+
+
+def test_push_hook_receives_integration_comparison_with_ambiguous_remote_heads(
+    tmp_path, bare_origin
+) -> None:
+    gate = """set shell := ["bash", "-euo", "pipefail", "-c"]
+set positional-arguments
+
+gate remote base:
+    @test "$1/$2" = "origin/main"
+    @test "$ORCHESTRATOR_COMPARISON_REMOTE/$ORCHESTRATOR_COMPARISON_BASE" = "origin/main"
+    @printf '%s\\n' "$1/$2" > "$(git rev-parse --git-dir)/integration-hook-gate-ran"
+"""
+    origin = bare_origin({"justfile": gate})
+    repo = _clone(tmp_path, origin)
+    _allow_local(repo)
+    _branch(repo, "claude/publish", {"published.txt": "published\n"})
+    _branch(repo, "remote-feature", {"remote.txt": "remote\n"})
+    _git(repo, "push", "origin", "remote-feature")
+    _git(repo, "fetch", "origin")
+    _git(repo, "symbolic-ref", "--delete", "refs/remotes/origin/HEAD")
+    _git(repo, "config", "core.hooksPath", str(ROOT / ".githooks"))
+
+    unresolved = subprocess.run(
+        [str(ROOT / "scripts/comparison-base.sh"), "origin"],
+        cwd=repo,
+        env={**os.environ, "ORCHESTRATOR_COMPARISON_BASE": ""},
+        text=True,
+        capture_output=True,
+    )
+    assert unresolved.returncode == 2
+    assert "cannot discover a unique base" in unresolved.stderr
+
+    result = integrate(
+        repo,
+        ["claude/publish"],
+        gate_command=["true"],
+        push=True,
+    )
+
+    assert result.base_advanced and result.pushed
+    assert _git(origin, "show", "main:published.txt") == "published"
+    git_dir = Path(_git(repo, "rev-parse", "--git-dir"))
+    marker = (git_dir if git_dir.is_absolute() else repo / git_dir) / "integration-hook-gate-ran"
+    assert marker.read_text(encoding="utf-8") == "origin/main\n"
 
 
 def test_conflict_is_skipped_and_train_continues(tmp_path, bare_origin) -> None:

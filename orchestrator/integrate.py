@@ -139,6 +139,10 @@ def _integrate_locked(
     planned = plan(selected, base, merged)
     initial_base = gitops.head_sha(root)
     results: list[BranchResult] = []
+    comparison_env = {
+        "ORCHESTRATOR_COMPARISON_REMOTE": remote,
+        "ORCHESTRATOR_COMPARISON_BASE": base,
+    }
 
     for item in planned:
         if item.status == "already-merged":
@@ -182,10 +186,7 @@ def _integrate_locked(
             if not run_gate(
                 worktree,
                 gate_command,
-                env={
-                    "ORCHESTRATOR_COMPARISON_REMOTE": remote,
-                    "ORCHESTRATOR_COMPARISON_BASE": base,
-                },
+                env=comparison_env,
             ).ok:
                 results.append(BranchResult(branch, "skipped", "gate-failed"))
                 continue
@@ -202,7 +203,13 @@ def _integrate_locked(
     advanced = gitops.head_sha(root) != initial_base
     pushed = False
     if push and advanced:
-        gitops.push(root, base, remote=remote, set_upstream=False)
+        gitops.push(
+            root,
+            base,
+            remote=remote,
+            set_upstream=False,
+            env=comparison_env,
+        )
         pushed = True
     return IntegrationResult(base, tuple(results), advanced, pushed)
 
