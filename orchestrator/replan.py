@@ -55,11 +55,10 @@ def next_round(
     }
     done_ids.update(ref for ref in completed_humans if "/" not in ref)
     removed = drop | set(split)  # split replaces a node → its id goes away
-    prior_tasks = {
-        task.get("id"): task
-        for task in prev_plan.get("tasks") or []
-        if isinstance(task, dict) and isinstance(task.get("id"), str)
-    }
+    prior_tasks: dict[str, Any] = {}
+    for task in prev_plan.get("tasks") or []:
+        if isinstance(task, dict) and isinstance((tid := task.get("id")), str):
+            prior_tasks[tid] = task
     _validate_completed_humans(prior_tasks, results, completed_humans)
 
     def _anchor(nid: str) -> StackBasePayload | None:

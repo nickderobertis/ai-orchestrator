@@ -102,7 +102,10 @@ next numbered plan, runs it, and records the result. `--plan-only` stops after
 derivation. Edits may `retry` with overrides, `split`, `add`, `drop`, or
 `complete_human`. Completed nodes fall out of the next plan, satisfied dependency
 ids are removed, and unresolved lifecycle stack anchors/resume checkpoints are
-preserved. The derived graph is validated before an attestation is recorded.
+preserved. An unresolved same-repository publication anchor passes through removed
+human gates (and other non-publication nodes), so attestation cannot silently cut a
+downstream lifecycle branch from the root. The derived graph is validated before
+an attestation is recorded.
 
 `just replan PREV_PLAN PREV_RESULT [edits.json]` exposes the lower-level pure
 derivation command. Old direct plans, old lifecycle-only repo plans, and recorded

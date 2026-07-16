@@ -27,6 +27,7 @@ from fakes import FakeGitHub, make_writing_dispatch
 
 from orchestrator import gitops
 from orchestrator.dispatch import Report
+from orchestrator.graph import graph_payload, parse_graph, run_graph
 from orchestrator.github import PullRequest
 from orchestrator.lifecycle import (
     RepoPlan,
@@ -42,6 +43,7 @@ from orchestrator.next_round import main as next_round_main
 from orchestrator.next_round import main_runs
 from orchestrator.provenance import INCOMPLETE_TRAILER, PR_BASE_TRAILER, incomplete_commits
 from orchestrator.recover import recover_repo
+from orchestrator.replan import next_round
 from orchestrator.registry import Registry
 from orchestrator.workspace import Workspace, normalize_repo
 
@@ -1214,6 +1216,90 @@ def test_linear_team_stack_targets_open_dependency_and_includes_pr_link(
     assert child.pr_base == parent.branch
     assert child.pr is not None and child.pr.base == parent.branch
     assert parent.pr is not None and parent.pr.url in github._prs[2].body
+    assert _has_file(origin, child.branch, "parent.txt")
+    assert _has_file(origin, child.branch, "child.txt")
+    assert not _has_file(origin, "main", "parent.txt")
+
+
+def test_cross_round_human_gate_preserves_open_same_repo_stack(tmp_path, bare_origin) -> None:
+    """Attesting a human between two repo nodes retains the parent's real PR base."""
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-human-stack")
+    Registry().register(str(canonical), workflow="remote", repo_type="team")
+    workspace = Workspace(tmp_path / "human-stack-worktrees")
+    github = FakeGitHub(origin)
+
+    plan_mapping = {
+        "tasks": [
+            {
+                "id": "parent",
+                "repo": str(canonical),
+                "persona": "backend-engineer",
+                "task": "parent",
+                "branch": "feature/human-stack-parent",
+            },
+            {
+                "id": "approval",
+                "kind": "human",
+                "task": "Approve the parent before the child starts.",
+                "deps": ["parent"],
+            },
+            {
+                "id": "child",
+                "repo": str(canonical),
+                "persona": "backend-engineer",
+                "task": "child",
+                "branch": "feature/human-stack-child",
+                "deps": ["approval"],
+            },
+        ]
+    }
+
+    def lifecycle_runner(node: RepoPlanNode):
+        return run_repo_task(
+            node.repo,
+            node.task,
+            node.persona,
+            workspace=workspace,
+            github=github,
+            branch=node.branch,
+            dispatch_fn=make_writing_dispatch(filename=f"{node.id}.txt"),
+            verify_cmd=["true"],
+            stack_bases=node.stack_bases,
+        )
+
+    def no_direct_agent(_node):
+        raise AssertionError("this graph contains no direct agent")
+
+    first = run_graph(
+        parse_graph(plan_mapping),
+        agent_runner=no_direct_agent,
+        lifecycle_runner=lifecycle_runner,
+    )
+    first_payload = graph_payload(first)
+    parent = first.results["parent"].lifecycle
+    assert first.state == "waiting" and parent is not None and parent.outcome == "pr-open"
+    assert first.results["approval"].status == "waiting"
+    assert first.results["child"].status == "blocked"
+
+    continued_mapping = next_round(
+        plan_mapping,
+        first_payload,
+        {"complete_human": ["approval"]},
+    )
+    child_mapping = continued_mapping["tasks"][0]
+    assert child_mapping["id"] == "child" and child_mapping["deps"] == []
+    assert child_mapping["stack_bases"][0]["branch"] == parent.branch
+
+    second = run_graph(
+        parse_graph(continued_mapping),
+        agent_runner=no_direct_agent,
+        lifecycle_runner=lifecycle_runner,
+    )
+    child = second.results["child"].lifecycle
+    assert second.ok and child is not None and child.outcome == "pr-open"
+    assert child.pr_base == parent.branch
+    assert child.pr is not None and child.pr.base == parent.branch
     assert _has_file(origin, child.branch, "parent.txt")
     assert _has_file(origin, child.branch, "child.txt")
     assert not _has_file(origin, "main", "parent.txt")

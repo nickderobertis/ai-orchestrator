@@ -267,7 +267,9 @@ actions. `orchestrator.replan.next_round` applies a small **edits** mapping:
 `retry`, `split`, `add`, `drop`, and `complete_human`. Completed nodes landed on
 root are removed as satisfied. Completed-but-open dependencies become
 `stack_bases` anchors before their IDs are removed; a merge into a feature or
-synthetic base carries that landed base until the content reaches root. Waiting
+synthetic base carries that landed base until the content reaches root. Those
+anchors also pass through a completed top-level human gate or other removed
+non-publication node, preserving same-repository ancestry across rounds. Waiting
 lifecycle nodes carry their resume checkpoint forward. The produced graph is
 validated, so bad edits and human references fail loudly.
 
