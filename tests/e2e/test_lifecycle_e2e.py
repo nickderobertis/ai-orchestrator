@@ -1055,6 +1055,23 @@ def test_remote_human_workstream_draft_checkpoint_and_safe_resume(tmp_path, bare
     assert dispatched == ["prepare", "implement"]
     github._prs[paused.pr.number].closed = False
 
+    github._prs[paused.pr.number].draft = False
+    prematurely_ready = run_repo_task(
+        "acme/widget",
+        workspace=workspace,
+        url=str(origin),
+        github=github,
+        steps=steps,
+        dispatch_fn=writing_step,
+        verify_cmd=gate,
+        resume=final_resume,
+    )
+    assert prematurely_ready.outcome == "resume-failed" and "ready for review" in (
+        prematurely_ready.detail
+    )
+    assert dispatched == ["prepare", "implement"]
+    github._prs[paused.pr.number].draft = True
+
     saved_tip = _tip(origin, second.branch)
     subprocess.run(
         ["git", "-C", str(origin), "update-ref", f"refs/heads/{second.branch}", advanced_sha],

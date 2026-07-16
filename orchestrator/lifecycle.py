@@ -443,10 +443,20 @@ def _validate_resume(clone: Path, resume: Resume, github: GitHubBackend | None) 
         if pr is None:
             return f"resume-failed: recorded draft {resume.pr!r} is not a GitHub pull-request URL"
         status = (github or CliGitHubBackend()).status(pr)
-        if status.state == "CLOSED" and not status.merged:
+        if status.merged:
+            return (
+                f"resume-failed: draft PR {resume.pr} merged before the human-gated "
+                "workstream completed"
+            )
+        if status.state == "CLOSED":
             return (
                 f"resume-failed: draft PR {resume.pr} was closed without merging; reopen it or "
                 "drop the node before continuing"
+            )
+        if not status.draft:
+            return (
+                f"resume-failed: recorded draft PR {resume.pr} is ready for review before the "
+                "human-gated workstream completed; convert it back to draft or drop the node"
             )
     return ResumePrep(worktree_base=tip, published=published)
 

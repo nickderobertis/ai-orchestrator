@@ -246,7 +246,9 @@ carries that validated resume metadata. Continuation fetches the branch,
 fast-forwards safely, requires the recorded checkpoint to remain in its history,
 and skips every recorded completed agent/human step. A missing or rewritten
 branch/checkpoint fails as `resume-failed`; a recorded draft closed without merge
-also fails explicitly. The harness never infers the human completion.
+also fails explicitly. A draft made ready or merged before final workstream
+success is likewise rejected so unfinished work cannot publish while paused. The
+harness never infers the human completion.
 
 For `workflow: local`, a pause remains only on the isolated local branch: no gate,
 push, or base publication occurs until the final agent steps complete. For a
