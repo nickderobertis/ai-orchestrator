@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from collections.abc import Callable
@@ -106,6 +107,64 @@ def test_conflicting_legacy_aliases_require_and_support_cli_identity_migration(
     assert len(registry.identities) == 1
     assert {entry.workflow for entry in registry.entries.values()} == {"local"}
     assert {Path(entry.path) for entry in registry.entries.values()} == {canonical, safety}
+
+
+def test_v2_registry_cli_inference_failure_recovery_and_type_migration(
+    tmp_path: Path,
+    bare_origin: Callable[..., Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The public CLIs lazily migrate v2 atomically and expose the type migration verb."""
+    home = tmp_path / "home" / ".ai-orchestrator"
+    home.mkdir(parents=True)
+    checkout = tmp_path / "checkout"
+    git("clone", str(bare_origin()), str(checkout))
+    origin = "git@github.com:AcMe/Widget.git"
+    git("remote", "set-url", "origin", origin, cwd=checkout)
+    identity = "https://github.com/acme/widget"
+    registry_path = home / "repos.json"
+    legacy = {
+        "version": 2,
+        "identities": {identity: {"origin": origin, "workflow": "remote"}},
+        "checkouts": {"acme/widget": {"path": str(checkout.resolve()), "identity": identity}},
+    }
+    original = json.dumps(legacy)
+    registry_path.write_text(original, encoding="utf-8")
+    monkeypatch.setenv("AI_ORCHESTRATOR_HOME", str(home))
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    gh = bin_dir / "gh"
+    gh.write_text("#!/bin/sh\nprintf 'authenticate first\\n' >&2\nexit 1\n", encoding="utf-8")
+    gh.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+
+    failed = _cli("orchestrator-repos", "--format", "json", check=False)
+    assert failed.returncode == 2 and "authenticate first" in failed.stderr
+    assert registry_path.read_text(encoding="utf-8") == original
+
+    gh.write_text("#!/bin/sh\nprintf 'ACME\\n'\n", encoding="utf-8")
+    gh.chmod(0o755)
+    migrated = _cli("orchestrator-repos", "--format", "json")
+    listed = json.loads(migrated.stdout)
+    assert listed["identities"][identity]["repo_type"] == "single-owner"
+    payload = json.loads(registry_path.read_text(encoding="utf-8"))
+    assert payload["version"] == 3
+
+    typed = _cli("orchestrator-migrate-repo-type", "acme/widget", "--repo-type", "team")
+    assert "repository_type=team" in typed.stdout
+    stored = Registry().identities[identity]
+    assert stored.repo_type == "team" and stored.workflow == "remote"
+
+    rejected = _cli(
+        "orchestrator-migrate-repo-workflow",
+        "acme/widget",
+        "--workflow",
+        "local",
+        check=False,
+    )
+    assert rejected.returncode == 2
+    assert "migrate the repository type to single-owner first" in rejected.stderr
 
 
 @pytest.mark.parametrize(

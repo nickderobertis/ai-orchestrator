@@ -159,7 +159,9 @@ then repository-type defaults apply.
   registration/workflow migration/direct integration is rejected.
 - **Single owner** — omitted policy preserves `local` direct publication or
   `remote` auto-merge. Explicit `none` forces remote PR publication for that run
-  and leaves the PR open without mutating a stored local workflow.
+  and leaves the PR open without mutating a stored local workflow. Because the
+  local strategy only supports direct publication, an explicit `auto` is reported
+  as the effective `direct` policy when the stored workflow remains local.
 
 - **`GitHubMergeStrategy`** (GitHub repos) — opens a PR, then merges it **only
   once the repo's required (blocking) checks are green**. The default policy is

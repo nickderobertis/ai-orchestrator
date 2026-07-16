@@ -267,9 +267,12 @@ def _effective_publication(
         return PublicationDecision(workflow, merge_policy or "none")
     if merge_policy == "none":
         return PublicationDecision("remote", "none")
-    return PublicationDecision(
-        workflow, merge_policy or ("direct" if workflow == "local" else "auto")
-    )
+    if workflow == "local":
+        # LocalMergeStrategy has exactly one publication behavior. Report that
+        # effective behavior even when a caller supplied the GitHub-only `auto`
+        # spelling, instead of claiming a policy the selected strategy ignores.
+        return PublicationDecision("local", "direct")
+    return PublicationDecision("remote", merge_policy or "auto")
 
 
 def _stack_body(anchors: list[StackBase], synthetic: str | None) -> str:

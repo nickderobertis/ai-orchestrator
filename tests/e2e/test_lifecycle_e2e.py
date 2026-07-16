@@ -21,6 +21,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import cast
 
+import pytest
 from fakes import FakeGitHub, make_writing_dispatch
 
 from orchestrator import gitops
@@ -116,6 +117,7 @@ def test_repo_plan_ledger_and_guided_next_round(
                 "task": "should-fail write-change: preserve this partial attempt",
                 "skip_verify": True,
                 "workflow": "local",
+                "repo_type": "single-owner",
             }
         ],
     }
@@ -129,6 +131,10 @@ def test_repo_plan_ledger_and_guided_next_round(
         str(tmp_path / "workspace"),
         "--format",
         "json",
+        # The node override must beat this command-wide override and preserve
+        # the registered local publication path.
+        "--repo-type",
+        "team",
     ]
     rc = main_plan([str(plan_path), "--run", "fixed-run", "--runs-dir", str(runs_dir), *common])
     captured = capsys.readouterr()
@@ -151,6 +157,12 @@ def test_repo_plan_ledger_and_guided_next_round(
     second_result = json.loads((second / "result.json").read_text())
     assert second_result["results"]["change"]["status"] == "done"
     assert second_result["results"]["change"]["follow_ups"] == follow_up
+    publication = second_result["results"]["change"]
+    assert publication["repository_type"] == publication["repo_type"] == "single-owner"
+    assert publication["publication_workflow"] == publication["workflow"] == "local"
+    assert publication["merge_policy"] == "direct"
+    assert publication["base_branch"] == publication["pr_base"] == "main"
+    assert publication["synthetic_stack_base"] is None and publication["stack_bases"] == []
     assert follow_up in captured.out
     assert main_runs(["--runs-dir", str(runs_dir)]) == 0
     assert follow_up in capsys.readouterr().out
@@ -293,6 +305,81 @@ def test_local_single_owner_none_opens_pr_without_mutating_stored_workflow(
     stored = Registry().identity_for_checkout(canonical)
     assert stored is not None and stored.workflow == "local"
     assert not _has_file(origin, "main", "local-none.txt")
+
+
+@pytest.mark.parametrize(
+    (
+        "repo_type",
+        "identity_workflow",
+        "merge_policy",
+        "expected_workflow",
+        "expected_policy",
+        "expected_outcome",
+    ),
+    [
+        ("single-owner", "local", None, "local", "direct", "merged"),
+        ("single-owner", "local", "auto", "local", "direct", "merged"),
+        ("single-owner", "local", "direct", "local", "direct", "merged"),
+        ("single-owner", "local", "none", "remote", "none", "pr-open"),
+        ("single-owner", "remote", None, "remote", "auto", "merged"),
+        ("single-owner", "remote", "auto", "remote", "auto", "merged"),
+        ("single-owner", "remote", "direct", "remote", "direct", "merged"),
+        ("single-owner", "remote", "none", "remote", "none", "pr-open"),
+        ("team", "local", None, "remote", "none", "pr-open"),
+        ("team", "local", "auto", "remote", "auto", "merged"),
+        ("team", "local", "direct", "remote", "direct", "merged"),
+        ("team", "local", "none", "remote", "none", "pr-open"),
+        ("team", "remote", None, "remote", "none", "pr-open"),
+        ("team", "remote", "auto", "remote", "auto", "merged"),
+        ("team", "remote", "direct", "remote", "direct", "merged"),
+        ("team", "remote", "none", "remote", "none", "pr-open"),
+    ],
+)
+def test_public_lifecycle_type_workflow_policy_matrix(
+    tmp_path,
+    bare_origin,
+    repo_type,
+    identity_workflow,
+    merge_policy,
+    expected_workflow,
+    expected_policy,
+    expected_outcome,
+) -> None:
+    """Every supported decision reaches the expected real Git publication boundary."""
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-policy-matrix")
+    stored_type = "single-owner" if identity_workflow == "local" else repo_type
+    registry = Registry()
+    registry.register(str(canonical), workflow=identity_workflow, repo_type=stored_type)
+    github = FakeGitHub(origin, fail_checks=expected_outcome == "pr-open")
+
+    result = run_repo_task(
+        str(canonical),
+        "Exercise one effective publication decision.",
+        "backend-engineer",
+        workspace=Workspace(tmp_path / "policy-matrix-worktrees"),
+        github=github,
+        repo_type=repo_type,
+        merge_policy=merge_policy,
+        dispatch_fn=make_writing_dispatch(filename="matrix.txt"),
+        verify_cmd=["true"],
+        sleep=lambda _: None,
+    )
+
+    assert result.ok and result.outcome == expected_outcome, result.detail
+    assert result.repository_type == repo_type
+    assert result.publication_workflow == expected_workflow
+    assert result.merge_policy == expected_policy
+    assert (github._n == 0) is (expected_workflow == "local")
+    assert _has_file(origin, "main", "matrix.txt") is (expected_outcome == "merged")
+    rendered = result.summary()
+    assert f"repository type: {repo_type}" in rendered
+    assert f"publication workflow: {expected_workflow}" in rendered
+    assert f"merge policy: {expected_policy}" in rendered
+    if repo_type == "team" and identity_workflow == "local":
+        stored = Registry().identity_for_checkout(canonical)
+        assert stored is not None
+        assert stored.repo_type == "single-owner" and stored.workflow == "local"
 
 
 def test_local_repo_direct_merge(tmp_path, bare_origin) -> None:
@@ -830,6 +917,70 @@ def test_multi_parent_stack_uses_synthetic_base_and_child_only_diff(tmp_path, ba
     ).stdout.splitlines()
     assert changed == ["child.txt"]
     assert all(state.head != synthetic for state in github._prs.values())
+
+
+def test_multi_parent_stack_deduplicates_ancestor_prerequisites(tmp_path, bare_origin) -> None:
+    """A declared ancestor after its descendant is a safe no-op in stack assembly."""
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-ancestry-stack")
+    Registry().register(str(canonical), workflow="remote", repo_type="team")
+    workspace = Workspace(tmp_path / "ancestry-stack-worktrees")
+    github = FakeGitHub(origin)
+
+    def runner(node: RepoPlanNode):
+        return run_repo_task(
+            node.repo,
+            node.task,
+            node.persona,
+            workspace=workspace,
+            github=github,
+            branch=node.branch,
+            dispatch_fn=make_writing_dispatch(filename=f"{node.id}.txt"),
+            verify_cmd=["true"],
+            stack_bases=node.stack_bases,
+        )
+
+    result = run_repo_plan(
+        RepoPlan(
+            [
+                RepoPlanNode(
+                    "ancestor",
+                    str(canonical),
+                    "backend-engineer",
+                    "ancestor",
+                    branch="feature/ancestor",
+                ),
+                RepoPlanNode(
+                    "descendant",
+                    str(canonical),
+                    "backend-engineer",
+                    "descendant",
+                    deps=["ancestor"],
+                    branch="feature/descendant",
+                ),
+                RepoPlanNode(
+                    "child",
+                    str(canonical),
+                    "backend-engineer",
+                    "child",
+                    deps=["descendant", "ancestor"],
+                    branch="feature/ancestry-child",
+                ),
+            ]
+        ),
+        runner,
+    )
+
+    ancestor = result.results["ancestor"].result
+    descendant = result.results["descendant"].result
+    child = result.results["child"].result
+    assert result.ok and ancestor is not None and descendant is not None and child is not None
+    assert child.synthetic_stack_base is not None
+    assert _tip(origin, child.synthetic_stack_base) == _tip(origin, descendant.branch)
+    assert child.pr is not None and child.pr.base == child.synthetic_stack_base
+    assert ancestor.pr is not None and descendant.pr is not None
+    assert ancestor.pr.url in github._prs[3].body
+    assert descendant.pr.url in github._prs[3].body
 
 
 def test_stack_conflict_aborts_before_child_dispatch_and_skips_descendant(

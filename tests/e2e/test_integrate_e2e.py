@@ -315,6 +315,15 @@ def test_registered_remote_refresh_is_allowed_without_base_mutation(tmp_path, ba
     assert not result.base_advanced and _git(repo, "rev-parse", "main") == base_before
 
 
+def test_team_identity_refuses_direct_integration(tmp_path, bare_origin) -> None:
+    repo = _clone(tmp_path, bare_origin())
+    Registry().register(str(repo), workflow="remote", repo_type="team")
+    _branch(repo, "feature/team", {"team.txt": "team\n"})
+
+    with pytest.raises(IntegrateError, match="repo_type=team"):
+        integrate(repo, ["feature/team"], gate_command=["true"])
+
+
 def test_permitted_integration_gate_receives_selected_comparison(tmp_path, bare_origin) -> None:
     repo = _clone(tmp_path, bare_origin())
     _allow_local(repo)
@@ -364,6 +373,9 @@ def test_repo_recover_cli_uses_explicit_local_workflow(tmp_path, bare_origin, ca
     )
     payload = json.loads(capsys.readouterr().out)
     assert payload["workflow"] == "local" and payload["outcome"] == "merged"
+    assert payload["repo_type"] == "single-owner" and payload["merge_policy"] == "direct"
+    assert payload["base"] == payload["pr_base"] == "main"
+    assert payload["synthetic_stack_base"] is None
     assert _git(origin, "show", "main:partial.txt") == "partial"
 
     _branch(repo, "claude/text-recovery", {"text.txt": "text\n"}, start="main")

@@ -93,6 +93,7 @@ def test_status_joins_real_history_worktree_commits_and_ledger(
         "status-run round-01",
         "1 done, 0 failed, 0 skipped",
         f"Execution checkout: {worktree}",
+        "type=single-owner",
         "workflow=local",
     ):
         assert expected in shown.stdout
@@ -104,6 +105,7 @@ def test_status_joins_real_history_worktree_commits_and_ledger(
     assert payload[0]["commits"][0]["subject"] == "feat: add status view"
     assert payload[0]["ledger"]["run_id"] == "status-run"
     assert payload[0]["execution_checkout"] == str(worktree)
+    assert payload[0]["repository_type"] == "single-owner"
     assert payload[0]["publication_workflow"] == "local"
 
     monkeypatch.setenv("ONEHARNESS_HISTORY_DIR", str(history_dir))
