@@ -23,7 +23,6 @@ from pathlib import Path
 from typing import Any
 
 from .config import ConfigError, load_yaml
-from .lifecycle import parse_repo_plan
 from .runs import StackBasePayload
 
 __all__ = ["next_round"]
@@ -36,27 +35,33 @@ def next_round(
 ) -> dict[str, Any]:
     """Compute the next round's repo-plan mapping.
 
-    ``prev_plan``: the prior repo-plan mapping. ``prev_result``: the ``--format
-    json`` output of ``repo-plan`` (its ``results[id].status`` drives carry-over).
-    ``edits``: ``{retry: {id: {overrides}}, split: {id: [nodes]}, add: [nodes],
-    drop: [ids]}``. The result is validated via `parse_repo_plan`.
+    ``prev_plan``: the prior tracked-graph mapping. ``prev_result``: the ``--format
+    json`` output of ``run-plan``. ``edits``: ``{retry: {id: {overrides}},
+    split: {id: [nodes]}, add: [nodes], drop: [ids], complete_human: [refs]}``.
+    The result is validated via the canonical graph parser.
     """
+    from .graph import parse_graph
+    from .plan import PlanError
+
     edits = edits or {}
     retry = edits.get("retry") or {}
     split = edits.get("split") or {}
     add = edits.get("add") or []
     drop = set(edits.get("drop") or [])
+    completed_humans = _completed_humans(edits)
 
     results = prev_result.get("results") or {}
     done_ids = {
         nid for nid, r in results.items() if isinstance(r, dict) and r.get("status") == "done"
     }
+    done_ids.update(ref for ref in completed_humans if "/" not in ref)
     removed = drop | set(split)  # split replaces a node → its id goes away
     prior_tasks = {
         task.get("id"): task
         for task in prev_plan.get("tasks") or []
         if isinstance(task, dict) and isinstance(task.get("id"), str)
     }
+    _validate_completed_humans(results, completed_humans)
 
     def _anchor(nid: str) -> StackBasePayload | None:
         item = results.get(nid)
@@ -103,6 +108,7 @@ def next_round(
         node = dict(task)
         if tid in retry:
             node.update(retry[tid])
+        _apply_lifecycle_resume(node, results, completed_humans)
         _emit(node)
 
     for subs in split.values():  # replacement subnodes for split nodes
@@ -131,8 +137,69 @@ def next_round(
 
     plan: dict[str, Any] = {"concurrency": prev_plan.get("concurrency", 4), "tasks": next_tasks}
     if next_tasks:
-        parse_repo_plan(plan)  # bad edits (duplicate ids, cycles, missing fields) fail loudly
+        parse_graph(plan)  # bad edits (duplicate ids, cycles, missing fields) fail loudly
     return plan
+
+
+def _completed_humans(edits: dict[str, Any]) -> set[str]:
+    refs = edits.get("complete_human") or []
+    if not isinstance(refs, list) or not all(isinstance(ref, str) and ref for ref in refs):
+        from .plan import PlanError
+
+        raise PlanError("'complete_human' must be a list of human task refs")
+    if len(set(refs)) != len(refs):
+        from .plan import PlanError
+
+        raise PlanError("'complete_human' refs must be unique")
+    return set(refs)
+
+
+def _validate_completed_humans(results: dict[str, Any], refs: set[str]) -> None:
+    if not refs:
+        return
+    from .plan import PlanError
+
+    waiting_refs = {
+        action["ref"]
+        for item in results.values()
+        if isinstance(item, dict)
+        for action in item.get("human_actions") or []
+        if isinstance(action, dict) and isinstance(action.get("ref"), str)
+    }
+    unknown = sorted(ref for ref in refs if ref not in waiting_refs)
+    if unknown:
+        raise PlanError("can only complete recorded waiting human task refs: " + ", ".join(unknown))
+
+
+def _apply_lifecycle_resume(
+    node: dict[str, Any], results: dict[str, Any], completed_humans: set[str]
+) -> None:
+    nid = node.get("id")
+    if not isinstance(nid, str):
+        return
+    item = results.get(nid)
+    if not isinstance(item, dict):
+        return
+    resume = item.get("resume")
+    waiting_steps = item.get("waiting_steps") or []
+    completed_steps = sorted(
+        ref.split("/", 1)[1] for ref in completed_humans if ref.startswith(f"{nid}/") and "/" in ref
+    )
+    if resume is None and not waiting_steps:
+        return
+    if not isinstance(resume, dict):
+        from .plan import PlanError
+
+        raise PlanError(f"task {nid!r} is waiting but has no valid resume metadata")
+    next_resume = dict(resume)
+    existing = next_resume.get("completed_steps") or []
+    if not isinstance(existing, list):
+        from .plan import PlanError
+
+        raise PlanError(f"task {nid!r} resume 'completed_steps' must be a list")
+    merged = list(dict.fromkeys([*existing, *completed_steps]))
+    next_resume["completed_steps"] = merged
+    node["resume"] = next_resume
 
 
 def _read_mapping(path: Path) -> dict[str, Any]:

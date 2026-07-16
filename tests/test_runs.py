@@ -13,7 +13,9 @@ from orchestrator.next_round import main, main_runs
 from orchestrator.runs import (
     latest_round,
     list_runs,
+    load_completions,
     prepare_round,
+    record_completions,
     resolve_run_dir,
     validate_run_id,
     write_next_plan,
@@ -113,6 +115,45 @@ def test_list_runs_surfaces_follow_ups(tmp_path) -> None:
     ]
 
 
+def test_status_summary_surfaces_waiting_human_action(tmp_path) -> None:
+    run = tmp_path / "demo"
+    _, round_dir = write_next_plan(run, PLAN)
+    write_result(
+        round_dir,
+        {
+            "ok": False,
+            "state": "waiting",
+            "started_order": ["h"],
+            "results": {
+                "h": {
+                    "status": "waiting",
+                    "human_actions": [
+                        {
+                            "ref": "h",
+                            "task": "Review the result",
+                            "unblocks": ["after"],
+                            "unblocks_publication": False,
+                        }
+                    ],
+                }
+            },
+        },
+    )
+
+    assert list_runs(tmp_path) == [
+        ("demo", 1, "1 waiting; awaiting h: Review the result -> unblocks after")
+    ]
+
+
+def test_human_completion_ledger_records_and_rejects_duplicates(tmp_path) -> None:
+    run = tmp_path / "demo"
+    run.mkdir()
+    record_completions(run, ["h"], round_number=2)
+    assert load_completions(run)[0]["ref"] == "h"
+    with pytest.raises(ConfigError, match="already completed"):
+        record_completions(run, ["h"], round_number=2)
+
+
 def test_next_round_noop_does_not_create_round(tmp_path, capsys) -> None:
     run = tmp_path / "demo"
     _, round_dir = write_next_plan(run, PLAN)
@@ -133,3 +174,48 @@ def test_plan_only_and_runs_cli(tmp_path, capsys) -> None:
     assert json.loads((run / "round-02" / "plan.json").read_text())["tasks"][0]["max_turns"] == 8
     assert main_runs(["--runs-dir", str(tmp_path)]) == 0
     assert "demo  round-01" in capsys.readouterr().out
+
+
+def test_next_round_complete_human_records_attestation_and_releases_dep(tmp_path, capsys) -> None:
+    run = tmp_path / "demo"
+    plan = {
+        "tasks": [
+            {"id": "h", "kind": "human", "task": "Review"},
+            {"id": "after", "persona": "backend-engineer", "task": "After", "deps": ["h"]},
+        ]
+    }
+    _, round_dir = write_next_plan(run, plan)
+    write_result(
+        round_dir,
+        {
+            "ok": False,
+            "state": "waiting",
+            "started_order": ["h"],
+            "results": {
+                "h": {
+                    "kind": "human",
+                    "status": "waiting",
+                    "task": "Review",
+                    "human_actions": [
+                        {
+                            "ref": "h",
+                            "task": "Review",
+                            "unblocks": ["after"],
+                            "unblocks_publication": False,
+                        }
+                    ],
+                },
+                "after": {"status": "blocked", "blocked_by": ["h"]},
+            },
+        },
+    )
+
+    rc = main(["demo", "--runs-dir", str(tmp_path), "--complete-human", "h", "--plan-only"])
+
+    assert rc == 0
+    assert load_completions(run)[0]["ref"] == "h"
+    next_plan = json.loads((run / "round-02" / "plan.json").read_text(encoding="utf-8"))
+    assert next_plan["tasks"] == [
+        {"id": "after", "persona": "backend-engineer", "task": "After", "deps": []}
+    ]
+    assert "just run-plan" in capsys.readouterr().out

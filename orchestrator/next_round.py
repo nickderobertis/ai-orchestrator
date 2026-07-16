@@ -1,28 +1,40 @@
-"""Guided continuation of a recorded repo-plan run."""
+"""Guided continuation of a recorded tracked-graph run."""
 
 from __future__ import annotations
 
 import argparse
 import sys
 from pathlib import Path
+from typing import Any
 
 from .config import ConfigError
-from .lifecycle import main_plan
 from .plan import PlanError
 from .replan import next_round
-from .runs import latest_round, list_runs, load_mapping, validate_run_id, write_next_plan
+from .runs import (
+    as_result_payload,
+    human_actions,
+    latest_round,
+    list_runs,
+    load_completions,
+    load_mapping,
+    record_completions,
+    validate_run_id,
+    write_next_plan,
+)
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Derive and run the next round from a repo-plan run ledger."
+        description="Derive and run the next round from a tracked-graph run ledger."
     )
     parser.add_argument("run_id")
     parser.add_argument("edits", type=Path, nargs="?", default=None)
+    parser.add_argument("--complete-human", action="append", default=[])
     parser.add_argument("--runs-dir", type=Path, default=Path("runs"))
     parser.add_argument("--plan-only", action="store_true")
     args, repo_plan_args = parser.parse_known_args(argv)
 
+    completed_refs: list[str] = []
     try:
         run_id = validate_run_id(args.run_id)
         run_dir = args.runs_dir / run_id
@@ -33,14 +45,27 @@ def main(argv: list[str] | None = None) -> int:
         result_path = round_dir / "result.json"
         if not result_path.exists():
             raise ConfigError(f"latest round has no result yet: {round_dir}")
+        result = load_mapping(result_path)
+        edits = load_mapping(args.edits) if args.edits else {}
+        completed_refs = _completion_refs(edits, args.complete_human)
+        _validate_completions(run_dir, result, completed_refs)
+        if completed_refs:
+            edits = {**edits, "complete_human": completed_refs}
         plan = next_round(
             load_mapping(round_dir / "plan.json"),
-            load_mapping(result_path),
-            load_mapping(args.edits) if args.edits else {},
+            result,
+            edits,
         )
     except (ConfigError, PlanError) as exc:
         print(f"next-round: {exc}", file=sys.stderr)
         return 2
+
+    if completed_refs:
+        try:
+            record_completions(run_dir, completed_refs, round_number=number)
+        except ConfigError as exc:
+            print(f"next-round: {exc}", file=sys.stderr)
+            return 2
 
     if not plan["tasks"]:
         print("All nodes are done or dropped; there is nothing to iterate.")
@@ -50,16 +75,44 @@ def main(argv: list[str] | None = None) -> int:
     plan_path = next_dir / "plan.json"
     if args.plan_only:
         print(f"Round {next_number:02d} plan written -> {plan_path}")
-        print(f"Run: just repo-plan {plan_path} --run {run_id} --runs-dir {args.runs_dir}")
+        print(f"Run: just run-plan {plan_path} --run {run_id} --runs-dir {args.runs_dir}")
         return 0
 
-    return main_plan(
+    from .graph import main as main_graph
+
+    return main_graph(
         [str(plan_path), "--run", run_id, "--runs-dir", str(args.runs_dir), *repo_plan_args]
     )
 
 
+def _completion_refs(edits: dict[str, Any], cli_refs: list[str]) -> list[str]:
+    raw = edits.get("complete_human") or []
+    if not isinstance(raw, list) or not all(isinstance(ref, str) and ref for ref in raw):
+        raise ConfigError("edits complete_human must be a list of human task refs")
+    refs = [*raw, *cli_refs]
+    if len(set(refs)) != len(refs):
+        raise ConfigError("human task completion refs must be unique")
+    return refs
+
+
+def _validate_completions(run_dir: Path, result: dict[str, Any], refs: list[str]) -> None:
+    if not refs:
+        return
+    payload = as_result_payload(result)
+    waiting = {action["ref"] for action in human_actions(payload)}
+    unknown = [ref for ref in refs if ref not in waiting]
+    if unknown:
+        raise ConfigError(
+            "can only complete recorded waiting human task refs: " + ", ".join(sorted(unknown))
+        )
+    completed = {item["ref"] for item in load_completions(run_dir)}
+    repeated = [ref for ref in refs if ref in completed]
+    if repeated:
+        raise ConfigError(f"human task(s) already completed: {', '.join(sorted(repeated))}")
+
+
 def main_runs(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="List recorded repo-plan runs.")
+    parser = argparse.ArgumentParser(description="List recorded tracked-graph runs.")
     parser.add_argument("--runs-dir", type=Path, default=Path("runs"))
     args = parser.parse_args(argv)
     rows = list_runs(args.runs_dir)

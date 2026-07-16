@@ -7,7 +7,7 @@ import json
 import pytest
 
 from orchestrator.dispatch import Report
-from orchestrator.graph import graph_payload, parse_graph, run_graph
+from orchestrator.graph import graph_payload, main, parse_graph, run_graph
 from orchestrator.lifecycle import LifecycleResult, Step, StepResult
 from orchestrator.plan import PlanError, PlanNode
 
@@ -206,3 +206,29 @@ def test_graph_payload_is_json_serializable() -> None:
     )
 
     json.dumps(graph_payload(result))
+
+
+def test_run_plan_cli_records_by_default_for_human_plan(tmp_path, capsys) -> None:
+    plan = tmp_path / "plan.json"
+    plan.write_text(
+        json.dumps({"tasks": [{"id": "review", "kind": "human", "task": "Approve"}]}),
+        encoding="utf-8",
+    )
+
+    rc = main(
+        [
+            str(plan),
+            "--run",
+            "demo",
+            "--runs-dir",
+            str(tmp_path / "runs"),
+            "--format",
+            "json",
+        ]
+    )
+
+    assert rc == 1
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["state"] == "waiting"
+    recorded = json.loads((tmp_path / "runs" / "demo" / "round-01" / "result.json").read_text())
+    assert recorded["results"]["review"]["human_actions"][0]["ref"] == "review"

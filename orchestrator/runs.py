@@ -118,6 +118,14 @@ RepoPlanResultItem = GraphResultItem
 RepoPlanPayload = GraphPayload
 
 
+class HumanCompletion(TypedDict):
+    """One attested human action."""
+
+    ref: str
+    round: int
+    completed_at: str
+
+
 class RoundStatus(TypedDict, total=False):
     status: Literal["running", "completed"]
     pid: int
@@ -316,6 +324,40 @@ def _downstream(action: HumanActionPayload) -> str:
     if action.get("unblocks_publication"):
         return "unblocks workstream publication"
     return "unblocks nothing downstream"
+
+
+def load_completions(run_dir: Path) -> list[HumanCompletion]:
+    """Read every human completion attestation for a run."""
+    path = run_dir / "humans.json"
+    if not path.exists():
+        return []
+    data = load_mapping(path)
+    raw = data.get("completions")
+    if not isinstance(raw, list) or not all(
+        isinstance(item, dict)
+        and isinstance(item.get("ref"), str)
+        and isinstance(item.get("round"), int)
+        and isinstance(item.get("completed_at"), str)
+        for item in raw
+    ):
+        raise ConfigError(f"{path} has an invalid human-completion ledger")
+    return cast(list[HumanCompletion], raw)
+
+
+def record_completions(run_dir: Path, refs: list[str], *, round_number: int) -> None:
+    """Append human attestations to the durable ledger."""
+    if len(set(refs)) != len(refs):
+        raise ConfigError("human task completion refs must be unique")
+    with advisory_lock(f"ledger:{run_dir.resolve()}"):
+        existing = load_completions(run_dir)
+        known = {item["ref"] for item in existing}
+        if repeated := [ref for ref in refs if ref in known]:
+            raise ConfigError(f"human task(s) already completed: {', '.join(sorted(repeated))}")
+        stamp = datetime.now(UTC).isoformat()
+        appended = existing + [
+            HumanCompletion(ref=ref, round=round_number, completed_at=stamp) for ref in refs
+        ]
+        atomic_json(run_dir / "humans.json", {"completions": appended})
 
 
 def list_runs(runs_dir: Path) -> list[RunLedgerRow]:
