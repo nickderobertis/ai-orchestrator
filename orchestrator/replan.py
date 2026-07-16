@@ -41,6 +41,7 @@ def next_round(
     The result is validated via the canonical graph parser.
     """
     from .graph import parse_graph
+
     edits = edits or {}
     retry = edits.get("retry") or {}
     split = edits.get("split") or {}
