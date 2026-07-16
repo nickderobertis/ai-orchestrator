@@ -1,4 +1,4 @@
-"""Persistent run ledger for repo-plan lifecycle rounds."""
+"""Persistent run ledger for tracked graph rounds."""
 
 from __future__ import annotations
 
@@ -41,10 +41,48 @@ class StackBasePayload(TypedDict):
     pr_base: NotRequired[str | None]
 
 
-class RepoPlanResultItem(TypedDict, total=False):
-    """Stable recorded fields for one repo-plan node."""
+class ResumePayload(TypedDict):
+    """Where a human-gated workstream paused, as recorded for a later round."""
 
+    branch: str
+    base_branch: str
+    pr_base: str
+    checkpoint: str
+    completed_steps: list[str]
+    pr: str | None
+
+
+class HumanActionPayload(TypedDict):
+    """One ready human action and what completing it releases."""
+
+    ref: str
+    task: str
+    unblocks: list[str]
+    unblocks_publication: bool
+
+
+class StepResultPayload(TypedDict):
+    """One workstream step's recorded outcome."""
+
+    id: str
+    kind: str
+    persona: str | None
     status: str
+
+
+class GraphResultItem(TypedDict, total=False):
+    """Stable recorded fields for one tracked-graph node."""
+
+    kind: str
+    status: str
+    task: str
+    unblocks: list[str]
+    blocked_by: list[str]
+    human_actions: list[HumanActionPayload]
+    completed: bool
+    exit_code: int | None
+    verdicts: list[Any]
+    usage: dict[str, Any]
     repo: str
     branch: str
     base_branch: str
@@ -61,15 +99,23 @@ class RepoPlanResultItem(TypedDict, total=False):
     pr: str | None
     detail: str
     follow_ups: str | None
+    steps: list[StepResultPayload]
+    waiting_steps: list[str]
+    resume: ResumePayload | None
     error: str | None
 
 
-class RepoPlanPayload(TypedDict):
-    """The JSON payload emitted and recorded by repo-plan."""
+class GraphPayload(TypedDict, total=False):
+    """The JSON payload emitted and recorded by run-plan."""
 
     ok: bool
+    state: str
     started_order: list[str]
-    results: dict[str, RepoPlanResultItem]
+    results: dict[str, GraphResultItem]
+
+
+RepoPlanResultItem = GraphResultItem
+RepoPlanPayload = GraphPayload
 
 
 class RoundStatus(TypedDict, total=False):
@@ -212,17 +258,43 @@ def load_mapping(path: Path) -> dict[str, Any]:
     return load_yaml(path)
 
 
-def status_counts(result: RepoPlanPayload) -> Counter[str]:
-    """Count per-node statuses in a repo-plan result payload."""
+def status_counts(result: GraphPayload) -> Counter[str]:
+    """Count per-node statuses in a tracked-graph result payload."""
     return Counter(item.get("status", "unknown") for item in result["results"].values())
 
 
-def status_summary(result: RepoPlanPayload) -> str:
-    """Render stable done/failed/skipped counts, plus any unexpected statuses."""
+def result_state(result: GraphPayload) -> str:
+    """Return recorded state, or derive it for older payloads."""
+    state = result.get("state")
+    if isinstance(state, str) and state:
+        return state
+    statuses = set(status_counts(result))
+    if statuses & {"failed", "skipped"}:
+        return "failed"
+    if statuses & {"waiting", "blocked"}:
+        return "waiting"
+    return "complete"
+
+
+def human_actions(result: GraphPayload) -> list[HumanActionPayload]:
+    """Every ready human action in node order."""
+    return [
+        action for item in result["results"].values() for action in item.get("human_actions") or []
+    ]
+
+
+def status_summary(result: GraphPayload) -> str:
+    """Render stable per-status counts, waiting actions, and follow-ups."""
     counts = status_counts(result)
-    keys = ["done", "failed", "skipped"]
+    keys = ["done", "waiting", "blocked", "failed", "skipped"]
     keys.extend(sorted(set(counts) - set(keys)))
-    summary = ", ".join(f"{counts[key]} {key}" for key in keys)
+    summary = ", ".join(f"{counts[key]} {key}" for key in keys if key in counts)
+    waiting = [
+        f"{action['ref']}: {_first_line(action['task'])} -> {_downstream(action)}"
+        for action in human_actions(result)
+    ]
+    if waiting:
+        summary += "; awaiting " + " | ".join(waiting)
     follow_ups = [
         f"{node_id}: {follow_up}"
         for node_id, item in result["results"].items()
@@ -231,6 +303,19 @@ def status_summary(result: RepoPlanPayload) -> str:
     if follow_ups:
         summary += "; follow-ups: " + " | ".join(follow_ups)
     return summary
+
+
+def _first_line(task: str) -> str:
+    line = task.strip().splitlines()[0] if task.strip() else ""
+    return line[:60] + ("..." if len(line) > 60 else "")
+
+
+def _downstream(action: HumanActionPayload) -> str:
+    if action.get("unblocks"):
+        return "unblocks " + ", ".join(action["unblocks"])
+    if action.get("unblocks_publication"):
+        return "unblocks workstream publication"
+    return "unblocks nothing downstream"
 
 
 def list_runs(runs_dir: Path) -> list[RunLedgerRow]:
@@ -267,7 +352,7 @@ def _write_json(path: Path, value: Mapping[str, Any]) -> None:
     atomic_json(path, value)
 
 
-def _as_result_payload(value: dict[str, Any]) -> RepoPlanPayload:
+def as_result_payload(value: dict[str, Any]) -> GraphPayload:
     """Validate the stable portion needed when reading a recorded result."""
     ok = value.get("ok")
     started = value.get("started_order")
@@ -280,5 +365,8 @@ def _as_result_payload(value: dict[str, Any]) -> RepoPlanPayload:
         or not all(isinstance(key, str) and isinstance(item, dict) for key, item in results.items())
         or not all(isinstance(item.get("status"), str) for item in results.values())
     ):
-        raise ConfigError("recorded result has an invalid repo-plan payload")
-    return cast(RepoPlanPayload, value)
+        raise ConfigError("recorded result has an invalid tracked-graph payload")
+    return cast(GraphPayload, value)
+
+
+_as_result_payload = as_result_payload

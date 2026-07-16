@@ -30,6 +30,12 @@ class PlanError(Exception):
     """The plan file is malformed, references unknown deps, or is cyclic."""
 
 
+#: What a tracked-graph node (or workstream step) is. ``agent`` is the default
+#: for backward-compatible plans; ``human`` names action the harness must never
+#: infer or execute.
+NODE_KINDS = ("agent", "human")
+
+
 @dataclass
 class PlanNode:
     id: str
@@ -79,9 +85,13 @@ class PlanResult:
 class NodeRun:
     """One node's scheduling outcome: its status and the runner's payload."""
 
-    status: str  # "done" | "failed" | "skipped"
+    status: str  # "done" | "failed" | "skipped" | "waiting" | "blocked"
     error: str | None = None
     payload: Any = None
+
+
+_UNMET = ("failed", "skipped")
+_GATED = ("waiting", "blocked")
 
 
 def schedule_dag(
@@ -91,37 +101,45 @@ def schedule_dag(
     *,
     concurrency: int,
 ) -> tuple[dict[str, NodeRun], list[str]]:
-    """Run a DAG of nodes concurrently, honoring deps and cascading failures.
+    """Run a DAG of nodes concurrently, honoring deps and cascading non-completion.
 
-    A node runs once every dep is ``done``; if any dep ``failed``/``skipped`` the
-    node is ``skipped`` (the failure cascades). `run_one` returns the node's
-    `NodeRun`; if it raises, the node is ``failed`` with the exception text. All
-    ready nodes are submitted to a `concurrency`-worker pool, which is what bounds
-    parallelism. Returns each node's `NodeRun` plus the order nodes were started.
+    A node runs once every dep is ``done``. If any dep failed or was skipped, the
+    node is skipped. If a dep is waiting on a human action, or blocked behind one,
+    the node is blocked. Failure takes precedence over waiting, so a node gated by
+    both waits for every dep to settle and then becomes skipped.
 
-    This is the shared engine under `run_plan` (onejudge dispatch) and
-    `lifecycle.run_repo_plan` (full repo lifecycle) — one scheduler, two payloads.
+    `run_one` returns the node's `NodeRun`; if it raises, the node is ``failed``
+    with the exception text. All ready nodes are submitted to a `concurrency`
+    worker pool, which bounds parallelism. Returns each node's `NodeRun` plus the
+    order nodes were started.
     """
     status = {nid: "pending" for nid in node_ids}
     results: dict[str, NodeRun] = {}
     started_order: list[str] = []
 
-    def resolve_skips() -> None:
+    def resolve_gated() -> None:
         changed = True
         while changed:
             changed = False
             for nid in node_ids:
-                if status[nid] == "pending" and any(
-                    status[d] in ("failed", "skipped") for d in deps[nid]
-                ):
+                if status[nid] != "pending":
+                    continue
+                settled = [status[d] for d in deps[nid]]
+                if any(s in ("pending", "running") for s in settled):
+                    continue
+                if any(s in _UNMET for s in settled):
                     status[nid] = "skipped"
                     results[nid] = NodeRun("skipped", "a dependency did not complete")
+                    changed = True
+                elif any(s in _GATED for s in settled):
+                    status[nid] = "blocked"
+                    results[nid] = NodeRun("blocked", "a dependency is awaiting human action")
                     changed = True
 
     with ThreadPoolExecutor(max_workers=concurrency) as pool:
         futures: dict[Any, str] = {}
         while any(s in ("pending", "running") for s in status.values()):
-            resolve_skips()
+            resolve_gated()
             for nid in node_ids:
                 if status[nid] == "pending" and all(status[d] == "done" for d in deps[nid]):
                     status[nid] = "running"
@@ -189,25 +207,7 @@ def load_plan(path: str | Path) -> Plan:
             raise PlanError(f"task #{i} needs a non-empty string 'id'")
         if nid in nodes:
             raise PlanError(f"duplicate task id: {nid!r}")
-        persona = t.get("persona")
-        if not isinstance(persona, str) or not persona:
-            raise PlanError(f"task {nid!r} needs a 'persona'")
-        task_text = t.get("task")
-        if not isinstance(task_text, str) or not task_text.strip():
-            raise PlanError(f"task {nid!r} needs a non-empty 'task'")
-        deps = t.get("deps", [])
-        if not isinstance(deps, list) or not all(isinstance(d, str) for d in deps):
-            raise PlanError(f"task {nid!r} 'deps' must be a list of ids")
-        nodes[nid] = PlanNode(
-            id=nid,
-            persona=persona,
-            task=task_text,
-            deps=list(deps),
-            session=t.get("session"),
-            project_dir=t.get("project_dir"),
-            max_turns=t.get("max_turns"),
-            done_when=t.get("done_when"),
-        )
+        nodes[nid] = parse_agent_node(nid, t)
 
     for nid, node in nodes.items():
         for dep in node.deps:
@@ -218,6 +218,29 @@ def load_plan(path: str | Path) -> Plan:
     _topological_order(nodes)  # raises on a cycle
 
     return Plan(tasks=list(nodes.values()), concurrency=concurrency)
+
+
+def parse_agent_node(nid: str, t: dict[str, Any]) -> PlanNode:
+    """Validate one direct-agent node into a `PlanNode`."""
+    persona = t.get("persona")
+    if not isinstance(persona, str) or not persona:
+        raise PlanError(f"task {nid!r} needs a 'persona'")
+    task_text = t.get("task")
+    if not isinstance(task_text, str) or not task_text.strip():
+        raise PlanError(f"task {nid!r} needs a non-empty 'task'")
+    deps = t.get("deps", [])
+    if not isinstance(deps, list) or not all(isinstance(d, str) for d in deps):
+        raise PlanError(f"task {nid!r} 'deps' must be a list of ids")
+    return PlanNode(
+        id=nid,
+        persona=persona,
+        task=task_text,
+        deps=list(deps),
+        session=t.get("session"),
+        project_dir=t.get("project_dir"),
+        max_turns=t.get("max_turns"),
+        done_when=t.get("done_when"),
+    )
 
 
 def run_plan(

@@ -95,7 +95,7 @@ def test_list_runs_uses_latest_completed_round(tmp_path) -> None:
     run = tmp_path / "demo"
     _, round_dir = write_next_plan(run, PLAN)
     write_result(round_dir, _result("done"))
-    assert list_runs(tmp_path) == [("demo", 1, "1 done, 0 failed, 0 skipped")]
+    assert list_runs(tmp_path) == [("demo", 1, "1 done")]
 
 
 def test_list_runs_surfaces_follow_ups(tmp_path) -> None:
@@ -108,7 +108,7 @@ def test_list_runs_surfaces_follow_ups(tmp_path) -> None:
         (
             "demo",
             1,
-            "1 done, 0 failed, 0 skipped; follow-ups: a: - Add the adjacent regression test.",
+            "1 done; follow-ups: a: - Add the adjacent regression test.",
         )
     ]
 

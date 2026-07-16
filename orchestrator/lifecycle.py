@@ -25,7 +25,7 @@ import re
 import sys
 import time
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, cast
@@ -43,7 +43,7 @@ from .merge import (
     MergePolicy,
     MergeStrategy,
 )
-from .plan import NodeRun, schedule_dag
+from .plan import NODE_KINDS, NodeRun, schedule_dag
 from .provenance import INCOMPLETE_TRAILER, PR_BASE_TRAILER
 from .registry import RegistryError, validate_identity_key
 from .runs import (
@@ -76,27 +76,49 @@ MERGE_METHODS = ("squash", "merge", "rebase")
 # Outcomes that count as the subtask succeeding.
 _SUCCESS_OUTCOMES = frozenset({"merged", "pr-open"})
 
+# Workstream paused on a human step. This is neither success nor failure; the next
+# recorded round resumes after a human attestation.
+_WAITING_OUTCOME = "waiting-human"
+
 DispatchFn = Callable[..., Report]
 
 
 @dataclass
 class Step:
-    """One onejudge dispatch within a PR workstream (shares the workstream branch)."""
+    """One step within a PR workstream (shares the workstream branch)."""
 
     id: str
-    persona: str
-    task: str
+    persona: str | None = None
+    task: str = ""
+    kind: str = "agent"
     deps: list[str] = field(default_factory=list)
     max_turns: int | None = None
     done_when: str | None = None
+
+    @property
+    def human(self) -> bool:
+        return self.kind == "human"
 
 
 @dataclass
 class StepResult:
     id: str
-    persona: str
-    status: str  # done | not-completed | skipped
+    persona: str | None
+    status: str  # done | not-completed | skipped | waiting | blocked
+    kind: str = "agent"
     report: Report | None = None
+
+
+@dataclass(frozen=True)
+class Resume:
+    """Validated continuation point for a human-gated lifecycle workstream."""
+
+    branch: str
+    base_branch: str
+    pr_base: str
+    checkpoint: str
+    completed_steps: tuple[str, ...] = ()
+    pr: str | None = None
 
 
 @dataclass(frozen=True)
@@ -155,10 +177,16 @@ class LifecycleResult:
     verify: VerifyResult | None = None
     detail: str = ""
     steps: list[StepResult] = field(default_factory=list)
+    waiting_steps: list[str] = field(default_factory=list)
+    resume: Resume | None = None
 
     @property
     def ok(self) -> bool:
         return self.outcome in _SUCCESS_OUTCOMES
+
+    @property
+    def waiting(self) -> bool:
+        return self.outcome == _WAITING_OUTCOME
 
     @property
     def repo_type(self) -> RepositoryType | None:
@@ -214,16 +242,21 @@ def _default_body(persona: str, task: str, report: Report | None) -> str:
     )
 
 
+def _step_label(step: Step) -> str:
+    """Use the persona when an agent runs, otherwise the step kind."""
+    return step.persona or step.kind
+
+
 def _step_commit_message(step: Step) -> str:
     return (
-        f"{_default_title(step.persona, step.task)}\n\n"
+        f"{_default_title(_step_label(step), step.task)}\n\n"
         f"Workstream step {step.id} (persona: {step.persona}), dispatched by ai-orchestrator."
     )
 
 
 def _incomplete_commit_message(step: Step, pr_base: str) -> str:
     return (
-        f"wip: {_default_title(step.persona, step.task)} (incomplete step)\n\n"
+        f"wip: {_default_title(_step_label(step), step.task)} (incomplete step)\n\n"
         f"Partial work from step {step.id} (persona: {step.persona}), preserved by "
         "ai-orchestrator after the dispatch did not complete.\n\n"
         f"{INCOMPLETE_TRAILER}\n"
@@ -233,18 +266,18 @@ def _incomplete_commit_message(step: Step, pr_base: str) -> str:
 
 def _workstream_branch_name(steps: list[Step]) -> str:
     lead = steps[0]
-    key = "\x00".join(f"{s.persona}:{s.task}" for s in steps)
-    return f"ai-orchestrator/{lead.persona}/{_short_hash(key)}-{uuid.uuid4().hex[:10]}"
+    key = "\x00".join(f"{_step_label(s)}:{s.task}" for s in steps)
+    return f"ai-orchestrator/{_step_label(lead)}/{_short_hash(key)}-{uuid.uuid4().hex[:10]}"
 
 
 def _workstream_body(steps: list[Step], results: list[StepResult]) -> str:
     if len(steps) == 1:
         report = results[0].report if results else None
-        return _default_body(steps[0].persona, steps[0].task, report)
+        return _default_body(_step_label(steps[0]), steps[0].task, report)
     lines = ["## What", "This PR bundles an ordered workstream of subtasks:", ""]
     for s in steps:
         first = s.task.strip().splitlines()[0] if s.task.strip() else s.id
-        lines.append(f"- **{s.id}** (`{s.persona}`): {first}")
+        lines.append(f"- **{s.id}** (`{_step_label(s)}`): {first}")
     lines += [
         "",
         "## Why",
@@ -594,6 +627,7 @@ def run_repo_task(
     clock: Callable[[], float] = time.monotonic,
     cleanup: bool = True,
     stack_bases: list[StackBase] | None = None,
+    resume: Resume | None = None,
 ) -> LifecycleResult:
     """Take one subtask from a fresh branch to a merged change on ``repo``.
 
@@ -626,7 +660,7 @@ def run_repo_task(
     result = LifecycleResult(
         repo=ref.slug,
         task=lead.task,
-        persona=lead.persona,
+        persona=lead.persona or lead.kind,
         base_branch=base_branch or "",
         branch=branch or _workstream_branch_name(effective_steps),
         outcome="error",
@@ -828,6 +862,7 @@ class RepoPlanNode:
     done_when: str | None = None
     steps: list[Step] | None = None
     stack_bases: list[StackBase] = field(default_factory=list)
+    resume: Resume | None = None
 
 
 @dataclass
@@ -895,66 +930,7 @@ def parse_repo_plan(data: dict[str, Any]) -> RepoPlan:
             raise PlanError(f"task #{i} needs a non-empty string 'id'")
         if nid in nodes:
             raise PlanError(f"duplicate task id: {nid!r}")
-        if not isinstance(t.get("repo"), str) or not str(t.get("repo")).strip():
-            raise PlanError(f"task {nid!r} needs a non-empty 'repo'")
-        raw_steps = t.get("steps")
-        if raw_steps is not None:
-            node_steps = _parse_steps(nid, raw_steps)
-            persona = task = None
-        else:
-            for key in ("persona", "task"):
-                if not isinstance(t.get(key), str) or not str(t.get(key)).strip():
-                    raise PlanError(f"task {nid!r} needs a non-empty {key!r} (or a 'steps' list)")
-            node_steps = None
-            persona, task = t["persona"], t["task"]
-        deps = t.get("deps", [])
-        if not isinstance(deps, list) or not all(isinstance(d, str) for d in deps):
-            raise PlanError(f"task {nid!r} 'deps' must be a list of ids")
-        policy = t.get("merge_policy")
-        if policy is not None and policy not in MERGE_POLICIES:
-            raise PlanError(f"task {nid!r} 'merge_policy' must be one of {MERGE_POLICIES}")
-        merge_policy = cast(MergePolicy | None, policy)
-        raw_workflow = t.get("workflow")
-        if raw_workflow is not None and raw_workflow not in ("local", "remote"):
-            raise PlanError(f"task {nid!r} 'workflow' must be 'local' or 'remote'")
-        workflow = cast(Workflow | None, raw_workflow)
-        raw_repo_type = t.get("repo_type")
-        if raw_repo_type is not None and raw_repo_type not in ("single-owner", "team"):
-            raise PlanError(f"task {nid!r} 'repo_type' must be 'single-owner' or 'team'")
-        repo_type = cast(RepositoryType | None, raw_repo_type)
-        if repo_type == "team" and workflow == "local":
-            raise PlanError(f"task {nid!r} repo_type=team cannot use workflow=local")
-        for field_name in ("base_branch", "branch"):
-            raw_branch = t.get(field_name)
-            if raw_branch is not None and (
-                not isinstance(raw_branch, str) or not gitops.is_valid_branch_name(raw_branch)
-            ):
-                raise PlanError(f"task {nid!r} {field_name!r} must be a valid non-empty Git branch")
-        raw_execution = t.get("execution_checkout")
-        if raw_execution is not None and (
-            not isinstance(raw_execution, str) or not raw_execution.strip()
-        ):
-            raise PlanError(f"task {nid!r} 'execution_checkout' must be a non-empty path")
-        nodes[nid] = RepoPlanNode(
-            id=nid,
-            repo=t["repo"],
-            persona=persona,
-            task=task,
-            deps=list(deps),
-            base_branch=t.get("base_branch"),
-            branch=t.get("branch"),
-            title=t.get("title"),
-            verify_cmd=t.get("verify_cmd"),
-            skip_verify=bool(t.get("skip_verify", False)),
-            merge_policy=merge_policy,
-            workflow=workflow,
-            repo_type=repo_type,
-            execution_checkout=raw_execution,
-            max_turns=t.get("max_turns"),
-            done_when=t.get("done_when"),
-            steps=node_steps,
-            stack_bases=_parse_stack_bases(nid, t.get("stack_bases", [])),
-        )
+        nodes[nid] = parse_repo_node(nid, t)
 
     for nid, node in nodes.items():
         for dep in node.deps:
@@ -965,6 +941,117 @@ def parse_repo_plan(data: dict[str, Any]) -> RepoPlan:
     _topological_order({nid: _to_plan_node(n) for nid, n in nodes.items()})  # cycle check
 
     return RepoPlan(tasks=list(nodes.values()), concurrency=concurrency)
+
+
+def parse_repo_node(nid: str, t: dict[str, Any]) -> RepoPlanNode:
+    """Validate one lifecycle node into a `RepoPlanNode`."""
+    from .plan import PlanError
+
+    if not isinstance(t.get("repo"), str) or not str(t.get("repo")).strip():
+        raise PlanError(f"task {nid!r} needs a non-empty 'repo'")
+    raw_steps = t.get("steps")
+    if raw_steps is not None:
+        node_steps = _parse_steps(nid, raw_steps)
+        persona = task = None
+    else:
+        for key in ("persona", "task"):
+            if not isinstance(t.get(key), str) or not str(t.get(key)).strip():
+                raise PlanError(f"task {nid!r} needs a non-empty {key!r} (or a 'steps' list)")
+        node_steps = None
+        persona, task = t["persona"], t["task"]
+    deps = t.get("deps", [])
+    if not isinstance(deps, list) or not all(isinstance(d, str) for d in deps):
+        raise PlanError(f"task {nid!r} 'deps' must be a list of ids")
+    policy = t.get("merge_policy")
+    if policy is not None and policy not in MERGE_POLICIES:
+        raise PlanError(f"task {nid!r} 'merge_policy' must be one of {MERGE_POLICIES}")
+    merge_policy = cast(MergePolicy | None, policy)
+    raw_workflow = t.get("workflow")
+    if raw_workflow is not None and raw_workflow not in ("local", "remote"):
+        raise PlanError(f"task {nid!r} 'workflow' must be 'local' or 'remote'")
+    workflow = cast(Workflow | None, raw_workflow)
+    raw_repo_type = t.get("repo_type")
+    if raw_repo_type is not None and raw_repo_type not in ("single-owner", "team"):
+        raise PlanError(f"task {nid!r} 'repo_type' must be 'single-owner' or 'team'")
+    repo_type = cast(RepositoryType | None, raw_repo_type)
+    if repo_type == "team" and workflow == "local":
+        raise PlanError(f"task {nid!r} repo_type=team cannot use workflow=local")
+    for field_name in ("base_branch", "branch"):
+        raw_branch = t.get(field_name)
+        if raw_branch is not None and (
+            not isinstance(raw_branch, str) or not gitops.is_valid_branch_name(raw_branch)
+        ):
+            raise PlanError(f"task {nid!r} {field_name!r} must be a valid non-empty Git branch")
+    raw_execution = t.get("execution_checkout")
+    if raw_execution is not None and (
+        not isinstance(raw_execution, str) or not raw_execution.strip()
+    ):
+        raise PlanError(f"task {nid!r} 'execution_checkout' must be a non-empty path")
+    return RepoPlanNode(
+        id=nid,
+        repo=t["repo"],
+        persona=persona,
+        task=task,
+        deps=list(deps),
+        base_branch=t.get("base_branch"),
+        branch=t.get("branch"),
+        title=t.get("title"),
+        verify_cmd=t.get("verify_cmd"),
+        skip_verify=bool(t.get("skip_verify", False)),
+        merge_policy=merge_policy,
+        workflow=workflow,
+        repo_type=repo_type,
+        execution_checkout=raw_execution,
+        max_turns=t.get("max_turns"),
+        done_when=t.get("done_when"),
+        steps=node_steps,
+        stack_bases=_parse_stack_bases(nid, t.get("stack_bases", [])),
+        resume=_parse_resume(nid, t.get("resume"), node_steps),
+    )
+
+
+_SHA = re.compile(r"[0-9a-f]{7,40}")
+_PR_URL = re.compile(r"https://github\.com/([^/]+/[^/]+)/pull/([1-9][0-9]*)")
+
+
+def _parse_resume(nid: str, raw: object, steps: list[Step] | None) -> Resume | None:
+    """Validate continuation metadata from a prior human-gated lifecycle round."""
+    from .plan import PlanError
+
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise PlanError(f"task {nid!r} 'resume' must be a mapping")
+    allowed = {"branch", "base_branch", "pr_base", "checkpoint", "completed_steps", "pr"}
+    if unknown := set(raw) - allowed:
+        raise PlanError(f"task {nid!r} 'resume' has unknown fields: {', '.join(sorted(unknown))}")
+    for field_name in ("branch", "base_branch", "pr_base"):
+        value = raw.get(field_name)
+        if not isinstance(value, str) or not gitops.is_valid_branch_name(value):
+            raise PlanError(f"task {nid!r} resume {field_name!r} must be a valid Git branch")
+    checkpoint = raw.get("checkpoint")
+    if not isinstance(checkpoint, str) or not _SHA.fullmatch(checkpoint):
+        raise PlanError(f"task {nid!r} resume 'checkpoint' must be a Git commit SHA")
+    completed = raw.get("completed_steps", [])
+    if not isinstance(completed, list) or not all(isinstance(s, str) for s in completed):
+        raise PlanError(f"task {nid!r} resume 'completed_steps' must be a list of step ids")
+    known = {s.id for s in steps or []}
+    if unknown_steps := set(completed) - known:
+        raise PlanError(
+            f"task {nid!r} resume 'completed_steps' names unknown steps: "
+            f"{', '.join(sorted(unknown_steps))}"
+        )
+    pr = raw.get("pr")
+    if pr is not None and (not isinstance(pr, str) or _PR_URL.fullmatch(pr) is None):
+        raise PlanError(f"task {nid!r} resume 'pr' must be a GitHub pull-request URL")
+    return Resume(
+        branch=cast(str, raw["branch"]),
+        base_branch=cast(str, raw["base_branch"]),
+        pr_base=cast(str, raw["pr_base"]),
+        checkpoint=checkpoint,
+        completed_steps=tuple(completed),
+        pr=pr,
+    )
 
 
 def _parse_stack_bases(nid: str, raw: object) -> list[StackBase]:
@@ -1058,6 +1145,9 @@ def _parse_stack_bases(nid: str, raw: object) -> list[StackBase]:
     return anchors
 
 
+_AGENT_STEP_FIELDS = ("persona", "max_turns", "done_when")
+
+
 def _parse_steps(nid: str, raw_steps: object) -> list[Step]:
     """Validate a node's `steps` sub-DAG and return `Step`s (raise PlanError)."""
     from .plan import PlanError, PlanNode, _topological_order
@@ -1073,16 +1163,27 @@ def _parse_steps(nid: str, raw_steps: object) -> list[Step]:
             raise PlanError(f"task {nid!r} step #{j} needs a non-empty string 'id'")
         if sid in steps:
             raise PlanError(f"task {nid!r} has a duplicate step id: {sid!r}")
-        for key in ("persona", "task"):
-            if not isinstance(s.get(key), str) or not str(s.get(key)).strip():
-                raise PlanError(f"task {nid!r} step {sid!r} needs a non-empty {key!r}")
+        kind = s.get("kind", "agent")
+        if kind not in NODE_KINDS:
+            raise PlanError(f"task {nid!r} step {sid!r} 'kind' must be one of {NODE_KINDS}")
+        if not isinstance(s.get("task"), str) or not str(s.get("task")).strip():
+            raise PlanError(f"task {nid!r} step {sid!r} needs a non-empty 'task'")
+        if kind == "human":
+            present = [key for key in _AGENT_STEP_FIELDS if s.get(key) is not None]
+            if present:
+                raise PlanError(
+                    f"task {nid!r} human step {sid!r} cannot set {', '.join(map(repr, present))}"
+                )
+        elif not isinstance(s.get("persona"), str) or not str(s.get("persona")).strip():
+            raise PlanError(f"task {nid!r} step {sid!r} needs a non-empty 'persona'")
         sdeps = s.get("deps", [])
         if not isinstance(sdeps, list) or not all(isinstance(d, str) for d in sdeps):
             raise PlanError(f"task {nid!r} step {sid!r} 'deps' must be a list of ids")
         steps[sid] = Step(
             id=sid,
-            persona=s["persona"],
+            persona=s.get("persona"),
             task=s["task"],
+            kind=kind,
             deps=list(sdeps),
             max_turns=s.get("max_turns"),
             done_when=s.get("done_when"),
@@ -1173,6 +1274,38 @@ def run_repo_plan(
     return RepoPlanResult(results=results, started_order=started_order)
 
 
+def dependency_anchor(result: LifecycleResult) -> StackBase | None:
+    """Return the stack prerequisite a completed dependency leaves behind."""
+    match result.outcome:
+        case "pr-open":
+            branch = result.branch
+        case "merged" if result.pr_base != result.base_branch:
+            branch = result.pr_base
+        case _:
+            return None
+    return StackBase(
+        branch=branch,
+        repo=result.repo,
+        identity=result.publication_identity,
+        base_branch=result.base_branch,
+        pr=result.pr.url if result.pr else None,
+        pr_base=result.pr_base,
+    )
+
+
+def combine_stack_bases(
+    node: RepoPlanNode, completed: Mapping[str, LifecycleResult]
+) -> list[StackBase]:
+    """Merge declared anchors with anchors produced by completed dependencies."""
+    combined = list(node.stack_bases)
+    for dep in node.deps:
+        result = completed.get(dep)
+        anchor = dependency_anchor(result) if result is not None else None
+        if anchor is not None and all(existing.branch != anchor.branch for existing in combined):
+            combined.append(anchor)
+    return combined
+
+
 def make_repo_runner(
     *,
     workspace: Workspace,
@@ -1217,6 +1350,7 @@ def make_repo_runner(
             timeout=timeout,
             publication_attempts=publication_attempts,
             stack_bases=node.stack_bases,
+            resume=node.resume,
         )
 
     return runner
@@ -1238,7 +1372,8 @@ def _positive_int(value: str) -> int:
     return parsed
 
 
-def _add_common_args(parser: argparse.ArgumentParser) -> None:
+def add_lifecycle_args(parser: argparse.ArgumentParser) -> None:
+    """Add flags shared by commands that can drive repo lifecycle nodes."""
     parser.add_argument("--base", type=Path, default=BASE_CONFIG, dest="base_config")
     parser.add_argument("--persona-dir", type=Path, default=PERSONA_DIR)
     parser.add_argument(
@@ -1270,14 +1405,22 @@ def _add_common_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("-o", "--output", type=Path, default=None)
 
 
-def _emit(rendered: str, output: Path | None) -> None:
+_add_common_args = add_lifecycle_args
+
+
+def emit(rendered: str, output: Path | None) -> None:
+    """Write rendered output to a file or stdout."""
     if output:
         output.write_text(rendered + "\n", encoding="utf-8")
     else:
         print(rendered)
 
 
-def _result_payload(result: LifecycleResult) -> dict[str, Any]:
+_emit = emit
+
+
+def result_payload(result: LifecycleResult) -> dict[str, Any]:
+    """Serialize one lifecycle outcome for JSON output and the run ledger."""
     return {
         "repo": result.repo,
         "execution_checkout": result.execution_checkout,
@@ -1308,6 +1451,29 @@ def _result_payload(result: LifecycleResult) -> dict[str, Any]:
         "pr": result.pr.url if result.pr else None,
         "detail": result.detail,
         "follow_ups": result.report.assessment if result.report else None,
+        "steps": [
+            {"id": s.id, "kind": s.kind, "persona": s.persona, "status": s.status}
+            for s in result.steps
+        ],
+        "waiting_steps": list(result.waiting_steps),
+        "resume": resume_payload(result.resume),
+    }
+
+
+_result_payload = result_payload
+
+
+def resume_payload(resume: Resume | None) -> dict[str, Any] | None:
+    """Serialize continuation metadata for a paused lifecycle workstream."""
+    if resume is None:
+        return None
+    return {
+        "branch": resume.branch,
+        "base_branch": resume.base_branch,
+        "pr_base": resume.pr_base,
+        "checkpoint": resume.checkpoint,
+        "completed_steps": list(resume.completed_steps),
+        "pr": resume.pr,
     }
 
 

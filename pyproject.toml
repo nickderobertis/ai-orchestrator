@@ -9,9 +9,9 @@ dependencies = [
 
 [project.scripts]
 orchestrator-dispatch = "orchestrator.dispatch:main"
-orchestrator-run-plan = "orchestrator.plan:main"
+orchestrator-run-plan = "orchestrator.graph:main"
 orchestrator-repo-task = "orchestrator.lifecycle:main_task"
-orchestrator-repo-plan = "orchestrator.lifecycle:main_plan"
+orchestrator-repo-plan = "orchestrator.graph:main_repo_plan"
 orchestrator-replan = "orchestrator.replan:main"
 orchestrator-next-round = "orchestrator.next_round:main"
 orchestrator-runs = "orchestrator.next_round:main_runs"
