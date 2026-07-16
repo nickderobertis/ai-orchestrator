@@ -15,7 +15,7 @@ import pytest
 from fakes import FakeGitHub, make_writing_dispatch
 
 from orchestrator.integrate import IntegrateError, integrate, main
-from orchestrator.lifecycle import run_repo_task
+from orchestrator.lifecycle import StackBase, run_repo_task
 from orchestrator.recover import main as recover_main
 from orchestrator.recover import recover_repo
 from orchestrator.registry import Registry
@@ -429,6 +429,74 @@ def test_team_recovery_default_opens_pr_without_polling(tmp_path, bare_origin) -
         _git(origin, "show", "main:team.txt")
 
 
+def test_team_recovery_preserves_recorded_linear_stack_base(tmp_path, bare_origin) -> None:
+    """Recovering a partial child must not publish its unresolved parent into root."""
+    origin = bare_origin()
+    repo = _clone(tmp_path, origin)
+    Registry().register(str(repo), workflow="remote", repo_type="team")
+    workspace = Workspace(tmp_path / "stacked-dispatch-worktrees")
+    github = FakeGitHub(origin)
+    parent = run_repo_task(
+        str(repo),
+        "parent",
+        "backend-engineer",
+        workspace=workspace,
+        github=github,
+        branch="feature/recovery-parent",
+        dispatch_fn=make_writing_dispatch(filename="parent.txt"),
+        verify_cmd=["true"],
+    )
+    assert parent.outcome == "pr-open" and parent.pr is not None
+    child = run_repo_task(
+        str(repo),
+        "partial child",
+        "backend-engineer",
+        workspace=workspace,
+        github=github,
+        branch="feature/recovery-child",
+        dispatch_fn=make_writing_dispatch(filename="child.txt", completed=False),
+        verify_cmd=["true"],
+        stack_bases=[
+            StackBase(
+                parent.branch,
+                repo=parent.repo,
+                identity=parent.publication_identity,
+                base_branch=parent.base_branch,
+                pr=parent.pr.url,
+                pr_base=parent.pr_base,
+            )
+        ],
+    )
+    assert child.outcome == "not-completed" and child.pr_base == parent.branch
+
+    with pytest.raises(ValueError, match="conflicts with preserved branch metadata"):
+        recover_repo(
+            repo,
+            child.branch,
+            workspace_root=tmp_path / "wrong-stacked-recovery-worktrees",
+            base=child.base_branch,
+            pr_base=child.base_branch,
+            verify_cmd=["true"],
+            github=github,
+        )
+
+    recovered = recover_repo(
+        repo,
+        child.branch,
+        workspace_root=tmp_path / "stacked-recovery-worktrees",
+        base=child.base_branch,
+        verify_cmd=["true"],
+        github=github,
+    )
+
+    assert recovered.outcome == "pr-open" and recovered.pr_base == parent.branch
+    assert github._prs[2].base == parent.branch
+    assert _git(origin, "show", f"{child.branch}:parent.txt").startswith("change by")
+    assert _git(origin, "show", f"{child.branch}:child.txt").startswith("change by")
+    with pytest.raises(subprocess.CalledProcessError):
+        _git(origin, "show", "main:parent.txt")
+
+
 def test_repo_recover_gate_failure_preserves_source_branch(tmp_path, bare_origin) -> None:
     repo = _clone(tmp_path, bare_origin())
     _allow_local(repo)
@@ -497,6 +565,33 @@ def test_repo_recover_reports_remote_base_sync_conflict(tmp_path, bare_origin) -
 def test_repo_recover_rejects_missing_branch_and_missing_gate(tmp_path, bare_origin) -> None:
     repo = _clone(tmp_path, bare_origin())
     _allow_local(repo)
+    with pytest.raises(ValueError, match="not a valid Git branch"):
+        recover_repo(
+            repo,
+            "bad..branch",
+            workspace_root=tmp_path / "invalid-recovery-worktrees",
+            verify_cmd=["true"],
+        )
+    _branch(repo, "claude/conflicting-base", {"partial.txt": "partial\n"})
+    _git(repo, "checkout", "claude/conflicting-base")
+    _git(
+        repo,
+        "commit",
+        "--amend",
+        "-m",
+        "wip: conflicting base (incomplete step)\n\n"
+        "Orchestrator-Status: incomplete\n"
+        "Orchestrator-PR-Base: parent/one\n"
+        "Orchestrator-PR-Base: parent/two",
+    )
+    _git(repo, "checkout", "main")
+    with pytest.raises(ValueError, match="records conflicting PR bases"):
+        recover_repo(
+            repo,
+            "claude/conflicting-base",
+            workspace_root=tmp_path / "conflicting-base-worktrees",
+            verify_cmd=["true"],
+        )
     with pytest.raises(ValueError, match="does not exist"):
         recover_repo(
             repo,

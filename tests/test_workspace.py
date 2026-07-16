@@ -9,6 +9,7 @@ from orchestrator.workspace import (
     DEFAULT_OWNER,
     RepoRef,
     Workspace,
+    WorkspaceError,
     _safe_branch_dir,
     normalize_repo,
 )
@@ -106,6 +107,16 @@ def test_workspace_fast_forwards_canonical_before_cutting_worktree(tmp_path, bar
 
     assert (canonical / "new.txt").read_text(encoding="utf-8") == "current\n"
     assert (worktree / "new.txt").read_text(encoding="utf-8") == "current\n"
+
+
+def test_workspace_refuses_dirty_execution_checkout(tmp_path, bare_origin) -> None:
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "dirty-canonical")
+    (canonical / "operator.txt").write_text("uncommitted\n", encoding="utf-8")
+    ws = Workspace(tmp_path / "worktrees", resolver=lambda _: canonical)
+
+    with pytest.raises(WorkspaceError, match="execution checkout.*dirty"):
+        ws.ensure_clone(normalize_repo(str(origin)))
 
 
 def test_repo_ref_defaults() -> None:

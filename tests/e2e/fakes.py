@@ -35,6 +35,7 @@ class FakePRState:
     title: str
     body: str
     merged: bool = False
+    closed: bool = False
     auto: bool = False
 
 
@@ -129,7 +130,7 @@ class FakeGitHub:
         merged = st.merged
         return PRStatus(
             number=pr.number,
-            state="MERGED" if merged else "OPEN",
+            state="MERGED" if merged else ("CLOSED" if st.closed else "OPEN"),
             merged=merged,
             merge_state_status="CLEAN",
             checks=checks,

@@ -82,6 +82,7 @@ def next_round(
             "identity": item.get("publication_identity"),
             "base_branch": root,
             "pr": item.get("pr"),
+            "pr_base": pr_base,
         }
         return anchor
 
@@ -118,6 +119,11 @@ def next_round(
             anchors = list(node.get("stack_bases") or [])
             for dep in previous_deps:
                 if dep in done_ids and (anchor := _anchor(dep)) is not None:
+                    anchors = [
+                        existing
+                        for existing in anchors
+                        if existing.get("branch") != anchor["branch"]
+                    ]
                     anchors.append(anchor)
             if anchors:
                 node["stack_bases"] = anchors

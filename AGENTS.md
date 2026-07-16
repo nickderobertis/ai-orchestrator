@@ -35,7 +35,9 @@ Recover incomplete preserved branches with `just
 repo-recover`, which verifies and publishes through the registered workflow; do
 not bypass an incomplete provenance marker with a normal commit. The selected
 publication checkout is **never worked in directly and only ever fast-forwarded**
-after a merge lands. One larger task becomes **multiple isolated
+after a merge lands; it must be clean with the selected root checked out before
+dispatch. Preserved stacked branches record their PR base so recovery targets the
+stack rather than the root. One larger task becomes **multiple isolated
 PRs** coordinated by a DAG; a single PR can itself run **several onejudge in
 sequence on one branch** (a node's `steps` sub-DAG). The DAG is static within a run
 — you **adapt between rounds**, reading each round's results and deriving the next

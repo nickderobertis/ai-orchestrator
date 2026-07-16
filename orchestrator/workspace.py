@@ -31,6 +31,7 @@ __all__ = [
     "RepositoryType",
     "Workflow",
     "Workspace",
+    "WorkspaceError",
     "WorkspaceSelection",
     "normalize_repo",
 ]
@@ -39,6 +40,10 @@ DEFAULT_OWNER = "nickderobertis"
 Workflow = Literal["local", "remote"]
 RepositoryType = Literal["single-owner", "team"]
 IdentityKey = NewType("IdentityKey", str)
+
+
+class WorkspaceError(RuntimeError):
+    """A checkout is unsafe to mutate or cannot satisfy a lifecycle operation."""
 
 
 class RepoResolver(Protocol):
@@ -194,6 +199,19 @@ class Workspace:
     def _worktree_root(self, repo: RepoRef) -> Path:
         return self.root / repo.dir_key
 
+    @staticmethod
+    def _assert_publication_ready(checkout: Path, branch: str) -> None:
+        if gitops.is_dirty(checkout):
+            raise WorkspaceError(
+                f"publication checkout {checkout} is dirty; clean it before dispatch"
+            )
+        current = gitops.current_branch(checkout)
+        if current != branch:
+            raise WorkspaceError(
+                f"publication checkout {checkout} has branch {current!r} checked out; "
+                f"check out root branch {branch!r} before dispatch"
+            )
+
     def ensure_clone(
         self,
         repo: RepoRef,
@@ -242,8 +260,18 @@ class Workspace:
             self._checkouts[repo.dir_key] = checkout
             self._selections[repo.dir_key] = selection
             with advisory_lock(f"git:{gitops.common_dir(checkout)}"):
+                if gitops.is_dirty(checkout):
+                    raise WorkspaceError(
+                        f"execution checkout {checkout} is dirty; clean it before dispatch"
+                    )
                 gitops.fetch(checkout)
                 base = base_branch or gitops.default_branch(checkout)
+                publication = selection.publication_checkout
+                if gitops.common_dir(publication) == gitops.common_dir(checkout):
+                    self._assert_publication_ready(publication, base)
+                else:
+                    with advisory_lock(f"git:{gitops.common_dir(publication)}"):
+                        self._assert_publication_ready(publication, base)
                 gitops.checkout(checkout, base)
                 gitops.merge_ff_only(checkout, f"origin/{base}")
             return checkout
@@ -278,6 +306,7 @@ class Workspace:
         selected = self._selections.get(repo.dir_key)
         checkout = selected.publication_checkout if selected is not None else self.clone_dir(repo)
         with self._repo_lock(repo), advisory_lock(f"git:{gitops.common_dir(checkout)}"):
+            self._assert_publication_ready(checkout, branch)
             gitops.fetch(checkout)
             gitops.merge_ff_only(checkout, f"origin/{branch}")
 
@@ -286,3 +315,9 @@ class Workspace:
         clone = self.clone_dir(repo)
         with advisory_lock(f"git:{gitops.common_dir(clone)}"):
             gitops.worktree_remove(clone, path)
+
+    def delete_branch(self, repo: RepoRef, branch: str) -> None:
+        """Delete an unneeded local lifecycle branch under the shared-git lock."""
+        clone = self.clone_dir(repo)
+        with self._repo_lock(repo), advisory_lock(f"git:{gitops.common_dir(clone)}"):
+            gitops.delete_branch(clone, branch)

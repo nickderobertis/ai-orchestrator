@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 
 import pytest
 
@@ -11,7 +12,7 @@ from orchestrator.replan import main, next_round
 
 
 def _plan(*tasks: dict) -> dict:
-    return {"concurrency": 2, "tasks": list(tasks)}
+    return {"concurrency": 2, "tasks": deepcopy(tasks)}
 
 
 def _result(**statuses: str) -> dict:
@@ -59,6 +60,7 @@ def test_done_open_dependency_becomes_stack_anchor_across_rounds() -> None:
             "identity": "https://github.com/o/r",
             "base_branch": "main",
             "pr": "https://github.com/o/r/pull/1",
+            "pr_base": "main",
         }
     ]
 
@@ -83,6 +85,48 @@ def test_merged_dependency_landed_on_synthetic_base_carries_that_base() -> None:
     plan = next_round(_plan(A, B), result)
 
     assert plan["tasks"][0]["stack_bases"][0]["branch"] == ("ai-orchestrator/stack-base/parents")
+    assert plan["tasks"][0]["stack_bases"][0]["pr_base"] == ("ai-orchestrator/stack-base/parents")
+
+
+def test_cross_round_anchor_replaces_duplicate_branch_with_current_metadata() -> None:
+    prior = _plan(A, B)
+    prior["tasks"][1]["stack_bases"] = [
+        {
+            "branch": "feature/a",
+            "repo": "o/r",
+            "identity": "https://github.com/o/r",
+            "base_branch": "main",
+            "pr": "https://github.com/o/r/pull/old",
+        }
+    ]
+    result = {
+        "results": {
+            "a": {
+                "status": "done",
+                "outcome": "pr-open",
+                "repo": "o/r",
+                "publication_identity": "https://github.com/o/r",
+                "branch": "feature/a",
+                "base_branch": "main",
+                "pr_base": "main",
+                "pr": "https://github.com/o/r/pull/2",
+            },
+            "b": {"status": "failed"},
+        }
+    }
+
+    plan = next_round(prior, result)
+
+    assert plan["tasks"][0]["stack_bases"] == [
+        {
+            "branch": "feature/a",
+            "repo": "o/r",
+            "identity": "https://github.com/o/r",
+            "base_branch": "main",
+            "pr": "https://github.com/o/r/pull/2",
+            "pr_base": "main",
+        }
+    ]
 
 
 def test_retry_overrides_fields() -> None:

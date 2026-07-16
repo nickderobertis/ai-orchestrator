@@ -123,6 +123,43 @@ def test_team_explicit_local_workflow_is_invalid() -> None:
         _effective_publication("team", None, "local", None)
 
 
+@pytest.mark.parametrize(
+    "anchor, expected",
+    [
+        (StackBase("parent", repo="https://github.com/o/r"), "normalized owner/name"),
+        (StackBase("parent", identity="git@github.com:o/r.git"), "normalized origin"),
+        (StackBase("parent", pr="https://example.com/pull/1"), "pull-request URL"),
+        (
+            StackBase(
+                "parent",
+                repo="o/r",
+                pr="https://github.com/x/r/pull/1",
+            ),
+            "does not match repo",
+        ),
+        (
+            StackBase(
+                "parent",
+                identity="https://github.com/o/r",
+                pr="https://github.com/o/x/pull/1",
+            ),
+            "does not match identity",
+        ),
+    ],
+)
+def test_programmatic_stack_anchors_fail_before_repository_resolution(
+    tmp_path, anchor, expected
+) -> None:
+    result = run_repo_task(
+        "o/r",
+        "task",
+        "backend-engineer",
+        workspace=Workspace(tmp_path / "unused", resolver=lambda _spec: tmp_path / "missing"),
+        stack_bases=[anchor],
+    )
+    assert result.outcome == "error" and expected in result.detail
+
+
 # --- repo-plan loading -----------------------------------------------------
 
 
@@ -200,6 +237,49 @@ def test_load_valid_repo_plan(tmp_path) -> None:
         (
             {"tasks": [{"id": "a", "repo": "r", "persona": "p", "task": "t", "repo_type": "x"}]},
             "repo_type",
+        ),
+        (
+            {
+                "tasks": [
+                    {
+                        "id": "a",
+                        "repo": "r",
+                        "persona": "p",
+                        "task": "t",
+                        "repo_type": "team",
+                        "workflow": "local",
+                    }
+                ]
+            },
+            "team.*workflow=local",
+        ),
+        (
+            {
+                "tasks": [
+                    {
+                        "id": "a",
+                        "repo": "r",
+                        "persona": "p",
+                        "task": "t",
+                        "branch": "bad..branch",
+                    }
+                ]
+            },
+            "branch.*valid.*Git branch",
+        ),
+        (
+            {
+                "tasks": [
+                    {
+                        "id": "a",
+                        "repo": "r",
+                        "persona": "p",
+                        "task": "t",
+                        "base_branch": 3,
+                    }
+                ]
+            },
+            "base_branch.*valid.*Git branch",
         ),
         (
             {
@@ -359,6 +439,20 @@ def test_load_valid_repo_plan(tmp_path) -> None:
                         "repo": "r",
                         "persona": "p",
                         "task": "t",
+                        "stack_bases": [{"branch": "feature/parent", "pr_base": "bad..base"}],
+                    }
+                ]
+            },
+            "pr_base.*not a valid Git branch",
+        ),
+        (
+            {
+                "tasks": [
+                    {
+                        "id": "a",
+                        "repo": "r",
+                        "persona": "p",
+                        "task": "t",
                         "stack_bases": [
                             {"branch": "feature/parent", "pr": "https://example.com/1"}
                         ],
@@ -366,6 +460,46 @@ def test_load_valid_repo_plan(tmp_path) -> None:
                 ]
             },
             "pull-request URL",
+        ),
+        (
+            {
+                "tasks": [
+                    {
+                        "id": "a",
+                        "repo": "r",
+                        "persona": "p",
+                        "task": "t",
+                        "stack_bases": [
+                            {
+                                "branch": "feature/parent",
+                                "repo": "o/r",
+                                "pr": "https://github.com/x/r/pull/1",
+                            }
+                        ],
+                    }
+                ]
+            },
+            "pr.*does not match 'repo'",
+        ),
+        (
+            {
+                "tasks": [
+                    {
+                        "id": "a",
+                        "repo": "r",
+                        "persona": "p",
+                        "task": "t",
+                        "stack_bases": [
+                            {
+                                "branch": "feature/parent",
+                                "identity": "https://github.com/o/r",
+                                "pr": "https://github.com/o/x/pull/1",
+                            }
+                        ],
+                    }
+                ]
+            },
+            "pr.*does not match 'identity'",
         ),
         (
             {"tasks": [{"id": "a", "repo": "r", "persona": "p", "task": "t", "deps": ["z"]}]},
@@ -561,6 +695,7 @@ def test_run_repo_plan_turns_open_same_identity_dependency_into_stack_base() -> 
             identity="https://github.com/o/r",
             base_branch="main",
             pr="https://github.com/o/r/pull/1",
+            pr_base="main",
         )
     ]
 
@@ -664,6 +799,23 @@ def test_main_task_rejects_nonpositive_publication_attempts(capsys) -> None:
         lc.main_task(["acme/widget", "backend-engineer", "do it", "--publication-attempts", "0"])
     assert exc.value.code == 2
     assert "must be at least 1" in capsys.readouterr().err
+
+
+def test_main_task_rejects_invalid_literal_branch_before_resolution(capsys) -> None:
+    rc = lc.main_task(
+        [
+            "acme/widget",
+            "backend-engineer",
+            "do it",
+            "--branch",
+            "bad..branch",
+            "--format",
+            "json",
+        ]
+    )
+    payload = json.loads(capsys.readouterr().out)
+    assert rc == 1 and payload["outcome"] == "error"
+    assert "not a valid Git branch" in payload["detail"]
 
 
 def test_main_task_human_nonzero_on_failure(monkeypatch, capsys) -> None:

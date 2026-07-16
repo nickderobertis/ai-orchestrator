@@ -30,6 +30,7 @@ from orchestrator.github import PullRequest
 from orchestrator.lifecycle import (
     RepoPlan,
     RepoPlanNode,
+    StackBase,
     Step,
     main_plan,
     run_repo_plan,
@@ -206,6 +207,41 @@ def test_local_identity_executes_in_safety_clone_and_publishes_without_pr(
     rendered = result.summary()
     assert f"execution checkout: {safety}" in rendered
     assert "publication workflow: local" in rendered
+
+
+def test_safety_clone_refuses_publication_checkout_on_nonroot_branch(tmp_path, bare_origin) -> None:
+    """A safety-clone run must not fast-forward whichever canonical branch is active."""
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-nonroot")
+    safety = gitops.clone(origin, tmp_path / "safety-nonroot")
+    Registry().register(str(canonical), workflow="local")
+    Registry().register(str(safety))
+    subprocess.run(
+        ["git", "-C", str(canonical), "switch", "-c", "operator/wip"],
+        check=True,
+        capture_output=True,
+    )
+    dispatched: list[str] = []
+
+    def dispatch_fn(persona: str, task: str, **_: object) -> Report:
+        dispatched.append(task)
+        return Report(persona, 0, True, False, 1, [], {}, {}, "")
+
+    result = run_repo_task(
+        str(canonical),
+        "Do not mutate the operator branch.",
+        "backend-engineer",
+        workspace=Workspace(tmp_path / "nonroot-worktrees"),
+        execution_checkout=safety,
+        dispatch_fn=dispatch_fn,
+        verify_cmd=["true"],
+    )
+
+    assert result.outcome == "error"
+    assert "publication checkout" in result.detail and "root branch 'main'" in result.detail
+    assert dispatched == []
+    assert gitops.current_branch(canonical) == "operator/wip"
+    assert _tip(origin, "main") == gitops.head_sha(canonical)
 
 
 def test_registered_remote_identity_keeps_pr_flow(tmp_path, bare_origin) -> None:
@@ -859,6 +895,208 @@ def test_linear_team_stack_targets_open_dependency_and_includes_pr_link(
     assert not _has_file(origin, "main", "parent.txt")
 
 
+def test_cross_round_root_merged_pr_anchor_is_dropped_after_squash(tmp_path, bare_origin) -> None:
+    """A root-landed squash is detected from PR state even without commit ancestry."""
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-squash-stack")
+    Registry().register(str(canonical), workflow="remote", repo_type="team")
+    workspace = Workspace(tmp_path / "squash-stack-worktrees")
+    github = FakeGitHub(origin)
+    parent = run_repo_task(
+        str(canonical),
+        "parent",
+        "backend-engineer",
+        workspace=workspace,
+        github=github,
+        branch="feature/squashed-parent",
+        dispatch_fn=make_writing_dispatch(filename="parent.txt"),
+        verify_cmd=["true"],
+    )
+    assert parent.outcome == "pr-open" and parent.pr is not None
+
+    merger = gitops.clone(origin, tmp_path / "squash-merger")
+    subprocess.run(
+        ["git", "-C", str(merger), "merge", "--squash", f"origin/{parent.branch}"],
+        check=True,
+        capture_output=True,
+    )
+    gitops.commit(merger, "squash parent")
+    gitops.push(merger, "main", set_upstream=False)
+    github._prs[parent.pr.number].merged = True
+    gitops.fetch(canonical)
+    assert not gitops.is_ancestor(canonical, f"origin/{parent.branch}", "origin/main")
+
+    child = run_repo_task(
+        str(canonical),
+        "child",
+        "backend-engineer",
+        workspace=workspace,
+        github=github,
+        branch="feature/post-squash-child",
+        dispatch_fn=make_writing_dispatch(filename="child.txt"),
+        verify_cmd=["true"],
+        stack_bases=[
+            StackBase(
+                parent.branch,
+                repo=parent.repo,
+                identity=parent.publication_identity,
+                base_branch=parent.base_branch,
+                pr=parent.pr.url,
+                pr_base=parent.pr_base,
+            )
+        ],
+    )
+
+    assert child.outcome == "pr-open" and child.pr_base == "main"
+    assert child.stack_bases == []
+    assert child.pr is not None and child.pr.base == "main"
+    assert _has_file(origin, child.branch, "parent.txt")
+
+
+def test_legacy_untyped_anchor_from_other_repo_is_scheduling_only(tmp_path, bare_origin) -> None:
+    left_origin = bare_origin()
+    right_origin = bare_origin()
+    left = gitops.clone(left_origin, tmp_path / "legacy-anchor-left")
+    right = gitops.clone(right_origin, tmp_path / "legacy-anchor-right")
+    registry = Registry()
+    registry.register(str(left), workflow="remote", repo_type="team")
+    registry.register(str(right), workflow="remote", repo_type="team")
+    left_result = run_repo_task(
+        str(left),
+        "left",
+        "backend-engineer",
+        workspace=Workspace(tmp_path / "legacy-left-worktrees"),
+        github=FakeGitHub(left_origin),
+        branch="feature/legacy-left",
+        dispatch_fn=make_writing_dispatch(filename="left.txt"),
+        verify_cmd=["true"],
+    )
+    assert left_result.outcome == "pr-open"
+
+    right_result = run_repo_task(
+        str(right),
+        "right",
+        "backend-engineer",
+        workspace=Workspace(tmp_path / "legacy-right-worktrees"),
+        github=FakeGitHub(right_origin),
+        branch="feature/legacy-right",
+        dispatch_fn=make_writing_dispatch(filename="right.txt"),
+        verify_cmd=["true"],
+        stack_bases=[StackBase(left_result.branch, repo=left_result.repo)],
+    )
+
+    assert right_result.outcome == "pr-open" and right_result.pr_base == "main"
+    assert right_result.stack_bases == []
+    assert _has_file(right_origin, right_result.branch, "right.txt")
+
+
+def test_stack_anchor_for_different_root_fails_before_dispatch(tmp_path, bare_origin) -> None:
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-root-mismatch")
+    Registry().register(str(canonical), workflow="remote", repo_type="team")
+    workspace = Workspace(tmp_path / "root-mismatch-worktrees")
+    github = FakeGitHub(origin)
+    parent = run_repo_task(
+        str(canonical),
+        "parent",
+        "backend-engineer",
+        workspace=workspace,
+        github=github,
+        branch="feature/root-mismatch-parent",
+        dispatch_fn=make_writing_dispatch(filename="parent.txt"),
+        verify_cmd=["true"],
+    )
+    dispatched: list[str] = []
+
+    def dispatch_fn(persona: str, task: str, **_: object) -> Report:
+        dispatched.append(task)
+        return Report(persona, 0, True, False, 1, [], {}, {}, "")
+
+    child = run_repo_task(
+        str(canonical),
+        "child",
+        "backend-engineer",
+        workspace=workspace,
+        github=github,
+        branch="feature/root-mismatch-child",
+        dispatch_fn=dispatch_fn,
+        verify_cmd=["true"],
+        stack_bases=[
+            StackBase(
+                parent.branch,
+                repo=parent.repo,
+                identity=parent.publication_identity,
+                base_branch="release",
+            )
+        ],
+    )
+
+    assert child.outcome == "stack-conflict" and child.pr_base == "main"
+    assert "belongs to root 'release'" in child.detail
+    assert dispatched == []
+
+
+def test_closed_and_missing_stack_anchors_fail_before_dispatch(tmp_path, bare_origin) -> None:
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-invalid-anchors")
+    Registry().register(str(canonical), workflow="remote", repo_type="team")
+    workspace = Workspace(tmp_path / "invalid-anchor-worktrees")
+    github = FakeGitHub(origin)
+    parent = run_repo_task(
+        str(canonical),
+        "parent",
+        "backend-engineer",
+        workspace=workspace,
+        github=github,
+        branch="feature/closed-parent",
+        dispatch_fn=make_writing_dispatch(filename="parent.txt"),
+        verify_cmd=["true"],
+    )
+    assert parent.pr is not None
+    github._prs[parent.pr.number].closed = True
+    anchor = StackBase(
+        parent.branch,
+        repo=parent.repo,
+        identity=parent.publication_identity,
+        base_branch=parent.base_branch,
+        pr=parent.pr.url,
+        pr_base=parent.pr_base,
+    )
+
+    closed = run_repo_task(
+        str(canonical),
+        "closed child",
+        "backend-engineer",
+        workspace=workspace,
+        github=github,
+        branch="feature/closed-child",
+        dispatch_fn=make_writing_dispatch(filename="closed.txt"),
+        verify_cmd=["true"],
+        stack_bases=[anchor],
+    )
+    missing = run_repo_task(
+        str(canonical),
+        "missing child",
+        "backend-engineer",
+        workspace=workspace,
+        github=github,
+        branch="feature/missing-child",
+        dispatch_fn=make_writing_dispatch(filename="missing.txt"),
+        verify_cmd=["true"],
+        stack_bases=[
+            StackBase(
+                "feature/deleted-parent",
+                repo=parent.repo,
+                identity=parent.publication_identity,
+                base_branch=parent.base_branch,
+            )
+        ],
+    )
+
+    assert closed.outcome == "stack-conflict" and "closed without merging" in closed.detail
+    assert missing.outcome == "stack-conflict" and "missing from origin" in missing.detail
+
+
 def test_multi_parent_stack_uses_synthetic_base_and_child_only_diff(tmp_path, bare_origin) -> None:
     origin = bare_origin()
     canonical = gitops.clone(origin, tmp_path / "canonical-multi-stack")
@@ -975,11 +1213,10 @@ def test_multi_parent_stack_deduplicates_ancestor_prerequisites(tmp_path, bare_o
     descendant = result.results["descendant"].result
     child = result.results["child"].result
     assert result.ok and ancestor is not None and descendant is not None and child is not None
-    assert child.synthetic_stack_base is not None
-    assert _tip(origin, child.synthetic_stack_base) == _tip(origin, descendant.branch)
-    assert child.pr is not None and child.pr.base == child.synthetic_stack_base
+    assert child.synthetic_stack_base is None
+    assert child.pr is not None and child.pr.base == descendant.branch
     assert ancestor.pr is not None and descendant.pr is not None
-    assert ancestor.pr.url in github._prs[3].body
+    assert ancestor.pr.url not in github._prs[3].body
     assert descendant.pr.url in github._prs[3].body
 
 
@@ -1069,6 +1306,9 @@ def test_stack_conflict_aborts_before_child_dispatch_and_skips_descendant(
         capture_output=True,
     ).stdout
     assert not refs.strip()
+    assert not any(
+        branch.startswith("ai-orchestrator/stack-base/") for branch in gitops.branches(canonical)
+    )
 
 
 # --- workstream: several onejudge on ONE PR -------------------------------

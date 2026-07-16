@@ -259,6 +259,8 @@ def test_identity_coalescing_rejects_type_conflicts_and_team_local() -> None:
         _coalesce({Slug("acme/widget"): RegistryEntry("/one", origin, "local", "team")})
     with pytest.raises(RegistryError, match="unclassified"):
         _serialize({Slug("acme/widget"): RegistryEntry("/one", origin, "remote", None)})
+    with pytest.raises(RegistryError, match="repo_type must be"):
+        _serialize({Slug("acme/widget"): RegistryEntry("/one", origin, "remote", "other")})
 
 
 @pytest.mark.parametrize(

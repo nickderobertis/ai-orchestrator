@@ -44,7 +44,7 @@ from .merge import (
     MergeStrategy,
 )
 from .plan import NodeRun, schedule_dag
-from .provenance import INCOMPLETE_TRAILER
+from .provenance import INCOMPLETE_TRAILER, PR_BASE_TRAILER
 from .registry import RegistryError, validate_identity_key
 from .runs import (
     RepoPlanPayload,
@@ -62,6 +62,7 @@ from .workspace import (
     RepositoryType,
     Workflow,
     Workspace,
+    WorkspaceError,
     normalize_repo,
 )
 
@@ -107,6 +108,7 @@ class StackBase:
     identity: IdentityKey | None = None
     base_branch: str | None = None
     pr: str | None = None
+    pr_base: str | None = None
 
 
 @dataclass(frozen=True)
@@ -219,12 +221,13 @@ def _step_commit_message(step: Step) -> str:
     )
 
 
-def _incomplete_commit_message(step: Step) -> str:
+def _incomplete_commit_message(step: Step, pr_base: str) -> str:
     return (
         f"wip: {_default_title(step.persona, step.task)} (incomplete step)\n\n"
         f"Partial work from step {step.id} (persona: {step.persona}), preserved by "
         "ai-orchestrator after the dispatch did not complete.\n\n"
-        f"{INCOMPLETE_TRAILER}"
+        f"{INCOMPLETE_TRAILER}\n"
+        f"{PR_BASE_TRAILER} {pr_base}"
     )
 
 
@@ -290,11 +293,147 @@ def _stack_body(anchors: list[StackBase], synthetic: str | None) -> str:
     return "\n".join(lines)
 
 
+def _validate_lifecycle_branch(value: str, *, field_name: str) -> None:
+    """Reject non-literal branch inputs before they reach any Git command."""
+    if not gitops.is_valid_branch_name(value):
+        raise ConfigError(f"{field_name} {value!r} is not a valid Git branch")
+
+
+def _validate_runtime_stack_bases(anchors: list[StackBase]) -> None:
+    """Validate programmatic anchors as strictly as serialized plan anchors."""
+    for index, anchor in enumerate(anchors):
+        _validate_lifecycle_branch(anchor.branch, field_name=f"stack_bases #{index} branch")
+        for field_name, value in (
+            ("base_branch", anchor.base_branch),
+            ("pr_base", anchor.pr_base),
+        ):
+            if value is not None:
+                _validate_lifecycle_branch(value, field_name=f"stack_bases #{index} {field_name}")
+        if anchor.repo is not None and normalize_repo(anchor.repo).slug != anchor.repo:
+            raise ConfigError(f"stack_bases #{index} repo must be a normalized owner/name")
+        if anchor.identity is not None:
+            try:
+                validate_identity_key(str(anchor.identity))
+            except RegistryError as exc:
+                raise ConfigError(f"stack_bases #{index}: {exc}") from exc
+        if anchor.pr is not None:
+            matched = re.fullmatch(r"https://github\.com/([^/]+/[^/]+)/pull/[1-9][0-9]*", anchor.pr)
+            if matched is None:
+                raise ConfigError(f"stack_bases #{index} pr must be a GitHub pull-request URL")
+            pr_repo = matched.group(1)
+            if anchor.repo is not None and anchor.repo.casefold() != pr_repo.casefold():
+                raise ConfigError(
+                    f"stack_bases #{index} pr repository {pr_repo!r} does not match "
+                    f"repo {anchor.repo!r}"
+                )
+            github_prefix = "https://github.com/"
+            if (
+                anchor.identity is not None
+                and str(anchor.identity).startswith(github_prefix)
+                and str(anchor.identity).removeprefix(github_prefix).casefold()
+                != pr_repo.casefold()
+            ):
+                raise ConfigError(
+                    f"stack_bases #{index} pr repository {pr_repo!r} does not match identity"
+                )
+
+
+def _stack_pr(anchor: StackBase) -> PullRequest | None:
+    """Rebuild the stable PR identity carried by a cross-round anchor."""
+    if anchor.pr is None:
+        return None
+    matched = re.fullmatch(r"https://github\.com/([^/]+/[^/]+)/pull/([1-9][0-9]*)", anchor.pr)
+    if matched is None:  # runtime validation reports this before stack resolution
+        return None
+    return PullRequest(
+        int(matched.group(2)),
+        anchor.pr,
+        matched.group(1),
+        anchor.branch,
+        anchor.pr_base or anchor.base_branch or "",
+    )
+
+
+def _resolve_stack_bases(
+    *,
+    clone: Path,
+    ref: RepoRef,
+    identity: IdentityKey,
+    root_base: str,
+    anchors: list[StackBase],
+    github: GitHubBackend | None,
+) -> list[StackBase] | StackConflict:
+    """Select live same-root anchors and collapse ancestry-redundant prerequisites."""
+    candidates: list[StackBase] = []
+    root_ref = f"origin/{root_base}"
+    backend = github
+    for anchor in anchors:
+        same_repo = (
+            anchor.identity == identity
+            if anchor.identity is not None
+            else anchor.repo is None or anchor.repo == ref.slug
+        )
+        if not same_repo:
+            continue
+        if anchor.base_branch is not None and anchor.base_branch != root_base:
+            return StackConflict(
+                detail=(
+                    f"stack-conflict: prerequisite {anchor.branch!r} belongs to root "
+                    f"{anchor.base_branch!r}, not task root {root_base!r}"
+                )
+            )
+
+        # A root-targeting PR can land between rounds. Query its durable PR state
+        # before requiring the (often auto-deleted) head branch, then refetch so
+        # the local root tracking ref includes the merge we just observed.
+        pr = _stack_pr(anchor)
+        if pr is not None and anchor.pr_base == root_base:
+            backend = backend or CliGitHubBackend()
+            status = backend.status(pr)
+            if status.merged:
+                gitops.fetch(clone)
+                continue
+            if status.state == "CLOSED":
+                return StackConflict(
+                    detail=f"stack-conflict: prerequisite PR {anchor.pr} closed without merging"
+                )
+
+        dependency_ref = f"origin/{anchor.branch}"
+        try:
+            gitops.ref_sha(clone, dependency_ref)
+        except GitError:
+            return StackConflict(
+                detail=(
+                    f"stack-conflict: prerequisite branch {anchor.branch!r} is missing from origin"
+                )
+            )
+        if gitops.is_ancestor(clone, dependency_ref, root_ref):
+            continue
+        candidates.append(anchor)
+
+    resolved: list[StackBase] = []
+    for candidate in candidates:
+        candidate_ref = f"origin/{candidate.branch}"
+        if any(
+            gitops.is_ancestor(clone, candidate_ref, f"origin/{existing.branch}")
+            for existing in resolved
+        ):
+            continue
+        resolved = [
+            existing
+            for existing in resolved
+            if not gitops.is_ancestor(clone, f"origin/{existing.branch}", candidate_ref)
+        ]
+        resolved.append(candidate)
+    return resolved
+
+
 def _run_steps(
     steps: list[Step],
     *,
     worktree: Path,
     branch: str,
+    pr_base: str,
     dispatch_fn: DispatchFn,
     oneharness_mode: str | None,
     base_path: str | Path,
@@ -329,7 +468,7 @@ def _run_steps(
         if not report.completed:
             if gitops.is_dirty(worktree):
                 gitops.add_all(worktree)
-                gitops.commit(worktree, _incomplete_commit_message(step))
+                gitops.commit(worktree, _incomplete_commit_message(step, pr_base))
                 return NodeRun(
                     "failed",
                     f"step {sid!r} hit the turn cap; partial work was committed to branch "
@@ -385,6 +524,7 @@ def _build_synthetic_stack_base(
     digest = _short_hash(ref.slug, root_base, key)
     branch = f"ai-orchestrator/stack-base/{digest}-{uuid.uuid4().hex[:10]}"
     worktree = workspace.worktree(ref, branch, base=f"origin/{root_base}")
+    pushed = False
     try:
         for anchor in anchors:
             dependency = f"origin/{anchor.branch}"
@@ -402,9 +542,12 @@ def _build_synthetic_stack_base(
                     )
                 )
         gitops.push(worktree, branch)
+        pushed = True
         return SyntheticStackBase(branch)
     finally:
         workspace.remove_worktree(ref, worktree)
+        if not pushed:
+            workspace.delete_branch(ref, branch)
 
 
 def run_repo_task(
@@ -481,6 +624,10 @@ def run_repo_task(
     )
     worktree: Path | None = None
     try:
+        _validate_lifecycle_branch(result.branch, field_name="branch")
+        if base_branch is not None:
+            _validate_lifecycle_branch(base_branch, field_name="base_branch")
+        _validate_runtime_stack_bases(stack_bases or [])
         clone = workspace.ensure_clone(
             ref,
             url=url,
@@ -515,11 +662,21 @@ def run_repo_task(
         strategy = _select_merge_strategy(ref, merge, github, decision.workflow)
         root_base = base_branch or gitops.default_branch(clone)
         result.base_branch = root_base
-        applicable_stack = [
-            anchor
-            for anchor in (stack_bases or [])
-            if anchor.identity is None or anchor.identity == selection.publication_identity
-        ]
+        result.pr_base = root_base
+        stack_resolution = _resolve_stack_bases(
+            clone=clone,
+            ref=ref,
+            identity=selection.publication_identity,
+            root_base=root_base,
+            anchors=stack_bases or [],
+            github=github,
+        )
+        if isinstance(stack_resolution, StackConflict):
+            result.outcome = "stack-conflict"
+            result.detail = stack_resolution.detail
+            result.stack_bases = list(stack_bases or [])
+            return result
+        applicable_stack = stack_resolution
         result.stack_bases = applicable_stack
         if len(applicable_stack) > 1:
             stack_result = _build_synthetic_stack_base(ref, workspace, root_base, applicable_stack)
@@ -541,6 +698,7 @@ def run_repo_task(
             effective_steps,
             worktree=worktree,
             branch=branch,
+            pr_base=pr_base,
             dispatch_fn=dispatch_fn,
             oneharness_mode=oneharness_mode,
             base_path=base_path,
@@ -627,7 +785,7 @@ def run_repo_task(
         result.outcome = merge_outcome.outcome
         result.detail = merge_outcome.detail
         return result
-    except (GitError, GitHubError, ConfigError, RegistryError) as exc:
+    except (GitError, GitHubError, ConfigError, RegistryError, WorkspaceError) as exc:
         result.outcome = "error"
         result.detail = str(exc)
         return result
@@ -755,6 +913,14 @@ def parse_repo_plan(data: dict[str, Any]) -> RepoPlan:
         if raw_repo_type is not None and raw_repo_type not in ("single-owner", "team"):
             raise PlanError(f"task {nid!r} 'repo_type' must be 'single-owner' or 'team'")
         repo_type = cast(RepositoryType | None, raw_repo_type)
+        if repo_type == "team" and workflow == "local":
+            raise PlanError(f"task {nid!r} repo_type=team cannot use workflow=local")
+        for field_name in ("base_branch", "branch"):
+            raw_branch = t.get(field_name)
+            if raw_branch is not None and (
+                not isinstance(raw_branch, str) or not gitops.is_valid_branch_name(raw_branch)
+            ):
+                raise PlanError(f"task {nid!r} {field_name!r} must be a valid non-empty Git branch")
         raw_execution = t.get("execution_checkout")
         if raw_execution is not None and (
             not isinstance(raw_execution, str) or not raw_execution.strip()
@@ -801,7 +967,7 @@ def _parse_stack_bases(nid: str, raw: object) -> list[StackBase]:
     for index, item in enumerate(raw):
         if not isinstance(item, dict):
             raise PlanError(f"task {nid!r} stack_bases #{index} must be a mapping")
-        allowed = {"branch", "repo", "identity", "base_branch", "pr"}
+        allowed = {"branch", "repo", "identity", "base_branch", "pr", "pr_base"}
         if set(item) - allowed:
             raise PlanError(f"task {nid!r} stack_bases #{index} has unknown fields")
         branch = item.get("branch")
@@ -809,7 +975,7 @@ def _parse_stack_bases(nid: str, raw: object) -> list[StackBase]:
             raise PlanError(f"task {nid!r} stack_bases #{index} needs a non-empty 'branch'")
         if not gitops.is_valid_branch_name(branch):
             raise PlanError(f"task {nid!r} stack_bases #{index} 'branch' is not a valid Git branch")
-        for field_name in ("repo", "identity", "base_branch", "pr"):
+        for field_name in ("repo", "identity", "base_branch", "pr", "pr_base"):
             value = item.get(field_name)
             if value is not None and (not isinstance(value, str) or not value.strip()):
                 raise PlanError(
@@ -830,15 +996,33 @@ def _parse_stack_bases(nid: str, raw: object) -> list[StackBase]:
             raise PlanError(
                 f"task {nid!r} stack_bases #{index} 'base_branch' is not a valid Git branch"
             )
-        raw_pr = item.get("pr")
-        if (
-            isinstance(raw_pr, str)
-            and re.fullmatch(r"https://github\.com/[^/]+/[^/]+/pull/[1-9][0-9]*", raw_pr) is None
-        ):
+        raw_pr_base = item.get("pr_base")
+        if isinstance(raw_pr_base, str) and not gitops.is_valid_branch_name(raw_pr_base):
             raise PlanError(
-                f"task {nid!r} stack_bases #{index} 'pr' must be a GitHub pull-request URL"
+                f"task {nid!r} stack_bases #{index} 'pr_base' is not a valid Git branch"
             )
         raw_identity = item.get("identity")
+        raw_pr = item.get("pr")
+        if isinstance(raw_pr, str):
+            matched_pr = re.fullmatch(r"https://github\.com/([^/]+/[^/]+)/pull/[1-9][0-9]*", raw_pr)
+            if matched_pr is None:
+                raise PlanError(
+                    f"task {nid!r} stack_bases #{index} 'pr' must be a GitHub pull-request URL"
+                )
+            pr_repo = matched_pr.group(1)
+            if isinstance(raw_repo, str) and raw_repo.casefold() != pr_repo.casefold():
+                raise PlanError(
+                    f"task {nid!r} stack_bases #{index} 'pr' repository does not match 'repo'"
+                )
+            if (
+                isinstance(raw_identity, str)
+                and raw_identity.startswith("https://github.com/")
+                and raw_identity.removeprefix("https://github.com/").casefold()
+                != pr_repo.casefold()
+            ):
+                raise PlanError(
+                    f"task {nid!r} stack_bases #{index} 'pr' repository does not match 'identity'"
+                )
         try:
             identity = (
                 validate_identity_key(raw_identity) if isinstance(raw_identity, str) else None
@@ -852,6 +1036,7 @@ def _parse_stack_bases(nid: str, raw: object) -> list[StackBase]:
                 identity=identity,
                 base_branch=item.get("base_branch"),
                 pr=item.get("pr"),
+                pr_base=item.get("pr_base"),
             )
         )
     return anchors
@@ -936,6 +1121,7 @@ def run_repo_plan(
             identity=result.publication_identity,
             base_branch=result.base_branch,
             pr=result.pr.url if result.pr else None,
+            pr_base=result.pr_base,
         )
 
     def run_one(nid: str) -> NodeRun:
@@ -1097,6 +1283,7 @@ def _result_payload(result: LifecycleResult) -> dict[str, Any]:
                 "identity": anchor.identity,
                 "base_branch": anchor.base_branch,
                 "pr": anchor.pr,
+                "pr_base": anchor.pr_base,
             }
             for anchor in result.stack_bases
         ],

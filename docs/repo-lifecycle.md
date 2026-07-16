@@ -66,7 +66,9 @@ The execution checkout hands out a **git worktree per branch** *outside* itself.
 N parallel subtasks against a repo get N isolated trees without N clones. The
 publication checkout is **never worked in directly and only ever fast-forwarded**
 after publication; the execution checkout is fetched and fast-forwarded before a
-worktree is cut from it. Worktree
+worktree is cut from it. Before dispatch, the publication checkout must be clean
+with the selected root branch checked out; a safety clone never makes an arbitrary
+active publication branch the fast-forward target. Worktree
 creation, removal, refresh, publication, and integration are serialized across
 processes by an OS advisory lock keyed by the checkout's resolved git common-dir.
 Locks have bounded waits and report the owning PID/host on timeout. The slow agent
@@ -195,14 +197,24 @@ concurrently, and a node whose dependency failed is skipped. Cross-repository
 dependencies only schedule. A successful same-identity dependency not landed on
 the root base becomes a stack prerequisite:
 
+All explicit task, base, anchor, and recovery branch names pass Git's literal
+branch validator before any Git command; a plan that explicitly combines
+`repo_type: team` with `workflow: local` fails validation before dispatch.
+
 - one prerequisite is the child's checkout and PR base;
-- several prerequisites are merged in declared order (ancestor duplicates are
-  skipped) into a pushed `ai-orchestrator/stack-base/*` branch cut from the root;
+- root-landed prerequisites are dropped using branch ancestry or the recorded PR
+  state (which also covers squash merges and deleted head branches); legacy
+  anchors without an identity fall back to their normalized repository slug;
+- ancestor duplicates collapse to the descendant first. Several remaining
+  prerequisites are merged in declared order into a pushed
+  `ai-orchestrator/stack-base/*` branch cut from the root;
   that synthetic branch has no PR and remains remote while it is a PR base;
 - stack prerequisites override an explicit `base_branch` as checkout/PR base,
   while that explicit/default branch remains the root for multi-parent assembly;
+  an anchor recorded for a different root is a `stack-conflict` rather than being
+  silently retargeted;
 - a merge conflict aborts before child dispatch/publication as `stack-conflict`,
-  so descendants skip.
+  cleans its unpublished local synthetic branch, and causes descendants to skip.
 
 The child PR body lists dependency PR links and stack bases. Its final gate runs
 against the complete stack, but the PR diff against its stack base is child-only.
@@ -307,9 +319,10 @@ discover checked-out worktree branches and local branches matching `claude/*`;
 use `--pattern` to change the glob or `--gate` to inject a different gate command.
 The base and candidate worktrees must be clean.
 
-An incomplete dispatch commit carries the stable trailer
-`Orchestrator-Status: incomplete`; legacy `wip: ... (incomplete step)` commits are
-also recognized. Integration rejects any candidate whose base-relative history
+An incomplete dispatch commit carries the stable trailers
+`Orchestrator-Status: incomplete` and `Orchestrator-PR-Base: <branch>`; legacy
+`wip: ... (incomplete step)` commits without the base trailer are also recognized.
+Integration rejects any candidate whose base-relative history
 contains an incomplete marker without a matching lifecycle recovery attestation.
 An ordinary later commit cannot clear it. Recover the preserved branch through
 its registered workflow:
@@ -319,11 +332,15 @@ just repo-recover <branch> --repo <canonical-checkout>
 ```
 
 Recovery retains the source branch on failure. It uses an isolated worktree,
-fetches and merges current `origin/<base>`, runs the lifecycle gate with the
+infers a recorded stack/PR base from new preserved commits, fetches and merges
+current `origin/<pr-base>`, runs the lifecycle gate with the
 resolved comparison environment, writes an attestation, and pushes the feature
 branch. Recovery uses the same type defaults and accepts run-only `--repo-type`;
 team omission leaves its ready-for-review PR open, remote single-owner omission
-enables auto-merge, and local single-owner omission uses direct merge.
+enables auto-merge, and local single-owner omission uses direct merge. For an
+older stacked preserved commit without the base trailer, pass the ledger's values
+explicitly as `--base <root> --pr-base <recorded-pr-base>`; recovery never
+fast-forwards the root publication checkout after a merge into a non-root base.
 `repo-task-auto` prints this
 command when it reports `not-completed`.
 

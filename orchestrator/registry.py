@@ -33,6 +33,12 @@ class RegistryError(ValueError):
     """Registry data or a requested checkout failed validation."""
 
 
+def _validate_repository_type(value: object) -> RepositoryType:
+    if value not in _REPOSITORY_TYPES:
+        raise RegistryError("repo_type must be 'single-owner' or 'team'")
+    return cast(RepositoryType, value)
+
+
 @dataclass(frozen=True)
 class RegistryEntry:
     """Compatibility view of one checkout alias plus identity metadata."""
@@ -358,6 +364,8 @@ def _serialize(entries: Mapping[Slug, RegistryEntry]) -> dict[str, object]:
             + ", ".join(sorted(missing))
             + "; pass --repo-type explicitly"
         )
+    for metadata in identities.values():
+        _validate_repository_type(metadata.repo_type)
     return {
         "version": _REGISTRY_VERSION,
         "identities": {
@@ -459,7 +467,7 @@ class Registry:
     ) -> RepositoryType:
         """Resolve a run override or the stored/inferred identity type."""
         if override is not None:
-            return override
+            return _validate_repository_type(override)
         metadata = self.identities.get(identity)
         if metadata is None:
             raise RegistryError(f"repository identity {str(identity)!r} is not registered")
@@ -562,6 +570,8 @@ class Registry:
         *,
         origin: str | None = None,
     ) -> Path:
+        if repo_type is not None:
+            _validate_repository_type(repo_type)
         resolved = path.expanduser().resolve()
         actual_origin = origin if origin is not None else gitops.remote_url(resolved)
         identity = _url_identity(actual_origin)
@@ -864,6 +874,7 @@ class Registry:
         path: str | Path | None = None,
     ) -> RepositoryTypeMigration:
         """Atomically change type for one identity; team always uses remote workflow."""
+        _validate_repository_type(repo_type)
         registry_path = Path(path) if path is not None else _base_dir() / "repos.json"
         with advisory_lock(f"registry:{registry_path.resolve()}"):
             if not registry_path.exists():

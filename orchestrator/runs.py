@@ -9,7 +9,7 @@ from collections import Counter
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Literal, NamedTuple, NewType, TypedDict, cast
+from typing import Any, Literal, NamedTuple, NewType, NotRequired, TypedDict, cast
 
 from .config import ConfigError, load_yaml
 from .coordination import advisory_lock, atomic_json
@@ -38,6 +38,7 @@ class StackBasePayload(TypedDict):
     identity: IdentityKey | None
     base_branch: str | None
     pr: str | None
+    pr_base: NotRequired[str | None]
 
 
 class RepoPlanResultItem(TypedDict, total=False):

@@ -28,6 +28,7 @@ __all__ = [
     "common_dir",
     "current_branch",
     "default_branch",
+    "delete_branch",
     "fetch",
     "has_commits_ahead",
     "head_sha",
@@ -253,6 +254,11 @@ def branch_exists(cwd: str | Path, branch: str) -> bool:
     """Whether ``branch`` names an exact local branch."""
     proc = _git(["show-ref", "--verify", "--quiet", f"refs/heads/{branch}"], cwd=cwd, check=False)
     return proc.returncode == 0
+
+
+def delete_branch(cwd: str | Path, branch: str) -> None:
+    """Delete one exact local branch after its worktree has been removed."""
+    _git(["branch", "-D", branch], cwd=cwd)
 
 
 def is_valid_branch_name(branch: str) -> bool:
