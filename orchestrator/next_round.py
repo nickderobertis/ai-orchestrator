@@ -26,12 +26,19 @@ from .runs import (
 def main(argv: list[str] | None = None) -> int:
     raw_args = list(sys.argv[1:] if argv is None else argv)
     parser = argparse.ArgumentParser(
-        description="Derive and run the next round from a tracked-graph run ledger."
+        description="Derive and run the next round from a tracked-graph run ledger.",
+        usage="%(prog)s RUN [EDITS.json] [--complete-human REF] [run-plan options]",
     )
     parser.add_argument("run_id")
-    parser.add_argument("--complete-human", action="append", default=[])
+    parser.add_argument(
+        "--complete-human",
+        action="append",
+        default=[],
+        metavar="NODE[/STEP]",
+        help="attest one human action recorded waiting in the latest round (repeatable)",
+    )
     parser.add_argument("--runs-dir", type=Path, default=Path("runs"))
-    parser.add_argument("--plan-only", action="store_true")
+    parser.add_argument("--plan-only", action="store_true", help="write but do not run next plan")
     edits_path: Path | None = None
     # ``parse_known_args`` cannot know that a forwarded graph flag such as
     # ``--base`` consumes the following token; an optional positional therefore

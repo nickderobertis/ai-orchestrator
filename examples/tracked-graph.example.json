@@ -1,0 +1,63 @@
+{
+  "name": "tracked-release",
+  "concurrency": 3,
+  "tasks": [
+    {
+      "id": "design",
+      "persona": "planner",
+      "task": "Design the release, record its API and rollout contract in docs/design.md, and verify the plan against the current project."
+    },
+    {
+      "id": "design-approval",
+      "kind": "human",
+      "task": "Approve the API and rollout contract in docs/design.md.",
+      "deps": ["design"]
+    },
+    {
+      "id": "service",
+      "repo": "nickderobertis/some-service",
+      "repo_type": "team",
+      "deps": ["design-approval"],
+      "title": "Implement the approved release",
+      "steps": [
+        {
+          "id": "implement",
+          "persona": "backend-engineer",
+          "task": "Implement the approved API and rollout behavior with realistic request tests."
+        },
+        {
+          "id": "staging-approval",
+          "kind": "human",
+          "task": "Exercise the staged service and approve continuation on this branch.",
+          "deps": ["implement"]
+        },
+        {
+          "id": "closeout",
+          "persona": "test-engineer",
+          "task": "Run the full acceptance journey after staging approval and close every verified gap.",
+          "deps": ["staging-approval"]
+        }
+      ]
+    },
+    {
+      "id": "docs",
+      "repo": "nickderobertis/some-docs",
+      "repo_type": "team",
+      "persona": "docs-writer",
+      "task": "Document the approved API and rollout with commands verified against the implementation.",
+      "deps": ["design-approval"]
+    },
+    {
+      "id": "release-approval",
+      "kind": "human",
+      "task": "Approve publication after reviewing the service and documentation results.",
+      "deps": ["service", "docs"]
+    },
+    {
+      "id": "announce",
+      "persona": "docs-writer",
+      "task": "Prepare the final release announcement from the verified implementation and documentation.",
+      "deps": ["release-approval"]
+    }
+  ]
+}

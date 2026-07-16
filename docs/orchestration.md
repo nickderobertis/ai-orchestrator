@@ -1,86 +1,120 @@
-# Orchestration model
+# Tracked graph orchestration
 
-How the orchestrator turns one large task into many parallel onejudge runs. The
-mechanics (dispatch, scheduling) are in `orchestrator/`; this doc is the judgment
-behind them.
+`just run-plan` turns one large task into one recorded hierarchical DAG. It is
+the canonical executor for direct onejudge work, full repository lifecycles, and
+explicit actions that only a person can complete. `just repo-plan` is a deprecated
+alias retained so old lifecycle-only plan files keep working.
 
-## The shape of the work
+## Node shapes
 
+Every top-level node needs a unique `id`; `deps` is an optional list of other
+top-level ids. Omitted `kind` defaults to `agent` for compatibility.
+
+| Shape | Required fields | Meaning |
+| --- | --- | --- |
+| Direct agent | `persona`, `task`; no `repo` | Dispatch one real onejudge process in the selected project directory. |
+| Lifecycle agent | `repo`, plus `persona` + `task` or `steps` | Work on an isolated branch/worktree, verify, and publish through the repository's registered policy. |
+| Human | `kind: human`, `task`; no persona or execution fields | Record action prose for a person. The harness never performs or infers it. |
+
+A lifecycle `steps` list is its own DAG. Agent steps require `persona` and `task`.
+Human steps require `kind: human` and `task`, and are referenced outside the node
+as `NODE_ID/STEP_ID`. Steps share one branch and run serially in topological order
+because concurrent writers cannot safely share a worktree. See
+[`tracked-graph.example.json`](../examples/tracked-graph.example.json) for direct,
+lifecycle, top-level human, and nested human nodes in one graph.
+
+## Decomposition and scheduling
+
+A fresh onejudge process pays a fixed setup cost to read and understand its
+project. Split work when independent pieces can run concurrently, when different
+personas materially improve it, or when one risky piece deserves a focused review
+bar. Keep tightly coupled or tiny work together. Dependencies should name only
+real inputs so unrelated branches remain parallel.
+
+`run-plan` starts every node whose dependencies are `done`, bounded by
+`concurrency`. Lifecycle dependencies on the same repository identity also carry
+publication/stack ancestry; cross-repository dependencies only schedule. A graph
+is static within one round. Adapt after reading its recorded result.
+
+## Status, state, and exit contract
+
+Each node settles once per round:
+
+- `done`: the agent completed or the lifecycle published successfully.
+- `waiting`: a ready human node or lifecycle human step needs action. Its
+  `human_actions` entry includes the exact `task`, direct `unblocks`, and whether
+  it unblocks workstream publication.
+- `blocked`: execution is transitively gated by a waiting human. `blocked_by`
+  contains the ready top-level or `NODE_ID/STEP_ID` human references.
+- `failed`: an executed agent or lifecycle failed.
+- `skipped`: a failed dependency made execution unsafe. Failure takes precedence
+  over a simultaneous waiting path, so such a descendant is skipped, not blocked.
+
+The result's top-level `state` is `failed` if any node failed or skipped,
+otherwise `waiting` if any node waits or is blocked, otherwise `complete`. `ok` is
+true only for `complete`. Human and JSON output carry the same facts. Exit status
+is 0 for `complete`, 1 for `waiting` or `failed`, and 2 for invalid plan, ledger,
+or command input.
+
+## Recorded rounds
+
+Recording is on by default:
+
+```text
+runs/<run-id>/round-01/plan.json
+runs/<run-id>/round-01/status.json
+runs/<run-id>/round-01/result.json
+runs/<run-id>/humans.json
 ```
-                   ┌─────────────┐
-   large task ───▶ │ decompose   │ ──▶ a plan (DAG of subtasks)
-                   └─────────────┘
-                          │
-                          ▼
-                   ┌─────────────┐   run every subtask whose deps are done,
-   plan  ────────▶ │  schedule   │   concurrently, bounded by `concurrency`
-                   └─────────────┘
-                          │
-              one onejudge process per subtask, each with a persona
-                          │
-                          ▼
-                   reports ──▶ re-plan the next layer from what came back
+
+Without `--run`, the id is derived from the plan's `name` or filename and made
+unique. `--runs-dir` moves the ledger, `--no-record` opts out, and `--recover`
+claims a `running` round only after its recorded owner is proven gone. Plan and
+result writes are atomic; a live round cannot be claimed by another process.
+`just runs` summarizes the latest completed round, including waiting action prose
+and what each action unblocks.
+
+## Human completion attestations
+
+After doing a reported action, attest it explicitly:
+
+```sh
+just next-round RUN --complete-human HUMAN_ID
+just next-round RUN --complete-human NODE_ID/STEP_ID
 ```
 
-## 1. Decompose into a DAG
+The same operation can be supplied in an edits file as `"complete_human":
+["HUMAN_ID"]`. Multiple CLI flags and file entries combine, but references must
+be unique. Only a human action recorded as `waiting` in the latest completed
+round can be attested. Unknown ids, blocked nodes/steps, agent ids, and previously
+completed humans are invalid and exit 2.
 
-A subtask is a node with an `id`, a `persona`, the `task` prose, and `deps` (the
-ids that must finish first). Two subtasks are independent when neither needs the
-other's output — those are what run in parallel. Make dependencies explicit and
-minimal: a node should depend only on what it truly consumes, so the scheduler
-does not serialize work that could overlap. Name the interface between dependent
-subtasks in the `task` prose (the file, the function signature, the contract) so
-the downstream agent does not have to re-derive it.
+The harness never guesses that a meeting, approval, deployment, or other human
+action happened. Each accepted attestation is durably appended to `humans.json`
+with its reference, the waiting round number, and a UTC timestamp. Replanning
+removes a completed top-level human or adds a nested human to the lifecycle
+resume's `completed_steps`; already-done agents are removed and never replayed.
 
-## 2. Choose granularity (the core tradeoff)
+## Replanning
 
-Every onejudge is a fresh agent that pays a **fixed overhead** to prepare its
-context before doing useful work — reading the repo, orienting, forming a plan.
-Splitting buys parallelism and lets you match a sharper persona to the work; it
-costs one more setup tax per split and more integration surface between pieces.
+`just next-round RUN [edits.json]` reads the latest plan and result, writes the
+next numbered plan, runs it, and records the result. `--plan-only` stops after
+derivation. Edits may `retry` with overrides, `split`, `add`, `drop`, or
+`complete_human`. Completed nodes fall out of the next plan, satisfied dependency
+ids are removed, and unresolved lifecycle stack anchors/resume checkpoints are
+preserved. The derived graph is validated before an attestation is recorded.
 
-Split a subtask when **any** holds:
+`just replan PREV_PLAN PREV_RESULT [edits.json]` exposes the lower-level pure
+derivation command. Old direct plans, old lifecycle-only repo plans, and recorded
+results without `state` remain readable.
 
-- The pieces are genuinely independent and there is spare concurrency to run them
-  at once (real wall-clock win).
-- The pieces want **different personas** (e.g. backend vs. frontend vs. docs).
-- One piece is risky enough to want its own focused agent and review bar.
+## Where this lives
 
-Keep a subtask whole when:
-
-- Splitting would create pieces so small the setup overhead dominates the actual
-  work (a fresh agent spending most of its turns just re-orienting).
-- The pieces are tightly coupled — they share so much context that one agent
-  holding it all is faster and less error-prone than several handing state back
-  and forth.
-
-When unsure, **err toward fewer, larger subtasks** and split further only if one
-proves too big for one agent to hold. Over-splitting is the common failure: it
-multiplies cost and latency for no parallelism gain.
-
-## 3. Schedule for parallelism
-
-`run-plan` schedules the DAG automatically: it runs every subtask whose deps have
-completed, up to the plan's `concurrency`, and a dependent waits only for its own
-deps — not for the whole previous layer. Set `concurrency` to the real ceiling
-(cost, rate limits, machine), not higher; extra width past the DAG's available
-parallelism does nothing.
-
-A subtask that does not complete (hits its turn cap) **fails**, and its
-dependents are **skipped** rather than run against a broken precondition. Read the
-skipped set as the blast radius of a failure, fix or re-scope that subtask, and
-re-dispatch.
-
-## 4. Read results, then re-plan
-
-Each node returns a onejudge report (completed? / verdicts / usage). Treat a plan
-as one layer of a larger loop: dispatch what you can, read what came back, and
-plan the next layer from reality rather than from the original guess. Coarse-grain
-first; only split a node further once a run shows it was too big.
-
-## Where this lives in code
-
-- `orchestrator/plan.py` — plan validation + the scheduler (`run_plan`).
-- `orchestrator/dispatch.py` — one subtask → one onejudge run.
-- `orchestrator/config.py` — base ⊕ persona → the effective onejudge config.
-- `examples/plan.example.json` — a worked diamond DAG.
+- `orchestrator/graph.py` — canonical mixed-node validation, scheduling, result,
+  output, and exit semantics.
+- `orchestrator/plan.py` — direct-agent parsing and the shared DAG scheduler.
+- `orchestrator/lifecycle.py` — repository nodes and resumable step workstreams.
+- `orchestrator/runs.py`, `next_round.py`, `replan.py` — durable rounds,
+  attestations, and continuation.
+- `orchestrator/dispatch.py` — one direct agent or lifecycle agent step → one
+  onejudge subprocess.

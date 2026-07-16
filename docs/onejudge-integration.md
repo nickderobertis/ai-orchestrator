@@ -138,6 +138,13 @@ no-unprivileged-userns host, dispatch codex with
   `gpt-5.6-sol` while retaining claude-code's Claude fallback model. A global
   `ONEHARNESS_MODELS` chain cannot be used here: onejudge supplies `--session`,
   and oneharness rejects multi-model runs combined with a named session.
+- **Use the tracked graph for coordinated work.** `just run-plan` accepts direct
+  agents, repository lifecycle agents, and explicit human nodes in one recorded
+  DAG. A lifecycle `steps` list may mix agent steps with `kind: human` steps on a
+  resumable branch. Human nodes never call onejudge; after a person performs the
+  reported action, `just next-round RUN --complete-human NODE[/STEP]` records an
+  attestation and releases only its dependents. Completed direct agents and
+  lifecycle steps are not dispatched again.
 - **Prefer the one-command wrapper.** Use
   `just repo-task-auto <repo> <persona> "<task>"`. It sets the dispatch
   environment and reports the branch's commit delta after the run, making

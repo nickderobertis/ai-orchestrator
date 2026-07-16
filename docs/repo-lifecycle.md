@@ -57,7 +57,7 @@ entries fail with every alias/path/workflow and the exact migration command; no
 workflow is selected implicitly.
 
 `--repo-type` on `register-repo` persists. The same option on `repo-task`,
-`repo-recover`, or `repo-plan` is run-only. A plan node's `repo_type` beats the
+`repo-recover`, or `run-plan` is run-only. A plan node's `repo_type` beats the
 command option, which beats stored or inferred type. Change stored type with
 `just migrate-repo-type <repo> --repo-type <single-owner|team>`; choosing team
 also normalizes workflow to `remote`.
@@ -185,17 +185,16 @@ checkout fetch and fast-forward with `--ff-only`. A merge into a feature or
 synthetic stack base does not advance it. No merge assembly,
 checkout, or hard reset occurs in that canonical working tree.
 
-## Many PRs for one task: `run_repo_plan`
+## Lifecycle nodes in the tracked graph
 
-A repo-plan is a DAG whose nodes each carry a `repo` and either a `persona`+`task`
-or a `steps` workstream, plus `deps` (and optional `base_branch`, `branch`,
-`title`, `verify_cmd`, `skip_verify`, `merge_policy`, `workflow`, `repo_type`,
-validated `stack_bases`,
-`execution_checkout`). `run_repo_plan` schedules it
-on the **same engine as `run_plan`** (`plan.schedule_dag`): independent nodes run
-concurrently, and a node whose dependency failed is skipped. Cross-repository
-dependencies only schedule. A successful same-identity dependency not landed on
-the root base becomes a stack prerequisite:
+A lifecycle node is an `agent` node in `just run-plan` with a `repo` and either a
+`persona`+`task` or a `steps` workstream. It may also carry `deps`, `base_branch`,
+`branch`, `title`, `verify_cmd`, `skip_verify`, `merge_policy`, `workflow`,
+`repo_type`, validated `stack_bases`, `execution_checkout`, or validated `resume`
+metadata. Independent top-level nodes run concurrently, and a node whose
+dependency failed is skipped. Cross-repository dependencies only schedule. A
+successful same-identity dependency not landed on the root base becomes a stack
+prerequisite:
 
 All explicit task, base, anchor, and recovery branch names pass Git's literal
 branch validator before any Git command; a plan that explicitly combines
@@ -218,39 +217,61 @@ branch validator before any Git command; a plan that explicitly combines
 
 The child PR body lists dependency PR links and stack bases. Its final gate runs
 against the complete stack, but the PR diff against its stack base is child-only.
-`just repo-plan <repo-plan.json>`; see
-`examples/repo-plan.example.json`.
+Run these nodes with `just run-plan`; `just repo-plan` is a deprecated alias that
+accepts old lifecycle-only files unchanged. See
+`examples/tracked-graph.example.json` and `examples/repo-plan.example.json`.
 
 ## Several onejudge on ONE PR: workstreams
 
 A single PR often wants more than one agent — implement, then add tests, then
 review and fix — all on the *same* branch before it merges. A node's **`steps`**
-express that: a sub-DAG of `Step`s (`id`, `persona`, `task`, `deps`) that share the
-node's one worktree/branch. They run in **topological order, serialized** — they
-share a working tree, so two dispatches into it at once would corrupt it; `deps`
-give ordering and each step sees its predecessors' commits. Each step commits its
-own work (one commit per step, labeled), the accumulated branch is verified **once**
-at the end, and it merges as **one** PR. A step that doesn't complete fails the
-workstream and skips its dependents (nothing merges). A plain `persona`+`task` node
-is just the one-step case. (True *concurrent* steps within a PR would need
-sub-worktrees merged back — deferred; cross-PR parallelism is where concurrency
-lives.)
+express that: a sub-DAG sharing the node's one worktree/branch. Agent steps have
+`id`, `persona`, `task`, and optional `deps`; human steps have `id`, `kind:
+human`, `task`, and optional `deps`, with no persona/execution fields. Steps run in
+**topological order, serialized** because concurrent dispatches would corrupt the
+shared tree. Each completed agent step commits its own work. A failed step stops
+the workstream and skips dependents. A plain `persona`+`task` lifecycle node is
+the one-step case.
+
+### Human pause and branch continuation
+
+When a human step becomes ready, the node returns `waiting-human`; later steps
+are `blocked`. The tracked result exposes a `NODE_ID/STEP_ID` human action and
+records step results plus `resume` metadata: branch, root base, PR base,
+checkpoint SHA, completed steps, and optional draft PR URL. The temporary
+worktree is always removed, but the branch and commits are preserved.
+
+After `just next-round RUN --complete-human NODE_ID/STEP_ID`, the derived node
+carries that validated resume metadata. Continuation fetches the branch,
+fast-forwards safely, requires the recorded checkpoint to remain in its history,
+and skips every recorded completed agent/human step. A missing or rewritten
+branch/checkpoint fails as `resume-failed`; a recorded draft closed without merge
+also fails explicitly. The harness never infers the human completion.
+
+For `workflow: local`, a pause remains only on the isolated local branch: no gate,
+push, or base publication occurs until the final agent steps complete. For a
+remote workflow with commits, the pause fetches and merges current
+`origin/<pr-base>`, runs the available local gate with the same comparison
+environment used at final publication, and pushes the branch without force. It
+then creates or reuses a draft PR. A sync conflict or gate failure publishes no
+draft; a pause with no commits creates no empty draft. Later pauses reuse the PR.
+On final success the existing draft is marked ready, then the repository's normal
+`auto`, `direct`, or `none` publication policy applies. Each checkpoint must be an
+ancestor of the continued branch, so force-rewritten history cannot be blessed.
 
 ## Adaptive replanning: adjust between rounds
 
-The DAG is static *within* a `run_repo_plan` call; the orchestrator adapts
-*between* rounds. Every round returns structured results — which PRs merged, which
-failed, the judge verdicts — and the orchestrator (an agent following `AGENTS.md`)
-decides the next round from them. `orchestrator.replan.next_round` formalizes the
-mechanics: given the prior plan, its results, and a small **edits** mapping
-(`retry` a failed node with overrides, `split` a too-big node into sub-nodes,
-`add` follow-up work, `drop` what's no longer needed), it emits the next round's
-plan. Completed nodes landed on root are removed as satisfied. Completed-but-open
-dependencies become `stack_bases` anchors before their IDs are removed; a merge
-into a feature or synthetic base carries that landed base until the content
-reaches root. The produced plan is validated, so a bad edit fails loudly.
+The DAG is static within a `run-plan` invocation; the orchestrator adapts between
+rounds. Every round returns direct reports, lifecycle results, and ready human
+actions. `orchestrator.replan.next_round` applies a small **edits** mapping:
+`retry`, `split`, `add`, `drop`, and `complete_human`. Completed nodes landed on
+root are removed as satisfied. Completed-but-open dependencies become
+`stack_bases` anchors before their IDs are removed; a merge into a feature or
+synthetic base carries that landed base until the content reaches root. Waiting
+lifecycle nodes carry their resume checkpoint forward. The produced graph is
+validated, so bad edits and human references fail loudly.
 
-`repo-plan` records every round by default:
+`run-plan` records every invocation by default:
 
 ```
 runs/<run-id>/round-01/plan.json
@@ -262,26 +283,36 @@ The plan mapping is preserved exactly and the result is the command's JSON
 payload. The round directory and `running` status are committed before dispatch;
 the result and `completed` status are atomic updates. A second process cannot claim
 the same explicit run/round. If a process died, inspect its recorded worktrees and
-then use `just repo-plan ... --run <id> --recover`; recovery is explicit and never
+then use `just run-plan ... --run <id> --recover`; recovery is explicit and never
 silently overwrites a result. Pass `--run <id>` to name a run; without it, a fresh unique run id comes
 from the plan's top-level `name` or filename. The continuation trailer is written
 to stderr, so `--format json` stdout remains machine-readable. Use `--no-record`
 to opt out or `--runs-dir` to move the ledger.
 
-After inspecting a round, put retry/split/add/drop decisions in `edits.json` and
-continue without manually locating the prior files:
+After inspecting a round, put retry/split/add/drop or `complete_human` decisions
+in `edits.json`, or attest a ready human on the CLI:
 
 ```
 just runs
 just next-round <run-id> [edits.json]
+just next-round <run-id> --complete-human <node-id>
+just next-round <run-id> --complete-human <node-id>/<step-id>
 just next-round <run-id> [edits.json] --plan-only
 ```
 
-`next-round` calls the existing replanner, writes `round-02/plan.json`, runs it,
-and records its result. `--plan-only` stops after writing the derived plan. The
-lower-level `just replan <prev-plan.json> <result.json> [edits.json]` remains
-available. The judgment stays with the orchestrator; these commands only apply
-and persist it.
+`next-round` writes `round-02/plan.json`, runs it with the canonical executor, and
+records its result. A human completion is accepted only when the latest recorded
+result names that exact ready action; unknown, blocked, agent, and already
+completed references exit 2. Each accepted attestation is appended to
+`runs/<run-id>/humans.json` with its reference, waiting round, and UTC timestamp.
+`--plan-only` stops after writing the derived plan. The lower-level `just replan
+<prev-plan.json> <result.json> [edits.json]` remains available.
+
+The graph result state is `complete`, `waiting`, or `failed`; `ok` is true only
+for complete. Node states are `done`, `waiting`, `blocked`, `failed`, or `skipped`.
+Waiting output includes action prose and direct `unblocks`; blocked nodes include
+transitive `blocked_by`. Failure takes precedence over waiting. Exit status is 0
+only for complete, 1 for waiting or failed, and 2 for invalid input.
 
 Use `just status` for the joined operational view: worker history, its latest
 agent output and commands, commits on the checked-out lifecycle branch, and the
@@ -346,7 +377,7 @@ command when it reports `not-completed`.
 
 ## Operating across workers and machines
 
-- **Several agents in one process:** the repo-plan scheduler owns concurrency.
+- **Several agents in one process:** the run-plan scheduler owns concurrency.
   Per-repo in-process locks serialize short canonical-checkout operations; agent
   dispatches in separate worktrees remain concurrent.
 - **Several processes on one machine:** OS advisory locks serialize registry,
@@ -367,7 +398,7 @@ The ledger is machine-local, not a global liveness source. On the launching
 machine use `just runs`, `just status --all`, and `just history` /
 `just history-show <id>`. The recorded branch and worktree are the recovery source
 of truth. Resume an intentional branch with `--branch <branch>`. For an interrupted
-round, inspect its worktrees and remote branch, then run `just repo-plan <plan>
+round, inspect its worktrees and remote branch, then run `just run-plan <plan>
 --run <id> --recover`. Recovery may reclaim a `running` record, so use it only
 after proving its owner is gone; never remove or reset an active worktree.
 

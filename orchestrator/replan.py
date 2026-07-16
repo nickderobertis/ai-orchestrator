@@ -1,6 +1,6 @@
-"""Across-round replanning: derive the next repo-plan from the last round's results.
+"""Across-round replanning: derive the next tracked graph from the last round.
 
-The plan is static *within* a `run_repo_plan` call; adaptivity lives *between*
+The graph is static within a `run-plan` call; adaptivity lives between
 rounds. The orchestrator (an agent following AGENTS.md) reads the structured
 results of a round — which PRs merged, which failed, the judge verdicts — and
 decides how to adjust: retry a failed node with more turns or a different persona,
@@ -33,7 +33,7 @@ def next_round(
     prev_result: dict[str, Any],
     edits: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Compute the next round's repo-plan mapping.
+    """Compute the next round's tracked-graph mapping.
 
     ``prev_plan``: the prior tracked-graph mapping. ``prev_result``: the ``--format
     json`` output of ``run-plan``. ``edits``: ``{retry: {id: {overrides}},
@@ -210,10 +210,10 @@ def main(argv: list[str] | None = None) -> int:
     from .plan import PlanError
 
     parser = argparse.ArgumentParser(
-        description="Derive the next round's repo-plan from the last round's results + edits."
+        description="Derive the next tracked-graph round from the last result plus edits."
     )
-    parser.add_argument("prev_plan", type=Path, help="the prior repo-plan (JSON or YAML)")
-    parser.add_argument("prev_result", type=Path, help="repo-plan --format json output")
+    parser.add_argument("prev_plan", type=Path, help="the prior tracked graph (JSON or YAML)")
+    parser.add_argument("prev_result", type=Path, help="run-plan --format json output")
     parser.add_argument(
         "edits", type=Path, nargs="?", default=None, help="edits mapping (retry/split/add/drop)"
     )
