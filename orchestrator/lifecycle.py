@@ -433,6 +433,11 @@ def _validate_resume(clone: Path, resume: Resume, github: GitHubBackend | None) 
             f"resume-failed: branch {resume.branch!r} was rewritten; recorded checkpoint "
             f"{resume.checkpoint} is no longer in the history of {tip}"
         )
+    if published and local and not gitops.is_ancestor(clone, resume.branch, tip):
+        return (
+            f"resume-failed: local branch {resume.branch!r} has unpublished or divergent "
+            f"commits and cannot be fast-forwarded safely to {tip}"
+        )
     if resume.pr is not None:
         pr = _pr_from_url(resume.pr, head=resume.branch, base=resume.pr_base)
         if pr is None:

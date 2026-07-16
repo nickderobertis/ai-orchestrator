@@ -1075,6 +1075,32 @@ def test_remote_human_workstream_draft_checkpoint_and_safe_resume(tmp_path, bare
         check=True,
     )
 
+    rogue = workspace.worktree(
+        normalize_repo("acme/widget"), second.branch, base=f"origin/{second.branch}"
+    )
+    (rogue / "unpublished.txt").write_text("must not enter the resumed draft\n", encoding="utf-8")
+    gitops.add_all(rogue)
+    gitops.commit(rogue, "unpublished local branch mutation")
+    workspace.remove_worktree(normalize_repo("acme/widget"), rogue)
+    local_ahead = run_repo_task(
+        "acme/widget",
+        workspace=workspace,
+        url=str(origin),
+        github=github,
+        steps=steps,
+        dispatch_fn=writing_step,
+        verify_cmd=gate,
+        resume=final_resume,
+    )
+    assert local_ahead.outcome == "resume-failed" and "unpublished or divergent" in (
+        local_ahead.detail
+    )
+    assert dispatched == ["prepare", "implement"]
+    subprocess.run(
+        ["git", "-C", str(canonical), "update-ref", f"refs/heads/{second.branch}", saved_tip],
+        check=True,
+    )
+
     completed = run_repo_task(
         "acme/widget",
         workspace=workspace,
