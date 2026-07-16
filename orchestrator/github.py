@@ -78,6 +78,7 @@ class PRStatus:
     merged: bool
     merge_state_status: str  # CLEAN | BLOCKED | BEHIND | UNSTABLE | DIRTY | ""
     checks: tuple[Check, ...]
+    draft: bool = False
 
     @property
     def blocking(self) -> tuple[Check, ...]:
@@ -100,8 +101,10 @@ class GitHubBackend(Protocol):
     def default_branch(self, repo: str) -> str: ...
 
     def create_pr(
-        self, repo: str, *, head: str, base: str, title: str, body: str
+        self, repo: str, *, head: str, base: str, title: str, body: str, draft: bool = False
     ) -> PullRequest: ...
+
+    def mark_ready(self, pr: PullRequest) -> None: ...
 
     def enable_auto_merge(self, pr: PullRequest, *, method: str) -> None: ...
 
@@ -124,6 +127,15 @@ def _normalize_check(raw: dict[str, object]) -> Check:
     # StatusContext (a commit status) or anything else with a ``state``.
     name = str(raw.get("context") or raw.get("name") or "status")
     return Check(name=name, state=str(raw.get("state") or "PENDING").upper(), required=required)
+
+
+def _optional_bool(data: dict[str, object], key: str) -> bool:
+    value = data.get(key)
+    if value is None:
+        return False
+    if not isinstance(value, bool):
+        raise GitHubError(f"gh pr view returned non-boolean {key}")
+    return value
 
 
 def _is_auto_merge_unavailable(message: str) -> bool:
@@ -153,7 +165,9 @@ class CliGitHubBackend:
         )
         return out.strip() or "main"
 
-    def create_pr(self, repo: str, *, head: str, base: str, title: str, body: str) -> PullRequest:
+    def create_pr(
+        self, repo: str, *, head: str, base: str, title: str, body: str, draft: bool = False
+    ) -> PullRequest:
         """Return the open PR for ``head`` → ``base``, or create one if none exists.
 
         Reusing the PR lets later orchestration rounds continue work on the same
@@ -209,6 +223,7 @@ class CliGitHubBackend:
                 title,
                 "--body",
                 body,
+                *(["--draft"] if draft else []),
             ]
         )
         url = out.strip().splitlines()[-1].strip() if out.strip() else ""
@@ -217,6 +232,9 @@ class CliGitHubBackend:
         except ValueError as exc:  # gh printed something unexpected instead of the PR URL
             raise GitHubError(f"could not parse PR number from gh output: {out!r}") from exc
         return PullRequest(number=number, url=url, repo=repo, head=head, base=base)
+
+    def mark_ready(self, pr: PullRequest) -> None:
+        self._run(["pr", "ready", str(pr.number), "--repo", pr.repo])
 
     def enable_auto_merge(self, pr: PullRequest, *, method: str) -> None:
         try:
@@ -238,10 +256,12 @@ class CliGitHubBackend:
                 "--repo",
                 pr.repo,
                 "--json",
-                "number,state,mergeStateStatus,statusCheckRollup",
+                "number,state,mergeStateStatus,statusCheckRollup,isDraft",
             ]
         )
         data = json.loads(raw)
+        if not isinstance(data, dict):
+            raise GitHubError("gh pr view returned invalid JSON payload")
         rollup = data.get("statusCheckRollup") or []
         checks = tuple(_normalize_check(c) for c in rollup if isinstance(c, dict))
         state = str(data.get("state") or "OPEN")
@@ -251,4 +271,5 @@ class CliGitHubBackend:
             merged=state == "MERGED",
             merge_state_status=str(data.get("mergeStateStatus") or ""),
             checks=checks,
+            draft=_optional_bool(data, "isDraft"),
         )

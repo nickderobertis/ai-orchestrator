@@ -34,6 +34,7 @@ class FakePRState:
     base: str
     title: str
     body: str
+    draft: bool = False
     merged: bool = False
     closed: bool = False
     auto: bool = False
@@ -101,9 +102,11 @@ class FakeGitHub:
     def default_branch(self, repo: str) -> str:
         return "main"
 
-    def create_pr(self, repo: str, *, head: str, base: str, title: str, body: str) -> PullRequest:
+    def create_pr(
+        self, repo: str, *, head: str, base: str, title: str, body: str, draft: bool = False
+    ) -> PullRequest:
         self._n += 1
-        self._prs[self._n] = FakePRState(head, base, title, body)
+        self._prs[self._n] = FakePRState(head, base, title, body, draft=draft)
         return PullRequest(
             number=self._n,
             url=f"https://github.com/{repo}/pull/{self._n}",
@@ -111,6 +114,9 @@ class FakeGitHub:
             head=head,
             base=base,
         )
+
+    def mark_ready(self, pr: PullRequest) -> None:
+        self._prs[pr.number].draft = False
 
     def enable_auto_merge(self, pr: PullRequest, *, method: str) -> None:
         if not self.auto_available:
@@ -134,6 +140,7 @@ class FakeGitHub:
             merged=merged,
             merge_state_status="CLEAN",
             checks=checks,
+            draft=st.draft,
         )
 
     def _do_merge(self, pr: PullRequest) -> None:

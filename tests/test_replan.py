@@ -21,6 +21,8 @@ def _result(**statuses: str) -> dict:
 
 A = {"id": "a", "repo": "o/r", "persona": "backend-engineer", "task": "A"}
 B = {"id": "b", "repo": "o/r", "persona": "reviewer", "task": "B", "deps": ["a"]}
+H = {"id": "h", "kind": "human", "task": "Review the change"}
+DIRECT_AFTER_H = {"id": "after", "persona": "backend-engineer", "task": "After", "deps": ["h"]}
 
 
 def test_done_node_is_carried_out_and_dep_satisfied() -> None:
@@ -170,6 +172,168 @@ def test_add_new_node() -> None:
     )
     ids = [t["id"] for t in plan["tasks"]]
     assert ids == ["c"] and plan["tasks"][0]["deps"] == []  # dep on merged 'a' satisfied
+
+
+def test_complete_top_level_human_releases_dependent() -> None:
+    result = {
+        "results": {
+            "h": {
+                "kind": "human",
+                "status": "waiting",
+                "human_actions": [
+                    {
+                        "ref": "h",
+                        "task": "Review the change",
+                        "unblocks": ["after"],
+                        "unblocks_publication": False,
+                    }
+                ],
+            },
+            "after": {"status": "blocked", "blocked_by": ["h"]},
+        }
+    }
+
+    plan = next_round(_plan(H, DIRECT_AFTER_H), result, {"complete_human": ["h"]})
+
+    assert [task["id"] for task in plan["tasks"]] == ["after"]
+    assert plan["tasks"][0]["deps"] == []
+
+
+def test_complete_nested_human_step_updates_resume() -> None:
+    work = {
+        "id": "work",
+        "repo": "o/r",
+        "steps": [
+            {"id": "prepare", "persona": "backend-engineer", "task": "Prepare"},
+            {"id": "approve", "kind": "human", "task": "Approve", "deps": ["prepare"]},
+            {"id": "finish", "persona": "backend-engineer", "task": "Finish", "deps": ["approve"]},
+        ],
+    }
+    result = {
+        "results": {
+            "work": {
+                "status": "waiting",
+                "outcome": "waiting-human",
+                "waiting_steps": ["approve"],
+                "human_actions": [
+                    {
+                        "ref": "work/approve",
+                        "task": "Approve",
+                        "unblocks": ["work/finish"],
+                        "unblocks_publication": False,
+                    }
+                ],
+                "resume": {
+                    "branch": "feature/work",
+                    "base_branch": "main",
+                    "pr_base": "main",
+                    "checkpoint": "abcdef1",
+                    "completed_steps": ["prepare"],
+                    "pr": None,
+                },
+            }
+        }
+    }
+
+    plan = next_round(_plan(work), result, {"complete_human": ["work/approve"]})
+
+    assert plan["tasks"][0]["resume"]["completed_steps"] == ["prepare", "approve"]
+
+
+def test_invalid_complete_human_ref_fails_validation() -> None:
+    result = {
+        "results": {
+            "h": {
+                "kind": "human",
+                "status": "waiting",
+                "human_actions": [
+                    {"ref": "h", "task": "Review", "unblocks": [], "unblocks_publication": False}
+                ],
+            }
+        }
+    }
+
+    with pytest.raises(PlanError, match="recorded waiting human"):
+        next_round(_plan(H), result, {"complete_human": ["not-h"]})
+
+
+def test_complete_human_edits_must_be_a_unique_list() -> None:
+    with pytest.raises(PlanError, match="must be a list"):
+        next_round(_plan(H), {"results": {}}, {"complete_human": "h"})
+    result = {
+        "results": {
+            "h": {
+                "status": "waiting",
+                "human_actions": [
+                    {"ref": "h", "task": "Review", "unblocks": [], "unblocks_publication": False}
+                ],
+            }
+        }
+    }
+    with pytest.raises(PlanError, match="unique"):
+        next_round(_plan(H), result, {"complete_human": ["h", "h"]})
+
+
+def test_waiting_lifecycle_node_requires_resume_metadata() -> None:
+    work = {
+        "id": "work",
+        "repo": "o/r",
+        "steps": [{"id": "approve", "kind": "human", "task": "Approve"}],
+    }
+    result = {
+        "results": {
+            "work": {
+                "status": "waiting",
+                "waiting_steps": ["approve"],
+                "human_actions": [
+                    {
+                        "ref": "work/approve",
+                        "task": "Approve",
+                        "unblocks": [],
+                        "unblocks_publication": True,
+                    }
+                ],
+            }
+        }
+    }
+
+    with pytest.raises(PlanError, match="resume"):
+        next_round(_plan(work), result, {"complete_human": ["work/approve"]})
+
+
+def test_waiting_lifecycle_resume_completed_steps_must_be_list() -> None:
+    work = {
+        "id": "work",
+        "repo": "o/r",
+        "steps": [{"id": "approve", "kind": "human", "task": "Approve"}],
+    }
+    result = {
+        "results": {
+            "work": {
+                "status": "waiting",
+                "waiting_steps": ["approve"],
+                "human_actions": [
+                    {
+                        "ref": "work/approve",
+                        "task": "Approve",
+                        "unblocks": [],
+                        "unblocks_publication": True,
+                    }
+                ],
+                "resume": {
+                    "branch": "feature/work",
+                    "base_branch": "main",
+                    "pr_base": "main",
+                    "checkpoint": "abcdef1",
+                    "completed_steps": "approve",
+                    "pr": None,
+                },
+            }
+        }
+    }
+
+    with pytest.raises(PlanError, match="completed_steps"):
+        next_round(_plan(work), result, {"complete_human": ["work/approve"]})
 
 
 def test_drop_removes_a_node() -> None:

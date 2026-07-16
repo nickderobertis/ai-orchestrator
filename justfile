@@ -81,7 +81,8 @@ sync branch="" remote="origin":
 dispatch *args:
     @uv run orchestrator-dispatch "$@"
 
-# Run a plan (task DAG): `just run-plan <plan.json>`.
+# Run the canonical tracked graph: direct agents, lifecycle agents, and humans.
+# `just run-plan <plan.json>`.
 run-plan *args:
     @uv run orchestrator-run-plan "$@"
 
@@ -101,14 +102,11 @@ repo-task-auto *args:
 repo-recover *args:
     @uv run orchestrator-repo-recover "$@"
 
-# Run a repo-plan: many isolated PRs across repos, coordinated by a DAG:
-# `just repo-plan <repo-plan.json>`. A node may carry a `steps` sub-DAG to run
-# several onejudge on ONE PR (shared branch, merged once).
+# Deprecated alias for run-plan; old repo-plan inputs are still accepted unchanged.
 repo-plan *args:
     @uv run orchestrator-repo-plan "$@"
 
-# Derive the next round's plan from the last round's results + edits (across-round
-# replanning): `just replan <prev-plan.json> <repo-plan-result.json> [edits.json]`.
+# Derive the next round's plan from the last round's results + edits.
 replan *args:
     @uv run orchestrator-replan "$@"
 

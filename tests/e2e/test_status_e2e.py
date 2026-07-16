@@ -91,7 +91,7 @@ def test_status_joins_real_history_worktree_commits_and_ledger(
         "agent/status-view",
         "feat: add status view",
         "status-run round-01",
-        "1 done, 0 failed, 0 skipped",
+        "1 done",
         f"Execution checkout: {worktree}",
         "type=single-owner",
         "workflow=local",

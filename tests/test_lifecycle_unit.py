@@ -3,16 +3,18 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
 import orchestrator.lifecycle as lc
 from orchestrator.config import ConfigError
-from orchestrator.github import CliGitHubBackend, PullRequest
+from orchestrator.github import CliGitHubBackend, PRStatus, PullRequest
 from orchestrator.lifecycle import (
     LifecycleResult,
     RepoPlan,
     RepoPlanNode,
+    Resume,
     StackBase,
     Step,
     _default_body,
@@ -664,6 +666,243 @@ def test_summary_shows_step_count() -> None:
         steps=[StepResult("a", "p", "done"), StepResult("b", "q", "done")],
     )
     assert "[2/2 steps]" in result.summary()
+
+
+def test_run_repo_task_pauses_and_resumes_local_human_step(tmp_path, bare_origin) -> None:
+    from orchestrator import gitops
+    from orchestrator.dispatch import Report
+
+    origin = bare_origin()
+    publication = gitops.clone(origin, tmp_path / "publication")
+    calls: list[str] = []
+
+    def fake_dispatch(persona, task, *, project_dir, **kw):
+        calls.append(task)
+        Path(project_dir, f"{task}.txt").write_text(f"{task}\n", encoding="utf-8")
+        return Report(persona, 0, True, False, 1, [], {}, {}, "")
+
+    workspace = Workspace(
+        tmp_path / "ws",
+        resolver=lambda _url: publication,
+        workflow="local",
+        repo_type="single-owner",
+    )
+    steps = [
+        Step("prepare", "backend-engineer", "prepare"),
+        Step("approve", task="approve this", kind="human", deps=["prepare"]),
+        Step("finish", "backend-engineer", "finish", deps=["approve"]),
+    ]
+
+    paused = run_repo_task(
+        str(origin),
+        workspace=workspace,
+        steps=steps,
+        verify_cmd=["true"],
+        dispatch_fn=fake_dispatch,
+    )
+
+    assert paused.outcome == "waiting-human"
+    assert paused.waiting_steps == ["approve"]
+    assert paused.resume is not None
+    assert paused.resume.pr is None
+    assert [step.status for step in paused.steps] == ["done", "waiting", "blocked"]
+
+    resume = Resume(
+        branch=paused.resume.branch,
+        base_branch=paused.resume.base_branch,
+        pr_base=paused.resume.pr_base,
+        checkpoint=paused.resume.checkpoint,
+        completed_steps=(*paused.resume.completed_steps, "approve"),
+        pr=paused.resume.pr,
+    )
+    finished = run_repo_task(
+        str(origin),
+        workspace=workspace,
+        steps=steps,
+        verify_cmd=["true"],
+        dispatch_fn=fake_dispatch,
+        resume=resume,
+    )
+
+    assert finished.outcome == "merged"
+    assert calls == ["prepare", "finish"]
+    assert (publication / "prepare.txt").read_text(encoding="utf-8") == "prepare\n"
+    assert (publication / "finish.txt").read_text(encoding="utf-8") == "finish\n"
+
+
+def test_run_repo_task_remote_pause_creates_non_empty_draft(tmp_path, bare_origin) -> None:
+    from orchestrator import gitops
+    from orchestrator.dispatch import Report
+
+    origin = bare_origin()
+    publication = gitops.clone(origin, tmp_path / "publication")
+    created: list[dict[str, object]] = []
+
+    class DraftGitHub:
+        def default_branch(self, repo):
+            return "main"
+
+        def create_pr(self, repo, *, head, base, title, body, draft=False):
+            created.append({"head": head, "base": base, "draft": draft})
+            return PullRequest(5, "https://github.com/o/r/pull/5", repo, head, base)
+
+        def mark_ready(self, pr):
+            raise AssertionError("pause must not mark draft ready")
+
+        def enable_auto_merge(self, pr, *, method):
+            raise AssertionError("pause must not merge")
+
+        def merge(self, pr, *, method):
+            raise AssertionError("pause must not merge")
+
+        def status(self, pr):
+            raise AssertionError("pause should not poll draft status")
+
+    def fake_dispatch(persona, task, *, project_dir, **kw):
+        Path(project_dir, "prepare.txt").write_text("prepare\n", encoding="utf-8")
+        return Report(persona, 0, True, False, 1, [], {}, {}, "")
+
+    workspace = Workspace(
+        tmp_path / "ws",
+        resolver=lambda _url: publication,
+        workflow="remote",
+        repo_type="single-owner",
+    )
+
+    result = run_repo_task(
+        str(origin),
+        workspace=workspace,
+        steps=[
+            Step("prepare", "backend-engineer", "prepare"),
+            Step("approve", task="approve", kind="human", deps=["prepare"]),
+        ],
+        verify_cmd=["true"],
+        dispatch_fn=fake_dispatch,
+        github=DraftGitHub(),
+    )
+
+    assert result.outcome == "waiting-human"
+    assert result.pr is not None
+    assert result.resume is not None and result.resume.pr == "https://github.com/o/r/pull/5"
+    assert created == [{"head": result.branch, "base": "main", "draft": True}]
+
+
+def test_run_repo_task_remote_pause_does_not_create_empty_draft(tmp_path, bare_origin) -> None:
+    from orchestrator import gitops
+
+    origin = bare_origin()
+    publication = gitops.clone(origin, tmp_path / "publication")
+
+    class NoDraftGitHub:
+        def create_pr(self, *args, **kwargs):
+            raise AssertionError("empty pause must not create a draft")
+
+    result = run_repo_task(
+        str(origin),
+        workspace=Workspace(
+            tmp_path / "ws",
+            resolver=lambda _url: publication,
+            workflow="remote",
+            repo_type="single-owner",
+        ),
+        steps=[Step("approve", task="approve", kind="human")],
+        verify_cmd=["true"],
+        github=NoDraftGitHub(),
+    )
+
+    assert result.outcome == "waiting-human"
+    assert result.resume is not None and result.resume.pr is None
+
+
+def test_run_repo_task_resume_fails_when_branch_is_missing(tmp_path, bare_origin) -> None:
+    from orchestrator import gitops
+
+    origin = bare_origin()
+    publication = gitops.clone(origin, tmp_path / "publication")
+    result = run_repo_task(
+        str(origin),
+        workspace=Workspace(
+            tmp_path / "ws",
+            resolver=lambda _url: publication,
+            workflow="local",
+            repo_type="single-owner",
+        ),
+        steps=[Step("approve", task="approve", kind="human")],
+        verify_cmd=["true"],
+        resume=Resume(
+            "feature/missing", "main", "main", gitops.head_sha(publication), ("approve",)
+        ),
+    )
+
+    assert result.outcome == "resume-failed"
+    assert "no longer exists" in result.detail
+
+
+def test_run_repo_task_resume_fails_when_checkpoint_is_missing(tmp_path, bare_origin) -> None:
+    from orchestrator import gitops
+
+    origin = bare_origin()
+    publication = gitops.clone(origin, tmp_path / "publication")
+    worktree = gitops.worktree_add(
+        publication, tmp_path / "branch", "feature/resume", base="origin/main"
+    )
+    gitops.worktree_remove(publication, worktree)
+
+    result = run_repo_task(
+        str(origin),
+        workspace=Workspace(
+            tmp_path / "ws",
+            resolver=lambda _url: publication,
+            workflow="local",
+            repo_type="single-owner",
+        ),
+        steps=[Step("approve", task="approve", kind="human")],
+        verify_cmd=["true"],
+        resume=Resume("feature/resume", "main", "main", "abcdef1", ("approve",)),
+    )
+
+    assert result.outcome == "resume-failed"
+    assert "checkpoint" in result.detail
+
+
+def test_run_repo_task_resume_fails_when_recorded_draft_is_closed(tmp_path, bare_origin) -> None:
+    from orchestrator import gitops
+
+    origin = bare_origin()
+    publication = gitops.clone(origin, tmp_path / "publication")
+    worktree = gitops.worktree_add(
+        publication, tmp_path / "branch", "feature/resume", base="origin/main"
+    )
+    checkpoint = gitops.head_sha(worktree)
+    gitops.worktree_remove(publication, worktree)
+
+    class ClosedDraftGitHub:
+        def status(self, pr):
+            return PRStatus(pr.number, "CLOSED", False, "CLEAN", ())
+
+    result = run_repo_task(
+        str(origin),
+        workspace=Workspace(
+            tmp_path / "ws",
+            resolver=lambda _url: publication,
+            workflow="remote",
+            repo_type="single-owner",
+        ),
+        steps=[Step("approve", task="approve", kind="human")],
+        verify_cmd=["true"],
+        github=ClosedDraftGitHub(),
+        resume=Resume(
+            "feature/resume",
+            "main",
+            "main",
+            checkpoint,
+            ("approve",),
+            "https://github.com/o/r/pull/9",
+        ),
+    )
+
+    assert result.outcome == "resume-failed"
+    assert "closed without merging" in result.detail
 
 
 # --- scheduling ------------------------------------------------------------

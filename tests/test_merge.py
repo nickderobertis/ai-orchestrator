@@ -25,12 +25,16 @@ class PolicyBackend:
         self.merged = False
         self.state = "OPEN"
         self.enabled = False
+        self.ready = False
 
     def default_branch(self, repo):  # pragma: no cover - unused here
         return "main"
 
     def create_pr(self, repo, *, head, base, title, body):
         return PullRequest(number=1, url="u", repo=repo, head=head, base=base)
+
+    def mark_ready(self, pr):
+        self.ready = True
 
     def enable_auto_merge(self, pr, *, method):
         if not self.auto_available:
@@ -48,6 +52,27 @@ class PolicyBackend:
             self.merged = True
             self.state = "MERGED"
         return PRStatus(1, self.state, self.merged, "CLEAN", self.checks)
+
+
+class DraftBackend(PolicyBackend):
+    def __init__(self) -> None:
+        super().__init__(checks=(Check("ci", "SUCCESS", True),), merge_on="direct")
+        self._draft = True
+
+    def mark_ready(self, pr):
+        super().mark_ready(pr)
+        self._draft = False
+
+    def status(self, pr):
+        status = super().status(pr)
+        return PRStatus(
+            status.number,
+            status.state,
+            status.merged,
+            status.merge_state_status,
+            status.checks,
+            draft=self._draft,
+        )
 
 
 def _ctx(**kw) -> MergeContext:
@@ -92,6 +117,13 @@ def test_direct_merges_on_green() -> None:
     assert out.outcome == "merged"
 
 
+def test_draft_pr_is_marked_ready_before_merge() -> None:
+    backend = DraftBackend()
+    out = GitHubMergeStrategy(backend).publish_and_merge(_ctx(policy="direct"))
+    assert out.outcome == "merged"
+    assert backend.ready
+
+
 def test_required_failure_is_checks_failed() -> None:
     checks = (Check("ci", "FAILURE", True),)
     backend = PolicyBackend(checks=checks, merge_on="never")
@@ -120,7 +152,7 @@ class DelayedDirectBackend:
 
     def status(self, pr):
         self.polls += 1
-        merged = self.polls >= 3
+        merged = self.polls >= 4
         checks = (Check("ci", "SUCCESS", True),)
         return PRStatus(1, "MERGED" if merged else "OPEN", merged, "CLEAN", checks)
 
