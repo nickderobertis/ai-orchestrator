@@ -806,6 +806,233 @@ def test_github_required_check_failure_blocks_merge(tmp_path, bare_origin) -> No
     assert _tip(origin, "main") == before  # required check failed → nothing merged
 
 
+def test_remote_human_workstream_draft_checkpoint_and_safe_resume(tmp_path, bare_origin) -> None:
+    """Remote pauses sync, gate, reuse one draft, and reject unsafe resumes."""
+
+    class TrackingGitHub(FakeGitHub):
+        def __init__(self, origin: Path) -> None:
+            super().__init__(origin)
+            self.created: list[int] = []
+            self.reused: list[int] = []
+            self.readied: list[int] = []
+
+        def create_pr(
+            self,
+            repo: str,
+            *,
+            head: str,
+            base: str,
+            title: str,
+            body: str,
+            draft: bool = False,
+        ) -> PullRequest:
+            for number, state in self._prs.items():
+                if (
+                    state.head == head
+                    and state.base == base
+                    and not state.closed
+                    and not state.merged
+                ):
+                    self.reused.append(number)
+                    return PullRequest(
+                        number=number,
+                        url=f"https://github.com/{repo}/pull/{number}",
+                        repo=repo,
+                        head=head,
+                        base=base,
+                    )
+            pr = super().create_pr(repo, head=head, base=base, title=title, body=body, draft=draft)
+            self.created.append(pr.number)
+            return pr
+
+        def mark_ready(self, pr: PullRequest) -> None:
+            self.readied.append(pr.number)
+            super().mark_ready(pr)
+
+    origin = bare_origin()
+    subprocess.run(
+        ["git", "-C", str(origin), "config", "receive.denyNonFastForwards", "true"],
+        check=True,
+    )
+    canonical = gitops.clone(origin, tmp_path / "remote-human-canonical")
+    workspace = Workspace(
+        tmp_path / "remote-human-worktrees",
+        resolver=lambda _: canonical,
+        workflow="remote",
+        repo_type="single-owner",
+    )
+    github = TrackingGitHub(origin)
+
+    empty = run_repo_task(
+        "acme/widget",
+        workspace=workspace,
+        url=str(origin),
+        github=github,
+        steps=[Step("approve", task="Approve before work starts.", kind="human")],
+        branch="feature/empty-human-pause",
+        verify_cmd=["true"],
+    )
+    assert empty.outcome == "waiting-human" and empty.resume is not None
+    assert empty.pr is None and empty.resume.pr is None and github.created == []
+    assert not _has_file(origin, empty.branch, "README.md")
+
+    failed_gate = run_repo_task(
+        "acme/widget",
+        workspace=workspace,
+        url=str(origin),
+        github=github,
+        steps=[
+            Step("prepare-bad", "backend-engineer", "prepare a rejected checkpoint"),
+            Step("reject", task="Reject this checkpoint.", kind="human", deps=["prepare-bad"]),
+        ],
+        branch="feature/rejected-human-pause",
+        dispatch_fn=_per_step_dispatch(),
+        verify_cmd=["false"],
+    )
+    assert failed_gate.outcome == "gate-failed"
+    assert failed_gate.pr is None and failed_gate.resume is None and github.created == []
+    assert not _has_file(origin, failed_gate.branch, "prepare-bad.txt")
+
+    dispatched: list[str] = []
+    advanced_sha: str | None = None
+
+    def writing_step(
+        persona: str, task: str, *, project_dir: str, session: str, **_: object
+    ) -> Report:
+        nonlocal advanced_sha
+        sid = session.rsplit(":", 1)[-1]
+        dispatched.append(sid)
+        (Path(project_dir) / f"{sid}.txt").write_text(task + "\n", encoding="utf-8")
+        if sid == "prepare" and advanced_sha is None:
+            advanced_sha = _advance_origin(tmp_path, origin, "base.txt", "advanced base\n")
+        return Report(persona, 0, True, False, 1, [], {}, {}, "")
+
+    gate_log = tmp_path / "remote-human-gates.log"
+    gate = [
+        "sh",
+        "-c",
+        f"echo gate >> {shlex.quote(str(gate_log))}; test -f base.txt && test -f prepare.txt",
+    ]
+    steps = [
+        Step("prepare", "backend-engineer", "prepare remote work"),
+        Step("approve", task="Approve the checkpoint.", kind="human", deps=["prepare"]),
+        Step("implement", "backend-engineer", "implement after approval", deps=["approve"]),
+        Step("release", task="Release the implementation.", kind="human", deps=["implement"]),
+        Step("finalize", "test-engineer", "finalize publication", deps=["release"]),
+    ]
+    paused = run_repo_task(
+        "acme/widget",
+        workspace=workspace,
+        url=str(origin),
+        github=github,
+        steps=steps,
+        branch="feature/remote-human-resume",
+        dispatch_fn=writing_step,
+        verify_cmd=gate,
+        sleep=lambda _: None,
+    )
+
+    assert paused.outcome == "waiting-human" and paused.resume is not None
+    assert advanced_sha is not None
+    assert paused.pr is not None and paused.resume.pr == paused.pr.url
+    assert github.created == [paused.pr.number] and github._prs[paused.pr.number].draft
+    assert dispatched == ["prepare"]
+    assert gate_log.read_text(encoding="utf-8").splitlines() == ["gate"]
+    assert paused.resume.checkpoint == _tip(origin, paused.branch)
+    assert gitops.is_ancestor(canonical, advanced_sha, paused.resume.checkpoint)
+    assert _tip(origin, "main") == advanced_sha
+
+    second = run_repo_task(
+        "acme/widget",
+        workspace=workspace,
+        url=str(origin),
+        github=github,
+        steps=steps,
+        dispatch_fn=writing_step,
+        verify_cmd=gate,
+        sleep=lambda _: None,
+        resume=replace(
+            paused.resume,
+            completed_steps=(*paused.resume.completed_steps, "approve"),
+        ),
+    )
+
+    assert second.outcome == "waiting-human" and second.resume is not None
+    assert second.pr is not None and second.pr.number == paused.pr.number
+    assert github.created == [paused.pr.number] and github.reused == []
+    assert github._prs[paused.pr.number].draft
+    assert dispatched == ["prepare", "implement"]
+    assert gate_log.read_text(encoding="utf-8").splitlines() == ["gate", "gate"]
+    assert gitops.is_ancestor(canonical, paused.resume.checkpoint, second.resume.checkpoint)
+    assert second.resume.checkpoint == _tip(origin, second.branch)
+
+    final_resume = replace(
+        second.resume,
+        completed_steps=(*second.resume.completed_steps, "release"),
+    )
+    github._prs[paused.pr.number].closed = True
+    closed = run_repo_task(
+        "acme/widget",
+        workspace=workspace,
+        url=str(origin),
+        github=github,
+        steps=steps,
+        dispatch_fn=writing_step,
+        verify_cmd=gate,
+        resume=final_resume,
+    )
+    assert closed.outcome == "resume-failed" and "closed without merging" in closed.detail
+    assert dispatched == ["prepare", "implement"]
+    github._prs[paused.pr.number].closed = False
+
+    saved_tip = _tip(origin, second.branch)
+    subprocess.run(
+        ["git", "-C", str(origin), "update-ref", f"refs/heads/{second.branch}", advanced_sha],
+        check=True,
+    )
+    rewritten = run_repo_task(
+        "acme/widget",
+        workspace=workspace,
+        url=str(origin),
+        github=github,
+        steps=steps,
+        dispatch_fn=writing_step,
+        verify_cmd=gate,
+        resume=final_resume,
+    )
+    assert rewritten.outcome == "resume-failed" and "rewritten" in rewritten.detail
+    assert dispatched == ["prepare", "implement"]
+    subprocess.run(
+        ["git", "-C", str(origin), "update-ref", f"refs/heads/{second.branch}", saved_tip],
+        check=True,
+    )
+
+    completed = run_repo_task(
+        "acme/widget",
+        workspace=workspace,
+        url=str(origin),
+        github=github,
+        steps=steps,
+        dispatch_fn=writing_step,
+        verify_cmd=gate,
+        sleep=lambda _: None,
+        resume=final_resume,
+    )
+
+    assert completed.ok and completed.outcome == "merged", completed.detail
+    assert completed.pr is not None and completed.pr.number == paused.pr.number
+    assert github.created == [paused.pr.number]
+    assert github.reused == [paused.pr.number]
+    assert github.readied == [paused.pr.number]
+    assert not github._prs[paused.pr.number].draft
+    assert dispatched == ["prepare", "implement", "finalize"]
+    assert gate_log.read_text(encoding="utf-8").splitlines() == ["gate", "gate", "gate"]
+    assert gitops.is_ancestor(canonical, second.resume.checkpoint, _tip(origin, completed.branch))
+    assert _has_file(origin, "main", "prepare.txt")
+    assert _has_file(origin, "main", "implement.txt")
+    assert _has_file(origin, "main", "finalize.txt")
+
+
 # --- multi-PR: one larger task across coordinated PRs ----------------------
 
 
