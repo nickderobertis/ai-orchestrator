@@ -27,8 +27,8 @@ from fakes import FakeGitHub, make_writing_dispatch
 
 from orchestrator import gitops
 from orchestrator.dispatch import Report
-from orchestrator.graph import graph_payload, parse_graph, run_graph
 from orchestrator.github import PullRequest
+from orchestrator.graph import graph_payload, parse_graph, run_graph
 from orchestrator.lifecycle import (
     RepoPlan,
     RepoPlanNode,
@@ -43,8 +43,8 @@ from orchestrator.next_round import main as next_round_main
 from orchestrator.next_round import main_runs
 from orchestrator.provenance import INCOMPLETE_TRAILER, PR_BASE_TRAILER, incomplete_commits
 from orchestrator.recover import recover_repo
-from orchestrator.replan import next_round
 from orchestrator.registry import Registry
+from orchestrator.replan import next_round
 from orchestrator.workspace import Workspace, normalize_repo
 
 
