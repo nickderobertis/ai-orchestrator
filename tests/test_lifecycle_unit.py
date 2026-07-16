@@ -128,6 +128,14 @@ def test_team_explicit_local_workflow_is_invalid() -> None:
     [
         (StackBase("parent", repo="https://github.com/o/r"), "normalized owner/name"),
         (StackBase("parent", identity="git@github.com:o/r.git"), "normalized origin"),
+        (
+            StackBase(
+                "parent",
+                repo="o/r",
+                identity="https://github.com/o/x",
+            ),
+            "does not match identity",
+        ),
         (StackBase("parent", pr="https://example.com/pull/1"), "pull-request URL"),
         (
             StackBase(
@@ -397,6 +405,26 @@ def test_load_valid_repo_plan(tmp_path) -> None:
                 ]
             },
             "not a normalized origin",
+        ),
+        (
+            {
+                "tasks": [
+                    {
+                        "id": "a",
+                        "repo": "r",
+                        "persona": "p",
+                        "task": "t",
+                        "stack_bases": [
+                            {
+                                "branch": "feature/parent",
+                                "repo": "o/r",
+                                "identity": "https://github.com/o/x",
+                            }
+                        ],
+                    }
+                ]
+            },
+            "repo.*does not match 'identity'",
         ),
         (
             {

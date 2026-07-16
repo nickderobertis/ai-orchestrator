@@ -316,6 +316,16 @@ def _validate_runtime_stack_bases(anchors: list[StackBase]) -> None:
                 validate_identity_key(str(anchor.identity))
             except RegistryError as exc:
                 raise ConfigError(f"stack_bases #{index}: {exc}") from exc
+            github_prefix = "https://github.com/"
+            if (
+                anchor.repo is not None
+                and str(anchor.identity).startswith(github_prefix)
+                and str(anchor.identity).removeprefix(github_prefix).casefold()
+                != anchor.repo.casefold()
+            ):
+                raise ConfigError(
+                    f"stack_bases #{index} repo {anchor.repo!r} does not match identity"
+                )
         if anchor.pr is not None:
             matched = re.fullmatch(r"https://github\.com/([^/]+/[^/]+)/pull/[1-9][0-9]*", anchor.pr)
             if matched is None:
@@ -326,11 +336,10 @@ def _validate_runtime_stack_bases(anchors: list[StackBase]) -> None:
                     f"stack_bases #{index} pr repository {pr_repo!r} does not match "
                     f"repo {anchor.repo!r}"
                 )
-            github_prefix = "https://github.com/"
             if (
                 anchor.identity is not None
-                and str(anchor.identity).startswith(github_prefix)
-                and str(anchor.identity).removeprefix(github_prefix).casefold()
+                and str(anchor.identity).startswith("https://github.com/")
+                and str(anchor.identity).removeprefix("https://github.com/").casefold()
                 != pr_repo.casefold()
             ):
                 raise ConfigError(
@@ -1002,6 +1011,13 @@ def _parse_stack_bases(nid: str, raw: object) -> list[StackBase]:
                 f"task {nid!r} stack_bases #{index} 'pr_base' is not a valid Git branch"
             )
         raw_identity = item.get("identity")
+        if (
+            isinstance(raw_repo, str)
+            and isinstance(raw_identity, str)
+            and raw_identity.startswith("https://github.com/")
+            and raw_identity.removeprefix("https://github.com/").casefold() != raw_repo.casefold()
+        ):
+            raise PlanError(f"task {nid!r} stack_bases #{index} 'repo' does not match 'identity'")
         raw_pr = item.get("pr")
         if isinstance(raw_pr, str):
             matched_pr = re.fullmatch(r"https://github\.com/([^/]+/[^/]+)/pull/[1-9][0-9]*", raw_pr)
