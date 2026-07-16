@@ -25,6 +25,9 @@ lifecycle, top-level human, and nested human nodes in one graph.
 The `/` separator is reserved: top-level human ids and human step ids cannot
 contain it. Existing lifecycle node ids may contain `/`; nested completion strips
 that node's exact prefix rather than assuming the first slash separates the step.
+Resume metadata is accepted only on a workstream containing a human step. Its
+explicit branch/base must agree with the node, completed steps must be unique and
+dependency-closed, and a GitHub PR URL must name the lifecycle repository.
 
 ## Decomposition and scheduling
 

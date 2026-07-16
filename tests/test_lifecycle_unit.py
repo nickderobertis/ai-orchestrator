@@ -643,6 +643,101 @@ def test_load_repo_plan_node_needs_persona_task_or_steps(tmp_path) -> None:
         load_repo_plan(_write(tmp_path, {"tasks": [{"id": "a", "repo": "o/r"}]}))
 
 
+def test_load_repo_plan_accepts_consistent_human_resume(tmp_path) -> None:
+    node = {
+        "id": "work",
+        "repo": "o/r",
+        "branch": "feature/work",
+        "base_branch": "main",
+        "steps": [
+            {"id": "prepare", "persona": "backend-engineer", "task": "Prepare"},
+            {"id": "approve", "kind": "human", "task": "Approve", "deps": ["prepare"]},
+        ],
+        "resume": {
+            "branch": "feature/work",
+            "base_branch": "main",
+            "pr_base": "main",
+            "checkpoint": "abcdef1",
+            "completed_steps": ["prepare", "approve"],
+            "pr": "https://github.com/o/r/pull/1",
+        },
+    }
+
+    plan = load_repo_plan(_write(tmp_path, {"tasks": [node]}))
+
+    assert plan.tasks[0].resume is not None
+    assert plan.tasks[0].resume.completed_steps == ("prepare", "approve")
+
+
+@pytest.mark.parametrize(
+    "update, match",
+    [
+        ({"branch": "feature/other"}, "conflicts with resume"),
+        ({"base_branch": "develop"}, "conflicts with resume"),
+        (
+            {"resume": {"completed_steps": ["prepare", "prepare"]}},
+            "must be unique",
+        ),
+        (
+            {"resume": {"completed_steps": ["approve"]}},
+            "missing completed dependencies: prepare",
+        ),
+        (
+            {"resume": {"pr": "https://github.com/x/r/pull/1"}},
+            "repository does not match 'repo'",
+        ),
+    ],
+)
+def test_load_repo_plan_rejects_inconsistent_human_resume(tmp_path, update, match) -> None:
+    resume = {
+        "branch": "feature/work",
+        "base_branch": "main",
+        "pr_base": "main",
+        "checkpoint": "abcdef1",
+        "completed_steps": ["prepare"],
+        "pr": "https://github.com/o/r/pull/1",
+    }
+    node = {
+        "id": "work",
+        "repo": "o/r",
+        "branch": "feature/work",
+        "base_branch": "main",
+        "steps": [
+            {"id": "prepare", "persona": "backend-engineer", "task": "Prepare"},
+            {"id": "approve", "kind": "human", "task": "Approve", "deps": ["prepare"]},
+        ],
+        "resume": resume,
+    }
+    nested = update.get("resume")
+    if nested is not None:
+        node["resume"] = {**resume, **nested}
+    else:
+        node.update(update)
+
+    with pytest.raises(PlanError, match=match):
+        load_repo_plan(_write(tmp_path, {"tasks": [node]}))
+
+
+def test_load_repo_plan_rejects_resume_without_human_workstream(tmp_path) -> None:
+    node = {
+        "id": "work",
+        "repo": "o/r",
+        "persona": "backend-engineer",
+        "task": "Work",
+        "resume": {
+            "branch": "feature/work",
+            "base_branch": "main",
+            "pr_base": "main",
+            "checkpoint": "abcdef1",
+            "completed_steps": [],
+            "pr": None,
+        },
+    }
+
+    with pytest.raises(PlanError, match="requires a steps workstream with a human step"):
+        load_repo_plan(_write(tmp_path, {"tasks": [node]}))
+
+
 def test_run_repo_task_requires_task_or_steps(tmp_path) -> None:
     with pytest.raises(ConfigError, match="needs either"):
         run_repo_task("o/r", workspace=Workspace(tmp_path / "ws"))
