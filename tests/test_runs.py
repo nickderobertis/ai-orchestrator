@@ -48,6 +48,29 @@ def test_list_runs_empty_and_invalid_result_payload(tmp_path) -> None:
         as_result_payload({"ok": True, "started_order": [], "results": {"a": {}}})
 
 
+@pytest.mark.parametrize(
+    "human_actions",
+    [
+        {"ref": "h", "task": "Review", "unblocks": [], "unblocks_publication": False},
+        [{"ref": "h", "task": "Review", "unblocks": ["a"], "unblocks_publication": "no"}],
+        [{"ref": "h", "task": "Review", "unblocks": [1], "unblocks_publication": False}],
+        [{"ref": "h", "unblocks": [], "unblocks_publication": False}],
+    ],
+)
+def test_result_payload_rejects_malformed_human_actions(human_actions) -> None:
+    payload = {
+        "ok": False,
+        "state": "waiting",
+        "started_order": ["h"],
+        "results": {"h": {"status": "waiting", "human_actions": human_actions}},
+    }
+
+    with pytest.raises(ConfigError, match="invalid human_actions"):
+        as_result_payload(payload)
+    with pytest.raises(ConfigError, match="invalid human_actions"):
+        status_summary(payload)
+
+
 def test_result_state_derives_old_payload_states() -> None:
     assert result_state(_result("failed")) == "failed"
     assert (

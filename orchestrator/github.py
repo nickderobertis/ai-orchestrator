@@ -129,6 +129,15 @@ def _normalize_check(raw: dict[str, object]) -> Check:
     return Check(name=name, state=str(raw.get("state") or "PENDING").upper(), required=required)
 
 
+def _optional_bool(data: dict[str, object], key: str) -> bool:
+    value = data.get(key)
+    if value is None:
+        return False
+    if not isinstance(value, bool):
+        raise GitHubError(f"gh pr view returned non-boolean {key}")
+    return value
+
+
 def _is_auto_merge_unavailable(message: str) -> bool:
     lowered = message.lower()
     return "auto-merge is not enabled" in lowered or "auto merge is not allowed" in lowered
@@ -251,6 +260,8 @@ class CliGitHubBackend:
             ]
         )
         data = json.loads(raw)
+        if not isinstance(data, dict):
+            raise GitHubError("gh pr view returned invalid JSON payload")
         rollup = data.get("statusCheckRollup") or []
         checks = tuple(_normalize_check(c) for c in rollup if isinstance(c, dict))
         state = str(data.get("state") or "OPEN")
@@ -260,5 +271,5 @@ class CliGitHubBackend:
             merged=state == "MERGED",
             merge_state_status=str(data.get("mergeStateStatus") or ""),
             checks=checks,
-            draft=bool(data.get("isDraft")),
+            draft=_optional_bool(data, "isDraft"),
         )

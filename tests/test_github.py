@@ -199,6 +199,18 @@ def test_status_merged() -> None:
     assert status.merged and status.blocking_green  # no required checks → vacuously green
 
 
+def test_status_rejects_non_boolean_draft_field() -> None:
+    payload = {
+        "number": 3,
+        "state": "OPEN",
+        "isDraft": "false",
+        "mergeStateStatus": "CLEAN",
+        "statusCheckRollup": [],
+    }
+    with pytest.raises(GitHubError, match="non-boolean isDraft"):
+        CliGitHubBackend(run=RecordingRun([json.dumps(payload)])).status(_pr())
+
+
 def test_normalize_check_variants() -> None:
     pending = _normalize_check({"__typename": "CheckRun", "name": "c", "status": "QUEUED"})
     assert pending.state == "PENDING" and not pending.required

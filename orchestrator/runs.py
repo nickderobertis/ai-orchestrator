@@ -287,7 +287,9 @@ def result_state(result: GraphPayload) -> str:
 def human_actions(result: GraphPayload) -> list[HumanActionPayload]:
     """Every ready human action in node order."""
     return [
-        action for item in result["results"].values() for action in item.get("human_actions") or []
+        action
+        for node_id, item in result["results"].items()
+        for action in _validated_human_actions(node_id, item.get("human_actions"))
     ]
 
 
@@ -324,6 +326,24 @@ def _downstream(action: HumanActionPayload) -> str:
     if action.get("unblocks_publication"):
         return "unblocks workstream publication"
     return "unblocks nothing downstream"
+
+
+def _validated_human_actions(node_id: str, raw: object) -> list[HumanActionPayload]:
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        raise ConfigError(f"recorded result has invalid human_actions for {node_id}")
+    for action in raw:
+        if (
+            not isinstance(action, dict)
+            or not isinstance(action.get("ref"), str)
+            or not isinstance(action.get("task"), str)
+            or not isinstance(action.get("unblocks"), list)
+            or not all(isinstance(ref, str) for ref in action.get("unblocks", []))
+            or not isinstance(action.get("unblocks_publication"), bool)
+        ):
+            raise ConfigError(f"recorded result has invalid human_actions for {node_id}")
+    return cast(list[HumanActionPayload], raw)
 
 
 def load_completions(run_dir: Path) -> list[HumanCompletion]:
@@ -408,6 +428,8 @@ def as_result_payload(value: dict[str, Any]) -> GraphPayload:
         or not all(isinstance(item.get("status"), str) for item in results.values())
     ):
         raise ConfigError("recorded result has an invalid tracked-graph payload")
+    for node_id, item in results.items():
+        _validated_human_actions(node_id, item.get("human_actions"))
     return cast(GraphPayload, value)
 
 
