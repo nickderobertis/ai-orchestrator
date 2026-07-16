@@ -35,6 +35,7 @@ __all__ = [
     "is_ancestor",
     "is_dirty",
     "is_repo",
+    "is_valid_branch_name",
     "log_delta",
     "merge",
     "merge_base_into_branch",
@@ -252,6 +253,11 @@ def branch_exists(cwd: str | Path, branch: str) -> bool:
     """Whether ``branch`` names an exact local branch."""
     proc = _git(["show-ref", "--verify", "--quiet", f"refs/heads/{branch}"], cwd=cwd, check=False)
     return proc.returncode == 0
+
+
+def is_valid_branch_name(branch: str) -> bool:
+    """Validate an external branch name with Git's authoritative ref parser."""
+    return _git(["check-ref-format", "--branch", branch], check=False).returncode == 0
 
 
 def worktrees(cwd: str | Path) -> dict[str, Path]:

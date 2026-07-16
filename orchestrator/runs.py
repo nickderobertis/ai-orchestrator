@@ -14,6 +14,7 @@ from typing import Any, Literal, NamedTuple, NewType, TypedDict, cast
 from .config import ConfigError, load_yaml
 from .coordination import advisory_lock, atomic_json
 from .merge import MergePolicy
+from .workspace import IdentityKey, RepositoryType, Workflow
 
 _RUN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 _ROUND = re.compile(r"^round-(\d+)$")
@@ -29,6 +30,16 @@ class RunLedgerRow(NamedTuple):
     summary: str
 
 
+class StackBasePayload(TypedDict):
+    """Stable serialized form of one typed lifecycle stack anchor."""
+
+    branch: str
+    repo: str | None
+    identity: IdentityKey | None
+    base_branch: str | None
+    pr: str | None
+
+
 class RepoPlanResultItem(TypedDict, total=False):
     """Stable recorded fields for one repo-plan node."""
 
@@ -38,11 +49,11 @@ class RepoPlanResultItem(TypedDict, total=False):
     base_branch: str
     pr_base: str
     synthetic_stack_base: str | None
-    stack_bases: list[dict[str, str | None]]
-    repository_type: str | None
-    repo_type: str | None
-    publication_workflow: str | None
-    workflow: str | None
+    stack_bases: list[StackBasePayload]
+    repository_type: RepositoryType | None
+    repo_type: RepositoryType | None
+    publication_workflow: Workflow | None
+    workflow: Workflow | None
     merge_policy: MergePolicy | None
     outcome: str
     ok: bool

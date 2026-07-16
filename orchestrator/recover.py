@@ -76,9 +76,7 @@ def recover_repo(
     identity = registry.identity_for_checkout(clone, repo_type=repo_type)
     if identity is None:
         raise RegistryError(f"registered checkout {clone} has no repository identity")
-    effective_workflow, effective_policy = _effective_publication(
-        identity.repo_type, identity.workflow, None, merge_policy
-    )
+    decision = _effective_publication(identity.repo_type, identity.workflow, None, merge_policy)
     owner, name = str(slug).split("/", 1)
     ref = RepoRef(owner, name, entry.origin)
     workspace = Workspace(
@@ -107,9 +105,9 @@ def recover_repo(
                 str(slug),
                 branch,
                 target,
-                effective_workflow,
+                decision.workflow,
                 identity.repo_type,
-                effective_policy,
+                decision.merge_policy,
                 "sync-conflict",
                 f"merge current {remote_base} into {branch!r}, resolve the conflict, then retry",
             )
@@ -126,9 +124,9 @@ def recover_repo(
                 str(slug),
                 branch,
                 target,
-                effective_workflow,
+                decision.workflow,
                 identity.repo_type,
-                effective_policy,
+                decision.merge_policy,
                 "gate-failed",
                 f"recovery gate failed; fix {branch!r} in its preserved branch and retry",
             )
@@ -142,7 +140,7 @@ def recover_repo(
         gitops.push(worktree, branch)
         strategy = (
             LocalMergeStrategy()
-            if effective_workflow == "local"
+            if decision.workflow == "local"
             else GitHubMergeStrategy(github or CliGitHubBackend())
         )
         context = MergeContext(
@@ -157,7 +155,7 @@ def recover_repo(
                 "a verified recovery attestation.\n"
             ),
             method=merge_method,
-            policy=effective_policy,
+            policy=decision.merge_policy,
             verify_command=command,
             verify_env=env,
         )
@@ -168,9 +166,9 @@ def recover_repo(
             str(slug),
             branch,
             target,
-            effective_workflow,
+            decision.workflow,
             identity.repo_type,
-            effective_policy,
+            decision.merge_policy,
             published.outcome,
             published.detail,
             published.pr.url if published.pr else None,

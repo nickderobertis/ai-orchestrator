@@ -44,7 +44,7 @@ from .merge import (
 )
 from .plan import NodeRun, schedule_dag
 from .provenance import INCOMPLETE_TRAILER
-from .registry import RegistryError
+from .registry import RegistryError, validate_identity_key
 from .runs import (
     RepoPlanPayload,
     RepoPlanResultItem,
@@ -106,6 +106,25 @@ class StackBase:
     identity: IdentityKey | None = None
     base_branch: str | None = None
     pr: str | None = None
+
+
+@dataclass(frozen=True)
+class PublicationDecision:
+    workflow: Workflow
+    merge_policy: MergePolicy
+
+
+@dataclass(frozen=True)
+class SyntheticStackBase:
+    branch: str
+
+
+@dataclass(frozen=True)
+class StackConflict:
+    detail: str
+
+
+StackBuildResult = SyntheticStackBase | StackConflict
 
 
 @dataclass
@@ -237,17 +256,19 @@ def _effective_publication(
     stored_workflow: Workflow | None,
     requested_workflow: Workflow | None,
     merge_policy: MergePolicy | None,
-) -> tuple[Workflow, MergePolicy]:
+) -> PublicationDecision:
     """Resolve workflow/policy after node and command precedence has selected inputs."""
     workflow = stored_workflow or requested_workflow or "remote"
     if repo_type == "team":
         if requested_workflow == "local":
             raise RegistryError("repo_type=team cannot use workflow=local")
         workflow = "remote"
-        return workflow, merge_policy or "none"
+        return PublicationDecision(workflow, merge_policy or "none")
     if merge_policy == "none":
-        return "remote", "none"
-    return workflow, merge_policy or ("direct" if workflow == "local" else "auto")
+        return PublicationDecision("remote", "none")
+    return PublicationDecision(
+        workflow, merge_policy or ("direct" if workflow == "local" else "auto")
+    )
 
 
 def _stack_body(anchors: list[StackBase], synthetic: str | None) -> str:
@@ -354,7 +375,7 @@ def _build_synthetic_stack_base(
     workspace: Workspace,
     root_base: str,
     anchors: list[StackBase],
-) -> tuple[str | None, str | None]:
+) -> StackBuildResult:
     """Build and push a multi-parent base, or return a stack-conflict detail."""
     key = "\x00".join(anchor.branch for anchor in anchors)
     digest = _short_hash(ref.slug, root_base, key)
@@ -370,12 +391,14 @@ def _build_synthetic_stack_base(
                 dependency,
                 message=f"Merge stack prerequisite {anchor.branch}",
             ):
-                return None, (
-                    f"stack-conflict: could not merge prerequisite {anchor.branch!r} "
-                    f"into synthetic base from {root_base!r}"
+                return StackConflict(
+                    detail=(
+                        f"stack-conflict: could not merge prerequisite {anchor.branch!r} "
+                        f"into synthetic base from {root_base!r}"
+                    )
                 )
         gitops.push(worktree, branch)
-        return branch, None
+        return SyntheticStackBase(branch)
     finally:
         workspace.remove_worktree(ref, worktree)
 
@@ -476,16 +499,16 @@ def run_repo_task(
         effective_type = repo_type or selection.repo_type
         if effective_type is None:
             raise RegistryError("repository type is unclassified; pass --repo-type explicitly")
-        publication_workflow, effective_policy = _effective_publication(
+        decision = _effective_publication(
             effective_type, registered_workflow, workflow, merge_policy
         )
         result.execution_checkout = str(selection.execution_checkout)
         result.publication_checkout = str(selection.publication_checkout)
         result.publication_identity = selection.publication_identity
-        result.publication_workflow = publication_workflow
+        result.publication_workflow = decision.workflow
         result.repository_type = effective_type
-        result.merge_policy = effective_policy
-        strategy = _select_merge_strategy(ref, merge, github, publication_workflow)
+        result.merge_policy = decision.merge_policy
+        strategy = _select_merge_strategy(ref, merge, github, decision.workflow)
         root_base = base_branch or gitops.default_branch(clone)
         result.base_branch = root_base
         applicable_stack = [
@@ -495,16 +518,13 @@ def run_repo_task(
         ]
         result.stack_bases = applicable_stack
         if len(applicable_stack) > 1:
-            synthetic, conflict = _build_synthetic_stack_base(
-                ref, workspace, root_base, applicable_stack
-            )
-            if conflict is not None:
+            stack_result = _build_synthetic_stack_base(ref, workspace, root_base, applicable_stack)
+            if isinstance(stack_result, StackConflict):
                 result.outcome = "stack-conflict"
-                result.detail = conflict
+                result.detail = stack_result.detail
                 return result
-            assert synthetic is not None
-            pr_base = synthetic
-            result.synthetic_stack_base = synthetic
+            pr_base = stack_result.branch
+            result.synthetic_stack_base = stack_result.branch
         elif applicable_stack:
             pr_base = applicable_stack[0].branch
         else:
@@ -583,7 +603,7 @@ def run_repo_task(
             body=(body or _workstream_body(effective_steps, step_results))
             + _stack_body(applicable_stack, result.synthetic_stack_base),
             method=merge_method,
-            policy=effective_policy,
+            policy=decision.merge_policy,
             poll_interval=poll_interval,
             timeout=timeout,
             sleep=sleep,
@@ -783,17 +803,26 @@ def _parse_stack_bases(nid: str, raw: object) -> list[StackBase]:
         branch = item.get("branch")
         if not isinstance(branch, str) or not branch.strip():
             raise PlanError(f"task {nid!r} stack_bases #{index} needs a non-empty 'branch'")
+        if not gitops.is_valid_branch_name(branch):
+            raise PlanError(f"task {nid!r} stack_bases #{index} 'branch' is not a valid Git branch")
         for field_name in ("repo", "identity", "base_branch", "pr"):
             value = item.get(field_name)
             if value is not None and (not isinstance(value, str) or not value.strip()):
                 raise PlanError(
                     f"task {nid!r} stack_bases #{index} {field_name!r} must be a non-empty string"
                 )
+        raw_identity = item.get("identity")
+        try:
+            identity = (
+                validate_identity_key(raw_identity) if isinstance(raw_identity, str) else None
+            )
+        except RegistryError as exc:
+            raise PlanError(f"task {nid!r} stack_bases #{index}: {exc}") from exc
         anchors.append(
             StackBase(
                 branch=branch,
                 repo=item.get("repo"),
-                identity=cast(IdentityKey | None, item.get("identity")),
+                identity=identity,
                 base_branch=item.get("base_branch"),
                 pr=item.get("pr"),
             )

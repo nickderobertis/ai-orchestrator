@@ -195,6 +195,13 @@ def _valid_origin(value: object) -> bool:
     )
 
 
+def validate_identity_key(value: str) -> IdentityKey:
+    """Accept only a canonical normalized origin identity from external data."""
+    if not _valid_origin(value) or str(_url_identity(value)) != value:
+        raise RegistryError(f"repository identity {value!r} is not a normalized origin")
+    return IdentityKey(value)
+
+
 def _validate_alias(slug: object) -> Slug:
     if not isinstance(slug, str) or not _SLUG_PATTERN.fullmatch(slug):
         raise RegistryError(f"registry key {slug!r} must be a normalized owner/name slug")

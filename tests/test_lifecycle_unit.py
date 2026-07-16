@@ -100,11 +100,13 @@ def test_select_merge_strategy() -> None:
     ],
 )
 def test_repository_type_policy_matrix(repo_type, workflow, policy, expected) -> None:
-    assert _effective_publication(repo_type, workflow, None, policy) == expected
+    decision = _effective_publication(repo_type, workflow, None, policy)
+    assert (decision.workflow, decision.merge_policy) == expected
 
 
 def test_team_run_override_normalizes_stored_local_workflow() -> None:
-    assert _effective_publication("team", "local", None, None) == ("remote", "none")
+    decision = _effective_publication("team", "local", None, None)
+    assert (decision.workflow, decision.merge_policy) == ("remote", "none")
 
 
 def test_team_explicit_local_workflow_is_invalid() -> None:
@@ -273,6 +275,39 @@ def test_load_valid_repo_plan(tmp_path) -> None:
                 ]
             },
             "must be a non-empty string",
+        ),
+        (
+            {
+                "tasks": [
+                    {
+                        "id": "a",
+                        "repo": "r",
+                        "persona": "p",
+                        "task": "t",
+                        "stack_bases": [{"branch": "invalid..branch"}],
+                    }
+                ]
+            },
+            "not a valid Git branch",
+        ),
+        (
+            {
+                "tasks": [
+                    {
+                        "id": "a",
+                        "repo": "r",
+                        "persona": "p",
+                        "task": "t",
+                        "stack_bases": [
+                            {
+                                "branch": "feature/parent",
+                                "identity": "git@github.com:o/r.git",
+                            }
+                        ],
+                    }
+                ]
+            },
+            "not a normalized origin",
         ),
         (
             {"tasks": [{"id": "a", "repo": "r", "persona": "p", "task": "t", "deps": ["z"]}]},
