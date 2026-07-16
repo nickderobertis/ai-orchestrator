@@ -115,6 +115,36 @@ def test_force_push(tmp_path, bare_origin) -> None:
     gitops.add_all(clone)
     gitops.commit(clone, "c2 amend-ish")
     gitops.push(clone, "main", set_upstream=False, force=True)
+    assert gitops.ref_sha(origin, "main") == gitops.head_sha(clone)
+
+
+def test_push_forwards_environment_overlay_to_real_hook(tmp_path, bare_origin) -> None:
+    clone = gitops.clone(str(bare_origin()), tmp_path / "clone")
+    hooks = tmp_path / "hooks"
+    hooks.mkdir()
+    hook = hooks / "pre-push"
+    hook.write_text(
+        '#!/bin/sh\nprintf \'%s\\n\' "$GITOPS_PUSH_VALUE" > "$GITOPS_PUSH_MARKER"\n',
+        encoding="utf-8",
+    )
+    hook.chmod(0o755)
+    gitops._git(["config", "core.hooksPath", str(hooks)], cwd=clone)
+    (clone / "forwarded.txt").write_text("forwarded\n", encoding="utf-8")
+    gitops.add_all(clone)
+    gitops.commit(clone, "test push environment")
+    marker = tmp_path / "push-environment"
+
+    gitops.push(
+        clone,
+        "main",
+        set_upstream=False,
+        env={
+            "GITOPS_PUSH_VALUE": "forwarded",
+            "GITOPS_PUSH_MARKER": str(marker),
+        },
+    )
+
+    assert marker.read_text(encoding="utf-8") == "forwarded\n"
 
 
 def test_merge_fast_forward_without_no_ff(tmp_path, bare_origin) -> None:

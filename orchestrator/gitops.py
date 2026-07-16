@@ -12,6 +12,7 @@ concurrent agents never collide in a single tree. See `workspace.py`.
 
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 from typing import NamedTuple
@@ -73,12 +74,14 @@ def _git(
     *,
     cwd: str | Path | None = None,
     check: bool = True,
+    env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     proc = subprocess.run(
         ["git", *args],
         cwd=str(cwd) if cwd is not None else None,
         text=True,
         capture_output=True,
+        env={**os.environ, **env} if env is not None else None,
     )
     if check and proc.returncode != 0:
         raise GitError(
@@ -367,15 +370,16 @@ def push(
     remote: str = "origin",
     set_upstream: bool = True,
     force: bool = False,
+    env: dict[str, str] | None = None,
 ) -> None:
-    """Push ``branch`` to ``remote`` (sets upstream by default)."""
+    """Push ``branch`` to ``remote`` with an optional environment overlay."""
     args = ["push"]
     if set_upstream:
         args.append("--set-upstream")
     if force:
         args.append("--force-with-lease")
     args += [remote, branch]
-    _git(args, cwd=cwd)
+    _git(args, cwd=cwd, env=env)
 
 
 def remotes(cwd: str | Path) -> list[str]:
