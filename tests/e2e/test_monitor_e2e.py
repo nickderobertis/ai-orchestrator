@@ -323,6 +323,17 @@ def test_a_branch_with_no_confirmed_repository_is_not_guessed_at(tmp_path: Path)
     assert known_branches([], journal.events()) == []
 
 
+def test_a_current_branch_is_streamable_from_its_journal_identity(tmp_path: Path) -> None:
+    run_dir = tmp_path / "runs" / RUN
+    journal = open_journal(run_dir, RUN, 1)
+    journal.append(
+        "branch-discovered",
+        node=NodeId("api"),
+        detail={"repo": "acme/app", "branch": "live", "base_branch": "main"},
+    )
+    assert known_branches([], journal.events()) == [BranchRef("acme/app", "live", "main")]
+
+
 def test_prs_are_collected_from_the_ledger_and_the_journal(tmp_path: Path) -> None:
     run_dir = tmp_path / "runs" / RUN
     journal = open_journal(run_dir, RUN, 1)
@@ -336,6 +347,23 @@ def test_prs_are_collected_from_the_ledger_and_the_journal(tmp_path: Path) -> No
     assert known_prs(ledgers, journal.events()) == [
         PrRef("acme/app", 1, "https://github.com/acme/app/pull/1", "main"),
         PrRef("acme/app", 2, "https://github.com/acme/app/pull/2", "main"),
+    ]
+
+
+def test_a_current_pr_is_streamable_from_its_journal_identity(tmp_path: Path) -> None:
+    run_dir = tmp_path / "runs" / RUN
+    journal = open_journal(run_dir, RUN, 1)
+    journal.append(
+        "pr-created",
+        node=NodeId("api"),
+        detail={
+            "repo": "acme/app",
+            "pr": "https://github.com/acme/app/pull/7",
+            "base": "main",
+        },
+    )
+    assert known_prs([], journal.events()) == [
+        PrRef("acme/app", 7, "https://github.com/acme/app/pull/7", "main")
     ]
 
 

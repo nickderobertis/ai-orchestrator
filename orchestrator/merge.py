@@ -123,6 +123,7 @@ def _drive_github_merge(
             ctx,
             "pr-checks-observed",
             {
+                "repo": ctx.repo_slug,
                 "pr": pr.url,
                 "state": status.state,
                 "merged": status.merged,
@@ -131,7 +132,11 @@ def _drive_github_merge(
             },
         )
         if status.merged:
-            _record(ctx, "pr-merged", {"pr": pr.url, "number": pr.number})
+            _record(
+                ctx,
+                "pr-merged",
+                {"repo": ctx.repo_slug, "pr": pr.url, "number": pr.number},
+            )
             return "merged", f"{detail}; merged"
         if status.state == "CLOSED":
             return "closed", f"{detail}; PR was closed without merging"
@@ -141,7 +146,11 @@ def _drive_github_merge(
         if policy == "direct" and status.blocking_green:
             github.merge(pr, method=ctx.method)
             if github.status(pr).merged:
-                _record(ctx, "pr-merged", {"pr": pr.url, "number": pr.number})
+                _record(
+                    ctx,
+                    "pr-merged",
+                    {"repo": ctx.repo_slug, "pr": pr.url, "number": pr.number},
+                )
                 return "merged", f"{detail}; merged"
         if ctx.clock() - start >= ctx.timeout:
             return "timeout", f"{detail}; timed out after {ctx.timeout}s awaiting checks"
@@ -161,11 +170,21 @@ class GitHubMergeStrategy:
         _record(
             ctx,
             "pr-created",
-            {"pr": pr.url, "number": pr.number, "base": ctx.base, "draft": False},
+            {
+                "repo": ctx.repo_slug,
+                "pr": pr.url,
+                "number": pr.number,
+                "base": ctx.base,
+                "draft": False,
+            },
         )
         if self._github.status(pr).draft:
             self._github.mark_ready(pr)
-            _record(ctx, "pr-ready", {"pr": pr.url, "number": pr.number})
+            _record(
+                ctx,
+                "pr-ready",
+                {"repo": ctx.repo_slug, "pr": pr.url, "number": pr.number},
+            )
         outcome, detail = _drive_github_merge(self._github, pr, ctx)
         return MergeOutcome(outcome=outcome, detail=detail, pr=pr)
 

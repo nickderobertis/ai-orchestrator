@@ -8,13 +8,25 @@ import queue
 import subprocess
 import threading
 import time
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
-from orchestrator import REPO_ROOT
+from fakes import FakeGitHub, make_writing_dispatch
+
+from orchestrator import REPO_ROOT, gitops
+from orchestrator.github import Check, GitHubError, PRStatus, PullRequest
+from orchestrator.journal import NodeJournal, open_journal
+from orchestrator.lifecycle import result_payload, run_repo_task
+from orchestrator.merge import GitHubMergeStrategy
+from orchestrator.monitor import Monitor, load_snapshot
+from orchestrator.runs import NodeId, RunId, prepare_round, write_result
+from orchestrator.workspace import Workspace
 
 FAKE_HARNESS = REPO_ROOT / "tests" / "e2e" / "fake_harness.py"
 RUN_ID = "real-monitor-e2e"
+LIFECYCLE_RUN_ID = "real-lifecycle-monitor-e2e"
 GRAPH_LABELS = (
     "run_id=real-monitor-e2e",
     "round=1",
@@ -344,3 +356,229 @@ def test_real_run_plan_waits_then_monitor_exits_only_after_attestation(
         for line in (runs_dir / RUN_ID / "events.jsonl").read_text(encoding="utf-8").splitlines()
     ]
     assert any(event["kind"] == "human-attested" for event in events)
+
+
+class _PausingGitHub(FakeGitHub):
+    """Hold native auto-merge open long enough for the live monitor pass."""
+
+    def __init__(self, origin: Path) -> None:
+        super().__init__(origin)
+        self.ready = threading.Event()
+        self.release = threading.Event()
+        self.status_calls = 0
+
+    def status(self, pr: PullRequest) -> PRStatus:
+        state = self._prs[pr.number]
+        self.status_calls += 1
+        # GitHubMergeStrategy reads once to detect a draft, then begins its merge
+        # loop. Pause that second read before either direct or native auto-merge.
+        if self.status_calls == 2 and not state.merged:
+            self.ready.set()
+            if not self.release.wait(15):
+                raise AssertionError("test did not release the paused auto-merge")
+        return super().status(pr)
+
+
+class _MonitorGitHub:
+    """Read the fake GitHub state without causing its simulated auto-merge."""
+
+    def __init__(self, lifecycle: _PausingGitHub) -> None:
+        self.lifecycle = lifecycle
+
+    def status(self, pr: PullRequest) -> PRStatus:
+        state = self.lifecycle._prs[pr.number]
+        return PRStatus(
+            number=pr.number,
+            state="MERGED" if state.merged else "OPEN",
+            merged=state.merged,
+            merge_state_status="CLEAN",
+            checks=(Check("ci", "SUCCESS", True),),
+            draft=state.draft,
+        )
+
+
+class _OfflineGitHub:
+    def status(self, pr: PullRequest) -> PRStatus:
+        raise GitHubError("offline after lifecycle completion")
+
+
+def _lifecycle_workspace(tmp_path: Path, origin: Path) -> tuple[Workspace, Path]:
+    canonical = gitops.clone(origin, tmp_path / "canonical")
+    workspace = Workspace(
+        tmp_path / "worktrees",
+        resolver=lambda _spec: canonical,
+        workflow="local",
+    )
+    return workspace, canonical
+
+
+def test_real_lifecycle_commit_and_pr_survive_live_state(
+    tmp_path: Path, bare_origin: Callable[..., Path]
+) -> None:
+    """The tracked journal, real git lifecycle, and GitHub seam form one stream.
+
+    The preceding tests in this module exercise real onejudge and oneharness. This
+    slice composes the remaining sanctioned boundaries: only the paid agent is
+    replaced by its writing seam and only GitHub decisioning is faked; git, the
+    lifecycle commit/merge, journal, monitor, snapshots, and detail CLI are real.
+    """
+    origin = bare_origin()
+    workspace, canonical = _lifecycle_workspace(tmp_path, origin)
+    runs_dir = tmp_path / "runs"
+    run_id = RunId(LIFECYCLE_RUN_ID)
+    run_dir = runs_dir / run_id
+    node_id = NodeId("ship")
+    branch = "orchestrator/monitor-lifecycle-e2e"
+    plan = {
+        "tasks": [
+            {
+                "id": node_id,
+                "repo": "acme/widget",
+                "persona": "backend-engineer",
+                "task": "write the monitored lifecycle change",
+                "branch": branch,
+            }
+        ]
+    }
+
+    # A stopped executor is nonterminal: the next recorded round is allowed to
+    # continue the same run, and the monitor must replay both rounds.
+    _, first_dir = prepare_round(run_dir, plan)
+    first_journal = open_journal(run_dir, run_id, 1)
+    first_journal.append("round-started", detail={"nodes": 1, "concurrency": 1})
+    first_node = NodeJournal(first_journal, node_id, run_id, 1)
+    first_node.append("node-started", detail={"node_kind": "lifecycle"})
+    first_node.append("node-failed", detail={"detail": "executor stopped"})
+    first_journal.append("round-finished", detail={"state": "failed", "ok": False})
+    write_result(
+        first_dir,
+        {
+            "ok": False,
+            "state": "failed",
+            "started_order": [node_id],
+            "results": {
+                node_id: {
+                    "kind": "agent",
+                    "status": "failed",
+                    "task": "write the monitored lifecycle change",
+                    "error": "executor stopped",
+                }
+            },
+        },
+    )
+
+    _, second_dir = prepare_round(run_dir, plan)
+    second_journal = open_journal(run_dir, run_id, 2)
+    second_journal.append("round-started", detail={"nodes": 1, "concurrency": 1})
+    second_node = NodeJournal(second_journal, node_id, run_id, 2)
+    second_node.append("node-started", detail={"node_kind": "lifecycle"})
+    lifecycle_github = _PausingGitHub(origin)
+    monitor_github = _MonitorGitHub(lifecycle_github)
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(
+            run_repo_task,
+            "acme/widget",
+            "write the monitored lifecycle change",
+            "backend-engineer",
+            workspace=workspace,
+            merge=GitHubMergeStrategy(lifecycle_github),
+            url=str(origin),
+            branch=branch,
+            repo_type="single-owner",
+            dispatch_fn=make_writing_dispatch(filename="monitored.txt"),
+            verify_cmd=["sh", "-c", "test -f monitored.txt"],
+            sleep=lambda _seconds: None,
+            journal=second_node,
+        )
+        if not lifecycle_github.ready.wait(15):
+            early = future.result(timeout=1)
+            raise AssertionError(
+                f"lifecycle did not reach its PR merge wait: {early.outcome}: {early.detail}"
+            )
+        monitor = Monitor(
+            run_id=run_id,
+            run_dir=run_dir,
+            oneharness_bin=str(tmp_path / "absent-oneharness"),
+            github=monitor_github,
+            _checkout_cache={"acme/widget": canonical},
+        )
+        try:
+            live = monitor.poll()
+        finally:
+            lifecycle_github.release.set()
+        result = future.result(timeout=30)
+
+    assert result.ok and result.outcome == "merged"
+    assert result.pr is not None and result.pr.number == 1
+    live_ids = {str(event.stream_id) for event in live}
+    git_ids = sorted(item for item in live_ids if item.startswith("git:acme/widget@"))
+    assert len(git_ids) == 1
+    assert "pr:acme/widget#1" in live_ids
+    assert f"graph:{run_id}/2/{node_id}" in live_ids
+
+    second_node.append("node-settled", detail={"status": "done", "outcome": result.outcome})
+    second_journal.append("round-finished", detail={"state": "complete", "ok": True})
+    lifecycle_item = result_payload(result)
+    lifecycle_item.update(
+        {
+            "kind": "agent",
+            "status": "done",
+            "task": "write the monitored lifecycle change",
+            "error": None,
+        }
+    )
+    write_result(
+        second_dir,
+        {
+            "ok": True,
+            "state": "complete",
+            "started_order": [node_id],
+            "results": {node_id: lifecycle_item},
+        },
+    )
+    settled = monitor.poll()
+    assert any(
+        str(event.stream_id) == "pr:acme/widget#1" and "merged" in event.summary
+        for event in settled
+    )
+    assert gitops.ref_sha(origin, "main") == gitops.ref_sha(origin, branch)
+
+    for detail_id in (
+        git_ids[0],
+        "pr:acme/widget#1",
+        f"graph:{run_id}/2/{node_id}",
+    ):
+        shown = _just("history-show", detail_id, "--runs-dir", str(runs_dir))
+        assert shown.returncode == 0, shown.stderr
+        assert f"Reference: {detail_id}" in shown.stdout
+
+    replay = Monitor(
+        run_id=run_id,
+        run_dir=run_dir,
+        oneharness_bin=str(tmp_path / "absent-oneharness"),
+        github=_OfflineGitHub(),
+        snapshot=load_snapshot(run_dir),
+        _checkout_cache={},
+    )
+    replay_ids = {str(event.stream_id) for event in replay.poll()}
+    assert git_ids[0] in replay_ids
+    assert "pr:acme/widget#1" in replay_ids
+
+    completed = _just(
+        "monitor",
+        str(run_id),
+        "--runs-dir",
+        str(runs_dir),
+        "--format",
+        "jsonl",
+        "--heartbeat",
+        "0.01",
+        "--poll-interval",
+        "0.01",
+    )
+    assert completed.returncode == 0, completed.stderr
+    records = [json.loads(line) for line in completed.stdout.splitlines()]
+    assert any(record.get("summary", "").endswith("executor stopped") for record in records)
+    assert records[-1]["state"] == "complete"
+    assert records[-1]["detail"] == "graph complete"

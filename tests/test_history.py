@@ -1,11 +1,22 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from orchestrator.history import HistoryError, SessionId, _records, digest, recent_runs, show_run
+from orchestrator.history import (
+    HistoryError,
+    SessionId,
+    _persisted_detail,
+    _records,
+    _render_persisted_detail,
+    digest,
+    recent_runs,
+    show_run,
+)
+from orchestrator.ids import GitId, PrId
 from orchestrator.journal import open_journal
 from orchestrator.runs import NodeId, RunId, prepare_round, write_result
 
@@ -237,3 +248,81 @@ def test_an_oh_uuid_uses_oneharness_exact_history_lookup(tmp_path: Path) -> None
 def test_an_empty_query_names_nothing_at_all(tmp_path: Path) -> None:
     with pytest.raises(HistoryError, match="must not be empty"):
         show_run("   ", runs_dir=_tracked_run(tmp_path))
+
+
+def test_git_and_pr_details_fall_back_to_persisted_monitor_snapshots(tmp_path: Path) -> None:
+    runs_dir = tmp_path / "runs"
+    details = runs_dir / "observed" / "monitor" / "details.json"
+    details.parent.mkdir(parents=True)
+    details.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "commits": {
+                    f"git:acme/app@{FULL_SHA[:7]}": {
+                        "identity": "acme/app",
+                        "sha": FULL_SHA[:7],
+                        "branch": "feature",
+                        "base": "main",
+                        "subject": "feat: observed",
+                        "detail": "commit detail\n\npatch body",
+                    }
+                },
+                "prs": {
+                    "pr:acme/app#7": {
+                        "url": PR_URL,
+                        "state": "MERGED",
+                        "merged": True,
+                        "draft": False,
+                        "merge_state_status": "CLEAN",
+                        "checks": [{"name": "ci", "state": "SUCCESS", "required": True}],
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    commit = show_run(f"git:acme/app@{FULL_SHA[:7]}", runs_dir=runs_dir)
+    assert "Subject: feat: observed" in commit
+    assert "patch body" in commit
+    pr = show_run("pr:acme/app#7", runs_dir=runs_dir)
+    assert "State: MERGED" in pr
+    assert '"name": "ci"' in pr
+
+
+def test_persisted_detail_reader_skips_absent_and_malformed_snapshots(tmp_path: Path) -> None:
+    git_ref = GitId("acme/app", FULL_SHA[:7])
+    assert _persisted_detail(git_ref, tmp_path / "absent") is None
+
+    malformed = tmp_path / "runs" / "newest" / "monitor" / "details.json"
+    malformed.parent.mkdir(parents=True)
+    malformed.write_text(json.dumps({"commits": []}), encoding="utf-8")
+    assert _persisted_detail(git_ref, tmp_path / "runs") is None
+    assert "Commit and diff:\n(unavailable)" in _render_persisted_detail(git_ref, {})
+    assert "Checks: []" in _render_persisted_detail(PrId("acme/app", 7), {})
+
+
+def test_recorded_node_includes_its_persisted_remote_detail(tmp_path: Path) -> None:
+    runs_dir = _tracked_run(tmp_path)
+    details = runs_dir / RUN / "monitor" / "details.json"
+    details.parent.mkdir(parents=True)
+    details.write_text(
+        json.dumps(
+            {
+                "commits": {
+                    f"git:acme/app@{FULL_SHA}": {
+                        "identity": "acme/app",
+                        "sha": FULL_SHA,
+                        "subject": "feat: full detail",
+                        "detail": "stored patch",
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    output = show_run(f"git:acme/app@{FULL_SHA[:7]}", runs_dir=runs_dir)
+    assert "Graph node: graph:watch-me/1/api" in output
+    assert "Persisted remote detail:" in output
+    assert "stored patch" in output

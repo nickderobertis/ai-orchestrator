@@ -318,6 +318,14 @@ def log_delta(cwd: str | Path, base: str, branch: str) -> list[Commit]:
     return commits
 
 
+def commit_detail(cwd: str | Path, sha: str) -> str:
+    """Return the durable human-readable commit metadata and patch for ``sha``."""
+    return _git(
+        ["show", "--no-ext-diff", "--format=fuller", "--stat", "--patch", sha],
+        cwd=cwd,
+    ).stdout
+
+
 def log_messages(cwd: str | Path, base: str, branch: str) -> list[CommitMessage]:
     """Return full commit messages in ``branch`` but not ``base``, oldest first."""
     proc = _git(["log", "--reverse", "--format=%H%x00%B%x00%x1e", f"{base}..{branch}"], cwd=cwd)

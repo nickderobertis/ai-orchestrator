@@ -205,7 +205,13 @@ def test_github_merge_journals_the_publication_it_drove(tmp_path: Path) -> None:
     # Every transition is attributed to the node the merge ran for, though the
     # strategy never names one.
     assert {e.node for e in events} == {"api"}
-    assert events[0].detail == {"pr": "u", "number": 1, "base": "main", "draft": False}
+    assert events[0].detail == {
+        "repo": "o/r",
+        "pr": "u",
+        "number": 1,
+        "base": "main",
+        "draft": False,
+    }
     assert events[1].detail["blocking"] == [{"name": "ci", "state": "SUCCESS"}]
 
 

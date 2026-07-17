@@ -12,6 +12,7 @@ import json
 import re
 import subprocess
 import sys
+import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -401,12 +402,79 @@ def _render_snapshot(snapshot: Snapshot, ref: DetailId) -> str:
     return "\n".join(lines)
 
 
+def _persisted_detail(ref: GitId | PrId, runs_dir: Path) -> dict[str, Any] | None:
+    """Find the newest monitor snapshot that observed ``ref``.
+
+    A real lifecycle records its branch and PR transitions in the journal, but a
+    commit SHA is discovered by git and mutable PR state comes from GitHub. The
+    monitor persists those observations precisely so detail lookup still works
+    after merge/cleanup, so this resolver must consult that durable source too.
+    """
+    if not runs_dir.is_dir():
+        return None
+    section = "commits" if isinstance(ref, GitId) else "prs"
+    for run_dir in sorted((path for path in runs_dir.iterdir() if path.is_dir()), reverse=True):
+        path = run_dir / "monitor" / "details.json"
+        if not path.exists():
+            continue
+        try:
+            raw = load_mapping(path)
+        except (ConfigError, OSError):
+            continue
+        records = raw.get(section)
+        if not isinstance(records, dict):
+            continue
+        for key, value in records.items():
+            if not isinstance(key, str) or not isinstance(value, dict):
+                continue
+            if isinstance(ref, PrId) and key == str(ref):
+                return value
+            if isinstance(ref, GitId):
+                identity = value.get("identity")
+                sha = value.get("sha")
+                if identity == ref.identity and isinstance(sha, str) and ref.matches(sha):
+                    return value
+    return None
+
+
+def _render_persisted_detail(ref: GitId | PrId, detail: Mapping[str, Any]) -> str:
+    if isinstance(ref, GitId):
+        lines = [f"Reference: {ref}", f"Commit: {detail.get('sha', ref.sha)}"]
+        for label, key in (("Repo", "identity"), ("Branch", "branch"), ("Base", "base")):
+            if isinstance(value := detail.get(key), str) and value:
+                lines.append(f"{label}: {value}")
+        if isinstance(subject := detail.get("subject"), str) and subject:
+            lines.append(f"Subject: {subject}")
+        patch = detail.get("detail")
+        lines.append(
+            "Commit and diff:\n" + (patch if isinstance(patch, str) and patch else "(unavailable)")
+        )
+        return "\n".join(lines)
+    checks = detail.get("checks")
+    rendered_checks = json.dumps(checks, sort_keys=True) if isinstance(checks, list) else "[]"
+    return "\n".join(
+        [
+            f"Reference: {ref}",
+            f"PR: {detail.get('url', ref)}",
+            f"State: {detail.get('state', 'unknown')}",
+            f"Merged: {detail.get('merged', False)}",
+            f"Draft: {detail.get('draft', False)}",
+            f"Merge state: {detail.get('merge_state_status', 'unknown')}",
+            f"Checks: {rendered_checks}",
+        ]
+    )
+
+
 def _show_snapshot(ref: GitId | PrId | GraphId, runs_dir: Path) -> str:
     """Resolve a graph/git/PR id against the persisted ledger and journal."""
     if isinstance(ref, GraphId):
         found = [snapshot] if (snapshot := _graph_snapshot(ref, runs_dir)) else []
     else:
         found = _matching_snapshots(ref, runs_dir)
+    detail_ref: GitId | PrId | None = ref if isinstance(ref, GitId | PrId) else None
+    persisted = _persisted_detail(detail_ref, runs_dir) if detail_ref is not None else None
+    if not found and persisted is not None and detail_ref is not None:
+        return _render_persisted_detail(detail_ref, persisted)
     if not found:
         raise HistoryError(
             f"no recorded tracked-graph node matches {ref} under {runs_dir}/ "
@@ -416,6 +484,10 @@ def _show_snapshot(ref: GitId | PrId | GraphId, runs_dir: Path) -> str:
     # is legitimately carried across rounds, so one commit or PR can appear in
     # several, and the latest round is the one that says where it ended up.
     rendered = _render_snapshot(found[-1], ref)
+    if persisted is not None and detail_ref is not None:
+        rendered += "\n\nPersisted remote detail:\n" + _render_persisted_detail(
+            detail_ref, persisted
+        )
     if len(found) > 1:
         others = ", ".join(str(snapshot.ref) for snapshot in found[:-1])
         rendered += f"\nAlso recorded in: {others}"
@@ -462,7 +534,7 @@ def _show_session(query: str, *, oneharness_bin: str = "oneharness") -> str:
         # file keeps substring lookup and legacy display-name lookup unchanged.
         parsed = session_records(item)
         detail_query = str(session_id)
-    else:
+    elif _is_uuid(query):
         # UUIDv7 history identities live on v0.2 records rather than the backwards-
         # compatible list envelope.  Delegate an otherwise-unmatched query to the
         # CLI's exact-ID lookup; it also synthesizes stable IDs while normalizing
@@ -476,6 +548,8 @@ def _show_session(query: str, *, oneharness_bin: str = "oneharness") -> str:
         raw_session = parsed[0].get("session")
         session_id = SessionId(raw_session if isinstance(raw_session, str) else query)
         detail_query = query
+    else:
+        raise HistoryError(f"no worker history session matches {query!r}")
     result = digest(parsed, session_id)
     commands = "\n".join(f"  $ {command}" for command in result.commands) or "  (none recorded)"
     return (
@@ -487,6 +561,14 @@ def _show_session(query: str, *, oneharness_bin: str = "oneharness") -> str:
         f"Latest agent text:\n{result.text or '(none recorded)'}\n\n"
         f"Full detail: oneharness history show {detail_query} --format text"
     )
+
+
+def _is_uuid(value: str) -> bool:
+    try:
+        uuid.UUID(value)
+    except ValueError:
+        return False
+    return True
 
 
 def _exit_error(exc: HistoryError) -> int:

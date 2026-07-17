@@ -28,6 +28,9 @@ def test_full_git_cycle(tmp_path, bare_origin) -> None:
     sha = gitops.commit(wt, "add new")
     assert sha == gitops.head_sha(wt)
     assert gitops.has_commits_ahead(wt, "origin/main")
+    detail = gitops.commit_detail(wt, sha)
+    assert "commit " + sha in detail
+    assert "add new" in detail and "+x" in detail
 
     gitops.push(wt, "feat")
     gitops.checkout(clone, "main")

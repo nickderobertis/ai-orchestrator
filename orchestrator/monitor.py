@@ -39,6 +39,7 @@ detail, it tells you the id to ask for.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 import re
@@ -367,10 +368,16 @@ def known_branches(ledgers: Iterable[RoundLedger], events: Iterable[Event]) -> l
             or not detail_base
         ):
             continue
-        # A journal event names the branch but not the repository — the node it is
-        # scoped to already implies one. Only adopt it for an identity the ledger
-        # has confirmed for this run, rather than guessing which repo it belongs to.
-        for identity in identities:
+        detail_identity = event.detail.get("repo")
+        candidates = (
+            [detail_identity]
+            if isinstance(detail_identity, str) and detail_identity
+            else sorted(identities)
+        )
+        # Current lifecycle writers carry the normalized repository directly, so
+        # the branch is observable before a running round has a result ledger. The
+        # ledger fallback keeps older journals replayable.
+        for identity in candidates:
             found.setdefault(
                 (identity, detail_branch), BranchRef(identity, detail_branch, detail_base)
             )
@@ -410,7 +417,13 @@ def known_prs(ledgers: Iterable[RoundLedger], events: Iterable[Event]) -> list[P
         if detail_number is None or not isinstance(detail_url, str):
             continue
         detail_base = event.detail.get("base")
-        for identity in identities:
+        detail_identity = event.detail.get("repo")
+        candidates = (
+            [detail_identity]
+            if isinstance(detail_identity, str) and detail_identity
+            else sorted(identities)
+        )
+        for identity in candidates:
             found.setdefault(
                 (identity, detail_number),
                 PrRef(
@@ -673,12 +686,18 @@ def git_events(
             except DetailIdError:
                 continue
             key = str(git_ref)
+            checkout = checkouts.get(ref.identity)
+            detail = ""
+            if checkout is not None:
+                with contextlib.suppress(gitops.GitError):
+                    detail = gitops.commit_detail(checkout, commit.sha)
             snapshot.commits[key] = {
                 "sha": commit.sha,
                 "subject": commit.subject,
                 "branch": ref.branch,
                 "base": ref.base,
                 "identity": ref.identity,
+                "detail": detail,
             }
             found.append(
                 MonitorEvent(

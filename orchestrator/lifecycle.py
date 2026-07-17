@@ -836,7 +836,14 @@ def _pause_at_human_step(
         # Only the branch that actually opens one records it; resuming reuses the
         # draft an earlier round already journaled.
         journal.append(
-            "pr-created", detail={"pr": pr.url, "number": pr.number, "base": pr_base, "draft": True}
+            "pr-created",
+            detail={
+                "repo": result.repo,
+                "pr": pr.url,
+                "number": pr.number,
+                "base": pr_base,
+                "draft": True,
+            },
         )
     result.pr = pr
     return pause(checkpoint, pr.url)
@@ -1027,6 +1034,7 @@ def run_repo_task(
         log.append(
             "branch-discovered",
             detail={
+                "repo": ref.slug,
                 "branch": branch,
                 "base_branch": root_base,
                 "pr_base": pr_base,
