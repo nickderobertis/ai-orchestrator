@@ -92,7 +92,7 @@ at different times into one ordered stream:
 | Run journal | `runs/<run-id>/events.jsonl` | every node transition, as it is appended |
 | oneharness history | sessions whose `run_id` label names this run | a session's status or turn count moves |
 | Git | commits on each known lifecycle branch | once per commit, ever |
-| GitHub | each lifecycle-linked PR | its state or required checks change |
+| GitHub | each lifecycle-linked PR | its state or any check changes |
 
 ```sh
 just monitor                      # newest active run, follow until it completes
@@ -128,6 +128,8 @@ control-stripped line capped at 96 characters derived from recorded status/resul
 values. The monitor never tries to *be* the detail; it tells you the id to ask
 for. Heartbeat lines carry no id — a heartbeat is the absence of an event, and
 inventing one would put a value in the stream that `history-show` cannot resolve.
+PR state and check observations are separate events under the same `pr:` id; every
+check line says `required` or `optional` before its state and name.
 
 Round transitions are not events for the same reason: a round has no node, so it
 has no `graph:` id. They reach the reader as run state, in the heartbeat.
@@ -135,8 +137,9 @@ has no `graph:` id. They reach the reader as run state, in the heartbeat.
 **Dedup and snapshots.** Every source is polled, so each pass re-reads what it has
 already reported. An observation is keyed by a **durable source identity** the
 source itself guarantees — a journal sequence, a commit sha, a PR state signature
-— never by its position in a pass, so a monitor restarted mid-run replays and then
-continues rather than double-reporting. Git and GitHub are remote state that
+or an individual check observation — never by its position in a pass, so a monitor
+restarted mid-run replays and then continues rather than double-reporting. Git and
+GitHub are remote state that
 outlives the round but is not reproducible from the run directory (a branch is
 deleted once its PR merges), so what they report is persisted to
 `runs/<run-id>/monitor/details.json`, keyed by the same typed id. That is what

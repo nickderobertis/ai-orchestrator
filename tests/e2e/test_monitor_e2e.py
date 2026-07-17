@@ -28,7 +28,7 @@ import pytest
 from fakes import FakeGitHub
 
 from orchestrator import REPO_ROOT, gitops
-from orchestrator.github import GitHubError, PRStatus, PullRequest
+from orchestrator.github import Check, GitHubError, PRStatus, PullRequest
 from orchestrator.journal import open_journal
 from orchestrator.monitor import (
     HEADER,
@@ -103,6 +103,22 @@ class _Offline:
     def status(self, pr: PullRequest) -> PRStatus:
         self.asked.append(pr.number)
         raise GitHubError("gh: command not found")
+
+
+class _MutableChecks:
+    """The sanctioned GitHub seam with a rollup a live poll can observe changing."""
+
+    def __init__(self, *checks: Check) -> None:
+        self.checks = list(checks)
+
+    def status(self, pr: PullRequest) -> PRStatus:
+        return PRStatus(
+            number=pr.number,
+            state="OPEN",
+            merged=False,
+            merge_state_status="CLEAN",
+            checks=tuple(self.checks),
+        )
 
 
 # --- the git source, and what outlives the branch ------------------------------
@@ -212,26 +228,96 @@ def test_the_snapshot_widens_what_git_shows_rather_than_replacing_it(
 # --- the PR source -------------------------------------------------------------
 
 
-def test_a_pr_is_reported_again_exactly_when_its_state_changes(
-    tmp_path: Path, bare_origin: Callable[..., Path]
-) -> None:
-    """A PR is the one source here that legitimately changes, and checks fold into the
-    signature so a required check going green is reportable rather than silent."""
-    github = FakeGitHub(bare_origin(), fail_checks=True)
-    pull = github.create_pr("acme/app", head="work", base="main", title="t", body="b")
+def test_every_pr_check_transition_says_whether_it_is_required() -> None:
+    """Optional checks are observable too; the classification precedes an unbounded name."""
+    pull = PullRequest(1, "https://github.com/acme/app/pull/1", "acme/app", "work", "main")
     refs = [PrRef("acme/app", pull.number, pull.url, "main")]
     snapshot = DetailSnapshot()
+    github = _MutableChecks(
+        Check("ci", "FAILURE", True),
+        Check("lint", "FAILURE", False),
+    )
+    seen: set[str] = set()
 
-    red = pr_events(refs, snapshot, now=AT, github=github)
-    assert [event.summary for event in red] == ["PR #1 open checks=failed clean"]
+    def fresh() -> list[Any]:
+        events = pr_events(refs, snapshot, now=AT, github=github, replay=not seen)
+        result = [event for event in events if event.key not in seen]
+        seen.update(event.key for event in result)
+        return result
 
-    unchanged = pr_events(refs, snapshot, now=AT, github=github)
-    assert [event.key for event in unchanged] == [event.key for event in red]
+    initial = fresh()
+    assert [(event.kind, event.summary) for event in initial] == [
+        ("pr-state", "PR #1 open clean"),
+        ("pr-check", "PR #1 required check failure ci"),
+        ("pr-check", "PR #1 optional check failure lint"),
+    ]
+    assert fresh() == []
 
-    github.fail_checks = False
-    green = pr_events(refs, snapshot, now=AT, github=github)
-    assert [event.summary for event in green] == ["PR #1 open checks=green clean"]
-    assert green[0].key != red[0].key
+    github.checks[1] = Check("lint", "SUCCESS", False)
+    assert [event.summary for event in fresh()] == ["PR #1 optional check success lint"]
+
+    github.checks[0] = Check("ci", "SUCCESS", True)
+    assert [event.summary for event in fresh()] == ["PR #1 required check success ci"]
+
+    github.checks[0] = Check("ci", "SUCCESS", False)
+    assert [event.summary for event in fresh()] == ["PR #1 optional check success ci"]
+
+    github.checks[0] = Check("ci", "FAILURE", False)
+    assert [event.summary for event in fresh()] == ["PR #1 optional check failure ci"]
+    github.checks[0] = Check("ci", "SUCCESS", False)
+    assert [event.summary for event in fresh()] == ["PR #1 optional check success ci"]
+
+    github.checks[1] = Check("style", "SUCCESS", False)
+    assert [event.summary for event in fresh()] == [
+        "PR #1 optional check success style",
+        "PR #1 optional check removed lint",
+    ]
+
+    github.checks.append(Check("x" * 120 + "\nrenamed", "ERROR", False))
+    long_event = fresh()
+    assert len(long_event) == 1
+    assert long_event[0].summary.startswith("PR #1 optional check error ")
+    assert len(long_event[0].summary) == 96
+    assert "\n" not in long_event[0].summary
+
+
+def test_monitor_poll_deduplicates_checks_but_emits_an_optional_only_change(tmp_path: Path) -> None:
+    run_dir = tmp_path / "runs" / RUN
+    open_journal(run_dir, RUN, 1).append(
+        "pr-created",
+        node=NodeId("api"),
+        detail={
+            "repo": "acme/app",
+            "pr": "https://github.com/acme/app/pull/1",
+            "base": "main",
+        },
+    )
+    github = _MutableChecks(
+        Check("ci", "SUCCESS", True),
+        Check("lint", "PENDING", False),
+    )
+    monitor = Monitor(
+        run_id=RUN,
+        run_dir=run_dir,
+        oneharness_bin=str(tmp_path / "absent"),
+        github=github,
+        clock=lambda: AT,
+    )
+
+    assert [event.summary for event in monitor.poll() if event.source == "pr"] == [
+        "PR #1 open clean",
+        "PR #1 required check success ci",
+        "PR #1 optional check pending lint",
+    ]
+    assert monitor.poll() == []
+
+    github.checks[1] = Check("lint", "FAILURE", False)
+    assert [event.summary for event in monitor.poll()] == ["PR #1 optional check failure lint"]
+    assert monitor.poll() == []
+
+    github.checks[1] = Check("lint", "PENDING", False)
+    assert [event.summary for event in monitor.poll()] == ["PR #1 optional check pending lint"]
+    assert monitor.poll() == []
 
 
 def test_a_replay_reports_the_pr_state_gh_can_no_longer_be_asked_for(
@@ -247,7 +333,10 @@ def test_a_replay_reports_the_pr_state_gh_can_no_longer_be_asked_for(
     snapshot = DetailSnapshot()
     live = pr_events(refs, snapshot, now=AT, github=github)
     save_snapshot(run_dir, snapshot)
-    assert [event.summary for event in live] == ["PR #1 open checks=green clean"]
+    assert [event.summary for event in live] == [
+        "PR #1 open clean",
+        "PR #1 required check success ci",
+    ]
 
     offline = _Offline()
     assert pr_events(refs, DetailSnapshot(), now=AT, github=offline) == []

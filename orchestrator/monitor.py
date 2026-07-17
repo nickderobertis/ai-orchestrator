@@ -57,7 +57,7 @@ from . import gitops
 from .config import ConfigError
 from .coordination import advisory_lock, atomic_json
 from .detail_snapshot import SNAPSHOT_VERSION, CommitDetail, PrDetail
-from .github import CliGitHubBackend, GitHubBackend, GitHubError, PRStatus, PullRequest
+from .github import Check, CliGitHubBackend, GitHubBackend, GitHubError, PRStatus, PullRequest
 from .history import HistoryError, HistorySession, session_records, worker_sessions
 from .ids import DetailId, DetailIdError, GitId, GraphId, OneharnessId, PrId
 from .journal import (
@@ -716,10 +716,57 @@ def git_events(
     return found
 
 
-def _pr_signature(
-    status_state: str, merged: bool, draft: bool, merge_state: str, checks: str
-) -> str:
-    return f"{status_state}:{merged}:{draft}:{merge_state}:{checks}"
+def _pr_signature(status_state: str, merged: bool, draft: bool, merge_state: str) -> str:
+    return f"{status_state}:{merged}:{draft}:{merge_state}"
+
+
+def _ordered_checks(checks: Iterable[Check]) -> list[Check]:
+    """Give check observations a stable order independent of GitHub's rollup order."""
+    return sorted(
+        checks,
+        key=lambda check: (
+            check.name.casefold(),
+            check.name,
+            not check.required,
+            check.state,
+        ),
+    )
+
+
+def _check_key(ref: PrId, check: Check, revision: int, state: str | None = None) -> str:
+    """A collision-safe identity for one check observation under a PR detail id."""
+    observation = json.dumps(
+        {
+            "name": check.name,
+            "required": check.required,
+            "revision": revision,
+            "state": state or check.state,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return f"pr-check:{ref}:{observation}"
+
+
+def _check_event(
+    ref: PrId,
+    number: int,
+    check: Check,
+    *,
+    now: float,
+    revision: int,
+    removed: bool = False,
+) -> MonitorEvent:
+    classification = "required" if check.required else "optional"
+    state = "removed" if removed else check.state.lower()
+    return MonitorEvent(
+        at=now,
+        source="pr",
+        kind="pr-check",
+        stream_id=ref,
+        summary=summarize(f"PR #{number} {classification} check {state} {check.name}"),
+        key=_check_key(ref, check, revision, "REMOVED" if removed else None),
+    )
 
 
 def persisted_status(snapshot: DetailSnapshot, ref: PrId) -> PRStatus | None:
@@ -740,13 +787,13 @@ def pr_events(
     *,
     now: float,
     github: GitHubBackend | None = None,
+    replay: bool = True,
 ) -> list[MonitorEvent]:
     """The current state of each PR the lifecycle linked.
 
-    Keyed by a *state signature* rather than the PR number: a PR is the one source
-    here that legitimately changes, and the reader needs to see each change once.
-    Checks fold into the signature so a required check going green is a reportable
-    transition, not a silent one.
+    PR lifecycle state and individual checks have separate durable signatures. That
+    keeps an optional-only check transition visible and lets every check summary say
+    whether it gates the merge, without making the PR-state line unbounded.
     """
     backend = github if github is not None else CliGitHubBackend()
     found: list[MonitorEvent] = []
@@ -757,6 +804,8 @@ def pr_events(
             pr_ref = PrId(identity=ref.identity, number=ref.number)
         except DetailIdError:
             continue
+        key = str(pr_ref)
+        previous = PrDetail.from_value(snapshot.prs.get(key))
         pull = PullRequest(
             number=ref.number, url=ref.url, repo=ref.identity, head="", base=ref.base
         )
@@ -771,35 +820,71 @@ def pr_events(
             if fallback is None:
                 continue
             status = fallback
-        checks = ",".join(
-            f"{check.name}={check.state}" for check in sorted(status.blocking, key=lambda c: c.name)
-        )
+        current = _ordered_checks(status.checks)
         signature = _pr_signature(
-            status.state, status.merged, status.draft, status.merge_state_status, checks
+            status.state, status.merged, status.draft, status.merge_state_status
         )
-        key = str(pr_ref)
+        previous_signature = (
+            _pr_signature(
+                previous.state,
+                previous.merged,
+                previous.draft,
+                previous.merge_state_status,
+            )
+            if previous is not None
+            else None
+        )
+        previous_checks = _ordered_checks(previous.checks) if previous is not None else []
+        changed = previous is None or signature != previous_signature or current != previous_checks
+        revision = 1 if previous is None else previous.revision + int(changed)
         snapshot.prs[key] = PrDetail.from_status(
-            status, url=ref.url, identity=ref.identity
+            status, url=ref.url, identity=ref.identity, revision=revision
         ).to_record()
-        blocking = "green" if status.blocking_green else "pending"
-        if status.blocking_failed:
-            blocking = "failed"
         # A draft PR is OPEN to `gh`, so drafts and ready PRs would render identically
         # and a draft going ready would read as no change at all.
         state = "draft" if status.draft and not status.merged else status.state.lower()
-        found.append(
-            MonitorEvent(
-                at=now,
-                source="pr",
-                kind="pr-state",
-                stream_id=pr_ref,
-                summary=summarize(
-                    f"PR #{status.number} {state} checks={blocking} "
-                    f"{status.merge_state_status.lower()}"
-                ),
-                key=f"pr:{key}:{signature}",
+        if replay or previous is None or signature != previous_signature:
+            found.append(
+                MonitorEvent(
+                    at=now,
+                    source="pr",
+                    kind="pr-state",
+                    stream_id=pr_ref,
+                    summary=summarize(
+                        f"PR #{status.number} {state} {status.merge_state_status.lower()}"
+                    ),
+                    key=f"pr:{key}:{revision}:{signature}",
+                )
             )
+        if replay or previous is None:
+            observed = current
+        else:
+            previous_by_name = {check.name: check for check in previous_checks}
+            observed = [check for check in current if previous_by_name.get(check.name) != check]
+        found.extend(
+            _check_event(
+                pr_ref,
+                status.number,
+                check,
+                now=now,
+                revision=revision,
+            )
+            for check in observed
         )
+        if previous is not None and not replay:
+            current_names = {check.name for check in current}
+            found.extend(
+                _check_event(
+                    pr_ref,
+                    status.number,
+                    check,
+                    now=now,
+                    revision=revision,
+                    removed=True,
+                )
+                for check in previous_checks
+                if check.name not in current_names
+            )
     return found
 
 
@@ -968,6 +1053,7 @@ class Monitor:
     seen: set[str] = field(default_factory=set)
     snapshot: DetailSnapshot = field(default_factory=DetailSnapshot)
     _checkout_cache: dict[str, Path] | None = None
+    _polled: bool = False
 
     def checkouts(self) -> dict[str, Path]:
         """Resolve registered checkouts once per process; the registry rarely moves."""
@@ -994,7 +1080,14 @@ class Monitor:
         # is where the branch's commits are when the two differ.
         checkouts = {**self.checkouts(), **ledger_checkouts(ledgers)}
         found += git_events(known_branches(ledgers, mine), checkouts, self.snapshot, now=now)
-        found += pr_events(known_prs(ledgers, mine), self.snapshot, now=now, github=self.github)
+        found += pr_events(
+            known_prs(ledgers, mine),
+            self.snapshot,
+            now=now,
+            github=self.github,
+            replay=not self._polled,
+        )
+        self._polled = True
         fresh = [event for event in found if event.key not in self.seen]
         self.seen.update(event.key for event in fresh)
         if fresh:
