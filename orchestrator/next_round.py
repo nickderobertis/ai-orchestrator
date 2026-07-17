@@ -12,6 +12,8 @@ from .journal import open_journal
 from .plan import PlanError
 from .replan import next_round
 from .runs import (
+    NodeId,
+    StepId,
     as_result_payload,
     human_actions,
     latest_round,
@@ -86,7 +88,12 @@ def main(argv: list[str] | None = None) -> int:
         journal = open_journal(run_dir, run_id, number)
         for ref in completed_refs:
             node, _, step = ref.partition("/")
-            journal.append("human-attested", node=node, step=step or None, detail={"ref": ref})
+            journal.append(
+                "human-attested",
+                node=NodeId(node),
+                step=StepId(step) if step else None,
+                detail={"ref": ref},
+            )
 
     if not plan["tasks"]:
         if completed_refs:

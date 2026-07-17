@@ -19,7 +19,14 @@ from .workspace import IdentityKey, RepositoryType, Workflow
 _RUN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 _ROUND = re.compile(r"^round-(\d+)$")
 
+# The identifiers a tracked round is addressed by. They are all non-empty strings
+# from different namespaces, and they travel together through the ledger, the
+# journal, and the history labels — often as adjacent arguments of one call. Naming
+# them apart makes passing a step id where a node id belongs a type error instead
+# of a plausible-looking recorded line that nothing would ever contradict.
 RunId = NewType("RunId", str)
+NodeId = NewType("NodeId", str)
+StepId = NewType("StepId", str)
 
 
 class RunLedgerRow(NamedTuple):

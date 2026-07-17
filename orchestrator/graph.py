@@ -21,7 +21,7 @@ from typing import Any, Literal, cast
 from . import REPO_ROOT
 from .config import ConfigError, load_yaml
 from .dispatch import Report
-from .journal import Journal, NullJournal, open_journal
+from .journal import JournalSink, NullJournal, open_journal
 from .lifecycle import (
     LifecycleResult,
     RepoPlanNode,
@@ -46,6 +46,9 @@ from .runs import (
     GraphPayload,
     GraphResultItem,
     HumanActionPayload,
+    NodeId,
+    RunId,
+    StepId,
     prepare_round,
     resolve_run_dir,
     status_summary,
@@ -245,7 +248,7 @@ def run_graph(
     agent_runner: Callable[[PlanNode], Report],
     lifecycle_runner: Callable[[RepoPlanNode], LifecycleResult],
     concurrency: int | None = None,
-    journal: Journal | NullJournal | None = None,
+    journal: JournalSink | None = None,
 ) -> GraphResult:
     """Schedule and run a mixed tracked graph, journaling each transition.
 
@@ -254,7 +257,7 @@ def run_graph(
     behaves identically to a recorded one.
     """
     conc = concurrency if concurrency is not None else graph.concurrency
-    log: Journal | NullJournal = journal if journal is not None else NullJournal()
+    log: JournalSink = journal if journal is not None else NullJournal()
     nodes = {n.id: n for n in graph.tasks}
     deps = {nid: nodes[nid].deps for nid in nodes}
     completed: dict[str, LifecycleResult] = {}
@@ -262,50 +265,51 @@ def run_graph(
 
     def run_one(nid: str) -> NodeRun:
         node = nodes[nid]
+        node_id = NodeId(nid)
         if node.human:
-            log.append("human-waiting", node=nid, detail={"task": first_line(node.task)})
+            log.append("human-waiting", node=node_id, detail={"task": first_line(node.task)})
             return NodeRun("waiting", "awaiting human action")
         log.append(
             "node-started",
-            node=nid,
+            node=node_id,
             detail={"node_kind": "lifecycle" if node.lifecycle else "direct"},
         )
         if node.lifecycle is not None:
             with guard:
                 anchors = combine_stack_bases(node.lifecycle, completed)
             result = lifecycle_runner(replace(node.lifecycle, stack_bases=anchors))
-            _journal_lifecycle(log, nid, result)
+            _journal_lifecycle(log, node_id, result)
             if result.waiting:
                 log.append(
                     "node-settled",
-                    node=nid,
+                    node=node_id,
                     detail={"status": "waiting", "outcome": result.outcome},
                 )
                 return NodeRun("waiting", result.detail, result)
             if not result.ok:
                 log.append(
                     "node-failed",
-                    node=nid,
+                    node=node_id,
                     detail={"outcome": result.outcome, "detail": result.detail},
                 )
                 return NodeRun("failed", result.detail or result.outcome, result)
             with guard:
                 completed[nid] = result
             log.append(
-                "node-settled", node=nid, detail={"status": "done", "outcome": result.outcome}
+                "node-settled", node=node_id, detail={"status": "done", "outcome": result.outcome}
             )
             return NodeRun("done", None, result)
         report = agent_runner(cast(PlanNode, node.direct))
         if report.completed:
             log.append(
                 "node-settled",
-                node=nid,
+                node=node_id,
                 detail={"status": "done", "turns": report.assistant_turns},
             )
             return NodeRun("done", None, report)
         log.append(
             "node-failed",
-            node=nid,
+            node=node_id,
             detail={"detail": "hit the turn cap", "turns": report.assistant_turns},
         )
         return NodeRun("failed", "did not complete (hit the turn cap)", report)
@@ -314,7 +318,7 @@ def run_graph(
     return _collect(nodes, runs, started_order)
 
 
-def _journal_lifecycle(log: Journal | NullJournal, nid: str, result: LifecycleResult) -> None:
+def _journal_lifecycle(log: JournalSink, nid: NodeId, result: LifecycleResult) -> None:
     """Record the transitions a finished lifecycle node reports back.
 
     Everything here is read off the returned `LifecycleResult` at the call site, so
@@ -335,11 +339,11 @@ def _journal_lifecycle(log: Journal | NullJournal, nid: str, result: LifecycleRe
         log.append(
             "step-settled",
             node=nid,
-            step=step.id,
+            step=StepId(step.id),
             detail={"status": step.status, "step_kind": step.kind},
         )
     for sid in result.waiting_steps:
-        log.append("human-waiting", node=nid, step=sid)
+        log.append("human-waiting", node=nid, step=StepId(sid))
     if result.verify is not None:
         log.append(
             "verification-finished",
@@ -573,9 +577,9 @@ def main(argv: list[str] | None = None) -> int:
             print(f"run-plan: could not claim run: {exc}", file=sys.stderr)
             return 2
 
-    journal: Journal | NullJournal = NullJournal()
+    journal: JournalSink = NullJournal()
     if run_dir is not None and round_record is not None:
-        journal = open_journal(run_dir, run_dir.name, round_record[0])
+        journal = open_journal(run_dir, RunId(run_dir.name), round_record[0])
         journal.append(
             "round-started",
             detail={"nodes": len(graph.tasks), "concurrency": graph.concurrency},

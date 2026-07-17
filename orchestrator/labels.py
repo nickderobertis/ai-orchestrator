@@ -22,6 +22,14 @@ from __future__ import annotations
 import re
 import unicodedata
 from collections.abc import Mapping
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    # Annotation-only: this module formats an env var and must stay importable
+    # without dragging the ledger (and through it the merge/github/verify stack)
+    # into every dispatch. `graph_labels` never constructs one of these ids, it
+    # only renders ones it is handed.
+    from .runs import NodeId, RunId, StepId
 
 LABEL_ENV = "ONEHARNESS_HISTORY_LABELS"
 
@@ -102,10 +110,10 @@ def merge_labels(inherited: str | None, own: Mapping[str, str]) -> str:
 
 def graph_labels(
     *,
-    run_id: str | None = None,
+    run_id: RunId | None = None,
     round_number: int | None = None,
-    node: str | None = None,
-    step: str | None = None,
+    node: NodeId | None = None,
+    step: StepId | None = None,
 ) -> dict[str, str]:
     """Build the labels locating a dispatch in the tracked graph.
 
