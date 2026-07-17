@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -106,10 +107,12 @@ class _Offline:
 # --- the git source, and what outlives the branch ------------------------------
 
 
-def test_the_git_source_reports_each_real_commit_under_a_stable_id(tmp_path: Path) -> None:
+def test_the_git_source_reports_each_real_commit_under_a_stable_id(
+    tmp_path: Path, bare_origin: Callable[..., Path]
+) -> None:
     """A commit is immutable, so its sha *is* its durable identity — which is what
     lets the dedup fire it exactly once however many passes re-read the branch."""
-    repo = _repo(tmp_path)
+    repo = _repo(tmp_path, bare_origin)
     snapshot = DetailSnapshot()
 
     events = git_events([BRANCH], {"local/app": repo}, snapshot, now=AT)
@@ -124,11 +127,13 @@ def test_the_git_source_reports_each_real_commit_under_a_stable_id(tmp_path: Pat
     assert [event.key for event in again] == [event.key for event in events]
 
 
-def test_a_replay_reports_the_commits_git_can_no_longer_show(tmp_path: Path) -> None:
+def test_a_replay_reports_the_commits_git_can_no_longer_show(
+    tmp_path: Path, bare_origin: Callable[..., Path]
+) -> None:
     """A branch is deleted once its PR merges and a clone is thrown away, so a replay
     that only re-derived commits from git would show *fewer* of them the longer ago
     the run was — the opposite of a durable record."""
-    repo = _repo(tmp_path)
+    repo = _repo(tmp_path, bare_origin)
     run_dir = tmp_path / "runs" / RUN
     checkouts = {"local/app": repo}
 
@@ -152,10 +157,12 @@ def test_a_replay_reports_the_commits_git_can_no_longer_show(tmp_path: Path) -> 
     assert [event.key for event in thrown_away] == [event.key for event in live]
 
 
-def test_a_replay_reports_the_commits_that_are_now_in_the_base(tmp_path: Path) -> None:
+def test_a_replay_reports_the_commits_that_are_now_in_the_base(
+    tmp_path: Path, bare_origin: Callable[..., Path]
+) -> None:
     """`base..branch` legitimately empties as the base catches up. The run's commits
     did not stop being the run's commits when the merge landed."""
-    repo = _repo(tmp_path)
+    repo = _repo(tmp_path, bare_origin)
     run_dir = tmp_path / "runs" / RUN
     checkouts = {"local/app": repo}
 
@@ -171,9 +178,11 @@ def test_a_replay_reports_the_commits_that_are_now_in_the_base(tmp_path: Path) -
     assert [event.key for event in replayed] == [event.key for event in live]
 
 
-def test_the_snapshot_widens_what_git_shows_rather_than_replacing_it(tmp_path: Path) -> None:
+def test_the_snapshot_widens_what_git_shows_rather_than_replacing_it(
+    tmp_path: Path, bare_origin: Callable[..., Path]
+) -> None:
     """Git is the only source for a commit pushed since the last pass."""
-    repo = _repo(tmp_path)
+    repo = _repo(tmp_path, bare_origin)
     run_dir = tmp_path / "runs" / RUN
     checkouts = {"local/app": repo}
 
@@ -197,7 +206,7 @@ def test_the_snapshot_widens_what_git_shows_rather_than_replacing_it(tmp_path: P
 
 
 def test_a_pr_is_reported_again_exactly_when_its_state_changes(
-    tmp_path: Path, bare_origin: Any
+    tmp_path: Path, bare_origin: Callable[..., Path]
 ) -> None:
     """A PR is the one source here that legitimately changes, and checks fold into the
     signature so a required check going green is reportable rather than silent."""
@@ -219,7 +228,7 @@ def test_a_pr_is_reported_again_exactly_when_its_state_changes(
 
 
 def test_a_replay_reports_the_pr_state_gh_can_no_longer_be_asked_for(
-    tmp_path: Path, bare_origin: Any
+    tmp_path: Path, bare_origin: Callable[..., Path]
 ) -> None:
     """GitHub outlives the round but is not reproducible from the run directory, and a
     replay may have no `gh`, no auth, and no network."""
@@ -423,10 +432,12 @@ def test_an_absent_history_store_degrades_to_silence(tmp_path: Path) -> None:
 # --- the whole monitor, over a real run ----------------------------------------
 
 
-def test_a_run_folds_its_journal_and_its_real_branch_into_one_stream(tmp_path: Path) -> None:
+def test_a_run_folds_its_journal_and_its_real_branch_into_one_stream(
+    tmp_path: Path, bare_origin: Callable[..., Path]
+) -> None:
     """The monitor discovers the branch from the run's own ledger, reads the real
     commits on it, and persists them — so the replay survives the branch itself."""
-    repo = _repo(tmp_path)
+    repo = _repo(tmp_path, bare_origin)
     Registry().register(str(repo))
     runs_dir = tmp_path / "runs"
     run_dir = runs_dir / RUN
