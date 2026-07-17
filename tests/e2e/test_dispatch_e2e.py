@@ -214,6 +214,12 @@ def test_dispatch_cli_applies_ordered_models_to_real_oneharness(
         "FAKE_HARNESS_LOG": str(log_path),
     }
     env.pop("ONEHARNESS_MODELS", None)
+    # The default session ("dispatch-<persona>") is a fixed global name: oneharness
+    # would resume whatever harness a previous run of it bound, so a stored
+    # codex-bound session silently overrides the claude-code model asserted here.
+    # Deriving the name from this test's target keeps the run on a session of its
+    # own without reaching into the global session store.
+    session = f"dispatch-models-{tmp_path.parent.name}-{target.name}"
     proc = subprocess.run(
         [
             "orchestrator-dispatch",
@@ -225,6 +231,8 @@ def test_dispatch_cli_applies_ordered_models_to_real_oneharness(
             str(target),
             "--project-dir",
             str(target),
+            "--session",
+            session,
             "--onejudge-bin",
             onejudge_bin,
         ],
