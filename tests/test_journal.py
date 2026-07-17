@@ -158,6 +158,17 @@ def test_reconcile_ignores_another_runs_records_without_deleting_them(tmp_path: 
     assert path.read_bytes() == before
 
 
+def test_journal_events_excludes_another_runs_records(tmp_path: Path) -> None:
+    run_dir = tmp_path / "r"
+    run_dir.mkdir()
+    path = run_dir / "events.jsonl"
+    path.write_text(_line(seq=1) + _line(run_id="someone-else", seq=2), encoding="utf-8")
+
+    journal = open_journal(run_dir, RunId("r"), 1)
+
+    assert [event.run_id for event in journal.events()] == ["r"]
+
+
 def test_read_events_skips_a_torn_tail_without_mutating_the_file(tmp_path: Path) -> None:
     path = tmp_path / "events.jsonl"
     path.write_text(
@@ -196,7 +207,9 @@ def test_reconcile_is_a_noop_on_a_missing_or_intact_journal(tmp_path: Path) -> N
         pytest.param(_record(round=True), id="boolean-round"),
         pytest.param(_record(seq=True), id="boolean-seq"),
         pytest.param(_record(node=7), id="non-string-node"),
+        pytest.param(_record(node=""), id="empty-node"),
         pytest.param(_record(step=7), id="non-string-step"),
+        pytest.param(_record(step=""), id="empty-step"),
         pytest.param(_record(detail="nope"), id="non-mapping-detail"),
         # The value contract: rounds and sequences count from 1, so a stored 0 is not
         # a low sequence but a corrupt one — honouring it would hand the next append

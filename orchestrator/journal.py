@@ -125,6 +125,10 @@ class Event:
             raise JournalError(f"unknown journal event kind: {self.kind!r}")
         if not self.run_id:
             raise JournalError("journal event run_id must be a non-empty string")
+        if self.node is not None and not self.node:
+            raise JournalError("journal event node must be a non-empty string when present")
+        if self.step is not None and not self.step:
+            raise JournalError("journal event step must be a non-empty string when present")
         if not _is_positive_int(self.round):
             raise JournalError(f"journal event round must be a positive integer: {self.round!r}")
         if not _is_positive_int(self.seq):
@@ -196,9 +200,9 @@ def parse_event(record: object) -> Event | None:
         return None
     if isinstance(at, bool) or not isinstance(at, int | float):
         return None
-    if node is not None and not isinstance(node, str):
+    if node is not None and (not isinstance(node, str) or not node):
         return None
-    if step is not None and not isinstance(step, str):
+    if step is not None and (not isinstance(step, str) or not step):
         return None
     if not isinstance(detail, dict):
         return None
@@ -386,7 +390,13 @@ class Journal:
         return event
 
     def events(self) -> list[Event]:
-        return read_events(self.path)
+        """Read only records owned by this journal's run.
+
+        Reconciliation already ignores a foreign run id when it establishes the
+        sequence high-water mark. Apply the same ownership boundary to readers so
+        a corrupt or hand-edited line cannot surface as activity for this run.
+        """
+        return [event for event in read_events(self.path) if event.run_id == self.run_id]
 
 
 def open_journal(run_dir: Path, run_id: RunId, round_number: int) -> Journal:
