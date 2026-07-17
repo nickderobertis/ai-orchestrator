@@ -212,6 +212,10 @@ dependency failed is skipped. Cross-repository dependencies only schedule. A
 successful same-identity dependency not landed on the root base becomes a stack
 prerequisite:
 
+The default PR title is derived from Conventional Commit subjects on the branch,
+with a non-releasing `chore:` fallback when none is usable. An explicit `title`
+must itself be a Conventional Commit subject of at most 72 characters.
+
 All explicit task, base, anchor, and recovery branch names pass Git's literal
 branch validator before any Git command; a plan that explicitly combines
 `repo_type: team` with `workflow: local` fails validation before dispatch.

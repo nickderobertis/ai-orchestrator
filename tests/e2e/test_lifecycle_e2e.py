@@ -660,7 +660,7 @@ def test_agent_not_completed_stops_early(tmp_path, bare_origin) -> None:
         text=True,
         capture_output=True,
     ).stdout.strip()
-    assert subject.startswith("wip:") and "incomplete step" in subject
+    assert subject.startswith("chore:") and "incomplete step" in subject
     assert not _has_file(origin, "main", "partial.txt")
     assert not _has_file(origin, result.branch, "partial.txt")  # incomplete work is not pushed
 
@@ -769,6 +769,41 @@ def test_github_auto_merge_on_required_checks(tmp_path, bare_origin) -> None:
     assert _has_file(origin, "main", "feature.txt")
     canonical = workspace.clone_dir(normalize_repo("acme/widget"))
     assert gitops.head_sha(canonical) == _tip(origin, "main")
+
+
+def test_github_pr_title_comes_from_agent_commit_subject(tmp_path, bare_origin) -> None:
+    """A real branch commit, not task prose, supplies the release-facing PR title."""
+    origin = bare_origin()
+    github = FakeGitHub(origin, required=("ci",))
+
+    def committing_dispatch(persona: str, task: str, *, project_dir: str, **_: object) -> Report:
+        worktree = Path(project_dir)
+        (worktree / "capture.txt").write_text("preserved output\n", encoding="utf-8")
+        gitops.add_all(worktree)
+        gitops.commit(worktree, "fix(capture): preserve failed session output")
+        return Report(persona, 0, True, False, 1, [], {}, {}, "")
+
+    result = run_repo_task(
+        "acme/widget",
+        "Fix a silent session-capture failure in oneharness, and the unfaithful behavior.",
+        "backend-engineer",
+        workspace=_workspace(tmp_path, origin),
+        merge=GitHubMergeStrategy(github),
+        url=str(origin),
+        dispatch_fn=committing_dispatch,
+        verify_cmd=["true"],
+        sleep=lambda _: None,
+    )
+
+    assert result.ok and result.pr is not None
+    assert github._prs[result.pr.number].title == "fix(capture): preserve failed session output"
+    merged_subject = subprocess.run(
+        ["git", "-C", str(origin), "log", "-1", "--format=%s", "main"],
+        check=True,
+        text=True,
+        capture_output=True,
+    ).stdout.strip()
+    assert merged_subject == "fix(capture): preserve failed session output"
 
 
 def test_github_second_run_reuses_open_pr_and_merges(tmp_path, bare_origin) -> None:
@@ -1838,6 +1873,7 @@ def test_local_human_workstream_removes_worktree_and_resumes_same_branch(
 
 def test_workstream_multiple_onejudge_one_pr(tmp_path, bare_origin) -> None:
     origin = bare_origin()
+    before = _tip(origin, "main")
     steps = [
         Step("impl", "backend-engineer", "implement the feature"),
         Step("test", "test-engineer", "add tests", deps=["impl"]),
@@ -1852,9 +1888,52 @@ def test_workstream_multiple_onejudge_one_pr(tmp_path, bare_origin) -> None:
     )
     assert result.ok and result.outcome == "merged"
     assert len(result.steps) == 3 and all(s.status == "done" for s in result.steps)
+    step_subjects = [
+        commit.message.splitlines()[0]
+        for commit in gitops.log_messages(origin, before, result.branch)
+    ]
+    assert step_subjects == [
+        "chore: implement the feature",
+        "chore: add tests",
+        "chore: document it",
+    ]
     # All three steps' changes landed on origin main via ONE merge of ONE branch.
     for sid in ("impl", "test", "docs"):
         assert _has_file(origin, "main", f"{sid}.txt")
+
+
+def test_step_commit_subject_comes_from_agent_commits(tmp_path, bare_origin) -> None:
+    origin = bare_origin()
+    before = _tip(origin, "main")
+
+    def partly_committing_dispatch(
+        persona: str, task: str, *, project_dir: str, **_: object
+    ) -> Report:
+        worktree = Path(project_dir)
+        (worktree / "committed.txt").write_text("agent commit\n", encoding="utf-8")
+        gitops.add_all(worktree)
+        gitops.commit(worktree, "fix(capture): retain failed output")
+        (worktree / "remaining.txt").write_text("remaining step work\n", encoding="utf-8")
+        return Report(persona, 0, True, False, 1, [], {}, {}, "")
+
+    result = run_repo_task(
+        str(origin),
+        "Repair capture using task prose that is not a commit subject.",
+        "backend-engineer",
+        workspace=_workspace(tmp_path, origin),
+        dispatch_fn=partly_committing_dispatch,
+        verify_cmd=["true"],
+    )
+
+    assert result.ok
+    subjects = [
+        commit.message.splitlines()[0]
+        for commit in gitops.log_messages(origin, before, result.branch)
+    ]
+    assert subjects == [
+        "fix(capture): retain failed output",
+        "fix(capture): retain failed output",
+    ]
 
 
 def test_workstream_step_failure_stops_and_skips_dependents(tmp_path, bare_origin) -> None:

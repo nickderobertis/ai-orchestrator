@@ -11,7 +11,7 @@ from pathlib import Path
 
 from . import gitops
 from .github import CliGitHubBackend, GitHubBackend, GitHubError
-from .lifecycle import _effective_publication
+from .lifecycle import _default_title, _effective_publication
 from .merge import GitHubMergeStrategy, LocalMergeStrategy, MergeContext, MergePolicy
 from .provenance import (
     RECOVERY_TRAILER,
@@ -176,7 +176,7 @@ def recover_repo(
             clone_dir=clone,
             base=publication_base,
             branch=branch,
-            title=f"Recover preserved branch {branch}",
+            title=_default_title(worktree, remote_base, f"Recover preserved branch {branch}"),
             body=(
                 "## What\nRecover lifecycle-preserved work after explicit verification.\n\n"
                 "## Why\nThe original dispatch did not complete; this branch now carries "

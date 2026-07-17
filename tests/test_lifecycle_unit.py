@@ -19,9 +19,10 @@ from orchestrator.lifecycle import (
     Step,
     _default_body,
     _default_branch_name,
-    _default_title,
     _effective_publication,
+    _incomplete_commit_message,
     _select_merge_strategy,
+    _subject_from_messages,
     _workstream_branch_name,
     load_repo_plan,
     make_repo_runner,
@@ -48,9 +49,138 @@ def test_branch_name_is_deterministic() -> None:
     assert a.startswith("ai-orchestrator/backend-engineer/")
 
 
-def test_default_title_truncates_long_first_line() -> None:
-    title = _default_title("p", "x" * 200)
-    assert title.endswith("…") and len(title) <= 69
+def _commit_messages(*messages: str) -> list[lc.gitops.CommitMessage]:
+    return [lc.gitops.CommitMessage(str(index), message) for index, message in enumerate(messages)]
+
+
+def test_single_commit_subject_becomes_default_title() -> None:
+    title = _subject_from_messages(
+        _commit_messages("fix(capture): preserve failed session output"), "irrelevant task prose"
+    )
+    assert title == "fix(capture): preserve failed session output"
+
+
+def test_multiple_commit_subjects_use_most_significant_type() -> None:
+    title = _subject_from_messages(
+        _commit_messages(
+            "docs: explain session capture",
+            "fix: retain failed output",
+            "feat: expose captured sessions",
+            "perf: avoid duplicate reads",
+        ),
+        "irrelevant task prose",
+    )
+    assert title.startswith("feat: expose captured sessions")
+    assert "explain session capture" in title
+
+
+def test_breaking_commit_signal_survives_synthesis() -> None:
+    title = _subject_from_messages(
+        _commit_messages(
+            "feat: add capture metadata",
+            "refactor(api): replace session result\n\nBREAKING CHANGE: callers must read output",
+        ),
+        "irrelevant task prose",
+    )
+    assert title.startswith("refactor!:")
+    parsed = lc._parse_conventional_subject(title)
+    assert parsed is not None and parsed.breaking
+
+
+def test_breaking_footer_survives_when_no_subject_is_usable() -> None:
+    title = _subject_from_messages(
+        _commit_messages("Update API\n\nBREAKING CHANGE: old API removed"),
+        "Describe the API migration.",
+    )
+    assert title == "chore!: Describe the API migration."
+
+
+def test_breaking_footer_on_invalid_subject_marks_mixed_history() -> None:
+    title = _subject_from_messages(
+        _commit_messages(
+            "fix: retain output",
+            "Update API\n\nBREAKING CHANGE: old API removed",
+        ),
+        "irrelevant task prose",
+    )
+    assert title == "fix!: retain output"
+
+
+def test_long_subject_truncates_only_description() -> None:
+    title = _subject_from_messages(
+        _commit_messages(f"fix(capture): {'x' * 200}"), "irrelevant task prose"
+    )
+    assert title.startswith("fix(capture): ") and title.endswith("…")
+    assert len(title) <= lc._SUBJECT_LIMIT
+
+
+@pytest.mark.parametrize(
+    "messages, task",
+    [
+        ((), "Task prose is not a commit title."),
+        (("not a conventional subject",), "Fallback description."),
+        (("chore: refresh fixtures",), "Ignored task."),
+        (("security: harden token parsing",), "Ignored task."),
+        (("fix!: remove old API",), "Ignored task."),
+    ],
+)
+def test_derived_title_is_always_conventional(messages: tuple[str, ...], task: str) -> None:
+    title = _subject_from_messages(_commit_messages(*messages), task)
+    assert lc._parse_conventional_subject(title) is not None
+    assert len(title) <= lc._SUBJECT_LIMIT
+
+
+def test_control_characters_never_reach_a_title() -> None:
+    # A subject is handed to git/gh as a subprocess argument, where an embedded NUL raises
+    # rather than round-tripping, so the derived path must fall back to a printable subject.
+    derived = _subject_from_messages(_commit_messages("fix: bad\x00null"), "Fallback description.")
+    assert derived.isprintable()
+    assert lc._parse_conventional_subject(derived) is not None
+
+
+# One representative from each class str.isprintable() rejects, plus the line breaks that
+# would smuggle an unvalidated second line into the PR title. Character safety is delegated
+# to the Unicode database rather than an enumerated denylist, so a C0 control, a C1 control
+# (the range a hand-written `\x00-\x1f\x7f` class missed), DEL, a format char, and every
+# line/paragraph separator must all be rejected. Built from code points, never typed as
+# literals: an editor silently folds a literal U+2028 into a space, hiding the case.
+_NON_PRINTABLE = [
+    0x00,  # NUL (C0)
+    0x0A,  # LF
+    0x0D,  # CR
+    0x0B,  # VT
+    0x1C,  # FS
+    0x7F,  # DEL
+    0x80,  # PAD (C1)
+    0x9B,  # CSI (C1) — the class the enumerated denylist missed
+    0x85,  # NEL
+    0x2028,  # LINE SEPARATOR
+    0x2029,  # PARAGRAPH SEPARATOR
+    0x200B,  # ZERO WIDTH SPACE (format char)
+]
+
+
+@pytest.mark.parametrize("code_point", _NON_PRINTABLE)
+def test_explicit_title_rejects_every_non_printable(code_point: int) -> None:
+    with pytest.raises(ConfigError):
+        lc._validate_explicit_title(f"fix: ok{chr(code_point)}smuggled")
+
+
+def test_printable_unicode_title_is_accepted() -> None:
+    # isprintable() safety must not over-reject: legitimate non-ASCII text is valid and
+    # parses to a usable subject that preserves the description verbatim.
+    title = "fix: café serves 日本語 fine"
+    lc._validate_explicit_title(title)  # does not raise
+    parsed = lc._parse_conventional_subject(title)
+    assert parsed is not None
+    assert parsed.description == "café serves 日本語 fine"
+
+
+def test_incomplete_commit_is_non_releasing_and_preserves_trailers() -> None:
+    message = _incomplete_commit_message(Step("main", "backend", "Repair capture."), "main")
+    subject, _, body = message.partition("\n")
+    assert subject == "chore: Repair capture. (incomplete step)"
+    assert body.endswith("\nOrchestrator-Status: incomplete\nOrchestrator-PR-Base: main")
 
 
 def test_default_body_mentions_persona_and_turns() -> None:
@@ -247,6 +377,34 @@ def test_load_valid_repo_plan(tmp_path) -> None:
         (
             {"tasks": [{"id": "a", "repo": "r", "persona": "p", "task": "t", "repo_type": "x"}]},
             "repo_type",
+        ),
+        (
+            {
+                "tasks": [
+                    {
+                        "id": "a",
+                        "repo": "r",
+                        "persona": "p",
+                        "task": "t",
+                        "title": "Fix the release",
+                    }
+                ]
+            },
+            "Conventional Commit subject",
+        ),
+        (
+            {
+                "tasks": [
+                    {
+                        "id": "a",
+                        "repo": "r",
+                        "persona": "p",
+                        "task": "t",
+                        "title": 3,
+                    }
+                ]
+            },
+            "Conventional Commit subject",
         ),
         (
             {
@@ -1286,6 +1444,23 @@ def test_main_task_rejects_invalid_literal_branch_before_resolution(capsys) -> N
     payload = json.loads(capsys.readouterr().out)
     assert rc == 1 and payload["outcome"] == "error"
     assert "not a valid Git branch" in payload["detail"]
+
+
+def test_main_task_rejects_nonconventional_explicit_title(capsys) -> None:
+    rc = lc.main_task(
+        [
+            "acme/widget",
+            "backend-engineer",
+            "do it",
+            "--title",
+            "Fix the release",
+            "--format",
+            "json",
+        ]
+    )
+    payload = json.loads(capsys.readouterr().out)
+    assert rc == 1 and payload["outcome"] == "error"
+    assert "Conventional Commit subject" in payload["detail"]
 
 
 def test_main_task_human_nonzero_on_failure(monkeypatch, capsys) -> None:
