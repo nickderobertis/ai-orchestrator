@@ -15,11 +15,11 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 from . import BASE_CONFIG, PERSONA_DIR, REPO_ROOT
 from .config import ConfigError, load_yaml
@@ -52,6 +52,17 @@ class PlanNode:
 class Plan:
     tasks: list[PlanNode]
     concurrency: int = 4
+
+
+class AgentRunner(Protocol):
+    """How a scheduler drives one direct agent node.
+
+    ``labels`` locates the dispatch in the tracked graph for oneharness history.
+    It is keyword-only with a default because `run_plan` — an untracked DAG with no
+    run, round, or node to name — calls this with the node alone.
+    """
+
+    def __call__(self, node: PlanNode, *, labels: Mapping[str, str] | None = None) -> Report: ...
 
 
 @dataclass
@@ -290,10 +301,10 @@ def make_dispatch_runner(
     provider: str | None,
     oneharness_mode: str | None,
     timeout: float | None,
-) -> Callable[[PlanNode], Report]:
+) -> AgentRunner:
     """Build the production runner that dispatches each node through onejudge."""
 
-    def runner(node: PlanNode) -> Report:
+    def runner(node: PlanNode, *, labels: Mapping[str, str] | None = None) -> Report:
         return dispatch(
             node.persona,
             node.task,
@@ -307,6 +318,7 @@ def make_dispatch_runner(
             onejudge_bin=onejudge_bin,
             provider=provider,
             oneharness_mode=oneharness_mode,
+            labels=labels,
             timeout=timeout,
         )
 

@@ -154,6 +154,14 @@ history *args:
 history-show *args:
     uv run orchestrator-history-show {{args}}
 
+# Follow one tracked-graph run as one concise event stream, aggregating the run
+# journal, its labelled oneharness sessions, its lifecycle-branch commits, and its
+# linked PR state. `just monitor [RUN_ID]`; defaults to the newest active run.
+# Only successful graph completion exits 0 — waiting/failed/stopped heartbeat on.
+# llmlint: ignore[tool_output_is_signal] the requested continuous event stream is this viewing command's product.
+monitor *args:
+    uv run orchestrator-monitor {{args}}
+
 # Show running tasks joined with recent output, branch commits, and ledger rounds.
 # Pass N or --all to include recently finished tasks.
 # llmlint: ignore[tool_output_is_signal] the requested multi-task status report is this viewing command's product.
@@ -179,9 +187,15 @@ setup-llmlint:
 
 # LLM-judge lint over the whole tree (or pass paths to narrow). Run once with
 # `just setup-llmlint` first in a plain terminal.
+#
+# `role=llmlint` stamps this tier's own harness sessions so they are separable from
+# the agent/judge sessions of the work being linted (whose roles come from
+# oneharness.toml / oneharness.judge.toml). It is layered over — not substituted
+# for — the graph labels inherited when a dispatched agent runs its own gate, so a
+# finding stays attributable to the run/round/node that provoked it.
 lint-llm *paths:
     @command -v llmlint >/dev/null 2>&1 || { echo "llmlint not installed — run 'just setup-llmlint'"; exit 1; }
-    @llmlint "$@"
+    @ONEHARNESS_HISTORY_LABELS="$(uv run orchestrator-history-labels role=llmlint)" llmlint "$@"
 
 # Deterministic, model-free llmlint gate: config structure, ignore directives name
 # real rules, edited fragments bumped their version. The fast pre-flight.
@@ -193,4 +207,4 @@ lint-llm-validate *args:
 # changed. This is the blocking pre-push check.
 lint-llm-diff base="origin/main":
     @command -v llmlint >/dev/null 2>&1 || { echo "llmlint not installed — run 'just setup-llmlint'"; exit 1; }
-    llmlint --diff --diff-base "{{base}}"
+    ONEHARNESS_HISTORY_LABELS="$(uv run orchestrator-history-labels role=llmlint)" llmlint --diff --diff-base "{{base}}"

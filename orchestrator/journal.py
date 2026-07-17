@@ -28,11 +28,12 @@ import math
 import os
 import time
 from collections.abc import Iterator, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Literal, Protocol, TypeAlias, get_args
 
 from .coordination import advisory_lock
+from .labels import graph_labels
 from .runs import NodeId, RunId, StepId
 
 # Bump when a record's *shape* changes incompatibly. Readers skip records they do
@@ -459,3 +460,135 @@ class NullJournal:
         detail: Detail | None = None,
     ) -> None:
         return None
+
+
+class NodeSink(Protocol):
+    """The scoped seam the code *inside* one node — lifecycle, merge — depends on.
+
+    A node's own code never names itself when it records something. It is handed
+    one of these, already bound to its place in the graph, and appends against it;
+    `labels` renders that same place for a dispatched subprocess's history entry,
+    so a recorded event and a recorded session agree by construction rather than by
+    two call sites being kept in step.
+    """
+
+    def append(
+        self,
+        kind: EventKind,
+        *,
+        node: NodeId | None = None,
+        step: StepId | None = None,
+        detail: Detail | None = None,
+    ) -> Event | None: ...
+
+    def for_step(self, step: StepId) -> NodeSink: ...
+
+    @property
+    def labels(self) -> Mapping[str, str]: ...
+
+
+@dataclass(frozen=True)
+class NodeJournal:
+    """A run's journal narrowed to one node, and optionally to one of its steps.
+
+    Concurrent nodes share a round's single `Journal`, and the lifecycle hands its
+    sink down through code that has no business knowing which node it serves. That
+    is what this exists to make safe: the locators are bound **here**, once, where
+    the graph still knows them, so a node physically cannot append an event — or
+    label a dispatch — that claims to be a sibling running beside it.
+
+    ``run_id``/``round`` duplicate what the underlying `Journal` already stamps on
+    every record. They are carried anyway because `labels` must render the same
+    coordinates for a *subprocess*, which never sees the journal; `append` does not
+    use them, so the record's run and round still come from the one writer that
+    owns the file.
+    """
+
+    sink: JournalSink
+    node: NodeId
+    run_id: RunId | None = None
+    round: int | None = None
+    step: StepId | None = None
+
+    def __post_init__(self) -> None:
+        if not self.node:
+            raise JournalError("node journal node must be a non-empty string")
+        if self.step is not None and not self.step:
+            raise JournalError("node journal step must be a non-empty string when present")
+        if self.run_id is not None and not self.run_id:
+            raise JournalError("node journal run_id must be a non-empty string when present")
+        if self.round is not None and not _is_positive_int(self.round):
+            raise JournalError(f"node journal round must be a positive integer: {self.round!r}")
+
+    def for_step(self, step: StepId) -> NodeJournal:
+        """Narrow this node's journal to one of its steps."""
+        return replace(self, step=step)
+
+    def append(
+        self,
+        kind: EventKind,
+        *,
+        node: NodeId | None = None,
+        step: StepId | None = None,
+        detail: Detail | None = None,
+    ) -> Event | None:
+        """Append one record located at this scope.
+
+        The locators are accepted only to satisfy `JournalSink`, and only to
+        *restate* the binding: passing another node's id is the mistake this scope
+        exists to prevent, so it raises rather than being quietly honoured or
+        quietly ignored.
+        """
+        if kind in ROUND_EVENT_KINDS:
+            raise JournalError(
+                f"journal event {kind!r} is a round transition and cannot be scoped to a node"
+            )
+        if node is not None and node != self.node:
+            raise JournalError(
+                f"journal scoped to node {self.node!r} cannot append an event for node {node!r}"
+            )
+        if step is not None and self.step is not None and step != self.step:
+            raise JournalError(
+                f"journal scoped to step {self.step!r} cannot append an event for step {step!r}"
+            )
+        return self.sink.append(
+            kind,
+            node=self.node,
+            step=self.step if step is None else step,
+            detail=detail,
+        )
+
+    @property
+    def labels(self) -> dict[str, str]:
+        """This scope as ``ONEHARNESS_HISTORY_LABELS`` for a dispatched subprocess."""
+        return graph_labels(
+            run_id=self.run_id, round_number=self.round, node=self.node, step=self.step
+        )
+
+
+@dataclass(frozen=True)
+class NullNodeJournal:
+    """Node-scoped no-op for a lifecycle run outside any tracked graph.
+
+    A bare ``just repo-task`` has no run, round, or node. This is that absence
+    stated once, rather than a scope built around a placeholder node id — which
+    would not merely record nothing, it would *label* every dispatch it made with a
+    node that does not exist.
+    """
+
+    def for_step(self, step: StepId) -> NullNodeJournal:
+        return self
+
+    def append(
+        self,
+        kind: EventKind,
+        *,
+        node: NodeId | None = None,
+        step: StepId | None = None,
+        detail: Detail | None = None,
+    ) -> None:
+        return None
+
+    @property
+    def labels(self) -> dict[str, str]:
+        return {}

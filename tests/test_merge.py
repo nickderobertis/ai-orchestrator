@@ -7,12 +7,14 @@ from pathlib import Path
 from orchestrator import gitops
 from orchestrator.github import AutoMergeUnavailable, Check, PRStatus, PullRequest
 from orchestrator.gitops import GitError
+from orchestrator.journal import Journal, NodeJournal, open_journal
 from orchestrator.merge import (
     GitHubMergeStrategy,
     LocalMergeStrategy,
     MergeContext,
     _is_push_race,
 )
+from orchestrator.runs import NodeId, RunId
 
 
 class PolicyBackend:
@@ -177,6 +179,111 @@ def test_timeout_when_never_merges() -> None:
         _ctx(policy="auto", timeout=10.0, clock=lambda: next(ticks))
     )
     assert out.outcome == "timeout"
+
+
+# --- journaled publication transitions -------------------------------------
+#
+# Wired the way the lifecycle wires it: a real `Journal` on disk, narrowed to the
+# node the merge is running for. A strategy is handed that scope and never names
+# a node itself, so these prove both the transitions and the binding.
+
+
+def _scope(tmp_path: Path, run: str) -> tuple[Journal, NodeJournal]:
+    journal = open_journal(tmp_path / run, RunId(run), 1)
+    return journal, NodeJournal(sink=journal, node=NodeId("api"), run_id=RunId(run), round=1)
+
+
+def test_github_merge_journals_the_publication_it_drove(tmp_path: Path) -> None:
+    journal, node = _scope(tmp_path, "run-gh")
+    backend = PolicyBackend(checks=(Check("ci", "SUCCESS", True),), merge_on="auto")
+
+    out = GitHubMergeStrategy(backend).publish_and_merge(_ctx(policy="auto", journal=node))
+
+    assert out.outcome == "merged"
+    events = journal.events()
+    assert [e.kind for e in events] == ["pr-created", "pr-checks-observed", "pr-merged"]
+    # Every transition is attributed to the node the merge ran for, though the
+    # strategy never names one.
+    assert {e.node for e in events} == {"api"}
+    assert events[0].detail == {"pr": "u", "number": 1, "base": "main", "draft": False}
+    assert events[1].detail["blocking"] == [{"name": "ci", "state": "SUCCESS"}]
+
+
+def test_github_merge_journals_the_ready_transition_for_a_draft(tmp_path: Path) -> None:
+    journal, node = _scope(tmp_path, "run-draft")
+
+    out = GitHubMergeStrategy(DraftBackend()).publish_and_merge(_ctx(policy="direct", journal=node))
+
+    assert out.outcome == "merged"
+    assert [e.kind for e in journal.events()] == [
+        "pr-created",
+        "pr-ready",
+        "pr-checks-observed",
+        "pr-merged",
+    ]
+
+
+def test_github_merge_does_not_journal_a_merge_that_did_not_happen(tmp_path: Path) -> None:
+    """A red required check settles as checks-failed, and nothing claims a merge."""
+    journal, node = _scope(tmp_path, "run-red")
+    backend = PolicyBackend(checks=(Check("ci", "FAILURE", True),), merge_on="never")
+
+    out = GitHubMergeStrategy(backend).publish_and_merge(_ctx(policy="auto", journal=node))
+
+    assert out.outcome == "checks-failed"
+    kinds = [e.kind for e in journal.events()]
+    assert kinds == ["pr-created", "pr-checks-observed"]
+    assert "pr-merged" not in kinds
+
+
+def test_local_merge_journals_verification_and_the_merge(tmp_path: Path, bare_origin) -> None:
+    origin = bare_origin()
+    clone = gitops.clone(origin, tmp_path / "clone")
+    feature = gitops.worktree_add(clone, tmp_path / "feature", "feature", base="origin/main")
+    (feature / "feature.txt").write_text("change\n", encoding="utf-8")
+    gitops.add_all(feature)
+    gitops.commit(feature, "feat: add feature")
+    gitops.push(feature, "feature")
+    journal, node = _scope(tmp_path, "run-local")
+
+    out = LocalMergeStrategy().publish_and_merge(
+        _ctx(clone_dir=clone, branch="feature", verify_command=["true"], journal=node)
+    )
+
+    assert out.outcome == "merged"
+    events = journal.events()
+    assert [e.kind for e in events] == [
+        "verification-started",
+        "verification-finished",
+        "pr-merged",
+    ]
+    assert events[0].detail == {"command": ["true"], "attempt": 1}
+    assert events[1].detail == {"ok": True, "command": ["true"], "attempt": 1}
+    assert events[2].detail == {"pr": "local:o/r#feature", "branch": "feature", "base": "main"}
+
+
+def test_local_merge_journals_a_gate_failure_without_claiming_a_merge(
+    tmp_path: Path, bare_origin
+) -> None:
+    origin = bare_origin()
+    clone = gitops.clone(origin, tmp_path / "clone")
+    feature = gitops.worktree_add(clone, tmp_path / "feature", "feature", base="origin/main")
+    (feature / "feature.txt").write_text("change\n", encoding="utf-8")
+    gitops.add_all(feature)
+    gitops.commit(feature, "feat: add feature")
+    gitops.push(feature, "feature")
+    journal, node = _scope(tmp_path, "run-gate")
+
+    out = LocalMergeStrategy().publish_and_merge(
+        _ctx(clone_dir=clone, branch="feature", verify_command=["false"], journal=node)
+    )
+
+    assert out.outcome == "gate-failed"
+    events = journal.events()
+    assert [e.kind for e in events] == ["verification-started", "verification-finished"]
+    assert events[1].detail["ok"] is False
+    # The rebuilt merge never reached the base branch, so nothing may say it did.
+    assert not (gitops.clone(origin, tmp_path / "check") / "feature.txt").exists()
 
 
 def test_push_race_classification_is_narrow() -> None:

@@ -18,6 +18,15 @@ run_mode = "fallback"
 # to capture dispatched runs, not just in a user config.
 history = true
 
+# history_labels: labels stamped on every history entry this config records. The
+# two sides of an onejudge conversation are both recorded, into the same store, by
+# the same tool — so without a stamp saying which side a session *is*, the only way
+# to tell the worker from its supervisor is `JUDGE_PREFIXES`, guessing from the
+# session name. This states it. A dispatch layers its graph labels (run/round/node)
+# over these via ONEHARNESS_HISTORY_LABELS; the role is the constant, so it belongs
+# in the config rather than at each call site.
+history_labels = { role = "agent" }
+
 # harnesses: the selection, in priority order (the first is preferred under
 # fallback). See `oneharness list` for every supported id.
 harnesses = ["codex", "claude-code"]

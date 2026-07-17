@@ -13,7 +13,7 @@ import json
 import sys
 import threading
 from collections import Counter
-from collections.abc import Callable, Iterable
+from collections.abc import Iterable
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Literal, cast
@@ -21,9 +21,10 @@ from typing import Any, Literal, cast
 from . import REPO_ROOT
 from .config import ConfigError, load_yaml
 from .dispatch import Report
-from .journal import JournalSink, NullJournal, open_journal
+from .journal import JournalSink, NodeJournal, NullJournal, open_journal
 from .lifecycle import (
     LifecycleResult,
+    LifecycleRunner,
     RepoPlanNode,
     add_lifecycle_args,
     combine_stack_bases,
@@ -34,6 +35,7 @@ from .lifecycle import (
 )
 from .plan import (
     NODE_KINDS,
+    AgentRunner,
     NodeRun,
     PlanError,
     PlanNode,
@@ -48,7 +50,6 @@ from .runs import (
     HumanActionPayload,
     NodeId,
     RunId,
-    StepId,
     prepare_round,
     resolve_run_dir,
     status_summary,
@@ -245,16 +246,24 @@ def load_graph(path: str | Path) -> Graph:
 def run_graph(
     graph: Graph,
     *,
-    agent_runner: Callable[[PlanNode], Report],
-    lifecycle_runner: Callable[[RepoPlanNode], LifecycleResult],
+    agent_runner: AgentRunner,
+    lifecycle_runner: LifecycleRunner,
     concurrency: int | None = None,
     journal: JournalSink | None = None,
+    run_id: RunId | None = None,
+    round_number: int | None = None,
 ) -> GraphResult:
     """Schedule and run a mixed tracked graph, journaling each transition.
 
     Journaling is observation only: `NullJournal` is substituted when a round is
     not recorded, and nothing here reads the journal back, so an unrecorded round
     behaves identically to a recorded one.
+
+    This is the last place that knows which node a piece of work belongs to, so it
+    is where each node's scope is built. ``run_id``/``round_number`` name the round
+    the journal already writes; they are taken separately because they must also
+    reach a *dispatched subprocess* as history labels, and a subprocess cannot be
+    handed a journal.
     """
     conc = concurrency if concurrency is not None else graph.concurrency
     log: JournalSink = journal if journal is not None else NullJournal()
@@ -263,97 +272,66 @@ def run_graph(
     completed: dict[str, LifecycleResult] = {}
     guard = threading.Lock()
 
-    def run_one(nid: str) -> NodeRun:
-        node = nodes[nid]
-        node_id = NodeId(nid)
-        if node.human:
-            log.append("human-waiting", node=node_id, detail={"task": first_line(node.task)})
-            return NodeRun("waiting", "awaiting human action")
-        log.append(
-            "node-started",
-            node=node_id,
-            detail={"node_kind": "lifecycle" if node.lifecycle else "direct"},
-        )
+    def settle(nid: str, node: GraphNode, node_log: NodeJournal) -> NodeRun:
+        """Run one already-started node to its outcome, journaling how it settled."""
         if node.lifecycle is not None:
             with guard:
                 anchors = combine_stack_bases(node.lifecycle, completed)
-            result = lifecycle_runner(replace(node.lifecycle, stack_bases=anchors))
-            _journal_lifecycle(log, node_id, result)
+            result = lifecycle_runner(
+                replace(node.lifecycle, stack_bases=anchors),
+                journal=node_log,
+            )
             if result.waiting:
-                log.append(
+                node_log.append(
                     "node-settled",
-                    node=node_id,
                     detail={"status": "waiting", "outcome": result.outcome},
                 )
                 return NodeRun("waiting", result.detail, result)
             if not result.ok:
-                log.append(
+                node_log.append(
                     "node-failed",
-                    node=node_id,
                     detail={"outcome": result.outcome, "detail": result.detail},
                 )
                 return NodeRun("failed", result.detail or result.outcome, result)
             with guard:
                 completed[nid] = result
-            log.append(
-                "node-settled", node=node_id, detail={"status": "done", "outcome": result.outcome}
-            )
+            node_log.append("node-settled", detail={"status": "done", "outcome": result.outcome})
             return NodeRun("done", None, result)
-        report = agent_runner(cast(PlanNode, node.direct))
+        report = agent_runner(cast(PlanNode, node.direct), labels=node_log.labels)
         if report.completed:
-            log.append(
+            node_log.append(
                 "node-settled",
-                node=node_id,
                 detail={"status": "done", "turns": report.assistant_turns},
             )
             return NodeRun("done", None, report)
-        log.append(
+        node_log.append(
             "node-failed",
-            node=node_id,
             detail={"detail": "hit the turn cap", "turns": report.assistant_turns},
         )
         return NodeRun("failed", "did not complete (hit the turn cap)", report)
 
+    def run_one(nid: str) -> NodeRun:
+        node = nodes[nid]
+        node_log = NodeJournal(sink=log, node=NodeId(nid), run_id=run_id, round=round_number)
+        if node.human:
+            node_log.append("human-waiting", detail={"task": first_line(node.task)})
+            return NodeRun("waiting", "awaiting human action")
+        node_log.append(
+            "node-started",
+            detail={"node_kind": "lifecycle" if node.lifecycle else "direct"},
+        )
+        try:
+            return settle(nid, node, node_log)
+        except Exception as exc:
+            # `schedule_dag` settles a runner that raised as a failed node, so the
+            # ledger records it either way. Journal it here as well: a `node-started`
+            # with nothing to close it is how this journal says "still running", and
+            # a node that raised is the one thing it is not.
+            node_log.append("node-failed", detail={"detail": str(exc), "error": type(exc).__name__})
+            raise
+
     runs, started_order = schedule_dag(list(nodes), deps, run_one, concurrency=conc)
     return _collect(nodes, runs, started_order)
-
-
-def _journal_lifecycle(log: JournalSink, nid: NodeId, result: LifecycleResult) -> None:
-    """Record the transitions a finished lifecycle node reports back.
-
-    Everything here is read off the returned `LifecycleResult` at the call site, so
-    the journal observes the lifecycle without reaching into how it merges or
-    verifies — a new outcome there needs no change here.
-    """
-    if result.branch:
-        log.append(
-            "branch-discovered",
-            node=nid,
-            detail={
-                "branch": result.branch,
-                "base_branch": result.base_branch,
-                "pr_base": result.pr_base,
-            },
-        )
-    for step in result.steps:
-        log.append(
-            "step-settled",
-            node=nid,
-            step=StepId(step.id),
-            detail={"status": step.status, "step_kind": step.kind},
-        )
-    for sid in result.waiting_steps:
-        log.append("human-waiting", node=nid, step=StepId(sid))
-    if result.verify is not None:
-        log.append(
-            "verification-finished",
-            node=nid,
-            detail={"ok": result.verify.ok, "command": list(result.verify.command)},
-        )
-    if result.pr is not None:
-        log.append("pr-created", node=nid, detail={"pr": result.pr.url, "number": result.pr.number})
-        if result.outcome == "merged":
-            log.append("pr-merged", node=nid, detail={"pr": result.pr.url})
 
 
 def _collect(
@@ -578,8 +556,12 @@ def main(argv: list[str] | None = None) -> int:
             return 2
 
     journal: JournalSink = NullJournal()
+    run_id: RunId | None = None
+    round_number: int | None = None
     if run_dir is not None and round_record is not None:
-        journal = open_journal(run_dir, RunId(run_dir.name), round_record[0])
+        run_id = RunId(run_dir.name)
+        round_number = round_record[0]
+        journal = open_journal(run_dir, run_id, round_number)
         journal.append(
             "round-started",
             detail={"nodes": len(graph.tasks), "concurrency": graph.concurrency},
@@ -589,6 +571,8 @@ def main(argv: list[str] | None = None) -> int:
     result = run_graph(
         graph,
         journal=journal,
+        run_id=run_id,
+        round_number=round_number,
         agent_runner=make_dispatch_runner(
             base_path=args.base_config,
             persona_dir=args.persona_dir,

@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from pathlib import Path
 
 import pytest
 
-from orchestrator.dispatch import Report
+from orchestrator.dispatch import DispatchError, Report
+from orchestrator.gitops import GitError
 from orchestrator.graph import (
     HumanAction,
     first_line,
@@ -20,8 +22,10 @@ from orchestrator.graph import (
     render_actions,
     run_graph,
 )
-from orchestrator.lifecycle import LifecycleResult, Step, StepResult
+from orchestrator.journal import JournalError, NodeSink, open_journal
+from orchestrator.lifecycle import LifecycleResult, RepoPlanNode, Step, StepResult
 from orchestrator.plan import PlanError, PlanNode
+from orchestrator.runs import NodeId, RunId
 
 
 def _report(persona: str, completed: bool = True) -> Report:
@@ -52,11 +56,15 @@ def _lifecycle(outcome: str = "merged", **kw) -> LifecycleResult:
 
 
 def test_run_graph_journals_what_the_round_actually_did(tmp_path: Path) -> None:
-    """The journal is written by the real scheduler, not by a stand-in for it."""
-    from orchestrator.journal import open_journal
-    from orchestrator.verify import VerifyResult
+    """The journal is written by the real scheduler, not by a stand-in for it.
 
-    journal = open_journal(tmp_path / "run-j", "run-j", 1)
+    Only the transitions `run_graph` itself owns are asserted here. A lifecycle's
+    own events (branch-discovered, step-settled, verification-*) are journaled from
+    inside the lifecycle against the scope it is handed, so they are proven there —
+    against the real lifecycle — rather than against a runner double that could
+    only ever restate what this test told it to say.
+    """
+    journal = open_journal(tmp_path / "run-j", RunId("run-j"), 1)
     graph = parse_graph(
         {
             "tasks": [
@@ -66,40 +74,154 @@ def test_run_graph_journals_what_the_round_actually_did(tmp_path: Path) -> None:
             ]
         }
     )
-    merged = _lifecycle(
-        outcome="merged",
-        branch="feature",
-        steps=[StepResult(id="main", persona="backend-engineer", status="done")],
-        verify=VerifyResult(True, ["just", "gate"], ""),
-    )
 
     run_graph(
         graph,
-        agent_runner=lambda node: _report(node.persona),
-        lifecycle_runner=lambda node: merged,
+        agent_runner=lambda node, **_: _report(node.persona),
+        lifecycle_runner=lambda node, **_: _lifecycle(outcome="merged", branch="feature"),
         journal=journal,
+        run_id=RunId("run-j"),
+        round_number=1,
     )
 
     events = journal.events()
     seen = {(e.kind, e.node, e.step) for e in events}
     assert ("node-started", "direct", None) in seen
     assert ("node-settled", "direct", None) in seen
-    assert ("branch-discovered", "repo", None) in seen
-    assert ("step-settled", "repo", "main") in seen
-    assert ("verification-finished", "repo", None) in seen
+    assert ("node-started", "repo", None) in seen
+    assert ("node-settled", "repo", None) in seen
     assert ("human-waiting", "review", None) in seen
     # Sequence numbers are dense and monotonic even though nodes ran concurrently.
     assert [e.seq for e in events] == list(range(1, len(events) + 1))
-    verification = next(e for e in events if e.kind == "verification-finished")
-    assert verification.detail == {"ok": True, "command": ["just", "gate"]}
+    settled = next(e for e in events if e.kind == "node-settled" and e.node == "repo")
+    assert settled.detail == {"status": "done", "outcome": "merged"}
+    assert all(e.round == 1 and e.run_id == "run-j" for e in events)
+
+
+def test_run_graph_journals_a_direct_node_whose_runner_raised(tmp_path: Path) -> None:
+    """A runner that raises is a node failure, and the journal must say so.
+
+    `schedule_dag` catches whatever a runner raises and settles the node as failed,
+    so the ledger records it. If the journal records no matching transition, the
+    round leaves a `node-started` with nothing to close it — which is exactly the
+    reading a started-with-no-settled event is reserved for: work still in flight.
+    """
+    journal = open_journal(tmp_path / "run-x", RunId("run-x"), 1)
+    graph = parse_graph({"tasks": [{"id": "api", "persona": "backend-engineer", "task": "A"}]})
+
+    def boom(node: PlanNode, **_: object) -> Report:
+        raise DispatchError("onejudge could not start")
+
+    result = run_graph(
+        graph,
+        agent_runner=boom,
+        lifecycle_runner=lambda node, **_: _lifecycle(),
+        journal=journal,
+        run_id=RunId("run-x"),
+        round_number=1,
+    )
+
+    assert result.results["api"].status == "failed"
+    events = journal.events()
+    assert [(e.kind, e.node) for e in events] == [("node-started", "api"), ("node-failed", "api")]
+    assert "onejudge could not start" in str(events[1].detail["detail"])
+
+
+def test_run_graph_journals_a_lifecycle_node_whose_runner_raised(tmp_path: Path) -> None:
+    """The same holds for a lifecycle node: a raised error still settles the journal."""
+    journal = open_journal(tmp_path / "run-y", RunId("run-y"), 1)
+    graph = parse_graph(
+        {"tasks": [{"id": "api", "repo": "o/r", "persona": "backend-engineer", "task": "A"}]}
+    )
+
+    def boom(node: RepoPlanNode, *, journal: NodeSink | None = None) -> LifecycleResult:
+        raise GitError("origin rejected the push")
+
+    result = run_graph(
+        graph,
+        agent_runner=lambda node, **_: _report(node.persona),
+        lifecycle_runner=boom,
+        journal=journal,
+        run_id=RunId("run-y"),
+        round_number=1,
+    )
+
+    assert result.results["api"].status == "failed"
+    assert [(e.kind, e.node) for e in journal.events()] == [
+        ("node-started", "api"),
+        ("node-failed", "api"),
+    ]
+
+
+def test_run_graph_labels_each_dispatch_with_its_place_in_the_graph(tmp_path: Path) -> None:
+    """A direct node's dispatch is labelled with the round and node it belongs to.
+
+    These labels are the only thing tying a recorded oneharness session back to the
+    node that produced it, so they are asserted at the seam the real dispatch is
+    called through rather than off the journal, which a subprocess never sees.
+    """
+    journal = open_journal(tmp_path / "run-l", RunId("run-l"), 7)
+    graph = parse_graph(
+        {
+            "tasks": [
+                {"id": "api", "persona": "backend-engineer", "task": "A"},
+                {"id": "web", "persona": "frontend-engineer", "task": "B"},
+            ]
+        }
+    )
+    seen: dict[str, dict[str, str]] = {}
+
+    def agent(node: PlanNode, *, labels: Mapping[str, str] | None = None) -> Report:
+        seen[node.id] = dict(labels or {})
+        return _report(node.persona)
+
+    run_graph(
+        graph,
+        agent_runner=agent,
+        lifecycle_runner=lambda node, **_: _lifecycle(),
+        journal=journal,
+        run_id=RunId("run-l"),
+        round_number=7,
+    )
+
+    assert seen["api"] == {"run_id": "run-l", "round": "7", "node": "api"}
+    assert seen["web"] == {"run_id": "run-l", "round": "7", "node": "web"}
+
+
+def test_run_graph_scopes_each_lifecycle_to_its_own_node() -> None:
+    """A lifecycle is handed a scope it cannot use to speak for a sibling node."""
+    graph = parse_graph(
+        {
+            "tasks": [
+                {"id": "api", "repo": "o/r", "persona": "backend-engineer", "task": "A"},
+                {"id": "web", "repo": "o/r", "persona": "frontend-engineer", "task": "B"},
+            ]
+        }
+    )
+    scopes: dict[str, NodeSink] = {}
+
+    def lifecycle(node: RepoPlanNode, *, journal: NodeSink | None = None) -> LifecycleResult:
+        assert journal is not None
+        scopes[node.id] = journal
+        return _lifecycle()
+
+    run_graph(
+        graph,
+        agent_runner=lambda node, **_: _report(node.persona),
+        lifecycle_runner=lifecycle,
+    )
+
+    assert scopes["api"].labels == {"node": "api"}
+    with pytest.raises(JournalError, match="cannot append an event for node 'web'"):
+        scopes["api"].append("branch-discovered", node=NodeId("web"))
 
 
 def test_run_graph_without_a_journal_is_unchanged(tmp_path: Path) -> None:
     graph = parse_graph({"tasks": [{"id": "a", "persona": "p", "task": "t"}]})
     result = run_graph(
         graph,
-        agent_runner=lambda node: _report("p"),
-        lifecycle_runner=lambda node: _lifecycle(),
+        agent_runner=lambda node, **_: _report("p"),
+        lifecycle_runner=lambda node, **_: _lifecycle(),
     )
     assert result.state == "complete"
 
@@ -188,8 +310,8 @@ def test_top_level_human_waits_and_blocks_transitively() -> None:
 
     result = run_graph(
         graph,
-        agent_runner=lambda node: _report(node.persona),
-        lifecycle_runner=lambda node: _lifecycle(),
+        agent_runner=lambda node, **_: _report(node.persona),
+        lifecycle_runner=lambda node, **_: _lifecycle(),
     )
     payload = graph_payload(result)
 
@@ -219,10 +341,10 @@ def test_failure_precedence_over_waiting_dependency() -> None:
         }
     )
 
-    def agent(node: PlanNode) -> Report:
+    def agent(node: PlanNode, **_: object) -> Report:
         return _report(node.persona, completed=node.id != "bad")
 
-    result = run_graph(graph, agent_runner=agent, lifecycle_runner=lambda node: _lifecycle())
+    result = run_graph(graph, agent_runner=agent, lifecycle_runner=lambda node, **_: _lifecycle())
 
     assert result.state == "failed"
     assert result.results["review"].status == "waiting"
@@ -237,8 +359,8 @@ def test_lifecycle_failure_sets_failed_state() -> None:
 
     result = run_graph(
         graph,
-        agent_runner=lambda node: _report(node.persona),
-        lifecycle_runner=lambda node: _lifecycle("gate-failed", detail="gate failed"),
+        agent_runner=lambda node, **_: _report(node.persona),
+        lifecycle_runner=lambda node, **_: _lifecycle("gate-failed", detail="gate failed"),
     )
 
     assert result.state == "failed"
@@ -263,7 +385,7 @@ def test_lifecycle_human_step_waiting_action_uses_nested_ref() -> None:
         }
     )
 
-    def lifecycle(node) -> LifecycleResult:
+    def lifecycle(node, **_: object) -> LifecycleResult:
         return _lifecycle(
             "waiting-human",
             detail="paused",
@@ -278,7 +400,7 @@ def test_lifecycle_human_step_waiting_action_uses_nested_ref() -> None:
 
     result = run_graph(
         graph,
-        agent_runner=lambda node: _report(node.persona),
+        agent_runner=lambda node, **_: _report(node.persona),
         lifecycle_runner=lifecycle,
     )
     action = graph_payload(result)["results"]["work"]["human_actions"][0]
@@ -311,8 +433,8 @@ def test_lifecycle_human_step_waiting_action_with_internal_downstream() -> None:
 
     result = run_graph(
         graph,
-        agent_runner=lambda node: _report(node.persona),
-        lifecycle_runner=lambda node: _lifecycle(
+        agent_runner=lambda node, **_: _report(node.persona),
+        lifecycle_runner=lambda node, **_: _lifecycle(
             "waiting-human",
             detail="paused",
             steps=[StepResult("approve", None, "waiting", "human", None)],
@@ -401,8 +523,8 @@ def test_graph_payload_is_json_serializable() -> None:
     graph = parse_graph({"tasks": [{"id": "review", "kind": "human", "task": "Approve"}]})
     result = run_graph(
         graph,
-        agent_runner=lambda node: _report(node.persona),
-        lifecycle_runner=lambda node: _lifecycle(),
+        agent_runner=lambda node, **_: _report(node.persona),
+        lifecycle_runner=lambda node, **_: _lifecycle(),
     )
 
     json.dumps(graph_payload(result))
@@ -412,8 +534,8 @@ def test_run_graph_direct_success_and_lifecycle_payload() -> None:
     direct = parse_graph({"tasks": [{"id": "a", "persona": "backend-engineer", "task": "A"}]})
     direct_result = run_graph(
         direct,
-        agent_runner=lambda node: _report(node.persona),
-        lifecycle_runner=lambda node: _lifecycle(),
+        agent_runner=lambda node, **_: _report(node.persona),
+        lifecycle_runner=lambda node, **_: _lifecycle(),
     )
     assert direct_result.ok
     assert graph_payload(direct_result)["results"]["a"]["completed"] is True
@@ -423,8 +545,8 @@ def test_run_graph_direct_success_and_lifecycle_payload() -> None:
     )
     lifecycle_result = run_graph(
         lifecycle,
-        agent_runner=lambda node: _report(node.persona),
-        lifecycle_runner=lambda node: _lifecycle("pr-open", detail="opened"),
+        agent_runner=lambda node, **_: _report(node.persona),
+        lifecycle_runner=lambda node, **_: _lifecycle("pr-open", detail="opened"),
     )
     payload = graph_payload(lifecycle_result)
     assert payload["results"]["life"]["outcome"] == "pr-open"

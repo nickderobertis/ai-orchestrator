@@ -9,11 +9,19 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import subprocess
 import sys
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, NewType
+
+from .config import ConfigError
+from .ids import DetailId, DetailIdError, GitId, GraphId, OneharnessId, PrId, parse_detail_id
+from .journal import JOURNAL_NAME, Event, read_events
+from .runs import GraphResultItem, RunId, as_result_payload, load_mapping, rounds
 
 
 class HistoryError(Exception):
@@ -27,6 +35,24 @@ JUDGE_PREFIXES = (
 SessionId = NewType("SessionId", str)
 
 
+def _session_labels(value: object) -> dict[str, str]:
+    """Read the history labels a dispatch stamped on this session.
+
+    Labels are optional and are dropped rather than rejected when malformed: a
+    session recorded before the orchestrator labelled its dispatches has none, and
+    an unlabelled session must still list. `labels` is written by `labels.py` at
+    dispatch time, so a value that fails the contract here came from somewhere else
+    and has no claim on a run.
+    """
+    if not isinstance(value, dict):
+        return {}
+    return {
+        key: item
+        for key, item in value.items()
+        if isinstance(key, str) and key and isinstance(item, str) and item
+    }
+
+
 @dataclass(frozen=True)
 class HistorySession:
     """Validated session metadata returned by ``oneharness history list``."""
@@ -36,6 +62,10 @@ class HistorySession:
     project: Path
     started: str
     path: Path
+    #: The ``ONEHARNESS_HISTORY_LABELS`` this dispatch was stamped with, which is
+    #: what lets a reader ask "which run/round/node produced this session?" rather
+    #: than inferring it from the project path or the task name.
+    labels: Mapping[str, str] = field(default_factory=dict)
 
     @classmethod
     def from_value(cls, value: Any) -> HistorySession | None:
@@ -60,6 +90,7 @@ class HistorySession:
             project=Path(project),
             started=started,
             path=Path(path),
+            labels=_session_labels(value.get("labels")),
         )
 
 
@@ -204,10 +235,221 @@ def digest(records: list[dict[str, Any]], session_id: SessionId) -> Digest:
     )
 
 
-def show_run(query: str, *, oneharness_bin: str = "oneharness") -> str:
-    """Resolve a substring to the newest worker session and render its digest."""
+DEFAULT_RUNS_DIR = Path("runs")
+
+_PR_URL_NUMBER = re.compile(r"/pull/(\d+)/?\Z")
+# The detail keys that carry a commit. Read as a set rather than one blessed key
+# because the transitions that name a commit are recorded by different subsystems,
+# and a snapshot lookup that only knew one of their spellings would answer "no such
+# commit" for a commit sitting in the journal under another.
+_SHA_DETAIL_KEYS = ("sha", "commit", "checkpoint", "head")
+
+
+def _pr_number(value: object) -> int | None:
+    """The PR number a recorded URL names, if it names one."""
+    if not isinstance(value, str) or (match := _PR_URL_NUMBER.search(value)) is None:
+        return None
+    return int(match.group(1))
+
+
+def _detail_number(value: object) -> int | None:
+    """A journal detail's number, rejecting the bool that `isinstance` would admit."""
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+@dataclass(frozen=True)
+class Snapshot:
+    """One tracked-graph node as the ledger and journal persisted it.
+
+    This is the answer to a typed id when oneharness' history cannot be one: the
+    ledger records a node's *outcome* and the journal records how it got there, and
+    both outlive the session that produced them. A `git:`/`pr:`/`graph:` id names a
+    thing in the graph rather than a conversation, so this — not a session digest —
+    is its primary source.
+    """
+
+    ref: GraphId
+    item: GraphResultItem
+    events: list[Event]
+
+    @property
+    def identity(self) -> str | None:
+        """The ``owner/name`` slug this node worked in, if it recorded one."""
+        repo = self.item.get("repo")
+        return repo if isinstance(repo, str) and repo else None
+
+    @property
+    def pr_numbers(self) -> set[int]:
+        """Every PR number this node recorded, from the ledger and the journal.
+
+        The local direct-merge path synthesizes a `PullRequest` numbered 0 so the
+        result has a stable ref to name; it opened no PR, so that 0 is dropped here
+        rather than made addressable as ``pr:owner/name#0``.
+        """
+        found = [_pr_number(self.item.get("pr"))]
+        for event in self.events:
+            found.append(_pr_number(event.detail.get("pr")))
+            found.append(_detail_number(event.detail.get("number")))
+        return {number for number in found if number is not None and number >= 1}
+
+    @property
+    def shas(self) -> set[str]:
+        """Every commit this node recorded, from the ledger and the journal."""
+        found = {
+            value
+            for event in self.events
+            for key in _SHA_DETAIL_KEYS
+            if isinstance(value := event.detail.get(key), str) and value
+        }
+        resume = self.item.get("resume")
+        if isinstance(resume, dict) and isinstance(checkpoint := resume.get("checkpoint"), str):
+            found.add(checkpoint)
+        return found
+
+
+def _round_snapshots(run_id: RunId, number: int, round_dir: Path) -> list[Snapshot]:
+    result_path = round_dir / "result.json"
+    if not result_path.exists():
+        return []
+    try:
+        payload = as_result_payload(load_mapping(result_path))
+    except ConfigError as exc:
+        raise HistoryError(f"cannot read recorded round {result_path}: {exc}") from exc
+    events = read_events(round_dir.parent / JOURNAL_NAME)
+    return [
+        Snapshot(
+            ref=GraphId(run_id=run_id, round=number, node=node),
+            item=item,
+            events=[
+                event
+                for event in events
+                if event.run_id == run_id and event.round == number and event.node == node
+            ],
+        )
+        for node, item in payload["results"].items()
+    ]
+
+
+def snapshots(runs_dir: Path = DEFAULT_RUNS_DIR) -> list[Snapshot]:
+    """Every persisted node of every recorded round, oldest round first."""
+    if not runs_dir.is_dir():
+        return []
+    return [
+        snapshot
+        for run_dir in sorted(entry for entry in runs_dir.iterdir() if entry.is_dir())
+        for number, round_dir in rounds(run_dir)
+        for snapshot in _round_snapshots(RunId(run_dir.name), number, round_dir)
+    ]
+
+
+def _graph_snapshot(ref: GraphId, runs_dir: Path) -> Snapshot | None:
+    """Read exactly the node a `graph:` id addresses, without scanning the ledger."""
+    round_dir = runs_dir / ref.run_id / ref.round_name
+    return next(
+        (
+            snapshot
+            for snapshot in _round_snapshots(RunId(ref.run_id), ref.round, round_dir)
+            if snapshot.ref.node == ref.node
+        ),
+        None,
+    )
+
+
+def _matching_snapshots(ref: GitId | PrId, runs_dir: Path) -> list[Snapshot]:
+    """Every node in the ledger that recorded the commit or PR ``ref`` names."""
+    return [
+        snapshot
+        for snapshot in snapshots(runs_dir)
+        if snapshot.identity == ref.identity
+        and (
+            any(ref.matches(sha) for sha in snapshot.shas)
+            if isinstance(ref, GitId)
+            else ref.number in snapshot.pr_numbers
+        )
+    ]
+
+
+def _stamp(at: float) -> str:
+    return datetime.fromtimestamp(at, UTC).isoformat(timespec="seconds")
+
+
+def _render_snapshot(snapshot: Snapshot, ref: DetailId) -> str:
+    item = snapshot.item
+    lines = [f"Reference: {ref}", f"Graph node: {snapshot.ref}"]
+    status = item.get("status", "unknown")
+    outcome = item.get("outcome")
+    lines.append(f"Status: {status}" + (f" ({outcome})" if outcome else ""))
+    for label, value in (
+        ("Repo", item.get("repo")),
+        ("Branch", item.get("branch")),
+        ("Base", item.get("base_branch")),
+    ):
+        if isinstance(value, str) and value:
+            lines.append(f"{label}: {value}")
+    if isinstance(pr := item.get("pr"), str) and pr:
+        lines.append(f"PR: {pr}")
+    if isinstance(detail := item.get("detail"), str) and detail:
+        lines.append(f"Detail: {detail}")
+    journal = "\n".join(
+        f"  {_stamp(event.at)} {event.kind}"
+        + (f" [{event.step}]" if event.step else "")
+        + (f" {json.dumps(dict(event.detail), sort_keys=True)}" if event.detail else "")
+        for event in snapshot.events
+    )
+    lines.append("Journal:\n" + (journal or "  (no recorded transitions)"))
+    lines.append(f"Full detail: just runs; cat runs/{snapshot.ref.run_id}/{JOURNAL_NAME}")
+    return "\n".join(lines)
+
+
+def _show_snapshot(ref: GitId | PrId | GraphId, runs_dir: Path) -> str:
+    """Resolve a graph/git/PR id against the persisted ledger and journal."""
+    if isinstance(ref, GraphId):
+        found = [snapshot] if (snapshot := _graph_snapshot(ref, runs_dir)) else []
+    else:
+        found = _matching_snapshots(ref, runs_dir)
+    if not found:
+        raise HistoryError(
+            f"no recorded tracked-graph node matches {ref} under {runs_dir}/ "
+            "(pass --runs-dir if the run was recorded elsewhere)"
+        )
+    # Newest wins, matching the session view's "newest first" resolution: a branch
+    # is legitimately carried across rounds, so one commit or PR can appear in
+    # several, and the latest round is the one that says where it ended up.
+    rendered = _render_snapshot(found[-1], ref)
+    if len(found) > 1:
+        others = ", ".join(str(snapshot.ref) for snapshot in found[:-1])
+        rendered += f"\nAlso recorded in: {others}"
+    return rendered
+
+
+def show_run(
+    query: str, *, oneharness_bin: str = "oneharness", runs_dir: Path = DEFAULT_RUNS_DIR
+) -> str:
+    """Render whatever ``query`` names: a typed detail id, or a legacy session.
+
+    A typed id says which namespace to resolve in, so it is dispatched there. Any
+    other string is a legacy oneharness id or substring and keeps its existing
+    meaning exactly — this view predates the typed ids and the muscle memory for it
+    is the reason they are a *widening* rather than a replacement.
+    """
     if not query.strip():
         raise HistoryError("id-or-substring must not be empty")
+    try:
+        ref = parse_detail_id(query.strip())
+    except DetailIdError as exc:
+        raise HistoryError(str(exc)) from exc
+    if ref is None:
+        return _show_session(query, oneharness_bin=oneharness_bin)
+    if isinstance(ref, OneharnessId):
+        # `oh:` is the namespace-explicit spelling of the legacy query, so it
+        # resolves through the same path: anything else would make the typed form
+        # subtly weaker than the string it replaces.
+        return _show_session(ref.history_id, oneharness_bin=oneharness_bin)
+    return _show_snapshot(ref, runs_dir)
+
+
+def _show_session(query: str, *, oneharness_bin: str = "oneharness") -> str:
+    """Resolve a substring to the newest worker session and render its digest."""
     matches = [
         session
         for session in _sessions(_run_history("list", oneharness_bin=oneharness_bin))
@@ -252,11 +494,19 @@ def main_list(argv: list[str] | None = None) -> int:
 
 
 def main_show(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Show progress for one dispatched worker.")
+    parser = argparse.ArgumentParser(
+        description=(
+            "Show one dispatched worker, or the recorded node a typed id names: "
+            "oh:<history-id>, git:<owner/name>@<sha>, pr:<owner/name>#<number>, "
+            "graph:<run>/<round>/<node>. Any other value is a legacy session "
+            "id-or-substring."
+        )
+    )
     parser.add_argument("session", metavar="ID-OR-SUBSTRING")
+    parser.add_argument("--runs-dir", type=Path, default=DEFAULT_RUNS_DIR)
     args = parser.parse_args(argv)
     try:
-        print(show_run(args.session))
+        print(show_run(args.session, runs_dir=args.runs_dir))
     except HistoryError as exc:
         return _exit_error(exc)
     return 0

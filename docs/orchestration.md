@@ -80,6 +80,74 @@ result writes are atomic; a live round cannot be claimed by another process.
 `just runs` summarizes the latest completed round, including waiting action prose
 and what each action unblocks.
 
+## Monitoring a live run
+
+`just runs` says where a round *ended* and `just history-show` says everything
+about one thing in it. `just monitor` answers the question in between — "what is
+happening right now, across the whole graph?" — by folding four stores that settle
+at different times into one ordered stream:
+
+| Source | Read from | Reported when |
+| --- | --- | --- |
+| Run journal | `runs/<run-id>/events.jsonl` | every node transition, as it is appended |
+| oneharness history | sessions whose `run_id` label names this run | a session's status or turn count moves |
+| Git | commits on each known lifecycle branch | once per commit, ever |
+| GitHub | each lifecycle-linked PR | its state or required checks change |
+
+```sh
+just monitor                      # newest active run, follow until it completes
+just monitor RUN_ID               # one named run
+just monitor --once               # replay what is known, report state, exit 0
+just monitor --format jsonl       # one JSON record per line, no header
+just monitor --heartbeat 30 --poll-interval 5
+```
+
+Without `RUN_ID` it picks the **newest active** run — anything that has not
+completed successfully, including one merely waiting on a human, since that is the
+most important state to be watching. If nothing is active it follows the newest
+run, which replays and exits. `--runs-dir` moves the ledger as everywhere else.
+
+**Exit contract.** Only a graph that *completed successfully* ends the stream
+(exit 0). Waiting on a human, a failed node, and an executor that died all keep
+heartbeating, because each is a state a person acts on and the run then continues
+— through `next-round`, whose new round directory the next poll picks up. A
+monitor that exited on them would report "finished" for a run that is merely
+stuck. `--once` is the escape hatch and always exits 0 after one pass; only follow
+mode encodes completion in its status. Exit 2 is an unresolvable run or bad input.
+
+**Output shape.** The text stream's first line is exactly:
+
+```text
+Concise graph events; run just history-show <stream-id> for full detail.
+```
+
+That is the contract, not a banner. Every event line carries exactly one strict
+typed id (`graph:`/`oh:`/`git:`/`pr:` — see `orchestrator/ids.py`), which is
+precisely the argument `just history-show` resolves, so each summary can stay one
+control-stripped line capped at 96 characters derived from recorded status/result
+values. The monitor never tries to *be* the detail; it tells you the id to ask
+for. Heartbeat lines carry no id — a heartbeat is the absence of an event, and
+inventing one would put a value in the stream that `history-show` cannot resolve.
+
+Round transitions are not events for the same reason: a round has no node, so it
+has no `graph:` id. They reach the reader as run state, in the heartbeat.
+
+**Dedup and snapshots.** Every source is polled, so each pass re-reads what it has
+already reported. An observation is keyed by a **durable source identity** the
+source itself guarantees — a journal sequence, a commit sha, a PR state signature
+— never by its position in a pass, so a monitor restarted mid-run replays and then
+continues rather than double-reporting. Git and GitHub are remote state that
+outlives the round but is not reproducible from the run directory (a branch is
+deleted once its PR merges), so what they report is persisted to
+`runs/<run-id>/monitor/details.json`, keyed by the same typed id. That is what
+makes a replay of a finished run show the commits and PRs the live session saw,
+without re-reaching the network.
+
+The monitor only ever reads: it writes nothing to the ledger or journal, takes no
+lock a writer needs, and treats every source as optional. A missing `gh`, an
+unfetched branch, or an absent history store degrades that source to silence
+instead of ending the stream.
+
 ## Human completion attestations
 
 After doing a reported action, attest it explicitly:
@@ -127,5 +195,9 @@ results without `state` remain readable.
 - `orchestrator/lifecycle.py` — repository nodes and resumable step workstreams.
 - `orchestrator/runs.py`, `next_round.py`, `replan.py` — durable rounds,
   attestations, and continuation.
+- `orchestrator/journal.py`, `ids.py` — the append-only per-transition record and
+  the strict typed ids its details point at.
+- `orchestrator/monitor.py` — the four-source aggregation, dedup, and the
+  `just monitor` stream/exit contract.
 - `orchestrator/dispatch.py` — one direct agent or lifecycle agent step → one
   onejudge subprocess.
