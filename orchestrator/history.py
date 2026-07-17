@@ -455,15 +455,27 @@ def _show_session(query: str, *, oneharness_bin: str = "oneharness") -> str:
         for session in _sessions(_run_history("list", oneharness_bin=oneharness_bin))
         if _is_worker(session) and (query in session.session_id or query in session.name)
     ]
-    if not matches:
-        raise HistoryError(f"no worker history session matches {query!r}")
-    item = matches[0]
-    session_id = item.session_id
-    # The list response already resolved the exact backing file. Reading that file
-    # keeps legacy v0.1 sessions usable with oneharness 0.4: their stored `session`
-    # value may be the non-unique display name, so asking the CLI to show the
-    # filename-derived id can legitimately return an empty normalized result.
-    parsed = session_records(item)
+    if matches:
+        item = matches[0]
+        session_id = item.session_id
+        # The list response already resolved the exact backing file. Reading that
+        # file keeps substring lookup and legacy display-name lookup unchanged.
+        parsed = session_records(item)
+        detail_query = str(session_id)
+    else:
+        # UUIDv7 history identities live on v0.2 records rather than the backwards-
+        # compatible list envelope.  Delegate an otherwise-unmatched query to the
+        # CLI's exact-ID lookup; it also synthesizes stable IDs while normalizing
+        # legacy v0.1 records.
+        value = _run_history("show", query, oneharness_bin=oneharness_bin)
+        if not isinstance(value, list):
+            raise HistoryError("oneharness history show returned an unexpected response")
+        parsed = [record for record in value if isinstance(record, dict)]
+        if not parsed:
+            raise HistoryError(f"no worker history session matches {query!r}")
+        raw_session = parsed[0].get("session")
+        session_id = SessionId(raw_session if isinstance(raw_session, str) else query)
+        detail_query = query
     result = digest(parsed, session_id)
     commands = "\n".join(f"  $ {command}" for command in result.commands) or "  (none recorded)"
     return (
@@ -473,7 +485,7 @@ def _show_session(query: str, *, oneharness_bin: str = "oneharness") -> str:
         f"Latest: {result.status} ({result.duration_ms / 1000:.1f}s)\n"
         f"Recent commands:\n{commands}\n"
         f"Latest agent text:\n{result.text or '(none recorded)'}\n\n"
-        f"Full detail: oneharness history show {result.session_id} --format text"
+        f"Full detail: oneharness history show {detail_query} --format text"
     )
 
 

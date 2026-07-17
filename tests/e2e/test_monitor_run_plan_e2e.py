@@ -23,10 +23,13 @@ GRAPH_LABELS = (
 )
 
 
-def _just(*args: str) -> subprocess.CompletedProcess[str]:
+def _just(
+    *args: str, environment: dict[str, str] | None = None
+) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         ["just", *args],
         cwd=REPO_ROOT,
+        env=environment,
         text=True,
         capture_output=True,
         timeout=180,
@@ -225,6 +228,17 @@ def test_real_history_labels_and_cursor_watch(oneharness_bin: str, tmp_path: Pat
     resumed_ids = [envelope["record"]["history_id"] for envelope in resumed]
     assert watched_ids[0] not in resumed_ids
     assert resumed_ids == watched_ids[1:]
+
+    detail = _just(
+        "history-show",
+        f"oh:{watched_ids[0]}",
+        "--runs-dir",
+        str(tmp_path / "runs"),
+        environment=environment,
+    )
+    assert detail.returncode == 0, detail.stderr
+    assert f"oneharness history show {watched_ids[0]} --format text" in detail.stdout
+    assert "Latest agent text:" in detail.stdout
 
 
 def test_real_run_plan_waits_then_monitor_exits_only_after_attestation(

@@ -226,6 +226,14 @@ def test_the_oh_namespace_is_the_explicit_spelling_of_the_legacy_query(tmp_path:
     assert "Session: build-history-command-20260714T100000Z-123" in typed
 
 
+def test_an_oh_uuid_uses_oneharness_exact_history_lookup(tmp_path: Path) -> None:
+    binary = _fake_oneharness(tmp_path)
+    history_id = "019f6f83-c0f3-7d51-a995-d05011ae2b28"
+    output = show_run(f"oh:{history_id}", oneharness_bin=str(binary))
+    assert "Session: worker-session" in output
+    assert f"oneharness history show {history_id} --format text" in output
+
+
 def test_an_empty_query_names_nothing_at_all(tmp_path: Path) -> None:
     with pytest.raises(HistoryError, match="must not be empty"):
         show_run("   ", runs_dir=_tracked_run(tmp_path))

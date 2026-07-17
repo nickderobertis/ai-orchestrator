@@ -560,14 +560,22 @@ def history_events(
     found: list[MonitorEvent] = []
     for session in sessions:
         try:
-            ref = OneharnessId(history_id=session.session_id)
-        except DetailIdError:
-            continue
-        try:
             records = session_records(session)
         except HistoryError:
             continue
         latest = records[-1] if records else {}
+        # v0.2 records own a stable UUIDv7 identity.  The list envelope keeps its
+        # filename-derived ``id`` for backwards compatibility, so take the typed
+        # detail identity from the record itself.  Labelled graph history is
+        # necessarily v0.2; the fallback only keeps hand-written/legacy fixtures
+        # and old stores inspectable.
+        history_id = latest.get("history_id", session.session_id)
+        if not isinstance(history_id, str):
+            continue
+        try:
+            ref = OneharnessId(history_id=history_id)
+        except DetailIdError:
+            continue
         status = str(latest.get("status", "unknown"))
         node = session.labels.get("node", "?")
         found.append(
@@ -580,7 +588,7 @@ def history_events(
                 # Re-emit exactly when the session's own status or turn count moves:
                 # those are the values the summary is derived from, so a key over
                 # them reports every change and nothing else.
-                key=f"history:{session.session_id}:{status}:{len(records)}",
+                key=f"history:{history_id}:{status}:{len(records)}",
             )
         )
     return found

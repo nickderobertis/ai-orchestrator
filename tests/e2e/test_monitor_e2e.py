@@ -356,11 +356,27 @@ def _oneharness(tmp_path: Path, sessions: list[dict[str, Any]]) -> str:
 
 
 def _session(
-    tmp_path: Path, session_id: str, name: str, statuses: list[str], **labels: str
+    tmp_path: Path,
+    session_id: str,
+    name: str,
+    statuses: list[str],
+    *,
+    history_id: str | None = None,
+    **labels: str,
 ) -> dict[str, Any]:
     records = tmp_path / f"{session_id}.jsonl"
     records.write_text(
-        "\n".join(json.dumps({"status": status, "harness": "codex"}) for status in statuses) + "\n",
+        "\n".join(
+            json.dumps(
+                {
+                    "status": status,
+                    "harness": "codex",
+                    **({"history_id": history_id} if history_id else {}),
+                }
+            )
+            for status in statuses
+        )
+        + "\n",
         encoding="utf-8",
     )
     session: dict[str, Any] = {
@@ -386,6 +402,7 @@ def test_the_history_source_selects_exactly_the_sessions_this_run_labelled(
             "api-20260714T100000Z-1",
             "backend-engineer",
             ["running", "completed"],
+            history_id="019f6f83-c0f3-7d51-a995-d05011ae2b28",
             run_id="watch-me",
             round="1",
             node="api",
@@ -405,7 +422,7 @@ def test_the_history_source_selects_exactly_the_sessions_this_run_labelled(
     binary = _oneharness(tmp_path, sessions)
 
     events = history_events(RUN, now=AT, oneharness_bin=binary)
-    assert [str(event.stream_id) for event in events] == ["oh:api-20260714T100000Z-1"]
+    assert [str(event.stream_id) for event in events] == ["oh:019f6f83-c0f3-7d51-a995-d05011ae2b28"]
     assert events[0].summary == "session api completed turns=2 backend-engineer"
     assert events[0].source == "history"
 
