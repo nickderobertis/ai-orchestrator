@@ -86,6 +86,7 @@ def test_pre_push_hook_clears_repository_local_git_environment(tmp_path: Path) -
             "PATH": f"{tools}:{os.environ['PATH']}",
             "GIT_DIR": str(ROOT / ".git"),
             "GIT_WORK_TREE": str(ROOT),
+            "ORCHESTRATOR_COMPARISON_BASE": "",
             "TEST_HOOK_RESULT": str(result),
         },
         text=True,
