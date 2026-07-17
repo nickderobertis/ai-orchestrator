@@ -146,9 +146,6 @@ codex's own `workspace-write` sandbox (`auto` mode) needs unprivileged user
 namespaces this host disables, so `bypass` (no approvals, no inner sandbox) is the
 working no-approval mode and the container is the boundary. The **allowlister**
 `repo-write` hook stays wired (`scripts/session-setup.sh`) as belt-and-suspenders.
-Dispatch defaults `ONEHARNESS_TIMEOUT` to a temporary 10,800-second hard per-turn
-ceiling for legitimate long-running agents; explicit overrides still win, and
-fine-grained inactivity/phase budgets remain issue #6 work.
 Full rationale, the merge strategies, and the claude-code caveat:
 `docs/repo-lifecycle.md` and `docs/onejudge-integration.md`.
 
