@@ -149,13 +149,16 @@ def test_a_replay_reports_the_commits_git_can_no_longer_show(
     # Nothing persisted means nothing to replay: the snapshot is what carries these.
     assert git_events([BRANCH], checkouts, DetailSnapshot(), now=AT) == []
 
+    # Keyed by durable identity, so a replay names the same commits the live pass did.
+    # Order within one pass is not part of that contract: every git event in a pass
+    # shares its timestamp, and the snapshot is a mapping keyed by id.
     replayed = git_events([BRANCH], checkouts, load_snapshot(run_dir), now=AT)
-    assert [event.key for event in replayed] == [event.key for event in live]
-    assert [event.summary for event in replayed] == [event.summary for event in live]
+    assert sorted(event.key for event in replayed) == sorted(event.key for event in live)
+    assert sorted(event.summary for event in replayed) == sorted(event.summary for event in live)
 
     # The same holds once the clone itself is gone.
     thrown_away = git_events([BRANCH], {}, load_snapshot(run_dir), now=AT)
-    assert [event.key for event in thrown_away] == [event.key for event in live]
+    assert sorted(event.key for event in thrown_away) == sorted(event.key for event in live)
 
 
 def test_a_replay_reports_the_commits_that_are_now_in_the_base(
@@ -176,7 +179,7 @@ def test_a_replay_reports_the_commits_that_are_now_in_the_base(
     assert gitops.log_delta(repo, "main", "work") == []
 
     replayed = git_events([BRANCH], checkouts, load_snapshot(run_dir), now=AT)
-    assert [event.key for event in replayed] == [event.key for event in live]
+    assert sorted(event.key for event in replayed) == sorted(event.key for event in live)
 
 
 def test_the_snapshot_widens_what_git_shows_rather_than_replacing_it(
@@ -196,10 +199,10 @@ def test_the_snapshot_widens_what_git_shows_rather_than_replacing_it(
     _git("commit", "-m", "docs: add c", cwd=repo)
 
     events = git_events([BRANCH], checkouts, load_snapshot(run_dir), now=AT)
-    assert [event.summary for event in events] == [
+    assert sorted(event.summary for event in events) == [
+        "commit work docs: add c",  # only git knows this one...
+        "commit work feat: add a",  # ...and the snapshot agrees about the rest
         "commit work fix: add b",
-        "commit work feat: add a",
-        "commit work docs: add c",
     ]
 
 
@@ -481,7 +484,8 @@ def test_a_run_folds_its_journal_and_its_real_branch_into_one_stream(
         clock=lambda: AT,
         snapshot=load_snapshot(run_dir),
     )
-    assert [str(e.stream_id) for e in replay.poll() if e.source == "git"] == git_ids
+    replayed = [str(e.stream_id) for e in replay.poll() if e.source == "git"]
+    assert sorted(replayed) == sorted(git_ids)
 
 
 # --- the real command ----------------------------------------------------------
