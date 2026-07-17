@@ -185,6 +185,22 @@ checkout fetch and fast-forward with `--ff-only`. A merge into a feature or
 synthetic stack base does not advance it. No merge assembly,
 checkout, or hard reset occurs in that canonical working tree.
 
+### Merged is not necessarily published
+
+A `merged` lifecycle outcome proves that the change reached its base branch. It
+does not prove a downstream release, deployment, package, generated changelog, or
+other task destination consumed that change. Identify the destination and its
+trigger while planning, then keep closeout open until the destination records the
+change.
+
+When release automation selects work by commit convention, that convention is part
+of the destination gate. Confirm that the commit produced by the repository's merge
+strategy satisfies the configured release trigger, then confirm the expected
+release artifact or changelog entry exists. A green tree gate and a successful
+merge are insufficient: release-plz can ignore a squash commit whose subject is not
+a recognized conventional commit, leaving the change on the base branch but absent
+from both the release and `CHANGELOG`.
+
 ## Lifecycle nodes in the tracked graph
 
 A lifecycle node is an `agent` node in `just run-plan` with a `repo` and either a
