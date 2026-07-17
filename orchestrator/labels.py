@@ -19,7 +19,10 @@ rather than silently corrupting a history record.
 
 from __future__ import annotations
 
+import argparse
+import os
 import re
+import sys
 import unicodedata
 from collections.abc import Mapping
 from typing import TYPE_CHECKING
@@ -130,3 +133,33 @@ def graph_labels(
     if step:
         labels["step"] = step
     return labels
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Print this process's labels plus the given ones, for a tool we shell out to.
+
+    A dispatched agent's own labels reach a subprocess through `run_onejudge`, which
+    layers them in Python. A tool invoked from a `just` recipe — llmlint — has no
+    such seam, and the recipe cannot layer them itself: the merge has to preserve an
+    inherited value it does not know the shape of. So the merge stays here, behind a
+    command the recipe can substitute, rather than being reimplemented in shell where
+    the label contract could not be enforced.
+    """
+    parser = argparse.ArgumentParser(
+        description="Render ONEHARNESS_HISTORY_LABELS: inherited labels, KEY=VALUE layered over."
+    )
+    parser.add_argument("labels", nargs="*", metavar="KEY=VALUE")
+    args = parser.parse_args(argv)
+    own: dict[str, str] = {}
+    for item in args.labels:
+        key, separator, value = item.partition("=")
+        if not separator:
+            print(f"history-labels: expected KEY=VALUE, got {item!r}", file=sys.stderr)
+            return 2
+        own[key] = value
+    try:
+        print(merge_labels(os.environ.get(LABEL_ENV), own))
+    except LabelError as exc:
+        print(f"history-labels: {exc}", file=sys.stderr)
+        return 2
+    return 0

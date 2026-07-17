@@ -417,6 +417,16 @@ def _rounds(run_dir: Path) -> list[tuple[int, Path]]:
     ]
 
 
+def rounds(run_dir: Path) -> list[tuple[int, Path]]:
+    """Every numbered round of a run, oldest first; empty for a non-run directory.
+
+    The round-directory naming is this module's to know. A reader that walks the
+    ledger — rather than only asking it for the `latest_round` — gets it from here
+    so a second spelling of ``round-NN`` cannot drift out of step with the writer's.
+    """
+    return sorted(_rounds(run_dir)) if run_dir.is_dir() else []
+
+
 def _write_json(path: Path, value: Mapping[str, Any]) -> None:
     atomic_json(path, value)
 
