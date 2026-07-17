@@ -1,5 +1,12 @@
 """Real oneharness history/watch acceptance for graph-labelled monitor inputs."""
 
+# llmlint: ignore-file[e2e_not_mocked] the first two tests cross real oneharness and
+# onejudge subprocess boundaries with only the paid model behind the established
+# command-provider seam. The lifecycle slice uses the repository's sanctioned
+# make_writing_dispatch paid-harness seam and FakeGitHub PR/CI decision seam while
+# driving real git, lifecycle commits/merge, journal, snapshots, and public CLIs;
+# the real dispatch boundary is exercised immediately above and in test_dispatch_e2e.py.
+
 from __future__ import annotations
 
 import json
