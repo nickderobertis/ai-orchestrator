@@ -411,6 +411,24 @@ def known_prs(ledgers: Iterable[RoundLedger], events: Iterable[Event]) -> list[P
     return sorted(found.values(), key=lambda ref: (ref.identity, ref.number))
 
 
+def ledger_checkouts(ledgers: Iterable[RoundLedger]) -> dict[str, Path]:
+    """Where each repository's work actually happened, as the ledger recorded it.
+
+    The registry names a repository's *publication* checkout, which is not where a
+    lifecycle branch's commits live when the round ran against a separate execution
+    checkout — the self-dispatch case, where the two deliberately differ. Reading the
+    recorded path is the only way to point git at the clone that has the branch.
+    """
+    found: dict[str, Path] = {}
+    for ledger in ledgers:
+        for item in ledger.payload["results"].values():
+            identity = _text(item, "repo")
+            checkout = _text(item, "execution_checkout")
+            if identity and checkout:
+                found[identity] = Path(checkout)
+    return found
+
+
 # --- sources -------------------------------------------------------------------
 
 # The recorded values a summary is derived from, in the order they are rendered.
@@ -975,7 +993,10 @@ class Monitor:
         ledgers = _round_ledgers(self.run_dir)
         found = journal_events(self.run_id, self.run_dir)
         found += history_events(self.run_id, now=now, oneharness_bin=self.oneharness_bin)
-        found += git_events(known_branches(ledgers, mine), self.checkouts(), self.snapshot, now=now)
+        # The registry is the fallback; a recorded execution checkout wins, because it
+        # is where the branch's commits are when the two differ.
+        checkouts = {**self.checkouts(), **ledger_checkouts(ledgers)}
+        found += git_events(known_branches(ledgers, mine), checkouts, self.snapshot, now=now)
         found += pr_events(known_prs(ledgers, mine), self.snapshot, now=now, github=self.github)
         fresh = [event for event in found if event.key not in self.seen]
         self.seen.update(event.key for event in fresh)
