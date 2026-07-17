@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import ConfigError
+from .journal import open_journal
 from .plan import PlanError
 from .replan import next_round
 from .runs import (
@@ -80,6 +81,12 @@ def main(argv: list[str] | None = None) -> int:
         except ConfigError as exc:
             print(f"next-round: {exc}", file=sys.stderr)
             return 2
+        # Journal the attestation against the round that recorded the wait, so the
+        # journal shows who released the block and when, not just that it lifted.
+        journal = open_journal(run_dir, run_id, number)
+        for ref in completed_refs:
+            node, _, step = ref.partition("/")
+            journal.append("human-attested", node=node, step=step or None, ref=ref)
 
     if not plan["tasks"]:
         if completed_refs:

@@ -17,6 +17,7 @@ from orchestrator.dispatch import (
     run_onejudge,
 )
 from orchestrator.dispatch import main as dispatch_main
+from orchestrator.labels import parse_labels
 from orchestrator.plan import PlanNode, PlanResult, TaskResult, _render
 from orchestrator.plan import main as plan_main
 
@@ -202,3 +203,57 @@ def test_run_onejudge_rejects_invalid_timeout(monkeypatch, bad_timeout: str) -> 
     monkeypatch.setenv("ONEHARNESS_TIMEOUT", bad_timeout)
     with pytest.raises(DispatchError, match="ONEHARNESS_TIMEOUT must be a positive integer"):
         run_onejudge({}, "task")
+
+
+def _label_echoing_onejudge(tmp_path) -> str:
+    """A stand-in onejudge that reports the labels it was actually handed."""
+    onejudge = tmp_path / "onejudge"
+    onejudge.write_text(
+        '#!/bin/sh\nprintf \'{"usage": {"labels": "%s"}}\' "$ONEHARNESS_HISTORY_LABELS"\n',
+        encoding="utf-8",
+    )
+    onejudge.chmod(0o755)
+    return os.fspath(onejudge)
+
+
+def test_run_onejudge_propagates_history_labels_to_the_subprocess(tmp_path, monkeypatch) -> None:
+    monkeypatch.delenv("ONEHARNESS_HISTORY_LABELS", raising=False)
+    report = run_onejudge(
+        {},
+        "task",
+        onejudge_bin=_label_echoing_onejudge(tmp_path),
+        labels={"run_id": "run-9", "round": "2", "node": "api"},
+    )
+    assert report.raw is not None
+    assert report.usage["labels"] == "run_id=run-9,round=2,node=api"
+
+
+def test_run_onejudge_preserves_inherited_labels_it_did_not_set(tmp_path, monkeypatch) -> None:
+    # A nested dispatch must keep the outer run's labels, and win only on conflict.
+    monkeypatch.setenv("ONEHARNESS_HISTORY_LABELS", "outer=keep,node=old")
+    report = run_onejudge(
+        {},
+        "task",
+        onejudge_bin=_label_echoing_onejudge(tmp_path),
+        labels={"node": "api", "run_id": "run-9"},
+    )
+    assert parse_labels(report.usage["labels"]) == {
+        "outer": "keep",
+        "node": "api",
+        "run_id": "run-9",
+    }
+
+
+def test_run_onejudge_without_labels_leaves_the_env_alone(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("ONEHARNESS_HISTORY_LABELS", "outer=keep")
+    report = run_onejudge({}, "task", onejudge_bin=_label_echoing_onejudge(tmp_path))
+    assert report.usage["labels"] == "outer=keep"
+
+
+def test_run_onejudge_rejects_an_off_contract_label(tmp_path) -> None:
+    # A comma cannot round-trip through the list format; fail loudly rather than
+    # hand oneharness a value that parses back as two different labels.
+    with pytest.raises(DispatchError, match="invalid history label"):
+        run_onejudge(
+            {}, "task", onejudge_bin=_label_echoing_onejudge(tmp_path), labels={"node": "a,b"}
+        )

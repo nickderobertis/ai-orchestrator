@@ -51,6 +51,59 @@ def _lifecycle(outcome: str = "merged", **kw) -> LifecycleResult:
     return LifecycleResult(**base)
 
 
+def test_run_graph_journals_what_the_round_actually_did(tmp_path: Path) -> None:
+    """The journal is written by the real scheduler, not by a stand-in for it."""
+    from orchestrator.journal import open_journal
+    from orchestrator.verify import VerifyResult
+
+    journal = open_journal(tmp_path / "run-j", "run-j", 1)
+    graph = parse_graph(
+        {
+            "tasks": [
+                {"id": "direct", "persona": "planner", "task": "Plan"},
+                {"id": "repo", "repo": "o/r", "persona": "backend-engineer", "task": "Patch"},
+                {"id": "review", "kind": "human", "task": "Approve the change", "deps": ["repo"]},
+            ]
+        }
+    )
+    merged = _lifecycle(
+        outcome="merged",
+        branch="feature",
+        steps=[StepResult(id="main", persona="backend-engineer", status="done")],
+        verify=VerifyResult(command=["just", "gate"], ok=True, exit_code=0, output=""),
+    )
+
+    run_graph(
+        graph,
+        agent_runner=lambda node: _report(node.persona),
+        lifecycle_runner=lambda node: merged,
+        journal=journal,
+    )
+
+    events = journal.events()
+    seen = {(e.kind, e.node, e.step) for e in events}
+    assert ("node-started", "direct", None) in seen
+    assert ("node-settled", "direct", None) in seen
+    assert ("branch-discovered", "repo", None) in seen
+    assert ("step-settled", "repo", "main") in seen
+    assert ("verification-finished", "repo", None) in seen
+    assert ("human-waiting", "review", None) in seen
+    # Sequence numbers are dense and monotonic even though nodes ran concurrently.
+    assert [e.seq for e in events] == list(range(1, len(events) + 1))
+    verification = next(e for e in events if e.kind == "verification-finished")
+    assert verification.detail == {"ok": True, "command": ["just", "gate"]}
+
+
+def test_run_graph_without_a_journal_is_unchanged(tmp_path: Path) -> None:
+    graph = parse_graph({"tasks": [{"id": "a", "persona": "p", "task": "t"}]})
+    result = run_graph(
+        graph,
+        agent_runner=lambda node: _report("p"),
+        lifecycle_runner=lambda node: _lifecycle(),
+    )
+    assert result.state == "complete"
+
+
 def test_parse_graph_accepts_old_direct_and_lifecycle_nodes() -> None:
     graph = parse_graph(
         {

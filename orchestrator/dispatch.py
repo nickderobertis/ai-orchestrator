@@ -15,6 +15,7 @@ import os
 import subprocess
 import sys
 import tempfile
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -23,6 +24,7 @@ import yaml
 
 from . import BASE_CONFIG, PERSONA_DIR, REPO_ROOT
 from .config import ConfigError, build_effective_config, load_yaml
+from .labels import LABEL_ENV, LabelError, merge_labels
 
 # onejudge's own exit codes (see docs/cli.md): 0 completed + boolean evals passed,
 # 1 hit the turn cap / a boolean eval failed, 2 bad config or usage.
@@ -128,6 +130,7 @@ def run_onejudge(
     onejudge_bin: str = "onejudge",
     provider: str | None = None,
     env: dict[str, str] | None = None,
+    labels: Mapping[str, str] | None = None,
     timeout: float | None = None,
 ) -> Report:
     """Run an already-merged effective config through onejudge; return a Report.
@@ -135,6 +138,10 @@ def run_onejudge(
     The task is passed over the CLI via ``--task -`` (stdin) so arbitrarily long,
     multi-line tasks need no shell quoting. A config/usage error (exit 2) is
     raised as a DispatchError rather than returned as a normal outcome.
+
+    ``labels`` locate this dispatch in the tracked graph (run/round/node/step) and
+    are layered over any ``ONEHARNESS_HISTORY_LABELS`` we inherited, so a nested
+    dispatch keeps the outer run's labels as well as its own.
     """
     with tempfile.TemporaryDirectory() as td:
         cfg_path = Path(td) / "effective.onejudge.yaml"
@@ -145,6 +152,11 @@ def run_onejudge(
         process_env = {**os.environ, **(env or {})}
         process_env.setdefault("ONEHARNESS_TIMEOUT", DEFAULT_ONEHARNESS_TIMEOUT)
         _validate_oneharness_timeout(process_env["ONEHARNESS_TIMEOUT"])
+        if labels:
+            try:
+                process_env[LABEL_ENV] = merge_labels(process_env.get(LABEL_ENV), labels)
+            except LabelError as exc:
+                raise DispatchError(f"invalid history label: {exc}") from exc
         try:
             proc = subprocess.run(
                 cmd,
@@ -220,6 +232,7 @@ def dispatch(
     onejudge_bin: str = "onejudge",
     provider: str | None = None,
     oneharness_mode: str | None = None,
+    labels: Mapping[str, str] | None = None,
     timeout: float | None = None,
 ) -> Report:
     """Merge base ⊕ persona and drive the subtask to completion via onejudge.
@@ -257,6 +270,7 @@ def dispatch(
         onejudge_bin=onejudge_bin,
         provider=provider,
         env=env or None,
+        labels=labels,
         timeout=timeout,
     )
 
