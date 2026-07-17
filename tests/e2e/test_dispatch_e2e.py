@@ -262,6 +262,7 @@ def test_dispatch_cli_applies_ordered_models_to_real_oneharness(
         text=True,
         capture_output=True,
         check=True,
+        env=env,
     )
     effective_config = json.loads(effective.stdout)
     assert effective_config["run_mode"]["value"] == "fallback"
