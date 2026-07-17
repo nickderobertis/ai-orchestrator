@@ -200,6 +200,7 @@ def test_reconcile_is_a_noop_on_a_missing_or_intact_journal(tmp_path: Path) -> N
     "record",
     [
         pytest.param("not a mapping", id="not-a-mapping"),
+        pytest.param(_record(version=True), id="boolean-schema-version"),
         pytest.param(_record(version=SCHEMA_VERSION + 1), id="newer-schema"),
         pytest.param(_record(kind="invented"), id="unknown-kind"),
         pytest.param(_record(run_id=""), id="empty-run-id"),

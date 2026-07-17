@@ -186,7 +186,10 @@ def parse_event(record: object) -> Event | None:
     the *values*, so a stored ``seq`` of 0 or a ``NaN`` timestamp is rejected by the
     same contract that governs a fresh append.
     """
-    if not isinstance(record, dict) or record.get("version") != SCHEMA_VERSION:
+    if not isinstance(record, dict):
+        return None
+    version = record.get("version")
+    if not _is_int(version) or version != SCHEMA_VERSION:
         return None
     kind = record.get("kind")
     run_id = record.get("run_id")
