@@ -272,17 +272,8 @@ def run_graph(
     completed: dict[str, LifecycleResult] = {}
     guard = threading.Lock()
 
-    def run_one(nid: str) -> NodeRun:
-        node = nodes[nid]
-        node_id = NodeId(nid)
-        node_log = NodeJournal(sink=log, node=node_id, run_id=run_id, round=round_number)
-        if node.human:
-            node_log.append("human-waiting", detail={"task": first_line(node.task)})
-            return NodeRun("waiting", "awaiting human action")
-        node_log.append(
-            "node-started",
-            detail={"node_kind": "lifecycle" if node.lifecycle else "direct"},
-        )
+    def settle(nid: str, node: GraphNode, node_log: NodeJournal) -> NodeRun:
+        """Run one already-started node to its outcome, journaling how it settled."""
         if node.lifecycle is not None:
             with guard:
                 anchors = combine_stack_bases(node.lifecycle, completed)
@@ -318,6 +309,28 @@ def run_graph(
             detail={"detail": "hit the turn cap", "turns": report.assistant_turns},
         )
         return NodeRun("failed", "did not complete (hit the turn cap)", report)
+
+    def run_one(nid: str) -> NodeRun:
+        node = nodes[nid]
+        node_log = NodeJournal(sink=log, node=NodeId(nid), run_id=run_id, round=round_number)
+        if node.human:
+            node_log.append("human-waiting", detail={"task": first_line(node.task)})
+            return NodeRun("waiting", "awaiting human action")
+        node_log.append(
+            "node-started",
+            detail={"node_kind": "lifecycle" if node.lifecycle else "direct"},
+        )
+        try:
+            return settle(nid, node, node_log)
+        except Exception as exc:
+            # `schedule_dag` settles a runner that raised as a failed node, so the
+            # ledger records it either way. Journal it here as well: a `node-started`
+            # with nothing to close it is how this journal says "still running", and
+            # a node that raised is the one thing it is not.
+            node_log.append(
+                "node-failed", detail={"detail": str(exc), "error": type(exc).__name__}
+            )
+            raise
 
     runs, started_order = schedule_dag(list(nodes), deps, run_one, concurrency=conc)
     return _collect(nodes, runs, started_order)

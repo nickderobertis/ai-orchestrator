@@ -8,7 +8,8 @@ from pathlib import Path
 
 import pytest
 
-from orchestrator.dispatch import Report
+from orchestrator.dispatch import DispatchError, Report
+from orchestrator.gitops import GitError
 from orchestrator.graph import (
     HumanAction,
     first_line,
@@ -95,6 +96,61 @@ def test_run_graph_journals_what_the_round_actually_did(tmp_path: Path) -> None:
     settled = next(e for e in events if e.kind == "node-settled" and e.node == "repo")
     assert settled.detail == {"status": "done", "outcome": "merged"}
     assert all(e.round == 1 and e.run_id == "run-j" for e in events)
+
+
+def test_run_graph_journals_a_direct_node_whose_runner_raised(tmp_path: Path) -> None:
+    """A runner that raises is a node failure, and the journal must say so.
+
+    `schedule_dag` catches whatever a runner raises and settles the node as failed,
+    so the ledger records it. If the journal records no matching transition, the
+    round leaves a `node-started` with nothing to close it — which is exactly the
+    reading a started-with-no-settled event is reserved for: work still in flight.
+    """
+    journal = open_journal(tmp_path / "run-x", RunId("run-x"), 1)
+    graph = parse_graph({"tasks": [{"id": "api", "persona": "backend-engineer", "task": "A"}]})
+
+    def boom(node: PlanNode, **_: object) -> Report:
+        raise DispatchError("onejudge could not start")
+
+    result = run_graph(
+        graph,
+        agent_runner=boom,
+        lifecycle_runner=lambda node, **_: _lifecycle(),
+        journal=journal,
+        run_id=RunId("run-x"),
+        round_number=1,
+    )
+
+    assert result.results["api"].status == "failed"
+    events = journal.events()
+    assert [(e.kind, e.node) for e in events] == [("node-started", "api"), ("node-failed", "api")]
+    assert "onejudge could not start" in str(events[1].detail["detail"])
+
+
+def test_run_graph_journals_a_lifecycle_node_whose_runner_raised(tmp_path: Path) -> None:
+    """The same holds for a lifecycle node: a raised error still settles the journal."""
+    journal = open_journal(tmp_path / "run-y", RunId("run-y"), 1)
+    graph = parse_graph(
+        {"tasks": [{"id": "api", "repo": "o/r", "persona": "backend-engineer", "task": "A"}]}
+    )
+
+    def boom(node: RepoPlanNode, *, journal: NodeSink | None = None) -> LifecycleResult:
+        raise GitError("origin rejected the push")
+
+    result = run_graph(
+        graph,
+        agent_runner=lambda node, **_: _report(node.persona),
+        lifecycle_runner=boom,
+        journal=journal,
+        run_id=RunId("run-y"),
+        round_number=1,
+    )
+
+    assert result.results["api"].status == "failed"
+    assert [(e.kind, e.node) for e in journal.events()] == [
+        ("node-started", "api"),
+        ("node-failed", "api"),
+    ]
 
 
 def test_run_graph_labels_each_dispatch_with_its_place_in_the_graph(tmp_path: Path) -> None:

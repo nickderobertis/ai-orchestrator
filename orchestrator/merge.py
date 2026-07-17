@@ -32,7 +32,7 @@ if TYPE_CHECKING:
     # this module, so importing the journal (which imports the ledger) for real
     # would close a cycle. Nothing here needs the journal at runtime — a strategy
     # only ever calls `append` on the sink the lifecycle injects.
-    from .journal import Detail, EventKind, JournalSink
+    from .journal import Detail, EventKind, NodeSink
 
 __all__ = [
     "GitHubMergeStrategy",
@@ -69,7 +69,12 @@ class MergeContext:
     #: Where publication transitions are recorded, already scoped to the node the
     #: lifecycle is merging for. ``None`` outside a tracked round, where there is
     #: no journal to record into.
-    journal: JournalSink | None = None
+    #:
+    #: `NodeSink` rather than the bare `JournalSink` it appends through: every kind
+    #: `_record` writes is a node transition, so an unscoped sink would raise on the
+    #: first one — after the branch is already pushed. The scope is the contract, so
+    #: it is the type.
+    journal: NodeSink | None = None
 
 
 @dataclass

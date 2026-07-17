@@ -1112,7 +1112,7 @@ def test_run_repo_task_resume_fails_when_recorded_draft_is_closed(tmp_path, bare
 
 
 def test_run_repo_plan_cascades(tmp_path) -> None:
-    def runner(node: RepoPlanNode) -> LifecycleResult:
+    def runner(node: RepoPlanNode, **_: object) -> LifecycleResult:
         return _result("merged" if node.id != "b" else "gate-failed", repo=node.repo)
 
     plan = RepoPlan(
@@ -1134,7 +1134,7 @@ def test_run_repo_plan_cascades(tmp_path) -> None:
 def test_run_repo_plan_turns_open_same_identity_dependency_into_stack_base() -> None:
     seen: dict[str, list[StackBase]] = {}
 
-    def runner(node: RepoPlanNode) -> LifecycleResult:
+    def runner(node: RepoPlanNode, **_: object) -> LifecycleResult:
         seen[node.id] = node.stack_bases
         if node.id == "parent":
             return _result(
@@ -1173,7 +1173,7 @@ def test_run_repo_plan_turns_open_same_identity_dependency_into_stack_base() -> 
 def test_run_repo_plan_carries_landed_nonroot_base() -> None:
     seen: dict[str, list[StackBase]] = {}
 
-    def runner(node: RepoPlanNode) -> LifecycleResult:
+    def runner(node: RepoPlanNode, **_: object) -> LifecycleResult:
         seen[node.id] = node.stack_bases
         if node.id == "parent":
             return _result(
