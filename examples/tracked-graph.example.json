@@ -18,7 +18,7 @@
       "repo": "nickderobertis/some-service",
       "repo_type": "team",
       "deps": ["design-approval"],
-      "title": "Implement the approved release",
+      "title": "feat: implement approved release",
       "steps": [
         {
           "id": "implement",

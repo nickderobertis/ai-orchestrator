@@ -75,6 +75,18 @@ from .workspace import (
 MERGE_POLICIES = ("auto", "direct", "none")
 MERGE_METHODS = ("squash", "merge", "rebase")
 
+# Keep generated PR titles within the conventional 72-character commit-subject
+# boundary. GitHub may use the PR title as the squash subject, so this is a
+# release-facing constraint rather than merely a display preference.
+_SUBJECT_LIMIT = 72
+_CONVENTIONAL_SUBJECT = re.compile(
+    r"^(?P<type>[a-z][a-z0-9-]*)"
+    r"(?:\((?P<scope>[^():\r\n]+)\))?"
+    r"(?P<breaking>!)?: (?P<description>\S(?:.*\S)?)$"
+)
+_BREAKING_FOOTER = re.compile(r"(?m)^BREAKING(?: |-)CHANGE:\s*\S")
+_TYPE_PRIORITY = {"feat": 0, "fix": 1, "perf": 2, "refactor": 3}
+
 # Outcomes that count as the subtask succeeding.
 _SUCCESS_OUTCOMES = frozenset({"merged", "pr-open"})
 
@@ -228,9 +240,111 @@ def _default_branch_name(persona: str, task: str) -> str:
     return f"ai-orchestrator/{persona}/{_short_hash(persona, task)}"
 
 
-def _default_title(persona: str, task: str) -> str:
-    line = task.strip().splitlines()[0] if task.strip() else "orchestrated change"
-    return line[:68] + ("…" if len(line) > 68 else "")
+@dataclass(frozen=True)
+class _ParsedSubject:
+    type: str
+    scope: str | None
+    breaking: bool
+    description: str
+
+
+def _parse_conventional_subject(message: str) -> _ParsedSubject | None:
+    """Parse one usable Conventional Commit message, including breaking footers."""
+    subject = message.splitlines()[0].strip() if message.strip() else ""
+    matched = _CONVENTIONAL_SUBJECT.fullmatch(subject)
+    # Conventional Commits permits project-specific types, but `wip` is a branch
+    # state rather than a durable change type and must not become a squash subject.
+    if matched is None or matched.group("type") == "wip":
+        return None
+    return _ParsedSubject(
+        type=matched.group("type"),
+        scope=matched.group("scope"),
+        breaking=bool(matched.group("breaking")) or bool(_BREAKING_FOOTER.search(message)),
+        description=matched.group("description"),
+    )
+
+
+def _format_conventional_subject(parsed: _ParsedSubject) -> str:
+    """Format and guard one Conventional Commit subject without truncating its prefix."""
+    scope = f"({parsed.scope})" if parsed.scope else ""
+    prefix = f"{parsed.type}{scope}{'!' if parsed.breaking else ''}: "
+    if len(prefix) >= _SUBJECT_LIMIT and parsed.scope is not None:
+        # A scope is optional. Drop an exceptionally long one rather than corrupting
+        # the type/breaking prefix or emitting a subject without a description.
+        prefix = f"{parsed.type}{'!' if parsed.breaking else ''}: "
+    available = _SUBJECT_LIMIT - len(prefix)
+    description = " ".join(parsed.description.split())
+    if available < 1 or not description:
+        raise ConfigError("cannot format a valid Conventional Commit subject")
+    if len(description) > available:
+        description = description[: max(available - 1, 0)].rstrip() + "…"
+    subject = prefix + description
+    if (
+        len(subject) > _SUBJECT_LIMIT
+        or (validated := _parse_conventional_subject(subject)) is None
+        or validated.breaking != parsed.breaking
+    ):
+        raise ConfigError(f"generated invalid Conventional Commit subject: {subject!r}")
+    return subject
+
+
+def _task_description(task: str) -> str:
+    return task.strip().splitlines()[0] if task.strip() else "orchestrated change"
+
+
+def _fallback_subject(task: str) -> str:
+    # Unknown work must not be guessed into a release-triggering feat/fix/perf type.
+    # `chore` is deliberately conventional but non-releasing for those workflows.
+    return _format_conventional_subject(
+        _ParsedSubject("chore", None, False, _task_description(task))
+    )
+
+
+def _subject_from_messages(messages: list[gitops.CommitMessage], task: str) -> str:
+    """Derive one semantic subject from usable agent-written commit messages."""
+    parsed = [
+        subject
+        for commit in messages
+        if (subject := _parse_conventional_subject(commit.message)) is not None
+    ]
+    if not parsed:
+        return _fallback_subject(task)
+    if len(parsed) == 1:
+        return _format_conventional_subject(parsed[0])
+
+    breaking = any(subject.breaking for subject in parsed)
+    candidates = [subject for subject in parsed if subject.breaking] if breaking else parsed
+    primary = min(candidates, key=lambda subject: _TYPE_PRIORITY.get(subject.type, 4))
+    common_scope = (
+        primary.scope if all(subject.scope == primary.scope for subject in parsed) else None
+    )
+    descriptions = [primary.description]
+    descriptions.extend(
+        subject.description
+        for subject in parsed
+        if subject is not primary and subject.description not in descriptions
+    )
+    return _format_conventional_subject(
+        _ParsedSubject(primary.type, common_scope, breaking, "; ".join(descriptions))
+    )
+
+
+def _default_title(worktree: Path, base: str, task: str) -> str:
+    return _subject_from_messages(gitops.log_messages(worktree, base, "HEAD"), task)
+
+
+def _validate_explicit_title(title: str) -> None:
+    if (
+        title != title.strip()
+        or "\n" in title
+        or "\r" in title
+        or len(title) > _SUBJECT_LIMIT
+        or _parse_conventional_subject(title) is None
+    ):
+        raise ConfigError(
+            f"title must be a Conventional Commit subject no longer than {_SUBJECT_LIMIT} "
+            "characters"
+        )
 
 
 def _default_body(persona: str, task: str, report: Report | None) -> str:
@@ -249,16 +363,19 @@ def _step_label(step: Step) -> str:
     return step.persona or step.kind
 
 
-def _step_commit_message(step: Step) -> str:
+def _step_commit_message(step: Step, worktree: Path, dispatch_head: str) -> str:
     return (
-        f"{_default_title(_step_label(step), step.task)}\n\n"
+        f"{_default_title(worktree, dispatch_head, step.task)}\n\n"
         f"Workstream step {step.id} (persona: {step.persona}), dispatched by ai-orchestrator."
     )
 
 
 def _incomplete_commit_message(step: Step, pr_base: str) -> str:
+    subject = _format_conventional_subject(
+        _ParsedSubject("chore", None, False, f"{_task_description(step.task)} (incomplete step)")
+    )
     return (
-        f"wip: {_default_title(_step_label(step), step.task)} (incomplete step)\n\n"
+        f"{subject}\n\n"
         f"Partial work from step {step.id} (persona: {step.persona}), preserved by "
         "ai-orchestrator after the dispatch did not complete.\n\n"
         f"{INCOMPLETE_TRAILER}\n"
@@ -653,7 +770,7 @@ def _run_steps(
             return NodeRun("failed", f"step {sid!r} hit the turn cap", report)
         if gitops.is_dirty(worktree):
             gitops.add_all(worktree)
-            gitops.commit(worktree, _step_commit_message(step))
+            gitops.commit(worktree, _step_commit_message(step, worktree, dispatch_head))
         log.append(
             "step-settled",
             detail={"status": "done", "step_kind": step.kind, "turns": report.assistant_turns},
@@ -828,7 +945,7 @@ def _pause_at_human_step(
             result.repo,
             head=branch,
             base=pr_base,
-            title=title or _default_title(_step_label(lead), lead.task),
+            title=title or _default_title(worktree, remote_base, lead.task),
             body=(body or _workstream_body(steps, step_run.results))
             + _stack_body(applicable_stack, result.synthetic_stack_base),
             draft=True,
@@ -931,6 +1048,8 @@ def run_repo_task(
     )
     worktree: Path | None = None
     try:
+        if title is not None:
+            _validate_explicit_title(title)
         _validate_lifecycle_branch(result.branch, field_name="branch")
         if base_branch is not None:
             _validate_lifecycle_branch(base_branch, field_name="base_branch")
@@ -1137,7 +1256,7 @@ def run_repo_task(
             clone_dir=clone,
             base=pr_base,
             branch=branch,
-            title=title or _default_title(_step_label(lead), lead.task),
+            title=title or _default_title(worktree, remote_base, lead.task),
             body=(body or _workstream_body(effective_steps, step_run.results))
             + _stack_body(applicable_stack, result.synthetic_stack_base),
             method=merge_method,
@@ -1329,6 +1448,14 @@ def parse_repo_node(nid: str, t: dict[str, Any]) -> RepoPlanNode:
             not isinstance(raw_branch, str) or not gitops.is_valid_branch_name(raw_branch)
         ):
             raise PlanError(f"task {nid!r} {field_name!r} must be a valid non-empty Git branch")
+    raw_title = t.get("title")
+    if raw_title is not None:
+        if not isinstance(raw_title, str):
+            raise PlanError(f"task {nid!r} 'title' must be a Conventional Commit subject")
+        try:
+            _validate_explicit_title(raw_title)
+        except ConfigError as exc:
+            raise PlanError(f"task {nid!r} {exc}") from exc
     raw_execution = t.get("execution_checkout")
     if raw_execution is not None and (
         not isinstance(raw_execution, str) or not raw_execution.strip()
@@ -1362,7 +1489,7 @@ def parse_repo_node(nid: str, t: dict[str, Any]) -> RepoPlanNode:
         deps=list(deps),
         base_branch=t.get("base_branch"),
         branch=t.get("branch"),
-        title=t.get("title"),
+        title=raw_title,
         verify_cmd=t.get("verify_cmd"),
         skip_verify=bool(t.get("skip_verify", False)),
         merge_policy=merge_policy,
