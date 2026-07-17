@@ -56,7 +56,8 @@ from typing import Any, Literal
 from . import gitops
 from .config import ConfigError
 from .coordination import advisory_lock, atomic_json
-from .github import Check, CliGitHubBackend, GitHubBackend, GitHubError, PRStatus, PullRequest
+from .detail_snapshot import SNAPSHOT_VERSION, CommitDetail, PrDetail
+from .github import CliGitHubBackend, GitHubBackend, GitHubError, PRStatus, PullRequest
 from .history import HistoryError, HistorySession, session_records, worker_sessions
 from .ids import DetailId, DetailIdError, GitId, GraphId, OneharnessId, PrId
 from .journal import (
@@ -96,8 +97,6 @@ _ELLIPSIS = "..."
 
 MONITOR_DIR = "monitor"
 SNAPSHOT_NAME = "details.json"
-SNAPSHOT_VERSION = 1
-
 # The run-label key a dispatched session is stamped with. `NodeJournal.labels`
 # renders it through `graph_labels`, so filtering history on it here selects
 # exactly the sessions this run's own scopes labelled.
@@ -244,14 +243,16 @@ class DetailSnapshot:
         return {"version": SNAPSHOT_VERSION, "commits": self.commits, "prs": self.prs}
 
 
-def _detail_map(value: object) -> dict[str, dict[str, DetailValue]]:
+def _detail_map(
+    value: object, parser: Callable[[object], CommitDetail | PrDetail | None]
+) -> dict[str, dict[str, DetailValue]]:
     """Read one persisted section, skipping anything that is not a detail mapping."""
     if not isinstance(value, dict):
         return {}
     return {
-        key: item
+        key: parsed.to_record()
         for key, item in value.items()
-        if isinstance(key, str) and key and isinstance(item, dict)
+        if isinstance(key, str) and key and (parsed := parser(item)) is not None
     }
 
 
@@ -275,7 +276,10 @@ def load_snapshot(run_dir: Path) -> DetailSnapshot:
         return DetailSnapshot()
     if raw.get("version") != SNAPSHOT_VERSION:
         return DetailSnapshot()
-    return DetailSnapshot(commits=_detail_map(raw.get("commits")), prs=_detail_map(raw.get("prs")))
+    return DetailSnapshot(
+        commits=_detail_map(raw.get("commits"), CommitDetail.from_value),
+        prs=_detail_map(raw.get("prs"), PrDetail.from_value),
+    )
 
 
 def save_snapshot(run_dir: Path, snapshot: DetailSnapshot) -> None:
@@ -691,14 +695,14 @@ def git_events(
             if checkout is not None:
                 with contextlib.suppress(gitops.GitError):
                     detail = gitops.commit_detail(checkout, commit.sha)
-            snapshot.commits[key] = {
-                "sha": commit.sha,
-                "subject": commit.subject,
-                "branch": ref.branch,
-                "base": ref.base,
-                "identity": ref.identity,
-                "detail": detail,
-            }
+            snapshot.commits[key] = CommitDetail(
+                sha=commit.sha,
+                subject=commit.subject,
+                branch=ref.branch,
+                base=ref.base,
+                identity=ref.identity,
+                detail=detail,
+            ).to_record()
             found.append(
                 MonitorEvent(
                     at=now,
@@ -718,22 +722,6 @@ def _pr_signature(
     return f"{status_state}:{merged}:{draft}:{merge_state}:{checks}"
 
 
-def _persisted_checks(value: object) -> tuple[Check, ...]:
-    """Rebuild the checks a previous pass persisted, dropping any that are malformed."""
-    if not isinstance(value, list):
-        return ()
-    found: list[Check] = []
-    for item in value:
-        if not isinstance(item, dict):
-            continue
-        name = item.get("name")
-        state = item.get("state")
-        required = item.get("required")
-        if isinstance(name, str) and isinstance(state, str) and isinstance(required, bool):
-            found.append(Check(name=name, state=state, required=required))
-    return tuple(found)
-
-
 def persisted_status(snapshot: DetailSnapshot, ref: PrId) -> PRStatus | None:
     """The PR state a previous pass persisted, for a replay `gh` cannot serve.
 
@@ -742,31 +730,8 @@ def persisted_status(snapshot: DetailSnapshot, ref: PrId) -> PRStatus | None:
     summary code as a live one. A replay that rendered itself would be free to drift
     from the thing it is replaying.
     """
-    record = snapshot.prs.get(str(ref))
-    if record is None:
-        return None
-    number = record.get("number")
-    state = record.get("state")
-    merged = record.get("merged")
-    merge_state = record.get("merge_state_status")
-    draft = record.get("draft")
-    if (
-        not isinstance(number, int)
-        or isinstance(number, bool)
-        or not isinstance(state, str)
-        or not isinstance(merged, bool)
-        or not isinstance(merge_state, str)
-        or not isinstance(draft, bool)
-    ):
-        return None
-    return PRStatus(
-        number=number,
-        state=state,
-        merged=merged,
-        merge_state_status=merge_state,
-        checks=_persisted_checks(record.get("checks")),
-        draft=draft,
-    )
+    detail = PrDetail.from_value(snapshot.prs.get(str(ref)))
+    return detail.status() if detail is not None else None
 
 
 def pr_events(
@@ -813,19 +778,9 @@ def pr_events(
             status.state, status.merged, status.draft, status.merge_state_status, checks
         )
         key = str(pr_ref)
-        snapshot.prs[key] = {
-            "number": status.number,
-            "url": ref.url,
-            "identity": ref.identity,
-            "state": status.state,
-            "merged": status.merged,
-            "merge_state_status": status.merge_state_status,
-            "draft": status.draft,
-            "checks": [
-                {"name": check.name, "state": check.state, "required": check.required}
-                for check in status.checks
-            ],
-        }
+        snapshot.prs[key] = PrDetail.from_status(
+            status, url=ref.url, identity=ref.identity
+        ).to_record()
         blocking = "green" if status.blocking_green else "pending"
         if status.blocking_failed:
             blocking = "failed"

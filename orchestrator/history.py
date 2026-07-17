@@ -13,13 +13,14 @@ import re
 import subprocess
 import sys
 import uuid
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, NewType
 
 from .config import ConfigError
+from .detail_snapshot import SNAPSHOT_VERSION, CommitDetail, PrDetail
 from .ids import DetailId, DetailIdError, GitId, GraphId, OneharnessId, PrId, parse_detail_id
 from .journal import JOURNAL_NAME, Event, read_events
 from .runs import GraphResultItem, RunId, as_result_payload, load_mapping, rounds
@@ -402,17 +403,10 @@ def _render_snapshot(snapshot: Snapshot, ref: DetailId) -> str:
     return "\n".join(lines)
 
 
-def _persisted_detail(ref: GitId | PrId, runs_dir: Path) -> dict[str, Any] | None:
-    """Find the newest monitor snapshot that observed ``ref``.
-
-    A real lifecycle records its branch and PR transitions in the journal, but a
-    commit SHA is discovered by git and mutable PR state comes from GitHub. The
-    monitor persists those observations precisely so detail lookup still works
-    after merge/cleanup, so this resolver must consult that durable source too.
-    """
+def _persisted_sections(runs_dir: Path, section: str) -> Iterator[Mapping[str, object]]:
+    """Yield understood snapshot sections newest-first, rejecting schema drift."""
     if not runs_dir.is_dir():
-        return None
-    section = "commits" if isinstance(ref, GitId) else "prs"
+        return
     for run_dir in sorted((path for path in runs_dir.iterdir() if path.is_dir()), reverse=True):
         path = run_dir / "monitor" / "details.json"
         if not path.exists():
@@ -422,47 +416,70 @@ def _persisted_detail(ref: GitId | PrId, runs_dir: Path) -> dict[str, Any] | Non
         except (ConfigError, OSError):
             continue
         records = raw.get(section)
-        if not isinstance(records, dict):
-            continue
-        for key, value in records.items():
-            if not isinstance(key, str) or not isinstance(value, dict):
-                continue
-            if isinstance(ref, PrId) and key == str(ref):
-                return value
-            if isinstance(ref, GitId):
-                identity = value.get("identity")
-                sha = value.get("sha")
-                if identity == ref.identity and isinstance(sha, str) and ref.matches(sha):
-                    return value
+        if raw.get("version") == SNAPSHOT_VERSION and isinstance(records, dict):
+            yield records
+
+
+def _persisted_detail(ref: GitId | PrId, runs_dir: Path) -> CommitDetail | PrDetail | None:
+    """Find the newest monitor snapshot that observed ``ref``.
+
+    A real lifecycle records its branch and PR transitions in the journal, but a
+    commit SHA is discovered by git and mutable PR state comes from GitHub. The
+    monitor persists those observations precisely so detail lookup still works
+    after merge/cleanup, so this resolver must consult that durable source too.
+    """
+    match ref:
+        case GitId(identity=identity):
+            for records in _persisted_sections(runs_dir, "commits"):
+                for value in records.values():
+                    detail = CommitDetail.from_value(value)
+                    if (
+                        detail is not None
+                        and detail.identity == identity
+                        and ref.matches(detail.sha)
+                    ):
+                        return detail
+        case PrId():
+            for records in _persisted_sections(runs_dir, "prs"):
+                pr_detail = PrDetail.from_value(records.get(str(ref)))
+                if pr_detail is not None:
+                    return pr_detail
     return None
 
 
-def _render_persisted_detail(ref: GitId | PrId, detail: Mapping[str, Any]) -> str:
-    if isinstance(ref, GitId):
-        lines = [f"Reference: {ref}", f"Commit: {detail.get('sha', ref.sha)}"]
-        for label, key in (("Repo", "identity"), ("Branch", "branch"), ("Base", "base")):
-            if isinstance(value := detail.get(key), str) and value:
-                lines.append(f"{label}: {value}")
-        if isinstance(subject := detail.get("subject"), str) and subject:
-            lines.append(f"Subject: {subject}")
-        patch = detail.get("detail")
-        lines.append(
-            "Commit and diff:\n" + (patch if isinstance(patch, str) and patch else "(unavailable)")
-        )
-        return "\n".join(lines)
-    checks = detail.get("checks")
-    rendered_checks = json.dumps(checks, sort_keys=True) if isinstance(checks, list) else "[]"
-    return "\n".join(
-        [
-            f"Reference: {ref}",
-            f"PR: {detail.get('url', ref)}",
-            f"State: {detail.get('state', 'unknown')}",
-            f"Merged: {detail.get('merged', False)}",
-            f"Draft: {detail.get('draft', False)}",
-            f"Merge state: {detail.get('merge_state_status', 'unknown')}",
-            f"Checks: {rendered_checks}",
-        ]
-    )
+def _render_persisted_detail(ref: GitId | PrId, detail: CommitDetail | PrDetail) -> str:
+    match ref, detail:
+        case GitId(), CommitDetail():
+            lines = [f"Reference: {ref}", f"Commit: {detail.sha}"]
+            for label, value in (
+                ("Repo", detail.identity),
+                ("Branch", detail.branch),
+                ("Base", detail.base),
+            ):
+                if value:
+                    lines.append(f"{label}: {value}")
+            if detail.subject:
+                lines.append(f"Subject: {detail.subject}")
+            lines.append("Commit and diff:\n" + (detail.detail or "(unavailable)"))
+            return "\n".join(lines)
+        case PrId(), PrDetail():
+            checks = [
+                {"name": check.name, "state": check.state, "required": check.required}
+                for check in detail.checks
+            ]
+            return "\n".join(
+                [
+                    f"Reference: {ref}",
+                    f"PR: {detail.url or ref}",
+                    f"State: {detail.state}",
+                    f"Merged: {detail.merged}",
+                    f"Draft: {detail.draft}",
+                    f"Merge state: {detail.merge_state_status}",
+                    f"Checks: {json.dumps(checks, sort_keys=True)}",
+                ]
+            )
+        case _:
+            raise HistoryError(f"persisted detail type does not match {ref}")
 
 
 def _show_snapshot(ref: GitId | PrId | GraphId, runs_dir: Path) -> str:

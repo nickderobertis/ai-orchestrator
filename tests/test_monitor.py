@@ -21,6 +21,7 @@ from typing import Any
 import pytest
 
 import orchestrator.monitor as monitor_module
+from orchestrator.detail_snapshot import CommitDetail, PrDetail
 from orchestrator.ids import GraphId
 from orchestrator.journal import JOURNAL_NAME, open_journal
 from orchestrator.monitor import (
@@ -360,8 +361,10 @@ def test_a_torn_tail_is_skipped_and_a_resumed_run_keeps_streaming(
 def test_a_saved_snapshot_round_trips_through_the_run_directory(tmp_path: Path) -> None:
     run_dir = tmp_path / RUN
     snapshot = DetailSnapshot(
-        commits={"git:local/app@abc1234": {"sha": "abc1234", "subject": "feat: ship"}},
-        prs={"pr:acme/app#1": {"number": 1, "state": "OPEN"}},
+        commits={
+            "git:local/app@abc1234": CommitDetail(sha="abc1234", subject="feat: ship").to_record()
+        },
+        prs={"pr:acme/app#1": PrDetail(number=1, state="OPEN").to_record()},
     )
     save_snapshot(run_dir, snapshot)
     assert snapshot_path(run_dir) == run_dir / "monitor" / "details.json"
@@ -409,7 +412,7 @@ def test_a_malformed_entry_is_dropped_without_taking_the_section_with_it(
         encoding="utf-8",
     )
     loaded = load_snapshot(run_dir)
-    assert loaded.commits == {"git:local/app@abc1234": {"sha": "abc1234"}}
+    assert loaded.commits == {"git:local/app@abc1234": CommitDetail(sha="abc1234").to_record()}
     assert loaded.prs == {}
 
 

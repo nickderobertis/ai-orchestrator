@@ -6,6 +6,7 @@ from typing import Any
 
 import pytest
 
+from orchestrator.detail_snapshot import CommitDetail, PrDetail
 from orchestrator.history import (
     HistoryError,
     SessionId,
@@ -270,7 +271,9 @@ def test_git_and_pr_details_fall_back_to_persisted_monitor_snapshots(tmp_path: P
                 },
                 "prs": {
                     "pr:acme/app#7": {
+                        "number": 7,
                         "url": PR_URL,
+                        "identity": "acme/app",
                         "state": "MERGED",
                         "merged": True,
                         "draft": False,
@@ -299,8 +302,10 @@ def test_persisted_detail_reader_skips_absent_and_malformed_snapshots(tmp_path: 
     malformed.parent.mkdir(parents=True)
     malformed.write_text(json.dumps({"commits": []}), encoding="utf-8")
     assert _persisted_detail(git_ref, tmp_path / "runs") is None
-    assert "Commit and diff:\n(unavailable)" in _render_persisted_detail(git_ref, {})
-    assert "Checks: []" in _render_persisted_detail(PrId("acme/app", 7), {})
+    assert "Commit and diff:\n(unavailable)" in _render_persisted_detail(
+        git_ref, CommitDetail(sha=FULL_SHA[:7])
+    )
+    assert "Checks: []" in _render_persisted_detail(PrId("acme/app", 7), PrDetail(number=7))
 
 
 def test_recorded_node_includes_its_persisted_remote_detail(tmp_path: Path) -> None:
@@ -310,6 +315,7 @@ def test_recorded_node_includes_its_persisted_remote_detail(tmp_path: Path) -> N
     details.write_text(
         json.dumps(
             {
+                "version": 1,
                 "commits": {
                     f"git:acme/app@{FULL_SHA}": {
                         "identity": "acme/app",
@@ -317,7 +323,7 @@ def test_recorded_node_includes_its_persisted_remote_detail(tmp_path: Path) -> N
                         "subject": "feat: full detail",
                         "detail": "stored patch",
                     }
-                }
+                },
             }
         ),
         encoding="utf-8",
