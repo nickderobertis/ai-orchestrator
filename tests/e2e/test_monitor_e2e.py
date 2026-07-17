@@ -439,7 +439,8 @@ def test_a_run_folds_its_journal_and_its_real_branch_into_one_stream(
     """The monitor discovers the branch from the run's own ledger, reads the real
     commits on it, and persists them — so the replay survives the branch itself."""
     repo = _repo(tmp_path, bare_origin)
-    Registry().register(str(repo))
+    # A local origin is not GitHub, so the type cannot be inferred from it.
+    Registry().register(str(repo), repo_type="single-owner")
     runs_dir = tmp_path / "runs"
     run_dir = runs_dir / RUN
 
