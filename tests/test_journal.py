@@ -214,9 +214,7 @@ def test_reconcile_is_a_noop_on_a_missing_or_intact_journal(tmp_path: Path) -> N
         pytest.param(_record(detail="nope"), id="non-mapping-detail"),
         pytest.param(_record(detail={"nested": [float("nan")]}), id="non-finite-detail"),
         pytest.param(_record(kind="node-started"), id="node-event-without-node"),
-        pytest.param(
-            _record(kind="step-settled", node="api"), id="step-event-without-step"
-        ),
+        pytest.param(_record(kind="step-settled", node="api"), id="step-event-without-step"),
         # The value contract: rounds and sequences count from 1, so a stored 0 is not
         # a low sequence but a corrupt one — honouring it would hand the next append
         # a number already on disk.
