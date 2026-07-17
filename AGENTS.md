@@ -89,27 +89,46 @@ dispatch onejudge.
 6. **Close out publication.** A lifecycle result is done only after its registered
    workflow verifies and publishes it and the publication checkout is
    synchronized. Route direct-agent branch results through an integration or
-   lifecycle closeout node; a judge verdict alone is not publication.
+   lifecycle closeout node; a judge verdict alone is not publication. A merge is
+   not publication when the task's destination is farther downstream; see
+   `docs/repo-lifecycle.md`.
 
 Treat unresolved same-identity dependencies as stack prerequisites, not merely
 scheduling edges, and preserve them across replans until their content reaches
 the root base. The deterministic mechanics live in `docs/repo-lifecycle.md`.
 
-The orchestrator does orchestration and planning only: decomposition, scheduling,
-persona choice, and merge/integration coordination. Dispatch all target-project
-work and research, including integration and closeout. A slight direct tweak to a
-dispatched result is allowed only when planning has already made the fix clear and
-it is quick to test; otherwise redispatch it.
+The orchestrator owns **decisions and sequencing only**: decomposition,
+scheduling, persona choice, which node merges and in what order, stack order,
+retry/split/drop decisions, and human-action attestation. That is the complete
+meaning of merge/integration coordination; it never includes authoring an
+artifact. Dispatch target-project implementation, research, integration, and
+closeout.
+
+Reading a target repo to decompose work, select a persona, and write a precise task
+is direct orchestration work. It stops once the task can be written; investigation
+past that point is research and must be dispatched.
+
+One narrow direct-tweak exception remains: **the complete gate can prove it**. If
+planning has already determined the change, the orchestrator may apply it directly
+only when a check in the target repo's complete gate exercises the changed artifact
+and demonstrates the fix; report that passing gate result. A mechanically checked
+rename can qualify. If no gate check proves the payload, dispatch it as authoring;
+commit-message payloads, PR titles and bodies, changelog prose, and release-note
+prose are in this category. Line count and urgency are irrelevant. “It's just a
+commit message,” “the diff is empty,” “it's only integration coordination,” and
+“it's faster than dispatching” are not exceptions.
 
 Prefer each agent proving its own change with `just gate`, leaving integration as
-a trivial merge. Before merging or pushing, independently confirm that the gate
-exercised the change: relevant tests did not skip and their fixtures, specs, and
-inputs were present. The lifecycle fetches and merges the current `origin/<base>`
-into the dispatched branch before this final gate, so the proof covers the same
-branch-plus-base diff enforced at pre-push. Lifecycle verification must pass its
-resolved comparison remote/base through every gate and re-verification so an
-override is never judged against an unrelated default. A sync conflict is aborted and reported
-without pushing. A green report or judge verdict without that evidence is not green.
+a trivial merge. Independently verifying a dispatched result is the orchestrator's
+own work and is never dispatched: dispatching that check defeats it. Before merging
+or pushing, confirm that the gate exercised the change: relevant tests did not skip
+and their fixtures, specs, and inputs were present. The lifecycle fetches and
+merges the current `origin/<base>` into the dispatched branch before this final
+gate, so the proof covers the same branch-plus-base diff enforced at pre-push.
+Lifecycle verification must pass its resolved comparison remote/base through every
+gate and re-verification so an override is never judged against an unrelated
+default. A sync conflict is aborted and reported without pushing. A green report or
+judge verdict without that evidence is not green.
 
 ## The granularity rule (the core judgment)
 
