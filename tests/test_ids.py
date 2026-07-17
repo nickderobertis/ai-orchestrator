@@ -101,9 +101,16 @@ def test_constructing_an_id_out_of_contract_raises_at_the_boundary() -> None:
 def test_a_bool_is_not_a_number_even_though_python_says_it_is() -> None:
     """`True == 1`, so an unguarded id would happily render `pr:acme/app#True`."""
     with pytest.raises(DetailIdError):
-        PrId(identity="acme/app", number=True)  # type: ignore[arg-type]
+        PrId(
+            identity="acme/app",
+            number=True,  # type: ignore[arg-type]  # deliberate runtime guard probe
+        )
     with pytest.raises(DetailIdError):
-        GraphId(run_id="watch-me", round=True, node="api")  # type: ignore[arg-type]
+        GraphId(
+            run_id="watch-me",
+            round=True,  # type: ignore[arg-type]  # deliberate runtime guard probe
+            node="api",
+        )
 
 
 def test_an_abbreviated_git_id_matches_only_the_full_sha_it_prefixes() -> None:

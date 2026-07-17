@@ -404,7 +404,10 @@ def test_node_journal_rejects_an_out_of_contract_scope(
     scope: dict[str, object], message: str
 ) -> None:
     with pytest.raises(JournalError, match=message):
-        NodeJournal(sink=NullJournal(), **scope)  # type: ignore[arg-type]
+        NodeJournal(
+            sink=NullJournal(),
+            **scope,  # type: ignore[arg-type]  # deliberate invalid scope probe
+        )
 
 
 def test_node_journal_labels_render_the_scope_for_a_subprocess() -> None:
