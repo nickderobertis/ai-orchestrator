@@ -23,6 +23,16 @@ GRAPH_LABELS = (
 )
 
 
+def _just(*args: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["just", *args],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        timeout=180,
+    )
+
+
 def _graph_label_args() -> list[str]:
     return [item for label in GRAPH_LABELS for item in ("--history-label", label)]
 
@@ -215,3 +225,108 @@ def test_real_history_labels_and_cursor_watch(oneharness_bin: str, tmp_path: Pat
     resumed_ids = [envelope["record"]["history_id"] for envelope in resumed]
     assert watched_ids[0] not in resumed_ids
     assert resumed_ids == watched_ids[1:]
+
+
+def test_real_run_plan_waits_then_monitor_exits_only_after_attestation(
+    tmp_path: Path, command_base: Any, onejudge_bin: str
+) -> None:
+    runs_dir = tmp_path / "runs"
+    plan_path = tmp_path / "plan.json"
+    plan_path.write_text(
+        json.dumps(
+            {
+                "tasks": [
+                    {
+                        "id": "prepare",
+                        "persona": "backend-engineer",
+                        "task": "complete-now: real monitored turn",
+                    },
+                    {
+                        "id": "approve",
+                        "kind": "human",
+                        "task": "Approve the monitored turn.",
+                        "deps": ["prepare"],
+                    },
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    common = (
+        "--runs-dir",
+        str(runs_dir),
+        "--base",
+        str(command_base()),
+        "--onejudge-bin",
+        onejudge_bin,
+        "--format",
+        "json",
+    )
+
+    paused = _just("run-plan", str(plan_path), "--run", RUN_ID, *common)
+    assert paused.returncode == 1, paused.stderr
+    first = json.loads(paused.stdout)
+    assert first["state"] == "waiting" and first["ok"] is False
+    assert first["results"]["prepare"]["status"] == "done"
+    assert first["results"]["approve"]["status"] == "waiting"
+
+    waiting = _just(
+        "monitor",
+        RUN_ID,
+        "--once",
+        "--runs-dir",
+        str(runs_dir),
+        "--format",
+        "jsonl",
+    )
+    assert waiting.returncode == 0, waiting.stderr
+    waiting_records = [json.loads(line) for line in waiting.stdout.splitlines()]
+    assert any(record.get("id") == f"graph:{RUN_ID}/1/prepare" for record in waiting_records)
+    assert waiting_records[-1]["type"] == "heartbeat"
+    assert waiting_records[-1]["state"] == "waiting"
+    assert waiting_records[-1]["round"] == 1
+    assert waiting_records[-1]["detail"] == "1 done, 1 waiting"
+
+    resumed = _just("next-round", RUN_ID, "--complete-human", "approve", *common)
+    assert resumed.returncode == 0, resumed.stderr
+    assert "nothing to iterate" in resumed.stdout
+    second = json.loads(
+        (runs_dir / RUN_ID / "round-02" / "result.json").read_text(encoding="utf-8")
+    )
+    assert second["ok"] is True and second["state"] == "complete"
+    assert second["results"]["approve"]["status"] == "done"
+
+    completed = _just(
+        "monitor",
+        RUN_ID,
+        "--runs-dir",
+        str(runs_dir),
+        "--format",
+        "jsonl",
+        "--heartbeat",
+        "0.01",
+        "--poll-interval",
+        "0.01",
+    )
+    assert completed.returncode == 0, completed.stderr
+    completed_records = [json.loads(line) for line in completed.stdout.splitlines()]
+    assert any(
+        record.get("id") == f"graph:{RUN_ID}/1/approve"
+        and record.get("summary", "").startswith("human-attested")
+        for record in completed_records
+    )
+    assert completed_records[-1] == {
+        "type": "heartbeat",
+        "at": completed_records[-1]["at"],
+        "run_id": RUN_ID,
+        "round": 2,
+        "state": "complete",
+        "detail": "graph complete",
+    }
+    assert (runs_dir / RUN_ID / "round-01" / "result.json").is_file()
+    assert (runs_dir / RUN_ID / "round-02" / "result.json").is_file()
+    events = [
+        json.loads(line)
+        for line in (runs_dir / RUN_ID / "events.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert any(event["kind"] == "human-attested" for event in events)
