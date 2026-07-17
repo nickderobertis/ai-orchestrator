@@ -653,8 +653,10 @@ def git_events(
     return found
 
 
-def _pr_signature(status_state: str, merged: bool, merge_state: str, checks: str) -> str:
-    return f"{status_state}:{merged}:{merge_state}:{checks}"
+def _pr_signature(
+    status_state: str, merged: bool, draft: bool, merge_state: str, checks: str
+) -> str:
+    return f"{status_state}:{merged}:{draft}:{merge_state}:{checks}"
 
 
 def _persisted_checks(value: object) -> tuple[Check, ...]:
@@ -747,7 +749,9 @@ def pr_events(
         checks = ",".join(
             f"{check.name}={check.state}" for check in sorted(status.blocking, key=lambda c: c.name)
         )
-        signature = _pr_signature(status.state, status.merged, status.merge_state_status, checks)
+        signature = _pr_signature(
+            status.state, status.merged, status.draft, status.merge_state_status, checks
+        )
         key = str(pr_ref)
         snapshot.prs[key] = {
             "number": status.number,
@@ -765,6 +769,9 @@ def pr_events(
         blocking = "green" if status.blocking_green else "pending"
         if status.blocking_failed:
             blocking = "failed"
+        # A draft PR is OPEN to `gh`, so drafts and ready PRs would render identically
+        # and a draft going ready would read as no change at all.
+        state = "draft" if status.draft and not status.merged else status.state.lower()
         found.append(
             MonitorEvent(
                 at=now,
@@ -772,7 +779,7 @@ def pr_events(
                 kind="pr-state",
                 stream_id=pr_ref,
                 summary=summarize(
-                    f"PR #{status.number} {status.state.lower()} checks={blocking} "
+                    f"PR #{status.number} {state} checks={blocking} "
                     f"{status.merge_state_status.lower()}"
                 ),
                 key=f"pr:{key}:{signature}",
