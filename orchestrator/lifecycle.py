@@ -248,6 +248,13 @@ class _ParsedSubject:
     description: str
 
 
+def _has_breaking_signal(message: str) -> bool:
+    """Detect subject and footer signals without requiring a usable subject."""
+    subject = message.splitlines()[0].strip() if message.strip() else ""
+    matched = _CONVENTIONAL_SUBJECT.fullmatch(subject)
+    return bool(matched and matched.group("breaking")) or bool(_BREAKING_FOOTER.search(message))
+
+
 def _parse_conventional_subject(message: str) -> _ParsedSubject | None:
     """Parse one usable Conventional Commit message, including breaking footers."""
     subject = message.splitlines()[0].strip() if message.strip() else ""
@@ -259,7 +266,7 @@ def _parse_conventional_subject(message: str) -> _ParsedSubject | None:
     return _ParsedSubject(
         type=matched.group("type"),
         scope=matched.group("scope"),
-        breaking=bool(matched.group("breaking")) or bool(_BREAKING_FOOTER.search(message)),
+        breaking=_has_breaking_signal(message),
         description=matched.group("description"),
     )
 
@@ -292,16 +299,17 @@ def _task_description(task: str) -> str:
     return task.strip().splitlines()[0] if task.strip() else "orchestrated change"
 
 
-def _fallback_subject(task: str) -> str:
+def _fallback_subject(task: str, *, breaking: bool = False) -> str:
     # Unknown work must not be guessed into a release-triggering feat/fix/perf type.
     # `chore` is deliberately conventional but non-releasing for those workflows.
     return _format_conventional_subject(
-        _ParsedSubject("chore", None, False, _task_description(task))
+        _ParsedSubject("chore", None, breaking, _task_description(task))
     )
 
 
 def _subject_from_messages(messages: list[gitops.CommitMessage], task: str) -> str:
     """Derive one semantic subject from usable agent-written commit messages."""
+    breaking = any(_has_breaking_signal(commit.message) for commit in messages)
     parsed = [
         subject
         for commit in messages
@@ -309,14 +317,16 @@ def _subject_from_messages(messages: list[gitops.CommitMessage], task: str) -> s
     ]
     match parsed:
         case []:
-            return _fallback_subject(task)
+            return _fallback_subject(task, breaking=breaking)
         case [subject]:
-            return _format_conventional_subject(subject)
+            return _format_conventional_subject(
+                _ParsedSubject(subject.type, subject.scope, breaking, subject.description)
+            )
         case _:
             pass
 
-    breaking = any(subject.breaking for subject in parsed)
-    candidates = [subject for subject in parsed if subject.breaking] if breaking else parsed
+    breaking_subjects = [subject for subject in parsed if subject.breaking]
+    candidates = breaking_subjects or parsed
     primary = min(candidates, key=lambda subject: _TYPE_PRIORITY.get(subject.type, 4))
     common_scope = (
         primary.scope if all(subject.scope == primary.scope for subject in parsed) else None

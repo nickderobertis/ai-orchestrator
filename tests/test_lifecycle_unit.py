@@ -87,6 +87,25 @@ def test_breaking_commit_signal_survives_synthesis() -> None:
     assert parsed is not None and parsed.breaking
 
 
+def test_breaking_footer_survives_when_no_subject_is_usable() -> None:
+    title = _subject_from_messages(
+        _commit_messages("Update API\n\nBREAKING CHANGE: old API removed"),
+        "Describe the API migration.",
+    )
+    assert title == "chore!: Describe the API migration."
+
+
+def test_breaking_footer_on_invalid_subject_marks_mixed_history() -> None:
+    title = _subject_from_messages(
+        _commit_messages(
+            "fix: retain output",
+            "Update API\n\nBREAKING CHANGE: old API removed",
+        ),
+        "irrelevant task prose",
+    )
+    assert title == "fix!: retain output"
+
+
 def test_long_subject_truncates_only_description() -> None:
     title = _subject_from_messages(
         _commit_messages(f"fix(capture): {'x' * 200}"), "irrelevant task prose"
