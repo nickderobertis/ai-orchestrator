@@ -61,7 +61,8 @@ the optional final `assessment` this repository uses to surface follow-up work.
 
 `onejudge init` scaffolds all three files — `oneharness.toml`,
 `oneharness.judge.toml`, and a starter `onejudge.yaml` — by shelling out to
-`oneharness init` (needs **oneharness 0.3.20+**):
+`oneharness init`. The adopted exact release lives in
+`config/oneharness.version`; `just bootstrap` installs and verifies that version:
 
 ```sh
 onejudge init --force    # writes the two oneharness configs + a starter onejudge.yaml
@@ -81,12 +82,15 @@ The wrapper's `run <config> --task - --format json` arguments remain valid in
 v0.3.0. The real-CLI e2e suite checks these schema and CLI surfaces before it
 drives dispatch.
 
-**Getting an init-capable oneharness on this box.** The prebuilt oneharness
+**Getting the adopted oneharness on this box.** The prebuilt oneharness
 release binary needs a newer glibc than the host provides, and the crates.io build
 lags behind the 0.3.x releases that added `init`. The **PyPI `oneharness-cli`
 wheel** (a manylinux build) is the one that both runs on the host's glibc and
-carries `init`, so `scripts/session-setup.sh` installs it with
-`uv tool install --upgrade 'oneharness-cli>=0.3.20'`.
+carries `init`, so `scripts/session-setup.sh` installs the exact
+`config/oneharness.version` release and rejects a stale binary. Version 0.3.24 is
+the first published release containing the process-tree timeout and partial
+telemetry fix from
+[oneharness PR #1147](https://github.com/nickderobertis/oneharness/pull/1147).
 
 **Watch for a stale cargo oneharness.** An earlier `cargo install oneharness`
 leaves a 0.2.x binary in `~/.cargo/bin`; its `run` lacks `--mode`, which onejudge's
@@ -99,8 +103,8 @@ the wheel is installed; keep `~/.local/bin` ahead of `~/.cargo/bin` regardless.
 
 Live dispatch drives a real harness, chosen by `oneharness.toml`'s fallback chain
 (`codex` primary, `claude-code` secondary). The offline gate needs neither; the
-live path does, and each harness has an **environment requirement** for its tools
-to actually execute:
+timeout e2e gate drives the adopted oneharness with a local fixture, and each live
+harness has an **environment requirement** for its tools to actually execute:
 
 - **codex** runs as its own process and executes tools directly, so it is the
   preferred nested harness (the fallback primary). It sandboxes via **bubblewrap**,
@@ -130,10 +134,11 @@ no-unprivileged-userns host, dispatch codex with
   harness, but its executable installs in `~/.local/node/bin`. Keep that
   directory on `PATH` or oneharness silently falls back to claude-code;
   `scripts/session-setup.sh` persists the path. The dispatch code also sets
-  `ONEHARNESS_TIMEOUT` well above oneharness's 120-second default so build-heavy
-  turns are not terminated with `SIGTERM`. Set the variable explicitly to
-  override it; onejudge's `max_turns` and the lifecycle `--timeout` still bound
-  the whole run independently. Project dispatch also pins the agent-side
+  `ONEHARNESS_TIMEOUT` to 10,800 seconds (three hours), a temporary hard per-turn
+  ceiling so legitimate build-heavy agents can finish. Set the variable
+  explicitly to override it; onejudge's `max_turns` and the lifecycle `--timeout`
+  still bound the whole run independently. Finer inactivity and phase budgets
+  remain tracked in issue #6. Project dispatch also pins the agent-side
   oneharness `--config` to this repo's config, which forces codex to
   `gpt-5.6-sol` while retaining claude-code's Claude fallback model. A global
   `ONEHARNESS_MODELS` chain cannot be used here: onejudge supplies `--session`,

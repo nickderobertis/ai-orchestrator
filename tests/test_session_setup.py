@@ -18,6 +18,10 @@ def _write_onejudge(path: Path, version: str) -> None:
     _write_executable(path, f"#!/bin/sh\nprintf 'onejudge {version}\\n'\n")
 
 
+def _write_oneharness(path: Path, version: str) -> None:
+    _write_executable(path, f"#!/bin/sh\nprintf 'oneharness {version}\\n'\n")
+
+
 def _fake_install_commands(tmp_path: Path) -> None:
     tools = tmp_path / "tools"
     curl = tools / "curl"
@@ -58,6 +62,36 @@ def _run_onejudge_install(tmp_path: Path, **extra_env: str) -> subprocess.Comple
     }
     return subprocess.run(
         ["bash", "-c", 'source "$1"; install_onejudge', "test-install", str(script)],
+        text=True,
+        capture_output=True,
+        env=env,
+    )
+
+
+def _run_oneharness_install(tmp_path: Path, **extra_env: str) -> subprocess.CompletedProcess[str]:
+    script = REPO_ROOT / "scripts" / "session-setup.sh"
+    tools = tmp_path / "tools"
+    uv = tools / "uv"
+    _write_executable(
+        uv,
+        """#!/bin/sh
+printf '%s\n' "$*" >"$TEST_UV_ARGS"
+if [ "${TEST_UV_FAIL:-0}" = 1 ]; then
+  exit 1
+fi
+mkdir -p "$HOME/.local/bin"
+cp "$TEST_ONEHARNESS_BINARY" "$HOME/.local/bin/oneharness"
+chmod +x "$HOME/.local/bin/oneharness"
+""",
+    )
+    env = {
+        "HOME": str(tmp_path),
+        "PATH": f"{tools}:/usr/bin:/bin",
+        "TEST_UV_ARGS": str(tmp_path / "uv.args"),
+        **extra_env,
+    }
+    return subprocess.run(
+        ["bash", "-c", 'source "$1"; install_oneharness', "test-install", str(script)],
         text=True,
         capture_output=True,
         env=env,
@@ -161,6 +195,49 @@ def test_install_onejudge_rejects_wrong_versions_from_both_paths(tmp_path: Path)
     assert "expected 'onejudge 0.3.0', got 'onejudge 0.4.0'" in proc.stderr
     assert "expected 'onejudge 0.3.0', got 'onejudge 0.2.0'" in proc.stderr
     assert "required onejudge 0.3.0 is unavailable" in proc.stderr
+
+
+def test_install_oneharness_skips_compliant_binary(tmp_path: Path) -> None:
+    _write_oneharness(tmp_path / ".local" / "bin" / "oneharness", "0.3.24")
+
+    proc = _run_oneharness_install(tmp_path)
+
+    assert proc.returncode == 0, proc.stderr
+    assert not (tmp_path / "uv.args").exists()
+
+
+def test_install_oneharness_upgrades_obsolete_binary_from_exact_pypi_release(
+    tmp_path: Path,
+) -> None:
+    _write_oneharness(tmp_path / ".local" / "bin" / "oneharness", "0.3.23")
+    replacement = tmp_path / "oneharness-0.3.24"
+    _write_oneharness(replacement, "0.3.24")
+
+    proc = _run_oneharness_install(tmp_path, TEST_ONEHARNESS_BINARY=str(replacement))
+
+    assert proc.returncode == 0, proc.stderr
+    assert (tmp_path / "uv.args").read_text(encoding="utf-8").strip() == (
+        "tool install --upgrade oneharness-cli==0.3.24"
+    )
+    version = subprocess.run(
+        [tmp_path / ".local" / "bin" / "oneharness", "--version"],
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    assert version.stdout.strip() == "oneharness 0.3.24"
+
+
+def test_install_oneharness_rejects_wrong_version_from_pypi(tmp_path: Path) -> None:
+    _write_oneharness(tmp_path / ".local" / "bin" / "oneharness", "0.3.23")
+    replacement = tmp_path / "wrong-oneharness"
+    _write_oneharness(replacement, "0.3.25")
+
+    proc = _run_oneharness_install(tmp_path, TEST_ONEHARNESS_BINARY=str(replacement))
+
+    assert proc.returncode == 1
+    assert "expected 'oneharness 0.3.24', got 'oneharness 0.3.25'" in proc.stderr
+    assert "required oneharness 0.3.24 is unavailable" in proc.stderr
 
 
 def test_persist_session_env_writes_path_once(tmp_path: Path) -> None:

@@ -9,19 +9,20 @@
 #      prebuilt install.sh where an archive exists (x86_64 Linux, macOS); otherwise
 #      builds the same version from crates.io (`cargo install`), which is the path
 #      on Linux aarch64. Every path verifies the resolved binary before continuing.
-#   2. `oneharness` (0.3.20+, init-capable) is installed via the PyPI
-#      `oneharness-cli` manylinux wheel — the LIVE dispatch path and `onejudge
-#      init` need it (the offline gate does not). The wheel is used because it
-#      runs on older glibc and carries `init`, unlike the prebuilt release binary.
-#      See docs/onejudge-integration.md.
+#   2. The exact `oneharness` version adopted in `config/oneharness.version` is
+#      installed via the PyPI `oneharness-cli` manylinux wheel and verified — the
+#      live dispatch path, `onejudge init`, and timeout e2e gate need it. The wheel
+#      is used because it runs on older glibc and carries `init`, unlike the
+#      prebuilt release binary. See docs/onejudge-integration.md.
 #   3. `codex` (the fallback PRIMARY harness) is installed via npm. Auth is a
 #      one-time manual `codex login`. See docs/onejudge-integration.md.
 #   4. Hands off to `setup-llmlint.sh` to install the llmlint LLM-judge tier.
 #
 # `set -e` is omitted so optional tool failures do not prevent the remaining
-# setup steps. A missing or wrong onejudge is different: the script finishes the
-# other setup work, then exits non-zero because dispatch and the gate require it.
-# llmlint: ignore-file[robust_shell, tool_output_is_signal, boundary_inputs_validated] deliberate for a session-startup installer: `set -e` is omitted so optional tool failures don't abort later setup; progress is logged to stderr; the required onejudge dependency is verified explicitly and controls the final exit status. CLAUDE_ENV_FILE is a path Claude Code itself provides for the session (a trusted platform input, not external/untrusted data); persist_session_env reads and appends to it exactly as the harness intends, so there is no untrusted boundary to validate.
+# setup steps. Missing or wrong onejudge/oneharness binaries are different: the
+# script finishes the other setup work, then exits non-zero because dispatch and
+# the gate require them.
+# llmlint: ignore-file[robust_shell, tool_output_is_signal, boundary_inputs_validated] deliberate for a session-startup installer: `set -e` is omitted so optional tool failures don't abort later setup; progress is logged to stderr; the required onejudge and oneharness dependencies are verified explicitly and control the final exit status. CLAUDE_ENV_FILE is a path Claude Code itself provides for the session (a trusted platform input, not external/untrusted data); persist_session_env reads and appends to it exactly as the harness intends, so there is no untrusted boundary to validate.
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -29,8 +30,11 @@ readonly SCRIPT_DIR
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 readonly REPO_ROOT
 readonly ONEJUDGE_VERSION_FILE="$REPO_ROOT/config/onejudge.version"
+readonly ONEHARNESS_VERSION_FILE="$REPO_ROOT/config/oneharness.version"
 ADOPTED_ONEJUDGE_VERSION="$(tr -d '[:space:]' <"$ONEJUDGE_VERSION_FILE")"
 readonly ADOPTED_ONEJUDGE_VERSION
+ADOPTED_ONEHARNESS_VERSION="$(tr -d '[:space:]' <"$ONEHARNESS_VERSION_FILE")"
+readonly ADOPTED_ONEHARNESS_VERSION
 readonly ONEJUDGE_RELEASE="v$ADOPTED_ONEJUDGE_VERSION"
 readonly ONEJUDGE_INSTALL_SCRIPT="https://raw.githubusercontent.com/nickderobertis/onejudge/$ONEJUDGE_RELEASE/install.sh"
 readonly LOCAL_ROOT="$HOME/.local"
@@ -43,6 +47,13 @@ log() { printf 'session-setup: %s\n' "$*" >&2; }
 
 if [[ ! $ADOPTED_ONEJUDGE_VERSION =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
   log "invalid adopted onejudge version in $ONEJUDGE_VERSION_FILE: '$ADOPTED_ONEJUDGE_VERSION'"
+  if [[ ${BASH_SOURCE[0]} != "$0" ]]; then
+    return 1
+  fi
+  exit 1
+fi
+if [[ ! $ADOPTED_ONEHARNESS_VERSION =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  log "invalid adopted oneharness version in $ONEHARNESS_VERSION_FILE: '$ADOPTED_ONEHARNESS_VERSION'"
   if [[ ${BASH_SOURCE[0]} != "$0" ]]; then
     return 1
   fi
@@ -128,17 +139,28 @@ ensure_codex() {
   fi
 }
 
-ensure_oneharness() {
+install_oneharness() {
   # The manylinux `oneharness-cli` wheel both runs on the host glibc and carries
   # `init` (the prebuilt release binary does not on both counts). uv is a
-  # clean-clone prerequisite; if absent, leave any existing oneharness in place.
-  if ! command -v uv >/dev/null 2>&1; then
-    log "uv not found; cannot install oneharness (offline gate unaffected; live path needs it)"
+  # clean-clone prerequisite. Accept an existing binary only when it is the exact
+  # adopted release; otherwise install the exact wheel and verify it before use.
+  local current="not installed"
+  if command -v oneharness >/dev/null 2>&1; then
+    current="$(oneharness --version 2>&1 || echo unusable)"
+  fi
+  if verify_oneharness >/dev/null 2>&1; then
     return 0
   fi
-  log "ensuring oneharness (init-capable) via uv tool"
-  uv tool install --upgrade 'oneharness-cli>=0.3.20' >&2 \
-    || log "oneharness-cli install failed (offline gate unaffected; live path needs it)"
+  if ! command -v uv >/dev/null 2>&1; then
+    log "cannot install required oneharness $ADOPTED_ONEHARNESS_VERSION: uv is not installed"
+    return 1
+  fi
+  log "installing oneharness $ADOPTED_ONEHARNESS_VERSION via uv tool (current: $current)"
+  if ! uv tool install --upgrade "oneharness-cli==$ADOPTED_ONEHARNESS_VERSION" >&2; then
+    log "oneharness-cli $ADOPTED_ONEHARNESS_VERSION install failed"
+    return 1
+  fi
+  hash -r
   # Remove any stale cargo-installed oneharness. The 0.2.x crates.io build lags the
   # init-capable wheel and its `run` lacks `--mode`, which onejudge's provider
   # needs; if it shadows the wheel on PATH, live dispatch dies with a confusing
@@ -147,9 +169,30 @@ ensure_oneharness() {
     log "removing stale cargo oneharness ($("$CARGO_BIN/oneharness" --version 2>/dev/null || echo unknown)); the wheel supersedes it"
     rm -f "$CARGO_BIN/oneharness"
   fi
-  if command -v oneharness >/dev/null 2>&1; then
-    log "oneharness ready ($(oneharness --version 2>/dev/null || echo unknown))"
+  if verify_oneharness; then
+    log "oneharness ready ($(oneharness --version))"
+    return 0
   fi
+  log "required oneharness $ADOPTED_ONEHARNESS_VERSION is unavailable after pinned PyPI install"
+  return 1
+}
+
+verify_oneharness() {
+  local binary actual expected
+  expected="oneharness $ADOPTED_ONEHARNESS_VERSION"
+  if ! binary="$(command -v oneharness 2>/dev/null)"; then
+    log "oneharness verification failed: expected '$expected', but no binary is on PATH"
+    return 1
+  fi
+  if ! actual="$("$binary" --version 2>&1)"; then
+    log "oneharness verification failed: $binary could not report its version"
+    return 1
+  fi
+  if [[ $actual != "$expected" ]]; then
+    log "oneharness verification failed: expected '$expected', got '$actual' from $binary"
+    return 1
+  fi
+  return 0
 }
 
 ensure_codex_gate() {
@@ -182,9 +225,9 @@ if [[ ${BASH_SOURCE[0]} != "$0" ]]; then
   return 0
 fi
 
-onejudge_failed=0
-install_onejudge || onejudge_failed=1
-ensure_oneharness
+toolchain_failed=0
+install_onejudge || toolchain_failed=1
+install_oneharness || toolchain_failed=1
 ensure_codex
 ensure_codex_gate
 persist_session_env
@@ -196,6 +239,10 @@ if verify_onejudge; then
   log "ready (onejudge: $(onejudge --version))"
 else
   log "onejudge $ADOPTED_ONEJUDGE_VERSION is required — 'just check' will fail until setup succeeds"
-  onejudge_failed=1
+  toolchain_failed=1
 fi
-exit "$onejudge_failed"
+if ! verify_oneharness; then
+  log "oneharness $ADOPTED_ONEHARNESS_VERSION is required — 'just check' will fail until setup succeeds"
+  toolchain_failed=1
+fi
+exit "$toolchain_failed"

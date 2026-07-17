@@ -180,7 +180,7 @@ def test_dispatch_cli_writes_output_file(command_base, onejudge_bin, tmp_path) -
 
 
 def test_dispatch_cli_applies_ordered_models_to_real_oneharness(
-    tmp_path: Path, onejudge_bin: str
+    tmp_path: Path, onejudge_bin: str, oneharness_bin: str
 ) -> None:
     target = tmp_path / "target"
     target.mkdir()
@@ -240,7 +240,13 @@ def test_dispatch_cli_applies_ordered_models_to_real_oneharness(
         {"harness": "codex", "model": "gpt-5.6-sol"},
     ]
     effective = subprocess.run(
-        ["oneharness", "config", "--config", str(REPO_ROOT / "oneharness.toml"), "--compact"],
+        [
+            oneharness_bin,
+            "config",
+            "--config",
+            str(REPO_ROOT / "oneharness.toml"),
+            "--compact",
+        ],
         text=True,
         capture_output=True,
         check=True,
