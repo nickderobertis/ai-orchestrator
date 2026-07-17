@@ -307,10 +307,13 @@ def _subject_from_messages(messages: list[gitops.CommitMessage], task: str) -> s
         for commit in messages
         if (subject := _parse_conventional_subject(commit.message)) is not None
     ]
-    if not parsed:
-        return _fallback_subject(task)
-    if len(parsed) == 1:
-        return _format_conventional_subject(parsed[0])
+    match parsed:
+        case []:
+            return _fallback_subject(task)
+        case [subject]:
+            return _format_conventional_subject(subject)
+        case _:
+            pass
 
     breaking = any(subject.breaking for subject in parsed)
     candidates = [subject for subject in parsed if subject.breaking] if breaking else parsed
