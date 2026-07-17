@@ -174,7 +174,7 @@ def test_run_onejudge_missing_binary_raises() -> None:
 
 @pytest.mark.parametrize(
     ("configured_timeout", "expected_timeout"),
-    [(None, "1800"), ("73", "73")],
+    [(None, "10800"), ("73", "73")],
 )
 def test_run_onejudge_sets_per_turn_timeout(
     tmp_path, monkeypatch, configured_timeout: str | None, expected_timeout: str

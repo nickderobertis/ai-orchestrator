@@ -121,6 +121,32 @@ def onejudge_bin(adopted_onejudge_version: str) -> str:
     return found
 
 
+@pytest.fixture(scope="session")
+def adopted_oneharness_version() -> str:
+    """Read and validate the repository's exact oneharness version declaration."""
+    adopted = (REPO_ROOT / "config" / "oneharness.version").read_text(encoding="utf-8").strip()
+    if re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", adopted) is None:
+        pytest.fail(f"config/oneharness.version must contain one semantic version, got {adopted!r}")
+    return adopted
+
+
+@pytest.fixture(scope="session")
+def oneharness_bin(adopted_oneharness_version: str) -> str:
+    """Resolve the adopted real oneharness CLI, rejecting a stale gate dependency."""
+    found = shutil.which("oneharness")
+    if not found:
+        pytest.fail("oneharness not on PATH — run 'just bootstrap' (the e2e gate needs it)")
+    version = subprocess.run([found, "--version"], text=True, capture_output=True, check=False)
+    expected = f"oneharness {adopted_oneharness_version}"
+    if version.returncode != 0 or version.stdout.strip() != expected:
+        actual = version.stdout.strip() or version.stderr.strip() or "<no version output>"
+        pytest.fail(
+            f"wrong oneharness on PATH: expected {expected!r}, got {actual!r} from {found} — "
+            "run 'just bootstrap'"
+        )
+    return found
+
+
 @pytest.fixture
 def command_base(tmp_path: Path) -> Callable[..., Path]:
     """Return a factory that writes a `command`-provider base config.

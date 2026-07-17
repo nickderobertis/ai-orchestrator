@@ -29,7 +29,9 @@ from .config import ConfigError, build_effective_config, load_yaml
 EXIT_COMPLETED = 0
 EXIT_INCOMPLETE = 1
 EXIT_CONFIG_ERROR = 2
-DEFAULT_ONEHARNESS_TIMEOUT = "1800"
+# Temporary hard per-turn ceiling for legitimate long-running agents. Issue #6
+# will replace this coarse bound with separate inactivity and phase budgets.
+DEFAULT_ONEHARNESS_TIMEOUT = "10800"
 AGENT_ONEHARNESS_BIN = REPO_ROOT / "scripts" / "oneharness-agent.sh"
 
 

@@ -38,7 +38,7 @@ def test_comparison_base_discovers_non_main_and_accepts_explicit_base(
     assert _resolve(clone, "origin", "master").stdout.strip() == "origin/master"
 
 
-def test_pre_push_hook_forwards_git_remote_and_explicit_base(tmp_path) -> None:
+def test_pre_push_hook_clears_git_environment_and_forwards_comparison(tmp_path) -> None:
     clone = gitops.clone(str(ROOT), tmp_path / "clone")
     gitops._git(["remote", "rename", "origin", "upstream"], cwd=clone)
     proc = subprocess.run(
@@ -46,6 +46,8 @@ def test_pre_push_hook_forwards_git_remote_and_explicit_base(tmp_path) -> None:
         cwd=clone,
         env={
             **os.environ,
+            "GIT_DIR": str(ROOT / ".git"),
+            "GIT_WORK_TREE": str(ROOT),
             "ORCHESTRATOR_COMPARISON_BASE": "invalid..base",
         },
         text=True,

@@ -131,9 +131,10 @@ side lives in oneharness config, not onejudge:
 - **Judge / simulated-user side** (supervises) — `oneharness.judge.toml`, passed
   as the base config's `provider.judge_config`.
 
-`onejudge init` scaffolds both files plus a starter `onejudge.yaml` (needs
-oneharness **0.3.20+**, installed as the `oneharness-cli` PyPI wheel by
-`scripts/session-setup.sh`). The committed configs are that output with two
+`onejudge init` scaffolds both files plus a starter `onejudge.yaml`. The adopted
+exact oneharness release is declared in `config/oneharness.version`, installed as
+the `oneharness-cli` PyPI wheel, and verified by `scripts/session-setup.sh`. The
+committed configs are that output with two
 customizations — a cheaper judge model and the `IS_SANDBOX` env — and
 `config/onejudge.base.yaml` supersedes init's starter `onejudge.yaml`. Regenerate
 with `onejudge init --force`.
