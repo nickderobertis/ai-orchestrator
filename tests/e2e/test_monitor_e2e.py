@@ -68,13 +68,14 @@ def _git(*args: str, cwd: str | Path | None = None) -> str:
     return proc.stdout
 
 
-def _repo(tmp_path: Path) -> Path:
-    """A real repository whose `work` branch carries two real commits over `main`."""
+def _repo(tmp_path: Path, bare_origin: Callable[..., Path]) -> Path:
+    """A real clone whose `work` branch carries two real commits over `main`.
+
+    Cloned rather than `git init`-ed because a checkout the lifecycle works in always
+    has an origin, and that origin is what the registry identifies it by.
+    """
     repo = tmp_path / "app"
-    _git("init", "-b", "main", str(repo))
-    (repo / "README.md").write_text("seed\n", encoding="utf-8")
-    _git("add", "-A", cwd=repo)
-    _git("commit", "-m", "init", cwd=repo)
+    _git("clone", str(bare_origin()), str(repo))
     _git("checkout", "-b", "work", cwd=repo)
     for name, subject in (("a.txt", "feat: add a"), ("b.txt", "fix: add b")):
         (repo / name).write_text(f"{name}\n", encoding="utf-8")
