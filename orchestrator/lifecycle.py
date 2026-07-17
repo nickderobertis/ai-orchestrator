@@ -28,7 +28,7 @@ import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Protocol, cast
 
 from . import BASE_CONFIG, PERSONA_DIR, gitops
 from .config import ConfigError, load_yaml
@@ -36,6 +36,7 @@ from .coordination import advisory_lock
 from .dispatch import Report, dispatch
 from .github import CliGitHubBackend, GitHubBackend, GitHubError, PullRequest
 from .gitops import GitError
+from .journal import NodeSink, NullNodeJournal
 from .merge import (
     GitHubMergeStrategy,
     LocalMergeStrategy,
@@ -49,6 +50,7 @@ from .registry import RegistryError, validate_identity_key
 from .runs import (
     RepoPlanPayload,
     RepoPlanResultItem,
+    StepId,
     prepare_round,
     resolve_run_dir,
     status_counts,
@@ -545,6 +547,29 @@ class StepRun:
     waiting: list[str] = field(default_factory=list)
 
 
+def _verify_gate(
+    journal: NodeSink,
+    worktree: Path,
+    cmd: list[str],
+    *,
+    timeout: float | None,
+    env: dict[str, str],
+) -> VerifyResult:
+    """Run the repo's own gate, bracketing the *actual* run with its transitions.
+
+    Journaling here rather than from the outcome is what makes a gate that never
+    returns visible: a started event with no matching finished event is a gate
+    still running (or one that took the process down with it), which an outcome
+    read after the fact can never report.
+    """
+    journal.append("verification-started", detail={"command": list(cmd)})
+    verify = run_gate(worktree, cmd, timeout=timeout, env=env)
+    journal.append(
+        "verification-finished", detail={"ok": verify.ok, "command": list(verify.command)}
+    )
+    return verify
+
+
 def _run_steps(
     steps: list[Step],
     *,
@@ -555,6 +580,7 @@ def _run_steps(
     oneharness_mode: str | None,
     base_path: str | Path,
     persona_dir: str | Path,
+    journal: NodeSink,
     completed: frozenset[str] = frozenset(),
 ) -> StepRun:
     """Run a step sub-DAG in the shared worktree, committing per step.
@@ -570,10 +596,15 @@ def _run_steps(
 
     def run_step(sid: str) -> NodeRun:
         step = by_id[sid]
+        log = journal.for_step(StepId(sid))
         if sid in completed:
+            # Attested in an earlier round; it settles without running again.
+            log.append("step-settled", detail={"status": "done", "step_kind": step.kind})
             return NodeRun("done", None, None)
         if step.human:
+            log.append("human-waiting", detail={"step_kind": step.kind})
             return NodeRun("waiting", f"step {sid!r} is awaiting human action", None)
+        log.append("step-started", detail={"step_kind": step.kind, "persona": step.persona})
         dispatch_head = gitops.head_sha(worktree)
         report = dispatch_fn(
             step.persona,
@@ -585,6 +616,7 @@ def _run_steps(
             session=f"{branch}:{sid}",
             max_turns=step.max_turns,
             done_when=step.done_when,
+            labels=log.labels,
         )
         reports[sid] = report
         if not report.completed:
@@ -602,6 +634,15 @@ def _run_steps(
                     preserved = True
                 elif dispatch_committed and ahead_of_pr_base:
                     preserved = True
+            log.append(
+                "step-settled",
+                detail={
+                    "status": "not-completed",
+                    "step_kind": step.kind,
+                    "turns": report.assistant_turns,
+                    "preserved": preserved,
+                },
+            )
             if preserved:
                 return NodeRun(
                     "failed",
@@ -613,6 +654,10 @@ def _run_steps(
         if gitops.is_dirty(worktree):
             gitops.add_all(worktree)
             gitops.commit(worktree, _step_commit_message(step))
+        log.append(
+            "step-settled",
+            detail={"status": "done", "step_kind": step.kind, "turns": report.assistant_turns},
+        )
         return NodeRun("done", None, report)
 
     runs, _order = schedule_dag(list(by_id), deps, run_step, concurrency=1)
@@ -717,6 +762,7 @@ def _pause_at_human_step(
     skip_verify: bool,
     gate_timeout: float | None,
     recorded_pr: str | None,
+    journal: NodeSink,
 ) -> LifecycleResult:
     """Preserve a human-gated workstream and record how to continue it."""
     lead = steps[0]
@@ -755,7 +801,8 @@ def _pause_at_human_step(
     if not skip_verify:
         cmd = verify_cmd or detect_gate(worktree)
         if cmd is not None:
-            verify = run_gate(
+            verify = _verify_gate(
+                journal,
                 worktree,
                 cmd,
                 timeout=gate_timeout,
@@ -774,15 +821,23 @@ def _pause_at_human_step(
     checkpoint = gitops.head_sha(worktree)
     gitops.push(worktree, branch)
     reused = _pr_from_url(recorded_pr, head=branch, base=pr_base) if recorded_pr else None
-    pr = reused or (github or CliGitHubBackend()).create_pr(
-        result.repo,
-        head=branch,
-        base=pr_base,
-        title=title or _default_title(_step_label(lead), lead.task),
-        body=(body or _workstream_body(steps, step_run.results))
-        + _stack_body(applicable_stack, result.synthetic_stack_base),
-        draft=True,
-    )
+    if reused is not None:
+        pr = reused
+    else:
+        pr = (github or CliGitHubBackend()).create_pr(
+            result.repo,
+            head=branch,
+            base=pr_base,
+            title=title or _default_title(_step_label(lead), lead.task),
+            body=(body or _workstream_body(steps, step_run.results))
+            + _stack_body(applicable_stack, result.synthetic_stack_base),
+            draft=True,
+        )
+        # Only the branch that actually opens one records it; resuming reuses the
+        # draft an earlier round already journaled.
+        journal.append(
+            "pr-created", detail={"pr": pr.url, "number": pr.number, "base": pr_base, "draft": True}
+        )
     result.pr = pr
     return pause(checkpoint, pr.url)
 
@@ -823,6 +878,7 @@ def run_repo_task(
     cleanup: bool = True,
     stack_bases: list[StackBase] | None = None,
     resume: Resume | None = None,
+    journal: NodeSink | None = None,
 ) -> LifecycleResult:
     """Take one subtask from a fresh branch to a merged change on ``repo``.
 
@@ -841,7 +897,13 @@ def run_repo_task(
     share the branch/worktree, run in dependency order committing in turn, and the
     result is verified and merged **once**. A single ``(persona, task)`` is the
     one-step case.
+
+    ``journal`` is this node's scope in a tracked round: transitions are recorded
+    against it as they happen, and every dispatch it makes is labelled with the
+    same coordinates. It defaults to a no-op, because a bare ``just repo-task``
+    belongs to no graph — and because observation must never decide an outcome.
     """
+    log: NodeSink = journal if journal is not None else NullNodeJournal()
     effective_steps = steps or (
         [Step("main", persona, task, max_turns=max_turns, done_when=done_when)]
         if persona and task
@@ -962,6 +1024,16 @@ def run_repo_task(
                     f"fast-forwarded: {exc}"
                 )
                 return result
+        log.append(
+            "branch-discovered",
+            detail={
+                "branch": branch,
+                "base_branch": root_base,
+                "pr_base": pr_base,
+                "synthetic_stack_base": result.synthetic_stack_base,
+                "resumed": resume is not None,
+            },
+        )
 
         step_run = _run_steps(
             effective_steps,
@@ -972,6 +1044,7 @@ def run_repo_task(
             oneharness_mode=oneharness_mode,
             base_path=base_path,
             persona_dir=persona_dir,
+            journal=log,
             completed=frozenset(resume.completed_steps) if resume else frozenset(),
         )
         result.steps = step_run.results
@@ -1000,6 +1073,7 @@ def run_repo_task(
                 skip_verify=skip_verify,
                 gate_timeout=gate_timeout,
                 recorded_pr=resume.pr if resume else None,
+                journal=log,
             )
         if step_run.status != "done":
             result.outcome = "error"
@@ -1024,7 +1098,8 @@ def run_repo_task(
         if not skip_verify:
             cmd = verify_cmd or detect_gate(worktree)
             if cmd is not None:
-                verify = run_gate(
+                verify = _verify_gate(
+                    log,
                     worktree,
                     cmd,
                     timeout=gate_timeout,
@@ -1070,6 +1145,7 @@ def run_repo_task(
                 "ORCHESTRATOR_COMPARISON_BASE": pr_base,
             },
             publication_attempts=publication_attempts,
+            journal=log,
         )
         merge_outcome = strategy.publish_and_merge(ctx)
         if merge_outcome.outcome == "merged" and pr_base == root_base:
@@ -1113,6 +1189,19 @@ class RepoPlanNode:
     steps: list[Step] | None = None
     stack_bases: list[StackBase] = field(default_factory=list)
     resume: Resume | None = None
+
+
+class LifecycleRunner(Protocol):
+    """How the tracked graph drives one lifecycle node.
+
+    ``journal`` is keyword-only with a default so a caller that has no round to
+    record into — `run_repo_plan` reached directly, a test driving one node — calls
+    this the same way it always has.
+    """
+
+    def __call__(
+        self, node: RepoPlanNode, *, journal: NodeSink | None = None
+    ) -> LifecycleResult: ...
 
 
 @dataclass
@@ -1492,14 +1581,14 @@ def _to_plan_node(node: RepoPlanNode) -> Any:
 
 def run_repo_plan(
     plan: RepoPlan,
-    runner: Callable[[RepoPlanNode], LifecycleResult],
+    runner: LifecycleRunner,
     *,
     concurrency: int | None = None,
 ) -> RepoPlanResult:
     """Run an all-lifecycle plan through the canonical tracked graph executor."""
     from .graph import Graph, GraphNode, run_graph
 
-    def no_direct(node: Any) -> Report:
+    def no_direct(node: Any, *, labels: Mapping[str, str] | None = None) -> Report:
         raise AssertionError("a repo plan has no direct agent nodes")
 
     result = run_graph(
@@ -1571,10 +1660,10 @@ def make_repo_runner(
     timeout: float,
     publication_attempts: int = 3,
     repo_type: RepositoryType | None = None,
-) -> Callable[[RepoPlanNode], LifecycleResult]:
+) -> LifecycleRunner:
     """Build the production runner that drives each node through `run_repo_task`."""
 
-    def runner(node: RepoPlanNode) -> LifecycleResult:
+    def runner(node: RepoPlanNode, *, journal: NodeSink | None = None) -> LifecycleResult:
         return run_repo_task(
             node.repo,
             node.task,
@@ -1602,6 +1691,7 @@ def make_repo_runner(
             publication_attempts=publication_attempts,
             stack_bases=node.stack_bases,
             resume=node.resume,
+            journal=journal,
         )
 
     return runner

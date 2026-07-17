@@ -20,12 +20,19 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal, Protocol
+from typing import TYPE_CHECKING, Literal, Protocol
 
 from . import gitops
 from .coordination import advisory_lock
 from .github import AutoMergeUnavailable, GitHubBackend, PullRequest
 from .verify import run_gate
+
+if TYPE_CHECKING:
+    # Annotation-only, and load-bearing: the run ledger imports `MergePolicy` from
+    # this module, so importing the journal (which imports the ledger) for real
+    # would close a cycle. Nothing here needs the journal at runtime — a strategy
+    # only ever calls `append` on the sink the lifecycle injects.
+    from .journal import Detail, EventKind, JournalSink
 
 __all__ = [
     "GitHubMergeStrategy",
@@ -59,6 +66,10 @@ class MergeContext:
     verify_env: dict[str, str] | None = None
     gate_timeout: float | None = None
     publication_attempts: int = 3
+    #: Where publication transitions are recorded, already scoped to the node the
+    #: lifecycle is merging for. ``None`` outside a tracked round, where there is
+    #: no journal to record into.
+    journal: JournalSink | None = None
 
 
 @dataclass
@@ -70,6 +81,17 @@ class MergeOutcome:
 
 class MergeStrategy(Protocol):
     def publish_and_merge(self, ctx: MergeContext) -> MergeOutcome: ...
+
+
+def _record(ctx: MergeContext, kind: EventKind, detail: Detail) -> None:
+    """Journal one publication transition, if this merge runs inside a tracked round.
+
+    ``detail`` is an explicit mapping rather than ``**kwargs`` for the same reason
+    `Journal.append` takes one: a payload key must never be able to collide with a
+    parameter of the function carrying it.
+    """
+    if ctx.journal is not None:
+        ctx.journal.append(kind, detail=detail)
 
 
 def _drive_github_merge(
@@ -92,7 +114,19 @@ def _drive_github_merge(
     start = ctx.clock()
     while True:
         status = github.status(pr)
+        _record(
+            ctx,
+            "pr-checks-observed",
+            {
+                "pr": pr.url,
+                "state": status.state,
+                "merged": status.merged,
+                "merge_state_status": status.merge_state_status,
+                "blocking": [{"name": c.name, "state": c.state} for c in status.blocking],
+            },
+        )
         if status.merged:
+            _record(ctx, "pr-merged", {"pr": pr.url, "number": pr.number})
             return "merged", f"{detail}; merged"
         if status.state == "CLOSED":
             return "closed", f"{detail}; PR was closed without merging"
@@ -102,6 +136,7 @@ def _drive_github_merge(
         if policy == "direct" and status.blocking_green:
             github.merge(pr, method=ctx.method)
             if github.status(pr).merged:
+                _record(ctx, "pr-merged", {"pr": pr.url, "number": pr.number})
                 return "merged", f"{detail}; merged"
         if ctx.clock() - start >= ctx.timeout:
             return "timeout", f"{detail}; timed out after {ctx.timeout}s awaiting checks"
@@ -118,8 +153,14 @@ class GitHubMergeStrategy:
         pr = self._github.create_pr(
             ctx.repo_slug, head=ctx.branch, base=ctx.base, title=ctx.title, body=ctx.body
         )
+        _record(
+            ctx,
+            "pr-created",
+            {"pr": pr.url, "number": pr.number, "base": ctx.base, "draft": False},
+        )
         if self._github.status(pr).draft:
             self._github.mark_ready(pr)
+            _record(ctx, "pr-ready", {"pr": pr.url, "number": pr.number})
         outcome, detail = _drive_github_merge(self._github, pr, ctx)
         return MergeOutcome(outcome=outcome, detail=detail, pr=pr)
 
@@ -146,11 +187,25 @@ class LocalMergeStrategy:
                     try:
                         gitops.merge(scratch, f"origin/{ctx.branch}", message=ctx.title)
                         if ctx.verify_command is not None:
+                            _record(
+                                ctx,
+                                "verification-started",
+                                {"command": list(ctx.verify_command), "attempt": attempt},
+                            )
                             verified = run_gate(
                                 scratch,
                                 ctx.verify_command,
                                 timeout=ctx.gate_timeout,
                                 env=ctx.verify_env,
+                            )
+                            _record(
+                                ctx,
+                                "verification-finished",
+                                {
+                                    "ok": verified.ok,
+                                    "command": list(verified.command),
+                                    "attempt": attempt,
+                                },
                             )
                             if not verified.ok:
                                 return MergeOutcome(
@@ -181,6 +236,11 @@ class LocalMergeStrategy:
             head=ctx.branch,
             base=ctx.base,
         )
+        # No `pr-created` counterpart: this path never opened one. The identity
+        # above is synthesized so the result has a stable ref to name, and claiming
+        # a PR was created for it would put a transition in the journal that never
+        # happened.
+        _record(ctx, "pr-merged", {"pr": pr.url, "branch": ctx.branch, "base": ctx.base})
         return MergeOutcome(
             outcome="merged",
             detail=f"local direct-merge of {ctx.branch} into {ctx.base} after checks",
