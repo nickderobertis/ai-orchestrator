@@ -11,5 +11,17 @@ fi
 
 remote=${1:-origin}
 base=${ORCHESTRATOR_COMPARISON_BASE:-}
+
+# Git exports repository-local GIT_* variables to hooks. The gate's realistic
+# tests create and drive other repositories, so leaking those values makes every
+# nested git command target this checkout instead of its requested cwd. The hook
+# already runs from the worktree root; clear only Git's documented local set and
+# let commands rediscover this repository from cwd.
+while IFS= read -r name; do
+  if [ -n "$name" ]; then
+    unset "$name"
+  fi
+done < <(git rev-parse --local-env-vars)
+
 echo "pre-push: complete gate (comparison remote=$remote${base:+ base=$base})..." >&2
 just gate "$remote" "$base"
