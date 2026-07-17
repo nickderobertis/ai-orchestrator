@@ -29,6 +29,7 @@ from orchestrator import gitops
 from orchestrator.dispatch import Report
 from orchestrator.github import PullRequest
 from orchestrator.graph import graph_payload, parse_graph, run_graph
+from orchestrator.journal import NodeSink
 from orchestrator.lifecycle import (
     RepoPlan,
     RepoPlanNode,
@@ -1154,7 +1155,7 @@ def test_multi_pr_dag_across_repos(tmp_path, bare_origin) -> None:
     repo_y = bare_origin()
     ws = _workspace(tmp_path, repo_x, repo_y)
 
-    def runner(node: RepoPlanNode):
+    def runner(node: RepoPlanNode, *, journal: NodeSink | None = None):
         return run_repo_task(
             node.repo,
             node.task,
@@ -1162,6 +1163,7 @@ def test_multi_pr_dag_across_repos(tmp_path, bare_origin) -> None:
             workspace=ws,
             dispatch_fn=make_writing_dispatch(filename=f"{node.id}.txt"),
             verify_cmd=["true"],
+            journal=journal,
         )
 
     plan = RepoPlan(
@@ -1193,7 +1195,7 @@ def test_linear_team_stack_targets_open_dependency_and_includes_pr_link(
     workspace = Workspace(tmp_path / "linear-stack-worktrees")
     github = FakeGitHub(origin)
 
-    def runner(node: RepoPlanNode):
+    def runner(node: RepoPlanNode, *, journal: NodeSink | None = None):
         return run_repo_task(
             node.repo,
             node.task,
@@ -1204,6 +1206,7 @@ def test_linear_team_stack_targets_open_dependency_and_includes_pr_link(
             dispatch_fn=make_writing_dispatch(filename=f"{node.id}.txt"),
             verify_cmd=["true"],
             stack_bases=node.stack_bases,
+            journal=journal,
         )
 
     result = run_repo_plan(
@@ -1272,7 +1275,7 @@ def test_cross_round_human_gate_preserves_open_same_repo_stack(tmp_path, bare_or
         ]
     }
 
-    def lifecycle_runner(node: RepoPlanNode):
+    def lifecycle_runner(node: RepoPlanNode, *, journal: NodeSink | None = None):
         return run_repo_task(
             node.repo,
             node.task,
@@ -1283,6 +1286,7 @@ def test_cross_round_human_gate_preserves_open_same_repo_stack(tmp_path, bare_or
             dispatch_fn=make_writing_dispatch(filename=f"{node.id}.txt"),
             verify_cmd=["true"],
             stack_bases=node.stack_bases,
+            journal=journal,
         )
 
     def no_direct_agent(_node):
@@ -1531,7 +1535,7 @@ def test_multi_parent_stack_uses_synthetic_base_and_child_only_diff(tmp_path, ba
     workspace = Workspace(tmp_path / "multi-stack-worktrees")
     github = FakeGitHub(origin)
 
-    def runner(node: RepoPlanNode):
+    def runner(node: RepoPlanNode, *, journal: NodeSink | None = None):
         return run_repo_task(
             node.repo,
             node.task,
@@ -1542,6 +1546,7 @@ def test_multi_parent_stack_uses_synthetic_base_and_child_only_diff(tmp_path, ba
             dispatch_fn=make_writing_dispatch(filename=f"{node.id}.txt"),
             verify_cmd=["true"],
             stack_bases=node.stack_bases,
+            journal=journal,
         )
 
     result = run_repo_plan(
@@ -1592,7 +1597,7 @@ def test_multi_parent_stack_deduplicates_ancestor_prerequisites(tmp_path, bare_o
     workspace = Workspace(tmp_path / "ancestry-stack-worktrees")
     github = FakeGitHub(origin)
 
-    def runner(node: RepoPlanNode):
+    def runner(node: RepoPlanNode, *, journal: NodeSink | None = None):
         return run_repo_task(
             node.repo,
             node.task,
@@ -1603,6 +1608,7 @@ def test_multi_parent_stack_deduplicates_ancestor_prerequisites(tmp_path, bare_o
             dispatch_fn=make_writing_dispatch(filename=f"{node.id}.txt"),
             verify_cmd=["true"],
             stack_bases=node.stack_bases,
+            journal=journal,
         )
 
     result = run_repo_plan(
@@ -1663,7 +1669,7 @@ def test_stack_conflict_aborts_before_child_dispatch_and_skips_descendant(
         path.write_text(f"{task}\n", encoding="utf-8")
         return Report(persona, 0, True, False, 1, [], {}, {}, "")
 
-    def runner(node: RepoPlanNode):
+    def runner(node: RepoPlanNode, *, journal: NodeSink | None = None):
         return run_repo_task(
             node.repo,
             node.task,
@@ -1674,6 +1680,7 @@ def test_stack_conflict_aborts_before_child_dispatch_and_skips_descendant(
             dispatch_fn=writing_dispatch,
             verify_cmd=["true"],
             stack_bases=node.stack_bases,
+            journal=journal,
         )
 
     result = run_repo_plan(
@@ -1878,7 +1885,7 @@ def test_multi_pr_failure_skips_dependents(tmp_path, bare_origin) -> None:
     repo_x = bare_origin()
     ws = _workspace(tmp_path, repo_x)
 
-    def runner(node: RepoPlanNode):
+    def runner(node: RepoPlanNode, *, journal: NodeSink | None = None):
         # node 'a' fails its gate; 'b' depends on it and must be skipped.
         return run_repo_task(
             node.repo,
@@ -1887,6 +1894,7 @@ def test_multi_pr_failure_skips_dependents(tmp_path, bare_origin) -> None:
             workspace=ws,
             dispatch_fn=make_writing_dispatch(filename=f"{node.id}.txt"),
             verify_cmd=["false"] if node.id == "a" else ["true"],
+            journal=journal,
         )
 
     plan = RepoPlan(
