@@ -968,12 +968,8 @@ class Monitor:
         ledgers = _round_ledgers(self.run_dir)
         found = journal_events(self.run_id, self.run_dir)
         found += history_events(self.run_id, now=now, oneharness_bin=self.oneharness_bin)
-        found += git_events(
-            known_branches(ledgers, mine), self.checkouts(), self.snapshot, now=now
-        )
-        found += pr_events(
-            known_prs(ledgers, mine), self.snapshot, now=now, github=self.github
-        )
+        found += git_events(known_branches(ledgers, mine), self.checkouts(), self.snapshot, now=now)
+        found += pr_events(known_prs(ledgers, mine), self.snapshot, now=now, github=self.github)
         fresh = [event for event in found if event.key not in self.seen]
         self.seen.update(event.key for event in fresh)
         if fresh:
@@ -1039,9 +1035,7 @@ def stream(
             return 0
         if state.finished:
             writer.heartbeat(
-                Heartbeat(
-                    monitor.clock(), state.run_id, state.round, state.state, "graph complete"
-                )
+                Heartbeat(monitor.clock(), state.run_id, state.round, state.state, "graph complete")
             )
             return 0
         now = monitor.clock()

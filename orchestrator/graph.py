@@ -327,9 +327,7 @@ def run_graph(
             # ledger records it either way. Journal it here as well: a `node-started`
             # with nothing to close it is how this journal says "still running", and
             # a node that raised is the one thing it is not.
-            node_log.append(
-                "node-failed", detail={"detail": str(exc), "error": type(exc).__name__}
-            )
+            node_log.append("node-failed", detail={"detail": str(exc), "error": type(exc).__name__})
             raise
 
     runs, started_order = schedule_dag(list(nodes), deps, run_one, concurrency=conc)

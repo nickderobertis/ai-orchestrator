@@ -26,7 +26,10 @@ FULL_SHA = "0123abcdef4567890123abcdef4567890123abcd"
 @pytest.mark.parametrize(
     ("value", "expected"),
     [
-        ("oh:backend-engineer-20260714T100000Z-123", OneharnessId("backend-engineer-20260714T100000Z-123")),
+        (
+            "oh:backend-engineer-20260714T100000Z-123",
+            OneharnessId("backend-engineer-20260714T100000Z-123"),
+        ),
         ("git:local/app@0123abc", GitId("local/app", "0123abc")),
         (f"git:acme/app@{FULL_SHA}", GitId("acme/app", FULL_SHA)),
         ("pr:acme/app#12", PrId("acme/app", 12)),

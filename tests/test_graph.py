@@ -344,9 +344,7 @@ def test_failure_precedence_over_waiting_dependency() -> None:
     def agent(node: PlanNode, **_: object) -> Report:
         return _report(node.persona, completed=node.id != "bad")
 
-    result = run_graph(
-        graph, agent_runner=agent, lifecycle_runner=lambda node, **_: _lifecycle()
-    )
+    result = run_graph(graph, agent_runner=agent, lifecycle_runner=lambda node, **_: _lifecycle())
 
     assert result.state == "failed"
     assert result.results["review"].status == "waiting"

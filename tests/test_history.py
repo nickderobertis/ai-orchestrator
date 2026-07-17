@@ -200,14 +200,14 @@ def test_a_commit_carried_across_rounds_resolves_to_where_it_ended_up(tmp_path: 
         "git:acme/app@9999999",
     ],
 )
-def test_a_well_formed_id_naming_nothing_recorded_is_actionable(
-    tmp_path: Path, query: str
-) -> None:
+def test_a_well_formed_id_naming_nothing_recorded_is_actionable(tmp_path: Path, query: str) -> None:
     with pytest.raises(HistoryError, match="no recorded tracked-graph node matches"):
         show_run(query, runs_dir=_tracked_run(tmp_path))
 
 
-@pytest.mark.parametrize("query", ["pr:acme/app#abc", "git:acme/app@nothex", "graph:watch-me/0/api"])
+@pytest.mark.parametrize(
+    "query", ["pr:acme/app#abc", "git:acme/app@nothex", "graph:watch-me/0/api"]
+)
 def test_a_typo_in_a_typed_id_is_reported_rather_than_silently_searched(
     tmp_path: Path, query: str
 ) -> None:

@@ -207,7 +207,9 @@ def test_a_heartbeat_carries_run_state_and_deliberately_no_id() -> None:
 
 
 def test_a_heartbeat_before_any_round_says_so_rather_than_inventing_one() -> None:
-    beat = Heartbeat(at=AT, run_id=RUN, round=None, state="unknown", detail="no recorded rounds yet")
+    beat = Heartbeat(
+        at=AT, run_id=RUN, round=None, state="unknown", detail="no recorded rounds yet"
+    )
     assert beat.text() == "12:00:00  --  watch-me no round unknown: no recorded rounds yet"
 
 
@@ -411,12 +413,16 @@ def test_a_malformed_entry_is_dropped_without_taking_the_section_with_it(
 
 
 def test_the_newest_active_run_is_watched_when_none_is_named(tmp_path: Path) -> None:
-    """"Active" is a property of the run, not of a live process: a round waiting on a
+    """ "Active" is a property of the run, not of a live process: a round waiting on a
     human has no executor at all and is the single most important thing to watch."""
     runs_dir = tmp_path / "runs"
     _settle(runs_dir / "done-run", {"api": {"status": "done"}}, ok=True, state="complete")
-    older = _settle(runs_dir / "old-wait", {"api": {"status": "waiting"}}, ok=False, state="waiting")
-    newer = _settle(runs_dir / "new-wait", {"api": {"status": "waiting"}}, ok=False, state="waiting")
+    older = _settle(
+        runs_dir / "old-wait", {"api": {"status": "waiting"}}, ok=False, state="waiting"
+    )
+    newer = _settle(
+        runs_dir / "new-wait", {"api": {"status": "waiting"}}, ok=False, state="waiting"
+    )
     os.utime(older, (AT, AT))
     os.utime(newer, (AT + 60, AT + 60))
 
@@ -536,7 +542,11 @@ def test_only_a_successful_graph_ends_the_stream(tmp_path: Path, no_oneharness: 
             "waiting",
             "1 waiting, 1 blocked",
         ),
-        ({"api": {"status": "failed"}, "web": {"status": "skipped"}}, "failed", "1 failed, 1 skipped"),
+        (
+            {"api": {"status": "failed"}, "web": {"status": "skipped"}},
+            "failed",
+            "1 failed, 1 skipped",
+        ),
     ],
 )
 def test_a_state_a_person_must_act_on_keeps_heartbeating(

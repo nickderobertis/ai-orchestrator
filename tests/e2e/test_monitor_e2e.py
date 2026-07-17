@@ -117,7 +117,10 @@ def test_the_git_source_reports_each_real_commit_under_a_stable_id(
     snapshot = DetailSnapshot()
 
     events = git_events([BRANCH], {"local/app": repo}, snapshot, now=AT)
-    assert [event.summary for event in events] == ["commit work fix: add b", "commit work feat: add a"]
+    assert [event.summary for event in events] == [
+        "commit work fix: add b",
+        "commit work feat: add a",
+    ]
     assert {event.source for event in events} == {"git"}
 
     shas = [commit.sha for commit in gitops.log_delta(repo, "main", "work")]

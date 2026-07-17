@@ -190,9 +190,7 @@ def test_timeout_when_never_merges() -> None:
 
 def _scope(tmp_path: Path, run: str) -> tuple[Journal, NodeJournal]:
     journal = open_journal(tmp_path / run, RunId(run), 1)
-    return journal, NodeJournal(
-        sink=journal, node=NodeId("api"), run_id=RunId(run), round=1
-    )
+    return journal, NodeJournal(sink=journal, node=NodeId("api"), run_id=RunId(run), round=1)
 
 
 def test_github_merge_journals_the_publication_it_drove(tmp_path: Path) -> None:
