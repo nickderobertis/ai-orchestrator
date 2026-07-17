@@ -60,6 +60,7 @@ class PrDetail:
     merge_state_status: str = "unknown"
     draft: bool = False
     checks: tuple[Check, ...] = ()
+    revision: int = 0
 
     @classmethod
     def from_value(cls, value: object) -> PrDetail | None:
@@ -73,10 +74,14 @@ class PrDetail:
         merged = value.get("merged", False)
         draft = value.get("draft", False)
         raw_checks = value.get("checks", [])
+        revision = value.get("revision", 0)
         if (
             not isinstance(merged, bool)
             or not isinstance(draft, bool)
             or not isinstance(raw_checks, list)
+            or not isinstance(revision, int)
+            or isinstance(revision, bool)
+            or revision < 0
         ):
             return None
         checks = tuple(
@@ -96,10 +101,13 @@ class PrDetail:
             merge_state_status=value.get("merge_state_status", "unknown"),
             draft=draft,
             checks=checks,
+            revision=revision,
         )
 
     @classmethod
-    def from_status(cls, status: PRStatus, *, url: str, identity: str) -> PrDetail:
+    def from_status(
+        cls, status: PRStatus, *, url: str, identity: str, revision: int = 0
+    ) -> PrDetail:
         return cls(
             number=status.number,
             url=url,
@@ -109,6 +117,7 @@ class PrDetail:
             merge_state_status=status.merge_state_status,
             draft=status.draft,
             checks=status.checks,
+            revision=revision,
         )
 
     def status(self) -> PRStatus:
@@ -134,4 +143,5 @@ class PrDetail:
                 {"name": check.name, "state": check.state, "required": check.required}
                 for check in self.checks
             ],
+            "revision": self.revision,
         }

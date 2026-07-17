@@ -25,6 +25,8 @@ def test_commit_detail_rejects_malformed_records(value: object) -> None:
         {"number": 1, "merged": "yes"},
         {"number": 1, "draft": "no"},
         {"number": 1, "checks": {}},
+        {"number": 1, "revision": True},
+        {"number": 1, "revision": -1},
     ],
 )
 def test_pr_detail_rejects_malformed_records(value: object) -> None:
@@ -41,7 +43,10 @@ def test_pr_detail_round_trips_a_typed_status_and_drops_bad_checks() -> None:
         draft=False,
     )
     detail = PrDetail.from_status(
-        status, url="https://github.com/acme/app/pull/3", identity="acme/app"
+        status,
+        url="https://github.com/acme/app/pull/3",
+        identity="acme/app",
+        revision=4,
     )
     assert PrDetail.from_value(detail.to_record()) == detail
     assert detail.status() == status
