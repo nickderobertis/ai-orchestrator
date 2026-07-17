@@ -197,8 +197,10 @@ def test_install_onejudge_rejects_wrong_versions_from_both_paths(tmp_path: Path)
     assert "required onejudge 0.3.0 is unavailable" in proc.stderr
 
 
-def test_install_oneharness_skips_compliant_binary(tmp_path: Path) -> None:
-    _write_oneharness(tmp_path / ".local" / "bin" / "oneharness", "0.4.0")
+def test_install_oneharness_skips_compliant_binary(
+    tmp_path: Path, adopted_oneharness_version: str
+) -> None:
+    _write_oneharness(tmp_path / ".local" / "bin" / "oneharness", adopted_oneharness_version)
 
     proc = _run_oneharness_install(tmp_path)
 
@@ -207,17 +209,17 @@ def test_install_oneharness_skips_compliant_binary(tmp_path: Path) -> None:
 
 
 def test_install_oneharness_upgrades_obsolete_binary_from_exact_pypi_release(
-    tmp_path: Path,
+    tmp_path: Path, adopted_oneharness_version: str
 ) -> None:
-    _write_oneharness(tmp_path / ".local" / "bin" / "oneharness", "0.3.24")
-    replacement = tmp_path / "oneharness-0.4.0"
-    _write_oneharness(replacement, "0.4.0")
+    _write_oneharness(tmp_path / ".local" / "bin" / "oneharness", "0.0.1")
+    replacement = tmp_path / "oneharness-current"
+    _write_oneharness(replacement, adopted_oneharness_version)
 
     proc = _run_oneharness_install(tmp_path, TEST_ONEHARNESS_BINARY=str(replacement))
 
     assert proc.returncode == 0, proc.stderr
     assert (tmp_path / "uv.args").read_text(encoding="utf-8").strip() == (
-        "tool install --upgrade oneharness-cli==0.4.0"
+        f"tool install --upgrade oneharness-cli=={adopted_oneharness_version}"
     )
     version = subprocess.run(
         [tmp_path / ".local" / "bin" / "oneharness", "--version"],
@@ -225,19 +227,25 @@ def test_install_oneharness_upgrades_obsolete_binary_from_exact_pypi_release(
         capture_output=True,
         check=True,
     )
-    assert version.stdout.strip() == "oneharness 0.4.0"
+    assert version.stdout.strip() == f"oneharness {adopted_oneharness_version}"
 
 
-def test_install_oneharness_rejects_wrong_version_from_pypi(tmp_path: Path) -> None:
-    _write_oneharness(tmp_path / ".local" / "bin" / "oneharness", "0.3.24")
+def test_install_oneharness_rejects_wrong_version_from_pypi(
+    tmp_path: Path, adopted_oneharness_version: str
+) -> None:
+    _write_oneharness(tmp_path / ".local" / "bin" / "oneharness", "0.0.1")
+    wrong_version = "99.99.99"  # never the adopted pin, so the mismatch is guaranteed
     replacement = tmp_path / "wrong-oneharness"
-    _write_oneharness(replacement, "0.4.1")
+    _write_oneharness(replacement, wrong_version)
 
     proc = _run_oneharness_install(tmp_path, TEST_ONEHARNESS_BINARY=str(replacement))
 
     assert proc.returncode == 1
-    assert "expected 'oneharness 0.4.0', got 'oneharness 0.4.1'" in proc.stderr
-    assert "required oneharness 0.4.0 is unavailable" in proc.stderr
+    assert (
+        f"expected 'oneharness {adopted_oneharness_version}', got 'oneharness {wrong_version}'"
+        in proc.stderr
+    )
+    assert f"required oneharness {adopted_oneharness_version} is unavailable" in proc.stderr
 
 
 def test_persist_session_env_writes_path_once(tmp_path: Path) -> None:
