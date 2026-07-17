@@ -130,6 +130,52 @@ def test_derived_title_is_always_conventional(messages: tuple[str, ...], task: s
     assert len(title) <= lc._SUBJECT_LIMIT
 
 
+def test_control_characters_never_reach_a_title() -> None:
+    # A subject is handed to git/gh as a subprocess argument, where an embedded NUL raises
+    # rather than round-tripping, so the derived path must fall back to a printable subject.
+    derived = _subject_from_messages(_commit_messages("fix: bad\x00null"), "Fallback description.")
+    assert derived.isprintable()
+    assert lc._parse_conventional_subject(derived) is not None
+
+
+# One representative from each class str.isprintable() rejects, plus the line breaks that
+# would smuggle an unvalidated second line into the PR title. Character safety is delegated
+# to the Unicode database rather than an enumerated denylist, so a C0 control, a C1 control
+# (the range a hand-written `\x00-\x1f\x7f` class missed), DEL, a format char, and every
+# line/paragraph separator must all be rejected. Built from code points, never typed as
+# literals: an editor silently folds a literal U+2028 into a space, hiding the case.
+_NON_PRINTABLE = [
+    0x00,  # NUL (C0)
+    0x0A,  # LF
+    0x0D,  # CR
+    0x0B,  # VT
+    0x1C,  # FS
+    0x7F,  # DEL
+    0x80,  # PAD (C1)
+    0x9B,  # CSI (C1) — the class the enumerated denylist missed
+    0x85,  # NEL
+    0x2028,  # LINE SEPARATOR
+    0x2029,  # PARAGRAPH SEPARATOR
+    0x200B,  # ZERO WIDTH SPACE (format char)
+]
+
+
+@pytest.mark.parametrize("code_point", _NON_PRINTABLE)
+def test_explicit_title_rejects_every_non_printable(code_point: int) -> None:
+    with pytest.raises(ConfigError):
+        lc._validate_explicit_title(f"fix: ok{chr(code_point)}smuggled")
+
+
+def test_printable_unicode_title_is_accepted() -> None:
+    # isprintable() safety must not over-reject: legitimate non-ASCII text is valid and
+    # parses to a usable subject that preserves the description verbatim.
+    title = "fix: café serves 日本語 fine"
+    lc._validate_explicit_title(title)  # does not raise
+    parsed = lc._parse_conventional_subject(title)
+    assert parsed is not None
+    assert parsed.description == "café serves 日本語 fine"
+
+
 def test_incomplete_commit_is_non_releasing_and_preserves_trailers() -> None:
     message = _incomplete_commit_message(Step("main", "backend", "Repair capture."), "main")
     subject, _, body = message.partition("\n")

@@ -79,10 +79,16 @@ MERGE_METHODS = ("squash", "merge", "rebase")
 # boundary. GitHub may use the PR title as the squash subject, so this is a
 # release-facing constraint rather than merely a display preference.
 _SUBJECT_LIMIT = 72
+# The regex owns STRUCTURE only (type, optional scope, breaking `!`, description shape);
+# character safety is enforced separately by `str.isprintable()` in the parser. A subject
+# reaches git and `gh` as a subprocess argument, where a control character surfaces as an
+# OS-level argument error (an embedded NUL raises at spawn), so rejecting non-printables is
+# a correctness boundary — and delegating it to the Unicode database is complete by
+# construction, where enumerating forbidden ranges (C0, then separators, then C1) was not.
 _CONVENTIONAL_SUBJECT = re.compile(
-    r"^(?P<type>[a-z][a-z0-9-]*)"
-    r"(?:\((?P<scope>[^():\r\n]+)\))?"
-    r"(?P<breaking>!)?: (?P<description>\S(?:.*\S)?)$"
+    r"(?P<type>[a-z][a-z0-9-]*)"
+    r"(?:\((?P<scope>[^():]+)\))?"
+    r"(?P<breaking>!)?: (?P<description>\S(?:.*\S)?)"
 )
 _BREAKING_FOOTER = re.compile(r"(?m)^BREAKING(?: |-)CHANGE:\s*\S")
 _TYPE_PRIORITY = {"feat": 0, "fix": 1, "perf": 2, "refactor": 3}
@@ -251,13 +257,20 @@ class _ParsedSubject:
 def _has_breaking_signal(message: str) -> bool:
     """Detect subject and footer signals without requiring a usable subject."""
     subject = message.splitlines()[0].strip() if message.strip() else ""
-    matched = _CONVENTIONAL_SUBJECT.fullmatch(subject)
+    # A non-printable subject is never a usable subject (the regex's `.` would otherwise
+    # match a control char), so its `!` must not count; the footer path stays independent.
+    matched = _CONVENTIONAL_SUBJECT.fullmatch(subject) if subject.isprintable() else None
     return bool(matched and matched.group("breaking")) or bool(_BREAKING_FOOTER.search(message))
 
 
 def _parse_conventional_subject(message: str) -> _ParsedSubject | None:
     """Parse one usable Conventional Commit message, including breaking footers."""
     subject = message.splitlines()[0].strip() if message.strip() else ""
+    # `isprintable()` is False for every C0/C1 control, DEL, and Unicode separator/format
+    # character (ASCII space excepted), so this one check rejects the whole class the regex
+    # must not carry into a subprocess argument — completely, via the Unicode database.
+    if not subject.isprintable():
+        return None
     matched = _CONVENTIONAL_SUBJECT.fullmatch(subject)
     # Conventional Commits permits project-specific types, but `wip` is a branch
     # state rather than a durable change type and must not become a squash subject.
@@ -347,10 +360,13 @@ def _default_title(worktree: Path, base: str, task: str) -> str:
 
 
 def _validate_explicit_title(title: str) -> None:
+    # `_parse_conventional_subject` judges `splitlines()[0]`, but the whole title becomes
+    # the PR title, so a title must be exactly one line by the same definition or an
+    # unvalidated suffix rides along behind the validated first line. Ask `splitlines`
+    # rather than enumerating separators: it also splits VT, FF, NEL, U+2028, and U+2029.
     if (
         title != title.strip()
-        or "\n" in title
-        or "\r" in title
+        or title.splitlines()[:1] != [title]
         or len(title) > _SUBJECT_LIMIT
         or _parse_conventional_subject(title) is None
     ):
