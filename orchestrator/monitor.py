@@ -123,8 +123,16 @@ class MonitorError(Exception):
 
 
 def _strip_controls(value: str) -> str:
-    """Drop Cc control characters, which is also what collapses newlines away."""
-    return "".join(ch for ch in value if unicodedata.category(ch) != "Cc")
+    """Replace every Cc control character with a space.
+
+    Substituted rather than dropped because a newline or a tab is a *separator*.
+    Deleting one welds the last word of a line onto the first word of the next and
+    yields a token that appeared in neither — a gate's ``failed\\nassert x == 1``
+    would reach the reader as ``failedassert x == 1``, which is worse than useless
+    on a line whose whole job is to be scanned. `summarize` collapses the runs this
+    leaves behind, so one event is still one line.
+    """
+    return "".join(" " if unicodedata.category(ch) == "Cc" else ch for ch in value)
 
 
 def summarize(value: str) -> str:

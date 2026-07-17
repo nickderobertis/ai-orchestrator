@@ -118,9 +118,15 @@ def test_a_summary_collapses_a_multi_line_value_onto_one_line() -> None:
     assert summarize("  spaced   out  ") == "spaced out"
 
 
+def test_a_separator_survives_as_a_separator_rather_than_welding_two_words() -> None:
+    """Dropping the newline would yield `failedassert` — a token in neither line."""
+    assert summarize("failed\nassert") == "failed assert"
+    assert summarize("a\tb\rc\x0bd") == "a b c d"
+
+
 def test_a_summary_strips_the_escape_sequences_a_coloured_log_carries() -> None:
     """The ESC is a Cc control character; what survives can no longer move a cursor."""
-    assert summarize("plain \x1b[31mred\x1b[0m done") == "plain [31mred[0m done"
+    assert summarize("plain \x1b[31mred\x1b[0m done") == "plain [31mred [0m done"
     assert "\x1b" not in summarize("\x00\x07\x1b[2Jcleared")
 
 
@@ -644,7 +650,8 @@ def test_once_replays_reports_state_and_exits_even_for_a_run_still_going(
     assert ticker.slept == 0
     lines = out.getvalue().splitlines()
     assert lines[0] == HEADER
-    assert lines[1] == "12:00:00  graph:watch-me/1/api  node-started"
+    # The event is stamped when the journal recorded it; the heartbeat, now.
+    assert lines[1].endswith("  graph:watch-me/1/api  node-started")
     assert lines[-1] == "12:00:00  --  watch-me round-01 waiting: 1 waiting"
 
 
