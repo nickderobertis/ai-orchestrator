@@ -20,6 +20,7 @@ from typing import Any
 
 import pytest
 
+import orchestrator.monitor as monitor_module
 from orchestrator.ids import GraphId
 from orchestrator.journal import JOURNAL_NAME, open_journal
 from orchestrator.monitor import (
@@ -40,6 +41,9 @@ from orchestrator.monitor import (
     snapshot_path,
     stream,
     summarize,
+)
+from orchestrator.monitor import (
+    main as monitor_main,
 )
 from orchestrator.runs import NodeId, RunId, StepId, prepare_round, write_result
 
@@ -489,6 +493,43 @@ def test_a_round_in_progress_reports_running_until_its_executor_is_gone(tmp_path
     assert gone.detail == "executor stopped without recording a result"
 
 
+def test_executor_status_corruption_is_interpreted_conservatively(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run_dir = tmp_path / RUN
+    _, round_dir = prepare_round(run_dir, PLAN)
+    status = round_dir / "status.json"
+
+    status.unlink()
+    assert run_state(run_dir, RUN).state == "stopped"
+
+    status.write_text("{", encoding="utf-8")
+    assert run_state(run_dir, RUN).state == "running"
+
+    status.write_text(json.dumps({"status": "complete"}), encoding="utf-8")
+    assert run_state(run_dir, RUN).state == "stopped"
+
+    status.write_text(json.dumps({"status": "running", "pid": False}), encoding="utf-8")
+    assert run_state(run_dir, RUN).state == "running"
+
+    status.write_text(
+        json.dumps({"status": "running", "pid": os.getpid(), "host": "another-host"}),
+        encoding="utf-8",
+    )
+    assert run_state(run_dir, RUN).state == "running"
+
+    status.write_text(
+        json.dumps({"status": "running", "pid": os.getpid(), "host": socket.gethostname()}),
+        encoding="utf-8",
+    )
+
+    def permission_denied(_pid: int, _signal: int) -> None:
+        raise PermissionError
+
+    monkeypatch.setattr(monitor_module.os, "kill", permission_denied)
+    assert run_state(run_dir, RUN).state == "running"
+
+
 def test_a_run_with_no_recorded_rounds_has_nothing_to_report_yet(tmp_path: Path) -> None:
     state = run_state(tmp_path / RUN, RUN)
     assert (state.round, state.state, state.finished) == (None, "unknown", False)
@@ -675,3 +716,90 @@ def test_an_unreadable_result_is_reported_rather_than_crashing_the_stream(
     assert state.state == "unknown"
     assert "unreadable result" in state.detail
     assert not state.finished
+
+
+def test_invalid_run_directories_are_skipped_after_their_ledgers_are_found(tmp_path: Path) -> None:
+    runs_dir = tmp_path / "runs"
+    prepare_round(runs_dir / "bad run name", PLAN)
+    assert active_runs(runs_dir) == []
+    assert monitor_module.newest_run(runs_dir) is None
+
+
+def test_a_corrupt_registry_degrades_monitor_checkout_discovery_to_empty(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, no_oneharness: str
+) -> None:
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    (state_dir / "repos.json").write_text("{", encoding="utf-8")
+    monkeypatch.setenv("AI_ORCHESTRATOR_HOME", str(state_dir))
+
+    monitor = _monitor(tmp_path / RUN, no_oneharness)
+    assert monitor.checkouts() == {}
+    assert monitor.checkouts() == {}  # the degraded result is cached for later polls
+
+
+@pytest.mark.parametrize("output_format", ["text", "jsonl"])
+def test_the_public_monitor_entrypoint_replays_a_complete_run_in_process(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    output_format: str,
+) -> None:
+    """Exercise the installed command's Python boundary without losing coverage to
+    the subprocess used by the e2e acceptance test."""
+    runs_dir = tmp_path / "runs"
+    run_dir = runs_dir / RUN
+    open_journal(run_dir, RUN, 1).append(
+        "node-settled", node=NodeId("api"), detail={"status": "done", "ok": True}
+    )
+    _settle(run_dir, {"api": {"status": "done"}}, ok=True, state="complete")
+    monkeypatch.setenv("PATH", str(tmp_path / "no-tools"))
+
+    assert (
+        monitor_main(["--once", "--runs-dir", str(runs_dir), "--format", output_format, str(RUN)])
+        == 0
+    )
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    lines = captured.out.splitlines()
+    if output_format == "text":
+        assert lines[0] == HEADER
+        assert lines[1].endswith("graph:watch-me/1/api  node-settled status=done ok=yes")
+        assert lines[-1].endswith("watch-me round-01 complete: 1 done")
+    else:
+        records = [json.loads(line) for line in lines]
+        assert records[0]["id"] == "graph:watch-me/1/api"
+        assert records[-1]["type"] == "heartbeat"
+        assert records[-1]["state"] == "complete"
+    assert snapshot_path(run_dir).is_file()
+
+
+def test_the_public_monitor_entrypoint_reports_resolution_and_argument_errors(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    runs_dir = tmp_path / "runs"
+    runs_dir.mkdir()
+
+    assert monitor_main(["--once", "--runs-dir", str(runs_dir), "missing"]) == 2
+    missing = capsys.readouterr()
+    assert "no recorded run 'missing'" in missing.err
+    assert "Traceback" not in missing.err
+
+    with pytest.raises(SystemExit) as invalid:
+        monitor_main(["--heartbeat", "0", "--runs-dir", str(runs_dir)])
+    assert invalid.value.code == 2
+    assert "--heartbeat must be a positive number of seconds" in capsys.readouterr().err
+
+
+def test_the_public_monitor_entrypoint_treats_ctrl_c_as_a_clean_stop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runs_dir = tmp_path / "runs"
+    _settle(runs_dir / RUN, {"api": {"status": "waiting"}}, ok=False, state="waiting")
+
+    def interrupted(*_args: Any, **_kwargs: Any) -> int:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(monitor_module, "stream", interrupted)
+    assert monitor_main(["--runs-dir", str(runs_dir), str(RUN)]) == 0
