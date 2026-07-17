@@ -154,6 +154,14 @@ history *args:
 history-show *args:
     uv run orchestrator-history-show {{args}}
 
+# Follow one tracked-graph run as one concise event stream, aggregating the run
+# journal, its labelled oneharness sessions, its lifecycle-branch commits, and its
+# linked PR state. `just monitor [RUN_ID]`; defaults to the newest active run.
+# Only successful graph completion exits 0 — waiting/failed/stopped heartbeat on.
+# llmlint: ignore[tool_output_is_signal] the requested continuous event stream is this viewing command's product.
+monitor *args:
+    uv run orchestrator-monitor {{args}}
+
 # Show running tasks joined with recent output, branch commits, and ledger rounds.
 # Pass N or --all to include recently finished tasks.
 # llmlint: ignore[tool_output_is_signal] the requested multi-task status report is this viewing command's product.

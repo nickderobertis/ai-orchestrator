@@ -12,7 +12,8 @@ import json
 import re
 import subprocess
 import sys
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, NewType
@@ -34,6 +35,24 @@ JUDGE_PREFIXES = (
 SessionId = NewType("SessionId", str)
 
 
+def _session_labels(value: object) -> dict[str, str]:
+    """Read the history labels a dispatch stamped on this session.
+
+    Labels are optional and are dropped rather than rejected when malformed: a
+    session recorded before the orchestrator labelled its dispatches has none, and
+    an unlabelled session must still list. `labels` is written by `labels.py` at
+    dispatch time, so a value that fails the contract here came from somewhere else
+    and has no claim on a run.
+    """
+    if not isinstance(value, dict):
+        return {}
+    return {
+        key: item
+        for key, item in value.items()
+        if isinstance(key, str) and key and isinstance(item, str) and item
+    }
+
+
 @dataclass(frozen=True)
 class HistorySession:
     """Validated session metadata returned by ``oneharness history list``."""
@@ -43,6 +62,10 @@ class HistorySession:
     project: Path
     started: str
     path: Path
+    #: The ``ONEHARNESS_HISTORY_LABELS`` this dispatch was stamped with, which is
+    #: what lets a reader ask "which run/round/node produced this session?" rather
+    #: than inferring it from the project path or the task name.
+    labels: Mapping[str, str] = field(default_factory=dict)
 
     @classmethod
     def from_value(cls, value: Any) -> HistorySession | None:
@@ -67,6 +90,7 @@ class HistorySession:
             project=Path(project),
             started=started,
             path=Path(path),
+            labels=_session_labels(value.get("labels")),
         )
 
 
