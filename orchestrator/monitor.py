@@ -358,15 +358,22 @@ def known_branches(ledgers: Iterable[RoundLedger], events: Iterable[Event]) -> l
     for event in events:
         if event.kind != "branch-discovered":
             continue
-        branch = event.detail.get("branch")
-        base = event.detail.get("base_branch") or event.detail.get("pr_base")
-        if not isinstance(branch, str) or not isinstance(base, str) or not branch or not base:
+        detail_branch = event.detail.get("branch")
+        detail_base = event.detail.get("base_branch") or event.detail.get("pr_base")
+        if (
+            not isinstance(detail_branch, str)
+            or not isinstance(detail_base, str)
+            or not detail_branch
+            or not detail_base
+        ):
             continue
         # A journal event names the branch but not the repository — the node it is
         # scoped to already implies one. Only adopt it for an identity the ledger
         # has confirmed for this run, rather than guessing which repo it belongs to.
         for identity in identities:
-            found.setdefault((identity, branch), BranchRef(identity, branch, base))
+            found.setdefault(
+                (identity, detail_branch), BranchRef(identity, detail_branch, detail_base)
+            )
     return sorted(found.values(), key=lambda ref: (ref.identity, ref.branch))
 
 
@@ -398,15 +405,20 @@ def known_prs(ledgers: Iterable[RoundLedger], events: Iterable[Event]) -> list[P
                 found[(identity, number)] = PrRef(identity, number, url, base)
     identities = {ref.identity for ref in found.values()}
     for event in events:
-        url = event.detail.get("pr")
-        number = _pr_number(url)
-        if number is None or not isinstance(url, str):
+        detail_url = event.detail.get("pr")
+        detail_number = _pr_number(detail_url)
+        if detail_number is None or not isinstance(detail_url, str):
             continue
-        base = event.detail.get("base")
+        detail_base = event.detail.get("base")
         for identity in identities:
             found.setdefault(
-                (identity, number),
-                PrRef(identity, number, url, base if isinstance(base, str) else ""),
+                (identity, detail_number),
+                PrRef(
+                    identity,
+                    detail_number,
+                    detail_url,
+                    detail_base if isinstance(detail_base, str) else "",
+                ),
             )
     return sorted(found.values(), key=lambda ref: (ref.identity, ref.number))
 
@@ -469,7 +481,7 @@ def _scalar(value: DetailValue) -> str | None:
 
 
 def _journal_summary(event: Event) -> str:
-    parts = [event.kind]
+    parts: list[str] = [event.kind]
     if event.step:
         parts.append(f"[{event.step}]")
     parts.extend(
@@ -761,9 +773,10 @@ def pr_events(
             # persisted, so replaying a finished run still shows the PR it reported
             # live. With nothing persisted either, this source degrades to silence
             # rather than ending a stream whose journal still has the transitions.
-            status = persisted_status(snapshot, pr_ref)
-            if status is None:
+            fallback = persisted_status(snapshot, pr_ref)
+            if fallback is None:
                 continue
+            status = fallback
         checks = ",".join(
             f"{check.name}={check.state}" for check in sorted(status.blocking, key=lambda c: c.name)
         )
