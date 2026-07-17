@@ -213,7 +213,11 @@ def test_dispatch_cli_applies_ordered_models_to_real_oneharness(
         "ONEHARNESS_BIN_CLAUDE_CODE": str(bin_dir / "claude"),
         "FAKE_HARNESS_LOG": str(log_path),
     }
+    # The surrounding recovery dispatch forces claude-code through the
+    # environment; this test must exercise its own configured ordered chain, so
+    # both the model and harness overrides are dropped from the inherited env.
     env.pop("ONEHARNESS_MODELS", None)
+    env.pop("ONEHARNESS_HARNESSES", None)
     # The default session ("dispatch-<persona>") is a fixed global name: oneharness
     # would resume whatever harness a previous run of it bound, so a stored
     # codex-bound session silently overrides the claude-code model asserted here.
