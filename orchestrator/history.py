@@ -217,10 +217,11 @@ def show_run(query: str, *, oneharness_bin: str = "oneharness") -> str:
         raise HistoryError(f"no worker history session matches {query!r}")
     item = matches[0]
     session_id = item.session_id
-    records = _run_history("show", session_id, oneharness_bin=oneharness_bin)
-    if not isinstance(records, list):
-        raise HistoryError("oneharness history show returned an unexpected response")
-    parsed = [record for record in records if isinstance(record, dict)]
+    # The list response already resolved the exact backing file. Reading that file
+    # keeps legacy v0.1 sessions usable with oneharness 0.4: their stored `session`
+    # value may be the non-unique display name, so asking the CLI to show the
+    # filename-derived id can legitimately return an empty normalized result.
+    parsed = session_records(item)
     result = digest(parsed, session_id)
     commands = "\n".join(f"  $ {command}" for command in result.commands) or "  (none recorded)"
     return (
