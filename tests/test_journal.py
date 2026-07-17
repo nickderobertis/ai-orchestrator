@@ -13,11 +13,14 @@ import pytest
 
 from orchestrator.journal import (
     EVENT_KINDS,
+    ROUND_EVENT_KINDS,
     SCHEMA_VERSION,
     Event,
     EventKind,
     JournalError,
+    NodeJournal,
     NullJournal,
+    NullNodeJournal,
     Reconciliation,
     open_journal,
     parse_event,
@@ -322,6 +325,113 @@ def test_null_journal_accepts_every_kind_and_writes_nothing(tmp_path: Path) -> N
     for kind in sorted(EVENT_KINDS):
         assert journal.append(kind, node=NodeId("a"), step=StepId("b"), detail={"x": 1}) is None
     assert list(tmp_path.iterdir()) == []
+
+
+# --- node-scoped journals --------------------------------------------------
+#
+# A node's own code never names itself when it records something: the graph binds
+# the locators once and hands down the scope. These cover that binding holding —
+# and refusing to bend — because a scope that can be talked out of its node would
+# put a sibling's name on a real transition.
+
+
+def test_node_journal_binds_its_locators_onto_every_append(tmp_path: Path) -> None:
+    journal = open_journal(tmp_path / "run-n", RunId("run-n"), 2)
+    node = NodeJournal(sink=journal, node=NodeId("api"), run_id=RunId("run-n"), round=2)
+
+    node.append("node-started", detail={"node_kind": "lifecycle"})
+    node.for_step(StepId("impl")).append("step-started", detail={"persona": "backend-engineer"})
+
+    assert [(e.kind, e.node, e.step) for e in journal.events()] == [
+        ("node-started", "api", None),
+        ("step-started", "api", "impl"),
+    ]
+
+
+def test_node_journal_refuses_to_speak_for_a_sibling_node(tmp_path: Path) -> None:
+    journal = open_journal(tmp_path / "run-n", RunId("run-n"), 1)
+    node = NodeJournal(sink=journal, node=NodeId("api"))
+
+    with pytest.raises(JournalError, match="cannot append an event for node 'web'"):
+        node.append("node-started", node=NodeId("web"))
+    # The refusal is total: no partial record, and no sequence burned on it.
+    assert journal.events() == []
+
+
+def test_node_journal_refuses_to_speak_for_a_sibling_step(tmp_path: Path) -> None:
+    journal = open_journal(tmp_path / "run-n", RunId("run-n"), 1)
+    step = NodeJournal(sink=journal, node=NodeId("api")).for_step(StepId("impl"))
+
+    with pytest.raises(JournalError, match="cannot append an event for step 'test'"):
+        step.append("step-settled", step=StepId("test"))
+    assert journal.events() == []
+
+
+def test_node_journal_accepts_a_restated_locator(tmp_path: Path) -> None:
+    """Restating the scope is how `NodeSink` satisfies `JournalSink`; it is not a lie."""
+    journal = open_journal(tmp_path / "run-n", RunId("run-n"), 1)
+    step = NodeJournal(sink=journal, node=NodeId("api")).for_step(StepId("impl"))
+
+    step.append("step-settled", node=NodeId("api"), step=StepId("impl"), detail={"status": "done"})
+
+    event = journal.events()[0]
+    assert (event.node, event.step) == ("api", "impl")
+
+
+def test_node_journal_refuses_a_round_transition(tmp_path: Path) -> None:
+    """A round starts and finishes once, for the whole graph — not per node."""
+    journal = open_journal(tmp_path / "run-n", RunId("run-n"), 1)
+    node = NodeJournal(sink=journal, node=NodeId("api"))
+
+    for kind in sorted(ROUND_EVENT_KINDS):
+        with pytest.raises(JournalError, match="cannot be scoped to a node"):
+            node.append(kind)
+    assert journal.events() == []
+
+
+@pytest.mark.parametrize(
+    "scope, message",
+    [
+        ({"node": ""}, "node must be a non-empty string"),
+        ({"node": "api", "step": ""}, "step must be a non-empty string"),
+        ({"node": "api", "run_id": ""}, "run_id must be a non-empty string"),
+        ({"node": "api", "round": 0}, "round must be a positive integer"),
+        ({"node": "api", "round": -1}, "round must be a positive integer"),
+        ({"node": "api", "round": True}, "round must be a positive integer"),
+    ],
+)
+def test_node_journal_rejects_an_out_of_contract_scope(
+    scope: dict[str, object], message: str
+) -> None:
+    with pytest.raises(JournalError, match=message):
+        NodeJournal(sink=NullJournal(), **scope)  # type: ignore[arg-type]
+
+
+def test_node_journal_labels_render_the_scope_for_a_subprocess() -> None:
+    """The labels a dispatch carries name the same place the events do."""
+    node = NodeJournal(sink=NullJournal(), node=NodeId("api"), run_id=RunId("run-1"), round=3)
+
+    assert node.labels == {"run_id": "run-1", "round": "3", "node": "api"}
+    assert node.for_step(StepId("impl")).labels == {
+        "run_id": "run-1",
+        "round": "3",
+        "node": "api",
+        "step": "impl",
+    }
+
+
+def test_node_journal_labels_omit_coordinates_an_untracked_round_lacks() -> None:
+    """An unrecorded round has no run or round to name, and must not invent one."""
+    assert NodeJournal(sink=NullJournal(), node=NodeId("api")).labels == {"node": "api"}
+
+
+def test_null_node_journal_records_nothing_and_labels_nothing() -> None:
+    """A bare `repo-task` has no node; it must not label a dispatch with a fake one."""
+    null = NullNodeJournal()
+
+    assert null.for_step(StepId("impl")) is null
+    assert null.append("node-started", detail={"x": 1}) is None
+    assert null.labels == {}
 
 
 def test_detail_may_carry_keys_that_shadow_the_record_locators(tmp_path: Path) -> None:

@@ -763,6 +763,114 @@ def test_summary_shows_step_count() -> None:
     assert "[2/2 steps]" in result.summary()
 
 
+def test_run_repo_task_journals_the_workstream_and_labels_each_dispatch(
+    tmp_path, bare_origin
+) -> None:
+    """The real lifecycle records its own transitions and labels its own dispatches.
+
+    Driven end to end against a real origin: real git, the real step scheduler, the
+    real local merge. Only the paid dispatch is a double, and it is there to capture
+    the labels a subprocess would have carried — the one thing tying a recorded
+    session back to the node that produced it.
+    """
+    from orchestrator import gitops
+    from orchestrator.dispatch import Report
+    from orchestrator.journal import NodeJournal, open_journal
+    from orchestrator.runs import NodeId, RunId
+
+    origin = bare_origin()
+    publication = gitops.clone(origin, tmp_path / "publication")
+    labelled: dict[str, dict[str, str]] = {}
+
+    def fake_dispatch(persona, task, *, project_dir, labels=None, **kw):
+        labelled[task] = dict(labels or {})
+        Path(project_dir, f"{task}.txt").write_text(f"{task}\n", encoding="utf-8")
+        return Report(persona, 0, True, False, 1, [], {}, {}, "")
+
+    workspace = Workspace(
+        tmp_path / "ws",
+        resolver=lambda _url: publication,
+        workflow="local",
+        repo_type="single-owner",
+    )
+    journal = open_journal(tmp_path / "run-lc", RunId("run-lc"), 4)
+    scope = NodeJournal(sink=journal, node=NodeId("api"), run_id=RunId("run-lc"), round=4)
+
+    result = run_repo_task(
+        str(origin),
+        workspace=workspace,
+        steps=[
+            Step("impl", "backend-engineer", "impl"),
+            Step("check", "test-engineer", "check", deps=["impl"]),
+        ],
+        verify_cmd=["true"],
+        dispatch_fn=fake_dispatch,
+        journal=scope,
+    )
+
+    assert result.outcome == "merged"
+    events = journal.events()
+    located = [(e.kind, e.step) for e in events]
+    assert ("branch-discovered", None) in located
+    assert ("step-started", "impl") in located
+    assert ("step-settled", "impl") in located
+    assert ("step-started", "check") in located
+    assert ("step-settled", "check") in located
+    assert ("verification-started", None) in located
+    assert ("verification-finished", None) in located
+    assert ("pr-merged", None) in located
+    # Every transition is attributed to the node the lifecycle was scoped to,
+    # though nothing inside the lifecycle ever names it.
+    assert {(e.node, e.run_id, e.round) for e in events} == {("api", "run-lc", 4)}
+
+    # A dispatch carries the same coordinates its step's events do, so a recorded
+    # session and a recorded transition agree.
+    assert labelled["impl"] == {"run_id": "run-lc", "round": "4", "node": "api", "step": "impl"}
+    assert labelled["check"] == {"run_id": "run-lc", "round": "4", "node": "api", "step": "check"}
+
+
+def test_run_repo_task_journals_a_step_that_hit_the_turn_cap(tmp_path, bare_origin) -> None:
+    """A step that does not complete settles as not-completed, saying so and why."""
+    from orchestrator import gitops
+    from orchestrator.dispatch import Report
+    from orchestrator.journal import NodeJournal, open_journal
+    from orchestrator.runs import NodeId, RunId
+
+    origin = bare_origin()
+    publication = gitops.clone(origin, tmp_path / "publication")
+
+    def fake_dispatch(persona, task, *, project_dir, labels=None, **kw):
+        Path(project_dir, "partial.txt").write_text("partial\n", encoding="utf-8")
+        return Report(persona, 0, False, False, 9, [], {}, {}, "")
+
+    workspace = Workspace(
+        tmp_path / "ws",
+        resolver=lambda _url: publication,
+        workflow="local",
+        repo_type="single-owner",
+    )
+    journal = open_journal(tmp_path / "run-cap", RunId("run-cap"), 1)
+    scope = NodeJournal(sink=journal, node=NodeId("api"), run_id=RunId("run-cap"), round=1)
+
+    result = run_repo_task(
+        str(origin),
+        workspace=workspace,
+        steps=[Step("impl", "backend-engineer", "impl")],
+        verify_cmd=["true"],
+        dispatch_fn=fake_dispatch,
+        journal=scope,
+    )
+
+    assert result.outcome == "not-completed"
+    settled = next(e for e in journal.events() if e.kind == "step-settled")
+    assert settled.step == "impl"
+    assert settled.detail["status"] == "not-completed"
+    assert settled.detail["turns"] == 9
+    # The turn cap preserved partial work on the branch; the journal is what says so.
+    assert settled.detail["preserved"] is True
+    assert "pr-merged" not in [e.kind for e in journal.events()]
+
+
 def test_run_repo_task_pauses_and_resumes_local_human_step(tmp_path, bare_origin) -> None:
     from orchestrator import gitops
     from orchestrator.dispatch import Report
