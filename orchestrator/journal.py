@@ -82,6 +82,8 @@ EventKind = Literal[
 # Typed as the literal it enumerates, so iterating it yields `EventKind` and a
 # caller feeding it back to `append` needs no cast.
 EVENT_KINDS: frozenset[EventKind] = frozenset(get_args(EventKind))
+ROUND_EVENT_KINDS: frozenset[EventKind] = frozenset({"round-started", "round-finished"})
+STEP_EVENT_KINDS: frozenset[EventKind] = frozenset({"step-started", "step-settled"})
 
 
 class JournalError(Exception):
@@ -94,6 +96,19 @@ def _is_int(value: object) -> bool:
 
 def _is_positive_int(value: object) -> bool:
     return isinstance(value, int) and not isinstance(value, bool) and value >= 1
+
+
+def _is_detail_value(value: object) -> bool:
+    """Validate the recursive JSON value contract, including finite numbers."""
+    if value is None or isinstance(value, str | bool | int):
+        return True
+    if isinstance(value, float):
+        return math.isfinite(value)
+    if isinstance(value, Mapping):
+        return all(isinstance(key, str) and _is_detail_value(item) for key, item in value.items())
+    if isinstance(value, Sequence) and not isinstance(value, str | bytes | bytearray):
+        return all(_is_detail_value(item) for item in value)
+    return False
 
 
 @dataclass(frozen=True)
@@ -129,6 +144,10 @@ class Event:
             raise JournalError("journal event node must be a non-empty string when present")
         if self.step is not None and not self.step:
             raise JournalError("journal event step must be a non-empty string when present")
+        if self.kind not in ROUND_EVENT_KINDS and self.node is None:
+            raise JournalError(f"journal event {self.kind!r} requires a node locator")
+        if self.kind in STEP_EVENT_KINDS and self.step is None:
+            raise JournalError(f"journal event {self.kind!r} requires a step locator")
         if not _is_positive_int(self.round):
             raise JournalError(f"journal event round must be a positive integer: {self.round!r}")
         if not _is_positive_int(self.seq):
@@ -137,6 +156,8 @@ class Event:
             raise JournalError(
                 f"journal event timestamp must be a finite, non-negative number: {self.at!r}"
             )
+        if not _is_detail_value(self.detail):
+            raise JournalError("journal event detail must contain only finite JSON values")
 
     def to_record(self) -> dict[str, DetailValue]:
         """Serialize to the on-disk mapping, omitting absent optional locators."""

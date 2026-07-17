@@ -185,7 +185,7 @@ def test_run_onejudge_sets_per_turn_timeout(
         '#!/bin/sh\nprintf \'{"usage": {"oneharness_timeout": "%s"}}\' "$ONEHARNESS_TIMEOUT"\n',
         encoding="utf-8",
     )
-    onejudge.chmod(0o755)
+    onejudge.chmod(0o700)
     if configured_timeout is None:
         monkeypatch.delenv("ONEHARNESS_TIMEOUT", raising=False)
     else:

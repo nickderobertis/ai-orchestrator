@@ -212,6 +212,11 @@ def test_reconcile_is_a_noop_on_a_missing_or_intact_journal(tmp_path: Path) -> N
         pytest.param(_record(step=7), id="non-string-step"),
         pytest.param(_record(step=""), id="empty-step"),
         pytest.param(_record(detail="nope"), id="non-mapping-detail"),
+        pytest.param(_record(detail={"nested": [float("nan")]}), id="non-finite-detail"),
+        pytest.param(_record(kind="node-started"), id="node-event-without-node"),
+        pytest.param(
+            _record(kind="step-settled", node="api"), id="step-event-without-step"
+        ),
         # The value contract: rounds and sequences count from 1, so a stored 0 is not
         # a low sequence but a corrupt one — honouring it would hand the next append
         # a number already on disk.
@@ -247,6 +252,18 @@ def test_parse_event_round_trips_a_well_formed_record() -> None:
         detail={"status": "done"},
     )
     assert parse_event(event.to_record()) == event
+
+
+def test_event_rejects_a_non_json_detail_value() -> None:
+    with pytest.raises(JournalError, match="finite JSON values"):
+        Event(
+            kind="round-started",
+            run_id=RunId("r"),
+            round=1,
+            seq=1,
+            at=1.0,
+            detail={"nested": [float("inf")]},
+        )
 
 
 def _event(*, round_number: int = 1, seq: int = 1, at: float = 1.0) -> Event:
