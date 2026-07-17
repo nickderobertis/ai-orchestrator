@@ -62,7 +62,10 @@ dispatch onejudge.
    a fresh agent — see the granularity rule below. Capture them as a tracked DAG.
    Agent nodes carry `persona` + `task` (and optionally `repo`/`steps` for a
    lifecycle); `kind: human` nodes carry only the action prose; `deps` names real
-   prerequisites. Start from `examples/tracked-graph.example.json`.
+   prerequisites. Start from `examples/tracked-graph.example.json`. Before a
+   lifecycle run, use `just repos` to confirm its repository identity, type,
+   workflow, and available checkout aliases; make durable routing changes with
+   the register/migration recipes rather than accidental run-only overrides.
 2. **Pick or create personas.** Match each subtask to a persona in `personas/`.
    If none fits, create one: `just new-persona <name>` scaffolds
    `personas/<name>.yaml` from the template — fill in the agent role and the
@@ -71,12 +74,22 @@ dispatch onejudge.
    It topologically schedules the DAG, running every subtask whose deps are done
    concurrently (bounded by the plan's `concurrency`), so independent branches go
    in parallel and dependents wait only for what they actually need.
-4. **Read the results, then decide.** `run-plan` records each invocation in
-   `runs/<run-id>/round-NN/`; use `just runs` to find the latest round. A ready
-   human action is `waiting`, its dependents are transitively `blocked`, and the
-   harness proceeds only after `just next-round <run-id> --complete-human <ref>`
-   durably records the person's attestation. Put retry/split/add/drop decisions in
-   `edits.json`. A failed subtask takes precedence and skips its dependents.
+4. **Monitor the graph.** Start `just monitor [RUN_ID]` after launch and keep it as
+   the default view across later rounds. An open or heartbeating stream means the
+   run still needs attention, not necessarily that an executor is working; inspect
+   the stream's detail pointer before deciding what to do. The viewing and exit
+   contracts live in `docs/orchestration.md`.
+5. **Read the settled round, then decide.** `run-plan` records each invocation in
+   `runs/<run-id>/round-NN/`; use `just runs` to see where the latest round ended.
+   A ready human action is `waiting`, its dependents are transitively `blocked`,
+   and the harness proceeds only after the ready action is explicitly attested
+   with `just next-round RUN --complete-human NODE[/STEP]`. Put
+   retry/split/add/drop decisions in `edits.json` and apply them with
+   `next-round`. A failed subtask takes precedence and skips its dependents.
+6. **Close out publication.** A lifecycle result is done only after its registered
+   workflow verifies and publishes it and the publication checkout is
+   synchronized. Route direct-agent branch results through an integration or
+   lifecycle closeout node; a judge verdict alone is not publication.
 
 Treat unresolved same-identity dependencies as stack prerequisites, not merely
 scheduling edges, and preserve them across replans until their content reaches
@@ -167,24 +180,22 @@ an inapplicable rule in `llmlint.yml`—rather than leaving closeout to integrat
 
 ## Dispatching playbook
 
-Watch a dispatched agent with `just history`, then `just history-show <id>`.
-History needs `ONEHARNESS_HISTORY=1`; the dispatch wrappers set it.
-
 Pass long or multi-line task and `--done-when` prose through a file or stdin, not
 inline — the same channel the task prose already uses.
 
 Prefer `just repo-task-auto` for a one-command dispatch — it sets up the harness
-environment and, afterward, points at the branch holding the agent's commits so a
-`not-completed` run's preserved work is never invisible. The judgment that matters:
-keep `~/.local/node/bin` on `PATH` or the harness silently falls back off codex, and
-read `not-completed` as a turn-cap timing signal rather than a failure — inspect the
-branch before concluding work was lost, then use `just repo-recover` for verified
-publication through its registered workflow. See `docs/onejudge-integration.md` for the
-operational details and `docs/repo-lifecycle.md` for lifecycle mechanics.
+environment and reports any branch preserved after an incomplete dispatch. Keep
+`~/.local/node/bin` on `PATH` or the harness silently falls back off codex. Read
+`not-completed` as "publication was not earned," not as proof that the branch is
+bad or that useful work survived: inspect the recorded detail, `oh:` history, and
+branch. If the branch carries incomplete lifecycle provenance, publish it only
+with `just repo-recover`; otherwise redispatch. See `docs/onejudge-integration.md`
+for operational details and `docs/repo-lifecycle.md` for lifecycle mechanics.
 
-When a dispatch looks done but is still running, read its history before acting —
-the branch, not the running conversation, is the source of truth, but a live run
-may be doing work the plan didn't foresee. If it is still pursuing the task
+When a dispatch looks done but is still running, open the monitor's `oh:` id with
+`just history-show` before acting. The branch, not the running conversation, is
+the source of truth, but a live run may be doing work the plan didn't foresee. If
+it is still pursuing the task
 (implementation surfaced changes the orchestrator couldn't see up front), let it
 finish. If it has wandered onto unrelated or follow-up work outside the subtask's
 scope, stop it — no sense paying for turns past the useful output — and triage that
