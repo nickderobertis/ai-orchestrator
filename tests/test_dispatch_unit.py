@@ -250,6 +250,16 @@ def test_run_onejudge_without_labels_leaves_the_env_alone(tmp_path, monkeypatch)
     assert report.usage["labels"] == "outer=keep"
 
 
+def test_run_onejudge_validates_inherited_labels_without_adding_its_own(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setenv("ONEHARNESS_HISTORY_LABELS", "bad key=dropped,outer=keep,novalue")
+
+    report = run_onejudge({}, "task", onejudge_bin=_label_echoing_onejudge(tmp_path))
+
+    assert report.usage["labels"] == "outer=keep"
+
+
 def test_run_onejudge_rejects_an_off_contract_label(tmp_path) -> None:
     # A comma cannot round-trip through the list format; fail loudly rather than
     # hand oneharness a value that parses back as two different labels.

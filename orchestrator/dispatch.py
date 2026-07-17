@@ -152,11 +152,16 @@ def run_onejudge(
         process_env = {**os.environ, **(env or {})}
         process_env.setdefault("ONEHARNESS_TIMEOUT", DEFAULT_ONEHARNESS_TIMEOUT)
         _validate_oneharness_timeout(process_env["ONEHARNESS_TIMEOUT"])
-        if labels:
+        inherited_labels = process_env.get(LABEL_ENV)
+        if labels or inherited_labels is not None:
             try:
-                process_env[LABEL_ENV] = merge_labels(process_env.get(LABEL_ENV), labels)
+                normalized_labels = merge_labels(inherited_labels, labels or {})
             except LabelError as exc:
                 raise DispatchError(f"invalid history label: {exc}") from exc
+            if normalized_labels:
+                process_env[LABEL_ENV] = normalized_labels
+            else:
+                process_env.pop(LABEL_ENV, None)
         try:
             proc = subprocess.run(
                 cmd,
