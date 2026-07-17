@@ -86,7 +86,7 @@ def main(argv: list[str] | None = None) -> int:
         journal = open_journal(run_dir, run_id, number)
         for ref in completed_refs:
             node, _, step = ref.partition("/")
-            journal.append("human-attested", node=node, step=step or None, ref=ref)
+            journal.append("human-attested", node=node, step=step or None, detail={"ref": ref})
 
     if not plan["tasks"]:
         if completed_refs:

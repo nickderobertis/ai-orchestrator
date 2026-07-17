@@ -70,7 +70,7 @@ def test_run_graph_journals_what_the_round_actually_did(tmp_path: Path) -> None:
         outcome="merged",
         branch="feature",
         steps=[StepResult(id="main", persona="backend-engineer", status="done")],
-        verify=VerifyResult(command=["just", "gate"], ok=True, exit_code=0, output=""),
+        verify=VerifyResult(True, ["just", "gate"], ""),
     )
 
     run_graph(

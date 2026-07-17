@@ -217,9 +217,14 @@ class Journal:
         *,
         node: str | None = None,
         step: str | None = None,
-        **detail: Any,
+        detail: Mapping[str, Any] | None = None,
     ) -> Event:
-        """Durably append one record and return it."""
+        """Durably append one record and return it.
+
+        ``detail`` is an explicit mapping rather than ``**kwargs`` so that a payload
+        key can never collide with this method's own ``kind``/``node``/``step``
+        parameters — a lifecycle step legitimately has a ``kind`` of its own.
+        """
         if kind not in EVENT_KINDS:
             raise JournalError(f"unknown journal event kind: {kind!r}")
         with advisory_lock(self.lock_identity):
@@ -232,7 +237,7 @@ class Journal:
                 at=time.time(),
                 node=node,
                 step=step,
-                detail=detail,
+                detail=dict(detail or {}),
             )
             with self.path.open("a", encoding="utf-8") as handle:
                 handle.write(json.dumps(event.to_record(), sort_keys=True) + "\n")
@@ -269,6 +274,6 @@ class NullJournal:
         *,
         node: str | None = None,
         step: str | None = None,
-        **detail: Any,
+        detail: Mapping[str, Any] | None = None,
     ) -> None:
         return None

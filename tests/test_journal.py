@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -25,7 +26,7 @@ from orchestrator.journal import (
 def test_append_writes_one_durable_record_per_event(tmp_path: Path) -> None:
     journal = open_journal(tmp_path / "run-1", "run-1", 3)
     journal.append("node-started", node="api")
-    journal.append("node-settled", node="api", status="done")
+    journal.append("node-settled", node="api", detail={"status": "done"})
 
     lines = (tmp_path / "run-1" / "events.jsonl").read_text().splitlines()
     assert len(lines) == 2
@@ -76,8 +77,11 @@ def test_open_journal_truncates_a_torn_trailing_record(tmp_path: Path) -> None:
 
 def test_read_events_skips_a_torn_tail_without_mutating_the_file(tmp_path: Path) -> None:
     path = tmp_path / "events.jsonl"
-    path.write_text('{"version": 1, "seq": 1, "at": 0, "kind": "round-started", '
-                    '"run_id": "r", "round": 1}\n{"partial": ', encoding="utf-8")
+    path.write_text(
+        '{"version": 1, "seq": 1, "at": 0, "kind": "round-started", '
+        '"run_id": "r", "round": 1}\n{"partial": ',
+        encoding="utf-8",
+    )
     before = path.read_bytes()
 
     assert [e.kind for e in read_events(path)] == ["round-started"]
@@ -90,8 +94,10 @@ def test_reconcile_is_a_noop_on_a_missing_or_intact_journal(tmp_path: Path) -> N
     assert read_events(missing) == []
 
     intact = tmp_path / "events.jsonl"
-    intact.write_text('{"version": 1, "seq": 1, "at": 0, "kind": "round-started", '
-                      '"run_id": "r", "round": 1}\n', encoding="utf-8")
+    intact.write_text(
+        '{"version": 1, "seq": 1, "at": 0, "kind": "round-started", "run_id": "r", "round": 1}\n',
+        encoding="utf-8",
+    )
     assert reconcile(intact) == 1
     assert reconcile(intact) == 1  # idempotent
 
@@ -100,18 +106,56 @@ def test_reconcile_is_a_noop_on_a_missing_or_intact_journal(tmp_path: Path) -> N
     "record",
     [
         "not a mapping",
-        {"version": SCHEMA_VERSION + 1, "seq": 1, "at": 0, "kind": "round-started",
-         "run_id": "r", "round": 1},
-        {"version": SCHEMA_VERSION, "seq": 1, "at": 0, "kind": "invented",
-         "run_id": "r", "round": 1},
-        {"version": SCHEMA_VERSION, "seq": 1, "at": 0, "kind": "round-started",
-         "run_id": "", "round": 1},
-        {"version": SCHEMA_VERSION, "seq": 1, "at": 0, "kind": "round-started",
-         "run_id": "r", "round": True},
-        {"version": SCHEMA_VERSION, "seq": 1, "at": 0, "kind": "round-started",
-         "run_id": "r", "round": 1, "node": 7},
-        {"version": SCHEMA_VERSION, "seq": 1, "at": 0, "kind": "round-started",
-         "run_id": "r", "round": 1, "detail": "nope"},
+        {
+            "version": SCHEMA_VERSION + 1,
+            "seq": 1,
+            "at": 0,
+            "kind": "round-started",
+            "run_id": "r",
+            "round": 1,
+        },
+        {
+            "version": SCHEMA_VERSION,
+            "seq": 1,
+            "at": 0,
+            "kind": "invented",
+            "run_id": "r",
+            "round": 1,
+        },
+        {
+            "version": SCHEMA_VERSION,
+            "seq": 1,
+            "at": 0,
+            "kind": "round-started",
+            "run_id": "",
+            "round": 1,
+        },
+        {
+            "version": SCHEMA_VERSION,
+            "seq": 1,
+            "at": 0,
+            "kind": "round-started",
+            "run_id": "r",
+            "round": True,
+        },
+        {
+            "version": SCHEMA_VERSION,
+            "seq": 1,
+            "at": 0,
+            "kind": "round-started",
+            "run_id": "r",
+            "round": 1,
+            "node": 7,
+        },
+        {
+            "version": SCHEMA_VERSION,
+            "seq": 1,
+            "at": 0,
+            "kind": "round-started",
+            "run_id": "r",
+            "round": 1,
+            "detail": "nope",
+        },
     ],
 )
 def test_parse_event_skips_unrecognized_records(record) -> None:
@@ -137,8 +181,21 @@ def test_append_rejects_an_unknown_kind(tmp_path: Path) -> None:
 def test_null_journal_accepts_every_kind_and_writes_nothing(tmp_path: Path) -> None:
     journal = NullJournal()
     for kind in sorted(EVENT_KINDS):
-        assert journal.append(kind, node="a", step="b", extra=1) is None  # type: ignore[arg-type]
+        assert journal.append(kind, node="a", step="b", detail={"x": 1}) is None  # type: ignore[arg-type]
     assert list(tmp_path.iterdir()) == []
+
+
+def test_detail_may_carry_keys_that_shadow_the_record_locators(tmp_path: Path) -> None:
+    """A step's own 'kind'/'node' must not collide with the event's locators."""
+    journal = open_journal(tmp_path / "run-6", "run-6", 1)
+    journal.append(
+        "step-settled", node="api", step="impl", detail={"step_kind": "human", "node": "shadow"}
+    )
+    event = journal.events()[0]
+    assert event.kind == "step-settled"
+    assert event.node == "api"
+    assert event.step == "impl"
+    assert event.detail == {"step_kind": "human", "node": "shadow"}
 
 
 def test_concurrent_processes_never_interleave_a_record(tmp_path: Path) -> None:
@@ -148,12 +205,13 @@ def test_concurrent_processes_never_interleave_a_record(tmp_path: Path) -> None:
     script = (
         "import sys; from pathlib import Path; from orchestrator.journal import open_journal;"
         "j = open_journal(Path(sys.argv[1]), 'run-5', 1);"
-        "[j.append('node-started', node=sys.argv[2], filler='x' * 200) for _ in range(25)]"
+        "[j.append('node-started', node=sys.argv[2], detail={'filler': 'x' * 200})"
+        " for _ in range(25)]"
     )
     workers = [
         subprocess.Popen(
             [sys.executable, "-c", script, str(run_dir), name],
-            env={**__import__("os").environ, "AI_ORCHESTRATOR_HOME": str(tmp_path / "home")},
+            env={**os.environ, "AI_ORCHESTRATOR_HOME": str(tmp_path / "home")},
         )
         for name in ("a", "b")
     ]
