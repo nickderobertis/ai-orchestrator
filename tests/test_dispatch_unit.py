@@ -212,7 +212,7 @@ def _label_echoing_onejudge(tmp_path) -> str:
         '#!/bin/sh\nprintf \'{"usage": {"labels": "%s"}}\' "$ONEHARNESS_HISTORY_LABELS"\n',
         encoding="utf-8",
     )
-    onejudge.chmod(0o755)
+    onejudge.chmod(0o700)
     return os.fspath(onejudge)
 
 

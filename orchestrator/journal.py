@@ -100,15 +100,19 @@ def _is_positive_int(value: object) -> bool:
 
 def _is_detail_value(value: object) -> bool:
     """Validate the recursive JSON value contract, including finite numbers."""
-    if value is None or isinstance(value, str | bool | int):
-        return True
-    if isinstance(value, float):
-        return math.isfinite(value)
-    if isinstance(value, Mapping):
-        return all(isinstance(key, str) and _is_detail_value(item) for key, item in value.items())
-    if isinstance(value, Sequence) and not isinstance(value, str | bytes | bytearray):
-        return all(_is_detail_value(item) for item in value)
-    return False
+    match value:
+        case None | str() | bool() | int():
+            return True
+        case float():
+            return math.isfinite(value)
+        case Mapping():
+            return all(
+                isinstance(key, str) and _is_detail_value(item) for key, item in value.items()
+            )
+        case Sequence() if not isinstance(value, str | bytes | bytearray):
+            return all(_is_detail_value(item) for item in value)
+        case _:
+            return False
 
 
 @dataclass(frozen=True)
