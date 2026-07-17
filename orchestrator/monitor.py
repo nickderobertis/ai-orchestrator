@@ -471,13 +471,15 @@ _SUMMARY_KEYS = (
 
 def _scalar(value: DetailValue) -> str | None:
     """Render a detail leaf, skipping the containers a summary cannot hold."""
-    if isinstance(value, bool):
-        return "yes" if value else "no"
-    if isinstance(value, str):
-        return value or None
-    if isinstance(value, int | float):
-        return str(value)
-    return None
+    match value:
+        case bool():
+            return "yes" if value else "no"
+        case str():
+            return value or None
+        case int() | float():
+            return str(value)
+        case _:
+            return None
 
 
 def _journal_summary(event: Event) -> str:
