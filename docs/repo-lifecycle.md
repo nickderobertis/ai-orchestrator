@@ -399,6 +399,36 @@ fast-forwards the root publication checkout after a merge into a non-root base.
 `repo-task-auto` prints this
 command when it reports `not-completed`.
 
+### Complete branch after publication failure
+
+`repo-recover` applies only to a branch with lifecycle-preserved incomplete
+provenance. It correctly rejects a complete branch:
+
+```text
+repo-recover: branch '<branch>' has no lifecycle-preserved incomplete provenance
+```
+
+A branch can nevertheless be complete and unpublished: the agent finishes and
+commits, then publication fails at push because of the environment. For example,
+when an execution checkout has no `refs/remotes/origin/HEAD`,
+`scripts/comparison-base.sh` silently degrades base discovery to a fallback that
+works only when the remote has one tracked branch. Stale dispatch branches make
+that fallback ambiguous, so the pre-push gate exits 2 before publication. Restore
+remote-HEAD discovery in the affected checkout with:
+
+```sh
+git remote set-head <remote> -a
+```
+
+Repair the environment fault, inspect the finished branch's base-relative diff,
+and run its complete gate with the comparison remote and base explicit. Then
+integrate the existing commits directly through the registered workflow; for a
+local workflow, `just integrate <branch> --base <base> --remote <remote> --push`
+re-verifies, fast-forwards, and pushes them. The push still runs the complete gate.
+Do not invent incomplete provenance to use `repo-recover`, and do not redispatch
+an agent to re-author identical content: it adds startup cost without improving
+the result.
+
 ## Operating across workers and machines
 
 - **Several agents in one process:** the run-plan scheduler owns concurrency.

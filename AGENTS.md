@@ -88,21 +88,31 @@ dispatch onejudge.
    `next-round`. A failed subtask takes precedence and skips its dependents.
 6. **Close out publication.** A lifecycle result is done only after its registered
    workflow verifies and publishes it and the publication checkout is
-   synchronized. Route direct-agent branch results through an integration or
-   lifecycle closeout node; a judge verdict alone is not publication. A merge is
-   not publication when the task's destination is farther downstream; see
-   `docs/repo-lifecycle.md`.
+   synchronized. Route direct-agent branch results through the registered
+   integration or lifecycle closeout; this may be a verified git-only operation
+   performed directly under the boundary below. A judge verdict alone is not
+   publication. A merge is not publication when the task's destination is farther
+   downstream; see `docs/repo-lifecycle.md`.
 
 Treat unresolved same-identity dependencies as stack prerequisites, not merely
 scheduling edges, and preserve them across replans until their content reaches
 the root base. The deterministic mechanics live in `docs/repo-lifecycle.md`.
 
-The orchestrator owns **decisions and sequencing only**: decomposition,
-scheduling, persona choice, which node merges and in what order, stack order,
-retry/split/drop decisions, and human-action attestation. That is the complete
-meaning of merge/integration coordination; it never includes authoring an
-artifact. Dispatch target-project implementation, research, integration, and
-closeout.
+Accuracy and quality come first; saving time or tokens never relaxes their bar.
+Subject to that, minimize both. Apply the fixed dispatch-cost judgment in [the
+granularity rule](#the-granularity-rule-the-core-judgment) both when splitting
+work and when deciding whether a dispatch adds value at all.
+
+The orchestrator owns **decisions, sequencing, and integration of finished work**:
+decomposition, scheduling, persona choice, merge and stack order, retry/split/drop
+decisions, human-action attestation, and git operations that move or reconcile
+finished dispatched work. It may fast-forward, merge, sync a branch with its base,
+and resolve a small merge conflict between dispatched results. The agents authored
+the content; the orchestrator may select or combine their existing changes but
+must not introduce new project content. A conflict that requires a new design or
+payload is authoring and must be dispatched. The complete gate must still exercise
+and prove whatever lands. Dispatch target-project implementation, research, and
+any integration or closeout that requires new authored content.
 
 Reading a target repo to decompose work, select a persona, and write a precise task
 is direct orchestration work. It stops once the task can be written; investigation
@@ -134,12 +144,15 @@ judge verdict without that evidence is not green.
 
 Maximize parallelism, but **do not over-split**. Every onejudge is a fresh agent
 that pays a fixed cost to prepare its context before it does useful work (reading
-the repo, orienting). Split only where it buys real parallelism or a genuinely
-different persona; keep a subtask whole when splitting it would cost more in
-per-agent overhead than it saves in wall-clock or quality. Prefer a coherent
-subtask that one agent can hold in its head over many micro-tasks that each
-re-pay the setup tax. When unsure, err toward fewer, larger subtasks and split
-further only if one proves too big. See `docs/orchestration.md`.
+the repo, orienting). Dispatch only where that cost buys correctness, independent
+context, parallelism, or a genuinely different persona. Apply this at two scales:
+split only where a fresh context buys enough to justify its overhead, and do not
+dispatch at all when the orchestrator already holds the context, planning has
+determined the change, and the complete gate proves it. That dispatch is cost with
+no benefit. Prefer a coherent subtask that one agent can hold in its head over
+many micro-tasks that each re-pay the setup tax. When unsure, err toward fewer,
+larger subtasks and split further only if one proves too big. See
+`docs/orchestration.md`.
 
 ## Personas and the base config
 
