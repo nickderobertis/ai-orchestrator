@@ -1,12 +1,23 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from orchestrator.history import HistoryError, SessionId, _records, digest, recent_runs, show_run
+from orchestrator.journal import open_journal
+from orchestrator.runs import NodeId, RunId, prepare_round, write_result
 
 FIXTURE = Path(__file__).parent / "fixtures" / "history" / "worker.jsonl"
+
+RUN = RunId("watch-me")
+FULL_SHA = "0123abcdef4567890123abcdef4567890123abcd"
+PR_URL = "https://github.com/acme/app/pull/7"
+PLAN: dict[str, Any] = {
+    "concurrency": 1,
+    "tasks": [{"id": "api", "persona": "backend-engineer", "task": "ship it"}],
+}
 
 
 def _fake_oneharness(tmp_path: Path) -> Path:
@@ -72,3 +83,149 @@ def test_bad_inputs_are_actionable(tmp_path: Path) -> None:
         recent_runs(0, oneharness_bin=str(binary))
     with pytest.raises(HistoryError, match="no worker history session"):
         show_run("missing", oneharness_bin=str(binary))
+
+
+# --- resolving a typed detail id -----------------------------------------------
+#
+# A `git:`/`pr:`/`graph:` id names a thing in the graph rather than a conversation,
+# so the ledger and the journal — both of which outlive the session that produced
+# them — are its source, not a oneharness session digest. These build both through
+# their real writers.
+
+
+def _settle(run_dir: Path, results: dict[str, Any], *, ok: bool, state: str) -> None:
+    _, round_dir = prepare_round(run_dir, PLAN)
+    write_result(
+        round_dir,
+        {"ok": ok, "state": state, "started_order": sorted(results), "results": results},
+    )
+
+
+def _tracked_run(tmp_path: Path) -> Path:
+    """A recorded run whose one node cut a branch, committed, and opened a PR."""
+    runs_dir = tmp_path / "runs"
+    run_dir = runs_dir / RUN
+    journal = open_journal(run_dir, RUN, 1)
+    journal.append(
+        "branch-discovered",
+        node=NodeId("api"),
+        detail={"branch": "feature-1", "base_branch": "main"},
+    )
+    journal.append("pr-created", node=NodeId("api"), detail={"pr": PR_URL})
+    journal.append("node-settled", node=NodeId("api"), detail={"status": "done", "sha": FULL_SHA})
+    _settle(
+        run_dir,
+        {
+            "api": {
+                "status": "done",
+                "outcome": "merged",
+                "repo": "acme/app",
+                "branch": "feature-1",
+                "base_branch": "main",
+                "pr": PR_URL,
+                "detail": "merged via auto-merge",
+            }
+        },
+        ok=True,
+        state="complete",
+    )
+    return runs_dir
+
+
+def test_a_graph_id_resolves_to_the_recorded_node_it_names(tmp_path: Path) -> None:
+    output = show_run("graph:watch-me/1/api", runs_dir=_tracked_run(tmp_path))
+    assert "Reference: graph:watch-me/1/api" in output
+    assert "Graph node: graph:watch-me/1/api" in output
+    assert "Status: done (merged)" in output
+    assert "Repo: acme/app" in output
+    assert "Branch: feature-1" in output
+    assert f"PR: {PR_URL}" in output
+    assert "Detail: merged via auto-merge" in output
+    # The journal says how it got there, which is the half the ledger cannot answer.
+    assert "branch-discovered" in output
+    assert "node-settled" in output
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        f"git:acme/app@{FULL_SHA}",
+        f"git:acme/app@{FULL_SHA[:7]}",  # as a human would copy it out of a log
+        "pr:acme/app#7",
+    ],
+)
+def test_a_git_or_pr_id_resolves_through_the_node_that_recorded_it(
+    tmp_path: Path, query: str
+) -> None:
+    output = show_run(query, runs_dir=_tracked_run(tmp_path))
+    assert f"Reference: {query}" in output
+    assert "Graph node: graph:watch-me/1/api" in output
+
+
+def test_a_commit_carried_across_rounds_resolves_to_where_it_ended_up(tmp_path: Path) -> None:
+    """A branch is legitimately carried across rounds, so one commit can appear in
+    several — and the latest round is the one that says where it ended up."""
+    runs_dir = tmp_path / "runs"
+    run_dir = runs_dir / RUN
+    first = open_journal(run_dir, RUN, 1)
+    first.append("node-settled", node=NodeId("api"), detail={"status": "waiting", "sha": FULL_SHA})
+    _settle(
+        run_dir,
+        {"api": {"status": "waiting", "repo": "acme/app", "branch": "feature-1"}},
+        ok=False,
+        state="waiting",
+    )
+    second = open_journal(run_dir, RUN, 2)
+    second.append("node-settled", node=NodeId("api"), detail={"status": "done", "sha": FULL_SHA})
+    _settle(
+        run_dir,
+        {"api": {"status": "done", "repo": "acme/app", "branch": "feature-1"}},
+        ok=True,
+        state="complete",
+    )
+
+    output = show_run(f"git:acme/app@{FULL_SHA[:7]}", runs_dir=runs_dir)
+    assert "Graph node: graph:watch-me/2/api" in output
+    assert "Also recorded in: graph:watch-me/1/api" in output
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "graph:watch-me/1/nope",  # no such node
+        "graph:watch-me/9/api",  # no such round
+        "graph:never-ran/1/api",  # no such run
+        "pr:acme/app#404",
+        "pr:other/app#7",  # the right PR number in the wrong repository
+        "git:acme/app@9999999",
+    ],
+)
+def test_a_well_formed_id_naming_nothing_recorded_is_actionable(
+    tmp_path: Path, query: str
+) -> None:
+    with pytest.raises(HistoryError, match="no recorded tracked-graph node matches"):
+        show_run(query, runs_dir=_tracked_run(tmp_path))
+
+
+@pytest.mark.parametrize("query", ["pr:acme/app#abc", "git:acme/app@nothex", "graph:watch-me/0/api"])
+def test_a_typo_in_a_typed_id_is_reported_rather_than_silently_searched(
+    tmp_path: Path, query: str
+) -> None:
+    """Degrading it to a substring search would answer a question the user did not
+    ask — `pr:acme/app#abc` would quietly match on the literal text."""
+    with pytest.raises(HistoryError, match="not a valid typed detail id"):
+        show_run(query, runs_dir=_tracked_run(tmp_path))
+
+
+def test_the_oh_namespace_is_the_explicit_spelling_of_the_legacy_query(tmp_path: Path) -> None:
+    """Anything else would make the typed form subtly weaker than the string it
+    replaces, and the muscle memory for that string is why these are a widening."""
+    binary = _fake_oneharness(tmp_path)
+    typed = show_run("oh:build-history-command-20260714T100000Z-123", oneharness_bin=str(binary))
+    assert typed == show_run("build-history-command", oneharness_bin=str(binary))
+    assert "Session: build-history-command-20260714T100000Z-123" in typed
+
+
+def test_an_empty_query_names_nothing_at_all(tmp_path: Path) -> None:
+    with pytest.raises(HistoryError, match="must not be empty"):
+        show_run("   ", runs_dir=_tracked_run(tmp_path))

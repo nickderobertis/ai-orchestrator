@@ -55,7 +55,7 @@ from typing import Any, Literal
 from . import gitops
 from .config import ConfigError
 from .coordination import advisory_lock, atomic_json
-from .github import CliGitHubBackend, GitHubBackend, GitHubError, PullRequest
+from .github import Check, CliGitHubBackend, GitHubBackend, GitHubError, PRStatus, PullRequest
 from .history import HistoryError, HistorySession, session_records, worker_sessions
 from .ids import DetailId, DetailIdError, GitId, GraphId, OneharnessId, PrId
 from .journal import (
@@ -556,6 +556,54 @@ def _checkouts(registry: Registry) -> dict[str, Path]:
     return {str(slug): Path(entry.path) for slug, entry in registry.entries.items()}
 
 
+def _persisted_commits(snapshot: DetailSnapshot, ref: BranchRef) -> list[gitops.Commit]:
+    """The commits a previous pass already recorded for this branch."""
+    found: list[gitops.Commit] = []
+    for record in snapshot.commits.values():
+        sha = record.get("sha")
+        subject = record.get("subject")
+        if (
+            record.get("identity") == ref.identity
+            and record.get("branch") == ref.branch
+            and isinstance(sha, str)
+            and isinstance(subject, str)
+        ):
+            found.append(gitops.Commit(sha, subject))
+    return found
+
+
+def branch_commits(
+    ref: BranchRef, checkouts: Mapping[str, Path], snapshot: DetailSnapshot
+) -> list[gitops.Commit]:
+    """Every commit known for one branch: what was persisted, plus what git shows now.
+
+    The two are *unioned* rather than one being preferred, because each is
+    incomplete in exactly the way the other covers. Git is the only source for a
+    commit pushed since the last pass. The snapshot is the only source for one whose
+    branch has since been deleted after its merge, or whose commits ``base..branch``
+    no longer lists precisely because they are now *in* the base — so re-deriving
+    from git alone would report fewer commits the longer ago the run was, which is
+    the opposite of a durable record.
+
+    Deduping by sha is what makes the union safe: a commit is immutable, so the two
+    sources naming it agree, and the reader sees it once.
+    """
+    found = {commit.sha: commit for commit in _persisted_commits(snapshot, ref)}
+    checkout = checkouts.get(ref.identity)
+    if checkout is None or not checkout.is_dir():
+        return list(found.values())
+    try:
+        live = gitops.log_delta(checkout, ref.base, ref.branch)
+    except gitops.GitError:
+        # An unfetched base, a branch already deleted after its merge, or a clone
+        # that has moved. All are normal, and none is worth ending a stream whose
+        # other three sources still work — the snapshot still carries what was seen.
+        return list(found.values())
+    for commit in live:
+        found.setdefault(commit.sha, commit)
+    return list(found.values())
+
+
 def git_events(
     branches: Iterable[BranchRef],
     checkouts: Mapping[str, Path],
@@ -571,17 +619,7 @@ def git_events(
     """
     found: list[MonitorEvent] = []
     for ref in branches:
-        checkout = checkouts.get(ref.identity)
-        if checkout is None or not checkout.is_dir():
-            continue
-        try:
-            commits = gitops.log_delta(checkout, ref.base, ref.branch)
-        except gitops.GitError:
-            # An unfetched base, a branch already deleted after its merge, or a
-            # clone that has moved. All are normal, and none is worth ending a
-            # stream whose other three sources still work.
-            continue
-        for commit in commits:
+        for commit in branch_commits(ref, checkouts, snapshot):
             try:
                 git_ref = GitId(identity=ref.identity, sha=commit.sha)
             except DetailIdError:
@@ -609,6 +647,57 @@ def git_events(
 
 def _pr_signature(status_state: str, merged: bool, merge_state: str, checks: str) -> str:
     return f"{status_state}:{merged}:{merge_state}:{checks}"
+
+
+def _persisted_checks(value: object) -> tuple[Check, ...]:
+    """Rebuild the checks a previous pass persisted, dropping any that are malformed."""
+    if not isinstance(value, list):
+        return ()
+    found: list[Check] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        name = item.get("name")
+        state = item.get("state")
+        required = item.get("required")
+        if isinstance(name, str) and isinstance(state, str) and isinstance(required, bool):
+            found.append(Check(name=name, state=state, required=required))
+    return tuple(found)
+
+
+def persisted_status(snapshot: DetailSnapshot, ref: PrId) -> PRStatus | None:
+    """The PR state a previous pass persisted, for a replay `gh` cannot serve.
+
+    Returned as a `PRStatus` — the same type the live backend returns — rather than
+    as a rendered line, so a replayed PR runs through exactly the same signature and
+    summary code as a live one. A replay that rendered itself would be free to drift
+    from the thing it is replaying.
+    """
+    record = snapshot.prs.get(str(ref))
+    if record is None:
+        return None
+    number = record.get("number")
+    state = record.get("state")
+    merged = record.get("merged")
+    merge_state = record.get("merge_state_status")
+    draft = record.get("draft")
+    if (
+        not isinstance(number, int)
+        or isinstance(number, bool)
+        or not isinstance(state, str)
+        or not isinstance(merged, bool)
+        or not isinstance(merge_state, str)
+        or not isinstance(draft, bool)
+    ):
+        return None
+    return PRStatus(
+        number=number,
+        state=state,
+        merged=merged,
+        merge_state_status=merge_state,
+        checks=_persisted_checks(record.get("checks")),
+        draft=draft,
+    )
 
 
 def pr_events(
@@ -640,10 +729,13 @@ def pr_events(
         try:
             status = backend.status(pull)
         except (GitHubError, json.JSONDecodeError, OSError):
-            # No `gh`, no auth, or no network. The PR's *recorded* transitions are
-            # already in the journal; this source only adds live state, so its
-            # absence degrades the stream rather than ending it.
-            continue
+            # No `gh`, no auth, or no network. Fall back to the state a previous pass
+            # persisted, so replaying a finished run still shows the PR it reported
+            # live. With nothing persisted either, this source degrades to silence
+            # rather than ending a stream whose journal still has the transitions.
+            status = persisted_status(snapshot, pr_ref)
+            if status is None:
+                continue
         checks = ",".join(
             f"{check.name}={check.state}" for check in sorted(status.blocking, key=lambda c: c.name)
         )
