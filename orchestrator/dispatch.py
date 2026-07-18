@@ -86,22 +86,9 @@ class Report:
         return line
 
 
-def _parse_report(stdout: str) -> dict[str, Any] | None:
-    stdout = stdout.strip()
-    if not stdout:
-        return None
-    try:
-        data = json.loads(stdout)
-    except json.JSONDecodeError:
-        return None
-    return data if isinstance(data, dict) else None
-
-
-def _build_report(persona: str, exit_code: int, stdout: str, stderr: str) -> Report:
-    data = _parse_report(stdout)
-    messages = ((data or {}).get("transcript") or {}).get("messages") or []
-    turns = sum(1 for m in messages if isinstance(m, dict) and m.get("role") == "assistant")
-    raw_assessment = (data or {}).get("assessment")
+def _build_report(persona: str, result: RunResult) -> Report:
+    """Adapt the SDK's validated report without changing our public contract."""
+    raw_assessment = result.raw.get("assessment")
     assessment = (
         raw_assessment.strip()
         if isinstance(raw_assessment, str) and raw_assessment.strip()
@@ -109,14 +96,14 @@ def _build_report(persona: str, exit_code: int, stdout: str, stderr: str) -> Rep
     )
     return Report(
         persona=persona,
-        exit_code=exit_code,
-        completed=exit_code == EXIT_COMPLETED,
-        stopped_early=bool((data or {}).get("stopped_early", False)),
-        assistant_turns=turns,
-        verdicts=list((data or {}).get("verdicts") or []),
-        usage=dict((data or {}).get("usage") or {}),
-        raw=data,
-        stderr=stderr,
+        exit_code=result.exit_code,
+        completed=result.completed,
+        stopped_early=bool(result.raw.get("stopped_early", False)),
+        assistant_turns=result.assistant_turns,
+        verdicts=list(result.verdicts),
+        usage=dict(result.usage),
+        raw=dict(result.raw),
+        stderr=result.stderr,
         assessment=assessment,
     )
 
@@ -215,29 +202,7 @@ def run_onejudge(
         raise DispatchError(
             f"onejudge failed (exit 2 — bad config or provider/runtime error): {exc}"
         ) from exc
-    return _build_sdk_report(persona, result)
-
-
-def _build_sdk_report(persona: str, result: RunResult) -> Report:
-    """Adapt the SDK's validated report without changing our public contract."""
-    raw_assessment = result.raw.get("assessment")
-    assessment = (
-        raw_assessment.strip()
-        if isinstance(raw_assessment, str) and raw_assessment.strip()
-        else None
-    )
-    return Report(
-        persona=persona,
-        exit_code=result.exit_code,
-        completed=result.completed,
-        stopped_early=bool(result.raw.get("stopped_early", False)),
-        assistant_turns=result.assistant_turns,
-        verdicts=list(result.verdicts),
-        usage=dict(result.usage),
-        raw=dict(result.raw),
-        stderr=result.stderr,
-        assessment=assessment,
-    )
+    return _build_report(persona, result)
 
 
 def _agent_run_context(

@@ -18,6 +18,7 @@ import pytest
 import yaml
 
 from orchestrator import PERSONA_DIR, REPO_ROOT
+from orchestrator.config import build_effective_config, load_yaml
 from orchestrator.dispatch import DispatchError, dispatch, main, run_onejudge
 
 FAKE_BACKEND = REPO_ROOT / "tests" / "e2e" / "fake_backend.py"
@@ -248,6 +249,23 @@ def test_dispatch_hits_turn_cap_when_never_done(command_base, onejudge_bin) -> N
     )
     assert not report.completed
     assert report.exit_code == 1
+    assert report.verdicts[0]["verdict"]["value"] is False
+
+
+def test_run_onejudge_returns_incomplete_report_for_exit_one(command_base, onejudge_bin) -> None:
+    config = build_effective_config(
+        load_yaml(command_base(max_turns=1)),
+        load_yaml(PERSONA_DIR / "test-engineer.yaml"),
+    )
+    report = run_onejudge(
+        config,
+        "should-fail: this subtask never satisfies the supervisor.",
+        onejudge_bin=onejudge_bin,
+    )
+
+    assert report.exit_code == 1
+    assert report.completed is False
+    assert report.assistant_turns == 1
     assert report.verdicts[0]["verdict"]["value"] is False
 
 

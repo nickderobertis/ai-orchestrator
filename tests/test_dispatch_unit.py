@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 
 import pytest
+from onejudge_sdk import RunResult
 
 from orchestrator import BASE_CONFIG, REPO_ROOT
 from orchestrator.dispatch import (
@@ -13,7 +14,6 @@ from orchestrator.dispatch import (
     Report,
     _agent_run_context,
     _build_report,
-    _parse_report,
     run_onejudge,
 )
 from orchestrator.dispatch import main as dispatch_main
@@ -22,15 +22,13 @@ from orchestrator.plan import PlanNode, PlanResult, TaskResult, _render
 from orchestrator.plan import main as plan_main
 
 
-def test_parse_report_handles_junk() -> None:
-    assert _parse_report("") is None
-    assert _parse_report("not json") is None
-    assert _parse_report("[1, 2]") is None  # valid JSON, wrong shape
-    assert _parse_report('{"a": 1}') == {"a": 1}
-
-
-def test_build_report_from_empty_stdout() -> None:
-    report = _build_report("p", 1, "", "some stderr")
+def test_build_report_maps_incomplete_sdk_result() -> None:
+    result = RunResult(
+        exit_code=1,
+        stderr="some stderr",
+        raw={"schema_version": 4, "transcript": {"messages": []}, "stopped_early": False},
+    )
+    report = _build_report("p", result)
     assert report.completed is False
     assert report.assistant_turns == 0
     assert report.verdicts == []
@@ -38,15 +36,25 @@ def test_build_report_from_empty_stdout() -> None:
 
 
 def test_build_report_counts_assistant_turns() -> None:
-    stdout = (
-        '{"transcript": {"messages": ['
-        '{"role": "user", "content": "t"},'
-        '{"role": "assistant", "content": "a"},'
-        '{"role": "user", "content": "u"},'
-        '{"role": "assistant", "content": "b"}'
-        ']}, "verdicts": [], "usage": {"output_tokens": 3}}'
+    result = RunResult(
+        exit_code=0,
+        stderr="",
+        raw={
+            "schema_version": 4,
+            "transcript": {
+                "messages": [
+                    {"role": "user", "content": "t"},
+                    {"role": "assistant", "content": "a"},
+                    {"role": "user", "content": "u"},
+                    {"role": "assistant", "content": "b"},
+                ]
+            },
+            "stopped_early": False,
+            "verdicts": [],
+            "usage": {"output_tokens": 3},
+        },
     )
-    report = _build_report("p", 0, stdout, "")
+    report = _build_report("p", result)
     assert report.completed is True
     assert report.assistant_turns == 2
     assert report.usage == {"output_tokens": 3}
@@ -61,9 +69,17 @@ def test_build_report_counts_assistant_turns() -> None:
     ],
 )
 def test_build_report_parses_optional_assessment(value, expected) -> None:
-    import json
-
-    report = _build_report("p", 0, json.dumps({"assessment": value}), "")
+    result = RunResult(
+        exit_code=0,
+        stderr="",
+        raw={
+            "schema_version": 4,
+            "transcript": {"messages": []},
+            "stopped_early": False,
+            "assessment": value,
+        },
+    )
+    report = _build_report("p", result)
     assert report.assessment == expected
 
 
