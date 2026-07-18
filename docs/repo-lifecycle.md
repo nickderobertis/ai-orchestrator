@@ -334,6 +334,11 @@ non-publication node, preserving same-repository ancestry across rounds. Waiting
 lifecycle nodes carry their resume checkpoint forward. The produced graph is
 validated, so bad edits and human references fail loudly.
 
+Publication closeout is executed by the orchestrator process, not the planner.
+The orchestrator surfaces the resulting branch, PR, gate, and publication-checkout
+state over the live planner channel; the planner accepts completion only after
+reviewing that evidence.
+
 `run-plan` records every invocation by default:
 
 ```
