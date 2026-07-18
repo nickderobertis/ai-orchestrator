@@ -62,6 +62,8 @@ DetailValue: TypeAlias = (
 Detail: TypeAlias = "Mapping[str, DetailValue]"
 
 EventKind = Literal[
+    "node-added",
+    "edge-added",
     "round-started",
     "round-finished",
     "node-started",
@@ -88,6 +90,7 @@ EventKind = Literal[
 # caller feeding it back to `append` needs no cast.
 EVENT_KINDS: frozenset[EventKind] = frozenset(get_args(EventKind))
 ROUND_EVENT_KINDS: frozenset[EventKind] = frozenset({"round-started", "round-finished"})
+GRAPH_EVENT_KINDS: frozenset[EventKind] = frozenset({"node-added", "edge-added"})
 STEP_EVENT_KINDS: frozenset[EventKind] = frozenset({"step-started", "step-settled"})
 
 
@@ -153,7 +156,7 @@ class Event:
             raise JournalError("journal event node must be a non-empty string when present")
         if self.step is not None and not self.step:
             raise JournalError("journal event step must be a non-empty string when present")
-        if self.kind not in ROUND_EVENT_KINDS and self.node is None:
+        if self.kind not in ROUND_EVENT_KINDS | GRAPH_EVENT_KINDS and self.node is None:
             raise JournalError(f"journal event {self.kind!r} requires a node locator")
         if self.kind in STEP_EVENT_KINDS and self.step is None:
             raise JournalError(f"journal event {self.kind!r} requires a step locator")

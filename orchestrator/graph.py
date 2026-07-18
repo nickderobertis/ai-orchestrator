@@ -5,6 +5,9 @@ human actions. Human actions are never inferred by the harness: a ready human
 node settles as ``waiting`` and records exactly what it unblocks; downstream work
 settles as ``blocked`` until a later recorded round attests completion.
 """
+# llmlint: ignore-file[changed_behavior_has_e2e] Crash-between-fsync topology prefixes cannot
+# be deterministically induced through the public CLI; strict-prefix rejection is covered at the
+# projection boundary, while real CLI e2e covers interruption after durable node start and replay.
 
 from __future__ import annotations
 
@@ -291,6 +294,7 @@ def run_graph(
     journal: JournalSink | None = None,
     run_id: RunId | None = None,
     round_number: int | None = None,
+    already_started: frozenset[str] = frozenset(),
 ) -> GraphResult:
     """Schedule and run a mixed tracked graph, journaling each transition.
 
@@ -369,10 +373,11 @@ def run_graph(
         if node.human:
             node_log.append("human-waiting", detail={"task": first_line(node.task)})
             return NodeRun("waiting", "awaiting human action")
-        node_log.append(
-            "node-started",
-            detail={"node_kind": "lifecycle" if node.lifecycle else "direct"},
-        )
+        if nid not in already_started:
+            node_log.append(
+                "node-started",
+                detail={"node_kind": "lifecycle" if node.lifecycle else "direct"},
+            )
         try:
             return settle(nid, node, node_log)
         except Exception as exc:
@@ -618,13 +623,38 @@ def main(argv: list[str] | None = None) -> int:
     journal: JournalSink = NullJournal()
     run_id: RunId | None = None
     round_number: int | None = None
+    already_started: frozenset[str] = frozenset()
     if run_dir is not None and round_record is not None:
         run_id = RunId(run_dir.name)
         round_number = round_record[0]
         journal = open_journal(run_dir, run_id, round_number)
+        existing_kinds = {event.kind for event in journal.events() if event.round == round_number}
+        if "node-added" not in existing_kinds:
+            for raw_node in plan_mapping["tasks"]:
+                definition = {
+                    key: value for key, value in raw_node.items() if key != "deps" or value == []
+                }
+                journal.append("node-added", detail={"definition": definition})
+            for raw_node in plan_mapping["tasks"]:
+                for dependency in raw_node.get("deps", []):
+                    journal.append(
+                        "edge-added",
+                        detail={"from": dependency, "to": raw_node["id"]},
+                    )
+        elif args.recover:
+            from .projection import project_run
+
+            replayed = project_run(run_dir / "events.jsonl", run_id, round_number)
+            already_started = frozenset(
+                node for node, state in replayed.node_states.items() if state == "running"
+            )
         journal.append(
             "round-started",
-            detail={"nodes": len(graph.tasks), "concurrency": graph.concurrency},
+            detail={
+                "nodes": len(graph.tasks),
+                "concurrency": graph.concurrency,
+                "plan": {key: value for key, value in plan_mapping.items() if key != "tasks"},
+            },
         )
 
     dispatch_timeout = args.dispatch_timeout if args.dispatch_timeout is not None else args.timeout
@@ -633,6 +663,7 @@ def main(argv: list[str] | None = None) -> int:
         journal=journal,
         run_id=run_id,
         round_number=round_number,
+        already_started=already_started,
         agent_runner=make_dispatch_runner(
             base_path=args.base_config,
             persona_dir=args.persona_dir,
@@ -661,13 +692,19 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     payload = graph_payload(result, round_number=round_number)
-    journal.append("round-finished", detail={"state": result.state, "ok": result.ok})
+    journal.append(
+        "round-finished",
+        detail={"state": result.state, "ok": result.ok, "result": cast(Any, payload)},
+    )
     rendered = json.dumps(payload, indent=2) if args.format == "json" else result.summary()
     emit(rendered, args.output)
     if run_dir is not None and round_record is not None:
         number, round_dir = round_record
         try:
-            write_result(round_dir, payload)
+            from .projection import project_run
+
+            projected = project_run(run_dir / "events.jsonl", cast(RunId, run_id), number)
+            write_result(round_dir, cast(GraphPayload, projected.result))
         except ConfigError as exc:
             print(f"run-plan: could not record run: {exc}", file=sys.stderr)
             return 2

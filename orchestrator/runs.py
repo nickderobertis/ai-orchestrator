@@ -233,7 +233,24 @@ def prepare_round(
         if latest is not None:
             number, round_dir = latest
             if not (round_dir / "result.json").exists():
-                existing = load_mapping(round_dir / "plan.json")
+                plan_path = round_dir / "plan.json"
+                if not plan_path.exists() and (run_dir / "events.jsonl").exists():
+                    from .projection import project_run
+
+                    replayed = project_run(run_dir / "events.jsonl", RunId(run_dir.name), number)
+                    _write_json(plan_path, replayed.plan)
+                    if replayed.result is not None:
+                        _write_json(round_dir / "result.json", replayed.result)
+                        atomic_json(round_dir / "status.json", _round_status("completed"))
+                        latest = None
+                if latest is None:
+                    number = number + 1
+                    round_dir = run_dir / f"round-{number:02d}"
+                    round_dir.mkdir(parents=True, exist_ok=False)
+                    _write_json(round_dir / "plan.json", plan)
+                    atomic_json(round_dir / "status.json", _round_status("running"))
+                    return number, round_dir
+                existing = load_mapping(plan_path)
                 if existing != plan:
                     raise ConfigError(f"{round_dir} has a pending different plan")
                 state_path = round_dir / "status.json"

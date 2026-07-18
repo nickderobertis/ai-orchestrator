@@ -8,7 +8,10 @@ provider is replaced by the command-provider protocol double from ``conftest``.
 from __future__ import annotations
 
 import json
+import os
+import signal
 import subprocess
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -146,6 +149,23 @@ def test_direct_human_pause_attestation_and_release_use_real_onejudge(
 
     round_one = runs / "human-direct" / "round-01"
     assert json.loads((round_one / "result.json").read_text(encoding="utf-8")) == first
+    events = [
+        json.loads(line)
+        for line in (runs / "human-direct" / "events.jsonl").read_text().splitlines()
+    ]
+    assert [event["detail"]["definition"]["id"] for event in events[:3]] == [
+        "prepare",
+        "approve",
+        "publish",
+    ]
+    assert [(event["detail"]["from"], event["detail"]["to"]) for event in events[3:5]] == [
+        ("prepare", "approve"),
+        ("approve", "publish"),
+    ]
+    started = next(event for event in events if event["kind"] == "round-started")
+    assert started["detail"]["plan"] == {"schema_version": 2}
+    finished = next(event for event in events if event["kind"] == "round-finished")
+    assert finished["detail"]["result"] == first
     for invalid in ("missing", "publish", "prepare"):
         rejected = _just(
             "next-round",
@@ -199,6 +219,71 @@ def test_direct_human_pause_attestation_and_release_use_real_onejudge(
     assert repeated.returncode == 2
     assert "already completed" in repeated.stderr
     assert len(list((runs / "human-direct").glob("round-*"))) == 2
+
+    replay_plan = tmp_path / "replay-plan.json"
+    replay_plan.write_text(json.dumps(second_plan))
+    round_two = runs / "human-direct" / "round-02"
+    for artifact in ("plan.json", "result.json", "status.json"):
+        (round_two / artifact).unlink()
+    replayed = _just("run-plan", str(replay_plan), "--run", "human-direct", "--recover", *common)
+    assert replayed.returncode == 0, replayed.stderr
+    assert json.loads((round_two / "plan.json").read_text()) == second_plan
+    assert json.loads((round_two / "result.json").read_text()) == second
+    round_three = runs / "human-direct" / "round-03"
+    assert (round_three / "result.json").exists()
+
+
+def test_recover_interrupted_real_cli_does_not_duplicate_node_start(
+    tmp_path: Path, command_base, onejudge_bin: str
+) -> None:
+    runs = tmp_path / "runs"
+    plan = tmp_path / "interrupt.json"
+    plan.write_text(
+        json.dumps({"tasks": [{"id": "work", "persona": "engineer", "task": "complete-now"}]})
+    )
+    command = [
+        "just",
+        "run-plan",
+        str(plan),
+        "--run",
+        "interrupted",
+        "--runs-dir",
+        str(runs),
+        "--base",
+        str(command_base()),
+        "--onejudge-bin",
+        onejudge_bin,
+        "--format",
+        "json",
+    ]
+    process = subprocess.Popen(
+        command,
+        cwd=REPO_ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        start_new_session=True,
+    )
+    events_path = runs / "interrupted" / "events.jsonl"
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        if events_path.exists() and '"kind": "node-started"' in events_path.read_text():
+            break
+        time.sleep(0.01)
+    else:
+        process.kill()
+        pytest.fail("run-plan did not durably start its node")
+    os.killpg(process.pid, signal.SIGKILL)
+    process.wait()
+    round_dir = runs / "interrupted" / "round-01"
+    (round_dir / "plan.json").unlink()
+
+    recovered = subprocess.run(
+        [*command, "--recover"], cwd=REPO_ROOT, text=True, capture_output=True, check=False
+    )
+    assert recovered.returncode == 0, recovered.stderr
+    events = [json.loads(line) for line in events_path.read_text().splitlines()]
+    assert sum(event["kind"] == "node-started" for event in events) == 1
 
 
 def test_legacy_direct_plan_and_recorded_ledger_still_run(
