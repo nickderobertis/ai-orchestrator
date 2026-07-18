@@ -9,7 +9,7 @@ from collections import Counter
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Literal, NamedTuple, NewType, NotRequired, TypedDict, cast
+from typing import Any, Literal, NamedTuple, NewType, NotRequired, TypedDict, cast, get_args
 
 from .config import ConfigError, load_yaml
 from .coordination import advisory_lock, atomic_json
@@ -18,6 +18,10 @@ from .workspace import IdentityKey, RepositoryType, Workflow
 
 _RUN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 _ROUND = re.compile(r"^round-(\d+)$")
+RECORDED_RESULT_SCHEMA_VERSION = 2
+ResumeMode = Literal["pause", "retry"]
+RESUME_MODES = frozenset(get_args(ResumeMode))
+RetryDisposition = Literal["reused", "recovered", "abandoned"]
 
 # The identifiers a tracked round is addressed by. They are all non-empty strings
 # from different namespaces, and they travel together through the ledger, the
@@ -57,6 +61,8 @@ class ResumePayload(TypedDict):
     checkpoint: str
     completed_steps: list[str]
     pr: str | None
+    mode: NotRequired[ResumeMode]
+    source_round: NotRequired[int]
 
 
 class HumanActionPayload(TypedDict):
@@ -75,6 +81,16 @@ class StepResultPayload(TypedDict):
     kind: str
     persona: str | None
     status: str
+
+
+class RetryLineagePayload(TypedDict):
+    """Serialized fate of a preserved-branch retry."""
+
+    supersedes_branch: str
+    supersedes_checkpoint: str
+    disposition: RetryDisposition
+    reason: NotRequired[str]
+    supersedes_round: NotRequired[int]
 
 
 class GraphResultItem(TypedDict, total=False):
@@ -110,6 +126,7 @@ class GraphResultItem(TypedDict, total=False):
     waiting_steps: list[str]
     resume: ResumePayload | None
     error: str | None
+    retry_lineage: RetryLineagePayload
 
 
 class GraphPayload(TypedDict, total=False):
@@ -119,6 +136,8 @@ class GraphPayload(TypedDict, total=False):
     state: str
     started_order: list[str]
     results: dict[str, GraphResultItem]
+    schema_version: int
+    round: int
 
 
 RepoPlanResultItem = GraphResultItem

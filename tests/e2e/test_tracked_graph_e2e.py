@@ -12,6 +12,8 @@ import subprocess
 from datetime import datetime
 from pathlib import Path
 
+import pytest
+
 from orchestrator import REPO_ROOT, gitops
 from orchestrator.registry import Registry
 
@@ -24,6 +26,50 @@ def _just(*args: str) -> subprocess.CompletedProcess[str]:
         capture_output=True,
         check=False,
     )
+
+
+@pytest.mark.parametrize(
+    ("invalid_field", "invalid_value", "message"),
+    [
+        ("mode", "unknown", "resume 'mode' must be 'pause' or 'retry'"),
+        ("source_round", 0, "resume 'source_round' must be a positive integer"),
+    ],
+)
+def test_run_plan_rejects_invalid_retry_resume_contract(
+    tmp_path: Path, invalid_field: str, invalid_value: object, message: str
+) -> None:
+    plan = tmp_path / "invalid-resume.json"
+    resume = {
+        "branch": "feature/preserved",
+        "base_branch": "main",
+        "pr_base": "main",
+        "checkpoint": "a" * 40,
+        "completed_steps": [],
+        "pr": None,
+        "mode": "retry",
+        invalid_field: invalid_value,
+    }
+    plan.write_text(
+        json.dumps(
+            {
+                "tasks": [
+                    {
+                        "id": "retry",
+                        "repo": str(tmp_path / "target"),
+                        "persona": "engineer",
+                        "task": "Retry preserved work.",
+                        "resume": resume,
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = _just("run-plan", str(plan), "--no-record")
+
+    assert result.returncode == 2
+    assert message in result.stderr
 
 
 def test_direct_human_pause_attestation_and_release_use_real_onejudge(
@@ -74,6 +120,7 @@ def test_direct_human_pause_attestation_and_release_use_real_onejudge(
 
     assert paused.returncode == 1, paused.stderr
     first = json.loads(paused.stdout)
+    assert first["schema_version"] == 2 and first["round"] == 1
     assert first["ok"] is False and first["state"] == "waiting"
     assert first["started_order"] == ["prepare", "approve"]
     assert first["results"]["prepare"]["status"] == "done"
@@ -185,6 +232,7 @@ def test_legacy_direct_plan_and_recorded_ledger_still_run(
     )
     assert direct.returncode == 0, direct.stderr
     direct_payload = json.loads(direct.stdout)
+    assert direct_payload["schema_version"] == 2 and "round" not in direct_payload
     assert direct_payload["state"] == "complete"
     assert direct_payload["results"]["legacy-agent"]["status"] == "done"
 

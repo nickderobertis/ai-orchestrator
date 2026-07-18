@@ -10,12 +10,16 @@ with the captured output kept for the report.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TypedDict, TypeGuard
+
+from .coordination import advisory_lock, atomic_json
 
 __all__ = ["VerifyResult", "detect_gate", "run_gate"]
 
@@ -25,6 +29,7 @@ class VerifyResult:
     ok: bool
     command: list[str]
     output: str
+    reused: bool = False
 
     def tail(self, limit: int = 2000) -> str:
         """The trailing slice of output, for a compact failure report."""
@@ -91,7 +96,18 @@ def run_gate(
     timeout: float | None = None,
     env: dict[str, str] | None = None,
 ) -> VerifyResult:
-    """Run ``command`` in ``project_dir``; ok iff it exits 0."""
+    """Run ``command`` in ``project_dir``; reuse an exact successful certification.
+
+    Reuse is deliberately unavailable outside a Git checkout or without the
+    resolved comparison remote/base.  The durable record is repository-local
+    and binds the verdict to HEAD, comparison identity, and the gate command.
+    """
+    directory = Path(project_dir)
+    context = _attestation_context(directory, command, env)
+    if context is not None and _has_attestation(context):
+        return VerifyResult(
+            ok=True, command=command, output="gate attestation reused\n", reused=True
+        )
     try:
         proc = subprocess.run(
             command,
@@ -109,4 +125,150 @@ def run_gate(
         )
     except subprocess.TimeoutExpired:  # pragma: no cover - timing-dependent
         return VerifyResult(ok=False, command=command, output=f"gate timed out after {timeout}s")
-    return VerifyResult(ok=proc.returncode == 0, command=command, output=proc.stdout + proc.stderr)
+    result = VerifyResult(
+        ok=proc.returncode == 0, command=command, output=proc.stdout + proc.stderr
+    )
+    if result.ok and context is not None:
+        _record_attestation(context)
+    return result
+
+
+_ATTESTATION_SCHEMA_VERSION = 1
+
+
+class _AttestationRecord(TypedDict):
+    """Exact inputs covered by one successful complete-gate verdict."""
+
+    commit: str
+    comparison_remote: str
+    comparison_base: str
+    comparison_commit: str
+    command: list[str]
+    environment_sha256: str
+
+
+class _AttestationStore(TypedDict):
+    """Versioned repository-local collection of reusable gate verdicts."""
+
+    schema_version: int
+    attestations: dict[str, _AttestationRecord]
+
+
+@dataclass(frozen=True)
+class _AttestationContext:
+    path: Path
+    key: str
+    record: _AttestationRecord
+
+
+def _git_value(directory: Path, *args: str) -> str | None:
+    proc = subprocess.run(["git", "-C", str(directory), *args], text=True, capture_output=True)
+    return proc.stdout.strip() if proc.returncode == 0 and proc.stdout.strip() else None
+
+
+def _attestation_context(
+    directory: Path, command: list[str], env: dict[str, str] | None
+) -> _AttestationContext | None:
+    remote = (env or {}).get("ORCHESTRATOR_COMPARISON_REMOTE")
+    base = (env or {}).get("ORCHESTRATOR_COMPARISON_BASE")
+    head = _git_value(directory, "rev-parse", "HEAD")
+    common = _git_value(directory, "rev-parse", "--path-format=absolute", "--git-common-dir")
+    valid_comparison = False
+    if remote and base:
+        checked = subprocess.run(
+            ["git", "check-ref-format", f"refs/remotes/{remote}/{base}"],
+            text=True,
+            capture_output=True,
+        )
+        valid_comparison = checked.returncode == 0
+    comparison = (
+        _git_value(directory, "rev-parse", "--verify", f"refs/remotes/{remote}/{base}^{{commit}}")
+        if valid_comparison
+        else None
+    )
+    status = subprocess.run(
+        ["git", "-C", str(directory), "status", "--porcelain"],
+        text=True,
+        capture_output=True,
+    )
+    clean = status.returncode == 0 and not status.stdout
+    if (
+        not remote
+        or not base
+        or not valid_comparison
+        or head is None
+        or common is None
+        or comparison is None
+        or not clean
+    ):
+        return None
+    environment = json.dumps(sorted((env or {}).items()), separators=(",", ":"))
+    record = _AttestationRecord(
+        commit=head,
+        comparison_remote=remote,
+        comparison_base=base,
+        comparison_commit=comparison,
+        command=list(command),
+        environment_sha256=hashlib.sha256(environment.encode()).hexdigest(),
+    )
+    key = json.dumps(record, sort_keys=True, separators=(",", ":"))
+    return _AttestationContext(
+        Path(common) / "ai-orchestrator" / "gate-attestations.json", key, record
+    )
+
+
+def _has_attestation(context: _AttestationContext) -> bool:
+    try:
+        payload = json.loads(context.path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    store = _parse_attestation_store(payload)
+    return store is not None and store["attestations"].get(context.key) == context.record
+
+
+def _is_attestation_record(value: object) -> TypeGuard[_AttestationRecord]:
+    if not isinstance(value, dict) or set(value) != _AttestationRecord.__required_keys__:
+        return False
+    return (
+        all(
+            isinstance(value[field], str)
+            for field in _AttestationRecord.__required_keys__ - {"command"}
+        )
+        and isinstance(value["command"], list)
+        and all(isinstance(part, str) for part in value["command"])
+    )
+
+
+def _parse_attestation_store(value: object) -> _AttestationStore | None:
+    """Validate persisted JSON before it can authorize gate reuse."""
+    if not isinstance(value, dict) or value.get("schema_version") != _ATTESTATION_SCHEMA_VERSION:
+        return None
+    raw_attestations = value.get("attestations")
+    if not isinstance(raw_attestations, dict) or not all(
+        isinstance(key, str) and _is_attestation_record(record)
+        for key, record in raw_attestations.items()
+    ):
+        return None
+    return _AttestationStore(
+        schema_version=_ATTESTATION_SCHEMA_VERSION,
+        attestations=raw_attestations,
+    )
+
+
+def _record_attestation(context: _AttestationContext) -> None:
+    context.path.parent.mkdir(parents=True, exist_ok=True)
+    with advisory_lock(f"gate-attestations:{context.path}"):
+        attestations: dict[str, _AttestationRecord] = {}
+        try:
+            payload = json.loads(context.path.read_text(encoding="utf-8"))
+            store = _parse_attestation_store(payload)
+            if store is not None:
+                attestations = dict(store["attestations"])
+        except (OSError, json.JSONDecodeError):
+            pass
+        attestations[context.key] = context.record
+        store = _AttestationStore(
+            schema_version=_ATTESTATION_SCHEMA_VERSION,
+            attestations=attestations,
+        )
+        atomic_json(context.path, store)

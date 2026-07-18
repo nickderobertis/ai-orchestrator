@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
 from orchestrator.verify import detect_gate, run_gate
@@ -88,6 +89,43 @@ def test_run_gate_passes_comparison_context(tmp_path) -> None:
         },
     )
     assert result.ok
+
+
+def test_run_gate_reuses_only_exact_commit_and_comparison(tmp_path) -> None:
+    subprocess.run(["git", "init", "-b", "main", str(tmp_path)], check=True)
+    subprocess.run(
+        ["git", "-C", str(tmp_path), "config", "user.email", "test@example.com"], check=True
+    )
+    subprocess.run(["git", "-C", str(tmp_path), "config", "user.name", "Test"], check=True)
+    (tmp_path / "tracked").write_text("one\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(tmp_path), "add", "tracked"], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "commit", "-m", "initial"], check=True)
+    subprocess.run(
+        ["git", "-C", str(tmp_path), "update-ref", "refs/remotes/origin/main", "HEAD"],
+        check=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(tmp_path), "update-ref", "refs/remotes/origin/release", "HEAD"],
+        check=True,
+    )
+    log = tmp_path.with_name(f"{tmp_path.name}-gate.log")
+    command = ["sh", "-c", f"echo run >> {log}"]
+    env = {
+        "ORCHESTRATOR_COMPARISON_REMOTE": "origin",
+        "ORCHESTRATOR_COMPARISON_BASE": "main",
+    }
+
+    assert run_gate(tmp_path, command, env=env).ok
+    reused = run_gate(tmp_path, command, env=env)
+    assert reused.ok and reused.reused
+    assert log.read_text(encoding="utf-8").splitlines() == ["run"]
+
+    changed_base = {**env, "ORCHESTRATOR_COMPARISON_BASE": "release"}
+    assert run_gate(tmp_path, command, env=changed_base).ok
+    (tmp_path / "tracked").write_text("two\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(tmp_path), "commit", "-am", "change"], check=True)
+    assert run_gate(tmp_path, command, env=env).ok
+    assert log.read_text(encoding="utf-8").splitlines() == ["run", "run", "run"]
 
 
 def test_run_gate_missing_command(tmp_path) -> None:
