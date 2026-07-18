@@ -231,7 +231,7 @@ def _gate_seconds(events: list[Event]) -> float:
     return total
 
 
-def _publication_waits(events: list[Event], *, active_at: float | None = None) -> list[float]:
+def _publication_waits(events: list[Event]) -> list[float]:
     """Pair each green gate with publication without subtracting overlapping work."""
     green: dict[str, float] = {}
     waits: list[float] = []
@@ -241,9 +241,21 @@ def _publication_waits(events: list[Event], *, active_at: float | None = None) -
             green[node] = event.at
         elif event.kind == "publication-finished" and node in green:
             waits.append(max(0.0, event.at - green.pop(node)))
-    if active_at is not None:
-        waits.extend(max(0.0, active_at - started) for started in green.values())
     return waits
+
+
+def _publication_wait_seconds(events: list[Event], *, active_at: float | None) -> float:
+    green: dict[str, float] = {}
+    completed = 0.0
+    for event in events:
+        node = str(event.node or "")
+        if event.kind == "verification-finished" and event.detail.get("ok") is True:
+            green[node] = event.at
+        elif event.kind == "publication-finished" and node in green:
+            completed += max(0.0, event.at - green.pop(node))
+    if active_at is None:
+        return completed
+    return completed + sum(max(0.0, active_at - started) for started in green.values())
 
 
 def _providers(run_id: RunId, oneharness_bin: str) -> tuple[list[Provider], float]:
@@ -343,10 +355,10 @@ def collect_run(
     current = time.time() if now is None else now
     wall_end = last.at if result_state_is_terminal(state) and last else current
     wall = max(0.0, wall_end - events[0].at) if events else 0.0
-    publication_waits = _publication_waits(
+    publication_waits = _publication_waits(events)
+    wait = _publication_wait_seconds(
         events, active_at=None if result_state_is_terminal(state) else current
     )
-    wait = sum(publication_waits)
     failure = next((found for item in items.values() if (found := _failure(item))), None)
     snapshot: DetailSnapshot = load_snapshot(run_dir)
     return RunTelemetry(
