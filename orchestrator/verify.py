@@ -10,6 +10,7 @@ with the captured output kept for the report.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -153,9 +154,17 @@ def _attestation_context(
     base = (env or {}).get("ORCHESTRATOR_COMPARISON_BASE")
     head = _git_value(directory, "rev-parse", "HEAD")
     common = _git_value(directory, "rev-parse", "--path-format=absolute", "--git-common-dir")
+    valid_comparison = False
+    if remote and base:
+        checked = subprocess.run(
+            ["git", "check-ref-format", f"refs/remotes/{remote}/{base}"],
+            text=True,
+            capture_output=True,
+        )
+        valid_comparison = checked.returncode == 0
     comparison = (
         _git_value(directory, "rev-parse", "--verify", f"refs/remotes/{remote}/{base}^{{commit}}")
-        if remote and base
+        if valid_comparison
         else None
     )
     status = subprocess.run(
@@ -164,14 +173,24 @@ def _attestation_context(
         capture_output=True,
     )
     clean = status.returncode == 0 and not status.stdout
-    if not remote or not base or head is None or common is None or comparison is None or not clean:
+    if (
+        not remote
+        or not base
+        or not valid_comparison
+        or head is None
+        or common is None
+        or comparison is None
+        or not clean
+    ):
         return None
+    environment = json.dumps(sorted((env or {}).items()), separators=(",", ":"))
     record: dict[str, object] = {
         "commit": head,
         "comparison_remote": remote,
         "comparison_base": base,
         "comparison_commit": comparison,
         "command": list(command),
+        "environment_sha256": hashlib.sha256(environment.encode()).hexdigest(),
     }
     key = json.dumps(record, sort_keys=True, separators=(",", ":"))
     return _AttestationContext(

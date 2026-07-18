@@ -28,7 +28,7 @@ import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Literal, Protocol, cast
+from typing import Any, Protocol, cast
 
 from . import BASE_CONFIG, PERSONA_DIR, gitops
 from .config import ConfigError, load_yaml
@@ -57,6 +57,8 @@ from .runs import (
     RECORDED_RESULT_SCHEMA_VERSION,
     RepoPlanPayload,
     RepoPlanResultItem,
+    ResumeMode,
+    RetryDisposition,
     StepId,
     prepare_round,
     resolve_run_dir,
@@ -147,7 +149,7 @@ class Resume:
     checkpoint: str
     completed_steps: tuple[str, ...] = ()
     pr: str | None = None
-    mode: Literal["pause", "retry"] = "pause"
+    mode: ResumeMode = "pause"
     source_round: int | None = None
 
 
@@ -157,7 +159,7 @@ class RetryLineage:
 
     supersedes_branch: str
     supersedes_checkpoint: str
-    disposition: Literal["reused", "recovered", "abandoned"]
+    disposition: RetryDisposition
     reason: str | None = None
     supersedes_round: int | None = None
 
@@ -1694,7 +1696,7 @@ def _parse_resume(nid: str, raw: object, steps: list[Step] | None) -> Resume | N
         checkpoint=checkpoint,
         completed_steps=tuple(completed),
         pr=pr,
-        mode=cast(Literal["pause", "retry"], mode),
+        mode=cast(ResumeMode, mode),
         source_round=source_round,
     )
 

@@ -42,6 +42,8 @@ def test_gate_attestation_reuses_only_exact_commit_and_comparison(tmp_path) -> N
     assert gate_log.read_text(encoding="utf-8").splitlines() == ["run"]
     changed_command = ["sh", "-c", f"echo changed-command >> {gate_log}"]
     assert run_gate(tmp_path, changed_command, env=comparison).ok
+    changed_environment = {**comparison, "GATE_FEATURE": "enabled"}
+    assert run_gate(tmp_path, command, env=changed_environment).ok
 
     changed_base = {**comparison, "ORCHESTRATOR_COMPARISON_BASE": "release"}
     assert run_gate(tmp_path, command, env=changed_base).ok
@@ -70,6 +72,7 @@ def test_gate_attestation_reuses_only_exact_commit_and_comparison(tmp_path) -> N
     assert gate_log.read_text(encoding="utf-8").splitlines() == [
         "run",
         "changed-command",
+        "run",
         "run",
         "run",
         "run",

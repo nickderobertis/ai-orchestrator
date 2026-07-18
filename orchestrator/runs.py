@@ -19,6 +19,8 @@ from .workspace import IdentityKey, RepositoryType, Workflow
 _RUN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 _ROUND = re.compile(r"^round-(\d+)$")
 RECORDED_RESULT_SCHEMA_VERSION = 2
+ResumeMode = Literal["pause", "retry"]
+RetryDisposition = Literal["reused", "recovered", "abandoned"]
 
 # The identifiers a tracked round is addressed by. They are all non-empty strings
 # from different namespaces, and they travel together through the ledger, the
@@ -58,7 +60,7 @@ class ResumePayload(TypedDict):
     checkpoint: str
     completed_steps: list[str]
     pr: str | None
-    mode: NotRequired[str]
+    mode: NotRequired[ResumeMode]
     source_round: NotRequired[int]
 
 
@@ -85,7 +87,7 @@ class RetryLineagePayload(TypedDict):
 
     supersedes_branch: str
     supersedes_checkpoint: str
-    disposition: Literal["reused", "recovered", "abandoned"]
+    disposition: RetryDisposition
     reason: NotRequired[str]
     supersedes_round: NotRequired[int]
 
