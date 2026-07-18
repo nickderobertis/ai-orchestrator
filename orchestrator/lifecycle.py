@@ -95,6 +95,11 @@ _CONVENTIONAL_SUBJECT = re.compile(
 _BREAKING_FOOTER = re.compile(r"(?m)^BREAKING(?: |-)CHANGE:\s*\S")
 _TYPE_PRIORITY = {"feat": 0, "fix": 1, "perf": 2, "refactor": 3}
 
+# This is the executable PR-body contract. A unit drift gate reconciles it with
+# the checked-in template, pr-author persona, and lifecycle documentation.
+PR_REQUIRED_SECTIONS = ("What", "Why")
+PR_OPTIONAL_SECTIONS = ("Additional info",)
+
 # Outcomes that count as the subtask succeeding.
 _SUCCESS_OUTCOMES = frozenset({"merged", "pr-open"})
 
@@ -461,6 +466,8 @@ def _drafting_task(output_path: Path, remote_base: str, steps: list[Step]) -> st
         f"Persona: {_step_label(step)}\nOriginal task context:\n{step.task.strip()}"
         for step in steps
     )
+    what, why = PR_REQUIRED_SECTIONS
+    additional = PR_OPTIONAL_SECTIONS[0]
     return f"""Draft the pull request body for the completed change in this worktree.
 
 Read the actual change with `git diff {remote_base}...HEAD` and use this context only to
@@ -471,8 +478,8 @@ understand its driver:
 Write the final body, and nothing else, to this absolute path:
 {output_path}
 
-Follow `.github/pull_request_template.md`: include `## What` describing observable behavior
-from the diff and `## Why` describing its driver. Add `## Additional info` only when useful.
+Follow `.github/pull_request_template.md`: include `## {what}` describing observable behavior
+from the diff and `## {why}` describing its driver. Add `## {additional}` only when useful.
 Stay terse. Never restate the handoff or paste the original task prose verbatim.
 Do not modify, stage, or commit any file in the worktree.
 """
@@ -485,9 +492,11 @@ def _valid_drafted_body(body: str) -> bool:
         return False
     names = sections[1::2]
     content = sections[2::2]
-    return names in (["What", "Why"], ["What", "Why", "Additional info"]) and all(
-        section.strip() for section in content
+    allowed_sequences = (
+        PR_REQUIRED_SECTIONS,
+        (*PR_REQUIRED_SECTIONS, *PR_OPTIONAL_SECTIONS),
     )
+    return tuple(names) in allowed_sequences and all(section.strip() for section in content)
 
 
 def _draft_pr_body(

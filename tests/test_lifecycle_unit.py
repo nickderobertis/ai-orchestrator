@@ -12,6 +12,8 @@ import orchestrator.lifecycle as lc
 from orchestrator.config import ConfigError
 from orchestrator.github import CliGitHubBackend, PRStatus, PullRequest
 from orchestrator.lifecycle import (
+    PR_OPTIONAL_SECTIONS,
+    PR_REQUIRED_SECTIONS,
     LifecycleResult,
     RepoPlan,
     RepoPlanNode,
@@ -117,7 +119,7 @@ def test_pr_author_contract_tracks_checked_in_template_persona_and_docs() -> Non
     persona = (root / "personas/pr-author.yaml").read_text(encoding="utf-8")
     docs = (root / "docs/repo-lifecycle.md").read_text(encoding="utf-8")
     template_sections = re.findall(r"(?m)^## ([^\n]+)$", template)
-    assert template_sections == ["What", "Why", "Additional info"]
+    assert template_sections == [*PR_REQUIRED_SECTIONS, *PR_OPTIONAL_SECTIONS]
     for section in template_sections:
         assert section in persona
         assert section in docs
