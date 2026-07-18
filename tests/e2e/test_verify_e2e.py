@@ -36,11 +36,18 @@ def test_gate_attestation_reuses_only_exact_commit_and_comparison(tmp_path) -> N
         "ORCHESTRATOR_COMPARISON_REMOTE": "origin",
         "ORCHESTRATOR_COMPARISON_BASE": "main",
     }
+    attestation_path = tmp_path / ".git" / "ai-orchestrator" / "gate-attestations.json"
+    attestation_path.parent.mkdir(parents=True)
+    attestation_path.write_text("{malformed", encoding="utf-8")
 
     assert run_gate(tmp_path, command, env=comparison).ok
     reused = run_gate(tmp_path, command, env=comparison)
     assert reused.ok and reused.reused
     assert gate_log.read_text(encoding="utf-8").splitlines() == ["run"]
+    attestation_path.write_text('{"schema_version": 999, "attestations": {}}\n', encoding="utf-8")
+    incompatible = run_gate(tmp_path, command, env=comparison)
+    assert incompatible.ok and not incompatible.reused
+    assert run_gate(tmp_path, command, env=comparison).reused
     changed_command = ["sh", "-c", f"echo changed-command >> {gate_log}"]
     assert run_gate(tmp_path, changed_command, env=comparison).ok
     changed_environment = {**comparison, "GATE_FEATURE": "enabled"}
@@ -71,6 +78,7 @@ def test_gate_attestation_reuses_only_exact_commit_and_comparison(tmp_path) -> N
     subprocess.run(["git", "-C", str(tmp_path), "commit", "-am", "change"], check=True)
     assert run_gate(tmp_path, command, env=comparison).ok
     assert gate_log.read_text(encoding="utf-8").splitlines() == [
+        "run",
         "run",
         "changed-command",
         "run",

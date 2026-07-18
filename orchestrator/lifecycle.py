@@ -55,6 +55,7 @@ from .provenance import (
 from .registry import RegistryError, validate_identity_key
 from .runs import (
     RECORDED_RESULT_SCHEMA_VERSION,
+    RESUME_MODES,
     RepoPlanPayload,
     RepoPlanResultItem,
     ResumeMode,
@@ -1684,7 +1685,7 @@ def _parse_resume(nid: str, raw: object, steps: list[Step] | None) -> Resume | N
     if pr is not None and (not isinstance(pr, str) or _PR_URL.fullmatch(pr) is None):
         raise PlanError(f"task {nid!r} resume 'pr' must be a GitHub pull-request URL")
     mode = raw.get("mode", "pause")
-    if mode not in {"pause", "retry"}:
+    if mode not in RESUME_MODES:
         raise PlanError(f"task {nid!r} resume 'mode' must be 'pause' or 'retry'")
     source_round = raw.get("source_round")
     if source_round is not None and (

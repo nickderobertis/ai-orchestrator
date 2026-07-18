@@ -230,6 +230,7 @@ def test_legacy_direct_plan_and_recorded_ledger_still_run(
     )
     assert direct.returncode == 0, direct.stderr
     direct_payload = json.loads(direct.stdout)
+    assert direct_payload["schema_version"] == 2 and "round" not in direct_payload
     assert direct_payload["state"] == "complete"
     assert direct_payload["results"]["legacy-agent"]["status"] == "done"
 

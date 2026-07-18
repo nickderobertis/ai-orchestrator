@@ -269,6 +269,20 @@ def test_repo_plan_ledger_and_guided_next_round(
     assert follow_up in capsys.readouterr().out
     assert "nothing to iterate" in captured.err
 
+    unrecorded_plan = {
+        **first_plan,
+        "tasks": [
+            {
+                **first_plan["tasks"][0],
+                "task": "complete-now write-unique-change: unrecorded schema output",
+            }
+        ],
+    }
+    plan_path.write_text(json.dumps(unrecorded_plan), encoding="utf-8")
+    assert main_plan([str(plan_path), "--no-record", *common]) == 0
+    unrecorded = json.loads(capsys.readouterr().out)
+    assert unrecorded["schema_version"] == 2 and "round" not in unrecorded
+
 
 # --- local repo: direct merge into main after checks -----------------------
 

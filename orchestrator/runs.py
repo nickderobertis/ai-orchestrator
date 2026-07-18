@@ -9,7 +9,7 @@ from collections import Counter
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Literal, NamedTuple, NewType, NotRequired, TypedDict, cast
+from typing import Any, Literal, NamedTuple, NewType, NotRequired, TypedDict, cast, get_args
 
 from .config import ConfigError, load_yaml
 from .coordination import advisory_lock, atomic_json
@@ -20,6 +20,7 @@ _RUN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 _ROUND = re.compile(r"^round-(\d+)$")
 RECORDED_RESULT_SCHEMA_VERSION = 2
 ResumeMode = Literal["pause", "retry"]
+RESUME_MODES = frozenset(get_args(ResumeMode))
 RetryDisposition = Literal["reused", "recovered", "abandoned"]
 
 # The identifiers a tracked round is addressed by. They are all non-empty strings
