@@ -865,24 +865,35 @@ def pr_events(
                 previous_by_name.get(check.name) is None or not previous_by_name[check.name].settled
             )
         ]
-        blocking = [
-            f"{check.name}: {check.state.lower()}"
-            for check in current
-            if check.required and not (check.settled and not check.red)
-        ]
-        snapshot.check_rollup = CheckRollup(
-            last_completed_check=(
-                newly_completed[-1]
-                if newly_completed
-                else snapshot.check_rollup.last_completed_check
-            ),
-            current_blocker=blocking[0] if blocking else "",
+        last_completed = (
+            newly_completed[-1] if newly_completed else snapshot.check_rollup.last_completed_check
         )
         changed = previous is None or signature != previous_signature or current != previous_checks
         revision = 1 if previous is None else previous.revision + int(changed)
         snapshot.prs[key] = PrDetail.from_status(
             status, url=ref.url, identity=ref.identity, revision=revision
         ).to_record()
+        persisted_prs = [
+            detail
+            for value in snapshot.prs.values()
+            if (detail := PrDetail.from_value(value)) is not None
+        ]
+        blockers = [
+            (detail.number, check)
+            for detail in persisted_prs
+            for check in detail.checks
+            if check.required and not (check.settled and not check.red)
+        ]
+        multiple_prs = len(persisted_prs) > 1
+        snapshot.check_rollup = CheckRollup(
+            last_completed_check=last_completed,
+            current_blocker=(
+                (f"PR #{blockers[0][0]} " if multiple_prs else "")
+                + f"{blockers[0][1].name}: {blockers[0][1].state.lower()}"
+                if blockers
+                else ""
+            ),
+        )
         # A draft PR is OPEN to `gh`, so drafts and ready PRs would render identically
         # and a draft going ready would read as no change at all.
         state = "draft" if status.draft and not status.merged else status.state.lower()

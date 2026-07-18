@@ -12,7 +12,7 @@ from typing import Literal, TypedDict
 from .detail_snapshot import CheckRollup
 from .history import HistoryError, session_records, worker_sessions
 from .journal import JOURNAL_NAME, Event, read_events
-from .monitor import DetailSnapshot, load_snapshot
+from .monitor import DetailSnapshot, load_snapshot, run_state
 from .runs import (
     RETRY_DISPOSITIONS,
     GraphResultItem,
@@ -191,7 +191,7 @@ def _phase(event: Event | None, state: str) -> str:
 def _failure(item: GraphResultItem) -> Failure | None:
     outcome = str(item.get("outcome", ""))
     detail = str(item.get("detail") or item.get("error") or "")
-    if not detail and item.get("status") not in {"failed", "not-completed"}:
+    if item.get("status") not in {"failed", "not-completed"}:
         return None
     if "timeout" in outcome or "timed out" in detail.lower():
         kind: FailureClass = "timeout"
@@ -205,7 +205,7 @@ def _failure(item: GraphResultItem) -> Failure | None:
         kind = "provider"
     elif "config" in detail.lower():
         kind = "configuration"
-    elif item.get("status") in {"failed", "not-completed"}:
+    elif not outcome:
         kind = "agent"
     else:
         kind = "unknown"
@@ -316,11 +316,18 @@ def collect_run(
     run_dir: Path, *, now: float | None = None, oneharness_bin: str = "oneharness"
 ) -> RunTelemetry | None:
     latest = latest_round(run_dir)
-    if latest is None or not (latest[1] / "result.json").exists():
+    if latest is None:
         return None
-    payload = as_result_payload(load_mapping(latest[1] / "result.json"))
-    state = result_state(payload)
     events = read_events(run_dir / JOURNAL_NAME)
+    result_path = latest[1] / "result.json"
+    if result_path.exists():
+        payload = as_result_payload(load_mapping(result_path))
+        state = result_state(payload)
+        items = payload["results"]
+    else:
+        state = run_state(run_dir, RunId(run_dir.name)).state
+        active_nodes = dict.fromkeys(str(event.node) for event in events if event.node is not None)
+        items = {node: GraphResultItem(status="running", kind="agent") for node in active_nodes}
     last = events[-1] if events else None
     providers, agent_seconds = _providers(RunId(run_dir.name), oneharness_bin)
     gate_seconds = _gate_seconds(events)
@@ -332,9 +339,7 @@ def collect_run(
     )
     publication_waits = _publication_waits(events)
     wait = sum(publication_waits)
-    failure = next(
-        (found for item in payload["results"].values() if (found := _failure(item))), None
-    )
+    failure = next((found for item in items.values() if (found := _failure(item))), None)
     snapshot: DetailSnapshot = load_snapshot(run_dir)
     return RunTelemetry(
         run_id=RunId(run_dir.name),
@@ -348,7 +353,7 @@ def collect_run(
             publication_wait_seconds=wait,
             wall_seconds=wall,
         ),
-        nodes=[_node_record(node, item, events) for node, item in payload["results"].items()],
+        nodes=[_node_record(node, item, events) for node, item in items.items()],
         providers=providers,
         failure=failure,
         check_rollup=snapshot.check_rollup,

@@ -336,6 +336,48 @@ def test_monitor_poll_deduplicates_checks_but_emits_an_optional_only_change(tmp_
     assert monitor.poll() == []
 
 
+def test_monitor_command_reports_one_rollup_across_multiple_prs(tmp_path: Path) -> None:
+    run_dir = tmp_path / "runs" / RUN
+    journal = open_journal(run_dir, RUN, 1)
+    for number in (1, 2):
+        journal.append(
+            "pr-created",
+            node=NodeId(f"api-{number}"),
+            detail={
+                "repo": "acme/app",
+                "pr": f"https://github.com/acme/app/pull/{number}",
+                "base": "main",
+            },
+        )
+
+    class PerPrChecks:
+        def status(self, pr: PullRequest) -> PRStatus:
+            check = Check("ci", "PENDING" if pr.number == 1 else "SUCCESS", True)
+            return PRStatus(pr.number, "OPEN", False, "CLEAN", (check,))
+
+    monitor = Monitor(
+        run_id=RUN,
+        run_dir=run_dir,
+        oneharness_bin=str(tmp_path / "absent"),
+        github=PerPrChecks(),
+        clock=lambda: AT,
+    )
+    monitor.poll()
+    _settle(
+        run_dir,
+        {"api-1": {"status": "waiting"}, "api-2": {"status": "done"}},
+        ok=False,
+        state="waiting",
+    )
+    reported = _monitor_cli(
+        "--runs-dir", str(tmp_path / "runs"), "--once", "--format", "jsonl", RUN
+    )
+    assert reported.returncode == 0, reported.stderr
+    rollup = json.loads(reported.stdout.splitlines()[-1])
+    assert rollup["last_completed_check"] == "ci"
+    assert rollup["current_blocker"] == "PR #1 ci: pending"
+
+
 def test_a_replay_reports_the_pr_state_gh_can_no_longer_be_asked_for(
     tmp_path: Path, bare_origin: Callable[..., Path]
 ) -> None:
@@ -760,7 +802,7 @@ def test_telemetry_command_classifies_failures_and_aggregates_lineage_metrics(
             runs_dir / expected,
             {
                 "api": {
-                    "status": "failed" if expected != "unknown" else "done",
+                    "status": "failed",
                     "outcome": outcome,
                     "detail": detail,
                     "retry_lineage": lineage,
@@ -775,6 +817,23 @@ def test_telemetry_command_classifies_failures_and_aggregates_lineage_metrics(
         ok=True,
         state="complete",
     )
+    active_dir = runs_dir / "in-progress"
+    prepare_round(active_dir, {"tasks": [{"id": "live", "task": "still running"}]})
+    open_journal(active_dir, RunId("in-progress"), 1).append("node-started", node=NodeId("live"))
+
+    active_index = subprocess.run(
+        ["just", "telemetry", "--runs-dir", str(runs_dir)],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        timeout=180,
+    )
+    assert active_index.returncode == 0, active_index.stderr
+    in_progress = next(
+        run for run in json.loads(active_index.stdout)["runs"] if run["run_id"] == "in-progress"
+    )
+    assert in_progress["state"] == "running"
+    assert in_progress["nodes"] == [{"node": "live", "status": "running"}]
 
     indexed = subprocess.run(
         ["just", "telemetry", "--runs-dir", str(runs_dir), "--all"],
