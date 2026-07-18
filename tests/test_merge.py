@@ -156,7 +156,14 @@ class DelayedDirectBackend:
         self.polls += 1
         merged = self.polls >= 4
         checks = (Check("ci", "SUCCESS", True),)
-        return PRStatus(1, "MERGED" if merged else "OPEN", merged, "CLEAN", checks)
+        return PRStatus(
+            1,
+            "MERGED" if merged else "OPEN",
+            merged,
+            "CLEAN",
+            checks,
+            merge_in_progress=not merged,
+        )
 
 
 def test_direct_merge_observed_after_a_later_poll() -> None:
@@ -169,12 +176,28 @@ def test_direct_merge_observed_after_a_later_poll() -> None:
     assert slept  # it looped (slept) before observing the merge
 
 
-def test_timeout_when_never_merges() -> None:
-    # Checks are green and auto is enabled, but the backend never flips to merged;
-    # an advancing clock forces the timeout branch.
+def test_settled_green_checks_fail_when_auto_merge_never_merges() -> None:
     checks = (Check("ci", "SUCCESS", True),)
     backend = PolicyBackend(checks=checks, merge_on="never")
-    ticks = iter([0.0, 100.0, 200.0])
+    out = GitHubMergeStrategy(backend).publish_and_merge(
+        _ctx(policy="auto", timeout=10_000.0, sleep=lambda _: (_ for _ in ()).throw(AssertionError))
+    )
+    assert out.outcome == "error"
+    assert "ci=SUCCESS" in out.detail
+
+
+def test_optional_pending_check_does_not_prevent_settlement() -> None:
+    checks = (Check("ci", "SUCCESS", True), Check("preview", "PENDING", False))
+    backend = PolicyBackend(checks=checks, merge_on="never")
+    out = GitHubMergeStrategy(backend).publish_and_merge(_ctx(policy="auto"))
+    assert out.outcome == "error"
+    assert "ci=SUCCESS" in out.detail
+    assert "preview" not in out.detail
+
+
+def test_timeout_remains_a_backstop_for_a_required_check_that_never_settles() -> None:
+    backend = PolicyBackend(checks=(Check("ci", "PENDING", True),), merge_on="never")
+    ticks = iter([0.0, 100.0])
     out = GitHubMergeStrategy(backend).publish_and_merge(
         _ctx(policy="auto", timeout=10.0, clock=lambda: next(ticks))
     )

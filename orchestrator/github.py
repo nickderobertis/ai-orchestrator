@@ -37,6 +37,11 @@ __all__ = [
 # StatusContext (state) shapes into one vocabulary the merge logic reasons over.
 _GREEN = {"SUCCESS", "SKIPPED", "NEUTRAL", "EXPECTED"}
 _RED = {"FAILURE", "ERROR", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED", "STARTUP_FAILURE"}
+_MERGE_QUEUE_QUERY = """query($owner:String!,$name:String!,$number:Int!){
+  repository(owner:$owner,name:$name){
+    pullRequest(number:$number){mergeQueueEntry{id}}
+  }
+}"""
 
 
 class GitHubError(Exception):
@@ -70,6 +75,11 @@ class Check:
     def red(self) -> bool:
         return self.state in _RED
 
+    @property
+    def settled(self) -> bool:
+        """Whether this normalized check has a recognized terminal conclusion."""
+        return self.green or self.red
+
 
 @dataclass(frozen=True)
 class PRStatus:
@@ -79,6 +89,8 @@ class PRStatus:
     merge_state_status: str  # CLEAN | BLOCKED | BEHIND | UNSTABLE | DIRTY | ""
     checks: tuple[Check, ...]
     draft: bool = False
+    # True only when the backend has positive evidence of active merge processing.
+    merge_in_progress: bool = False
 
     @property
     def blocking(self) -> tuple[Check, ...]:
@@ -247,6 +259,42 @@ class CliGitHubBackend:
     def merge(self, pr: PullRequest, *, method: str) -> None:
         self._run(["pr", "merge", str(pr.number), "--repo", pr.repo, f"--{method}"])
 
+    def _merge_in_progress(self, pr: PullRequest) -> bool:
+        parts = pr.repo.rsplit("/", 2)
+        if len(parts) < 2 or not parts[-2] or not parts[-1]:
+            raise GitHubError(f"invalid GitHub repository slug: {pr.repo!r}")
+        owner, name = parts[-2:]
+        host_args = ["--hostname", parts[0]] if len(parts) == 3 else []
+        raw = self._run(
+            [
+                "api",
+                "graphql",
+                *host_args,
+                "-f",
+                f"query={_MERGE_QUEUE_QUERY}",
+                "-f",
+                f"owner={owner}",
+                "-f",
+                f"name={name}",
+                "-F",
+                f"number={pr.number}",
+            ]
+        )
+        payload = json.loads(raw)
+        if not isinstance(payload, dict):
+            raise GitHubError("gh api graphql returned invalid JSON payload")
+        data = payload.get("data")
+        repository = data.get("repository") if isinstance(data, dict) else None
+        pull_request = repository.get("pullRequest") if isinstance(repository, dict) else None
+        if not isinstance(pull_request, dict) or "mergeQueueEntry" not in pull_request:
+            raise GitHubError("gh api graphql returned invalid mergeQueueEntry payload")
+        entry = pull_request["mergeQueueEntry"]
+        if entry is not None and not isinstance(entry, dict):
+            raise GitHubError("gh api graphql returned non-object mergeQueueEntry")
+        if isinstance(entry, dict) and not isinstance(entry.get("id"), str):
+            raise GitHubError("gh api graphql returned invalid mergeQueueEntry id")
+        return isinstance(entry, dict)
+
     def status(self, pr: PullRequest) -> PRStatus:
         raw = self._run(
             [
@@ -265,11 +313,14 @@ class CliGitHubBackend:
         rollup = data.get("statusCheckRollup") or []
         checks = tuple(_normalize_check(c) for c in rollup if isinstance(c, dict))
         state = str(data.get("state") or "OPEN")
+        draft = _optional_bool(data, "isDraft")
+        merge_in_progress = self._merge_in_progress(pr) if state == "OPEN" else False
         return PRStatus(
             number=int(data.get("number", pr.number)),
             state=state,
             merged=state == "MERGED",
             merge_state_status=str(data.get("mergeStateStatus") or ""),
             checks=checks,
-            draft=_optional_bool(data, "isDraft"),
+            draft=draft,
+            merge_in_progress=merge_in_progress,
         )

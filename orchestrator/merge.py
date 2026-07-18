@@ -117,6 +117,7 @@ def _drive_github_merge(
             detail = "native auto-merge unavailable; merging directly on green required checks"
 
     start = ctx.clock()
+    direct_merge_requested = False
     while True:
         status = github.status(pr)
         _record(
@@ -143,15 +144,40 @@ def _drive_github_merge(
         if status.blocking_failed:
             failed = ", ".join(c.name for c in status.blocking if c.red)
             return "checks-failed", f"required checks failed: {failed}"
-        if policy == "direct" and status.blocking_green:
+        blocking_settled = all(check.settled for check in status.blocking)
+        if policy == "direct" and status.blocking_green and not direct_merge_requested:
             github.merge(pr, method=ctx.method)
-            if github.status(pr).merged:
+            direct_merge_requested = True
+            post_merge = github.status(pr)
+            if post_merge.merged:
                 _record(
                     ctx,
                     "pr-merged",
                     {"repo": ctx.repo_slug, "pr": pr.url, "number": pr.number},
                 )
                 return "merged", f"{detail}; merged"
+            if all(check.settled for check in post_merge.blocking) and not (
+                post_merge.merge_in_progress
+            ):
+                states = ", ".join(f"{check.name}={check.state}" for check in post_merge.blocking)
+                return (
+                    "error",
+                    f"{detail}; required checks settled but PR remains unmerged: [{states}]",
+                )
+            if ctx.clock() - start >= ctx.timeout:
+                return "timeout", f"{detail}; timed out after {ctx.timeout}s awaiting checks"
+            ctx.sleep(ctx.poll_interval)
+            continue
+        if (
+            blocking_settled
+            and not status.merge_in_progress
+            and (policy == "auto" or direct_merge_requested)
+        ):
+            states = ", ".join(f"{check.name}={check.state}" for check in status.blocking)
+            return (
+                "error",
+                f"{detail}; required checks settled but PR remains unmerged: [{states}]",
+            )
         if ctx.clock() - start >= ctx.timeout:
             return "timeout", f"{detail}; timed out after {ctx.timeout}s awaiting checks"
         ctx.sleep(ctx.poll_interval)
