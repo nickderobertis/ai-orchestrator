@@ -387,7 +387,7 @@ def _metrics(runs: list[RunTelemetry]) -> MetricsRecord:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Emit the unified run telemetry index as JSON.")
     parser.add_argument("--runs-dir", type=Path, default=Path("runs"))
-    parser.add_argument("--all", action="store_true", help="include completed runs")
+    parser.add_argument("--all", action="store_true", help="include settled runs")
     parser.add_argument("--oneharness-bin", default="oneharness")
     args = parser.parse_args(argv)
     records = (
@@ -396,7 +396,7 @@ def main(argv: list[str] | None = None) -> int:
             for entry in sorted(args.runs_dir.iterdir())
             if args.runs_dir.is_dir() and entry.is_dir()
             if (telemetry := collect_run(entry, oneharness_bin=args.oneharness_bin)) is not None
-            and (args.all or telemetry.state != "complete")
+            and (args.all or not result_state_is_terminal(telemetry.state))
         ]
         if args.runs_dir.is_dir()
         else []

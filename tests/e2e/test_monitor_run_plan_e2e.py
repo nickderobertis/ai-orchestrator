@@ -467,6 +467,9 @@ def test_real_failed_run_telemetry_stops_wall_time_at_settlement(
     )
     assert second_run["state"] == "failed"
     assert second_run["timing"]["wall_seconds"] == first_run["timing"]["wall_seconds"]
+    active_only = _just("telemetry", "--runs-dir", str(runs_dir))
+    assert active_only.returncode == 0, active_only.stderr
+    assert json.loads(active_only.stdout)["runs"] == []
 
 
 def test_monitor_backoff_resets_after_real_human_attestation(tmp_path: Path) -> None:
@@ -675,7 +678,7 @@ def test_real_lifecycle_commit_and_pr_survive_live_state(
             },
         },
     )
-    failed_telemetry = _just("telemetry", "--runs-dir", str(runs_dir))
+    failed_telemetry = _just("telemetry", "--runs-dir", str(runs_dir), "--all")
     assert failed_telemetry.returncode == 0, failed_telemetry.stderr
     failed_record = json.loads(failed_telemetry.stdout)["runs"][0]
     assert failed_record["failure"]["class"] == "agent"

@@ -143,7 +143,7 @@ def test_optional_record_fields_are_omitted() -> None:
     assert Provider("oneharness").record() == {"provider": "oneharness"}
 
 
-def test_index_cli_defaults_to_active_and_all_includes_complete(
+def test_index_cli_defaults_to_active_and_all_includes_settled(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     _recorded_run(tmp_path)
@@ -152,8 +152,8 @@ def test_index_cli_defaults_to_active_and_all_includes_complete(
     assert main(["--runs-dir", str(tmp_path / "runs"), "--oneharness-bin", "absent"]) == 0
     active = json.loads(capsys.readouterr().out)
     assert active["schema_version"] == 1
-    assert [run["run_id"] for run in active["runs"]] == ["observed"]
-    assert active["metrics"]["recovered_branches"] == 1
+    assert active["runs"] == []
+    assert active["metrics"]["recovered_branches"] == 0
 
     assert main(["--runs-dir", str(tmp_path / "runs"), "--all", "--oneharness-bin", "absent"]) == 0
     all_runs = json.loads(capsys.readouterr().out)
