@@ -34,7 +34,7 @@ class PlanError(Exception):
 #: for backward-compatible plans; ``human`` names action the harness must never
 #: infer or execute.
 NODE_KINDS = ("agent", "human")
-PLAN_SCHEMA_VERSION = 2
+PLAN_SCHEMA_VERSION = 3
 
 
 @dataclass

@@ -173,16 +173,21 @@ def parse_graph(data: dict[str, Any]) -> Graph:
     if (
         not isinstance(schema_version, int)
         or isinstance(schema_version, bool)
-        or schema_version not in (1, PLAN_SCHEMA_VERSION)
+        or schema_version not in range(1, PLAN_SCHEMA_VERSION + 1)
     ):
-        raise PlanError(f"'schema_version' must be 1 or the current version {PLAN_SCHEMA_VERSION}")
+        raise PlanError(
+            f"'schema_version' must be between 1 and the current version {PLAN_SCHEMA_VERSION}"
+        )
     raw_tasks = data.get("tasks")
     if not isinstance(raw_tasks, list) or not raw_tasks:
         raise PlanError("plan must have a non-empty 'tasks' list")
-    if schema_version < PLAN_SCHEMA_VERSION and _contains_expects_no_diff(raw_tasks):
+    if schema_version < 2 and _contains_field(raw_tasks, "expects_no_diff", include_steps=True):
         raise PlanError(
-            f"'expects_no_diff' requires schema_version {PLAN_SCHEMA_VERSION}; "
-            "legacy plans must omit the field"
+            "'expects_no_diff' requires schema_version 2; legacy plans must omit the field"
+        )
+    if schema_version < 3 and _contains_field(raw_tasks, "verify_via_ci"):
+        raise PlanError(
+            "'verify_via_ci' requires schema_version 3; legacy plans must omit the field"
         )
     concurrency = data.get("concurrency", 4)
     if not isinstance(concurrency, int) or isinstance(concurrency, bool) or concurrency < 1:
@@ -214,16 +219,18 @@ def parse_graph(data: dict[str, Any]) -> Graph:
     return Graph(tasks=list(nodes.values()), concurrency=concurrency)
 
 
-def _contains_expects_no_diff(tasks: list[Any]) -> bool:
-    """Return whether a top-level node or lifecycle step uses the v2 field."""
+def _contains_field(tasks: list[Any], field: str, *, include_steps: bool = False) -> bool:
+    """Return whether a versioned field occurs at its supported node levels."""
     for task in tasks:
         if not isinstance(task, dict):
             continue
-        if "expects_no_diff" in task:
+        if field in task:
             return True
         steps = task.get("steps", [])
-        if isinstance(steps, list) and any(
-            isinstance(step, dict) and "expects_no_diff" in step for step in steps
+        if (
+            include_steps
+            and isinstance(steps, list)
+            and any(isinstance(step, dict) and field in step for step in steps)
         ):
             return True
     return False

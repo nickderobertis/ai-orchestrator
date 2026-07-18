@@ -110,6 +110,8 @@ class PRStatus:
 class GitHubBackend(Protocol):
     """The GitHub operations the lifecycle needs; faked at this seam in tests."""
 
+    def supports_ci(self, repo: str) -> bool: ...
+
     def default_branch(self, repo: str) -> str: ...
 
     def create_pr(
@@ -170,6 +172,10 @@ class CliGitHubBackend:
 
     def __init__(self, *, run: Callable[[list[str]], str] | None = None) -> None:
         self._run = run if run is not None else _default_run
+
+    def supports_ci(self, repo: str) -> bool:
+        """Whether this CLI backend can address the normalized repository."""
+        return not repo.startswith("local/")
 
     def default_branch(self, repo: str) -> str:
         out = self._run(

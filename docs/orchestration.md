@@ -5,7 +5,7 @@ the canonical executor for direct onejudge work, full repository lifecycles, and
 explicit actions that only a person can complete. `just repo-plan` is a deprecated
 alias retained so old lifecycle-only plan files keep working.
 
-The current tracked-plan contract is schema version 2 (`"schema_version": 2`).
+The current tracked-plan contract is schema version 3 (`"schema_version": 3`).
 Plans that omit the version retain version-1 behavior for compatibility.
 
 ## Node shapes

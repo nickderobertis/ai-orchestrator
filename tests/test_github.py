@@ -277,6 +277,12 @@ def test_prstatus_no_required_is_vacuously_green() -> None:
     assert status.blocking_green and not status.blocking_failed
 
 
+def test_cli_backend_ci_support_requires_github_coordinates() -> None:
+    backend = CliGitHubBackend()
+    assert backend.supports_ci("owner/repo")
+    assert not backend.supports_ci("local/checkout")
+
+
 def test_default_run_success_and_failure(monkeypatch) -> None:
     monkeypatch.setattr(
         gh.subprocess,

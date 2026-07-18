@@ -133,6 +133,9 @@ class FakeGitHub:
     def default_branch(self, repo: str) -> str:
         return "main"
 
+    def supports_ci(self, repo: str) -> bool:
+        return True
+
     def create_pr(
         self, repo: str, *, head: str, base: str, title: str, body: str, draft: bool = False
     ) -> PullRequest:

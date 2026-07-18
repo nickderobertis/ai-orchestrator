@@ -505,6 +505,22 @@ def test_empty_next_round_signals_nothing_to_iterate() -> None:
     assert next_round(_plan(A, B), _result(a="done", b="done"))["tasks"] == []
 
 
+@pytest.mark.parametrize("value", [True, False, None])
+def test_verify_via_ci_optional_field_round_trips_only_when_present(value) -> None:
+    task = deepcopy(A)
+    if value is not None:
+        task["verify_via_ci"] = value
+    plan = {"schema_version": 3, "tasks": [task]}
+
+    carried = next_round(plan, _result(a="failed"))
+
+    assert carried["schema_version"] == 3
+    if value is None:
+        assert "verify_via_ci" not in carried["tasks"][0]
+    else:
+        assert carried["tasks"][0]["verify_via_ci"] is value
+
+
 # --- CLI -------------------------------------------------------------------
 
 

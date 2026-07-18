@@ -125,7 +125,6 @@ CI is the authoritative check for this task. Push your workstream branch to orig
 watch the CI run for that pushed head. If any required (blocking) check fails, read its logs, fix
 the cause, commit and push again, and repeat until every required check is green. A passing local
 gate alone is not done."""
-_CLI_GITHUB_BACKEND_TYPE = CliGitHubBackend
 
 
 class DispatchFn(Protocol):
@@ -1298,7 +1297,8 @@ def run_repo_task(
         ci_backend = github or (CliGitHubBackend() if verify_via_ci else None)
         if verify_via_ci and (
             decision.workflow != "remote"
-            or (ref.local and isinstance(ci_backend, _CLI_GITHUB_BACKEND_TYPE))
+            or ci_backend is None
+            or not ci_backend.supports_ci(ref.slug)
         ):
             raise ConfigError(
                 "--verify-via-ci requires a remote GitHub/PR workflow with a GitHub origin; "
@@ -1585,7 +1585,7 @@ def run_repo_task(
                     "merged": status.merged,
                     "merge_state_status": status.merge_state_status,
                     "blocking": [
-                        {"name": name, "state": state} for name, state in assessment.states
+                        {"name": check.name, "state": check.state} for check in assessment.checks
                     ],
                 },
             )

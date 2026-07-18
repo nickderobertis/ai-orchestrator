@@ -669,7 +669,7 @@ def test_verify_via_ci_real_cli_rejects_local_and_tracked_node_can_opt_out(
     plan.write_text(
         json.dumps(
             {
-                "schema_version": 2,
+                "schema_version": 3,
                 "tasks": [
                     {
                         "id": "opt-out",
@@ -710,7 +710,7 @@ def test_verify_via_ci_real_cli_rejects_local_and_tracked_node_can_opt_out(
     inherited_plan.write_text(
         json.dumps(
             {
-                "schema_version": 2,
+                "schema_version": 3,
                 "tasks": [
                     {
                         "id": "ci-default",
@@ -743,6 +743,44 @@ def test_verify_via_ci_real_cli_rejects_local_and_tracked_node_can_opt_out(
     inherited_payload = json.loads(capsys.readouterr().out)
     assert inherited_rc == 0
     assert inherited_payload["results"]["ci-default"]["outcome"] == "pr-open"
+
+    node_opt_in_plan = tmp_path / "node-verify-via-ci-plan.json"
+    node_opt_in_plan.write_text(
+        json.dumps(
+            {
+                "schema_version": 3,
+                "tasks": [
+                    {
+                        "id": "ci-node-opt-in",
+                        "repo": str(remote_checkout),
+                        "persona": "engineer",
+                        "task": "complete-now write-unique-change node CI opt-in",
+                        "verify_via_ci": True,
+                        "verify_cmd": ["false"],
+                        "merge_policy": "none",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    node_opt_in_rc = graph_module.main(
+        [
+            str(node_opt_in_plan),
+            "--no-record",
+            "--workspace",
+            str(tmp_path / "node-opt-in-worktrees"),
+            "--base",
+            str(command_base(max_turns=2)),
+            "--persona-dir",
+            str(personas_dir),
+            "--format",
+            "json",
+        ]
+    )
+    node_opt_in_payload = json.loads(capsys.readouterr().out)
+    assert node_opt_in_rc == 0
+    assert node_opt_in_payload["results"]["ci-node-opt-in"]["outcome"] == "pr-open"
 
 
 @pytest.mark.parametrize(

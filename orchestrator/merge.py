@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING, Literal, Protocol
 
 from . import gitops
 from .coordination import advisory_lock
-from .github import AutoMergeUnavailable, GitHubBackend, PRStatus, PullRequest
+from .github import AutoMergeUnavailable, Check, GitHubBackend, PRStatus, PullRequest
 from .verify import run_gate
 
 if TYPE_CHECKING:
@@ -93,11 +93,11 @@ class BlockingCheckAssessment:
 
     green: bool
     settled: bool
-    states: tuple[tuple[str, str], ...]
+    checks: tuple[Check, ...]
 
     @property
     def detail(self) -> str:
-        rendered = ", ".join(f"{name}={state}" for name, state in self.states)
+        rendered = ", ".join(f"{check.name}={check.state}" for check in self.checks)
         return f"required checks: [{rendered}]" if rendered else "required checks: []"
 
 
@@ -107,7 +107,7 @@ def assess_blocking_checks(status: PRStatus) -> BlockingCheckAssessment:
     return BlockingCheckAssessment(
         green=bool(blocking) and all(check.green for check in blocking),
         settled=bool(blocking) and all(check.settled for check in blocking),
-        states=tuple((check.name, check.state) for check in blocking),
+        checks=blocking,
     )
 
 

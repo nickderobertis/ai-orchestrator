@@ -332,6 +332,29 @@ def test_plan_schema_version_documentation_cannot_drift() -> None:
         assert mapping["schema_version"] == PLAN_SCHEMA_VERSION
 
 
+def test_schema_v2_remains_compatible_but_verify_via_ci_requires_v3() -> None:
+    legacy_v2 = {
+        "schema_version": 2,
+        "tasks": [
+            {
+                "id": "work",
+                "repo": "o/r",
+                "persona": "engineer",
+                "task": "Patch",
+            }
+        ],
+    }
+    assert parse_graph(legacy_v2).tasks[0].lifecycle is not None
+
+    legacy_v2["tasks"][0]["verify_via_ci"] = True
+    with pytest.raises(PlanError, match="verify_via_ci.*requires schema_version 3"):
+        parse_graph(legacy_v2)
+
+    legacy_v2["schema_version"] = 3
+    lifecycle = parse_graph(legacy_v2).tasks[0].lifecycle
+    assert lifecycle is not None and lifecycle.verify_via_ci is True
+
+
 @pytest.mark.parametrize("field, value", [("persona", "p"), ("persona", None), ("repo", None)])
 def test_human_node_validation_is_strict(field, value) -> None:
     with pytest.raises(PlanError, match=f"cannot set '{field}'"):
