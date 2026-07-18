@@ -111,15 +111,15 @@ gate remote base:
     _git(repo, "symbolic-ref", "--delete", "refs/remotes/origin/HEAD")
     _git(repo, "config", "core.hooksPath", str(ROOT / ".githooks"))
 
-    unresolved = subprocess.run(
+    resolved = subprocess.run(
         [str(ROOT / "scripts/comparison-base.sh"), "origin"],
         cwd=repo,
         env={**os.environ, "ORCHESTRATOR_COMPARISON_BASE": ""},
         text=True,
         capture_output=True,
     )
-    assert unresolved.returncode == 2
-    assert "cannot discover a unique base" in unresolved.stderr
+    assert resolved.returncode == 0
+    assert resolved.stdout.strip() == "origin/main"
 
     result = integrate(
         repo,

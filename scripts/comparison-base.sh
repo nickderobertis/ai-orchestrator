@@ -20,10 +20,22 @@ else
   if [[ $symbolic == "$remote/"* ]] && git show-ref --verify --quiet "refs/remotes/$symbolic"; then
     base=${symbolic#"$remote/"}
   else
-    mapfile -t refs < <(git for-each-ref --format='%(refname:strip=3)' "refs/remotes/$remote" | sed '/^HEAD$/d')
-    if (( ${#refs[@]} == 1 )); then base=${refs[0]}; else
-      echo "comparison-base: cannot discover a unique base for '$remote' (found: ${refs[*]:-none}); pass it explicitly: just gate $remote <branch>" >&2
-      exit 2
+    current=$(git symbolic-ref --quiet --short HEAD 2>/dev/null || true)
+    if [[ -n $current ]]; then
+      upstream_remote=$(git config --get "branch.$current.remote" 2>/dev/null || true)
+      upstream_merge=$(git config --get "branch.$current.merge" 2>/dev/null || true)
+      candidate=${upstream_merge#refs/heads/}
+      if [[ $upstream_remote == "$remote" && -n $candidate ]] &&
+        git show-ref --verify --quiet "refs/remotes/$remote/$candidate"; then
+        base=$candidate
+      fi
+    fi
+    if [[ -z $base ]]; then
+      mapfile -t refs < <(git for-each-ref --format='%(refname:strip=3)' "refs/remotes/$remote" | sed '/^HEAD$/d')
+      if (( ${#refs[@]} == 1 )); then base=${refs[0]}; else
+        echo "comparison-base: cannot discover a unique base for '$remote' (found: ${refs[*]:-none}); pass it explicitly: just gate $remote <branch>" >&2
+        exit 2
+      fi
     fi
   fi
 fi
