@@ -22,11 +22,11 @@ from .runs import (
     latest_round,
     load_mapping,
     result_state,
+    result_state_is_terminal,
 )
 from .verify import GateAttestation
 
 TELEMETRY_SCHEMA_VERSION = 1
-TERMINAL_RUN_STATES = frozenset({"complete", "failed"})
 FailureClass = Literal[
     "agent", "gate", "checks", "publication", "timeout", "provider", "configuration", "unknown"
 ]
@@ -339,7 +339,7 @@ def collect_run(
     providers, agent_seconds = _providers(RunId(run_dir.name), oneharness_bin)
     gate_seconds = _gate_seconds(events)
     current = time.time() if now is None else now
-    wall_end = last.at if state in TERMINAL_RUN_STATES and last else current
+    wall_end = last.at if result_state_is_terminal(state) and last else current
     wall = max(0.0, wall_end - events[0].at) if events else 0.0
     publication_waits = _publication_waits(events)
     wait = sum(publication_waits)

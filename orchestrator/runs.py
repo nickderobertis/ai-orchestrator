@@ -311,6 +311,11 @@ def result_state(result: GraphPayload) -> str:
     return "complete"
 
 
+def result_state_is_terminal(state: str) -> bool:
+    """Whether a derived ledger state represents a settled run."""
+    return state in {"complete", "failed"}
+
+
 def human_actions(result: GraphPayload) -> list[HumanActionPayload]:
     """Every ready human action in node order."""
     return [
