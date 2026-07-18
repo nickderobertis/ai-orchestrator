@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import subprocess
+import tomllib
 from pathlib import Path
 
 from orchestrator import REPO_ROOT
@@ -13,6 +14,29 @@ ADOPTED_ONEJUDGE_VERSION = (
 ADOPTED_ONEHARNESS_VERSION = (
     (REPO_ROOT / "config" / "oneharness.version").read_text(encoding="utf-8").strip()
 )
+
+
+def test_onejudge_dependency_pin_matches_authoritative_version() -> None:
+    """DRIFT-GATE the executable SDK dependency against config/onejudge.version."""
+    pyproject = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    dependencies = pyproject["project"]["dependencies"]
+    onejudge_specs = [
+        dependency for dependency in dependencies if dependency.startswith("onejudge")
+    ]
+
+    assert len(onejudge_specs) == 1, (
+        "pyproject.toml must declare exactly one exact onejudge dependency; "
+        f"found {onejudge_specs!r}"
+    )
+    package, separator, pinned_version = onejudge_specs[0].partition("==")
+    assert package == "onejudge" and separator and pinned_version, (
+        "pyproject.toml must pin the onejudge distribution exactly as onejudge==<version>; "
+        f"found {onejudge_specs[0]!r}"
+    )
+    assert pinned_version == ADOPTED_ONEJUDGE_VERSION, (
+        f"pyproject.toml pins onejudge=={pinned_version}, but config/onejudge.version "
+        f"declares {ADOPTED_ONEJUDGE_VERSION}"
+    )
 
 
 def _write_executable(path: Path, body: str) -> None:
