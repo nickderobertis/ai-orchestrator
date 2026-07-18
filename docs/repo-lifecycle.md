@@ -247,6 +247,19 @@ branch validator before any Git command; a plan that explicitly combines
 
 The child PR body lists dependency PR links and stack bases. Its final gate runs
 against the complete stack, but the PR diff against its stack base is child-only.
+
+### Diff-derived PR descriptions
+
+After the final branch-vs-base gate passes and before a remote PR is created, the
+lifecycle performs one additional plain onejudge dispatch with the `pr-author`
+persona. That agent reads the completed diff and writes a terse body following
+`.github/pull_request_template.md` to a temporary path outside the worktree. The
+lifecycle reads and removes that artifact, then appends stack metadata as usual.
+This costs exactly one extra dispatch per published PR, including workstream and
+draft-checkpoint PRs. An explicit title or body skips drafting. A failed,
+incomplete, or empty drafting result falls back to the legacy deterministic body,
+so description generation never prevents publication.
+
 Run these nodes with `just run-plan`; `just repo-plan` is a deprecated alias that
 accepts old lifecycle-only files unchanged. See
 `examples/tracked-graph.example.json` and `examples/repo-plan.example.json`.

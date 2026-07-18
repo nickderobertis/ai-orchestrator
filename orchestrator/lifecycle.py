@@ -23,6 +23,7 @@ import hashlib
 import json
 import re
 import sys
+import tempfile
 import time
 import uuid
 from collections.abc import Callable, Mapping
@@ -435,6 +436,91 @@ def _workstream_body(steps: list[Step], results: list[StepResult]) -> str:
         "",
     ]
     return "\n".join(lines)
+
+
+def _drafting_task(output_path: Path, remote_base: str, steps: list[Step]) -> str:
+    context = "\n\n".join(
+        f"Persona: {_step_label(step)}\nOriginal task context:\n{step.task.strip()}"
+        for step in steps
+    )
+    return f"""Draft the pull request body for the completed change in this worktree.
+
+Read the actual change with `git diff {remote_base}...HEAD` and use this context only to
+understand its driver:
+
+{context}
+
+Write the final body, and nothing else, to this absolute path:
+{output_path}
+
+Follow `.github/pull_request_template.md`: include `## What` describing observable behavior
+from the diff and `## Why` describing its driver. Add `## Additional info` only when useful.
+Stay terse. Never restate the handoff or paste the original task prose verbatim.
+Do not modify, stage, or commit any file in the worktree.
+"""
+
+
+def _valid_drafted_body(body: str) -> bool:
+    """Validate the small template contract at the agent-output boundary."""
+    sections = re.split(r"(?m)^## ([^\n]+)\s*$", body.strip())
+    if sections[0].strip():
+        return False
+    names = sections[1::2]
+    content = sections[2::2]
+    return names in (["What", "Why"], ["What", "Why", "Additional info"]) and all(
+        section.strip() for section in content
+    )
+
+
+def _draft_pr_body(
+    *,
+    worktree: Path,
+    remote_base: str,
+    steps: list[Step],
+    fallback: str,
+    dispatch_fn: DispatchFn,
+    oneharness_mode: str | None,
+    base_path: str | Path,
+    persona_dir: str | Path,
+    journal: NodeSink,
+    dispatch_env: dict[str, str],
+) -> str:
+    """Draft a diff-derived body, falling back without blocking publication."""
+    journal.append("pr-drafting-started", detail={"base": remote_base})
+    try:
+        with tempfile.TemporaryDirectory(prefix="ai-orchestrator-pr-body-") as temp_dir:
+            output_path = Path(temp_dir) / "body.md"
+            report = dispatch_fn(
+                "pr-author",
+                _drafting_task(output_path, remote_base, steps),
+                project_dir=str(worktree),
+                oneharness_mode=oneharness_mode,
+                base_path=base_path,
+                persona_dir=persona_dir,
+                session="pr-author",
+                labels=journal.labels,
+                env=dispatch_env,
+            )
+            drafted = (
+                output_path.read_text(encoding="utf-8").strip() if output_path.is_file() else ""
+            )
+            if report.completed and _valid_drafted_body(drafted):
+                journal.append(
+                    "pr-drafting-finished",
+                    detail={"completed": True, "body_length": len(drafted)},
+                )
+                return drafted + "\n"
+            reason = "invalid or empty body" if report.completed else "dispatch did not complete"
+    except Exception as exc:  # Drafting is best-effort and must never block publication.
+        reason = f"drafting error: {exc}"
+    journal.append("pr-drafting-finished", detail={"completed": False, "reason": reason})
+    journal.append("pr-drafting-fallback", detail={"reason": reason})
+    return fallback
+
+
+def _should_draft_pr_body(title: str | None, body: str | None) -> bool:
+    """An explicit title or body opts out of automatic PR-body authorship."""
+    return title is None and body is None
 
 
 def _effective_publication(
@@ -913,6 +999,10 @@ def _pause_at_human_step(
     recorded_pr: str | None,
     journal: NodeSink,
     cache_env: dict[str, str],
+    dispatch_fn: DispatchFn,
+    oneharness_mode: str | None,
+    base_path: str | Path,
+    persona_dir: str | Path,
 ) -> LifecycleResult:
     """Preserve a human-gated workstream and record how to continue it."""
     lead = steps[0]
@@ -975,13 +1065,27 @@ def _pause_at_human_step(
     if reused is not None:
         pr = reused
     else:
+        fallback_body = _workstream_body(steps, step_run.results)
+        pr_body = body or fallback_body
+        if workflow == "remote" and _should_draft_pr_body(title, body):
+            pr_body = _draft_pr_body(
+                worktree=worktree,
+                remote_base=remote_base,
+                steps=steps,
+                fallback=fallback_body,
+                dispatch_fn=dispatch_fn,
+                oneharness_mode=oneharness_mode,
+                base_path=base_path,
+                persona_dir=persona_dir,
+                journal=journal,
+                dispatch_env=cache_env,
+            )
         pr = (github or CliGitHubBackend()).create_pr(
             result.repo,
             head=branch,
             base=pr_base,
             title=title or _default_title(worktree, remote_base, lead.task),
-            body=(body or _workstream_body(steps, step_run.results))
-            + _stack_body(applicable_stack, result.synthetic_stack_base),
+            body=pr_body + _stack_body(applicable_stack, result.synthetic_stack_base),
             draft=True,
         )
         # Only the branch that actually opens one records it; resuming reuses the
@@ -1238,6 +1342,10 @@ def run_repo_task(
                 recorded_pr=resume.pr if resume else None,
                 journal=log,
                 cache_env=cache_env,
+                dispatch_fn=dispatch_fn,
+                oneharness_mode=oneharness_mode,
+                base_path=base_path,
+                persona_dir=persona_dir,
             )
         if step_run.status != "done":
             result.outcome = "error"
@@ -1288,6 +1396,22 @@ def run_repo_task(
             result.detail = "agent completed but produced no commits to open a PR"
             return result
 
+        fallback_body = _workstream_body(effective_steps, step_run.results)
+        pr_body = body or fallback_body
+        if decision.workflow == "remote" and _should_draft_pr_body(title, body):
+            pr_body = _draft_pr_body(
+                worktree=worktree,
+                remote_base=remote_base,
+                steps=effective_steps,
+                fallback=fallback_body,
+                dispatch_fn=dispatch_fn,
+                oneharness_mode=oneharness_mode,
+                base_path=base_path,
+                persona_dir=persona_dir,
+                journal=log,
+                dispatch_env=cache_env,
+            )
+
         gitops.push(worktree, branch)
         ctx = MergeContext(
             repo_slug=ref.slug,
@@ -1295,8 +1419,7 @@ def run_repo_task(
             base=pr_base,
             branch=branch,
             title=title or _default_title(worktree, remote_base, lead.task),
-            body=(body or _workstream_body(effective_steps, step_run.results))
-            + _stack_body(applicable_stack, result.synthetic_stack_base),
+            body=pr_body + _stack_body(applicable_stack, result.synthetic_stack_base),
             method=merge_method,
             policy=decision.merge_policy,
             poll_interval=poll_interval,

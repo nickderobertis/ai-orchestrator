@@ -75,10 +75,23 @@ def main() -> int:
         sys.stderr.write("fake_backend: messages must be a list of objects\n")
         return 1
     task = _task_text(messages)
-    fail = "should-fail" in task
+    drafting = "Write the final body, and nothing else, to this absolute path:" in task
+    fail = "should-fail" in task or (drafting and "drafting-fails" in task)
 
     match op:
         case "respond":
+            if (
+                "Write the final body, and nothing else, to this absolute path:" in task
+                and "drafting-empty" not in task
+            ):
+                output = task.split(
+                    "Write the final body, and nothing else, to this absolute path:\n", 1
+                )[1].splitlines()[0]
+                Path(output).write_text(
+                    "## What\nAdds the completed behavior from the branch diff.\n\n"
+                    "## Why\nMakes the requested capability available.\n",
+                    encoding="utf-8",
+                )
             if "capture-cache-env" in task:
                 (Path.cwd() / "CACHE_ENV.txt").write_text(
                     os.environ["ORCHESTRATOR_CACHE_DIR"], encoding="utf-8"

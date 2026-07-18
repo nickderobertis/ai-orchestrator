@@ -19,10 +19,13 @@ from orchestrator.lifecycle import (
     Step,
     _default_body,
     _default_branch_name,
+    _draft_pr_body,
     _effective_publication,
     _incomplete_commit_message,
     _select_merge_strategy,
+    _should_draft_pr_body,
     _subject_from_messages,
+    _valid_drafted_body,
     _workstream_branch_name,
     load_repo_plan,
     make_repo_runner,
@@ -47,6 +50,63 @@ def test_branch_name_is_deterministic() -> None:
     a = _default_branch_name("engineer", "do a thing")
     assert a == _default_branch_name("engineer", "do a thing")
     assert a.startswith("ai-orchestrator/engineer/")
+
+
+def test_pr_body_drafting_reads_output_and_falls_back(tmp_path) -> None:
+    from orchestrator.dispatch import Report
+    from orchestrator.journal import NullNodeJournal
+
+    calls: list[str] = []
+
+    def drafting_dispatch(persona: str, task: str, **_: object) -> Report:
+        calls.append(persona)
+        output = task.split("Write the final body, and nothing else, to this absolute path:\n", 1)[
+            1
+        ].splitlines()[0]
+        Path(output).write_text("## What\nA behavior.\n\n## Why\nA driver.\n", encoding="utf-8")
+        return Report(persona, 0, True, False, 1, [], {}, {}, "")
+
+    common = dict(
+        worktree=tmp_path,
+        remote_base="origin/main",
+        steps=[Step("change", "engineer", "Raw handoff prose")],
+        fallback="fallback",
+        oneharness_mode="bypass",
+        base_path="base.yaml",
+        persona_dir="personas",
+        journal=NullNodeJournal(),
+        dispatch_env={},
+    )
+    body = _draft_pr_body(dispatch_fn=drafting_dispatch, **common)
+    assert body == "## What\nA behavior.\n\n## Why\nA driver.\n"
+    assert calls == ["pr-author"]
+
+    def failed_dispatch(*_: object, **__: object) -> Report:
+        raise RuntimeError("provider unavailable")
+
+    assert _draft_pr_body(dispatch_fn=failed_dispatch, **common) == "fallback"
+
+
+@pytest.mark.parametrize(
+    ("title", "body", "expected"),
+    [(None, None, True), ("feat: supplied", None, False), (None, "supplied", False)],
+)
+def test_explicit_pr_metadata_skips_body_drafting(title, body, expected) -> None:
+    assert _should_draft_pr_body(title, body) is expected
+
+
+@pytest.mark.parametrize(
+    ("body", "expected"),
+    [
+        ("## What\nBehavior.\n\n## Why\nDriver.", True),
+        ("## What\nBehavior.\n\n## Why\nDriver.\n\n## Additional info\nNote.", True),
+        ("arbitrary prose", False),
+        ("## What\n\n## Why\nDriver.", False),
+        ("## Why\nDriver.\n\n## What\nBehavior.", False),
+    ],
+)
+def test_drafted_body_validation(body, expected) -> None:
+    assert _valid_drafted_body(body) is expected
 
 
 def _commit_messages(*messages: str) -> list[lc.gitops.CommitMessage]:

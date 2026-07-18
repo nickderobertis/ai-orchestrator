@@ -228,6 +228,11 @@ A dispatched change is not done until `just gate` is green. Its agent clears its
 own llmlint findings—by fixing them, adding a justified `ignore-file`, or disabling
 an inapplicable rule in `llmlint.yml`—rather than leaving closeout to integration.
 
+Every remote lifecycle PR without explicit title/body metadata gets one
+post-verification `pr-author` dispatch. It drafts the template-shaped body from
+the actual diff through a temporary out-of-worktree file; drafting failure falls
+back to the deterministic body and must never block publication.
+
 ## Dispatching playbook
 
 Pass long or multi-line task and `--done-when` prose through a file or stdin, not

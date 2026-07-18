@@ -153,6 +153,150 @@ def test_identity_cache_and_repo_post_checkout_hook_are_wired_across_dispatches(
     assert len(lifecycle_worktrees) == 2
 
 
+def test_real_lifecycle_dispatch_drafts_pr_bodies_and_preserves_fallbacks(
+    tmp_path, bare_origin, command_base, personas_dir
+) -> None:
+    """The real onejudge boundary authors single/workstream bodies and safely falls back."""
+    origin = bare_origin()
+    workspace = _workspace(tmp_path, origin, workflow="remote")
+    github = FakeGitHub(origin)
+    base = command_base(max_turns=2)
+
+    single_task = "complete-now write-change raw single-lifecycle handoff"
+    single = run_repo_task(
+        "acme/widget",
+        single_task,
+        "engineer",
+        workspace=workspace,
+        github=github,
+        url=str(origin),
+        workflow="remote",
+        repo_type="single-owner",
+        merge_policy="none",
+        branch="draft-single",
+        base_path=base,
+        persona_dir=personas_dir,
+        verify_cmd=["true"],
+    )
+    assert single.pr is not None, (single.outcome, single.detail)
+    single_body = github._prs[single.pr.number].body
+    assert single.outcome == "pr-open"
+    assert single_body == (
+        "## What\nAdds the completed behavior from the branch diff.\n\n"
+        "## Why\nMakes the requested capability available.\n"
+    )
+    assert single_task not in single_body
+
+    workstream = run_repo_task(
+        "acme/widget",
+        workspace=workspace,
+        github=github,
+        url=str(origin),
+        workflow="remote",
+        repo_type="single-owner",
+        merge_policy="none",
+        branch="draft-workstream",
+        steps=[
+            Step("implement", "engineer", "complete-now write-change raw implementation handoff"),
+            Step(
+                "verify",
+                "test-engineer",
+                "complete-now capture-cache-env raw verification handoff",
+                deps=["implement"],
+            ),
+        ],
+        base_path=base,
+        persona_dir=personas_dir,
+        verify_cmd=["true"],
+    )
+    workstream_body = github._prs[workstream.pr.number].body
+    assert workstream.outcome == "pr-open"
+    assert workstream_body.startswith("## What\nAdds the completed behavior from the branch diff.")
+    assert "raw implementation handoff" not in workstream_body
+
+    fallback_task = "complete-now write-change drafting-fails fallback handoff"
+    fallback = run_repo_task(
+        "acme/widget",
+        fallback_task,
+        "engineer",
+        workspace=workspace,
+        github=github,
+        url=str(origin),
+        workflow="remote",
+        repo_type="single-owner",
+        merge_policy="none",
+        branch="draft-fallback",
+        base_path=base,
+        persona_dir=personas_dir,
+        verify_cmd=["true"],
+    )
+    assert fallback.outcome == "pr-open"
+    assert fallback_task in github._prs[fallback.pr.number].body
+
+    empty_task = "complete-now write-change drafting-empty empty fallback handoff"
+    empty = run_repo_task(
+        "acme/widget",
+        empty_task,
+        "engineer",
+        workspace=workspace,
+        github=github,
+        url=str(origin),
+        workflow="remote",
+        repo_type="single-owner",
+        merge_policy="none",
+        branch="draft-empty",
+        base_path=base,
+        persona_dir=personas_dir,
+        verify_cmd=["true"],
+    )
+    assert empty.outcome == "pr-open"
+    assert empty_task in github._prs[empty.pr.number].body
+
+    explicit = run_repo_task(
+        "acme/widget",
+        "complete-now write-change explicit body handoff",
+        "engineer",
+        workspace=workspace,
+        github=github,
+        url=str(origin),
+        workflow="remote",
+        repo_type="single-owner",
+        merge_policy="none",
+        branch="draft-explicit",
+        body="## What\nSupplied body.\n\n## Why\nSupplied reason.\n",
+        base_path=base,
+        persona_dir=personas_dir,
+        verify_cmd=["true"],
+    )
+    assert explicit.outcome == "pr-open"
+    assert github._prs[explicit.pr.number].body == (
+        "## What\nSupplied body.\n\n## Why\nSupplied reason.\n"
+    )
+
+    title_task = "complete-now write-change explicit title handoff"
+    titled = run_repo_task(
+        "acme/widget",
+        title_task,
+        "engineer",
+        workspace=workspace,
+        github=github,
+        url=str(origin),
+        workflow="remote",
+        repo_type="single-owner",
+        merge_policy="none",
+        branch="draft-title",
+        title="feat: use supplied title",
+        base_path=base,
+        persona_dir=personas_dir,
+        verify_cmd=["true"],
+    )
+    assert titled.outcome == "pr-open"
+    assert title_task in github._prs[titled.pr.number].body
+    assert (
+        "Adds the completed behavior from the branch diff" not in github._prs[titled.pr.number].body
+    )
+
+
 def test_empty_orchestrator_home_fails_at_lifecycle_cache_boundary(
     tmp_path, bare_origin, monkeypatch
 ) -> None:
@@ -926,6 +1070,8 @@ def test_github_second_run_reuses_open_pr_and_merges(tmp_path, bare_origin) -> N
     continue_dispatch = make_writing_dispatch(filename="second.txt")
 
     def resume_open_pr(persona: str, task: str, *, project_dir: str, **kwargs: object) -> Report:
+        if persona == "pr-author":
+            return cast(Report, continue_dispatch(persona, task, project_dir=project_dir, **kwargs))
         subprocess.run(
             ["git", "reset", "--hard", f"origin/{branch}"],
             cwd=project_dir,
@@ -1301,6 +1447,16 @@ def test_remote_human_workstream_draft_checkpoint_and_safe_resume(tmp_path, bare
         persona: str, task: str, *, project_dir: str, session: str, **_: object
     ) -> Report:
         nonlocal advanced_sha
+        if persona == "pr-author":
+            output = task.split(
+                "Write the final body, and nothing else, to this absolute path:\n", 1
+            )[1].splitlines()[0]
+            Path(output).write_text(
+                "## What\nPrepares and publishes the remote work.\n\n"
+                "## Why\nSupports the gated workstream.\n",
+                encoding="utf-8",
+            )
+            return Report(persona, 0, True, False, 1, [], {}, {}, "")
         sid = session.rsplit(":", 1)[-1]
         dispatched.append(sid)
         (Path(project_dir) / f"{sid}.txt").write_text(task + "\n", encoding="utf-8")
