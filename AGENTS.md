@@ -77,10 +77,7 @@ dispatch onejudge.
    search fails or leaves multiple strong candidates.
 2. **Pick or create personas.** Match each subtask to a general role and review
    bar in `personas/`. Prefer precise task prose plus per-node `done_when` over
-   encoding subtask details in a new persona. If a genuinely distinct role or
-   review bar is still needed, dispatch its creation or edit through this repo's
-   isolated self-lifecycle; there, `just new-persona <name>` scaffolds
-   `personas/<name>.yaml` from the template, and `just check` validates it.
+   encoding subtask details in a new persona.
 3. **Schedule for parallelism.** Run the plan with `just run-plan <plan.json>`.
    It topologically schedules the DAG, running every subtask whose deps are done
    concurrently (bounded by the plan's `concurrency`), so independent branches go
@@ -173,14 +170,23 @@ larger subtasks and split further only if one proves too big. See
 ## Personas and the base config
 
 A persona is a small onejudge **delta** file in `personas/` — the agent's general
-role (`agent.instructions`) plus the supervisor's review bar (`persona`).
+role (`agent.instructions`) plus the supervisor's review bar (`persona`). General
+cross-repo roles are top-level files; repo-specific roles live under
+`personas/<repo>/` and are dispatched with `<repo>/<name>`.
 Common settings live once in `config/onejudge.base.yaml` (the base config);
 `dispatch` merges base ⊕ persona ⊕ the CLI `--task` into one effective config and
 runs `onejudge run` on it. Keep subtask-specificity in the node controls described
 above; add a persona only for a genuinely distinct role or review bar. A dedicated
 `reviewer` is reserved for complex DAGs where one agent reviews and integrates
 several agents' independently produced work, since the simulated-user supervisor
-already reviews every dispatch. Catalog and authoring rules: `personas/README.md`.
+already reviews every dispatch.
+
+Draft a new role under gitignored `scratch/personas/`, dispatch against that
+directory, and refine it from observed performance. Once proven, dispatch its
+addition through this repo's isolated self-lifecycle; `just new-persona <name>`
+scaffolds the tracked file and `just check` validates it. General personas stay
+flat; repo-specific personas use slash-qualified names and subdirectories
+(`crozier/crozier-corpus` maps to `personas/crozier/crozier-corpus.yaml`).
 
 ## The two sides of the conversation
 

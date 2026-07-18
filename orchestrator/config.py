@@ -1,7 +1,8 @@
 """Load and merge onejudge configs: base ⊕ persona → one effective config.
 
 The base (`config/onejudge.base.yaml`) carries settings common to every subtask;
-a persona (`personas/<name>.yaml`) carries only the role-specific delta. Merging
+a persona (`personas/<name>.yaml` or `personas/<repo>/<name>.yaml`) carries only
+the role-specific delta. Merging
 them produces the effective onejudge config that `dispatch` runs. The task itself
 is never merged in — it is passed to onejudge over the CLI (`--task`).
 """

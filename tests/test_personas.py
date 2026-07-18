@@ -10,6 +10,8 @@ from orchestrator.personas import (
     main_validate,
     new_persona,
     persona_files,
+    persona_name,
+    persona_path,
     validate_all,
     validate_persona,
 )
@@ -26,6 +28,40 @@ def test_template_is_excluded() -> None:
     names = {p.stem for p in persona_files(PERSONA_DIR)}
     assert "_template" not in names
     assert "planner" in names
+
+
+def test_readme_catalog_matches_discovered_personas() -> None:
+    readme = (PERSONA_DIR / "README.md").read_text(encoding="utf-8")
+    catalog = readme.split("## Catalog\n", 1)[1].split("\n## ", 1)[0]
+    documented = {line.split("`", 2)[1] for line in catalog.splitlines() if line.startswith("| `")}
+    discovered = {persona_name(path, PERSONA_DIR) for path in persona_files(PERSONA_DIR)}
+
+    assert not discovered - documented, (
+        f"personas missing from README catalog: {sorted(discovered - documented)}"
+    )
+    assert not documented - discovered, (
+        f"README catalog entries without persona files: {sorted(documented - discovered)}"
+    )
+
+
+def test_persona_files_discovers_subdirectories_and_skips_private_paths(tmp_path) -> None:
+    (tmp_path / "repo").mkdir()
+    (tmp_path / "repo" / "specialist.yaml").touch()
+    (tmp_path / "repo" / "_draft.yaml").touch()
+    (tmp_path / "_private").mkdir()
+    (tmp_path / "_private" / "hidden.yaml").touch()
+
+    assert persona_files(tmp_path) == [tmp_path / "repo" / "specialist.yaml"]
+
+
+def test_persona_files_skips_symlink_that_escapes_catalog(tmp_path) -> None:
+    persona_dir = tmp_path / "personas"
+    persona_dir.mkdir()
+    external = tmp_path / "external.yaml"
+    external.touch()
+    (persona_dir / "escaped.yaml").symlink_to(external)
+
+    assert persona_files(persona_dir) == []
 
 
 def test_valid_persona_has_no_errors() -> None:
@@ -92,6 +128,27 @@ def test_new_persona_scaffolds_from_template(tmp_path) -> None:
     assert "agent" in target.read_text(encoding="utf-8")
 
 
+def test_new_persona_scaffolds_in_subdirectory(tmp_path) -> None:
+    target = new_persona("repo/my-role", persona_dir=tmp_path)
+    assert target == (tmp_path / "repo" / "my-role.yaml").resolve()
+    assert target.is_file()
+
+
+def test_validate_all_uses_subdir_qualified_names(tmp_path) -> None:
+    new_persona("repo/my-role", persona_dir=tmp_path)
+    results = validate_all(tmp_path, BASE_CONFIG)
+    assert list(results) == ["repo/my-role"]
+    assert not results["repo/my-role"]
+
+
+@pytest.mark.parametrize(
+    "name", ["../escape", "repo/../escape", "/absolute", "repo//name", "repo\\name"]
+)
+def test_persona_path_rejects_traversal_and_malformed_names(tmp_path, name) -> None:
+    with pytest.raises(ValueError, match="invalid persona name"):
+        persona_path(name, tmp_path)
+
+
 def test_new_persona_rejects_bad_name(tmp_path) -> None:
     with pytest.raises(ValueError, match="invalid persona name"):
         new_persona("Bad Name", persona_dir=tmp_path)
@@ -106,7 +163,7 @@ def test_new_persona_refuses_overwrite(tmp_path) -> None:
 
 
 def test_main_new_and_validate_clis(tmp_path, capsys) -> None:
-    rc = main_new(["role-a", "--persona-dir", str(tmp_path)])
+    rc = main_new(["repo/role-a", "--persona-dir", str(tmp_path)])
     assert rc == 0
     # A freshly scaffolded persona still has template placeholders but valid shape.
     rc = main_validate(["--persona-dir", str(tmp_path), "--base", str(BASE_CONFIG)])
@@ -130,8 +187,9 @@ def test_main_new_rejects_bad_name(tmp_path, capsys) -> None:
 
 
 def test_main_new_reports_os_error(tmp_path, capsys) -> None:
-    missing = tmp_path / "does-not-exist"  # not created → copyfile target dir absent
-    rc = main_new(["role", "--persona-dir", str(missing)])
+    not_a_directory = tmp_path / "file"
+    not_a_directory.touch()
+    rc = main_new(["role", "--persona-dir", str(not_a_directory)])
     assert rc == 1
     assert "new-persona:" in capsys.readouterr().err
 
