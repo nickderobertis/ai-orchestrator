@@ -18,6 +18,7 @@ from .workspace import IdentityKey, RepositoryType, Workflow
 
 _RUN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 _ROUND = re.compile(r"^round-(\d+)$")
+RECORDED_RESULT_SCHEMA_VERSION = 2
 
 # The identifiers a tracked round is addressed by. They are all non-empty strings
 # from different namespaces, and they travel together through the ledger, the

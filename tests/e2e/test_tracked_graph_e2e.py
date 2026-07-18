@@ -73,6 +73,7 @@ def test_direct_human_pause_attestation_and_release_use_real_onejudge(
 
     assert paused.returncode == 1, paused.stderr
     first = json.loads(paused.stdout)
+    assert first["schema_version"] == 2 and first["round"] == 1
     assert first["ok"] is False and first["state"] == "waiting"
     assert first["started_order"] == ["prepare", "approve"]
     assert first["results"]["prepare"]["status"] == "done"

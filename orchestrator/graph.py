@@ -45,6 +45,7 @@ from .plan import (
     schedule_dag,
 )
 from .runs import (
+    RECORDED_RESULT_SCHEMA_VERSION,
     GraphPayload,
     GraphResultItem,
     HumanActionPayload,
@@ -448,7 +449,7 @@ def _node_payload(result: NodeResult) -> GraphResultItem:
 
 def graph_payload(result: GraphResult, *, round_number: int | None = None) -> GraphPayload:
     payload = GraphPayload(
-        schema_version=2,
+        schema_version=RECORDED_RESULT_SCHEMA_VERSION,
         ok=result.ok,
         state=result.state,
         started_order=result.started_order,

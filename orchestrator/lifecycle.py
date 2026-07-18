@@ -54,6 +54,7 @@ from .provenance import (
 )
 from .registry import RegistryError, validate_identity_key
 from .runs import (
+    RECORDED_RESULT_SCHEMA_VERSION,
     RepoPlanPayload,
     RepoPlanResultItem,
     StepId,
@@ -2221,7 +2222,7 @@ def main_plan(argv: list[str] | None = None) -> int:
     result = run_repo_plan(plan, runner, concurrency=args.concurrency)
 
     payload: RepoPlanPayload = {
-        "schema_version": 2,
+        "schema_version": RECORDED_RESULT_SCHEMA_VERSION,
         **({"round": round_record[0]} if round_record is not None else {}),
         "ok": result.ok,
         "started_order": result.started_order,
