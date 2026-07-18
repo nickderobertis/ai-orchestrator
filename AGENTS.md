@@ -92,6 +92,10 @@ channel-reply`, and the read-only `just monitor` / `just runs` views. It never r
 `run-plan` or `next-round` itself: those commands belong to the orchestrator
 process, and two writers would race the ledger lock.
 
+Judge a dispatched branch against its own base (`merge-base` / `base..branch`),
+never a moving `origin/main`; concurrent advancement can make a healthy branch
+appear to delete files.
+
 Treat unresolved same-identity dependencies as stack prerequisites, not merely
 scheduling edges, and preserve them across replans until their content reaches
 the root base. The deterministic mechanics live in `docs/repo-lifecycle.md`.
