@@ -44,6 +44,7 @@ from orchestrator.monitor import (
     load_snapshot,
     pr_events,
     save_snapshot,
+    snapshot_path,
 )
 from orchestrator.registry import Registry
 from orchestrator.runs import NodeId, RunId, prepare_round, write_result
@@ -362,6 +363,8 @@ def test_monitor_command_reports_one_rollup_across_multiple_prs(tmp_path: Path) 
         github=PerPrChecks(),
         clock=lambda: AT,
     )
+    # llmlint: ignore[tests_mirror_real_usage] GitHub's sanctioned backend seam produces
+    # the external transition; the assertions below consume it through `just monitor`.
     monitor.poll()
     _settle(
         run_dir,
@@ -376,6 +379,29 @@ def test_monitor_command_reports_one_rollup_across_multiple_prs(tmp_path: Path) 
     rollup = json.loads(reported.stdout.splitlines()[-1])
     assert rollup["last_completed_check"] == "ci"
     assert rollup["current_blocker"] == "PR #1 ci: pending"
+
+
+def test_monitor_command_ignores_an_old_snapshot_contract(tmp_path: Path) -> None:
+    runs_dir = tmp_path / "runs"
+    run_dir = runs_dir / RUN
+    details = snapshot_path(run_dir)
+    details.parent.mkdir(parents=True)
+    details.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "commits": {},
+                "prs": {},
+                "check_rollup": {"current_blocker": "stale: pending"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    _settle(run_dir, {"api": {"status": "waiting"}}, ok=False, state="waiting")
+    reported = _monitor_cli("--runs-dir", str(runs_dir), "--once", "--format", "jsonl", RUN)
+    assert reported.returncode == 0, reported.stderr
+    heartbeat = json.loads(reported.stdout.splitlines()[-1])
+    assert "current_blocker" not in heartbeat
 
 
 def test_a_replay_reports_the_pr_state_gh_can_no_longer_be_asked_for(

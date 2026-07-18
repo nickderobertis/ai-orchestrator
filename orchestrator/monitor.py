@@ -1290,7 +1290,10 @@ def main(argv: list[str] | None = None) -> int:
         type=float,
         default=DEFAULT_MAX_POLL_INTERVAL,
         metavar="SECONDS",
-        help="maximum seconds between unchanged source polls (default: 30)",
+        help=(
+            "maximum seconds between unchanged source polls "
+            f"(default: {DEFAULT_MAX_POLL_INTERVAL:g})"
+        ),
     )
     parser.add_argument("--runs-dir", type=Path, default=DEFAULT_RUNS_DIR)
     args = parser.parse_args(argv)

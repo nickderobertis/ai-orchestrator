@@ -130,8 +130,8 @@ just monitor --format jsonl       # one JSON record per line, no header
 just monitor --heartbeat 30 --poll-interval 5
 ```
 
-Unchanged polls back off exponentially to a bounded interval (30 seconds by
-default, configurable with `--max-poll-interval`). New observations reset the
+Unchanged polls back off exponentially to a configurable bounded interval.
+`--max-poll-interval` changes that bound. New observations reset the
 initial interval. Silence heartbeats remain independent of polling frequency.
 
 Without `RUN_ID` it picks the **newest active** run — anything that has not

@@ -1459,7 +1459,10 @@ def test_github_waits_for_required_checks_to_be_reported_then_merges(tmp_path, b
     origin = bare_origin()
     # The first status read checks whether the new PR is a draft; the merge poll
     # then observes no reported checks, pending CI, and finally green CI.
-    github = FakeGitHub(origin, check_states=(None, None, "PENDING", "SUCCESS"))
+    github = FakeGitHub(
+        origin,
+        check_states=(None, None, "PENDING", "PENDING", "PENDING", "PENDING", "SUCCESS"),
+    )
     sleeps: list[float] = []
 
     result = run_repo_task(
@@ -1478,8 +1481,8 @@ def test_github_waits_for_required_checks_to_be_reported_then_merges(tmp_path, b
     )
 
     assert result.ok and result.outcome == "merged"
-    assert sleeps == [15.0, 30.0]
-    assert github.status_polls == 4
+    assert sleeps == [15.0, 30.0, 60.0, 120.0, 120.0]
+    assert github.status_polls == 7
     assert _has_file(origin, "main", "feature.txt")
 
 

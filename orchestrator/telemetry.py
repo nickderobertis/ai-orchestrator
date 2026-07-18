@@ -7,7 +7,7 @@ import json
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal, TypedDict
+from typing import Literal, TypedDict, cast
 
 from .detail_snapshot import CheckRollup
 from .history import HistoryError, session_records, worker_sessions
@@ -16,6 +16,7 @@ from .monitor import DetailSnapshot, load_snapshot, run_state
 from .runs import (
     RETRY_DISPOSITIONS,
     GraphResultItem,
+    RetryDisposition,
     RunId,
     as_result_payload,
     latest_round,
@@ -77,7 +78,7 @@ class Provider:
 class RetryLineageTelemetry:
     supersedes_branch: str
     supersedes_checkpoint: str
-    disposition: str
+    disposition: RetryDisposition
 
     @classmethod
     def from_value(cls, value: object) -> RetryLineageTelemetry | None:
@@ -97,7 +98,7 @@ class RetryLineageTelemetry:
             and disposition in RETRY_DISPOSITIONS
         ):
             return None
-        return cls(branch, checkpoint, disposition)
+        return cls(branch, checkpoint, cast(RetryDisposition, disposition))
 
     def record(self) -> dict[str, str]:
         return {
