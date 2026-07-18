@@ -33,12 +33,18 @@ ALLOWED_USER = {"persona", "done_when", "max_turns"}
 
 
 def persona_files(persona_dir: Path) -> list[Path]:
-    """Return recursive persona files, excluding underscore-prefixed paths."""
-    return sorted(
-        path
-        for path in persona_dir.rglob("*.yaml")
-        if not any(part.startswith("_") for part in path.relative_to(persona_dir).parts)
-    )
+    """Return recursive personas whose resolved targets remain in the catalog."""
+    root = persona_dir.resolve()
+    files: list[Path] = []
+    for path in persona_dir.rglob("*.yaml"):
+        if any(part.startswith("_") for part in path.relative_to(persona_dir).parts):
+            continue
+        try:
+            path.resolve().relative_to(root)
+        except (OSError, RuntimeError, ValueError):
+            continue
+        files.append(path)
+    return sorted(files)
 
 
 def persona_path(name: str, persona_dir: Path = PERSONA_DIR) -> Path:

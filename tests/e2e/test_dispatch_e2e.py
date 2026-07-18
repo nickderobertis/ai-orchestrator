@@ -39,6 +39,12 @@ def test_subdir_persona_scaffolding_and_recursive_validation_cli(tmp_path) -> No
     )
     assert scaffold.returncode == 0, scaffold.stderr
     assert (persona_dir / "repo" / "specialist.yaml").is_file()
+    external = tmp_path / "external.yaml"
+    external.write_text("invalid: [unclosed\n", encoding="utf-8")
+    (persona_dir / "escaped.yaml").symlink_to(external)
+    (persona_dir / "_draft.yaml").write_text("invalid: [unclosed\n", encoding="utf-8")
+    (persona_dir / "_private").mkdir()
+    (persona_dir / "_private" / "hidden.yaml").write_text("invalid: [unclosed\n", encoding="utf-8")
 
     validate = subprocess.run(
         [
@@ -54,6 +60,21 @@ def test_subdir_persona_scaffolding_and_recursive_validation_cli(tmp_path) -> No
     )
     assert validate.returncode == 0, validate.stderr
     assert "1 persona(s) OK" in validate.stdout
+
+
+@pytest.mark.parametrize("name", ["../escape", "repo/../escape", "repo//name"])
+def test_new_persona_cli_rejects_unsafe_names(tmp_path, name) -> None:
+    persona_dir = tmp_path / "personas"
+    result = subprocess.run(
+        ["just", "new-persona", name, "--persona-dir", str(persona_dir)],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+    )
+
+    assert result.returncode != 0
+    assert "invalid persona name" in result.stderr
+    assert not persona_dir.exists()
 
 
 def test_real_onejudge_cli_matches_adopted_contract(

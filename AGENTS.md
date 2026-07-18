@@ -187,8 +187,7 @@ above; add a persona only for a genuinely distinct role or review bar. A dedicat
 `reviewer` is reserved for complex DAGs where one agent reviews and integrates
 several agents' independently produced work, since the simulated-user supervisor
 already reviews every dispatch. Draft new roles in `scratch/personas/`; promote a
-proven role only through the isolated self-dispatch rule. Catalog and authoring
-rules: `personas/README.md`.
+proven role only through the isolated self-dispatch rule.
 
 ## The two sides of the conversation
 

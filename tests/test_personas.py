@@ -39,6 +39,16 @@ def test_persona_files_discovers_subdirectories_and_skips_private_paths(tmp_path
     assert persona_files(tmp_path) == [tmp_path / "repo" / "specialist.yaml"]
 
 
+def test_persona_files_skips_symlink_that_escapes_catalog(tmp_path) -> None:
+    persona_dir = tmp_path / "personas"
+    persona_dir.mkdir()
+    external = tmp_path / "external.yaml"
+    external.touch()
+    (persona_dir / "escaped.yaml").symlink_to(external)
+
+    assert persona_files(persona_dir) == []
+
+
 def test_valid_persona_has_no_errors() -> None:
     data = {"agent": {"instructions": "do x"}, "user": {"persona": "review x"}}
     assert validate_persona(data) == []

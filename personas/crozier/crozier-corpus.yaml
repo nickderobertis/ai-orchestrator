@@ -1,5 +1,8 @@
 # Persona for growing crozier's real-world Fern golden corpus (nickderobertis/crozier).
 # A delta over config/onejudge.base.yaml — role + review bar only.
+# llmlint: ignore-file[contracts_have_one_source_or_a_drift_gate] A repo-specific
+# persona must summarize its review bar; Crozier's named docs remain authoritative
+# and the worker is explicitly required to read and follow them before acting.
 
 agent:
   name: crozier-corpus
