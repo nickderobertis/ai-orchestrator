@@ -41,6 +41,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import json
+import math
 import os
 import re
 import socket
@@ -1259,7 +1260,7 @@ def stream(
 
 
 def _positive(parser: argparse.ArgumentParser, name: str, value: float) -> float:
-    if value <= 0:
+    if not math.isfinite(value) or value <= 0:
         parser.error(f"{name} must be a positive number of seconds")
     return value
 

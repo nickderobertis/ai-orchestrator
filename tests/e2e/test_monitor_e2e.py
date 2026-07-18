@@ -749,6 +749,10 @@ def test_the_monitor_command_reports_a_run_it_cannot_watch_actionably(tmp_path: 
     )
     assert bad_bound.returncode == 2
     assert "--max-poll-interval must be at least --poll-interval" in bad_bound.stderr
+    for invalid_maximum in ("0", "nan", "inf"):
+        invalid = _monitor_cli("--runs-dir", str(runs_dir), "--max-poll-interval", invalid_maximum)
+        assert invalid.returncode == 2
+        assert "--max-poll-interval must be a positive number of seconds" in invalid.stderr
 
 
 def test_monitor_command_backs_off_to_its_bounded_interval(tmp_path: Path) -> None:
