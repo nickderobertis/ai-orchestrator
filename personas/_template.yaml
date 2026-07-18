@@ -1,4 +1,4 @@
-# Persona template. `just new-persona <name>` copies this to personas/<name>.yaml.
+# Persona template. `just new-persona <name>` copies this to the named catalog path.
 #
 # A persona is a DELTA over config/onejudge.base.yaml — put only what makes this
 # role different here. Everything else (provider, session, the shared agent

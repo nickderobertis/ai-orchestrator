@@ -23,6 +23,39 @@ FAKE_BACKEND = REPO_ROOT / "tests" / "e2e" / "fake_backend.py"
 FAKE_HARNESS = REPO_ROOT / "tests" / "e2e" / "fake_harness.py"
 
 
+def test_subdir_persona_scaffolding_and_recursive_validation_cli(tmp_path) -> None:
+    persona_dir = tmp_path / "personas"
+    scaffold = subprocess.run(
+        [
+            "just",
+            "new-persona",
+            "repo/specialist",
+            "--persona-dir",
+            str(persona_dir),
+        ],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+    )
+    assert scaffold.returncode == 0, scaffold.stderr
+    assert (persona_dir / "repo" / "specialist.yaml").is_file()
+
+    validate = subprocess.run(
+        [
+            "uv",
+            "run",
+            "orchestrator-validate-personas",
+            "--persona-dir",
+            str(persona_dir),
+        ],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+    )
+    assert validate.returncode == 0, validate.stderr
+    assert "1 persona(s) OK" in validate.stdout
+
+
 def test_real_onejudge_cli_matches_adopted_contract(
     onejudge_bin: str, adopted_onejudge_version: str
 ) -> None:
@@ -83,6 +116,19 @@ def test_dispatch_completes_via_supervisor_loop(command_base, onejudge_bin) -> N
     assert report.usage.get("output_tokens", 0) > 0
     assert report.verdicts and report.verdicts[0]["verdict"]["value"] is True
     assert report.assessment == "- Add a regression test for the adjacent edge case."
+
+
+def test_dispatch_subdir_qualified_persona_via_real_onejudge(command_base, onejudge_bin) -> None:
+    report = dispatch(
+        "crozier/crozier-corpus",
+        "complete-now: verify subdirectory persona dispatch.",
+        base_path=command_base(),
+        persona_dir=PERSONA_DIR,
+        onejudge_bin=onejudge_bin,
+    )
+
+    assert report.completed
+    assert report.persona == "crozier/crozier-corpus"
 
 
 def test_dispatch_forwards_validated_environment_to_real_provider(
@@ -163,6 +209,12 @@ def test_dispatch_hits_turn_cap_when_never_done(command_base, onejudge_bin) -> N
 def test_dispatch_unknown_persona_raises(command_base, onejudge_bin) -> None:
     with pytest.raises(DispatchError, match="unknown persona"):
         dispatch("no-such-persona", "x", base_path=command_base(), onejudge_bin=onejudge_bin)
+
+
+@pytest.mark.parametrize("persona", ["../engineer", "/engineer", "repo/../engineer"])
+def test_dispatch_rejects_unsafe_persona_names(persona, command_base, onejudge_bin) -> None:
+    with pytest.raises(DispatchError, match="invalid persona name"):
+        dispatch(persona, "x", base_path=command_base(), onejudge_bin=onejudge_bin)
 
 
 def test_dispatch_cli_json_output(command_base, onejudge_bin, capsys) -> None:
