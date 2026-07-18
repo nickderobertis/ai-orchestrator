@@ -91,7 +91,10 @@ and what each action unblocks.
 
 `just runs` says where a round *ended* and `just history-show` says everything
 about one thing in it. `just monitor` answers the question in between — "what is
-happening right now, across the whole graph?" — by folding four stores that settle
+happening right now, across the whole run?" It is the standard first view for
+every recorded in-flight dispatch: both `run-plan` graphs and single
+`repo-task`/`repo-task-auto` lifecycle nodes (the auto wrapper records a
+monitorable run). It folds four stores that settle
 at different times into one ordered stream:
 
 | Source | Read from | Reported when |
@@ -100,6 +103,11 @@ at different times into one ordered stream:
 | oneharness history | sessions whose `run_id` label names this run | a session's status or turn count moves |
 | Git | commits on each known lifecycle branch | once per commit, ever |
 | GitHub | each lifecycle-linked PR | its state or any check changes |
+
+PR check events identify the check, state, and whether it is required, and emit
+each transition. Do not replace this aggregate view with an ad hoc `gh pr checks`
+poller or bespoke lifecycle watch script. Start with `just monitor`; a targeted
+`gh` query remains appropriate for a one-off detail absent from its stream.
 
 ```sh
 just monitor                      # newest active run, follow until it completes

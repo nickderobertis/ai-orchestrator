@@ -81,7 +81,17 @@ The registry uses its own process-shared locks for resolution and first clone. I
 JSON is reloaded and merged while locked, then atomically replaced, so concurrent
 registrations are retained and interruption cannot leave partial JSON.
 
-### Self-dispatch hazard: worktrees share the canonical `.git`
+### Self-dispatch isolation for this repository
+
+Multiple orchestrators operate concurrently from this repository's canonical
+checkout. Treat that checkout strictly as the publication checkout: never author
+changes in its working tree, including temporary plan files, personas, or docs.
+Dispatch every change into a worktree created from the registered
+`local/ai-orchestrator-isolated` execution clone, then let the registered local
+workflow integrate it and fast-forward the canonical checkout. This preserves the
+orchestrator's narrow authority to merge, fast-forward, sync, or resolve a small
+conflict in already-dispatched work; it prohibits using the shared tree to author
+the payload.
 
 A worktree shares its canonical checkout's `.git` common dir (config, refs, object
 store). That is safe for ordinary changes, but hazardous when the *dispatched agent
