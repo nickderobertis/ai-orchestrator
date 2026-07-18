@@ -19,7 +19,7 @@ just check              # deterministic gate (format, lint, types, personas, tes
 just gate               # complete pre-push gate, including llmlint
 
 # Dispatch one subtask with a persona (task passed over the CLI):
-just dispatch backend-engineer "Add a /health endpoint and test it."
+just dispatch engineer "Add a /health endpoint and test it."
 
 # Run one recorded graph mixing agents, repos, and human gates:
 just run-plan examples/tracked-graph.example.json
@@ -31,10 +31,10 @@ just next-round <run-id> --complete-human release-approval
 just integrate claude/api claude/docs --push
 
 # Verify and publish a lifecycle-preserved branch through its registered workflow:
-just repo-recover ai-orchestrator/backend-engineer/abc123 --repo /path/to/checkout
+just repo-recover ai-orchestrator/engineer/abc123 --repo /path/to/checkout
 
 # Self-dispatch from a safety clone while publishing through the canonical identity:
-just repo-task /path/to/canonical backend-engineer - \
+just repo-task /path/to/canonical engineer - \
   --execution-checkout /path/to/safety-clone
 
 # Deliberately change publication policy for every alias of one repository identity:

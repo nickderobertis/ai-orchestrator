@@ -28,7 +28,7 @@ FULL_SHA = "0123abcdef4567890123abcdef4567890123abcd"
 PR_URL = "https://github.com/acme/app/pull/7"
 PLAN: dict[str, Any] = {
     "concurrency": 1,
-    "tasks": [{"id": "api", "persona": "backend-engineer", "task": "ship it"}],
+    "tasks": [{"id": "api", "persona": "engineer", "task": "ship it"}],
 }
 
 

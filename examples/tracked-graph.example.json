@@ -22,8 +22,9 @@
       "steps": [
         {
           "id": "implement",
-          "persona": "backend-engineer",
-          "task": "Implement the approved API and rollout behavior with realistic request tests."
+          "persona": "engineer",
+          "task": "Implement the approved API and rollout behavior with realistic request tests.",
+          "done_when": "the approved API and rollout contract are proven through real requests and the repository's full gate passes"
         },
         {
           "id": "staging-approval",

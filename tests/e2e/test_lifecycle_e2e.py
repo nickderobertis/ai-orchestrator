@@ -120,7 +120,7 @@ def test_repo_plan_ledger_and_guided_next_round(
             {
                 "id": "change",
                 "repo": str(canonical),
-                "persona": "backend-engineer",
+                "persona": "engineer",
                 "task": "should-fail write-change: preserve this partial attempt",
                 "skip_verify": True,
                 "workflow": "local",
@@ -194,7 +194,7 @@ def test_local_identity_executes_in_safety_clone_and_publishes_without_pr(
     result = run_repo_task(
         str(canonical),
         "Change the git subsystem from an isolated safety clone.",
-        "backend-engineer",
+        "engineer",
         workspace=Workspace(tmp_path / "worktrees"),
         execution_checkout=safety,
         github=github,
@@ -236,7 +236,7 @@ def test_safety_clone_refuses_publication_checkout_on_nonroot_branch(tmp_path, b
     result = run_repo_task(
         str(canonical),
         "Do not mutate the operator branch.",
-        "backend-engineer",
+        "engineer",
         workspace=Workspace(tmp_path / "nonroot-worktrees"),
         execution_checkout=safety,
         dispatch_fn=dispatch_fn,
@@ -259,7 +259,7 @@ def test_registered_remote_identity_keeps_pr_flow(tmp_path, bare_origin) -> None
     result = run_repo_task(
         str(canonical),
         "Publish this identity through review.",
-        "backend-engineer",
+        "engineer",
         workspace=Workspace(tmp_path / "remote-worktrees"),
         github=github,
         dispatch_fn=make_writing_dispatch(filename="reviewed.txt"),
@@ -286,7 +286,7 @@ def test_team_default_opens_ready_for_review_pr_without_polling(tmp_path, bare_o
     result = run_repo_task(
         str(canonical),
         "Open a team-owned change for review.",
-        "backend-engineer",
+        "engineer",
         workspace=Workspace(tmp_path / "team-worktrees"),
         github=github,
         dispatch_fn=make_writing_dispatch(filename="team.txt"),
@@ -309,7 +309,7 @@ def test_team_explicit_auto_merges_remote_pr(tmp_path, bare_origin) -> None:
     result = run_repo_task(
         str(canonical),
         "Merge an explicitly automated team change.",
-        "backend-engineer",
+        "engineer",
         workspace=Workspace(tmp_path / "team-auto-worktrees"),
         github=FakeGitHub(origin),
         dispatch_fn=make_writing_dispatch(filename="team-auto.txt"),
@@ -334,7 +334,7 @@ def test_local_single_owner_none_opens_pr_without_mutating_stored_workflow(
     result = run_repo_task(
         str(canonical),
         "Temporarily publish local work for review.",
-        "backend-engineer",
+        "engineer",
         workspace=Workspace(tmp_path / "local-none-worktrees"),
         github=FakeGitHub(origin),
         dispatch_fn=make_writing_dispatch(filename="local-none.txt"),
@@ -398,7 +398,7 @@ def test_public_lifecycle_type_workflow_policy_matrix(
     result = run_repo_task(
         str(canonical),
         "Exercise one effective publication decision.",
-        "backend-engineer",
+        "engineer",
         workspace=Workspace(tmp_path / "policy-matrix-worktrees"),
         github=github,
         repo_type=repo_type,
@@ -430,7 +430,7 @@ def test_local_repo_direct_merge(tmp_path, bare_origin) -> None:
     result = run_repo_task(
         str(origin),  # a local path → local direct-merge strategy is auto-selected
         "Add a change file.",
-        "backend-engineer",
+        "engineer",
         workspace=ws,
         dispatch_fn=make_writing_dispatch(filename="feature.txt"),
         verify_cmd=["true"],  # explicit gate so the test never depends on make/just
@@ -450,7 +450,7 @@ def test_local_repo_non_main_default_and_gate_context(tmp_path, bare_origin) -> 
     result = run_repo_task(
         str(origin),
         "Add a portable change.",
-        "backend-engineer",
+        "engineer",
         workspace=ws,
         dispatch_fn=make_writing_dispatch(filename="portable.txt"),
         verify_cmd=[
@@ -494,7 +494,7 @@ def test_competing_local_publishers_rebuild_and_reverify_after_push_race(
         return run_repo_task(
             str(origin),
             f"Publish from {machine}.",
-            "backend-engineer",
+            "engineer",
             workspace=ws,
             branch=f"feature/{machine}",
             dispatch_fn=make_writing_dispatch(filename=f"{machine}.txt"),
@@ -518,7 +518,7 @@ def test_local_repo_gate_failure_blocks_merge(tmp_path, bare_origin) -> None:
     result = run_repo_task(
         str(origin),
         "Add a change that fails the gate.",
-        "backend-engineer",
+        "engineer",
         workspace=_workspace(tmp_path, origin),
         dispatch_fn=make_writing_dispatch(filename="feature.txt"),
         verify_cmd=["false"],  # gate fails → never pushes or merges
@@ -546,7 +546,7 @@ def test_local_repo_syncs_advanced_base_before_gate(tmp_path, bare_origin) -> No
     result = run_repo_task(
         str(origin),
         "Add a feature while main advances.",
-        "backend-engineer",
+        "engineer",
         workspace=ws,
         dispatch_fn=dispatch_after_base_advances,
         verify_cmd=[
@@ -582,7 +582,7 @@ def test_local_repo_sync_conflict_aborts_before_gate_or_push(tmp_path, bare_orig
     result = run_repo_task(
         str(origin),
         "Edit the same file as a concurrent main change.",
-        "backend-engineer",
+        "engineer",
         workspace=_workspace(tmp_path, origin),
         dispatch_fn=conflicting_dispatch,
         verify_cmd=["sh", "-c", "touch GATE_RAN && false"],
@@ -611,7 +611,7 @@ def test_local_repo_no_gate_detected_proceeds(tmp_path, bare_origin) -> None:
     result = run_repo_task(
         str(origin),
         "Add a change with no detectable local gate.",
-        "backend-engineer",
+        "engineer",
         workspace=_workspace(tmp_path, origin),
         dispatch_fn=make_writing_dispatch(filename="feature.txt"),
         # no verify_cmd → detect_gate finds nothing (only README in the repo)
@@ -626,7 +626,7 @@ def test_skip_verify_bypasses_the_gate(tmp_path, bare_origin) -> None:
     result = run_repo_task(
         str(origin),
         "Add a change with the gate skipped.",
-        "backend-engineer",
+        "engineer",
         workspace=_workspace(tmp_path, origin),
         dispatch_fn=make_writing_dispatch(filename="feature.txt"),
         skip_verify=True,  # no local gate runs at all
@@ -643,7 +643,7 @@ def test_agent_not_completed_stops_early(tmp_path, bare_origin) -> None:
     result = run_repo_task(
         str(origin),
         "Task the agent will not finish.",
-        "backend-engineer",
+        "engineer",
         workspace=ws,
         dispatch_fn=make_writing_dispatch(filename="partial.txt", completed=False),
         verify_cmd=["true"],
@@ -683,7 +683,7 @@ def test_clean_committed_partial_work_is_marked_and_recoverable(tmp_path, bare_o
     result = run_repo_task(
         str(canonical),
         "Commit partial work, then hit the turn cap.",
-        "backend-engineer",
+        "engineer",
         workspace=workspace,
         branch="feature/clean-committed-partial",
         dispatch_fn=committing_dispatch,
@@ -755,7 +755,7 @@ def test_github_auto_merge_on_required_checks(tmp_path, bare_origin) -> None:
     result = run_repo_task(
         "acme/widget",  # a GitHub-style slug → GitHub strategy
         "Add a feature file.",
-        "backend-engineer",
+        "engineer",
         workspace=workspace,
         merge=GitHubMergeStrategy(github),
         url=str(origin),  # but clone/push the real bare repo
@@ -786,7 +786,7 @@ def test_github_pr_title_comes_from_agent_commit_subject(tmp_path, bare_origin) 
     result = run_repo_task(
         "acme/widget",
         "Fix a silent session-capture failure in oneharness, and the unfaithful behavior.",
-        "backend-engineer",
+        "engineer",
         workspace=_workspace(tmp_path, origin),
         merge=GitHubMergeStrategy(github),
         url=str(origin),
@@ -831,7 +831,7 @@ def test_github_second_run_reuses_open_pr_and_merges(tmp_path, bare_origin) -> N
     first = run_repo_task(
         "acme/widget",
         "Start a feature.",
-        "backend-engineer",
+        "engineer",
         workspace=workspace,
         merge=GitHubMergeStrategy(github),
         url=str(origin),
@@ -857,7 +857,7 @@ def test_github_second_run_reuses_open_pr_and_merges(tmp_path, bare_origin) -> N
     second = run_repo_task(
         "acme/widget",
         "Continue the feature.",
-        "backend-engineer",
+        "engineer",
         workspace=workspace,
         merge=GitHubMergeStrategy(github),
         url=str(origin),
@@ -879,7 +879,7 @@ def test_github_auto_merge_unavailable_falls_back_to_direct(tmp_path, bare_origi
     result = run_repo_task(
         "acme/widget",
         "Add a feature file.",
-        "backend-engineer",
+        "engineer",
         workspace=_workspace(tmp_path, origin),
         merge=GitHubMergeStrategy(github),
         url=str(origin),
@@ -898,7 +898,7 @@ def test_github_required_check_failure_blocks_merge(tmp_path, bare_origin) -> No
     result = run_repo_task(
         "acme/widget",
         "Add a feature file.",
-        "backend-engineer",
+        "engineer",
         workspace=_workspace(tmp_path, origin),
         merge=GitHubMergeStrategy(github),
         url=str(origin),
@@ -988,7 +988,7 @@ def test_remote_human_workstream_draft_checkpoint_and_safe_resume(tmp_path, bare
         url=str(origin),
         github=github,
         steps=[
-            Step("prepare-bad", "backend-engineer", "prepare a rejected checkpoint"),
+            Step("prepare-bad", "engineer", "prepare a rejected checkpoint"),
             Step("reject", task="Reject this checkpoint.", kind="human", deps=["prepare-bad"]),
         ],
         branch="feature/rejected-human-pause",
@@ -1020,9 +1020,9 @@ def test_remote_human_workstream_draft_checkpoint_and_safe_resume(tmp_path, bare
         f"echo gate >> {shlex.quote(str(gate_log))}; test -f base.txt && test -f prepare.txt",
     ]
     steps = [
-        Step("prepare", "backend-engineer", "prepare remote work"),
+        Step("prepare", "engineer", "prepare remote work"),
         Step("approve", task="Approve the checkpoint.", kind="human", deps=["prepare"]),
-        Step("implement", "backend-engineer", "implement after approval", deps=["approve"]),
+        Step("implement", "engineer", "implement after approval", deps=["approve"]),
         Step("release", task="Release the implementation.", kind="human", deps=["implement"]),
         Step("finalize", "test-engineer", "finalize publication", deps=["release"]),
     ]
@@ -1203,8 +1203,8 @@ def test_multi_pr_dag_across_repos(tmp_path, bare_origin) -> None:
 
     plan = RepoPlan(
         tasks=[
-            RepoPlanNode("a", str(repo_x), "backend-engineer", "part A on repo X"),
-            RepoPlanNode("b", str(repo_y), "backend-engineer", "part B on repo Y"),
+            RepoPlanNode("a", str(repo_x), "engineer", "part A on repo X"),
+            RepoPlanNode("b", str(repo_y), "engineer", "part B on repo Y"),
             RepoPlanNode("c", str(repo_x), "reviewer", "part C on repo X", deps=["a"]),
         ],
         concurrency=3,
@@ -1248,12 +1248,12 @@ def test_linear_team_stack_targets_open_dependency_and_includes_pr_link(
         RepoPlan(
             [
                 RepoPlanNode(
-                    "parent", str(canonical), "backend-engineer", "parent", branch="feature/parent"
+                    "parent", str(canonical), "engineer", "parent", branch="feature/parent"
                 ),
                 RepoPlanNode(
                     "child",
                     str(canonical),
-                    "backend-engineer",
+                    "engineer",
                     "child",
                     deps=["parent"],
                     branch="feature/child",
@@ -1289,7 +1289,7 @@ def test_cross_round_human_gate_preserves_open_same_repo_stack(tmp_path, bare_or
             {
                 "id": "parent",
                 "repo": str(canonical),
-                "persona": "backend-engineer",
+                "persona": "engineer",
                 "task": "parent",
                 "branch": "feature/human-stack-parent",
             },
@@ -1302,7 +1302,7 @@ def test_cross_round_human_gate_preserves_open_same_repo_stack(tmp_path, bare_or
             {
                 "id": "child",
                 "repo": str(canonical),
-                "persona": "backend-engineer",
+                "persona": "engineer",
                 "task": "child",
                 "branch": "feature/human-stack-child",
                 "deps": ["approval"],
@@ -1371,7 +1371,7 @@ def test_cross_round_root_merged_pr_anchor_is_dropped_after_squash(tmp_path, bar
     parent = run_repo_task(
         str(canonical),
         "parent",
-        "backend-engineer",
+        "engineer",
         workspace=workspace,
         github=github,
         branch="feature/squashed-parent",
@@ -1395,7 +1395,7 @@ def test_cross_round_root_merged_pr_anchor_is_dropped_after_squash(tmp_path, bar
     child = run_repo_task(
         str(canonical),
         "child",
-        "backend-engineer",
+        "engineer",
         workspace=workspace,
         github=github,
         branch="feature/post-squash-child",
@@ -1430,7 +1430,7 @@ def test_legacy_untyped_anchor_from_other_repo_is_scheduling_only(tmp_path, bare
     left_result = run_repo_task(
         str(left),
         "left",
-        "backend-engineer",
+        "engineer",
         workspace=Workspace(tmp_path / "legacy-left-worktrees"),
         github=FakeGitHub(left_origin),
         branch="feature/legacy-left",
@@ -1442,7 +1442,7 @@ def test_legacy_untyped_anchor_from_other_repo_is_scheduling_only(tmp_path, bare
     right_result = run_repo_task(
         str(right),
         "right",
-        "backend-engineer",
+        "engineer",
         workspace=Workspace(tmp_path / "legacy-right-worktrees"),
         github=FakeGitHub(right_origin),
         branch="feature/legacy-right",
@@ -1465,7 +1465,7 @@ def test_stack_anchor_for_different_root_fails_before_dispatch(tmp_path, bare_or
     parent = run_repo_task(
         str(canonical),
         "parent",
-        "backend-engineer",
+        "engineer",
         workspace=workspace,
         github=github,
         branch="feature/root-mismatch-parent",
@@ -1481,7 +1481,7 @@ def test_stack_anchor_for_different_root_fails_before_dispatch(tmp_path, bare_or
     child = run_repo_task(
         str(canonical),
         "child",
-        "backend-engineer",
+        "engineer",
         workspace=workspace,
         github=github,
         branch="feature/root-mismatch-child",
@@ -1511,7 +1511,7 @@ def test_closed_and_missing_stack_anchors_fail_before_dispatch(tmp_path, bare_or
     parent = run_repo_task(
         str(canonical),
         "parent",
-        "backend-engineer",
+        "engineer",
         workspace=workspace,
         github=github,
         branch="feature/closed-parent",
@@ -1532,7 +1532,7 @@ def test_closed_and_missing_stack_anchors_fail_before_dispatch(tmp_path, bare_or
     closed = run_repo_task(
         str(canonical),
         "closed child",
-        "backend-engineer",
+        "engineer",
         workspace=workspace,
         github=github,
         branch="feature/closed-child",
@@ -1543,7 +1543,7 @@ def test_closed_and_missing_stack_anchors_fail_before_dispatch(tmp_path, bare_or
     missing = run_repo_task(
         str(canonical),
         "missing child",
-        "backend-engineer",
+        "engineer",
         workspace=workspace,
         github=github,
         branch="feature/missing-child",
@@ -1587,16 +1587,12 @@ def test_multi_parent_stack_uses_synthetic_base_and_child_only_diff(tmp_path, ba
     result = run_repo_plan(
         RepoPlan(
             [
-                RepoPlanNode(
-                    "left", str(canonical), "backend-engineer", "left", branch="feature/left"
-                ),
-                RepoPlanNode(
-                    "right", str(canonical), "backend-engineer", "right", branch="feature/right"
-                ),
+                RepoPlanNode("left", str(canonical), "engineer", "left", branch="feature/left"),
+                RepoPlanNode("right", str(canonical), "engineer", "right", branch="feature/right"),
                 RepoPlanNode(
                     "child",
                     str(canonical),
-                    "backend-engineer",
+                    "engineer",
                     "child",
                     deps=["left", "right"],
                     branch="feature/combined-child",
@@ -1652,14 +1648,14 @@ def test_multi_parent_stack_deduplicates_ancestor_prerequisites(tmp_path, bare_o
                 RepoPlanNode(
                     "ancestor",
                     str(canonical),
-                    "backend-engineer",
+                    "engineer",
                     "ancestor",
                     branch="feature/ancestor",
                 ),
                 RepoPlanNode(
                     "descendant",
                     str(canonical),
-                    "backend-engineer",
+                    "engineer",
                     "descendant",
                     deps=["ancestor"],
                     branch="feature/descendant",
@@ -1667,7 +1663,7 @@ def test_multi_parent_stack_deduplicates_ancestor_prerequisites(tmp_path, bare_o
                 RepoPlanNode(
                     "child",
                     str(canonical),
-                    "backend-engineer",
+                    "engineer",
                     "child",
                     deps=["descendant", "ancestor"],
                     branch="feature/ancestry-child",
@@ -1724,21 +1720,21 @@ def test_stack_conflict_aborts_before_child_dispatch_and_skips_descendant(
                 RepoPlanNode(
                     "left",
                     str(canonical),
-                    "backend-engineer",
+                    "engineer",
                     "left",
                     branch="feature/conflict-left",
                 ),
                 RepoPlanNode(
                     "right",
                     str(canonical),
-                    "backend-engineer",
+                    "engineer",
                     "right",
                     branch="feature/conflict-right",
                 ),
                 RepoPlanNode(
                     "child",
                     str(canonical),
-                    "backend-engineer",
+                    "engineer",
                     "child",
                     deps=["left", "right"],
                     branch="feature/conflict-child",
@@ -1746,7 +1742,7 @@ def test_stack_conflict_aborts_before_child_dispatch_and_skips_descendant(
                 RepoPlanNode(
                     "descendant",
                     str(canonical),
-                    "backend-engineer",
+                    "engineer",
                     "descendant",
                     deps=["child"],
                 ),
@@ -1807,7 +1803,7 @@ def test_local_human_workstream_removes_worktree_and_resumes_same_branch(
         f"echo gate >> {shlex.quote(str(gate_log))}; test -f prepare.txt && test -f finalize.txt",
     ]
     steps = [
-        Step("prepare", "backend-engineer", "prepare the change"),
+        Step("prepare", "engineer", "prepare the change"),
         Step("approve", task="Approve the prepared change.", kind="human", deps=["prepare"]),
         Step("finalize", "test-engineer", "finalize the change", deps=["approve"]),
     ]
@@ -1875,7 +1871,7 @@ def test_workstream_multiple_onejudge_one_pr(tmp_path, bare_origin) -> None:
     origin = bare_origin()
     before = _tip(origin, "main")
     steps = [
-        Step("impl", "backend-engineer", "implement the feature"),
+        Step("impl", "engineer", "implement the feature"),
         Step("test", "test-engineer", "add tests", deps=["impl"]),
         Step("docs", "docs-writer", "document it", deps=["impl"]),
     ]
@@ -1919,7 +1915,7 @@ def test_step_commit_subject_comes_from_agent_commits(tmp_path, bare_origin) -> 
     result = run_repo_task(
         str(origin),
         "Repair capture using task prose that is not a commit subject.",
-        "backend-engineer",
+        "engineer",
         workspace=_workspace(tmp_path, origin),
         dispatch_fn=partly_committing_dispatch,
         verify_cmd=["true"],
@@ -1941,7 +1937,7 @@ def test_workstream_step_failure_stops_and_skips_dependents(tmp_path, bare_origi
     before = _tip(origin, "main")
     workspace = _workspace(tmp_path, origin)
     steps = [
-        Step("impl", "backend-engineer", "implement"),
+        Step("impl", "engineer", "implement"),
         Step("test", "test-engineer", "add tests", deps=["impl"]),
     ]
     result = run_repo_task(
@@ -1978,7 +1974,7 @@ def test_multi_pr_failure_skips_dependents(tmp_path, bare_origin) -> None:
 
     plan = RepoPlan(
         tasks=[
-            RepoPlanNode("a", str(repo_x), "backend-engineer", "failing part"),
+            RepoPlanNode("a", str(repo_x), "engineer", "failing part"),
             RepoPlanNode("b", str(repo_x), "reviewer", "dependent part", deps=["a"]),
         ],
         concurrency=2,

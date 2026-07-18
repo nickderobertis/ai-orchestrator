@@ -5,8 +5,9 @@
       "id": "api",
       "repo": "nickderobertis/some-service",
       "repo_type": "team",
-      "persona": "backend-engineer",
+      "persona": "engineer",
       "task": "Add a POST /health endpoint that returns build metadata, with tests that drive real requests. Keep the change scoped to the endpoint.",
+      "done_when": "real requests prove the endpoint response and validation behavior, and the repository's full gate passes",
       "title": "feat(api): add /health endpoint"
     },
     {
@@ -22,7 +23,7 @@
       "id": "client",
       "repo": "nickderobertis/some-client",
       "repo_type": "team",
-      "persona": "backend-engineer",
+      "persona": "engineer",
       "task": "Add a typed health() method to the client that calls GET /health, with a test against a real local server.",
       "deps": ["api"],
       "title": "feat(client): add health() method"
@@ -36,26 +37,15 @@
       "steps": [
         {
           "id": "impl",
-          "persona": "backend-engineer",
-          "task": "Implement a read-only /admin dashboard page that surfaces the health metadata."
-        },
-        {
-          "id": "test",
-          "persona": "test-engineer",
-          "task": "Add tests that render the /admin page and assert the health fields, driving real requests.",
-          "deps": ["impl"]
+          "persona": "engineer",
+          "task": "Implement a read-only /admin dashboard page that surfaces the health metadata, with tests that render the page and drive real requests.",
+          "done_when": "the rendered dashboard exposes every health field through real requests, access control is covered, and the full gate passes"
         },
         {
           "id": "approval",
           "kind": "human",
           "task": "Exercise the dashboard in staging and approve final review.",
-          "deps": ["test"]
-        },
-        {
-          "id": "review",
-          "persona": "reviewer",
-          "task": "Review the dashboard for correctness, access control, and missing edge cases; fix what you find.",
-          "deps": ["approval"]
+          "deps": ["impl"]
         }
       ]
     }

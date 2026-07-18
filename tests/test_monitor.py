@@ -52,7 +52,7 @@ RUN = RunId("watch-me")
 AT = datetime(2026, 7, 14, 12, 0, 0, tzinfo=UTC).timestamp()
 PLAN: dict[str, Any] = {
     "concurrency": 1,
-    "tasks": [{"id": "api", "persona": "backend-engineer", "task": "ship it"}],
+    "tasks": [{"id": "api", "persona": "engineer", "task": "ship it"}],
 }
 
 
@@ -88,7 +88,7 @@ def _event(**overrides: Any) -> MonitorEvent:
         "source": "journal",
         "kind": "node-started",
         "stream_id": GraphId(run_id=RUN, round=1, node="api"),
-        "summary": "node-started persona=backend-engineer",
+        "summary": "node-started persona=engineer",
         "key": "journal:watch-me:1",
     }
     return MonitorEvent(**{**fields, **overrides})
@@ -174,9 +174,7 @@ def test_only_the_text_stream_carries_the_header() -> None:
 def test_a_text_line_leads_with_the_id_to_ask_history_show_for() -> None:
     out = io.StringIO()
     Writer("text", out).event(_event())
-    assert out.getvalue() == (
-        "12:00:00  graph:watch-me/1/api  node-started persona=backend-engineer\n"
-    )
+    assert out.getvalue() == ("12:00:00  graph:watch-me/1/api  node-started persona=engineer\n")
 
 
 def test_a_jsonl_event_envelope_carries_exactly_one_typed_id() -> None:
@@ -188,7 +186,7 @@ def test_a_jsonl_event_envelope_carries_exactly_one_typed_id() -> None:
         "source": "journal",
         "kind": "node-started",
         "id": "graph:watch-me/1/api",
-        "summary": "node-started persona=backend-engineer",
+        "summary": "node-started persona=engineer",
     }
 
 
@@ -226,12 +224,12 @@ def test_a_round_transition_reaches_the_reader_as_state_not_as_an_id(tmp_path: P
     run_dir = tmp_path / RUN
     journal = open_journal(run_dir, RUN, 1)
     journal.append("round-started")
-    journal.append("node-started", node=NodeId("api"), detail={"persona": "backend-engineer"})
+    journal.append("node-started", node=NodeId("api"), detail={"persona": "engineer"})
     journal.append("round-finished")
 
     events = journal_events(RUN, run_dir)
     assert [str(event.stream_id) for event in events] == ["graph:watch-me/1/api"]
-    assert events[0].summary == "node-started persona=backend-engineer"
+    assert events[0].summary == "node-started persona=engineer"
 
 
 def test_a_summary_renders_an_allowlist_not_whatever_the_payload_holds(tmp_path: Path) -> None:

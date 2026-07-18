@@ -32,10 +32,17 @@ dependency-closed, and a GitHub PR URL must name the lifecycle repository.
 ## Decomposition and scheduling
 
 A fresh onejudge process pays a fixed setup cost to read and understand its
-project. Split work when independent pieces can run concurrently, when different
-personas materially improve it, or when one risky piece deserves a focused review
-bar. Keep tightly coupled or tiny work together. Dependencies should name only
-real inputs so unrelated branches remain parallel.
+project. It is also a highly capable coding agent, pair-programmed with and reviewed
+by a simulated-user supervisor that pushes back until the task is actually done.
+Bias toward fewer, larger coherent tasks that amortize setup. Split only for
+genuine parallelism, a real dependency, or a genuinely different role or review
+bar — not simply to give a capable agent a smaller slice. Put subtask-specific
+requirements in detailed `task` prose and explicit per-node `done_when` acceptance
+criteria, using `max_turns` when a task needs more room, rather than proliferating
+personas. Every dispatch already has the built-in supervisor/reviewer; reserve a
+dedicated `reviewer` step for complex DAGs where it reviews and integrates several
+agents' independently produced work. Dependencies should name only real inputs so
+unrelated branches remain parallel.
 
 `run-plan` starts every node whose dependencies are `done`, bounded by
 `concurrency`. Lifecycle dependencies on the same repository identity also carry

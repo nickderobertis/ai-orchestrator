@@ -11,18 +11,22 @@ role-specific parts live here.
 
 | Persona | Use it for |
 | --- | --- |
+| `engineer` | General implementation across server-side systems, UI, accessibility, and contract-aware libraries. |
 | `planner` | Decomposing work into an actionable, dependency-ordered plan (no implementation). |
-| `backend-engineer` | Server-side work: APIs, data models, business logic, persistence. |
-| `frontend-engineer` | UI work: components, state, styling, accessibility. |
 | `test-engineer` | Closing coverage gaps and writing realistic, un-mocked e2e tests. |
 | `docs-writer` | READMEs, reference docs, durable AGENTS.md notes. |
-| `reviewer` | Finding and reporting verified, severity-ranked issues in a change. |
 | `researcher` | Answering questions with evidence cited from the actual source. |
+| `reviewer` | Reviewing and integrating several agents' independently produced work in a complex DAG. |
+| `iac-author` | Project-specific infrastructure-as-code authoring and validation. |
+| `crozier-corpus` | Project-specific Crozier corpus research and curation. |
 
 ## Adding a persona
 
-Add one when a subtask needs a distinct role or a different review bar than any
-existing persona — not to make small wording tweaks.
+Prefer a detailed task with explicit per-node `done_when` acceptance criteria (and
+`max_turns` when needed) over a new persona. Add one only when a subtask needs a
+genuinely distinct general role or review bar. The simulated-user supervisor
+reviews every dispatch already; the dedicated `reviewer` is for multi-agent
+integration, not ordinary review of one change.
 
 ```sh
 just new-persona <name>      # scaffolds personas/<name>.yaml from _template.yaml

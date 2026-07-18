@@ -49,7 +49,7 @@ def test_direct_human_pause_attestation_and_release_use_real_onejudge(
                     },
                     {
                         "id": "publish",
-                        "persona": "backend-engineer",
+                        "persona": "engineer",
                         "task": "complete-now: publish the approved release.",
                         "deps": ["approve"],
                     },
@@ -162,7 +162,7 @@ def test_legacy_direct_plan_and_recorded_ledger_still_run(
         "tasks": [
             {
                 "id": "legacy-agent",
-                "persona": "backend-engineer",
+                "persona": "engineer",
                 "task": "complete-now: run the old direct plan.",
             }
         ],
@@ -265,7 +265,7 @@ def test_legacy_repo_plan_runs_through_canonical_and_deprecated_alias(
                         {
                             "id": name,
                             "repo": str(canonical),
-                            "persona": "backend-engineer",
+                            "persona": "engineer",
                             "task": task,
                             "skip_verify": True,
                             "workflow": "local",

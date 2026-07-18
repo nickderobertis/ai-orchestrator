@@ -44,9 +44,9 @@ def _result(outcome: str, **kw) -> LifecycleResult:
 
 
 def test_branch_name_is_deterministic() -> None:
-    a = _default_branch_name("backend-engineer", "do a thing")
-    assert a == _default_branch_name("backend-engineer", "do a thing")
-    assert a.startswith("ai-orchestrator/backend-engineer/")
+    a = _default_branch_name("engineer", "do a thing")
+    assert a == _default_branch_name("engineer", "do a thing")
+    assert a.startswith("ai-orchestrator/engineer/")
 
 
 def _commit_messages(*messages: str) -> list[lc.gitops.CommitMessage]:
@@ -293,7 +293,7 @@ def test_programmatic_stack_anchors_fail_before_repository_resolution(
     result = run_repo_task(
         "o/r",
         "task",
-        "backend-engineer",
+        "engineer",
         workspace=Workspace(tmp_path / "unused", resolver=lambda _spec: tmp_path / "missing"),
         stack_bases=[anchor],
     )
@@ -316,7 +316,7 @@ def test_load_valid_repo_plan(tmp_path) -> None:
             {
                 "concurrency": 2,
                 "tasks": [
-                    {"id": "a", "repo": "o/r", "persona": "backend-engineer", "task": "A"},
+                    {"id": "a", "repo": "o/r", "persona": "engineer", "task": "A"},
                     {
                         "id": "b",
                         "repo": "o/r",
@@ -746,7 +746,7 @@ def test_load_repo_plan_with_steps(tmp_path) -> None:
                         "id": "feature",
                         "repo": "o/r",
                         "steps": [
-                            {"id": "impl", "persona": "backend-engineer", "task": "build"},
+                            {"id": "impl", "persona": "engineer", "task": "build"},
                             {
                                 "id": "test",
                                 "persona": "test-engineer",
@@ -808,7 +808,7 @@ def test_load_repo_plan_accepts_consistent_human_resume(tmp_path) -> None:
         "branch": "feature/work",
         "base_branch": "main",
         "steps": [
-            {"id": "prepare", "persona": "backend-engineer", "task": "Prepare"},
+            {"id": "prepare", "persona": "engineer", "task": "Prepare"},
             {"id": "approve", "kind": "human", "task": "Approve", "deps": ["prepare"]},
         ],
         "resume": {
@@ -861,7 +861,7 @@ def test_load_repo_plan_rejects_inconsistent_human_resume(tmp_path, update, matc
         "branch": "feature/work",
         "base_branch": "main",
         "steps": [
-            {"id": "prepare", "persona": "backend-engineer", "task": "Prepare"},
+            {"id": "prepare", "persona": "engineer", "task": "Prepare"},
             {"id": "approve", "kind": "human", "task": "Approve", "deps": ["prepare"]},
         ],
         "resume": resume,
@@ -880,7 +880,7 @@ def test_load_repo_plan_rejects_resume_without_human_workstream(tmp_path) -> Non
     node = {
         "id": "work",
         "repo": "o/r",
-        "persona": "backend-engineer",
+        "persona": "engineer",
         "task": "Work",
         "resume": {
             "branch": "feature/work",
@@ -902,13 +902,11 @@ def test_run_repo_task_requires_task_or_steps(tmp_path) -> None:
 
 
 def test_workstream_branch_name_unique_and_task_identifiable() -> None:
-    a = _workstream_branch_name([Step("impl", "backend-engineer", "x")])
-    assert a != _workstream_branch_name([Step("impl", "backend-engineer", "x")])
-    assert "/979f9ea4-" in a
-    b = _workstream_branch_name(
-        [Step("impl", "backend-engineer", "x"), Step("test", "test-engineer", "y")]
-    )
-    assert a != b and a.startswith("ai-orchestrator/backend-engineer/")
+    a = _workstream_branch_name([Step("impl", "engineer", "x")])
+    assert a != _workstream_branch_name([Step("impl", "engineer", "x")])
+    assert "/37808517-" in a
+    b = _workstream_branch_name([Step("impl", "engineer", "x"), Step("test", "test-engineer", "y")])
+    assert a != b and a.startswith("ai-orchestrator/engineer/")
 
 
 def test_summary_shows_step_count() -> None:
@@ -958,7 +956,7 @@ def test_run_repo_task_journals_the_workstream_and_labels_each_dispatch(
         str(origin),
         workspace=workspace,
         steps=[
-            Step("impl", "backend-engineer", "impl"),
+            Step("impl", "engineer", "impl"),
             Step("check", "test-engineer", "check", deps=["impl"]),
         ],
         verify_cmd=["true"],
@@ -1013,7 +1011,7 @@ def test_run_repo_task_journals_a_step_that_hit_the_turn_cap(tmp_path, bare_orig
     result = run_repo_task(
         str(origin),
         workspace=workspace,
-        steps=[Step("impl", "backend-engineer", "impl")],
+        steps=[Step("impl", "engineer", "impl")],
         verify_cmd=["true"],
         dispatch_fn=fake_dispatch,
         journal=scope,
@@ -1049,9 +1047,9 @@ def test_run_repo_task_pauses_and_resumes_local_human_step(tmp_path, bare_origin
         repo_type="single-owner",
     )
     steps = [
-        Step("prepare", "backend-engineer", "prepare"),
+        Step("prepare", "engineer", "prepare"),
         Step("approve", task="approve this", kind="human", deps=["prepare"]),
-        Step("finish", "backend-engineer", "finish", deps=["approve"]),
+        Step("finish", "engineer", "finish", deps=["approve"]),
     ]
 
     paused = run_repo_task(
@@ -1134,7 +1132,7 @@ def test_run_repo_task_remote_pause_creates_non_empty_draft(tmp_path, bare_origi
         str(origin),
         workspace=workspace,
         steps=[
-            Step("prepare", "backend-engineer", "prepare"),
+            Step("prepare", "engineer", "prepare"),
             Step("approve", task="approve", kind="human", deps=["prepare"]),
         ],
         verify_cmd=["true"],
@@ -1399,7 +1397,7 @@ def test_run_repo_task_git_error_is_reported(tmp_path) -> None:
     result = run_repo_task(
         "acme/widget",
         "t",
-        "backend-engineer",
+        "engineer",
         workspace=Workspace(tmp_path / "ws"),
         url=str(tmp_path / "does-not-exist.git"),  # clone fails → GitError
         verify_cmd=["true"],
@@ -1416,7 +1414,7 @@ def test_main_task_json_output(monkeypatch, capsys) -> None:
         "run_repo_task",
         lambda *a, **k: _result("merged", pr=PullRequest(1, "url", "o/r", "b", "main")),
     )
-    rc = lc.main_task(["acme/widget", "backend-engineer", "do it", "--format", "json"])
+    rc = lc.main_task(["acme/widget", "engineer", "do it", "--format", "json"])
     assert rc == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["outcome"] == "merged" and payload["pr"] == "url"
@@ -1424,7 +1422,7 @@ def test_main_task_json_output(monkeypatch, capsys) -> None:
 
 def test_main_task_rejects_nonpositive_publication_attempts(capsys) -> None:
     with pytest.raises(SystemExit) as exc:
-        lc.main_task(["acme/widget", "backend-engineer", "do it", "--publication-attempts", "0"])
+        lc.main_task(["acme/widget", "engineer", "do it", "--publication-attempts", "0"])
     assert exc.value.code == 2
     assert "must be at least 1" in capsys.readouterr().err
 
@@ -1433,7 +1431,7 @@ def test_main_task_rejects_invalid_literal_branch_before_resolution(capsys) -> N
     rc = lc.main_task(
         [
             "acme/widget",
-            "backend-engineer",
+            "engineer",
             "do it",
             "--branch",
             "bad..branch",
@@ -1450,7 +1448,7 @@ def test_main_task_rejects_nonconventional_explicit_title(capsys) -> None:
     rc = lc.main_task(
         [
             "acme/widget",
-            "backend-engineer",
+            "engineer",
             "do it",
             "--title",
             "Fix the release",
@@ -1465,7 +1463,7 @@ def test_main_task_rejects_nonconventional_explicit_title(capsys) -> None:
 
 def test_main_task_human_nonzero_on_failure(monkeypatch, capsys) -> None:
     monkeypatch.setattr(lc, "run_repo_task", lambda *a, **k: _result("gate-failed"))
-    rc = lc.main_task(["acme/widget", "backend-engineer", "do it"])
+    rc = lc.main_task(["acme/widget", "engineer", "do it"])
     assert rc == 1
     assert "gate-failed" in capsys.readouterr().out
 
@@ -1488,7 +1486,7 @@ def test_main_task_reads_task_from_stdin(monkeypatch, capsys) -> None:
 
     monkeypatch.setattr(lc, "run_repo_task", fake_task)
     monkeypatch.setattr("sys.stdin", io.StringIO("task via stdin"))
-    rc = lc.main_task(["acme/widget", "backend-engineer"])  # task omitted → stdin
+    rc = lc.main_task(["acme/widget", "engineer"])  # task omitted → stdin
     assert rc == 0 and seen["task"] == "task via stdin"
 
 
