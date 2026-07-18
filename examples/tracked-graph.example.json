@@ -1,4 +1,5 @@
 {
+  "schema_version": 2,
   "name": "tracked-release",
   "concurrency": 3,
   "tasks": [
@@ -6,6 +7,12 @@
       "id": "design",
       "persona": "planner",
       "task": "Design the release, record its API and rollout contract in docs/design.md, and verify the plan against the current project."
+    },
+    {
+      "id": "unchanged-handoff",
+      "task": "Record that the readiness handoff expects no repository change or separate review evidence.",
+      "expects_no_diff": true,
+      "deps": ["design"]
     },
     {
       "id": "design-approval",

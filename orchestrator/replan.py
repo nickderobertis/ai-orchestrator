@@ -185,6 +185,8 @@ def next_round(
             node["deps"] = [d for d in previous_deps if d in kept_ids]
 
     plan: dict[str, Any] = {"concurrency": prev_plan.get("concurrency", 4), "tasks": next_tasks}
+    if "schema_version" in prev_plan:
+        plan["schema_version"] = prev_plan["schema_version"]
     if next_tasks:
         parse_graph(plan)  # bad edits (duplicate ids, cycles, missing fields) fail loudly
     return plan

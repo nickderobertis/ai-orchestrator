@@ -5,6 +5,9 @@ the canonical executor for direct onejudge work, full repository lifecycles, and
 explicit actions that only a person can complete. `just repo-plan` is a deprecated
 alias retained so old lifecycle-only plan files keep working.
 
+The current tracked-plan contract is schema version 2 (`"schema_version": 2`).
+Plans that omit the version retain version-1 behavior for compatibility.
+
 ## Node shapes
 
 Every top-level node needs a unique `id`; `deps` is an optional list of other
@@ -15,6 +18,14 @@ top-level ids. Omitted `kind` defaults to `agent` for compatibility.
 | Direct agent | `persona`, `task`; no `repo` | Dispatch one real onejudge process in the selected project directory. |
 | Lifecycle agent | `repo`, plus `persona` + `task` or `steps` | Work on an isolated branch/worktree, verify, and publish through the repository's registered policy. |
 | Human | `kind: human`, `task`; no persona or execution fields | Record action prose for a person. The harness never performs or infers it. |
+
+An agent node or lifecycle agent step may instead set `expects_no_diff: true`
+with `task` and no `persona` or `done_when`. This explicitly declares that the
+task expects no repository change and no separate review evidence. It settles as
+`done` with the existing `no-changes` outcome without dispatching onejudge. The
+executor does not infer this from task prose. Combining the declaration with
+`persona` or `done_when` is rejected while loading the plan, before any provider
+time is spent. Omitting `expects_no_diff` preserves normal dispatch behavior.
 
 A lifecycle `steps` list is its own DAG. Agent steps require `persona` and `task`.
 Human steps require `kind: human` and `task`, and are referenced outside the node
@@ -54,6 +65,8 @@ is static within one round. Adapt after reading its recorded result.
 Each node settles once per round:
 
 - `done`: the agent completed or the lifecycle published successfully.
+- `done` with outcome `no-changes`: an explicit `expects_no_diff` node settled
+  deterministically without an agent dispatch.
 - `waiting`: a ready human node or lifecycle human step needs action. Its
   `human_actions` entry includes the exact `task`, direct `unblocks`, and whether
   it unblocks workstream publication.
