@@ -253,7 +253,8 @@ against the complete stack, but the PR diff against its stack base is child-only
 After the final branch-vs-base gate passes and before a remote PR is created, the
 lifecycle performs one additional plain onejudge dispatch with the `pr-author`
 persona. That agent reads the completed diff and writes a terse body following
-`.github/pull_request_template.md` to a temporary path outside the worktree. The
+`.github/pull_request_template.md` (required `What` and `Why`, optional
+`Additional info`) to a temporary path outside the worktree. The
 lifecycle reads and removes that artifact, then appends stack metadata as usual.
 This costs exactly one extra dispatch per published PR, including workstream and
 draft-checkpoint PRs. An explicit title or body skips drafting. A failed,

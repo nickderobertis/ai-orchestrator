@@ -76,6 +76,9 @@ def main() -> int:
         return 1
     task = _task_text(messages)
     drafting = "Write the final body, and nothing else, to this absolute path:" in task
+    if drafting and "drafting-errors" in task:
+        sys.stderr.write("fake_backend: forced drafting provider failure\n")
+        return 1
     fail = "should-fail" in task or (drafting and "drafting-fails" in task)
 
     match op:

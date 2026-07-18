@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -107,6 +108,19 @@ def test_explicit_pr_metadata_skips_body_drafting(title, body, expected) -> None
 )
 def test_drafted_body_validation(body, expected) -> None:
     assert _valid_drafted_body(body) is expected
+
+
+def test_pr_author_contract_tracks_checked_in_template_persona_and_docs() -> None:
+    """Make intentional contract copies fail together when the template changes."""
+    root = Path(__file__).parents[1]
+    template = (root / ".github/pull_request_template.md").read_text(encoding="utf-8")
+    persona = (root / "personas/pr-author.yaml").read_text(encoding="utf-8")
+    docs = (root / "docs/repo-lifecycle.md").read_text(encoding="utf-8")
+    template_sections = re.findall(r"(?m)^## ([^\n]+)$", template)
+    assert template_sections == ["What", "Why", "Additional info"]
+    for section in template_sections:
+        assert section in persona
+        assert section in docs
 
 
 def _commit_messages(*messages: str) -> list[lc.gitops.CommitMessage]:

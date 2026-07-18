@@ -102,7 +102,25 @@ _SUCCESS_OUTCOMES = frozenset({"merged", "pr-open"})
 # recorded round resumes after a human attestation.
 _WAITING_OUTCOME = "waiting-human"
 
-DispatchFn = Callable[..., Report]
+
+class DispatchFn(Protocol):
+    """Structural boundary implemented by the real and deterministic dispatchers."""
+
+    def __call__(
+        self,
+        persona: str,
+        task: str,
+        *,
+        project_dir: str | None = None,
+        oneharness_mode: str | None = None,
+        base_path: str | Path = BASE_CONFIG,
+        persona_dir: str | Path = PERSONA_DIR,
+        session: str | None = None,
+        max_turns: int | None = None,
+        done_when: str | None = None,
+        labels: Mapping[str, str] | None = None,
+        env: dict[str, str] | None = None,
+    ) -> Report: ...
 
 
 @dataclass
@@ -841,7 +859,7 @@ def _run_steps(
         log.append("step-started", detail={"step_kind": step.kind, "persona": step.persona})
         dispatch_head = gitops.head_sha(worktree)
         report = dispatch_fn(
-            step.persona,
+            cast(str, step.persona),
             step.task,
             project_dir=str(worktree),
             oneharness_mode=oneharness_mode,

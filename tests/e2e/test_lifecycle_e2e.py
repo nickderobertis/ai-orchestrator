@@ -252,6 +252,25 @@ def test_real_lifecycle_dispatch_drafts_pr_bodies_and_preserves_fallbacks(
     assert empty.outcome == "pr-open"
     assert empty_task in github._prs[empty.pr.number].body
 
+    error_task = "complete-now write-change drafting-errors error fallback handoff"
+    error = run_repo_task(
+        "acme/widget",
+        error_task,
+        "engineer",
+        workspace=workspace,
+        github=github,
+        url=str(origin),
+        workflow="remote",
+        repo_type="single-owner",
+        merge_policy="none",
+        branch="draft-error",
+        base_path=base,
+        persona_dir=personas_dir,
+        verify_cmd=["true"],
+    )
+    assert error.outcome == "pr-open"
+    assert error_task in github._prs[error.pr.number].body
+
     explicit = run_repo_task(
         "acme/widget",
         "complete-now write-change explicit body handoff",
