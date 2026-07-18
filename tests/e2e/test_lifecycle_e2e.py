@@ -27,6 +27,8 @@ from typing import cast
 import pytest
 from fakes import FakeGitHub, make_writing_dispatch
 
+import orchestrator.graph as graph_module
+import orchestrator.lifecycle as lifecycle_module
 from orchestrator import gitops
 from orchestrator.dispatch import Report
 from orchestrator.github import PullRequest
@@ -39,6 +41,7 @@ from orchestrator.lifecycle import (
     StackBase,
     Step,
     main_plan,
+    main_task,
     result_payload,
     run_repo_plan,
     run_repo_task,
@@ -579,6 +582,247 @@ def test_registered_remote_identity_keeps_pr_flow(tmp_path, bare_origin) -> None
     assert result.repository_type == "single-owner"
     assert result.merge_policy == "auto"
     assert result.pr_base == "main"
+
+
+def test_verify_via_ci_iterates_real_dispatch_then_requires_green_branch_ci(
+    tmp_path, bare_origin, command_base, personas_dir, monkeypatch, capsys
+) -> None:
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-ci")
+    Registry().register(str(canonical), workflow="remote", repo_type="single-owner")
+    push_log = tmp_path / "ci-pushes.log"
+    hook = origin / "hooks" / "post-receive"
+    hook.write_text(
+        "#!/bin/sh\n"
+        "while read old new ref; do\n"
+        f'  git show "$new:CI_STATE.txt" 2>/dev/null >> {shlex.quote(str(push_log))} || true\n'
+        "done\n",
+        encoding="utf-8",
+    )
+    hook.chmod(0o755)
+    github = FakeGitHub(origin)
+    monkeypatch.setattr(lifecycle_module, "CliGitHubBackend", lambda: github)
+
+    green_rc = main_task(
+        [
+            str(canonical),
+            "engineer",
+            "ci-iterate exercise authoritative CI",
+            "--verify-via-ci",
+            "--workspace",
+            str(tmp_path / "ci-worktrees"),
+            "--base",
+            str(command_base(max_turns=2)),
+            "--persona-dir",
+            str(personas_dir),
+            "--poll-interval",
+            "0",
+            "--format",
+            "json",
+        ]
+    )
+    green = json.loads(capsys.readouterr().out)
+
+    assert green_rc == 0 and green["outcome"] == "merged", green["detail"]
+    assert push_log.read_text(encoding="utf-8").splitlines()[:2] == ["RED", "GREEN"]
+    assert _has_file(origin, "main", "CI_STATE.txt")
+    assert github._n == 1  # CI pre-verification and publication reuse one PR
+
+    red_github = FakeGitHub(origin, fail_checks=True)
+    red = run_repo_task(
+        str(canonical),
+        "complete-now write-change leave CI red",
+        "engineer",
+        workspace=Workspace(tmp_path / "red-worktrees"),
+        github=red_github,
+        verify_via_ci=True,
+        base_path=command_base(max_turns=2),
+        persona_dir=personas_dir,
+        sleep=lambda _: None,
+    )
+
+    assert red.outcome == "not-completed"
+    assert "ci=FAILURE" in red.detail
+    assert red.pr is not None
+
+
+def test_verify_via_ci_real_cli_rejects_local_and_tracked_node_can_opt_out(
+    tmp_path, bare_origin, command_base, personas_dir, monkeypatch, capsys
+) -> None:
+    local_origin = bare_origin()
+    local_checkout = gitops.clone(local_origin, tmp_path / "local-ci-checkout")
+    Registry().register(str(local_checkout), workflow="local", repo_type="single-owner")
+
+    rejected = main_task(
+        [
+            str(local_checkout),
+            "engineer",
+            "complete-now write-change",
+            "--verify-via-ci",
+            "--workspace",
+            str(tmp_path / "local-cli-worktrees"),
+            "--base",
+            str(command_base(max_turns=2)),
+            "--persona-dir",
+            str(personas_dir),
+            "--format",
+            "json",
+        ]
+    )
+    rejected_payload = json.loads(capsys.readouterr().out)
+    assert rejected == 1
+    assert "remote GitHub/PR workflow" in rejected_payload["detail"]
+
+    remote_origin = bare_origin()
+    remote_checkout = gitops.clone(remote_origin, tmp_path / "remote-ci-checkout")
+    Registry().register(str(remote_checkout), workflow="remote", repo_type="single-owner")
+    github = FakeGitHub(remote_origin, fail_checks=True)
+    monkeypatch.setattr(lifecycle_module, "CliGitHubBackend", lambda: github)
+    plan = tmp_path / "verify-via-ci-plan.json"
+    plan.write_text(
+        json.dumps(
+            {
+                "schema_version": 3,
+                "tasks": [
+                    {
+                        "id": "opt-out",
+                        "repo": str(remote_checkout),
+                        "persona": "engineer",
+                        "task": "complete-now write-change",
+                        "verify_via_ci": False,
+                        "merge_policy": "none",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    graph_rc = graph_module.main(
+        [
+            str(plan),
+            "--verify-via-ci",
+            "--no-record",
+            "--workspace",
+            str(tmp_path / "graph-worktrees"),
+            "--base",
+            str(command_base(max_turns=2)),
+            "--persona-dir",
+            str(personas_dir),
+            "--format",
+            "json",
+        ]
+    )
+    graph_payload_result = json.loads(capsys.readouterr().out)
+    assert graph_rc == 0
+    assert graph_payload_result["results"]["opt-out"]["outcome"] == "pr-open"
+
+    inherited_github = FakeGitHub(remote_origin)
+    monkeypatch.setattr(lifecycle_module, "CliGitHubBackend", lambda: inherited_github)
+    inherited_plan = tmp_path / "inherited-verify-via-ci-plan.json"
+    inherited_plan.write_text(
+        json.dumps(
+            {
+                "schema_version": 3,
+                "tasks": [
+                    {
+                        "id": "ci-default",
+                        "repo": str(remote_checkout),
+                        "persona": "engineer",
+                        "task": "complete-now write-change",
+                        "verify_cmd": ["false"],
+                        "merge_policy": "none",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    inherited_rc = graph_module.main(
+        [
+            str(inherited_plan),
+            "--verify-via-ci",
+            "--no-record",
+            "--workspace",
+            str(tmp_path / "inherited-graph-worktrees"),
+            "--base",
+            str(command_base(max_turns=2)),
+            "--persona-dir",
+            str(personas_dir),
+            "--format",
+            "json",
+        ]
+    )
+    inherited_payload = json.loads(capsys.readouterr().out)
+    assert inherited_rc == 0
+    assert inherited_payload["results"]["ci-default"]["outcome"] == "pr-open"
+
+    node_opt_in_plan = tmp_path / "node-verify-via-ci-plan.json"
+    node_opt_in_plan.write_text(
+        json.dumps(
+            {
+                "schema_version": 3,
+                "tasks": [
+                    {
+                        "id": "ci-node-opt-in",
+                        "repo": str(remote_checkout),
+                        "persona": "engineer",
+                        "task": "complete-now write-unique-change node CI opt-in",
+                        "verify_via_ci": True,
+                        "verify_cmd": ["false"],
+                        "merge_policy": "none",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    node_opt_in_rc = graph_module.main(
+        [
+            str(node_opt_in_plan),
+            "--no-record",
+            "--workspace",
+            str(tmp_path / "node-opt-in-worktrees"),
+            "--base",
+            str(command_base(max_turns=2)),
+            "--persona-dir",
+            str(personas_dir),
+            "--format",
+            "json",
+        ]
+    )
+    node_opt_in_payload = json.loads(capsys.readouterr().out)
+    assert node_opt_in_rc == 0
+    assert node_opt_in_payload["results"]["ci-node-opt-in"]["outcome"] == "pr-open"
+
+
+@pytest.mark.parametrize(
+    ("check_states", "expected_detail"),
+    [
+        (("PENDING",), "ci=PENDING"),
+        ((None,), "required checks: []"),
+    ],
+)
+def test_verify_via_ci_rejects_unsettled_or_absent_required_checks(
+    tmp_path, bare_origin, check_states, expected_detail
+) -> None:
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-unsettled-ci")
+    Registry().register(str(canonical), workflow="remote", repo_type="single-owner")
+
+    result = run_repo_task(
+        str(canonical),
+        "Leave authoritative CI incomplete.",
+        "engineer",
+        workspace=Workspace(tmp_path / "unsettled-ci-worktrees"),
+        github=FakeGitHub(origin, check_states=check_states),
+        verify_via_ci=True,
+        dispatch_fn=make_writing_dispatch(filename="unsettled.txt"),
+        sleep=lambda _: None,
+    )
+
+    assert result.outcome == "not-completed"
+    assert expected_detail in result.detail
 
 
 def test_team_default_opens_ready_for_review_pr_without_polling(tmp_path, bare_origin) -> None:

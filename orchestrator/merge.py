@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING, Literal, Protocol
 
 from . import gitops
 from .coordination import advisory_lock
-from .github import AutoMergeUnavailable, GitHubBackend, PullRequest
+from .github import AutoMergeUnavailable, Check, GitHubBackend, PRStatus, PullRequest
 from .verify import run_gate
 
 if TYPE_CHECKING:
@@ -35,12 +35,14 @@ if TYPE_CHECKING:
     from .journal import Detail, EventKind, NodeSink
 
 __all__ = [
+    "BlockingCheckAssessment",
     "GitHubMergeStrategy",
     "LocalMergeStrategy",
     "MergeContext",
     "MergeOutcome",
     "MergePolicy",
     "MergeStrategy",
+    "assess_blocking_checks",
 ]
 
 MergePolicy = Literal["auto", "direct", "none"]
@@ -76,6 +78,7 @@ class MergeContext:
     #: first one — after the branch is already pushed. The scope is the contract, so
     #: it is the type.
     journal: NodeSink | None = None
+    preverified_pr: PullRequest | None = None
 
 
 @dataclass
@@ -83,6 +86,30 @@ class MergeOutcome:
     outcome: str
     detail: str
     pr: PullRequest | None = None
+
+
+@dataclass(frozen=True)
+class BlockingCheckAssessment:
+    """The shared required-check decision used before and during publication."""
+
+    green: bool
+    settled: bool
+    checks: tuple[Check, ...]
+
+    @property
+    def detail(self) -> str:
+        rendered = ", ".join(f"{check.name}={check.state}" for check in self.checks)
+        return f"required checks: [{rendered}]" if rendered else "required checks: []"
+
+
+def assess_blocking_checks(status: PRStatus) -> BlockingCheckAssessment:
+    """Assess required checks, preserving the non-vacuous empty-list guard."""
+    blocking = status.blocking
+    return BlockingCheckAssessment(
+        green=bool(blocking) and all(check.green for check in blocking),
+        settled=bool(blocking) and all(check.settled for check in blocking),
+        checks=blocking,
+    )
 
 
 class MergeStrategy(Protocol):
@@ -151,8 +178,9 @@ def _drive_github_merge(
         if status.blocking_failed:
             failed = ", ".join(c.name for c in status.blocking if c.red)
             return "checks-failed", f"required checks failed: {failed}"
-        blocking_settled = bool(status.blocking) and all(check.settled for check in status.blocking)
-        if policy == "direct" and status.blocking_green and not direct_merge_requested:
+        assessment = assess_blocking_checks(status)
+        blocking_settled = assessment.settled
+        if policy == "direct" and assessment.green and not direct_merge_requested:
             github.merge(pr, method=ctx.method)
             direct_merge_requested = True
             post_merge = github.status(pr)
@@ -205,20 +233,21 @@ class GitHubMergeStrategy:
         self._github = github
 
     def publish_and_merge(self, ctx: MergeContext) -> MergeOutcome:
-        pr = self._github.create_pr(
+        pr = ctx.preverified_pr or self._github.create_pr(
             ctx.repo_slug, head=ctx.branch, base=ctx.base, title=ctx.title, body=ctx.body
         )
-        _record(
-            ctx,
-            "pr-created",
-            {
-                "repo": ctx.repo_slug,
-                "pr": pr.url,
-                "number": pr.number,
-                "base": ctx.base,
-                "draft": False,
-            },
-        )
+        if ctx.preverified_pr is None:
+            _record(
+                ctx,
+                "pr-created",
+                {
+                    "repo": ctx.repo_slug,
+                    "pr": pr.url,
+                    "number": pr.number,
+                    "base": ctx.base,
+                    "draft": False,
+                },
+            )
         if self._github.status(pr).draft:
             self._github.mark_ready(pr)
             _record(

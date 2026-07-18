@@ -53,6 +53,7 @@ def build_effective_config(
     session: str | None = None,
     max_turns: int | None = None,
     done_when: str | None = None,
+    extra_instructions: str | None = None,
 ) -> dict[str, Any]:
     """Merge a persona delta over the base into an effective onejudge config.
 
@@ -84,7 +85,8 @@ def build_effective_config(
     persona_agent = persona.get("agent", {}) or {}
     preamble = str(base_agent.get("instructions", "")).rstrip()
     role = str(persona_agent.get("instructions", "")).strip()
-    combined = f"{preamble}\n\n{role}" if preamble and role else (role or preamble)
+    parts = [part for part in (preamble, role, (extra_instructions or "").strip()) if part]
+    combined = "\n\n".join(parts)
     if combined:
         cfg["system_prompt"] = combined
 

@@ -408,7 +408,7 @@ def test_expects_no_diff_contract_is_rejected_at_cli_boundary(tmp_path: Path) ->
         ),
         (
             {"schema_version": 99, "tasks": [{"id": "x", "persona": "p", "task": "x"}]},
-            "current version 2",
+            "current version 3",
         ),
         (
             {
@@ -470,6 +470,21 @@ def test_expects_no_diff_contract_is_rejected_at_cli_boundary(tmp_path: Path) ->
             "requires schema_version 2",
         ),
         ({"schema_version": 2, "tasks": "not-a-list"}, "non-empty 'tasks' list"),
+        (
+            {
+                "schema_version": 2,
+                "tasks": [
+                    {
+                        "id": "x",
+                        "repo": "owner/repo",
+                        "persona": "engineer",
+                        "task": "x",
+                        "verify_via_ci": True,
+                    }
+                ],
+            },
+            "verify_via_ci' requires schema_version 3",
+        ),
     )
     for index, (mapping, message) in enumerate(invalid_plans):
         plan = tmp_path / f"invalid-{index}.json"

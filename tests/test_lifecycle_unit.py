@@ -39,6 +39,7 @@ from orchestrator.lifecycle import (
 )
 from orchestrator.merge import GitHubMergeStrategy, LocalMergeStrategy
 from orchestrator.plan import PlanError
+from orchestrator.registry import Registry
 from orchestrator.runs import ResumePayload, RetryLineagePayload
 from orchestrator.workspace import Workspace, normalize_repo
 
@@ -425,6 +426,7 @@ def test_load_valid_repo_plan(tmp_path) -> None:
                             }
                         ],
                         "skip_verify": True,
+                        "verify_via_ci": False,
                     },
                 ],
             },
@@ -433,6 +435,7 @@ def test_load_valid_repo_plan(tmp_path) -> None:
     assert plan.concurrency == 2
     assert [t.id for t in plan.tasks] == ["a", "b"]
     assert plan.tasks[1].merge_policy == "direct" and plan.tasks[1].skip_verify
+    assert plan.tasks[1].verify_via_ci is False
     assert plan.tasks[1].workflow == "local"
     assert plan.tasks[1].repo_type == "single-owner"
     assert plan.tasks[1].stack_bases[0].branch == "feature/parent"
@@ -466,6 +469,20 @@ def test_load_valid_repo_plan(tmp_path) -> None:
         (
             {"tasks": [{"id": "a", "repo": "r", "persona": "p", "task": "t", "repo_type": "x"}]},
             "repo_type",
+        ),
+        (
+            {
+                "tasks": [
+                    {
+                        "id": "a",
+                        "repo": "r",
+                        "persona": "p",
+                        "task": "t",
+                        "verify_via_ci": "yes",
+                    }
+                ]
+            },
+            "verify_via_ci",
         ),
         (
             {
@@ -1485,6 +1502,7 @@ def test_make_repo_runner_threads_node_fields(monkeypatch) -> None:
         merge_method="squash",
         oneharness_mode="bypass",
         skip_verify=False,
+        verify_via_ci=True,
         poll_interval=1.0,
         timeout=9.0,
         repo_type="team",
@@ -1496,6 +1514,7 @@ def test_make_repo_runner_threads_node_fields(monkeypatch) -> None:
         "task",
         merge_policy="direct",
         skip_verify=True,
+        verify_via_ci=False,
         repo_type="single-owner",
     )
     out = runner(node)
@@ -1504,10 +1523,35 @@ def test_make_repo_runner_threads_node_fields(monkeypatch) -> None:
     assert captured["merge_policy"] == "direct"  # node override wins
     assert captured["repo_type"] == "single-owner"
     assert captured["skip_verify"] is True
+    assert captured["verify_via_ci"] is False
     assert captured["oneharness_mode"] == "bypass"
 
 
 # --- error path ------------------------------------------------------------
+
+
+def test_verify_via_ci_without_remote_path_fails_before_dispatch(tmp_path, bare_origin) -> None:
+    dispatched: list[str] = []
+    checkout = lc.gitops.clone(bare_origin(), tmp_path / "checkout")
+    Registry().register(str(checkout), workflow="local", repo_type="single-owner")
+
+    def dispatch_fn(*args: object, **kwargs: object):
+        dispatched.append("called")
+        raise AssertionError("dispatch must not run")
+
+    result = run_repo_task(
+        str(checkout),
+        "t",
+        "engineer",
+        workspace=Workspace(tmp_path / "ws"),
+        repo_type="single-owner",
+        verify_via_ci=True,
+        dispatch_fn=dispatch_fn,
+    )
+
+    assert result.outcome == "error"
+    assert "remote GitHub/PR workflow" in result.detail
+    assert dispatched == []
 
 
 def test_run_repo_task_git_error_is_reported(tmp_path) -> None:
@@ -1526,15 +1570,22 @@ def test_run_repo_task_git_error_is_reported(tmp_path) -> None:
 
 
 def test_main_task_json_output(monkeypatch, capsys) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_task(*args, **kwargs):
+        captured.update(kwargs)
+        return _result("merged", pr=PullRequest(1, "url", "o/r", "b", "main"))
+
     monkeypatch.setattr(
         lc,
         "run_repo_task",
-        lambda *a, **k: _result("merged", pr=PullRequest(1, "url", "o/r", "b", "main")),
+        fake_task,
     )
-    rc = lc.main_task(["acme/widget", "engineer", "do it", "--format", "json"])
+    rc = lc.main_task(["acme/widget", "engineer", "do it", "--verify-via-ci", "--format", "json"])
     assert rc == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["outcome"] == "merged" and payload["pr"] == "url"
+    assert captured["verify_via_ci"] is True
 
 
 def test_main_task_rejects_nonpositive_publication_attempts(capsys) -> None:

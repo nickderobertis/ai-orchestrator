@@ -145,6 +145,16 @@ and runs it in the worktree. A failing gate stops the lifecycle at `gate-failed`
 (nothing is pushed). Pass an explicit `verify_cmd`, or `--skip-verify` to skip the
 gate; the pre-handoff sync still occurs.
 
+For work whose real verifier is remote CI, `verify_via_ci: true` (or the
+run-level `--verify-via-ci`) injects a standard CI iteration contract into the
+agent instructions. The agent must push and iterate on the branch until its
+required checks pass; after dispatch, the lifecycle independently confirms that
+the pushed head has a non-empty set of required checks and that all are green.
+Red, pending, or absent required checks produce `not-completed` with their names
+and states. This mode requires a remote GitHub/PR workflow and fails before
+dispatch when no such path exists. An explicit plan-node boolean beats the
+run-level flag, including `false` to opt a node out.
+
 This repository's complete gate resolves that same comparison ref with
 `scripts/comparison-base.sh`. `just gate` discovers the base from a valid remote
 HEAD (or a sole remote branch); use `just gate <remote> <base>` when discovery is
@@ -215,7 +225,7 @@ from both the release and `CHANGELOG`.
 
 A lifecycle node is an `agent` node in `just run-plan` with a `repo` and either a
 `persona`+`task` or a `steps` workstream. It may also carry `deps`, `base_branch`,
-`branch`, `title`, `verify_cmd`, `skip_verify`, `merge_policy`, `workflow`,
+`branch`, `title`, `verify_cmd`, `skip_verify`, `verify_via_ci`, `merge_policy`, `workflow`,
 `repo_type`, validated `stack_bases`, `execution_checkout`, or validated `resume`
 metadata. Independent top-level nodes run concurrently, and a node whose
 dependency failed is skipped. Cross-repository dependencies only schedule. A

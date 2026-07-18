@@ -23,6 +23,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import subprocess
 import sys
 from pathlib import Path
 from typing import Literal, TypedDict, cast
@@ -54,6 +55,19 @@ def _task_text(messages: list[dict]) -> str:
 
 def _assistant_turns(messages: list[dict]) -> int:
     return sum(1 for m in messages if isinstance(m, dict) and m.get("role") == "assistant")
+
+
+def _commit_and_push_ci_iteration(state: str) -> None:
+    """Act like the paid agent iterating a branch against authoritative CI."""
+    Path("CI_STATE.txt").write_text(state + "\n", encoding="utf-8")
+    subprocess.run(["git", "add", "CI_STATE.txt"], check=True, capture_output=True)
+    subprocess.run(
+        ["git", "commit", "-m", f"test: CI is {state.lower()}"], check=True, capture_output=True
+    )
+    branch = subprocess.run(
+        ["git", "branch", "--show-current"], check=True, text=True, capture_output=True
+    ).stdout.strip()
+    subprocess.run(["git", "push", "-u", "origin", branch], check=True, capture_output=True)
 
 
 def main() -> int:
@@ -92,6 +106,9 @@ def main() -> int:
 
     match op:
         case "respond":
+            if "ci-iterate" in task:
+                state = "RED" if _assistant_turns(messages) == 0 else "GREEN"
+                _commit_and_push_ci_iteration(state)
             if (
                 "Write the final body, and nothing else, to this absolute path:" in task
                 and "drafting-empty" not in task
