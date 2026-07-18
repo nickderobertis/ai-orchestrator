@@ -8,6 +8,32 @@ import subprocess
 from orchestrator.verify import run_gate
 
 
+def test_gate_runs_without_caching_when_comparison_ref_is_missing(tmp_path) -> None:
+    subprocess.run(["git", "init", "-b", "main", str(tmp_path)], check=True)
+    subprocess.run(
+        ["git", "-C", str(tmp_path), "config", "user.email", "test@example.com"],
+        check=True,
+    )
+    subprocess.run(["git", "-C", str(tmp_path), "config", "user.name", "Test"], check=True)
+    (tmp_path / "tracked").write_text("content\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(tmp_path), "add", "tracked"], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "commit", "-m", "initial"], check=True)
+    gate_log = tmp_path.with_name(f"{tmp_path.name}-ineligible-gate.log")
+    command = ["sh", "-c", f"echo run >> {shlex.quote(str(gate_log))}"]
+    missing_comparison = {
+        "ORCHESTRATOR_COMPARISON_REMOTE": "origin",
+        "ORCHESTRATOR_COMPARISON_BASE": "missing",
+    }
+
+    first = run_gate(tmp_path, command, env=missing_comparison)
+    second = run_gate(tmp_path, command, env=missing_comparison)
+
+    assert first.ok and not first.reused
+    assert second.ok and not second.reused
+    assert gate_log.read_text(encoding="utf-8").splitlines() == ["run", "run"]
+    assert not (tmp_path / ".git" / "ai-orchestrator" / "gate-attestations.json").exists()
+
+
 def test_gate_attestation_reuses_only_exact_commit_and_comparison(tmp_path) -> None:
     subprocess.run(["git", "init", "-b", "main", str(tmp_path)], check=True)
     subprocess.run(
