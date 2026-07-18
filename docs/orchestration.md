@@ -1,3 +1,5 @@
+<!-- llmlint: ignore-file[contracts_have_one_source_or_a_drift_gate] Operator-facing wire examples are required here; orchestrator/channel.py remains authoritative and its exact contract is exercised by channel unit/e2e tests. -->
+
 # Tracked graph orchestration
 
 `just run-plan` turns one large task into one recorded hierarchical DAG. It is
@@ -7,6 +9,66 @@ alias retained so old lifecycle-only plan files keep working.
 
 The current tracked-plan contract is schema version 3 (`"schema_version": 3`).
 Plans that omit the version retain version-1 behavior for compatibility.
+
+## The planner<->orchestrator channel
+
+`just orchestrate <plan.json>` starts a detached orchestrator onejudge run and
+prints its run id. The orchestrator is the graph executor; its supervisor is the
+live planner rather than a simulated-user model. One orchestrator turn owns one
+recorded graph round: it runs `just run-plan` (or `just next-round` after the first
+round), watches `just monitor`, reads the settled result, and asks the planner for
+a decision before writing the next round. The planner must not run either writer.
+After launch it uses only the channel and the read-only `just monitor` / `just
+runs` views; otherwise two processes can race the ledger lock.
+
+At each round boundary the orchestrator emits JSON in its final assistant message:
+
+```json
+{"kind":"blocker","message":"Node X failed its gate; retry with a corrected fixture?","options":["retry X","drop X"]}
+```
+
+`orchestrator.channel.relay_supervisor` validates that emission and sends this
+newline-delimited JSON frame to the planner:
+
+```json
+{"op":"supervisor","run_id":"RUN","round":1,"surface":{"kind":"blocker","message":"Node X failed its gate; retry with a corrected fixture?","options":["retry X","drop X"]},"messages":[{"role":"assistant","content":"..."}]}
+```
+
+The orchestrator persona defines the boundary-kind vocabulary. `surface.options`
+is optional and, when present, is a list of strings. `messages` is the onejudge
+conversation context. The planner replies with one of these shapes:
+
+```json
+{"completion":false,"message":"retry X with the fixture requirement","reason":"the graph is not complete"}
+{"completion":true,"reason":"publication and follow-up triage verified"}
+```
+
+`completion: false` requires both `message` and `reason`; `completion: true`
+requires `reason`. The orchestrator applies continuing guidance through
+`next-round` edits. Completion is reserved for a verified `closeout` after the
+whole graph is published and follow-ups are triaged.
+
+The three planner-facing recipes are:
+
+```sh
+just orchestrate plan.json --runs-dir /host/path/runs
+just channel-next RUN --runs-dir /host/path/runs
+just channel-reply RUN reply.json --runs-dir /host/path/runs
+```
+
+`channel-next` waits for one surface. A bounded wait with no message returns
+`{"status":"running","surface":null}`; a settled run returns
+`{"status":"finished"}`. `channel-reply` accepts a reply file or reads JSON from
+stdin when its file argument is omitted. Both sides may exit and reattach between
+messages: transport state lives under `runs/<run-id>/channel/` as `up.fifo`,
+`down.fifo`, `channel.json`, and the last `planner-verdict.json`.
+
+Only the orchestrator crosses round boundaries. Worker onejudge processes remain
+bounded to the graph round that dispatched them and never use the planner channel.
+The orchestrator may author in an isolated execution checkout, but its
+`--runs-dir` must resolve to the same host-visible path for the detached process
+and planner. The round ledger and its sibling `channel/` directory cannot live
+only inside a disposable worktree or container-private filesystem.
 
 ## Node shapes
 
@@ -245,5 +307,7 @@ results without `state` remain readable.
   the strict typed ids its details point at.
 - `orchestrator/monitor.py` — the four-source aggregation, dedup, and the
   `just monitor` stream/exit contract.
-- `orchestrator/dispatch.py` — one direct agent or lifecycle agent step → one
-  onejudge subprocess.
+- `orchestrator/channel.py` — FIFO transport, surface/reply validation, and the
+  live `relay_supervisor` command judge.
+- `orchestrator/dispatch.py` — one worker subprocess, plus `launch_orchestrator`'s
+  detached orchestrator path and split-provider wiring.
