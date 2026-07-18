@@ -44,6 +44,7 @@ from orchestrator.monitor import (
     load_snapshot,
     pr_events,
     save_snapshot,
+    snapshot_path,
 )
 from orchestrator.registry import Registry
 from orchestrator.runs import NodeId, RunId, prepare_round, write_result
@@ -318,6 +319,73 @@ def test_monitor_poll_deduplicates_checks_but_emits_an_optional_only_change(tmp_
     github.checks[1] = Check("lint", "PENDING", False)
     assert [event.summary for event in monitor.poll()] == ["PR #1 optional check pending lint"]
     assert monitor.poll() == []
+
+
+def test_monitor_command_reports_one_rollup_across_multiple_prs(tmp_path: Path) -> None:
+    run_dir = tmp_path / "runs" / RUN
+    journal = open_journal(run_dir, RUN, 1)
+    for number in (1, 2):
+        journal.append(
+            "pr-created",
+            node=NodeId(f"api-{number}"),
+            detail={
+                "repo": "acme/app",
+                "pr": f"https://github.com/acme/app/pull/{number}",
+                "base": "main",
+            },
+        )
+
+    class PerPrChecks:
+        def status(self, pr: PullRequest) -> PRStatus:
+            check = Check("ci", "PENDING" if pr.number == 1 else "SUCCESS", True)
+            return PRStatus(pr.number, "OPEN", False, "CLEAN", (check,))
+
+    monitor = Monitor(
+        run_id=RUN,
+        run_dir=run_dir,
+        oneharness_bin=str(tmp_path / "absent"),
+        github=PerPrChecks(),
+        clock=lambda: AT,
+    )
+    # llmlint: ignore[tests_mirror_real_usage] GitHub's sanctioned backend seam produces
+    # the external transition; the assertions below consume it through `just monitor`.
+    monitor.poll()
+    _settle(
+        run_dir,
+        {"api-1": {"status": "waiting"}, "api-2": {"status": "done"}},
+        ok=False,
+        state="waiting",
+    )
+    reported = _monitor_cli(
+        "--runs-dir", str(tmp_path / "runs"), "--once", "--format", "jsonl", RUN
+    )
+    assert reported.returncode == 0, reported.stderr
+    rollup = json.loads(reported.stdout.splitlines()[-1])
+    assert rollup["last_completed_check"] == "ci"
+    assert rollup["current_blocker"] == "PR #1 ci: pending"
+
+
+def test_monitor_command_ignores_an_old_snapshot_contract(tmp_path: Path) -> None:
+    runs_dir = tmp_path / "runs"
+    run_dir = runs_dir / RUN
+    details = snapshot_path(run_dir)
+    details.parent.mkdir(parents=True)
+    details.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "commits": {},
+                "prs": {},
+                "check_rollup": {"current_blocker": "stale: pending"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    _settle(run_dir, {"api": {"status": "waiting"}}, ok=False, state="waiting")
+    reported = _monitor_cli("--runs-dir", str(runs_dir), "--once", "--format", "jsonl", RUN)
+    assert reported.returncode == 0, reported.stderr
+    heartbeat = json.loads(reported.stdout.splitlines()[-1])
+    assert "current_blocker" not in heartbeat
 
 
 def test_a_replay_reports_the_pr_state_gh_can_no_longer_be_asked_for(
@@ -676,3 +744,54 @@ def test_the_monitor_command_reports_a_run_it_cannot_watch_actionably(tmp_path: 
     bad = _monitor_cli("--runs-dir", str(runs_dir), "--heartbeat", "0")
     assert bad.returncode == 2
     assert "--heartbeat must be a positive number of seconds" in bad.stderr
+    bad_bound = _monitor_cli(
+        "--runs-dir", str(runs_dir), "--poll-interval", "2", "--max-poll-interval", "1"
+    )
+    assert bad_bound.returncode == 2
+    assert "--max-poll-interval must be at least --poll-interval" in bad_bound.stderr
+    for invalid_maximum in ("0", "nan", "inf"):
+        invalid = _monitor_cli("--runs-dir", str(runs_dir), "--max-poll-interval", invalid_maximum)
+        assert invalid.returncode == 2
+        assert "--max-poll-interval must be a positive number of seconds" in invalid.stderr
+    for option in ("--heartbeat", "--poll-interval"):
+        for non_finite in ("nan", "inf"):
+            invalid = _monitor_cli("--runs-dir", str(runs_dir), option, non_finite)
+            assert invalid.returncode == 2
+            assert f"{option} must be a positive number of seconds" in invalid.stderr
+
+
+def test_monitor_command_backs_off_to_its_bounded_interval(tmp_path: Path) -> None:
+    runs_dir = tmp_path / "runs"
+    run_dir = runs_dir / RUN
+    open_journal(run_dir, RUN, 1).append("node-started", node=NodeId("api"))
+    _settle(run_dir, {"api": {"status": "waiting"}}, ok=False, state="waiting")
+    process = subprocess.Popen(
+        [
+            "just",
+            "monitor",
+            "--runs-dir",
+            str(runs_dir),
+            "--format",
+            "jsonl",
+            "--heartbeat",
+            "0.001",
+            "--poll-interval",
+            "0.01",
+            "--max-poll-interval",
+            "0.04",
+            RUN,
+        ],
+        cwd=REPO_ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    try:
+        assert process.stdout is not None
+        records = [json.loads(process.stdout.readline()) for _ in range(5)]
+    finally:
+        process.terminate()
+        process.wait(timeout=5)
+    intervals = [record["next_poll_seconds"] for record in records if record["type"] == "heartbeat"]
+    assert 0.02 in intervals
+    assert intervals[-1] == 0.04

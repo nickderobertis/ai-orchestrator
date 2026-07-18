@@ -61,6 +61,7 @@ class MergeContext:
     method: str = "squash"  # GitHub merge method; ignored by the local strategy
     policy: MergePolicy = "auto"  # GitHub only
     poll_interval: float = 15.0
+    max_poll_interval: float = 120.0
     timeout: float = 3600.0
     sleep: Callable[[float], None] = time.sleep
     clock: Callable[[], float] = time.monotonic
@@ -144,6 +145,7 @@ def _drive_github_merge(
             detail = "native auto-merge unavailable; merging directly on green required checks"
 
     start = ctx.clock()
+    delay = ctx.poll_interval
     direct_merge_requested = False
     while True:
         status = github.status(pr)
@@ -165,6 +167,11 @@ def _drive_github_merge(
                 "pr-merged",
                 {"repo": ctx.repo_slug, "pr": pr.url, "number": pr.number},
             )
+            _record(
+                ctx,
+                "publication-finished",
+                {"repo": ctx.repo_slug, "pr": pr.url, "branch": ctx.branch, "base": ctx.base},
+            )
             return "merged", f"{detail}; merged"
         if status.state == "CLOSED":
             return "closed", f"{detail}; PR was closed without merging"
@@ -183,6 +190,11 @@ def _drive_github_merge(
                     "pr-merged",
                     {"repo": ctx.repo_slug, "pr": pr.url, "number": pr.number},
                 )
+                _record(
+                    ctx,
+                    "publication-finished",
+                    {"repo": ctx.repo_slug, "pr": pr.url, "branch": ctx.branch, "base": ctx.base},
+                )
                 return "merged", f"{detail}; merged"
             post_merge_blocking_settled = bool(post_merge.blocking) and all(
                 check.settled for check in post_merge.blocking
@@ -195,7 +207,8 @@ def _drive_github_merge(
                 )
             if ctx.clock() - start >= ctx.timeout:
                 return "timeout", f"{detail}; timed out after {ctx.timeout}s awaiting checks"
-            ctx.sleep(ctx.poll_interval)
+            ctx.sleep(delay)
+            delay = min(ctx.max_poll_interval, delay * 2)
             continue
         if (
             blocking_settled
@@ -209,7 +222,8 @@ def _drive_github_merge(
             )
         if ctx.clock() - start >= ctx.timeout:
             return "timeout", f"{detail}; timed out after {ctx.timeout}s awaiting checks"
-        ctx.sleep(ctx.poll_interval)
+        ctx.sleep(delay)
+        delay = min(ctx.max_poll_interval, delay * 2)
 
 
 class GitHubMergeStrategy:
@@ -320,7 +334,11 @@ class LocalMergeStrategy:
         # above is synthesized so the result has a stable ref to name, and claiming
         # a PR was created for it would put a transition in the journal that never
         # happened.
-        _record(ctx, "pr-merged", {"pr": pr.url, "branch": ctx.branch, "base": ctx.base})
+        _record(
+            ctx,
+            "publication-finished",
+            {"pr": pr.url, "branch": ctx.branch, "base": ctx.base},
+        )
         return MergeOutcome(
             outcome="merged",
             detail=f"local direct-merge of {ctx.branch} into {ctx.base} after checks",

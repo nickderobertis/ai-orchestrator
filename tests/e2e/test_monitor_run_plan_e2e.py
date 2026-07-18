@@ -259,6 +259,50 @@ def test_real_history_labels_and_cursor_watch(oneharness_bin: str, tmp_path: Pat
     assert f"oneharness history show {watched_ids[0]} --format text" in detail.stdout
     assert "Latest agent text:" in detail.stdout
 
+    runs_dir = tmp_path / "runs"
+    plan_path = tmp_path / "provider-telemetry-plan.json"
+    plan_path.write_text(
+        json.dumps(
+            {
+                "tasks": [
+                    {
+                        "id": "history-turns",
+                        "kind": "human",
+                        "task": "Approve the history-backed telemetry run.",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    planned = _just(
+        "run-plan",
+        str(plan_path),
+        "--run",
+        RUN_ID,
+        "--runs-dir",
+        str(runs_dir),
+        "--format",
+        "json",
+        environment=environment,
+    )
+    assert planned.returncode == 1, planned.stderr
+    assert json.loads(planned.stdout)["state"] == "waiting"
+    indexed = _just(
+        "telemetry",
+        "--runs-dir",
+        str(runs_dir),
+        "--oneharness-bin",
+        oneharness_bin,
+        environment=environment,
+    )
+    assert indexed.returncode == 0, indexed.stderr
+    run = json.loads(indexed.stdout)["runs"][0]
+    assert run["providers"][0]["provider"] == "oneharness"
+    assert run["providers"][0]["harness"]
+    assert run["providers"][0]["model"]
+    assert run["timing"]["agent_seconds"] > 0
+
 
 def test_real_run_plan_waits_then_monitor_exits_only_after_attestation(
     tmp_path: Path, command_base: Any, onejudge_bin: str
@@ -355,6 +399,7 @@ def test_real_run_plan_waits_then_monitor_exits_only_after_attestation(
         "round": 2,
         "state": "complete",
         "detail": "graph complete",
+        "next_poll_seconds": 0.01,
     }
     assert (runs_dir / RUN_ID / "round-01" / "result.json").is_file()
     assert (runs_dir / RUN_ID / "round-02" / "result.json").is_file()
@@ -363,6 +408,169 @@ def test_real_run_plan_waits_then_monitor_exits_only_after_attestation(
         for line in (runs_dir / RUN_ID / "events.jsonl").read_text(encoding="utf-8").splitlines()
     ]
     assert any(event["kind"] == "human-attested" for event in events)
+
+
+def test_real_failed_run_telemetry_stops_wall_time_at_settlement(
+    tmp_path: Path, command_base: Any, onejudge_bin: str
+) -> None:
+    runs_dir = tmp_path / "runs"
+    common = (
+        "--runs-dir",
+        str(runs_dir),
+        "--base",
+        str(command_base()),
+        "--onejudge-bin",
+        onejudge_bin,
+        "--format",
+        "json",
+    )
+
+    def run_failure(run_id: str, task: str) -> None:
+        plan_path = tmp_path / f"{run_id}.json"
+        plan_path.write_text(
+            json.dumps(
+                {
+                    "tasks": [
+                        {
+                            "id": "fail",
+                            "persona": "engineer",
+                            "task": task,
+                            "max_turns": 1,
+                        }
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+        failed = _just("run-plan", str(plan_path), "--run", run_id, *common)
+        assert failed.returncode == 1, failed.stderr
+        assert json.loads(failed.stdout)["state"] == "failed"
+
+    run_failure("failed-wall", "should-fail: prove failed wall telemetry")
+    run_failure("provider", "provider-errors: prove provider classification")
+    run_failure("configuration", "configuration-errors: prove configuration classification")
+    run_failure("unknown", "unknown-errors: prove unknown classification")
+
+    first = _just("telemetry", "--runs-dir", str(runs_dir), "--all")
+    assert first.returncode == 0, first.stderr
+    first_runs = {run["run_id"]: run for run in json.loads(first.stdout)["runs"]}
+    first_run = first_runs["failed-wall"]
+    assert first_run["failure"]["class"] == "agent"
+    assert first_runs["provider"]["failure"]["class"] == "provider"
+    assert first_runs["configuration"]["failure"]["class"] == "configuration"
+    assert first_runs["unknown"]["failure"]["class"] == "unknown"
+    time.sleep(0.05)
+    second = _just("telemetry", "--runs-dir", str(runs_dir), "--all")
+    assert second.returncode == 0, second.stderr
+    second_run = next(
+        run for run in json.loads(second.stdout)["runs"] if run["run_id"] == "failed-wall"
+    )
+    assert second_run["state"] == "failed"
+    assert second_run["timing"]["wall_seconds"] == first_run["timing"]["wall_seconds"]
+    active_only = _just("telemetry", "--runs-dir", str(runs_dir))
+    assert active_only.returncode == 0, active_only.stderr
+    assert json.loads(active_only.stdout)["runs"] == []
+    missing = _just("telemetry", "--runs-dir", str(tmp_path / "missing-runs"))
+    assert missing.returncode == 0, missing.stderr
+    assert json.loads(missing.stdout)["runs"] == []
+
+
+def test_monitor_backoff_resets_after_real_human_attestation(tmp_path: Path) -> None:
+    runs_dir = tmp_path / "runs"
+    plan_path = tmp_path / "human-plan.json"
+    plan_path.write_text(
+        json.dumps(
+            {
+                "tasks": [
+                    {"id": "approve", "kind": "human", "task": "Approve the monitored run."},
+                    {
+                        "id": "release",
+                        "kind": "human",
+                        "task": "Release the monitored run.",
+                        "deps": ["approve"],
+                    },
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    started = _just(
+        "run-plan",
+        str(plan_path),
+        "--run",
+        "backoff-reset",
+        "--runs-dir",
+        str(runs_dir),
+        "--format",
+        "json",
+    )
+    assert started.returncode == 1, started.stderr
+    process = subprocess.Popen(
+        [
+            "just",
+            "monitor",
+            "backoff-reset",
+            "--runs-dir",
+            str(runs_dir),
+            "--format",
+            "jsonl",
+            "--heartbeat",
+            "0.001",
+            "--poll-interval",
+            "0.01",
+            "--max-poll-interval",
+            "0.04",
+        ],
+        cwd=REPO_ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    before: list[dict[str, Any]] = []
+    try:
+        assert process.stdout is not None
+        while not any(record.get("next_poll_seconds") == 0.04 for record in before):
+            before.append(json.loads(process.stdout.readline()))
+        resumed = _just(
+            "next-round",
+            "backoff-reset",
+            "--complete-human",
+            "approve",
+            "--runs-dir",
+            str(runs_dir),
+            "--format",
+            "json",
+        )
+        assert resumed.returncode == 1, resumed.stderr
+        transition: list[dict[str, Any]] = []
+        while not any(record.get("kind") == "human-attested" for record in transition):
+            transition.append(json.loads(process.stdout.readline()))
+        attested = next(record for record in transition if record.get("kind") == "human-attested")
+        assert attested["next_poll_seconds"] == 0.01
+        released = _just(
+            "next-round",
+            "backoff-reset",
+            "--complete-human",
+            "release",
+            "--runs-dir",
+            str(runs_dir),
+            "--format",
+            "json",
+        )
+        assert released.returncode == 0, released.stderr
+        remainder, stderr = process.communicate(timeout=30)
+        assert process.returncode == 0, stderr
+    finally:
+        _terminate(process)
+    after = [json.loads(line) for line in remainder.splitlines()]
+    assert after[-1]["state"] == "complete"
+    events = [
+        json.loads(line)
+        for line in (runs_dir / "backoff-reset" / "events.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    ]
+    assert sum(event["kind"] == "human-attested" for event in events) == 2
 
 
 class _PausingGitHub(FakeGitHub):
@@ -473,6 +681,10 @@ def test_real_lifecycle_commit_and_pr_survive_live_state(
             },
         },
     )
+    failed_telemetry = _just("telemetry", "--runs-dir", str(runs_dir), "--all")
+    assert failed_telemetry.returncode == 0, failed_telemetry.stderr
+    failed_record = json.loads(failed_telemetry.stdout)["runs"][0]
+    assert failed_record["failure"]["class"] == "agent"
 
     _, second_dir = prepare_round(run_dir, plan)
     second_journal = open_journal(run_dir, run_id, 2)
@@ -512,6 +724,17 @@ def test_real_lifecycle_commit_and_pr_survive_live_state(
         )
         try:
             live = monitor.poll()
+            time.sleep(0.01)
+            active_telemetry = _just(
+                "telemetry",
+                "--runs-dir",
+                str(runs_dir),
+                "--oneharness-bin",
+                str(tmp_path / "absent-oneharness"),
+            )
+            assert active_telemetry.returncode == 0, active_telemetry.stderr
+            active_record = json.loads(active_telemetry.stdout)["runs"][0]
+            assert active_record["timing"]["publication_wait_seconds"] > 0
         finally:
             lifecycle_github.release.set()
         result = future.result(timeout=30)
@@ -550,6 +773,32 @@ def test_real_lifecycle_commit_and_pr_survive_live_state(
         for event in settled
     )
     assert gitops.ref_sha(origin, "main") == gitops.ref_sha(origin, branch)
+
+    telemetry_command = _just(
+        "telemetry",
+        "--runs-dir",
+        str(runs_dir),
+        "--all",
+        "--oneharness-bin",
+        str(tmp_path / "absent-oneharness"),
+    )
+    assert telemetry_command.returncode == 0, telemetry_command.stderr
+    record = json.loads(telemetry_command.stdout)["runs"][0]
+    assert record["phase"] == "complete"
+    assert record["last_event"] == "round-finished"
+    timing = record["timing"]
+    assert isinstance(timing, dict) and timing["gate_seconds"] >= 0
+    node = record["nodes"][0]
+    assert isinstance(node, dict)
+    assert (node["comparison_remote"], node["comparison_base"]) == ("origin", "main")
+    attestation = node["gate_attestation"]
+    assert isinstance(attestation, dict)
+    assert attestation["comparison_base"] == "main"
+    assert attestation["commit"]
+    assert json.loads(telemetry_command.stdout)["metrics"]["green_to_publication_seconds"]
+    active_only = _just("telemetry", "--runs-dir", str(runs_dir))
+    assert active_only.returncode == 0, active_only.stderr
+    assert json.loads(active_only.stdout)["runs"] == []
 
     for detail_id in (
         git_ids[0],

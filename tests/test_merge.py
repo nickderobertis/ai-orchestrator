@@ -176,6 +176,23 @@ def test_direct_merge_observed_after_a_later_poll() -> None:
     assert slept  # it looped (slept) before observing the merge
 
 
+def test_check_poll_backoff_is_bounded() -> None:
+    slept: list[float] = []
+    backend = DelayedDirectBackend()
+    backend.polls = -3
+    out = GitHubMergeStrategy(backend).publish_and_merge(
+        _ctx(
+            policy="direct",
+            timeout=1000.0,
+            poll_interval=2.0,
+            max_poll_interval=5.0,
+            sleep=slept.append,
+        )
+    )
+    assert out.outcome == "merged"
+    assert slept == [2.0, 4.0, 5.0, 5.0]
+
+
 def test_settled_green_checks_fail_when_auto_merge_never_merges() -> None:
     checks = (Check("ci", "SUCCESS", True),)
     backend = PolicyBackend(checks=checks, merge_on="never")
@@ -224,7 +241,12 @@ def test_github_merge_journals_the_publication_it_drove(tmp_path: Path) -> None:
 
     assert out.outcome == "merged"
     events = journal.events()
-    assert [e.kind for e in events] == ["pr-created", "pr-checks-observed", "pr-merged"]
+    assert [e.kind for e in events] == [
+        "pr-created",
+        "pr-checks-observed",
+        "pr-merged",
+        "publication-finished",
+    ]
     # Every transition is attributed to the node the merge ran for, though the
     # strategy never names one.
     assert {e.node for e in events} == {"api"}
@@ -249,6 +271,7 @@ def test_github_merge_journals_the_ready_transition_for_a_draft(tmp_path: Path) 
         "pr-ready",
         "pr-checks-observed",
         "pr-merged",
+        "publication-finished",
     ]
 
 
@@ -284,7 +307,7 @@ def test_local_merge_journals_verification_and_the_merge(tmp_path: Path, bare_or
     assert [e.kind for e in events] == [
         "verification-started",
         "verification-finished",
-        "pr-merged",
+        "publication-finished",
     ]
     assert events[0].detail == {"command": ["true"], "attempt": 1}
     assert events[1].detail == {"ok": True, "command": ["true"], "attempt": 1}

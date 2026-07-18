@@ -33,7 +33,7 @@ from orchestrator import gitops
 from orchestrator.dispatch import Report
 from orchestrator.github import PullRequest
 from orchestrator.graph import graph_payload, parse_graph, run_graph
-from orchestrator.journal import NodeSink
+from orchestrator.journal import NodeJournal, NodeSink, open_journal
 from orchestrator.lifecycle import (
     RepoPlan,
     RepoPlanNode,
@@ -42,6 +42,7 @@ from orchestrator.lifecycle import (
     Step,
     main_plan,
     main_task,
+    result_payload,
     run_repo_plan,
     run_repo_task,
 )
@@ -52,6 +53,7 @@ from orchestrator.provenance import INCOMPLETE_TRAILER, PR_BASE_TRAILER, incompl
 from orchestrator.recover import recover_repo
 from orchestrator.registry import Registry
 from orchestrator.replan import next_round
+from orchestrator.runs import NodeId, RunId, prepare_round, write_result
 from orchestrator.workspace import Workspace, normalize_repo
 
 
@@ -451,6 +453,17 @@ def test_repo_plan_ledger_and_guided_next_round(
     assert publication["base_branch"] == publication["pr_base"] == "main"
     assert publication["synthetic_stack_base"] is None and publication["stack_bases"] == []
     assert follow_up in captured.out
+    indexed = subprocess.run(
+        ["just", "telemetry", "--runs-dir", str(runs_dir), "--all"],
+        cwd=Path(__file__).parents[2],
+        text=True,
+        capture_output=True,
+        timeout=180,
+    )
+    assert indexed.returncode == 0, indexed.stderr
+    telemetry = json.loads(indexed.stdout)
+    assert telemetry["metrics"]["recovered_branches"] == 1
+    assert telemetry["metrics"]["green_to_publication_seconds"]
     assert main_runs(["--runs-dir", str(runs_dir)]) == 0
     assert follow_up in capsys.readouterr().out
     assert "nothing to iterate" in captured.err
@@ -1380,6 +1393,167 @@ def test_no_changes_produces_no_pr(tmp_path, bare_origin) -> None:
     assert not result.ok
 
 
+def test_real_lifecycle_outcomes_round_trip_through_telemetry_cli(tmp_path, bare_origin) -> None:
+    """Produce every classification and metric from real git lifecycle journeys."""
+    runs_dir = tmp_path / "runs"
+
+    def run_recorded(
+        run_id: str,
+        *,
+        origin: Path,
+        github: FakeGitHub | None = None,
+        dispatch_fn=None,
+        verify_cmd: list[str] | None = None,
+        timeout: float = 3600.0,
+        clock=None,
+        resume: Resume | None = None,
+        workspace: Workspace | None = None,
+    ):
+        run_dir = runs_dir / run_id
+        _, round_dir = prepare_round(run_dir, {"tasks": [{"id": "ship", "task": run_id}]})
+        journal = open_journal(run_dir, RunId(run_id), 1)
+        node = NodeJournal(journal, NodeId("ship"), RunId(run_id), 1)
+        result = run_repo_task(
+            "acme/widget" if github is not None else str(origin),
+            run_id,
+            "engineer",
+            workspace=workspace or _workspace(tmp_path / run_id, origin),
+            merge=GitHubMergeStrategy(github) if github is not None else None,
+            url=str(origin),
+            dispatch_fn=dispatch_fn or make_writing_dispatch(filename="change.txt"),
+            verify_cmd=verify_cmd or ["true"],
+            timeout=timeout,
+            clock=clock or __import__("time").monotonic,
+            sleep=lambda _seconds: None,
+            journal=node,
+            resume=resume,
+        )
+        item = result_payload(result)
+        item.update(
+            {
+                "kind": "agent",
+                "status": "done" if result.ok or result.outcome == "no-changes" else "failed",
+            }
+        )
+        write_result(
+            round_dir,
+            {
+                "ok": result.ok,
+                "state": "complete" if result.ok else "failed",
+                "started_order": ["ship"],
+                "results": {"ship": item},
+            },
+        )
+        return result
+
+    run_recorded("gate", origin=bare_origin(), verify_cmd=["false"])
+    checks_origin = bare_origin()
+    run_recorded(
+        "checks",
+        origin=checks_origin,
+        github=FakeGitHub(checks_origin, fail_checks=True),
+    )
+    timeout_origin = bare_origin()
+    ticks = iter((0.0, 100.0))
+    run_recorded(
+        "timeout",
+        origin=timeout_origin,
+        github=FakeGitHub(timeout_origin, auto_completes=False, check_states=("PENDING",)),
+        timeout=1.0,
+        clock=lambda: next(ticks),
+    )
+
+    class ClosedGitHub(FakeGitHub):
+        def status(self, pr):
+            self._prs[pr.number].closed = True
+            return super().status(pr)
+
+    closed_origin = bare_origin()
+    run_recorded(
+        "publication",
+        origin=closed_origin,
+        github=ClosedGitHub(closed_origin),
+    )
+    run_recorded(
+        "no-diff",
+        origin=bare_origin(),
+        dispatch_fn=make_writing_dispatch(filename=None),
+    )
+
+    reused_origin = bare_origin()
+    reused_workspace = _workspace(tmp_path / "reused-workspace", reused_origin)
+    partial = run_repo_task(
+        str(reused_origin),
+        "Preserve work for a real retry.",
+        "engineer",
+        workspace=reused_workspace,
+        dispatch_fn=make_writing_dispatch(filename="partial.txt", completed=False),
+        verify_cmd=["true"],
+    )
+    assert isinstance(partial.resume, Resume)
+    reused = run_recorded(
+        "reused",
+        origin=reused_origin,
+        workspace=reused_workspace,
+        resume=partial.resume,
+        verify_cmd=["false"],
+    )
+    assert reused.retry_lineage is not None
+    assert reused.retry_lineage.disposition == "reused"
+
+    abandoned_origin = bare_origin()
+    abandoned_workspace = _workspace(tmp_path / "abandoned-workspace", abandoned_origin)
+    abandoned_partial = run_repo_task(
+        str(abandoned_origin),
+        "Preserve work before invalidating its provenance.",
+        "engineer",
+        workspace=abandoned_workspace,
+        dispatch_fn=make_writing_dispatch(filename="partial.txt", completed=False),
+        verify_cmd=["true"],
+    )
+    assert isinstance(abandoned_partial.resume, Resume)
+    recovery_worktree = abandoned_workspace.worktree(
+        normalize_repo(str(abandoned_origin)), abandoned_partial.branch, base="origin/main"
+    )
+    gitops.commit_empty(
+        recovery_worktree,
+        "test: invalidate retry provenance\n\n"
+        f"Orchestrator-Recovered-Incomplete: {abandoned_partial.resume.checkpoint}",
+    )
+    abandoned_workspace.remove_worktree(normalize_repo(str(abandoned_origin)), recovery_worktree)
+    abandoned = run_recorded(
+        "abandoned",
+        origin=abandoned_origin,
+        workspace=abandoned_workspace,
+        resume=abandoned_partial.resume,
+    )
+    assert abandoned.retry_lineage is not None
+    assert abandoned.retry_lineage.disposition == "abandoned"
+
+    indexed = subprocess.run(
+        ["just", "telemetry", "--runs-dir", str(runs_dir), "--all"],
+        cwd=Path(__file__).parents[2],
+        text=True,
+        capture_output=True,
+        timeout=180,
+    )
+    assert indexed.returncode == 0, indexed.stderr
+    payload = json.loads(indexed.stdout)
+    failures = {
+        run["run_id"]: run["failure"]["class"] for run in payload["runs"] if "failure" in run
+    }
+    assert failures == {
+        "gate": "gate",
+        "checks": "checks",
+        "timeout": "timeout",
+        "publication": "publication",
+        "reused": "gate",
+    }
+    assert payload["metrics"]["no_diff_dispatches"] == 1
+    assert payload["metrics"]["retry_branch_reuses"] == 1
+    assert payload["metrics"]["abandoned_branches"] == 1
+
+
 # --- GitHub repo: PR + auto-merge on required checks -----------------------
 
 
@@ -1703,7 +1877,10 @@ def test_github_waits_for_required_checks_to_be_reported_then_merges(tmp_path, b
     origin = bare_origin()
     # The first status read checks whether the new PR is a draft; the merge poll
     # then observes no reported checks, pending CI, and finally green CI.
-    github = FakeGitHub(origin, check_states=(None, None, "PENDING", "SUCCESS"))
+    github = FakeGitHub(
+        origin,
+        check_states=(None, None, "PENDING", "PENDING", "PENDING", "PENDING", "SUCCESS"),
+    )
     sleeps: list[float] = []
 
     result = run_repo_task(
@@ -1722,8 +1899,8 @@ def test_github_waits_for_required_checks_to_be_reported_then_merges(tmp_path, b
     )
 
     assert result.ok and result.outcome == "merged"
-    assert sleeps == [15.0, 15.0]
-    assert github.status_polls == 4
+    assert sleeps == [15.0, 30.0, 60.0, 120.0, 120.0]
+    assert github.status_polls == 7
     assert _has_file(origin, "main", "feature.txt")
 
 

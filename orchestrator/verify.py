@@ -21,7 +21,43 @@ from typing import TypedDict, TypeGuard
 
 from .coordination import advisory_lock, atomic_json
 
-__all__ = ["VerifyResult", "detect_gate", "run_gate"]
+__all__ = ["GateAttestation", "VerifyResult", "detect_gate", "run_gate"]
+
+
+@dataclass(frozen=True)
+class GateAttestation:
+    """Reusable complete-gate identity safe to surface in run telemetry."""
+
+    commit: str
+    comparison_remote: str
+    comparison_base: str
+    comparison_commit: str
+    command: tuple[str, ...]
+    environment_sha256: str
+
+    @classmethod
+    def from_value(cls, value: object) -> GateAttestation | None:
+        """Validate the journal representation of the authoritative identity."""
+        if not _is_attestation_record(value):
+            return None
+        return cls(
+            commit=value["commit"],
+            comparison_remote=value["comparison_remote"],
+            comparison_base=value["comparison_base"],
+            comparison_commit=value["comparison_commit"],
+            command=tuple(value["command"]),
+            environment_sha256=value["environment_sha256"],
+        )
+
+    def to_record(self) -> _AttestationRecord:
+        return _AttestationRecord(
+            commit=self.commit,
+            comparison_remote=self.comparison_remote,
+            comparison_base=self.comparison_base,
+            comparison_commit=self.comparison_commit,
+            command=list(self.command),
+            environment_sha256=self.environment_sha256,
+        )
 
 
 @dataclass(frozen=True)
@@ -30,6 +66,7 @@ class VerifyResult:
     command: list[str]
     output: str
     reused: bool = False
+    attestation: GateAttestation | None = None
 
     def tail(self, limit: int = 2000) -> str:
         """The trailing slice of output, for a compact failure report."""
@@ -106,7 +143,11 @@ def run_gate(
     context = _attestation_context(directory, command, env)
     if context is not None and _has_attestation(context):
         return VerifyResult(
-            ok=True, command=command, output="gate attestation reused\n", reused=True
+            ok=True,
+            command=command,
+            output="gate attestation reused\n",
+            reused=True,
+            attestation=_public_attestation(context.record),
         )
     try:
         proc = subprocess.run(
@@ -130,6 +171,12 @@ def run_gate(
     )
     if result.ok and context is not None:
         _record_attestation(context)
+        result = VerifyResult(
+            ok=result.ok,
+            command=result.command,
+            output=result.output,
+            attestation=_public_attestation(context.record),
+        )
     return result
 
 
@@ -159,6 +206,17 @@ class _AttestationContext:
     path: Path
     key: str
     record: _AttestationRecord
+
+
+def _public_attestation(record: _AttestationRecord) -> GateAttestation:
+    return GateAttestation(
+        commit=record["commit"],
+        comparison_remote=record["comparison_remote"],
+        comparison_base=record["comparison_base"],
+        comparison_commit=record["comparison_commit"],
+        command=tuple(record["command"]),
+        environment_sha256=record["environment_sha256"],
+    )
 
 
 def _git_value(directory: Path, *args: str) -> str | None:

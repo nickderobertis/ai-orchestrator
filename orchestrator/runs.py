@@ -22,6 +22,7 @@ RECORDED_RESULT_SCHEMA_VERSION = 2
 ResumeMode = Literal["pause", "retry"]
 RESUME_MODES = frozenset(get_args(ResumeMode))
 RetryDisposition = Literal["reused", "recovered", "abandoned"]
+RETRY_DISPOSITIONS = frozenset(get_args(RetryDisposition))
 
 # The identifiers a tracked round is addressed by. They are all non-empty strings
 # from different namespaces, and they travel together through the ledger, the
@@ -308,6 +309,11 @@ def result_state(result: GraphPayload) -> str:
     if statuses & {"waiting", "blocked"}:
         return "waiting"
     return "complete"
+
+
+def result_state_is_terminal(state: str) -> bool:
+    """Whether a derived ledger state represents a settled run."""
+    return state in {"complete", "failed"}
 
 
 def human_actions(result: GraphPayload) -> list[HumanActionPayload]:

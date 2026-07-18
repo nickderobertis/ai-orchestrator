@@ -37,7 +37,7 @@ from .coordination import advisory_lock
 from .dispatch import Report, dispatch
 from .github import CliGitHubBackend, GitHubBackend, GitHubError, PullRequest
 from .gitops import GitError
-from .journal import NodeSink, NullNodeJournal
+from .journal import DetailValue, NodeSink, NullNodeJournal
 from .merge import (
     GitHubMergeStrategy,
     LocalMergeStrategy,
@@ -862,11 +862,23 @@ def _verify_gate(
     still running (or one that took the process down with it), which an outcome
     read after the fact can never report.
     """
-    journal.append("verification-started", detail={"command": list(cmd)})
-    verify = run_gate(worktree, cmd, timeout=timeout, env=env)
     journal.append(
-        "verification-finished", detail={"ok": verify.ok, "command": list(verify.command)}
+        "verification-started",
+        detail={
+            "command": list(cmd),
+            "comparison_remote": env.get("ORCHESTRATOR_COMPARISON_REMOTE", ""),
+            "comparison_base": env.get("ORCHESTRATOR_COMPARISON_BASE", ""),
+        },
     )
+    verify = run_gate(worktree, cmd, timeout=timeout, env=env)
+    finished: dict[str, DetailValue] = {
+        "ok": verify.ok,
+        "command": list(verify.command),
+        "reused": verify.reused,
+    }
+    if verify.attestation is not None:
+        finished["gate_attestation"] = cast(DetailValue, verify.attestation.to_record())
+    journal.append("verification-finished", detail=finished)
     return verify
 
 

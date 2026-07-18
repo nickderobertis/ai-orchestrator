@@ -69,6 +69,9 @@ def test_gate_attestation_reuses_only_exact_commit_and_comparison(tmp_path) -> N
     assert run_gate(tmp_path, command, env=comparison).ok
     reused = run_gate(tmp_path, command, env=comparison)
     assert reused.ok and reused.reused
+    assert reused.attestation is not None
+    assert reused.attestation.comparison_remote == "origin"
+    assert reused.attestation.comparison_base == "main"
     assert gate_log.read_text(encoding="utf-8").splitlines() == ["run"]
     attestation_path.write_text('{"schema_version": 999, "attestations": {}}\n', encoding="utf-8")
     incompatible = run_gate(tmp_path, command, env=comparison)

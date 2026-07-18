@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 
-from orchestrator.detail_snapshot import CommitDetail, PrDetail
+from orchestrator.detail_snapshot import SNAPSHOT_VERSION, CommitDetail, PrDetail
 from orchestrator.history import (
     HistoryError,
     SessionId,
@@ -258,7 +258,7 @@ def test_git_and_pr_details_fall_back_to_persisted_monitor_snapshots(tmp_path: P
     details.write_text(
         json.dumps(
             {
-                "version": 1,
+                "version": SNAPSHOT_VERSION,
                 "commits": {
                     f"git:acme/app@{FULL_SHA[:7]}": {
                         "identity": "acme/app",
@@ -315,7 +315,7 @@ def test_recorded_node_includes_its_persisted_remote_detail(tmp_path: Path) -> N
     details.write_text(
         json.dumps(
             {
-                "version": 1,
+                "version": SNAPSHOT_VERSION,
                 "commits": {
                     f"git:acme/app@{FULL_SHA}": {
                         "identity": "acme/app",
