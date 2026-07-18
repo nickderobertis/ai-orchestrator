@@ -5,9 +5,6 @@ human actions. Human actions are never inferred by the harness: a ready human
 node settles as ``waiting`` and records exactly what it unblocks; downstream work
 settles as ``blocked`` until a later recorded round attests completion.
 """
-# llmlint: ignore-file[changed_behavior_has_e2e] Crash-between-fsync topology prefixes cannot
-# be deterministically induced through the public CLI; strict-prefix rejection is covered at the
-# projection boundary, while real CLI e2e covers interruption after durable node start and replay.
 
 from __future__ import annotations
 
@@ -645,17 +642,28 @@ def main(argv: list[str] | None = None) -> int:
             from .projection import project_run
 
             replayed = project_run(run_dir / "events.jsonl", run_id, round_number)
+            settled = sorted(
+                node for node, state in replayed.node_states.items() if state != "running"
+            )
+            if settled:
+                print(
+                    "run-plan: could not recover round with settled nodes before its terminal "
+                    "event: " + ", ".join(settled),
+                    file=sys.stderr,
+                )
+                return 2
             already_started = frozenset(
                 node for node, state in replayed.node_states.items() if state == "running"
             )
-        journal.append(
-            "round-started",
-            detail={
-                "nodes": len(graph.tasks),
-                "concurrency": graph.concurrency,
-                "plan": {key: value for key, value in plan_mapping.items() if key != "tasks"},
-            },
-        )
+        if "round-started" not in existing_kinds:
+            journal.append(
+                "round-started",
+                detail={
+                    "nodes": len(graph.tasks),
+                    "concurrency": graph.concurrency,
+                    "plan": {key: value for key, value in plan_mapping.items() if key != "tasks"},
+                },
+            )
 
     dispatch_timeout = args.dispatch_timeout if args.dispatch_timeout is not None else args.timeout
     result = run_graph(
@@ -704,7 +712,9 @@ def main(argv: list[str] | None = None) -> int:
             from .projection import project_run
 
             projected = project_run(run_dir / "events.jsonl", cast(RunId, run_id), number)
-            write_result(round_dir, cast(GraphPayload, projected.result))
+            if projected.result is None:  # round-finished above makes this an internal invariant
+                raise ConfigError("event projection has no terminal result")
+            write_result(round_dir, projected.result)
         except ConfigError as exc:
             print(f"run-plan: could not record run: {exc}", file=sys.stderr)
             return 2

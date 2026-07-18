@@ -41,6 +41,8 @@ from .runs import NodeId, RunId, StepId
 SCHEMA_VERSION = 1
 
 JOURNAL_NAME = "events.jsonl"
+REQUIRED_EVENT_FIELDS = ("version", "seq", "at", "kind", "run_id", "round")
+OPTIONAL_EVENT_FIELDS = ("node", "step", "detail")
 
 # ``RunId``/``NodeId``/``StepId`` come from the ledger rather than being redeclared
 # here: the journal lives inside the run directory the ledger names and records the
@@ -89,6 +91,17 @@ EventKind = Literal[
 # Typed as the literal it enumerates, so iterating it yields `EventKind` and a
 # caller feeding it back to `append` needs no cast.
 EVENT_KINDS: frozenset[EventKind] = frozenset(get_args(EventKind))
+AUTHORITATIVE_EVENT_KINDS: tuple[EventKind, ...] = (
+    "node-added",
+    "edge-added",
+    "round-started",
+    "node-started",
+    "node-settled",
+    "node-failed",
+    "human-attested",
+    "round-finished",
+)
+AUDIT_EVENT_KINDS: frozenset[EventKind] = EVENT_KINDS - frozenset(AUTHORITATIVE_EVENT_KINDS)
 ROUND_EVENT_KINDS: frozenset[EventKind] = frozenset({"round-started", "round-finished"})
 GRAPH_EVENT_KINDS: frozenset[EventKind] = frozenset({"node-added", "edge-added"})
 STEP_EVENT_KINDS: frozenset[EventKind] = frozenset({"step-started", "step-settled"})
@@ -181,6 +194,7 @@ class Event:
             "run_id": self.run_id,
             "round": self.round,
         }
+        assert tuple(record) == REQUIRED_EVENT_FIELDS
         if self.node is not None:
             record["node"] = self.node
         if self.step is not None:

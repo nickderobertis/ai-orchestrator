@@ -231,6 +231,12 @@ def test_direct_human_pause_attestation_and_release_use_real_onejudge(
     assert json.loads((round_two / "result.json").read_text()) == second
     round_three = runs / "human-direct" / "round-03"
     assert (round_three / "result.json").exists()
+    third = json.loads((round_three / "result.json").read_text())
+    (round_three / "result.json").unlink()
+    result_only = _just("run-plan", str(replay_plan), "--run", "human-direct", "--recover", *common)
+    assert result_only.returncode == 0, result_only.stderr
+    assert json.loads((round_three / "result.json").read_text()) == third
+    assert (runs / "human-direct" / "round-04" / "result.json").exists()
 
 
 def test_recover_interrupted_real_cli_does_not_duplicate_node_start(
@@ -284,6 +290,314 @@ def test_recover_interrupted_real_cli_does_not_duplicate_node_start(
     assert recovered.returncode == 0, recovered.stderr
     events = [json.loads(line) for line in events_path.read_text().splitlines()]
     assert sum(event["kind"] == "node-started" for event in events) == 1
+
+    baseline = events_path.read_bytes()
+    artifacts = {
+        name: (round_dir / name).read_bytes()
+        for name in ("plan.json", "result.json", "status.json")
+    }
+    seq = events[-1]["seq"] + 1
+    envelope = {"version": 1, "seq": seq, "at": 0, "run_id": "interrupted", "round": 1}
+    corruptions = [
+        (b"\n", "is blank"),
+        (b"\xff\n", "malformed authoritative event"),
+        (b"{broken}\n", "malformed authoritative event"),
+        (
+            (json.dumps({**envelope, "kind": "node-started"}) + "\n").encode(),
+            "invalid authoritative event",
+        ),
+        (
+            (
+                json.dumps({**envelope, "kind": "round-started", "run_id": "foreign"}) + "\n"
+            ).encode(),
+            "belongs to another run",
+        ),
+        (
+            (json.dumps({**envelope, "kind": "round-started", "seq": seq + 1}) + "\n").encode(),
+            "sequence must be contiguous",
+        ),
+        (
+            (json.dumps({**envelope, "kind": "node-dropped"}) + "\n").encode(),
+            "unknown authoritative event",
+        ),
+        (
+            (
+                json.dumps({**envelope, "kind": "node-added", "detail": events[0]["detail"]}) + "\n"
+            ).encode(),
+            "follows round-finished",
+        ),
+        (
+            (
+                json.dumps(
+                    {
+                        **envelope,
+                        "kind": "edge-added",
+                        "detail": {"from": "work", "to": "missing"},
+                    }
+                )
+                + "\n"
+            ).encode(),
+            "follows round-finished",
+        ),
+        (
+            (
+                json.dumps(
+                    {
+                        **envelope,
+                        "kind": "node-settled",
+                        "node": "work",
+                        "detail": {"status": "done"},
+                    }
+                )
+                + "\n"
+            ).encode(),
+            "follows round-finished",
+        ),
+        (
+            (
+                json.dumps(
+                    {**envelope, "kind": "round-finished", "detail": {"result": {"ok": "yes"}}}
+                )
+                + "\n"
+            ).encode(),
+            "follows round-finished",
+        ),
+        (
+            (
+                json.dumps(
+                    {
+                        **envelope,
+                        "kind": "human-attested",
+                        "node": "work",
+                        "detail": {"ref": "work"},
+                    }
+                )
+                + "\n"
+                + json.dumps(
+                    {
+                        **envelope,
+                        "seq": seq + 1,
+                        "kind": "human-attested",
+                        "node": "work",
+                        "detail": {"ref": "work"},
+                    }
+                )
+                + "\n"
+            ).encode(),
+            "attested more than once",
+        ),
+    ]
+    for corruption, diagnostic in corruptions:
+        events_path.write_bytes(baseline + corruption)
+        for artifact in artifacts:
+            (round_dir / artifact).unlink(missing_ok=True)
+        malformed = subprocess.run(
+            [*command, "--recover"], cwd=REPO_ROOT, text=True, capture_output=True, check=False
+        )
+        assert malformed.returncode == 2
+        assert "cannot replay authoritative event log" in malformed.stderr
+        assert diagnostic in malformed.stderr
+        for name, content in artifacts.items():
+            (round_dir / name).write_bytes(content)
+    pre_finish_events = [event for event in events if event["kind"] != "round-finished"]
+    pre_finish = b"".join((json.dumps(event) + "\n").encode() for event in pre_finish_events)
+    next_seq = pre_finish_events[-1]["seq"] + 1
+    prefix_failures = [
+        (
+            (json.dumps({**events[0], "unexpected": True}) + "\n").encode()
+            + b"".join((json.dumps(event) + "\n").encode() for event in events[1:]),
+            "unknown fields",
+        ),
+        ((json.dumps(events[0]) + "\n").encode(), "no round-started event"),
+        (
+            pre_finish
+            + (
+                json.dumps(
+                    {
+                        **events[0],
+                        "seq": next_seq,
+                        "at": 0,
+                    }
+                )
+                + "\n"
+            ).encode(),
+            "duplicate node-added",
+        ),
+        (
+            pre_finish
+            + (
+                json.dumps(
+                    {
+                        **envelope,
+                        "seq": next_seq,
+                        "kind": "node-started",
+                        "node": "missing",
+                    }
+                )
+                + "\n"
+            ).encode(),
+            "references unknown node",
+        ),
+        (
+            pre_finish
+            + (
+                json.dumps(
+                    {**envelope, "seq": next_seq, "kind": "round-started", "detail": {"plan": {}}}
+                )
+                + "\n"
+            ).encode(),
+            "round-started may occur only once",
+        ),
+        (
+            pre_finish
+            + (
+                json.dumps({**envelope, "seq": next_seq, "kind": "node-started", "node": "work"})
+                + "\n"
+            ).encode(),
+            "started more than once",
+        ),
+        (
+            b"".join(
+                (json.dumps(event) + "\n").encode()
+                for event in pre_finish_events
+                if event["seq"]
+                <= next(item["seq"] for item in pre_finish_events if item["kind"] == "node-started")
+            )
+            + (
+                json.dumps(
+                    {
+                        **envelope,
+                        "seq": next(
+                            item["seq"]
+                            for item in pre_finish_events
+                            if item["kind"] == "node-started"
+                        )
+                        + 1,
+                        "kind": "node-settled",
+                        "node": "work",
+                        "detail": {"status": "bogus"},
+                    }
+                )
+                + "\n"
+            ).encode(),
+            "requires a string status",
+        ),
+        (
+            b"".join(
+                (json.dumps(event) + "\n").encode()
+                for event in pre_finish_events
+                if event["kind"] in {"node-added", "round-started"}
+            )
+            + (
+                json.dumps(
+                    {
+                        **envelope,
+                        "seq": 3,
+                        "kind": "edge-added",
+                        "detail": {"from": "work", "to": "work"},
+                    }
+                )
+                + "\n"
+            ).encode(),
+            "depends on itself",
+        ),
+        (
+            (json.dumps(events[0]) + "\n").encode()
+            + (
+                json.dumps(
+                    {
+                        **envelope,
+                        "seq": 2,
+                        "kind": "edge-added",
+                        "detail": {"from": "work", "to": "work"},
+                    }
+                )
+                + "\n"
+            ).encode()
+            + (
+                json.dumps(
+                    {
+                        **envelope,
+                        "seq": 3,
+                        "kind": "edge-added",
+                        "detail": {"from": "work", "to": "work"},
+                    }
+                )
+                + "\n"
+            ).encode()
+            + (
+                json.dumps(
+                    {
+                        **next(item for item in events if item["kind"] == "round-started"),
+                        "seq": 4,
+                    }
+                )
+                + "\n"
+            ).encode(),
+            "duplicate edge",
+        ),
+    ]
+    for invalid_log, diagnostic in prefix_failures:
+        events_path.write_bytes(invalid_log)
+        for artifact in artifacts:
+            (round_dir / artifact).unlink(missing_ok=True)
+        malformed = subprocess.run(
+            [*command, "--recover"], cwd=REPO_ROOT, text=True, capture_output=True, check=False
+        )
+        assert malformed.returncode == 2
+        assert diagnostic in malformed.stderr
+        for name, content in artifacts.items():
+            (round_dir / name).write_bytes(content)
+    events_path.write_bytes(baseline)
+
+    settled_plan = tmp_path / "settled.json"
+    settled_plan.write_text(
+        json.dumps(
+            {
+                "tasks": [
+                    {"id": "first", "persona": "engineer", "task": "complete-now"},
+                    {
+                        "id": "second",
+                        "persona": "engineer",
+                        "task": "complete-now",
+                        "deps": ["first"],
+                    },
+                ]
+            }
+        )
+    )
+    settled_command = [
+        *command[:2],
+        str(settled_plan),
+        "--run",
+        "settled-prefix",
+        *command[5:],
+    ]
+    settled_process = subprocess.Popen(
+        settled_command,
+        cwd=REPO_ROOT,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    )
+    settled_events = runs / "settled-prefix" / "events.jsonl"
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        content = settled_events.read_text() if settled_events.exists() else ""
+        if '"kind": "node-settled"' in content and content.count('"kind": "node-started"') >= 2:
+            break
+        time.sleep(0.01)
+    else:
+        settled_process.kill()
+        pytest.fail("run-plan did not reach the settled-prefix recovery boundary")
+    os.killpg(settled_process.pid, signal.SIGKILL)
+    settled_process.wait()
+    refused = subprocess.run(
+        [*settled_command, "--recover"], cwd=REPO_ROOT, text=True, capture_output=True, check=False
+    )
+    assert refused.returncode == 2
+    assert "settled nodes before its terminal event: first" in refused.stderr
 
 
 def test_legacy_direct_plan_and_recorded_ledger_still_run(

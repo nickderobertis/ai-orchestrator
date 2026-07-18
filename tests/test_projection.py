@@ -5,7 +5,17 @@ from pathlib import Path
 
 import pytest
 
-from orchestrator.journal import Event, NodeId, RunId, open_journal
+from orchestrator.config import ConfigError
+from orchestrator.journal import (
+    AUTHORITATIVE_EVENT_KINDS,
+    OPTIONAL_EVENT_FIELDS,
+    REQUIRED_EVENT_FIELDS,
+    Event,
+    EventKind,
+    NodeId,
+    RunId,
+    open_journal,
+)
 from orchestrator.projection import ProjectionError, project_round, project_run, read_strict_events
 from orchestrator.runs import prepare_round
 
@@ -14,18 +24,10 @@ def test_static_event_contract_golden() -> None:
     golden = json.loads(
         (Path(__file__).parent / "golden" / "static-round-events-v1.json").read_text()
     )
-    assert golden == {
-        "version": 1,
-        "state_changing_kinds": [
-            "node-added",
-            "edge-added",
-            "node-started",
-            "node-settled",
-            "human-attested",
-        ],
-        "required_envelope": ["version", "seq", "at", "kind", "run_id", "round"],
-        "optional_envelope": ["node", "step", "detail"],
-    }
+    assert golden["version"] == 1
+    assert golden["state_changing_kinds"] == list(AUTHORITATIVE_EVENT_KINDS)
+    assert golden["required_envelope"] == list(REQUIRED_EVENT_FIELDS)
+    assert golden["optional_envelope"] == list(OPTIONAL_EVENT_FIELDS)
 
 
 def test_projection_reconstructs_plan_states_attestations_and_result(tmp_path: Path) -> None:
@@ -97,9 +99,9 @@ def test_strict_reader_rejects_every_invalid_durable_line(
         read_strict_events(path, RunId("r"))
 
 
-def _event(kind: str, seq: int, *, node: str | None = None, detail=None) -> Event:
+def _event(kind: EventKind, seq: int, *, node: str | None = None, detail=None) -> Event:
     return Event(
-        kind=kind,  # type: ignore[arg-type]
+        kind=kind,
         run_id=RunId("r"),
         round=1,
         seq=seq,
@@ -141,6 +143,10 @@ def _event(kind: str, seq: int, *, node: str | None = None, detail=None) -> Even
             "more than once",
         ),
         ([_event("round-finished", 2)], "projected result"),
+        (
+            [_event("round-finished", 2, detail={"result": {"ok": "yes"}})],
+            "result is invalid",
+        ),
         ([_event("edge-added", 2, detail={"from": "missing", "to": "a"})], "unknown node"),
         ([_event("edge-added", 2, detail={"from": "a", "to": "a"})], "depends on itself"),
         (
@@ -162,20 +168,23 @@ def test_fold_rejects_invalid_static_transitions(tail: list[Event], message: str
         detail={"definition": {"id": "a", "persona": "p", "task": "x"}},
     )
     with pytest.raises(ProjectionError, match=message):
-        project_round([first, *tail], RunId("r"), 1)
+        project_round(
+            [first, _event("round-started", 2, detail={"plan": {}}), *tail], RunId("r"), 1
+        )
 
 
 def test_fold_requires_a_graph_definition() -> None:
     with pytest.raises(ProjectionError, match="no node-added"):
-        project_round([_event("round-started", 1)], RunId("r"), 1)
+        project_round([_event("round-started", 1, detail={"plan": {}})], RunId("r"), 1)
 
 
 def test_fold_records_failed_state_and_ignores_another_round() -> None:
     events = [
         _event("node-added", 1, detail={"definition": {"id": "a", "persona": "p", "task": "x"}}),
-        _event("node-started", 2, node="a"),
-        _event("node-failed", 3, node="a"),
-        Event("round-started", RunId("r"), 2, 4, 0),
+        _event("round-started", 2, detail={"plan": {}}),
+        _event("node-started", 3, node="a"),
+        _event("node-failed", 4, node="a"),
+        Event("round-started", RunId("r"), 2, 5, 0),
     ]
     assert project_round(events, RunId("r"), 1).node_states == {"a": "failed"}
 
@@ -199,7 +208,7 @@ def test_prepare_round_rejects_an_invalid_authoritative_replay(tmp_path: Path) -
     _, round_dir = prepare_round(run_dir, {"tasks": [{"id": "a", "task": "x"}]})
     (round_dir / "plan.json").unlink()
     (run_dir / "events.jsonl").write_text("{}\n")
-    with pytest.raises(ProjectionError, match="unknown authoritative event"):
+    with pytest.raises(ConfigError, match="cannot replay.*unknown authoritative event"):
         prepare_round(run_dir, {"tasks": [{"id": "a", "task": "x"}]}, recover=True)
 
 

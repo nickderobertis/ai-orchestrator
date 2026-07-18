@@ -234,15 +234,24 @@ def prepare_round(
             number, round_dir = latest
             if not (round_dir / "result.json").exists():
                 plan_path = round_dir / "plan.json"
-                if not plan_path.exists() and (run_dir / "events.jsonl").exists():
-                    from .projection import project_run
+                replayed = None
+                events_path = run_dir / "events.jsonl"
+                from .journal import read_events
 
-                    replayed = project_run(run_dir / "events.jsonl", RunId(run_dir.name), number)
+                has_round_events = any(event.round == number for event in read_events(events_path))
+                if events_path.exists() and (not plan_path.exists() or has_round_events):
+                    from .projection import ProjectionError, project_run
+
+                    try:
+                        replayed = project_run(events_path, RunId(run_dir.name), number)
+                    except ProjectionError as exc:
+                        raise ConfigError(f"cannot replay authoritative event log: {exc}") from exc
+                if not plan_path.exists() and replayed is not None:
                     _write_json(plan_path, replayed.plan)
-                    if replayed.result is not None:
-                        _write_json(round_dir / "result.json", replayed.result)
-                        atomic_json(round_dir / "status.json", _round_status("completed"))
-                        latest = None
+                if replayed is not None and replayed.result is not None:
+                    _write_json(round_dir / "result.json", replayed.result)
+                    atomic_json(round_dir / "status.json", _round_status("completed"))
+                    latest = None
                 if latest is None:
                     number = number + 1
                     round_dir = run_dir / f"round-{number:02d}"
