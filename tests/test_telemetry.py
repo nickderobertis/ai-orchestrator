@@ -95,6 +95,15 @@ def test_collect_run_joins_ledger_journal_history_and_attestation(
                 "duration_ms": 2500,
             }
         )
+        + "\n"
+        + json.dumps(
+            {
+                "provider": "oneharness",
+                "harness": "codex",
+                "model": "gpt-5",
+                "duration_ms": -1000,
+            }
+        )
         + "\n",
         encoding="utf-8",
     )

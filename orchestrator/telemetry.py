@@ -272,7 +272,9 @@ def _providers(run_id: RunId, oneharness_bin: str) -> tuple[list[Provider], floa
         elapsed += sum(
             value / 1000
             for record in records
-            if isinstance((value := record.get("duration_ms")), int) and not isinstance(value, bool)
+            if isinstance((value := record.get("duration_ms")), int)
+            and not isinstance(value, bool)
+            and value >= 0
         )
         latest = records[-1] if records else {}
         raw_provider = latest.get("provider", "oneharness")
