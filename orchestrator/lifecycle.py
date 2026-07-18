@@ -854,7 +854,14 @@ def _verify_gate(
     still running (or one that took the process down with it), which an outcome
     read after the fact can never report.
     """
-    journal.append("verification-started", detail={"command": list(cmd)})
+    journal.append(
+        "verification-started",
+        detail={
+            "command": list(cmd),
+            "comparison_remote": env.get("ORCHESTRATOR_COMPARISON_REMOTE", ""),
+            "comparison_base": env.get("ORCHESTRATOR_COMPARISON_BASE", ""),
+        },
+    )
     verify = run_gate(worktree, cmd, timeout=timeout, env=env)
     finished: dict[str, DetailValue] = {
         "ok": verify.ok,

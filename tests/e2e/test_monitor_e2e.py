@@ -697,3 +697,40 @@ def test_the_monitor_command_reports_a_run_it_cannot_watch_actionably(tmp_path: 
     )
     assert bad_bound.returncode == 2
     assert "--max-poll-interval must be at least --poll-interval" in bad_bound.stderr
+
+
+def test_monitor_command_backs_off_to_its_bounded_interval(tmp_path: Path) -> None:
+    runs_dir = tmp_path / "runs"
+    run_dir = runs_dir / RUN
+    open_journal(run_dir, RUN, 1).append("node-started", node=NodeId("api"))
+    _settle(run_dir, {"api": {"status": "waiting"}}, ok=False, state="waiting")
+    process = subprocess.Popen(
+        [
+            "just",
+            "monitor",
+            "--runs-dir",
+            str(runs_dir),
+            "--format",
+            "jsonl",
+            "--heartbeat",
+            "0.001",
+            "--poll-interval",
+            "0.01",
+            "--max-poll-interval",
+            "0.04",
+            RUN,
+        ],
+        cwd=REPO_ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    try:
+        assert process.stdout is not None
+        records = [json.loads(process.stdout.readline()) for _ in range(5)]
+    finally:
+        process.terminate()
+        process.wait(timeout=5)
+    intervals = [record["next_poll_seconds"] for record in records if record["type"] == "heartbeat"]
+    assert 0.02 in intervals
+    assert intervals[-1] == 0.04

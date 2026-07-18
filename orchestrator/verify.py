@@ -35,6 +35,20 @@ class GateAttestation:
     command: tuple[str, ...]
     environment_sha256: str
 
+    @classmethod
+    def from_value(cls, value: object) -> GateAttestation | None:
+        """Validate the journal representation of the authoritative identity."""
+        if not _is_attestation_record(value):
+            return None
+        return cls(
+            commit=value["commit"],
+            comparison_remote=value["comparison_remote"],
+            comparison_base=value["comparison_base"],
+            comparison_commit=value["comparison_commit"],
+            command=tuple(value["command"]),
+            environment_sha256=value["environment_sha256"],
+        )
+
     def to_record(self) -> _AttestationRecord:
         return _AttestationRecord(
             commit=self.commit,

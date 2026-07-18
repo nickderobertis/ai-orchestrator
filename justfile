@@ -162,8 +162,6 @@ history-show *args:
 monitor *args:
     uv run orchestrator-monitor {{args}}
 
-# Emit one versioned JSON index joining run phase, execution, timing, lineage,
-# comparison, gate attestation, and current check blocker telemetry.
 telemetry *args:
     @uv run orchestrator-telemetry {{args}}
 

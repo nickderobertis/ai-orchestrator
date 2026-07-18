@@ -21,6 +21,7 @@ from .runs import (
     load_mapping,
     result_state,
 )
+from .verify import GateAttestation
 
 TELEMETRY_SCHEMA_VERSION = 1
 FailureClass = Literal[
@@ -106,40 +107,6 @@ class RetryLineageTelemetry:
 
 
 @dataclass(frozen=True)
-class GateAttestationTelemetry:
-    commit: str
-    comparison_remote: str
-    comparison_base: str
-
-    @classmethod
-    def from_value(cls, value: object) -> GateAttestationTelemetry | None:
-        if not isinstance(value, dict):
-            return None
-        commit, remote, base = (
-            value.get("commit"),
-            value.get("comparison_remote"),
-            value.get("comparison_base"),
-        )
-        if not (
-            isinstance(commit, str)
-            and commit
-            and isinstance(remote, str)
-            and remote
-            and isinstance(base, str)
-            and base
-        ):
-            return None
-        return cls(commit, remote, base)
-
-    def record(self) -> dict[str, str]:
-        return {
-            "commit": self.commit,
-            "comparison_remote": self.comparison_remote,
-            "comparison_base": self.comparison_base,
-        }
-
-
-@dataclass(frozen=True)
 class NodeTelemetry:
     node: str
     status: str
@@ -150,7 +117,7 @@ class NodeTelemetry:
     checkpoint: str = ""
     commit: str = ""
     retry_lineage: RetryLineageTelemetry | None = None
-    gate_attestation: GateAttestationTelemetry | None = None
+    gate_attestation: GateAttestation | None = None
 
     def record(self) -> dict[str, object]:
         result: dict[str, object] = {"node": self.node, "status": self.status}
@@ -167,7 +134,7 @@ class NodeTelemetry:
         if self.retry_lineage:
             result["retry_lineage"] = self.retry_lineage.record()
         if self.gate_attestation:
-            result["gate_attestation"] = self.gate_attestation.record()
+            result["gate_attestation"] = self.gate_attestation.to_record()
         return result
 
 
@@ -256,7 +223,7 @@ def _gate_seconds(events: list[Event]) -> float:
     return total
 
 
-def _publication_waits(events: list[Event], *, end: float) -> list[float]:
+def _publication_waits(events: list[Event]) -> list[float]:
     """Pair each green gate with publication without subtracting overlapping work."""
     green: dict[str, float] = {}
     waits: list[float] = []
@@ -266,7 +233,6 @@ def _publication_waits(events: list[Event], *, end: float) -> list[float]:
             green[node] = event.at
         elif event.kind == "pr-merged" and node in green:
             waits.append(max(0.0, event.at - green.pop(node)))
-    waits.extend(max(0.0, end - started) for started in green.values())
     return waits
 
 
@@ -284,11 +250,20 @@ def _providers(run_id: RunId, oneharness_bin: str) -> tuple[list[Provider], floa
         elapsed += sum(
             value / 1000
             for record in records
-            if isinstance((value := record.get("duration_ms")), int)
+            if isinstance((value := record.get("duration_ms")), int) and not isinstance(value, bool)
         )
         latest = records[-1] if records else {}
-        provider = str(latest.get("provider", "oneharness"))
-        item = Provider(provider, str(latest.get("harness", "")), str(latest.get("model", "")))
+        raw_provider = latest.get("provider", "oneharness")
+        raw_harness = latest.get("harness", "")
+        raw_model = latest.get("model", "")
+        if not (
+            isinstance(raw_provider, str)
+            and raw_provider
+            and isinstance(raw_harness, str)
+            and isinstance(raw_model, str)
+        ):
+            continue
+        item = Provider(raw_provider, raw_harness, raw_model)
         if item not in found:
             found.append(item)
     return found, elapsed
@@ -307,19 +282,32 @@ def _node_record(node: str, item: GraphResultItem, events: list[Event]) -> NodeT
         for event in events
         if event.node == node and event.kind == "verification-finished"
     ]
+    attestation = GateAttestation.from_value(attestations[-1] if attestations else None)
+    comparisons = [
+        event.detail
+        for event in events
+        if event.node == node and event.kind == "verification-started"
+    ]
+    comparison_remote = attestation.comparison_remote if attestation else ""
+    comparison_base = attestation.comparison_base if attestation else ""
+    if comparisons and not comparison_remote:
+        remote, base = (
+            comparisons[-1].get("comparison_remote"),
+            comparisons[-1].get("comparison_base"),
+        )
+        comparison_remote = remote if isinstance(remote, str) else ""
+        comparison_base = base if isinstance(base, str) else ""
     return NodeTelemetry(
         node=node,
         status=str(item.get("status", "unknown")),
         outcome=str(item.get("outcome", "")),
         branch=str(item.get("branch", "")),
-        comparison_remote="origin" if item.get("pr_base") else "",
-        comparison_base=str(item.get("pr_base", "")),
+        comparison_remote=comparison_remote,
+        comparison_base=comparison_base,
         checkpoint=checkpoint,
         commit=commits[-1] if commits else "",
         retry_lineage=RetryLineageTelemetry.from_value(item.get("retry_lineage")),
-        gate_attestation=GateAttestationTelemetry.from_value(
-            attestations[-1] if attestations else None
-        ),
+        gate_attestation=attestation,
     )
 
 
@@ -341,7 +329,7 @@ def collect_run(
         if events
         else 0.0
     )
-    publication_waits = _publication_waits(events, end=current)
+    publication_waits = _publication_waits(events)
     wait = sum(publication_waits)
     failure = next(
         (found for item in payload["results"].values() if (found := _failure(item))), None

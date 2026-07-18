@@ -208,6 +208,7 @@ class Heartbeat:
     detail: str
     last_completed_check: str = ""
     current_blocker: str = ""
+    next_poll_seconds: float = 0.0
 
     def text(self) -> str:
         stamp = datetime.fromtimestamp(self.at, UTC).strftime("%H:%M:%S")
@@ -227,6 +228,8 @@ class Heartbeat:
             record["last_completed_check"] = self.last_completed_check
         if self.current_blocker:
             record["current_blocker"] = self.current_blocker
+        if self.next_poll_seconds:
+            record["next_poll_seconds"] = self.next_poll_seconds
         return record
 
 
@@ -1201,6 +1204,7 @@ def stream(
                     state.detail,
                     rollup.last_completed_check,
                     rollup.current_blocker,
+                    delay,
                 )
             )
             return 0
@@ -1214,6 +1218,7 @@ def stream(
                     "graph complete",
                     rollup.last_completed_check,
                     rollup.current_blocker,
+                    delay,
                 )
             )
             return 0
@@ -1228,6 +1233,7 @@ def stream(
                     state.detail,
                     rollup.last_completed_check,
                     rollup.current_blocker,
+                    delay,
                 )
             )
             last = now

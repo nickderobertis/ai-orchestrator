@@ -21,7 +21,14 @@ def _recorded_run(tmp_path: Path, *, state: str = "failed") -> Path:
     node = NodeJournal(journal, NodeId("api"), RunId("observed"), 1)
     journal.append("round-started", detail={"nodes": 1})
     node.append("node-started", detail={"persona": "engineer"})
-    node.append("verification-started", detail={"command": ["just", "gate"]})
+    node.append(
+        "verification-started",
+        detail={
+            "command": ["just", "gate"],
+            "comparison_remote": "origin",
+            "comparison_base": "main",
+        },
+    )
     node.append(
         "verification-finished",
         detail={
@@ -31,6 +38,9 @@ def _recorded_run(tmp_path: Path, *, state: str = "failed") -> Path:
                 "commit": "a" * 40,
                 "comparison_remote": "origin",
                 "comparison_base": "main",
+                "comparison_commit": "d" * 40,
+                "command": ["just", "gate"],
+                "environment_sha256": "e" * 64,
             },
         },
     )

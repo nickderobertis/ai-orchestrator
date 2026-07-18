@@ -355,6 +355,7 @@ def test_real_run_plan_waits_then_monitor_exits_only_after_attestation(
         "round": 2,
         "state": "complete",
         "detail": "graph complete",
+        "next_poll_seconds": 0.01,
     }
     assert (runs_dir / RUN_ID / "round-01" / "result.json").is_file()
     assert (runs_dir / RUN_ID / "round-02" / "result.json").is_file()
@@ -473,6 +474,10 @@ def test_real_lifecycle_commit_and_pr_survive_live_state(
             },
         },
     )
+    failed_telemetry = _just("telemetry", "--runs-dir", str(runs_dir))
+    assert failed_telemetry.returncode == 0, failed_telemetry.stderr
+    failed_record = json.loads(failed_telemetry.stdout)["runs"][0]
+    assert failed_record["failure"]["class"] == "agent"
 
     _, second_dir = prepare_round(run_dir, plan)
     second_journal = open_journal(run_dir, run_id, 2)
@@ -572,6 +577,10 @@ def test_real_lifecycle_commit_and_pr_survive_live_state(
     assert isinstance(attestation, dict)
     assert attestation["comparison_base"] == "main"
     assert attestation["commit"]
+    assert json.loads(telemetry_command.stdout)["metrics"]["green_to_publication_seconds"]
+    active_only = _just("telemetry", "--runs-dir", str(runs_dir))
+    assert active_only.returncode == 0, active_only.stderr
+    assert json.loads(active_only.stdout)["runs"] == []
 
     for detail_id in (
         git_ids[0],

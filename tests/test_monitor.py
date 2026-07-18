@@ -573,6 +573,7 @@ def test_only_a_successful_graph_ends_the_stream(tmp_path: Path, no_oneharness: 
         "round": 1,
         "state": "complete",
         "detail": "graph complete",
+        "next_poll_seconds": 10.0,
     }
 
 
