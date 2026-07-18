@@ -85,6 +85,56 @@ def test_dispatch_completes_via_supervisor_loop(command_base, onejudge_bin) -> N
     assert report.assessment == "- Add a regression test for the adjacent edge case."
 
 
+def test_dispatch_forwards_validated_environment_to_real_provider(
+    tmp_path, command_base, onejudge_bin
+) -> None:
+    cache = (tmp_path / "identity-cache").resolve()
+    cache.mkdir()
+
+    report = dispatch(
+        "engineer",
+        "complete-now capture-cache-env",
+        base_path=command_base(),
+        persona_dir=PERSONA_DIR,
+        project_dir=str(tmp_path),
+        onejudge_bin=onejudge_bin,
+        env={"ORCHESTRATOR_CACHE_DIR": str(cache)},
+    )
+
+    assert report.completed
+    assert (tmp_path / "CACHE_ENV.txt").read_text(encoding="utf-8") == str(cache)
+
+
+@pytest.mark.parametrize(
+    "env, message",
+    [
+        ({"BAD=NAME": "value"}, "name is invalid"),
+        ({"": "value"}, "name is invalid"),
+        ({"BAD\x00NAME": "value"}, "name is invalid"),
+        ({3: "value"}, "name is invalid"),
+        ({"BAD_VALUE": "nul\x00value"}, "non-NUL string"),
+        ({"BAD_VALUE": 3}, "non-NUL string"),
+    ],
+)
+def test_dispatch_rejects_invalid_process_environment(
+    env, message, command_base, onejudge_bin
+) -> None:
+    with pytest.raises(DispatchError, match=message):
+        dispatch(
+            "engineer",
+            "complete-now",
+            base_path=command_base(),
+            persona_dir=PERSONA_DIR,
+            onejudge_bin=onejudge_bin,
+            env=env,
+        )
+
+
+def test_run_onejudge_rejects_invalid_environment_at_its_public_boundary(onejudge_bin) -> None:
+    with pytest.raises(DispatchError, match="name is invalid"):
+        run_onejudge({}, "task", onejudge_bin=onejudge_bin, env={"": "value"})
+
+
 def test_dispatch_complete_now_single_turn(command_base, onejudge_bin) -> None:
     report = dispatch(
         "engineer",

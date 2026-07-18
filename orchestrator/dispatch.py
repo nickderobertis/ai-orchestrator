@@ -121,6 +121,15 @@ def _validate_oneharness_timeout(value: str) -> None:
         )
 
 
+def _validate_environment(env: Mapping[str, str]) -> None:
+    """Validate caller-provided values before they reach the process boundary."""
+    for key, value in env.items():
+        if not isinstance(key, str) or not key or "\x00" in key or "=" in key:
+            raise DispatchError(f"environment variable name is invalid: {key!r}")
+        if not isinstance(value, str) or "\x00" in value:
+            raise DispatchError(f"environment variable {key!r} must be a non-NUL string")
+
+
 def run_onejudge(
     config: dict[str, Any],
     task: str,
@@ -149,6 +158,7 @@ def run_onejudge(
         cmd = [onejudge_bin, "run", str(cfg_path), "--task", "-", "--format", "json"]
         if provider is not None:
             cmd += ["--provider", provider]
+        _validate_environment(env or {})
         process_env = {**os.environ, **(env or {})}
         process_env.setdefault("ONEHARNESS_TIMEOUT", DEFAULT_ONEHARNESS_TIMEOUT)
         _validate_oneharness_timeout(process_env["ONEHARNESS_TIMEOUT"])
@@ -239,6 +249,7 @@ def dispatch(
     oneharness_mode: str | None = None,
     labels: Mapping[str, str] | None = None,
     timeout: float | None = None,
+    env: dict[str, str] | None = None,
 ) -> Report:
     """Merge base ⊕ persona and drive the subtask to completion via onejudge.
 
@@ -264,9 +275,11 @@ def dispatch(
         done_when=done_when,
     )
 
-    run_cwd, env = _agent_run_context(
+    run_cwd, context_env = _agent_run_context(
         config, cwd=cwd, project_dir=project_dir, oneharness_mode=oneharness_mode
     )
+    process_env = {**context_env, **(env or {})}
+    _validate_environment(process_env)
     return run_onejudge(
         config,
         task,
@@ -274,7 +287,7 @@ def dispatch(
         cwd=run_cwd,
         onejudge_bin=onejudge_bin,
         provider=provider,
-        env=env or None,
+        env=process_env or None,
         labels=labels,
         timeout=timeout,
     )

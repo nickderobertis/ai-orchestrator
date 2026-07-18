@@ -27,6 +27,7 @@ __all__ = [
     "clone",
     "commit",
     "common_dir",
+    "configure_repo_hooks",
     "current_branch",
     "default_branch",
     "delete_branch",
@@ -67,6 +68,20 @@ def common_dir(cwd: str | Path) -> Path:
     if not value.is_absolute():
         value = Path(cwd) / value
     return value.resolve()
+
+
+def configure_repo_hooks(cwd: str | Path) -> Path | None:
+    """Point this checkout at its tracked ``.githooks`` directory, when present.
+
+    Git clone does not copy repository-local config. Configuring the execution
+    clone is therefore required before ``git worktree add`` for a tracked
+    post-checkout hook to run while the new worktree is populated.
+    """
+    hooks = (Path(cwd) / ".githooks").resolve()
+    if not hooks.is_dir():
+        return None
+    _git(["config", "core.hooksPath", str(hooks)], cwd=cwd)
+    return hooks
 
 
 def _git(
