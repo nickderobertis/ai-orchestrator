@@ -20,6 +20,7 @@ PR/CI decisioning* are faked, each at its own seam:
 
 from __future__ import annotations
 
+import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -58,7 +59,17 @@ def make_writing_dispatch(
     """
 
     def dispatch_fn(persona: str, task: str, *, project_dir: str, **_: object) -> Report:
-        if filename is not None:
+        if persona == "pr-author":
+            match = re.search(
+                r"Write the final body, and nothing else, to this absolute path:\n(.+)", task
+            )
+            if match:
+                Path(match.group(1)).write_text(
+                    "## What\nAdds the completed behavior.\n\n"
+                    "## Why\nMakes the requested capability available.\n",
+                    encoding="utf-8",
+                )
+        elif filename is not None:
             (Path(project_dir) / filename).write_text(f"{content} by {persona}\n", encoding="utf-8")
         return Report(
             persona=persona,
