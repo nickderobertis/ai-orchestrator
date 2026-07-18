@@ -24,7 +24,7 @@ from orchestrator.graph import (
 )
 from orchestrator.journal import JournalError, NodeSink, open_journal
 from orchestrator.lifecycle import LifecycleResult, RepoPlanNode, Step, StepResult
-from orchestrator.plan import PlanError, PlanNode
+from orchestrator.plan import PLAN_SCHEMA_VERSION, PlanError, PlanNode
 from orchestrator.runs import NodeId, RunId
 
 
@@ -245,6 +245,91 @@ def test_parse_graph_accepts_old_direct_and_lifecycle_nodes() -> None:
     assert graph.tasks[0].direct is not None
     assert graph.tasks[1].lifecycle is not None
     assert graph.tasks[1].deps == ["direct"]
+
+
+def test_expects_no_diff_rejects_agent_review_contract_before_dispatch() -> None:
+    with pytest.raises(
+        PlanError,
+        match="expects_no_diff cannot set 'persona', 'done_when'.*no agent or review evidence",
+    ):
+        parse_graph(
+            {
+                "schema_version": 2,
+                "tasks": [
+                    {
+                        "id": "certify",
+                        "expects_no_diff": True,
+                        "persona": "reviewer",
+                        "task": "Certify the unchanged tree.",
+                        "done_when": "report verified review findings and implement required fixes",
+                    }
+                ],
+            }
+        )
+
+
+def test_expects_no_diff_step_settles_without_dispatch() -> None:
+    graph = parse_graph(
+        {
+            "schema_version": 2,
+            "tasks": [
+                {
+                    "id": "work",
+                    "repo": "o/r",
+                    "steps": [
+                        {
+                            "id": "ready",
+                            "task": "Record that no repository change is expected.",
+                            "expects_no_diff": True,
+                        }
+                    ],
+                }
+            ],
+        }
+    )
+
+    lifecycle = graph.tasks[0].lifecycle
+    assert lifecycle is not None
+    assert lifecycle.steps is not None
+    step = lifecycle.steps[0]
+    assert step.expects_no_diff is True
+    assert step.persona is None
+
+
+def test_expects_no_diff_direct_node_records_no_changes_without_runner() -> None:
+    graph = parse_graph(
+        {
+            "schema_version": 2,
+            "tasks": [
+                {
+                    "id": "ready",
+                    "task": "Certify the deterministic unchanged state.",
+                    "expects_no_diff": True,
+                }
+            ],
+        }
+    )
+
+    def unexpected_dispatch(*args: object, **kwargs: object) -> Report:
+        raise AssertionError("expects_no_diff must not dispatch")
+
+    result = run_graph(
+        graph,
+        agent_runner=unexpected_dispatch,
+        lifecycle_runner=lambda node, **_: _lifecycle(),
+    )
+
+    assert graph_payload(result)["results"]["ready"]["outcome"] == "no-changes"
+    assert result.results["ready"].status == "done"
+
+
+def test_plan_schema_version_documentation_cannot_drift() -> None:
+    root = Path(__file__).parents[1]
+    docs = (root / "docs" / "orchestration.md").read_text(encoding="utf-8")
+    assert f"schema version {PLAN_SCHEMA_VERSION}" in docs
+    for example in ("plan.example.json", "repo-plan.example.json", "tracked-graph.example.json"):
+        mapping = json.loads((root / "examples" / example).read_text(encoding="utf-8"))
+        assert mapping["schema_version"] == PLAN_SCHEMA_VERSION
 
 
 @pytest.mark.parametrize("field, value", [("persona", "p"), ("persona", None), ("repo", None)])
