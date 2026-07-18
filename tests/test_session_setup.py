@@ -131,6 +131,26 @@ def test_install_onejudge_installs_pinned_sdk_and_cli_from_pypi(tmp_path: Path) 
     )
 
 
+def test_install_onejudge_fails_loudly_when_uv_is_unavailable(tmp_path: Path) -> None:
+    proc = _run_onejudge_install(tmp_path)
+
+    assert proc.returncode == 1
+    assert "cannot install required onejudge 0.3.2: uv is not installed" in proc.stderr
+
+
+def test_install_onejudge_surfaces_uv_sync_failure(tmp_path: Path) -> None:
+    _fake_install_commands(tmp_path)
+
+    proc = _run_onejudge_install(tmp_path, TEST_UV_FAIL="1")
+
+    assert proc.returncode == 1
+    assert (tmp_path / "uv.args").read_text(encoding="utf-8").strip() == (
+        f"sync --project {tmp_path}/repo"
+    )
+    assert "onejudge 0.3.2 PyPI install failed" in proc.stderr
+    assert "required onejudge SDK and CLI 0.3.2 are unavailable" in proc.stderr
+
+
 def test_install_onejudge_rejects_wrong_sdk_version(tmp_path: Path) -> None:
     _fake_install_commands(tmp_path)
     replacement = tmp_path / "onejudge-0.3.2"
