@@ -17,6 +17,8 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
+from .coordination import advisory_lock, atomic_json
+
 __all__ = ["VerifyResult", "detect_gate", "run_gate"]
 
 
@@ -25,6 +27,7 @@ class VerifyResult:
     ok: bool
     command: list[str]
     output: str
+    reused: bool = False
 
     def tail(self, limit: int = 2000) -> str:
         """The trailing slice of output, for a compact failure report."""
@@ -91,7 +94,18 @@ def run_gate(
     timeout: float | None = None,
     env: dict[str, str] | None = None,
 ) -> VerifyResult:
-    """Run ``command`` in ``project_dir``; ok iff it exits 0."""
+    """Run ``command`` in ``project_dir``; reuse an exact successful certification.
+
+    Reuse is deliberately unavailable outside a Git checkout or without the
+    resolved comparison remote/base.  The durable record is repository-local
+    and binds the verdict to HEAD, comparison identity, and the gate command.
+    """
+    directory = Path(project_dir)
+    context = _attestation_context(directory, command, env)
+    if context is not None and _has_attestation(context):
+        return VerifyResult(
+            ok=True, command=command, output="gate attestation reused\n", reused=True
+        )
     try:
         proc = subprocess.run(
             command,
@@ -109,4 +123,79 @@ def run_gate(
         )
     except subprocess.TimeoutExpired:  # pragma: no cover - timing-dependent
         return VerifyResult(ok=False, command=command, output=f"gate timed out after {timeout}s")
-    return VerifyResult(ok=proc.returncode == 0, command=command, output=proc.stdout + proc.stderr)
+    result = VerifyResult(
+        ok=proc.returncode == 0, command=command, output=proc.stdout + proc.stderr
+    )
+    if result.ok and context is not None:
+        _record_attestation(context)
+    return result
+
+
+_ATTESTATION_SCHEMA_VERSION = 1
+
+
+@dataclass(frozen=True)
+class _AttestationContext:
+    path: Path
+    key: str
+    record: dict[str, object]
+
+
+def _git_value(directory: Path, *args: str) -> str | None:
+    proc = subprocess.run(["git", "-C", str(directory), *args], text=True, capture_output=True)
+    return proc.stdout.strip() if proc.returncode == 0 and proc.stdout.strip() else None
+
+
+def _attestation_context(
+    directory: Path, command: list[str], env: dict[str, str] | None
+) -> _AttestationContext | None:
+    remote = (env or {}).get("ORCHESTRATOR_COMPARISON_REMOTE")
+    base = (env or {}).get("ORCHESTRATOR_COMPARISON_BASE")
+    head = _git_value(directory, "rev-parse", "HEAD")
+    common = _git_value(directory, "rev-parse", "--path-format=absolute", "--git-common-dir")
+    if not remote or not base or head is None or common is None:
+        return None
+    record: dict[str, object] = {
+        "commit": head,
+        "comparison_remote": remote,
+        "comparison_base": base,
+        "command": list(command),
+    }
+    key = json.dumps(record, sort_keys=True, separators=(",", ":"))
+    return _AttestationContext(
+        Path(common) / "ai-orchestrator" / "gate-attestations.json", key, record
+    )
+
+
+def _has_attestation(context: _AttestationContext) -> bool:
+    try:
+        payload = json.loads(context.path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    return (
+        isinstance(payload, dict)
+        and payload.get("schema_version") == _ATTESTATION_SCHEMA_VERSION
+        and isinstance(payload.get("attestations"), dict)
+        and payload["attestations"].get(context.key) == context.record
+    )
+
+
+def _record_attestation(context: _AttestationContext) -> None:
+    context.path.parent.mkdir(parents=True, exist_ok=True)
+    with advisory_lock(f"gate-attestations:{context.path}"):
+        attestations: dict[str, object] = {}
+        try:
+            payload = json.loads(context.path.read_text(encoding="utf-8"))
+            if (
+                isinstance(payload, dict)
+                and payload.get("schema_version") == _ATTESTATION_SCHEMA_VERSION
+                and isinstance(payload.get("attestations"), dict)
+            ):
+                attestations = dict(payload["attestations"])
+        except (OSError, json.JSONDecodeError):
+            pass
+        attestations[context.key] = context.record
+        atomic_json(
+            context.path,
+            {"schema_version": _ATTESTATION_SCHEMA_VERSION, "attestations": attestations},
+        )

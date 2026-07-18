@@ -155,7 +155,7 @@ def next_round(
         node = dict(task)
         if tid in retry:
             node.update(retry[tid])
-        _apply_lifecycle_resume(node, results, completed_humans)
+        _apply_lifecycle_resume(node, results, completed_humans, retry_requested=tid in retry)
         _emit(node)
 
     for subs in split.values():  # replacement subnodes for split nodes
@@ -258,7 +258,11 @@ def _node_human_refs(nid: str, task: dict[str, Any]) -> set[str]:
 
 
 def _apply_lifecycle_resume(
-    node: dict[str, Any], results: dict[str, Any], completed_humans: set[str]
+    node: dict[str, Any],
+    results: dict[str, Any],
+    completed_humans: set[str],
+    *,
+    retry_requested: bool = False,
 ) -> None:
     nid = node.get("id")
     if not isinstance(nid, str):
@@ -272,12 +276,14 @@ def _apply_lifecycle_resume(
     completed_steps = sorted(
         ref.removeprefix(prefix) for ref in completed_humans if ref.startswith(prefix)
     )
-    if item.get("status") != "waiting" or (resume is None and not waiting_steps):
+    status = item.get("status")
+    retrying_preserved = retry_requested and status == "failed"
+    if not (status == "waiting" or retrying_preserved) or (resume is None and not waiting_steps):
         return
     if not isinstance(resume, dict):
         from .plan import PlanError
 
-        raise PlanError(f"task {nid!r} is waiting but has no valid resume metadata")
+        raise PlanError(f"task {nid!r} has no valid resume metadata")
     next_resume = dict(resume)
     existing = next_resume.get("completed_steps") or []
     if not isinstance(existing, list):

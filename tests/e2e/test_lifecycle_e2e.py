@@ -202,7 +202,7 @@ def test_repo_plan_ledger_and_guided_next_round(
                 "repo": str(canonical),
                 "persona": "engineer",
                 "task": "should-fail write-change: preserve this partial attempt",
-                "skip_verify": True,
+                "verify_cmd": ["true"],
                 "workflow": "local",
                 "repo_type": "single-owner",
             }
@@ -226,6 +226,10 @@ def test_repo_plan_ledger_and_guided_next_round(
     rc = main_plan([str(plan_path), "--run", "fixed-run", "--runs-dir", str(runs_dir), *common])
     captured = capsys.readouterr()
     assert rc == 1 and json.loads(captured.out)["results"]["change"]["status"] == "failed"
+    first_result = json.loads((runs_dir / "fixed-run" / "round-01" / "result.json").read_text())
+    preserved_branch = first_result["results"]["change"]["branch"]
+    preserved_checkpoint = first_result["results"]["change"]["resume"]["checkpoint"]
+    assert first_result["results"]["change"]["resume"]["mode"] == "retry"
     first = runs_dir / "fixed-run" / "round-01"
     assert json.loads((first / "plan.json").read_text()) == first_plan
     assert (first / "result.json").is_file()
@@ -245,6 +249,12 @@ def test_repo_plan_ledger_and_guided_next_round(
     assert second_result["results"]["change"]["status"] == "done"
     assert second_result["results"]["change"]["follow_ups"] == follow_up
     publication = second_result["results"]["change"]
+    assert publication["branch"] == preserved_branch
+    assert publication["retry_lineage"] == {
+        "supersedes_branch": preserved_branch,
+        "supersedes_checkpoint": preserved_checkpoint,
+        "disposition": "recovered",
+    }
     assert publication["repository_type"] == publication["repo_type"] == "single-owner"
     assert publication["publication_workflow"] == publication["workflow"] == "local"
     assert publication["merge_policy"] == "direct"

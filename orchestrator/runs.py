@@ -57,6 +57,7 @@ class ResumePayload(TypedDict):
     checkpoint: str
     completed_steps: list[str]
     pr: str | None
+    mode: NotRequired[str]
 
 
 class HumanActionPayload(TypedDict):
@@ -110,6 +111,7 @@ class GraphResultItem(TypedDict, total=False):
     waiting_steps: list[str]
     resume: ResumePayload | None
     error: str | None
+    retry_lineage: dict[str, Any]
 
 
 class GraphPayload(TypedDict, total=False):
@@ -119,6 +121,7 @@ class GraphPayload(TypedDict, total=False):
     state: str
     started_order: list[str]
     results: dict[str, GraphResultItem]
+    schema_version: int
 
 
 RepoPlanResultItem = GraphResultItem

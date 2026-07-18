@@ -448,6 +448,7 @@ def _node_payload(result: NodeResult) -> GraphResultItem:
 
 def graph_payload(result: GraphResult) -> GraphPayload:
     return GraphPayload(
+        schema_version=2,
         ok=result.ok,
         state=result.state,
         started_order=result.started_order,

@@ -45,7 +45,13 @@ from .merge import (
     MergeStrategy,
 )
 from .plan import NODE_KINDS, NodeRun, schedule_dag
-from .provenance import INCOMPLETE_TRAILER, PR_BASE_TRAILER, incomplete_commits
+from .provenance import (
+    INCOMPLETE_TRAILER,
+    PR_BASE_TRAILER,
+    RECOVERY_TRAILER,
+    incomplete_commits,
+    unattested_incomplete,
+)
 from .registry import RegistryError, validate_identity_key
 from .runs import (
     RepoPlanPayload,
@@ -140,6 +146,7 @@ class Resume:
     checkpoint: str
     completed_steps: tuple[str, ...] = ()
     pr: str | None = None
+    mode: str = "pause"
 
 
 @dataclass(frozen=True)
@@ -200,6 +207,7 @@ class LifecycleResult:
     steps: list[StepResult] = field(default_factory=list)
     waiting_steps: list[str] = field(default_factory=list)
     resume: Resume | None = None
+    retry_lineage: dict[str, Any] | None = None
 
     @property
     def ok(self) -> bool:
@@ -581,6 +589,11 @@ def _validate_resume(clone: Path, resume: Resume, github: GitHubBackend | None) 
         return (
             f"resume-failed: branch {resume.branch!r} was rewritten; recorded checkpoint "
             f"{resume.checkpoint} is no longer in the history of {tip}"
+        )
+    if resume.mode == "retry" and not unattested_incomplete(clone, f"origin/{resume.pr_base}", tip):
+        return (
+            f"resume-failed: branch {resume.branch!r} does not carry valid unattested "
+            "incomplete provenance; retry will use a fresh branch"
         )
     if published and local and not gitops.is_ancestor(clone, resume.branch, tip):
         return (
@@ -1169,11 +1182,28 @@ def run_repo_task(
         if resume is not None:
             validated = _validate_resume(clone, resume, github)
             if isinstance(validated, str):
-                result.outcome = "resume-failed"
-                result.detail = validated
-                return result
-            prepared = validated
-            worktree_base = prepared.worktree_base
+                if resume.mode != "retry":
+                    result.outcome = "resume-failed"
+                    result.detail = validated
+                    return result
+                abandoned = resume
+                resume = None
+                result.branch = branch = _workstream_branch_name(effective_steps)
+                result.retry_lineage = {
+                    "supersedes_branch": abandoned.branch,
+                    "supersedes_checkpoint": abandoned.checkpoint,
+                    "disposition": "abandoned",
+                    "reason": validated,
+                }
+            else:
+                prepared = validated
+                worktree_base = prepared.worktree_base
+                if resume.mode == "retry":
+                    result.retry_lineage = {
+                        "supersedes_branch": resume.branch,
+                        "supersedes_checkpoint": resume.checkpoint,
+                        "disposition": "reused",
+                    }
         worktree = workspace.worktree(ref, branch, base=worktree_base)
         if resume is not None and prepared is not None and prepared.published:
             try:
@@ -1217,6 +1247,18 @@ def run_repo_task(
         if step_run.status == "not-completed":
             result.outcome = "not-completed"
             result.detail = f"workstream did not complete: {step_run.detail}"
+            remote_base = f"origin/{pr_base}"
+            if incomplete_commits(worktree, remote_base, "HEAD"):
+                result.resume = Resume(
+                    branch=branch,
+                    base_branch=root_base,
+                    pr_base=pr_base,
+                    checkpoint=gitops.head_sha(worktree),
+                    completed_steps=tuple(
+                        step.id for step in step_run.results if step.status == "done"
+                    ),
+                    mode="retry",
+                )
             return result
         if step_run.status == "waiting":
             return _pause_at_human_step(
@@ -1280,6 +1322,28 @@ def run_repo_task(
                     return result
             else:
                 result.detail = "no local gate detected; relying on required CI checks"
+
+        if (
+            result.retry_lineage
+            and result.retry_lineage["disposition"] == "reused"
+            and result.verify is not None
+            and result.verify.ok
+        ):
+            missing = sorted(unattested_incomplete(worktree, remote_base, "HEAD"))
+            if missing:
+                trailers = "\n".join(f"{RECOVERY_TRAILER} {sha}" for sha in missing)
+                gitops.commit_empty(
+                    worktree,
+                    "chore: attest verified recovery of preserved work\n\n" + trailers,
+                )
+                result.retry_lineage["disposition"] = "recovered"
+        if result.retry_lineage and unattested_incomplete(worktree, remote_base, "HEAD"):
+            result.outcome = "not-completed"
+            result.detail = (
+                "preserved retry completed but cannot be recovered without a successful "
+                "complete gate; retry with the repository gate enabled"
+            )
+            return result
 
         # Each step commits its own work in _run_steps, so the worktree is clean
         # here; if no step produced a commit, there is nothing to open a PR for.
@@ -1502,8 +1566,12 @@ def parse_repo_node(nid: str, t: dict[str, Any]) -> RepoPlanNode:
         raise PlanError(f"task {nid!r} 'execution_checkout' must be a non-empty path")
     resume = _parse_resume(nid, t.get("resume"), node_steps)
     if resume is not None:
-        if not node_steps or not any(step.human for step in node_steps):
-            raise PlanError(f"task {nid!r} 'resume' requires a steps workstream with a human step")
+        if resume.mode == "pause" and (
+            not node_steps or not any(step.human for step in node_steps)
+        ):
+            raise PlanError(
+                f"task {nid!r} pause resume requires a steps workstream with a human step"
+            )
         for field_name, recorded in (
             ("branch", resume.branch),
             ("base_branch", resume.base_branch),
@@ -1555,7 +1623,7 @@ def _parse_resume(nid: str, raw: object, steps: list[Step] | None) -> Resume | N
         return None
     if not isinstance(raw, dict):
         raise PlanError(f"task {nid!r} 'resume' must be a mapping")
-    allowed = {"branch", "base_branch", "pr_base", "checkpoint", "completed_steps", "pr"}
+    allowed = {"branch", "base_branch", "pr_base", "checkpoint", "completed_steps", "pr", "mode"}
     if unknown := set(raw) - allowed:
         raise PlanError(f"task {nid!r} 'resume' has unknown fields: {', '.join(sorted(unknown))}")
     for field_name in ("branch", "base_branch", "pr_base"):
@@ -1586,6 +1654,9 @@ def _parse_resume(nid: str, raw: object, steps: list[Step] | None) -> Resume | N
     pr = raw.get("pr")
     if pr is not None and (not isinstance(pr, str) or _PR_URL.fullmatch(pr) is None):
         raise PlanError(f"task {nid!r} resume 'pr' must be a GitHub pull-request URL")
+    mode = raw.get("mode", "pause")
+    if mode not in {"pause", "retry"}:
+        raise PlanError(f"task {nid!r} resume 'mode' must be 'pause' or 'retry'")
     return Resume(
         branch=cast(str, raw["branch"]),
         base_branch=cast(str, raw["base_branch"]),
@@ -1593,6 +1664,7 @@ def _parse_resume(nid: str, raw: object, steps: list[Step] | None) -> Resume | N
         checkpoint=checkpoint,
         completed_steps=tuple(completed),
         pr=pr,
+        mode=cast(str, mode),
     )
 
 
@@ -1972,6 +2044,7 @@ def result_payload(result: LifecycleResult) -> dict[str, Any]:
         ],
         "waiting_steps": list(result.waiting_steps),
         "resume": resume_payload(result.resume),
+        **({"retry_lineage": result.retry_lineage} if result.retry_lineage else {}),
     }
 
 
@@ -1989,6 +2062,7 @@ def resume_payload(resume: Resume | None) -> dict[str, Any] | None:
         "checkpoint": resume.checkpoint,
         "completed_steps": list(resume.completed_steps),
         "pr": resume.pr,
+        **({"mode": resume.mode} if resume.mode != "pause" else {}),
     }
 
 
