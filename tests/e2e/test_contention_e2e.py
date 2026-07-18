@@ -47,7 +47,7 @@ def _lifecycle_process(
     result = run_repo_task(
         origin,
         "complete-now write-unique-change: the same lifecycle task",
-        "backend-engineer",
+        "engineer",
         workspace=workspace,
         base_path=base_config,
         persona_dir=persona_dir,

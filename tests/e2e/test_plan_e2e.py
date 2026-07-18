@@ -47,13 +47,13 @@ def test_diamond_dag_all_complete(tmp_path, command_base, onejudge_bin, capsys) 
                 {"id": "design", "persona": "planner", "task": "Design the feature."},
                 {
                     "id": "api",
-                    "persona": "backend-engineer",
+                    "persona": "engineer",
                     "task": "Build the API.",
                     "deps": ["design"],
                 },
                 {
                     "id": "ui",
-                    "persona": "frontend-engineer",
+                    "persona": "engineer",
                     "task": "Build the UI.",
                     "deps": ["design"],
                 },
@@ -85,7 +85,7 @@ def test_failure_cascades_to_dependents(tmp_path, command_base, onejudge_bin, ca
                 {"id": "design", "persona": "planner", "task": "should-fail: unsatisfiable."},
                 {
                     "id": "api",
-                    "persona": "backend-engineer",
+                    "persona": "engineer",
                     "task": "Build on the design.",
                     "deps": ["design"],
                 },

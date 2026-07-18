@@ -60,11 +60,13 @@ dispatch onejudge.
 
 ## Your loop as orchestrator
 
-1. **Decompose.** Break the task into the smallest subtasks that are still worth
-   a fresh agent — see the granularity rule below. Capture them as a tracked DAG.
+1. **Decompose.** Apply the granularity rule below, then capture the work as a
+   tracked DAG.
    Agent nodes carry `persona` + `task` (and optionally `repo`/`steps` for a
    lifecycle); `kind: human` nodes carry only the action prose; `deps` names real
-   prerequisites. Start from `examples/tracked-graph.example.json`. Before a
+   prerequisites. Specify each subtask with detailed `task` prose, per-node
+   `done_when`, and `max_turns` when needed. Start from
+   `examples/tracked-graph.example.json`. Before a
    lifecycle run, use `just repos` to confirm its repository identity, type,
    workflow, and available checkout aliases; make durable routing changes with
    the register/migration recipes rather than accidental run-only overrides. Treat
@@ -73,8 +75,10 @@ dispatch onejudge.
    with `gh search repos <name>` and `gh repo list <owner>`. A hit whose description
    matches the prompt's other clues resolves the reference; ask only when the
    search fails or leaves multiple strong candidates.
-2. **Pick or create personas.** Match each subtask to a persona in `personas/`.
-   If none fits, create one: `just new-persona <name>` scaffolds
+2. **Pick or create personas.** Match each subtask to a general role and review
+   bar in `personas/`. Prefer precise task prose plus per-node `done_when` over
+   encoding subtask details in a new persona. If a genuinely distinct role or
+   review bar is still needed, `just new-persona <name>` scaffolds
    `personas/<name>.yaml` from the template — fill in the agent role and the
    supervisor's `persona`/`done_when`, then `just check` validates it.
 3. **Schedule for parallelism.** Run the plan with `just run-plan <plan.json>`.
@@ -149,11 +153,15 @@ judge verdict without that evidence is not green.
 
 ## The granularity rule (the core judgment)
 
-Maximize parallelism, but **do not over-split**. Every onejudge is a fresh agent
-that pays a fixed cost to prepare its context before it does useful work (reading
-the repo, orienting). Dispatch only where that cost buys correctness, independent
-context, parallelism, or a genuinely different persona. Apply this at two scales:
-split only where a fresh context buys enough to justify its overhead, and do not
+Maximize useful parallelism, but **do not over-split**. Every onejudge is a fresh
+agent that pays a fixed cost to prepare its context before it does useful work
+(reading the repo, orienting). These are highly capable coding agents,
+pair-programmed with and reviewed by a simulated-user supervisor that pushes back
+until the task is actually done. One can hold a large coherent task well, so fewer,
+larger dispatches amortize setup cost better. Split only for genuine parallelism,
+a real dependency, or a genuinely different persona or review bar — not merely to
+hand a capable agent a smaller slice. Apply this at two scales: split only where a
+fresh context buys enough to justify its overhead, and do not
 dispatch at all when the orchestrator already holds the context, planning has
 determined the change, and the complete gate proves it. That dispatch is cost with
 no benefit. Prefer a coherent subtask that one agent can hold in its head over
@@ -163,13 +171,15 @@ larger subtasks and split further only if one proves too big. See
 
 ## Personas and the base config
 
-A persona is a small onejudge **delta** file in `personas/` — the agent's role
-(`agent.instructions`) plus the supervisor's `persona` / `done_when` / turn cap.
+A persona is a small onejudge **delta** file in `personas/` — the agent's general
+role (`agent.instructions`) plus the supervisor's review bar (`persona`).
 Common settings live once in `config/onejudge.base.yaml` (the base config);
 `dispatch` merges base ⊕ persona ⊕ the CLI `--task` into one effective config and
-runs `onejudge run` on it. Add a persona rather than overloading an existing one
-when a subtask needs a distinct role or review bar. Catalog and authoring rules:
-`personas/README.md`.
+runs `onejudge run` on it. Keep subtask-specificity in the node controls described
+above; add a persona only for a genuinely distinct role or review bar. A dedicated
+`reviewer` is reserved for complex DAGs where one agent reviews and integrates
+several agents' independently produced work, since the simulated-user supervisor
+already reviews every dispatch. Catalog and authoring rules: `personas/README.md`.
 
 ## The two sides of the conversation
 

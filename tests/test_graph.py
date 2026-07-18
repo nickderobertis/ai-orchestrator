@@ -46,7 +46,7 @@ def _lifecycle(outcome: str = "merged", **kw) -> LifecycleResult:
     base = {
         "repo": "o/r",
         "task": "change",
-        "persona": "backend-engineer",
+        "persona": "engineer",
         "base_branch": "main",
         "branch": "feature",
         "outcome": outcome,
@@ -69,7 +69,7 @@ def test_run_graph_journals_what_the_round_actually_did(tmp_path: Path) -> None:
         {
             "tasks": [
                 {"id": "direct", "persona": "planner", "task": "Plan"},
-                {"id": "repo", "repo": "o/r", "persona": "backend-engineer", "task": "Patch"},
+                {"id": "repo", "repo": "o/r", "persona": "engineer", "task": "Patch"},
                 {"id": "review", "kind": "human", "task": "Approve the change", "deps": ["repo"]},
             ]
         }
@@ -107,7 +107,7 @@ def test_run_graph_journals_a_direct_node_whose_runner_raised(tmp_path: Path) ->
     reading a started-with-no-settled event is reserved for: work still in flight.
     """
     journal = open_journal(tmp_path / "run-x", RunId("run-x"), 1)
-    graph = parse_graph({"tasks": [{"id": "api", "persona": "backend-engineer", "task": "A"}]})
+    graph = parse_graph({"tasks": [{"id": "api", "persona": "engineer", "task": "A"}]})
 
     def boom(node: PlanNode, **_: object) -> Report:
         raise DispatchError("onejudge could not start")
@@ -131,7 +131,7 @@ def test_run_graph_journals_a_lifecycle_node_whose_runner_raised(tmp_path: Path)
     """The same holds for a lifecycle node: a raised error still settles the journal."""
     journal = open_journal(tmp_path / "run-y", RunId("run-y"), 1)
     graph = parse_graph(
-        {"tasks": [{"id": "api", "repo": "o/r", "persona": "backend-engineer", "task": "A"}]}
+        {"tasks": [{"id": "api", "repo": "o/r", "persona": "engineer", "task": "A"}]}
     )
 
     def boom(node: RepoPlanNode, *, journal: NodeSink | None = None) -> LifecycleResult:
@@ -164,8 +164,8 @@ def test_run_graph_labels_each_dispatch_with_its_place_in_the_graph(tmp_path: Pa
     graph = parse_graph(
         {
             "tasks": [
-                {"id": "api", "persona": "backend-engineer", "task": "A"},
-                {"id": "web", "persona": "frontend-engineer", "task": "B"},
+                {"id": "api", "persona": "engineer", "task": "A"},
+                {"id": "web", "persona": "engineer", "task": "B"},
             ]
         }
     )
@@ -193,8 +193,8 @@ def test_run_graph_scopes_each_lifecycle_to_its_own_node() -> None:
     graph = parse_graph(
         {
             "tasks": [
-                {"id": "api", "repo": "o/r", "persona": "backend-engineer", "task": "A"},
-                {"id": "web", "repo": "o/r", "persona": "frontend-engineer", "task": "B"},
+                {"id": "api", "repo": "o/r", "persona": "engineer", "task": "A"},
+                {"id": "web", "repo": "o/r", "persona": "engineer", "task": "B"},
             ]
         }
     )
@@ -234,7 +234,7 @@ def test_parse_graph_accepts_old_direct_and_lifecycle_nodes() -> None:
                 {
                     "id": "repo",
                     "repo": "o/r",
-                    "persona": "backend-engineer",
+                    "persona": "engineer",
                     "task": "Patch",
                     "deps": ["direct"],
                 },
@@ -302,7 +302,7 @@ def test_top_level_human_waits_and_blocks_transitively() -> None:
         {
             "tasks": [
                 {"id": "review", "kind": "human", "task": "Approve the change"},
-                {"id": "ship", "persona": "backend-engineer", "task": "Ship", "deps": ["review"]},
+                {"id": "ship", "persona": "engineer", "task": "Ship", "deps": ["review"]},
                 {"id": "announce", "persona": "docs-writer", "task": "Announce", "deps": ["ship"]},
             ]
         }
@@ -329,11 +329,11 @@ def test_failure_precedence_over_waiting_dependency() -> None:
     graph = parse_graph(
         {
             "tasks": [
-                {"id": "bad", "persona": "backend-engineer", "task": "Fail"},
+                {"id": "bad", "persona": "engineer", "task": "Fail"},
                 {"id": "review", "kind": "human", "task": "Review"},
                 {
                     "id": "after",
-                    "persona": "backend-engineer",
+                    "persona": "engineer",
                     "task": "After",
                     "deps": ["bad", "review"],
                 },
@@ -354,7 +354,7 @@ def test_failure_precedence_over_waiting_dependency() -> None:
 
 def test_lifecycle_failure_sets_failed_state() -> None:
     graph = parse_graph(
-        {"tasks": [{"id": "work", "repo": "o/r", "persona": "backend-engineer", "task": "Patch"}]}
+        {"tasks": [{"id": "work", "repo": "o/r", "persona": "engineer", "task": "Patch"}]}
     )
 
     result = run_graph(
@@ -376,11 +376,11 @@ def test_lifecycle_human_step_waiting_action_uses_nested_ref() -> None:
                     "id": "work",
                     "repo": "o/r",
                     "steps": [
-                        {"id": "agent", "persona": "backend-engineer", "task": "Prepare"},
+                        {"id": "agent", "persona": "engineer", "task": "Prepare"},
                         {"id": "approve", "kind": "human", "task": "Approve", "deps": ["agent"]},
                     ],
                 },
-                {"id": "after", "persona": "backend-engineer", "task": "After", "deps": ["work"]},
+                {"id": "after", "persona": "engineer", "task": "After", "deps": ["work"]},
             ]
         }
     )
@@ -390,9 +390,7 @@ def test_lifecycle_human_step_waiting_action_uses_nested_ref() -> None:
             "waiting-human",
             detail="paused",
             steps=[
-                StepResult(
-                    "agent", "backend-engineer", "done", "agent", _report("backend-engineer")
-                ),
+                StepResult("agent", "engineer", "done", "agent", _report("engineer")),
                 StepResult("approve", None, "waiting", "human", None),
             ],
             waiting_steps=["approve"],
@@ -421,7 +419,7 @@ def test_lifecycle_human_step_waiting_action_with_internal_downstream() -> None:
                         {"id": "approve", "kind": "human", "task": "Approve"},
                         {
                             "id": "finish",
-                            "persona": "backend-engineer",
+                            "persona": "engineer",
                             "task": "Finish",
                             "deps": ["approve"],
                         },
@@ -491,7 +489,7 @@ def test_parse_graph_accepts_human_steps_and_rejects_agent_fields() -> None:
                                 "id": "approve",
                                 "kind": "human",
                                 "task": "Approve",
-                                "persona": "backend-engineer",
+                                "persona": "engineer",
                             }
                         ],
                     }
@@ -531,7 +529,7 @@ def test_graph_payload_is_json_serializable() -> None:
 
 
 def test_run_graph_direct_success_and_lifecycle_payload() -> None:
-    direct = parse_graph({"tasks": [{"id": "a", "persona": "backend-engineer", "task": "A"}]})
+    direct = parse_graph({"tasks": [{"id": "a", "persona": "engineer", "task": "A"}]})
     direct_result = run_graph(
         direct,
         agent_runner=lambda node, **_: _report(node.persona),
@@ -541,7 +539,7 @@ def test_run_graph_direct_success_and_lifecycle_payload() -> None:
     assert graph_payload(direct_result)["results"]["a"]["completed"] is True
 
     lifecycle = parse_graph(
-        {"tasks": [{"id": "life", "repo": "o/r", "persona": "backend-engineer", "task": "L"}]}
+        {"tasks": [{"id": "life", "repo": "o/r", "persona": "engineer", "task": "L"}]}
     )
     lifecycle_result = run_graph(
         lifecycle,

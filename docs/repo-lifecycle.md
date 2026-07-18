@@ -95,7 +95,7 @@ into spurious `init` commits and mass deletions. Develop those subsystems agains
 publication selection:
 
 ```sh
-just repo-task /path/to/ai-orchestrator backend-engineer - \
+just repo-task /path/to/ai-orchestrator engineer - \
   --execution-checkout /path/to/ai-orchestrator-isolated
 ```
 
@@ -243,9 +243,14 @@ accepts old lifecycle-only files unchanged. See
 
 ## Several onejudge on ONE PR: workstreams
 
-A single PR often wants more than one agent — implement, then add tests, then
-review and fix — all on the *same* branch before it merges. A node's **`steps`**
-express that: a sub-DAG sharing the node's one worktree/branch. Agent steps have
+A capable agent should normally implement a coherent change and its tests in one
+step. A single PR may still need several agents when distinct workstreams contribute
+independent results and a later agent must review and integrate all of them on the
+*same* branch before it merges. A node's **`steps`** express that: a sub-DAG sharing
+the node's one worktree/branch. Every dispatch already has a simulated-user
+supervisor reviewing it, so do not add a separate routine review step; reserve the
+dedicated `reviewer` for integration of several agents' independently produced
+work. Agent steps have
 `id`, `persona`, `task`, and optional `deps`; human steps have `id`, `kind:
 human`, `task`, and optional `deps`, with no persona/execution fields. Steps run in
 **topological order, serialized** because concurrent dispatches would corrupt the

@@ -297,7 +297,7 @@ def test_next_round_complete_human_records_attestation_and_releases_dep(tmp_path
     plan = {
         "tasks": [
             {"id": "h", "kind": "human", "task": "Review"},
-            {"id": "after", "persona": "backend-engineer", "task": "After", "deps": ["h"]},
+            {"id": "after", "persona": "engineer", "task": "After", "deps": ["h"]},
         ]
     }
     _, round_dir = write_next_plan(run, plan)
@@ -332,7 +332,7 @@ def test_next_round_complete_human_records_attestation_and_releases_dep(tmp_path
     assert load_completions(run)[0]["ref"] == "h"
     next_plan = json.loads((run / "round-02" / "plan.json").read_text(encoding="utf-8"))
     assert next_plan["tasks"] == [
-        {"id": "after", "persona": "backend-engineer", "task": "After", "deps": []}
+        {"id": "after", "persona": "engineer", "task": "After", "deps": []}
     ]
     assert "just run-plan" in capsys.readouterr().out
 
@@ -472,7 +472,7 @@ def test_next_round_reports_completion_record_failure(tmp_path, monkeypatch, cap
     plan = {
         "tasks": [
             {"id": "h", "kind": "human", "task": "Review"},
-            {"id": "after", "persona": "backend-engineer", "task": "After", "deps": ["h"]},
+            {"id": "after", "persona": "engineer", "task": "After", "deps": ["h"]},
         ]
     }
     _, round_dir = write_next_plan(run, plan)

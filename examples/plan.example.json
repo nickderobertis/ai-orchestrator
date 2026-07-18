@@ -8,14 +8,16 @@
     },
     {
       "id": "api",
-      "persona": "backend-engineer",
+      "persona": "engineer",
       "task": "Implement the URL-shortener HTTP API per docs/design.md: the create and resolve endpoints, validation, and persistence. Cover the endpoints with tests that drive real requests.",
+      "done_when": "create and resolve work through real HTTP requests, invalid input is rejected, persistence is covered, and the full gate passes",
       "deps": ["design"]
     },
     {
       "id": "ui",
-      "persona": "frontend-engineer",
+      "persona": "engineer",
       "task": "Build the URL-shortener web UI per docs/design.md: a form to create a short link and a view of the result. Match the existing component patterns and keep it accessible.",
+      "done_when": "a user-facing test creates a short link through the rendered accessible form and the full gate passes",
       "deps": ["design"]
     },
     {

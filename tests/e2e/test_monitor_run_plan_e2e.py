@@ -271,7 +271,7 @@ def test_real_run_plan_waits_then_monitor_exits_only_after_attestation(
                 "tasks": [
                     {
                         "id": "prepare",
-                        "persona": "backend-engineer",
+                        "persona": "engineer",
                         "task": "complete-now: real monitored turn",
                     },
                     {
@@ -441,7 +441,7 @@ def test_real_lifecycle_commit_and_pr_survive_live_state(
             {
                 "id": node_id,
                 "repo": "acme/widget",
-                "persona": "backend-engineer",
+                "persona": "engineer",
                 "task": "write the monitored lifecycle change",
                 "branch": branch,
             }
@@ -487,7 +487,7 @@ def test_real_lifecycle_commit_and_pr_survive_live_state(
             run_repo_task,
             "acme/widget",
             "write the monitored lifecycle change",
-            "backend-engineer",
+            "engineer",
             workspace=workspace,
             merge=GitHubMergeStrategy(lifecycle_github),
             url=str(origin),

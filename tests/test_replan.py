@@ -19,10 +19,10 @@ def _result(**statuses: str) -> dict:
     return {"results": {nid: {"status": s, "outcome": s} for nid, s in statuses.items()}}
 
 
-A = {"id": "a", "repo": "o/r", "persona": "backend-engineer", "task": "A"}
+A = {"id": "a", "repo": "o/r", "persona": "engineer", "task": "A"}
 B = {"id": "b", "repo": "o/r", "persona": "reviewer", "task": "B", "deps": ["a"]}
 H = {"id": "h", "kind": "human", "task": "Review the change"}
-DIRECT_AFTER_H = {"id": "after", "persona": "backend-engineer", "task": "After", "deps": ["h"]}
+DIRECT_AFTER_H = {"id": "after", "persona": "engineer", "task": "After", "deps": ["h"]}
 
 
 def test_done_node_is_carried_out_and_dep_satisfied() -> None:
@@ -256,9 +256,9 @@ def test_complete_nested_human_step_updates_resume() -> None:
         "id": "work",
         "repo": "o/r",
         "steps": [
-            {"id": "prepare", "persona": "backend-engineer", "task": "Prepare"},
+            {"id": "prepare", "persona": "engineer", "task": "Prepare"},
             {"id": "approve", "kind": "human", "task": "Approve", "deps": ["prepare"]},
-            {"id": "finish", "persona": "backend-engineer", "task": "Finish", "deps": ["approve"]},
+            {"id": "finish", "persona": "engineer", "task": "Finish", "deps": ["approve"]},
         ],
     }
     result = {
@@ -452,7 +452,7 @@ def test_failed_human_pause_can_be_retried_without_resume_metadata() -> None:
         "id": "work",
         "repo": "o/r",
         "steps": [
-            {"id": "prepare", "persona": "backend-engineer", "task": "Prepare"},
+            {"id": "prepare", "persona": "engineer", "task": "Prepare"},
             {"id": "approve", "kind": "human", "task": "Approve", "deps": ["prepare"]},
         ],
     }

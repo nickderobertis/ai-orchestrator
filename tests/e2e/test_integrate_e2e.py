@@ -274,7 +274,7 @@ def test_remote_incomplete_integration_is_immutable_then_recovers_via_pr(
     incomplete = run_repo_task(
         str(canonical),
         "Write partial work and genuinely stop incomplete.",
-        "backend-engineer",
+        "engineer",
         workspace=workspace,
         dispatch_fn=make_writing_dispatch(filename="partial.txt", completed=False),
         verify_cmd=["true"],
@@ -487,7 +487,7 @@ def test_team_recovery_preserves_recorded_linear_stack_base(tmp_path, bare_origi
     parent = run_repo_task(
         str(repo),
         "parent",
-        "backend-engineer",
+        "engineer",
         workspace=workspace,
         github=github,
         branch="feature/recovery-parent",
@@ -498,7 +498,7 @@ def test_team_recovery_preserves_recorded_linear_stack_base(tmp_path, bare_origi
     child = run_repo_task(
         str(repo),
         "partial child",
-        "backend-engineer",
+        "engineer",
         workspace=workspace,
         github=github,
         branch="feature/recovery-child",

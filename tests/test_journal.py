@@ -340,7 +340,7 @@ def test_node_journal_binds_its_locators_onto_every_append(tmp_path: Path) -> No
     node = NodeJournal(sink=journal, node=NodeId("api"), run_id=RunId("run-n"), round=2)
 
     node.append("node-started", detail={"node_kind": "lifecycle"})
-    node.for_step(StepId("impl")).append("step-started", detail={"persona": "backend-engineer"})
+    node.for_step(StepId("impl")).append("step-started", detail={"persona": "engineer"})
 
     assert [(e.kind, e.node, e.step) for e in journal.events()] == [
         ("node-started", "api", None),

@@ -55,7 +55,7 @@ AT = datetime(2026, 7, 14, 12, 0, 0, tzinfo=UTC).timestamp()
 BRANCH = BranchRef("local/app", "work", "main")
 PLAN: dict[str, Any] = {
     "concurrency": 1,
-    "tasks": [{"id": "api", "persona": "backend-engineer", "task": "ship it"}],
+    "tasks": [{"id": "api", "persona": "engineer", "task": "ship it"}],
 }
 
 
@@ -517,17 +517,15 @@ def test_the_history_source_selects_exactly_the_sessions_this_run_labelled(
         _session(
             tmp_path,
             "api-20260714T100000Z-1",
-            "backend-engineer",
+            "engineer",
             ["running", "completed"],
             history_id="019f6f83-c0f3-7d51-a995-d05011ae2b28",
             run_id="watch-me",
             round="1",
             node="api",
         ),
-        _session(
-            tmp_path, "other-20260714T100000Z-2", "backend-engineer", ["completed"], run_id="other"
-        ),
-        _session(tmp_path, "bare-20260714T100000Z-3", "backend-engineer", ["completed"]),
+        _session(tmp_path, "other-20260714T100000Z-2", "engineer", ["completed"], run_id="other"),
+        _session(tmp_path, "bare-20260714T100000Z-3", "engineer", ["completed"]),
         _session(
             tmp_path,
             "judge-20260714T100000Z-4",
@@ -540,7 +538,7 @@ def test_the_history_source_selects_exactly_the_sessions_this_run_labelled(
 
     events = history_events(RUN, now=AT, oneharness_bin=binary)
     assert [str(event.stream_id) for event in events] == ["oh:019f6f83-c0f3-7d51-a995-d05011ae2b28"]
-    assert events[0].summary == "session api completed turns=2 backend-engineer"
+    assert events[0].summary == "session api completed turns=2 engineer"
     assert events[0].source == "history"
 
 
@@ -548,18 +546,18 @@ def test_a_session_is_reported_again_when_its_own_state_moves(tmp_path: Path) ->
     """The key is over the values the summary is derived from, so it reports every
     change and nothing else."""
     session = _session(
-        tmp_path, "api-20260714T100000Z-1", "backend-engineer", ["running"], run_id="watch-me"
+        tmp_path, "api-20260714T100000Z-1", "engineer", ["running"], run_id="watch-me"
     )
     binary = _oneharness(tmp_path, [session])
     first = history_events(RUN, now=AT, oneharness_bin=binary)
-    assert first[0].summary == "session ? running turns=1 backend-engineer"
+    assert first[0].summary == "session ? running turns=1 engineer"
 
     Path(session["path"]).write_text(
         '{"status": "running"}\n{"status": "completed"}\n', encoding="utf-8"
     )
     later = history_events(RUN, now=AT, oneharness_bin=binary)
     assert later[0].key != first[0].key
-    assert later[0].summary == "session ? completed turns=2 backend-engineer"
+    assert later[0].summary == "session ? completed turns=2 engineer"
 
     assert [e.key for e in history_events(RUN, now=AT, oneharness_bin=binary)] == [later[0].key]
 
@@ -585,7 +583,7 @@ def test_a_run_folds_its_journal_and_its_real_branch_into_one_stream(
     run_dir = runs_dir / RUN
 
     journal = open_journal(run_dir, RUN, 1)
-    journal.append("node-started", node=NodeId("api"), detail={"persona": "backend-engineer"})
+    journal.append("node-started", node=NodeId("api"), detail={"persona": "engineer"})
     journal.append("node-settled", node=NodeId("api"), detail={"status": "done"})
     _settle(
         run_dir,
@@ -640,7 +638,7 @@ def test_the_monitor_command_streams_a_run_and_only_success_exits_zero(tmp_path:
     runs_dir = tmp_path / "runs"
     run_dir = runs_dir / RUN
     journal = open_journal(run_dir, RUN, 1)
-    journal.append("node-started", node=NodeId("api"), detail={"persona": "backend-engineer"})
+    journal.append("node-started", node=NodeId("api"), detail={"persona": "engineer"})
     journal.append("node-settled", node=NodeId("api"), detail={"status": "done"})
     _settle(run_dir, {"api": {"status": "done"}}, ok=True, state="complete")
 
@@ -649,7 +647,7 @@ def test_the_monitor_command_streams_a_run_and_only_success_exits_zero(tmp_path:
     lines = text.stdout.splitlines()
     assert lines[0] == HEADER
     assert "just history-show" in lines[0]
-    assert lines[1].endswith("graph:watch-me/1/api  node-started persona=backend-engineer")
+    assert lines[1].endswith("graph:watch-me/1/api  node-started persona=engineer")
     assert lines[-1].endswith("watch-me round-01 complete: graph complete")
 
     streamed = _monitor_cli("--runs-dir", str(runs_dir), "--format", "jsonl", RUN)

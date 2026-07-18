@@ -49,7 +49,7 @@ def test_just_dispatch_preserves_metacharacter_laden_arguments(command_base, one
         [
             "just",
             "dispatch",
-            "backend-engineer",
+            "engineer",
             task,
             "--done-when",
             done_when,
@@ -71,7 +71,7 @@ def test_just_dispatch_preserves_metacharacter_laden_arguments(command_base, one
 
 def test_dispatch_completes_via_supervisor_loop(command_base, onejudge_bin) -> None:
     report = dispatch(
-        "backend-engineer",
+        "engineer",
         "Add a health-check endpoint.",
         base_path=command_base(),
         persona_dir=PERSONA_DIR,
@@ -87,7 +87,7 @@ def test_dispatch_completes_via_supervisor_loop(command_base, onejudge_bin) -> N
 
 def test_dispatch_complete_now_single_turn(command_base, onejudge_bin) -> None:
     report = dispatch(
-        "backend-engineer",
+        "engineer",
         "complete-now: trivial change.",
         base_path=command_base(),
         persona_dir=PERSONA_DIR,
@@ -227,7 +227,7 @@ def test_dispatch_cli_applies_ordered_models_to_real_oneharness(
     proc = subprocess.run(
         [
             "orchestrator-dispatch",
-            "backend-engineer",
+            "engineer",
             "complete-now: prove model fallback",
             "--base",
             str(base_path),

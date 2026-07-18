@@ -27,8 +27,8 @@ FULL_SHA = "0123abcdef4567890123abcdef4567890123abcd"
     ("value", "expected"),
     [
         (
-            "oh:backend-engineer-20260714T100000Z-123",
-            OneharnessId("backend-engineer-20260714T100000Z-123"),
+            "oh:engineer-20260714T100000Z-123",
+            OneharnessId("engineer-20260714T100000Z-123"),
         ),
         ("git:local/app@0123abc", GitId("local/app", "0123abc")),
         (f"git:acme/app@{FULL_SHA}", GitId("acme/app", FULL_SHA)),
