@@ -1,8 +1,8 @@
-"""E2E: drive the real onejudge CLI through `dispatch`, faking only the model.
+"""E2E: drive the real onejudge CLI through the SDK, faking only the model.
 
 These run the actual `onejudge` binary as a subprocess against a real persona,
 with onejudge's `command` provider pointed at tests/e2e/fake_backend.py. Nothing
-in our layer (merge, dispatch, report parsing) is mocked.
+in our layer (merge, SDK dispatch, report validation) is mocked.
 """
 
 from __future__ import annotations
@@ -13,6 +13,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import onejudge_sdk
 import pytest
 import yaml
 
@@ -99,7 +100,7 @@ def test_new_persona_cli_rejects_unsafe_names(tmp_path, name) -> None:
     assert not persona_dir.exists()
 
 
-def test_real_onejudge_cli_matches_adopted_contract(
+def test_real_onejudge_sdk_and_cli_match_adopted_contract(
     onejudge_bin: str, adopted_onejudge_version: str
 ) -> None:
     version = subprocess.run(
@@ -110,6 +111,7 @@ def test_real_onejudge_cli_matches_adopted_contract(
         [onejudge_bin, "run", "--help"], text=True, capture_output=True, check=True
     )
 
+    assert onejudge_sdk.__version__ == adopted_onejudge_version
     assert version.stdout.strip() == f"onejudge {adopted_onejudge_version}"
     assert "system_prompt:" in schema.stdout
     assert "assessment:" in schema.stdout
@@ -423,5 +425,6 @@ def test_run_onejudge_config_error_raises(onejudge_bin) -> None:
         "user": {"persona": "p", "done_when": "d", "max_turns": 2},
         "unknown_field": 123,  # onejudge validates deny_unknown_fields → exit 2
     }
-    with pytest.raises(DispatchError, match="exit 2"):
+    with pytest.raises(DispatchError, match="exit 2") as raised:
         run_onejudge(bad, "task", onejudge_bin=onejudge_bin)
+    assert "unknown_field" in str(raised.value)

@@ -164,13 +164,8 @@ def test_agent_run_context_pins_split_skill_harness() -> None:
 
 
 def test_run_onejudge_missing_binary_raises() -> None:
-    cfg = {
-        "provider": {"kind": "command", "command": ["true"]},
-        "agent": {"name": "a", "dir": ".", "instructions": "x"},
-        "user": {"persona": "p", "done_when": "d", "max_turns": 1},
-    }
     with pytest.raises(DispatchError, match="not found"):
-        run_onejudge(cfg, "t", onejudge_bin="onejudge-does-not-exist-xyz")
+        run_onejudge({}, "t", onejudge_bin="onejudge-does-not-exist-xyz")
 
 
 @pytest.mark.parametrize(
@@ -182,7 +177,11 @@ def test_run_onejudge_sets_per_turn_timeout(
 ) -> None:
     onejudge = tmp_path / "onejudge"
     onejudge.write_text(
-        '#!/bin/sh\nprintf \'{"usage": {"oneharness_timeout": "%s"}}\' "$ONEHARNESS_TIMEOUT"\n',
+        "#!/bin/sh\n"
+        "printf '"
+        '{"schema_version":4,"transcript":{"messages":[]},"stopped_early":false,'
+        '"usage":{"oneharness_timeout":"%s"}}'
+        '\' "$ONEHARNESS_TIMEOUT"\n',
         encoding="utf-8",
     )
     onejudge.chmod(0o700)
@@ -209,7 +208,11 @@ def _label_echoing_onejudge(tmp_path) -> str:
     """A stand-in onejudge that reports the labels it was actually handed."""
     onejudge = tmp_path / "onejudge"
     onejudge.write_text(
-        '#!/bin/sh\nprintf \'{"usage": {"labels": "%s"}}\' "$ONEHARNESS_HISTORY_LABELS"\n',
+        "#!/bin/sh\n"
+        "printf '"
+        '{"schema_version":4,"transcript":{"messages":[]},"stopped_early":false,'
+        '"usage":{"labels":"%s"}}'
+        '\' "$ONEHARNESS_HISTORY_LABELS"\n',
         encoding="utf-8",
     )
     onejudge.chmod(0o700)

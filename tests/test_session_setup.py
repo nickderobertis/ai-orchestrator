@@ -24,40 +24,39 @@ def _write_oneharness(path: Path, version: str) -> None:
 
 def _fake_install_commands(tmp_path: Path) -> None:
     tools = tmp_path / "tools"
-    curl = tools / "curl"
-    cargo = tools / "cargo"
+    uv = tools / "uv"
     _write_executable(
-        curl,
+        uv,
         """#!/bin/sh
-printf '%s\n' "$*" >"$TEST_CURL_ARGS"
-if [ "${TEST_CURL_FAIL:-0}" = 1 ]; then
+printf '%s\n' "$*" >"$TEST_UV_ARGS"
+if [ "${TEST_UV_FAIL:-0}" = 1 ]; then
   exit 1
 fi
-exec /bin/cat "$TEST_INSTALLER"
-""",
-    )
-    _write_executable(
-        cargo,
-        """#!/bin/sh
-printf '%s\n' "$*" >"$TEST_CARGO_ARGS"
-if [ "${TEST_CARGO_FAIL:-0}" = 1 ]; then
-  exit 1
-fi
-mkdir -p "$HOME/.local/bin"
-cp "$TEST_CARGO_BINARY" "$HOME/.local/bin/onejudge"
-chmod +x "$HOME/.local/bin/onejudge"
+mkdir -p "$TEST_REPO/.venv/bin"
+cp "$TEST_ONEJUDGE_BINARY" "$TEST_REPO/.venv/bin/onejudge"
+cp "$TEST_SDK_PYTHON" "$TEST_REPO/.venv/bin/python"
+chmod +x "$TEST_REPO/.venv/bin/onejudge" "$TEST_REPO/.venv/bin/python"
 """,
     )
 
 
 def _run_onejudge_install(tmp_path: Path, **extra_env: str) -> subprocess.CompletedProcess[str]:
-    script = REPO_ROOT / "scripts" / "session-setup.sh"
+    test_repo = tmp_path / "repo"
+    (test_repo / "scripts").mkdir(parents=True)
+    (test_repo / "config").mkdir()
+    script = test_repo / "scripts" / "session-setup.sh"
+    script.write_text(
+        (REPO_ROOT / "scripts" / "session-setup.sh").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    (test_repo / "config" / "onejudge.version").write_text("0.3.2\n", encoding="utf-8")
+    (test_repo / "config" / "oneharness.version").write_text("0.4.0\n", encoding="utf-8")
     tools = tmp_path / "tools"
     env = {
         "HOME": str(tmp_path),
         "PATH": f"{tools}:/usr/bin:/bin",
-        "TEST_CURL_ARGS": str(tmp_path / "curl.args"),
-        "TEST_CARGO_ARGS": str(tmp_path / "cargo.args"),
+        "TEST_REPO": str(test_repo),
+        "TEST_UV_ARGS": str(tmp_path / "uv.args"),
         **extra_env,
     }
     return subprocess.run(
@@ -98,103 +97,56 @@ chmod +x "$HOME/.local/bin/oneharness"
     )
 
 
-def _write_release_installer(path: Path) -> None:
-    _write_executable(
-        path,
-        """#!/bin/sh
-set -eu
-printf '%s\n' "$ONEJUDGE_VERSION" >"$TEST_INSTALL_VERSION"
-mkdir -p "$ONEJUDGE_INSTALL_DIR"
-cp "$TEST_ARCHIVE_BINARY" "$ONEJUDGE_INSTALL_DIR/onejudge"
-chmod +x "$ONEJUDGE_INSTALL_DIR/onejudge"
-""",
-    )
+def _write_sdk_python(path: Path, version: str) -> None:
+    _write_executable(path, f"#!/bin/sh\nprintf '{version}\\n'\n")
 
 
-def test_install_onejudge_skips_compliant_binary(tmp_path: Path) -> None:
+def test_install_onejudge_skips_compliant_sdk_and_cli(tmp_path: Path) -> None:
     _fake_install_commands(tmp_path)
-    _write_onejudge(tmp_path / ".local" / "bin" / "onejudge", "0.3.0")
+    _write_onejudge(tmp_path / "repo" / ".venv" / "bin" / "onejudge", "0.3.2")
+    _write_sdk_python(tmp_path / "repo" / ".venv" / "bin" / "python", "0.3.2")
 
     proc = _run_onejudge_install(tmp_path)
 
     assert proc.returncode == 0, proc.stderr
-    assert not (tmp_path / "curl.args").exists()
-    assert not (tmp_path / "cargo.args").exists()
+    assert not (tmp_path / "uv.args").exists()
 
 
-def test_install_onejudge_upgrades_obsolete_binary_from_pinned_release(tmp_path: Path) -> None:
+def test_install_onejudge_installs_pinned_sdk_and_cli_from_pypi(tmp_path: Path) -> None:
     _fake_install_commands(tmp_path)
-    _write_onejudge(tmp_path / ".local" / "bin" / "onejudge", "0.2.0")
-    replacement = tmp_path / "onejudge-0.3.0"
-    _write_onejudge(replacement, "0.3.0")
-    installer = tmp_path / "release-installer.sh"
-    _write_release_installer(installer)
+    replacement = tmp_path / "onejudge-0.3.2"
+    sdk_python = tmp_path / "sdk-python"
+    _write_onejudge(replacement, "0.3.2")
+    _write_sdk_python(sdk_python, "0.3.2")
 
     proc = _run_onejudge_install(
         tmp_path,
-        TEST_INSTALLER=str(installer),
-        TEST_ARCHIVE_BINARY=str(replacement),
-        TEST_INSTALL_VERSION=str(tmp_path / "install.version"),
+        TEST_ONEJUDGE_BINARY=str(replacement),
+        TEST_SDK_PYTHON=str(sdk_python),
     )
 
     assert proc.returncode == 0, proc.stderr
-    assert (tmp_path / ".local" / "bin" / "onejudge").read_text(encoding="utf-8") == (
-        replacement.read_text(encoding="utf-8")
+    assert (tmp_path / "uv.args").read_text(encoding="utf-8").strip() == (
+        f"sync --project {tmp_path}/repo"
     )
-    assert (tmp_path / "install.version").read_text(encoding="utf-8").strip() == "v0.3.0"
-    assert (tmp_path / "curl.args").read_text(encoding="utf-8").strip() == (
-        "-fsSL https://raw.githubusercontent.com/nickderobertis/onejudge/v0.3.0/install.sh"
-    )
-    assert not (tmp_path / "cargo.args").exists()
 
 
-def test_install_onejudge_fallback_pins_and_verifies_crates_io(tmp_path: Path) -> None:
+def test_install_onejudge_rejects_wrong_sdk_version(tmp_path: Path) -> None:
     _fake_install_commands(tmp_path)
-    _write_onejudge(tmp_path / ".local" / "bin" / "onejudge", "0.2.0")
-    replacement = tmp_path / "cargo-onejudge-0.3.0"
-    _write_onejudge(replacement, "0.3.0")
+    replacement = tmp_path / "onejudge-0.3.2"
+    sdk_python = tmp_path / "sdk-python"
+    _write_onejudge(replacement, "0.3.2")
+    _write_sdk_python(sdk_python, "0.3.1")
 
     proc = _run_onejudge_install(
         tmp_path,
-        TEST_CURL_FAIL="1",
-        TEST_CARGO_BINARY=str(replacement),
-    )
-
-    assert proc.returncode == 0, proc.stderr
-    assert (tmp_path / "cargo.args").read_text(encoding="utf-8").strip() == (
-        f"install onejudge --version 0.3.0 --features cli --locked --force --root {tmp_path}/.local"
-    )
-    version = subprocess.run(
-        [tmp_path / ".local" / "bin" / "onejudge", "--version"],
-        text=True,
-        capture_output=True,
-        check=True,
-    )
-    assert version.stdout.strip() == "onejudge 0.3.0"
-
-
-def test_install_onejudge_rejects_wrong_versions_from_both_paths(tmp_path: Path) -> None:
-    _fake_install_commands(tmp_path)
-    _write_onejudge(tmp_path / ".local" / "bin" / "onejudge", "0.2.0")
-    archive_binary = tmp_path / "archive-onejudge"
-    cargo_binary = tmp_path / "cargo-onejudge"
-    _write_onejudge(archive_binary, "0.4.0")
-    _write_onejudge(cargo_binary, "0.2.0")
-    installer = tmp_path / "release-installer.sh"
-    _write_release_installer(installer)
-
-    proc = _run_onejudge_install(
-        tmp_path,
-        TEST_INSTALLER=str(installer),
-        TEST_ARCHIVE_BINARY=str(archive_binary),
-        TEST_INSTALL_VERSION=str(tmp_path / "install.version"),
-        TEST_CARGO_BINARY=str(cargo_binary),
+        TEST_ONEJUDGE_BINARY=str(replacement),
+        TEST_SDK_PYTHON=str(sdk_python),
     )
 
     assert proc.returncode == 1
-    assert "expected 'onejudge 0.3.0', got 'onejudge 0.4.0'" in proc.stderr
-    assert "expected 'onejudge 0.3.0', got 'onejudge 0.2.0'" in proc.stderr
-    assert "required onejudge 0.3.0 is unavailable" in proc.stderr
+    assert "expected '0.3.2', got '0.3.1'" in proc.stderr
+    assert "required onejudge SDK and CLI 0.3.2" in proc.stderr
 
 
 def test_install_oneharness_skips_compliant_binary(

@@ -227,7 +227,7 @@ def main() -> int:
             resp = supervisor_resp
         case "judge" if req.get("kind") == "boolean":
             # Final evals still use the standalone judge operation. The loop's
-            # completion decision itself goes through `supervisor` above in v0.3.0.
+            # completion decision itself goes through `supervisor` above in v0.3.2.
             value = (not fail) and ("complete-now" in task or _assistant_turns(messages) >= 2)
             resp = {"value": value, "reason": "fake judge verdict"}
         case "judge":

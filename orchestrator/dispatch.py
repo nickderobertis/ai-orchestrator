@@ -1,8 +1,8 @@
-"""Dispatch one subtask: merge base ⊕ persona, then run the real onejudge CLI.
+"""Dispatch one subtask: merge base ⊕ persona, then run onejudge through its SDK.
 
 `dispatch()` is the single unit of orchestrated work. It builds the effective
-onejudge config for a persona, passes the task to `onejudge run` over the CLI
-(`--task -`), and parses the versioned JSON report back into a `Report`. The
+onejudge config for a persona, and passes it to the typed Python SDK, which drives
+the real CLI and validates its versioned JSON report. The
 orchestrator calls this for one-off subtasks; `plan.run_plan` calls it for each
 node of a DAG.
 """
@@ -14,19 +14,27 @@ node of a DAG.
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import os
 import socket
 import subprocess
 import sys
-import tempfile
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import yaml
+from onejudge_sdk import (
+    ContractError,
+    OneJudge,
+    OneJudgeProcessError,
+    OneJudgeTimeoutError,
+    RunConfig,
+    RunResult,
+)
 
 from . import BASE_CONFIG, PERSONA_DIR, REPO_ROOT
 from .channel import create_channel
@@ -155,60 +163,81 @@ def run_onejudge(
 ) -> Report:
     """Run an already-merged effective config through onejudge; return a Report.
 
-    The task is passed over the CLI via ``--task -`` (stdin) so arbitrarily long,
-    multi-line tasks need no shell quoting. A config/usage error (exit 2) is
-    raised as a DispatchError rather than returned as a normal outcome.
+    The SDK passes the task to the CLI over stdin, so arbitrarily long, multi-line
+    tasks need no shell quoting. A config/provider error (exit 2) is raised as a
+    DispatchError rather than returned as a normal outcome.
 
     ``labels`` locate this dispatch in the tracked graph (run/round/node/step) and
     are layered over any ``ONEHARNESS_HISTORY_LABELS`` we inherited, so a nested
     dispatch keeps the outer run's labels as well as its own.
     """
-    with tempfile.TemporaryDirectory() as td:
-        cfg_path = Path(td) / "effective.onejudge.yaml"
-        cfg_path.write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
-        cmd = [onejudge_bin, "run", str(cfg_path), "--task", "-", "--format", "json"]
-        if provider is not None:
-            cmd += ["--provider", provider]
-        _validate_environment(env or {})
-        process_env = {**os.environ, **(env or {})}
-        process_env.setdefault("ONEHARNESS_TIMEOUT", DEFAULT_ONEHARNESS_TIMEOUT)
-        _validate_oneharness_timeout(process_env["ONEHARNESS_TIMEOUT"])
-        inherited_labels = process_env.get(LABEL_ENV)
-        if labels or inherited_labels is not None:
-            try:
-                normalized_labels = merge_labels(inherited_labels, labels or {})
-            except LabelError as exc:
-                raise DispatchError(f"invalid history label: {exc}") from exc
-            if normalized_labels:
-                process_env[LABEL_ENV] = normalized_labels
-            else:
-                process_env.pop(LABEL_ENV, None)
+    _validate_environment(env or {})
+    process_env = {**os.environ, **(env or {})}
+    process_env.setdefault("ONEHARNESS_TIMEOUT", DEFAULT_ONEHARNESS_TIMEOUT)
+    _validate_oneharness_timeout(process_env["ONEHARNESS_TIMEOUT"])
+    inherited_labels = process_env.get(LABEL_ENV)
+    if labels or inherited_labels is not None:
         try:
-            proc = subprocess.run(
-                cmd,
+            normalized_labels = merge_labels(inherited_labels, labels or {})
+        except LabelError as exc:
+            raise DispatchError(f"invalid history label: {exc}") from exc
+        if normalized_labels:
+            process_env[LABEL_ENV] = normalized_labels
+        else:
+            process_env.pop(LABEL_ENV, None)
+    try:
+        result = asyncio.run(
+            OneJudge(executable=onejudge_bin).run(
+                cast(RunConfig, config),
+                task,
+                provider=provider,
                 cwd=str(cwd),
-                input=task,
-                text=True,
-                capture_output=True,
                 env=process_env,
                 timeout=timeout,
             )
-        except FileNotFoundError as exc:
-            raise DispatchError(
-                f"onejudge binary not found: {onejudge_bin!r} — run 'just bootstrap'"
-            ) from exc
-        except subprocess.TimeoutExpired as exc:  # pragma: no cover - timing-dependent
-            raise DispatchError(f"onejudge timed out after {timeout}s") from exc
-
-    if proc.returncode == EXIT_CONFIG_ERROR:
+        )
+    except FileNotFoundError as exc:
+        raise DispatchError(
+            f"onejudge binary not found: {onejudge_bin!r} — run 'just bootstrap'"
+        ) from exc
+    except OneJudgeTimeoutError as exc:  # pragma: no cover - timing-dependent
+        raise DispatchError(f"onejudge timed out after {timeout}s") from exc
+    except OneJudgeProcessError as exc:
         # Exit 2 covers both a rejected config AND a provider/runtime failure (e.g.
         # the harness process dying → "provider error ... Broken pipe"). Don't
         # assume "bad config" — surface onejudge's own stderr, which says which.
+        detail = exc.stderr.strip() or "<no stderr>"
         raise DispatchError(
-            f"onejudge failed (exit 2 — bad config or provider/runtime error): "
-            f"{proc.stderr.strip() or '<no stderr>'}"
-        )
-    return _build_report(persona, proc.returncode, proc.stdout, proc.stderr)
+            f"onejudge failed (exit {exc.returncode} — bad config or provider/runtime error): "
+            f"{detail}"
+        ) from exc
+    except ContractError as exc:
+        raise DispatchError(
+            f"onejudge failed (exit 2 — bad config or provider/runtime error): {exc}"
+        ) from exc
+    return _build_sdk_report(persona, result)
+
+
+def _build_sdk_report(persona: str, result: RunResult) -> Report:
+    """Adapt the SDK's validated report without changing our public contract."""
+    raw_assessment = result.raw.get("assessment")
+    assessment = (
+        raw_assessment.strip()
+        if isinstance(raw_assessment, str) and raw_assessment.strip()
+        else None
+    )
+    return Report(
+        persona=persona,
+        exit_code=result.exit_code,
+        completed=result.completed,
+        stopped_early=bool(result.raw.get("stopped_early", False)),
+        assistant_turns=result.assistant_turns,
+        verdicts=list(result.verdicts),
+        usage=dict(result.usage),
+        raw=dict(result.raw),
+        stderr=result.stderr,
+        assessment=assessment,
+    )
 
 
 def _agent_run_context(
