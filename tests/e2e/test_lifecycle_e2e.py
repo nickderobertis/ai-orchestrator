@@ -155,6 +155,189 @@ def test_identity_cache_and_repo_post_checkout_hook_are_wired_across_dispatches(
     assert len(lifecycle_worktrees) == 2
 
 
+def test_real_lifecycle_dispatch_drafts_pr_bodies_and_preserves_fallbacks(
+    tmp_path, bare_origin, command_base, personas_dir
+) -> None:
+    """The real onejudge boundary authors single/workstream bodies and safely falls back."""
+    origin = bare_origin()
+    workspace = _workspace(tmp_path, origin, workflow="remote")
+    github = FakeGitHub(origin)
+    base = command_base(max_turns=2)
+
+    single_task = "complete-now write-change raw single-lifecycle handoff"
+    single = run_repo_task(
+        "acme/widget",
+        single_task,
+        "engineer",
+        workspace=workspace,
+        github=github,
+        url=str(origin),
+        workflow="remote",
+        repo_type="single-owner",
+        merge_policy="none",
+        branch="draft-single",
+        base_path=base,
+        persona_dir=personas_dir,
+        verify_cmd=["true"],
+    )
+    assert single.pr is not None, (single.outcome, single.detail)
+    single_body = github._prs[single.pr.number].body
+    assert single.outcome == "pr-open"
+    assert single_body == (
+        "## What\nAdds the completed behavior from the branch diff.\n\n"
+        "## Why\nMakes the requested capability available.\n"
+    )
+    assert single_task not in single_body
+
+    workstream = run_repo_task(
+        "acme/widget",
+        workspace=workspace,
+        github=github,
+        url=str(origin),
+        workflow="remote",
+        repo_type="single-owner",
+        merge_policy="none",
+        branch="draft-workstream",
+        steps=[
+            Step("implement", "engineer", "complete-now write-change raw implementation handoff"),
+            Step(
+                "verify",
+                "test-engineer",
+                "complete-now capture-cache-env raw verification handoff",
+                deps=["implement"],
+            ),
+        ],
+        base_path=base,
+        persona_dir=personas_dir,
+        verify_cmd=["true"],
+    )
+    workstream_body = github._prs[workstream.pr.number].body
+    assert workstream.outcome == "pr-open"
+    assert workstream_body.startswith("## What\nAdds the completed behavior from the branch diff.")
+    assert "raw implementation handoff" not in workstream_body
+
+    fallback_task = "complete-now write-change drafting-fails fallback handoff"
+    fallback = run_repo_task(
+        "acme/widget",
+        fallback_task,
+        "engineer",
+        workspace=workspace,
+        github=github,
+        url=str(origin),
+        workflow="remote",
+        repo_type="single-owner",
+        merge_policy="none",
+        branch="draft-fallback",
+        base_path=base,
+        persona_dir=personas_dir,
+        verify_cmd=["true"],
+    )
+    assert fallback.outcome == "pr-open"
+    assert fallback_task in github._prs[fallback.pr.number].body
+
+    empty_task = "complete-now write-change drafting-empty empty fallback handoff"
+    empty = run_repo_task(
+        "acme/widget",
+        empty_task,
+        "engineer",
+        workspace=workspace,
+        github=github,
+        url=str(origin),
+        workflow="remote",
+        repo_type="single-owner",
+        merge_policy="none",
+        branch="draft-empty",
+        base_path=base,
+        persona_dir=personas_dir,
+        verify_cmd=["true"],
+    )
+    assert empty.outcome == "pr-open"
+    assert empty_task in github._prs[empty.pr.number].body
+
+    invalid_task = "complete-now write-change drafting-invalid invalid fallback handoff"
+    invalid = run_repo_task(
+        "acme/widget",
+        invalid_task,
+        "engineer",
+        workspace=workspace,
+        github=github,
+        url=str(origin),
+        workflow="remote",
+        repo_type="single-owner",
+        merge_policy="none",
+        branch="draft-invalid",
+        base_path=base,
+        persona_dir=personas_dir,
+        verify_cmd=["true"],
+    )
+    assert invalid.outcome == "pr-open"
+    assert invalid_task in github._prs[invalid.pr.number].body
+    assert "nonempty malformed drafting output" not in github._prs[invalid.pr.number].body
+
+    error_task = "complete-now write-change drafting-errors error fallback handoff"
+    error = run_repo_task(
+        "acme/widget",
+        error_task,
+        "engineer",
+        workspace=workspace,
+        github=github,
+        url=str(origin),
+        workflow="remote",
+        repo_type="single-owner",
+        merge_policy="none",
+        branch="draft-error",
+        base_path=base,
+        persona_dir=personas_dir,
+        verify_cmd=["true"],
+    )
+    assert error.outcome == "pr-open"
+    assert error_task in github._prs[error.pr.number].body
+
+    explicit = run_repo_task(
+        "acme/widget",
+        "complete-now write-change explicit body handoff",
+        "engineer",
+        workspace=workspace,
+        github=github,
+        url=str(origin),
+        workflow="remote",
+        repo_type="single-owner",
+        merge_policy="none",
+        branch="draft-explicit",
+        body="## What\nSupplied body.\n\n## Why\nSupplied reason.\n",
+        base_path=base,
+        persona_dir=personas_dir,
+        verify_cmd=["true"],
+    )
+    assert explicit.outcome == "pr-open"
+    assert github._prs[explicit.pr.number].body == (
+        "## What\nSupplied body.\n\n## Why\nSupplied reason.\n"
+    )
+
+    title_task = "complete-now write-change explicit title handoff"
+    titled = run_repo_task(
+        "acme/widget",
+        title_task,
+        "engineer",
+        workspace=workspace,
+        github=github,
+        url=str(origin),
+        workflow="remote",
+        repo_type="single-owner",
+        merge_policy="none",
+        branch="draft-title",
+        title="feat: use supplied title",
+        base_path=base,
+        persona_dir=personas_dir,
+        verify_cmd=["true"],
+    )
+    assert titled.outcome == "pr-open"
+    assert title_task in github._prs[titled.pr.number].body
+    assert (
+        "Adds the completed behavior from the branch diff" not in github._prs[titled.pr.number].body
+    )
+
+
 def test_empty_orchestrator_home_fails_at_lifecycle_cache_boundary(
     tmp_path, bare_origin, monkeypatch
 ) -> None:
@@ -1054,6 +1237,8 @@ def test_github_second_run_reuses_open_pr_and_merges(tmp_path, bare_origin) -> N
     continue_dispatch = make_writing_dispatch(filename="second.txt")
 
     def resume_open_pr(persona: str, task: str, *, project_dir: str, **kwargs: object) -> Report:
+        if persona == "pr-author":
+            return cast(Report, continue_dispatch(persona, task, project_dir=project_dir, **kwargs))
         subprocess.run(
             ["git", "reset", "--hard", f"origin/{branch}"],
             cwd=project_dir,
@@ -1242,16 +1427,10 @@ def test_github_pending_required_check_keeps_polling_then_merges(tmp_path, bare_
     assert _has_file(origin, "main", "feature.txt")
 
 
-@pytest.mark.parametrize(
-    ("required", "expected_states"),
-    [(("ci",), "[ci=SUCCESS]"), ((), "[]")],
-)
-def test_github_settled_checks_fail_when_native_auto_merge_stalls(
-    tmp_path, bare_origin, required: tuple[str, ...], expected_states: str
-) -> None:
+def test_github_settled_checks_fail_when_native_auto_merge_stalls(tmp_path, bare_origin) -> None:
     origin = bare_origin()
     before = _tip(origin, "main")
-    github = FakeGitHub(origin, required=required, auto_completes=False)
+    github = FakeGitHub(origin, required=("ci",), auto_completes=False)
     sleeps: list[float] = []
 
     result = run_repo_task(
@@ -1271,9 +1450,98 @@ def test_github_settled_checks_fail_when_native_auto_merge_stalls(
 
     assert result.outcome == "error", result.detail
     assert not result.ok
-    assert expected_states in result.detail
+    assert "[ci=SUCCESS]" in result.detail
     assert sleeps == []
     assert _tip(origin, "main") == before
+
+
+def test_github_waits_for_required_checks_to_be_reported_then_merges(tmp_path, bare_origin) -> None:
+    origin = bare_origin()
+    # The first status read checks whether the new PR is a draft; the merge poll
+    # then observes no reported checks, pending CI, and finally green CI.
+    github = FakeGitHub(origin, check_states=(None, None, "PENDING", "SUCCESS"))
+    sleeps: list[float] = []
+
+    result = run_repo_task(
+        "acme/widget",
+        "Add a feature after GitHub reports and settles CI.",
+        "engineer",
+        workspace=_workspace(tmp_path, origin, workflow="remote"),
+        merge=GitHubMergeStrategy(github),
+        url=str(origin),
+        dispatch_fn=make_writing_dispatch(filename="feature.txt"),
+        verify_cmd=["true"],
+        repo_type="single-owner",
+        merge_policy="auto",
+        sleep=sleeps.append,
+        timeout=60.0,
+    )
+
+    assert result.ok and result.outcome == "merged"
+    assert sleeps == [15.0, 15.0]
+    assert github.status_polls == 4
+    assert _has_file(origin, "main", "feature.txt")
+
+
+def test_github_unreported_required_checks_wait_until_timeout(tmp_path, bare_origin) -> None:
+    origin = bare_origin()
+    before = _tip(origin, "main")
+    github = FakeGitHub(origin, check_states=(None,), auto_completes=False)
+    sleeps: list[float] = []
+    ticks = iter([0.0, 0.0, 100.0])
+
+    result = run_repo_task(
+        "acme/widget",
+        "Add a feature whose required checks are never reported.",
+        "engineer",
+        workspace=_workspace(tmp_path, origin, workflow="remote"),
+        merge=GitHubMergeStrategy(github),
+        url=str(origin),
+        dispatch_fn=make_writing_dispatch(filename="feature.txt"),
+        verify_cmd=["true"],
+        repo_type="single-owner",
+        merge_policy="auto",
+        sleep=sleeps.append,
+        clock=lambda: next(ticks),
+        timeout=10.0,
+    )
+
+    assert not result.ok and result.outcome == "timeout"
+    assert sleeps == [15.0]
+    assert github.status_polls == 3
+    assert _tip(origin, "main") == before
+
+
+def test_github_direct_merge_waits_when_post_merge_checks_disappear(tmp_path, bare_origin) -> None:
+    origin = bare_origin()
+    github = FakeGitHub(
+        origin,
+        auto_available=False,
+        direct_completes=False,
+        direct_merge_status_poll=4,
+        check_states=("SUCCESS", "SUCCESS", None, "SUCCESS"),
+    )
+    sleeps: list[float] = []
+
+    result = run_repo_task(
+        "acme/widget",
+        "Add a feature despite a transient empty post-merge check response.",
+        "engineer",
+        workspace=_workspace(tmp_path, origin, workflow="remote"),
+        merge=GitHubMergeStrategy(github),
+        url=str(origin),
+        dispatch_fn=make_writing_dispatch(filename="feature.txt"),
+        verify_cmd=["true"],
+        repo_type="single-owner",
+        merge_policy="auto",
+        sleep=sleeps.append,
+        timeout=60.0,
+    )
+
+    assert result.ok and result.outcome == "merged"
+    assert sleeps == [15.0]
+    assert github.status_polls == 4
+    assert _has_file(origin, "main", "feature.txt")
 
 
 def test_github_auto_policy_polls_an_in_progress_merge_until_completion(
@@ -1429,6 +1697,16 @@ def test_remote_human_workstream_draft_checkpoint_and_safe_resume(tmp_path, bare
         persona: str, task: str, *, project_dir: str, session: str, **_: object
     ) -> Report:
         nonlocal advanced_sha
+        if persona == "pr-author":
+            output = task.split(
+                "Write the final body, and nothing else, to this absolute path:\n", 1
+            )[1].splitlines()[0]
+            Path(output).write_text(
+                "## What\nPrepares and publishes the remote work.\n\n"
+                "## Why\nSupports the gated workstream.\n",
+                encoding="utf-8",
+            )
+            return Report(persona, 0, True, False, 1, [], {}, {}, "")
         sid = session.rsplit(":", 1)[-1]
         dispatched.append(sid)
         (Path(project_dir) / f"{sid}.txt").write_text(task + "\n", encoding="utf-8")

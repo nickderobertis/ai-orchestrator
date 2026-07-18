@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import fields
 from pathlib import Path
 
@@ -12,6 +13,8 @@ import orchestrator.lifecycle as lc
 from orchestrator.config import ConfigError
 from orchestrator.github import CliGitHubBackend, PRStatus, PullRequest
 from orchestrator.lifecycle import (
+    PR_OPTIONAL_SECTIONS,
+    PR_REQUIRED_SECTIONS,
     LifecycleResult,
     RepoPlan,
     RepoPlanNode,
@@ -21,10 +24,13 @@ from orchestrator.lifecycle import (
     Step,
     _default_body,
     _default_branch_name,
+    _draft_pr_body,
     _effective_publication,
     _incomplete_commit_message,
     _select_merge_strategy,
+    _should_draft_pr_body,
     _subject_from_messages,
+    _valid_drafted_body,
     _workstream_branch_name,
     load_repo_plan,
     make_repo_runner,
@@ -60,6 +66,76 @@ def test_branch_name_is_deterministic() -> None:
     a = _default_branch_name("engineer", "do a thing")
     assert a == _default_branch_name("engineer", "do a thing")
     assert a.startswith("ai-orchestrator/engineer/")
+
+
+def test_pr_body_drafting_reads_output_and_falls_back(tmp_path) -> None:
+    from orchestrator.dispatch import Report
+    from orchestrator.journal import NullNodeJournal
+
+    calls: list[str] = []
+
+    def drafting_dispatch(persona: str, task: str, **_: object) -> Report:
+        calls.append(persona)
+        output = task.split("Write the final body, and nothing else, to this absolute path:\n", 1)[
+            1
+        ].splitlines()[0]
+        Path(output).write_text("## What\nA behavior.\n\n## Why\nA driver.\n", encoding="utf-8")
+        return Report(persona, 0, True, False, 1, [], {}, {}, "")
+
+    common = dict(
+        worktree=tmp_path,
+        remote_base="origin/main",
+        steps=[Step("change", "engineer", "Raw handoff prose")],
+        fallback="fallback",
+        oneharness_mode="bypass",
+        base_path="base.yaml",
+        persona_dir="personas",
+        journal=NullNodeJournal(),
+        dispatch_env={},
+    )
+    body = _draft_pr_body(dispatch_fn=drafting_dispatch, **common)
+    assert body == "## What\nA behavior.\n\n## Why\nA driver.\n"
+    assert calls == ["pr-author"]
+
+    def failed_dispatch(*_: object, **__: object) -> Report:
+        raise RuntimeError("provider unavailable")
+
+    assert _draft_pr_body(dispatch_fn=failed_dispatch, **common) == "fallback"
+
+
+@pytest.mark.parametrize(
+    ("title", "body", "expected"),
+    [(None, None, True), ("feat: supplied", None, False), (None, "supplied", False)],
+)
+def test_explicit_pr_metadata_skips_body_drafting(title, body, expected) -> None:
+    assert _should_draft_pr_body(title, body) is expected
+
+
+@pytest.mark.parametrize(
+    ("body", "expected"),
+    [
+        ("## What\nBehavior.\n\n## Why\nDriver.", True),
+        ("## What\nBehavior.\n\n## Why\nDriver.\n\n## Additional info\nNote.", True),
+        ("arbitrary prose", False),
+        ("## What\n\n## Why\nDriver.", False),
+        ("## Why\nDriver.\n\n## What\nBehavior.", False),
+    ],
+)
+def test_drafted_body_validation(body, expected) -> None:
+    assert _valid_drafted_body(body) is expected
+
+
+def test_pr_author_contract_tracks_checked_in_template_persona_and_docs() -> None:
+    """Make intentional contract copies fail together when the template changes."""
+    root = Path(__file__).parents[1]
+    template = (root / ".github/pull_request_template.md").read_text(encoding="utf-8")
+    persona = (root / "personas/pr-author.yaml").read_text(encoding="utf-8")
+    docs = (root / "docs/repo-lifecycle.md").read_text(encoding="utf-8")
+    template_sections = re.findall(r"(?m)^## ([^\n]+)$", template)
+    assert template_sections == [*PR_REQUIRED_SECTIONS, *PR_OPTIONAL_SECTIONS]
+    for section in template_sections:
+        assert section in persona
+        assert section in docs
 
 
 def _commit_messages(*messages: str) -> list[lc.gitops.CommitMessage]:
@@ -1038,6 +1114,34 @@ def test_run_repo_task_journals_a_step_that_hit_the_turn_cap(tmp_path, bare_orig
     # The turn cap preserved partial work on the branch; the journal is what says so.
     assert settled.detail["preserved"] is True
     assert "pr-merged" not in [e.kind for e in journal.events()]
+
+
+def test_run_repo_task_expects_no_diff_step_does_not_dispatch(tmp_path, bare_origin) -> None:
+    from orchestrator import gitops
+
+    origin = bare_origin()
+    publication = gitops.clone(origin, tmp_path / "publication")
+    workspace = Workspace(
+        tmp_path / "ws",
+        resolver=lambda _url: publication,
+        workflow="local",
+        repo_type="single-owner",
+    )
+
+    def unexpected_dispatch(*args, **kwargs):
+        raise AssertionError("expects_no_diff must not dispatch")
+
+    result = run_repo_task(
+        str(origin),
+        workspace=workspace,
+        steps=[Step("ready", task="certify unchanged", expects_no_diff=True)],
+        verify_cmd=["true"],
+        dispatch_fn=unexpected_dispatch,
+    )
+
+    assert result.outcome == "no-changes"
+    assert result.steps[0].status == "done"
+    assert result.steps[0].report is None
 
 
 def test_run_repo_task_pauses_and_resumes_local_human_step(tmp_path, bare_origin) -> None:

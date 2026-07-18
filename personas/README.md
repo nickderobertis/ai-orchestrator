@@ -17,6 +17,7 @@ role-specific parts live here.
 | `docs-writer` | READMEs, reference docs, durable AGENTS.md notes. |
 | `researcher` | Answering questions with evidence cited from the actual source. |
 | `reviewer` | Reviewing and integrating several agents' independently produced work in a complex DAG. |
+| `pr-author` | Drafting a terse, diff-derived PR body for a completed lifecycle change. |
 | `iac-author` | Project-specific infrastructure-as-code authoring and validation. |
 | `crozier-corpus` | Project-specific Crozier corpus research and curation. |
 

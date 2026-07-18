@@ -23,6 +23,7 @@ import hashlib
 import json
 import re
 import sys
+import tempfile
 import time
 import uuid
 from collections.abc import Callable, Mapping
@@ -106,6 +107,11 @@ _CONVENTIONAL_SUBJECT = re.compile(
 _BREAKING_FOOTER = re.compile(r"(?m)^BREAKING(?: |-)CHANGE:\s*\S")
 _TYPE_PRIORITY = {"feat": 0, "fix": 1, "perf": 2, "refactor": 3}
 
+# This is the executable PR-body contract. A unit drift gate reconciles it with
+# the checked-in template, pr-author persona, and lifecycle documentation.
+PR_REQUIRED_SECTIONS = ("What", "Why")
+PR_OPTIONAL_SECTIONS = ("Additional info",)
+
 # Outcomes that count as the subtask succeeding.
 _SUCCESS_OUTCOMES = frozenset({"merged", "pr-open"})
 
@@ -113,7 +119,25 @@ _SUCCESS_OUTCOMES = frozenset({"merged", "pr-open"})
 # recorded round resumes after a human attestation.
 _WAITING_OUTCOME = "waiting-human"
 
-DispatchFn = Callable[..., Report]
+
+class DispatchFn(Protocol):
+    """Structural boundary implemented by the real and deterministic dispatchers."""
+
+    def __call__(
+        self,
+        persona: str,
+        task: str,
+        *,
+        project_dir: str | None = None,
+        oneharness_mode: str | None = None,
+        base_path: str | Path = BASE_CONFIG,
+        persona_dir: str | Path = PERSONA_DIR,
+        session: str | None = None,
+        max_turns: int | None = None,
+        done_when: str | None = None,
+        labels: Mapping[str, str] | None = None,
+        env: dict[str, str] | None = None,
+    ) -> Report: ...
 
 
 @dataclass
@@ -127,6 +151,7 @@ class Step:
     deps: list[str] = field(default_factory=list)
     max_turns: int | None = None
     done_when: str | None = None
+    expects_no_diff: bool = False
 
     @property
     def human(self) -> bool:
@@ -463,6 +488,95 @@ def _workstream_body(steps: list[Step], results: list[StepResult]) -> str:
     return "\n".join(lines)
 
 
+def _drafting_task(output_path: Path, remote_base: str, steps: list[Step]) -> str:
+    context = "\n\n".join(
+        f"Persona: {_step_label(step)}\nOriginal task context:\n{step.task.strip()}"
+        for step in steps
+    )
+    what, why = PR_REQUIRED_SECTIONS
+    additional = PR_OPTIONAL_SECTIONS[0]
+    return f"""Draft the pull request body for the completed change in this worktree.
+
+Read the actual change with `git diff {remote_base}...HEAD` and use this context only to
+understand its driver:
+
+{context}
+
+Write the final body, and nothing else, to this absolute path:
+{output_path}
+
+Follow `.github/pull_request_template.md`: include `## {what}` describing observable behavior
+from the diff and `## {why}` describing its driver. Add `## {additional}` only when useful.
+Stay terse. Never restate the handoff or paste the original task prose verbatim.
+Do not modify, stage, or commit any file in the worktree.
+"""
+
+
+def _valid_drafted_body(body: str) -> bool:
+    """Validate the small template contract at the agent-output boundary."""
+    sections = re.split(r"(?m)^## ([^\n]+)\s*$", body.strip())
+    if sections[0].strip():
+        return False
+    names = sections[1::2]
+    content = sections[2::2]
+    allowed_sequences = (
+        PR_REQUIRED_SECTIONS,
+        (*PR_REQUIRED_SECTIONS, *PR_OPTIONAL_SECTIONS),
+    )
+    return tuple(names) in allowed_sequences and all(section.strip() for section in content)
+
+
+def _draft_pr_body(
+    *,
+    worktree: Path,
+    remote_base: str,
+    steps: list[Step],
+    fallback: str,
+    dispatch_fn: DispatchFn,
+    oneharness_mode: str | None,
+    base_path: str | Path,
+    persona_dir: str | Path,
+    journal: NodeSink,
+    dispatch_env: dict[str, str],
+) -> str:
+    """Draft a diff-derived body, falling back without blocking publication."""
+    journal.append("pr-drafting-started", detail={"base": remote_base})
+    try:
+        with tempfile.TemporaryDirectory(prefix="ai-orchestrator-pr-body-") as temp_dir:
+            output_path = Path(temp_dir) / "body.md"
+            report = dispatch_fn(
+                "pr-author",
+                _drafting_task(output_path, remote_base, steps),
+                project_dir=str(worktree),
+                oneharness_mode=oneharness_mode,
+                base_path=base_path,
+                persona_dir=persona_dir,
+                session="pr-author",
+                labels=journal.labels,
+                env=dispatch_env,
+            )
+            drafted = (
+                output_path.read_text(encoding="utf-8").strip() if output_path.is_file() else ""
+            )
+            if report.completed and _valid_drafted_body(drafted):
+                journal.append(
+                    "pr-drafting-finished",
+                    detail={"completed": True, "body_length": len(drafted)},
+                )
+                return drafted + "\n"
+            reason = "invalid or empty body" if report.completed else "dispatch did not complete"
+    except Exception as exc:  # Drafting is best-effort and must never block publication.
+        reason = f"drafting error: {exc}"
+    journal.append("pr-drafting-finished", detail={"completed": False, "reason": reason})
+    journal.append("pr-drafting-fallback", detail={"reason": reason})
+    return fallback
+
+
+def _should_draft_pr_body(title: str | None, body: str | None) -> bool:
+    """An explicit title or body opts out of automatic PR-body authorship."""
+    return title is None and body is None
+
+
 def _effective_publication(
     repo_type: RepositoryType,
     stored_workflow: Workflow | None,
@@ -783,10 +897,16 @@ def _run_steps(
         if step.human:
             log.append("human-waiting", detail={"step_kind": step.kind})
             return NodeRun("waiting", f"step {sid!r} is awaiting human action", None)
+        if step.expects_no_diff:
+            log.append(
+                "step-settled",
+                detail={"status": "done", "step_kind": step.kind, "outcome": "no-changes"},
+            )
+            return NodeRun("done", None, None)
         log.append("step-started", detail={"step_kind": step.kind, "persona": step.persona})
         dispatch_head = gitops.head_sha(worktree)
         report = dispatch_fn(
-            step.persona,
+            cast(str, step.persona),
             step.task,
             project_dir=str(worktree),
             oneharness_mode=oneharness_mode,
@@ -944,6 +1064,10 @@ def _pause_at_human_step(
     recorded_pr: str | None,
     journal: NodeSink,
     cache_env: dict[str, str],
+    dispatch_fn: DispatchFn,
+    oneharness_mode: str | None,
+    base_path: str | Path,
+    persona_dir: str | Path,
 ) -> LifecycleResult:
     """Preserve a human-gated workstream and record how to continue it."""
     lead = steps[0]
@@ -1006,13 +1130,27 @@ def _pause_at_human_step(
     if reused is not None:
         pr = reused
     else:
+        fallback_body = _workstream_body(steps, step_run.results)
+        pr_body = body or fallback_body
+        if workflow == "remote" and _should_draft_pr_body(title, body):
+            pr_body = _draft_pr_body(
+                worktree=worktree,
+                remote_base=remote_base,
+                steps=steps,
+                fallback=fallback_body,
+                dispatch_fn=dispatch_fn,
+                oneharness_mode=oneharness_mode,
+                base_path=base_path,
+                persona_dir=persona_dir,
+                journal=journal,
+                dispatch_env=cache_env,
+            )
         pr = (github or CliGitHubBackend()).create_pr(
             result.repo,
             head=branch,
             base=pr_base,
             title=title or _default_title(worktree, remote_base, lead.task),
-            body=(body or _workstream_body(steps, step_run.results))
-            + _stack_body(applicable_stack, result.synthetic_stack_base),
+            body=pr_body + _stack_body(applicable_stack, result.synthetic_stack_base),
             draft=True,
         )
         # Only the branch that actually opens one records it; resuming reuses the
@@ -1301,6 +1439,10 @@ def run_repo_task(
                 recorded_pr=resume.pr if resume else None,
                 journal=log,
                 cache_env=cache_env,
+                dispatch_fn=dispatch_fn,
+                oneharness_mode=oneharness_mode,
+                base_path=base_path,
+                persona_dir=persona_dir,
             )
         if step_run.status != "done":
             result.outcome = "error"
@@ -1373,6 +1515,22 @@ def run_repo_task(
             result.detail = "agent completed but produced no commits to open a PR"
             return result
 
+        fallback_body = _workstream_body(effective_steps, step_run.results)
+        pr_body = body or fallback_body
+        if decision.workflow == "remote" and _should_draft_pr_body(title, body):
+            pr_body = _draft_pr_body(
+                worktree=worktree,
+                remote_base=remote_base,
+                steps=effective_steps,
+                fallback=fallback_body,
+                dispatch_fn=dispatch_fn,
+                oneharness_mode=oneharness_mode,
+                base_path=base_path,
+                persona_dir=persona_dir,
+                journal=log,
+                dispatch_env=cache_env,
+            )
+
         gitops.push(worktree, branch)
         ctx = MergeContext(
             repo_slug=ref.slug,
@@ -1380,8 +1538,7 @@ def run_repo_task(
             base=pr_base,
             branch=branch,
             title=title or _default_title(worktree, remote_base, lead.task),
-            body=(body or _workstream_body(effective_steps, step_run.results))
-            + _stack_body(applicable_stack, result.synthetic_stack_base),
+            body=pr_body + _stack_body(applicable_stack, result.synthetic_stack_base),
             method=merge_method,
             policy=decision.merge_policy,
             poll_interval=poll_interval,
@@ -1437,6 +1594,7 @@ class RepoPlanNode:
     execution_checkout: str | None = None
     max_turns: int | None = None
     done_when: str | None = None
+    expects_no_diff: bool = False
     steps: list[Step] | None = None
     stack_bases: list[StackBase] = field(default_factory=list)
     resume: Resume | None = None
@@ -1535,14 +1693,23 @@ def parse_repo_plan(data: dict[str, Any]) -> RepoPlan:
 
 def parse_repo_node(nid: str, t: dict[str, Any]) -> RepoPlanNode:
     """Validate one lifecycle node into a `RepoPlanNode`."""
-    from .plan import PlanError
+    from .plan import PlanError, _expects_no_diff
 
     if not isinstance(t.get("repo"), str) or not str(t.get("repo")).strip():
         raise PlanError(f"task {nid!r} needs a non-empty 'repo'")
+    expects_no_diff = _expects_no_diff(nid, t)
     raw_steps = t.get("steps")
+    if expects_no_diff and raw_steps is not None:
+        raise PlanError(f"task {nid!r} expects_no_diff cannot also set 'steps'")
     if raw_steps is not None:
         node_steps = _parse_steps(nid, raw_steps)
         persona = task = None
+    elif expects_no_diff:
+        node_steps = None
+        persona = None
+        task = t.get("task")
+        if not isinstance(task, str) or not task.strip():
+            raise PlanError(f"task {nid!r} needs a non-empty 'task'")
     else:
         for key in ("persona", "task"):
             if not isinstance(t.get(key), str) or not str(t.get(key)).strip():
@@ -1626,6 +1793,7 @@ def parse_repo_node(nid: str, t: dict[str, Any]) -> RepoPlanNode:
         execution_checkout=raw_execution,
         max_turns=t.get("max_turns"),
         done_when=t.get("done_when"),
+        expects_no_diff=expects_no_diff,
         steps=node_steps,
         stack_bases=_parse_stack_bases(nid, t.get("stack_bases", [])),
         resume=resume,
@@ -1795,12 +1963,12 @@ def _parse_stack_bases(nid: str, raw: object) -> list[StackBase]:
     return anchors
 
 
-_AGENT_STEP_FIELDS = ("persona", "max_turns", "done_when")
+_AGENT_STEP_FIELDS = ("persona", "max_turns", "done_when", "expects_no_diff")
 
 
 def _parse_steps(nid: str, raw_steps: object) -> list[Step]:
     """Validate a node's `steps` sub-DAG and return `Step`s (raise PlanError)."""
-    from .plan import PlanError, PlanNode, _topological_order
+    from .plan import PlanError, PlanNode, _expects_no_diff, _topological_order
 
     if not isinstance(raw_steps, list) or not raw_steps:
         raise PlanError(f"task {nid!r} 'steps' must be a non-empty list")
@@ -1829,8 +1997,12 @@ def _parse_steps(nid: str, raw_steps: object) -> list[Step]:
                 raise PlanError(
                     f"task {nid!r} human step {sid!r} cannot set {', '.join(map(repr, present))}"
                 )
-        elif not isinstance(s.get("persona"), str) or not str(s.get("persona")).strip():
-            raise PlanError(f"task {nid!r} step {sid!r} needs a non-empty 'persona'")
+        else:
+            expects_no_diff = _expects_no_diff(nid, s, step=sid)
+            if not expects_no_diff and (
+                not isinstance(s.get("persona"), str) or not str(s.get("persona")).strip()
+            ):
+                raise PlanError(f"task {nid!r} step {sid!r} needs a non-empty 'persona'")
         sdeps = s.get("deps", [])
         if not isinstance(sdeps, list) or not all(isinstance(d, str) for d in sdeps):
             raise PlanError(f"task {nid!r} step {sid!r} 'deps' must be a list of ids")
@@ -1842,6 +2014,7 @@ def _parse_steps(nid: str, raw_steps: object) -> list[Step]:
             deps=list(sdeps),
             max_turns=s.get("max_turns"),
             done_when=s.get("done_when"),
+            expects_no_diff=expects_no_diff if kind == "agent" else False,
         )
     for sid, step in steps.items():
         for dep in step.deps:

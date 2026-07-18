@@ -35,6 +35,7 @@ from .lifecycle import (
 )
 from .plan import (
     NODE_KINDS,
+    PLAN_SCHEMA_VERSION,
     AgentRunner,
     NodeRun,
     PlanError,
@@ -69,6 +70,7 @@ _AGENT_NODE_FIELDS = (
     "project_dir",
     "max_turns",
     "done_when",
+    "expects_no_diff",
     "base_branch",
     "branch",
     "title",
@@ -135,6 +137,7 @@ class NodeResult:
     unblocks: list[str] = field(default_factory=list)
     blocked_by: list[str] = field(default_factory=list)
     human_actions: list[HumanAction] = field(default_factory=list)
+    outcome: str | None = None
 
 
 @dataclass
@@ -165,9 +168,21 @@ class GraphResult:
 
 def parse_graph(data: dict[str, Any]) -> Graph:
     """Validate an in-memory tracked graph mapping."""
+    schema_version = data.get("schema_version", 1)
+    if (
+        not isinstance(schema_version, int)
+        or isinstance(schema_version, bool)
+        or schema_version not in (1, PLAN_SCHEMA_VERSION)
+    ):
+        raise PlanError(f"'schema_version' must be 1 or the current version {PLAN_SCHEMA_VERSION}")
     raw_tasks = data.get("tasks")
     if not isinstance(raw_tasks, list) or not raw_tasks:
         raise PlanError("plan must have a non-empty 'tasks' list")
+    if schema_version < PLAN_SCHEMA_VERSION and _contains_expects_no_diff(raw_tasks):
+        raise PlanError(
+            f"'expects_no_diff' requires schema_version {PLAN_SCHEMA_VERSION}; "
+            "legacy plans must omit the field"
+        )
     concurrency = data.get("concurrency", 4)
     if not isinstance(concurrency, int) or isinstance(concurrency, bool) or concurrency < 1:
         raise PlanError("'concurrency' must be a positive integer")
@@ -196,6 +211,21 @@ def parse_graph(data: dict[str, Any]) -> Graph:
         }
     )
     return Graph(tasks=list(nodes.values()), concurrency=concurrency)
+
+
+def _contains_expects_no_diff(tasks: list[Any]) -> bool:
+    """Return whether a top-level node or lifecycle step uses the v2 field."""
+    for task in tasks:
+        if not isinstance(task, dict):
+            continue
+        if "expects_no_diff" in task:
+            return True
+        steps = task.get("steps", [])
+        if isinstance(steps, list) and any(
+            isinstance(step, dict) and "expects_no_diff" in step for step in steps
+        ):
+            return True
+    return False
 
 
 def _parse_node(nid: str, raw: dict[str, Any]) -> GraphNode:
@@ -275,6 +305,13 @@ def run_graph(
 
     def settle(nid: str, node: GraphNode, node_log: NodeJournal) -> NodeRun:
         """Run one already-started node to its outcome, journaling how it settled."""
+        expects_no_diff = bool(
+            (node.direct and node.direct.expects_no_diff)
+            or (node.lifecycle and node.lifecycle.expects_no_diff)
+        )
+        if expects_no_diff:
+            node_log.append("node-settled", detail={"status": "done", "outcome": "no-changes"})
+            return NodeRun("done", None, "no-changes")
         if node.lifecycle is not None:
             with guard:
                 anchors = combine_stack_bases(node.lifecycle, completed)
@@ -288,6 +325,13 @@ def run_graph(
                     detail={"status": "waiting", "outcome": result.outcome},
                 )
                 return NodeRun("waiting", result.detail, result)
+            agent_steps = [step for step in node.lifecycle.steps or [] if not step.human]
+            expected_step_no_diff = bool(agent_steps) and all(
+                step.expects_no_diff for step in agent_steps
+            )
+            if result.outcome == "no-changes" and expected_step_no_diff:
+                node_log.append("node-settled", detail={"status": "done", "outcome": "no-changes"})
+                return NodeRun("done", None, result)
             if not result.ok:
                 node_log.append(
                     "node-failed",
@@ -380,6 +424,7 @@ def _collect(
             unblocks=list(dependents[nid]) if run.status == "waiting" else [],
             blocked_by=blocking(nid) if run.status == "blocked" else [],
             human_actions=actions.get(nid, []),
+            outcome=run.payload if run.payload == "no-changes" else None,
         )
     return GraphResult(results=results, started_order=started_order)
 
@@ -426,6 +471,8 @@ def _node_payload(result: NodeResult) -> GraphResultItem:
     item: dict[str, Any] = {}
     if result.lifecycle is not None:
         item.update(result_payload(result.lifecycle))
+    elif result.outcome is not None:
+        item.update({"outcome": result.outcome, "completed": True})
     elif result.kind == "agent":
         report = result.report
         item.update(

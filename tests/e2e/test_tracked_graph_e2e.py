@@ -81,6 +81,7 @@ def test_direct_human_pause_attestation_and_release_use_real_onejudge(
     plan.write_text(
         json.dumps(
             {
+                "schema_version": 2,
                 "tasks": [
                     {
                         "id": "prepare",
@@ -99,7 +100,7 @@ def test_direct_human_pause_attestation_and_release_use_real_onejudge(
                         "task": "complete-now: publish the approved release.",
                         "deps": ["approve"],
                     },
-                ]
+                ],
             }
         ),
         encoding="utf-8",
@@ -175,6 +176,7 @@ def test_direct_human_pause_attestation_and_release_use_real_onejudge(
     second_plan = json.loads(
         (runs / "human-direct" / "round-02" / "plan.json").read_text(encoding="utf-8")
     )
+    assert second_plan["schema_version"] == 2
     assert [task["id"] for task in second_plan["tasks"]] == ["publish"]
     assert second_plan["tasks"][0]["deps"] == []
 
@@ -283,6 +285,198 @@ def test_legacy_direct_plan_and_recorded_ledger_still_run(
     assert continued_payload["state"] == "complete"
     assert continued_payload["results"]["legacy-agent"]["status"] == "done"
     assert (runs / "old-ledger" / "round-02" / "result.json").is_file()
+
+
+def test_expects_no_diff_skips_onejudge_while_sibling_uses_real_boundary(
+    tmp_path: Path, bare_origin, command_base, onejudge_bin: str
+) -> None:
+    """The explicit zero-yield node settles without invoking the coding backend."""
+    no_op_dir = tmp_path / "no-op-project"
+    ordinary_dir = tmp_path / "ordinary-project"
+    no_op_dir.mkdir()
+    ordinary_dir.mkdir()
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "zero-yield-canonical")
+    Registry().register(str(canonical), workflow="local")
+    plan = tmp_path / "zero-yield.json"
+    plan.write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "tasks": [
+                    {
+                        "id": "certify-unchanged",
+                        "task": "write-change complete-now: certify the unchanged handoff.",
+                        "project_dir": str(no_op_dir),
+                        "expects_no_diff": True,
+                    },
+                    {
+                        "id": "ordinary",
+                        "persona": "engineer",
+                        "task": "write-change complete-now: perform ordinary work.",
+                        "project_dir": str(ordinary_dir),
+                    },
+                    {
+                        "id": "lifecycle-no-op",
+                        "repo": str(canonical),
+                        "task": "write-change complete-now: no lifecycle should start.",
+                        "expects_no_diff": True,
+                    },
+                    {
+                        "id": "step-no-op",
+                        "repo": str(canonical),
+                        "skip_verify": True,
+                        "steps": [
+                            {
+                                "id": "certify",
+                                "task": "write-change complete-now: certify unchanged.",
+                                "expects_no_diff": True,
+                            }
+                        ],
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    completed = _just(
+        "run-plan",
+        str(plan),
+        "--no-record",
+        "--base",
+        str(command_base()),
+        "--onejudge-bin",
+        onejudge_bin,
+        "--workspace",
+        str(tmp_path / "zero-yield-worktrees"),
+        "--format",
+        "json",
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    payload = json.loads(completed.stdout)
+    assert payload["results"]["certify-unchanged"] == {
+        "outcome": "no-changes",
+        "completed": True,
+        "kind": "agent",
+        "status": "done",
+        "task": "write-change complete-now: certify the unchanged handoff.",
+        "error": None,
+    }
+    assert payload["results"]["ordinary"]["status"] == "done"
+    assert payload["results"]["lifecycle-no-op"]["outcome"] == "no-changes"
+    assert payload["results"]["step-no-op"]["outcome"] == "no-changes"
+    assert not (no_op_dir / "CHANGE.txt").exists()
+    assert (ordinary_dir / "CHANGE.txt").read_text(encoding="utf-8") == "change from fake agent\n"
+    assert (
+        subprocess.run(
+            ["git", "-C", str(origin), "cat-file", "-e", "main:CHANGE.txt"],
+            capture_output=True,
+        ).returncode
+        != 0
+    )
+
+
+def test_expects_no_diff_contract_is_rejected_at_cli_boundary(tmp_path: Path) -> None:
+    invalid_plans = (
+        (
+            {"schema_version": 1, "tasks": [{"id": "x", "task": "x", "expects_no_diff": True}]},
+            "requires schema_version 2",
+        ),
+        (
+            {
+                "schema_version": 2,
+                "tasks": [
+                    {
+                        "id": "x",
+                        "task": "x",
+                        "expects_no_diff": True,
+                        "persona": "reviewer",
+                        "done_when": "provide review findings",
+                    }
+                ],
+            },
+            "cannot set 'persona', 'done_when'",
+        ),
+        (
+            {
+                "schema_version": 2,
+                "tasks": [{"id": "x", "task": "x", "expects_no_diff": "yes"}],
+            },
+            "must be a boolean",
+        ),
+        (
+            {"schema_version": 99, "tasks": [{"id": "x", "persona": "p", "task": "x"}]},
+            "current version 2",
+        ),
+        (
+            {
+                "schema_version": 2,
+                "tasks": [
+                    {
+                        "id": "x",
+                        "repo": "owner/repo",
+                        "task": "x",
+                        "expects_no_diff": True,
+                        "persona": "engineer",
+                    }
+                ],
+            },
+            "cannot set 'persona'",
+        ),
+        (
+            {
+                "schema_version": 2,
+                "tasks": [
+                    {
+                        "id": "x",
+                        "repo": "owner/repo",
+                        "steps": [
+                            {
+                                "id": "ready",
+                                "task": "x",
+                                "expects_no_diff": True,
+                                "done_when": "provide findings",
+                            }
+                        ],
+                    }
+                ],
+            },
+            "step 'ready' with expects_no_diff cannot set 'done_when'",
+        ),
+        (
+            {
+                "schema_version": 2,
+                "tasks": [
+                    {
+                        "id": "x",
+                        "repo": "owner/repo",
+                        "task": "x",
+                        "expects_no_diff": True,
+                        "steps": [{"id": "ready", "task": "x", "expects_no_diff": True}],
+                    }
+                ],
+            },
+            "cannot also set 'steps'",
+        ),
+        (
+            {
+                "schema_version": 1,
+                "tasks": [
+                    {"id": "x", "persona": "engineer", "task": "x", "expects_no_diff": False}
+                ],
+            },
+            "requires schema_version 2",
+        ),
+        ({"schema_version": 2, "tasks": "not-a-list"}, "non-empty 'tasks' list"),
+    )
+    for index, (mapping, message) in enumerate(invalid_plans):
+        plan = tmp_path / f"invalid-{index}.json"
+        plan.write_text(json.dumps(mapping), encoding="utf-8")
+        rejected = _just("run-plan", str(plan), "--no-record")
+        assert rejected.returncode == 2
+        assert message in rejected.stderr
 
 
 def test_legacy_repo_plan_runs_through_canonical_and_deprecated_alias(

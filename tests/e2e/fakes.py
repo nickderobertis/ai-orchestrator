@@ -20,6 +20,7 @@ PR/CI decisioning* are faked, each at its own seam:
 
 from __future__ import annotations
 
+import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -58,7 +59,17 @@ def make_writing_dispatch(
     """
 
     def dispatch_fn(persona: str, task: str, *, project_dir: str, **_: object) -> Report:
-        if filename is not None:
+        if persona == "pr-author":
+            match = re.search(
+                r"Write the final body, and nothing else, to this absolute path:\n(.+)", task
+            )
+            if match:
+                Path(match.group(1)).write_text(
+                    "## What\nAdds the completed behavior.\n\n"
+                    "## Why\nMakes the requested capability available.\n",
+                    encoding="utf-8",
+                )
+        elif filename is not None:
             (Path(project_dir) / filename).write_text(f"{content} by {persona}\n", encoding="utf-8")
         return Report(
             persona=persona,
@@ -102,7 +113,7 @@ class FakeGitHub:
         direct_merge_status_poll: int | None = None,
         merge_in_progress: bool = False,
         merge_progress_states: tuple[bool, ...] | None = None,
-        check_states: tuple[str, ...] | None = None,
+        check_states: tuple[str | None, ...] | None = None,
     ) -> None:
         self.origin = origin
         self.required = required
@@ -155,8 +166,12 @@ class FakeGitHub:
             state = self.check_states[min(self.status_polls - 1, len(self.check_states) - 1)]
         else:
             state = "FAILURE" if self.fail_checks else "SUCCESS"
-        checks = tuple(Check(name=c, state=state, required=True) for c in self.required)
-        green = all(c.green for c in checks)
+        checks = (
+            tuple(Check(name=c, state=state, required=True) for c in self.required)
+            if state is not None
+            else ()
+        )
+        green = bool(checks) and all(c.green for c in checks)
         if (
             st.direct_requested
             and self.direct_merge_status_poll is not None

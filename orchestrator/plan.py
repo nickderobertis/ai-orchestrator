@@ -34,6 +34,7 @@ class PlanError(Exception):
 #: for backward-compatible plans; ``human`` names action the harness must never
 #: infer or execute.
 NODE_KINDS = ("agent", "human")
+PLAN_SCHEMA_VERSION = 2
 
 
 @dataclass
@@ -46,6 +47,7 @@ class PlanNode:
     project_dir: str | None = None
     max_turns: int | None = None
     done_when: str | None = None
+    expects_no_diff: bool = False
 
 
 @dataclass
@@ -233,8 +235,9 @@ def load_plan(path: str | Path) -> Plan:
 
 def parse_agent_node(nid: str, t: dict[str, Any]) -> PlanNode:
     """Validate one direct-agent node into a `PlanNode`."""
+    expects_no_diff = _expects_no_diff(nid, t)
     persona = t.get("persona")
-    if not isinstance(persona, str) or not persona:
+    if not expects_no_diff and (not isinstance(persona, str) or not persona):
         raise PlanError(f"task {nid!r} needs a 'persona'")
     task_text = t.get("task")
     if not isinstance(task_text, str) or not task_text.strip():
@@ -244,14 +247,32 @@ def parse_agent_node(nid: str, t: dict[str, Any]) -> PlanNode:
         raise PlanError(f"task {nid!r} 'deps' must be a list of ids")
     return PlanNode(
         id=nid,
-        persona=persona,
+        persona=persona or "",
         task=task_text,
         deps=list(deps),
         session=t.get("session"),
         project_dir=t.get("project_dir"),
         max_turns=t.get("max_turns"),
         done_when=t.get("done_when"),
+        expects_no_diff=expects_no_diff,
     )
+
+
+def _expects_no_diff(nid: str, item: dict[str, Any], *, step: str | None = None) -> bool:
+    """Validate the explicit zero-yield declaration shared by nodes and steps."""
+    value = item.get("expects_no_diff", False)
+    location = f"task {nid!r}" + (f" step {step!r}" if step is not None else "")
+    if not isinstance(value, bool):
+        raise PlanError(f"{location} 'expects_no_diff' must be a boolean")
+    if not value:
+        return False
+    incompatible = [field for field in ("persona", "done_when") if field in item]
+    if incompatible:
+        raise PlanError(
+            f"{location} with expects_no_diff cannot set "
+            f"{', '.join(map(repr, incompatible))}: no agent or review evidence is dispatched"
+        )
+    return True
 
 
 def run_plan(
