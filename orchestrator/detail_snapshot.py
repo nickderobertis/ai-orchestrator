@@ -8,7 +8,34 @@ from typing import Any
 from .github import Check, PRStatus
 from .journal import DetailValue
 
-SNAPSHOT_VERSION = 1
+SNAPSHOT_VERSION = 2
+
+
+@dataclass(frozen=True)
+class CheckRollup:
+    """Compact persisted answer to what passed last and what blocks now."""
+
+    last_completed_check: str = ""
+    current_blocker: str = ""
+
+    @classmethod
+    def from_value(cls, value: object) -> CheckRollup | None:
+        if not isinstance(value, dict) or not _optional_strings(
+            value, ("last_completed_check", "current_blocker")
+        ):
+            return None
+        return cls(
+            last_completed_check=value.get("last_completed_check", ""),
+            current_blocker=value.get("current_blocker", ""),
+        )
+
+    def to_record(self) -> dict[str, DetailValue]:
+        record: dict[str, DetailValue] = {}
+        if self.last_completed_check:
+            record["last_completed_check"] = self.last_completed_check
+        if self.current_blocker:
+            record["current_blocker"] = self.current_blocker
+        return record
 
 
 def _optional_strings(value: dict[str, Any], names: tuple[str, ...]) -> bool:

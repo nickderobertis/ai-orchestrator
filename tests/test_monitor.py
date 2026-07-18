@@ -21,7 +21,7 @@ from typing import Any
 import pytest
 
 import orchestrator.monitor as monitor_module
-from orchestrator.detail_snapshot import CommitDetail, PrDetail
+from orchestrator.detail_snapshot import SNAPSHOT_VERSION, CommitDetail, PrDetail
 from orchestrator.ids import GraphId
 from orchestrator.journal import JOURNAL_NAME, open_journal
 from orchestrator.monitor import (
@@ -402,7 +402,7 @@ def test_a_malformed_entry_is_dropped_without_taking_the_section_with_it(
     path.write_text(
         json.dumps(
             {
-                "version": 1,
+                "version": SNAPSHOT_VERSION,
                 "commits": {"": {"sha": "x"}, "git:local/app@abc1234": {"sha": "abc1234"}},
                 "prs": ["not a mapping"],
             }
@@ -574,6 +574,31 @@ def test_only_a_successful_graph_ends_the_stream(tmp_path: Path, no_oneharness: 
         "state": "complete",
         "detail": "graph complete",
     }
+
+
+def test_unchanged_monitor_polls_back_off_to_the_bounded_maximum(
+    tmp_path: Path, no_oneharness: str
+) -> None:
+    run_dir = tmp_path / RUN
+    open_journal(run_dir, RUN, 1).append("node-started", node=NodeId("api"))
+    _settle(run_dir, {"api": {"status": "waiting"}}, ok=False, state="waiting")
+    ticker = _Ticker(stop_after=4)
+    intervals: list[float] = []
+
+    def sleep(seconds: float) -> None:
+        intervals.append(seconds)
+        ticker.sleep(seconds)
+
+    with pytest.raises(KeyboardInterrupt):
+        stream(
+            _monitor(run_dir, no_oneharness, clock=ticker.clock),
+            Writer("jsonl", io.StringIO()),
+            heartbeat=100.0,
+            poll_interval=2.0,
+            max_poll_interval=5.0,
+            sleep=sleep,
+        )
+    assert intervals == [2.0, 4.0, 5.0, 5.0]
 
 
 @pytest.mark.parametrize(

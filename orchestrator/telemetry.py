@@ -1,0 +1,319 @@
+"""One versioned machine-readable index over every recorded run source."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import time
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Literal, TypedDict
+
+from .history import HistoryError, session_records, worker_sessions
+from .journal import JOURNAL_NAME, Event, read_events
+from .monitor import DetailSnapshot, load_snapshot
+from .runs import (
+    GraphResultItem,
+    RunId,
+    as_result_payload,
+    latest_round,
+    load_mapping,
+    result_state,
+)
+
+TELEMETRY_SCHEMA_VERSION = 1
+FailureClass = Literal[
+    "agent", "gate", "checks", "publication", "timeout", "provider", "configuration", "unknown"
+]
+
+
+class TimingRecord(TypedDict):
+    agent_seconds: float
+    gate_seconds: float
+    monitor_wait_seconds: float
+    wall_seconds: float
+
+
+class MetricsRecord(TypedDict):
+    retry_attempts: int
+    retry_branch_reuses: int
+    recovered_branches: int
+    abandoned_branches: int
+    no_diff_dispatches: int
+    green_to_publication_seconds: list[float]
+
+
+@dataclass(frozen=True)
+class Failure:
+    classification: FailureClass
+    detail: str = ""
+
+    def record(self) -> dict[str, object]:
+        result: dict[str, object] = {"class": self.classification}
+        if self.detail:
+            result["detail"] = self.detail
+        return result
+
+
+@dataclass(frozen=True)
+class Provider:
+    provider: str
+    harness: str = ""
+    model: str = ""
+
+    def record(self) -> dict[str, str]:
+        result = {"provider": self.provider}
+        if self.harness:
+            result["harness"] = self.harness
+        if self.model:
+            result["model"] = self.model
+        return result
+
+
+@dataclass
+class RunTelemetry:
+    run_id: RunId
+    state: str
+    phase: str
+    last_progress_at: float | None
+    last_event: str
+    timing: TimingRecord
+    nodes: list[dict[str, object]] = field(default_factory=list)
+    providers: list[Provider] = field(default_factory=list)
+    failure: Failure | None = None
+    check_rollup: dict[str, object] = field(default_factory=dict)
+    green_to_publication_seconds: list[float] = field(default_factory=list)
+
+    def record(self) -> dict[str, object]:
+        result: dict[str, object] = {
+            "run_id": self.run_id,
+            "state": self.state,
+            "phase": self.phase,
+            "last_event": self.last_event,
+            "timing": self.timing,
+            "nodes": self.nodes,
+        }
+        if self.last_progress_at is not None:
+            result["last_progress_at"] = self.last_progress_at
+        if self.providers:
+            result["providers"] = [provider.record() for provider in self.providers]
+        if self.failure:
+            result["failure"] = self.failure.record()
+        if self.check_rollup:
+            result["check_rollup"] = self.check_rollup
+        return result
+
+
+def _phase(event: Event | None, state: str) -> str:
+    if event is None:
+        return state
+    return {
+        "verification-started": "gate",
+        "verification-finished": "publication" if event.detail.get("ok") else "failed",
+        "pr-created": "check-waiting",
+        "pr-checks-observed": "check-waiting",
+        "pr-merged": "published",
+        "human-waiting": "human-waiting",
+        "node-started": "agent",
+        "step-started": "agent",
+    }.get(event.kind, state)
+
+
+def _failure(item: GraphResultItem) -> Failure | None:
+    outcome = str(item.get("outcome", ""))
+    detail = str(item.get("detail") or item.get("error") or "")
+    if not detail and item.get("status") not in {"failed", "not-completed"}:
+        return None
+    if "timeout" in outcome or "timed out" in detail.lower():
+        kind: FailureClass = "timeout"
+    elif "gate" in outcome:
+        kind = "gate"
+    elif "checks" in outcome:
+        kind = "checks"
+    elif "publication" in outcome or outcome in {"closed", "error"}:
+        kind = "publication"
+    elif "provider" in detail.lower():
+        kind = "provider"
+    elif "config" in detail.lower():
+        kind = "configuration"
+    elif item.get("status") in {"failed", "not-completed"}:
+        kind = "agent"
+    else:
+        kind = "unknown"
+    return Failure(kind, detail)
+
+
+def _gate_seconds(events: list[Event]) -> float:
+    starts: dict[tuple[int, str, str], float] = {}
+    total = 0.0
+    for event in events:
+        key = (event.round, str(event.node or ""), str(event.step or ""))
+        if event.kind == "verification-started":
+            starts[key] = event.at
+        elif event.kind == "verification-finished" and key in starts:
+            total += max(0.0, event.at - starts.pop(key))
+    return total
+
+
+def _publication_waits(events: list[Event], *, end: float) -> list[float]:
+    """Pair each green gate with publication without subtracting overlapping work."""
+    green: dict[str, float] = {}
+    waits: list[float] = []
+    for event in events:
+        node = str(event.node or "")
+        if event.kind == "verification-finished" and event.detail.get("ok") is True:
+            green[node] = event.at
+        elif event.kind == "pr-merged" and node in green:
+            waits.append(max(0.0, event.at - green.pop(node)))
+    waits.extend(max(0.0, end - started) for started in green.values())
+    return waits
+
+
+def _providers(run_id: RunId, oneharness_bin: str) -> tuple[list[Provider], float]:
+    found: list[Provider] = []
+    elapsed = 0.0
+    try:
+        sessions = worker_sessions(oneharness_bin=oneharness_bin)
+    except HistoryError:
+        return found, elapsed
+    for session in sessions:
+        if session.labels.get("run_id") != run_id:
+            continue
+        records = session_records(session)
+        elapsed += sum(
+            value / 1000
+            for record in records
+            if isinstance((value := record.get("duration_ms")), int)
+        )
+        latest = records[-1] if records else {}
+        provider = str(latest.get("provider", "oneharness"))
+        item = Provider(provider, str(latest.get("harness", "")), str(latest.get("model", "")))
+        if item not in found:
+            found.append(item)
+    return found, elapsed
+
+
+def _node_record(node: str, item: GraphResultItem, events: list[Event]) -> dict[str, object]:
+    result: dict[str, object] = {"node": node, "status": str(item.get("status", "unknown"))}
+    if outcome := item.get("outcome"):
+        result["outcome"] = outcome
+    for source, target in (
+        ("branch", "branch"),
+        ("pr_base", "comparison_base"),
+        ("retry_lineage", "retry_lineage"),
+    ):
+        if value := item.get(source):
+            result[target] = value
+    if item.get("pr_base"):
+        result["comparison_remote"] = "origin"
+    resume = item.get("resume")
+    if isinstance(resume, dict) and (checkpoint := resume.get("checkpoint")):
+        result["checkpoint"] = checkpoint
+    commits = [
+        str(event.detail.get("commit"))
+        for event in events
+        if event.node == node and event.detail.get("commit")
+    ]
+    if commits:
+        result["commit"] = commits[-1]
+    attestations = [
+        event.detail.get("gate_attestation")
+        for event in events
+        if event.node == node and event.kind == "verification-finished"
+    ]
+    if attestations and isinstance(attestations[-1], dict):
+        result["gate_attestation"] = dict(attestations[-1])
+    return result
+
+
+def collect_run(
+    run_dir: Path, *, now: float | None = None, oneharness_bin: str = "oneharness"
+) -> RunTelemetry | None:
+    latest = latest_round(run_dir)
+    if latest is None or not (latest[1] / "result.json").exists():
+        return None
+    payload = as_result_payload(load_mapping(latest[1] / "result.json"))
+    state = result_state(payload)
+    events = read_events(run_dir / JOURNAL_NAME)
+    last = events[-1] if events else None
+    providers, agent_seconds = _providers(RunId(run_dir.name), oneharness_bin)
+    gate_seconds = _gate_seconds(events)
+    current = time.time() if now is None else now
+    wall = (
+        max(0.0, (last.at if state == "complete" and last else current) - events[0].at)
+        if events
+        else 0.0
+    )
+    publication_waits = _publication_waits(events, end=current)
+    wait = sum(publication_waits)
+    failure = next(
+        (found for item in payload["results"].values() if (found := _failure(item))), None
+    )
+    snapshot: DetailSnapshot = load_snapshot(run_dir)
+    return RunTelemetry(
+        run_id=RunId(run_dir.name),
+        state=state,
+        phase=_phase(last, state),
+        last_progress_at=last.at if last else None,
+        last_event=last.kind if last else "",
+        timing=TimingRecord(
+            agent_seconds=agent_seconds,
+            gate_seconds=gate_seconds,
+            monitor_wait_seconds=wait,
+            wall_seconds=wall,
+        ),
+        nodes=[_node_record(node, item, events) for node, item in payload["results"].items()],
+        providers=providers,
+        failure=failure,
+        check_rollup=dict(snapshot.check_rollup.to_record()),
+        green_to_publication_seconds=publication_waits,
+    )
+
+
+def _metrics(runs: list[RunTelemetry]) -> MetricsRecord:
+    lineages = [
+        node["retry_lineage"] for run in runs for node in run.nodes if "retry_lineage" in node
+    ]
+    dispositions = [lineage.get("disposition") for lineage in lineages if isinstance(lineage, dict)]
+    return MetricsRecord(
+        retry_attempts=len(dispositions),
+        retry_branch_reuses=dispositions.count("reused"),
+        recovered_branches=dispositions.count("recovered"),
+        abandoned_branches=dispositions.count("abandoned"),
+        no_diff_dispatches=sum(
+            node.get("outcome") == "no-changes" for run in runs for node in run.nodes
+        ),
+        green_to_publication_seconds=[
+            elapsed for run in runs for elapsed in run.green_to_publication_seconds
+        ],
+    )
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Emit the unified run telemetry index as JSON.")
+    parser.add_argument("--runs-dir", type=Path, default=Path("runs"))
+    parser.add_argument("--all", action="store_true", help="include completed runs")
+    parser.add_argument("--oneharness-bin", default="oneharness")
+    args = parser.parse_args(argv)
+    records = (
+        [
+            telemetry
+            for entry in sorted(args.runs_dir.iterdir())
+            if args.runs_dir.is_dir() and entry.is_dir()
+            if (telemetry := collect_run(entry, oneharness_bin=args.oneharness_bin)) is not None
+            and (args.all or telemetry.state != "complete")
+        ]
+        if args.runs_dir.is_dir()
+        else []
+    )
+    print(
+        json.dumps(
+            {
+                "schema_version": TELEMETRY_SCHEMA_VERSION,
+                "runs": [record.record() for record in records],
+                "metrics": _metrics(records),
+            },
+            sort_keys=True,
+        )
+    )
+    return 0

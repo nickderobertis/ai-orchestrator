@@ -162,6 +162,11 @@ history-show *args:
 monitor *args:
     uv run orchestrator-monitor {{args}}
 
+# Emit one versioned JSON index joining run phase, execution, timing, lineage,
+# comparison, gate attestation, and current check blocker telemetry.
+telemetry *args:
+    @uv run orchestrator-telemetry {{args}}
+
 # Show running tasks joined with recent output, branch commits, and ledger rounds.
 # Pass N or --all to include recently finished tasks.
 # llmlint: ignore[tool_output_is_signal] the requested multi-task status report is this viewing command's product.

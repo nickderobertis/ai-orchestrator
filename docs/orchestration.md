@@ -130,6 +130,10 @@ just monitor --format jsonl       # one JSON record per line, no header
 just monitor --heartbeat 30 --poll-interval 5
 ```
 
+Unchanged polls back off exponentially to a bounded interval (30 seconds by
+default, configurable with `--max-poll-interval`). New observations reset the
+initial interval. Silence heartbeats remain independent of polling frequency.
+
 Without `RUN_ID` it picks the **newest active** run — anything that has not
 completed successfully, including one merely waiting on a human, since that is the
 most important state to be watching. If nothing is active it follows the newest
@@ -178,6 +182,15 @@ The monitor only ever reads: it writes nothing to the ledger or journal, takes n
 lock a writer needs, and treats every source as optional. A missing `gh`, an
 unfetched branch, or an absent history store degrades that source to silence
 instead of ending the stream.
+
+For automation, `just telemetry [--all]` emits one schema-versioned JSON run
+index. It joins phase, typed provider/failure identity, latest progress,
+branch/commit/checkpoint, independent agent/gate/publication-wait timing plus
+overlap-safe wall time, retry lineage, comparison base, reusable gate attestation,
+and the persisted last-completed-check/current-blocker rollup. Top-level metrics
+make retry reuse, recovered/abandoned branches, no-diff dispatches, and time from
+green gate to publication directly consumable. The default is active runs;
+`--all` includes settled runs.
 
 ## Human completion attestations
 

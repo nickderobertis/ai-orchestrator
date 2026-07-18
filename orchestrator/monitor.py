@@ -56,7 +56,7 @@ from typing import Any, Literal
 from . import gitops
 from .config import ConfigError
 from .coordination import advisory_lock, atomic_json
-from .detail_snapshot import SNAPSHOT_VERSION, CommitDetail, PrDetail
+from .detail_snapshot import SNAPSHOT_VERSION, CheckRollup, CommitDetail, PrDetail
 from .github import Check, CliGitHubBackend, GitHubBackend, GitHubError, PRStatus, PullRequest
 from .history import HistoryError, HistorySession, session_records, worker_sessions
 from .ids import DetailId, DetailIdError, GitId, GraphId, OneharnessId, PrId
@@ -88,6 +88,7 @@ HEADER = "Concise graph events; run just history-show <stream-id> for full detai
 DEFAULT_RUNS_DIR = Path("runs")
 DEFAULT_HEARTBEAT = 60.0
 DEFAULT_POLL_INTERVAL = 2.0
+DEFAULT_MAX_POLL_INTERVAL = 30.0
 
 # A summary is a *scan target*, not prose: it sits beside a typed id that already
 # leads to the full record, so it is capped hard enough to stay one terminal line
@@ -238,9 +239,17 @@ class DetailSnapshot:
 
     commits: dict[str, dict[str, DetailValue]] = field(default_factory=dict)
     prs: dict[str, dict[str, DetailValue]] = field(default_factory=dict)
+    check_rollup: CheckRollup = field(default_factory=CheckRollup)
 
     def to_record(self) -> dict[str, Any]:
-        return {"version": SNAPSHOT_VERSION, "commits": self.commits, "prs": self.prs}
+        record: dict[str, Any] = {
+            "version": SNAPSHOT_VERSION,
+            "commits": self.commits,
+            "prs": self.prs,
+        }
+        if rollup := self.check_rollup.to_record():
+            record["check_rollup"] = rollup
+        return record
 
 
 def _detail_map(
@@ -279,6 +288,7 @@ def load_snapshot(run_dir: Path) -> DetailSnapshot:
     return DetailSnapshot(
         commits=_detail_map(raw.get("commits"), CommitDetail.from_value),
         prs=_detail_map(raw.get("prs"), PrDetail.from_value),
+        check_rollup=CheckRollup.from_value(raw.get("check_rollup")) or CheckRollup(),
     )
 
 
@@ -821,6 +831,16 @@ def pr_events(
                 continue
             status = fallback
         current = _ordered_checks(status.checks)
+        completed = [check.name for check in current if check.settled and not check.red]
+        blocking = [
+            f"{check.name}: {check.state.lower()}"
+            for check in current
+            if check.required and not (check.settled and not check.red)
+        ]
+        snapshot.check_rollup = CheckRollup(
+            last_completed_check=completed[-1] if completed else "",
+            current_blocker=blocking[0] if blocking else "",
+        )
         signature = _pr_signature(
             status.state, status.merged, status.draft, status.merge_state_status
         )
@@ -1127,6 +1147,7 @@ def stream(
     once: bool = False,
     heartbeat: float = DEFAULT_HEARTBEAT,
     poll_interval: float = DEFAULT_POLL_INTERVAL,
+    max_poll_interval: float = DEFAULT_MAX_POLL_INTERVAL,
     sleep: Callable[[float], None] = time.sleep,
 ) -> int:
     """Replay what is known, then follow the run until it completes successfully.
@@ -1141,10 +1162,13 @@ def stream(
     """
     writer.header()
     last = monitor.clock()
+    delay = poll_interval
     while True:
-        for event in monitor.poll():
+        events = monitor.poll()
+        for event in events:
             writer.event(event)
             last = monitor.clock()
+        delay = poll_interval if events else min(max_poll_interval, delay * 2)
         state = monitor.state()
         if once:
             writer.heartbeat(
@@ -1160,7 +1184,7 @@ def stream(
         if now - last >= heartbeat:
             writer.heartbeat(Heartbeat(now, state.run_id, state.round, state.state, state.detail))
             last = now
-        sleep(poll_interval)
+        sleep(delay)
 
 
 def _positive(parser: argparse.ArgumentParser, name: str, value: float) -> float:
@@ -1197,10 +1221,20 @@ def main(argv: list[str] | None = None) -> int:
         metavar="SECONDS",
         help="seconds between source polls (default: 2)",
     )
+    parser.add_argument(
+        "--max-poll-interval",
+        type=float,
+        default=DEFAULT_MAX_POLL_INTERVAL,
+        metavar="SECONDS",
+        help="maximum seconds between unchanged source polls (default: 30)",
+    )
     parser.add_argument("--runs-dir", type=Path, default=DEFAULT_RUNS_DIR)
     args = parser.parse_args(argv)
     _positive(parser, "--heartbeat", args.heartbeat)
     _positive(parser, "--poll-interval", args.poll_interval)
+    _positive(parser, "--max-poll-interval", args.max_poll_interval)
+    if args.max_poll_interval < args.poll_interval:
+        parser.error("--max-poll-interval must be at least --poll-interval")
     try:
         run_id = resolve_run(args.runs_dir, args.run_id)
     except MonitorError as exc:
@@ -1216,6 +1250,7 @@ def main(argv: list[str] | None = None) -> int:
             once=args.once,
             heartbeat=args.heartbeat,
             poll_interval=args.poll_interval,
+            max_poll_interval=args.max_poll_interval,
         )
     except KeyboardInterrupt:
         # Ctrl-C is how a person ends a follow that is working as designed, so it is

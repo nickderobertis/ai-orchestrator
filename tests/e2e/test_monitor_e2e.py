@@ -309,7 +309,16 @@ def test_monitor_poll_deduplicates_checks_but_emits_an_optional_only_change(tmp_
         "PR #1 required check success ci",
         "PR #1 optional check pending lint",
     ]
+    assert monitor.snapshot.check_rollup.last_completed_check == "ci"
+    assert monitor.snapshot.check_rollup.current_blocker == ""
     assert monitor.poll() == []
+
+    github.checks[0] = Check("ci", "PENDING", True)
+    assert [event.summary for event in monitor.poll()] == ["PR #1 required check pending ci"]
+    assert monitor.snapshot.check_rollup.current_blocker == "ci: pending"
+    github.checks[0] = Check("ci", "SUCCESS", True)
+    assert [event.summary for event in monitor.poll()] == ["PR #1 required check success ci"]
+    assert monitor.snapshot.check_rollup.current_blocker == ""
 
     github.checks[1] = Check("lint", "FAILURE", False)
     assert [event.summary for event in monitor.poll()] == ["PR #1 optional check failure lint"]

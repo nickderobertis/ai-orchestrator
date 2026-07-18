@@ -176,6 +176,23 @@ def test_direct_merge_observed_after_a_later_poll() -> None:
     assert slept  # it looped (slept) before observing the merge
 
 
+def test_check_poll_backoff_is_bounded() -> None:
+    slept: list[float] = []
+    backend = DelayedDirectBackend()
+    backend.polls = -3
+    out = GitHubMergeStrategy(backend).publish_and_merge(
+        _ctx(
+            policy="direct",
+            timeout=1000.0,
+            poll_interval=2.0,
+            max_poll_interval=5.0,
+            sleep=slept.append,
+        )
+    )
+    assert out.outcome == "merged"
+    assert slept == [2.0, 4.0, 5.0, 5.0]
+
+
 def test_settled_green_checks_fail_when_auto_merge_never_merges() -> None:
     checks = (Check("ci", "SUCCESS", True),)
     backend = PolicyBackend(checks=checks, merge_on="never")
