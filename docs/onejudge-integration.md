@@ -42,12 +42,16 @@ loop's own concerns (persona defaults, session), never harness/model selection.
 ```
 config/onejudge.base.yaml   (shared: provider, agent preamble, defaults)
         ⊕
-personas/<name>.yaml        (delta: agent role + supervisor persona)
+personas/<name>.yaml or personas/<repo>/<name>.yaml
+                            (delta: agent role + supervisor persona)
         ⊕
 --task "<the subtask>"       (passed over the CLI, never merged into a file)
         ↓  orchestrator.config.build_effective_config
 effective onejudge config   →  onejudge run <cfg> --task -   →  JSON report
 ```
+
+Repo-specific personas are addressed by their slash-qualified catalog name, such
+as `crozier/crozier-corpus`; general cross-repo roles retain top-level names.
 
 `dispatch` writes the effective config to a temp file and runs
 `onejudge run <cfg> --task - --format json`, feeding the task on stdin so long,

@@ -28,6 +28,8 @@ executor does not infer this from task prose. Combining the declaration with
 time is spent. Omitting `expects_no_diff` preserves normal dispatch behavior.
 
 A lifecycle `steps` list is its own DAG. Agent steps require `persona` and `task`.
+Persona names may be top-level general roles (`engineer`) or slash-qualified
+repo-specific roles (`crozier/crozier-corpus`).
 Human steps require `kind: human` and `task`, and are referenced outside the node
 as `NODE_ID/STEP_ID`. Steps share one branch and run serially in topological order
 because concurrent writers cannot safely share a worktree. See

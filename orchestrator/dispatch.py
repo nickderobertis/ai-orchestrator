@@ -25,6 +25,7 @@ import yaml
 from . import BASE_CONFIG, PERSONA_DIR, REPO_ROOT
 from .config import ConfigError, build_effective_config, load_yaml
 from .labels import LABEL_ENV, LabelError, merge_labels
+from .personas import persona_path
 
 # onejudge's own exit codes (see docs/cli.md): 0 completed + boolean evals passed,
 # 1 hit the turn cap / a boolean eval failed, 2 bad config or usage.
@@ -260,13 +261,16 @@ def dispatch(
     oneharness configs are made resolvable from that cwd.
     """
     base = load_yaml(base_path)
-    persona_path = Path(persona_dir) / f"{persona}.yaml"
-    if not persona_path.is_file():
+    try:
+        resolved_persona = persona_path(persona, Path(persona_dir))
+    except ValueError as exc:
+        raise DispatchError(str(exc)) from exc
+    if not resolved_persona.is_file():
         raise DispatchError(
-            f"unknown persona {persona!r}: no {persona_path} "
+            f"unknown persona {persona!r}: no {resolved_persona} "
             f"(create one with 'just new-persona {persona}')"
         )
-    persona_data = load_yaml(persona_path)
+    persona_data = load_yaml(resolved_persona)
     config = build_effective_config(
         base,
         persona_data,

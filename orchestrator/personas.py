@@ -33,8 +33,40 @@ ALLOWED_USER = {"persona", "done_when", "max_turns"}
 
 
 def persona_files(persona_dir: Path) -> list[Path]:
-    """Return the persona files in `persona_dir` (``*.yaml``, excluding ``_*``)."""
-    return sorted(p for p in persona_dir.glob("*.yaml") if not p.name.startswith("_"))
+    """Return recursive personas whose resolved targets remain in the catalog."""
+    root = persona_dir.resolve()
+    files: list[Path] = []
+    for path in persona_dir.rglob("*.yaml"):
+        if any(part.startswith("_") for part in path.relative_to(persona_dir).parts):
+            continue
+        try:
+            path.resolve().relative_to(root)
+        except (OSError, RuntimeError, ValueError):
+            continue
+        files.append(path)
+    return sorted(files)
+
+
+def persona_path(name: str, persona_dir: Path = PERSONA_DIR) -> Path:
+    """Resolve a slash-qualified persona name safely beneath ``persona_dir``."""
+    parts = name.split("/")
+    if not name or any(not NAME_RE.fullmatch(part) for part in parts):
+        raise ValueError(
+            f"invalid persona name {name!r}: use slash-separated lowercase letters, "
+            "digits, and hyphens"
+        )
+    root = persona_dir.resolve()
+    target = (persona_dir.joinpath(*parts).with_suffix(".yaml")).resolve()
+    try:
+        target.relative_to(root)
+    except ValueError as exc:
+        raise ValueError(f"invalid persona name {name!r}: path escapes persona directory") from exc
+    return target
+
+
+def persona_name(path: Path, persona_dir: Path) -> str:
+    """Return the slash-qualified catalog name for a discovered persona path."""
+    return path.relative_to(persona_dir).with_suffix("").as_posix()
 
 
 def validate_persona(data: dict[str, Any]) -> list[str]:
@@ -99,7 +131,7 @@ def validate_all(persona_dir: Path, base_path: Path) -> dict[str, list[str]]:
         try:
             data = load_yaml(path)
         except ConfigError as exc:
-            results[path.stem] = [str(exc)]
+            results[persona_name(path, persona_dir)] = [str(exc)]
             continue
         errors = validate_persona(data)
         if not errors:
@@ -113,26 +145,23 @@ def validate_all(persona_dir: Path, base_path: Path) -> dict[str, list[str]]:
                 key = field.split(".")[1]
                 if not merged.get("user", {}).get(key):
                     errors.append(f"merged config is missing {field} (check the base config)")
-        results[path.stem] = errors
+        results[persona_name(path, persona_dir)] = errors
     return results
 
 
 def new_persona(name: str, *, persona_dir: Path = PERSONA_DIR, force: bool = False) -> Path:
-    """Scaffold ``personas/<name>.yaml`` from the template; return its path."""
-    if not NAME_RE.match(name):
-        raise ValueError(
-            f"invalid persona name {name!r}: use lowercase letters, digits, and hyphens"
-        )
-    target = persona_dir / f"{name}.yaml"
+    """Scaffold a slash-qualified persona from the template; return its path."""
+    target = persona_path(name, persona_dir)
     if target.exists() and not force:
         raise FileExistsError(f"{target} already exists (pass --force to overwrite)")
+    target.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(TEMPLATE, target)
     return target
 
 
 def main_new(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Scaffold a new persona from the template.")
-    parser.add_argument("name", help="persona name (lowercase, hyphens)")
+    parser.add_argument("name", help="persona name (slash-separated lowercase segments)")
     parser.add_argument("--force", action="store_true", help="overwrite an existing persona")
     parser.add_argument("--persona-dir", type=Path, default=PERSONA_DIR)
     args = parser.parse_args(argv)
