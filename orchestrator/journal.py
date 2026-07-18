@@ -81,6 +81,7 @@ EventKind = Literal[
     "pr-checks-observed",
     "pr-ready",
     "pr-merged",
+    "publication-finished",
 ]
 
 # Typed as the literal it enumerates, so iterating it yields `EventKind` and a

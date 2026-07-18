@@ -46,7 +46,7 @@ def _recorded_run(tmp_path: Path, *, state: str = "failed") -> Path:
     )
     node.append("pr-created", detail={"pr": "https://example.test/pull/1"})
     if state == "complete":
-        node.append("pr-merged", detail={"pr": "https://example.test/pull/1"})
+        node.append("publication-finished", detail={"pr": "https://example.test/pull/1"})
     journal.append("round-finished", detail={"state": state, "ok": state == "complete"})
     write_result(
         round_dir,

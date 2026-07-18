@@ -75,6 +75,15 @@ def main() -> int:
         sys.stderr.write("fake_backend: messages must be a list of objects\n")
         return 1
     task = _task_text(messages)
+    if "provider-errors" in task:
+        sys.stderr.write("fake_backend: provider error\n")
+        return 1
+    if "configuration-errors" in task:
+        sys.stderr.write("fake_backend: bad config\n")
+        return 1
+    if "unknown-errors" in task:
+        sys.stderr.write("fake_backend: unexpected runtime failure\n")
+        return 1
     drafting = "Write the final body, and nothing else, to this absolute path:" in task
     if drafting and "drafting-errors" in task:
         sys.stderr.write("fake_backend: forced drafting provider failure\n")

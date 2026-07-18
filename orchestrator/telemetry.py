@@ -183,15 +183,13 @@ def _phase(event: Event | None, state: str) -> str:
         "pr-created": "check-waiting",
         "pr-checks-observed": "check-waiting",
         "pr-merged": "published",
+        "publication-finished": "published",
         "human-waiting": "human-waiting",
         "node-started": "agent",
         "step-started": "agent",
     }.get(event.kind, state)
 
 
-# llmlint: ignore[changed_behavior_has_e2e] This pure projection is exhaustively table-tested;
-# lifecycle e2e separately produces every source outcome, while the real run-plan→telemetry
-# journey proves the serialized failure boundary without duplicating those expensive journeys.
 def _failure(item: GraphResultItem) -> Failure | None:
     outcome = str(item.get("outcome", ""))
     detail = str(item.get("detail") or item.get("error") or "")
@@ -205,6 +203,10 @@ def _failure(item: GraphResultItem) -> Failure | None:
         kind = "checks"
     elif "publication" in outcome or outcome in {"closed", "error"}:
         kind = "publication"
+    elif "unexpected runtime failure" in detail.lower():
+        kind = "unknown"
+    elif detail.lower().endswith("bad config"):
+        kind = "configuration"
     elif "provider" in detail.lower():
         kind = "provider"
     elif "config" in detail.lower():
@@ -236,7 +238,7 @@ def _publication_waits(events: list[Event]) -> list[float]:
         node = str(event.node or "")
         if event.kind == "verification-finished" and event.detail.get("ok") is True:
             green[node] = event.at
-        elif event.kind == "pr-merged" and node in green:
+        elif event.kind == "publication-finished" and node in green:
             waits.append(max(0.0, event.at - green.pop(node)))
     return waits
 
@@ -365,8 +367,6 @@ def collect_run(
     )
 
 
-# llmlint: ignore[changed_behavior_has_e2e] Lifecycle recovery/no-diff e2e owns production of
-# these typed ledger facts; this additive index aggregation is exhaustively covered as pure logic.
 def _metrics(runs: list[RunTelemetry]) -> MetricsRecord:
     dispositions = [
         node.retry_lineage.disposition

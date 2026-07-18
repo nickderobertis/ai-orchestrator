@@ -241,7 +241,12 @@ def test_github_merge_journals_the_publication_it_drove(tmp_path: Path) -> None:
 
     assert out.outcome == "merged"
     events = journal.events()
-    assert [e.kind for e in events] == ["pr-created", "pr-checks-observed", "pr-merged"]
+    assert [e.kind for e in events] == [
+        "pr-created",
+        "pr-checks-observed",
+        "pr-merged",
+        "publication-finished",
+    ]
     # Every transition is attributed to the node the merge ran for, though the
     # strategy never names one.
     assert {e.node for e in events} == {"api"}
@@ -266,6 +271,7 @@ def test_github_merge_journals_the_ready_transition_for_a_draft(tmp_path: Path) 
         "pr-ready",
         "pr-checks-observed",
         "pr-merged",
+        "publication-finished",
     ]
 
 
@@ -301,7 +307,7 @@ def test_local_merge_journals_verification_and_the_merge(tmp_path: Path, bare_or
     assert [e.kind for e in events] == [
         "verification-started",
         "verification-finished",
-        "pr-merged",
+        "publication-finished",
     ]
     assert events[0].detail == {"command": ["true"], "attempt": 1}
     assert events[1].detail == {"ok": True, "command": ["true"], "attempt": 1}

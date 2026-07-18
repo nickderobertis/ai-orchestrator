@@ -140,6 +140,11 @@ def _drive_github_merge(
                 "pr-merged",
                 {"repo": ctx.repo_slug, "pr": pr.url, "number": pr.number},
             )
+            _record(
+                ctx,
+                "publication-finished",
+                {"repo": ctx.repo_slug, "pr": pr.url, "branch": ctx.branch, "base": ctx.base},
+            )
             return "merged", f"{detail}; merged"
         if status.state == "CLOSED":
             return "closed", f"{detail}; PR was closed without merging"
@@ -156,6 +161,11 @@ def _drive_github_merge(
                     ctx,
                     "pr-merged",
                     {"repo": ctx.repo_slug, "pr": pr.url, "number": pr.number},
+                )
+                _record(
+                    ctx,
+                    "publication-finished",
+                    {"repo": ctx.repo_slug, "pr": pr.url, "branch": ctx.branch, "base": ctx.base},
                 )
                 return "merged", f"{detail}; merged"
             post_merge_blocking_settled = bool(post_merge.blocking) and all(
@@ -295,7 +305,11 @@ class LocalMergeStrategy:
         # above is synthesized so the result has a stable ref to name, and claiming
         # a PR was created for it would put a transition in the journal that never
         # happened.
-        _record(ctx, "pr-merged", {"pr": pr.url, "branch": ctx.branch, "base": ctx.base})
+        _record(
+            ctx,
+            "publication-finished",
+            {"pr": pr.url, "branch": ctx.branch, "base": ctx.base},
+        )
         return MergeOutcome(
             outcome="merged",
             detail=f"local direct-merge of {ctx.branch} into {ctx.base} after checks",

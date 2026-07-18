@@ -414,22 +414,6 @@ def test_real_failed_run_telemetry_keeps_wall_time_advancing(
     tmp_path: Path, command_base: Any, onejudge_bin: str
 ) -> None:
     runs_dir = tmp_path / "runs"
-    plan_path = tmp_path / "failed-plan.json"
-    plan_path.write_text(
-        json.dumps(
-            {
-                "tasks": [
-                    {
-                        "id": "fail",
-                        "persona": "engineer",
-                        "task": "should-fail: prove failed wall telemetry",
-                        "max_turns": 1,
-                    }
-                ]
-            }
-        ),
-        encoding="utf-8",
-    )
     common = (
         "--runs-dir",
         str(runs_dir),
@@ -440,18 +424,47 @@ def test_real_failed_run_telemetry_keeps_wall_time_advancing(
         "--format",
         "json",
     )
-    failed = _just("run-plan", str(plan_path), "--run", "failed-wall", *common)
-    assert failed.returncode == 1, failed.stderr
-    assert json.loads(failed.stdout)["state"] == "failed"
+
+    def run_failure(run_id: str, task: str) -> None:
+        plan_path = tmp_path / f"{run_id}.json"
+        plan_path.write_text(
+            json.dumps(
+                {
+                    "tasks": [
+                        {
+                            "id": "fail",
+                            "persona": "engineer",
+                            "task": task,
+                            "max_turns": 1,
+                        }
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+        failed = _just("run-plan", str(plan_path), "--run", run_id, *common)
+        assert failed.returncode == 1, failed.stderr
+        assert json.loads(failed.stdout)["state"] == "failed"
+
+    run_failure("failed-wall", "should-fail: prove failed wall telemetry")
+    run_failure("provider", "provider-errors: prove provider classification")
+    run_failure("configuration", "configuration-errors: prove configuration classification")
+    run_failure("unknown", "unknown-errors: prove unknown classification")
 
     first = _just("telemetry", "--runs-dir", str(runs_dir), "--all")
     assert first.returncode == 0, first.stderr
-    first_run = json.loads(first.stdout)["runs"][0]
+    first_runs = {run["run_id"]: run for run in json.loads(first.stdout)["runs"]}
+    first_run = first_runs["failed-wall"]
     assert first_run["failure"]["class"] == "agent"
+    assert first_runs["provider"]["failure"]["class"] == "provider"
+    assert first_runs["configuration"]["failure"]["class"] == "configuration"
+    assert first_runs["unknown"]["failure"]["class"] == "unknown"
     time.sleep(0.05)
     second = _just("telemetry", "--runs-dir", str(runs_dir), "--all")
     assert second.returncode == 0, second.stderr
-    second_run = json.loads(second.stdout)["runs"][0]
+    second_run = next(
+        run for run in json.loads(second.stdout)["runs"] if run["run_id"] == "failed-wall"
+    )
     assert second_run["state"] == "failed"
     assert second_run["timing"]["wall_seconds"] > first_run["timing"]["wall_seconds"]
 

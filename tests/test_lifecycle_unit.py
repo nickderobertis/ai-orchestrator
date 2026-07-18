@@ -1063,7 +1063,7 @@ def test_run_repo_task_journals_the_workstream_and_labels_each_dispatch(
     assert ("step-settled", "check") in located
     assert ("verification-started", None) in located
     assert ("verification-finished", None) in located
-    assert ("pr-merged", None) in located
+    assert ("publication-finished", None) in located
     # Every transition is attributed to the node the lifecycle was scoped to,
     # though nothing inside the lifecycle ever names it.
     assert {(e.node, e.run_id, e.round) for e in events} == {("api", "run-lc", 4)}
