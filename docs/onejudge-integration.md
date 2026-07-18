@@ -197,6 +197,6 @@ so any command can stand in for the harness. The e2e suite points it at
 **real** onejudge CLI and loop across a real subprocess boundary, faking only the
 paid model/harness. This is the one sanctioned mock (a genuinely external service),
 and it is confined to the provider seam; the merge, SDK dispatch, CLI, and report
-validation all run for real. That backend implements v0.3.2's protocol v4 unified
+validation all run for real. That backend implements onejudge v0.3.2's protocol v4 unified
 `supervisor` operation; the e2e fixture rejects any real CLI whose version is not
 the adopted `config/onejudge.version` value.
