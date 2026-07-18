@@ -53,7 +53,8 @@ decision over the live channel.
 
 In this repo, an **agent** (or **subagent**) is a **dispatched onejudge process** —
 a coding agent run under a simulated-user supervisor via `just dispatch` /
-`just repo-task` / `just run-plan`. This is the default sense of the word
+`just repo-task`, or as a worker launched by `just orchestrate`. This is the
+default sense of the word
 everywhere below and in requests to you. When a task says "use an agent," "have an
 agent do X," "dispatch an agent," or "spin up a subagent" — including for research
 or investigation, not just code changes — dispatch onejudge. Do **not** reach for
@@ -204,9 +205,13 @@ Use the `just` recipes (`just --list` is the index); do not hand-roll
 equivalents. `just bootstrap` sets up from a clean clone (installs the toolchain,
 activates the git hooks); `just check` is the deterministic tier, while `just gate`
 is the complete pre-push bar: `check` plus the llmlint diff tier. `just run-plan`
-is the canonical recorded mixed-graph executor; `repo-plan` exists only for
-compatibility. Human completion is never inferred and enters the graph only as an
-explicit `next-round` attestation. Keep operational syntax and result contracts in
+is the recorded mixed-graph executor driven internally by the dedicated
+orchestrator onejudge process. The planner launches multi-node work with `just
+orchestrate <plan.json>` and supervises its surfaced round boundaries over the
+[live channel](docs/orchestration.md#the-plannerorchestrator-channel); it does not
+invoke `run-plan` directly. `repo-plan` exists only for compatibility. Human
+completion is never inferred and enters the graph only as an explicit `next-round`
+attestation. Keep operational syntax and result contracts in
 `docs/orchestration.md` and lifecycle policy in `docs/repo-lifecycle.md` rather
 than duplicating command help here.
 
@@ -222,9 +227,9 @@ back to the deterministic body and must never block publication.
 ## Dogfooding rule
 
 Use the orchestrator harness for **all tasks of sufficient complexity**, in any
-repo or project. Decompose multi-node work into a tracked plan and launch it with
-`just orchestrate <plan.json>`; use `just repo-task <repo> <persona> "<task>"` for
-a single lifecycle node. Lifecycle
+repo or project. Use `just dispatch` for one direct-agent node, `just repo-task`
+for one lifecycle node, and `just orchestrate <plan.json>` by default for every
+multi-node tracked graph. Lifecycle
 nodes clone the target, work in an isolated worktree, verify with its gate, and
 publish. Dispatch smaller project work with a single task rather than doing it
 directly; only the slight-tweak exception above applies. This repo is one
@@ -234,8 +239,10 @@ local-mode case of the same rule.
 canonical checkout: concurrent orchestrators use it and direct edits race them.
 Every change — including plans, personas, docs, and `AGENTS.md` — must be dispatched
 into an isolated worktree cut from the registered `local/ai-orchestrator-isolated`
-safety clone via `--execution-checkout`, with the canonical checkout retained as
-the positional publication repository and only fast-forwarded after integration.
+safety clone, with the canonical checkout retained as the positional publication
+repository and only fast-forwarded after integration. Pass `--execution-checkout`
+for `just repo-task`; in a plan launched by `just orchestrate`, set
+`execution_checkout` on each lifecycle node instead of passing a top-level flag.
 This does not restrict the narrow direct git operations above on finished
 dispatched work. Confirm `git config core.bare` is `false` before trusting a
 self-dispatch result.
