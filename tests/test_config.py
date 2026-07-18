@@ -35,6 +35,12 @@ def test_instructions_are_appended_not_replaced() -> None:
     assert "agent" not in cfg
 
 
+def test_run_only_instructions_are_appended_once() -> None:
+    cfg = build_effective_config(_base(), _persona(), extra_instructions="CI IS AUTHORITATIVE")
+    assert cfg["system_prompt"] == ("SHARED PREAMBLE\n\nROLE INSTRUCTIONS\n\nCI IS AUTHORITATIVE")
+    assert cfg["system_prompt"].count("CI IS AUTHORITATIVE") == 1
+
+
 def test_base_instructions_require_incremental_commits() -> None:
     cfg = load_yaml(REPO_ROOT / "config" / "onejudge.base.yaml")
     assert "Commit as you go" in cfg["agent"]["instructions"]

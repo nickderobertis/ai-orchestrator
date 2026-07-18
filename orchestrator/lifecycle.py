@@ -44,6 +44,7 @@ from .merge import (
     MergeContext,
     MergePolicy,
     MergeStrategy,
+    assess_blocking_checks,
 )
 from .plan import NODE_KINDS, NodeRun, schedule_dag
 from .provenance import (
@@ -119,6 +120,13 @@ _SUCCESS_OUTCOMES = frozenset({"merged", "pr-open"})
 # recorded round resumes after a human attestation.
 _WAITING_OUTCOME = "waiting-human"
 
+CI_ITERATION_INSTRUCTIONS = """CI verification mode:
+CI is the authoritative check for this task. Push your workstream branch to origin and find and
+watch the CI run for that pushed head. If any required (blocking) check fails, read its logs, fix
+the cause, commit and push again, and repeat until every required check is green. A passing local
+gate alone is not done."""
+_CLI_GITHUB_BACKEND_TYPE = CliGitHubBackend
+
 
 class DispatchFn(Protocol):
     """Structural boundary implemented by the real and deterministic dispatchers."""
@@ -135,6 +143,7 @@ class DispatchFn(Protocol):
         session: str | None = None,
         max_turns: int | None = None,
         done_when: str | None = None,
+        extra_instructions: str | None = None,
         labels: Mapping[str, str] | None = None,
         env: dict[str, str] | None = None,
     ) -> Report: ...
@@ -874,6 +883,7 @@ def _run_steps(
     persona_dir: str | Path,
     journal: NodeSink,
     dispatch_env: dict[str, str],
+    extra_instructions: str | None = None,
     completed: frozenset[str] = frozenset(),
 ) -> StepRun:
     """Run a step sub-DAG in the shared worktree, committing per step.
@@ -915,6 +925,7 @@ def _run_steps(
             session=f"{branch}:{sid}",
             max_turns=step.max_turns,
             done_when=step.done_when,
+            extra_instructions=extra_instructions,
             labels=log.labels,
             env=dispatch_env,
         )
@@ -1188,6 +1199,7 @@ def run_repo_task(
     url: str | None = None,
     verify_cmd: list[str] | None = None,
     skip_verify: bool = False,
+    verify_via_ci: bool = False,
     merge_policy: MergePolicy | None = None,
     merge_method: str = "squash",
     oneharness_mode: str | None = "bypass",
@@ -1283,6 +1295,15 @@ def run_repo_task(
         decision = _effective_publication(
             effective_type, registered_workflow, workflow, merge_policy
         )
+        ci_backend = github or (CliGitHubBackend() if verify_via_ci else None)
+        if verify_via_ci and (
+            decision.workflow != "remote"
+            or (ref.local and isinstance(ci_backend, _CLI_GITHUB_BACKEND_TYPE))
+        ):
+            raise ConfigError(
+                "--verify-via-ci requires a remote GitHub/PR workflow with a GitHub origin; "
+                "register or migrate this repository to a remote workflow before dispatch"
+            )
         result.execution_checkout = str(selection.execution_checkout)
         result.publication_checkout = str(selection.publication_checkout)
         result.publication_identity = selection.publication_identity
@@ -1397,6 +1418,7 @@ def run_repo_task(
             persona_dir=persona_dir,
             journal=log,
             dispatch_env=cache_env,
+            extra_instructions=CI_ITERATION_INSTRUCTIONS if verify_via_ci else None,
             completed=frozenset(resume.completed_steps) if resume else frozenset(),
         )
         result.steps = step_run.results
@@ -1464,7 +1486,7 @@ def run_repo_task(
             )
             return result
 
-        if not skip_verify:
+        if not skip_verify and not verify_via_ci:
             cmd = verify_cmd or detect_gate(worktree)
             if cmd is not None:
                 verify = _verify_gate(
@@ -1532,6 +1554,47 @@ def run_repo_task(
             )
 
         gitops.push(worktree, branch)
+        preverified_pr: PullRequest | None = None
+        if verify_via_ci:
+            backend = cast(GitHubBackend, ci_backend)
+            preverified_pr = backend.create_pr(
+                ref.slug,
+                head=branch,
+                base=pr_base,
+                title=title or _default_title(worktree, remote_base, lead.task),
+                body=pr_body + _stack_body(applicable_stack, result.synthetic_stack_base),
+            )
+            log.append(
+                "pr-created",
+                detail={
+                    "repo": ref.slug,
+                    "pr": preverified_pr.url,
+                    "number": preverified_pr.number,
+                    "base": pr_base,
+                    "draft": False,
+                },
+            )
+            status = backend.status(preverified_pr)
+            assessment = assess_blocking_checks(status)
+            log.append(
+                "pr-checks-observed",
+                detail={
+                    "repo": ref.slug,
+                    "pr": preverified_pr.url,
+                    "state": status.state,
+                    "merged": status.merged,
+                    "merge_state_status": status.merge_state_status,
+                    "blocking": [
+                        {"name": name, "state": state} for name, state in assessment.states
+                    ],
+                },
+            )
+            if not assessment.green:
+                result.pr = preverified_pr
+                result.outcome = "not-completed"
+                qualifier = "settled but not green" if assessment.settled else "not settled"
+                result.detail = f"authoritative CI {qualifier}; {assessment.detail}"
+                return result
         ctx = MergeContext(
             repo_slug=ref.slug,
             clone_dir=clone,
@@ -1554,6 +1617,7 @@ def run_repo_task(
             },
             publication_attempts=publication_attempts,
             journal=log,
+            preverified_pr=preverified_pr,
         )
         merge_outcome = strategy.publish_and_merge(ctx)
         if merge_outcome.outcome == "merged" and pr_base == root_base:
@@ -1588,6 +1652,7 @@ class RepoPlanNode:
     title: str | None = None
     verify_cmd: list[str] | None = None
     skip_verify: bool = False
+    verify_via_ci: bool | None = None
     merge_policy: MergePolicy | None = None
     workflow: Workflow | None = None
     repo_type: RepositoryType | None = None
@@ -1752,6 +1817,9 @@ def parse_repo_node(nid: str, t: dict[str, Any]) -> RepoPlanNode:
         not isinstance(raw_execution, str) or not raw_execution.strip()
     ):
         raise PlanError(f"task {nid!r} 'execution_checkout' must be a non-empty path")
+    raw_verify_via_ci = t.get("verify_via_ci")
+    if raw_verify_via_ci is not None and not isinstance(raw_verify_via_ci, bool):
+        raise PlanError(f"task {nid!r} 'verify_via_ci' must be a boolean")
     resume = _parse_resume(nid, t.get("resume"), node_steps)
     if resume is not None:
         if resume.mode == "pause" and (
@@ -1787,6 +1855,7 @@ def parse_repo_node(nid: str, t: dict[str, Any]) -> RepoPlanNode:
         title=raw_title,
         verify_cmd=t.get("verify_cmd"),
         skip_verify=bool(t.get("skip_verify", False)),
+        verify_via_ci=raw_verify_via_ci,
         merge_policy=merge_policy,
         workflow=workflow,
         repo_type=repo_type,
@@ -2111,6 +2180,7 @@ def make_repo_runner(
     merge_method: str,
     oneharness_mode: str | None,
     skip_verify: bool,
+    verify_via_ci: bool = False,
     poll_interval: float,
     timeout: float,
     publication_attempts: int = 3,
@@ -2134,6 +2204,7 @@ def make_repo_runner(
             title=node.title,
             verify_cmd=node.verify_cmd,
             skip_verify=node.skip_verify or skip_verify,
+            verify_via_ci=(node.verify_via_ci if node.verify_via_ci is not None else verify_via_ci),
             merge_policy=(node.merge_policy if node.merge_policy is not None else merge_policy),
             merge_method=merge_method,
             oneharness_mode=oneharness_mode,
@@ -2189,6 +2260,11 @@ def add_lifecycle_args(parser: argparse.ArgumentParser) -> None:
         "no-approval mode; the container is the sandbox)",
     )
     parser.add_argument("--skip-verify", action="store_true", help="skip the local gate")
+    parser.add_argument(
+        "--verify-via-ci",
+        action="store_true",
+        help="make required CI checks on the pushed branch authoritative",
+    )
     parser.add_argument("--poll-interval", type=float, default=15.0)
     parser.add_argument("--timeout", type=float, default=3600.0)
     parser.add_argument(
@@ -2333,6 +2409,7 @@ def main_task(argv: list[str] | None = None) -> int:
         repo_type=args.repo_type,
         verify_cmd=None,
         skip_verify=args.skip_verify,
+        verify_via_ci=args.verify_via_ci,
         merge_policy=args.merge_policy,
         merge_method=args.merge_method,
         oneharness_mode=args.oneharness_mode,
@@ -2394,6 +2471,7 @@ def main_plan(argv: list[str] | None = None) -> int:
         merge_method=args.merge_method,
         oneharness_mode=args.oneharness_mode,
         skip_verify=args.skip_verify,
+        verify_via_ci=args.verify_via_ci,
         poll_interval=args.poll_interval,
         timeout=args.timeout,
         publication_attempts=args.publication_attempts,

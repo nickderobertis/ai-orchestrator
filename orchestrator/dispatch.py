@@ -244,6 +244,7 @@ def dispatch(
     project_dir: str | None = None,
     max_turns: int | None = None,
     done_when: str | None = None,
+    extra_instructions: str | None = None,
     cwd: str | Path = REPO_ROOT,
     onejudge_bin: str = "onejudge",
     provider: str | None = None,
@@ -277,6 +278,7 @@ def dispatch(
         session=session if session is not None else f"dispatch-{persona}",
         max_turns=max_turns,
         done_when=done_when,
+        extra_instructions=extra_instructions,
     )
 
     run_cwd, context_env = _agent_run_context(
