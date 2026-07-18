@@ -90,11 +90,13 @@ def main() -> int:
                 output = task.split(
                     "Write the final body, and nothing else, to this absolute path:\n", 1
                 )[1].splitlines()[0]
-                Path(output).write_text(
-                    "## What\nAdds the completed behavior from the branch diff.\n\n"
-                    "## Why\nMakes the requested capability available.\n",
-                    encoding="utf-8",
+                drafted = (
+                    "nonempty malformed drafting output\n"
+                    if "drafting-invalid" in task
+                    else "## What\nAdds the completed behavior from the branch diff.\n\n"
+                    "## Why\nMakes the requested capability available.\n"
                 )
+                Path(output).write_text(drafted, encoding="utf-8")
             if "capture-cache-env" in task:
                 (Path.cwd() / "CACHE_ENV.txt").write_text(
                     os.environ["ORCHESTRATOR_CACHE_DIR"], encoding="utf-8"
