@@ -164,9 +164,11 @@ flat; repo-specific personas use slash-qualified names and subdirectories
 
 ## The two sides of the conversation
 
-This repository adopts exactly **onejudge 0.3.0**; `config/onejudge.version` is
-the durable version declaration, and session setup upgrades any other resolved
-version and verifies both archive and crates.io install paths. onejudge drives a
+This repository adopts exactly **onejudge 0.3.2**; `config/onejudge.version` is
+the durable version declaration, and session setup installs the pinned PyPI
+`onejudge` distribution and verifies both its `onejudge_sdk` import and matching
+CLI wheel. Dispatch calls the typed Python SDK, which drives and validates the
+real CLI. onejudge drives a
 two-party conversation, and harness/model selection for each
 side lives in oneharness config, not onejudge:
 

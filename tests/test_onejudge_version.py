@@ -1,0 +1,47 @@
+"""Drift gate for human-readable references to the adopted onejudge version."""
+
+from __future__ import annotations
+
+import re
+from pathlib import Path
+
+import pytest
+
+from orchestrator import REPO_ROOT
+
+# DRIFT-GATE: config/onejudge.version is the single source of truth. Keep this
+# explicit list aligned with the human-readable files that intentionally state
+# the adopted onejudge version.
+ONEJUDGE_VERSION_REFERENCE_COUNTS = {
+    Path("AGENTS.md"): 1,
+    Path("README.md"): 2,
+    Path("config/onejudge.base.yaml"): 1,
+    Path("docs/onejudge-integration.md"): 8,
+    Path("tests/e2e/fake_backend.py"): 1,
+}
+ONEJUDGE_VERSION_REFERENCE = re.compile(
+    r"(?:\bonejudge(?:-cli| SDK/CLI)?(?:'s)?(?: version)?[\s`*(=]+|/onejudge/(?:blob/)?)"
+    r"v?(?P<version>\d+\.\d+\.\d+)",
+    re.IGNORECASE,
+)
+
+
+@pytest.mark.parametrize(
+    ("relative_path", "expected_count"), ONEJUDGE_VERSION_REFERENCE_COUNTS.items()
+)
+def test_onejudge_version_references_match_single_source(
+    relative_path: Path, expected_count: int, adopted_onejudge_version: str
+) -> None:
+    """Reject stale onejudge literals in every file covered by this drift gate."""
+    text = (REPO_ROOT / relative_path).read_text(encoding="utf-8")
+    matches = list(ONEJUDGE_VERSION_REFERENCE.finditer(text))
+    referenced_versions = {match.group("version") for match in matches}
+
+    assert len(matches) == expected_count, (
+        f"drift gate parsed {len(matches)} of {expected_count} intended onejudge version "
+        f"references in {relative_path}"
+    )
+    assert referenced_versions == {adopted_onejudge_version}, (
+        f"{relative_path} references onejudge versions {sorted(referenced_versions)}; "
+        f"expected only config/onejudge.version ({adopted_onejudge_version})"
+    )

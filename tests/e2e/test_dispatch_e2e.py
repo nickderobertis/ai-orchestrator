@@ -1,8 +1,8 @@
-"""E2E: drive the real onejudge CLI through `dispatch`, faking only the model.
+"""E2E: drive the real onejudge CLI through the SDK, faking only the model.
 
 These run the actual `onejudge` binary as a subprocess against a real persona,
 with onejudge's `command` provider pointed at tests/e2e/fake_backend.py. Nothing
-in our layer (merge, dispatch, report parsing) is mocked.
+in our layer (merge, SDK dispatch, report validation) is mocked.
 """
 
 from __future__ import annotations
@@ -13,10 +13,12 @@ import subprocess
 import sys
 from pathlib import Path
 
+import onejudge_sdk
 import pytest
 import yaml
 
 from orchestrator import PERSONA_DIR, REPO_ROOT
+from orchestrator.config import build_effective_config, load_yaml
 from orchestrator.dispatch import DispatchError, dispatch, main, run_onejudge
 
 FAKE_BACKEND = REPO_ROOT / "tests" / "e2e" / "fake_backend.py"
@@ -99,7 +101,7 @@ def test_new_persona_cli_rejects_unsafe_names(tmp_path, name) -> None:
     assert not persona_dir.exists()
 
 
-def test_real_onejudge_cli_matches_adopted_contract(
+def test_real_onejudge_sdk_and_cli_match_adopted_contract(
     onejudge_bin: str, adopted_onejudge_version: str
 ) -> None:
     version = subprocess.run(
@@ -110,6 +112,7 @@ def test_real_onejudge_cli_matches_adopted_contract(
         [onejudge_bin, "run", "--help"], text=True, capture_output=True, check=True
     )
 
+    assert onejudge_sdk.__version__ == adopted_onejudge_version
     assert version.stdout.strip() == f"onejudge {adopted_onejudge_version}"
     assert "system_prompt:" in schema.stdout
     assert "assessment:" in schema.stdout
@@ -246,6 +249,23 @@ def test_dispatch_hits_turn_cap_when_never_done(command_base, onejudge_bin) -> N
     )
     assert not report.completed
     assert report.exit_code == 1
+    assert report.verdicts[0]["verdict"]["value"] is False
+
+
+def test_run_onejudge_returns_incomplete_report_for_exit_one(command_base, onejudge_bin) -> None:
+    config = build_effective_config(
+        load_yaml(command_base(max_turns=1)),
+        load_yaml(PERSONA_DIR / "test-engineer.yaml"),
+    )
+    report = run_onejudge(
+        config,
+        "should-fail: this subtask never satisfies the supervisor.",
+        onejudge_bin=onejudge_bin,
+    )
+
+    assert report.exit_code == 1
+    assert report.completed is False
+    assert report.assistant_turns == 1
     assert report.verdicts[0]["verdict"]["value"] is False
 
 
@@ -423,5 +443,6 @@ def test_run_onejudge_config_error_raises(onejudge_bin) -> None:
         "user": {"persona": "p", "done_when": "d", "max_turns": 2},
         "unknown_field": 123,  # onejudge validates deny_unknown_fields → exit 2
     }
-    with pytest.raises(DispatchError, match="exit 2"):
+    with pytest.raises(DispatchError, match="exit 2") as raised:
         run_onejudge(bad, "task", onejudge_bin=onejudge_bin)
+    assert "unknown_field" in str(raised.value)

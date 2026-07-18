@@ -14,7 +14,7 @@ the config, personas, and deterministic scripts to do the mechanical parts.
 ## Quick start
 
 ```sh
-just bootstrap          # install adopted onejudge v0.3.0 + sync the Python env
+just bootstrap          # install adopted onejudge SDK/CLI v0.3.2 + sync the Python env
 just check              # deterministic gate (format, lint, types, personas, tests)
 just gate               # complete pre-push gate, including llmlint
 
@@ -48,7 +48,7 @@ just migrate-repo-type local/ai-orchestrator --repo-type single-owner
 | --- | --- |
 | [`AGENTS.md`](AGENTS.md) | The orchestrator's durable instructions: decompose → schedule → dispatch, and the granularity judgment. |
 | `config/onejudge.base.yaml` | The one base config: settings common to every subtask. |
-| `config/onejudge.version` | The exact supported onejudge CLI version (`0.3.0`). |
+| `config/onejudge.version` | The exact supported onejudge SDK/CLI v0.3.2. |
 | `personas/` | Per-persona onejudge deltas (roles). See [`personas/README.md`](personas/README.md). |
 | `oneharness.toml` / `oneharness.judge.toml` | The two conversation sides (agent / judge) — harness + model selection. |
 | `orchestrator/` | The mechanics: base⊕persona merge, tracked mixed-graph scheduling, lifecycle publication, and run ledger. |

@@ -4,11 +4,9 @@
 # (`just session-setup` / `just bootstrap`).
 #
 # What it ensures:
-#   1. The exact `onejudge` version adopted in `config/onejudge.version` is
-#      installed — the offline gate drives it as a subprocess. Uses that release's
-#      prebuilt install.sh where an archive exists (x86_64 Linux, macOS); otherwise
-#      builds the same version from crates.io (`cargo install`), which is the path
-#      on Linux aarch64. Every path verifies the resolved binary before continuing.
+#   1. The exact `onejudge` SDK version adopted in `config/onejudge.version` is
+#      installed from PyPI. Its dependency supplies the matching `onejudge-cli`
+#      wheel, and setup verifies both the Python import and resolved binary.
 #   2. The exact `oneharness` version adopted in `config/oneharness.version` is
 #      installed via the PyPI `oneharness-cli` manylinux wheel and verified — the
 #      live dispatch path, `onejudge init`, and timeout e2e gate need it. The wheel
@@ -35,13 +33,11 @@ ADOPTED_ONEJUDGE_VERSION="$(tr -d '[:space:]' <"$ONEJUDGE_VERSION_FILE")"
 readonly ADOPTED_ONEJUDGE_VERSION
 ADOPTED_ONEHARNESS_VERSION="$(tr -d '[:space:]' <"$ONEHARNESS_VERSION_FILE")"
 readonly ADOPTED_ONEHARNESS_VERSION
-readonly ONEJUDGE_RELEASE="v$ADOPTED_ONEJUDGE_VERSION"
-readonly ONEJUDGE_INSTALL_SCRIPT="https://raw.githubusercontent.com/nickderobertis/onejudge/$ONEJUDGE_RELEASE/install.sh"
-readonly LOCAL_ROOT="$HOME/.local"
 readonly BIN_DIR="$HOME/.local/bin"
 readonly CARGO_BIN="$HOME/.cargo/bin"
 readonly NODE_BIN="$HOME/.local/node/bin"   # npm global prefix (codex lands here)
-export PATH="$BIN_DIR:$CARGO_BIN:$NODE_BIN:$PATH"
+readonly PROJECT_VENV_BIN="$REPO_ROOT/.venv/bin"
+export PATH="$PROJECT_VENV_BIN:$BIN_DIR:$CARGO_BIN:$NODE_BIN:$PATH"
 
 log() { printf 'session-setup: %s\n' "$*" >&2; }
 
@@ -74,39 +70,25 @@ install_onejudge() {
   if verify_onejudge >/dev/null 2>&1; then
     return 0
   fi
-  log "installing onejudge $ADOPTED_ONEJUDGE_VERSION (current: $current)"
-  # Prefer the prebuilt archive; fall back to building from source (e.g. aarch64
-  # Linux, which has no prebuilt onejudge archive).
-  if curl -fsSL "$ONEJUDGE_INSTALL_SCRIPT" \
-    | ONEJUDGE_INSTALL_DIR="$BIN_DIR" ONEJUDGE_VERSION="$ONEJUDGE_RELEASE" bash >&2; then
+  if ! command -v uv >/dev/null 2>&1; then
+    log "cannot install required onejudge $ADOPTED_ONEJUDGE_VERSION: uv is not installed"
+    return 1
+  fi
+  log "installing onejudge SDK $ADOPTED_ONEJUDGE_VERSION from PyPI (current CLI: $current)"
+  if uv sync --project "$REPO_ROOT" >&2; then
     hash -r
     if verify_onejudge; then
       return 0
     fi
-    log "the pinned release installer did not produce the required binary; trying crates.io"
   else
-    log "the pinned release archive is unavailable for this platform; trying crates.io"
+    log "onejudge $ADOPTED_ONEJUDGE_VERSION PyPI install failed"
   fi
-  if command -v cargo >/dev/null 2>&1; then
-    log "building onejudge $ADOPTED_ONEJUDGE_VERSION from crates.io (this can take a few minutes)"
-    if cargo install onejudge --version "$ADOPTED_ONEJUDGE_VERSION" --features cli --locked \
-      --force --root "$LOCAL_ROOT" >&2; then
-      hash -r
-      if verify_onejudge; then
-        return 0
-      fi
-    else
-      log "onejudge $ADOPTED_ONEJUDGE_VERSION source build failed"
-    fi
-  else
-    log "cannot build onejudge $ADOPTED_ONEJUDGE_VERSION: cargo is not installed"
-  fi
-  log "required onejudge $ADOPTED_ONEJUDGE_VERSION is unavailable after pinned release and crates.io install attempts"
+  log "required onejudge SDK and CLI $ADOPTED_ONEJUDGE_VERSION are unavailable after pinned PyPI install"
   return 1
 }
 
 verify_onejudge() {
-  local binary actual expected
+  local binary actual expected sdk_actual python_bin
   expected="onejudge $ADOPTED_ONEJUDGE_VERSION"
   if ! binary="$(command -v onejudge 2>/dev/null)"; then
     log "onejudge verification failed: expected '$expected', but no binary is on PATH"
@@ -118,6 +100,19 @@ verify_onejudge() {
   fi
   if [[ $actual != "$expected" ]]; then
     log "onejudge verification failed: expected '$expected', got '$actual' from $binary"
+    return 1
+  fi
+  python_bin="$PROJECT_VENV_BIN/python"
+  if [ ! -x "$python_bin" ]; then
+    log "onejudge SDK verification failed: $python_bin is unavailable"
+    return 1
+  fi
+  if ! sdk_actual="$("$python_bin" -c 'import onejudge_sdk; print(onejudge_sdk.__version__)' 2>&1)"; then
+    log "onejudge SDK verification failed: onejudge_sdk could not be imported by $python_bin"
+    return 1
+  fi
+  if [[ $sdk_actual != "$ADOPTED_ONEJUDGE_VERSION" ]]; then
+    log "onejudge SDK verification failed: expected '$ADOPTED_ONEJUDGE_VERSION', got '$sdk_actual'"
     return 1
   fi
   return 0

@@ -3,13 +3,12 @@
 How this repo calls [onejudge](https://github.com/nickderobertis/onejudge) and how
 the two conversation sides are wired.
 
-This repository adopts exactly **onejudge 0.3.0**, declared once in
-`config/onejudge.version`. `just bootstrap` compares the resolved CLI's exact
-`onejudge --version` output before doing any install. A compliant binary is left
-alone; a missing or different version is replaced using v0.3.0's tagged installer
-and `ONEJUDGE_VERSION=v0.3.0`, with an exact `cargo install --version 0.3.0`
-fallback for platforms without an archive. Both paths verify the binary they
-leave on `PATH`; setup exits non-zero if neither produces v0.3.0.
+This repository adopts exactly **onejudge 0.3.2**, declared once in
+`config/onejudge.version` and pinned as the PyPI distribution `onejudge`. That
+distribution exposes the Python SDK as `onejudge_sdk` and installs the matching
+`onejudge-cli==0.3.2` wheel. `just bootstrap` verifies both the SDK import and the
+resolved CLI's exact `onejudge --version` output; setup exits non-zero unless both
+report onejudge 0.3.2.
 
 ## The layering
 
@@ -66,19 +65,20 @@ config/onejudge.base.yaml   (shared: provider, agent preamble, defaults)
 personas/<name>.yaml or personas/<repo>/<name>.yaml
                             (delta: agent role + supervisor persona)
         ⊕
---task "<the subtask>"       (passed over the CLI, never merged into a file)
+task "<the subtask>"         (passed to the SDK, never merged into a file)
         ↓  orchestrator.config.build_effective_config
-effective onejudge config   →  onejudge run <cfg> --task -   →  JSON report
+effective config object     →  onejudge_sdk.OneJudge.run   →  validated RunResult
 ```
 
 Repo-specific personas are addressed by their slash-qualified catalog name, such
 as `crozier/crozier-corpus`; general cross-repo roles retain top-level names.
 
-`dispatch` writes the effective config to a temp file and runs
-`onejudge run <cfg> --task - --format json`, feeding the task on stdin so long,
-multi-line tasks need no shell quoting. The report is parsed back into a `Report`
-(completed? / verdicts / usage). Exit codes mirror onejudge: `0` completed, `1`
-hit the turn cap, `2` bad config (raised as a `DispatchError`). onejudge v0.3.0
+`dispatch` passes the effective config object and task to
+`onejudge_sdk.OneJudge.run`. The SDK owns the temporary config, stdin task
+transport, CLI invocation, and report-contract validation; the orchestrator maps
+its typed `RunResult` into the existing `Report`. Exit codes mirror onejudge: `0`
+completed, `1` incomplete, and `2` bad config or provider/runtime failure (raised
+as a `DispatchError` with onejudge's stderr). onejudge v0.3.2
 emits report schema v4, including the unified supervisor's completion reason and
 the optional final `assessment` this repository uses to surface follow-up work.
 
@@ -100,12 +100,11 @@ both add an `IS_SANDBOX` env so claude-code runs under root. init's starter
 `onejudge.yaml` is not kept — `config/onejudge.base.yaml` supersedes it as the base
 this repo merges personas onto.
 
-The committed base and adapter follow the v0.3.0 schema: persona-authored
+The committed base and adapter follow the onejudge v0.3.2 schema: persona-authored
 `agent.instructions` is internal ai-orchestrator vocabulary and is translated to
 onejudge's `system_prompt`; no obsolete onejudge `agent` block reaches the CLI.
-The wrapper's `run <config> --task - --format json` arguments remain valid in
-v0.3.0. The real-CLI e2e suite checks these schema and CLI surfaces before it
-drives dispatch.
+The real-CLI e2e suite checks these schema and CLI surfaces before it drives the
+same SDK-to-CLI path used in production dispatch.
 
 **Getting the adopted oneharness on this box.** The prebuilt oneharness
 release binary needs a newer glibc than the host provides, and the crates.io build
@@ -213,12 +212,12 @@ merge mechanics.
 ## Testing against onejudge without a paid model
 
 onejudge's `command` provider speaks a small JSON-lines protocol
-([v0.3.0 docs/protocol.md](https://github.com/nickderobertis/onejudge/blob/v0.3.0/docs/protocol.md)),
+([onejudge v0.3.2 docs/protocol.md](https://github.com/nickderobertis/onejudge/blob/v0.3.2/docs/protocol.md)),
 so any command can stand in for the harness. The e2e suite points it at
 `tests/e2e/fake_backend.py` — a deterministic backend — so the gate drives the
 **real** onejudge CLI and loop across a real subprocess boundary, faking only the
 paid model/harness. This is the one sanctioned mock (a genuinely external service),
-and it is confined to the provider seam; the merge, dispatch, and report parsing
-all run for real. That backend implements v0.3.0's protocol v4 unified
+and it is confined to the provider seam; the merge, SDK dispatch, CLI, and report
+validation all run for real. That backend implements onejudge v0.3.2's protocol v4 unified
 `supervisor` operation; the e2e fixture rejects any real CLI whose version is not
 the adopted `config/onejudge.version` value.
