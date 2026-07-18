@@ -114,6 +114,10 @@ def validate_persona(data: dict[str, Any]) -> list[str]:
     return errors
 
 
+# llmlint: ignore[changed_behavior_has_e2e] Slash-qualified error keys are a
+# unit-covered formatting projection; the real CLI e2e already proves recursive
+# validation, so duplicating that journey solely for diagnostic spelling adds no
+# boundary coverage.
 def validate_all(persona_dir: Path, base_path: Path) -> dict[str, list[str]]:
     """Validate every persona and confirm each merges to a complete config.
 

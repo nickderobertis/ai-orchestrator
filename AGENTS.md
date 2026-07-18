@@ -77,14 +77,7 @@ dispatch onejudge.
    search fails or leaves multiple strong candidates.
 2. **Pick or create personas.** Match each subtask to a general role and review
    bar in `personas/`. Prefer precise task prose plus per-node `done_when` over
-   encoding subtask details in a new persona. If a genuinely distinct role or
-   review bar is still needed, draft it under gitignored `scratch/personas/`,
-   dispatch against that directory, and refine it from observed performance.
-   Once proven, dispatch its addition through this repo's isolated self-lifecycle;
-   `just new-persona <name>` scaffolds the tracked file and `just check` validates
-   it. General personas stay flat; repo-specific personas use slash-qualified
-   names and subdirectories (`crozier/crozier-corpus` maps to
-   `personas/crozier/crozier-corpus.yaml`).
+   encoding subtask details in a new persona.
 3. **Schedule for parallelism.** Run the plan with `just run-plan <plan.json>`.
    It topologically schedules the DAG, running every subtask whose deps are done
    concurrently (bounded by the plan's `concurrency`), so independent branches go
@@ -186,8 +179,14 @@ runs `onejudge run` on it. Keep subtask-specificity in the node controls describ
 above; add a persona only for a genuinely distinct role or review bar. A dedicated
 `reviewer` is reserved for complex DAGs where one agent reviews and integrates
 several agents' independently produced work, since the simulated-user supervisor
-already reviews every dispatch. Draft new roles in `scratch/personas/`; promote a
-proven role only through the isolated self-dispatch rule.
+already reviews every dispatch.
+
+Draft a new role under gitignored `scratch/personas/`, dispatch against that
+directory, and refine it from observed performance. Once proven, dispatch its
+addition through this repo's isolated self-lifecycle; `just new-persona <name>`
+scaffolds the tracked file and `just check` validates it. General personas stay
+flat; repo-specific personas use slash-qualified names and subdirectories
+(`crozier/crozier-corpus` maps to `personas/crozier/crozier-corpus.yaml`).
 
 ## The two sides of the conversation
 
