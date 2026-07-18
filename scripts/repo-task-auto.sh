@@ -4,8 +4,9 @@
 # llmlint: ignore-file[robust_shell, boundary_inputs_validated, work_goes_through_command_surface] this IS a command-surface recipe (`just repo-task-auto`) wrapping the `orchestrator-repo-task` entry point to add env setup + post-run reporting. It deliberately omits `set -e` so it can still report the preserved-commit delta AFTER a non-zero (not-completed) dispatch — the very case it exists for; failure paths are checked explicitly. The fields it consumes are this project's own orchestrator-repo-task JSON result (a trusted internal boundary), and the branch is guarded by `git show-ref` before any ref use.
 set -uo pipefail
 
+readonly BIN_DIR="$HOME/.local/bin"
 readonly NODE_BIN="$HOME/.local/node/bin"
-export PATH="$NODE_BIN:$PATH"
+export PATH="$BIN_DIR:$NODE_BIN:$PATH"
 
 # Record dispatched runs to oneharness history (viewable with `oneharness history`)
 # even against repos whose oneharness.toml doesn't enable it: the env override beats
