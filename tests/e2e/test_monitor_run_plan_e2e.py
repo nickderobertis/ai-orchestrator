@@ -259,6 +259,32 @@ def test_real_history_labels_and_cursor_watch(oneharness_bin: str, tmp_path: Pat
     assert f"oneharness history show {watched_ids[0]} --format text" in detail.stdout
     assert "Latest agent text:" in detail.stdout
 
+    runs_dir = tmp_path / "runs"
+    _, round_dir = prepare_round(runs_dir / RUN_ID, {"tasks": [{"id": "history-turns"}]})
+    write_result(
+        round_dir,
+        {
+            "ok": False,
+            "state": "waiting",
+            "started_order": ["history-turns"],
+            "results": {"history-turns": {"status": "waiting"}},
+        },
+    )
+    indexed = _just(
+        "telemetry",
+        "--runs-dir",
+        str(runs_dir),
+        "--oneharness-bin",
+        oneharness_bin,
+        environment=environment,
+    )
+    assert indexed.returncode == 0, indexed.stderr
+    run = json.loads(indexed.stdout)["runs"][0]
+    assert run["providers"][0]["provider"] == "oneharness"
+    assert run["providers"][0]["harness"]
+    assert run["providers"][0]["model"]
+    assert run["timing"]["agent_seconds"] > 0
+
 
 def test_real_run_plan_waits_then_monitor_exits_only_after_attestation(
     tmp_path: Path, command_base: Any, onejudge_bin: str

@@ -22,6 +22,7 @@ RECORDED_RESULT_SCHEMA_VERSION = 2
 ResumeMode = Literal["pause", "retry"]
 RESUME_MODES = frozenset(get_args(ResumeMode))
 RetryDisposition = Literal["reused", "recovered", "abandoned"]
+RETRY_DISPOSITIONS = frozenset(get_args(RetryDisposition))
 
 # The identifiers a tracked round is addressed by. They are all non-empty strings
 # from different namespaces, and they travel together through the ledger, the

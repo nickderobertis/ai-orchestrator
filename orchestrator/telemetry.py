@@ -14,6 +14,7 @@ from .history import HistoryError, session_records, worker_sessions
 from .journal import JOURNAL_NAME, Event, read_events
 from .monitor import DetailSnapshot, load_snapshot
 from .runs import (
+    RETRY_DISPOSITIONS,
     GraphResultItem,
     RunId,
     as_result_payload,
@@ -93,7 +94,7 @@ class RetryLineageTelemetry:
             and isinstance(checkpoint, str)
             and checkpoint
             and isinstance(disposition, str)
-            and disposition
+            and disposition in RETRY_DISPOSITIONS
         ):
             return None
         return cls(branch, checkpoint, disposition)
