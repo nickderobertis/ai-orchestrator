@@ -394,17 +394,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--all", action="store_true", help="include settled runs")
     parser.add_argument("--oneharness-bin", default="oneharness")
     args = parser.parse_args(argv)
-    records = (
-        [
-            telemetry
-            for entry in sorted(args.runs_dir.iterdir())
-            if args.runs_dir.is_dir() and entry.is_dir()
-            if (telemetry := collect_run(entry, oneharness_bin=args.oneharness_bin)) is not None
-            and (args.all or not result_state_is_terminal(telemetry.state))
-        ]
-        if args.runs_dir.is_dir()
-        else []
-    )
+    entries = sorted(args.runs_dir.iterdir()) if args.runs_dir.is_dir() else []
+    records = [
+        telemetry
+        for entry in entries
+        if entry.is_dir()
+        if (telemetry := collect_run(entry, oneharness_bin=args.oneharness_bin)) is not None
+        and (args.all or not result_state_is_terminal(telemetry.state))
+    ]
     print(
         json.dumps(
             {

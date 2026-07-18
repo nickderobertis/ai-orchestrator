@@ -470,6 +470,9 @@ def test_real_failed_run_telemetry_stops_wall_time_at_settlement(
     active_only = _just("telemetry", "--runs-dir", str(runs_dir))
     assert active_only.returncode == 0, active_only.stderr
     assert json.loads(active_only.stdout)["runs"] == []
+    missing = _just("telemetry", "--runs-dir", str(tmp_path / "missing-runs"))
+    assert missing.returncode == 0, missing.stderr
+    assert json.loads(missing.stdout)["runs"] == []
 
 
 def test_monitor_backoff_resets_after_real_human_attestation(tmp_path: Path) -> None:
