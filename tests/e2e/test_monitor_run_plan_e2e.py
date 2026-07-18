@@ -410,7 +410,7 @@ def test_real_run_plan_waits_then_monitor_exits_only_after_attestation(
     assert any(event["kind"] == "human-attested" for event in events)
 
 
-def test_real_failed_run_telemetry_keeps_wall_time_advancing(
+def test_real_failed_run_telemetry_stops_wall_time_at_settlement(
     tmp_path: Path, command_base: Any, onejudge_bin: str
 ) -> None:
     runs_dir = tmp_path / "runs"
@@ -466,7 +466,7 @@ def test_real_failed_run_telemetry_keeps_wall_time_advancing(
         run for run in json.loads(second.stdout)["runs"] if run["run_id"] == "failed-wall"
     )
     assert second_run["state"] == "failed"
-    assert second_run["timing"]["wall_seconds"] > first_run["timing"]["wall_seconds"]
+    assert second_run["timing"]["wall_seconds"] == first_run["timing"]["wall_seconds"]
 
 
 def test_monitor_backoff_resets_after_real_human_attestation(tmp_path: Path) -> None:
