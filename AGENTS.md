@@ -78,18 +78,19 @@ dispatch onejudge.
 2. **Pick or create personas.** Match each subtask to a general role and review
    bar in `personas/`. Prefer precise task prose plus per-node `done_when` over
    encoding subtask details in a new persona. If a genuinely distinct role or
-   review bar is still needed, `just new-persona <name>` scaffolds
-   `personas/<name>.yaml` from the template — fill in the agent role and the
-   supervisor's `persona`/`done_when`, then `just check` validates it.
+   review bar is still needed, dispatch its creation or edit through this repo's
+   isolated self-lifecycle; there, `just new-persona <name>` scaffolds
+   `personas/<name>.yaml` from the template, and `just check` validates it.
 3. **Schedule for parallelism.** Run the plan with `just run-plan <plan.json>`.
    It topologically schedules the DAG, running every subtask whose deps are done
    concurrently (bounded by the plan's `concurrency`), so independent branches go
    in parallel and dependents wait only for what they actually need.
-4. **Monitor the graph.** Start `just monitor [RUN_ID]` after launch and keep it as
-   the default view across later rounds. An open or heartbeating stream means the
-   run still needs attention, not necessarily that an executor is working; inspect
-   the stream's detail pointer before deciding what to do. The viewing and exit
-   contracts live in `docs/orchestration.md`.
+4. **Monitor every dispatch.** Start `just monitor [RUN_ID]` after any recorded
+   launch — a single `repo-task`/`repo-task-auto` or a `run-plan` graph — and keep
+   it as the default view across later rounds. It already combines graph, session,
+   branch, PR, and named check transitions; use targeted queries only for details
+   it does not expose, not to build a parallel watcher. An open or heartbeating
+   stream still needs attention; follow its detail pointer before acting.
 5. **Read the settled round, then decide.** `run-plan` records each invocation in
    `runs/<run-id>/round-NN/`; use `just runs` to see where the latest round ended.
    A ready human action is `waiting`, its dependents are transitively `blocked`,
@@ -261,17 +262,15 @@ publish. Dispatch smaller project work with a single task rather than doing it
 directly; only the slight-tweak exception above applies. This repo is one
 local-mode case of the same rule.
 
-**Self-dispatch caveat (this repo).** Do not dispatch changes to the
-git-manipulating subsystems (`gitops`/`workspace`/`lifecycle`/`integrate`) *onto
-this checkout*: the agent's worktree shares its execution checkout's `.git`, so
-its in-progress code and `just check` runs can corrupt that checkout. Keep the
-canonical checkout as the positional publication repository and select the
-isolated safety clone with `--execution-checkout`; publication still uses the
-shared identity's local workflow and the canonical checkout is fast-forwarded
-afterward. Confirm `git config core.bare` is `false` before trusting any
-self-dispatch result. If legacy aliases for this repository conflict, first run
-`just migrate-repo-workflow local/ai-orchestrator --workflow local`. Mechanism and
-recovery: `docs/repo-lifecycle.md`.
+**Self-dispatch rule (this repo).** Never author working-tree changes in the shared
+canonical checkout: concurrent orchestrators use it and direct edits race them.
+Every change — including plans, personas, docs, and `AGENTS.md` — must be dispatched
+into an isolated worktree cut from the registered `local/ai-orchestrator-isolated`
+safety clone via `--execution-checkout`, with the canonical checkout retained as
+the positional publication repository and only fast-forwarded after integration.
+This does not restrict the narrow direct git operations above on finished
+dispatched work. Confirm `git config core.bare` is `false` before trusting a
+self-dispatch result.
 
 ## Stack and composition
 
