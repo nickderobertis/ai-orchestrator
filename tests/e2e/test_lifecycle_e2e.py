@@ -15,6 +15,7 @@ journey — local direct-merge and the GitHub PR+auto-merge path — for real.
 from __future__ import annotations
 
 import json
+import os
 import shlex
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
@@ -91,6 +92,85 @@ def _tip(origin: Path, ref: str) -> str:
     return subprocess.run(
         ["git", "-C", str(origin), "rev-parse", ref], text=True, capture_output=True
     ).stdout.strip()
+
+
+def test_identity_cache_and_repo_post_checkout_hook_are_wired_across_dispatches(
+    tmp_path, bare_origin, command_base, personas_dir
+) -> None:
+    """Real worktree creation runs repo hooks and reuses one identity cache."""
+    origin = bare_origin()
+    hook_author = gitops.clone(origin, tmp_path / "hook-author")
+    hook_marker = tmp_path / "post-checkout-runs"
+    hooks = hook_author / ".githooks"
+    hooks.mkdir()
+    hook = hooks / "post-checkout"
+    hook.write_text(
+        f"#!/bin/sh\nprintf '%s\\n' \"$PWD\" >> {shlex.quote(str(hook_marker))}\n",
+        encoding="utf-8",
+    )
+    hook.chmod(0o755)
+    gitops.add_all(hook_author)
+    gitops.commit(hook_author, "test: add target post-checkout hook")
+    gitops.push(hook_author, "main", set_upstream=False)
+
+    workspace = _workspace(tmp_path, origin)
+    observed_caches: list[Path] = []
+
+    for number in (1, 2):
+        result = run_repo_task(
+            str(origin),
+            f"complete-now capture-cache-env write-unique-change {number}\n",
+            "engineer",
+            workspace=workspace,
+            base_path=command_base(),
+            persona_dir=personas_dir,
+            repo_type="single-owner",
+            workflow="local",
+            branch=f"cache-hook-{number}",
+            verify_cmd=[
+                "sh",
+                "-c",
+                'test -d "$ORCHESTRATOR_CACHE_DIR" && '
+                'case "$ORCHESTRATOR_CACHE_DIR" in /*) true;; *) false;; esac',
+            ],
+        )
+        assert result.outcome == "merged", result.detail
+        publication_checkout = Path(
+            workspace.selection(normalize_repo(str(origin))).publication_checkout
+        )
+        observed_caches.append(
+            Path((publication_checkout / "CACHE_ENV.txt").read_text(encoding="utf-8"))
+        )
+
+    assert observed_caches[0] == observed_caches[1]
+    assert observed_caches[0].parent.name == "cache"
+    assert observed_caches[0].parent.parent == Path(os.environ["AI_ORCHESTRATOR_HOME"])
+    lifecycle_worktrees = [
+        path
+        for path in hook_marker.read_text(encoding="utf-8").splitlines()
+        if Path(path).name.startswith("cache-hook-")
+    ]
+    assert len(lifecycle_worktrees) == 2
+
+
+def test_empty_orchestrator_home_fails_at_lifecycle_cache_boundary(
+    tmp_path, bare_origin, monkeypatch
+) -> None:
+    origin = bare_origin()
+    workspace = _workspace(tmp_path, origin)
+    monkeypatch.setenv("AI_ORCHESTRATOR_HOME", "")
+
+    with pytest.raises(ValueError, match="AI_ORCHESTRATOR_HOME must not be empty"):
+        run_repo_task(
+            str(origin),
+            "never dispatched",
+            "engineer",
+            workspace=workspace,
+            dispatch_fn=_per_step_dispatch(),
+            repo_type="single-owner",
+            workflow="local",
+            branch="empty-home",
+        )
 
 
 def _advance_origin(tmp_path: Path, origin: Path, filename: str, content: str) -> str:
@@ -1232,7 +1312,8 @@ def test_remote_human_workstream_draft_checkpoint_and_safe_resume(tmp_path, bare
     gate = [
         "sh",
         "-c",
-        f"echo gate >> {shlex.quote(str(gate_log))}; test -f base.txt && test -f prepare.txt",
+        f"echo gate >> {shlex.quote(str(gate_log))}; test -f base.txt && "
+        'test -f prepare.txt && test -d "$ORCHESTRATOR_CACHE_DIR"',
     ]
     steps = [
         Step("prepare", "engineer", "prepare remote work"),

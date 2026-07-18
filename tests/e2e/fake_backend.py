@@ -21,6 +21,7 @@ Outcome is steered by sentinels in the task (the first user message):
 from __future__ import annotations
 
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -78,6 +79,10 @@ def main() -> int:
 
     match op:
         case "respond":
+            if "capture-cache-env" in task:
+                (Path.cwd() / "CACHE_ENV.txt").write_text(
+                    os.environ["ORCHESTRATOR_CACHE_DIR"], encoding="utf-8"
+                )
             if "write-change" in task:
                 (Path.cwd() / "CHANGE.txt").write_text("change from fake agent\n", encoding="utf-8")
             if "write-unique-change" in task:

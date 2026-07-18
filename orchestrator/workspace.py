@@ -11,6 +11,8 @@ A repo is named loosely — ``"onejudge"`` (the default owner is filled in),
 
 from __future__ import annotations
 
+import hashlib
+import os
 import re
 import threading
 from collections.abc import Callable
@@ -26,6 +28,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     "DEFAULT_OWNER",
+    "CACHE_ENV",
     "IdentityKey",
     "RepoRef",
     "RepositoryType",
@@ -37,6 +40,7 @@ __all__ = [
 ]
 
 DEFAULT_OWNER = "nickderobertis"
+CACHE_ENV = "ORCHESTRATOR_CACHE_DIR"
 Workflow = Literal["local", "remote"]
 RepositoryType = Literal["single-owner", "team"]
 IdentityKey = NewType("IdentityKey", str)
@@ -199,6 +203,18 @@ class Workspace:
     def _worktree_root(self, repo: RepoRef) -> Path:
         return self.root / repo.dir_key
 
+    def ensure_cache_dir(self, repo: RepoRef) -> Path:
+        """Create and return this repository identity's persistent build cache."""
+        identity = self.selection(repo).publication_identity
+        digest = hashlib.sha256(str(identity).encode("utf-8")).hexdigest()
+        override = os.environ.get("AI_ORCHESTRATOR_HOME")
+        if override is not None and not override.strip():
+            raise WorkspaceError("AI_ORCHESTRATOR_HOME must not be empty")
+        state_root = Path(override) if override else Path.home() / ".ai-orchestrator"
+        cache = (state_root / "cache" / digest).resolve()
+        cache.mkdir(parents=True, exist_ok=True)
+        return cache
+
     @staticmethod
     def _assert_publication_ready(checkout: Path, branch: str) -> None:
         if gitops.is_dirty(checkout):
@@ -274,6 +290,8 @@ class Workspace:
                         self._assert_publication_ready(publication, base)
                 gitops.checkout(checkout, base)
                 gitops.merge_ff_only(checkout, f"origin/{base}")
+                gitops.configure_repo_hooks(checkout)
+                self.ensure_cache_dir(repo)
             return checkout
 
     def worktree(self, repo: RepoRef, branch: str, *, base: str) -> Path:

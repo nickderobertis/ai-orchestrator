@@ -59,6 +59,7 @@ from .runs import (
 )
 from .verify import VerifyResult, detect_gate, run_gate
 from .workspace import (
+    CACHE_ENV,
     IdentityKey,
     RepoRef,
     RepositoryType,
@@ -727,6 +728,7 @@ def _run_steps(
     base_path: str | Path,
     persona_dir: str | Path,
     journal: NodeSink,
+    dispatch_env: dict[str, str],
     completed: frozenset[str] = frozenset(),
 ) -> StepRun:
     """Run a step sub-DAG in the shared worktree, committing per step.
@@ -763,6 +765,7 @@ def _run_steps(
             max_turns=step.max_turns,
             done_when=step.done_when,
             labels=log.labels,
+            env=dispatch_env,
         )
         reports[sid] = report
         if not report.completed:
@@ -909,6 +912,7 @@ def _pause_at_human_step(
     gate_timeout: float | None,
     recorded_pr: str | None,
     journal: NodeSink,
+    cache_env: dict[str, str],
 ) -> LifecycleResult:
     """Preserve a human-gated workstream and record how to continue it."""
     lead = steps[0]
@@ -953,6 +957,7 @@ def _pause_at_human_step(
                 cmd,
                 timeout=gate_timeout,
                 env={
+                    **cache_env,
                     "ORCHESTRATOR_COMPARISON_REMOTE": "origin",
                     "ORCHESTRATOR_COMPARISON_BASE": pr_base,
                 },
@@ -1091,6 +1096,7 @@ def run_repo_task(
             repo_type=repo_type,
         )
         selection = workspace.selection(ref)
+        cache_env = {CACHE_ENV: str(workspace.ensure_cache_dir(ref))}
         registered_workflow = selection.workflow
         if (
             workflow is not None
@@ -1201,6 +1207,7 @@ def run_repo_task(
             base_path=base_path,
             persona_dir=persona_dir,
             journal=log,
+            dispatch_env=cache_env,
             completed=frozenset(resume.completed_steps) if resume else frozenset(),
         )
         result.steps = step_run.results
@@ -1230,6 +1237,7 @@ def run_repo_task(
                 gate_timeout=gate_timeout,
                 recorded_pr=resume.pr if resume else None,
                 journal=log,
+                cache_env=cache_env,
             )
         if step_run.status != "done":
             result.outcome = "error"
@@ -1260,6 +1268,7 @@ def run_repo_task(
                     cmd,
                     timeout=gate_timeout,
                     env={
+                        **cache_env,
                         "ORCHESTRATOR_COMPARISON_REMOTE": "origin",
                         "ORCHESTRATOR_COMPARISON_BASE": pr_base,
                     },
@@ -1297,6 +1306,7 @@ def run_repo_task(
             verify_command=None if skip_verify else (verify_cmd or detect_gate(worktree)),
             gate_timeout=gate_timeout,
             verify_env={
+                **cache_env,
                 "ORCHESTRATOR_COMPARISON_REMOTE": "origin",
                 "ORCHESTRATOR_COMPARISON_BASE": pr_base,
             },
