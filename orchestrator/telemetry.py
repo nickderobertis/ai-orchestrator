@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal, TypedDict
 
+from .detail_snapshot import CheckRollup
 from .history import HistoryError, session_records, worker_sessions
 from .journal import JOURNAL_NAME, Event, read_events
 from .monitor import DetailSnapshot, load_snapshot
@@ -30,7 +31,7 @@ FailureClass = Literal[
 class TimingRecord(TypedDict):
     agent_seconds: float
     gate_seconds: float
-    monitor_wait_seconds: float
+    publication_wait_seconds: float
     wall_seconds: float
 
 
@@ -70,6 +71,106 @@ class Provider:
         return result
 
 
+@dataclass(frozen=True)
+class RetryLineageTelemetry:
+    supersedes_branch: str
+    supersedes_checkpoint: str
+    disposition: str
+
+    @classmethod
+    def from_value(cls, value: object) -> RetryLineageTelemetry | None:
+        if not isinstance(value, dict):
+            return None
+        branch, checkpoint, disposition = (
+            value.get("supersedes_branch"),
+            value.get("supersedes_checkpoint"),
+            value.get("disposition"),
+        )
+        if not (
+            isinstance(branch, str)
+            and branch
+            and isinstance(checkpoint, str)
+            and checkpoint
+            and isinstance(disposition, str)
+            and disposition
+        ):
+            return None
+        return cls(branch, checkpoint, disposition)
+
+    def record(self) -> dict[str, str]:
+        return {
+            "supersedes_branch": self.supersedes_branch,
+            "supersedes_checkpoint": self.supersedes_checkpoint,
+            "disposition": self.disposition,
+        }
+
+
+@dataclass(frozen=True)
+class GateAttestationTelemetry:
+    commit: str
+    comparison_remote: str
+    comparison_base: str
+
+    @classmethod
+    def from_value(cls, value: object) -> GateAttestationTelemetry | None:
+        if not isinstance(value, dict):
+            return None
+        commit, remote, base = (
+            value.get("commit"),
+            value.get("comparison_remote"),
+            value.get("comparison_base"),
+        )
+        if not (
+            isinstance(commit, str)
+            and commit
+            and isinstance(remote, str)
+            and remote
+            and isinstance(base, str)
+            and base
+        ):
+            return None
+        return cls(commit, remote, base)
+
+    def record(self) -> dict[str, str]:
+        return {
+            "commit": self.commit,
+            "comparison_remote": self.comparison_remote,
+            "comparison_base": self.comparison_base,
+        }
+
+
+@dataclass(frozen=True)
+class NodeTelemetry:
+    node: str
+    status: str
+    outcome: str = ""
+    branch: str = ""
+    comparison_remote: str = ""
+    comparison_base: str = ""
+    checkpoint: str = ""
+    commit: str = ""
+    retry_lineage: RetryLineageTelemetry | None = None
+    gate_attestation: GateAttestationTelemetry | None = None
+
+    def record(self) -> dict[str, object]:
+        result: dict[str, object] = {"node": self.node, "status": self.status}
+        for name in (
+            "outcome",
+            "branch",
+            "comparison_remote",
+            "comparison_base",
+            "checkpoint",
+            "commit",
+        ):
+            if value := getattr(self, name):
+                result[name] = value
+        if self.retry_lineage:
+            result["retry_lineage"] = self.retry_lineage.record()
+        if self.gate_attestation:
+            result["gate_attestation"] = self.gate_attestation.record()
+        return result
+
+
 @dataclass
 class RunTelemetry:
     run_id: RunId
@@ -78,10 +179,10 @@ class RunTelemetry:
     last_progress_at: float | None
     last_event: str
     timing: TimingRecord
-    nodes: list[dict[str, object]] = field(default_factory=list)
+    nodes: list[NodeTelemetry] = field(default_factory=list)
     providers: list[Provider] = field(default_factory=list)
     failure: Failure | None = None
-    check_rollup: dict[str, object] = field(default_factory=dict)
+    check_rollup: CheckRollup = field(default_factory=CheckRollup)
     green_to_publication_seconds: list[float] = field(default_factory=list)
 
     def record(self) -> dict[str, object]:
@@ -91,7 +192,7 @@ class RunTelemetry:
             "phase": self.phase,
             "last_event": self.last_event,
             "timing": self.timing,
-            "nodes": self.nodes,
+            "nodes": [node.record() for node in self.nodes],
         }
         if self.last_progress_at is not None:
             result["last_progress_at"] = self.last_progress_at
@@ -99,8 +200,8 @@ class RunTelemetry:
             result["providers"] = [provider.record() for provider in self.providers]
         if self.failure:
             result["failure"] = self.failure.record()
-        if self.check_rollup:
-            result["check_rollup"] = self.check_rollup
+        if rollup := self.check_rollup.to_record():
+            result["check_rollup"] = rollup
         return result
 
 
@@ -193,37 +294,33 @@ def _providers(run_id: RunId, oneharness_bin: str) -> tuple[list[Provider], floa
     return found, elapsed
 
 
-def _node_record(node: str, item: GraphResultItem, events: list[Event]) -> dict[str, object]:
-    result: dict[str, object] = {"node": node, "status": str(item.get("status", "unknown"))}
-    if outcome := item.get("outcome"):
-        result["outcome"] = outcome
-    for source, target in (
-        ("branch", "branch"),
-        ("pr_base", "comparison_base"),
-        ("retry_lineage", "retry_lineage"),
-    ):
-        if value := item.get(source):
-            result[target] = value
-    if item.get("pr_base"):
-        result["comparison_remote"] = "origin"
+def _node_record(node: str, item: GraphResultItem, events: list[Event]) -> NodeTelemetry:
     resume = item.get("resume")
-    if isinstance(resume, dict) and (checkpoint := resume.get("checkpoint")):
-        result["checkpoint"] = checkpoint
+    checkpoint = str(resume.get("checkpoint", "")) if isinstance(resume, dict) else ""
     commits = [
         str(event.detail.get("commit"))
         for event in events
         if event.node == node and event.detail.get("commit")
     ]
-    if commits:
-        result["commit"] = commits[-1]
     attestations = [
         event.detail.get("gate_attestation")
         for event in events
         if event.node == node and event.kind == "verification-finished"
     ]
-    if attestations and isinstance(attestations[-1], dict):
-        result["gate_attestation"] = dict(attestations[-1])
-    return result
+    return NodeTelemetry(
+        node=node,
+        status=str(item.get("status", "unknown")),
+        outcome=str(item.get("outcome", "")),
+        branch=str(item.get("branch", "")),
+        comparison_remote="origin" if item.get("pr_base") else "",
+        comparison_base=str(item.get("pr_base", "")),
+        checkpoint=checkpoint,
+        commit=commits[-1] if commits else "",
+        retry_lineage=RetryLineageTelemetry.from_value(item.get("retry_lineage")),
+        gate_attestation=GateAttestationTelemetry.from_value(
+            attestations[-1] if attestations else None
+        ),
+    )
 
 
 def collect_run(
@@ -259,30 +356,30 @@ def collect_run(
         timing=TimingRecord(
             agent_seconds=agent_seconds,
             gate_seconds=gate_seconds,
-            monitor_wait_seconds=wait,
+            publication_wait_seconds=wait,
             wall_seconds=wall,
         ),
         nodes=[_node_record(node, item, events) for node, item in payload["results"].items()],
         providers=providers,
         failure=failure,
-        check_rollup=dict(snapshot.check_rollup.to_record()),
+        check_rollup=snapshot.check_rollup,
         green_to_publication_seconds=publication_waits,
     )
 
 
 def _metrics(runs: list[RunTelemetry]) -> MetricsRecord:
-    lineages = [
-        node["retry_lineage"] for run in runs for node in run.nodes if "retry_lineage" in node
+    dispositions = [
+        node.retry_lineage.disposition
+        for run in runs
+        for node in run.nodes
+        if node.retry_lineage is not None
     ]
-    dispositions = [lineage.get("disposition") for lineage in lineages if isinstance(lineage, dict)]
     return MetricsRecord(
         retry_attempts=len(dispositions),
         retry_branch_reuses=dispositions.count("reused"),
         recovered_branches=dispositions.count("recovered"),
         abandoned_branches=dispositions.count("abandoned"),
-        no_diff_dispatches=sum(
-            node.get("outcome") == "no-changes" for run in runs for node in run.nodes
-        ),
+        no_diff_dispatches=sum(node.outcome == "no-changes" for run in runs for node in run.nodes),
         green_to_publication_seconds=[
             elapsed for run in runs for elapsed in run.green_to_publication_seconds
         ],

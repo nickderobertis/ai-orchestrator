@@ -316,6 +316,13 @@ def test_monitor_poll_deduplicates_checks_but_emits_an_optional_only_change(tmp_
     github.checks[0] = Check("ci", "PENDING", True)
     assert [event.summary for event in monitor.poll()] == ["PR #1 required check pending ci"]
     assert monitor.snapshot.check_rollup.current_blocker == "ci: pending"
+    save_snapshot(run_dir, monitor.snapshot)
+    _settle(run_dir, {"api": {"status": "waiting"}}, ok=False, state="waiting")
+    reported = _monitor_cli(
+        "--runs-dir", str(tmp_path / "runs"), "--once", "--format", "jsonl", RUN
+    )
+    assert reported.returncode == 0, reported.stderr
+    assert json.loads(reported.stdout.splitlines()[-1])["current_blocker"] == "ci: pending"
     github.checks[0] = Check("ci", "SUCCESS", True)
     assert [event.summary for event in monitor.poll()] == ["PR #1 required check success ci"]
     assert monitor.snapshot.check_rollup.current_blocker == ""
@@ -685,3 +692,8 @@ def test_the_monitor_command_reports_a_run_it_cannot_watch_actionably(tmp_path: 
     bad = _monitor_cli("--runs-dir", str(runs_dir), "--heartbeat", "0")
     assert bad.returncode == 2
     assert "--heartbeat must be a positive number of seconds" in bad.stderr
+    bad_bound = _monitor_cli(
+        "--runs-dir", str(runs_dir), "--poll-interval", "2", "--max-poll-interval", "1"
+    )
+    assert bad_bound.returncode == 2
+    assert "--max-poll-interval must be at least --poll-interval" in bad_bound.stderr

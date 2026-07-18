@@ -29,7 +29,6 @@ from orchestrator.lifecycle import result_payload, run_repo_task
 from orchestrator.merge import GitHubMergeStrategy
 from orchestrator.monitor import Monitor, load_snapshot
 from orchestrator.runs import NodeId, RunId, prepare_round, write_result
-from orchestrator.telemetry import collect_run
 from orchestrator.workspace import Workspace
 
 FAKE_HARNESS = REPO_ROOT / "tests" / "e2e" / "fake_harness.py"
@@ -552,11 +551,16 @@ def test_real_lifecycle_commit_and_pr_survive_live_state(
     )
     assert gitops.ref_sha(origin, "main") == gitops.ref_sha(origin, branch)
 
-    telemetry = collect_run(
-        run_dir, now=time.time(), oneharness_bin=str(tmp_path / "absent-oneharness")
+    telemetry_command = _just(
+        "telemetry",
+        "--runs-dir",
+        str(runs_dir),
+        "--all",
+        "--oneharness-bin",
+        str(tmp_path / "absent-oneharness"),
     )
-    assert telemetry is not None
-    record = telemetry.record()
+    assert telemetry_command.returncode == 0, telemetry_command.stderr
+    record = json.loads(telemetry_command.stdout)["runs"][0]
     assert record["phase"] == "complete"
     assert record["last_event"] == "round-finished"
     timing = record["timing"]

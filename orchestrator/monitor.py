@@ -206,6 +206,8 @@ class Heartbeat:
     round: int | None
     state: str
     detail: str
+    last_completed_check: str = ""
+    current_blocker: str = ""
 
     def text(self) -> str:
         stamp = datetime.fromtimestamp(self.at, UTC).strftime("%H:%M:%S")
@@ -213,7 +215,7 @@ class Heartbeat:
         return f"{stamp}  --  {self.run_id} {where} {self.state}: {self.detail}"
 
     def record(self) -> dict[str, DetailValue]:
-        return {
+        record: dict[str, DetailValue] = {
             "type": "heartbeat",
             "at": self.at,
             "run_id": self.run_id,
@@ -221,6 +223,11 @@ class Heartbeat:
             "state": self.state,
             "detail": self.detail,
         }
+        if self.last_completed_check:
+            record["last_completed_check"] = self.last_completed_check
+        if self.current_blocker:
+            record["current_blocker"] = self.current_blocker
+        return record
 
 
 # --- persisted detail snapshots ------------------------------------------------
@@ -831,16 +838,6 @@ def pr_events(
                 continue
             status = fallback
         current = _ordered_checks(status.checks)
-        completed = [check.name for check in current if check.settled and not check.red]
-        blocking = [
-            f"{check.name}: {check.state.lower()}"
-            for check in current
-            if check.required and not (check.settled and not check.red)
-        ]
-        snapshot.check_rollup = CheckRollup(
-            last_completed_check=completed[-1] if completed else "",
-            current_blocker=blocking[0] if blocking else "",
-        )
         signature = _pr_signature(
             status.state, status.merged, status.draft, status.merge_state_status
         )
@@ -855,6 +852,29 @@ def pr_events(
             else None
         )
         previous_checks = _ordered_checks(previous.checks) if previous is not None else []
+        previous_by_name = {check.name: check for check in previous_checks}
+        newly_completed = [
+            check.name
+            for check in current
+            if check.settled
+            and not check.red
+            and (
+                previous_by_name.get(check.name) is None or not previous_by_name[check.name].settled
+            )
+        ]
+        blocking = [
+            f"{check.name}: {check.state.lower()}"
+            for check in current
+            if check.required and not (check.settled and not check.red)
+        ]
+        snapshot.check_rollup = CheckRollup(
+            last_completed_check=(
+                newly_completed[-1]
+                if newly_completed
+                else snapshot.check_rollup.last_completed_check
+            ),
+            current_blocker=blocking[0] if blocking else "",
+        )
         changed = previous is None or signature != previous_signature or current != previous_checks
         revision = 1 if previous is None else previous.revision + int(changed)
         snapshot.prs[key] = PrDetail.from_status(
@@ -879,7 +899,6 @@ def pr_events(
         if replay or previous is None:
             observed = current
         else:
-            previous_by_name = {check.name: check for check in previous_checks}
             observed = [check for check in current if previous_by_name.get(check.name) != check]
         found.extend(
             _check_event(
@@ -1170,19 +1189,47 @@ def stream(
             last = monitor.clock()
         delay = poll_interval if events else min(max_poll_interval, delay * 2)
         state = monitor.state()
+
+        rollup = monitor.snapshot.check_rollup
         if once:
             writer.heartbeat(
-                Heartbeat(monitor.clock(), state.run_id, state.round, state.state, state.detail)
+                Heartbeat(
+                    monitor.clock(),
+                    state.run_id,
+                    state.round,
+                    state.state,
+                    state.detail,
+                    rollup.last_completed_check,
+                    rollup.current_blocker,
+                )
             )
             return 0
         if state.finished:
             writer.heartbeat(
-                Heartbeat(monitor.clock(), state.run_id, state.round, state.state, "graph complete")
+                Heartbeat(
+                    monitor.clock(),
+                    state.run_id,
+                    state.round,
+                    state.state,
+                    "graph complete",
+                    rollup.last_completed_check,
+                    rollup.current_blocker,
+                )
             )
             return 0
         now = monitor.clock()
         if now - last >= heartbeat:
-            writer.heartbeat(Heartbeat(now, state.run_id, state.round, state.state, state.detail))
+            writer.heartbeat(
+                Heartbeat(
+                    now,
+                    state.run_id,
+                    state.round,
+                    state.state,
+                    state.detail,
+                    rollup.last_completed_check,
+                    rollup.current_blocker,
+                )
+            )
             last = now
         sleep(delay)
 
