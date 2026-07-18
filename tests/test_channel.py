@@ -5,6 +5,7 @@ import json
 import os
 import socket
 import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -49,6 +50,22 @@ def test_fifo_timeout_is_bounded(tmp_path: Path) -> None:
         read_message(channel / "up.fifo", timeout=0.01)
     with pytest.raises(ChannelTimeout):
         write_message(channel / "down.fifo", {"value": 1}, timeout=0.01)
+
+
+def test_writer_reports_writability_timeout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    channel = create_channel(tmp_path / "run")
+    reader = os.open(channel / "down.fifo", os.O_RDONLY | os.O_NONBLOCK)
+    try:
+        monkeypatch.setattr(
+            "orchestrator.channel.select.select",
+            lambda reads, writes, errors, timeout: ([], [], []),
+        )
+        with pytest.raises(ChannelTimeout, match="write timed out"):
+            write_message(channel / "down.fifo", {"value": 1}, timeout=1)
+    finally:
+        os.close(reader)
 
 
 def test_frame_and_supervisor_shapes_are_validated(tmp_path: Path) -> None:
@@ -192,7 +209,13 @@ def test_bridge_main_success_finished_and_errors(
     monkeypatch.setattr("orchestrator.channel._finished", lambda path: False)
     monkeypatch.setattr(
         "orchestrator.channel.read_message",
-        lambda path, timeout: {"op": "supervisor", "surface": {}},
+        lambda path, timeout: {
+            "op": "supervisor",
+            "run_id": "orch",
+            "round": 1,
+            "surface": {"kind": "milestone", "message": "done"},
+            "messages": [],
+        },
     )
     assert main_next(["orch", "--runs-dir", str(runs)]) == 0
     assert json.loads(capsys.readouterr().out)["op"] == "supervisor"
@@ -295,3 +318,174 @@ def test_finished_handles_missing_status_and_dead_owner(
 
     monkeypatch.setattr("orchestrator.channel.os.kill", inaccessible)
     assert _finished(run) is False
+
+
+@pytest.mark.parametrize(
+    "payload,error",
+    [
+        ({"op": "unknown"}, "request op"),
+        ({"op": "judge", "kind": "unknown"}, "judge kind"),
+        ({"op": "judge", "kind": "score", "max": -1}, "numeric judge max"),
+    ],
+)
+def test_relay_rejects_invalid_protocol_variants(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    payload: dict[str, object],
+    error: str,
+) -> None:
+    channel = create_channel(tmp_path / "run")
+    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(payload)))
+    assert relay_supervisor(channel, "run", 1, timeout=1) == 1
+    assert error in capsys.readouterr().err
+
+
+def test_relay_rejects_malformed_persisted_verdict(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    channel = create_channel(tmp_path / "run")
+    atomic_json(channel / "planner-verdict.json", {"completion": "yes"})
+    monkeypatch.setattr("sys.stdin", io.StringIO('{"op":"judge","kind":"boolean"}'))
+    assert relay_supervisor(channel, "run", 1, timeout=1) == 1
+    assert "persisted planner completion" in capsys.readouterr().err
+
+
+def test_relay_boolean_defaults_incomplete_without_persisted_verdict(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    channel = create_channel(tmp_path / "run")
+    monkeypatch.setattr("sys.stdin", io.StringIO('{"op":"judge","kind":"boolean"}'))
+    assert relay_supervisor(channel, "run", 1, timeout=1) == 0
+    assert json.loads(capsys.readouterr().out)["value"] is False
+
+
+@pytest.mark.parametrize(
+    "argv,error",
+    [
+        (["0", "--timeout", "1"], "round must be"),
+        (["1", "--timeout", "1", "wrong-run"], "unrecognized arguments"),
+    ],
+)
+def test_relay_cli_rejects_invalid_arguments(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    argv: list[str],
+    error: str,
+) -> None:
+    channel = create_channel(tmp_path / "run")
+    args = [str(channel), "run", *argv]
+    with pytest.raises(SystemExit):
+        main_relay(args)
+    assert error in capsys.readouterr().err
+
+
+def test_relay_cli_rejects_wrong_channel_and_metadata(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    wrong = create_channel(tmp_path / "other")
+    with pytest.raises(SystemExit):
+        main_relay([str(wrong), "run", "1", "--timeout", "1"])
+    assert "must belong" in capsys.readouterr().err
+
+    channel = create_channel(tmp_path / "run")
+    (channel / "channel.json").write_text('{"schema_version":2}', encoding="utf-8")
+    with pytest.raises(SystemExit):
+        main_relay([str(channel), "run", "1", "--timeout", "1"])
+    assert "invalid metadata" in capsys.readouterr().err
+
+
+def test_finished_tolerates_partial_report_and_missing_status(tmp_path: Path) -> None:
+    run = tmp_path / "run"
+    report = run / "orchestrator" / "report.json"
+    report.parent.mkdir(parents=True)
+    report.write_text("{", encoding="utf-8")
+    assert _finished(run) is False
+    (run / "round-01").mkdir()
+    assert _finished(run) is False
+
+
+def test_reader_rejects_oversized_frame(tmp_path: Path) -> None:
+    channel = create_channel(tmp_path / "run")
+
+    def raw_send() -> None:
+        fd = os.open(channel / "up.fifo", os.O_WRONLY)
+        try:
+            os.write(fd, b"x" * 5000)
+        finally:
+            os.close(fd)
+
+    sender = threading.Thread(target=raw_send)
+    sender.start()
+    with pytest.raises(ChannelError, match="exceeds limit"):
+        read_message(channel / "up.fifo", timeout=1)
+    sender.join()
+
+
+def test_surface_ignores_non_json_assistant_content() -> None:
+    value = _surface(
+        {"task": "fallback", "messages": [{"role": "assistant", "content": "plain text"}]},
+        "run",
+        1,
+    )
+    assert value["surface"] == {"kind": "supervisor", "message": "fallback"}
+
+
+def test_surface_accepts_emitted_shape_without_options() -> None:
+    value = _surface(
+        {
+            "task": "fallback",
+            "messages": [{"role": "assistant", "content": '{"kind":"closeout","message":"done"}'}],
+        },
+        "run",
+        1,
+    )
+    assert value["surface"] == {"kind": "closeout", "message": "done"}
+
+
+def test_finished_reports_live_local_owner_as_running(tmp_path: Path) -> None:
+    run = tmp_path / "run"
+    round_dir = run / "round-01"
+    round_dir.mkdir(parents=True)
+    atomic_json(
+        round_dir / "status.json",
+        {"status": "running", "pid": os.getpid(), "host": socket.gethostname()},
+    )
+    assert _finished(run) is False
+
+
+def test_reader_waits_through_fifo_rendezvous_before_writer_arrives(tmp_path: Path) -> None:
+    channel = create_channel(tmp_path / "run")
+
+    def delayed_send() -> None:
+        time.sleep(0.02)
+        write_message(channel / "up.fifo", {"ready": True}, timeout=1)
+
+    sender = threading.Thread(target=delayed_send)
+    sender.start()
+    assert read_message(channel / "up.fifo", timeout=1) == {"ready": True}
+    sender.join()
+
+
+def test_reader_times_out_after_writer_closes_without_frame(tmp_path: Path) -> None:
+    channel = create_channel(tmp_path / "run")
+
+    def close_without_frame() -> None:
+        fd = os.open(channel / "up.fifo", os.O_WRONLY)
+        os.close(fd)
+
+    sender = threading.Thread(target=close_without_frame)
+    sender.start()
+    with pytest.raises(ChannelTimeout):
+        read_message(channel / "up.fifo", timeout=0.02)
+    sender.join()
+
+
+@pytest.mark.parametrize("content", ["[]", "{}"])
+def test_surface_ignores_json_without_emitted_surface_shape(content: str) -> None:
+    value = _surface(
+        {"task": "fallback", "messages": [{"role": "assistant", "content": content}]},
+        "run",
+        1,
+    )
+    assert value["surface"] == {"kind": "supervisor", "message": "fallback"}

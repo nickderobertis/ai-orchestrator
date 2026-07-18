@@ -12,6 +12,7 @@ from pathlib import Path
 import yaml
 
 from orchestrator import BASE_CONFIG, REPO_ROOT
+from orchestrator.dispatch import launch_orchestrator
 
 FAKE_BACKEND = REPO_ROOT / "tests" / "e2e" / "fake_backend.py"
 
@@ -128,6 +129,30 @@ def test_live_channel_runs_real_nested_graph_and_round_trips_guidance(
     nested_result = json.loads((nested[0] / "round-01" / "result.json").read_text())
     assert nested_result["results"]["worker"]["status"] == "done"
     assert not (nested[0] / "channel").exists()
+
+
+def test_launch_api_records_detached_owner_and_real_report(
+    tmp_path: Path, onejudge_bin: str
+) -> None:
+    """Cover the Python launch boundary while still driving the real onejudge process."""
+    runs = tmp_path / "api-runs"
+    run_id = launch_orchestrator(
+        _plan(tmp_path, "surface-milestone"),
+        runs_dir=runs,
+        base_path=_base(tmp_path),
+        onejudge_bin=onejudge_bin,
+        skill_provider={"kind": "command", "command": [sys.executable, str(FAKE_BACKEND)]},
+        turn_timeout=10,
+    )
+    run_dir = runs / run_id
+    status = json.loads((run_dir / "round-01" / "status.json").read_text(encoding="utf-8"))
+    assert status["status"] == "running"
+    assert isinstance(status["pid"], int) and status["host"]
+    surface = _next_cli(run_id, runs)
+    assert surface["surface"]["kind"] == "milestone"
+    _reply_cli(run_id, runs, {"completion": True, "reason": "verified"})
+    report = _wait_report(run_dir / "orchestrator" / "report.json")
+    assert report["stopped_early"] is False
 
 
 def test_bridge_timeout_reattach_finished_and_monitorable(

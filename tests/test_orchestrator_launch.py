@@ -43,6 +43,31 @@ def test_launch_validates_provider_payload(tmp_path: Path, provider: dict[str, o
         launch_orchestrator(plan, runs_dir=tmp_path / "runs", skill_provider=provider)
 
 
+def test_launch_reaches_real_process_boundary_for_valid_oneharness_provider(tmp_path: Path) -> None:
+    plan = tmp_path / "plan.json"
+    plan.write_text(
+        '{"schema_version":3,"tasks":[{"id":"approval","kind":"human","task":"approve"}]}',
+        encoding="utf-8",
+    )
+    with pytest.raises(DispatchError, match="binary not found"):
+        launch_orchestrator(
+            plan,
+            runs_dir=tmp_path / "runs",
+            onejudge_bin="definitely-missing-onejudge",
+            skill_provider={"kind": "oneharness", "bin": "oneharness"},
+        )
+
+
+def test_launch_rejects_nul_onejudge_binary(tmp_path: Path) -> None:
+    plan = tmp_path / "plan.json"
+    plan.write_text(
+        '{"schema_version":3,"tasks":[{"id":"approval","kind":"human","task":"approve"}]}',
+        encoding="utf-8",
+    )
+    with pytest.raises(DispatchError, match="non-NUL"):
+        launch_orchestrator(plan, runs_dir=tmp_path / "runs", onejudge_bin="bad\0binary")
+
+
 def test_orchestrate_cli_prints_run_id(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
