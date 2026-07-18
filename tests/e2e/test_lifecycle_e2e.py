@@ -891,6 +891,100 @@ def test_github_auto_merge_unavailable_falls_back_to_direct(tmp_path, bare_origi
     assert _has_file(origin, "main", "feature.txt")
 
 
+def test_github_direct_fallback_fails_fast_when_merge_returns_unmerged(
+    tmp_path, bare_origin
+) -> None:
+    origin = bare_origin()
+    before = _tip(origin, "main")
+    github = FakeGitHub(origin, auto_available=False, direct_completes=False)
+    sleeps: list[float] = []
+
+    result = run_repo_task(
+        "acme/widget",
+        "Add a feature whose direct remote merge stalls.",
+        "engineer",
+        workspace=_workspace(tmp_path, origin, workflow="remote"),
+        merge=GitHubMergeStrategy(github),
+        url=str(origin),
+        dispatch_fn=make_writing_dispatch(filename="feature.txt"),
+        verify_cmd=["true"],
+        repo_type="single-owner",
+        merge_policy="auto",
+        sleep=sleeps.append,
+        timeout=10_000.0,
+    )
+
+    assert not result.ok and result.outcome == "error"
+    assert "ci=SUCCESS" in result.detail
+    assert sleeps == []
+    assert _tip(origin, "main") == before
+
+
+def test_github_direct_fallback_polls_only_while_merge_is_in_progress(
+    tmp_path, bare_origin
+) -> None:
+    origin = bare_origin()
+    before = _tip(origin, "main")
+    github = FakeGitHub(
+        origin,
+        auto_available=False,
+        direct_completes=False,
+        merge_progress_states=(False, False, True, False),
+    )
+    sleeps: list[float] = []
+
+    result = run_repo_task(
+        "acme/widget",
+        "Add a feature whose queued direct merge stops progressing.",
+        "engineer",
+        workspace=_workspace(tmp_path, origin, workflow="remote"),
+        merge=GitHubMergeStrategy(github),
+        url=str(origin),
+        dispatch_fn=make_writing_dispatch(filename="feature.txt"),
+        verify_cmd=["true"],
+        repo_type="single-owner",
+        merge_policy="auto",
+        sleep=sleeps.append,
+        timeout=10_000.0,
+    )
+
+    assert not result.ok and result.outcome == "error"
+    assert "ci=SUCCESS" in result.detail
+    assert sleeps == [15.0]
+    assert _tip(origin, "main") == before
+
+
+def test_github_direct_policy_polls_an_in_progress_merge_until_completion(
+    tmp_path, bare_origin
+) -> None:
+    origin = bare_origin()
+    github = FakeGitHub(
+        origin,
+        direct_completes=False,
+        direct_merge_status_poll=4,
+        merge_in_progress=True,
+    )
+    sleeps: list[float] = []
+
+    result = run_repo_task(
+        "acme/widget",
+        "Add a feature whose direct merge completes asynchronously.",
+        "engineer",
+        workspace=_workspace(tmp_path, origin),
+        merge=GitHubMergeStrategy(github),
+        url=str(origin),
+        dispatch_fn=make_writing_dispatch(filename="feature.txt"),
+        verify_cmd=["true"],
+        merge_policy="direct",
+        sleep=sleeps.append,
+        timeout=10_000.0,
+    )
+
+    assert result.ok and result.outcome == "merged"
+    assert sleeps == [15.0]
+    assert _has_file(origin, "main", "feature.txt")
+
+
 def test_github_required_check_failure_blocks_merge(tmp_path, bare_origin) -> None:
     origin = bare_origin()
     before = _tip(origin, "main")
@@ -967,10 +1061,69 @@ def test_github_settled_checks_fail_when_native_auto_merge_stalls(
         timeout=10_000.0,
     )
 
-    assert result.outcome == "checks-failed", result.detail
+    assert result.outcome == "error", result.detail
     assert not result.ok
     assert expected_states in result.detail
     assert sleeps == []
+    assert _tip(origin, "main") == before
+
+
+def test_github_auto_policy_polls_an_in_progress_merge_until_completion(
+    tmp_path, bare_origin
+) -> None:
+    origin = bare_origin()
+    github = FakeGitHub(
+        origin,
+        auto_completes=False,
+        auto_merge_status_poll=3,
+        merge_progress_states=(False, True, True),
+    )
+    sleeps: list[float] = []
+
+    result = run_repo_task(
+        "acme/widget",
+        "Add a feature whose native auto-merge completes asynchronously.",
+        "engineer",
+        workspace=_workspace(tmp_path, origin, workflow="remote"),
+        merge=GitHubMergeStrategy(github),
+        url=str(origin),
+        dispatch_fn=make_writing_dispatch(filename="feature.txt"),
+        verify_cmd=["true"],
+        repo_type="single-owner",
+        merge_policy="auto",
+        sleep=sleeps.append,
+        timeout=10_000.0,
+    )
+
+    assert result.ok and result.outcome == "merged"
+    assert sleeps == [15.0]
+    assert _has_file(origin, "main", "feature.txt")
+
+
+def test_github_in_progress_merge_uses_timeout_as_backstop(tmp_path, bare_origin) -> None:
+    origin = bare_origin()
+    before = _tip(origin, "main")
+    github = FakeGitHub(origin, direct_completes=False, merge_in_progress=True)
+    sleeps: list[float] = []
+    ticks = iter([0.0, 0.0, 100.0])
+
+    result = run_repo_task(
+        "acme/widget",
+        "Add a feature whose direct merge never finishes processing.",
+        "engineer",
+        workspace=_workspace(tmp_path, origin),
+        merge=GitHubMergeStrategy(github),
+        url=str(origin),
+        dispatch_fn=make_writing_dispatch(filename="feature.txt"),
+        verify_cmd=["true"],
+        merge_policy="direct",
+        sleep=sleeps.append,
+        clock=lambda: next(ticks),
+        timeout=10.0,
+    )
+
+    assert not result.ok and result.outcome == "timeout"
+    assert sleeps == [15.0]
     assert _tip(origin, "main") == before
 
 

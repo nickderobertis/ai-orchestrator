@@ -38,6 +38,7 @@ class FakePRState:
     merged: bool = False
     closed: bool = False
     auto: bool = False
+    direct_requested: bool = False
 
 
 def _git(*args: str, cwd: str | Path) -> str:
@@ -80,10 +81,12 @@ class FakeGitHub:
     ``required``: the required (blocking) check names. ``fail_checks``: the
     required checks conclude red (never merges). ``auto_available``: whether the
     repo allows native auto-merge (else `enable_auto_merge` raises, exercising the
-    direct-merge fallback). ``auto_completes`` can simulate GitHub accepting native
-    auto-merge without completing it. The merge fast-forwards ``base`` to the PR
-    head in the bare origin, so the change genuinely lands on the remote's default
-    branch.
+    direct-merge fallback). ``auto_completes`` and ``direct_completes`` can simulate
+    an accepted merge mode not completing it; ``auto_merge_status_poll`` and
+    ``direct_merge_status_poll`` delay a merge until a later status read.
+    ``merge_in_progress`` or ``merge_progress_states`` represents active merge
+    processing. The merge fast-forwards ``base`` to the PR head in the bare origin,
+    so the change genuinely lands on the remote's default branch.
     """
 
     def __init__(
@@ -94,6 +97,11 @@ class FakeGitHub:
         fail_checks: bool = False,
         auto_available: bool = True,
         auto_completes: bool = True,
+        auto_merge_status_poll: int | None = None,
+        direct_completes: bool = True,
+        direct_merge_status_poll: int | None = None,
+        merge_in_progress: bool = False,
+        merge_progress_states: tuple[bool, ...] | None = None,
         check_states: tuple[str, ...] | None = None,
     ) -> None:
         self.origin = origin
@@ -101,6 +109,11 @@ class FakeGitHub:
         self.fail_checks = fail_checks
         self.auto_available = auto_available
         self.auto_completes = auto_completes
+        self.auto_merge_status_poll = auto_merge_status_poll
+        self.direct_completes = direct_completes
+        self.direct_merge_status_poll = direct_merge_status_poll
+        self.merge_in_progress = merge_in_progress
+        self.merge_progress_states = merge_progress_states
         self.check_states = check_states
         self.status_polls = 0
         self._prs: dict[int, FakePRState] = {}
@@ -131,7 +144,9 @@ class FakeGitHub:
         self._prs[pr.number].auto = True
 
     def merge(self, pr: PullRequest, *, method: str) -> None:
-        self._do_merge(pr)
+        self._prs[pr.number].direct_requested = True
+        if self.direct_completes:
+            self._do_merge(pr)
 
     def status(self, pr: PullRequest) -> PRStatus:
         self.status_polls += 1
@@ -142,6 +157,20 @@ class FakeGitHub:
             state = "FAILURE" if self.fail_checks else "SUCCESS"
         checks = tuple(Check(name=c, state=state, required=True) for c in self.required)
         green = all(c.green for c in checks)
+        if (
+            st.direct_requested
+            and self.direct_merge_status_poll is not None
+            and self.status_polls >= self.direct_merge_status_poll
+            and not st.merged
+        ):
+            self._do_merge(pr)
+        if (
+            st.auto
+            and self.auto_merge_status_poll is not None
+            and self.status_polls >= self.auto_merge_status_poll
+            and not st.merged
+        ):
+            self._do_merge(pr)
         if st.auto and self.auto_completes and green and not st.merged:
             self._do_merge(pr)  # native auto-merge fires once required checks are green
         merged = st.merged
@@ -152,6 +181,13 @@ class FakeGitHub:
             merge_state_status="CLEAN",
             checks=checks,
             draft=st.draft,
+            merge_in_progress=(
+                self.merge_progress_states[
+                    min(self.status_polls - 1, len(self.merge_progress_states) - 1)
+                ]
+                if self.merge_progress_states
+                else self.merge_in_progress
+            ),
         )
 
     def _do_merge(self, pr: PullRequest) -> None:

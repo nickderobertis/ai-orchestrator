@@ -40,6 +40,10 @@ def _pr() -> PullRequest:
     return PullRequest(number=3, url="u", repo="o/r", head="feat", base="main")
 
 
+def _queue_payload(entry: dict[str, str] | None = None) -> str:
+    return json.dumps({"data": {"repository": {"pullRequest": {"mergeQueueEntry": entry}}}})
+
+
 def test_default_branch() -> None:
     run = RecordingRun(["main\n"])
     assert CliGitHubBackend(run=run).default_branch("o/r") == "main"
@@ -185,18 +189,46 @@ def test_status_parses_rollup() -> None:
             },
         ],
     }
-    status = CliGitHubBackend(run=RecordingRun([json.dumps(payload)])).status(_pr())
+    run = RecordingRun([json.dumps(payload), _queue_payload()])
+    status = CliGitHubBackend(run=run).status(_pr())
     assert status.number == 3 and not status.merged
     assert status.draft
+    assert not status.merge_in_progress
     assert len(status.blocking) == 2  # ci + legacy
     assert status.blocking_failed  # legacy failed
     assert not status.blocking_green
+    assert run.calls[1][:2] == ["api", "graphql"]
+
+
+def test_status_reports_merge_queue_entry_as_in_progress() -> None:
+    payload = {
+        "number": 3,
+        "state": "OPEN",
+        "mergeStateStatus": "CLEAN",
+        "statusCheckRollup": [],
+    }
+    status = CliGitHubBackend(
+        run=RecordingRun([json.dumps(payload), _queue_payload({"id": "MQE_1"})])
+    ).status(_pr())
+    assert status.merge_in_progress
+
+
+@pytest.mark.parametrize(
+    ("entry", "message"),
+    [(True, "non-object mergeQueueEntry"), ({}, "invalid mergeQueueEntry id")],
+)
+def test_status_rejects_malformed_merge_queue_entry(entry: object, message: str) -> None:
+    payload = {"number": 3, "state": "OPEN", "statusCheckRollup": []}
+    malformed = json.dumps({"data": {"repository": {"pullRequest": {"mergeQueueEntry": entry}}}})
+    with pytest.raises(GitHubError, match=message):
+        CliGitHubBackend(run=RecordingRun([json.dumps(payload), malformed])).status(_pr())
 
 
 def test_status_merged() -> None:
     payload = {"number": 3, "state": "MERGED", "mergeStateStatus": "CLEAN", "statusCheckRollup": []}
     status = CliGitHubBackend(run=RecordingRun([json.dumps(payload)])).status(_pr())
     assert status.merged and status.blocking_green  # no required checks → vacuously green
+    assert not status.merge_in_progress
 
 
 def test_status_rejects_non_boolean_draft_field() -> None:
@@ -209,6 +241,11 @@ def test_status_rejects_non_boolean_draft_field() -> None:
     }
     with pytest.raises(GitHubError, match="non-boolean isDraft"):
         CliGitHubBackend(run=RecordingRun([json.dumps(payload)])).status(_pr())
+
+
+def test_status_rejects_non_object_response_root() -> None:
+    with pytest.raises(GitHubError, match="invalid JSON payload"):
+        CliGitHubBackend(run=RecordingRun(["[]"])).status(_pr())
 
 
 def test_normalize_check_variants() -> None:
