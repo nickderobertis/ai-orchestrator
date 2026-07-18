@@ -7,6 +7,13 @@ from pathlib import Path
 
 from orchestrator import REPO_ROOT
 
+ADOPTED_ONEJUDGE_VERSION = (
+    (REPO_ROOT / "config" / "onejudge.version").read_text(encoding="utf-8").strip()
+)
+ADOPTED_ONEHARNESS_VERSION = (
+    (REPO_ROOT / "config" / "oneharness.version").read_text(encoding="utf-8").strip()
+)
+
 
 def _write_executable(path: Path, body: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -49,8 +56,12 @@ def _run_onejudge_install(tmp_path: Path, **extra_env: str) -> subprocess.Comple
         (REPO_ROOT / "scripts" / "session-setup.sh").read_text(encoding="utf-8"),
         encoding="utf-8",
     )
-    (test_repo / "config" / "onejudge.version").write_text("0.3.2\n", encoding="utf-8")
-    (test_repo / "config" / "oneharness.version").write_text("0.4.0\n", encoding="utf-8")
+    (test_repo / "config" / "onejudge.version").write_text(
+        f"{ADOPTED_ONEJUDGE_VERSION}\n", encoding="utf-8"
+    )
+    (test_repo / "config" / "oneharness.version").write_text(
+        f"{ADOPTED_ONEHARNESS_VERSION}\n", encoding="utf-8"
+    )
     tools = tmp_path / "tools"
     env = {
         "HOME": str(tmp_path),
@@ -103,8 +114,8 @@ def _write_sdk_python(path: Path, version: str) -> None:
 
 def test_install_onejudge_skips_compliant_sdk_and_cli(tmp_path: Path) -> None:
     _fake_install_commands(tmp_path)
-    _write_onejudge(tmp_path / "repo" / ".venv" / "bin" / "onejudge", "0.3.2")
-    _write_sdk_python(tmp_path / "repo" / ".venv" / "bin" / "python", "0.3.2")
+    _write_onejudge(tmp_path / "repo" / ".venv" / "bin" / "onejudge", ADOPTED_ONEJUDGE_VERSION)
+    _write_sdk_python(tmp_path / "repo" / ".venv" / "bin" / "python", ADOPTED_ONEJUDGE_VERSION)
 
     proc = _run_onejudge_install(tmp_path)
 
@@ -114,10 +125,10 @@ def test_install_onejudge_skips_compliant_sdk_and_cli(tmp_path: Path) -> None:
 
 def test_install_onejudge_installs_pinned_sdk_and_cli_from_pypi(tmp_path: Path) -> None:
     _fake_install_commands(tmp_path)
-    replacement = tmp_path / "onejudge-0.3.2"
+    replacement = tmp_path / f"onejudge-{ADOPTED_ONEJUDGE_VERSION}"
     sdk_python = tmp_path / "sdk-python"
-    _write_onejudge(replacement, "0.3.2")
-    _write_sdk_python(sdk_python, "0.3.2")
+    _write_onejudge(replacement, ADOPTED_ONEJUDGE_VERSION)
+    _write_sdk_python(sdk_python, ADOPTED_ONEJUDGE_VERSION)
 
     proc = _run_onejudge_install(
         tmp_path,
@@ -135,7 +146,10 @@ def test_install_onejudge_fails_loudly_when_uv_is_unavailable(tmp_path: Path) ->
     proc = _run_onejudge_install(tmp_path)
 
     assert proc.returncode == 1
-    assert "cannot install required onejudge 0.3.2: uv is not installed" in proc.stderr
+    assert (
+        f"cannot install required onejudge {ADOPTED_ONEJUDGE_VERSION}: uv is not installed"
+        in proc.stderr
+    )
 
 
 def test_install_onejudge_surfaces_uv_sync_failure(tmp_path: Path) -> None:
@@ -147,16 +161,19 @@ def test_install_onejudge_surfaces_uv_sync_failure(tmp_path: Path) -> None:
     assert (tmp_path / "uv.args").read_text(encoding="utf-8").strip() == (
         f"sync --project {tmp_path}/repo"
     )
-    assert "onejudge 0.3.2 PyPI install failed" in proc.stderr
-    assert "required onejudge SDK and CLI 0.3.2 are unavailable" in proc.stderr
+    assert f"onejudge {ADOPTED_ONEJUDGE_VERSION} PyPI install failed" in proc.stderr
+    assert (
+        f"required onejudge SDK and CLI {ADOPTED_ONEJUDGE_VERSION} are unavailable" in proc.stderr
+    )
 
 
 def test_install_onejudge_rejects_wrong_sdk_version(tmp_path: Path) -> None:
     _fake_install_commands(tmp_path)
-    replacement = tmp_path / "onejudge-0.3.2"
+    replacement = tmp_path / f"onejudge-{ADOPTED_ONEJUDGE_VERSION}"
     sdk_python = tmp_path / "sdk-python"
-    _write_onejudge(replacement, "0.3.2")
-    _write_sdk_python(sdk_python, "0.3.1")
+    wrong_version = "99.99.99"  # never the adopted pin, so the mismatch is guaranteed
+    _write_onejudge(replacement, ADOPTED_ONEJUDGE_VERSION)
+    _write_sdk_python(sdk_python, wrong_version)
 
     proc = _run_onejudge_install(
         tmp_path,
@@ -165,14 +182,12 @@ def test_install_onejudge_rejects_wrong_sdk_version(tmp_path: Path) -> None:
     )
 
     assert proc.returncode == 1
-    assert "expected '0.3.2', got '0.3.1'" in proc.stderr
-    assert "required onejudge SDK and CLI 0.3.2" in proc.stderr
+    assert f"expected '{ADOPTED_ONEJUDGE_VERSION}', got '{wrong_version}'" in proc.stderr
+    assert f"required onejudge SDK and CLI {ADOPTED_ONEJUDGE_VERSION}" in proc.stderr
 
 
-def test_install_oneharness_skips_compliant_binary(
-    tmp_path: Path, adopted_oneharness_version: str
-) -> None:
-    _write_oneharness(tmp_path / ".local" / "bin" / "oneharness", adopted_oneharness_version)
+def test_install_oneharness_skips_compliant_binary(tmp_path: Path) -> None:
+    _write_oneharness(tmp_path / ".local" / "bin" / "oneharness", ADOPTED_ONEHARNESS_VERSION)
 
     proc = _run_oneharness_install(tmp_path)
 
@@ -181,17 +196,17 @@ def test_install_oneharness_skips_compliant_binary(
 
 
 def test_install_oneharness_upgrades_obsolete_binary_from_exact_pypi_release(
-    tmp_path: Path, adopted_oneharness_version: str
+    tmp_path: Path,
 ) -> None:
     _write_oneharness(tmp_path / ".local" / "bin" / "oneharness", "0.0.1")
     replacement = tmp_path / "oneharness-current"
-    _write_oneharness(replacement, adopted_oneharness_version)
+    _write_oneharness(replacement, ADOPTED_ONEHARNESS_VERSION)
 
     proc = _run_oneharness_install(tmp_path, TEST_ONEHARNESS_BINARY=str(replacement))
 
     assert proc.returncode == 0, proc.stderr
     assert (tmp_path / "uv.args").read_text(encoding="utf-8").strip() == (
-        f"tool install --upgrade oneharness-cli=={adopted_oneharness_version}"
+        f"tool install --upgrade oneharness-cli=={ADOPTED_ONEHARNESS_VERSION}"
     )
     version = subprocess.run(
         [tmp_path / ".local" / "bin" / "oneharness", "--version"],
@@ -199,12 +214,10 @@ def test_install_oneharness_upgrades_obsolete_binary_from_exact_pypi_release(
         capture_output=True,
         check=True,
     )
-    assert version.stdout.strip() == f"oneharness {adopted_oneharness_version}"
+    assert version.stdout.strip() == f"oneharness {ADOPTED_ONEHARNESS_VERSION}"
 
 
-def test_install_oneharness_rejects_wrong_version_from_pypi(
-    tmp_path: Path, adopted_oneharness_version: str
-) -> None:
+def test_install_oneharness_rejects_wrong_version_from_pypi(tmp_path: Path) -> None:
     _write_oneharness(tmp_path / ".local" / "bin" / "oneharness", "0.0.1")
     wrong_version = "99.99.99"  # never the adopted pin, so the mismatch is guaranteed
     replacement = tmp_path / "wrong-oneharness"
@@ -214,10 +227,10 @@ def test_install_oneharness_rejects_wrong_version_from_pypi(
 
     assert proc.returncode == 1
     assert (
-        f"expected 'oneharness {adopted_oneharness_version}', got 'oneharness {wrong_version}'"
+        f"expected 'oneharness {ADOPTED_ONEHARNESS_VERSION}', got 'oneharness {wrong_version}'"
         in proc.stderr
     )
-    assert f"required oneharness {adopted_oneharness_version} is unavailable" in proc.stderr
+    assert f"required oneharness {ADOPTED_ONEHARNESS_VERSION} is unavailable" in proc.stderr
 
 
 def test_persist_session_env_writes_path_once(tmp_path: Path) -> None:
