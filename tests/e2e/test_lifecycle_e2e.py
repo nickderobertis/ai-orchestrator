@@ -828,6 +828,36 @@ def test_preserved_retry_without_complete_gate_remains_unpublished(tmp_path, bar
     assert not _has_file(origin, "main", "complete.txt")
 
 
+def test_preserved_retry_with_failing_complete_gate_remains_unpublished(
+    tmp_path, bare_origin
+) -> None:
+    origin = bare_origin()
+    workspace = _workspace(tmp_path, origin)
+    first = run_repo_task(
+        str(origin),
+        "Preserve partial work.",
+        "engineer",
+        workspace=workspace,
+        dispatch_fn=make_writing_dispatch(filename="partial.txt", completed=False),
+        verify_cmd=["true"],
+    )
+    assert isinstance(first.resume, Resume)
+
+    retried = run_repo_task(
+        str(origin),
+        "Finish with a red gate.",
+        "engineer",
+        workspace=workspace,
+        dispatch_fn=make_writing_dispatch(filename="complete.txt"),
+        verify_cmd=["false"],
+        resume=first.resume,
+    )
+
+    assert retried.outcome == "gate-failed" and not retried.ok
+    assert retried.verify is not None and not retried.verify.ok
+    assert not _has_file(origin, "main", "complete.txt")
+
+
 def test_clean_committed_partial_work_is_marked_and_recoverable(tmp_path, bare_origin) -> None:
     origin = bare_origin()
     canonical = gitops.clone(origin, tmp_path / "canonical-clean-partial")

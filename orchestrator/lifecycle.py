@@ -1195,7 +1195,8 @@ def run_repo_task(
         if resume is not None:
             validated = _validate_resume(clone, resume, github)
             if isinstance(validated, str):
-                if resume.mode != "retry":
+                invalid_provenance = "valid unattested incomplete provenance" in validated
+                if resume.mode != "retry" or not invalid_provenance:
                     result.outcome = "resume-failed"
                     result.detail = validated
                     return result
