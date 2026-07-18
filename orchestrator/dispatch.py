@@ -7,25 +7,34 @@ orchestrator calls this for one-off subtasks; `plan.run_plan` calls it for each
 node of a DAG.
 """
 
+# llmlint: ignore-file[changed_behavior_has_e2e] the real just/console launch, detached split
+# provider, nested run-plan, worker isolation, and launch failures run e2e; exhaustive malformed
+# provider and binary string variants are deterministic pre-launch unit boundary tests.
+
 from __future__ import annotations
 
 import argparse
 import json
 import os
+import socket
 import subprocess
 import sys
 import tempfile
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 import yaml
 
 from . import BASE_CONFIG, PERSONA_DIR, REPO_ROOT
+from .channel import create_channel
 from .config import ConfigError, build_effective_config, load_yaml
+from .coordination import atomic_json
 from .labels import LABEL_ENV, LabelError, merge_labels
 from .personas import persona_path
+from .runs import resolve_run_dir
 
 # onejudge's own exit codes (see docs/cli.md): 0 completed + boolean evals passed,
 # 1 hit the turn cap / a boolean eval failed, 2 bad config or usage.
@@ -35,6 +44,7 @@ EXIT_CONFIG_ERROR = 2
 # Temporary hard per-turn ceiling for legitimate long-running agents. Issue #6
 # will replace this coarse bound with separate inactivity and phase budgets.
 DEFAULT_ONEHARNESS_TIMEOUT = "10800"
+ORCHESTRATOR_ONEHARNESS_TIMEOUT = "86400"
 AGENT_ONEHARNESS_BIN = REPO_ROOT / "scripts" / "oneharness-agent.sh"
 
 
@@ -297,6 +307,163 @@ def dispatch(
         labels=labels,
         timeout=timeout,
     )
+
+
+# llmlint: ignore[changed_behavior_has_e2e] tests/e2e/test_channel_e2e.py drives the real CLI
+# for missing-plan, unsupported-provider, and missing-onejudge launch failures as well as the
+# successful detached split-provider journey; provider payload variants are deterministic
+# pre-launch validation branches covered exhaustively in tests/test_orchestrator_launch.py.
+# llmlint: ignore[structural_pattern_matching] provider_kind is first validated as the
+# discriminator, then each open-ended provider mapping receives variant-specific checks.
+def launch_orchestrator(
+    plan_path: str | Path,
+    *,
+    runs_dir: str | Path = "runs",
+    run_id: str | None = None,
+    base_path: str | Path = BASE_CONFIG,
+    onejudge_bin: str = "onejudge",
+    skill_provider: Mapping[str, Any] | None = None,
+    max_turns: int = 100,
+    turn_timeout: int = int(ORCHESTRATOR_ONEHARNESS_TIMEOUT),
+    cwd: str | Path = REPO_ROOT,
+) -> str:
+    """Launch a detached live-supervised orchestrator and return its run id."""
+    plan = Path(plan_path).resolve()
+    if not plan.is_file():
+        raise DispatchError(f"plan does not exist: {plan}")
+    if not isinstance(onejudge_bin, str) or not onejudge_bin or "\x00" in onejudge_bin:
+        raise DispatchError("onejudge binary must be a non-empty, non-NUL string")
+    plan_mapping = load_yaml(plan)
+    # Import locally because graph's direct-agent runner imports this module.
+    from .graph import parse_graph
+
+    parse_graph(plan_mapping)
+    root = Path(runs_dir).resolve()
+    run_dir = resolve_run_dir(root, plan_mapping, plan, run_id)
+    run_dir.mkdir(parents=True, exist_ok=False)
+    channel_dir = create_channel(run_dir)
+    round_dir = run_dir / "round-01"
+    round_dir.mkdir()
+    config = build_effective_config(load_yaml(base_path), {}, max_turns=max_turns)
+    # The live planner's supervisor verdict is the completion authority. Standalone
+    # simulated-model eval/assessment calls do not belong on this command relay.
+    config.pop("evals", None)
+    config.pop("assessment", None)
+    skill = dict(skill_provider or config.get("provider", {}))
+    provider_kind = skill.get("kind")
+    if provider_kind not in {"command", "oneharness"}:
+        raise DispatchError("orchestrator skill provider kind must be 'command' or 'oneharness'")
+    if provider_kind == "command":
+        provider_command = skill.get("command")
+        if not (
+            isinstance(provider_command, list)
+            and provider_command
+            and all(
+                isinstance(item, str) and item and "\x00" not in item for item in provider_command
+            )
+        ):
+            raise DispatchError(
+                "orchestrator command provider requires a non-empty command list of strings"
+            )
+    else:
+        provider_bin = skill.get("bin", "oneharness")
+        if not isinstance(provider_bin, str) or not provider_bin or "\x00" in provider_bin:
+            raise DispatchError("orchestrator oneharness provider bin must be a non-empty string")
+    config["provider"] = {
+        "kind": "split",
+        "skill": skill,
+        "judge": {
+            "kind": "command",
+            "command": [
+                sys.executable,
+                "-m",
+                "orchestrator.channel",
+                str(channel_dir),
+                run_dir.name,
+                "1",
+                "--timeout",
+                str(turn_timeout),
+            ],
+        },
+    }
+    config["session"] = f"orchestrator-{run_dir.name}"
+    effective = run_dir / "orchestrator" / "effective.onejudge.yaml"
+    effective.parent.mkdir()
+    effective.write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
+    worker_base = load_yaml(base_path)
+    worker_base["provider"] = skill
+    worker_base_path = effective.parent / "worker-base.yaml"
+    worker_base_path.write_text(yaml.safe_dump(worker_base, sort_keys=False), encoding="utf-8")
+    report_path = effective.parent / "report.json"
+    stderr_path = effective.parent / "stderr.log"
+    task = (
+        "Drive this tracked orchestration plan one round at a time. Execute the real command "
+        f"`just run-plan {plan} --runs-dir {root} --base {worker_base_path} "
+        f"--provider {provider_kind}` for each required round, review its recorded "
+        "result, and surface milestones, blockers, departures, and closeout to your supervisor."
+    )
+    command = [onejudge_bin, "run", str(effective), "--task", task, "--format", "json"]
+    process_env = dict(os.environ)
+    process_env["ONEHARNESS_TIMEOUT"] = str(turn_timeout)
+    _validate_oneharness_timeout(process_env["ONEHARNESS_TIMEOUT"])
+    try:
+        with (
+            report_path.open("w", encoding="utf-8") as stdout,
+            stderr_path.open("w", encoding="utf-8") as stderr,
+        ):
+            proc = subprocess.Popen(
+                command,
+                cwd=str(cwd),
+                text=True,
+                stdout=stdout,
+                stderr=stderr,
+                env=process_env,
+                start_new_session=True,
+            )
+    except FileNotFoundError as exc:
+        raise DispatchError(f"onejudge binary not found: {onejudge_bin!r}") from exc
+    atomic_json(
+        round_dir / "status.json",
+        {
+            "status": "running",
+            "pid": proc.pid,
+            "host": socket.gethostname(),
+            "started": datetime.now(UTC).isoformat(),
+        },
+    )
+    atomic_json(round_dir / "plan.json", {"name": run_dir.name, "nodes": []})
+    return run_dir.name
+
+
+def main_orchestrate(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Launch a live-supervised orchestrator")
+    parser.add_argument("plan", type=Path)
+    parser.add_argument("--runs-dir", type=Path, default=Path("runs"))
+    parser.add_argument("--run-id")
+    parser.add_argument("--base", type=Path, default=BASE_CONFIG)
+    parser.add_argument("--onejudge-bin", default="onejudge")
+    parser.add_argument(
+        "--skill-command",
+        nargs="+",
+        help="command-provider argv for the orchestrator agent (primarily for deterministic tests)",
+    )
+    args = parser.parse_args(argv)
+    try:
+        skill = {"kind": "command", "command": args.skill_command} if args.skill_command else None
+        print(
+            launch_orchestrator(
+                args.plan,
+                runs_dir=args.runs_dir,
+                run_id=args.run_id,
+                base_path=args.base,
+                onejudge_bin=args.onejudge_bin,
+                skill_provider=skill,
+            )
+        )
+    except (DispatchError, ConfigError) as exc:
+        print(f"orchestrate: {exc}", file=sys.stderr)
+        return EXIT_CONFIG_ERROR
+    return 0
 
 
 def _read_task(value: str | None) -> str:

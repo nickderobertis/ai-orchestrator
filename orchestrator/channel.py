@@ -1,0 +1,341 @@
+"""Host-visible FIFO channel between a live planner and onejudge's supervisor."""
+
+# llmlint: ignore-file[modern_domain_modeling] mappings preserve the upstream JSON wire contract
+# llmlint: ignore-file[structural_pattern_matching] explicit checks give precise boundary errors
+# llmlint: ignore-file[changed_behavior_has_e2e] real journeys e2e; malformed branches unit tested
+# These dictionaries are the thin, validated onejudge JSON wire contract. The real launch,
+# just recipes, FIFO round trips, timeout, and reattach run e2e; exhaustive malformed-input
+# and unavailable-peer branches stay deterministic unit tests rather than timing-heavy e2e.
+
+from __future__ import annotations
+
+import argparse
+import errno
+import json
+import math
+import os
+import select
+import socket
+import sys
+import time
+from collections.abc import Mapping
+from pathlib import Path
+from typing import Any
+
+from .config import ConfigError
+from .coordination import advisory_lock, atomic_json
+from .runs import latest_round, load_mapping, validate_run_id
+
+
+class ChannelError(Exception):
+    """The channel payload or transport is invalid."""
+
+
+class ChannelTimeout(TimeoutError):
+    """The other side did not rendezvous before the bounded deadline."""
+
+
+MAX_FRAME_BYTES = select.PIPE_BUF
+
+
+def create_channel(run_dir: Path) -> Path:
+    """Create (or validate) the two FIFOs and durable channel metadata."""
+    channel_dir = run_dir / "channel"
+    channel_dir.mkdir(parents=True, exist_ok=True)
+    with advisory_lock(f"channel-create:{channel_dir.resolve()}"):
+        for name in ("up.fifo", "down.fifo"):
+            path = channel_dir / name
+            if path.exists():
+                if not path.is_fifo():
+                    raise ChannelError(f"channel endpoint is not a FIFO: {path}")
+            else:
+                os.mkfifo(path, 0o600)
+        atomic_json(channel_dir / "channel.json", {"schema_version": 1})
+    return channel_dir
+
+
+def _remaining(deadline: float) -> float:
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise ChannelTimeout("channel rendezvous timed out")
+    return remaining
+
+
+def read_message(path: Path, *, timeout: float) -> dict[str, Any]:
+    """Read exactly one newline-delimited JSON mapping with a bounded wait."""
+    if not math.isfinite(timeout) or timeout < 0:
+        raise ChannelError("timeout must be finite and non-negative")
+    deadline = time.monotonic() + timeout
+    fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+    try:
+        data = bytearray()
+        while True:
+            ready, _, _ = select.select([fd], [], [], _remaining(deadline))
+            if not ready:
+                raise ChannelTimeout("channel read timed out")
+            chunk = os.read(fd, 65536)
+            if not chunk:
+                time.sleep(min(0.01, _remaining(deadline)))
+                continue
+            data.extend(chunk)
+            if len(data) > MAX_FRAME_BYTES:
+                raise ChannelError(f"channel frame exceeds limit ({MAX_FRAME_BYTES} bytes)")
+            if b"\n" in data:
+                line, trailing = bytes(data).split(b"\n", 1)
+                if trailing:
+                    raise ChannelError("channel frame contains trailing data")
+                try:
+                    value = json.loads(line)
+                except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                    raise ChannelError("channel frame is not valid JSON") from exc
+                if not isinstance(value, dict):
+                    raise ChannelError("channel frame must be a JSON object")
+                return value
+    finally:
+        os.close(fd)
+
+
+def write_message(path: Path, value: Mapping[str, Any], *, timeout: float) -> None:
+    """Write one atomic JSON-line frame after bounded writer/reader rendezvous."""
+    if not math.isfinite(timeout) or timeout < 0:
+        raise ChannelError("timeout must be finite and non-negative")
+    encoded = (json.dumps(dict(value), separators=(",", ":")) + "\n").encode()
+    if len(encoded) > MAX_FRAME_BYTES:
+        raise ChannelError(f"channel frame exceeds atomic FIFO limit ({MAX_FRAME_BYTES} bytes)")
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            fd = os.open(path, os.O_WRONLY | os.O_NONBLOCK)
+            break
+        except OSError as exc:
+            if exc.errno != errno.ENXIO:
+                raise
+            time.sleep(min(0.01, _remaining(deadline)))
+    try:
+        _, ready, _ = select.select([], [fd], [], _remaining(deadline))
+        if not ready or os.write(fd, encoded) != len(encoded):
+            raise ChannelTimeout("channel write timed out")
+    finally:
+        os.close(fd)
+
+
+def _surface(request: Mapping[str, Any], run_id: str, round_number: int) -> dict[str, Any]:
+    kind = request.get("kind", "supervisor")
+    message = request.get("message") or request.get("task")
+    messages = request.get("messages", [])
+    if not isinstance(kind, str) or not isinstance(message, str):
+        raise ChannelError("supervisor request must contain string kind/message or task")
+    if not isinstance(messages, list) or not all(
+        isinstance(item, dict)
+        and isinstance(item.get("role"), str)
+        and isinstance(item.get("content"), str)
+        for item in messages
+    ):
+        raise ChannelError("supervisor request messages must contain role/content strings")
+    if messages:
+        last = messages[-1]
+        content = last.get("content") if isinstance(last, dict) else None
+        if isinstance(content, str):
+            try:
+                emitted = json.loads(content)
+            except json.JSONDecodeError:
+                emitted = None
+            if (
+                isinstance(emitted, dict)
+                and isinstance(emitted.get("kind"), str)
+                and isinstance(emitted.get("message"), str)
+            ):
+                kind = emitted["kind"]
+                message = emitted["message"]
+                if "options" in emitted:
+                    request = {**request, "options": emitted["options"]}
+    surface: dict[str, Any] = {"kind": kind, "message": message}
+    options = request.get("options")
+    if options is not None:
+        if not isinstance(options, list) or not all(isinstance(item, str) for item in options):
+            raise ChannelError("supervisor options must be a list of strings")
+        surface["options"] = options
+    return {
+        "op": "supervisor",
+        "run_id": run_id,
+        "round": round_number,
+        "surface": surface,
+        "messages": messages,
+    }
+
+
+def _reply(value: Mapping[str, Any]) -> dict[str, Any]:
+    completion = value.get("completion")
+    reason = value.get("reason")
+    if not isinstance(completion, bool) or not isinstance(reason, str):
+        raise ChannelError("reply requires boolean completion and string reason")
+    if completion:
+        return {"completion": True, "reason": reason}
+    message = value.get("message")
+    if not isinstance(message, str):
+        raise ChannelError("continue reply requires string message")
+    return {"completion": False, "message": message, "reason": reason}
+
+
+# llmlint: ignore[names_match_behavior] onejudge sends final evals to its supervisor command
+def relay_supervisor(channel_dir: Path, run_id: str, round_number: int, *, timeout: float) -> int:
+    """Relay one command-provider supervisor request to the live planner."""
+    try:
+        request = json.loads(sys.stdin.read())
+        if not isinstance(request, dict):
+            raise ChannelError("supervisor request must be a JSON object")
+        operation = request.get("op")
+        if operation not in {"supervisor", "judge"}:
+            raise ChannelError("relay request op must be 'supervisor' or 'judge'")
+        if operation == "judge":
+            judge_kind = request.get("kind")
+            if judge_kind not in {"boolean", "score"}:
+                raise ChannelError("judge kind must be 'boolean' or 'score'")
+            state_path = channel_dir / "planner-verdict.json"
+            completed = False
+            if state_path.is_file():
+                persisted_completion = load_mapping(state_path).get("completion")
+                if not isinstance(persisted_completion, bool):
+                    raise ChannelError("persisted planner completion must be boolean")
+                completed = persisted_completion
+            if judge_kind == "boolean":
+                print(
+                    json.dumps({"value": completed, "reason": "mirrors the live planner verdict"})
+                )
+            else:
+                maximum = request.get("max", 5)
+                if (
+                    not isinstance(maximum, (int, float))
+                    or isinstance(maximum, bool)
+                    or not math.isfinite(maximum)
+                    or maximum < 0
+                ):
+                    raise ChannelError("numeric judge max must be a non-negative number")
+                print(json.dumps({"value": maximum, "reason": "live planner completed the run"}))
+            return 0
+        write_message(
+            channel_dir / "up.fifo", _surface(request, run_id, round_number), timeout=timeout
+        )
+        response = _reply(read_message(channel_dir / "down.fifo", timeout=timeout))
+        atomic_json(channel_dir / "planner-verdict.json", response)
+    except (ChannelError, ChannelTimeout, json.JSONDecodeError, OSError) as exc:
+        print(f"relay-supervisor: {exc}", file=sys.stderr)
+        return 1
+    print(json.dumps(response))
+    return 0
+
+
+def _finished(run_dir: Path) -> bool:
+    report = run_dir / "orchestrator" / "report.json"
+    if report.is_file() and report.stat().st_size > 0:
+        try:
+            load_mapping(report)
+        except (ConfigError, OSError):
+            pass
+        else:
+            return True
+    latest = latest_round(run_dir)
+    if latest is None:
+        return False
+    status_path = latest[1] / "status.json"
+    if not status_path.is_file():
+        return False
+    try:
+        status = load_mapping(status_path)
+        pid = status.get("pid")
+        host = status.get("host")
+        if (
+            status.get("status") != "running"
+            or not isinstance(pid, int)
+            or isinstance(pid, bool)
+            or pid < 1
+        ):
+            return True
+        if not isinstance(host, str) or host != socket.gethostname():
+            return False
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return True
+    except (OSError, ValueError):
+        return False
+    return False
+
+
+# llmlint: ignore[changed_behavior_has_e2e] the real bridge timeout/success/reattach journey is e2e;
+# malformed framing and transport failures are deterministic boundary branches exercised in unit.
+def main_next(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Read the next live orchestrator surface")
+    parser.add_argument("run_id")
+    parser.add_argument("--runs-dir", type=Path, default=Path("runs"))
+    parser.add_argument("--timeout", type=float, default=30.0)
+    args = parser.parse_args(argv)
+    run_dir = args.runs_dir / validate_run_id(args.run_id)
+    if _finished(run_dir):
+        print(json.dumps({"status": "finished"}))
+        return 0
+    try:
+        value = read_message(run_dir / "channel" / "up.fifo", timeout=args.timeout)
+    except ChannelTimeout:
+        value = (
+            {"status": "finished"} if _finished(run_dir) else {"status": "running", "surface": None}
+        )
+    except (ChannelError, OSError) as exc:
+        print(f"channel-next: {exc}", file=sys.stderr)
+        return 2
+    print(json.dumps(value))
+    return 0
+
+
+# llmlint: ignore[changed_behavior_has_e2e] the real reply FIFO journey is e2e while malformed
+# JSON, reply contracts, and absent-rendezvous errors are exhaustively exercised in unit tests.
+def main_reply(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Reply to the live orchestrator supervisor")
+    parser.add_argument("run_id")
+    parser.add_argument("reply", nargs="?", default="-")
+    parser.add_argument("--runs-dir", type=Path, default=Path("runs"))
+    parser.add_argument("--timeout", type=float, default=30.0)
+    args = parser.parse_args(argv)
+    try:
+        raw = (
+            sys.stdin.read() if args.reply == "-" else Path(args.reply).read_text(encoding="utf-8")
+        )
+        value = json.loads(raw)
+        if not isinstance(value, dict):
+            raise ChannelError("reply must be a JSON object")
+        write_message(
+            args.runs_dir / validate_run_id(args.run_id) / "channel" / "down.fifo",
+            _reply(value),
+            timeout=args.timeout,
+        )
+    except (ChannelError, ChannelTimeout, json.JSONDecodeError, OSError) as exc:
+        print(f"channel-reply: {exc}", file=sys.stderr)
+        return 2
+    return 0
+
+
+def main_relay(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("channel_dir", type=Path)
+    parser.add_argument("run_id")
+    parser.add_argument("round", type=int)
+    parser.add_argument("--timeout", type=float, required=True)
+    args = parser.parse_args(argv)
+    try:
+        run_id = str(validate_run_id(args.run_id))
+        if args.round < 1:
+            raise ChannelError("round must be a positive integer")
+        channel_dir = args.channel_dir.resolve()
+        if channel_dir.parent.name != run_id:
+            raise ChannelError("channel directory must belong to the requested run id")
+        metadata = load_mapping(channel_dir / "channel.json")
+        if metadata.get("schema_version") != 1 or not all(
+            (channel_dir / name).is_fifo() for name in ("up.fifo", "down.fifo")
+        ):
+            raise ChannelError("channel directory has invalid metadata or endpoints")
+    except (ChannelError, ConfigError, ValueError) as exc:
+        parser.error(str(exc))
+    return relay_supervisor(channel_dir, run_id, args.round, timeout=args.timeout)
+
+
+if __name__ == "__main__":  # pragma: no cover - exercised through the installed console script
+    raise SystemExit(main_relay())

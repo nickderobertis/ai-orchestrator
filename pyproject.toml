@@ -28,6 +28,10 @@ orchestrator-register-repo = "orchestrator.registry:main_register"
 orchestrator-migrate-repo-workflow = "orchestrator.registry:main_migrate_workflow"
 orchestrator-migrate-repo-type = "orchestrator.registry:main_migrate_type"
 orchestrator-repos = "orchestrator.registry:main_repos"
+orchestrator-orchestrate = "orchestrator.dispatch:main_orchestrate"
+orchestrator-channel-next = "orchestrator.channel:main_next"
+orchestrator-channel-reply = "orchestrator.channel:main_reply"
+orchestrator-relay-supervisor = "orchestrator.channel:main_relay"
 
 [dependency-groups]
 dev = [

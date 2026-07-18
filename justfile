@@ -86,6 +86,20 @@ dispatch *args:
 run-plan *args:
     @uv run orchestrator-run-plan "$@"
 
+# Launch the dedicated orchestrator with a host-visible live planner channel.
+# llmlint: ignore[tool_output_is_signal] orchestrate reports validated launch failures and the caller can retry after correcting the named input.
+orchestrate *args:
+    @uv run orchestrator-orchestrate "$@"
+
+# Bounded host-side reads and replies for the live planner channel.
+# llmlint: ignore[tool_output_is_signal] channel-next returns a structured bounded status or a validated transport error for planner recovery.
+channel-next *args:
+    @uv run orchestrator-channel-next "$@"
+
+# llmlint: ignore[tool_output_is_signal] channel-reply validates the reply and names transport/rendezvous failures so the planner can reattach and retry.
+channel-reply *args:
+    @uv run orchestrator-channel-reply "$@"
+
 # Drive one subtask through a repo's full lifecycle (clone→gate→PR/merge):
 # `just repo-task <repo> <persona> "<task>"`. `<repo>` is a GitHub name/slug/URL
 # or a local path; direct base merge requires an explicit registered local workflow.

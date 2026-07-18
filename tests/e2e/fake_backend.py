@@ -23,10 +23,11 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 from pathlib import Path
-from typing import Literal, TypedDict, cast
+from typing import Literal, NamedTuple, TypedDict, cast
 
 
 class SupervisorRequest(TypedDict):
@@ -55,6 +56,28 @@ def _task_text(messages: list[dict]) -> str:
 
 def _assistant_turns(messages: list[dict]) -> int:
     return sum(1 for m in messages if isinstance(m, dict) and m.get("role") == "assistant")
+
+
+class OrchestratorCommand(NamedTuple):
+    plan: Path
+    runs_dir: Path
+    argv: list[str]
+
+
+def _orchestrator_command(task: str) -> OrchestratorCommand | None:
+    match = re.search(r"`(just run-plan .+?)`", task)
+    if match is None:
+        return None
+    command = shlex.split(match.group(1))
+    runs_index = command.index("--runs-dir")
+    return OrchestratorCommand(Path(command[2]), Path(command[runs_index + 1]), command)
+
+
+def _planner_guidance(messages: list[dict]) -> str | None:
+    for message in reversed(messages):
+        if message.get("role") == "user" and "retry " in str(message.get("content", "")):
+            return str(message["content"])
+    return None
 
 
 def _commit_and_push_ci_iteration(state: str) -> None:
@@ -97,6 +120,18 @@ def main() -> int:
 
     match op:
         case "respond":
+            orchestrator_plan = _orchestrator_command(task)
+            plan_text = ""
+            if orchestrator_plan is not None:
+                plan_path = orchestrator_plan.plan
+                plan_text = plan_path.read_text(encoding="utf-8")
+                if _assistant_turns(messages) == 0:
+                    subprocess.run(
+                        orchestrator_plan.argv,
+                        check=True,
+                        capture_output=True,
+                        text=True,
+                    )
             if "ci-iterate" in task:
                 state = "RED" if _assistant_turns(messages) == 0 else "GREEN"
                 _commit_and_push_ci_iteration(state)
@@ -129,8 +164,26 @@ def main() -> int:
             # "not done" and completion is decided by the unified supervisor
             # below, which only passes on the second turn — exercising the loop.
             done = (not fail) and ("complete-now" in task)
+            guidance = _planner_guidance(messages)
+            if orchestrator_plan is not None:
+                turn = _assistant_turns(messages)
+                if turn == 0 and "surface-blocker" in plan_text:
+                    agent_message = json.dumps(
+                        {"kind": "blocker", "message": "plan departure needs a decision"}
+                    )
+                elif turn == 0:
+                    agent_message = json.dumps(
+                        {"kind": "milestone", "message": "tracked round completed"}
+                    )
+                else:
+                    suffix = f"; received {guidance}" if guidance else ""
+                    agent_message = json.dumps(
+                        {"kind": "closeout", "message": f"orchestration complete{suffix}"}
+                    )
+            else:
+                agent_message = "done" if done else "working on it"
             resp = {
-                "message": "done" if done else "working on it",
+                "message": agent_message,
                 "done": done,
                 "usage": {"input_tokens": 10, "output_tokens": 5},
                 "events": [
