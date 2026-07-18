@@ -139,6 +139,7 @@ class Step:
     deps: list[str] = field(default_factory=list)
     max_turns: int | None = None
     done_when: str | None = None
+    expects_no_diff: bool = False
 
     @property
     def human(self) -> bool:
@@ -865,6 +866,12 @@ def _run_steps(
         if step.human:
             log.append("human-waiting", detail={"step_kind": step.kind})
             return NodeRun("waiting", f"step {sid!r} is awaiting human action", None)
+        if step.expects_no_diff:
+            log.append(
+                "step-settled",
+                detail={"status": "done", "step_kind": step.kind, "outcome": "no-changes"},
+            )
+            return NodeRun("done", None, None)
         log.append("step-started", detail={"step_kind": step.kind, "persona": step.persona})
         dispatch_head = gitops.head_sha(worktree)
         report = dispatch_fn(
@@ -1502,6 +1509,7 @@ class RepoPlanNode:
     execution_checkout: str | None = None
     max_turns: int | None = None
     done_when: str | None = None
+    expects_no_diff: bool = False
     steps: list[Step] | None = None
     stack_bases: list[StackBase] = field(default_factory=list)
     resume: Resume | None = None
@@ -1600,14 +1608,23 @@ def parse_repo_plan(data: dict[str, Any]) -> RepoPlan:
 
 def parse_repo_node(nid: str, t: dict[str, Any]) -> RepoPlanNode:
     """Validate one lifecycle node into a `RepoPlanNode`."""
-    from .plan import PlanError
+    from .plan import PlanError, _expects_no_diff
 
     if not isinstance(t.get("repo"), str) or not str(t.get("repo")).strip():
         raise PlanError(f"task {nid!r} needs a non-empty 'repo'")
+    expects_no_diff = _expects_no_diff(nid, t)
     raw_steps = t.get("steps")
+    if expects_no_diff and raw_steps is not None:
+        raise PlanError(f"task {nid!r} expects_no_diff cannot also set 'steps'")
     if raw_steps is not None:
         node_steps = _parse_steps(nid, raw_steps)
         persona = task = None
+    elif expects_no_diff:
+        node_steps = None
+        persona = None
+        task = t.get("task")
+        if not isinstance(task, str) or not task.strip():
+            raise PlanError(f"task {nid!r} needs a non-empty 'task'")
     else:
         for key in ("persona", "task"):
             if not isinstance(t.get(key), str) or not str(t.get(key)).strip():
@@ -1687,6 +1704,7 @@ def parse_repo_node(nid: str, t: dict[str, Any]) -> RepoPlanNode:
         execution_checkout=raw_execution,
         max_turns=t.get("max_turns"),
         done_when=t.get("done_when"),
+        expects_no_diff=expects_no_diff,
         steps=node_steps,
         stack_bases=_parse_stack_bases(nid, t.get("stack_bases", [])),
         resume=resume,
@@ -1837,12 +1855,12 @@ def _parse_stack_bases(nid: str, raw: object) -> list[StackBase]:
     return anchors
 
 
-_AGENT_STEP_FIELDS = ("persona", "max_turns", "done_when")
+_AGENT_STEP_FIELDS = ("persona", "max_turns", "done_when", "expects_no_diff")
 
 
 def _parse_steps(nid: str, raw_steps: object) -> list[Step]:
     """Validate a node's `steps` sub-DAG and return `Step`s (raise PlanError)."""
-    from .plan import PlanError, PlanNode, _topological_order
+    from .plan import PlanError, PlanNode, _expects_no_diff, _topological_order
 
     if not isinstance(raw_steps, list) or not raw_steps:
         raise PlanError(f"task {nid!r} 'steps' must be a non-empty list")
@@ -1871,8 +1889,12 @@ def _parse_steps(nid: str, raw_steps: object) -> list[Step]:
                 raise PlanError(
                     f"task {nid!r} human step {sid!r} cannot set {', '.join(map(repr, present))}"
                 )
-        elif not isinstance(s.get("persona"), str) or not str(s.get("persona")).strip():
-            raise PlanError(f"task {nid!r} step {sid!r} needs a non-empty 'persona'")
+        else:
+            expects_no_diff = _expects_no_diff(nid, s, step=sid)
+            if not expects_no_diff and (
+                not isinstance(s.get("persona"), str) or not str(s.get("persona")).strip()
+            ):
+                raise PlanError(f"task {nid!r} step {sid!r} needs a non-empty 'persona'")
         sdeps = s.get("deps", [])
         if not isinstance(sdeps, list) or not all(isinstance(d, str) for d in sdeps):
             raise PlanError(f"task {nid!r} step {sid!r} 'deps' must be a list of ids")
@@ -1884,6 +1906,7 @@ def _parse_steps(nid: str, raw_steps: object) -> list[Step]:
             deps=list(sdeps),
             max_turns=s.get("max_turns"),
             done_when=s.get("done_when"),
+            expects_no_diff=expects_no_diff if kind == "agent" else False,
         )
     for sid, step in steps.items():
         for dep in step.deps:

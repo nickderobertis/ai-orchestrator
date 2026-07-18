@@ -113,7 +113,7 @@ class FakeGitHub:
         direct_merge_status_poll: int | None = None,
         merge_in_progress: bool = False,
         merge_progress_states: tuple[bool, ...] | None = None,
-        check_states: tuple[str, ...] | None = None,
+        check_states: tuple[str | None, ...] | None = None,
     ) -> None:
         self.origin = origin
         self.required = required
@@ -166,8 +166,12 @@ class FakeGitHub:
             state = self.check_states[min(self.status_polls - 1, len(self.check_states) - 1)]
         else:
             state = "FAILURE" if self.fail_checks else "SUCCESS"
-        checks = tuple(Check(name=c, state=state, required=True) for c in self.required)
-        green = all(c.green for c in checks)
+        checks = (
+            tuple(Check(name=c, state=state, required=True) for c in self.required)
+            if state is not None
+            else ()
+        )
+        green = bool(checks) and all(c.green for c in checks)
         if (
             st.direct_requested
             and self.direct_merge_status_poll is not None

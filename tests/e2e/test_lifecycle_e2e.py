@@ -1299,16 +1299,10 @@ def test_github_pending_required_check_keeps_polling_then_merges(tmp_path, bare_
     assert _has_file(origin, "main", "feature.txt")
 
 
-@pytest.mark.parametrize(
-    ("required", "expected_states"),
-    [(("ci",), "[ci=SUCCESS]"), ((), "[]")],
-)
-def test_github_settled_checks_fail_when_native_auto_merge_stalls(
-    tmp_path, bare_origin, required: tuple[str, ...], expected_states: str
-) -> None:
+def test_github_settled_checks_fail_when_native_auto_merge_stalls(tmp_path, bare_origin) -> None:
     origin = bare_origin()
     before = _tip(origin, "main")
-    github = FakeGitHub(origin, required=required, auto_completes=False)
+    github = FakeGitHub(origin, required=("ci",), auto_completes=False)
     sleeps: list[float] = []
 
     result = run_repo_task(
@@ -1328,9 +1322,98 @@ def test_github_settled_checks_fail_when_native_auto_merge_stalls(
 
     assert result.outcome == "error", result.detail
     assert not result.ok
-    assert expected_states in result.detail
+    assert "[ci=SUCCESS]" in result.detail
     assert sleeps == []
     assert _tip(origin, "main") == before
+
+
+def test_github_waits_for_required_checks_to_be_reported_then_merges(tmp_path, bare_origin) -> None:
+    origin = bare_origin()
+    # The first status read checks whether the new PR is a draft; the merge poll
+    # then observes no reported checks, pending CI, and finally green CI.
+    github = FakeGitHub(origin, check_states=(None, None, "PENDING", "SUCCESS"))
+    sleeps: list[float] = []
+
+    result = run_repo_task(
+        "acme/widget",
+        "Add a feature after GitHub reports and settles CI.",
+        "engineer",
+        workspace=_workspace(tmp_path, origin, workflow="remote"),
+        merge=GitHubMergeStrategy(github),
+        url=str(origin),
+        dispatch_fn=make_writing_dispatch(filename="feature.txt"),
+        verify_cmd=["true"],
+        repo_type="single-owner",
+        merge_policy="auto",
+        sleep=sleeps.append,
+        timeout=60.0,
+    )
+
+    assert result.ok and result.outcome == "merged"
+    assert sleeps == [15.0, 15.0]
+    assert github.status_polls == 4
+    assert _has_file(origin, "main", "feature.txt")
+
+
+def test_github_unreported_required_checks_wait_until_timeout(tmp_path, bare_origin) -> None:
+    origin = bare_origin()
+    before = _tip(origin, "main")
+    github = FakeGitHub(origin, check_states=(None,), auto_completes=False)
+    sleeps: list[float] = []
+    ticks = iter([0.0, 0.0, 100.0])
+
+    result = run_repo_task(
+        "acme/widget",
+        "Add a feature whose required checks are never reported.",
+        "engineer",
+        workspace=_workspace(tmp_path, origin, workflow="remote"),
+        merge=GitHubMergeStrategy(github),
+        url=str(origin),
+        dispatch_fn=make_writing_dispatch(filename="feature.txt"),
+        verify_cmd=["true"],
+        repo_type="single-owner",
+        merge_policy="auto",
+        sleep=sleeps.append,
+        clock=lambda: next(ticks),
+        timeout=10.0,
+    )
+
+    assert not result.ok and result.outcome == "timeout"
+    assert sleeps == [15.0]
+    assert github.status_polls == 3
+    assert _tip(origin, "main") == before
+
+
+def test_github_direct_merge_waits_when_post_merge_checks_disappear(tmp_path, bare_origin) -> None:
+    origin = bare_origin()
+    github = FakeGitHub(
+        origin,
+        auto_available=False,
+        direct_completes=False,
+        direct_merge_status_poll=4,
+        check_states=("SUCCESS", "SUCCESS", None, "SUCCESS"),
+    )
+    sleeps: list[float] = []
+
+    result = run_repo_task(
+        "acme/widget",
+        "Add a feature despite a transient empty post-merge check response.",
+        "engineer",
+        workspace=_workspace(tmp_path, origin, workflow="remote"),
+        merge=GitHubMergeStrategy(github),
+        url=str(origin),
+        dispatch_fn=make_writing_dispatch(filename="feature.txt"),
+        verify_cmd=["true"],
+        repo_type="single-owner",
+        merge_policy="auto",
+        sleep=sleeps.append,
+        timeout=60.0,
+    )
+
+    assert result.ok and result.outcome == "merged"
+    assert sleeps == [15.0]
+    assert github.status_polls == 4
+    assert _has_file(origin, "main", "feature.txt")
 
 
 def test_github_auto_policy_polls_an_in_progress_merge_until_completion(

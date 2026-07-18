@@ -1103,6 +1103,34 @@ def test_run_repo_task_journals_a_step_that_hit_the_turn_cap(tmp_path, bare_orig
     assert "pr-merged" not in [e.kind for e in journal.events()]
 
 
+def test_run_repo_task_expects_no_diff_step_does_not_dispatch(tmp_path, bare_origin) -> None:
+    from orchestrator import gitops
+
+    origin = bare_origin()
+    publication = gitops.clone(origin, tmp_path / "publication")
+    workspace = Workspace(
+        tmp_path / "ws",
+        resolver=lambda _url: publication,
+        workflow="local",
+        repo_type="single-owner",
+    )
+
+    def unexpected_dispatch(*args, **kwargs):
+        raise AssertionError("expects_no_diff must not dispatch")
+
+    result = run_repo_task(
+        str(origin),
+        workspace=workspace,
+        steps=[Step("ready", task="certify unchanged", expects_no_diff=True)],
+        verify_cmd=["true"],
+        dispatch_fn=unexpected_dispatch,
+    )
+
+    assert result.outcome == "no-changes"
+    assert result.steps[0].status == "done"
+    assert result.steps[0].report is None
+
+
 def test_run_repo_task_pauses_and_resumes_local_human_step(tmp_path, bare_origin) -> None:
     from orchestrator import gitops
     from orchestrator.dispatch import Report

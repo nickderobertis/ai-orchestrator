@@ -144,7 +144,7 @@ def _drive_github_merge(
         if status.blocking_failed:
             failed = ", ".join(c.name for c in status.blocking if c.red)
             return "checks-failed", f"required checks failed: {failed}"
-        blocking_settled = all(check.settled for check in status.blocking)
+        blocking_settled = bool(status.blocking) and all(check.settled for check in status.blocking)
         if policy == "direct" and status.blocking_green and not direct_merge_requested:
             github.merge(pr, method=ctx.method)
             direct_merge_requested = True
@@ -156,9 +156,10 @@ def _drive_github_merge(
                     {"repo": ctx.repo_slug, "pr": pr.url, "number": pr.number},
                 )
                 return "merged", f"{detail}; merged"
-            if all(check.settled for check in post_merge.blocking) and not (
-                post_merge.merge_in_progress
-            ):
+            post_merge_blocking_settled = bool(post_merge.blocking) and all(
+                check.settled for check in post_merge.blocking
+            )
+            if post_merge_blocking_settled and not post_merge.merge_in_progress:
                 states = ", ".join(f"{check.name}={check.state}" for check in post_merge.blocking)
                 return (
                     "error",
