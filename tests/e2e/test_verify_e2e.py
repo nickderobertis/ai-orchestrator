@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shlex
 import subprocess
 
 from orchestrator.verify import run_gate
@@ -78,3 +79,43 @@ def test_gate_attestation_reuses_only_exact_commit_and_comparison(tmp_path) -> N
         "run",
         "run",
     ]
+
+
+def test_failed_gate_is_rerun_until_success_earns_attestation(tmp_path) -> None:
+    subprocess.run(["git", "init", "-b", "main", str(tmp_path)], check=True)
+    subprocess.run(
+        ["git", "-C", str(tmp_path), "config", "user.email", "test@example.com"],
+        check=True,
+    )
+    subprocess.run(["git", "-C", str(tmp_path), "config", "user.name", "Test"], check=True)
+    (tmp_path / "tracked").write_text("content\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(tmp_path), "add", "tracked"], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "commit", "-m", "initial"], check=True)
+    subprocess.run(
+        ["git", "-C", str(tmp_path), "update-ref", "refs/remotes/origin/main", "HEAD"],
+        check=True,
+    )
+    gate_log = tmp_path.with_name(f"{tmp_path.name}-failed-gate.log")
+    allow = tmp_path.with_name(f"{tmp_path.name}-allow-gate")
+    command = [
+        "sh",
+        "-c",
+        f"echo run >> {shlex.quote(str(gate_log))}; test -f {shlex.quote(str(allow))}",
+    ]
+    comparison = {
+        "ORCHESTRATOR_COMPARISON_REMOTE": "origin",
+        "ORCHESTRATOR_COMPARISON_BASE": "main",
+    }
+
+    first = run_gate(tmp_path, command, env=comparison)
+    second = run_gate(tmp_path, command, env=comparison)
+    assert not first.ok and not first.reused
+    assert not second.ok and not second.reused
+    assert gate_log.read_text(encoding="utf-8").splitlines() == ["run", "run"]
+
+    allow.touch()
+    successful = run_gate(tmp_path, command, env=comparison)
+    reused = run_gate(tmp_path, command, env=comparison)
+    assert successful.ok and not successful.reused
+    assert reused.ok and reused.reused
+    assert gate_log.read_text(encoding="utf-8").splitlines() == ["run", "run", "run"]

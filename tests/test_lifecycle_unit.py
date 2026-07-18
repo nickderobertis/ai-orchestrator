@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import fields
 from pathlib import Path
 
 import pytest
@@ -15,6 +16,7 @@ from orchestrator.lifecycle import (
     RepoPlan,
     RepoPlanNode,
     Resume,
+    RetryLineage,
     StackBase,
     Step,
     _default_body,
@@ -31,6 +33,7 @@ from orchestrator.lifecycle import (
 )
 from orchestrator.merge import GitHubMergeStrategy, LocalMergeStrategy
 from orchestrator.plan import PlanError
+from orchestrator.runs import ResumePayload, RetryLineagePayload
 from orchestrator.workspace import Workspace, normalize_repo
 
 
@@ -38,6 +41,16 @@ def _result(outcome: str, **kw) -> LifecycleResult:
     base = dict(repo="o/r", task="t", persona="p", base_branch="main", branch="b", outcome=outcome)
     base.update(kw)
     return LifecycleResult(**base)
+
+
+def test_resume_and_retry_lineage_payload_contracts_cannot_drift() -> None:
+    """Every dataclass field must have a serialized boundary field and vice versa."""
+    assert {field.name for field in fields(Resume)} == (
+        ResumePayload.__required_keys__ | ResumePayload.__optional_keys__
+    )
+    assert {field.name for field in fields(RetryLineage)} == (
+        RetryLineagePayload.__required_keys__ | RetryLineagePayload.__optional_keys__
+    )
 
 
 # --- helpers ---------------------------------------------------------------

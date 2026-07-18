@@ -58,7 +58,9 @@ from .runs import (
     RepoPlanPayload,
     RepoPlanResultItem,
     ResumeMode,
+    ResumePayload,
     RetryDisposition,
+    RetryLineagePayload,
     StepId,
     prepare_round,
     resolve_run_dir,
@@ -2078,23 +2080,7 @@ def result_payload(result: LifecycleResult) -> dict[str, Any]:
         "waiting_steps": list(result.waiting_steps),
         "resume": resume_payload(result.resume),
         **(
-            {
-                "retry_lineage": {
-                    "supersedes_branch": result.retry_lineage.supersedes_branch,
-                    "supersedes_checkpoint": result.retry_lineage.supersedes_checkpoint,
-                    "disposition": result.retry_lineage.disposition,
-                    **(
-                        {"reason": result.retry_lineage.reason}
-                        if result.retry_lineage.reason
-                        else {}
-                    ),
-                    **(
-                        {"supersedes_round": result.retry_lineage.supersedes_round}
-                        if result.retry_lineage.supersedes_round is not None
-                        else {}
-                    ),
-                }
-            }
+            {"retry_lineage": retry_lineage_payload(result.retry_lineage)}
             if result.retry_lineage
             else {}
         ),
@@ -2104,20 +2090,37 @@ def result_payload(result: LifecycleResult) -> dict[str, Any]:
 _result_payload = result_payload
 
 
-def resume_payload(resume: Resume | None) -> dict[str, Any] | None:
+def retry_lineage_payload(lineage: RetryLineage) -> RetryLineagePayload:
+    """Serialize retry lineage through its checked boundary contract."""
+    payload = RetryLineagePayload(
+        supersedes_branch=lineage.supersedes_branch,
+        supersedes_checkpoint=lineage.supersedes_checkpoint,
+        disposition=lineage.disposition,
+    )
+    if lineage.reason:
+        payload["reason"] = lineage.reason
+    if lineage.supersedes_round is not None:
+        payload["supersedes_round"] = lineage.supersedes_round
+    return payload
+
+
+def resume_payload(resume: Resume | None) -> ResumePayload | None:
     """Serialize continuation metadata for a paused lifecycle workstream."""
     if resume is None:
         return None
-    return {
-        "branch": resume.branch,
-        "base_branch": resume.base_branch,
-        "pr_base": resume.pr_base,
-        "checkpoint": resume.checkpoint,
-        "completed_steps": list(resume.completed_steps),
-        "pr": resume.pr,
-        **({"mode": resume.mode} if resume.mode != "pause" else {}),
-        **({"source_round": resume.source_round} if resume.source_round is not None else {}),
-    }
+    payload = ResumePayload(
+        branch=resume.branch,
+        base_branch=resume.base_branch,
+        pr_base=resume.pr_base,
+        checkpoint=resume.checkpoint,
+        completed_steps=list(resume.completed_steps),
+        pr=resume.pr,
+    )
+    if resume.mode != "pause":
+        payload["mode"] = resume.mode
+    if resume.source_round is not None:
+        payload["source_round"] = resume.source_round
+    return payload
 
 
 def main_task(argv: list[str] | None = None) -> int:
