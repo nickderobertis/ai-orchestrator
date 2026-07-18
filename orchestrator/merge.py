@@ -143,6 +143,7 @@ def _drive_github_merge(
         if status.blocking_failed:
             failed = ", ".join(c.name for c in status.blocking if c.red)
             return "checks-failed", f"required checks failed: {failed}"
+        blocking_settled = all(check.settled for check in status.blocking)
         if policy == "direct" and status.blocking_green:
             github.merge(pr, method=ctx.method)
             if github.status(pr).merged:
@@ -152,6 +153,12 @@ def _drive_github_merge(
                     {"repo": ctx.repo_slug, "pr": pr.url, "number": pr.number},
                 )
                 return "merged", f"{detail}; merged"
+        if policy == "auto" and blocking_settled:
+            states = ", ".join(f"{check.name}={check.state}" for check in status.blocking)
+            return (
+                "checks-failed",
+                f"{detail}; required checks settled but PR remains unmerged: [{states}]",
+            )
         if ctx.clock() - start >= ctx.timeout:
             return "timeout", f"{detail}; timed out after {ctx.timeout}s awaiting checks"
         ctx.sleep(ctx.poll_interval)

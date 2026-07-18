@@ -80,8 +80,10 @@ class FakeGitHub:
     ``required``: the required (blocking) check names. ``fail_checks``: the
     required checks conclude red (never merges). ``auto_available``: whether the
     repo allows native auto-merge (else `enable_auto_merge` raises, exercising the
-    direct-merge fallback). The merge fast-forwards ``base`` to the PR head in the
-    bare origin, so the change genuinely lands on the remote's default branch.
+    direct-merge fallback). ``auto_completes`` can simulate GitHub accepting native
+    auto-merge without completing it. The merge fast-forwards ``base`` to the PR
+    head in the bare origin, so the change genuinely lands on the remote's default
+    branch.
     """
 
     def __init__(
@@ -91,11 +93,16 @@ class FakeGitHub:
         required: tuple[str, ...] = ("ci",),
         fail_checks: bool = False,
         auto_available: bool = True,
+        auto_completes: bool = True,
+        check_states: tuple[str, ...] | None = None,
     ) -> None:
         self.origin = origin
         self.required = required
         self.fail_checks = fail_checks
         self.auto_available = auto_available
+        self.auto_completes = auto_completes
+        self.check_states = check_states
+        self.status_polls = 0
         self._prs: dict[int, FakePRState] = {}
         self._n = 0
 
@@ -127,11 +134,15 @@ class FakeGitHub:
         self._do_merge(pr)
 
     def status(self, pr: PullRequest) -> PRStatus:
+        self.status_polls += 1
         st = self._prs[pr.number]
-        state = "FAILURE" if self.fail_checks else "SUCCESS"
+        if self.check_states:
+            state = self.check_states[min(self.status_polls - 1, len(self.check_states) - 1)]
+        else:
+            state = "FAILURE" if self.fail_checks else "SUCCESS"
         checks = tuple(Check(name=c, state=state, required=True) for c in self.required)
         green = all(c.green for c in checks)
-        if st.auto and green and not st.merged:
+        if st.auto and self.auto_completes and green and not st.merged:
             self._do_merge(pr)  # native auto-merge fires once required checks are green
         merged = st.merged
         return PRStatus(

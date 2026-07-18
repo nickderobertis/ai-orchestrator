@@ -70,6 +70,11 @@ class Check:
     def red(self) -> bool:
         return self.state in _RED
 
+    @property
+    def settled(self) -> bool:
+        """Whether this normalized check has a recognized terminal conclusion."""
+        return self.green or self.red
+
 
 @dataclass(frozen=True)
 class PRStatus:
