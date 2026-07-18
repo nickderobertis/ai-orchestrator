@@ -28,7 +28,7 @@ import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Protocol, cast
+from typing import Any, Literal, Protocol, cast
 
 from . import BASE_CONFIG, PERSONA_DIR, gitops
 from .config import ConfigError, load_yaml
@@ -146,7 +146,19 @@ class Resume:
     checkpoint: str
     completed_steps: tuple[str, ...] = ()
     pr: str | None = None
-    mode: str = "pause"
+    mode: Literal["pause", "retry"] = "pause"
+    source_round: int | None = None
+
+
+@dataclass
+class RetryLineage:
+    """Recorded fate of one validated preserved-branch retry."""
+
+    supersedes_branch: str
+    supersedes_checkpoint: str
+    disposition: Literal["reused", "recovered", "abandoned"]
+    reason: str | None = None
+    supersedes_round: int | None = None
 
 
 @dataclass(frozen=True)
@@ -207,7 +219,7 @@ class LifecycleResult:
     steps: list[StepResult] = field(default_factory=list)
     waiting_steps: list[str] = field(default_factory=list)
     resume: Resume | None = None
-    retry_lineage: dict[str, Any] | None = None
+    retry_lineage: RetryLineage | None = None
 
     @property
     def ok(self) -> bool:
@@ -1189,21 +1201,23 @@ def run_repo_task(
                 abandoned = resume
                 resume = None
                 result.branch = branch = _workstream_branch_name(effective_steps)
-                result.retry_lineage = {
-                    "supersedes_branch": abandoned.branch,
-                    "supersedes_checkpoint": abandoned.checkpoint,
-                    "disposition": "abandoned",
-                    "reason": validated,
-                }
+                result.retry_lineage = RetryLineage(
+                    abandoned.branch,
+                    abandoned.checkpoint,
+                    "abandoned",
+                    validated,
+                    abandoned.source_round,
+                )
             else:
                 prepared = validated
                 worktree_base = prepared.worktree_base
                 if resume.mode == "retry":
-                    result.retry_lineage = {
-                        "supersedes_branch": resume.branch,
-                        "supersedes_checkpoint": resume.checkpoint,
-                        "disposition": "reused",
-                    }
+                    result.retry_lineage = RetryLineage(
+                        resume.branch,
+                        resume.checkpoint,
+                        "reused",
+                        supersedes_round=resume.source_round,
+                    )
         worktree = workspace.worktree(ref, branch, base=worktree_base)
         if resume is not None and prepared is not None and prepared.published:
             try:
@@ -1325,7 +1339,7 @@ def run_repo_task(
 
         if (
             result.retry_lineage
-            and result.retry_lineage["disposition"] == "reused"
+            and result.retry_lineage.disposition == "reused"
             and result.verify is not None
             and result.verify.ok
         ):
@@ -1336,7 +1350,7 @@ def run_repo_task(
                     worktree,
                     "chore: attest verified recovery of preserved work\n\n" + trailers,
                 )
-                result.retry_lineage["disposition"] = "recovered"
+                result.retry_lineage.disposition = "recovered"
         if result.retry_lineage and unattested_incomplete(worktree, remote_base, "HEAD"):
             result.outcome = "not-completed"
             result.detail = (
@@ -1623,7 +1637,16 @@ def _parse_resume(nid: str, raw: object, steps: list[Step] | None) -> Resume | N
         return None
     if not isinstance(raw, dict):
         raise PlanError(f"task {nid!r} 'resume' must be a mapping")
-    allowed = {"branch", "base_branch", "pr_base", "checkpoint", "completed_steps", "pr", "mode"}
+    allowed = {
+        "branch",
+        "base_branch",
+        "pr_base",
+        "checkpoint",
+        "completed_steps",
+        "pr",
+        "mode",
+        "source_round",
+    }
     if unknown := set(raw) - allowed:
         raise PlanError(f"task {nid!r} 'resume' has unknown fields: {', '.join(sorted(unknown))}")
     for field_name in ("branch", "base_branch", "pr_base"):
@@ -1657,6 +1680,11 @@ def _parse_resume(nid: str, raw: object, steps: list[Step] | None) -> Resume | N
     mode = raw.get("mode", "pause")
     if mode not in {"pause", "retry"}:
         raise PlanError(f"task {nid!r} resume 'mode' must be 'pause' or 'retry'")
+    source_round = raw.get("source_round")
+    if source_round is not None and (
+        not isinstance(source_round, int) or isinstance(source_round, bool) or source_round < 1
+    ):
+        raise PlanError(f"task {nid!r} resume 'source_round' must be a positive integer")
     return Resume(
         branch=cast(str, raw["branch"]),
         base_branch=cast(str, raw["base_branch"]),
@@ -1664,7 +1692,8 @@ def _parse_resume(nid: str, raw: object, steps: list[Step] | None) -> Resume | N
         checkpoint=checkpoint,
         completed_steps=tuple(completed),
         pr=pr,
-        mode=cast(str, mode),
+        mode=cast(Literal["pause", "retry"], mode),
+        source_round=source_round,
     )
 
 
@@ -2044,7 +2073,27 @@ def result_payload(result: LifecycleResult) -> dict[str, Any]:
         ],
         "waiting_steps": list(result.waiting_steps),
         "resume": resume_payload(result.resume),
-        **({"retry_lineage": result.retry_lineage} if result.retry_lineage else {}),
+        **(
+            {
+                "retry_lineage": {
+                    "supersedes_branch": result.retry_lineage.supersedes_branch,
+                    "supersedes_checkpoint": result.retry_lineage.supersedes_checkpoint,
+                    "disposition": result.retry_lineage.disposition,
+                    **(
+                        {"reason": result.retry_lineage.reason}
+                        if result.retry_lineage.reason
+                        else {}
+                    ),
+                    **(
+                        {"supersedes_round": result.retry_lineage.supersedes_round}
+                        if result.retry_lineage.supersedes_round is not None
+                        else {}
+                    ),
+                }
+            }
+            if result.retry_lineage
+            else {}
+        ),
     }
 
 
@@ -2063,6 +2112,7 @@ def resume_payload(resume: Resume | None) -> dict[str, Any] | None:
         "completed_steps": list(resume.completed_steps),
         "pr": resume.pr,
         **({"mode": resume.mode} if resume.mode != "pause" else {}),
+        **({"source_round": resume.source_round} if resume.source_round is not None else {}),
     }
 
 
@@ -2171,6 +2221,8 @@ def main_plan(argv: list[str] | None = None) -> int:
     result = run_repo_plan(plan, runner, concurrency=args.concurrency)
 
     payload: RepoPlanPayload = {
+        "schema_version": 2,
+        **({"round": round_record[0]} if round_record is not None else {}),
         "ok": result.ok,
         "started_order": result.started_order,
         "results": {

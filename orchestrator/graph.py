@@ -446,14 +446,17 @@ def _node_payload(result: NodeResult) -> GraphResultItem:
     return cast(GraphResultItem, item)
 
 
-def graph_payload(result: GraphResult) -> GraphPayload:
-    return GraphPayload(
+def graph_payload(result: GraphResult, *, round_number: int | None = None) -> GraphPayload:
+    payload = GraphPayload(
         schema_version=2,
         ok=result.ok,
         state=result.state,
         started_order=result.started_order,
         results={nid: _node_payload(item) for nid, item in result.results.items()},
     )
+    if round_number is not None:
+        payload["round"] = round_number
+    return payload
 
 
 _HEADLINE = {
@@ -600,7 +603,7 @@ def main(argv: list[str] | None = None) -> int:
         concurrency=args.concurrency,
     )
 
-    payload = graph_payload(result)
+    payload = graph_payload(result, round_number=round_number)
     journal.append("round-finished", detail={"state": result.state, "ok": result.ok})
     rendered = json.dumps(payload, indent=2) if args.format == "json" else result.summary()
     emit(rendered, args.output)

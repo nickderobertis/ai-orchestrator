@@ -100,7 +100,15 @@ def test_run_gate_reuses_only_exact_commit_and_comparison(tmp_path) -> None:
     (tmp_path / "tracked").write_text("one\n", encoding="utf-8")
     subprocess.run(["git", "-C", str(tmp_path), "add", "tracked"], check=True)
     subprocess.run(["git", "-C", str(tmp_path), "commit", "-m", "initial"], check=True)
-    log = tmp_path / "gate.log"
+    subprocess.run(
+        ["git", "-C", str(tmp_path), "update-ref", "refs/remotes/origin/main", "HEAD"],
+        check=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(tmp_path), "update-ref", "refs/remotes/origin/release", "HEAD"],
+        check=True,
+    )
+    log = tmp_path.with_name(f"{tmp_path.name}-gate.log")
     command = ["sh", "-c", f"echo run >> {log}"]
     env = {
         "ORCHESTRATOR_COMPARISON_REMOTE": "origin",

@@ -17,7 +17,19 @@ def test_gate_attestation_reuses_only_exact_commit_and_comparison(tmp_path) -> N
     (tmp_path / "tracked").write_text("one\n", encoding="utf-8")
     subprocess.run(["git", "-C", str(tmp_path), "add", "tracked"], check=True)
     subprocess.run(["git", "-C", str(tmp_path), "commit", "-m", "initial"], check=True)
-    gate_log = tmp_path / "gate.log"
+    for base in ("main", "release"):
+        subprocess.run(
+            [
+                "git",
+                "-C",
+                str(tmp_path),
+                "update-ref",
+                f"refs/remotes/origin/{base}",
+                "HEAD",
+            ],
+            check=True,
+        )
+    gate_log = tmp_path.with_name(f"{tmp_path.name}-gate.log")
     command = ["sh", "-c", f"echo run >> {gate_log}"]
     comparison = {
         "ORCHESTRATOR_COMPARISON_REMOTE": "origin",
@@ -31,7 +43,32 @@ def test_gate_attestation_reuses_only_exact_commit_and_comparison(tmp_path) -> N
 
     changed_base = {**comparison, "ORCHESTRATOR_COMPARISON_BASE": "release"}
     assert run_gate(tmp_path, command, env=changed_base).ok
+    comparison_commit = subprocess.run(
+        ["git", "-C", str(tmp_path), "commit-tree", "HEAD^{tree}", "-m", "advance base"],
+        check=True,
+        text=True,
+        capture_output=True,
+    ).stdout.strip()
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(tmp_path),
+            "update-ref",
+            "refs/remotes/origin/main",
+            comparison_commit,
+        ],
+        check=True,
+    )
+    assert run_gate(tmp_path, command, env=comparison).ok
     (tmp_path / "tracked").write_text("two\n", encoding="utf-8")
+    assert run_gate(tmp_path, command, env=comparison).ok
     subprocess.run(["git", "-C", str(tmp_path), "commit", "-am", "change"], check=True)
     assert run_gate(tmp_path, command, env=comparison).ok
-    assert gate_log.read_text(encoding="utf-8").splitlines() == ["run", "run", "run"]
+    assert gate_log.read_text(encoding="utf-8").splitlines() == [
+        "run",
+        "run",
+        "run",
+        "run",
+        "run",
+    ]

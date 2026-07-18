@@ -58,6 +58,7 @@ class ResumePayload(TypedDict):
     completed_steps: list[str]
     pr: str | None
     mode: NotRequired[str]
+    source_round: NotRequired[int]
 
 
 class HumanActionPayload(TypedDict):
@@ -76,6 +77,16 @@ class StepResultPayload(TypedDict):
     kind: str
     persona: str | None
     status: str
+
+
+class RetryLineagePayload(TypedDict):
+    """Serialized fate of a preserved-branch retry."""
+
+    supersedes_branch: str
+    supersedes_checkpoint: str
+    disposition: Literal["reused", "recovered", "abandoned"]
+    reason: NotRequired[str]
+    supersedes_round: NotRequired[int]
 
 
 class GraphResultItem(TypedDict, total=False):
@@ -111,7 +122,7 @@ class GraphResultItem(TypedDict, total=False):
     waiting_steps: list[str]
     resume: ResumePayload | None
     error: str | None
-    retry_lineage: dict[str, Any]
+    retry_lineage: RetryLineagePayload
 
 
 class GraphPayload(TypedDict, total=False):
@@ -122,6 +133,7 @@ class GraphPayload(TypedDict, total=False):
     started_order: list[str]
     results: dict[str, GraphResultItem]
     schema_version: int
+    round: int
 
 
 RepoPlanResultItem = GraphResultItem

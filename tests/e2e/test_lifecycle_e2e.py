@@ -34,6 +34,7 @@ from orchestrator.journal import NodeSink
 from orchestrator.lifecycle import (
     RepoPlan,
     RepoPlanNode,
+    Resume,
     StackBase,
     Step,
     main_plan,
@@ -227,6 +228,7 @@ def test_repo_plan_ledger_and_guided_next_round(
     captured = capsys.readouterr()
     assert rc == 1 and json.loads(captured.out)["results"]["change"]["status"] == "failed"
     first_result = json.loads((runs_dir / "fixed-run" / "round-01" / "result.json").read_text())
+    assert first_result["schema_version"] == 2
     preserved_branch = first_result["results"]["change"]["branch"]
     preserved_checkpoint = first_result["results"]["change"]["resume"]["checkpoint"]
     assert first_result["results"]["change"]["resume"]["mode"] == "retry"
@@ -254,6 +256,7 @@ def test_repo_plan_ledger_and_guided_next_round(
         "supersedes_branch": preserved_branch,
         "supersedes_checkpoint": preserved_checkpoint,
         "disposition": "recovered",
+        "supersedes_round": 1,
     }
     assert publication["repository_type"] == publication["repo_type"] == "single-owner"
     assert publication["publication_workflow"] == publication["workflow"] == "local"
@@ -753,6 +756,76 @@ def test_agent_not_completed_stops_early(tmp_path, bare_origin) -> None:
     assert subject.startswith("chore:") and "incomplete step" in subject
     assert not _has_file(origin, "main", "partial.txt")
     assert not _has_file(origin, result.branch, "partial.txt")  # incomplete work is not pushed
+
+
+def test_retry_with_invalid_incomplete_provenance_records_fresh_branch_fallback(
+    tmp_path, bare_origin
+) -> None:
+    origin = bare_origin()
+    workspace = _workspace(tmp_path, origin)
+    first = run_repo_task(
+        str(origin),
+        "Preserve partial work.",
+        "engineer",
+        workspace=workspace,
+        dispatch_fn=make_writing_dispatch(filename="partial.txt", completed=False),
+        verify_cmd=["true"],
+    )
+    assert first.resume is not None and first.resume.mode == "retry"
+    recovery_worktree = workspace.worktree(
+        normalize_repo(str(origin)), first.branch, base="origin/main"
+    )
+    gitops.commit_empty(
+        recovery_worktree,
+        "test: invalidate retry provenance\n\n"
+        f"Orchestrator-Recovered-Incomplete: {first.resume.checkpoint}",
+    )
+    workspace.remove_worktree(normalize_repo(str(origin)), recovery_worktree)
+
+    second = run_repo_task(
+        str(origin),
+        "Complete on a safe branch.",
+        "engineer",
+        workspace=workspace,
+        dispatch_fn=make_writing_dispatch(filename="complete.txt"),
+        verify_cmd=["true"],
+        resume=first.resume,
+    )
+
+    assert second.ok and second.branch != first.branch
+    assert second.retry_lineage is not None
+    assert second.retry_lineage.disposition == "abandoned"
+    assert "does not carry valid unattested incomplete provenance" in (
+        second.retry_lineage.reason or ""
+    )
+
+
+def test_preserved_retry_without_complete_gate_remains_unpublished(tmp_path, bare_origin) -> None:
+    origin = bare_origin()
+    workspace = _workspace(tmp_path, origin)
+    first = run_repo_task(
+        str(origin),
+        "Preserve partial work.",
+        "engineer",
+        workspace=workspace,
+        dispatch_fn=make_writing_dispatch(filename="partial.txt", completed=False),
+        verify_cmd=["true"],
+    )
+    assert isinstance(first.resume, Resume)
+
+    retried = run_repo_task(
+        str(origin),
+        "Finish without a gate.",
+        "engineer",
+        workspace=workspace,
+        dispatch_fn=make_writing_dispatch(filename="complete.txt"),
+        skip_verify=True,
+        resume=first.resume,
+    )
+
+    assert retried.outcome == "not-completed" and not retried.ok
+    assert "cannot be recovered without a successful complete gate" in retried.detail
+    assert not _has_file(origin, "main", "complete.txt")
 
 
 def test_clean_committed_partial_work_is_marked_and_recoverable(tmp_path, bare_origin) -> None:

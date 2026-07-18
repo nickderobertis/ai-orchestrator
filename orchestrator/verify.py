@@ -153,12 +153,24 @@ def _attestation_context(
     base = (env or {}).get("ORCHESTRATOR_COMPARISON_BASE")
     head = _git_value(directory, "rev-parse", "HEAD")
     common = _git_value(directory, "rev-parse", "--path-format=absolute", "--git-common-dir")
-    if not remote or not base or head is None or common is None:
+    comparison = (
+        _git_value(directory, "rev-parse", "--verify", f"refs/remotes/{remote}/{base}^{{commit}}")
+        if remote and base
+        else None
+    )
+    status = subprocess.run(
+        ["git", "-C", str(directory), "status", "--porcelain"],
+        text=True,
+        capture_output=True,
+    )
+    clean = status.returncode == 0 and not status.stdout
+    if not remote or not base or head is None or common is None or comparison is None or not clean:
         return None
     record: dict[str, object] = {
         "commit": head,
         "comparison_remote": remote,
         "comparison_base": base,
+        "comparison_commit": comparison,
         "command": list(command),
     }
     key = json.dumps(record, sort_keys=True, separators=(",", ":"))
