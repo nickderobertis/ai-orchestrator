@@ -181,8 +181,8 @@ class MonitorEvent:
         stamp = datetime.fromtimestamp(self.at, UTC).strftime("%H:%M:%S")
         return f"{stamp}  {self.stream_id}  {self.summary}"
 
-    def record(self) -> dict[str, DetailValue]:
-        return {
+    def record(self, *, next_poll_seconds: float | None = None) -> dict[str, DetailValue]:
+        record: dict[str, DetailValue] = {
             "type": "event",
             "at": self.at,
             "source": self.source,
@@ -190,6 +190,9 @@ class MonitorEvent:
             "id": str(self.stream_id),
             "summary": self.summary,
         }
+        if next_poll_seconds is not None:
+            record["next_poll_seconds"] = next_poll_seconds
+        return record
 
 
 @dataclass(frozen=True)
@@ -1164,8 +1167,12 @@ class Writer:
         if not self._json:
             print(HEADER, file=self._out, flush=True)
 
-    def event(self, event: MonitorEvent) -> None:
-        line = json.dumps(event.record(), sort_keys=True) if self._json else event.text()
+    def event(self, event: MonitorEvent, *, next_poll_seconds: float | None = None) -> None:
+        line = (
+            json.dumps(event.record(next_poll_seconds=next_poll_seconds), sort_keys=True)
+            if self._json
+            else event.text()
+        )
         print(line, file=self._out, flush=True)
 
     def heartbeat(self, beat: Heartbeat) -> None:
@@ -1198,10 +1205,10 @@ def stream(
     delay = poll_interval
     while True:
         events = monitor.poll()
-        for event in events:
-            writer.event(event)
-            last = monitor.clock()
         delay = poll_interval if events else min(max_poll_interval, delay * 2)
+        for event in events:
+            writer.event(event, next_poll_seconds=delay)
+            last = monitor.clock()
         state = monitor.state()
 
         rollup = monitor.snapshot.check_rollup
