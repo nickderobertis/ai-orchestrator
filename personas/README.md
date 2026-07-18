@@ -1,7 +1,7 @@
 # Personas
 
 A **persona** is a small onejudge *delta* over `config/onejudge.base.yaml` that
-defines one kind of worker: the agent's role (`agent.instructions`) and how the
+defines one kind of agent: its role (`agent.instructions`) and how the
 simulated supervisor reviews it (`user.persona`). At dispatch time,
 `orchestrator.config` merges base ⊕ persona ⊕ the CLI `--task` into one effective
 onejudge config and runs it. Common settings live once in the base; only the
@@ -13,6 +13,7 @@ role-specific parts live here.
 | --- | --- |
 | `engineer` | General implementation across server-side systems, UI, accessibility, and contract-aware libraries. |
 | `planner` | Decomposing work into an actionable, dependency-ordered plan (no implementation). |
+| `orchestrator` | Executing a tracked graph round by round under a live planner's supervision. |
 | `test-engineer` | Closing coverage gaps and writing realistic, un-mocked e2e tests. |
 | `docs-writer` | READMEs, reference docs, durable AGENTS.md notes. |
 | `researcher` | Answering questions with evidence cited from the actual source. |

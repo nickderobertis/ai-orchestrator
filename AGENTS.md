@@ -1,8 +1,9 @@
 <!-- llmlint: ignore-file[determinism_vs_judgment] Repo discovery requires judgment across existing interfaces. -->
+<!-- llmlint: ignore-file[no_redundant_instruction_pointers] The planner/orchestrator split requires a direct pointer to its live-channel operating contract. -->
 
 # AGENTS.md
 
-Durable instructions for the **orchestrator** and any agent working in this repo.
+Durable instructions for the **planner** and any agent working in this repo.
 Write for a future maintainer, not as a session log. Deterministic steps live in
 `orchestrator/` (run via `just`); this file holds the judgment.
 
@@ -10,16 +11,18 @@ Write for a future maintainer, not as a session log. Deterministic steps live in
 
 ## What this repo is
 
-A local **orchestration harness**: you (the orchestrator) take one large task,
-split it into a dependency graph of smaller tasks, and drive each subtask to
-completion by dispatching a **[onejudge](https://github.com/nickderobertis/onejudge)**
-process with a fitting **persona**. onejudge runs a real coding agent under a
-simulated-user supervisor that pushes back until the subtask is actually done.
-Your job is the *decomposition, scheduling, and persona choice*; the mechanics of
-running onejudge in parallel are scripts. The deliverable is this setup itself —
-config, personas, scripts, docs — not a shipped binary.
+A local **orchestration harness**: you (the planner) take one large task, split it
+into a dependency graph of smaller tasks, and review its execution. `just
+orchestrate` delegates scheduling, dispatch, round transitions, and publication
+closeout to an orchestrator onejudge process using
+[`personas/orchestrator.yaml`](personas/orchestrator.yaml). Its supervisor is the
+live planner over the channel described in
+[`docs/orchestration.md`](docs/orchestration.md#the-plannerorchestrator-channel).
+Worker onejudge processes still run under simulated-user supervisors. The
+deliverable is this setup itself — config, personas, scripts, docs — not a shipped
+binary.
 
-Beyond dispatching at a directory, the orchestrator manages a change's **full
+Beyond dispatching at a directory, the harness manages a change's **full
 life cycle** against any repo (GitHub or a local path): resolve its normalized
 origin to one **repository identity**, choose a registered publication checkout,
 do the work in an **isolated worktree cut from an execution checkout**, verify it
@@ -43,8 +46,8 @@ stack rather than the root. `just run-plan` is the one tracked hierarchical grap
 executor: its top-level DAG may mix direct agents, lifecycle agents, and explicit
 human actions; a lifecycle node may itself run **several agent and human steps in
 sequence on one branch**. The DAG is static within a round — you **adapt between
-recorded rounds**, attesting completed human work or changing the plan with `just
-next-round`. See `docs/orchestration.md` and `docs/repo-lifecycle.md`.
+recorded rounds** by reviewing the orchestrator's surfaced update and returning a
+decision over the live channel.
 
 ## What "agent" means here
 
@@ -58,7 +61,7 @@ the host harness's own built-in subagent mechanism (its own agent/task/fork tool
 unless the request names that mechanism explicitly. When the wording is ambiguous,
 dispatch onejudge.
 
-## Your loop as orchestrator
+## Your loop as planner
 
 1. **Decompose.** Apply the granularity rule below, then capture the work as a
    tracked DAG.
@@ -78,30 +81,16 @@ dispatch onejudge.
 2. **Pick or create personas.** Match each subtask to a general role and review
    bar in `personas/`. Prefer precise task prose plus per-node `done_when` over
    encoding subtask details in a new persona.
-3. **Schedule for parallelism.** Run the plan with `just run-plan <plan.json>`.
-   It topologically schedules the DAG, running every subtask whose deps are done
-   concurrently (bounded by the plan's `concurrency`), so independent branches go
-   in parallel and dependents wait only for what they actually need.
-4. **Monitor every dispatch.** Start `just monitor [RUN_ID]` after any recorded
-   launch — a single `repo-task`/`repo-task-auto` or a `run-plan` graph — and keep
-   it as the default view across later rounds. It already combines graph, session,
-   branch, PR, and named check transitions; use targeted queries only for details
-   it does not expose, not to build a parallel watcher. An open or heartbeating
-   stream still needs attention; follow its detail pointer before acting.
-5. **Read the settled round, then decide.** `run-plan` records each invocation in
-   `runs/<run-id>/round-NN/`; use `just runs` to see where the latest round ended.
-   A ready human action is `waiting`, its dependents are transitively `blocked`,
-   and the harness proceeds only after the ready action is explicitly attested
-   with `just next-round RUN --complete-human NODE[/STEP]`. Put
-   retry/split/add/drop decisions in `edits.json` and apply them with
-   `next-round`. A failed subtask takes precedence and skips its dependents.
-6. **Close out publication.** A lifecycle result is done only after its registered
-   workflow verifies and publishes it and the publication checkout is
-   synchronized. Route direct-agent branch results through the registered
-   integration or lifecycle closeout; this may be a verified git-only operation
-   performed directly under the boundary below. A judge verdict alone is not
-   publication. A merge is not publication when the task's destination is farther
-   downstream; see `docs/repo-lifecycle.md`.
+3. **Launch and supervise.** Start the graph with `just orchestrate <plan.json>`,
+   then review each structured boundary surfaced by the orchestrator. Decide
+   retry/split/add/drop actions, approve or reject departures, triage follow-ups,
+   and keep the user informed. Require verified publication closeout before
+   accepting completion.
+
+After `just orchestrate`, the planner uses **only** `just channel-next`, `just
+channel-reply`, and the read-only `just monitor` / `just runs` views. It never runs
+`run-plan` or `next-round` itself: those commands belong to the orchestrator
+process, and two writers would race the ledger lock.
 
 Treat unresolved same-identity dependencies as stack prerequisites, not merely
 scheduling edges, and preserve them across replans until their content reaches
@@ -112,23 +101,17 @@ Subject to that, minimize both. Apply the fixed dispatch-cost judgment in [the
 granularity rule](#the-granularity-rule-the-core-judgment) both when splitting
 work and when deciding whether a dispatch adds value at all.
 
-The orchestrator owns **decisions, sequencing, and integration of finished work**:
-decomposition, scheduling, persona choice, merge and stack order, retry/split/drop
-decisions, human-action attestation, and git operations that move or reconcile
-finished dispatched work. It may fast-forward, merge, sync a branch with its base,
-and resolve a small merge conflict between dispatched results. The agents authored
-the content; the orchestrator may select or combine their existing changes but
-must not introduce new project content. A conflict that requires a new design or
-payload is authoring and must be dispatched. The complete gate must still exercise
-and prove whatever lands. Dispatch target-project implementation, research, and
-any integration or closeout that requires new authored content.
+The planner owns decomposition, persona choice, review decisions, and user
+liaison. The orchestrator owns scheduling, round-ledger writes, human-action
+attestation, integration of finished work, and publication closeout. Neither role
+authors target-project content; dispatch implementation and research to workers.
 
 Reading a target repo to decompose work, select a persona, and write a precise task
-is direct orchestration work. It stops once the task can be written; investigation
+is direct planning work. It stops once the task can be written; investigation
 past that point is research and must be dispatched.
 
 One narrow direct-tweak exception remains: **the complete gate can prove it**. If
-planning has already determined the change, the orchestrator may apply it directly
+planning has already determined the change, the planner may apply it directly
 only when a check in the target repo's complete gate exercises the changed artifact
 and demonstrates the fix; report that passing gate result. A mechanically checked
 rename can qualify. If no gate check proves the payload, dispatch it as authoring;
@@ -137,17 +120,8 @@ prose are in this category. Line count and urgency are irrelevant. “It's just 
 commit message,” “the diff is empty,” “it's only integration coordination,” and
 “it's faster than dispatching” are not exceptions.
 
-Prefer each agent proving its own change with `just gate`, leaving integration as
-a trivial merge. Independently verifying a dispatched result is the orchestrator's
-own work and is never dispatched: dispatching that check defeats it. Before merging
-or pushing, confirm that the gate exercised the change: relevant tests did not skip
-and their fixtures, specs, and inputs were present. The lifecycle fetches and
-merges the current `origin/<base>` into the dispatched branch before this final
-gate, so the proof covers the same branch-plus-base diff enforced at pre-push.
-Lifecycle verification must pass its resolved comparison remote/base through every
-gate and re-verification so an override is never judged against an unrelated
-default. A sync conflict is aborted and reported without pushing. A green report or
-judge verdict without that evidence is not green.
+Require each worker to prove its own change with `just gate`. Review surfaced gate
+evidence rather than a judge verdict alone; relevant checks must not have skipped.
 
 ## The granularity rule (the core judgment)
 
@@ -160,7 +134,7 @@ larger dispatches amortize setup cost better. Split only for genuine parallelism
 a real dependency, or a genuinely different persona or review bar — not merely to
 hand a capable agent a smaller slice. Apply this at two scales: split only where a
 fresh context buys enough to justify its overhead, and do not
-dispatch at all when the orchestrator already holds the context, planning has
+dispatch at all when the planner already holds the context, planning has
 determined the change, and the complete gate proves it. That dispatch is cost with
 no benefit. Prefer a coherent subtask that one agent can hold in its head over
 many micro-tasks that each re-pay the setup tax. When unsure, err toward fewer,
@@ -241,35 +215,12 @@ post-verification `pr-author` dispatch. It drafts the template-shaped body from
 the actual diff through a temporary out-of-worktree file; drafting failure falls
 back to the deterministic body and must never block publication.
 
-## Dispatching playbook
-
-Pass long or multi-line task and `--done-when` prose through a file or stdin, not
-inline — the same channel the task prose already uses.
-
-Prefer `just repo-task-auto` for a one-command dispatch — it sets up the harness
-environment and reports any branch preserved after an incomplete dispatch. Keep
-`~/.local/node/bin` on `PATH` or the harness silently falls back off codex. Read
-`not-completed` as "publication was not earned," not as proof that the branch is
-bad or that useful work survived: inspect the recorded detail, `oh:` history, and
-branch. If the branch carries incomplete lifecycle provenance, publish it only
-with `just repo-recover`; otherwise redispatch. See `docs/onejudge-integration.md`
-for operational details and `docs/repo-lifecycle.md` for lifecycle mechanics.
-
-When a dispatch looks done but is still running, open the monitor's `oh:` id with
-`just history-show` before acting. The branch, not the running conversation, is
-the source of truth, but a live run may be doing work the plan didn't foresee. If
-it is still pursuing the task
-(implementation surfaced changes the orchestrator couldn't see up front), let it
-finish. If it has wandered onto unrelated or follow-up work outside the subtask's
-scope, stop it — no sense paying for turns past the useful output — and triage that
-follow-up: fold it into the plan if it is clearly in scope and worthwhile,
-otherwise ask before pursuing it.
-
 ## Dogfooding rule
 
 Use the orchestrator harness for **all tasks of sufficient complexity**, in any
-repo or project. Decompose multi-node work into `just run-plan <plan.json>`; use
-`just repo-task <repo> <persona> "<task>"` for a single lifecycle node. Lifecycle
+repo or project. Decompose multi-node work into a tracked plan and launch it with
+`just orchestrate <plan.json>`; use `just repo-task <repo> <persona> "<task>"` for
+a single lifecycle node. Lifecycle
 nodes clone the target, work in an isolated worktree, verify with its gate, and
 publish. Dispatch smaller project work with a single task rather than doing it
 directly; only the slight-tweak exception above applies. This repo is one

@@ -36,6 +36,27 @@ Edit those two files (or use oneharness's `ONEHARNESS_*` env overrides) to chang
 the harness or model on either side. `config/onejudge.base.yaml` carries only the
 loop's own concerns (persona defaults, session), never harness/model selection.
 
+## Provider wiring
+
+This repository uses three onejudge provider arrangements:
+
+- `oneharness` is the live worker path. Its agent and simulated-user sides use
+  the two harness configs above.
+- `command` is the deterministic test path. A local JSON-lines process stands in
+  for the paid harness boundary.
+- The live orchestrator uses a `split` provider: its `skill` side is either the
+  configured oneharness provider or a command provider, while its `judge` side is
+  a command invoking `orchestrator.channel.relay_supervisor`. The relay forwards
+  supervisor requests over the run's FIFOs to the live planner and returns the
+  planner's completion or continuation reply to onejudge. Final boolean/score
+  judge calls mirror the persisted planner verdict; the launch removes standalone
+  model evals and assessment because the live planner is completion authority.
+
+`orchestrator.dispatch.launch_orchestrator` creates this split config and launches
+`onejudge run` with a detached `subprocess.Popen`. This wiring is specific to the
+orchestrator persona; worker dispatch retains its ordinary oneharness or command
+provider and simulated-user loop.
+
 ## How a persona becomes a run
 
 ```
