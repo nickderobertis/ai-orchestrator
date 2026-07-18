@@ -721,6 +721,17 @@ def test_real_lifecycle_commit_and_pr_survive_live_state(
         )
         try:
             live = monitor.poll()
+            time.sleep(0.01)
+            active_telemetry = _just(
+                "telemetry",
+                "--runs-dir",
+                str(runs_dir),
+                "--oneharness-bin",
+                str(tmp_path / "absent-oneharness"),
+            )
+            assert active_telemetry.returncode == 0, active_telemetry.stderr
+            active_record = json.loads(active_telemetry.stdout)["runs"][0]
+            assert active_record["timing"]["publication_wait_seconds"] > 0
         finally:
             lifecycle_github.release.set()
         result = future.result(timeout=30)
