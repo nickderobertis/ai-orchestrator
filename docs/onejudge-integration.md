@@ -8,7 +8,7 @@ This repository adopts exactly **onejudge 0.3.2**, declared once in
 distribution exposes the Python SDK as `onejudge_sdk` and installs the matching
 `onejudge-cli==0.3.2` wheel. `just bootstrap` verifies both the SDK import and the
 resolved CLI's exact `onejudge --version` output; setup exits non-zero unless both
-are 0.3.2.
+report onejudge 0.3.2.
 
 ## The layering
 
@@ -79,7 +79,7 @@ both add an `IS_SANDBOX` env so claude-code runs under root. init's starter
 `onejudge.yaml` is not kept — `config/onejudge.base.yaml` supersedes it as the base
 this repo merges personas onto.
 
-The committed base and adapter follow the v0.3.2 schema: persona-authored
+The committed base and adapter follow the onejudge v0.3.2 schema: persona-authored
 `agent.instructions` is internal ai-orchestrator vocabulary and is translated to
 onejudge's `system_prompt`; no obsolete onejudge `agent` block reaches the CLI.
 The real-CLI e2e suite checks these schema and CLI surfaces before it drives the
@@ -191,7 +191,7 @@ merge mechanics.
 ## Testing against onejudge without a paid model
 
 onejudge's `command` provider speaks a small JSON-lines protocol
-([v0.3.2 docs/protocol.md](https://github.com/nickderobertis/onejudge/blob/v0.3.2/docs/protocol.md)),
+([onejudge v0.3.2 docs/protocol.md](https://github.com/nickderobertis/onejudge/blob/v0.3.2/docs/protocol.md)),
 so any command can stand in for the harness. The e2e suite points it at
 `tests/e2e/fake_backend.py` — a deterministic backend — so the gate drives the
 **real** onejudge CLI and loop across a real subprocess boundary, faking only the
