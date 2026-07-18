@@ -17,6 +17,7 @@ import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TypedDict, TypeGuard
 
 from .coordination import advisory_lock, atomic_json
 
@@ -135,11 +136,29 @@ def run_gate(
 _ATTESTATION_SCHEMA_VERSION = 1
 
 
+class _AttestationRecord(TypedDict):
+    """Exact inputs covered by one successful complete-gate verdict."""
+
+    commit: str
+    comparison_remote: str
+    comparison_base: str
+    comparison_commit: str
+    command: list[str]
+    environment_sha256: str
+
+
+class _AttestationStore(TypedDict):
+    """Versioned repository-local collection of reusable gate verdicts."""
+
+    schema_version: int
+    attestations: dict[str, _AttestationRecord]
+
+
 @dataclass(frozen=True)
 class _AttestationContext:
     path: Path
     key: str
-    record: dict[str, object]
+    record: _AttestationRecord
 
 
 def _git_value(directory: Path, *args: str) -> str | None:
@@ -184,14 +203,14 @@ def _attestation_context(
     ):
         return None
     environment = json.dumps(sorted((env or {}).items()), separators=(",", ":"))
-    record: dict[str, object] = {
-        "commit": head,
-        "comparison_remote": remote,
-        "comparison_base": base,
-        "comparison_commit": comparison,
-        "command": list(command),
-        "environment_sha256": hashlib.sha256(environment.encode()).hexdigest(),
-    }
+    record = _AttestationRecord(
+        commit=head,
+        comparison_remote=remote,
+        comparison_base=base,
+        comparison_commit=comparison,
+        command=list(command),
+        environment_sha256=hashlib.sha256(environment.encode()).hexdigest(),
+    )
     key = json.dumps(record, sort_keys=True, separators=(",", ":"))
     return _AttestationContext(
         Path(common) / "ai-orchestrator" / "gate-attestations.json", key, record
@@ -203,30 +222,53 @@ def _has_attestation(context: _AttestationContext) -> bool:
         payload = json.loads(context.path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return False
+    store = _parse_attestation_store(payload)
+    return store is not None and store["attestations"].get(context.key) == context.record
+
+
+def _is_attestation_record(value: object) -> TypeGuard[_AttestationRecord]:
+    if not isinstance(value, dict) or set(value) != _AttestationRecord.__required_keys__:
+        return False
     return (
-        isinstance(payload, dict)
-        and payload.get("schema_version") == _ATTESTATION_SCHEMA_VERSION
-        and isinstance(payload.get("attestations"), dict)
-        and payload["attestations"].get(context.key) == context.record
+        all(
+            isinstance(value[field], str)
+            for field in _AttestationRecord.__required_keys__ - {"command"}
+        )
+        and isinstance(value["command"], list)
+        and all(isinstance(part, str) for part in value["command"])
+    )
+
+
+def _parse_attestation_store(value: object) -> _AttestationStore | None:
+    """Validate persisted JSON before it can authorize gate reuse."""
+    if not isinstance(value, dict) or value.get("schema_version") != _ATTESTATION_SCHEMA_VERSION:
+        return None
+    raw_attestations = value.get("attestations")
+    if not isinstance(raw_attestations, dict) or not all(
+        isinstance(key, str) and _is_attestation_record(record)
+        for key, record in raw_attestations.items()
+    ):
+        return None
+    return _AttestationStore(
+        schema_version=_ATTESTATION_SCHEMA_VERSION,
+        attestations=raw_attestations,
     )
 
 
 def _record_attestation(context: _AttestationContext) -> None:
     context.path.parent.mkdir(parents=True, exist_ok=True)
     with advisory_lock(f"gate-attestations:{context.path}"):
-        attestations: dict[str, object] = {}
+        attestations: dict[str, _AttestationRecord] = {}
         try:
             payload = json.loads(context.path.read_text(encoding="utf-8"))
-            if (
-                isinstance(payload, dict)
-                and payload.get("schema_version") == _ATTESTATION_SCHEMA_VERSION
-                and isinstance(payload.get("attestations"), dict)
-            ):
-                attestations = dict(payload["attestations"])
+            store = _parse_attestation_store(payload)
+            if store is not None:
+                attestations = dict(store["attestations"])
         except (OSError, json.JSONDecodeError):
             pass
         attestations[context.key] = context.record
-        atomic_json(
-            context.path,
-            {"schema_version": _ATTESTATION_SCHEMA_VERSION, "attestations": attestations},
+        store = _AttestationStore(
+            schema_version=_ATTESTATION_SCHEMA_VERSION,
+            attestations=attestations,
         )
+        atomic_json(context.path, store)
