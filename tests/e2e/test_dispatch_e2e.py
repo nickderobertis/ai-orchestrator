@@ -62,6 +62,28 @@ def test_subdir_persona_scaffolding_and_recursive_validation_cli(tmp_path) -> No
     assert "1 persona(s) OK" in validate.stdout
 
 
+def test_recursive_validation_cli_reports_qualified_persona_name(tmp_path) -> None:
+    persona_dir = tmp_path / "personas" / "repo"
+    persona_dir.mkdir(parents=True)
+    (persona_dir / "broken.yaml").write_text("agent: {}\nuser: {}\n", encoding="utf-8")
+
+    result = subprocess.run(
+        [
+            "uv",
+            "run",
+            "orchestrator-validate-personas",
+            "--persona-dir",
+            str(persona_dir.parent),
+        ],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+    )
+
+    assert result.returncode != 0
+    assert "repo/broken: agent.instructions" in result.stderr
+
+
 @pytest.mark.parametrize("name", ["../escape", "repo/../escape", "repo//name"])
 def test_new_persona_cli_rejects_unsafe_names(tmp_path, name) -> None:
     persona_dir = tmp_path / "personas"

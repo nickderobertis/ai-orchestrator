@@ -20,6 +20,8 @@ role-specific parts live here.
 | `pr-author` | Drafting a terse, diff-derived PR body for a completed lifecycle change. |
 | `crozier/crozier-corpus` | Crozier-specific corpus research and curation. |
 
+The test suite requires these rows to match recursive persona discovery exactly.
+
 ## Adding a persona
 
 Prefer a detailed task with explicit per-node `done_when` acceptance criteria (and

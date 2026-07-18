@@ -10,6 +10,7 @@ from orchestrator.personas import (
     main_validate,
     new_persona,
     persona_files,
+    persona_name,
     persona_path,
     validate_all,
     validate_persona,
@@ -27,6 +28,20 @@ def test_template_is_excluded() -> None:
     names = {p.stem for p in persona_files(PERSONA_DIR)}
     assert "_template" not in names
     assert "planner" in names
+
+
+def test_readme_catalog_matches_discovered_personas() -> None:
+    readme = (PERSONA_DIR / "README.md").read_text(encoding="utf-8")
+    catalog = readme.split("## Catalog\n", 1)[1].split("\n## ", 1)[0]
+    documented = {line.split("`", 2)[1] for line in catalog.splitlines() if line.startswith("| `")}
+    discovered = {persona_name(path, PERSONA_DIR) for path in persona_files(PERSONA_DIR)}
+
+    assert not discovered - documented, (
+        f"personas missing from README catalog: {sorted(discovered - documented)}"
+    )
+    assert not documented - discovered, (
+        f"README catalog entries without persona files: {sorted(documented - discovered)}"
+    )
 
 
 def test_persona_files_discovers_subdirectories_and_skips_private_paths(tmp_path) -> None:
