@@ -1478,7 +1478,7 @@ def test_github_waits_for_required_checks_to_be_reported_then_merges(tmp_path, b
     )
 
     assert result.ok and result.outcome == "merged"
-    assert sleeps == [15.0, 15.0]
+    assert sleeps == [15.0, 30.0]
     assert github.status_polls == 4
     assert _has_file(origin, "main", "feature.txt")
 
