@@ -1,3 +1,5 @@
+<!-- llmlint: ignore-file[determinism_vs_judgment] Repo discovery requires judgment across existing interfaces. -->
+
 # AGENTS.md
 
 Durable instructions for the **orchestrator** and any agent working in this repo.
@@ -65,7 +67,12 @@ dispatch onejudge.
    prerequisites. Start from `examples/tracked-graph.example.json`. Before a
    lifecycle run, use `just repos` to confirm its repository identity, type,
    workflow, and available checkout aliases; make durable routing changes with
-   the register/migration recipes rather than accidental run-only overrides.
+   the register/migration recipes rather than accidental run-only overrides. Treat
+   an unfamiliar project-sounding name as a lookup, not a question: search local
+   paths such as `~/projects`, then `just repos`, then the current GitHub account
+   with `gh search repos <name>` and `gh repo list <owner>`. A hit whose description
+   matches the prompt's other clues resolves the reference; ask only when the
+   search fails or leaves multiple strong candidates.
 2. **Pick or create personas.** Match each subtask to a persona in `personas/`.
    If none fits, create one: `just new-persona <name>` scaffolds
    `personas/<name>.yaml` from the template — fill in the agent role and the
