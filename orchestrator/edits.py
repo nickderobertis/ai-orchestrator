@@ -14,16 +14,57 @@ EDIT_OPS = frozenset(get_args(EditOp))
 JsonValue: TypeAlias = str | int | float | bool | None | list["JsonValue"] | dict[str, "JsonValue"]
 
 
-class EditPayload(TypedDict, total=False):
-    """Validated union carrier; fields are required by their discriminated op."""
+# One TypedDict per op discriminant: each records exactly the fields that op
+# carries so the required shape is visible in the type, not just enforced at the
+# runtime trust boundary in ``apply_edit``.
+class AddPayload(TypedDict):
+    """Insert a new node from its full definition mapping."""
 
-    op: EditOp
+    op: Literal["add"]
     node: dict[str, Any]
+
+
+class DropPayload(TypedDict):
+    """Remove a node, either dropping or detaching its dependents."""
+
+    op: Literal["drop"]
+    id: str
+    dependents: Literal["drop", "detach"]
+
+
+class ReparentPayload(TypedDict):
+    """Replace an unstarted node's dependency set."""
+
+    op: Literal["reparent"]
     id: str
     deps: list[str]
-    dependents: Literal["drop", "detach"]
+
+
+class RetryPayload(TypedDict):
+    """Cancel a settled node and schedule a fresh replacement in its place."""
+
+    op: Literal["retry"]
+    id: str
+    node: dict[str, Any]
+
+
+class AttestPayload(TypedDict):
+    """Attest a currently-ready human action by reference."""
+
+    op: Literal["attest"]
     ref: str
+
+
+class CompletePayload(TypedDict):
+    """Request round completion with a planner-supplied reason."""
+
+    op: Literal["complete"]
     reason: str
+
+
+EditPayload: TypeAlias = (
+    AddPayload | DropPayload | ReparentPayload | RetryPayload | AttestPayload | CompletePayload
+)
 
 
 class EditOperation(TypedDict, total=False):
