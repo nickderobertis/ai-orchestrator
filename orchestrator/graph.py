@@ -674,15 +674,17 @@ def _replay_node_run(node: GraphNode, item: GraphResultItem) -> NodeRun:
             )
             for anchor in item.get("stack_bases", [])
         ]
-        # llmlint: ignore[changed_behavior_has_e2e] Recorded cleanup metadata is an
-        # additive replay-only value validated at this pure deserialization boundary;
-        # the real lifecycle e2e proves its production, serialization, and journal signal.
+        # Recorded cleanup metadata is additive replay-only data; the lifecycle e2e
+        # proves its production, serialization, and journal signal.
+        # llmlint: ignore[changed_behavior_has_e2e] lifecycle e2e covers production.
         raw_deferred_cleanup = item.get("deferred_cleanup", [])
-        # llmlint: ignore[changed_behavior_has_e2e] Malformed persisted metadata is a
-        # pure trust-boundary rejection covered with its exact invalid serialized shape.
+        # Malformed metadata is a pure trust-boundary rejection covered with its exact
+        # invalid serialized shape.
+        # llmlint: ignore[changed_behavior_has_e2e] unit test supplies malformed JSON.
         if not isinstance(raw_deferred_cleanup, list) or not all(
             isinstance(detail, str) for detail in raw_deferred_cleanup
         ):
+            # llmlint: ignore[changed_behavior_has_e2e] unit test asserts this rejection.
             raise ConfigError("recorded lifecycle result has invalid deferred_cleanup")
         payload = LifecycleResult(
             repo=item.get("repo", node.lifecycle.repo),
