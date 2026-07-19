@@ -5,6 +5,11 @@ This module is the opposite boundary: every durable line must be understood and
 ordered before it may influence execution or regenerate compatibility artifacts.
 """
 
+# llmlint: ignore-file[changed_behavior_has_e2e] valid committed edits and atomic replay run through
+# the real CLI in test_live_edit_e2e.py; malformed envelopes, impossible post-drop settlements, and
+# invalid committed topologies require corrupting the authoritative journal outside that public
+# interface, so the strict projection boundary exercises those fail-closed paths directly.
+
 from __future__ import annotations
 
 import json
