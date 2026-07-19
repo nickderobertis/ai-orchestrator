@@ -192,6 +192,39 @@ def test_lifecycle_failure_survives_simultaneous_deferred_teardown(
     assert result.deferred_cleanup and "remove-worktree deferred" in result.deferred_cleanup[0]
 
 
+def test_real_git_teardown_refusal_is_deferred_after_publication(tmp_path, bare_origin) -> None:
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-locked-cleanup")
+    workspace = Workspace(
+        tmp_path / "locked-cleanup-worktrees",
+        resolver=lambda _spec: canonical,
+        workflow="local",
+        repo_type="single-owner",
+    )
+
+    def locking_dispatch(persona, task, *, project_dir, **kwargs):
+        worktree = Path(project_dir)
+        (worktree / "locked-cleanup.txt").write_text("published\n", encoding="utf-8")
+        subprocess.run(["git", "-C", str(canonical), "worktree", "lock", str(worktree)], check=True)
+        return Report(persona, 0, True, False, 1, [], {}, {}, "")
+
+    result = run_repo_task(
+        str(origin),
+        "publish before real Git cleanup refusal",
+        "engineer",
+        workspace=workspace,
+        branch="locked-cleanup",
+        dispatch_fn=locking_dispatch,
+        verify_cmd=["true"],
+    )
+
+    assert result.outcome == "merged", result.detail
+    assert result.deferred_cleanup and "locked working tree" in result.deferred_cleanup[0]
+    orphan = gitops.worktrees(canonical)["locked-cleanup"]
+    subprocess.run(["git", "-C", str(canonical), "worktree", "unlock", str(orphan)], check=True)
+    workspace.remove_worktree(normalize_repo(str(origin)), orphan)
+
+
 def test_synthetic_stack_teardown_contention_is_deferred_with_real_git(
     tmp_path, bare_origin
 ) -> None:

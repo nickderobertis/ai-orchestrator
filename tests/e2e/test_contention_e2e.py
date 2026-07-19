@@ -264,6 +264,31 @@ def test_failed_abandoned_reclaim_releases_lease_for_retry(
     workspace.remove_worktree(repo, replacement)
 
 
+def test_abandoned_branch_at_different_path_moves_to_new_owned_worktree(
+    tmp_path: Path, bare_origin: Callable[..., Path]
+) -> None:
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-moved-orphan")
+    ready: multiprocessing.Queue[str] = multiprocessing.Queue()
+    process = multiprocessing.Process(
+        target=_orphan_worktree_process,
+        args=(str(canonical), str(tmp_path / "old-root"), "feature/moved", ready),
+    )
+    process.start()
+    old_path = Path(ready.get(timeout=10))
+    _join(process)
+
+    repo = normalize_repo(str(canonical))
+    workspace = Workspace(tmp_path / "new-root", resolver=lambda _spec: canonical, workflow="local")
+    replacement = workspace.worktree(repo, "feature/moved", base="origin/main")
+
+    assert replacement != old_path
+    assert not old_path.exists()
+    assert replacement.exists()
+    assert gitops.worktrees(canonical)["feature/moved"] == replacement
+    workspace.remove_worktree(repo, replacement)
+
+
 def test_identical_simultaneous_lifecycles_get_unique_branches_and_both_land(
     tmp_path: Path,
     bare_origin: Callable[..., Path],

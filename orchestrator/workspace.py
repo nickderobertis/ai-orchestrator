@@ -345,6 +345,11 @@ class Workspace:
                     except Exception:
                         self._release_worktree_lease(registered)
                         raise
+                    if registered.resolve() != path.resolve():
+                        try:
+                            self._acquire_worktree_lease(clone, path)
+                        finally:
+                            self._release_worktree_lease(registered)
                     active = gitops.worktrees(clone)
             if path.exists():
                 raise RuntimeError(
@@ -376,7 +381,7 @@ class Workspace:
         clone = self.clone_dir(repo)
         try:
             with advisory_lock(f"git:{gitops.common_dir(clone)}"):
-                gitops.worktree_remove(clone, path)
+                gitops.worktree_remove(clone, path, check=True)
         finally:
             self._release_worktree_lease(path)
 

@@ -678,6 +678,8 @@ def _replay_node_run(node: GraphNode, item: GraphResultItem) -> NodeRun:
         # additive replay-only value validated at this pure deserialization boundary;
         # the real lifecycle e2e proves its production, serialization, and journal signal.
         raw_deferred_cleanup = item.get("deferred_cleanup", [])
+        # llmlint: ignore[changed_behavior_has_e2e] Malformed persisted metadata is a
+        # pure trust-boundary rejection covered with its exact invalid serialized shape.
         if not isinstance(raw_deferred_cleanup, list) or not all(
             isinstance(detail, str) for detail in raw_deferred_cleanup
         ):
