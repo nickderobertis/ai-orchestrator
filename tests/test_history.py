@@ -9,13 +9,17 @@ import pytest
 from orchestrator.detail_snapshot import SNAPSHOT_VERSION, CommitDetail, PrDetail
 from orchestrator.history import (
     HistoryError,
+    HistorySession,
     SessionId,
     _persisted_detail,
     _records,
     _render_persisted_detail,
+    _session_labels,
     all_sessions,
     digest,
     recent_runs,
+    session_duration_ms,
+    session_role,
     show_run,
 )
 from orchestrator.ids import GitId, PrId
@@ -101,6 +105,47 @@ def test_bad_inputs_are_actionable(tmp_path: Path) -> None:
         recent_runs(0, oneharness_bin=str(binary))
     with pytest.raises(HistoryError, match="no worker history session"):
         show_run("missing", oneharness_bin=str(binary))
+
+
+def test_session_identity_role_and_duration_accept_legacy_records_defensively(
+    tmp_path: Path,
+) -> None:
+    assert HistorySession.from_value("bad") is None
+    assert HistorySession.from_value({"id": "missing"}) is None
+    assert _session_labels("bad") == {}
+    assert _session_labels({"role": "judge", "empty": "", 1: "bad", "bad": 1}) == {"role": "judge"}
+    labelled = HistorySession(
+        SessionId("labelled"),
+        "ordinary",
+        tmp_path,
+        "now",
+        tmp_path / "history",
+        {"role": "judge"},
+    )
+    legacy_judge = HistorySession(
+        SessionId("legacy"),
+        "you-are-roleplaying-the-user-in-a-test",
+        tmp_path,
+        "now",
+        tmp_path / "history",
+        {},
+    )
+    legacy_agent = HistorySession(
+        SessionId("agent"),
+        "implement",
+        tmp_path,
+        "now",
+        tmp_path / "history",
+        {},
+    )
+    assert session_role(labelled) == session_role(legacy_judge) == "judge"
+    assert session_role(legacy_agent) == "agent"
+    assert (
+        session_duration_ms(
+            [{"duration_ms": 5}, {"duration_ms": -1}, {"duration_ms": True}, {"duration_ms": 2.5}]
+        )
+        == 5
+    )
 
 
 # --- resolving a typed detail id -----------------------------------------------

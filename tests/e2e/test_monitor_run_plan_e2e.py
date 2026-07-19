@@ -298,6 +298,7 @@ def test_real_history_labels_and_cursor_watch(oneharness_bin: str, tmp_path: Pat
     )
     assert indexed.returncode == 0, indexed.stderr
     run = json.loads(indexed.stdout)["runs"][0]
+    assert json.loads(indexed.stdout)["schema_version"] == 2
     native_records = {
         role: [json.loads(line) for line in Path(record["path"]).read_text().splitlines()]
         for role, record in by_role.items()
@@ -323,6 +324,27 @@ def test_real_history_labels_and_cursor_watch(oneharness_bin: str, tmp_path: Pat
         and item["duration_ms"] >= 0
     )
     assert round(run["timing"]["agent_seconds"] * 1000) == expected_agent_ms
+    expected_judge_ms = sum(
+        int(item["duration_ms"])
+        for item in native_records["judge"]
+        if isinstance(item.get("duration_ms"), int)
+        and not isinstance(item["duration_ms"], bool)
+        and item["duration_ms"] >= 0
+    )
+    assert round(run["timing"]["judge_seconds"] * 1000) == expected_judge_ms
+    assert run["turns"] == sum(len(items) for items in native_records.values())
+    breakdown = _just(
+        "telemetry",
+        "--runs-dir",
+        str(runs_dir),
+        "--oneharness-bin",
+        oneharness_bin,
+        "--breakdown",
+        environment=environment,
+    )
+    assert breakdown.returncode == 0, breakdown.stderr
+    assert "history-turns" in breakdown.stdout
+    assert "Turn histogram:" in breakdown.stdout
 
 
 def test_real_run_plan_waits_then_monitor_exits_only_after_attestation(
