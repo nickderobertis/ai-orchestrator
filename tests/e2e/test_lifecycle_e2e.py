@@ -188,7 +188,7 @@ def test_lifecycle_failure_survives_simultaneous_deferred_teardown(
     )
 
     assert result.outcome == "not-completed"
-    assert "agent stopped before completion" in result.detail
+    assert "step 'main' hit the turn cap" in result.detail
     assert result.deferred_cleanup and "remove-worktree deferred" in result.deferred_cleanup[0]
 
 
