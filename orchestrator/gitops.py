@@ -215,13 +215,15 @@ def worktree_add_detached(cwd: str | Path, path: str | Path, ref: str) -> Path:
     return Path(path)
 
 
-def worktree_remove(cwd: str | Path, path: str | Path, *, force: bool = True) -> None:
-    """Remove a worktree created by `worktree_add` (best-effort cleanup)."""
+def worktree_remove(
+    cwd: str | Path, path: str | Path, *, force: bool = True, check: bool = False
+) -> None:
+    """Remove a worktree, optionally surfacing Git's refusal to the caller."""
     args = ["worktree", "remove"]
     if force:
         args.append("--force")
     args.append(str(path))
-    _git(args, cwd=cwd, check=False)
+    _git(args, cwd=cwd, check=check)
 
 
 def add_all(cwd: str | Path) -> None:

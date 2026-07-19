@@ -340,7 +340,11 @@ class Workspace:
                             f"branch {branch!r} is active in {active[branch]}; use a unique run "
                             "or resume that worktree explicitly"
                         ) from None
-                    gitops.worktree_remove(clone, registered)
+                    try:
+                        gitops.worktree_remove(clone, registered, check=True)
+                    except Exception:
+                        self._release_worktree_lease(registered)
+                        raise
                     active = gitops.worktrees(clone)
             if path.exists():
                 raise RuntimeError(

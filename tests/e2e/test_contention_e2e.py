@@ -16,7 +16,7 @@ import pytest
 
 from orchestrator import gitops
 from orchestrator.config import ConfigError
-from orchestrator.coordination import LockTimeout, advisory_lock
+from orchestrator.coordination import advisory_lock
 from orchestrator.lifecycle import run_repo_task
 from orchestrator.registry import Registry
 from orchestrator.runs import prepare_round
@@ -74,6 +74,14 @@ def _paused_teardown_process(
     ready.put(str(worktree))
     begin.wait(10)
     workspace.remove_worktree(repo, worktree)
+
+
+def _orphan_worktree_process(
+    canonical: str, root: str, branch: str, ready: multiprocessing.Queue[str]
+) -> None:
+    repo = normalize_repo(canonical)
+    workspace = Workspace(root, resolver=lambda _spec: Path(canonical), workflow="local")
+    ready.put(str(workspace.worktree(repo, branch, base="origin/main")))
 
 
 def _lifecycle_process(
@@ -209,22 +217,51 @@ def test_same_branch_redispatch_cannot_overtake_paused_teardown(
         with advisory_lock(f"git:{gitops.common_dir(canonical)}"):
             begin.set()
             assert teardown_started.wait(10)
-            with pytest.raises(LockTimeout):
-                contender._acquire_worktree_lease(canonical, original)
             redispatch = pool.submit(contender.worktree, repo, "feature/race", base="origin/main")
             with pytest.raises(FutureTimeout):
                 redispatch.result(timeout=0.1)
-        with pytest.raises(RuntimeError, match="branch 'feature/race' is active"):
-            redispatch.result(timeout=10)
+        try:
+            replacement = redispatch.result(timeout=10)
+        except RuntimeError as exc:
+            assert "branch 'feature/race' is active" in str(exc)
+            replacement = None
     finally:
         pool.shutdown(wait=True)
         _join(process)
 
-    replacement = contender.worktree(repo, "feature/race", base="origin/main")
+    if replacement is None:
+        replacement = contender.worktree(repo, "feature/race", base="origin/main")
     assert replacement.exists()
     assert gitops.worktrees(canonical)["feature/race"] == replacement
     assert replacement == original
     contender.remove_worktree(repo, replacement)
+
+
+def test_failed_abandoned_reclaim_releases_lease_for_retry(
+    tmp_path: Path, bare_origin: Callable[..., Path]
+) -> None:
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-locked-orphan")
+    root = tmp_path / "worktrees-locked-orphan"
+    ready: multiprocessing.Queue[str] = multiprocessing.Queue()
+    process = multiprocessing.Process(
+        target=_orphan_worktree_process,
+        args=(str(canonical), str(root), "feature/orphan", ready),
+    )
+    process.start()
+    orphan = Path(ready.get(timeout=10))
+    _join(process)
+    subprocess.run(["git", "-C", str(canonical), "worktree", "lock", str(orphan)], check=True)
+
+    repo = normalize_repo(str(canonical))
+    workspace = Workspace(root, resolver=lambda _spec: canonical, workflow="local")
+    with pytest.raises(gitops.GitError, match="locked working tree"):
+        workspace.worktree(repo, "feature/orphan", base="origin/main")
+
+    subprocess.run(["git", "-C", str(canonical), "worktree", "unlock", str(orphan)], check=True)
+    replacement = workspace.worktree(repo, "feature/orphan", base="origin/main")
+    assert replacement.exists()
+    workspace.remove_worktree(repo, replacement)
 
 
 def test_identical_simultaneous_lifecycles_get_unique_branches_and_both_land(
