@@ -370,9 +370,11 @@ class Workspace:
     def remove_worktree(self, repo: RepoRef, path: str | Path) -> None:
         """Tear down a worktree once its subtask is done."""
         clone = self.clone_dir(repo)
-        self._release_worktree_lease(path)
-        with advisory_lock(f"git:{gitops.common_dir(clone)}"):
-            gitops.worktree_remove(clone, path)
+        try:
+            with advisory_lock(f"git:{gitops.common_dir(clone)}"):
+                gitops.worktree_remove(clone, path)
+        finally:
+            self._release_worktree_lease(path)
 
     def delete_branch(self, repo: RepoRef, branch: str) -> None:
         """Delete an unneeded local lifecycle branch under the shared-git lock."""

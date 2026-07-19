@@ -7,6 +7,8 @@ import multiprocessing
 import os
 import subprocess
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FutureTimeout
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +16,7 @@ import pytest
 
 from orchestrator import gitops
 from orchestrator.config import ConfigError
+from orchestrator.coordination import LockTimeout, advisory_lock
 from orchestrator.lifecycle import run_repo_task
 from orchestrator.registry import Registry
 from orchestrator.runs import prepare_round
@@ -47,6 +50,29 @@ def _held_worktree_process(
     worktree = workspace.worktree(repo, branch, base="origin/main")
     ready.put(str(worktree))
     release.wait(10)
+    workspace.remove_worktree(repo, worktree)
+
+
+def _paused_teardown_process(
+    canonical: str,
+    root: str,
+    branch: str,
+    ready: multiprocessing.Queue[str],
+    begin: Any,
+    teardown_started: Any,
+) -> None:
+    class PausedTeardownWorkspace(Workspace):
+        def remove_worktree(self, repo, path) -> None:
+            teardown_started.set()
+            super().remove_worktree(repo, path)
+
+    repo = normalize_repo(canonical)
+    workspace = PausedTeardownWorkspace(
+        root, resolver=lambda _spec: Path(canonical), workflow="local"
+    )
+    worktree = workspace.worktree(repo, branch, base="origin/main")
+    ready.put(str(worktree))
+    begin.wait(10)
     workspace.remove_worktree(repo, worktree)
 
 
@@ -152,6 +178,53 @@ def test_active_cross_process_worktree_is_never_reclaimed(
     finally:
         release.set()
         _join(process)
+
+
+def test_same_branch_redispatch_cannot_overtake_paused_teardown(
+    tmp_path: Path, bare_origin: Callable[..., Path]
+) -> None:
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-teardown-race")
+    root = tmp_path / "worktrees-teardown-race"
+    ready: multiprocessing.Queue[str] = multiprocessing.Queue()
+    begin = multiprocessing.Event()
+    teardown_started = multiprocessing.Event()
+    process = multiprocessing.Process(
+        target=_paused_teardown_process,
+        args=(
+            str(canonical),
+            str(root),
+            "feature/race",
+            ready,
+            begin,
+            teardown_started,
+        ),
+    )
+    process.start()
+    original = Path(ready.get(timeout=10))
+    repo = normalize_repo(str(canonical))
+    contender = Workspace(root, resolver=lambda _spec: canonical, workflow="local")
+    pool = ThreadPoolExecutor(max_workers=1)
+    try:
+        with advisory_lock(f"git:{gitops.common_dir(canonical)}"):
+            begin.set()
+            assert teardown_started.wait(10)
+            with pytest.raises(LockTimeout):
+                contender._acquire_worktree_lease(canonical, original)
+            redispatch = pool.submit(contender.worktree, repo, "feature/race", base="origin/main")
+            with pytest.raises(FutureTimeout):
+                redispatch.result(timeout=0.1)
+        with pytest.raises(RuntimeError, match="branch 'feature/race' is active"):
+            redispatch.result(timeout=10)
+    finally:
+        pool.shutdown(wait=True)
+        _join(process)
+
+    replacement = contender.worktree(repo, "feature/race", base="origin/main")
+    assert replacement.exists()
+    assert gitops.worktrees(canonical)["feature/race"] == replacement
+    assert replacement == original
+    contender.remove_worktree(repo, replacement)
 
 
 def test_identical_simultaneous_lifecycles_get_unique_branches_and_both_land(
