@@ -88,7 +88,11 @@ def test_breakdown_aggregates_real_multirole_history_records(tmp_path: Path) -> 
         "#!/usr/bin/env python3\n" + FAKE_ONEHARNESS.read_text(encoding="utf-8"), encoding="utf-8"
     )
     oneharness.chmod(0o755)
-    environment = {**os.environ, "FAKE_ONEHARNESS_STORE": str(store)}
+    environment = {
+        **os.environ,
+        "FAKE_ONEHARNESS_STORE": str(store),
+        "PATH": f"{tmp_path}:{os.environ['PATH']}",
+    }
     command = subprocess.run(
         [
             "just",
@@ -161,6 +165,22 @@ def test_breakdown_aggregates_real_multirole_history_records(tmp_path: Path) -> 
     assert malformed_tool.returncode == 2
     judge_record["events"][0]["tool_call_id"] = "judge-tool-1"
     (tmp_path / "judge.jsonl").write_text(json.dumps(judge_record) + "\n", encoding="utf-8")
+    invalid_timing = dict(judge_record)
+    invalid_timing["duration_ms"] = True
+    (tmp_path / "judge.jsonl").write_text(json.dumps(invalid_timing) + "\n", encoding="utf-8")
+    rejected_timing = subprocess.run(
+        command.args, cwd=REPO_ROOT, env=environment, text=True, capture_output=True, timeout=30
+    )
+    assert rejected_timing.returncode == 2
+    (tmp_path / "judge.jsonl").write_text(json.dumps(judge_record) + "\n", encoding="utf-8")
+    sessions[1]["labels"]["role"] = "other"
+    store.write_text(json.dumps({"sessions": sessions}), encoding="utf-8")
+    rejected_role = subprocess.run(
+        command.args, cwd=REPO_ROOT, env=environment, text=True, capture_output=True, timeout=30
+    )
+    assert rejected_role.returncode == 2
+    sessions[1]["labels"]["role"] = "judge"
+    store.write_text(json.dumps({"sessions": sessions}), encoding="utf-8")
 
     for history in (tmp_path / "agent.jsonl", tmp_path / "judge.jsonl"):
         record = json.loads(history.read_text(encoding="utf-8"))
@@ -198,3 +218,18 @@ def test_breakdown_aggregates_real_multirole_history_records(tmp_path: Path) -> 
     )
     assert rejected.returncode == 2
     assert "unsupported oneharness history schema" in rejected.stderr
+
+    (tmp_path / "agent.jsonl").write_text(
+        '{"duration_ms":1200,"status":"running"}\n{"duration_ms":2500,"status":"completed"}\n',
+        encoding="utf-8",
+    )
+    shown = subprocess.run(
+        ["just", "history-show", "agent-history"],
+        cwd=REPO_ROOT,
+        env=environment,
+        text=True,
+        capture_output=True,
+        timeout=30,
+    )
+    assert shown.returncode == 0, shown.stderr
+    assert "Latest: completed (3.7s)" in shown.stdout
