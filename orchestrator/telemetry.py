@@ -616,7 +616,9 @@ def _timing(
     )
 
 
-def _providers(run_id: RunId, oneharness_bin: str) -> tuple[list[Provider], list[_SessionSummary]]:
+def _history_telemetry(
+    run_id: RunId, oneharness_bin: str
+) -> tuple[list[Provider], list[_SessionSummary]]:
     found: list[Provider] = []
     summaries: list[_SessionSummary] = []
     try:
@@ -745,7 +747,7 @@ def collect_run(
         active_nodes = dict.fromkeys(str(event.node) for event in events if event.node is not None)
         items = {node: GraphResultItem(status="running", kind="agent") for node in active_nodes}
     last = events[-1] if events else None
-    providers, summaries = _providers(RunId(run_dir.name), oneharness_bin)
+    providers, summaries = _history_telemetry(RunId(run_dir.name), oneharness_bin)
     gate_seconds = _gate_seconds(events)
     current = time.time() if now is None else now
     wall_end = last.at if result_state_is_terminal(state) and last else current
