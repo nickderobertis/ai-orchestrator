@@ -230,7 +230,7 @@ def apply_edit(
                 "failed",
                 "cancelled",
             }:
-                raise EditError("retry requires a settled retryable node")
+                raise EditError("retry requires a running, failed, or cancelled node")
             if not isinstance(node, dict):
                 raise EditError("retry requires a replacement node mapping")
             if node.get("id") in by_id:

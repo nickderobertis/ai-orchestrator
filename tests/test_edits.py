@@ -186,7 +186,10 @@ def test_attestation_and_command_boundary_rejections() -> None:
         (EditCommand("reparent", {"op": "reparent", "id": "missing", "deps": []}), "existing"),
         (EditCommand("reparent", {"op": "reparent", "id": "leaf", "deps": "bad"}), "list"),
         (EditCommand("drop", {"op": "drop", "id": "missing", "dependents": "drop"}), "existing"),
-        (EditCommand("retry", {"op": "retry", "id": "root", "node": {}}), "retryable"),
+        (
+            EditCommand("retry", {"op": "retry", "id": "root", "node": {}}),
+            "running, failed, or cancelled",
+        ),
         (EditCommand("complete", {"op": "complete", "reason": 1}), "string reason"),
     ],
 )

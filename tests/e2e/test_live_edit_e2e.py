@@ -171,7 +171,7 @@ def test_real_cli_mutates_live_frontier_and_replays_atomic_edits(
             {"op": "drop", "id": "anchor", "dependents": "detach"},
             "last unresolved publication anchor",
         ),
-        ({"op": "retry", "id": "approve", "node": "bad"}, "settled retryable"),
+        ({"op": "retry", "id": "approve", "node": "bad"}, "running, failed, or cancelled"),
     ):
         _reply(run_id, runs, [command])
         rejected = subprocess.run(
@@ -223,9 +223,16 @@ def test_real_cli_mutates_live_frontier_and_replays_atomic_edits(
     assert payload["results"]["added"]["status"] == "done"
     assert payload["results"]["pending"]["status"] == "done"
     assert payload["results"]["retry"]["status"] == "done"
+    # Retry schedules a fresh replacement without mutating the settled node in
+    # place: the failed original stays on the frontier as its own failed result.
+    assert payload["results"]["failed"]["status"] == "failed"
     assert "slow_b" not in payload["results"]
     projection = project_run(events, RunId(run_dir.name), 1)
     assert {node["id"] for node in projection.plan["tasks"]} == set(payload["results"])
+    # Atomic replay preserves the same retry lineage: the original failed node
+    # survives the retry-requested no-op while the replacement folds to done.
+    assert projection.node_states["failed"] == "failed"
+    assert projection.node_states["retry"] == "done"
     committed = [
         line for line in events.read_text().splitlines() if '"kind": "edit-committed"' in line
     ]
@@ -235,6 +242,15 @@ def test_real_cli_mutates_live_frontier_and_replays_atomic_edits(
         "edge-added",
         "reparent",
     ]
+    retry = next(json.loads(line) for line in committed if '"retry-requested"' in line)
+    assert retry["detail"]["operations"][0] == {
+        "kind": "retry-requested",
+        "node": "failed",
+        "detail": {"replacement": "retry"},
+    }
+    # The planner's completion command is committed through the reconciler as a
+    # completion-requested operation rather than being silently dropped.
+    assert any('"completion-requested"' in line for line in committed)
     boundary = subprocess.run(
         ["just", "channel-next", run_id, "--runs-dir", str(runs), "--timeout", "10"],
         cwd=REPO_ROOT,
