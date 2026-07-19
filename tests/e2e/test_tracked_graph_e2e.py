@@ -388,6 +388,8 @@ def test_recover_interrupted_real_cli_does_not_duplicate_node_start(
         ),
     ]
     for corruption, diagnostic in corruptions:
+        # llmlint: ignore[tests_mirror_real_usage] These bytes deliberately model journal
+        # corruption that has no user-facing producer; setup and recovery both use run-plan.
         events_path.write_bytes(baseline + corruption)
         for artifact in artifacts:
             (round_dir / artifact).unlink(missing_ok=True)
@@ -402,7 +404,88 @@ def test_recover_interrupted_real_cli_does_not_duplicate_node_start(
     pre_finish_events = [event for event in events if event["kind"] != "round-finished"]
     pre_finish = b"".join((json.dumps(event) + "\n").encode() for event in pre_finish_events)
     next_seq = pre_finish_events[-1]["seq"] + 1
+    terminal_event = next(event for event in events if event["kind"] == "round-finished")
+    disagreement = json.loads(json.dumps(terminal_event))
+    disagreement["seq"] = next_seq
+    disagreement["detail"]["result"]["results"]["work"]["status"] = "failed"
+    unknown_result = json.loads(json.dumps(terminal_event))
+    unknown_result["seq"] = next_seq
+    unknown_result["detail"]["result"]["results"]["unknown"] = {"status": "done"}
+    unknown_started = json.loads(json.dumps(terminal_event))
+    unknown_started["seq"] = next_seq
+    unknown_started["detail"]["result"]["started_order"].append("unknown")
+    never_started_events: list[dict[str, object]] = []
+    inserted = False
+    for original in events:
+        event = json.loads(json.dumps(original))
+        if event["kind"] == "round-started" and not inserted:
+            never_started_events.append(
+                {
+                    "version": 1,
+                    "seq": event["seq"],
+                    "at": 0,
+                    "kind": "node-added",
+                    "run_id": "interrupted",
+                    "round": 1,
+                    "detail": {
+                        "definition": {
+                            "id": "idle",
+                            "task": "No diff.",
+                            "expects_no_diff": True,
+                        }
+                    },
+                }
+            )
+            inserted = True
+        if inserted:
+            event["seq"] += 1
+        if event["kind"] == "round-finished":
+            event["detail"]["result"]["started_order"].append("idle")
+            event["detail"]["result"]["results"]["idle"] = {"status": "skipped"}
+        never_started_events.append(event)
     prefix_failures = [
+        (
+            b"".join(
+                (
+                    json.dumps(
+                        {**event, "detail": {}} if event["kind"] == "round-started" else event
+                    )
+                    + "\n"
+                ).encode()
+                for event in pre_finish_events
+            ),
+            "round-started requires plan metadata",
+        ),
+        (
+            pre_finish
+            + (
+                json.dumps(
+                    {
+                        **terminal_event,
+                        "seq": next_seq,
+                        "detail": {"result": {"ok": "not-a-boolean"}},
+                    }
+                )
+                + "\n"
+            ).encode(),
+            "round-finished result is invalid",
+        ),
+        (
+            pre_finish + (json.dumps(disagreement) + "\n").encode(),
+            "round-finished result disagrees with projected node 'work'",
+        ),
+        (
+            pre_finish + (json.dumps(unknown_result) + "\n").encode(),
+            "round-finished result references unknown node(s): unknown",
+        ),
+        (
+            pre_finish + (json.dumps(unknown_started) + "\n").encode(),
+            "round-finished started_order references unknown node(s): unknown",
+        ),
+        (
+            b"".join((json.dumps(event) + "\n").encode() for event in never_started_events),
+            "round-finished started_order contains node(s) without a start event: idle",
+        ),
         (
             (json.dumps({**events[0], "unexpected": True}) + "\n").encode()
             + b"".join((json.dumps(event) + "\n").encode() for event in events[1:]),
@@ -552,6 +635,8 @@ def test_recover_interrupted_real_cli_does_not_duplicate_node_start(
         ),
     ]
     for invalid_log, diagnostic in prefix_failures:
+        # llmlint: ignore[tests_mirror_real_usage] These bytes deliberately model journal
+        # corruption that has no user-facing producer; setup and recovery both use run-plan.
         events_path.write_bytes(invalid_log)
         for artifact in artifacts:
             (round_dir / artifact).unlink(missing_ok=True)

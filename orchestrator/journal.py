@@ -96,6 +96,7 @@ AUTHORITATIVE_EVENT_KINDS: tuple[EventKind, ...] = (
     "edge-added",
     "round-started",
     "node-started",
+    "human-waiting",
     "node-settled",
     "node-failed",
     "human-attested",

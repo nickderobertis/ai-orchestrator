@@ -41,8 +41,14 @@ def test_projection_reconstructs_plan_states_attestations_and_result(tmp_path: P
     )
     journal.append("edge-added", detail={"from": "approve", "to": "ship"})
     journal.append("round-started", detail={"plan": {"schema_version": 3, "concurrency": 1}})
+    journal.append("human-waiting", node=NodeId("approve"), detail={"task": "Approve"})
     journal.append("human-attested", node=NodeId("approve"), detail={"ref": "approve"})
-    result = {"ok": False, "state": "waiting", "started_order": ["approve"], "results": {}}
+    result = {
+        "ok": False,
+        "state": "waiting",
+        "started_order": ["approve"],
+        "results": {"approve": {"status": "waiting"}},
+    }
     journal.append("round-finished", detail={"result": result})
 
     projection = project_run(tmp_path / "events.jsonl", run_id, 1)
@@ -191,6 +197,60 @@ def test_fold_records_failed_state_and_ignores_another_round() -> None:
         Event("round-started", RunId("r"), 2, 5, 0),
     ]
     assert project_round(events, RunId("r"), 1).node_states == {"a": "failed"}
+
+
+@pytest.mark.parametrize(
+    ("payload", "message"),
+    [
+        (
+            {
+                "ok": True,
+                "state": "complete",
+                "started_order": ["a"],
+                "results": {
+                    "a": {"status": "done"},
+                    "unknown": {"status": "done"},
+                },
+            },
+            "result references unknown node.*unknown",
+        ),
+        (
+            {
+                "ok": True,
+                "state": "complete",
+                "started_order": ["unknown"],
+                "results": {"a": {"status": "done"}},
+            },
+            "started_order references unknown node.*unknown",
+        ),
+        (
+            {
+                "ok": True,
+                "state": "complete",
+                "started_order": ["a"],
+                "results": {"a": {"status": "done"}},
+            },
+            "without a start event.*a",
+        ),
+    ],
+)
+def test_fold_rejects_terminal_identifiers_outside_the_projected_execution(
+    payload: dict[str, object], message: str
+) -> None:
+    events = [
+        _event("node-added", 1, detail={"definition": {"id": "a", "persona": "p", "task": "x"}}),
+        _event("round-started", 2, detail={"plan": {}}),
+    ]
+    if "without a start" not in message:
+        events.extend(
+            [
+                _event("node-started", 3, node="a"),
+                _event("node-settled", 4, node="a", detail={"status": "done"}),
+            ]
+        )
+    events.append(_event("round-finished", 5, detail={"result": payload}))
+    with pytest.raises(ProjectionError, match=message):
+        project_round(events, RunId("r"), 1)
 
 
 def test_prepare_round_rebuilds_deleted_derived_plan(tmp_path: Path) -> None:

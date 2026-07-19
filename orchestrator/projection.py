@@ -160,6 +160,12 @@ def project_round(events: list[Event], run_id: RunId, round_number: int) -> Roun
                 if event.node in builder.states:
                     raise ProjectionError(f"node {event.node!r} started more than once")
                 builder.states[event.node] = "running"
+            case "human-waiting" if event.node is not None:
+                if event.node not in builder.node_ids:
+                    raise ProjectionError(f"human-waiting references unknown node {event.node!r}")
+                if event.node in builder.states:
+                    raise ProjectionError(f"node {event.node!r} started more than once")
+                builder.states[event.node] = "waiting"
             case "node-settled" | "node-failed" if event.node is not None:
                 if builder.states.get(event.node) != "running":
                     raise ProjectionError(f"node {event.node!r} settled without one start")
@@ -184,6 +190,25 @@ def project_round(events: list[Event], run_id: RunId, round_number: int) -> Roun
                     builder.result = as_result_payload(payload)
                 except ConfigError as exc:
                     raise ProjectionError(f"round-finished result is invalid: {exc}") from exc
+                topology = builder.node_ids
+                unknown_results = sorted(set(builder.result["results"]) - topology)
+                if unknown_results:
+                    raise ProjectionError(
+                        "round-finished result references unknown node(s): "
+                        + ", ".join(unknown_results)
+                    )
+                unknown_started = sorted(set(builder.result["started_order"]) - topology)
+                if unknown_started:
+                    raise ProjectionError(
+                        "round-finished started_order references unknown node(s): "
+                        + ", ".join(unknown_started)
+                    )
+                never_started = sorted(set(builder.result["started_order"]) - set(builder.states))
+                if never_started:
+                    raise ProjectionError(
+                        "round-finished started_order contains node(s) without a start event: "
+                        + ", ".join(never_started)
+                    )
                 for node, state in builder.states.items():
                     recorded = builder.result["results"].get(node)
                     if state == "running" or recorded is None or recorded.get("status") != state:
