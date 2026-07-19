@@ -29,6 +29,12 @@ _REGISTRY_VERSION = 3
 _REPOSITORY_TYPES = ("single-owner", "team")
 
 
+def _is_local_alias_spec(spec: str) -> bool:
+    """Return whether ``spec`` is a bare alias in the reserved local namespace."""
+    stripped = spec.strip()
+    return bool(_SLUG_PATTERN.fullmatch(stripped) and stripped.startswith("local/"))
+
+
 class RegistryError(ValueError):
     """Registry data or a requested checkout failed validation."""
 
@@ -432,7 +438,7 @@ class Registry:
             alias = str(Slug(spec.strip()))
             owner, name = alias.split("/", 1)
             return RepoRef(owner, name, entry.path, local=True)
-        if normalized.owner == "local" and not normalized.local:
+        if _is_local_alias_spec(spec):
             raise RegistryError(
                 f"unknown local checkout alias {spec.strip()!r}; run 'just repos' "
                 "to list registered checkouts"
@@ -445,8 +451,7 @@ class Registry:
         entry = self.entries.get(Slug(raw.strip()))
         if entry is not None:
             return Path(entry.path)
-        normalized = normalize_repo(raw)
-        if normalized.owner == "local" and not normalized.local:
+        if _is_local_alias_spec(raw):
             raise RegistryError(
                 f"unknown local checkout alias {raw.strip()!r}; run 'just repos' "
                 "to list registered checkouts"

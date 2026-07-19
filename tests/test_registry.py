@@ -78,6 +78,11 @@ def test_repo_ref_prefers_registered_alias_and_rejects_unknown_local_namespace(
     assert not github.local
     assert github.url == "https://github.com/acme/widget.git"
 
+    explicit_local_owner = registry.repo_ref("https://github.com/local/example.git")
+    assert not explicit_local_owner.local
+    assert explicit_local_owner.slug == "local/example"
+    assert explicit_local_owner.url == "https://github.com/local/example.git"
+
     remote_checkout = _clone(bare_origin(), tmp_path / "remote-checkout")
     remote_url = "https://github.com/nickderobertis/crozier.git"
     git("remote", "set-url", "origin", remote_url, cwd=remote_checkout)
