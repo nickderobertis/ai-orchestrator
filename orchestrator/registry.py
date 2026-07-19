@@ -424,6 +424,35 @@ class Registry:
     def _reload(self) -> None:
         self.entries, self.identities = self._load()
 
+    def repo_ref(self, spec: str) -> RepoRef:
+        """Normalize ``spec``, preferring an exact registered checkout alias."""
+        normalized = normalize_repo(spec)
+        entry = self.entries.get(Slug(spec.strip()))
+        if entry is not None:
+            alias = str(Slug(spec.strip()))
+            owner, name = alias.split("/", 1)
+            return RepoRef(owner, name, entry.path, local=True)
+        if normalized.owner == "local" and not normalized.local:
+            raise RegistryError(
+                f"unknown local checkout alias {spec.strip()!r}; run 'just repos' "
+                "to list registered checkouts"
+            )
+        return normalized
+
+    def checkout_path(self, spec: str | Path) -> Path:
+        """Resolve a checkout alias or preserve an explicit filesystem path."""
+        raw = str(spec)
+        entry = self.entries.get(Slug(raw.strip()))
+        if entry is not None:
+            return Path(entry.path)
+        normalized = normalize_repo(raw)
+        if normalized.owner == "local" and not normalized.local:
+            raise RegistryError(
+                f"unknown local checkout alias {raw.strip()!r}; run 'just repos' "
+                "to list registered checkouts"
+            )
+        return Path(raw).expanduser().resolve()
+
     def _set_identity_type(
         self, identity: IdentityKey, repo_type: RepositoryType, *, workflow: Workflow | None = None
     ) -> None:
@@ -641,7 +670,7 @@ class Registry:
         default_workflow: Workflow = "remote",
         repo_type: RepositoryType | None = None,
     ) -> Path:
-        repo = normalize_repo(spec)
+        repo = self.repo_ref(spec)
         with advisory_lock(f"registry-resolve:{self.path.resolve()}:{repo.slug}"):
             self._reload()
             return self._resolve_unlocked(
@@ -711,7 +740,7 @@ class Registry:
         repo_type: RepositoryType | None = None,
     ) -> RegistrySelection:
         """Select publication identity/path and an optional exact execution clone."""
-        repo = normalize_repo(spec)
+        repo = self.repo_ref(spec)
         self._reload()
         try:
             expected = (
@@ -752,7 +781,7 @@ class Registry:
         identity = _url_identity(entry.origin)
         effective_type = self.repository_type(identity, override=repo_type)
         execution = (
-            Path(execution_checkout).expanduser().resolve()
+            self.checkout_path(execution_checkout).expanduser().resolve()
             if execution_checkout is not None
             else publication
         )

@@ -49,6 +49,7 @@ from .lifecycle import (
     make_repo_runner,
     parse_repo_node,
     result_payload,
+    validate_repo_aliases,
 )
 from .plan import (
     NODE_KINDS,
@@ -62,6 +63,7 @@ from .plan import (
     parse_agent_node,
     reconcile_dag,
 )
+from .registry import Registry
 from .runs import (
     RECORDED_RESULT_SCHEMA_VERSION,
     GraphPayload,
@@ -895,6 +897,10 @@ def main(argv: list[str] | None = None) -> int:
     try:
         plan_mapping = load_yaml(args.plan)
         graph = parse_graph(plan_mapping)
+        registry = Registry()
+        for node in graph.tasks:
+            if node.lifecycle is not None:
+                validate_repo_aliases(node.lifecycle, registry)
         if args.concurrency is not None and args.concurrency < 1:
             raise PlanError("'--concurrency' must be a positive integer")
         run_dir = (

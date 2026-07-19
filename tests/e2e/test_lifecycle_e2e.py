@@ -37,6 +37,7 @@ from orchestrator.github import PullRequest
 from orchestrator.graph import graph_payload, parse_graph, run_graph
 from orchestrator.journal import NodeJournal, NodeSink, open_journal
 from orchestrator.lifecycle import (
+    LifecycleResult,
     RepoPlan,
     RepoPlanNode,
     Resume,
@@ -485,6 +486,69 @@ def test_repo_plan_ledger_and_guided_next_round(
 
 
 # --- local repo: direct merge into main after checks -----------------------
+
+
+def test_registered_aliases_drive_real_lifecycle_without_a_stray_clone(
+    tmp_path, bare_origin, command_base, personas_dir
+) -> None:
+    """Repo and execution aliases reach the real onejudge lifecycle boundary."""
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical")
+    safety = gitops.clone(origin, tmp_path / "safety")
+    registry = Registry()
+    registry.register(str(canonical), workflow="local")
+    registry.register(str(safety))
+
+    result = run_repo_task(
+        "local/canonical",
+        "complete-now write-change alias lifecycle",
+        "engineer",
+        workspace=Workspace(tmp_path / "worktrees"),
+        execution_checkout="local/safety",
+        base_path=command_base(),
+        persona_dir=personas_dir,
+        verify_cmd=["true"],
+    )
+
+    assert result.ok and result.outcome == "merged", result.detail
+    assert Path(result.publication_checkout) == canonical
+    assert Path(result.execution_checkout) == safety
+    assert not (Path(os.environ["AI_ORCHESTRATOR_HOME"]) / "repos").exists()
+
+    plan = RepoPlan(
+        tasks=[
+            RepoPlanNode(
+                id="alias-node",
+                repo="local/canonical",
+                persona="engineer",
+                task="complete-now write-unique-change alias plan lifecycle",
+                execution_checkout="local/safety",
+            )
+        ],
+        concurrency=1,
+    )
+    plan_workspace = Workspace(tmp_path / "plan-worktrees")
+
+    def plan_runner(node: RepoPlanNode, **_: object) -> LifecycleResult:
+        return run_repo_task(
+            node.repo,
+            node.task,
+            node.persona,
+            workspace=plan_workspace,
+            execution_checkout=node.execution_checkout,
+            base_path=command_base(),
+            persona_dir=personas_dir,
+            verify_cmd=["true"],
+        )
+
+    planned = run_repo_plan(plan, plan_runner)
+
+    assert planned.ok, planned.results["alias-node"].error
+    planned_result = planned.results["alias-node"].result
+    assert planned_result is not None
+    assert Path(planned_result.publication_checkout) == canonical
+    assert Path(planned_result.execution_checkout) == safety
+    assert not (Path(os.environ["AI_ORCHESTRATOR_HOME"]) / "repos").exists()
 
 
 def test_local_identity_executes_in_safety_clone_and_publishes_without_pr(
