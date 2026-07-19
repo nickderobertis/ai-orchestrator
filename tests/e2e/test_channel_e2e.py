@@ -369,6 +369,41 @@ def test_orchestrate_cli_reports_launch_boundary_failures(tmp_path: Path) -> Non
     assert missing.returncode == 2
     assert "plan does not exist" in missing.stderr
 
+    unknown_alias_plan = tmp_path / "unknown-alias.json"
+    unknown_alias_plan.write_text(
+        json.dumps(
+            {
+                "schema_version": 3,
+                "tasks": [
+                    {
+                        "id": "unknown",
+                        "repo": "local/does-not-exist",
+                        "persona": "engineer",
+                        "task": "must not launch",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    unknown_runs = tmp_path / "unknown-runs"
+    unknown_alias = subprocess.run(
+        [
+            "orchestrator-orchestrate",
+            str(unknown_alias_plan),
+            "--runs-dir",
+            str(unknown_runs),
+            "--onejudge-bin",
+            "definitely-missing-onejudge",
+        ],
+        text=True,
+        capture_output=True,
+    )
+    assert unknown_alias.returncode == 2
+    assert "unknown local checkout alias 'local/does-not-exist'" in unknown_alias.stderr
+    assert "just repos" in unknown_alias.stderr
+    assert not unknown_runs.exists()
+
     plan = _plan(tmp_path, "surface-milestone")
     split_base = _base(tmp_path)
     value = yaml.safe_load(split_base.read_text(encoding="utf-8"))

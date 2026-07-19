@@ -312,6 +312,14 @@ def load_graph(path: str | Path) -> Graph:
     return parse_graph(data)
 
 
+def validate_graph_repo_aliases(graph: Graph, registry: Registry | None = None) -> None:
+    """Validate registry-backed lifecycle inputs before a graph is launched."""
+    selected_registry = registry or Registry()
+    for node in graph.tasks:
+        if node.lifecycle is not None:
+            validate_repo_aliases(node.lifecycle, selected_registry)
+
+
 def run_graph(
     graph: Graph,
     *,
@@ -897,10 +905,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         plan_mapping = load_yaml(args.plan)
         graph = parse_graph(plan_mapping)
-        registry = Registry()
-        for node in graph.tasks:
-            if node.lifecycle is not None:
-                validate_repo_aliases(node.lifecycle, registry)
+        validate_graph_repo_aliases(graph)
         if args.concurrency is not None and args.concurrency < 1:
             raise PlanError("'--concurrency' must be a positive integer")
         run_dir = (

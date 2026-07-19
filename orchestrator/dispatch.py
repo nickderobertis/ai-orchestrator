@@ -356,9 +356,14 @@ def launch_orchestrator(
         raise DispatchError("onejudge binary must be a non-empty, non-NUL string")
     plan_mapping = load_yaml(plan)
     # Import locally because graph's direct-agent runner imports this module.
-    from .graph import parse_graph
+    from .graph import parse_graph, validate_graph_repo_aliases
+    from .plan import PlanError
 
-    parse_graph(plan_mapping)
+    try:
+        graph = parse_graph(plan_mapping)
+        validate_graph_repo_aliases(graph)
+    except PlanError as exc:
+        raise DispatchError(f"invalid plan: {exc}") from exc
     root = Path(runs_dir).resolve()
     run_dir = resolve_run_dir(root, plan_mapping, plan, run_id)
     run_dir.mkdir(parents=True, exist_ok=False)
