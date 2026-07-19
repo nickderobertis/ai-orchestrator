@@ -163,7 +163,7 @@ def project_round(events: list[Event], run_id: RunId, round_number: int) -> Roun
                 if event.node in builder.states:
                     raise ProjectionError(f"node {event.node!r} started more than once")
                 builder.states[event.node] = "running"
-            case "human-waiting" if event.node is not None:
+            case "human-waiting" if event.node is not None and event.step is None:
                 if event.node not in builder.node_ids:
                     raise ProjectionError(f"human-waiting references unknown node {event.node!r}")
                 if event.node in builder.states:

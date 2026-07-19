@@ -1372,6 +1372,152 @@ def test_real_cli_recovers_failed_lifecycle_result(
     assert result["results"]["failed-lifecycle"]["outcome"] == "not-completed"
 
 
+def test_real_cli_recovers_waiting_and_no_change_lifecycle_results(
+    tmp_path: Path, bare_origin, command_base, onejudge_bin: str
+) -> None:
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "lifecycle-variants-canonical")
+    Registry().register(str(canonical), workflow="local")
+    runs = tmp_path / "runs"
+    plan = tmp_path / "lifecycle-variants-prefix.json"
+    plan.write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "concurrency": 3,
+                "tasks": [
+                    {
+                        "id": "waiting-lifecycle",
+                        "repo": str(canonical),
+                        "task": "Pause for approval",
+                        "branch": "feature/waiting-lifecycle",
+                        "workflow": "local",
+                        "repo_type": "single-owner",
+                        "skip_verify": True,
+                        "steps": [
+                            {
+                                "id": "prepare",
+                                "persona": "engineer",
+                                "task": "complete-now write-change prepare approval",
+                            },
+                            {
+                                "id": "approve",
+                                "kind": "human",
+                                "task": "Approve the prepared change.",
+                                "deps": ["prepare"],
+                            },
+                        ],
+                    },
+                    {
+                        "id": "no-change-lifecycle",
+                        "repo": str(canonical),
+                        "task": "Certify no lifecycle change",
+                        "branch": "feature/no-change-lifecycle",
+                        "workflow": "local",
+                        "repo_type": "single-owner",
+                        "skip_verify": True,
+                        "steps": [
+                            {
+                                "id": "certify",
+                                "task": "No diff.",
+                                "expects_no_diff": True,
+                            }
+                        ],
+                    },
+                    {
+                        "id": "blocked",
+                        "persona": "engineer",
+                        "task": "complete-now",
+                        "deps": ["waiting-lifecycle"],
+                    },
+                    {
+                        "id": "in-flight",
+                        "persona": "engineer",
+                        "task": "should-fail",
+                        "max_turns": 5,
+                    },
+                ],
+            }
+        )
+    )
+    command = [
+        "just",
+        "run-plan",
+        str(plan),
+        "--run",
+        "lifecycle-variants-prefix",
+        "--runs-dir",
+        str(runs),
+        "--workspace",
+        str(tmp_path / "lifecycle-variants-worktrees"),
+        "--base",
+        str(command_base()),
+        "--onejudge-bin",
+        onejudge_bin,
+        "--format",
+        "json",
+    ]
+    process = subprocess.Popen(
+        command,
+        cwd=REPO_ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        start_new_session=True,
+    )
+    events_path = runs / "lifecycle-variants-prefix" / "events.jsonl"
+    deadline = time.monotonic() + 20
+    while time.monotonic() < deadline:
+        records = (
+            [json.loads(line) for line in events_path.read_text().splitlines()]
+            if events_path.exists()
+            else []
+        )
+        settled = {event.get("node") for event in records if event["kind"] == "node-settled"}
+        in_flight = any(
+            event["kind"] == "node-started" and event.get("node") == "in-flight"
+            for event in records
+        )
+        if {"waiting-lifecycle", "no-change-lifecycle"} <= settled and in_flight:
+            break
+        time.sleep(0.01)
+    else:
+        process.kill()
+        pytest.fail("run-plan did not reach the waiting lifecycle recovery boundary")
+    os.killpg(process.pid, signal.SIGKILL)
+    process.wait()
+
+    recovered = subprocess.run(
+        [*command, "--recover"], cwd=REPO_ROOT, text=True, capture_output=True, check=False
+    )
+    assert recovered.returncode == 1, recovered.stderr
+    result = json.loads(
+        (runs / "lifecycle-variants-prefix" / "round-01" / "result.json").read_text()
+    )
+    records = [json.loads(line) for line in events_path.read_text().splitlines()]
+    for node_id in ("waiting-lifecycle", "no-change-lifecycle"):
+        terminal = [
+            event
+            for event in records
+            if event["kind"] == "node-settled" and event.get("node") == node_id
+        ]
+        assert len(terminal) == 1
+        assert (
+            sum(
+                event["kind"] == "node-started" and event.get("node") == node_id
+                for event in records
+            )
+            == 1
+        )
+        assert terminal[0]["detail"]["result"] == result["results"][node_id]
+    waiting = result["results"]["waiting-lifecycle"]
+    assert waiting["status"] == "waiting" and waiting["outcome"] == "waiting-human"
+    assert waiting["waiting_steps"] == ["approve"]
+    assert waiting["human_actions"][0]["ref"] == "waiting-lifecycle/approve"
+    assert result["results"]["blocked"]["status"] == "blocked"
+    assert result["results"]["no-change-lifecycle"]["outcome"] == "no-changes"
+
+
 def test_recover_completes_a_partially_emitted_graph_without_duplicates(tmp_path: Path) -> None:
     runs = tmp_path / "runs"
     node_count = 2000
