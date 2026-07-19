@@ -323,7 +323,7 @@ def test_session_normalization_degrades_each_field_independently(tmp_path: Path)
     assert summary.commands == {"git": 1}
     assert summary.usage["input_tokens"] is None
     assert summary.usage["output_tokens"] is None
-    assert not summary.interval_complete
+    assert not summary.validated_native_fields
     assert _command_class("just check") == "just"
     assert _command_class("") == "unknown"
     zero = _timing(0, [summary])
