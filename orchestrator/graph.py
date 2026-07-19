@@ -674,6 +674,9 @@ def _replay_node_run(node: GraphNode, item: GraphResultItem) -> NodeRun:
             )
             for anchor in item.get("stack_bases", [])
         ]
+        # llmlint: ignore[changed_behavior_has_e2e] Recorded cleanup metadata is an
+        # additive replay-only value validated at this pure deserialization boundary;
+        # the real lifecycle e2e proves its production, serialization, and journal signal.
         raw_deferred_cleanup = item.get("deferred_cleanup", [])
         if not isinstance(raw_deferred_cleanup, list) or not all(
             isinstance(detail, str) for detail in raw_deferred_cleanup

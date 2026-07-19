@@ -1077,6 +1077,8 @@ def _build_synthetic_stack_base(
             cleanup=lambda: workspace.remove_worktree(ref, worktree),
         )
         if not pushed:
+            # llmlint: ignore[changed_behavior_has_e2e] The real-git synthetic-stack
+            # conflict e2e exercises both deferred teardown operations on this path.
             _best_effort_cleanup(
                 result,
                 journal,

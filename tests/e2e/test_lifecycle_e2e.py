@@ -199,6 +199,54 @@ def test_synthetic_stack_teardown_contention_is_deferred_with_real_git(
     assert result.deferred_cleanup and "remove-worktree deferred" in result.deferred_cleanup[0]
 
 
+def test_failed_synthetic_stack_defers_worktree_and_branch_cleanup_with_real_git(
+    tmp_path, bare_origin
+) -> None:
+    origin = bare_origin()
+    writer = gitops.clone(origin, tmp_path / "stack-writer")
+    for branch, content in (("stack-left", "left\n"), ("stack-right", "right\n")):
+        subprocess.run(["git", "checkout", "-B", branch, "origin/main"], cwd=writer, check=True)
+        (writer / "conflict.txt").write_text(content, encoding="utf-8")
+        gitops.add_all(writer)
+        gitops.commit(writer, f"test: create {branch}")
+        gitops.push(writer, branch, set_upstream=False)
+    canonical = gitops.clone(origin, tmp_path / "canonical-conflict")
+
+    class ContendedCleanupWorkspace(Workspace):
+        def remove_worktree(self, repo, path) -> None:
+            raise LockTimeout("worktree cleanup busy")
+
+        def delete_branch(self, repo, branch) -> None:
+            raise LockTimeout("branch cleanup busy")
+
+    workspace = ContendedCleanupWorkspace(
+        tmp_path / "conflict-worktrees",
+        resolver=lambda _spec: canonical,
+        workflow="local",
+        repo_type="single-owner",
+    )
+    ref = normalize_repo(str(origin))
+    workspace.ensure_clone(ref)
+    result = lifecycle_module.LifecycleResult(
+        ref.slug, "stack", "engineer", "main", "stack", "error"
+    )
+
+    built = lifecycle_module._build_synthetic_stack_base(
+        ref,
+        workspace,
+        "main",
+        [StackBase("stack-left"), StackBase("stack-right")],
+        result=result,
+        journal=lifecycle_module.NullNodeJournal(),
+    )
+
+    assert isinstance(built, lifecycle_module.StackConflict)
+    assert [detail.split(" deferred", 1)[0] for detail in result.deferred_cleanup] == [
+        "remove-worktree",
+        "delete-branch",
+    ]
+
+
 def test_identity_cache_and_repo_post_checkout_hook_are_wired_across_dispatches(
     tmp_path, bare_origin, command_base, personas_dir
 ) -> None:
