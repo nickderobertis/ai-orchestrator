@@ -250,3 +250,44 @@ def test_retry_replacement_shape_and_lineage_are_validated() -> None:
             states={},
             attestations=(),
         )
+
+
+def test_reparent_rejects_an_already_started_node() -> None:
+    with pytest.raises(EditError, match="unstarted node"):
+        apply_edit(
+            _graph(),
+            EditCommand("reparent", {"op": "reparent", "id": "leaf", "deps": []}),
+            states={"leaf": "running"},
+            attestations=(),
+        )
+
+
+def test_drop_cascade_visits_each_reachable_dependent_once() -> None:
+    diamond = parse_graph(
+        {
+            "schema_version": 3,
+            "tasks": [
+                {"id": "keep", "persona": "engineer", "task": "Keep"},
+                {"id": "root", "persona": "engineer", "task": "Root"},
+                {"id": "left", "persona": "engineer", "task": "Left", "deps": ["root"]},
+                {"id": "right", "persona": "engineer", "task": "Right", "deps": ["root"]},
+                {
+                    "id": "sink",
+                    "persona": "engineer",
+                    "task": "Sink",
+                    "deps": ["left", "right"],
+                },
+            ],
+        }
+    )
+    graph, events = apply_edit(
+        diamond,
+        EditCommand("drop", {"op": "drop", "id": "root", "dependents": "drop"}),
+        states={},
+        attestations=(),
+    )
+    assert [node.id for node in graph.tasks] == ["keep"]
+    # ``sink`` is reachable through both ``left`` and ``right``; the cascade removes
+    # it exactly once rather than emitting a duplicate node-dropped event.
+    dropped = [event["node"] for event in events if event["kind"] == "node-dropped"]
+    assert sorted(dropped) == ["left", "right", "root", "sink"]
