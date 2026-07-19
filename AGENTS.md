@@ -45,9 +45,10 @@ dispatch. Preserved stacked branches record their PR base so recovery targets th
 stack rather than the root. `just run-plan` is the one tracked hierarchical graph
 executor: its top-level DAG may mix direct agents, lifecycle agents, and explicit
 human actions; a lifecycle node may itself run **several agent and human steps in
-sequence on one branch**. The DAG is static within a round — you **adapt between
-recorded rounds** by reviewing the orchestrator's surfaced update and returning a
-decision over the live channel.
+sequence on one branch**. Its reconciler accepts planner-issued graph edits while
+a round is running; rounds are checkpoints, not adaptation barriers. Review
+surfaced proposals and use the [live-edit
+protocol](docs/orchestration.md#live-graph-edits) to change the desired frontier.
 
 ## What "agent" means here
 
@@ -89,17 +90,20 @@ dispatch onejudge.
    bar in `personas/`. Prefer precise task prose plus per-node `done_when` over
    encoding subtask details in a new persona.
 3. **Launch and supervise.** Start the graph with `just orchestrate <plan.json>`,
-   then review each structured boundary surfaced by the orchestrator. Decide
-   retry/split/add/drop actions, approve or reject departures, and triage
-   follow-ups. Keep the user informed at each milestone and never let more than
-   30 minutes pass between updates. When a completed task published a PR, include
-   the relevant PR link in its completion report. Require verified publication
-   closeout before accepting completion.
+   then review each structured boundary and mid-run proposal surfaced by the
+   orchestrator. Issue valid live `add` / `drop` / `reparent` / `retry` / `attest`
+   edits when the running frontier should change; workers propose but never edit.
+   Triage follow-ups, keep the user informed at each milestone, and never let more
+   than 30 minutes pass between updates. When a completed task published a PR,
+   include the relevant PR link in its completion report. Require verified
+   publication closeout before issuing `complete`.
 
 After `just orchestrate`, the planner uses **only** `just channel-next`, `just
 channel-reply`, and the read-only `just monitor` / `just runs` / `just status`
-views. It never runs `run-plan` or `next-round` itself: those commands belong to
-the orchestrator process, and two writers would race the ledger lock.
+views. `channel-reply` carries both legacy verdicts and [versioned live
+edits](docs/orchestration.md#live-graph-edits). The planner never runs `run-plan`
+or `next-round` itself: those commands belong to the orchestrator process, and
+two writers would race the ledger lock.
 
 Judge a dispatched branch against its own base (`merge-base` / `base..branch`),
 never a moving `origin/main`; concurrent advancement can make a healthy branch
@@ -215,11 +219,12 @@ activates the git hooks); `just check` is the deterministic tier, while `just ga
 is the complete pre-push bar: `check` plus the llmlint diff tier. `just run-plan`
 is the recorded mixed-graph executor driven internally by the dedicated
 orchestrator onejudge process. The planner launches multi-node work with `just
-orchestrate <plan.json>` and supervises its surfaced round boundaries over the
-[live channel](docs/orchestration.md#the-plannerorchestrator-channel); it does not
-invoke `run-plan` directly. `repo-plan` exists only for compatibility. Human
-completion is never inferred and enters the graph only as an explicit `next-round`
-attestation. Keep operational syntax and result contracts in
+orchestrate <plan.json>` and supervises its surfaced boundaries and proposals
+over the [live channel](docs/orchestration.md#the-plannerorchestrator-channel); it
+does not invoke `run-plan` directly. `repo-plan` exists only for compatibility.
+Human completion is never inferred and enters the graph only as an explicit live
+`attest` command (or compatibility `next-round` attestation). Keep operational
+syntax and result contracts in
 `docs/orchestration.md` and lifecycle policy in `docs/repo-lifecycle.md` rather
 than duplicating command help here.
 

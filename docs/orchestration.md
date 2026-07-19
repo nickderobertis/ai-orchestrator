@@ -1,4 +1,5 @@
 <!-- llmlint: ignore-file[contracts_have_one_source_or_a_drift_gate] Operator-facing wire examples are required here; orchestrator/channel.py remains authoritative and its exact contract is exercised by channel unit/e2e tests. -->
+<!-- llmlint: ignore-file[no_redundant_instruction_pointers] Live cancellation can preserve incomplete commits; the recovery command must link its safety contract at the point of use. -->
 
 # Tracked graph orchestration
 
@@ -14,12 +15,13 @@ Plans that omit the version retain version-1 behavior for compatibility.
 
 `just orchestrate <plan.json>` starts a detached orchestrator onejudge run and
 prints its run id. The orchestrator is the graph executor; its supervisor is the
-live planner rather than a simulated-user model. One orchestrator turn owns one
-recorded graph round: it runs `just run-plan` (or `just next-round` after the first
-round), watches `just monitor`, reads the settled result, and asks the planner for
-a decision before writing the next round. The planner must not run either writer.
-After launch it uses only the channel and the read-only `just monitor` / `just
-runs` views; otherwise two processes can race the ledger lock.
+live planner rather than a simulated-user model. During a round, the reconciler
+converges the actual frontier toward a desired graph that the planner may edit
+while nodes run. Recorded rounds are checkpoints and labels, not stop-the-world
+adaptation barriers. The orchestrator alone writes the graph, journal, and round
+ledger. After launch the planner uses only the channel and the read-only `just
+monitor` / `just runs` views; running `run-plan` or `next-round` alongside it
+would race the single writer.
 
 At each round boundary the orchestrator emits JSON in its final assistant message:
 
@@ -36,7 +38,10 @@ newline-delimited JSON frame to the planner:
 
 The orchestrator persona defines the boundary-kind vocabulary. `surface.options`
 is optional and, when present, is a list of strings. `messages` is the onejudge
-conversation context. The planner replies with one of these shapes:
+conversation context. Settled workers may also surface `kind: "proposal"` while
+the round continues. Proposals are advice only: workers never receive the down
+FIFO, and only the planner can issue edits. The planner replies with one of these
+legacy verdict shapes:
 
 ```json
 {"completion":false,"message":"retry X with the fixture requirement","reason":"the graph is not complete"}
@@ -44,9 +49,9 @@ conversation context. The planner replies with one of these shapes:
 ```
 
 `completion: false` requires both `message` and `reason`; `completion: true`
-requires `reason`. The orchestrator applies continuing guidance through
-`next-round` edits. Completion is reserved for a verified `closeout` after the
-whole graph is published and follow-ups are triaged.
+requires `reason`. Completion is reserved for a verified `closeout` after the
+whole graph is published and follow-ups are triaged. See [Live graph edits](#live-graph-edits)
+to change the graph without waiting for a round boundary.
 
 The three planner-facing recipes are:
 
@@ -69,6 +74,66 @@ The orchestrator may author in an isolated execution checkout, but its
 `--runs-dir` must resolve to the same host-visible path for the detached process
 and planner. The round ledger and its sibling `channel/` directory cannot live
 only inside a disposable worktree or container-private filesystem.
+
+### Live graph edits
+
+Send a version-1 edit envelope to `channel-reply`; this is the shape exercised by
+`tests/e2e/test_live_edit_e2e.py`:
+
+```sh
+just channel-reply RUN --runs-dir /host/path/runs <<'JSON'
+{"version":1,"commands":[{"op":"reparent","id":"pending","deps":["slow_b"]},{"op":"drop","id":"slow_b","dependents":"detach"},{"op":"attest","ref":"approve"}]}
+JSON
+```
+
+The accepted commands are:
+
+| `op` | Required fields | Effect |
+| --- | --- | --- |
+| `add` | `node`: full node mapping | Add a new node. Its `deps`, if any, must name graph nodes. |
+| `drop` | `id`; `dependents`: `"drop"` or `"detach"` | Remove the node and recursively drop its dependents, or detach its direct dependents. |
+| `reparent` | `id`; `deps`: list of node ids | Replace an unstarted node's dependencies. |
+| `retry` | `id`; `node`: full replacement node mapping with a new id | Supersede a running, failed, or cancelled node with a fresh lineage and redirect its direct dependents. |
+| `attest` | `ref` | Complete a currently ready, waiting human action. |
+| `complete` | `reason` | Journal the planner's completion request independently of graph mutation. |
+
+A command-only envelope gets a synthesized continuing verdict. Commands can
+instead accompany either legacy verdict, for example:
+
+```json
+{"completion":false,"message":"apply the replacement and continue","reason":"the failed node is retryable","version":1,"commands":[{"op":"retry","id":"failed","node":{"id":"retry","task":"No diff","expects_no_diff":true}}]}
+```
+
+`complete` is the versioned equivalent of a completion verdict and may share an
+envelope with graph edits:
+
+```json
+{"version":1,"commands":[{"op":"complete","reason":"publication and follow-up triage verified"}]}
+```
+
+Completion is decoupled from scheduling: the reconciler journals it for audit
+and replay, while the graph continues to settle its frontier and the supervisor
+verdict closes the orchestrator run.
+
+Every delta is validated against the live frontier before commit. The resulting
+graph must still satisfy the normal plan schema: ids and referenced dependencies
+must exist, and dependencies cannot form a cycle or self-edge. `reparent` cannot
+change a started node; `retry` requires a running, failed, or cancelled target and
+a new replacement id; `attest` requires a ready waiting human action. `drop` must
+state the dependents' fate and cannot remove the last publication anchor while an
+unresolved same-identity dependent remains. A rejected delta changes no state and
+returns as a `reconciler: rejected ...` proposal. Commands are reconciled in
+order. Each accepted delta, including a multi-edge reparent or retry, is appended
+by the reconciler's single writer as one `edit-committed` event, so replay sees
+all of that delta's compiled mutations or none of them. Channel frames are
+locked, acknowledged JSON lines and are not limited to a FIFO's atomic-write
+size.
+
+Dropping or retrying a running node sets its cooperative cancellation signal. A
+direct dispatch stops; a lifecycle dispatch preserves commits already made on
+its branch with incomplete provenance before it settles `cancelled` (publication
+already in its commit phase may finish). Verify and publish preserved lifecycle
+work with [`just repo-recover`](repo-lifecycle.md#integrating-completed-workstreams).
 
 ## Node shapes
 
@@ -121,8 +186,10 @@ unrelated branches remain parallel.
 
 `run-plan` starts every node whose dependencies are `done`, bounded by
 `concurrency`. Lifecycle dependencies on the same repository identity also carry
-publication/stack ancestry; cross-repository dependencies only schedule. A graph
-is static within one round. Adapt after reading its recorded result.
+publication/stack ancestry; cross-repository dependencies only schedule. During
+an orchestrated run, [live edits](#live-graph-edits) can change the desired graph
+and the reconciler applies the new reachable frontier without waiting for the
+round to settle.
 
 ## Status, state, and exit contract
 
@@ -164,7 +231,7 @@ result writes are atomic; a live round cannot be claimed by another process.
 `just runs` summarizes the latest completed round, including waiting action prose
 and what each action unblocks.
 
-Execution is a long-lived reconcile loop: it compares the round's fixed desired
+Execution is a long-lived reconcile loop: it compares the round's live desired
 graph with actual node state projected from `events.jsonl`, starts the reachable
 frontier, and reacts to each completion until the graph is terminal. Journal
 schema 2 terminal node events carry the complete serialized node result, so
