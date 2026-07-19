@@ -943,7 +943,7 @@ def test_real_cli_recovers_exception_terminal_result_without_duplicates(
     plan.write_text(
         json.dumps(
             {
-                "concurrency": 2,
+                "concurrency": 3,
                 "tasks": [
                     {
                         "id": "raises",
@@ -1290,6 +1290,16 @@ def test_real_cli_recovers_failed_lifecycle_result(
                         "max_turns": 1,
                     },
                     {
+                        "id": "gate-failed-lifecycle",
+                        "repo": str(canonical),
+                        "persona": "engineer",
+                        "task": "complete-now write-change gate failure",
+                        "branch": "feature/gate-failed-lifecycle",
+                        "workflow": "local",
+                        "repo_type": "single-owner",
+                        "verify_cmd": ["false"],
+                    },
+                    {
                         "id": "in-flight",
                         "persona": "engineer",
                         "task": "should-fail",
@@ -1332,15 +1342,14 @@ def test_real_cli_recovers_failed_lifecycle_result(
             if events_path.exists()
             else []
         )
-        lifecycle_failed = any(
-            event["kind"] == "node-failed" and event.get("node") == "failed-lifecycle"
-            for event in records
-        )
+        failed_lifecycles = {
+            event.get("node") for event in records if event["kind"] == "node-failed"
+        }
         in_flight = any(
             event["kind"] == "node-started" and event.get("node") == "in-flight"
             for event in records
         )
-        if lifecycle_failed and in_flight:
+        if {"failed-lifecycle", "gate-failed-lifecycle"} <= failed_lifecycles and in_flight:
             break
         time.sleep(0.01)
     else:
@@ -1355,21 +1364,23 @@ def test_real_cli_recovers_failed_lifecycle_result(
     assert recovered.returncode == 1, recovered.stderr
     result = json.loads((runs / "failed-lifecycle-prefix" / "round-01" / "result.json").read_text())
     records = [json.loads(line) for line in events_path.read_text().splitlines()]
-    terminal = [
-        event
-        for event in records
-        if event["kind"] == "node-failed" and event.get("node") == "failed-lifecycle"
-    ]
-    assert len(terminal) == 1
-    assert (
-        sum(
-            event["kind"] == "node-started" and event.get("node") == "failed-lifecycle"
+    for node_id in ("failed-lifecycle", "gate-failed-lifecycle"):
+        terminal = [
+            event
             for event in records
+            if event["kind"] == "node-failed" and event.get("node") == node_id
+        ]
+        assert len(terminal) == 1
+        assert (
+            sum(
+                event["kind"] == "node-started" and event.get("node") == node_id
+                for event in records
+            )
+            == 1
         )
-        == 1
-    )
-    assert terminal[0]["detail"]["result"] == result["results"]["failed-lifecycle"]
+        assert terminal[0]["detail"]["result"] == result["results"][node_id]
     assert result["results"]["failed-lifecycle"]["outcome"] == "not-completed"
+    assert result["results"]["gate-failed-lifecycle"]["outcome"] == "gate-failed"
 
 
 def test_real_cli_recovers_waiting_and_no_change_lifecycle_results(
