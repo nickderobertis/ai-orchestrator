@@ -80,6 +80,39 @@ def test_run_graph_enqueues_worker_assessment_through_reconciler() -> None:
     assert pump.drains >= 2
 
 
+def test_main_validates_and_services_inherited_proposal_channel(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    plan = tmp_path / "plan.json"
+    plan.write_text(
+        json.dumps({"tasks": [{"id": "worker", "persona": "engineer", "task": "Work"}]}),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("AI_ORCHESTRATOR_CHANNEL_DIR", str(tmp_path / "channel"))
+    monkeypatch.setenv("AI_ORCHESTRATOR_CHANNEL_RUN_ID", "outer")
+    monkeypatch.setenv("AI_ORCHESTRATOR_CHANNEL_ROUND", "invalid")
+    assert main([str(plan), "--no-record"]) == 2
+    assert "invalid proposal channel round" in capsys.readouterr().err
+
+    pumps: list[_RecordingProposalPump] = []
+
+    def make_pump(path: Path, run_id: str, round_number: int) -> _RecordingProposalPump:
+        assert (path, run_id, round_number) == (tmp_path / "channel", "outer", 2)
+        pump = _RecordingProposalPump()
+        pump.close = lambda: pump.drain_replies()  # type: ignore[attr-defined]
+        pumps.append(pump)
+        return pump
+
+    monkeypatch.setenv("AI_ORCHESTRATOR_CHANNEL_ROUND", "2")
+    monkeypatch.setattr("orchestrator.graph.ProposalPump", make_pump)
+    monkeypatch.setattr(
+        "orchestrator.graph.make_dispatch_runner",
+        lambda **kwargs: lambda node, **labels: _report(node.persona),
+    )
+    assert main([str(plan), "--no-record"]) == 0
+    assert len(pumps) == 1 and pumps[0].drains >= 2
+
+
 def _lifecycle(outcome: str = "merged", **kw) -> LifecycleResult:
     base = {
         "repo": "o/r",

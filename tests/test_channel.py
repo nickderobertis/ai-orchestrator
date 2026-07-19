@@ -74,21 +74,36 @@ def test_proposal_pump_round_trips_and_persists_on_reconciler_drain(tmp_path: Pa
     assert json.loads(verdict.read_text(encoding="utf-8")) == reply
 
 
-@pytest.mark.parametrize("failure", ["write", "read"])
+@pytest.mark.parametrize("failure", ["write", "read", "write_timeout", "read_timeout"])
 def test_proposal_pump_stops_on_broken_fifo(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str
 ) -> None:
     channel = create_channel(tmp_path / "run")
+    calls = 0
+
+    def fail_after_timeout(*args: object, **kwargs: object) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise ChannelTimeout
+        raise OSError("closed")
+
     if failure == "write":
         monkeypatch.setattr(
             "orchestrator.channel.write_message",
             lambda *args, **kwargs: (_ for _ in ()).throw(OSError("closed")),
         )
+    elif failure == "write_timeout":
+        monkeypatch.setattr("orchestrator.channel.write_message", fail_after_timeout)
     else:
         monkeypatch.setattr("orchestrator.channel.write_message", lambda *args, **kwargs: None)
         monkeypatch.setattr(
             "orchestrator.channel.read_message",
-            lambda *args, **kwargs: (_ for _ in ()).throw(ChannelError("broken")),
+            (
+                fail_after_timeout
+                if failure == "read_timeout"
+                else lambda *args, **kwargs: (_ for _ in ()).throw(ChannelError("broken"))
+            ),
         )
     pump = ProposalPump(channel, "live", 1)
     pump.propose("worker", "discovery")
