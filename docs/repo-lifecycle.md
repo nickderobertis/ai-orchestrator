@@ -28,10 +28,11 @@ publication with policy `none`),
 `checks-failed`, `closed`, `timeout`, `stack-conflict`, `error`.
 
 `just repo-task <repo> <persona> "<task>"` runs one. `<repo>` is a GitHub
-`name` / `owner/name` / URL, **or a local filesystem path**. It selects the
-publication repository identity and checkout. For self-dispatch safety, pass
-`--execution-checkout <isolated-clone>` to cut the task worktree from that exact
-clone while keeping `<repo>`'s publication workflow and post-merge fast-forward.
+`name` / `owner/name` / URL, a **local filesystem path**, or an exact checkout alias
+shown by `just repos`. It selects the publication repository identity and checkout.
+For self-dispatch safety, `--execution-checkout` likewise accepts a path or alias
+and cuts the task worktree from that exact clone while keeping `<repo>`'s publication
+workflow and post-merge fast-forward.
 
 ## Repository identity, checkout roles, and isolation
 

@@ -55,7 +55,7 @@ from .provenance import (
     incomplete_commits,
     unattested_incomplete,
 )
-from .registry import RegistryError, validate_identity_key
+from .registry import Registry, RegistryError, validate_identity_key
 from .runs import (
     RECORDED_RESULT_SCHEMA_VERSION,
     RESUME_MODES,
@@ -1268,7 +1268,7 @@ def run_repo_task(
         raise ConfigError("run_repo_task needs either (persona, task) or a non-empty steps list")
     lead = effective_steps[0]
 
-    ref = normalize_repo(repo)
+    ref = workspace.repo_ref(repo)
     result = LifecycleResult(
         repo=ref.slug,
         task=lead.task,
@@ -1746,6 +1746,14 @@ class LifecycleRunner(Protocol):
     ) -> LifecycleResult: ...
 
 
+class RepoAliasResolver(Protocol):
+    """Registry operations needed to validate lifecycle repository inputs."""
+
+    def repo_ref(self, spec: str) -> RepoRef: ...
+
+    def checkout_path(self, spec: str | Path) -> Path: ...
+
+
 @dataclass
 class RepoPlan:
     tasks: list[RepoPlanNode]
@@ -1822,6 +1830,18 @@ def parse_repo_plan(data: dict[str, Any]) -> RepoPlan:
     _topological_order({nid: _to_plan_node(n) for nid, n in nodes.items()})  # cycle check
 
     return RepoPlan(tasks=list(nodes.values()), concurrency=concurrency)
+
+
+def validate_repo_aliases(node: RepoPlanNode, registry: RepoAliasResolver) -> None:
+    """Fail before dispatch when a lifecycle node names an unknown local alias."""
+    from .plan import PlanError
+
+    try:
+        registry.repo_ref(node.repo)
+        if node.execution_checkout is not None:
+            registry.checkout_path(node.execution_checkout)
+    except RegistryError as exc:
+        raise PlanError(f"task {node.id!r}: {exc}") from exc
 
 
 def parse_repo_node(nid: str, t: dict[str, Any]) -> RepoPlanNode:
@@ -2476,6 +2496,14 @@ def main_task(argv: list[str] | None = None) -> int:
     _add_common_args(parser)
     args = parser.parse_args(argv)
 
+    registry = Registry()
+    try:
+        registry.repo_ref(args.repo)
+        if args.execution_checkout is not None:
+            registry.checkout_path(args.execution_checkout)
+    except RegistryError as exc:
+        parser.error(str(exc))
+
     result = run_repo_task(
         args.repo,
         _read_task(args.task),
@@ -2525,6 +2553,9 @@ def main_plan(argv: list[str] | None = None) -> int:
     try:
         plan_mapping = load_yaml(args.plan)
         plan = parse_repo_plan(plan_mapping)
+        registry = Registry()
+        for node in plan.tasks:
+            validate_repo_aliases(node, registry)
         run_dir = (
             resolve_run_dir(args.runs_dir, plan_mapping, args.plan, args.run)
             if not args.no_record

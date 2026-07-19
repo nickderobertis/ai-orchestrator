@@ -53,6 +53,52 @@ def test_resolve_returns_valid_registered_checkout(
     assert registry.entries[f"local/{checkout.name}"].workflow == "remote"
 
 
+def test_repo_ref_prefers_registered_alias_and_rejects_unknown_local_namespace(
+    tmp_path: Path, bare_origin: Callable[..., Path]
+) -> None:
+    checkout = _clone(bare_origin(), tmp_path / "checkout")
+    registry = Registry(tmp_path / "registry.json")
+    registry.register(str(checkout), repo_type="single-owner")
+
+    ref = registry.repo_ref("local/checkout")
+    assert ref.local and ref.url == str(checkout.resolve())
+    assert ref.slug == "local/checkout"
+    assert registry.checkout_path("local/checkout") == checkout.resolve()
+
+    with pytest.raises(
+        RegistryError, match=r"unknown local checkout alias 'local/missing'.*just repos"
+    ):
+        registry.repo_ref("local/missing")
+    with pytest.raises(
+        RegistryError, match=r"unknown local checkout alias 'local/missing'.*just repos"
+    ):
+        registry.checkout_path("local/missing")
+
+    github = registry.repo_ref("acme/widget")
+    assert not github.local
+    assert github.url == "https://github.com/acme/widget.git"
+
+    explicit_local_owner = registry.repo_ref("https://github.com/local/example.git")
+    assert not explicit_local_owner.local
+    assert explicit_local_owner.slug == "local/example"
+    assert explicit_local_owner.url == "https://github.com/local/example.git"
+
+    remote_checkout = _clone(bare_origin(), tmp_path / "remote-checkout")
+    remote_url = "https://github.com/nickderobertis/crozier.git"
+    git("remote", "set-url", "origin", remote_url, cwd=remote_checkout)
+    registry.register(
+        "nickderobertis/crozier",
+        remote_checkout,
+        workflow="remote",
+        repo_type="single-owner",
+    )
+    remote_alias = registry.repo_ref("nickderobertis/crozier")
+    assert remote_alias.local and remote_alias.url == str(remote_checkout.resolve())
+    selected = registry.select("nickderobertis/crozier")
+    assert selected.publication_checkout == remote_checkout.resolve()
+    assert selected.workflow == "remote" and selected.repo_type == "single-owner"
+
+
 def test_resolve_finds_checkout_by_origin_and_registers(
     tmp_path: Path, bare_origin: Callable[..., Path]
 ) -> None:
