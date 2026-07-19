@@ -110,8 +110,10 @@ def read_message(path: Path, *, timeout: float) -> dict[str, Any]:
                     continue
                 data.extend(chunk)
 
-            # A conforming writer emits the newline last and cannot hand off to the
-            # next writer until this reader releases its read lock below.
+            # After seeing the writer's final newline, the reader closes this FIFO and
+            # creates its acknowledgment while still holding the read lock. The writer
+            # retains the write lock until that acknowledgment appears, so queued writers
+            # wait on the write lock; they do not wait for this read lock to be released.
             acknowledge = True
             line, trailing = bytes(data).split(b"\n", 1)
             if trailing:
