@@ -369,7 +369,9 @@ def run_graph(
                 detail={
                     "status": "done",
                     "outcome": "no-changes",
-                    TERMINAL_NODE_RESULT_FIELD: cast(Any, _run_payload(node, run, dependents[nid])),
+                    TERMINAL_NODE_RESULT_FIELD: cast(
+                        Any, _run_payload(node, run, dependents.get(nid, []))
+                    ),
                 },
             )
             return run
@@ -387,7 +389,7 @@ def run_graph(
             result = lifecycle_runner(
                 replace(node.lifecycle, stack_bases=anchors), **lifecycle_args
             )
-            if cancellations[nid].is_set():
+            if cancellations[nid].is_set() and not result.ok:
                 run = NodeRun("cancelled", "cancelled cooperatively", result)
                 node_log.append(
                     "node-settled",
@@ -395,7 +397,7 @@ def run_graph(
                         "status": "cancelled",
                         "outcome": result.outcome,
                         TERMINAL_NODE_RESULT_FIELD: cast(
-                            Any, _run_payload(node, run, dependents[nid])
+                            Any, _run_payload(node, run, dependents.get(nid, []))
                         ),
                     },
                 )
@@ -408,7 +410,7 @@ def run_graph(
                         "status": "waiting",
                         "outcome": result.outcome,
                         TERMINAL_NODE_RESULT_FIELD: cast(
-                            Any, _run_payload(node, run, dependents[nid])
+                            Any, _run_payload(node, run, dependents.get(nid, []))
                         ),
                     },
                 )
@@ -425,7 +427,7 @@ def run_graph(
                         "status": "done",
                         "outcome": "no-changes",
                         TERMINAL_NODE_RESULT_FIELD: cast(
-                            Any, _run_payload(node, run, dependents[nid])
+                            Any, _run_payload(node, run, dependents.get(nid, []))
                         ),
                     },
                 )
@@ -438,7 +440,7 @@ def run_graph(
                         "outcome": result.outcome,
                         "detail": result.detail,
                         TERMINAL_NODE_RESULT_FIELD: cast(
-                            Any, _run_payload(node, run, dependents[nid])
+                            Any, _run_payload(node, run, dependents.get(nid, []))
                         ),
                     },
                 )
@@ -451,7 +453,9 @@ def run_graph(
                 detail={
                     "status": "done",
                     "outcome": result.outcome,
-                    TERMINAL_NODE_RESULT_FIELD: cast(Any, _run_payload(node, run, dependents[nid])),
+                    TERMINAL_NODE_RESULT_FIELD: cast(
+                        Any, _run_payload(node, run, dependents.get(nid, []))
+                    ),
                 },
             )
             return run
@@ -465,7 +469,9 @@ def run_graph(
                 "node-settled",
                 detail={
                     "status": "cancelled",
-                    TERMINAL_NODE_RESULT_FIELD: cast(Any, _run_payload(node, run, dependents[nid])),
+                    TERMINAL_NODE_RESULT_FIELD: cast(
+                        Any, _run_payload(node, run, dependents.get(nid, []))
+                    ),
                 },
             )
             return run
@@ -476,7 +482,9 @@ def run_graph(
                 detail={
                     "status": "done",
                     "turns": report.assistant_turns,
-                    TERMINAL_NODE_RESULT_FIELD: cast(Any, _run_payload(node, run, dependents[nid])),
+                    TERMINAL_NODE_RESULT_FIELD: cast(
+                        Any, _run_payload(node, run, dependents.get(nid, []))
+                    ),
                 },
             )
             return run
@@ -486,7 +494,9 @@ def run_graph(
             detail={
                 "detail": "hit the turn cap",
                 "turns": report.assistant_turns,
-                TERMINAL_NODE_RESULT_FIELD: cast(Any, _run_payload(node, run, dependents[nid])),
+                TERMINAL_NODE_RESULT_FIELD: cast(
+                    Any, _run_payload(node, run, dependents.get(nid, []))
+                ),
             },
         )
         return run
@@ -501,7 +511,9 @@ def run_graph(
                 "human-waiting",
                 detail={
                     "task": first_line(node.task),
-                    TERMINAL_NODE_RESULT_FIELD: cast(Any, _run_payload(node, run, dependents[nid])),
+                    TERMINAL_NODE_RESULT_FIELD: cast(
+                        Any, _run_payload(node, run, dependents.get(nid, []))
+                    ),
                 },
             )
             return run
@@ -524,7 +536,7 @@ def run_graph(
                     "detail": str(exc),
                     "error": type(exc).__name__,
                     TERMINAL_NODE_RESULT_FIELD: cast(
-                        Any, _run_payload(node, failed, dependents[nid])
+                        Any, _run_payload(node, failed, dependents.get(nid, []))
                     ),
                 },
             )

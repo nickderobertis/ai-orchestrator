@@ -1431,6 +1431,58 @@ def test_cooperative_real_dispatch_cancellation_preserves_and_recovers_branch(
     assert _has_file(origin, "main", "CHANGE.txt")
 
 
+def test_cancellation_during_verification_preserves_before_publication(
+    tmp_path, bare_origin, command_base, personas_dir
+) -> None:
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-verification-cancel")
+    Registry().register(str(canonical), workflow="local", repo_type="single-owner")
+    cancel = threading.Event()
+    gate_started = tmp_path / "verification.started"
+    branch = "feature/verification-cancel"
+    gate = [
+        "sh",
+        "-c",
+        f"touch {shlex.quote(str(gate_started))}; sleep 1; test -f CHANGE.txt",
+    ]
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(
+            run_repo_task,
+            str(canonical),
+            "complete-now write-change",
+            "engineer",
+            workspace=Workspace(tmp_path / "verification-cancel-worktrees"),
+            base_path=command_base(),
+            persona_dir=personas_dir,
+            branch=branch,
+            verify_cmd=gate,
+            cancel=cancel,
+        )
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline and not gate_started.exists():
+            time.sleep(0.02)
+        assert gate_started.exists()
+        cancel.set()
+        result = future.result(timeout=15)
+
+    assert result.outcome == "not-completed"
+    assert result.detail.startswith("cancelled cooperatively after verification")
+    assert isinstance(result.resume, Resume)
+    assert result.resume.checkpoint == gitops.ref_sha(canonical, branch)
+    assert incomplete_commits(canonical, "origin/main", branch)
+    assert not _has_file(origin, "main", "CHANGE.txt")
+
+    recovered = recover_repo(
+        canonical,
+        branch,
+        workspace_root=tmp_path / "verification-cancel-recovery",
+        verify_cmd=["test", "-f", "CHANGE.txt"],
+    )
+    assert recovered.ok and recovered.outcome == "merged"
+    assert _has_file(origin, "main", "CHANGE.txt")
+
+
 def test_no_changes_produces_no_pr(tmp_path, bare_origin) -> None:
     origin = bare_origin()
     result = run_repo_task(

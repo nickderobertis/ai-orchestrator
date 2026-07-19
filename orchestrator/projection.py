@@ -211,8 +211,10 @@ def project_round(events: list[Event], run_id: RunId, round_number: int) -> Roun
                 builder.states[event.node] = status
                 _fold_node_result(builder, event)
                 if dropped:
-                    if status != "cancelled":
-                        raise ProjectionError("a dropped running node must settle cancelled")
+                    if status not in {"done", "cancelled"}:
+                        raise ProjectionError(
+                            "a dropped running node must settle cancelled or finish publication"
+                        )
                     builder.states.pop(event.node, None)
                     builder.results.pop(event.node, None)
             case "human-attested":

@@ -1423,6 +1423,33 @@ def run_repo_task(
                 "resumed": resume is not None,
             },
         )
+        remote_base = f"origin/{pr_base}"
+
+        def preserve_cancelled(stage: str) -> bool:
+            """Durably hand off completed partial work at cooperative checkpoints."""
+            if cancel is None or not cancel.is_set():
+                return False
+            if gitops.is_dirty(worktree):
+                gitops.add_all(worktree)
+                gitops.commit(worktree, _incomplete_commit_message(lead, pr_base))
+            elif gitops.has_commits_ahead(worktree, remote_base) and not incomplete_commits(
+                worktree, remote_base, "HEAD"
+            ):
+                gitops.commit_empty(worktree, _incomplete_commit_message(lead, pr_base))
+            if gitops.has_commits_ahead(worktree, remote_base):
+                result.resume = Resume(
+                    branch=branch,
+                    base_branch=root_base,
+                    pr_base=pr_base,
+                    checkpoint=gitops.head_sha(worktree),
+                    completed_steps=tuple(
+                        step.id for step in result.steps if step.status == "done"
+                    ),
+                    mode="retry",
+                )
+            result.outcome = "not-completed"
+            result.detail = f"cancelled cooperatively {stage}; partial work preserved"
+            return True
 
         step_run = _run_steps(
             effective_steps,
@@ -1445,8 +1472,12 @@ def run_repo_task(
         )
         if step_run.status == "not-completed":
             result.outcome = "not-completed"
-            result.detail = f"workstream did not complete: {step_run.detail}"
-            remote_base = f"origin/{pr_base}"
+            prefix = "cancelled cooperatively" if cancel is not None and cancel.is_set() else None
+            result.detail = (
+                f"{prefix}; {step_run.detail}"
+                if prefix is not None
+                else f"workstream did not complete: {step_run.detail}"
+            )
             if incomplete_commits(worktree, remote_base, "HEAD"):
                 result.resume = Resume(
                     branch=branch,
@@ -1489,9 +1520,11 @@ def run_repo_task(
             result.detail = f"unexpected step status: {step_run.status}"
             return result
 
+        if preserve_cancelled("after dispatch"):
+            return result
+
         with advisory_lock(f"git:{gitops.common_dir(worktree)}"):
             gitops.fetch(worktree)
-        remote_base = f"origin/{pr_base}"
         if not gitops.merge_base_into_branch(
             worktree,
             remote_base,
@@ -1525,6 +1558,9 @@ def run_repo_task(
                     return result
             else:
                 result.detail = "no local gate detected; relying on required CI checks"
+
+        if preserve_cancelled("after verification"):
+            return result
 
         if (
             result.retry_lineage
@@ -1571,6 +1607,12 @@ def run_repo_task(
                 dispatch_env=cache_env,
             )
 
+        if preserve_cancelled("before publication"):
+            return result
+        # Publication is the lifecycle's commit point: cancellation is cooperative
+        # only at the checkpoints above. Once push/publication begins, it runs to an
+        # authoritative outcome so a late request cannot strand a pushed branch or
+        # report already-merged work as discarded.
         gitops.push(worktree, branch)
         preverified_pr: PullRequest | None = None
         if verify_via_ci:

@@ -196,7 +196,8 @@ def test_every_compiled_edit_operation_kind_has_a_replay_handler() -> None:
     assert [node["id"] for node in projection.plan["tasks"]] == ["a", "approve", "c"]
 
 
-def test_running_drop_replays_cancellation_after_atomic_removal() -> None:
+@pytest.mark.parametrize("status", ["cancelled", "done"])
+def test_running_drop_replays_terminal_handoff_after_atomic_removal(status: str) -> None:
     events = [
         _event(
             "node-added", 1, detail={"definition": {"id": "work", "persona": "p", "task": "Work"}}
@@ -215,7 +216,7 @@ def test_running_drop_replays_cancellation_after_atomic_removal() -> None:
                 ]
             },
         ),
-        _event("node-settled", 6, node="work", detail={"status": "cancelled"}),
+        _event("node-settled", 6, node="work", detail={"status": status}),
     ]
     projection = project_round(events, RunId("r"), 1)
     assert [node["id"] for node in projection.plan["tasks"]] == ["keep"]
@@ -345,9 +346,9 @@ def _node_added(seq: int, node_id: str, **extra: object) -> Event:
                         ]
                     },
                 ),
-                _event("node-settled", 6, node="work", detail={"status": "done"}),
+                _event("node-settled", 6, node="work", detail={"status": "failed"}),
             ],
-            "must settle cancelled",
+            "must settle cancelled or finish publication",
         ),
         (
             [

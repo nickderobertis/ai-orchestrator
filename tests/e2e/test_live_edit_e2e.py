@@ -16,8 +16,10 @@ from pathlib import Path
 
 import yaml
 
-from orchestrator import BASE_CONFIG, REPO_ROOT
+from orchestrator import BASE_CONFIG, REPO_ROOT, gitops
 from orchestrator.projection import project_run
+from orchestrator.provenance import incomplete_commits
+from orchestrator.registry import Registry
 from orchestrator.runs import RunId
 
 FAKE_BACKEND = REPO_ROOT / "tests" / "e2e" / "fake_backend.py"
@@ -303,4 +305,133 @@ def test_real_cli_mutates_live_frontier_and_replays_atomic_edits(
             capture_output=True,
             check=True,
         )
+    _wait_for(outer_run / "orchestrator" / "report.json", lambda text: bool(text.strip()))
+
+
+def test_real_cli_live_drop_preserves_and_recovers_running_lifecycle(
+    tmp_path: Path, onejudge_bin: str, bare_origin
+) -> None:
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-live-cancel")
+    Registry().register(str(canonical), workflow="local", repo_type="single-owner")
+    runs = tmp_path / "lifecycle-runs"
+    base = yaml.safe_load(BASE_CONFIG.read_text(encoding="utf-8"))
+    base["provider"] = {"kind": "command", "command": [sys.executable, str(FAKE_BACKEND)]}
+    base_path = tmp_path / "lifecycle-base.yaml"
+    base_path.write_text(yaml.safe_dump(base), encoding="utf-8")
+    witness = tmp_path / "lifecycle.ticks"
+    branch = "feature/live-cancel"
+    plan = tmp_path / "lifecycle-plan.json"
+    plan.write_text(
+        json.dumps(
+            {
+                "schema_version": 3,
+                "name": "live-edit",
+                "tasks": [
+                    {
+                        "id": "lifecycle",
+                        "repo": str(canonical),
+                        "execution_checkout": str(canonical),
+                        "persona": "engineer",
+                        "task": f"slow-branch {witness} live-edit-slow write-change",
+                        "branch": branch,
+                        "verify_cmd": ["test", "-f", "CHANGE.txt"],
+                    },
+                    {"id": "keep", "kind": "human", "task": "Keep cancellation observable"},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    launched = subprocess.run(
+        [
+            "just",
+            "orchestrate",
+            str(plan),
+            "--runs-dir",
+            str(runs),
+            "--base",
+            str(base_path),
+            "--onejudge-bin",
+            onejudge_bin,
+            "--skill-command",
+            sys.executable,
+            str(FAKE_BACKEND),
+        ],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    run_id = launched.stdout.strip()
+    outer_run = runs / run_id
+    nested: Path | None = None
+    deadline = time.monotonic() + 15
+    while time.monotonic() < deadline:
+        candidates = [
+            path
+            for path in runs.iterdir()
+            if path != outer_run and (path / "events.jsonl").is_file()
+        ]
+        if candidates:
+            nested = candidates[0]
+            break
+        time.sleep(0.02)
+    assert nested is not None
+    events = nested / "events.jsonl"
+    _wait_for(
+        witness,
+        lambda text: text.count("tick") >= 3,
+        timeout=20,
+    )
+    _wait_for(events, lambda text: '"kind": "node-started"' in text)
+    _reply(run_id, runs, [{"op": "drop", "id": "lifecycle", "dependents": "drop"}])
+    _wait_for(
+        events,
+        lambda text: '"kind": "node-settled"' in text and '"status": "cancelled"' in text,
+        timeout=20,
+    )
+
+    checkpoint = gitops.ref_sha(canonical, branch)
+    assert incomplete_commits(canonical, "origin/main", branch)
+    recovered = subprocess.run(
+        [
+            "just",
+            "repo-recover",
+            branch,
+            "--repo",
+            str(canonical),
+            "--workspace",
+            str(tmp_path / "recovery-worktrees"),
+            "--gate",
+            "test -f CHANGE.txt",
+            "--format",
+            "json",
+        ],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    recovery = json.loads(recovered.stdout)
+    assert recovery["outcome"] == "merged"
+    assert gitops.is_ancestor(canonical, checkpoint, "origin/main")
+    assert (canonical / "CHANGE.txt").read_text(encoding="utf-8") == "change from fake agent\n"
+
+    boundary = subprocess.run(
+        ["just", "channel-next", run_id, "--runs-dir", str(runs), "--timeout", "10"],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    assert json.loads(boundary.stdout)["surface"]["kind"] in {"milestone", "closeout"}
+    subprocess.run(
+        ["just", "channel-reply", run_id, "--runs-dir", str(runs)],
+        cwd=REPO_ROOT,
+        input=json.dumps({"completion": True, "reason": "cancelled branch recovered"}),
+        text=True,
+        capture_output=True,
+        check=True,
+    )
     _wait_for(outer_run / "orchestrator" / "report.json", lambda text: bool(text.strip()))
