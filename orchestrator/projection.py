@@ -177,6 +177,32 @@ def project_round(events: list[Event], run_id: RunId, round_number: int) -> Roun
                 ref = detail.get("ref")
                 if not isinstance(ref, str) or not ref:
                     raise ProjectionError("human-attested requires a non-empty ref")
+                if event.node is None or event.node not in builder.node_ids:
+                    raise ProjectionError("human-attested references an unknown graph node")
+                expected_ref = (
+                    str(event.node) if event.step is None else f"{event.node}/{event.step}"
+                )
+                if ref != expected_ref:
+                    raise ProjectionError(
+                        f"human-attested ref {ref!r} does not match locator {expected_ref!r}"
+                    )
+                definition = next(node for node in builder.nodes if node["id"] == event.node)
+                top_level_human = definition.get("kind") == "human" and event.step is None
+                recorded_actions = (
+                    [
+                        action.get("ref")
+                        for action in builder.result["results"]
+                        .get(str(event.node), {})
+                        .get("human_actions", [])
+                        if isinstance(action, dict)
+                    ]
+                    if builder.result is not None
+                    else []
+                )
+                if not top_level_human and ref not in recorded_actions:
+                    raise ProjectionError(
+                        f"human-attested target {ref!r} is not a projected human action"
+                    )
                 if ref in builder.attestations:
                     raise ProjectionError(f"human action {ref!r} was attested more than once")
                 builder.attestations.append(ref)

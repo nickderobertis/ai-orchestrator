@@ -168,10 +168,15 @@ def _event(kind: EventKind, seq: int, *, node: str | None = None, detail=None) -
     ],
 )
 def test_fold_rejects_invalid_static_transitions(tail: list[Event], message: str) -> None:
+    definition = (
+        {"id": "a", "kind": "human", "task": "Approve"}
+        if any(event.kind == "human-attested" for event in tail)
+        else {"id": "a", "persona": "p", "task": "x"}
+    )
     first = _event(
         "node-added",
         1,
-        detail={"definition": {"id": "a", "persona": "p", "task": "x"}},
+        detail={"definition": definition},
     )
     topology_only = all(event.kind in {"node-added", "edge-added"} for event in tail)
     ordered = (
@@ -249,6 +254,41 @@ def test_fold_rejects_terminal_identifiers_outside_the_projected_execution(
             ]
         )
     events.append(_event("round-finished", 5, detail={"result": payload}))
+    with pytest.raises(ProjectionError, match=message):
+        project_round(events, RunId("r"), 1)
+
+
+@pytest.mark.parametrize(
+    ("definition", "node", "ref", "message"),
+    [
+        (
+            {"id": "approval", "kind": "human", "task": "Approve"},
+            "unknown",
+            "unknown",
+            "unknown graph node",
+        ),
+        (
+            {"id": "approval", "persona": "p", "task": "Work"},
+            "approval",
+            "approval",
+            "not a projected human action",
+        ),
+        (
+            {"id": "approval", "kind": "human", "task": "Approve"},
+            "approval",
+            "different",
+            "does not match locator 'approval'",
+        ),
+    ],
+)
+def test_fold_rejects_invalid_human_attestation_targets(
+    definition: dict[str, object], node: str, ref: str, message: str
+) -> None:
+    events = [
+        _event("node-added", 1, detail={"definition": definition}),
+        _event("round-started", 2, detail={"plan": {}}),
+        _event("human-attested", 3, node=node, detail={"ref": ref}),
+    ]
     with pytest.raises(ProjectionError, match=message):
         project_round(events, RunId("r"), 1)
 

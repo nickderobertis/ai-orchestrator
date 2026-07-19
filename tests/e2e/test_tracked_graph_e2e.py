@@ -384,7 +384,21 @@ def test_recover_interrupted_real_cli_does_not_duplicate_node_start(
                 )
                 + "\n"
             ).encode(),
-            "attested more than once",
+            "target 'work' is not a projected human action",
+        ),
+        (
+            (
+                json.dumps(
+                    {
+                        **envelope,
+                        "kind": "human-attested",
+                        "node": "unknown",
+                        "detail": {"ref": "unknown"},
+                    }
+                )
+                + "\n"
+            ).encode(),
+            "references an unknown graph node",
         ),
     ]
     for corruption, diagnostic in corruptions:
@@ -443,6 +457,44 @@ def test_recover_interrupted_real_cli_does_not_duplicate_node_start(
             event["detail"]["result"]["started_order"].append("idle")
             event["detail"]["result"]["results"]["idle"] = {"status": "skipped"}
         never_started_events.append(event)
+    mismatched_attestation_events: list[dict[str, object]] = []
+    inserted = False
+    for original in events:
+        event = json.loads(json.dumps(original))
+        if event["kind"] == "round-started" and not inserted:
+            mismatched_attestation_events.append(
+                {
+                    "version": 1,
+                    "seq": event["seq"],
+                    "at": 0,
+                    "kind": "node-added",
+                    "run_id": "interrupted",
+                    "round": 1,
+                    "detail": {
+                        "definition": {
+                            "id": "approval",
+                            "kind": "human",
+                            "task": "Approve",
+                        }
+                    },
+                }
+            )
+            inserted = True
+        if inserted:
+            event["seq"] += 1
+        mismatched_attestation_events.append(event)
+    mismatched_attestation_events.append(
+        {
+            "version": 1,
+            "seq": mismatched_attestation_events[-1]["seq"] + 1,
+            "at": 0,
+            "kind": "human-attested",
+            "run_id": "interrupted",
+            "round": 1,
+            "node": "approval",
+            "detail": {"ref": "different"},
+        }
+    )
     prefix_failures = [
         (
             b"".join(
@@ -485,6 +537,12 @@ def test_recover_interrupted_real_cli_does_not_duplicate_node_start(
         (
             b"".join((json.dumps(event) + "\n").encode() for event in never_started_events),
             "round-finished started_order contains node(s) without a start event: idle",
+        ),
+        (
+            b"".join(
+                (json.dumps(event) + "\n").encode() for event in mismatched_attestation_events
+            ),
+            "human-attested ref 'different' does not match locator 'approval'",
         ),
         (
             (json.dumps({**events[0], "unexpected": True}) + "\n").encode()
@@ -795,7 +853,45 @@ def test_recover_completes_a_partially_emitted_graph_without_duplicates(tmp_path
         ),
         (wrong_edge, "graph edges do not match"),
     ]
+    invalid_envelopes = [
+        (prefix + b"{broken}\n", "malformed authoritative event"),
+        (
+            b"".join(
+                (json.dumps({**item, "unexpected": True} if index == 0 else item) + "\n").encode()
+                for index, item in enumerate(prefix_records)
+            ),
+            "unknown fields",
+        ),
+        (
+            b"".join(
+                (json.dumps({**item, "run_id": "foreign"} if index == 0 else item) + "\n").encode()
+                for index, item in enumerate(prefix_records)
+            ),
+            "belongs to another run",
+        ),
+        (
+            b"".join(
+                (
+                    json.dumps({**item, "seq": item["seq"] + 1} if index == 0 else item) + "\n"
+                ).encode()
+                for index, item in enumerate(prefix_records)
+            ),
+            "sequence must be contiguous",
+        ),
+    ]
+    for invalid_events, diagnostic in invalid_envelopes:
+        # llmlint: ignore[tests_mirror_real_usage] Envelope corruption has no public
+        # producer; the real CLI created the prefix and is the recovery interface under test.
+        events_path.write_bytes(invalid_events)
+        status_path.write_bytes(dead_status)
+        rejected = subprocess.run(
+            [*command, "--recover"], cwd=REPO_ROOT, text=True, capture_output=True, check=False
+        )
+        assert rejected.returncode == 2
+        assert diagnostic in rejected.stderr
     for invalid_events, diagnostic in comparison_failures:
+        # llmlint: ignore[tests_mirror_real_usage] These records deliberately corrupt the
+        # real CLI's durable prefix; recovery itself is exercised only through run-plan.
         events_path.write_bytes(invalid_events)
         status_path.write_bytes(dead_status)
         rejected = subprocess.run(

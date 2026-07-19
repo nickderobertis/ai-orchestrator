@@ -625,7 +625,14 @@ def main(argv: list[str] | None = None) -> int:
         run_id = RunId(run_dir.name)
         round_number = round_record[0]
         journal = open_journal(run_dir, run_id, round_number)
-        round_events = [event for event in journal.events() if event.round == round_number]
+        from .projection import ProjectionError, read_strict_events
+
+        try:
+            durable_events = read_strict_events(run_dir / "events.jsonl", run_id)
+        except ProjectionError as exc:
+            print(f"run-plan: cannot replay authoritative event log: {exc}", file=sys.stderr)
+            return 2
+        round_events = [event for event in durable_events if event.round == round_number]
         expected_definitions = [
             {key: value for key, value in raw_node.items() if key != "deps" or value == []}
             for raw_node in plan_mapping["tasks"]
