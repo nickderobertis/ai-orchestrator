@@ -1028,6 +1028,111 @@ def test_real_cli_recovers_exception_terminal_result_without_duplicates(
     assert raised_events[0]["detail"]["result"] == result["results"]["raises"]
 
 
+def test_real_cli_recovers_successful_report_and_no_change_results(
+    tmp_path: Path, command_base, onejudge_bin: str
+) -> None:
+    runs = tmp_path / "runs"
+    plan = tmp_path / "successful-report-prefix.json"
+    plan.write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "concurrency": 3,
+                "tasks": [
+                    {
+                        "id": "successful-report",
+                        "persona": "engineer",
+                        "task": "complete-now",
+                    },
+                    {
+                        "id": "no-change",
+                        "task": "No diff.",
+                        "expects_no_diff": True,
+                    },
+                    {
+                        "id": "in-flight",
+                        "persona": "engineer",
+                        "task": "should-fail",
+                        "max_turns": 5,
+                    },
+                ],
+            }
+        )
+    )
+    command = [
+        "just",
+        "run-plan",
+        str(plan),
+        "--run",
+        "successful-report-prefix",
+        "--runs-dir",
+        str(runs),
+        "--base",
+        str(command_base()),
+        "--onejudge-bin",
+        onejudge_bin,
+        "--format",
+        "json",
+    ]
+    process = subprocess.Popen(
+        command,
+        cwd=REPO_ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        start_new_session=True,
+    )
+    events_path = runs / "successful-report-prefix" / "events.jsonl"
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        records = (
+            [json.loads(line) for line in events_path.read_text().splitlines()]
+            if events_path.exists()
+            else []
+        )
+        settled = {event.get("node") for event in records if event["kind"] == "node-settled"}
+        in_flight = any(
+            event["kind"] == "node-started" and event.get("node") == "in-flight"
+            for event in records
+        )
+        if {"successful-report", "no-change"} <= settled and in_flight:
+            break
+        time.sleep(0.005)
+    else:
+        process.kill()
+        pytest.fail("run-plan did not emit successful Report and no-change prefix")
+    os.killpg(process.pid, signal.SIGKILL)
+    process.wait()
+
+    recovered = subprocess.run(
+        [*command, "--recover"], cwd=REPO_ROOT, text=True, capture_output=True, check=False
+    )
+    assert recovered.returncode == 1, recovered.stderr
+    result = json.loads(
+        (runs / "successful-report-prefix" / "round-01" / "result.json").read_text()
+    )
+    records = [json.loads(line) for line in events_path.read_text().splitlines()]
+    for node_id in ("successful-report", "no-change"):
+        terminal = [
+            event
+            for event in records
+            if event["kind"] == "node-settled" and event.get("node") == node_id
+        ]
+        assert len(terminal) == 1
+        assert (
+            sum(
+                event["kind"] == "node-started" and event.get("node") == node_id
+                for event in records
+            )
+            == 1
+        )
+        assert terminal[0]["detail"]["result"] == result["results"][node_id]
+    report = result["results"]["successful-report"]
+    assert report["completed"] is True and report["exit_code"] == 0
+    assert isinstance(report["verdicts"], list) and isinstance(report["usage"], dict)
+    assert result["results"]["no-change"]["outcome"] == "no-changes"
+
+
 def test_real_cli_recovers_settled_lifecycle_stack_anchor(
     tmp_path: Path, bare_origin, command_base, onejudge_bin: str
 ) -> None:
