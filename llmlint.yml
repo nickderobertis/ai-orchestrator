@@ -31,6 +31,32 @@ plugins:
 # `async_typed_clients_at_boundaries` not-relevant repo-wide instead of re-suppressing it
 # per file across every module it touches.
 rules:
+  - name: orchestration_contract_changes_update_docs
+    relevance: >-
+      The diff changes observable planner/operator behavior in the just command
+      surface, planner-orchestrator channel or live-edit protocol, graph round or
+      replan semantics, status/exit behavior, or documented repo-lifecycle policy.
+    description: >-
+      The diff updates the corresponding durable operator documentation in
+      AGENTS.md, docs/orchestration.md, or docs/repo-lifecycle.md so a planner or
+      operator would not find the docs stale or wrong.
+    files:
+      include:
+        - "justfile"
+        - "orchestrator/channel.py"
+        - "orchestrator/edits.py"
+        - "orchestrator/graph.py"
+        - "orchestrator/plan.py"
+        - "orchestrator/next_round.py"
+        - "orchestrator/replan.py"
+        - "orchestrator/runs.py"
+        - "orchestrator/lifecycle.py"
+        - "orchestrator/recover.py"
+        - "orchestrator/merge.py"
+        - "orchestrator/registry.py"
+        - "AGENTS.md"
+        - "docs/orchestration.md"
+        - "docs/repo-lifecycle.md"
   - name: async_typed_clients_at_boundaries
     override: true
     relevance: false
