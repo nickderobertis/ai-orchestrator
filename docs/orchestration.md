@@ -144,7 +144,7 @@ top-level ids. Omitted `kind` defaults to `agent` for compatibility.
 | --- | --- | --- |
 | Direct agent | `persona`, `task`; no `repo` | Dispatch one real onejudge process in the selected project directory. |
 | Lifecycle agent | `repo`, plus `persona` + `task` or `steps` | Work on an isolated branch/worktree, verify, and publish through the repository's registered policy. |
-| Human | `kind: human`, `task`; no persona or execution fields | Record action prose for a person. The harness never performs or infers it. |
+| Human | `kind: human`, `task`; no persona or execution fields | Record an action only an external person or outside system can perform. Planner review, acceptance, validation, and integration happen through live channel edits, not a human node. |
 
 An agent node or lifecycle agent step may instead set `expects_no_diff: true`
 with `task` and no `persona` or `done_when`. This explicitly declares that the
@@ -331,6 +331,10 @@ and the persisted last-completed-check/current-blocker rollup. Top-level metrics
 make retry reuse, recovered/abandoned branches, no-diff dispatches, and time from
 green gate to publication directly consumable. The default is active runs;
 `--all` includes settled runs.
+
+The additive, cross-layer timing and usage contract planned for the next index
+version is specified in [`telemetry-model.md`](telemetry-model.md); that document
+marks target behavior separately from the version-1 command above.
 
 ## Human completion attestations
 

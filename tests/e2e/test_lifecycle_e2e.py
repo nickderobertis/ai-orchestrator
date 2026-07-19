@@ -32,6 +32,7 @@ from fakes import FakeGitHub, make_writing_dispatch
 import orchestrator.graph as graph_module
 import orchestrator.lifecycle as lifecycle_module
 from orchestrator import gitops
+from orchestrator.coordination import LockTimeout, advisory_lock, git_lock_identity
 from orchestrator.dispatch import Report
 from orchestrator.github import PullRequest
 from orchestrator.graph import graph_payload, parse_graph, run_graph
@@ -101,6 +102,212 @@ def _tip(origin: Path, ref: str) -> str:
     return subprocess.run(
         ["git", "-C", str(origin), "rev-parse", ref], text=True, capture_output=True
     ).stdout.strip()
+
+
+def test_published_dispatch_survives_deferred_teardown_and_redispatch_reclaims_it(
+    tmp_path, bare_origin, command_base, personas_dir
+) -> None:
+    """A real merged lifecycle self-heals after teardown leaves its worktree registered."""
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical")
+    root = tmp_path / "worktrees"
+
+    class ContendedTeardownWorkspace(Workspace):
+        def remove_worktree(self, repo, path) -> None:
+            self._release_worktree_lease(path)
+            raise LockTimeout("shared .git remains busy")
+
+    contended = ContendedTeardownWorkspace(
+        root, resolver=lambda _spec: canonical, workflow="local", repo_type="single-owner"
+    )
+    journal = open_journal(tmp_path / "run", RunId("teardown"), 1)
+    scope = NodeJournal(journal, NodeId("publish"), RunId("teardown"), 1)
+    first = run_repo_task(
+        str(origin),
+        "complete-now write-unique-change first",
+        "engineer",
+        workspace=contended,
+        branch="teardown-retry",
+        base_path=command_base(),
+        persona_dir=personas_dir,
+        verify_cmd=["true"],
+        journal=scope,
+    )
+
+    assert first.outcome == "merged", first.detail
+    assert first.deferred_cleanup and "remove-worktree deferred" in first.deferred_cleanup[0]
+    serialized = json.loads(json.dumps(result_payload(first)))
+    assert serialized["outcome"] == "merged"
+    assert serialized["deferred_cleanup"] == first.deferred_cleanup
+    deferred = [event for event in journal.events() if event.kind == "cleanup-deferred"]
+    assert deferred and deferred[0].detail["operation"] == "remove-worktree"
+    orphan = gitops.worktrees(canonical)["teardown-retry"]
+    assert orphan.exists()
+
+    recovered = Workspace(
+        root, resolver=lambda _spec: canonical, workflow="local", repo_type="single-owner"
+    )
+    second = run_repo_task(
+        str(origin),
+        "complete-now write-change second",
+        "engineer",
+        workspace=recovered,
+        branch="teardown-retry",
+        base_path=command_base(),
+        persona_dir=personas_dir,
+        verify_cmd=["true"],
+    )
+    assert second.outcome == "merged", second.detail
+
+
+def test_lifecycle_failure_survives_simultaneous_deferred_teardown(
+    tmp_path, bare_origin, command_base, personas_dir
+) -> None:
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-failed")
+
+    class ContendedTeardownWorkspace(Workspace):
+        def remove_worktree(self, repo, path) -> None:
+            self._release_worktree_lease(path)
+            raise LockTimeout("shared .git remains busy")
+
+    result = run_repo_task(
+        str(origin),
+        "should-fail write-change preserve original failure",
+        "engineer",
+        workspace=ContendedTeardownWorkspace(
+            tmp_path / "failed-worktrees",
+            resolver=lambda _spec: canonical,
+            workflow="local",
+            repo_type="single-owner",
+        ),
+        branch="failed-teardown",
+        base_path=command_base(),
+        persona_dir=personas_dir,
+        verify_cmd=["true"],
+    )
+
+    assert result.outcome == "not-completed"
+    assert "step 'main' hit the turn cap" in result.detail
+    assert result.deferred_cleanup and "remove-worktree deferred" in result.deferred_cleanup[0]
+
+
+def test_real_git_teardown_refusal_is_deferred_after_publication(tmp_path, bare_origin) -> None:
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-locked-cleanup")
+    workspace = Workspace(
+        tmp_path / "locked-cleanup-worktrees",
+        resolver=lambda _spec: canonical,
+        workflow="local",
+        repo_type="single-owner",
+    )
+
+    def locking_dispatch(persona, task, *, project_dir, **kwargs):
+        worktree = Path(project_dir)
+        (worktree / "locked-cleanup.txt").write_text("published\n", encoding="utf-8")
+        subprocess.run(["git", "-C", str(canonical), "worktree", "lock", str(worktree)], check=True)
+        return Report(persona, 0, True, False, 1, [], {}, {}, "")
+
+    result = run_repo_task(
+        str(origin),
+        "publish before real Git cleanup refusal",
+        "engineer",
+        workspace=workspace,
+        branch="locked-cleanup",
+        dispatch_fn=locking_dispatch,
+        verify_cmd=["true"],
+    )
+
+    assert result.outcome == "merged", result.detail
+    assert result.deferred_cleanup and "locked working tree" in result.deferred_cleanup[0]
+    orphan = gitops.worktrees(canonical)["locked-cleanup"]
+    subprocess.run(["git", "-C", str(canonical), "worktree", "unlock", str(orphan)], check=True)
+    workspace.remove_worktree(normalize_repo(str(origin)), orphan)
+
+
+def test_synthetic_stack_teardown_contention_is_deferred_with_real_git(
+    tmp_path, bare_origin
+) -> None:
+    """The other lifecycle teardown site preserves its real synthetic push outcome."""
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-stack")
+
+    class ContendedStackWorkspace(Workspace):
+        def remove_worktree(self, repo, path) -> None:
+            raise LockTimeout("shared .git remains busy")
+
+    workspace = ContendedStackWorkspace(
+        tmp_path / "stack-worktrees",
+        resolver=lambda _spec: canonical,
+        workflow="local",
+        repo_type="single-owner",
+    )
+    ref = normalize_repo(str(origin))
+    workspace.ensure_clone(ref)
+    result = lifecycle_module.LifecycleResult(
+        ref.slug, "stack", "engineer", "main", "stack", "error"
+    )
+
+    built = lifecycle_module._build_synthetic_stack_base(
+        ref,
+        workspace,
+        "main",
+        [StackBase("main")],
+        result=result,
+        journal=lifecycle_module.NullNodeJournal(),
+    )
+
+    assert isinstance(built, lifecycle_module.SyntheticStackBase)
+    assert _tip(origin, f"refs/heads/{built.branch}")
+    assert result.deferred_cleanup and "remove-worktree deferred" in result.deferred_cleanup[0]
+
+
+def test_failed_synthetic_stack_defers_worktree_and_branch_cleanup_with_real_git(
+    tmp_path, bare_origin
+) -> None:
+    origin = bare_origin()
+    writer = gitops.clone(origin, tmp_path / "stack-writer")
+    for branch, content in (("stack-left", "left\n"), ("stack-right", "right\n")):
+        subprocess.run(["git", "checkout", "-B", branch, "origin/main"], cwd=writer, check=True)
+        (writer / "conflict.txt").write_text(content, encoding="utf-8")
+        gitops.add_all(writer)
+        gitops.commit(writer, f"test: create {branch}")
+        gitops.push(writer, branch, set_upstream=False)
+    canonical = gitops.clone(origin, tmp_path / "canonical-conflict")
+
+    class ContendedCleanupWorkspace(Workspace):
+        def remove_worktree(self, repo, path) -> None:
+            raise LockTimeout("worktree cleanup busy")
+
+        def delete_branch(self, repo, branch) -> None:
+            raise LockTimeout("branch cleanup busy")
+
+    workspace = ContendedCleanupWorkspace(
+        tmp_path / "conflict-worktrees",
+        resolver=lambda _spec: canonical,
+        workflow="local",
+        repo_type="single-owner",
+    )
+    ref = normalize_repo(str(origin))
+    workspace.ensure_clone(ref)
+    result = lifecycle_module.LifecycleResult(
+        ref.slug, "stack", "engineer", "main", "stack", "error"
+    )
+
+    built = lifecycle_module._build_synthetic_stack_base(
+        ref,
+        workspace,
+        "main",
+        [StackBase("stack-left"), StackBase("stack-right")],
+        result=result,
+        journal=lifecycle_module.NullNodeJournal(),
+    )
+
+    assert isinstance(built, lifecycle_module.StackConflict)
+    assert [detail.split(" deferred", 1)[0] for detail in result.deferred_cleanup] == [
+        "remove-worktree",
+        "delete-branch",
+    ]
 
 
 def test_identity_cache_and_repo_post_checkout_hook_are_wired_across_dispatches(
@@ -418,7 +625,7 @@ def test_repo_plan_ledger_and_guided_next_round(
     captured = capsys.readouterr()
     assert rc == 1 and json.loads(captured.out)["results"]["change"]["status"] == "failed"
     first_result = json.loads((runs_dir / "fixed-run" / "round-01" / "result.json").read_text())
-    assert first_result["schema_version"] == 2
+    assert first_result["schema_version"] == 3
     preserved_branch = first_result["results"]["change"]["branch"]
     preserved_checkpoint = first_result["results"]["change"]["resume"]["checkpoint"]
     assert first_result["results"]["change"]["resume"]["mode"] == "retry"
@@ -481,7 +688,7 @@ def test_repo_plan_ledger_and_guided_next_round(
     plan_path.write_text(json.dumps(unrecorded_plan), encoding="utf-8")
     assert main_plan([str(plan_path), "--no-record", *common]) == 0
     unrecorded = json.loads(capsys.readouterr().out)
-    assert unrecorded["schema_version"] == 2 and "round" not in unrecorded
+    assert unrecorded["schema_version"] == 3 and "round" not in unrecorded
 
 
 # --- local repo: direct merge into main after checks -----------------------
@@ -1114,6 +1321,47 @@ def test_local_repo_direct_merge(tmp_path, bare_origin) -> None:
     assert gitops.head_sha(canonical) == _tip(origin, "main")
 
 
+def test_local_merge_gate_does_not_hold_the_shared_git_lock(tmp_path, bare_origin) -> None:
+    origin = bare_origin()
+    ws = _workspace(tmp_path, origin)
+    verification_started = tmp_path / "verification-started"
+    verification_release = tmp_path / "verification-release"
+    gate = [
+        "sh",
+        "-c",
+        "if git symbolic-ref -q HEAD >/dev/null; then exit 0; fi; "
+        f"touch {shlex.quote(str(verification_started))}; "
+        f"while test ! -f {shlex.quote(str(verification_release))}; do sleep 0.01; done",
+    ]
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(
+            run_repo_task,
+            str(origin),
+            "Add a change while publication verification pauses.",
+            "engineer",
+            workspace=ws,
+            dispatch_fn=make_writing_dispatch(filename="feature.txt"),
+            verify_cmd=gate,
+        )
+        deadline = time.monotonic() + 10
+        while not verification_started.exists() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert verification_started.exists(), "publication verification did not start"
+
+        clone = ws.clone_dir(normalize_repo(str(origin)))
+        identity = git_lock_identity(gitops.common_dir(clone))
+        try:
+            with advisory_lock(identity, timeout=0.5):
+                gitops.fetch(clone)
+        finally:
+            verification_release.touch()
+        result = future.result(timeout=10)
+
+    assert result.ok and result.outcome == "merged", result.detail
+    assert _has_file(origin, "main", "feature.txt")
+
+
 def test_local_repo_non_main_default_and_gate_context(tmp_path, bare_origin) -> None:
     origin = bare_origin(branch="master")
     ws = _workspace(tmp_path, origin)
@@ -1134,7 +1382,7 @@ def test_local_repo_non_main_default_and_gate_context(tmp_path, bare_origin) -> 
     assert _has_file(origin, "master", "portable.txt")
 
 
-def test_competing_local_publishers_rebuild_and_reverify_after_push_race(
+def test_base_advance_during_verification_rebuilds_and_reverifies_local_merge(
     tmp_path, bare_origin
 ) -> None:
     origin = bare_origin()
@@ -1178,8 +1426,11 @@ def test_competing_local_publishers_rebuild_and_reverify_after_push_race(
     assert all(result.ok and result.outcome == "merged" for result in results)
     assert _has_file(origin, "main", "machine-a.txt")
     assert _has_file(origin, "main", "machine-b.txt")
-    assert verification_log.read_text(encoding="utf-8").splitlines().count("b-stale") == 1
-    assert verification_log.read_text(encoding="utf-8").splitlines().count("b-rebuilt") == 1
+    publication_gates = verification_log.read_text(encoding="utf-8").splitlines()
+    # Publisher B verifies once against the initial base, observes A's base advance,
+    # then rebuilds and verifies a second time before its merge may be pushed.
+    assert publication_gates.count("b-stale") == 1
+    assert publication_gates.count("b-rebuilt") == 1
 
 
 def test_local_repo_gate_failure_blocks_merge(tmp_path, bare_origin) -> None:

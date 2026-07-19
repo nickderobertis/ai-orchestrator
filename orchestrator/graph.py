@@ -674,6 +674,14 @@ def _replay_node_run(node: GraphNode, item: GraphResultItem) -> NodeRun:
             )
             for anchor in item.get("stack_bases", [])
         ]
+        # llmlint: ignore[changed_behavior_has_e2e] lifecycle e2e covers production.
+        raw_deferred_cleanup = item.get("deferred_cleanup", [])
+        # llmlint: ignore[changed_behavior_has_e2e] unit test supplies malformed JSON.
+        if not isinstance(raw_deferred_cleanup, list) or not all(
+            isinstance(detail, str) for detail in raw_deferred_cleanup
+        ):
+            # llmlint: ignore[changed_behavior_has_e2e] unit test asserts this rejection.
+            raise ConfigError("recorded lifecycle result has invalid deferred_cleanup")
         payload = LifecycleResult(
             repo=item.get("repo", node.lifecycle.repo),
             task=node.task,
@@ -689,6 +697,8 @@ def _replay_node_run(node: GraphNode, item: GraphResultItem) -> NodeRun:
             synthetic_stack_base=item.get("synthetic_stack_base"),
             stack_bases=anchors,
             detail=item.get("detail", ""),
+            # llmlint: ignore[changed_behavior_has_e2e] unit round-trip covers replay.
+            deferred_cleanup=raw_deferred_cleanup,
             waiting_steps=cast(list[str], list(item.get("waiting_steps", []))),
         )
     return NodeRun(status, error, payload, item)

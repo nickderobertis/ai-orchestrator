@@ -18,7 +18,7 @@ from .workspace import IdentityKey, RepositoryType, Workflow
 
 _RUN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 _ROUND = re.compile(r"^round-(\d+)$")
-RECORDED_RESULT_SCHEMA_VERSION = 2
+RECORDED_RESULT_SCHEMA_VERSION = 3
 ResumeMode = Literal["pause", "retry"]
 RESUME_MODES = frozenset(get_args(ResumeMode))
 RetryDisposition = Literal["reused", "recovered", "abandoned"]
@@ -128,6 +128,7 @@ class GraphResultItem(TypedDict, total=False):
     resume: ResumePayload | None
     error: str | None
     retry_lineage: RetryLineagePayload
+    deferred_cleanup: list[str]
 
 
 class GraphPayload(TypedDict, total=False):

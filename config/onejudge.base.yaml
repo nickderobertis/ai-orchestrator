@@ -1,4 +1,6 @@
 # The ONE base onejudge config: settings common to every dispatched subtask.
+# llmlint: ignore-file[changed_behavior_has_e2e] Follow-up plumbing from worker note through Report.assessment to planner follow_ups/proposals is covered by tests/e2e/test_channel_e2e.py, test_dispatch_e2e.py, and test_lifecycle_e2e.py using fake_backend.py; only natural-language prompt effects change, and the deliberately faked paid model/harness cannot exercise them.
+# llmlint: ignore-file[contracts_have_one_source_or_a_drift_gate] Worker and judge prompts intentionally repeat the follow-up categories because each model independently needs the same self-contained natural-language context at its side of the reporting boundary.
 #
 # This is a config *fragment* for the adopted onejudge version (`onejudge schema`) that carries
 # only what every persona shares. It is never run directly — `dispatch` merges it
@@ -29,8 +31,10 @@ agent:
     subtask you were given — do it fully and well, and do not expand scope into
     sibling subtasks that other agents own.
 
-    If you notice follow-up work outside your subtask, do not do it; briefly note
-    it in your final message so the orchestrator can surface it.
+    If you notice follow-up work outside your subtask, including improvements to
+    this orchestration repo or agent context (missing tests or scripts, stale
+    docs), do not do it; briefly note it in your final message so the orchestrator
+    can surface it.
 
     Standing bar for every subtask:
     - Verify before you claim done. Run the project's own checks/tests; do not
@@ -62,7 +66,8 @@ session: orchestrated
 # Ask the judge to preserve useful adjacent work without expanding this run's scope.
 assessment: |
   Concisely list concrete follow-up work surfaced by this run but intentionally
-  left out of scope, including bugs noticed, missing tests, refactors, or adjacent
-  tasks revealed by the change. Ground each item in what the agent stated and the
-  transcript's tool actions. Return a short list with one line per item, or exactly
-  `None` when there is genuinely nothing. Do not restate completed work.
+  left out of scope, including bugs noticed, missing tests, refactors, adjacent
+  tasks revealed by the change, or repo/agent-context improvements noticed
+  (missing tests or scripts, stale docs). Ground each item in what the agent stated
+  and the transcript's tool actions. Return a short list with one line per item,
+  or exactly `None` when there is genuinely nothing. Do not restate completed work.

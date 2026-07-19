@@ -17,7 +17,7 @@ from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, NewType
+from typing import Any, Literal, NewType, cast
 
 from .config import ConfigError
 from .detail_snapshot import SNAPSHOT_VERSION, CommitDetail, PrDetail
@@ -35,6 +35,7 @@ JUDGE_PREFIXES = (
     "you-are-roleplaying-the-user-in",
 )
 SessionId = NewType("SessionId", str)
+SessionRole = Literal["agent", "judge"]
 
 
 def _session_labels(value: object) -> dict[str, str]:
@@ -134,6 +135,14 @@ def _is_worker(session: HistorySession) -> bool:
     return not session.name.startswith(JUDGE_PREFIXES)
 
 
+def session_role(session: HistorySession) -> SessionRole:
+    """Classify a session from its validated label, falling back for legacy history."""
+    role = session.labels.get("role")
+    if role in {"agent", "judge"}:
+        return cast(SessionRole, role)
+    return "agent" if _is_worker(session) else "judge"
+
+
 def _sessions(value: Any) -> list[HistorySession]:
     if not isinstance(value, list):
         raise HistoryError("oneharness history list returned an unexpected response")
@@ -143,16 +152,30 @@ def _sessions(value: Any) -> list[HistorySession]:
 def worker_sessions(*, oneharness_bin: str = "oneharness") -> list[HistorySession]:
     """Return validated worker sessions, newest first, across every project."""
     return [
-        session
-        for session in _sessions(_run_history("list", oneharness_bin=oneharness_bin))
-        if _is_worker(session)
+        session for session in all_sessions(oneharness_bin=oneharness_bin) if _is_worker(session)
     ]
+
+
+def all_sessions(*, oneharness_bin: str = "oneharness") -> list[HistorySession]:
+    """Return every validated session, newest first, across every project."""
+    return _sessions(_run_history("list", oneharness_bin=oneharness_bin))
 
 
 # llmlint: ignore[modern_domain_modeling] harness records as dicts, per history.py convention
 def session_records(session: HistorySession) -> list[dict[str, Any]]:
     """Read the normalized records belonging to ``session``."""
     return _records(session.path)
+
+
+def session_duration_ms(records: list[dict[str, Any]]) -> int:
+    """Sum measured, non-negative record durations without treating bools as integers."""
+    return sum(
+        duration
+        for record in records
+        if isinstance((duration := record.get("duration_ms")), int)
+        and not isinstance(duration, bool)
+        and duration >= 0
+    )
 
 
 def recent_runs(limit: int, *, oneharness_bin: str = "oneharness") -> str:
@@ -229,9 +252,7 @@ def digest(records: list[dict[str, Any]], session_id: SessionId) -> Digest:
         input_tokens=input_tokens,
         output_tokens=output_tokens,
         status=str(latest.get("status", "unknown")),
-        duration_ms=latest.get("duration_ms", 0)
-        if isinstance(latest.get("duration_ms"), int)
-        else 0,
+        duration_ms=session_duration_ms(records),
         commands=commands[-5:],
         text=str(latest.get("text", "")),
     )

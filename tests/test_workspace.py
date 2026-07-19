@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import shutil
+
 import pytest
 
 from orchestrator import gitops
@@ -87,8 +89,14 @@ def test_workspace_clone_worktree_lifecycle(tmp_path, bare_origin) -> None:
     with pytest.raises(RuntimeError, match="branch 'feat' is active.*resume"):
         ws.worktree(ref, "feat", base="origin/main")
 
-    ws.remove_worktree(ref, wt)
-    assert not wt.exists()
+    # A crashed teardown can leave Git's registration after its directory is gone.
+    shutil.rmtree(wt)
+    replacement = ws.worktree(ref, "feat", base="origin/main")
+    assert replacement == wt
+    assert gitops.current_branch(replacement) == "feat"
+
+    ws.remove_worktree(ref, replacement)
+    assert not replacement.exists()
 
 
 def test_workspace_fast_forwards_canonical_before_cutting_worktree(tmp_path, bare_origin) -> None:
@@ -109,6 +117,19 @@ def test_workspace_fast_forwards_canonical_before_cutting_worktree(tmp_path, bar
     assert (worktree / "new.txt").read_text(encoding="utf-8") == "current\n"
 
 
+def test_workspace_refuses_unregistered_path_collision(tmp_path, bare_origin) -> None:
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical")
+    ref = normalize_repo(str(origin))
+    ws = Workspace(tmp_path / "worktrees", resolver=lambda _: canonical)
+    ws.ensure_clone(ref)
+    collision = ws._worktree_root(ref) / _safe_branch_dir("feat")
+    collision.mkdir(parents=True)
+
+    with pytest.raises(RuntimeError, match="worktree path.*already exists"):
+        ws.worktree(ref, "feat", base="origin/main")
+
+
 def test_workspace_refuses_dirty_execution_checkout(tmp_path, bare_origin) -> None:
     origin = bare_origin()
     canonical = gitops.clone(origin, tmp_path / "dirty-canonical")
@@ -117,6 +138,54 @@ def test_workspace_refuses_dirty_execution_checkout(tmp_path, bare_origin) -> No
 
     with pytest.raises(WorkspaceError, match="execution checkout.*dirty"):
         ws.ensure_clone(normalize_repo(str(origin)))
+
+
+def test_failed_worktree_add_releases_lease_for_retry(tmp_path, bare_origin) -> None:
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-add-failure")
+    ref = normalize_repo(str(origin))
+    ws = Workspace(tmp_path / "worktrees", resolver=lambda _: canonical)
+    ws.ensure_clone(ref)
+
+    with pytest.raises(gitops.GitError):
+        ws.worktree(ref, "feat", base="origin/missing")
+
+    worktree = ws.worktree(ref, "feat", base="origin/main")
+    assert worktree.exists()
+    ws.remove_worktree(ref, worktree)
+
+
+def test_workspace_rejects_invalid_execution_checkout(tmp_path) -> None:
+    invalid = tmp_path / "not-a-repo"
+    invalid.mkdir()
+    workspace = Workspace(tmp_path / "worktrees", resolver=lambda _: invalid)
+
+    with pytest.raises(RuntimeError, match="not a git checkout"):
+        workspace.ensure_clone(normalize_repo("o/r"))
+
+
+def test_publication_readiness_rejects_dirty_and_wrong_branch(tmp_path, bare_origin) -> None:
+    origin = bare_origin()
+    checkout = gitops.clone(origin, tmp_path / "publication-readiness")
+    (checkout / "dirty.txt").write_text("dirty\n", encoding="utf-8")
+    with pytest.raises(WorkspaceError, match="publication checkout.*dirty"):
+        Workspace._assert_publication_ready(checkout, "main")
+
+    (checkout / "dirty.txt").unlink()
+    with pytest.raises(WorkspaceError, match="branch 'main'.*root branch 'other'"):
+        Workspace._assert_publication_ready(checkout, "other")
+
+
+def test_cache_rejects_empty_state_home(tmp_path, bare_origin, monkeypatch) -> None:
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-cache")
+    ref = normalize_repo(str(origin))
+    workspace = Workspace(tmp_path / "worktrees", resolver=lambda _: canonical)
+    workspace.ensure_clone(ref)
+    monkeypatch.setenv("AI_ORCHESTRATOR_HOME", "")
+
+    with pytest.raises(WorkspaceError, match="must not be empty"):
+        workspace.ensure_cache_dir(ref)
 
 
 def test_repo_ref_defaults() -> None:

@@ -215,13 +215,15 @@ def worktree_add_detached(cwd: str | Path, path: str | Path, ref: str) -> Path:
     return Path(path)
 
 
-def worktree_remove(cwd: str | Path, path: str | Path, *, force: bool = True) -> None:
-    """Remove a worktree created by `worktree_add` (best-effort cleanup)."""
+def worktree_remove(
+    cwd: str | Path, path: str | Path, *, force: bool = True, check: bool = False
+) -> None:
+    """Remove a worktree, optionally surfacing Git's refusal to the caller."""
     args = ["worktree", "remove"]
     if force:
         args.append("--force")
     args.append(str(path))
-    _git(args, cwd=cwd, check=False)
+    _git(args, cwd=cwd, check=check)
 
 
 def add_all(cwd: str | Path) -> None:
@@ -297,6 +299,31 @@ def worktrees(cwd: str | Path) -> dict[str, Path]:
         elif line.startswith("branch refs/heads/") and path is not None:
             result[line.removeprefix("branch refs/heads/")] = path
     return result
+
+
+def stale_worktree_branches(cwd: str | Path) -> dict[str, Path]:
+    """Map branches whose registered worktrees Git reports as safely prunable."""
+    proc = _git(["worktree", "list", "--porcelain"], cwd=cwd)
+    result: dict[str, Path] = {}
+    path: Path | None = None
+    branch: str | None = None
+    for line in [*proc.stdout.splitlines(), ""]:
+        if line.startswith("worktree "):
+            path = Path(line.removeprefix("worktree "))
+            branch = None
+        elif line.startswith("branch refs/heads/"):
+            branch = line.removeprefix("branch refs/heads/")
+        elif line.startswith("prunable ") and path is not None and branch is not None:
+            result[branch] = path
+        elif not line:
+            path = None
+            branch = None
+    return result
+
+
+def worktree_prune(cwd: str | Path) -> None:
+    """Remove registrations Git considers prunable without an expiry delay."""
+    _git(["worktree", "prune", "--expire", "now"], cwd=cwd)
 
 
 def has_commits_ahead(cwd: str | Path, base: str) -> bool:
