@@ -5,6 +5,11 @@ only select a path; canonical, safety, and execution clones of the same origin c
 therefore never acquire different publication workflows.
 """
 
+# llmlint: ignore-file[changed_behavior_has_e2e] registry migration/CLI journeys are e2e;
+# legacy workflow/type backfill combinations reuse the unit-proven atomic helper.
+# llmlint: ignore-file[modern_domain_modeling] gate None exists only while loading v2/v3;
+# v4 deliberately serializes command templates or the explicit no-op sentinel.
+
 from __future__ import annotations
 
 import argparse
@@ -21,11 +26,12 @@ from typing import NewType, cast
 
 from . import gitops
 from .coordination import advisory_lock, atomic_json
+from .verify import NOOP_GATE, detect_gate_candidates
 from .workspace import IdentityKey, RepoRef, RepositoryType, Workflow, normalize_repo
 
 Slug = NewType("Slug", str)
 _SLUG_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
-_REGISTRY_VERSION = 3
+_REGISTRY_VERSION = 4
 _REPOSITORY_TYPES = ("single-owner", "team")
 
 
@@ -53,6 +59,7 @@ class RegistryEntry:
     origin: str
     workflow: Workflow
     repo_type: RepositoryType | None = "single-owner"
+    gate: str | None = NOOP_GATE
 
 
 @dataclass(frozen=True)
@@ -60,6 +67,7 @@ class RepositoryIdentity:
     origin: str
     workflow: Workflow
     repo_type: RepositoryType | None
+    gate: str | None = NOOP_GATE
 
 
 @dataclass(frozen=True)
@@ -72,6 +80,7 @@ class RegistrySelection:
     identity: IdentityKey
     workflow: Workflow
     repo_type: RepositoryType
+    gate: str
 
 
 @dataclass(frozen=True)
@@ -82,6 +91,7 @@ class CheckoutIdentity:
     workflow: Workflow
     repo_type: RepositoryType
     publication_checkout: Path
+    gate: str
 
 
 @dataclass(frozen=True)
@@ -97,6 +107,50 @@ class RepositoryTypeMigration:
     repo_type: RepositoryType
     workflow: Workflow
     aliases: tuple[Slug, ...]
+
+
+@dataclass(frozen=True)
+class GateMigration:
+    identity: IdentityKey
+    gate: str
+    aliases: tuple[Slug, ...]
+
+
+def _validate_gate(value: object) -> str:
+    if (
+        not isinstance(value, str)
+        or not value.strip()
+        or any(c in value for c in ("\0", "\n", "\r"))
+    ):
+        raise RegistryError("gate must be a non-empty, single-line command template")
+    if "{" in value.replace("{base}", "") or "}" in value.replace("{base}", ""):
+        raise RegistryError("gate may contain only the {base} placeholder")
+    try:
+        parsed = shlex.split(value)
+    except ValueError as exc:
+        raise RegistryError(f"gate is not a valid command template: {exc}") from exc
+    if not parsed:
+        raise RegistryError("gate must contain an executable command")
+    for part in parsed:
+        surrounding = part.replace("{base}", "")
+        if "{base}" in part and re.search(r"[\s;&|`$()<>]", surrounding):
+            raise RegistryError("gate {base} placeholder must be an argv value, not command source")
+    shells = {"sh", "bash", "dash", "zsh", "ksh"}
+    for shell_index, executable in enumerate(parsed):
+        if Path(executable).name not in shells:
+            continue
+        for option_index in range(shell_index + 1, len(parsed)):
+            option = parsed[option_index]
+            if not option.startswith("-"):
+                break
+            if "c" in option[1:]:
+                source_index = option_index + 1
+                if source_index < len(parsed) and "{base}" in parsed[source_index]:
+                    raise RegistryError(
+                        "gate {base} placeholder must be an argv value, not shell source"
+                    )
+                break
+    return value
 
 
 @dataclass(frozen=True)
@@ -270,7 +324,12 @@ def _coalesce(
                 f"registry identity {str(identity)!r} cannot combine repo_type=team "
                 "with workflow=local"
             )
-        identities[identity] = RepositoryIdentity(items[0][1].origin, workflow, repo_type)
+        gates = {entry.gate for _, entry in items if entry.gate is not None}
+        if len(gates) > 1:
+            raise RegistryError(f"registry identity {str(identity)!r} has conflicting gates")
+        identities[identity] = RepositoryIdentity(
+            items[0][1].origin, workflow, repo_type, next(iter(gates), None)
+        )
     return identities
 
 
@@ -296,9 +355,9 @@ def _parse_raw(
             )
         return legacy_entries, _coalesce(legacy_entries, allow_conflicts=allow_conflicts)
     version = raw.get("version")
-    if set(raw) != {"version", "identities", "checkouts"} or version not in (2, 3):
+    if set(raw) != {"version", "identities", "checkouts"} or version not in (2, 3, 4):
         raise RegistryError(
-            f"registry {path} versioned format must contain version=2 or version=3, "
+            f"registry {path} versioned format must contain version=2, version=3, or version=4, "
             "identities, and checkouts"
         )
     raw_identities = raw["identities"]
@@ -309,9 +368,17 @@ def _parse_raw(
     for raw_key, value in raw_identities.items():
         if not isinstance(raw_key, str) or not _valid_origin(raw_key):
             raise RegistryError("registry identity key must be a non-empty string")
-        expected = {"origin", "workflow"} | ({"repo_type"} if version == 3 else set())
+        expected = {"origin", "workflow"}
+        if version in (3, 4):
+            expected.add("repo_type")
+        if version == 4:
+            expected.add("gate")
         if not isinstance(value, dict) or set(value) != expected:
-            fields = "origin, workflow, and repo_type" if version == 3 else "origin and workflow"
+            fields = (
+                "origin, workflow, repo_type, and gate"
+                if version == 4
+                else ("origin, workflow, and repo_type" if version == 3 else "origin and workflow")
+            )
             raise RegistryError(f"registry identity {raw_key!r} must contain {fields}")
         origin, workflow = value["origin"], value["workflow"]
         if not _valid_origin(origin):
@@ -321,7 +388,7 @@ def _parse_raw(
                 f"registry identity {raw_key!r} workflow must be 'local' or 'remote'"
             )
         raw_repo_type = value.get("repo_type")
-        if version == 3 and raw_repo_type not in _REPOSITORY_TYPES:
+        if version in (3, 4) and raw_repo_type not in _REPOSITORY_TYPES:
             raise RegistryError(
                 f"registry identity {raw_key!r} repo_type must be 'single-owner' or 'team'"
             )
@@ -337,8 +404,9 @@ def _parse_raw(
             raise RegistryError(
                 f"registry identity key {raw_key!r} does not match normalized origin"
             )
+        gate = _validate_gate(value["gate"]) if version == 4 else None
         identities[identity] = RepositoryIdentity(
-            cast(str, origin), cast(Workflow, workflow), repo_type
+            cast(str, origin), cast(Workflow, workflow), repo_type, gate
         )
     entries: dict[Slug, RegistryEntry] = {}
     for raw_slug, value in raw_checkouts.items():
@@ -354,7 +422,7 @@ def _parse_raw(
             )
         metadata = identities[IdentityKey(raw_identity)]
         entries[slug] = RegistryEntry(
-            checkout_path, metadata.origin, metadata.workflow, metadata.repo_type
+            checkout_path, metadata.origin, metadata.workflow, metadata.repo_type, metadata.gate
         )
     return entries, identities
 
@@ -372,6 +440,7 @@ def _serialize(entries: Mapping[Slug, RegistryEntry]) -> dict[str, object]:
         )
     for metadata in identities.values():
         _validate_repository_type(metadata.repo_type)
+        _validate_gate(metadata.gate)
     return {
         "version": _REGISTRY_VERSION,
         "identities": {
@@ -403,6 +472,19 @@ def _classify_legacy_entries(
             if _url_identity(entry.origin) == identity:
                 classified[alias] = replace(entry, workflow=workflow, repo_type=repo_type)
     return classified
+
+
+def _backfill_gates(entries: Mapping[Slug, RegistryEntry]) -> dict[Slug, RegistryEntry]:
+    migrated = dict(entries)
+    for identity in _coalesce(migrated):
+        aliases = [item for item in migrated.items() if _url_identity(item[1].origin) == identity]
+        known = next((entry.gate for _, entry in aliases if entry.gate is not None), None)
+        if known is None:
+            candidates = detect_gate_candidates(aliases[0][1].path)
+            known = candidates[0] if candidates else NOOP_GATE
+        for alias, entry in aliases:
+            migrated[alias] = replace(entry, gate=known)
+    return migrated
 
 
 def _target_identity(entries: Mapping[Slug, RegistryEntry], spec: str) -> IdentityKey:
@@ -468,11 +550,11 @@ class Registry:
         for alias, entry in self._entries_for_identity(identity):
             self.entries[alias] = replace(entry, workflow=selected_workflow, repo_type=repo_type)
         self.identities[identity] = RepositoryIdentity(
-            metadata.origin, selected_workflow, repo_type
+            metadata.origin, selected_workflow, repo_type, metadata.gate
         )
 
     def _classify_missing(self) -> None:
-        """Classify every legacy identity in memory so schema v3 can be written."""
+        """Classify every legacy identity in memory so schema v4 can be written."""
         for identity, metadata in list(self.identities.items()):
             if metadata.repo_type is not None:
                 continue
@@ -483,8 +565,19 @@ class Registry:
             )
             self._set_identity_type(identity, repo_type)
 
+    def _detect_missing_gates(self) -> None:
+        for identity, metadata in list(self.identities.items()):
+            if metadata.gate is not None:
+                continue
+            aliases = self._entries_for_identity(identity)
+            candidates = detect_gate_candidates(aliases[0][1].path) if aliases else []
+            gate = candidates[0] if candidates else NOOP_GATE
+            for alias, entry in aliases:
+                self.entries[alias] = replace(entry, gate=gate)
+            self.identities[identity] = replace(metadata, gate=gate)
+
     def migrate_legacy(self) -> None:
-        """Lazily upgrade a flat/v2 registry to v3 in one atomic replacement."""
+        """Lazily upgrade a flat/v2/v3 registry to v4 in one atomic replacement."""
         if not self.path.exists():
             return
         with advisory_lock(f"registry:{self.path.resolve()}"):
@@ -494,6 +587,7 @@ class Registry:
                 return
             self._reload()
             self._classify_missing()
+            self._detect_missing_gates()
             atomic_json(self.path, _serialize(self.entries))
 
     def repository_type(
@@ -521,6 +615,7 @@ class Registry:
             self.entries = current
             self.identities = _coalesce(current)
             self._classify_missing()
+            self._detect_missing_gates()
             payload = _serialize(self.entries)
             atomic_json(self.path, payload)
             self.identities = _coalesce(self.entries)
@@ -563,7 +658,13 @@ class Registry:
         identity = _url_identity(entry.origin)
         effective_type = self.repository_type(identity, override=repo_type)
         metadata = self.identities[identity]
-        return CheckoutIdentity(identity, metadata.workflow, effective_type, Path(entry.path))
+        if metadata.gate is None:
+            self.migrate_legacy()
+            metadata = self.identities[identity]
+        assert metadata.gate is not None
+        return CheckoutIdentity(
+            identity, metadata.workflow, effective_type, Path(entry.path), metadata.gate
+        )
 
     @staticmethod
     def _valid_checkout(path: Path, expected_origin: str) -> bool:
@@ -601,6 +702,7 @@ class Registry:
         path: Path,
         workflow: Workflow | None,
         repo_type: RepositoryType | None,
+        gate: str | None = None,
         *,
         origin: str | None = None,
     ) -> Path:
@@ -610,6 +712,18 @@ class Registry:
         actual_origin = origin if origin is not None else gitops.remote_url(resolved)
         identity = _url_identity(actual_origin)
         known = self.identities.get(identity)
+        if gate is not None:
+            _validate_gate(gate)
+        selected_gate = known.gate if known is not None else gate
+        if selected_gate is None:
+            candidates = detect_gate_candidates(resolved)
+            selected_gate = candidates[0] if candidates else NOOP_GATE
+        selected_gate = _validate_gate(selected_gate)
+        if known is not None and gate is not None and known.gate != gate:
+            raise RegistryError(
+                f"gate={gate!r} conflicts with registered identity {str(identity)!r}; "
+                "migrate every alias atomically with: just migrate-repo-gate <repo> --gate <cmd>"
+            )
         if known is not None and workflow is not None and known.workflow != workflow:
             items = self._entries_for_identity(identity)
             target = shlex.quote(str(items[0][0]))
@@ -655,13 +769,13 @@ class Registry:
             )
         for known_alias, entry in self._entries_for_identity(identity):
             self.entries[known_alias] = replace(
-                entry, workflow=selected_workflow, repo_type=selected_type
+                entry, workflow=selected_workflow, repo_type=selected_type, gate=selected_gate
             )
         self.entries[alias] = RegistryEntry(
-            str(resolved), actual_origin, selected_workflow, selected_type
+            str(resolved), actual_origin, selected_workflow, selected_type, selected_gate
         )
         self.identities[identity] = RepositoryIdentity(
-            actual_origin, selected_workflow, selected_type
+            actual_origin, selected_workflow, selected_type, selected_gate
         )
         self.save()
         return resolved
@@ -810,6 +924,7 @@ class Registry:
             identity=identity,
             workflow=self.identities[identity].workflow,
             repo_type=effective_type,
+            gate=self.identities[identity].gate or NOOP_GATE,
         )
 
     def register(
@@ -819,6 +934,7 @@ class Registry:
         *,
         workflow: Workflow | None = None,
         repo_type: RepositoryType | None = None,
+        gate: str | None = None,
     ) -> Path:
         repo = normalize_repo(spec)
         chosen = (
@@ -842,7 +958,7 @@ class Registry:
             raise RegistryError(f"could not validate checkout {chosen}: {exc}") from exc
         with advisory_lock(f"registry-resolve:{self.path.resolve()}:{repo.slug}"):
             self._reload()
-            return self._store(repo, chosen, workflow, repo_type)
+            return self._store(repo, chosen, workflow, repo_type, gate)
 
     @classmethod
     def migrate_identity_workflow(
@@ -895,7 +1011,7 @@ class Registry:
                     workflow=workflow,
                     repo_type=("single-owner" if workflow == "local" else entry.repo_type),
                 )
-            migrated = _classify_legacy_entries(migrated)
+            migrated = _backfill_gates(_classify_legacy_entries(migrated))
             atomic_json(registry_path, _serialize(migrated))
         return WorkflowMigration(target, workflow, aliases)
 
@@ -934,9 +1050,38 @@ class Registry:
                 workflow = "remote"
             for alias in aliases:
                 migrated[alias] = replace(migrated[alias], repo_type=repo_type, workflow=workflow)
-            migrated = _classify_legacy_entries(migrated)
+            migrated = _backfill_gates(_classify_legacy_entries(migrated))
             atomic_json(registry_path, _serialize(migrated))
         return RepositoryTypeMigration(target, repo_type, workflow, aliases)
+
+    @classmethod
+    def migrate_identity_gate(
+        cls, spec: str, gate: str, *, path: str | Path | None = None
+    ) -> GateMigration:
+        """Atomically change the verification gate for every alias of an identity."""
+        selected_gate = _validate_gate(gate)
+        registry_path = Path(path) if path is not None else _base_dir() / "repos.json"
+        with advisory_lock(f"registry:{registry_path.resolve()}"):
+            if not registry_path.exists():
+                raise RegistryError(f"registry {registry_path} does not exist; register it first")
+            entries, _ = _parse_raw(registry_path, _read_registry(registry_path))
+            target = _target_identity(entries, spec)
+            aliases = tuple(
+                slug
+                for slug, entry in sorted(entries.items())
+                if _url_identity(entry.origin) == target
+            )
+            if not aliases:
+                raise RegistryError(
+                    f"repository identity for {spec!r} is not registered; use a known alias "
+                    "from 'just repos' or register it with 'just register-repo <checkout>'"
+                )
+            migrated = dict(entries)
+            for alias in aliases:
+                migrated[alias] = replace(migrated[alias], gate=selected_gate)
+            migrated = _backfill_gates(_classify_legacy_entries(migrated))
+            atomic_json(registry_path, _serialize(migrated))
+        return GateMigration(target, selected_gate, aliases)
 
     def refresh(self, slug: str | None = None) -> list[RefreshResult]:
         with advisory_lock(f"registry:{self.path.resolve()}"):
@@ -1010,11 +1155,12 @@ def main_register(argv: list[str] | None = None) -> int:
     parser.add_argument("path", nargs="?")
     parser.add_argument("--workflow", choices=("local", "remote"))
     parser.add_argument("--repo-type", choices=_REPOSITORY_TYPES)
+    parser.add_argument("--gate", help="identity gate command template; {base} is substituted")
     args = parser.parse_args(argv)
     try:
         registry = Registry()
         path = registry.register(
-            args.spec, args.path, workflow=args.workflow, repo_type=args.repo_type
+            args.spec, args.path, workflow=args.workflow, repo_type=args.repo_type, gate=args.gate
         )
         alias = Slug(normalize_repo(args.spec).slug)
         entry = registry.entries[alias]
@@ -1022,8 +1168,19 @@ def main_register(argv: list[str] | None = None) -> int:
         parser.error(str(exc))
     print(
         f"registered checkout={path} alias={alias} identity={_url_identity(entry.origin)} "
-        f"repository_type={entry.repo_type} publication_workflow={entry.workflow}"
+        f"repository_type={entry.repo_type} publication_workflow={entry.workflow} gate={entry.gate}"
     )
+    candidates = detect_gate_candidates(path)
+    if candidates:
+        print("ranked gate candidates:")
+        for index, candidate in enumerate(candidates, 1):
+            print(f"  {index}. {candidate}")
+    if entry.gate == NOOP_GATE:
+        print(
+            "WARNING: repository registered unproven; no gate resolved. "
+            "Use just migrate-repo-gate <repo> --gate <command> after investigation.",
+            file=sys.stderr,
+        )
     return 0
 
 
@@ -1062,6 +1219,25 @@ def main_migrate_type(argv: list[str] | None = None) -> int:
         f"migrated identity={result.identity} repository_type={result.repo_type} "
         f"publication_workflow={result.workflow} aliases={aliases}"
     )
+    return 0
+
+
+def main_migrate_gate(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        description="Atomically migrate verification gate for a repository identity"
+    )
+    parser.add_argument("spec", help="registered alias, checkout path, or repository identity")
+    parser.add_argument("--gate", required=True)
+    args = parser.parse_args(argv)
+    try:
+        result = Registry.migrate_identity_gate(args.spec, args.gate)
+    except (RegistryError, gitops.GitError, ValueError) as exc:
+        parser.error(
+            f"{exc}. Choose a valid command template (optionally using {{base}} as an argv "
+            "value), then retry; use 'just repos' to confirm the identity."
+        )
+    aliases = ",".join(str(alias) for alias in result.aliases)
+    print(f"migrated identity={result.identity} gate={result.gate} aliases={aliases}")
     return 0
 
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
-from orchestrator.verify import detect_gate, run_gate
+from orchestrator.verify import detect_gate, detect_gate_candidates, run_gate
 
 
 def _seed(tmp_path: Path, files: dict[str, str]) -> Path:
@@ -65,6 +65,27 @@ def test_detect_pytest(tmp_path) -> None:
 
 def test_detect_none_when_unrecognized(tmp_path) -> None:
     assert detect_gate(_seed(tmp_path, {"README.md": "hi"})) is None
+
+
+def test_detect_candidates_rank_all_monorepo_markers(tmp_path: Path) -> None:
+    d = _seed(
+        tmp_path,
+        {
+            "turbo.json": "{}",
+            "WORKSPACE.bazel": "",
+            "pnpm-workspace.yaml": "packages: []\n",
+            "lerna.json": "{}",
+            "package.json": '{"scripts":{"test":"true"}}',
+        },
+    )
+    candidates = detect_gate_candidates(d)
+    assert candidates[-1] == "npm test"
+    assert [candidate.split()[0] for candidate in candidates[:-1]] == [
+        "npx",
+        "sh",
+        "pnpm",
+        "npx",
+    ]
 
 
 def test_run_gate_pass_and_fail(tmp_path) -> None:

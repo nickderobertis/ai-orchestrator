@@ -65,6 +65,7 @@ class WorkspaceSelection:
     publication_identity: IdentityKey
     workflow: Workflow | None
     repo_type: RepositoryType | None
+    gate: str | None
 
 
 @dataclass(frozen=True)
@@ -255,6 +256,7 @@ class Workspace:
                     publication_identity=selected.identity,
                     workflow=selected.workflow,
                     repo_type=selected.repo_type,
+                    gate=selected.gate,
                 )
                 checkout = selection.execution_checkout
             else:
@@ -274,6 +276,7 @@ class Workspace:
                         or self._repo_type
                         or ("single-owner" if self._workflow(repo) == "local" else None)
                     ),
+                    gate=None,
                 )
             if not checkout.is_dir() or not gitops.is_repo(checkout):
                 raise RuntimeError(f"execution checkout {checkout} is not a git checkout")

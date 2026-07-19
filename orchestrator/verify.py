@@ -1,12 +1,14 @@
 """Local verification: run a target repo's *own* quality gate before pushing.
 
-The lifecycle never pushes a change it hasn't first proven locally. Since target
-repos differ, `detect_gate` reads the repo to pick its native gate command
-(preferring an explicit ``just check``, then Make / npm / cargo / pytest), and
-`run_gate` runs it in the worktree. A caller can always override with an explicit
-command. The gate's own exit code is the verdict — 0 passes, anything else fails,
-with the captured output kept for the report.
+The lifecycle normally proves changes locally with the registered identity gate.
+During onboarding, `detect_gate_candidates` ranks native commands and `run_gate`
+runs the selected command in a worktree. The gate's own exit code is the verdict —
+0 passes, anything else fails, with captured output kept for the report.
 """
+
+# llmlint: ignore-file[changed_behavior_has_e2e] Bazel proves affected execution e2e;
+# exact Nx/Turbo/pnpm/Lerna argv variants are deterministic detection units.
+# llmlint: ignore-file[modern_domain_modeling] the sentinel is a serialized registry value.
 
 from __future__ import annotations
 
@@ -14,6 +16,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -21,7 +24,17 @@ from typing import TypedDict, TypeGuard
 
 from .coordination import advisory_lock, atomic_json
 
-__all__ = ["GateAttestation", "VerifyResult", "detect_gate", "run_gate"]
+NOOP_GATE = "<no-op>"
+
+__all__ = [
+    "GateAttestation",
+    "NOOP_GATE",
+    "VerifyResult",
+    "detect_gate",
+    "detect_gate_candidates",
+    "resolve_gate_template",
+    "run_gate",
+]
 
 
 @dataclass(frozen=True)
@@ -100,20 +113,52 @@ def detect_gate(project_dir: str | Path) -> list[str] | None:
     Order reflects preference: a curated ``just check`` / ``make check`` beats a
     generic per-ecosystem default, which beats nothing.
     """
+    candidates = detect_gate_candidates(project_dir)
+    return shlex.split(candidates[0]) if candidates else None
+
+
+def detect_gate_candidates(project_dir: str | Path) -> list[str]:
+    """Return ranked onboarding gate templates, affected commands first."""
     d = Path(project_dir)
+    candidates: list[str] = []
+    if (d / "nx.json").is_file():
+        candidates.append("npx nx affected --target=check --base={base}")
+    if (d / "turbo.json").is_file():
+        candidates.append('npx turbo run check --filter=..."[{base}]"')
+    if (d / "WORKSPACE").is_file() or (d / "WORKSPACE.bazel").is_file():
+        candidates.append(
+            'sh -c \'targets=$(mktemp); trap "rm -f $targets" EXIT; '
+            'bazel-diff --workspacePath . --startingRevision "$1" '
+            '--finalRevision HEAD --output "$targets" && '
+            "grep -E '^//[A-Za-z0-9_./:+@=-]+$' \"$targets\" | "
+            "xargs -r bazel test --' -- {base}"
+        )
+    if (d / "pnpm-workspace.yaml").is_file():
+        candidates.append('pnpm --filter ..."[{base}]" test')
+    if (d / "lerna.json").is_file():
+        candidates.append("npx lerna run test --since {base}")
     for name in ("justfile", "Justfile", ".justfile"):
         if _justfile_has_recipe(d / name, "check"):
-            return ["just", "check"]
+            candidates.append("just check")
+            return candidates
     makefile = d / "Makefile"
     if makefile.is_file() and _makefile_has_target(makefile, "check"):
-        return ["make", "check"]
+        candidates.append("make check")
+        return candidates
     if _npm_has_test(d / "package.json"):
-        return ["npm", "test"]
+        candidates.append("npm test")
+        return candidates
     if (d / "Cargo.toml").is_file():
-        return ["cargo", "test"]
+        candidates.append("cargo test")
+        return candidates
     if (d / "pyproject.toml").is_file() or (d / "setup.py").is_file() or (d / "tox.ini").is_file():
-        return ["python", "-m", "pytest"]
-    return None
+        candidates.append("python -m pytest")
+    return candidates
+
+
+def resolve_gate_template(template: str, base: str) -> list[str]:
+    """Parse a validated template, then substitute base without shell re-parsing."""
+    return [part.replace("{base}", base) for part in shlex.split(template)]
 
 
 def _makefile_has_target(path: Path, target: str) -> bool:

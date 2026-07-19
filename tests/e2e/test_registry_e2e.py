@@ -9,7 +9,9 @@ from pathlib import Path
 import pytest
 from conftest import git
 
+from orchestrator import REPO_ROOT
 from orchestrator.registry import Registry, RegistryEntry
+from orchestrator.verify import NOOP_GATE
 
 
 def _cli(name: str, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
@@ -215,6 +217,218 @@ def test_repository_type_migration_installed_cli_journey(
     )
     assert rejected.returncode == 2
     assert "migrate the repository type to single-owner first" in rejected.stderr
+
+
+def test_register_ranks_affected_gate_and_persists_explicit_gate(
+    tmp_path: Path, bare_origin: Callable[..., Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tmp_path / "home"
+    monkeypatch.setenv("AI_ORCHESTRATOR_HOME", str(home))
+    checkout = tmp_path / "monorepo"
+    git(
+        "clone",
+        str(
+            bare_origin(
+                {
+                    "nx.json": "{}",
+                    "turbo.json": "{}",
+                    "WORKSPACE.bazel": "",
+                    "pnpm-workspace.yaml": "packages: []\n",
+                    "lerna.json": "{}",
+                    "justfile": "check:\n\ttrue\n",
+                }
+            )
+        ),
+        str(checkout),
+    )
+
+    result = _cli(
+        "orchestrator-register-repo",
+        str(checkout),
+        "--workflow",
+        "local",
+        "--repo-type",
+        "single-owner",
+    )
+
+    assert "1. npx nx affected --target=check --base={base}" in result.stdout
+    for expected in ("turbo run", "bazel-diff", "pnpm --filter", "lerna run"):
+        assert expected in result.stdout
+    assert result.stdout.index("npx nx affected") < result.stdout.index("6. just check")
+    assert (
+        next(iter(Registry().identities.values())).gate
+        == "npx nx affected --target=check --base={base}"
+    )
+
+    conflicting = _cli(
+        "orchestrator-register-repo", str(checkout), "--gate", "just check", check=False
+    )
+    assert conflicting.returncode == 2
+    assert "conflicts with registered identity" in conflicting.stderr
+
+    plain = tmp_path / "plain"
+    git("clone", str(bare_origin({"Makefile": "check:\n\ttrue\n"})), str(plain))
+    _cli(
+        "orchestrator-register-repo",
+        str(plain),
+        "--workflow",
+        "local",
+        "--repo-type",
+        "single-owner",
+    )
+    assert Registry().entries[f"local/{plain.name}"].gate == "make check"
+
+    explicit = tmp_path / "explicit"
+    git("clone", str(bare_origin()), str(explicit))
+    _cli(
+        "orchestrator-register-repo",
+        str(explicit),
+        "--workflow",
+        "local",
+        "--repo-type",
+        "single-owner",
+        "--gate",
+        "custom verify {base}",
+    )
+    assert Registry().entries[f"local/{explicit.name}"].gate == "custom verify {base}"
+
+
+def test_gateless_registration_warns_and_gate_migration_updates_all_aliases(
+    tmp_path: Path, bare_origin: Callable[..., Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tmp_path / "home"
+    monkeypatch.setenv("AI_ORCHESTRATOR_HOME", str(home))
+    origin = bare_origin()
+    first, second = tmp_path / "first", tmp_path / "second"
+    git("clone", str(origin), str(first))
+    git("clone", str(origin), str(second))
+    registered = _cli(
+        "orchestrator-register-repo",
+        str(first),
+        "--workflow",
+        "local",
+        "--repo-type",
+        "single-owner",
+    )
+    _cli("orchestrator-register-repo", str(second))
+
+    assert "registered unproven" in registered.stderr
+    assert next(iter(Registry().identities.values())).gate == NOOP_GATE
+    migrated = subprocess.run(
+        ["just", "migrate-repo-gate", f"local/{first.name}", "--gate", "make check"],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    assert "gate=make check" in migrated.stdout
+    assert {entry.gate for entry in Registry().entries.values()} == {"make check"}
+
+
+def test_repos_cli_migrates_v3_and_backfills_detected_gate(
+    tmp_path: Path, bare_origin: Callable[..., Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("AI_ORCHESTRATOR_HOME", str(home))
+    checkout = tmp_path / "checkout"
+    origin = bare_origin({"justfile": "check:\n\ttrue\n"})
+    git("clone", str(origin), str(checkout))
+    identity = str(origin).removesuffix(".git")
+    (home / "repos.json").write_text(
+        json.dumps(
+            {
+                "version": 3,
+                "identities": {
+                    identity: {
+                        "origin": str(origin),
+                        "workflow": "local",
+                        "repo_type": "single-owner",
+                    }
+                },
+                "checkouts": {
+                    f"local/{checkout.name}": {
+                        "path": str(checkout.resolve()),
+                        "identity": identity,
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    _cli("orchestrator-repos")
+
+    migrated = json.loads((home / "repos.json").read_text(encoding="utf-8"))
+    assert migrated["version"] == 4
+    assert migrated["identities"][identity]["gate"] == "just check"
+
+    gateless = tmp_path / "gateless"
+    gateless_origin = bare_origin()
+    git("clone", str(gateless_origin), str(gateless))
+    gateless_identity = str(gateless_origin).removesuffix(".git")
+    payload = {
+        "version": 3,
+        "identities": {
+            gateless_identity: {
+                "origin": str(gateless_origin),
+                "workflow": "local",
+                "repo_type": "single-owner",
+            }
+        },
+        "checkouts": {
+            f"local/{gateless.name}": {
+                "path": str(gateless.resolve()),
+                "identity": gateless_identity,
+            }
+        },
+    }
+    (home / "repos.json").write_text(json.dumps(payload), encoding="utf-8")
+    _cli("orchestrator-repos")
+    migrated = json.loads((home / "repos.json").read_text(encoding="utf-8"))
+    assert migrated["identities"][gateless_identity]["gate"] == NOOP_GATE
+
+    malformed = _cli(
+        "orchestrator-register-repo", str(gateless), "--gate", "bad {target}", check=False
+    )
+    assert malformed.returncode == 2
+    assert "only the {base} placeholder" in malformed.stderr
+
+    invalid_migration = _cli(
+        "orchestrator-migrate-repo-gate", f"local/{gateless.name}", "--gate", "", check=False
+    )
+    assert invalid_migration.returncode == 2
+    assert "non-empty" in invalid_migration.stderr
+    unknown = _cli("orchestrator-migrate-repo-gate", "unknown/repo", "--gate", "true", check=False)
+    assert unknown.returncode == 2
+    assert "not registered" in unknown.stderr
+
+    unsafe_shell = _cli(
+        "orchestrator-register-repo",
+        str(gateless),
+        "--gate",
+        "sh -c 'test {base} = origin/main'",
+        check=False,
+    )
+    assert unsafe_shell.returncode == 2
+    assert "must be an argv value, not command source" in unsafe_shell.stderr
+
+    malformed_v4 = {
+        "version": 4,
+        "identities": {
+            gateless_identity: {
+                "origin": str(gateless_origin),
+                "workflow": "local",
+                "repo_type": "single-owner",
+                "gate": "bad\0gate",
+            }
+        },
+        "checkouts": payload["checkouts"],
+    }
+    (home / "repos.json").write_text(json.dumps(malformed_v4), encoding="utf-8")
+    nul_gate = _cli("orchestrator-repos", check=False)
+    assert nul_gate.returncode == 2
+    assert "single-line command template" in nul_gate.stderr
 
 
 @pytest.mark.parametrize(

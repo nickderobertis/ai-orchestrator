@@ -11,6 +11,7 @@ from conftest import git
 
 from orchestrator import gitops
 from orchestrator.registry import (
+    _REGISTRY_VERSION,
     Registry,
     RegistryEntry,
     RegistryError,
@@ -21,11 +22,13 @@ from orchestrator.registry import (
     _serialize,
     _url_identity,
     infer_repository_type,
+    main_migrate_gate,
     main_migrate_type,
     main_migrate_workflow,
     main_register,
     main_repos,
 )
+from orchestrator.verify import NOOP_GATE
 
 
 def _clone(origin: Path, path: Path) -> Path:
@@ -165,7 +168,7 @@ def test_malformed_registry_is_rejected(tmp_path: Path, payload: str, expected: 
     "payload, match",
     [
         (
-            {"version": 4, "identities": {}, "checkouts": {}},
+            {"version": 5, "identities": {}, "checkouts": {}},
             "versioned format must contain",
         ),
         (
@@ -241,6 +244,60 @@ def test_version_two_registry_validation(
     path.write_text(json.dumps(payload), encoding="utf-8")
     with pytest.raises(RegistryError, match=match):
         Registry(path)
+
+
+def test_v4_gate_round_trips_and_rejects_malformed_entries(tmp_path: Path) -> None:
+    identity = "/repo"
+    valid = {
+        "version": 4,
+        "identities": {
+            identity: {
+                "origin": identity,
+                "workflow": "remote",
+                "repo_type": "single-owner",
+                "gate": "just check {base}",
+            }
+        },
+        "checkouts": {"x/y": {"path": "/tmp/repo", "identity": identity}},
+    }
+    path = tmp_path / "registry.json"
+    path.write_text(json.dumps(valid), encoding="utf-8")
+    assert Registry(path).identities[identity].gate == "just check {base}"
+
+    valid["identities"][identity]["gate"] = "bad {unknown}"
+    path.write_text(json.dumps(valid), encoding="utf-8")
+    with pytest.raises(RegistryError, match="only the .base. placeholder"):
+        Registry(path)
+
+
+def test_v3_migration_detects_gate_from_registered_checkout(tmp_path: Path) -> None:
+    checkout = tmp_path / "checkout"
+    checkout.mkdir()
+    (checkout / "justfile").write_text("check:\n\ttrue\n", encoding="utf-8")
+    identity = "/repo"
+    path = tmp_path / "registry.json"
+    path.write_text(
+        json.dumps(
+            {
+                "version": 3,
+                "identities": {
+                    identity: {
+                        "origin": identity,
+                        "workflow": "remote",
+                        "repo_type": "single-owner",
+                    }
+                },
+                "checkouts": {"x/y": {"path": str(checkout.resolve()), "identity": identity}},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    Registry(path).migrate_legacy()
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["version"] == 4
+    assert payload["identities"][identity]["gate"] == "just check"
 
 
 def test_origin_identity_normalizes_clone_spellings_and_default_roots(
@@ -370,7 +427,7 @@ def test_repository_type_inference_fails_closed(
 
 
 @pytest.mark.parametrize("legacy_version", [None, 2])
-def test_flat_and_v2_registries_upgrade_atomically_to_v3(
+def test_flat_and_v2_registries_upgrade_atomically_to_v4(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, legacy_version: int | None
 ) -> None:
     path = tmp_path / "registry.json"
@@ -391,7 +448,8 @@ def test_flat_and_v2_registries_upgrade_atomically_to_v3(
     Registry(path).migrate_legacy()
 
     upgraded = json.loads(path.read_text(encoding="utf-8"))
-    assert upgraded["version"] == 3
+    assert upgraded["version"] == 4
+    assert next(iter(upgraded["identities"].values()))["gate"] == "<no-op>"
     metadata = next(iter(upgraded["identities"].values()))
     assert metadata["repo_type"] == "team" and metadata["workflow"] == "remote"
 
@@ -456,7 +514,7 @@ def test_legacy_migration_failure_keeps_original_file(
     monkeypatch.setattr("orchestrator.registry.infer_repository_type", lambda _origin: "team")
     Registry(path).migrate_legacy()
     recovered = json.loads(path.read_text(encoding="utf-8"))
-    assert recovered["version"] == 3
+    assert recovered["version"] == 4
     assert next(iter(recovered["identities"].values()))["repo_type"] == "team"
 
 
@@ -483,7 +541,7 @@ def test_registration_infers_and_persists_type_from_normalized_github_origin(
 
     payload = json.loads(path.read_text(encoding="utf-8"))
     metadata = next(iter(payload["identities"].values()))
-    assert payload["version"] == 3
+    assert payload["version"] == 4
     assert metadata["repo_type"] == "team" and metadata["workflow"] == "remote"
 
 
@@ -579,7 +637,7 @@ def test_explicit_workflow_migration_updates_every_alias_in_one_write(
     migrated = Registry(path)
     assert {entry.workflow for entry in migrated.entries.values()} == {"local"}
     payload = json.loads(path.read_text(encoding="utf-8"))
-    assert payload["version"] == 3
+    assert payload["version"] == 4
     assert list(payload["identities"].values())[0]["workflow"] == "local"
 
 
@@ -855,10 +913,32 @@ def test_migration_accepts_checkout_path_and_cli_reports_errors(
 
     migrated = Registry.migrate_identity_workflow(str(checkout), "local")
     assert migrated.workflow == "local"
+    gate = Registry.migrate_identity_gate(str(checkout), "just check {base}")
+    assert gate.gate == "just check {base}"
+    assert Registry().entry_for_checkout(checkout)[1].gate == "just check {base}"
     with pytest.raises(SystemExit):
         main_migrate_workflow(["missing/repo", "--workflow", "local"])
     with pytest.raises(SystemExit):
         main_migrate_type(["missing/repo", "--repo-type", "team"])
+    with pytest.raises(SystemExit):
+        main_migrate_gate(["missing/repo", "--gate", "true"])
+
+
+def test_gate_migration_validates_registry_and_command(tmp_path: Path) -> None:
+    with pytest.raises(RegistryError, match="non-empty"):
+        Registry.migrate_identity_gate("x/y", "", path=tmp_path / "missing.json")
+    with pytest.raises(RegistryError, match="valid command template"):
+        Registry.migrate_identity_gate("x/y", "sh -c '", path=tmp_path / "missing.json")
+    with pytest.raises(RegistryError, match="not shell source"):
+        Registry.migrate_identity_gate(
+            "x/y", "env bash -ec '{base}'", path=tmp_path / "missing.json"
+        )
+    with pytest.raises(RegistryError, match="does not exist"):
+        Registry.migrate_identity_gate("x/y", "true", path=tmp_path / "missing.json")
+    path = tmp_path / "registry.json"
+    path.write_text(json.dumps({"version": 4, "identities": {}, "checkouts": {}}))
+    with pytest.raises(RegistryError, match="not registered"):
+        Registry.migrate_identity_gate("x/y", "true", path=path)
 
 
 def test_type_migration_requires_registry_and_known_identity(tmp_path: Path) -> None:
@@ -896,6 +976,8 @@ def test_repo_cli_text_json_and_register_errors(
     assert '"refresh"' in capsys.readouterr().out
     assert main_migrate_type([str(checkout), "--repo-type", "team"]) == 0
     assert "repository_type=team" in capsys.readouterr().out
+    assert main_migrate_gate([str(checkout), "--gate", "true"]) == 0
+    assert "gate=true" in capsys.readouterr().out
 
     with pytest.raises(SystemExit):
         main_register(["acme/missing", str(tmp_path / "absent")])
@@ -921,3 +1003,12 @@ def test_default_state_is_isolated_from_the_real_home() -> None:
     isolated = Path(os.environ["AI_ORCHESTRATOR_HOME"]) / "repos.json"
     assert Registry().path == isolated
     assert (Path.home() / ".ai-orchestrator") not in Registry().path.parents
+
+
+def test_documented_registry_schema_version_tracks_contract() -> None:
+    root = Path(__file__).parents[1]
+    assert f"Schema-v{_REGISTRY_VERSION}" in (root / "AGENTS.md").read_text(encoding="utf-8")
+    assert f"version {_REGISTRY_VERSION} format" in (root / "docs" / "repo-lifecycle.md").read_text(
+        encoding="utf-8"
+    )
+    assert NOOP_GATE in (root / "docs" / "repo-lifecycle.md").read_text(encoding="utf-8")

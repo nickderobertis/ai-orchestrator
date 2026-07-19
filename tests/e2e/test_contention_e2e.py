@@ -167,7 +167,7 @@ def test_concurrent_registry_initialization_retains_both_entries(
         _join(process)
 
     payload = json.loads(registry_path.read_text(encoding="utf-8"))
-    assert payload["version"] == 3
+    assert payload["version"] == 4
     assert set(payload["checkouts"]) == {"local/alpha", "local/beta"}
     assert len(Registry(registry_path).entries) == 2
 
