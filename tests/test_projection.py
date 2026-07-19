@@ -132,7 +132,7 @@ def _event(kind: EventKind, seq: int, *, node: str | None = None, detail=None) -
         ([_event("node-settled", 2, node="a", detail={"status": "done"})], "without one start"),
         (
             [_event("node-started", 2, node="a"), _event("node-settled", 3, node="a")],
-            "string status",
+            "terminal status",
         ),
         ([_event("human-attested", 2, node="a")], "non-empty ref"),
         (
@@ -167,10 +167,14 @@ def test_fold_rejects_invalid_static_transitions(tail: list[Event], message: str
         1,
         detail={"definition": {"id": "a", "persona": "p", "task": "x"}},
     )
+    topology_only = all(event.kind in {"node-added", "edge-added"} for event in tail)
+    ordered = (
+        [first, *tail, _event("round-started", 5, detail={"plan": {}})]
+        if topology_only
+        else [first, _event("round-started", 2, detail={"plan": {}}), *tail]
+    )
     with pytest.raises(ProjectionError, match=message):
-        project_round(
-            [first, _event("round-started", 2, detail={"plan": {}}), *tail], RunId("r"), 1
-        )
+        project_round(ordered, RunId("r"), 1)
 
 
 def test_fold_requires_a_graph_definition() -> None:

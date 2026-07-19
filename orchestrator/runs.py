@@ -238,8 +238,11 @@ def prepare_round(
                 events_path = run_dir / "events.jsonl"
                 from .journal import read_events
 
-                has_round_events = any(event.round == number for event in read_events(events_path))
-                if events_path.exists() and (not plan_path.exists() or has_round_events):
+                has_terminal_event = any(
+                    event.round == number and event.kind == "round-finished"
+                    for event in read_events(events_path)
+                )
+                if events_path.exists() and (not plan_path.exists() or has_terminal_event):
                     from .projection import ProjectionError, project_run
 
                     try:

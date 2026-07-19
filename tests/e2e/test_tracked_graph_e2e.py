@@ -410,13 +410,22 @@ def test_recover_interrupted_real_cli_does_not_duplicate_node_start(
         ),
         ((json.dumps(events[0]) + "\n").encode(), "no round-started event"),
         (
-            pre_finish
+            (json.dumps(events[0]) + "\n").encode()
             + (
                 json.dumps(
                     {
                         **events[0],
-                        "seq": next_seq,
+                        "seq": 2,
                         "at": 0,
+                    }
+                )
+                + "\n"
+            ).encode()
+            + (
+                json.dumps(
+                    {
+                        **next(item for item in events if item["kind"] == "round-started"),
+                        "seq": 3,
                     }
                 )
                 + "\n"
@@ -480,21 +489,26 @@ def test_recover_interrupted_real_cli_does_not_duplicate_node_start(
                 )
                 + "\n"
             ).encode(),
-            "requires a string status",
+            "requires a terminal status",
         ),
         (
-            b"".join(
-                (json.dumps(event) + "\n").encode()
-                for event in pre_finish_events
-                if event["kind"] in {"node-added", "round-started"}
-            )
+            (json.dumps(events[0]) + "\n").encode()
             + (
                 json.dumps(
                     {
                         **envelope,
-                        "seq": 3,
+                        "seq": 2,
                         "kind": "edge-added",
                         "detail": {"from": "work", "to": "work"},
+                    }
+                )
+                + "\n"
+            ).encode()
+            + (
+                json.dumps(
+                    {
+                        **next(item for item in events if item["kind"] == "round-started"),
+                        "seq": 3,
                     }
                 )
                 + "\n"
@@ -598,6 +612,168 @@ def test_recover_interrupted_real_cli_does_not_duplicate_node_start(
     )
     assert refused.returncode == 2
     assert "settled nodes before its terminal event: first" in refused.stderr
+
+
+def test_recover_completes_a_partially_emitted_graph_without_duplicates(tmp_path: Path) -> None:
+    runs = tmp_path / "runs"
+    node_count = 2000
+    plan = tmp_path / "large-static.json"
+    plan.write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "tasks": [
+                    {
+                        "id": f"node-{index}",
+                        "task": "No diff.",
+                        "expects_no_diff": True,
+                        **({"deps": ["node-0"]} if index else {}),
+                    }
+                    for index in range(node_count)
+                ],
+            }
+        )
+    )
+    command = [
+        "just",
+        "run-plan",
+        str(plan),
+        "--run",
+        "partial-topology",
+        "--runs-dir",
+        str(runs),
+        "--format",
+        "json",
+    ]
+    process = subprocess.Popen(
+        command,
+        cwd=REPO_ROOT,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    )
+    events_path = runs / "partial-topology" / "events.jsonl"
+    deadline = time.monotonic() + 10
+    durable = 0
+    while time.monotonic() < deadline:
+        if events_path.exists():
+            durable = events_path.read_text().count('"kind": "node-added"')
+            if 0 < durable < node_count:
+                break
+        time.sleep(0.001)
+    else:
+        process.kill()
+        pytest.fail(f"did not observe a partial graph-definition prefix (saw {durable})")
+    os.killpg(process.pid, signal.SIGKILL)
+    process.wait()
+
+    prefix = events_path.read_bytes()
+    prefix_records = [json.loads(line) for line in prefix.splitlines()]
+    status_path = runs / "partial-topology" / "round-01" / "status.json"
+    dead_status = status_path.read_bytes()
+    malformed_definition = [dict(record) for record in prefix_records]
+    malformed_definition[0] = {
+        **malformed_definition[0],
+        "detail": {"definition": "not-a-mapping"},
+    }
+    different_definition = [dict(record) for record in prefix_records]
+    different_definition[0] = {
+        **different_definition[0],
+        "detail": {"definition": {"id": "node-0", "task": "Different."}},
+    }
+    wrong_edge = (
+        prefix
+        + (
+            json.dumps(
+                {
+                    "version": 1,
+                    "seq": prefix_records[-1]["seq"] + 1,
+                    "at": 0,
+                    "kind": "edge-added",
+                    "run_id": "partial-topology",
+                    "round": 1,
+                    "detail": {"from": "node-9", "to": "node-10"},
+                }
+            )
+            + "\n"
+        ).encode()
+    )
+    comparison_failures = [
+        (
+            b"".join((json.dumps(item) + "\n").encode() for item in malformed_definition),
+            "malformed",
+        ),
+        (
+            b"".join((json.dumps(item) + "\n").encode() for item in different_definition),
+            "do not match",
+        ),
+        (wrong_edge, "graph edges do not match"),
+    ]
+    for invalid_events, diagnostic in comparison_failures:
+        events_path.write_bytes(invalid_events)
+        status_path.write_bytes(dead_status)
+        rejected = subprocess.run(
+            [*command, "--recover"], cwd=REPO_ROOT, text=True, capture_output=True, check=False
+        )
+        assert rejected.returncode == 2
+        assert diagnostic in rejected.stderr
+    events_path.write_bytes(prefix)
+    status_path.write_bytes(dead_status)
+
+    recovered = subprocess.run(
+        [*command, "--recover"], cwd=REPO_ROOT, text=True, capture_output=True, check=False
+    )
+    assert recovered.returncode == 0, recovered.stderr
+    events = [json.loads(line) for line in events_path.read_text().splitlines()]
+    definitions = [
+        event["detail"]["definition"]["id"] for event in events if event["kind"] == "node-added"
+    ]
+    assert definitions == [f"node-{index}" for index in range(node_count)]
+    assert sum(event["kind"] == "round-started" for event in events) == 1
+
+
+def test_recover_discards_only_a_torn_final_journal_line(
+    tmp_path: Path, command_base, onejudge_bin: str
+) -> None:
+    runs = tmp_path / "runs"
+    plan = tmp_path / "torn.json"
+    plan.write_text(
+        json.dumps({"tasks": [{"id": "work", "persona": "engineer", "task": "complete-now"}]})
+    )
+    command = [
+        "just",
+        "run-plan",
+        str(plan),
+        "--run",
+        "torn-tail",
+        "--runs-dir",
+        str(runs),
+        "--base",
+        str(command_base()),
+        "--onejudge-bin",
+        onejudge_bin,
+        "--format",
+        "json",
+    ]
+    completed = subprocess.run(command, cwd=REPO_ROOT, text=True, capture_output=True, check=False)
+    assert completed.returncode == 0, completed.stderr
+    run_dir = runs / "torn-tail"
+    events_path = run_dir / "events.jsonl"
+    durable = events_path.read_bytes()
+    with events_path.open("ab") as handle:
+        handle.write(b'{"version":1,"seq":999,"kind":"node-started"')
+    round_dir = run_dir / "round-01"
+    for artifact in ("plan.json", "result.json", "status.json"):
+        (round_dir / artifact).unlink()
+
+    recovered = subprocess.run(
+        [*command, "--recover"], cwd=REPO_ROOT, text=True, capture_output=True, check=False
+    )
+    assert recovered.returncode == 0, recovered.stderr
+    assert events_path.read_bytes().startswith(durable)
+    assert b'"seq":999' not in events_path.read_bytes()
+    assert json.loads((round_dir / "result.json").read_text()) == json.loads(completed.stdout)
 
 
 def test_legacy_direct_plan_and_recorded_ledger_still_run(

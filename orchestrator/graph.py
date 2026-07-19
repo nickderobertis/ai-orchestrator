@@ -13,7 +13,7 @@ import json
 import sys
 import threading
 from collections import Counter
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Literal, cast
@@ -625,20 +625,45 @@ def main(argv: list[str] | None = None) -> int:
         run_id = RunId(run_dir.name)
         round_number = round_record[0]
         journal = open_journal(run_dir, run_id, round_number)
-        existing_kinds = {event.kind for event in journal.events() if event.round == round_number}
-        if "node-added" not in existing_kinds:
-            for raw_node in plan_mapping["tasks"]:
-                definition = {
-                    key: value for key, value in raw_node.items() if key != "deps" or value == []
-                }
-                journal.append("node-added", detail={"definition": definition})
-            for raw_node in plan_mapping["tasks"]:
-                for dependency in raw_node.get("deps", []):
-                    journal.append(
-                        "edge-added",
-                        detail={"from": dependency, "to": raw_node["id"]},
-                    )
-        elif args.recover:
+        round_events = [event for event in journal.events() if event.round == round_number]
+        expected_definitions = [
+            {key: value for key, value in raw_node.items() if key != "deps" or value == []}
+            for raw_node in plan_mapping["tasks"]
+        ]
+        recorded_definitions: list[dict[str, Any]] = []
+        for event in round_events:
+            if event.kind != "node-added":
+                continue
+            definition = event.detail.get("definition")
+            if not isinstance(definition, Mapping):
+                print("run-plan: recorded node definition is malformed", file=sys.stderr)
+                return 2
+            recorded_definitions.append(dict(definition))
+        if recorded_definitions != expected_definitions[: len(recorded_definitions)]:
+            print(
+                "run-plan: recorded node definitions do not match the recovery plan",
+                file=sys.stderr,
+            )
+            return 2
+        for definition in expected_definitions[len(recorded_definitions) :]:
+            journal.append("node-added", detail={"definition": definition})
+        expected_edges = [
+            {"from": dependency, "to": raw_node["id"]}
+            for raw_node in plan_mapping["tasks"]
+            for dependency in raw_node.get("deps", [])
+        ]
+        recorded_edges = [
+            {"from": event.detail.get("from"), "to": event.detail.get("to")}
+            for event in round_events
+            if event.kind == "edge-added"
+        ]
+        if recorded_edges != expected_edges[: len(recorded_edges)]:
+            print("run-plan: recorded graph edges do not match the recovery plan", file=sys.stderr)
+            return 2
+        for edge in expected_edges[len(recorded_edges) :]:
+            journal.append("edge-added", detail=edge)
+        existing_kinds = {event.kind for event in round_events}
+        if args.recover and "round-started" in existing_kinds:
             from .projection import project_run
 
             replayed = project_run(run_dir / "events.jsonl", run_id, round_number)

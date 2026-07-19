@@ -130,6 +130,8 @@ def project_round(events: list[Event], run_id: RunId, round_number: int) -> Roun
             and event.kind not in {"node-added", "edge-added", "round-started", "human-attested"}
         ):
             raise ProjectionError(f"authoritative event {event.kind!r} precedes round-started")
+        if round_started and event.kind in {"node-added", "edge-added"}:
+            raise ProjectionError(f"authoritative event {event.kind!r} follows round-started")
         match event.kind:
             case "node-added":
                 node = detail.get("definition")
@@ -162,8 +164,8 @@ def project_round(events: list[Event], run_id: RunId, round_number: int) -> Roun
                 if builder.states.get(event.node) != "running":
                     raise ProjectionError(f"node {event.node!r} settled without one start")
                 status = "failed" if event.kind == "node-failed" else detail.get("status")
-                if status not in {"running", "done", "failed", "waiting"}:
-                    raise ProjectionError("node-settled requires a string status")
+                if status not in {"done", "failed", "waiting"}:
+                    raise ProjectionError("node-settled requires a terminal status")
                 builder.states[event.node] = status
             case "human-attested":
                 ref = detail.get("ref")
@@ -182,6 +184,12 @@ def project_round(events: list[Event], run_id: RunId, round_number: int) -> Roun
                     builder.result = as_result_payload(payload)
                 except ConfigError as exc:
                     raise ProjectionError(f"round-finished result is invalid: {exc}") from exc
+                for node, state in builder.states.items():
+                    recorded = builder.result["results"].get(node)
+                    if state == "running" or recorded is None or recorded.get("status") != state:
+                        raise ProjectionError(
+                            f"round-finished result disagrees with projected node {node!r}"
+                        )
                 round_finished = True
             case _:
                 pass
