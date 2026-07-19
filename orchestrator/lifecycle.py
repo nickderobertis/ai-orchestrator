@@ -24,6 +24,7 @@ import json
 import re
 import sys
 import tempfile
+import threading
 import time
 import uuid
 from collections.abc import Callable, Mapping
@@ -145,6 +146,7 @@ class DispatchFn(Protocol):
         extra_instructions: str | None = None,
         labels: Mapping[str, str] | None = None,
         env: dict[str, str] | None = None,
+        cancel: threading.Event | None = None,
     ) -> Report: ...
 
 
@@ -896,6 +898,7 @@ def _run_steps(
     dispatch_env: dict[str, str],
     extra_instructions: str | None = None,
     completed: frozenset[str] = frozenset(),
+    cancel: threading.Event | None = None,
 ) -> StepRun:
     """Run a step sub-DAG in the shared worktree, committing per step.
 
@@ -939,6 +942,7 @@ def _run_steps(
             extra_instructions=extra_instructions,
             labels=log.labels,
             env=dispatch_env,
+            cancel=cancel,
         )
         reports[sid] = report
         if not report.completed:
@@ -1229,6 +1233,7 @@ def run_repo_task(
     stack_bases: list[StackBase] | None = None,
     resume: Resume | None = None,
     journal: NodeSink | None = None,
+    cancel: threading.Event | None = None,
 ) -> LifecycleResult:
     """Take one subtask from a fresh branch to a merged change on ``repo``.
 
@@ -1418,6 +1423,33 @@ def run_repo_task(
                 "resumed": resume is not None,
             },
         )
+        remote_base = f"origin/{pr_base}"
+
+        def preserve_cancelled(stage: str) -> bool:
+            """Durably hand off completed partial work at cooperative checkpoints."""
+            if cancel is None or not cancel.is_set():
+                return False
+            if gitops.is_dirty(worktree):
+                gitops.add_all(worktree)
+                gitops.commit(worktree, _incomplete_commit_message(lead, pr_base))
+            elif gitops.has_commits_ahead(worktree, remote_base) and not incomplete_commits(
+                worktree, remote_base, "HEAD"
+            ):
+                gitops.commit_empty(worktree, _incomplete_commit_message(lead, pr_base))
+            if gitops.has_commits_ahead(worktree, remote_base):
+                result.resume = Resume(
+                    branch=branch,
+                    base_branch=root_base,
+                    pr_base=pr_base,
+                    checkpoint=gitops.head_sha(worktree),
+                    completed_steps=tuple(
+                        step.id for step in result.steps if step.status == "done"
+                    ),
+                    mode="retry",
+                )
+            result.outcome = "not-completed"
+            result.detail = f"cancelled cooperatively {stage}; partial work preserved"
+            return True
 
         step_run = _run_steps(
             effective_steps,
@@ -1432,6 +1464,7 @@ def run_repo_task(
             dispatch_env=cache_env,
             extra_instructions=CI_ITERATION_INSTRUCTIONS if verify_via_ci else None,
             completed=frozenset(resume.completed_steps) if resume else frozenset(),
+            cancel=cancel,
         )
         result.steps = step_run.results
         result.report = next(
@@ -1439,8 +1472,12 @@ def run_repo_task(
         )
         if step_run.status == "not-completed":
             result.outcome = "not-completed"
-            result.detail = f"workstream did not complete: {step_run.detail}"
-            remote_base = f"origin/{pr_base}"
+            prefix = "cancelled cooperatively" if cancel is not None and cancel.is_set() else None
+            result.detail = (
+                f"{prefix}; {step_run.detail}"
+                if prefix is not None
+                else f"workstream did not complete: {step_run.detail}"
+            )
             if incomplete_commits(worktree, remote_base, "HEAD"):
                 result.resume = Resume(
                     branch=branch,
@@ -1483,9 +1520,11 @@ def run_repo_task(
             result.detail = f"unexpected step status: {step_run.status}"
             return result
 
+        if preserve_cancelled("after dispatch"):
+            return result
+
         with advisory_lock(f"git:{gitops.common_dir(worktree)}"):
             gitops.fetch(worktree)
-        remote_base = f"origin/{pr_base}"
         if not gitops.merge_base_into_branch(
             worktree,
             remote_base,
@@ -1519,6 +1558,9 @@ def run_repo_task(
                     return result
             else:
                 result.detail = "no local gate detected; relying on required CI checks"
+
+        if preserve_cancelled("after verification"):
+            return result
 
         if (
             result.retry_lineage
@@ -1565,6 +1607,16 @@ def run_repo_task(
                 dispatch_env=cache_env,
             )
 
+        # llmlint: ignore[changed_behavior_has_e2e] no blocking external operation exists between
+        # the tested post-verification checkpoint and this final race-closing check: only local
+        # result/metadata construction runs here. Cancellation during the reachable blocking
+        # publication stage below is covered with a real delayed git receive hook.
+        if preserve_cancelled("before publication"):
+            return result
+        # Publication is the lifecycle's commit point: cancellation is cooperative
+        # only at the checkpoints above. Once push/publication begins, it runs to an
+        # authoritative outcome so a late request cannot strand a pushed branch or
+        # report already-merged work as discarded.
         gitops.push(worktree, branch)
         preverified_pr: PullRequest | None = None
         if verify_via_ci:
@@ -1686,7 +1738,11 @@ class LifecycleRunner(Protocol):
     """
 
     def __call__(
-        self, node: RepoPlanNode, *, journal: NodeSink | None = None
+        self,
+        node: RepoPlanNode,
+        *,
+        journal: NodeSink | None = None,
+        cancel: threading.Event | None = None,
     ) -> LifecycleResult: ...
 
 
@@ -2124,7 +2180,12 @@ def run_repo_plan(
     """Run an all-lifecycle plan through the canonical tracked graph executor."""
     from .graph import Graph, GraphNode, run_graph
 
-    def no_direct(node: Any, *, labels: Mapping[str, str] | None = None) -> Report:
+    def no_direct(
+        node: Any,
+        *,
+        labels: Mapping[str, str] | None = None,
+        cancel: threading.Event | None = None,
+    ) -> Report:
         raise AssertionError("a repo plan has no direct agent nodes")
 
     result = run_graph(
@@ -2200,7 +2261,12 @@ def make_repo_runner(
 ) -> LifecycleRunner:
     """Build the production runner that drives each node through `run_repo_task`."""
 
-    def runner(node: RepoPlanNode, *, journal: NodeSink | None = None) -> LifecycleResult:
+    def runner(
+        node: RepoPlanNode,
+        *,
+        journal: NodeSink | None = None,
+        cancel: threading.Event | None = None,
+    ) -> LifecycleResult:
         return run_repo_task(
             node.repo,
             node.task,
@@ -2230,6 +2296,7 @@ def make_repo_runner(
             stack_bases=node.stack_bases,
             resume=node.resume,
             journal=journal,
+            cancel=cancel,
         )
 
     return runner
