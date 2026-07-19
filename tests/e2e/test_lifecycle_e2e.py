@@ -19,6 +19,8 @@ import json
 import os
 import shlex
 import subprocess
+import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
@@ -1376,6 +1378,57 @@ def test_clean_committed_partial_work_is_marked_and_recoverable(tmp_path, bare_o
     assert f"Orchestrator-Recovered-Incomplete: {marker_sha}" in attestation[0].message
     assert gitops.is_ancestor(canonical, attestation[0].sha, "origin/main")
     assert _has_file(origin, "main", "partial.txt")
+
+
+def test_cooperative_real_dispatch_cancellation_preserves_and_recovers_branch(
+    tmp_path, bare_origin, command_base, personas_dir
+) -> None:
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-cancelled")
+    Registry().register(str(canonical), workflow="local", repo_type="single-owner")
+    workspace = Workspace(tmp_path / "cancelled-worktrees")
+    cancel = threading.Event()
+    witness = tmp_path / "cancelled.ticks"
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(
+            run_repo_task,
+            str(canonical),
+            f"slow-branch {witness} write-change",
+            "engineer",
+            workspace=workspace,
+            base_path=command_base(),
+            persona_dir=personas_dir,
+            branch="feature/cooperative-cancel",
+            verify_cmd=["test", "-f", "CHANGE.txt"],
+            cancel=cancel,
+        )
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline:
+            ticks = witness.read_text(encoding="utf-8").count("tick") if witness.exists() else 0
+            changes = list((tmp_path / "cancelled-worktrees").rglob("CHANGE.txt"))
+            if ticks >= 3 and changes:
+                break
+            time.sleep(0.02)
+        else:
+            pytest.fail("real dispatch did not produce partial work before cancellation")
+        cancel.set()
+        result = future.result(timeout=15)
+
+    assert result.outcome == "not-completed"
+    assert isinstance(result.resume, Resume)
+    assert result.resume.checkpoint == gitops.ref_sha(canonical, result.branch)
+    assert result.branch not in gitops.worktrees(canonical)
+    assert incomplete_commits(canonical, "origin/main", result.branch)
+
+    recovered = recover_repo(
+        canonical,
+        result.branch,
+        workspace_root=tmp_path / "cancelled-recovery-worktrees",
+        verify_cmd=["test", "-f", "CHANGE.txt"],
+    )
+    assert recovered.ok and recovered.outcome == "merged"
+    assert _has_file(origin, "main", "CHANGE.txt")
 
 
 def test_no_changes_produces_no_pr(tmp_path, bare_origin) -> None:

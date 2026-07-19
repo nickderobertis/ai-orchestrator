@@ -592,7 +592,7 @@ def run_graph(
         on_tick=proposal_pump.persist_replies if proposal_pump is not None else None,
         on_reconcile=reconcile_commands if proposal_pump is not None else None,
     )
-    return _collect(nodes, runs, started_order)
+    return _collect(nodes, runs, [node for node in started_order if node in nodes])
 
 
 def _run_payload(node: GraphNode, run: NodeRun, dependents: list[str]) -> GraphResultItem:

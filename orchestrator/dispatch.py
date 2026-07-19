@@ -189,7 +189,12 @@ def run_onejudge(
         )
         if cancel is None:
             return await run
-        cancelled = asyncio.create_task(asyncio.to_thread(cancel.wait))
+
+        async def cancellation_requested() -> None:
+            while not cancel.is_set():
+                await asyncio.sleep(0.05)
+
+        cancelled = asyncio.create_task(cancellation_requested())
         done, _ = await asyncio.wait({run, cancelled}, return_when=asyncio.FIRST_COMPLETED)
         if run in done:
             cancelled.cancel()
