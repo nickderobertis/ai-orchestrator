@@ -295,7 +295,13 @@ def _fold_node_result(builder: _RoundBuilder, event: Event) -> None:
     status = raw.get("status")
     if status != builder.states.get(str(event.node)):
         raise ProjectionError(f"{event.kind} has an invalid serialized node result status")
-    state = "complete" if status == "done" else "waiting" if status == "waiting" else "failed"
+    match status:
+        case "done":
+            state = "complete"
+        case "waiting":
+            state = "waiting"
+        case _:
+            state = "failed"
     payload = {
         "schema_version": 2,
         "ok": status == "done",
