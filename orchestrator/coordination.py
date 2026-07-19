@@ -32,6 +32,11 @@ def lock_path(identity: str) -> Path:
     return _lock_root() / f"{digest}.lock"
 
 
+def git_lock_identity(common_dir: str | Path) -> str:
+    """Return the advisory-lock identity for a repository's git common directory."""
+    return f"git:{Path(common_dir)}"
+
+
 @contextmanager
 def advisory_lock(identity: str, *, timeout: float = 30.0) -> Iterator[None]:
     """Exclusively lock an identity, with owner metadata and a bounded wait."""
