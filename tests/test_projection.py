@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from orchestrator.config import ConfigError
+from orchestrator.edits import EDIT_OPERATION_KINDS
 from orchestrator.journal import (
     AUTHORITATIVE_EVENT_KINDS,
     OPTIONAL_EVENT_FIELDS,
@@ -157,6 +158,42 @@ def test_committed_drop_and_attestation_fold_live_state() -> None:
     assert projection.node_states == {"approve": "done"}
     assert projection.attestations == ("approve",)
     assert [node["id"] for node in projection.plan["tasks"]] == ["approve"]
+
+
+def test_every_compiled_edit_operation_kind_has_a_replay_handler() -> None:
+    operations = [
+        {
+            "kind": "node-added",
+            "detail": {"definition": {"id": "c", "persona": "p", "task": "c"}},
+        },
+        {"kind": "edge-added", "detail": {"from": "a", "to": "c"}},
+        {"kind": "edge-removed", "detail": {"from": "a", "to": "b"}},
+        {"kind": "reparent", "node": "b", "detail": {"deps": []}},
+        {"kind": "retry-requested", "node": "a", "detail": {"replacement": "c"}},
+        {"kind": "human-attested", "node": "approve", "detail": {"ref": "approve"}},
+        {"kind": "completion-requested", "detail": {"reason": "done"}},
+        {"kind": "node-dropped", "node": "b", "detail": {"dependents": "drop"}},
+    ]
+    assert {operation["kind"] for operation in operations} == EDIT_OPERATION_KINDS
+    events = [
+        _event("node-added", 1, detail={"definition": {"id": "a", "persona": "p", "task": "a"}}),
+        _event(
+            "node-added",
+            2,
+            detail={"definition": {"id": "b", "persona": "p", "task": "b"}},
+        ),
+        _event("edge-added", 3, detail={"from": "a", "to": "b"}),
+        _event(
+            "node-added",
+            4,
+            detail={"definition": {"id": "approve", "kind": "human", "task": "Approve"}},
+        ),
+        _event("round-started", 5, detail={"plan": {"schema_version": 3}}),
+        _event("human-waiting", 6, node="approve"),
+        _event("edit-committed", 7, detail={"operations": operations}),
+    ]
+    projection = project_round(events, RunId("r"), 1)
+    assert [node["id"] for node in projection.plan["tasks"]] == ["a", "approve", "c"]
 
 
 def test_running_drop_replays_cancellation_after_atomic_removal() -> None:

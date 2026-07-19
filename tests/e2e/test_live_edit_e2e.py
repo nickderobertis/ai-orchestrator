@@ -195,6 +195,7 @@ def test_real_cli_mutates_live_frontier_and_replays_atomic_edits(
         )
         assert diagnostic in json.loads(rejected.stdout)["surface"]["message"]
     before = events.read_text(encoding="utf-8").count('"kind": "edit-committed"')
+    _wait_for(events, lambda text: '"kind": "node-failed"' in text and '"node": "failed"' in text)
 
     _reply(
         run_id,
@@ -212,22 +213,20 @@ def test_real_cli_mutates_live_frontier_and_replays_atomic_edits(
             {"op": "reparent", "id": "pending", "deps": ["slow_b"]},
             {"op": "drop", "id": "slow_b", "dependents": "detach"},
             {"op": "attest", "ref": "approve"},
-        ],
-    )
-    _wait_for(events, lambda text: text.count('"kind": "edit-committed"') >= before + 4)
-    _wait_for(events, lambda text: '"kind": "node-failed"' in text and '"node": "failed"' in text)
-    _reply(
-        run_id,
-        runs,
-        [
+            {
+                "op": "retry",
+                "id": "slow_a",
+                "node": {"id": "slow_a_retry", "task": "No diff", "expects_no_diff": True},
+            },
             {
                 "op": "retry",
                 "id": "failed",
                 "node": {"id": "retry", "task": "No diff", "expects_no_diff": True},
-            }
+            },
+            {"op": "complete", "reason": "planner verified publication anchors"},
         ],
     )
-    _reply(run_id, runs, [{"op": "complete", "reason": "planner verified publication anchors"}])
+    _wait_for(events, lambda text: text.count('"kind": "edit-committed"') >= before + 7)
 
     result_path = run_dir / "round-01" / "result.json"
     _wait_for(result_path, lambda text: bool(text.strip()), timeout=25)
@@ -236,6 +235,8 @@ def test_real_cli_mutates_live_frontier_and_replays_atomic_edits(
     assert payload["results"]["pending"]["status"] == "done"
     assert payload["results"]["retry"]["status"] == "done"
     assert payload["results"]["after_retry"]["status"] == "done"
+    assert payload["results"]["slow_a_retry"]["status"] == "done"
+    assert payload["results"]["slow_a"]["status"] == "cancelled"
     # Retry schedules a fresh replacement without mutating the settled node in
     # place: the failed original stays on the frontier as its own failed result.
     assert payload["results"]["failed"]["status"] == "failed"
@@ -257,7 +258,20 @@ def test_real_cli_mutates_live_frontier_and_replays_atomic_edits(
         "edge-added",
         "reparent",
     ]
-    retry = next(json.loads(line) for line in committed if '"retry-requested"' in line)
+    running_retry = next(
+        json.loads(line)
+        for line in committed
+        if '"retry-requested"' in line and '"node": "slow_a"' in line
+    )
+    assert running_retry["detail"]["operations"][-2:] == [
+        {"kind": "edge-removed", "detail": {"from": "slow_a", "to": "added"}},
+        {"kind": "edge-added", "detail": {"from": "slow_a_retry", "to": "added"}},
+    ]
+    retry = next(
+        json.loads(line)
+        for line in committed
+        if '"retry-requested"' in line and '"node": "failed"' in line
+    )
     assert retry["detail"]["operations"][0] == {
         "kind": "retry-requested",
         "node": "failed",

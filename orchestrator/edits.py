@@ -90,6 +90,7 @@ EditOperationKind = Literal[
     "human-attested",
     "completion-requested",
 ]
+EDIT_OPERATION_KINDS = frozenset(get_args(EditOperationKind))
 
 
 class EditOperation(TypedDict, total=False):
