@@ -32,6 +32,7 @@ from fakes import FakeGitHub, make_writing_dispatch
 import orchestrator.graph as graph_module
 import orchestrator.lifecycle as lifecycle_module
 from orchestrator import gitops
+from orchestrator.coordination import advisory_lock, git_lock_identity
 from orchestrator.dispatch import Report
 from orchestrator.github import PullRequest
 from orchestrator.graph import graph_payload, parse_graph, run_graph
@@ -1114,6 +1115,47 @@ def test_local_repo_direct_merge(tmp_path, bare_origin) -> None:
     assert gitops.head_sha(canonical) == _tip(origin, "main")
 
 
+def test_local_merge_gate_does_not_hold_the_shared_git_lock(tmp_path, bare_origin) -> None:
+    origin = bare_origin()
+    ws = _workspace(tmp_path, origin)
+    verification_started = tmp_path / "verification-started"
+    verification_release = tmp_path / "verification-release"
+    gate = [
+        "sh",
+        "-c",
+        "if git symbolic-ref -q HEAD >/dev/null; then exit 0; fi; "
+        f"touch {shlex.quote(str(verification_started))}; "
+        f"while test ! -f {shlex.quote(str(verification_release))}; do sleep 0.01; done",
+    ]
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(
+            run_repo_task,
+            str(origin),
+            "Add a change while publication verification pauses.",
+            "engineer",
+            workspace=ws,
+            dispatch_fn=make_writing_dispatch(filename="feature.txt"),
+            verify_cmd=gate,
+        )
+        deadline = time.monotonic() + 10
+        while not verification_started.exists() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert verification_started.exists(), "publication verification did not start"
+
+        clone = ws.clone_dir(normalize_repo(str(origin)))
+        identity = git_lock_identity(gitops.common_dir(clone))
+        try:
+            with advisory_lock(identity, timeout=0.5):
+                gitops.fetch(clone)
+        finally:
+            verification_release.touch()
+        result = future.result(timeout=10)
+
+    assert result.ok and result.outcome == "merged", result.detail
+    assert _has_file(origin, "main", "feature.txt")
+
+
 def test_local_repo_non_main_default_and_gate_context(tmp_path, bare_origin) -> None:
     origin = bare_origin(branch="master")
     ws = _workspace(tmp_path, origin)
@@ -1134,7 +1176,7 @@ def test_local_repo_non_main_default_and_gate_context(tmp_path, bare_origin) -> 
     assert _has_file(origin, "master", "portable.txt")
 
 
-def test_competing_local_publishers_rebuild_and_reverify_after_push_race(
+def test_base_advance_during_verification_rebuilds_and_reverifies_local_merge(
     tmp_path, bare_origin
 ) -> None:
     origin = bare_origin()
@@ -1178,8 +1220,11 @@ def test_competing_local_publishers_rebuild_and_reverify_after_push_race(
     assert all(result.ok and result.outcome == "merged" for result in results)
     assert _has_file(origin, "main", "machine-a.txt")
     assert _has_file(origin, "main", "machine-b.txt")
-    assert verification_log.read_text(encoding="utf-8").splitlines().count("b-stale") == 1
-    assert verification_log.read_text(encoding="utf-8").splitlines().count("b-rebuilt") == 1
+    publication_gates = verification_log.read_text(encoding="utf-8").splitlines()
+    # Publisher B verifies once against the initial base, observes A's base advance,
+    # then rebuilds and verifies a second time before its merge may be pushed.
+    assert publication_gates.count("b-stale") == 1
+    assert publication_gates.count("b-rebuilt") == 1
 
 
 def test_local_repo_gate_failure_blocks_merge(tmp_path, bare_origin) -> None:

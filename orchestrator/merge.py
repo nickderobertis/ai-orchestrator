@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Literal, Protocol
 
 from . import gitops
-from .coordination import advisory_lock
+from .coordination import advisory_lock, git_lock_identity
 from .github import AutoMergeUnavailable, Check, GitHubBackend, PRStatus, PullRequest
 from .verify import run_gate
 
@@ -271,42 +271,53 @@ class LocalMergeStrategy:
     def publish_and_merge(self, ctx: MergeContext) -> MergeOutcome:
         if ctx.publication_attempts < 1:
             raise ValueError("publication_attempts must be at least 1")
-        identity = f"git:{gitops.common_dir(ctx.clone_dir)}"
-        with advisory_lock(identity):
-            for attempt in range(1, ctx.publication_attempts + 1):
-                gitops.fetch(ctx.clone_dir)
-                with tempfile.TemporaryDirectory(prefix="orchestrator-merge-") as parent:
-                    scratch = Path(parent) / "worktree"
+        identity = git_lock_identity(gitops.common_dir(ctx.clone_dir))
+        for attempt in range(1, ctx.publication_attempts + 1):
+            with tempfile.TemporaryDirectory(prefix="orchestrator-merge-") as parent:
+                scratch = Path(parent) / "worktree"
+                with advisory_lock(identity):
+                    gitops.fetch(ctx.clone_dir)
+                    base_sha = gitops.ref_sha(ctx.clone_dir, f"origin/{ctx.base}")
                     gitops.worktree_add_detached(ctx.clone_dir, scratch, f"origin/{ctx.base}")
                     try:
                         gitops.merge(scratch, f"origin/{ctx.branch}", message=ctx.title)
-                        if ctx.verify_command is not None:
-                            _record(
-                                ctx,
-                                "verification-started",
-                                {"command": list(ctx.verify_command), "attempt": attempt},
+                    except Exception:
+                        gitops.worktree_remove(ctx.clone_dir, scratch)
+                        raise
+                try:
+                    if ctx.verify_command is not None:
+                        _record(
+                            ctx,
+                            "verification-started",
+                            {"command": list(ctx.verify_command), "attempt": attempt},
+                        )
+                        verified = run_gate(
+                            scratch,
+                            ctx.verify_command,
+                            timeout=ctx.gate_timeout,
+                            env=ctx.verify_env,
+                        )
+                        _record(
+                            ctx,
+                            "verification-finished",
+                            {
+                                "ok": verified.ok,
+                                "command": list(verified.command),
+                                "attempt": attempt,
+                            },
+                        )
+                        if not verified.ok:
+                            return MergeOutcome(
+                                outcome="gate-failed",
+                                detail="rebuilt local publication failed verification",
                             )
-                            verified = run_gate(
-                                scratch,
-                                ctx.verify_command,
-                                timeout=ctx.gate_timeout,
-                                env=ctx.verify_env,
-                            )
-                            _record(
-                                ctx,
-                                "verification-finished",
-                                {
-                                    "ok": verified.ok,
-                                    "command": list(verified.command),
-                                    "attempt": attempt,
-                                },
-                            )
-                            if not verified.ok:
-                                return MergeOutcome(
-                                    outcome="gate-failed",
-                                    detail="rebuilt local publication failed verification",
-                                )
+                    with advisory_lock(identity):
+                        gitops.fetch(ctx.clone_dir)
                         try:
+                            if gitops.ref_sha(ctx.clone_dir, f"origin/{ctx.base}") != base_sha:
+                                raise gitops.GitError(
+                                    f"! [rejected] verified merge -> {ctx.base} (fetch first)"
+                                )
                             gitops.push(scratch, f"HEAD:{ctx.base}", set_upstream=False)
                         except gitops.GitError as exc:
                             if not _is_push_race(exc):
@@ -320,8 +331,9 @@ class LocalMergeStrategy:
                                     ),
                                 )
                             continue
-                        break
-                    finally:
+                    break
+                finally:
+                    with advisory_lock(identity):
                         gitops.worktree_remove(ctx.clone_dir, scratch)
         pr = PullRequest(
             number=0,
