@@ -19,14 +19,18 @@ from orchestrator.registry import (
     _authenticated_login,
     _coalesce,
     _default_search_roots,
+    _parse_entry,
     _serialize,
     _url_identity,
+    _validate_alias,
+    _validate_gate,
     infer_repository_type,
     main_migrate_gate,
     main_migrate_type,
     main_migrate_workflow,
     main_register,
     main_repos,
+    validate_identity_key,
 )
 from orchestrator.verify import NOOP_GATE
 
@@ -939,6 +943,38 @@ def test_gate_migration_validates_registry_and_command(tmp_path: Path) -> None:
     path.write_text(json.dumps({"version": 4, "identities": {}, "checkouts": {}}))
     with pytest.raises(RegistryError, match="not registered"):
         Registry.migrate_identity_gate("x/y", "true", path=path)
+
+
+def test_gate_template_rejects_command_source_placeholder() -> None:
+    with pytest.raises(RegistryError, match="argv value, not command source"):
+        _validate_gate("just gate prefix;{base}")
+
+
+def test_gate_template_allows_placeholder_after_non_command_shell_argument() -> None:
+    assert _validate_gate("bash script.sh {base}") == "bash script.sh {base}"
+
+
+def test_registry_identity_alias_and_entry_validation_boundaries() -> None:
+    identity = "https://github.com/acme/widget"
+    assert validate_identity_key(identity) == identity
+    with pytest.raises(RegistryError, match="not a normalized origin"):
+        validate_identity_key("https://github.com/acme/widget.git")
+
+    assert _validate_alias("acme/widget") == "acme/widget"
+    with pytest.raises(RegistryError, match="normalized owner/name slug"):
+        _validate_alias("acme")
+    with pytest.raises(RegistryError, match="invalid entry"):
+        _parse_entry(Slug("acme/widget"), [])
+
+
+def test_coalesce_rejects_conflicting_identity_gates() -> None:
+    origin = "https://github.com/acme/widget.git"
+    entries = {
+        Slug("acme/one"): RegistryEntry("/one", origin, "remote", "single-owner", "just check"),
+        Slug("acme/two"): RegistryEntry("/two", origin, "remote", "single-owner", "just gate"),
+    }
+    with pytest.raises(RegistryError, match="conflicting gates"):
+        _coalesce(entries)
 
 
 def test_type_migration_requires_registry_and_known_identity(tmp_path: Path) -> None:
