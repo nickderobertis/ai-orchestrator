@@ -13,5 +13,6 @@
   ],
   "required_envelope": ["version", "seq", "at", "kind", "run_id", "round"],
   "optional_envelope": ["node", "step", "detail"],
+  "terminal_node_kinds": ["human-waiting", "node-settled", "node-failed"],
   "terminal_detail": {"required": ["result"], "result": "GraphResultItem"}
 }

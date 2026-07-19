@@ -103,6 +103,13 @@ AUTHORITATIVE_EVENT_KINDS: tuple[EventKind, ...] = (
     "human-attested",
     "round-finished",
 )
+TERMINAL_NODE_EVENT_KINDS: tuple[EventKind, ...] = (
+    "human-waiting",
+    "node-settled",
+    "node-failed",
+)
+TERMINAL_NODE_RESULT_FIELD = "result"
+TERMINAL_NODE_RESULT_TYPE = "GraphResultItem"
 AUDIT_EVENT_KINDS: frozenset[EventKind] = EVENT_KINDS - frozenset(AUTHORITATIVE_EVENT_KINDS)
 ROUND_EVENT_KINDS: frozenset[EventKind] = frozenset({"round-started", "round-finished"})
 GRAPH_EVENT_KINDS: frozenset[EventKind] = frozenset({"node-added", "edge-added"})

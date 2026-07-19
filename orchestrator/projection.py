@@ -19,6 +19,7 @@ from .journal import (
     AUTHORITATIVE_EVENT_KINDS,
     OPTIONAL_EVENT_FIELDS,
     REQUIRED_EVENT_FIELDS,
+    TERMINAL_NODE_RESULT_FIELD,
     Event,
     parse_event,
 )
@@ -284,7 +285,7 @@ def project_run(path: Path, run_id: RunId, round_number: int) -> RoundProjection
 
 def _fold_node_result(builder: _RoundBuilder, event: Event) -> None:
     """Validate and retain a v2 terminal node payload when one is present."""
-    raw = event.detail.get("result")
+    raw = event.detail.get(TERMINAL_NODE_RESULT_FIELD)
     if raw is None:
         if event.version >= 2:
             raise ProjectionError(f"{event.kind} requires a serialized node result")

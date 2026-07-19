@@ -783,7 +783,16 @@ def test_recover_interrupted_real_cli_does_not_duplicate_node_start(
     )
 
 
-def test_real_cli_refuses_legacy_settled_prefix_without_terminal_payload(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("event_version", "diagnostic"),
+    [
+        (1, "legacy settled nodes without terminal payloads: done"),
+        (2, "node-settled requires a serialized node result"),
+    ],
+)
+def test_real_cli_rejects_terminal_prefix_without_required_payload(
+    tmp_path: Path, event_version: int, diagnostic: str
+) -> None:
     runs = tmp_path / "runs"
     plan = tmp_path / "legacy-prefix.json"
     plan.write_text(
@@ -798,7 +807,7 @@ def test_real_cli_refuses_legacy_settled_prefix_without_terminal_payload(tmp_pat
         "run-plan",
         str(plan),
         "--run",
-        "legacy-prefix",
+        f"missing-payload-v{event_version}",
         "--runs-dir",
         str(runs),
         "--format",
@@ -806,14 +815,14 @@ def test_real_cli_refuses_legacy_settled_prefix_without_terminal_payload(tmp_pat
     ]
     completed = _just(*command)
     assert completed.returncode == 0, completed.stderr
-    round_dir = runs / "legacy-prefix" / "round-01"
-    events_path = runs / "legacy-prefix" / "events.jsonl"
+    round_dir = runs / f"missing-payload-v{event_version}" / "round-01"
+    events_path = runs / f"missing-payload-v{event_version}" / "events.jsonl"
     events = [json.loads(line) for line in events_path.read_text().splitlines()]
     prefix = []
     for event in events:
         if event["kind"] == "round-finished":
             continue
-        event["version"] = 1
+        event["version"] = event_version
         if event["kind"] == "node-settled":
             event["detail"].pop("result")
         prefix.append(event)
@@ -825,7 +834,87 @@ def test_real_cli_refuses_legacy_settled_prefix_without_terminal_payload(tmp_pat
 
     recovered = _just(*command, "--recover")
     assert recovered.returncode == 2
-    assert "legacy settled nodes without terminal payloads: done" in recovered.stderr
+    assert diagnostic in recovered.stderr
+
+
+def test_real_cli_replays_failed_and_waiting_terminal_prefixes(
+    tmp_path: Path, command_base, onejudge_bin: str
+) -> None:
+    runs = tmp_path / "runs"
+
+    def interrupt_and_recover(run_id: str, tasks: list[dict], terminal_kind: str):
+        plan = tmp_path / f"{run_id}.json"
+        plan.write_text(json.dumps({"tasks": tasks, "concurrency": 2}))
+        command = [
+            "just",
+            "run-plan",
+            str(plan),
+            "--run",
+            run_id,
+            "--runs-dir",
+            str(runs),
+            "--base",
+            str(command_base()),
+            "--onejudge-bin",
+            onejudge_bin,
+            "--format",
+            "json",
+        ]
+        process = subprocess.Popen(
+            command,
+            cwd=REPO_ROOT,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            start_new_session=True,
+        )
+        events_path = runs / run_id / "events.jsonl"
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            content = events_path.read_text() if events_path.exists() else ""
+            if (
+                f'"kind": "{terminal_kind}"' in content
+                and content.count('"kind": "node-started"') >= 1
+            ):
+                break
+            time.sleep(0.005)
+        else:
+            process.kill()
+            pytest.fail(f"run-plan did not emit {terminal_kind}")
+        os.killpg(process.pid, signal.SIGKILL)
+        process.wait()
+        recovered = subprocess.run(
+            [*command, "--recover"],
+            cwd=REPO_ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        return recovered, json.loads((runs / run_id / "round-01" / "result.json").read_text())
+
+    failed, failed_result = interrupt_and_recover(
+        "failed-prefix",
+        [
+            {"id": "failed", "persona": "engineer", "task": "should-fail", "max_turns": 1},
+            {"id": "running", "persona": "engineer", "task": "should-fail", "max_turns": 5},
+        ],
+        "node-failed",
+    )
+    assert failed.returncode == 1, failed.stderr
+    assert failed_result["results"]["failed"]["status"] == "failed"
+
+    waiting, waiting_result = interrupt_and_recover(
+        "waiting-prefix",
+        [
+            {"id": "approval", "kind": "human", "task": "Approve"},
+            {"id": "blocked", "persona": "engineer", "task": "complete-now", "deps": ["approval"]},
+            {"id": "running", "persona": "engineer", "task": "should-fail", "max_turns": 5},
+        ],
+        "human-waiting",
+    )
+    assert waiting.returncode == 1, waiting.stderr
+    assert waiting_result["results"]["approval"]["status"] == "waiting"
+    assert waiting_result["results"]["blocked"]["status"] == "blocked"
 
 
 def test_recover_completes_a_partially_emitted_graph_without_duplicates(tmp_path: Path) -> None:

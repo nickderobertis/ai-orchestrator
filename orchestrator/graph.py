@@ -21,7 +21,13 @@ from typing import Any, Literal, cast
 from . import REPO_ROOT
 from .config import ConfigError, load_yaml
 from .dispatch import Report
-from .journal import JournalSink, NodeJournal, NullJournal, open_journal
+from .journal import (
+    TERMINAL_NODE_RESULT_FIELD,
+    JournalSink,
+    NodeJournal,
+    NullJournal,
+    open_journal,
+)
 from .lifecycle import (
     LifecycleResult,
     LifecycleRunner,
@@ -337,7 +343,7 @@ def run_graph(
                 detail={
                     "status": "done",
                     "outcome": "no-changes",
-                    "result": cast(Any, _run_payload(node, run, dependents[nid])),
+                    TERMINAL_NODE_RESULT_FIELD: cast(Any, _run_payload(node, run, dependents[nid])),
                 },
             )
             return run
@@ -355,7 +361,9 @@ def run_graph(
                     detail={
                         "status": "waiting",
                         "outcome": result.outcome,
-                        "result": cast(Any, _run_payload(node, run, dependents[nid])),
+                        TERMINAL_NODE_RESULT_FIELD: cast(
+                            Any, _run_payload(node, run, dependents[nid])
+                        ),
                     },
                 )
                 return run
@@ -370,7 +378,9 @@ def run_graph(
                     detail={
                         "status": "done",
                         "outcome": "no-changes",
-                        "result": cast(Any, _run_payload(node, run, dependents[nid])),
+                        TERMINAL_NODE_RESULT_FIELD: cast(
+                            Any, _run_payload(node, run, dependents[nid])
+                        ),
                     },
                 )
                 return run
@@ -381,7 +391,9 @@ def run_graph(
                     detail={
                         "outcome": result.outcome,
                         "detail": result.detail,
-                        "result": cast(Any, _run_payload(node, run, dependents[nid])),
+                        TERMINAL_NODE_RESULT_FIELD: cast(
+                            Any, _run_payload(node, run, dependents[nid])
+                        ),
                     },
                 )
                 return run
@@ -393,7 +405,7 @@ def run_graph(
                 detail={
                     "status": "done",
                     "outcome": result.outcome,
-                    "result": cast(Any, _run_payload(node, run, dependents[nid])),
+                    TERMINAL_NODE_RESULT_FIELD: cast(Any, _run_payload(node, run, dependents[nid])),
                 },
             )
             return run
@@ -405,7 +417,7 @@ def run_graph(
                 detail={
                     "status": "done",
                     "turns": report.assistant_turns,
-                    "result": cast(Any, _run_payload(node, run, dependents[nid])),
+                    TERMINAL_NODE_RESULT_FIELD: cast(Any, _run_payload(node, run, dependents[nid])),
                 },
             )
             return run
@@ -415,7 +427,7 @@ def run_graph(
             detail={
                 "detail": "hit the turn cap",
                 "turns": report.assistant_turns,
-                "result": cast(Any, _run_payload(node, run, dependents[nid])),
+                TERMINAL_NODE_RESULT_FIELD: cast(Any, _run_payload(node, run, dependents[nid])),
             },
         )
         return run
@@ -429,7 +441,7 @@ def run_graph(
                 "human-waiting",
                 detail={
                     "task": first_line(node.task),
-                    "result": cast(Any, _run_payload(node, run, dependents[nid])),
+                    TERMINAL_NODE_RESULT_FIELD: cast(Any, _run_payload(node, run, dependents[nid])),
                 },
             )
             return run
@@ -451,7 +463,9 @@ def run_graph(
                 detail={
                     "detail": str(exc),
                     "error": type(exc).__name__,
-                    "result": cast(Any, _run_payload(node, failed, dependents[nid])),
+                    TERMINAL_NODE_RESULT_FIELD: cast(
+                        Any, _run_payload(node, failed, dependents[nid])
+                    ),
                 },
             )
             raise
@@ -813,7 +827,14 @@ def main(argv: list[str] | None = None) -> int:
         if args.recover and "round-started" in existing_kinds:
             from .projection import project_run
 
-            replayed = project_run(run_dir / "events.jsonl", run_id, round_number)
+            try:
+                replayed = project_run(run_dir / "events.jsonl", run_id, round_number)
+            except ProjectionError as exc:
+                print(
+                    f"run-plan: cannot replay authoritative event log: {exc}",
+                    file=sys.stderr,
+                )
+                return 2
             settled = sorted(
                 node for node, state in replayed.node_states.items() if state != "running"
             )

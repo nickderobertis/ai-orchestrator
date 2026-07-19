@@ -10,6 +10,9 @@ from orchestrator.journal import (
     AUTHORITATIVE_EVENT_KINDS,
     OPTIONAL_EVENT_FIELDS,
     REQUIRED_EVENT_FIELDS,
+    TERMINAL_NODE_EVENT_KINDS,
+    TERMINAL_NODE_RESULT_FIELD,
+    TERMINAL_NODE_RESULT_TYPE,
     Event,
     EventKind,
     NodeId,
@@ -25,9 +28,10 @@ def test_static_event_contract_golden() -> None:
         (Path(__file__).parent / "golden" / "static-round-events-v2.json").read_text()
     )
     assert golden["version"] == 2
+    assert golden["terminal_node_kinds"] == list(TERMINAL_NODE_EVENT_KINDS)
     assert golden["terminal_detail"] == {
-        "required": ["result"],
-        "result": "GraphResultItem",
+        "required": [TERMINAL_NODE_RESULT_FIELD],
+        TERMINAL_NODE_RESULT_FIELD: TERMINAL_NODE_RESULT_TYPE,
     }
     assert golden["state_changing_kinds"] == list(AUTHORITATIVE_EVENT_KINDS)
     assert golden["required_envelope"] == list(REQUIRED_EVENT_FIELDS)
