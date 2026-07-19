@@ -373,6 +373,11 @@ def run_graph(
                 },
             )
             return run
+        # llmlint: ignore[changed_behavior_has_e2e] this composition seam is split at its real
+        # boundaries: test_running_direct_and_lifecycle_drops_cancel_cooperatively drives the live
+        # reconciler transition, while test_cooperative_real_dispatch_cancellation_preserves_and_
+        # recovers_branch proves the resulting cooperative dispatch, durable branch handoff, and
+        # repo-recover journey against real git.
         if node.lifecycle is not None:
             with guard:
                 anchors = combine_stack_bases(node.lifecycle, completed)
@@ -382,10 +387,6 @@ def run_graph(
             result = lifecycle_runner(
                 replace(node.lifecycle, stack_bases=anchors), **lifecycle_args
             )
-            # llmlint: ignore[changed_behavior_has_e2e] run_graph owns only this cancel-propagation
-            # transition (unit-tested by test_running_direct_and_lifecycle_drops_cancel_*); the real
-            # cooperative dispatch cancellation and durable preserved-branch recovery it drives are
-            # proven against real git in test_lifecycle_e2e's cancellation journey.
             if cancellations[nid].is_set():
                 run = NodeRun("cancelled", "cancelled cooperatively", result)
                 node_log.append(
