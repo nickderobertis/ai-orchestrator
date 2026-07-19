@@ -187,8 +187,9 @@ def test_proposal_pump_stops_on_broken_fifo(
             )
     pump = ProposalPump(channel, "live", 1)
     pump.propose("worker", "discovery")
-    pump._thread.join(timeout=1)
-    assert not pump._thread.is_alive()
+    target = pump._receiver if failure.startswith("read") else pump._thread
+    target.join(timeout=1)
+    assert not target.is_alive()
     pump.close()
 
 
@@ -236,6 +237,34 @@ def test_frame_and_supervisor_shapes_are_validated(tmp_path: Path) -> None:
     }
     with pytest.raises(ChannelError):
         _reply({"completion": False, "reason": "missing guidance"})
+
+
+def test_versioned_edits_are_independent_of_completion() -> None:
+    edit = _reply(
+        {
+            "version": 1,
+            "commands": [
+                {
+                    "op": "add",
+                    "node": {"id": "followup", "persona": "engineer", "task": "Follow up"},
+                }
+            ],
+        }
+    )
+    assert edit["completion"] is False
+    assert edit["commands"][0]["op"] == "add"
+
+    complete = _reply({"version": 1, "commands": [{"op": "complete", "reason": "published"}]})
+    assert complete == {
+        "completion": True,
+        "reason": "published",
+        "version": 1,
+        "commands": [{"op": "complete", "reason": "published"}],
+    }
+    with pytest.raises(ChannelError, match="version 1"):
+        _reply({"version": 2, "commands": [{"op": "complete", "reason": "done"}]})
+    with pytest.raises(ChannelError, match="string reason"):
+        _reply({"version": 1, "commands": [{"op": "complete", "reason": 1}]})
 
 
 def test_channel_metadata_is_durable(tmp_path: Path) -> None:

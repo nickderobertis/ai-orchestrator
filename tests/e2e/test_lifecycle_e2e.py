@@ -19,6 +19,8 @@ import json
 import os
 import shlex
 import subprocess
+import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
@@ -1376,6 +1378,150 @@ def test_clean_committed_partial_work_is_marked_and_recoverable(tmp_path, bare_o
     assert f"Orchestrator-Recovered-Incomplete: {marker_sha}" in attestation[0].message
     assert gitops.is_ancestor(canonical, attestation[0].sha, "origin/main")
     assert _has_file(origin, "main", "partial.txt")
+
+
+def test_cooperative_real_dispatch_cancellation_preserves_and_recovers_branch(
+    tmp_path, bare_origin, command_base, personas_dir
+) -> None:
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-cancelled")
+    Registry().register(str(canonical), workflow="local", repo_type="single-owner")
+    workspace = Workspace(tmp_path / "cancelled-worktrees")
+    cancel = threading.Event()
+    witness = tmp_path / "cancelled.ticks"
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(
+            run_repo_task,
+            str(canonical),
+            f"slow-branch {witness} write-change",
+            "engineer",
+            workspace=workspace,
+            base_path=command_base(),
+            persona_dir=personas_dir,
+            branch="feature/cooperative-cancel",
+            verify_cmd=["test", "-f", "CHANGE.txt"],
+            cancel=cancel,
+        )
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline:
+            ticks = witness.read_text(encoding="utf-8").count("tick") if witness.exists() else 0
+            changes = list((tmp_path / "cancelled-worktrees").rglob("CHANGE.txt"))
+            if ticks >= 3 and changes:
+                break
+            time.sleep(0.02)
+        else:
+            pytest.fail("real dispatch did not produce partial work before cancellation")
+        cancel.set()
+        result = future.result(timeout=15)
+
+    assert result.outcome == "not-completed"
+    assert isinstance(result.resume, Resume)
+    assert result.resume.checkpoint == gitops.ref_sha(canonical, result.branch)
+    assert result.branch not in gitops.worktrees(canonical)
+    assert incomplete_commits(canonical, "origin/main", result.branch)
+
+    recovered = recover_repo(
+        canonical,
+        result.branch,
+        workspace_root=tmp_path / "cancelled-recovery-worktrees",
+        verify_cmd=["test", "-f", "CHANGE.txt"],
+    )
+    assert recovered.ok and recovered.outcome == "merged"
+    assert _has_file(origin, "main", "CHANGE.txt")
+
+
+def test_cancellation_during_verification_preserves_before_publication(
+    tmp_path, bare_origin, command_base, personas_dir
+) -> None:
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-verification-cancel")
+    Registry().register(str(canonical), workflow="local", repo_type="single-owner")
+    cancel = threading.Event()
+    gate_started = tmp_path / "verification.started"
+    branch = "feature/verification-cancel"
+    gate = [
+        "sh",
+        "-c",
+        f"touch {shlex.quote(str(gate_started))}; sleep 1; test -f CHANGE.txt",
+    ]
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(
+            run_repo_task,
+            str(canonical),
+            "complete-now write-change",
+            "engineer",
+            workspace=Workspace(tmp_path / "verification-cancel-worktrees"),
+            base_path=command_base(),
+            persona_dir=personas_dir,
+            branch=branch,
+            verify_cmd=gate,
+            cancel=cancel,
+        )
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline and not gate_started.exists():
+            time.sleep(0.02)
+        assert gate_started.exists()
+        cancel.set()
+        result = future.result(timeout=15)
+
+    assert result.outcome == "not-completed"
+    assert result.detail.startswith("cancelled cooperatively after verification")
+    assert isinstance(result.resume, Resume)
+    assert result.resume.checkpoint == gitops.ref_sha(canonical, branch)
+    assert incomplete_commits(canonical, "origin/main", branch)
+    assert not _has_file(origin, "main", "CHANGE.txt")
+
+    recovered = recover_repo(
+        canonical,
+        branch,
+        workspace_root=tmp_path / "verification-cancel-recovery",
+        verify_cmd=["test", "-f", "CHANGE.txt"],
+    )
+    assert recovered.ok and recovered.outcome == "merged"
+    assert _has_file(origin, "main", "CHANGE.txt")
+
+
+def test_cancellation_after_publication_starts_finishes_authoritatively(
+    tmp_path, bare_origin, command_base, personas_dir
+) -> None:
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-publication-cancel")
+    Registry().register(str(canonical), workflow="local", repo_type="single-owner")
+    push_started = tmp_path / "publication.started"
+    hook = origin / "hooks" / "pre-receive"
+    hook.write_text(
+        f"#!/bin/sh\ntouch {shlex.quote(str(push_started))}\nsleep 1\nexit 0\n",
+        encoding="utf-8",
+    )
+    hook.chmod(0o755)
+    cancel = threading.Event()
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(
+            run_repo_task,
+            str(canonical),
+            "complete-now write-change",
+            "engineer",
+            workspace=Workspace(tmp_path / "publication-cancel-worktrees"),
+            base_path=command_base(),
+            persona_dir=personas_dir,
+            branch="feature/publication-cancel",
+            verify_cmd=["test", "-f", "CHANGE.txt"],
+            cancel=cancel,
+        )
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline and not push_started.exists():
+            time.sleep(0.02)
+        assert push_started.exists()
+        cancel.set()
+        result = future.result(timeout=20)
+
+    assert cancel.is_set()
+    assert result.ok and result.outcome == "merged"
+    assert result.resume is None
+    assert _has_file(origin, "main", "CHANGE.txt")
 
 
 def test_no_changes_produces_no_pr(tmp_path, bare_origin) -> None:
