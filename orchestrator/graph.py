@@ -20,7 +20,13 @@ from pathlib import Path
 from typing import Any, Literal, cast
 
 from . import REPO_ROOT
-from .channel import ProposalPump
+from .channel import (
+    CHANNEL_DIR_ENV,
+    CHANNEL_ROUND_ENV,
+    CHANNEL_RUN_ID_ENV,
+    ProposalPump,
+    ProposalSink,
+)
 from .config import ConfigError, load_yaml
 from .dispatch import Report
 from .journal import (
@@ -64,6 +70,7 @@ from .runs import (
     prepare_round,
     resolve_run_dir,
     status_summary,
+    validate_run_id,
     write_result,
 )
 from .workspace import Workspace
@@ -304,7 +311,7 @@ def run_graph(
     already_started: frozenset[str] = frozenset(),
     replayed_runs: Mapping[str, NodeRun] | None = None,
     replayed_order: list[str] | None = None,
-    proposal_pump: ProposalPump | None = None,
+    proposal_pump: ProposalSink | None = None,
 ) -> GraphResult:
     """Schedule and run a mixed tracked graph, journaling each transition.
 
@@ -481,7 +488,7 @@ def run_graph(
             return
         if run.payload.assessment and run.payload.assessment.strip().lower() != "none":
             proposal_pump.propose(nid, run.payload.assessment)
-        proposal_pump.drain_replies()
+        proposal_pump.persist_replies()
 
     runs, started_order = reconcile_dag(
         lambda: list(nodes),
@@ -491,7 +498,7 @@ def run_graph(
         actual=actual,
         started_order=replayed_order,
         on_settled=on_settled,
-        on_tick=proposal_pump.drain_replies if proposal_pump is not None else None,
+        on_tick=proposal_pump.persist_replies if proposal_pump is not None else None,
     )
     return _collect(nodes, runs, started_order)
 
@@ -880,16 +887,27 @@ def main(argv: list[str] | None = None) -> int:
 
     dispatch_timeout = args.dispatch_timeout if args.dispatch_timeout is not None else args.timeout
     proposal_pump: ProposalPump | None = None
-    channel_path = os.environ.get("AI_ORCHESTRATOR_CHANNEL_DIR")
-    channel_run_id = os.environ.get("AI_ORCHESTRATOR_CHANNEL_RUN_ID")
-    channel_round = os.environ.get("AI_ORCHESTRATOR_CHANNEL_ROUND")
+    channel_path = os.environ.get(CHANNEL_DIR_ENV)
+    channel_run_id = os.environ.get(CHANNEL_RUN_ID_ENV)
+    channel_round = os.environ.get(CHANNEL_ROUND_ENV)
     if channel_path and channel_run_id and channel_round:
+        # llmlint: ignore[changed_behavior_has_e2e] launch-authored env; malformed only in unit
         try:
             parsed_channel_round = int(channel_round)
         except ValueError:
             print("run-plan: invalid proposal channel round", file=sys.stderr)
             return 2
-        proposal_pump = ProposalPump(Path(channel_path), channel_run_id, parsed_channel_round)
+        try:
+            validated_run_id = str(validate_run_id(channel_run_id))
+            resolved_channel = Path(channel_path).resolve(strict=True)
+            if resolved_channel.parent.name != validated_run_id or not all(
+                (resolved_channel / endpoint).is_fifo() for endpoint in ("up.fifo", "down.fifo")
+            ):
+                raise ValueError("channel identity or endpoints do not match")
+        except (OSError, ValueError) as exc:
+            print(f"run-plan: invalid proposal channel: {exc}", file=sys.stderr)
+            return 2
+        proposal_pump = ProposalPump(resolved_channel, validated_run_id, parsed_channel_round)
     try:
         result = run_graph(
             graph,

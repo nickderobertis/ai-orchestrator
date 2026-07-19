@@ -67,7 +67,7 @@ def test_proposal_pump_round_trips_and_persists_on_reconciler_drain(tmp_path: Pa
     deadline = time.monotonic() + 1
     verdict = channel / "planner-verdict.json"
     while time.monotonic() < deadline and not verdict.is_file():
-        pump.drain_replies()
+        pump.persist_replies()
         time.sleep(0.01)
     sender.join()
     pump.close()
@@ -88,23 +88,24 @@ def test_proposal_pump_stops_on_broken_fifo(
             raise ChannelTimeout
         raise OSError("closed")
 
-    if failure == "write":
-        monkeypatch.setattr(
-            "orchestrator.channel.write_message",
-            lambda *args, **kwargs: (_ for _ in ()).throw(OSError("closed")),
-        )
-    elif failure == "write_timeout":
-        monkeypatch.setattr("orchestrator.channel.write_message", fail_after_timeout)
-    else:
-        monkeypatch.setattr("orchestrator.channel.write_message", lambda *args, **kwargs: None)
-        monkeypatch.setattr(
-            "orchestrator.channel.read_message",
-            (
-                fail_after_timeout
-                if failure == "read_timeout"
-                else lambda *args, **kwargs: (_ for _ in ()).throw(ChannelError("broken"))
-            ),
-        )
+    match failure:
+        case "write":
+            monkeypatch.setattr(
+                "orchestrator.channel.write_message",
+                lambda *args, **kwargs: (_ for _ in ()).throw(OSError("closed")),
+            )
+        case "write_timeout":
+            monkeypatch.setattr("orchestrator.channel.write_message", fail_after_timeout)
+        case "read" | "read_timeout":
+            monkeypatch.setattr("orchestrator.channel.write_message", lambda *args, **kwargs: None)
+            monkeypatch.setattr(
+                "orchestrator.channel.read_message",
+                (
+                    fail_after_timeout
+                    if failure == "read_timeout"
+                    else lambda *args, **kwargs: (_ for _ in ()).throw(ChannelError("broken"))
+                ),
+            )
     pump = ProposalPump(channel, "live", 1)
     pump.propose("worker", "discovery")
     pump._thread.join(timeout=1)

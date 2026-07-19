@@ -22,7 +22,7 @@ import threading
 import time
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 from .config import ConfigError
 from .coordination import advisory_lock, atomic_json
@@ -38,6 +38,15 @@ class ChannelTimeout(TimeoutError):
 
 
 MAX_FRAME_BYTES = select.PIPE_BUF
+CHANNEL_DIR_ENV = "AI_ORCHESTRATOR_CHANNEL_DIR"
+CHANNEL_RUN_ID_ENV = "AI_ORCHESTRATOR_CHANNEL_RUN_ID"
+CHANNEL_ROUND_ENV = "AI_ORCHESTRATOR_CHANNEL_ROUND"
+
+
+class ProposalSink(Protocol):
+    def propose(self, node: str, message: str) -> None: ...
+
+    def persist_replies(self) -> None: ...
 
 
 def create_channel(run_dir: Path) -> Path:
@@ -202,7 +211,7 @@ class ProposalPump:
             }
         )
 
-    def drain_replies(self) -> None:
+    def persist_replies(self) -> None:
         """Persist transport replies on the reconciler's single-writer thread."""
         while True:
             try:
@@ -214,7 +223,7 @@ class ProposalPump:
     def close(self) -> None:
         self._proposals.put(None)
         self._thread.join(timeout=1)
-        self.drain_replies()
+        self.persist_replies()
 
     def _service(self) -> None:
         while (proposal := self._proposals.get()) is not None:

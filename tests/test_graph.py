@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+from orchestrator.channel import create_channel
 from orchestrator.dispatch import DispatchError, Report
 from orchestrator.gitops import GitError
 from orchestrator.graph import (
@@ -53,7 +54,7 @@ class _RecordingProposalPump:
     def propose(self, node: str, message: str) -> None:
         self.proposals.append((node, message))
 
-    def drain_replies(self) -> None:
+    def persist_replies(self) -> None:
         self.drains += 1
 
 
@@ -88,7 +89,8 @@ def test_main_validates_and_services_inherited_proposal_channel(
         json.dumps({"tasks": [{"id": "worker", "persona": "engineer", "task": "Work"}]}),
         encoding="utf-8",
     )
-    monkeypatch.setenv("AI_ORCHESTRATOR_CHANNEL_DIR", str(tmp_path / "channel"))
+    channel = create_channel(tmp_path / "outer")
+    monkeypatch.setenv("AI_ORCHESTRATOR_CHANNEL_DIR", str(channel))
     monkeypatch.setenv("AI_ORCHESTRATOR_CHANNEL_RUN_ID", "outer")
     monkeypatch.setenv("AI_ORCHESTRATOR_CHANNEL_ROUND", "invalid")
     assert main([str(plan), "--no-record"]) == 2
@@ -97,9 +99,9 @@ def test_main_validates_and_services_inherited_proposal_channel(
     pumps: list[_RecordingProposalPump] = []
 
     def make_pump(path: Path, run_id: str, round_number: int) -> _RecordingProposalPump:
-        assert (path, run_id, round_number) == (tmp_path / "channel", "outer", 2)
+        assert (path, run_id, round_number) == (channel, "outer", 2)
         pump = _RecordingProposalPump()
-        pump.close = lambda: pump.drain_replies()  # type: ignore[attr-defined]
+        pump.close = lambda: pump.persist_replies()  # type: ignore[attr-defined]
         pumps.append(pump)
         return pump
 
