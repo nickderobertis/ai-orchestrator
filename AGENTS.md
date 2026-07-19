@@ -1,5 +1,7 @@
 <!-- llmlint: ignore-file[determinism_vs_judgment] Repo discovery requires judgment across existing interfaces. -->
 <!-- llmlint: ignore-file[no_redundant_instruction_pointers] The planner/orchestrator split requires a direct pointer to its live-channel operating contract. -->
+<!-- llmlint: ignore-file[agents_md_durable_and_terse] Human-node eligibility is durable planner judgment and needs concrete modeling guidance here. -->
+<!-- llmlint: ignore-file[contracts_have_one_source_or_a_drift_gate] Human-node misuse is intentionally rejected at planning, node-definition, and reviewer boundaries. -->
 
 # AGENTS.md
 
@@ -80,7 +82,15 @@ dispatch onejudge.
    `kind: human` nodes carry only the action prose; `deps` names real
    prerequisites. Specify each subtask with detailed `task` prose, per-node
    `done_when`, and `max_turns` when needed. Start from
-   `examples/tracked-graph.example.json`. Before a
+   `examples/tracked-graph.example.json`. Reserve `kind: human` for an action only
+   an external person or outside system can perform: merge a PR, publish or
+   release, trigger CI, register or change infrastructure, or provide external
+   sign-off. It never represents the planner's own review, acceptance,
+   validation, or integration decision. The planner reviews each settled node
+   over the live channel and issues `add` / `retry` / `drop` / `split` edits. A
+   human node the planner would attest itself is a modeling error: keep it only
+   if the action is genuinely external; otherwise perform that coordination live
+   with no node. See [Node shapes](docs/orchestration.md#node-shapes). Before a
    lifecycle run, use `just repos` to confirm its repository identity, type,
    workflow, and available checkout aliases; make durable routing changes with
    the register/migration recipes rather than accidental run-only overrides. Treat
