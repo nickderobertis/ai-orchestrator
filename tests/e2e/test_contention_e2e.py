@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import multiprocessing
 import os
+import shutil
 import subprocess
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
@@ -286,6 +287,32 @@ def test_abandoned_branch_at_different_path_moves_to_new_owned_worktree(
     assert not old_path.exists()
     assert replacement.exists()
     assert gitops.worktrees(canonical)["feature/moved"] == replacement
+    workspace.remove_worktree(repo, replacement)
+
+
+def test_missing_abandoned_worktree_registration_is_pruned_and_recreated(
+    tmp_path: Path, bare_origin: Callable[..., Path]
+) -> None:
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-missing-orphan")
+    root = tmp_path / "worktrees-missing-orphan"
+    ready: multiprocessing.Queue[str] = multiprocessing.Queue()
+    process = multiprocessing.Process(
+        target=_orphan_worktree_process,
+        args=(str(canonical), str(root), "feature/missing", ready),
+    )
+    process.start()
+    missing = Path(ready.get(timeout=10))
+    _join(process)
+    shutil.rmtree(missing)
+
+    repo = normalize_repo(str(canonical))
+    workspace = Workspace(root, resolver=lambda _spec: canonical, workflow="local")
+    replacement = workspace.worktree(repo, "feature/missing", base="origin/main")
+
+    assert replacement == missing
+    assert replacement.exists()
+    assert gitops.worktrees(canonical)["feature/missing"] == replacement
     workspace.remove_worktree(repo, replacement)
 
 
