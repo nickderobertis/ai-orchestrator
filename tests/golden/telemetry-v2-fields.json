@@ -1,0 +1,35 @@
+{
+  "fractions": [
+    "agent_model",
+    "idle_orchestration",
+    "judge_model",
+    "tool"
+  ],
+  "session_link": [
+    "history_id",
+    "role",
+    "session_id",
+    "turn_index"
+  ],
+  "timing": [
+    "agent_model_ms",
+    "agent_seconds",
+    "fractions",
+    "gate_seconds",
+    "idle_orchestration_ms",
+    "judge_model_ms",
+    "judge_seconds",
+    "publication_wait_seconds",
+    "tool_ms",
+    "unattributed_ms",
+    "wall_ms",
+    "wall_seconds"
+  ],
+  "usage": [
+    "cache_read_tokens",
+    "cache_write_tokens",
+    "cost_usd",
+    "input_tokens",
+    "output_tokens"
+  ]
+}

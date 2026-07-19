@@ -13,7 +13,11 @@ from orchestrator.journal import NodeJournal, open_journal
 from orchestrator.runs import NodeId, RunId, prepare_round, write_result
 from orchestrator.telemetry import (
     Failure,
+    FractionsRecord,
     Provider,
+    SessionLink,
+    TimingRecord,
+    UsageValues,
     _command_class,
     _failure,
     _metrics,
@@ -182,6 +186,18 @@ def test_optional_record_fields_are_omitted() -> None:
     assert Provider("oneharness").record() == {"provider": "oneharness"}
 
 
+def test_schema_v2_field_golden_prevents_cross_layer_drift() -> None:
+    golden = json.loads(
+        (Path(__file__).parent / "golden" / "telemetry-v2-fields.json").read_text(encoding="utf-8")
+    )
+    assert golden == {
+        "timing": sorted(TimingRecord.__required_keys__),
+        "fractions": sorted(FractionsRecord.__required_keys__),
+        "usage": sorted(UsageValues.__required_keys__),
+        "session_link": sorted(SessionLink.__required_keys__),
+    }
+
+
 def test_index_cli_defaults_to_active_and_all_includes_settled(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -298,3 +314,5 @@ def test_session_normalization_degrades_each_field_independently(tmp_path: Path)
     assert _command_class("") == "unknown"
     zero = _timing(0, [summary])
     assert set(zero["fractions"].values()) == {0.0}
+    with pytest.raises(telemetry_module.HistoryError, match="unsupported.*schema"):
+        _summarize_session(session, [{"schema_version": 99}])

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
+import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -44,11 +46,33 @@ class TimingRecord(TypedDict):
     idle_orchestration_ms: int
     unattributed_ms: int
     wall_ms: int
-    fractions: dict[str, float]
+    fractions: FractionsRecord
 
 
-UsageValues = dict[str, int | float | None]
-UsageRecord = dict[str, UsageValues]
+class FractionsRecord(TypedDict):
+    agent_model: float
+    judge_model: float
+    tool: float
+    idle_orchestration: float
+
+
+class UsageValues(TypedDict):
+    input_tokens: int | float | None
+    output_tokens: int | float | None
+    cache_read_tokens: int | float | None
+    cache_write_tokens: int | float | None
+    cost_usd: int | float | None
+
+
+class UsageRecord(TypedDict):
+    agent: UsageValues
+    judge: UsageValues
+    total: UsageValues
+
+
+UsageKey = Literal[
+    "input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens", "cost_usd"
+]
 
 
 class SessionLink(TypedDict):
@@ -186,7 +210,7 @@ class RunTelemetry:
     failure: Failure | None = None
     check_rollup: CheckRollup = field(default_factory=CheckRollup)
     green_to_publication_seconds: list[float] = field(default_factory=list)
-    usage: UsageRecord = field(default_factory=dict)
+    usage: UsageRecord = field(default_factory=lambda: cast(UsageRecord, {}))
     telemetry_quality: Literal["complete", "partial", "legacy"] = "legacy"
     sources: list[str] = field(default_factory=list)
     node_work_ms: dict[str, int] = field(default_factory=dict)
@@ -301,7 +325,7 @@ def _publication_wait_seconds(events: list[Event], *, active_at: float | None) -
     return completed + sum(max(0.0, active_at - started) for started in green.values())
 
 
-USAGE_FIELDS = (
+USAGE_FIELDS: tuple[UsageKey, ...] = (
     "input_tokens",
     "output_tokens",
     "cache_read_tokens",
@@ -327,23 +351,28 @@ class _SessionSummary:
 def _number(value: object) -> int | float | None:
     return (
         value
-        if isinstance(value, (int, float)) and not isinstance(value, bool) and value >= 0
+        if isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+        and value >= 0
         else None
     )
 
 
 def _command_class(command: str) -> str:
     first = command.strip().split(maxsplit=1)[0] if command.strip() else "unknown"
-    if first == "just":
-        return "gate" if "gate" in command.split() else "just"
-    if first == "git":
-        return "git"
-    return first
+    match first:
+        case "just":
+            return "gate" if "gate" in command.split() else "just"
+        case "git":
+            return "git"
+        case _:
+            return first
 
 
 def _summarize_session(session: Any, records: list[dict[str, Any]]) -> _SessionSummary:
     role = session_role(session)
-    usage: UsageValues = {}
+    usage = cast(UsageValues, {})
     for field_name in USAGE_FIELDS:
         values = [
             _number(raw.get(field_name)) if isinstance(raw, dict) else None
@@ -360,6 +389,9 @@ def _summarize_session(session: Any, records: list[dict[str, Any]]) -> _SessionS
     native_timing = bool(records)
     commands: dict[str, int] = {}
     for record in records:
+        schema_version = record.get("schema_version")
+        if schema_version not in {None, "0.2", "0.3", 1, 2}:
+            raise HistoryError(f"unsupported oneharness history schema version {schema_version!r}")
         model = _number(record.get("model_ms"))
         tool = _number(record.get("tool_ms"))
         if model is None or tool is None:
@@ -376,7 +408,6 @@ def _summarize_session(session: Any, records: list[dict[str, Any]]) -> _SessionS
             duration = _number(event.get("duration_ms"))
             if tool is None and duration is not None:
                 tool_ms += round(duration)
-                native_timing = True
             if event.get("name") not in {"command_execution", "bash"}:
                 continue
             inputs = event.get("input")
@@ -391,6 +422,7 @@ def _summarize_session(session: Any, records: list[dict[str, Any]]) -> _SessionS
         link=SessionLink(
             session_id=str(session.session_id), history_id=None, role=role, turn_index=None
         ),
+        # A normalized history record is one provider invocation (one conversation turn).
         turns=len(records),
         duration_ms=session_duration_ms(records),
         model_ms=model_ms,
@@ -403,7 +435,7 @@ def _summarize_session(session: Any, records: list[dict[str, Any]]) -> _SessionS
 
 def _party_usage(summaries: list[_SessionSummary], role: str) -> UsageValues:
     party = [summary for summary in summaries if summary.role == role]
-    result: UsageValues = {}
+    result = cast(UsageValues, {})
     for field_name in USAGE_FIELDS:
         values = [item.usage[field_name] for item in party]
         result[field_name] = (
@@ -417,12 +449,15 @@ def _party_usage(summaries: list[_SessionSummary], role: str) -> UsageValues:
 def _usage(summaries: list[_SessionSummary]) -> UsageRecord:
     agent = _party_usage(summaries, "agent")
     judge = _party_usage(summaries, "judge")
-    total = {
-        key: cast(int | float, agent[key]) + cast(int | float, judge[key])
-        if agent[key] is not None and judge[key] is not None
-        else None
-        for key in USAGE_FIELDS
-    }
+    total = cast(
+        UsageValues,
+        {
+            key: cast(int | float, agent[key]) + cast(int | float, judge[key])
+            if agent[key] is not None and judge[key] is not None
+            else None
+            for key in USAGE_FIELDS
+        },
+    )
     return {"agent": agent, "judge": judge, "total": total}
 
 
@@ -431,10 +466,15 @@ def _timing(
 ) -> TimingRecord:
     agent_duration = sum(item.duration_ms for item in summaries if item.role == "agent")
     judge_duration = sum(item.duration_ms for item in summaries if item.role == "judge")
-    agent_model = sum(item.model_ms for item in summaries if item.role == "agent")
-    judge_model = sum(item.model_ms for item in summaries if item.role == "judge")
-    tool = sum(item.tool_ms for item in summaries)
-    measured = min(wall_ms, agent_model + judge_model + tool)
+    raw_agent_model = sum(item.model_ms for item in summaries if item.role == "agent")
+    raw_judge_model = sum(item.model_ms for item in summaries if item.role == "judge")
+    raw_tool = sum(item.tool_ms for item in summaries)
+    # Without native intervals, enforce the contract's tool > judge > agent precedence
+    # while clipping the sequential sums to the observed row wall.
+    tool = min(wall_ms, raw_tool)
+    judge_model = min(max(0, wall_ms - tool), raw_judge_model)
+    agent_model = min(max(0, wall_ms - tool - judge_model), raw_agent_model)
+    measured = agent_model + judge_model + tool
     idle = max(0, wall_ms - measured)
     unattributed = min(
         idle,
@@ -457,12 +497,12 @@ def _timing(
         idle_orchestration_ms=idle,
         unattributed_ms=unattributed,
         wall_ms=wall_ms,
-        fractions={
-            "agent_model": fraction(agent_model),
-            "judge_model": fraction(judge_model),
-            "tool": fraction(tool),
-            "idle_orchestration": fraction(idle),
-        },
+        fractions=FractionsRecord(
+            agent_model=fraction(agent_model),
+            judge_model=fraction(judge_model),
+            tool=fraction(tool),
+            idle_orchestration=fraction(idle),
+        ),
     )
 
 
@@ -495,7 +535,7 @@ def _providers(run_id: RunId, oneharness_bin: str) -> tuple[list[Provider], list
     return found, summaries
 
 
-def _node_wall_ms(node: str, events: list[Event]) -> int:
+def _node_wall_ms(node: str, events: list[Event], *, active_at: float | None = None) -> int:
     started: float | None = None
     total = 0.0
     for event in events:
@@ -506,6 +546,8 @@ def _node_wall_ms(node: str, events: list[Event]) -> int:
         elif event.kind in {"node-settled", "node-failed", "human-waiting"} and started is not None:
             total += max(0.0, event.at - started)
             started = None
+    if started is not None and active_at is not None:
+        total += max(0.0, active_at - started)
     return round(total * 1000)
 
 
@@ -518,7 +560,12 @@ def _command_counts(summaries: list[_SessionSummary]) -> dict[str, int]:
 
 
 def _node_record(
-    node: str, item: GraphResultItem, events: list[Event], summaries: list[_SessionSummary]
+    node: str,
+    item: GraphResultItem,
+    events: list[Event],
+    summaries: list[_SessionSummary],
+    *,
+    active_at: float | None = None,
 ) -> NodeTelemetry:
     resume = item.get("resume")
     checkpoint = str(resume.get("checkpoint", "")) if isinstance(resume, dict) else ""
@@ -559,7 +606,7 @@ def _node_record(
         commit=commits[-1] if commits else "",
         retry_lineage=RetryLineageTelemetry.from_value(item.get("retry_lineage")),
         gate_attestation=attestation,
-        timing=_timing(_node_wall_ms(node, events), linked),
+        timing=_timing(_node_wall_ms(node, events, active_at=active_at), linked),
         usage=_usage(linked),
         sessions=[summary.link for summary in linked],
         tool_commands=_command_counts(linked),
@@ -594,7 +641,11 @@ def collect_run(
     )
     failure = next((found for item in items.values() if (found := _failure(item))), None)
     snapshot: DetailSnapshot = load_snapshot(run_dir)
-    nodes = [_node_record(node, item, events, summaries) for node, item in items.items()]
+    node_active_at = None if result_state_is_terminal(state) else current
+    nodes = [
+        _node_record(node, item, events, summaries, active_at=node_active_at)
+        for node, item in items.items()
+    ]
     timing = _timing(round(wall * 1000), summaries, gate_seconds, wait)
     native = [summary.native_timing for summary in summaries]
     quality: Literal["complete", "partial", "legacy"] = (
@@ -637,7 +688,7 @@ def _metrics(runs: list[RunTelemetry]) -> MetricsRecord:
     turns: dict[int, int] = {}
     for run in runs:
         turns[run.turns] = turns.get(run.turns, 0) + 1
-    usage: UsageValues = {}
+    usage = cast(UsageValues, {})
     for key in USAGE_FIELDS:
         values = [run.usage["total"][key] for run in runs]
         usage[key] = (
@@ -716,13 +767,17 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
     entries = sorted(args.runs_dir.iterdir()) if args.runs_dir.is_dir() else []
-    records = [
-        telemetry
-        for entry in entries
-        if entry.is_dir()
-        if (telemetry := collect_run(entry, oneharness_bin=args.oneharness_bin)) is not None
-        and (args.all or not result_state_is_terminal(telemetry.state))
-    ]
+    try:
+        records = [
+            telemetry
+            for entry in entries
+            if entry.is_dir()
+            if (telemetry := collect_run(entry, oneharness_bin=args.oneharness_bin)) is not None
+            and (args.all or not result_state_is_terminal(telemetry.state))
+        ]
+    except HistoryError as exc:
+        print(f"telemetry: {exc}", file=sys.stderr)
+        return 2
     if args.breakdown:
         print(_breakdown(records))
         return 0
