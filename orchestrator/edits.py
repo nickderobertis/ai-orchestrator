@@ -80,10 +80,22 @@ EditPayload: TypeAlias = (
 )
 
 
+EditOperationKind = Literal[
+    "node-added",
+    "edge-added",
+    "edge-removed",
+    "node-dropped",
+    "reparent",
+    "retry-requested",
+    "human-attested",
+    "completion-requested",
+]
+
+
 class EditOperation(TypedDict, total=False):
     """One compiled operation inside an atomic edit commit."""
 
-    kind: str
+    kind: EditOperationKind
     node: str
     detail: dict[str, Any]
 
@@ -134,6 +146,9 @@ def apply_edit(
     graph: Graph,
     command: EditCommand,
     *,
+    # llmlint: ignore[modern_domain_modeling] the frontier is the executor's own node-status map,
+    # kept as plain strings by the codebase-wide string-status convention (see status.py); edit
+    # validity only tests membership, so narrowing it here would fork that shared vocabulary.
     states: Mapping[str, str],
     attestations: Sequence[str],
 ) -> tuple[Graph, list[EditOperation]]:

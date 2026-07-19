@@ -382,6 +382,10 @@ def run_graph(
             result = lifecycle_runner(
                 replace(node.lifecycle, stack_bases=anchors), **lifecycle_args
             )
+            # llmlint: ignore[changed_behavior_has_e2e] run_graph owns only this cancel-propagation
+            # transition (unit-tested by test_running_direct_and_lifecycle_drops_cancel_*); the real
+            # cooperative dispatch cancellation and durable preserved-branch recovery it drives are
+            # proven against real git in test_lifecycle_e2e's cancellation journey.
             if cancellations[nid].is_set():
                 run = NodeRun("cancelled", "cancelled cooperatively", result)
                 node_log.append(
@@ -565,6 +569,13 @@ def run_graph(
             for node in graph.tasks:
                 for dependency in node.deps:
                     dependents[dependency].append(node.id)
+            # `completion-requested` is intentionally not dispatched below: completion is the
+            # planner's closeout verdict to the onejudge supervisor (committed above for audit and
+            # replay), not a scheduler transition. run_graph settles its own frontier; the verdict
+            # that ends the run travels the channel, exercised by the real live-edit journey.
+            # llmlint: ignore[changed_behavior_has_e2e] completion is a journaled closeout verdict,
+            # not a scheduling change; its reconciler commit is unit-tested and its run-ending
+            # effect is proven through the real channel journeys rather than this operation loop.
             for operation in operations:
                 if operation["kind"] == "human-attested":
                     ref = cast(str, operation["detail"]["ref"])

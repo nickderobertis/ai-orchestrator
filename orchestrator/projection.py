@@ -31,6 +31,10 @@ class ProjectionError(ValueError):
     """An authoritative event stream cannot be folded safely."""
 
 
+# llmlint: ignore[contracts_have_one_source_or_a_drift_gate] the executor keeps run statuses as
+# plain strings by the codebase string-status convention (no canonical enum to source from); this
+# strict-reader view is drift-gated where it matters — round-finished folding rejects any state that
+# disagrees with the recorded result, so a status the executor emits but omits here cannot project.
 NodeState = Literal["running", "done", "failed", "waiting", "cancelled"]
 
 

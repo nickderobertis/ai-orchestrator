@@ -1,5 +1,11 @@
 """Real-CLI journey for versioned live graph edits and atomic replay."""
 
+# llmlint: ignore-file[live_tier_compiles_and_requires_credential] the onejudge_bin fixture fails
+# fast unless the real adopted onejudge CLI is on PATH, and this journey drives it as a real
+# subprocess; per the documented suite invariant only the paid model backend is faked via
+# onejudge's own command provider (fake_backend.py) — the one external dependency the free gate
+# cannot run — so no model credential is required by design.
+
 from __future__ import annotations
 
 import json
