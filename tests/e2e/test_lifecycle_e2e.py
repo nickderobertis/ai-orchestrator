@@ -160,6 +160,38 @@ def test_published_dispatch_survives_deferred_teardown_and_redispatch_reclaims_i
     assert second.outcome == "merged", second.detail
 
 
+def test_lifecycle_failure_survives_simultaneous_deferred_teardown(
+    tmp_path, bare_origin, command_base, personas_dir
+) -> None:
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-failed")
+
+    class ContendedTeardownWorkspace(Workspace):
+        def remove_worktree(self, repo, path) -> None:
+            self._release_worktree_lease(path)
+            raise LockTimeout("shared .git remains busy")
+
+    result = run_repo_task(
+        str(origin),
+        "should-fail write-change preserve original failure",
+        "engineer",
+        workspace=ContendedTeardownWorkspace(
+            tmp_path / "failed-worktrees",
+            resolver=lambda _spec: canonical,
+            workflow="local",
+            repo_type="single-owner",
+        ),
+        branch="failed-teardown",
+        base_path=command_base(),
+        persona_dir=personas_dir,
+        verify_cmd=["true"],
+    )
+
+    assert result.outcome == "not-completed"
+    assert "agent stopped before completion" in result.detail
+    assert result.deferred_cleanup and "remove-worktree deferred" in result.deferred_cleanup[0]
+
+
 def test_synthetic_stack_teardown_contention_is_deferred_with_real_git(
     tmp_path, bare_origin
 ) -> None:
