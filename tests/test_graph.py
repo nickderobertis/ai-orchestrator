@@ -29,7 +29,7 @@ from orchestrator.graph import (
 )
 from orchestrator.journal import JournalError, NodeSink, open_journal
 from orchestrator.lifecycle import LifecycleResult, RepoPlanNode, Step, StepResult
-from orchestrator.plan import PLAN_SCHEMA_VERSION, PlanError, PlanNode
+from orchestrator.plan import PLAN_SCHEMA_VERSION, NodeRun, PlanError, PlanNode
 from orchestrator.runs import NodeId, RunId
 
 
@@ -195,6 +195,57 @@ def test_running_direct_and_lifecycle_drops_cancel_cooperatively() -> None:
         proposal_pump=lifecycle_pump,  # type: ignore[arg-type]
     )
     assert set(lifecycle_result.results) == {"keep"}
+
+
+def test_reconciler_retries_failed_and_drops_unstarted_nodes() -> None:
+    retry_graph = parse_graph(
+        {
+            "tasks": [
+                {"id": "failed", "persona": "engineer", "task": "Failed"},
+                {"id": "keep", "kind": "human", "task": "Keep"},
+            ]
+        }
+    )
+    retry_pump = _EditingPump(
+        [
+            EditCommand(
+                "retry",
+                {
+                    "op": "retry",
+                    "id": "failed",
+                    "node": {"id": "replacement", "task": "No diff", "expects_no_diff": True},
+                },
+            )
+        ]
+    )
+    retried = run_graph(
+        retry_graph,
+        agent_runner=lambda node, **_: _report(node.persona),
+        lifecycle_runner=lambda node, **_: _lifecycle(),
+        replayed_runs={"failed": NodeRun("failed", "failed earlier")},
+        proposal_pump=retry_pump,  # type: ignore[arg-type]
+    )
+    assert retried.results["replacement"].status == "done"
+
+    drop_graph = parse_graph(
+        {
+            "schema_version": 3,
+            "tasks": [
+                {"id": "keep", "kind": "human", "task": "Keep"},
+                {"id": "pending", "task": "No diff", "expects_no_diff": True, "deps": ["keep"]},
+            ],
+        }
+    )
+    drop_pump = _EditingPump(
+        [EditCommand("drop", {"op": "drop", "id": "pending", "dependents": "drop"})]
+    )
+    dropped = run_graph(
+        drop_graph,
+        agent_runner=lambda node, **_: _report(node.persona),
+        lifecycle_runner=lambda node, **_: _lifecycle(),
+        proposal_pump=drop_pump,  # type: ignore[arg-type]
+    )
+    assert set(dropped.results) == {"keep"}
 
 
 def test_main_validates_and_services_inherited_proposal_channel(

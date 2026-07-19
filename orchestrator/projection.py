@@ -193,14 +193,15 @@ def project_round(events: list[Event], run_id: RunId, round_number: int) -> Roun
                 builder.states[event.node] = "waiting"
                 _fold_node_result(builder, event)
             case "node-settled" | "node-failed" if event.node is not None:
-                if builder.states.get(event.node) != "running":
+                dropped = event.node in builder.dropped_ids
+                if not dropped and builder.states.get(event.node) != "running":
                     raise ProjectionError(f"node {event.node!r} settled without one start")
                 status = "failed" if event.kind == "node-failed" else detail.get("status")
                 if status not in {"done", "failed", "waiting", "cancelled"}:
                     raise ProjectionError("node-settled requires a terminal status")
                 builder.states[event.node] = status
                 _fold_node_result(builder, event)
-                if event.node in builder.dropped_ids:
+                if dropped:
                     if status != "cancelled":
                         raise ProjectionError("a dropped running node must settle cancelled")
                     builder.states.pop(event.node, None)
@@ -356,9 +357,8 @@ def _fold_edit_operation(builder: _RoundBuilder, operation: object) -> None:
         builder.dropped_ids.add(node)
         builder.nodes = [definition for definition in builder.nodes if definition["id"] != node]
         builder.edges = [edge for edge in builder.edges if node not in edge]
-        if builder.states.get(node) != "running":
-            builder.states.pop(node, None)
-            builder.results.pop(node, None)
+        builder.states.pop(node, None)
+        builder.results.pop(node, None)
     elif kind == "human-attested":
         ref = detail.get("ref")
         if not isinstance(ref, str) or ref != node or builder.states.get(ref) != "waiting":

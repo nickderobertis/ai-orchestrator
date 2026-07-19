@@ -203,3 +203,50 @@ def test_graph_mapping_falls_back_for_programmatic_nodes() -> None:
         "kind": "agent",
         "task": "Root",
     }
+
+
+def test_retry_replacement_shape_and_lineage_are_validated() -> None:
+    with pytest.raises(EditError, match="replacement node mapping"):
+        apply_edit(
+            _graph(),
+            EditCommand("retry", {"op": "retry", "id": "root", "node": "bad"}),
+            states={"root": "failed"},
+            attestations=(),
+        )
+    with pytest.raises(EditError, match="must be new"):
+        apply_edit(
+            _graph(),
+            EditCommand("retry", {"op": "retry", "id": "root", "node": {"id": "leaf"}}),
+            states={"root": "failed"},
+            attestations=(),
+        )
+    _, events = apply_edit(
+        _graph(),
+        EditCommand(
+            "retry",
+            {
+                "op": "retry",
+                "id": "root",
+                "node": {
+                    "id": "replacement",
+                    "task": "No diff",
+                    "expects_no_diff": True,
+                    "deps": ["approve"],
+                },
+            },
+        ),
+        states={"root": "cancelled"},
+        attestations=(),
+    )
+    assert events[-1] == {
+        "kind": "edge-added",
+        "detail": {"from": "approve", "to": "replacement"},
+    }
+
+    with pytest.raises(EditError, match="duplicate task id"):
+        apply_edit(
+            _graph(),
+            EditCommand("add", {"op": "add", "node": {"id": "root", "task": "duplicate"}}),
+            states={},
+            attestations=(),
+        )
