@@ -177,19 +177,92 @@ today's fields when absent, so local value never blocks on upstream.** The
 fallback inputs are `labels.role`, `labels.run_id`, per-record `duration_ms`,
 `command_execution` events, and `usage`.
 
-Apply the fallback in this order:
+Session selection is common to every row below. Prefer onejudge's native
+`telemetry.sessions` linkage. Otherwise select sessions whose `labels.run_id`
+matches the run and classify each by `labels.role`. Only when `labels.role` is
+absent may the existing recognized judge name prefixes classify a legacy session;
+all other legacy sessions are agent sessions. A node additionally requires the
+matching `labels.node` (and `labels.step` when producing a step-scoped value).
+Records that cannot be linked to the run are not consumed.
 
-1. Use onejudge's native `telemetry.sessions` linkage and party summaries.
-2. Otherwise select all sessions with matching `labels.run_id`, classify them by
-   `labels.role`, and aggregate their new oneharness fields.
-3. Otherwise classify the recognized legacy judge name prefixes as judge and
-   all other sessions as agent. Sum each record's non-negative `duration_ms` as
-   legacy party elapsed time, identify tool presence from `command_execution`
-   events without inventing tool duration, and aggregate whatever legacy
-   `usage` fields exist.
-4. Derive wall time from the run journal as today. Put every duration that cannot
-   be separated safely in `idle_orchestration_ms` and `unattributed_ms`; never
-   guess an agent/judge/tool split from token counts or event counts.
+### Timing and fractions
+
+| Consumer field | Preferred source | Exact legacy fallback and emitted value |
+| --- | --- | --- |
+| `timing.wall_ms` | onejudge `telemetry.wall_ms`; otherwise the union of linked oneharness `started_at`/`finished_at` intervals clipped to the journal run interval | Journal timing from first run event through terminal settlement, or observation time while active. Emit `0` only when the journal has no interval. |
+| `timing.agent_model_ms` | onejudge `telemetry.agent.model_ms`; otherwise union linked agent oneharness model intervals or sum their `model_ms` when intervals are unavailable | No legacy field separates model waiting from tools. Emit `0` and move the linked records' non-negative `duration_ms` into `unattributed_ms`; do not call it agent-model time. |
+| `timing.judge_model_ms` | onejudge `telemetry.judge.model_ms`; otherwise union linked judge oneharness model intervals or sum their `model_ms` | As above: legacy `duration_ms` is unseparated. Emit `0` here and account for it in `unattributed_ms`. If no judge can be linked, this is measured-unknown represented by `0` plus nonzero unattributed time, not proof that no judging occurred. |
+| `timing.tool_ms` | union the native timed tool intervals linked through onejudge; otherwise union oneharness timed `tool_call` events | Legacy `command_execution` events prove tool presence but carry no duration. Emit `0` and leave their enclosing record `duration_ms` unattributed. No command event means “no legacy evidence,” not a measured zero. |
+| `timing.idle_orchestration_ms` | onejudge `telemetry.orchestration_ms`, reconciled as the non-negative wall remainder after interval precedence | Journal `wall_ms` minus measured agent-model, judge-model, and tool intervals. This remainder includes both actual orchestration and unknown legacy time and is never negative. |
+| `timing.unattributed_ms` | `0` when native linkage and interval-complete onejudge/oneharness timing covers the run | Union legacy linked record spans when placeable; otherwise the lesser of the summed non-negative per-record `duration_ms` and journal `wall_ms`, plus uncovered journal remainder. Clip and union so it never exceeds `wall_ms`. This value is contained within `idle_orchestration_ms`, not added beside it. |
+| `timing.fractions.agent_model` | Derived from the emitted `agent_model_ms / wall_ms` | Use the emitted fallback milliseconds. Emit `0.0` when `wall_ms == 0`; otherwise the quotient, even when the numerator is zero because its duration is unattributed. |
+| `timing.fractions.judge_model` | Derived from the emitted `judge_model_ms / wall_ms` | Same rule. |
+| `timing.fractions.tool` | Derived from the emitted `tool_ms / wall_ms` | Same rule. A legacy `command_execution` event alone therefore does not create a positive fraction. |
+| `timing.fractions.idle_orchestration` | Derived from the emitted `idle_orchestration_ms / wall_ms` | Same rule. It includes the unattributed share, which the adjacent `unattributed_ms` qualifies. |
+
+The same mapping applies independently to every field under `nodes[].timing`,
+using the node's onejudge summary or oneharness sessions selected by
+`labels.run_id` plus `labels.node`, and the node's `node-started` through
+settlement journal interval. A node with no journal interval emits zero timing
+and fractions. Run timing uses interval unions and the precedence rule above;
+node timing does not borrow duration from another node.
+
+Legacy per-record `duration_ms` therefore has one unambiguous meaning: it is
+evidence of elapsed party-session work for the compatibility
+`timing.agent_seconds` calculation and for coverage accounting, but it is not
+evidence of agent-model or judge-model latency. In the four-way model it remains
+inside `idle_orchestration_ms` and is explicitly counted by `unattributed_ms`
+until `model_ms` or timed tool events separate it.
+
+### Usage
+
+For every row, prefer the named onejudge party `usage` field, then aggregate the
+same field from role-linked oneharness records, then aggregate today's per-record
+`usage`. Native and legacy values may mix record by record. A counter or cost is
+`null` when any contributing linked record lacks that field; it is `0` only when
+all contributing records report measured zero. An empty party with authoritative
+native linkage has measured zero usage; a party that cannot be linked has unknown
+usage (`null`). Totals are `null` if either party is unknown and otherwise are
+the arithmetic sum; this prevents a partial total from looking complete.
+
+| Consumer field | Preferred source | Exact legacy fallback and emitted value |
+| --- | --- | --- |
+| `usage.agent.input_tokens` | onejudge `telemetry.agent.usage.input_tokens` | Sum agent-linked oneharness or legacy `usage.input_tokens`; otherwise `null` under the rule above. |
+| `usage.agent.output_tokens` | onejudge `telemetry.agent.usage.output_tokens` | Sum agent-linked `usage.output_tokens`; otherwise `null`. |
+| `usage.agent.cache_read_tokens` | onejudge `telemetry.agent.usage.cache_read_tokens` | Sum agent-linked `usage.cache_read_tokens`; otherwise `null`. |
+| `usage.agent.cache_write_tokens` | onejudge `telemetry.agent.usage.cache_write_tokens` | Sum agent-linked `usage.cache_write_tokens`; otherwise `null`. |
+| `usage.agent.cost_usd` | onejudge `telemetry.agent.usage.cost_usd` | Sum agent-linked `usage.cost_usd`; otherwise `null`. Never derive cost from tokens locally. |
+| `usage.judge.input_tokens` | onejudge `telemetry.judge.usage.input_tokens` | Sum judge-linked `usage.input_tokens`; otherwise `null`. |
+| `usage.judge.output_tokens` | onejudge `telemetry.judge.usage.output_tokens` | Sum judge-linked `usage.output_tokens`; otherwise `null`. |
+| `usage.judge.cache_read_tokens` | onejudge `telemetry.judge.usage.cache_read_tokens` | Sum judge-linked `usage.cache_read_tokens`; otherwise `null`. |
+| `usage.judge.cache_write_tokens` | onejudge `telemetry.judge.usage.cache_write_tokens` | Sum judge-linked `usage.cache_write_tokens`; otherwise `null`. |
+| `usage.judge.cost_usd` | onejudge `telemetry.judge.usage.cost_usd` | Sum judge-linked `usage.cost_usd`; otherwise `null`. Never derive cost from tokens locally. |
+| `usage.total.input_tokens` | Sum emitted agent and judge `input_tokens` | Sum only when both are known; otherwise `null`. |
+| `usage.total.output_tokens` | Sum emitted agent and judge `output_tokens` | Sum only when both are known; otherwise `null`. |
+| `usage.total.cache_read_tokens` | Sum emitted agent and judge `cache_read_tokens` | Sum only when both are known; otherwise `null`. |
+| `usage.total.cache_write_tokens` | Sum emitted agent and judge `cache_write_tokens` | Sum only when both are known; otherwise `null`. |
+| `usage.total.cost_usd` | Sum emitted agent and judge `cost_usd` | Sum only when both are known; otherwise `null`. |
+
+`nodes[].usage` applies this exact table to sessions selected by the node labels.
+It does not apportion a run-level usage value across nodes. Unknown fields render
+as `?` in `--breakdown` and remain JSON `null` in the machine view.
+
+### Linkage, quality, and work totals
+
+| Consumer field | Preferred source | Exact legacy fallback and emitted value |
+| --- | --- | --- |
+| `nodes[].sessions` | onejudge `telemetry.sessions` records linked to the node | Build entries from oneharness sessions matching `labels.run_id` and `labels.node`; use `labels.role`, then the legacy name-prefix classification. Preserve the native `session_id`; set `history_id` to the history record identity when present, otherwise `null`; set `turn_index` to `null` because record order is not a native turn identity. Emit `[]` when no session can be linked. |
+| `telemetry_quality` | Completeness of native onejudge linkage and interval-complete oneharness timing | Emit `complete` only when all linked sessions have native role linkage and complete timing; `legacy` when no new timing field contributes; `partial` for every mixture, invalid optional field, unknown usage field, or uncovered interval. |
+| `sources` | Record each preferred source actually consumed | Emit the ordered de-duplicated subset of `onejudge`, `oneharness`, `history_legacy`, and `journal_legacy`. `labels.run_id`/`labels.role`, `duration_ms`, `command_execution`, and legacy `usage` imply `history_legacy`; journal wall or node intervals imply `journal_legacy`. Emit `[]` only when the run has neither linked history nor journal timing. |
+| `node_work_ms.agent_model_ms` | Sum emitted `nodes[].timing.agent_model_ms` | Exact sum, including zero fallbacks; never infer from legacy `duration_ms`. |
+| `node_work_ms.judge_model_ms` | Sum emitted `nodes[].timing.judge_model_ms` | Exact sum, including zero fallbacks. |
+| `node_work_ms.tool_ms` | Sum emitted `nodes[].timing.tool_ms` | Exact sum; legacy `command_execution` events without timing contribute zero. |
+| `node_work_ms.wall_ms` | Sum emitted `nodes[].timing.wall_ms` | Exact node sum without overlap removal. Nodes lacking an interval contribute zero. |
+
+`node_work_ms` deliberately has no idle or unattributed field: those are
+wall-clock coverage qualifications, while this object reports parallelizable
+work totals. Consumers use each node's `unattributed_ms` and the run-level
+quality fields to judge the totals.
 
 Fallback is per field, not per record or run: for example, native timing can
 coexist with legacy usage, and a provider-native token count can coexist with an
