@@ -12,7 +12,6 @@ from pathlib import Path
 import yaml
 
 from orchestrator import BASE_CONFIG, REPO_ROOT
-from orchestrator.channel import CHANNEL_DIR_ENV, CHANNEL_RUN_ID_ENV, create_channel
 from orchestrator.dispatch import launch_orchestrator
 
 FAKE_BACKEND = REPO_ROOT / "tests" / "e2e" / "fake_backend.py"
@@ -319,7 +318,7 @@ def test_continuation_round_proposal_uses_reconciled_round_number(
         json.dumps(
             {
                 "schema_version": 3,
-                "name": "continuation-proposal",
+                "name": "continuation-channel",
                 "concurrency": 2,
                 "tasks": [
                     {"id": "gate", "kind": "human", "task": "Approve continuation"},
@@ -340,68 +339,25 @@ def test_continuation_round_proposal_uses_reconciled_round_number(
         ),
         encoding="utf-8",
     )
-    base = _base(tmp_path)
-    first = subprocess.run(
-        [
-            "just",
-            "run-plan",
-            str(plan),
-            "--run",
-            "continuation-proposal",
-            "--runs-dir",
-            str(runs),
-            "--base",
-            str(base),
-            "--provider",
-            "command",
-        ],
-        cwd=REPO_ROOT,
-        text=True,
-        capture_output=True,
+    run_id = _launch_cli(plan, runs, _base(tmp_path), onejudge_bin)
+    boundary = _next_cli(run_id, runs)
+    assert boundary["surface"]["kind"] == "milestone"
+    _reply_cli(
+        run_id,
+        runs,
+        {"completion": False, "message": "continue round two", "reason": "gate approved"},
     )
-    assert first.returncode == 1
-    channel = create_channel(runs / "continuation-proposal")
-    env = {
-        **os.environ,
-        CHANNEL_DIR_ENV: str(channel),
-        CHANNEL_RUN_ID_ENV: "continuation-proposal",
-    }
-    resumed = subprocess.Popen(
-        [
-            "just",
-            "next-round",
-            "continuation-proposal",
-            "--complete-human",
-            "gate",
-            "--runs-dir",
-            str(runs),
-            "--base",
-            str(base),
-            "--provider",
-            "command",
-            "--onejudge-bin",
-            onejudge_bin,
-        ],
-        cwd=REPO_ROOT,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        env=env,
-    )
-    deadline = time.monotonic() + 10
-    round_two_status = runs / "continuation-proposal" / "round-02" / "status.json"
-    while time.monotonic() < deadline and not round_two_status.is_file():
-        time.sleep(0.02)
-    assert round_two_status.is_file()
-    proposal = _next_cli("continuation-proposal", runs)
+    proposal = _next_cli(run_id, runs)
     assert proposal["round"] == 2
     _reply_cli(
-        "continuation-proposal",
+        run_id,
         runs,
         {"completion": False, "message": "defer", "reason": "next continuation"},
     )
-    stdout, stderr = resumed.communicate(timeout=15)
-    assert resumed.returncode == 0, (stdout, stderr)
+    closeout = _next_cli(run_id, runs)
+    assert closeout["surface"]["kind"] == "closeout"
+    _reply_cli(run_id, runs, {"completion": True, "reason": "round two verified"})
+    _wait_report(runs / run_id / "orchestrator" / "report.json")
 
 
 def test_orchestrate_cli_reports_launch_boundary_failures(tmp_path: Path) -> None:

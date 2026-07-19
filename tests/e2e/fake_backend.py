@@ -142,9 +142,34 @@ def main() -> int:
             if orchestrator_plan is not None:
                 plan_path = orchestrator_plan.plan
                 plan_text = plan_path.read_text(encoding="utf-8")
-                if _assistant_turns(messages) == 0:
+                orchestrator_turn = _assistant_turns(messages)
+                if orchestrator_turn == 0:
                     subprocess.run(
                         orchestrator_plan.argv,
+                        check="continuation-channel" not in plan_text,
+                        capture_output=True,
+                        text=True,
+                    )
+                elif orchestrator_turn == 1 and "continuation-channel" in plan_text:
+                    nested_runs = [
+                        path
+                        for path in orchestrator_plan.runs_dir.iterdir()
+                        if path.is_dir()
+                        and path.name.startswith("continuation-channel-")
+                        and (path / "round-01" / "result.json").is_file()
+                    ]
+                    if len(nested_runs) != 1:
+                        raise RuntimeError("expected one settled continuation-channel run")
+                    forwarded = orchestrator_plan.argv[orchestrator_plan.argv.index("--runs-dir") :]
+                    subprocess.run(
+                        [
+                            "just",
+                            "next-round",
+                            nested_runs[0].name,
+                            "--complete-human",
+                            "gate",
+                            *forwarded,
+                        ],
                         check=True,
                         capture_output=True,
                         text=True,
