@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import TypedDict, TypeGuard
 
 from .coordination import advisory_lock, atomic_json
+from .environment import CHANNEL_ENV_PREFIX
 
 NOOP_GATE = "<no-op>"
 
@@ -185,6 +186,11 @@ def run_gate(
     and binds the verdict to HEAD, comparison identity, and the gate command.
     """
     directory = Path(project_dir)
+    gate_env = {
+        key: value
+        for key, value in {**os.environ, **(env or {})}.items()
+        if not key.startswith(CHANNEL_ENV_PREFIX)
+    }
     context = _attestation_context(directory, command, env)
     if context is not None and _has_attestation(context):
         return VerifyResult(
@@ -201,7 +207,7 @@ def run_gate(
             text=True,
             capture_output=True,
             timeout=timeout,
-            env={**os.environ, **(env or {})},
+            env=gate_env,
         )
     except FileNotFoundError:
         return VerifyResult(

@@ -29,6 +29,7 @@ from typing import Any, Protocol
 from .config import ConfigError
 from .coordination import advisory_lock, atomic_json
 from .edits import EDIT_PROTOCOL_VERSION, EditCommand, EditError, parse_commands
+from .environment import CHANNEL_ENV_PREFIX
 from .runs import latest_round, load_mapping, validate_run_id
 
 
@@ -40,8 +41,8 @@ class ChannelTimeout(TimeoutError):
     """The other side did not rendezvous before the bounded deadline."""
 
 
-CHANNEL_DIR_ENV = "AI_ORCHESTRATOR_CHANNEL_DIR"
-CHANNEL_RUN_ID_ENV = "AI_ORCHESTRATOR_CHANNEL_RUN_ID"
+CHANNEL_DIR_ENV = f"{CHANNEL_ENV_PREFIX}DIR"
+CHANNEL_RUN_ID_ENV = f"{CHANNEL_ENV_PREFIX}RUN_ID"
 CHANNEL_ENDPOINTS = ("up.fifo", "down.fifo")
 
 

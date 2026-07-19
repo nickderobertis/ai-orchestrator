@@ -112,6 +112,19 @@ def test_run_gate_passes_comparison_context(tmp_path) -> None:
     assert result.ok
 
 
+def test_run_gate_scrubs_parent_orchestrator_channel(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("AI_ORCHESTRATOR_CHANNEL_DIR", "/live/channel")
+    monkeypatch.setenv("AI_ORCHESTRATOR_CHANNEL_RUN_ID", "outer-run")
+    monkeypatch.setenv("AI_ORCHESTRATOR_CHANNEL_FUTURE", "private")
+
+    result = run_gate(
+        tmp_path,
+        ["sh", "-c", "test -z \"$(env | grep '^AI_ORCHESTRATOR_CHANNEL_')\""],
+    )
+
+    assert result.ok, result.output
+
+
 def test_run_gate_reuses_only_exact_commit_and_comparison(tmp_path) -> None:
     subprocess.run(["git", "init", "-b", "main", str(tmp_path)], check=True)
     subprocess.run(
