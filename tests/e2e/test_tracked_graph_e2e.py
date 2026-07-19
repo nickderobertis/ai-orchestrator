@@ -822,12 +822,14 @@ def test_real_cli_rejects_terminal_prefix_without_required_payload(
     events_path = runs / f"bad-payload-v{event_version}-{mutation}" / "events.jsonl"
     events = [json.loads(line) for line in events_path.read_text().splitlines()]
     prefix = []
-    # llmlint: ignore[tests_mirror_real_usage] Invalid versioned terminal payloads have no
-    # public producer; mutate the CLI-produced prefix solely to exercise its recovery boundary.
     for event in events:
         if event["kind"] == "round-finished":
             continue
+        # llmlint: ignore[tests_mirror_real_usage] Invalid journal versions cannot be produced
+        # by the public CLI; this deliberate corruption exercises defensive recovery parsing.
         event["version"] = event_version
+        # llmlint: ignore[tests_mirror_real_usage] Invalid terminal payloads cannot be produced
+        # by the public CLI; this deliberate corruption exercises defensive recovery parsing.
         if event["kind"] == "node-settled":
             match mutation:
                 case "missing":
