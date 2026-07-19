@@ -183,6 +183,32 @@ def test_frame_and_supervisor_shapes_are_validated(tmp_path: Path) -> None:
         _reply({"completion": False, "reason": "missing guidance"})
 
 
+def test_versioned_edits_are_independent_of_completion() -> None:
+    edit = _reply(
+        {
+            "version": 1,
+            "commands": [
+                {
+                    "op": "add",
+                    "node": {"id": "followup", "persona": "engineer", "task": "Follow up"},
+                }
+            ],
+        }
+    )
+    assert edit["completion"] is False
+    assert edit["commands"][0]["op"] == "add"
+
+    complete = _reply({"version": 1, "commands": [{"op": "complete", "reason": "published"}]})
+    assert complete == {
+        "completion": True,
+        "reason": "published",
+        "version": 1,
+        "commands": [{"op": "complete", "reason": "published"}],
+    }
+    with pytest.raises(ChannelError, match="version 1"):
+        _reply({"version": 2, "commands": [{"op": "complete", "reason": "done"}]})
+
+
 def test_channel_metadata_is_durable(tmp_path: Path) -> None:
     channel = create_channel(tmp_path / "run")
     assert json.loads((channel / "channel.json").read_text()) == {"schema_version": 1}

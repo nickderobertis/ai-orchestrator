@@ -26,6 +26,7 @@ from typing import Any, Protocol
 
 from .config import ConfigError
 from .coordination import advisory_lock, atomic_json
+from .edits import EditCommand, EditError, parse_commands
 from .runs import latest_round, load_mapping, validate_run_id
 
 
@@ -47,6 +48,8 @@ class ProposalSink(Protocol):
     def propose(self, node: str, message: str) -> None: ...
 
     def persist_replies(self) -> None: ...
+
+    def drain_commands(self) -> tuple[EditCommand, ...]: ...
 
 
 def create_channel(run_dir: Path) -> Path:
@@ -176,16 +179,38 @@ def _surface(request: Mapping[str, Any], run_id: str, round_number: int) -> dict
 
 
 def _reply(value: Mapping[str, Any]) -> dict[str, Any]:
+    try:
+        commands = parse_commands(value)
+    except EditError as exc:
+        raise ChannelError(str(exc)) from exc
     completion = value.get("completion")
     reason = value.get("reason")
+    if completion is None and commands:
+        completes = [command for command in commands if command.op == "complete"]
+        complete_reason = completes[-1].payload.get("reason") if completes else None
+        response: dict[str, Any] = {
+            "completion": bool(completes),
+            "reason": complete_reason or "versioned edit commands",
+            "version": 1,
+            "commands": [command.payload for command in commands],
+        }
+        if not completes:
+            response["message"] = "apply live graph edits"
+        return response
     if not isinstance(completion, bool) or not isinstance(reason, str):
         raise ChannelError("reply requires boolean completion and string reason")
     if completion:
-        return {"completion": True, "reason": reason}
+        response = {"completion": True, "reason": reason}
+        if commands:
+            response.update({"version": 1, "commands": [command.payload for command in commands]})
+        return response
     message = value.get("message")
     if not isinstance(message, str):
         raise ChannelError("continue reply requires string message")
-    return {"completion": False, "message": message, "reason": reason}
+    response = {"completion": False, "message": message, "reason": reason}
+    if commands:
+        response.update({"version": 1, "commands": [command.payload for command in commands]})
+    return response
 
 
 class ProposalPump:
@@ -197,6 +222,7 @@ class ProposalPump:
         self._round = round_number
         self._proposals: queue.Queue[dict[str, Any] | None] = queue.Queue()
         self._replies: queue.Queue[dict[str, Any]] = queue.Queue()
+        self._commands: queue.Queue[EditCommand] = queue.Queue()
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._service, daemon=True)
         self._thread.start()
@@ -221,6 +247,15 @@ class ProposalPump:
                 return
             atomic_json(self._channel_dir / "planner-verdict.json", response)
 
+    def drain_commands(self) -> tuple[EditCommand, ...]:
+        """Return commands to the reconciler thread without applying them here."""
+        commands: list[EditCommand] = []
+        while True:
+            try:
+                commands.append(self._commands.get_nowait())
+            except queue.Empty:
+                return tuple(commands)
+
     def close(self) -> None:
         self._stop.set()
         self._proposals.put(None)
@@ -244,6 +279,8 @@ class ProposalPump:
                     return
                 try:
                     response = _reply(read_message(self._channel_dir / "down.fifo", timeout=0.1))
+                    for command in parse_commands(response):
+                        self._commands.put(command)
                     self._replies.put(response)
                     break
                 except ChannelTimeout:
@@ -280,7 +317,7 @@ def relay_supervisor(channel_dir: Path, run_id: str, round_number: int, *, timeo
             else:
                 maximum = request.get("max", 5)
                 if (
-                    not isinstance(maximum, (int, float))
+                    not isinstance(maximum, int | float)
                     or isinstance(maximum, bool)
                     or not math.isfinite(maximum)
                     or maximum < 0
@@ -293,7 +330,7 @@ def relay_supervisor(channel_dir: Path, run_id: str, round_number: int, *, timeo
         )
         response = _reply(read_message(channel_dir / "down.fifo", timeout=timeout))
         atomic_json(channel_dir / "planner-verdict.json", response)
-    except (ChannelError, ChannelTimeout, json.JSONDecodeError, OSError) as exc:
+    except (ChannelError, ChannelTimeout, EditError, json.JSONDecodeError, OSError) as exc:
         print(f"relay-supervisor: {exc}", file=sys.stderr)
         return 1
     print(json.dumps(response))
@@ -382,7 +419,7 @@ def main_reply(argv: list[str] | None = None) -> int:
             _reply(value),
             timeout=args.timeout,
         )
-    except (ChannelError, ChannelTimeout, json.JSONDecodeError, OSError) as exc:
+    except (ChannelError, ChannelTimeout, EditError, json.JSONDecodeError, OSError) as exc:
         print(f"channel-reply: {exc}", file=sys.stderr)
         return 2
     return 0

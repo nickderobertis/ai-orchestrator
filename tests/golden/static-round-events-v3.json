@@ -1,8 +1,10 @@
 {
-  "version": 2,
+  "version": 3,
   "state_changing_kinds": [
     "node-added",
     "edge-added",
+    "edit-committed",
+    "run-completed",
     "round-started",
     "node-started",
     "human-waiting",

@@ -29,6 +29,7 @@ from .channel import (
 )
 from .config import ConfigError, load_yaml
 from .dispatch import Report
+from .edits import EditError, apply_edit
 from .journal import (
     TERMINAL_NODE_RESULT_FIELD,
     JournalSink,
@@ -339,6 +340,10 @@ def run_graph(
         if run.status == "done" and isinstance(run.payload, LifecycleResult)
     }
     guard = threading.Lock()
+    frontier = {nid: run.status for nid, run in (replayed_runs or {}).items()} | {
+        nid: "running" for nid in already_started
+    }
+    attestations: list[str] = []
 
     def settle(nid: str, node: GraphNode, node_log: NodeJournal) -> NodeRun:
         """Run one already-started node to its outcome, journaling how it settled."""
@@ -444,6 +449,7 @@ def run_graph(
 
     def run_one(nid: str) -> NodeRun:
         node = nodes[nid]
+        frontier[nid] = "running"
         node_log = NodeJournal(sink=log, node=NodeId(nid), run_id=run_id, round=round_number)
         if node.human:
             run = NodeRun("waiting", "awaiting human action")
@@ -484,11 +490,51 @@ def run_graph(
     actual.update({nid: NodeRun("running") for nid in already_started if nid not in actual})
 
     def on_settled(nid: str, run: NodeRun) -> None:
+        frontier[nid] = run.status
         if proposal_pump is None or not isinstance(run.payload, Report):
             return
         if run.payload.assessment and run.payload.assessment.strip().lower() != "none":
             proposal_pump.propose(nid, run.payload.assessment)
         proposal_pump.persist_replies()
+
+    def reconcile_commands(status: dict[str, str], actual: dict[str, NodeRun]) -> None:
+        nonlocal graph
+        if proposal_pump is None:
+            return
+        proposal_pump.persist_replies()
+        drain = getattr(proposal_pump, "drain_commands", lambda: ())
+        for command in drain():
+            try:
+                updated, operations = apply_edit(
+                    graph, command, states=frontier, attestations=attestations
+                )
+            except EditError as exc:
+                proposal_pump.propose("reconciler", f"rejected {command.op}: {exc}")
+                continue
+            # One event is the commit boundary: replay either sees every compiled
+            # edge mutation or none of them.
+            log.append("edit-committed", detail={"operations": cast(Any, operations)})
+            graph = updated
+            nodes.clear()
+            nodes.update({node.id: node for node in graph.tasks})
+            deps.clear()
+            deps.update({node.id: node.deps for node in graph.tasks})
+            dependents.clear()
+            dependents.update({node.id: [] for node in graph.tasks})
+            for node in graph.tasks:
+                for dependency in node.deps:
+                    dependents[dependency].append(node.id)
+            for operation in operations:
+                if operation["kind"] == "human-attested":
+                    ref = cast(str, operation["detail"]["ref"])
+                    attestations.append(ref)
+                    status[ref] = "done"
+                    actual[ref] = NodeRun("done", payload="human-attested")
+                elif operation["kind"] == "node-dropped":
+                    dropped = cast(str, operation["node"])
+                    if status.get(dropped) != "running":
+                        status.pop(dropped, None)
+                        actual.pop(dropped, None)
 
     runs, started_order = reconcile_dag(
         lambda: list(nodes),
@@ -499,6 +545,7 @@ def run_graph(
         started_order=replayed_order,
         on_settled=on_settled,
         on_tick=proposal_pump.persist_replies if proposal_pump is not None else None,
+        on_reconcile=reconcile_commands if proposal_pump is not None else None,
     )
     return _collect(nodes, runs, started_order)
 

@@ -31,7 +31,7 @@ class ProjectionError(ValueError):
     """An authoritative event stream cannot be folded safely."""
 
 
-NodeState = Literal["running", "done", "failed", "waiting"]
+NodeState = Literal["running", "done", "failed", "waiting", "cancelled"]
 
 
 class ProjectedPlan(TypedDict, total=False):
@@ -149,6 +149,18 @@ def project_round(events: list[Event], run_id: RunId, round_number: int) -> Roun
                 if not isinstance(source, str) or not isinstance(target, str):
                     raise ProjectionError("edge-added requires string 'from' and 'to' references")
                 builder.edges.append((source, target))
+            case "edit-committed":
+                operations = detail.get("operations")
+                if not isinstance(operations, list) or not operations:
+                    raise ProjectionError("edit-committed requires non-empty operations")
+                snapshot = _copy_builder(builder)
+                try:
+                    for operation in operations:
+                        _fold_edit_operation(builder, operation)
+                    _validate_live_topology(builder)
+                except ProjectionError:
+                    builder = snapshot
+                    raise
             case "round-started":
                 if round_started:
                     raise ProjectionError("round-started may occur only once")
@@ -277,6 +289,80 @@ def project_round(events: list[Event], run_id: RunId, round_number: int) -> Roun
         builder.result,
         last_seq,
     )
+
+
+def _copy_builder(builder: _RoundBuilder) -> _RoundBuilder:
+    return _RoundBuilder(
+        meta=dict(builder.meta),
+        nodes=[dict(node) for node in builder.nodes],
+        node_ids=set(builder.node_ids),
+        edges=list(builder.edges),
+        states=dict(builder.states),
+        results=dict(builder.results),
+        attestations=list(builder.attestations),
+        result=builder.result,
+    )
+
+
+def _fold_edit_operation(builder: _RoundBuilder, operation: object) -> None:
+    if not isinstance(operation, dict) or not isinstance(operation.get("kind"), str):
+        raise ProjectionError("edit operation must contain a kind")
+    kind = operation["kind"]
+    detail = operation.get("detail", {})
+    node = operation.get("node")
+    if not isinstance(detail, dict):
+        raise ProjectionError("edit operation detail must be a mapping")
+    if kind == "node-added":
+        definition = detail.get("definition")
+        if not isinstance(definition, dict) or not isinstance(definition.get("id"), str):
+            raise ProjectionError("node-added requires a node definition")
+        if definition["id"] in builder.node_ids:
+            raise ProjectionError(f"duplicate node-added for {definition['id']!r}")
+        builder.node_ids.add(definition["id"])
+        builder.nodes.append(dict(definition))
+    elif kind in {"edge-added", "edge-removed"}:
+        source, target = detail.get("from"), detail.get("to")
+        if not isinstance(source, str) or not isinstance(target, str):
+            raise ProjectionError(f"{kind} endpoints must be strings")
+        edge = (source, target)
+        if kind == "edge-added":
+            if edge in builder.edges:
+                raise ProjectionError("duplicate edge-added")
+            builder.edges.append(edge)
+        else:
+            if edge not in builder.edges:
+                raise ProjectionError("edge-removed references an absent edge")
+            builder.edges.remove(edge)
+    elif kind == "node-dropped":
+        if not isinstance(node, str) or node not in builder.node_ids:
+            raise ProjectionError("node-dropped references an unknown node")
+        builder.node_ids.remove(node)
+        builder.nodes = [definition for definition in builder.nodes if definition["id"] != node]
+        builder.edges = [edge for edge in builder.edges if node not in edge]
+        builder.states.pop(node, None)
+        builder.results.pop(node, None)
+    elif kind == "human-attested":
+        ref = detail.get("ref")
+        if not isinstance(ref, str) or ref != node or builder.states.get(ref) != "waiting":
+            raise ProjectionError("human-attested target is not currently waiting")
+        if ref in builder.attestations:
+            raise ProjectionError(f"human action {ref!r} was attested more than once")
+        builder.attestations.append(ref)
+        builder.states[ref] = "done"
+    elif kind in {"reparent", "retry-requested", "run-completed"}:
+        return
+    else:
+        raise ProjectionError(f"unknown committed edit operation {kind!r}")
+
+
+def _validate_live_topology(builder: _RoundBuilder) -> None:
+    by_id = {node["id"]: dict(node) for node in builder.nodes}
+    for node in by_id.values():
+        node["deps"] = [source for source, target in builder.edges if target == node["id"]]
+    try:
+        parse_graph({**builder.meta, "tasks": list(by_id.values())})
+    except PlanError as exc:
+        raise ProjectionError(str(exc)) from exc
 
 
 def project_run(path: Path, run_id: RunId, round_number: int) -> RoundProjection:
