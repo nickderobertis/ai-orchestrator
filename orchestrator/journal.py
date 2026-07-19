@@ -38,7 +38,7 @@ from .runs import NodeId, RunId, StepId
 
 # Bump when a record's *shape* changes incompatibly. Readers skip records they do
 # not understand rather than failing a round that is only being observed.
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 2
 SUPPORTED_SCHEMA_VERSIONS = frozenset({1, SCHEMA_VERSION})
 
 JOURNAL_NAME = "events.jsonl"
@@ -67,12 +67,6 @@ Detail: TypeAlias = "Mapping[str, DetailValue]"
 EventKind = Literal[
     "node-added",
     "edge-added",
-    "edit-committed",
-    "node-dropped",
-    "edge-removed",
-    "reparent",
-    "retry-requested",
-    "run-completed",
     "round-started",
     "round-finished",
     "node-started",
@@ -101,8 +95,6 @@ EVENT_KINDS: frozenset[EventKind] = frozenset(get_args(EventKind))
 AUTHORITATIVE_EVENT_KINDS: tuple[EventKind, ...] = (
     "node-added",
     "edge-added",
-    "edit-committed",
-    "run-completed",
     "round-started",
     "node-started",
     "human-waiting",
@@ -119,20 +111,8 @@ TERMINAL_NODE_EVENT_KINDS: tuple[EventKind, ...] = (
 TERMINAL_NODE_RESULT_FIELD = "result"
 TERMINAL_NODE_RESULT_TYPE = "GraphResultItem"
 AUDIT_EVENT_KINDS: frozenset[EventKind] = EVENT_KINDS - frozenset(AUTHORITATIVE_EVENT_KINDS)
-ROUND_EVENT_KINDS: frozenset[EventKind] = frozenset(
-    {"round-started", "round-finished", "run-completed"}
-)
-GRAPH_EVENT_KINDS: frozenset[EventKind] = frozenset(
-    {
-        "node-added",
-        "edge-added",
-        "edit-committed",
-        "node-dropped",
-        "edge-removed",
-        "reparent",
-        "retry-requested",
-    }
-)
+ROUND_EVENT_KINDS: frozenset[EventKind] = frozenset({"round-started", "round-finished"})
+GRAPH_EVENT_KINDS: frozenset[EventKind] = frozenset({"node-added", "edge-added"})
 STEP_EVENT_KINDS: frozenset[EventKind] = frozenset({"step-started", "step-settled"})
 
 
@@ -468,12 +448,6 @@ class Journal:
                 os.fsync(handle.fileno())
             self.seq = event.seq
         return event
-
-    def append_transaction(self, operations: Sequence[Mapping[str, DetailValue]]) -> Event:
-        """Append a validated edit's events as one atomic replay record."""
-        if not operations:
-            raise JournalError("an edit transaction requires at least one operation")
-        return self.append("edit-committed", detail={"operations": list(operations)})
 
     def events(self) -> list[Event]:
         """Read only records owned by this journal's run.
