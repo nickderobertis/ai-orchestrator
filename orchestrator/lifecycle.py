@@ -580,9 +580,9 @@ def _draft_pr_body(
     return fallback
 
 
-def _should_draft_pr_body(title: str | None, body: str | None) -> bool:
-    """An explicit title or body opts out of automatic PR-body authorship."""
-    return title is None and body is None
+def _should_draft_pr_body(_title: str | None, body: str | None) -> bool:
+    """An explicit body opts out of automatic PR-body authorship; a title does not."""
+    return body is None
 
 
 def _effective_publication(

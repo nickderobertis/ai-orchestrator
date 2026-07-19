@@ -106,9 +106,14 @@ def test_pr_body_drafting_reads_output_and_falls_back(tmp_path) -> None:
 
 @pytest.mark.parametrize(
     ("title", "body", "expected"),
-    [(None, None, True), ("feat: supplied", None, False), (None, "supplied", False)],
+    [
+        (None, None, True),
+        ("feat: supplied", None, True),
+        (None, "supplied", False),
+        ("feat: supplied", "supplied", False),
+    ],
 )
-def test_explicit_pr_metadata_skips_body_drafting(title, body, expected) -> None:
+def test_only_explicit_pr_body_skips_body_drafting(title, body, expected) -> None:
     assert _should_draft_pr_body(title, body) is expected
 
 

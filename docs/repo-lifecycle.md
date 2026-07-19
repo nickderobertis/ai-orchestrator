@@ -267,9 +267,9 @@ persona. That agent reads the completed diff and writes a terse body following
 `Additional info`) to a temporary path outside the worktree. The
 lifecycle reads and removes that artifact, then appends stack metadata as usual.
 This costs exactly one extra dispatch per published PR, including workstream and
-draft-checkpoint PRs. An explicit title or body skips drafting. A failed,
-incomplete, or empty drafting result falls back to the legacy deterministic body,
-so description generation never prevents publication.
+draft-checkpoint PRs. An explicit body skips drafting; an explicit title does not.
+A failed, incomplete, or empty drafting result falls back to the legacy
+deterministic body, so description generation never prevents publication.
 
 Run these nodes with `just run-plan`; `just repo-plan` is a deprecated alias that
 accepts old lifecycle-only files unchanged. See
