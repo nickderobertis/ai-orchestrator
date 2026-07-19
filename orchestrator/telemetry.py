@@ -8,11 +8,19 @@ import math
 import sys
 import time
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal, TypedDict, cast
 
 from .detail_snapshot import CheckRollup
-from .history import HistoryError, all_sessions, session_duration_ms, session_records, session_role
+from .history import (
+    HistoryError,
+    SessionRole,
+    all_sessions,
+    session_duration_ms,
+    session_records,
+    session_role,
+)
 from .journal import JOURNAL_NAME, Event, read_events
 from .monitor import DetailSnapshot, load_snapshot, run_state
 from .runs import (
@@ -29,6 +37,9 @@ from .runs import (
 from .verify import GateAttestation
 
 TELEMETRY_SCHEMA_VERSION = 2
+SUPPORTED_HISTORY_SCHEMA_VERSIONS = ("0.2", "0.3", 1, 2)
+TelemetryQuality = Literal["complete", "partial", "legacy"]
+TelemetrySource = Literal["onejudge", "oneharness", "history_legacy", "journal_legacy"]
 FailureClass = Literal[
     "agent", "gate", "checks", "publication", "timeout", "provider", "configuration", "unknown"
 ]
@@ -78,7 +89,7 @@ UsageKey = Literal[
 class SessionLink(TypedDict):
     session_id: str
     history_id: str | None
-    role: str
+    role: SessionRole
     turn_index: int | None
 
 
@@ -91,6 +102,13 @@ class MetricsRecord(TypedDict):
     green_to_publication_seconds: list[float]
     turns: dict[int, int]
     usage: UsageValues
+
+
+class NodeWorkRecord(TypedDict):
+    agent_model_ms: int
+    judge_model_ms: int
+    tool_ms: int
+    wall_ms: int
 
 
 @dataclass(frozen=True)
@@ -211,9 +229,9 @@ class RunTelemetry:
     check_rollup: CheckRollup = field(default_factory=CheckRollup)
     green_to_publication_seconds: list[float] = field(default_factory=list)
     usage: UsageRecord = field(default_factory=lambda: cast(UsageRecord, {}))
-    telemetry_quality: Literal["complete", "partial", "legacy"] = "legacy"
-    sources: list[str] = field(default_factory=list)
-    node_work_ms: dict[str, int] = field(default_factory=dict)
+    telemetry_quality: TelemetryQuality = "legacy"
+    sources: list[TelemetrySource] = field(default_factory=list)
+    node_work_ms: NodeWorkRecord = field(default_factory=lambda: cast(NodeWorkRecord, {}))
     turns: int = 0
     tool_commands: dict[str, int] = field(default_factory=dict)
 
@@ -359,6 +377,10 @@ def _number(value: object) -> int | float | None:
     )
 
 
+def _non_negative_int(value: object) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
+
+
 def _command_class(command: str) -> str:
     first = command.strip().split(maxsplit=1)[0] if command.strip() else "unknown"
     match first:
@@ -375,7 +397,13 @@ def _summarize_session(session: Any, records: list[dict[str, Any]]) -> _SessionS
     usage = cast(UsageValues, {})
     for field_name in USAGE_FIELDS:
         values = [
-            _number(raw.get(field_name)) if isinstance(raw, dict) else None
+            (
+                _number(raw.get(field_name))
+                if field_name == "cost_usd" and isinstance(raw, dict)
+                else _non_negative_int(raw.get(field_name))
+                if isinstance(raw, dict)
+                else None
+            )
             for record in records
             for raw in [record.get("usage")]
         ]
@@ -390,10 +418,31 @@ def _summarize_session(session: Any, records: list[dict[str, Any]]) -> _SessionS
     commands: dict[str, int] = {}
     for record in records:
         schema_version = record.get("schema_version")
-        if schema_version not in {None, "0.2", "0.3", 1, 2}:
+        if schema_version is not None and schema_version not in SUPPORTED_HISTORY_SCHEMA_VERSIONS:
             raise HistoryError(f"unsupported oneharness history schema version {schema_version!r}")
-        model = _number(record.get("model_ms"))
-        tool = _number(record.get("tool_ms"))
+        model = _non_negative_int(record.get("model_ms"))
+        tool = _non_negative_int(record.get("tool_ms"))
+        if schema_version in {"0.3", 2} and (
+            _non_negative_int(record.get("duration_ms")) is None or model is None or tool is None
+        ):
+            raise HistoryError("oneharness history schema v2 record has invalid required timing")
+        if schema_version in {"0.3", 2}:
+            started, finished = record.get("started_at"), record.get("finished_at")
+            try:
+                start_at = datetime.fromisoformat(started) if isinstance(started, str) else None
+                finish_at = datetime.fromisoformat(finished) if isinstance(finished, str) else None
+            except ValueError as exc:
+                raise HistoryError(
+                    "oneharness history schema v2 record has invalid interval"
+                ) from exc
+            duration = cast(int, record["duration_ms"])
+            if (
+                start_at is None
+                or finish_at is None
+                or finish_at < start_at
+                or cast(int, model) + cast(int, tool) > duration
+            ):
+                raise HistoryError("oneharness history schema v2 record has invalid interval")
         if model is None or tool is None:
             native_timing = False
         else:
@@ -405,9 +454,9 @@ def _summarize_session(session: Any, records: list[dict[str, Any]]) -> _SessionS
         for event in events:
             if not isinstance(event, dict) or event.get("kind") != "tool_call":
                 continue
-            duration = _number(event.get("duration_ms"))
-            if tool is None and duration is not None:
-                tool_ms += round(duration)
+            event_duration = _non_negative_int(event.get("duration_ms"))
+            if tool is None and event_duration is not None:
+                tool_ms += event_duration
             if event.get("name") not in {"command_execution", "bash"}:
                 continue
             inputs = event.get("input")
@@ -648,10 +697,13 @@ def collect_run(
     ]
     timing = _timing(round(wall * 1000), summaries, gate_seconds, wait)
     native = [summary.native_timing for summary in summaries]
-    quality: Literal["complete", "partial", "legacy"] = (
-        "complete" if native and all(native) else "partial" if any(native) else "legacy"
-    )
-    sources = (["oneharness"] if any(native) else []) + (["history_legacy"] if summaries else [])
+    # History timing without authoritative onejudge linkage remains partial.
+    quality: TelemetryQuality = "partial" if any(native) else "legacy"
+    sources: list[TelemetrySource] = []
+    if any(native):
+        sources.append("oneharness")
+    if summaries:
+        sources.append("history_legacy")
     if events:
         sources.append("journal_legacy")
     return RunTelemetry(
@@ -669,10 +721,12 @@ def collect_run(
         usage=_usage(summaries),
         telemetry_quality=quality,
         sources=sources,
-        node_work_ms={
-            key: sum(cast(TimingRecord, node.timing)[key] for node in nodes)
-            for key in ("agent_model_ms", "judge_model_ms", "tool_ms", "wall_ms")
-        },
+        node_work_ms=NodeWorkRecord(
+            agent_model_ms=sum(cast(TimingRecord, node.timing)["agent_model_ms"] for node in nodes),
+            judge_model_ms=sum(cast(TimingRecord, node.timing)["judge_model_ms"] for node in nodes),
+            tool_ms=sum(cast(TimingRecord, node.timing)["tool_ms"] for node in nodes),
+            wall_ms=sum(cast(TimingRecord, node.timing)["wall_ms"] for node in nodes),
+        ),
         turns=sum(summary.turns for summary in summaries),
         tool_commands=_command_counts(summaries),
     )

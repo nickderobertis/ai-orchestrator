@@ -12,6 +12,8 @@ from orchestrator.history import HistorySession, SessionId
 from orchestrator.journal import NodeJournal, open_journal
 from orchestrator.runs import NodeId, RunId, prepare_round, write_result
 from orchestrator.telemetry import (
+    SUPPORTED_HISTORY_SCHEMA_VERSIONS,
+    TELEMETRY_SCHEMA_VERSION,
     Failure,
     FractionsRecord,
     Provider,
@@ -191,6 +193,11 @@ def test_schema_v2_field_golden_prevents_cross_layer_drift() -> None:
         (Path(__file__).parent / "golden" / "telemetry-v2-fields.json").read_text(encoding="utf-8")
     )
     assert golden == {
+        "schema_version": TELEMETRY_SCHEMA_VERSION,
+        "history_schema_versions": list(SUPPORTED_HISTORY_SCHEMA_VERSIONS),
+        "roles": ["agent", "judge"],
+        "qualities": ["complete", "legacy", "partial"],
+        "sources": ["history_legacy", "journal_legacy", "oneharness", "onejudge"],
         "timing": sorted(TimingRecord.__required_keys__),
         "fractions": sorted(FractionsRecord.__required_keys__),
         "usage": sorted(UsageValues.__required_keys__),
@@ -272,7 +279,7 @@ def test_native_timing_usage_tools_and_breakdown_are_role_and_node_scoped(
     assert record["usage"]["total"]["cost_usd"] == pytest.approx(0.03)
     assert record["nodes"][0]["sessions"][1]["role"] == "judge"
     assert record["nodes"][0]["tool_commands"] == {"gate": 2}
-    assert record["telemetry_quality"] == "complete"
+    assert record["telemetry_quality"] == "partial"
     assert main(["--runs-dir", str(tmp_path / "runs"), "--all", "--breakdown"]) == 0
     assert "Turn histogram:" in capsys.readouterr().out
 

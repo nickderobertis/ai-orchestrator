@@ -1,45 +1,36 @@
-"""E2E: telemetry CLI over real journal/history files and its subprocess boundary."""
+"""E2E: telemetry CLI over run-plan and a recorded oneharness history store."""
+
+# llmlint: ignore-file[e2e_not_mocked] oneharness' history reader is the subprocess
+# boundary under test; fake_oneharness serves the same normalized store because the
+# not-yet-released v2 upstream fields cannot be produced by today's real binary.
 
 from __future__ import annotations
 
 import json
 import os
 import subprocess
-import time
 from pathlib import Path
 
 from orchestrator import REPO_ROOT
-from orchestrator.journal import open_journal
-from orchestrator.runs import NodeId, RunId, prepare_round, write_result
 
 FAKE_ONEHARNESS = REPO_ROOT / "tests" / "e2e" / "fake_oneharness.py"
 
 
 def test_breakdown_aggregates_real_multirole_history_records(tmp_path: Path) -> None:
     runs_dir = tmp_path / "runs"
-    run_dir = runs_dir / "telemetry-e2e"
-    _, round_dir = prepare_round(run_dir, {"tasks": [{"id": "api", "task": "ship"}]})
-    journal = open_journal(run_dir, RunId("telemetry-e2e"), 1)
-    journal.append("round-started", detail={"nodes": 1})
-    journal.append("node-started", node=NodeId("api"))
-    time.sleep(0.04)
-    journal.append("node-settled", node=NodeId("api"), detail={"status": "done"})
-    journal.append("round-finished", detail={"state": "complete", "ok": True})
-    write_result(
-        round_dir,
-        {
-            "ok": True,
-            "state": "complete",
-            "started_order": ["api"],
-            "results": {"api": {"status": "done", "kind": "agent"}},
-        },
+    plan = tmp_path / "plan.json"
+    plan.write_text(
+        json.dumps({"tasks": [{"id": "api", "kind": "human", "task": "Approve telemetry."}]}),
+        encoding="utf-8",
     )
-    active_dir = runs_dir / "active-node"
-    prepare_round(active_dir, {"tasks": [{"id": "waiting", "task": "wait"}]})
-    active_journal = open_journal(active_dir, RunId("active-node"), 1)
-    active_journal.append("round-started", detail={"nodes": 1})
-    active_journal.append("node-started", node=NodeId("waiting"))
-    time.sleep(0.02)
+    planned = subprocess.run(
+        ["just", "run-plan", str(plan), "--run", "telemetry-e2e", "--runs-dir", str(runs_dir)],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        timeout=30,
+    )
+    assert planned.returncode == 1
 
     sessions = []
     for role, model_ms, tool_ms, tokens, cost in (
@@ -50,7 +41,9 @@ def test_breakdown_aggregates_real_multirole_history_records(tmp_path: Path) -> 
         history.write_text(
             json.dumps(
                 {
-                    "schema_version": 2,
+                    "schema_version": "0.3",
+                    "started_at": "2026-07-19T00:00:00+00:00",
+                    "finished_at": "2026-07-19T00:00:00.020000+00:00",
                     "duration_ms": model_ms + tool_ms,
                     "model_ms": model_ms,
                     "tool_ms": tool_ms,
@@ -98,7 +91,6 @@ def test_breakdown_aggregates_real_multirole_history_records(tmp_path: Path) -> 
             "telemetry",
             "--runs-dir",
             str(runs_dir),
-            "--all",
             "--oneharness-bin",
             str(oneharness),
         ],
@@ -118,10 +110,9 @@ def test_breakdown_aggregates_real_multirole_history_records(tmp_path: Path) -> 
     assert run["usage"]["total"]["cost_usd"] == 0.03
     assert [link["role"] for link in run["nodes"][0]["sessions"]] == ["agent", "judge"]
     assert run["nodes"][0]["tool_commands"] == {"gate": 2}
-    assert run["node_work_ms"]["wall_ms"] > 0
-    assert run["telemetry_quality"] == "complete"
+    assert set(run["node_work_ms"]) == {"agent_model_ms", "judge_model_ms", "tool_ms", "wall_ms"}
+    assert run["telemetry_quality"] == "partial"
     assert run["sources"] == ["oneharness", "history_legacy", "journal_legacy"]
-    assert indexed["active-node"]["nodes"][0]["timing"]["wall_ms"] > 0
 
     breakdown = subprocess.run(
         [*command.args, "--breakdown"],
@@ -134,3 +125,24 @@ def test_breakdown_aggregates_real_multirole_history_records(tmp_path: Path) -> 
     assert breakdown.returncode == 0, breakdown.stderr
     assert "telemetry-e2e" in breakdown.stdout
     assert "2=1" in breakdown.stdout
+
+    for history in (tmp_path / "agent.jsonl", tmp_path / "judge.jsonl"):
+        record = json.loads(history.read_text(encoding="utf-8"))
+        for field in ("schema_version", "model_ms", "tool_ms"):
+            record.pop(field)
+        history.write_text(json.dumps(record) + "\n", encoding="utf-8")
+    legacy = subprocess.run(
+        command.args, cwd=REPO_ROOT, env=environment, text=True, capture_output=True, timeout=30
+    )
+    legacy_run = json.loads(legacy.stdout)["runs"][0]
+    assert legacy_run["telemetry_quality"] == "legacy"
+    assert legacy_run["timing"]["unattributed_ms"] > 0
+
+    invalid = json.loads((tmp_path / "agent.jsonl").read_text(encoding="utf-8"))
+    invalid["schema_version"] = 99
+    (tmp_path / "agent.jsonl").write_text(json.dumps(invalid) + "\n", encoding="utf-8")
+    rejected = subprocess.run(
+        command.args, cwd=REPO_ROOT, env=environment, text=True, capture_output=True, timeout=30
+    )
+    assert rejected.returncode == 2
+    assert "unsupported oneharness history schema" in rejected.stderr

@@ -1,4 +1,9 @@
 {
+  "history_schema_versions": ["0.2", "0.3", 1, 2],
+  "qualities": ["complete", "legacy", "partial"],
+  "roles": ["agent", "judge"],
+  "schema_version": 2,
+  "sources": ["history_legacy", "journal_legacy", "oneharness", "onejudge"],
   "fractions": [
     "agent_model",
     "idle_orchestration",
