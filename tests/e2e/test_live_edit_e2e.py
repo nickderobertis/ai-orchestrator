@@ -231,6 +231,7 @@ def test_real_cli_mutates_live_frontier_and_replays_atomic_edits(
     result_path = run_dir / "round-01" / "result.json"
     _wait_for(result_path, lambda text: bool(text.strip()), timeout=25)
     payload = json.loads(result_path.read_text(encoding="utf-8"))
+    assert payload["state"] == "failed"
     assert payload["results"]["added"]["status"] == "done"
     assert payload["results"]["pending"]["status"] == "done"
     assert payload["results"]["retry"]["status"] == "done"
