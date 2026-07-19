@@ -74,6 +74,29 @@ def test_proposal_pump_round_trips_and_persists_on_reconciler_drain(tmp_path: Pa
     assert json.loads(verdict.read_text(encoding="utf-8")) == reply
 
 
+@pytest.mark.parametrize("failure", ["write", "read"])
+def test_proposal_pump_stops_on_broken_fifo(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str
+) -> None:
+    channel = create_channel(tmp_path / "run")
+    if failure == "write":
+        monkeypatch.setattr(
+            "orchestrator.channel.write_message",
+            lambda *args, **kwargs: (_ for _ in ()).throw(OSError("closed")),
+        )
+    else:
+        monkeypatch.setattr("orchestrator.channel.write_message", lambda *args, **kwargs: None)
+        monkeypatch.setattr(
+            "orchestrator.channel.read_message",
+            lambda *args, **kwargs: (_ for _ in ()).throw(ChannelError("broken")),
+        )
+    pump = ProposalPump(channel, "live", 1)
+    pump.propose("worker", "discovery")
+    pump._thread.join(timeout=1)
+    assert not pump._thread.is_alive()
+    pump.close()
+
+
 def test_fifo_timeout_is_bounded(tmp_path: Path) -> None:
     channel = create_channel(tmp_path / "run")
     with pytest.raises(ChannelTimeout):
