@@ -329,48 +329,49 @@ def _fold_edit_operation(builder: _RoundBuilder, operation: object) -> None:
     node = operation.get("node")
     if not isinstance(detail, dict):
         raise ProjectionError("edit operation detail must be a mapping")
-    if kind == "node-added":
-        definition = detail.get("definition")
-        if not isinstance(definition, dict) or not isinstance(definition.get("id"), str):
-            raise ProjectionError("node-added requires a node definition")
-        if definition["id"] in builder.node_ids:
-            raise ProjectionError(f"duplicate node-added for {definition['id']!r}")
-        builder.node_ids.add(definition["id"])
-        builder.nodes.append(dict(definition))
-    elif kind in {"edge-added", "edge-removed"}:
-        source, target = detail.get("from"), detail.get("to")
-        if not isinstance(source, str) or not isinstance(target, str):
-            raise ProjectionError(f"{kind} endpoints must be strings")
-        edge = (source, target)
-        if kind == "edge-added":
-            if edge in builder.edges:
-                raise ProjectionError("duplicate edge-added")
-            builder.edges.append(edge)
-        else:
-            if edge not in builder.edges:
-                raise ProjectionError("edge-removed references an absent edge")
-            builder.edges.remove(edge)
-    elif kind == "node-dropped":
-        if not isinstance(node, str) or node not in builder.node_ids:
-            raise ProjectionError("node-dropped references an unknown node")
-        builder.node_ids.remove(node)
-        builder.dropped_ids.add(node)
-        builder.nodes = [definition for definition in builder.nodes if definition["id"] != node]
-        builder.edges = [edge for edge in builder.edges if node not in edge]
-        builder.states.pop(node, None)
-        builder.results.pop(node, None)
-    elif kind == "human-attested":
-        ref = detail.get("ref")
-        if not isinstance(ref, str) or ref != node or builder.states.get(ref) != "waiting":
-            raise ProjectionError("human-attested target is not currently waiting")
-        if ref in builder.attestations:
-            raise ProjectionError(f"human action {ref!r} was attested more than once")
-        builder.attestations.append(ref)
-        builder.states[ref] = "done"
-    elif kind in {"reparent", "retry-requested", "completion-requested"}:
-        return
-    else:
-        raise ProjectionError(f"unknown committed edit operation {kind!r}")
+    match kind:
+        case "node-added":
+            definition = detail.get("definition")
+            if not isinstance(definition, dict) or not isinstance(definition.get("id"), str):
+                raise ProjectionError("node-added requires a node definition")
+            if definition["id"] in builder.node_ids:
+                raise ProjectionError(f"duplicate node-added for {definition['id']!r}")
+            builder.node_ids.add(definition["id"])
+            builder.nodes.append(dict(definition))
+        case "edge-added" | "edge-removed":
+            source, target = detail.get("from"), detail.get("to")
+            if not isinstance(source, str) or not isinstance(target, str):
+                raise ProjectionError(f"{kind} endpoints must be strings")
+            edge = (source, target)
+            if kind == "edge-added":
+                if edge in builder.edges:
+                    raise ProjectionError("duplicate edge-added")
+                builder.edges.append(edge)
+            else:
+                if edge not in builder.edges:
+                    raise ProjectionError("edge-removed references an absent edge")
+                builder.edges.remove(edge)
+        case "node-dropped":
+            if not isinstance(node, str) or node not in builder.node_ids:
+                raise ProjectionError("node-dropped references an unknown node")
+            builder.node_ids.remove(node)
+            builder.dropped_ids.add(node)
+            builder.nodes = [definition for definition in builder.nodes if definition["id"] != node]
+            builder.edges = [edge for edge in builder.edges if node not in edge]
+            builder.states.pop(node, None)
+            builder.results.pop(node, None)
+        case "human-attested":
+            ref = detail.get("ref")
+            if not isinstance(ref, str) or ref != node or builder.states.get(ref) != "waiting":
+                raise ProjectionError("human-attested target is not currently waiting")
+            if ref in builder.attestations:
+                raise ProjectionError(f"human action {ref!r} was attested more than once")
+            builder.attestations.append(ref)
+            builder.states[ref] = "done"
+        case "reparent" | "retry-requested" | "completion-requested":
+            return
+        case _:
+            raise ProjectionError(f"unknown committed edit operation {kind!r}")
 
 
 def _validate_live_topology(builder: _RoundBuilder) -> None:

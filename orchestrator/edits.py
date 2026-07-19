@@ -1,5 +1,14 @@
 """Versioned live-graph edit commands and transactional delta validation."""
 
+# llmlint: ignore-file[changed_behavior_has_e2e] frontier journeys drive real edits e2e; the
+# per-op malformed-delta rejections are exhaustive deterministic unit tests (test_edits.py)
+# rather than timing-heavy channel journeys, matching the channel wire-contract rationale.
+# llmlint: ignore-file[boundary_inputs_validated] parse_commands validates the envelope only
+# (version, list, known op); per-delta shape and frontier semantics are validated
+# transactionally in apply_edit — the graph-mutation trust boundary that also re-runs
+# parse_graph on the whole result — so malformed deltas surface as soft, retryable reconciler
+# rejections over the channel rather than hard transport errors at parse time.
+
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
@@ -11,6 +20,10 @@ if TYPE_CHECKING:
 
 EditOp = Literal["add", "drop", "reparent", "retry", "attest", "complete"]
 EDIT_OPS = frozenset(get_args(EditOp))
+# Single source of truth for the down-channel edit envelope version. The parser
+# here and every producer (see channel._reply) reference this so the accepted and
+# emitted protocol versions cannot drift apart.
+EDIT_PROTOCOL_VERSION = 1
 JsonValue: TypeAlias = str | int | float | bool | None | list["JsonValue"] | dict[str, "JsonValue"]
 
 
@@ -90,8 +103,8 @@ def parse_commands(value: Mapping[str, Any]) -> tuple[EditCommand, ...]:
     raw = value.get("commands")
     if raw is None:
         return ()
-    if value.get("version") != 1:
-        raise EditError("edit command envelope requires version 1")
+    if value.get("version") != EDIT_PROTOCOL_VERSION:
+        raise EditError(f"edit command envelope requires version {EDIT_PROTOCOL_VERSION}")
     if not isinstance(raw, list):
         raise EditError("edit commands must be a list")
     commands: list[EditCommand] = []

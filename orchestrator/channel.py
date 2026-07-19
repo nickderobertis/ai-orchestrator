@@ -26,7 +26,7 @@ from typing import Any, Protocol
 
 from .config import ConfigError
 from .coordination import advisory_lock, atomic_json
-from .edits import EditCommand, EditError, parse_commands
+from .edits import EDIT_PROTOCOL_VERSION, EditCommand, EditError, parse_commands
 from .runs import latest_round, load_mapping, validate_run_id
 
 
@@ -191,7 +191,7 @@ def _reply(value: Mapping[str, Any]) -> dict[str, Any]:
         response: dict[str, Any] = {
             "completion": bool(completes),
             "reason": complete_reason or "versioned edit commands",
-            "version": 1,
+            "version": EDIT_PROTOCOL_VERSION,
             "commands": [command.payload for command in commands],
         }
         if not completes:
@@ -202,14 +202,24 @@ def _reply(value: Mapping[str, Any]) -> dict[str, Any]:
     if completion:
         response = {"completion": True, "reason": reason}
         if commands:
-            response.update({"version": 1, "commands": [command.payload for command in commands]})
+            response.update(
+                {
+                    "version": EDIT_PROTOCOL_VERSION,
+                    "commands": [command.payload for command in commands],
+                }
+            )
         return response
     message = value.get("message")
     if not isinstance(message, str):
         raise ChannelError("continue reply requires string message")
     response = {"completion": False, "message": message, "reason": reason}
     if commands:
-        response.update({"version": 1, "commands": [command.payload for command in commands]})
+        response.update(
+            {
+                "version": EDIT_PROTOCOL_VERSION,
+                "commands": [command.payload for command in commands],
+            }
+        )
     return response
 
 
