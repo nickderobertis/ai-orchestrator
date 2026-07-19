@@ -248,25 +248,59 @@ def apply_edit(
                 raise EditError("retry requires a running, failed, or cancelled node")
             if not isinstance(node, dict):
                 raise EditError("retry requires a replacement node mapping")
-            if node.get("id") in by_id:
+            replacement_id = node.get("id")
+            if not isinstance(replacement_id, str) or not replacement_id:
+                raise EditError("retry replacement requires a non-empty string id")
+            if replacement_id in by_id:
                 raise EditError("retry replacement id must be new")
-            tasks.append(dict(node))
+            replacement = dict(node)
+            replacement.setdefault("deps", list(by_id[node_id].get("deps", [])))
+            direct_dependents = [task for task in tasks if node_id in task.get("deps", [])]
+            reset: set[str] = {task["id"] for task in direct_dependents}
+            pending = list(reset)
+            while pending:
+                predecessor = pending.pop()
+                for task in tasks:
+                    if predecessor in task.get("deps", []) and task["id"] not in reset:
+                        reset.add(task["id"])
+                        pending.append(task["id"])
+            tasks.append(replacement)
             events.append(
                 {
                     "kind": "retry-requested",
                     "node": node_id,
-                    "detail": {"replacement": node.get("id")},
+                    "detail": {"replacement": replacement_id, "reset": sorted(reset)},
                 }
             )
             events.append(
                 {
                     "kind": "node-added",
-                    "detail": {"definition": _definition(node), "retry_of": node_id},
+                    "detail": {"definition": _definition(replacement), "retry_of": node_id},
                 }
             )
-            for dependency in node.get("deps", []):
+            for dependency in replacement.get("deps", []):
                 events.append(
-                    {"kind": "edge-added", "detail": {"from": dependency, "to": node.get("id")}}
+                    {
+                        "kind": "edge-added",
+                        "detail": {"from": dependency, "to": replacement_id},
+                    }
+                )
+            for dependent in direct_dependents:
+                dependent["deps"] = [
+                    replacement_id if dependency == node_id else dependency
+                    for dependency in dependent.get("deps", [])
+                ]
+                events.extend(
+                    [
+                        {
+                            "kind": "edge-removed",
+                            "detail": {"from": node_id, "to": dependent["id"]},
+                        },
+                        {
+                            "kind": "edge-added",
+                            "detail": {"from": replacement_id, "to": dependent["id"]},
+                        },
+                    ]
                 )
         case "attest":
             ref = item.get("ref")

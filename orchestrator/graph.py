@@ -585,6 +585,15 @@ def run_graph(
                 elif operation["kind"] == "retry-requested":
                     retried = operation["node"]
                     cancellations[retried].set()
+                    reset = operation["detail"].get("reset", [])
+                    if isinstance(reset, list):
+                        for dependent in reset:
+                            if isinstance(dependent, str) and status.get(dependent) in {
+                                "skipped",
+                                "blocked",
+                            }:
+                                status[dependent] = "pending"
+                                actual.pop(dependent, None)
                 elif operation["kind"] == "node-dropped":
                     dropped = operation["node"]
                     cancellations[dropped].set()

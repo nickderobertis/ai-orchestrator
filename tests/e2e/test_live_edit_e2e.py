@@ -76,6 +76,12 @@ def test_real_cli_mutates_live_frontier_and_replays_atomic_edits(
                         "task": "should-fail no-assessment",
                         "max_turns": 1,
                     },
+                    {
+                        "id": "after_retry",
+                        "task": "No diff",
+                        "expects_no_diff": True,
+                        "deps": ["failed"],
+                    },
                     {"id": "approve", "kind": "human", "task": "Approve"},
                     {
                         "id": "pending",
@@ -229,6 +235,7 @@ def test_real_cli_mutates_live_frontier_and_replays_atomic_edits(
     assert payload["results"]["added"]["status"] == "done"
     assert payload["results"]["pending"]["status"] == "done"
     assert payload["results"]["retry"]["status"] == "done"
+    assert payload["results"]["after_retry"]["status"] == "done"
     # Retry schedules a fresh replacement without mutating the settled node in
     # place: the failed original stays on the frontier as its own failed result.
     assert payload["results"]["failed"]["status"] == "failed"
@@ -239,6 +246,8 @@ def test_real_cli_mutates_live_frontier_and_replays_atomic_edits(
     # survives the retry-requested no-op while the replacement folds to done.
     assert projection.node_states["failed"] == "failed"
     assert projection.node_states["retry"] == "done"
+    after_retry = next(node for node in projection.plan["tasks"] if node["id"] == "after_retry")
+    assert after_retry["deps"] == ["retry"]
     committed = [
         line for line in events.read_text().splitlines() if '"kind": "edit-committed"' in line
     ]
@@ -252,8 +261,12 @@ def test_real_cli_mutates_live_frontier_and_replays_atomic_edits(
     assert retry["detail"]["operations"][0] == {
         "kind": "retry-requested",
         "node": "failed",
-        "detail": {"replacement": "retry"},
+        "detail": {"replacement": "retry", "reset": ["after_retry"]},
     }
+    assert retry["detail"]["operations"][-2:] == [
+        {"kind": "edge-removed", "detail": {"from": "failed", "to": "after_retry"}},
+        {"kind": "edge-added", "detail": {"from": "retry", "to": "after_retry"}},
+    ]
     # The planner's completion command is committed through the reconciler as a
     # completion-requested operation rather than being silently dropped.
     assert any('"completion-requested"' in line for line in committed)

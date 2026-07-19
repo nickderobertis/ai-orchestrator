@@ -89,8 +89,12 @@ def test_retry_and_attestation_require_the_current_frontier() -> None:
     assert retry_events[0] == {
         "kind": "retry-requested",
         "node": "root",
-        "detail": {"replacement": "root_retry"},
+        "detail": {"replacement": "root_retry", "reset": ["leaf"]},
     }
+    assert retry_events[-2:] == [
+        {"kind": "edge-removed", "detail": {"from": "root", "to": "leaf"}},
+        {"kind": "edge-added", "detail": {"from": "root_retry", "to": "leaf"}},
+    ]
 
     with pytest.raises(EditError, match="currently-ready"):
         apply_edit(
@@ -241,7 +245,18 @@ def test_retry_replacement_shape_and_lineage_are_validated() -> None:
         states={"root": "cancelled"},
         attestations=(),
     )
-    assert events[-1] == {
+    assert events[1] == {
+        "kind": "node-added",
+        "detail": {
+            "definition": {
+                "id": "replacement",
+                "task": "No diff",
+                "expects_no_diff": True,
+            },
+            "retry_of": "root",
+        },
+    }
+    assert events[2] == {
         "kind": "edge-added",
         "detail": {"from": "approve", "to": "replacement"},
     }

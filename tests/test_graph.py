@@ -200,10 +200,17 @@ def test_running_direct_and_lifecycle_drops_cancel_cooperatively() -> None:
 def test_reconciler_retries_failed_and_drops_unstarted_nodes() -> None:
     retry_graph = parse_graph(
         {
+            "schema_version": 3,
             "tasks": [
                 {"id": "failed", "persona": "engineer", "task": "Failed"},
+                {
+                    "id": "dependent",
+                    "task": "No diff",
+                    "expects_no_diff": True,
+                    "deps": ["failed"],
+                },
                 {"id": "keep", "kind": "human", "task": "Keep"},
-            ]
+            ],
         }
     )
     retry_pump = _EditingPump(
@@ -222,10 +229,14 @@ def test_reconciler_retries_failed_and_drops_unstarted_nodes() -> None:
         retry_graph,
         agent_runner=lambda node, **_: _report(node.persona),
         lifecycle_runner=lambda node, **_: _lifecycle(),
-        replayed_runs={"failed": NodeRun("failed", "failed earlier")},
+        replayed_runs={
+            "failed": NodeRun("failed", "failed earlier"),
+            "dependent": NodeRun("skipped", "dependency failed"),
+        },
         proposal_pump=retry_pump,  # type: ignore[arg-type] - focused in-memory command pump
     )
     assert retried.results["replacement"].status == "done"
+    assert retried.results["dependent"].status == "done"
 
     drop_graph = parse_graph(
         {
