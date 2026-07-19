@@ -73,10 +73,6 @@ def _remaining(deadline: float) -> float:
     return remaining
 
 
-def _acknowledgment_path(path: Path) -> Path:
-    return path.with_name(f"{path.name}.ack")
-
-
 @contextmanager
 def _channel_lock(path: Path, purpose: str, deadline: float) -> Iterator[None]:
     """Hold one endpoint lock within the caller's transport deadline."""
@@ -132,7 +128,7 @@ def read_message(path: Path, *, timeout: float) -> dict[str, Any]:
         finally:
             os.close(fd)
             if acknowledge:
-                _acknowledgment_path(path).touch(mode=0o600)
+                path.with_name(f"{path.name}.ack").touch(mode=0o600)
 
 
 def write_message(path: Path, value: Mapping[str, Any], *, timeout: float) -> None:
@@ -142,7 +138,7 @@ def write_message(path: Path, value: Mapping[str, Any], *, timeout: float) -> No
     encoded = (json.dumps(dict(value), separators=(",", ":")) + "\n").encode()
     deadline = time.monotonic() + timeout
     with _channel_lock(path, "write", deadline):
-        acknowledgment = _acknowledgment_path(path)
+        acknowledgment = path.with_name(f"{path.name}.ack")
         with suppress(FileNotFoundError):
             acknowledgment.unlink()
         while True:
