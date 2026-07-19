@@ -41,6 +41,7 @@ from .journal import (
 from .lifecycle import (
     LifecycleResult,
     LifecycleRunner,
+    RepoAliasResolver,
     RepoPlanNode,
     StackBase,
     add_lifecycle_args,
@@ -312,7 +313,7 @@ def load_graph(path: str | Path) -> Graph:
     return parse_graph(data)
 
 
-def validate_graph_repo_aliases(graph: Graph, registry: Registry | None = None) -> None:
+def validate_graph_repo_aliases(graph: Graph, registry: RepoAliasResolver | None = None) -> None:
     """Validate registry-backed lifecycle inputs before a graph is launched."""
     selected_registry = registry or Registry()
     for node in graph.tasks:

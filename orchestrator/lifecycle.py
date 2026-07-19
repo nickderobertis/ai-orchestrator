@@ -1746,6 +1746,14 @@ class LifecycleRunner(Protocol):
     ) -> LifecycleResult: ...
 
 
+class RepoAliasResolver(Protocol):
+    """Registry operations needed to validate lifecycle repository inputs."""
+
+    def repo_ref(self, spec: str) -> RepoRef: ...
+
+    def checkout_path(self, spec: str | Path) -> Path: ...
+
+
 @dataclass
 class RepoPlan:
     tasks: list[RepoPlanNode]
@@ -1824,7 +1832,7 @@ def parse_repo_plan(data: dict[str, Any]) -> RepoPlan:
     return RepoPlan(tasks=list(nodes.values()), concurrency=concurrency)
 
 
-def validate_repo_aliases(node: RepoPlanNode, registry: Registry) -> None:
+def validate_repo_aliases(node: RepoPlanNode, registry: RepoAliasResolver) -> None:
     """Fail before dispatch when a lifecycle node names an unknown local alias."""
     from .plan import PlanError
 

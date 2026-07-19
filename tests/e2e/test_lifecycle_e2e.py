@@ -53,7 +53,7 @@ from orchestrator.next_round import main as next_round_main
 from orchestrator.next_round import main_runs
 from orchestrator.provenance import INCOMPLETE_TRAILER, PR_BASE_TRAILER, incomplete_commits
 from orchestrator.recover import recover_repo
-from orchestrator.registry import Registry
+from orchestrator.registry import Registry, RegistryEntry, Slug
 from orchestrator.replan import next_round
 from orchestrator.runs import NodeId, RunId, prepare_round, write_result
 from orchestrator.workspace import Workspace, normalize_repo
@@ -488,7 +488,7 @@ def test_repo_plan_ledger_and_guided_next_round(
 
 
 def test_registered_aliases_drive_real_lifecycle_without_a_stray_clone(
-    tmp_path, bare_origin, command_base, personas_dir, capsys
+    tmp_path, bare_origin, command_base, personas_dir, capsys, monkeypatch
 ) -> None:
     """Repo and execution aliases reach the real onejudge lifecycle boundary."""
     origin = bare_origin()
@@ -555,6 +555,57 @@ def test_registered_aliases_drive_real_lifecycle_without_a_stray_clone(
     assert Path(planned_result["publication_checkout"]) == canonical
     assert Path(planned_result["execution_checkout"]) == safety
     assert not (Path(os.environ["AI_ORCHESTRATOR_HOME"]) / "repos").exists()
+
+    remote_origin = bare_origin()
+    remote_checkout = gitops.clone(remote_origin, tmp_path / "crozier")
+    remote_registry = Registry()
+    remote_registry.entries[Slug("nickderobertis/crozier")] = RegistryEntry(
+        str(remote_checkout.resolve()),
+        str(remote_origin),
+        "remote",
+        "single-owner",
+    )
+    remote_registry.save()
+    monkeypatch.setattr(lifecycle_module, "CliGitHubBackend", lambda: FakeGitHub(remote_origin))
+    remote_plan = tmp_path / "remote-alias-plan.json"
+    remote_plan.write_text(
+        json.dumps(
+            {
+                "schema_version": 3,
+                "tasks": [
+                    {
+                        "id": "remote-alias",
+                        "repo": "nickderobertis/crozier",
+                        "persona": "engineer",
+                        "task": "complete-now write-change registered remote alias",
+                        "verify_cmd": ["true"],
+                        "merge_policy": "none",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    remote_rc = graph_module.main(
+        [
+            str(remote_plan),
+            "--no-record",
+            "--workspace",
+            str(tmp_path / "remote-plan-worktrees"),
+            "--base",
+            str(command_base()),
+            "--persona-dir",
+            str(personas_dir),
+            "--format",
+            "json",
+        ]
+    )
+    remote = json.loads(capsys.readouterr().out)["results"]["remote-alias"]
+
+    assert remote_rc == 0
+    assert remote["outcome"] == "pr-open"
+    assert Path(remote["publication_checkout"]) == remote_checkout
+    assert remote["workflow"] == "remote" and remote["repo_type"] == "single-owner"
 
 
 def test_local_identity_executes_in_safety_clone_and_publishes_without_pr(
