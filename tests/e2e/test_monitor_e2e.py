@@ -734,7 +734,7 @@ def test_the_monitor_command_reports_a_run_it_cannot_watch_actionably(tmp_path: 
 
     unknown = _monitor_cli("--runs-dir", str(runs_dir), "never-ran")
     assert unknown.returncode == 2
-    assert "no recorded run 'never-ran'" in unknown.stderr
+    assert "no active orchestration matches 'never-ran'" in unknown.stderr
     assert "Traceback" not in unknown.stderr
 
     empty = _monitor_cli("--runs-dir", str(tmp_path / "elsewhere"))

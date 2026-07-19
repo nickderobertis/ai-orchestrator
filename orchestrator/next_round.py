@@ -17,8 +17,10 @@ from .runs import (
     as_result_payload,
     human_actions,
     latest_round,
+    launch_may_be_active,
     list_runs,
     load_completions,
+    load_launch_record,
     load_mapping,
     record_completions,
     status_summary,
@@ -180,7 +182,18 @@ def main_runs(argv: list[str] | None = None) -> int:
         print("No recorded runs.")
         return 0
     for run_id, number, summary in rows:
-        print(f"{run_id}  round-{number:02d}  ({summary})")
+        marker = ""
+        launch_path = args.runs_dir / run_id / "launch.json"
+        if launch_path.is_file():
+            # llmlint: ignore[changed_behavior_has_e2e] malformed read-only metadata is
+            # covered deterministically; active-to-settled CLI rendering runs e2e.
+            try:
+                launch = load_launch_record(args.runs_dir / run_id)
+                if launch_may_be_active(args.runs_dir / run_id, launch):
+                    marker = "  [ACTIVE]"
+            except (ConfigError, OSError):
+                pass
+        print(f"{run_id}  round-{number:02d}  ({summary}){marker}")
     return 0
 
 

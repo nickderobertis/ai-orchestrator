@@ -82,7 +82,10 @@ def _wait_report(path: Path) -> dict[str, object]:
     raise AssertionError(f"report did not land: {path}")
 
 
-def _launch_cli(plan: Path, runs: Path, base: Path, onejudge_bin: str) -> str:
+def _launch_cli(
+    plan: Path, runs: Path, base: Path, onejudge_bin: str, *, run_id: str | None = None
+) -> str:
+    explicit_run = ["--run-id", run_id] if run_id is not None else []
     launched = subprocess.run(
         [
             "just",
@@ -94,6 +97,7 @@ def _launch_cli(plan: Path, runs: Path, base: Path, onejudge_bin: str) -> str:
             str(base),
             "--onejudge-bin",
             onejudge_bin,
+            *explicit_run,
             "--skill-command",
             sys.executable,
             str(FAKE_BACKEND),
@@ -103,7 +107,8 @@ def _launch_cli(plan: Path, runs: Path, base: Path, onejudge_bin: str) -> str:
         capture_output=True,
         check=True,
     )
-    return launched.stdout.strip()
+    record = json.loads(launched.stdout)
+    return str(record["run_id"])
 
 
 def _next_cli(run_id: str, runs: Path, timeout: str = "10") -> dict[str, object]:
@@ -128,34 +133,74 @@ def _reply_cli(run_id: str, runs: Path, value: dict[str, object]) -> None:
     )
 
 
+def _convenience_cli(recipe: str, run_id: str, runs: Path, text: str | None = None) -> None:
+    command = ["just", recipe, run_id]
+    if text is not None:
+        command.append(text)
+    subprocess.run(
+        [*command, "--runs-dir", str(runs)],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+
+
 def test_live_channel_runs_real_nested_graph_and_round_trips_guidance(
     tmp_path: Path, onejudge_bin: str
 ) -> None:
     runs = tmp_path / "host-runs"
     run_id = _launch_cli(_plan(tmp_path, "surface-blocker"), runs, _base(tmp_path), onejudge_bin)
     run_dir = runs / run_id
-    blocker = _next_cli(run_id, runs)
+    blocker = _next_cli("nested-surface-blocker", runs)
     assert blocker["surface"] == {
         "kind": "blocker",
         "message": "plan departure needs a decision",
+        "blocking": True,
     }
-    _reply_cli(
-        run_id,
-        runs,
-        {"completion": False, "message": "retry X", "reason": "planner chose retry"},
+    monitored = subprocess.run(
+        [
+            "just",
+            "monitor",
+            "nested-surface-blocker",
+            "--once",
+            "--runs-dir",
+            str(runs),
+        ],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=True,
     )
+    assert "PLANNER REPLY REQUIRED (blocker)" in monitored.stdout
+    active = subprocess.run(
+        ["just", "runs", "--runs-dir", str(runs)],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    assert f"{run_id}  round-01" in active.stdout
+    assert "[ACTIVE]" in active.stdout
+    _convenience_cli("channel-continue", "nested-surface-blocker", runs, "retry X")
     closeout = _next_cli(run_id, runs)
     assert closeout["surface"]["kind"] == "closeout"
     assert "retry X" in closeout["surface"]["message"]
-    _reply_cli(run_id, runs, {"completion": True, "reason": "planner verified closeout"})
+    _convenience_cli("channel-approve", run_id, runs)
 
     report = _wait_report(run_dir / "orchestrator" / "report.json")
     assert report["stopped_early"] is False
-    nested = [path for path in runs.iterdir() if path != run_dir]
-    assert len(nested) == 1
-    nested_result = json.loads((nested[0] / "round-01" / "result.json").read_text())
-    assert nested_result["results"]["worker"]["status"] == "done"
-    assert not (nested[0] / "channel").exists()
+    settled = subprocess.run(
+        ["just", "runs", "--runs-dir", str(runs)],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    assert "[ACTIVE]" not in settled.stdout
+    result = json.loads((run_dir / "round-01" / "result.json").read_text())
+    assert result["results"]["worker"]["status"] == "done"
+    assert (run_dir / "channel").exists()
 
 
 def test_live_channel_surfaces_large_round_summary(tmp_path: Path, onejudge_bin: str) -> None:
@@ -187,9 +232,16 @@ def test_launch_api_records_detached_owner_and_real_report(
         turn_timeout=10,
     )
     run_dir = runs / run_id
-    status = json.loads((run_dir / "round-01" / "status.json").read_text(encoding="utf-8"))
-    assert status["status"] == "running"
-    assert isinstance(status["pid"], int) and status["host"]
+    launch = json.loads((run_dir / "launch.json").read_text(encoding="utf-8"))
+    assert isinstance(launch["pid"], int) and launch["host"]
+    assert launch["channel_id"] == run_id
+    assert launch["commands"] == {
+        "channel_next": f"just channel-next {run_id} --runs-dir {runs.resolve()}",
+        "monitor": f"just monitor {run_id} --runs-dir {runs.resolve()}",
+    }
+    planner = (run_dir / "planner.md").read_text(encoding="utf-8")
+    assert launch["commands"]["channel_next"] in planner
+    assert launch["commands"]["monitor"] in planner
     surface = _next_cli(run_id, runs)
     assert surface["surface"]["kind"] == "milestone"
     _reply_cli(run_id, runs, {"completion": True, "reason": "verified"})
@@ -273,13 +325,18 @@ def test_reattached_planner_replies_to_mid_run_proposal_without_stopping_graph(
     assert proposal["surface"] == {
         "kind": "proposal",
         "message": "discoverer: - Add a regression test for the adjacent edge case.",
+        "blocking": False,
     }
-    ticks_before_reply = witness.read_text(encoding="utf-8").count("tick")
-    _reply_cli(
-        run_id,
-        runs,
-        {"completion": False, "message": "defer to next round", "reason": "out of scope"},
+    monitored = subprocess.run(
+        ["just", "monitor", run_id, "--once", "--runs-dir", str(runs)],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=True,
     )
+    assert "planner proposal awaiting optional reply (proposal)" in monitored.stdout
+    ticks_before_reply = witness.read_text(encoding="utf-8").count("tick")
+    _convenience_cli("channel-reject", run_id, runs, "out of scope")
 
     verdict_path = runs / run_id / "channel" / "planner-verdict.json"
     deadline = time.monotonic() + 5
@@ -287,7 +344,7 @@ def test_reattached_planner_replies_to_mid_run_proposal_without_stopping_graph(
         time.sleep(0.02)
     assert json.loads(verdict_path.read_text(encoding="utf-8")) == {
         "completion": False,
-        "message": "defer to next round",
+        "message": "stop and address planner rejection",
         "reason": "out of scope",
     }
     assert not (runs / run_id / "orchestrator" / "report.json").stat().st_size
@@ -363,7 +420,7 @@ def test_continuation_round_proposal_uses_reconciled_round_number(
         {"completion": False, "message": "continue round two", "reason": "gate approved"},
     )
     proposal = _next_cli(run_id, runs)
-    assert proposal["round"] == 2
+    assert proposal.get("round") == 2, proposal
     _reply_cli(
         run_id,
         runs,
@@ -448,3 +505,39 @@ def test_orchestrate_cli_reports_launch_boundary_failures(tmp_path: Path) -> Non
     )
     assert missing_binary.returncode == 2
     assert "binary not found" in missing_binary.stderr
+
+
+def test_supervision_cli_rejects_ambiguous_and_stale_plan_names(
+    tmp_path: Path, onejudge_bin: str
+) -> None:
+    runs = tmp_path / "resolution-runs"
+    plan = _plan(tmp_path, "surface-milestone")
+    value = json.loads(plan.read_text(encoding="utf-8"))
+    value["name"] = "shared plan"
+    plan.write_text(json.dumps(value), encoding="utf-8")
+    base = _base(tmp_path)
+    for run_id in ("shared-a", "shared-b"):
+        assert _launch_cli(plan, runs, base, onejudge_bin, run_id=run_id) == run_id
+    ambiguous = subprocess.run(
+        ["just", "channel-next", "shared plan", "--runs-dir", str(runs), "--timeout", "0"],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+    )
+    assert ambiguous.returncode == 2
+    assert "valid active run ids: shared-a, shared-b" in ambiguous.stderr
+
+    stale = subprocess.run(
+        ["just", "monitor", "stale plan", "--once", "--runs-dir", str(runs)],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+    )
+    assert stale.returncode == 2
+    assert "valid run ids: shared-a, shared-b" in stale.stderr
+    for run_id in ("shared-a", "shared-b"):
+        surface = _next_cli(run_id, runs)
+        assert surface["surface"]["kind"] == "milestone"
+        _reply_cli(run_id, runs, {"completion": True, "reason": "resolution verified"})
+        _wait_report(runs / run_id / "orchestrator" / "report.json")
+    assert _next_cli("shared-a", runs, timeout="0.1") == {"status": "finished"}

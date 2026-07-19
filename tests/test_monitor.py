@@ -453,7 +453,7 @@ def test_an_explicitly_named_run_beats_recency(tmp_path: Path) -> None:
 def test_a_run_that_cannot_be_watched_is_reported_actionably(tmp_path: Path) -> None:
     runs_dir = tmp_path / "runs"
     _settle(runs_dir / "done-run", {"api": {"status": "done"}}, ok=True, state="complete")
-    with pytest.raises(MonitorError, match="no recorded run 'never-ran'"):
+    with pytest.raises(MonitorError, match="no active orchestration matches 'never-ran'"):
         resolve_run(runs_dir, "never-ran")
     with pytest.raises(MonitorError, match="letters, numbers"):
         resolve_run(runs_dir, "../escape")
@@ -534,6 +534,26 @@ def test_executor_status_corruption_is_interpreted_conservatively(
 def test_a_run_with_no_recorded_rounds_has_nothing_to_report_yet(tmp_path: Path) -> None:
     state = run_state(tmp_path / RUN, RUN)
     assert (state.round, state.state, state.finished) == (None, "unknown", False)
+
+
+def test_pending_planner_decision_is_explicit_in_run_state(tmp_path: Path) -> None:
+    channel = tmp_path / RUN / "channel"
+    channel.mkdir(parents=True)
+    (channel / "pending.json").write_text(
+        json.dumps(
+            {
+                "surface": {
+                    "kind": "closeout",
+                    "message": "verify publication",
+                    "blocking": True,
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    state = run_state(tmp_path / RUN, RUN)
+    assert state.state == "awaiting-planner"
+    assert state.detail == "PLANNER REPLY REQUIRED (closeout)"
 
 
 def test_only_a_complete_and_ok_result_counts_as_finished(tmp_path: Path) -> None:
@@ -810,7 +830,7 @@ def test_the_public_monitor_entrypoint_reports_resolution_and_argument_errors(
 
     assert monitor_main(["--once", "--runs-dir", str(runs_dir), "missing"]) == 2
     missing = capsys.readouterr()
-    assert "no recorded run 'missing'" in missing.err
+    assert "no active orchestration matches 'missing'" in missing.err
     assert "Traceback" not in missing.err
 
     with pytest.raises(SystemExit) as invalid:

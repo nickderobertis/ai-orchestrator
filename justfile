@@ -100,6 +100,16 @@ channel-next *args:
 channel-reply *args:
     @uv run orchestrator-channel-reply "$@"
 
+# Reply builders for the common planner decisions; RUN may also be an unambiguous active plan name.
+channel-approve *args:
+    @uv run orchestrator-channel-approve "$@"
+
+channel-reject *args:
+    @uv run orchestrator-channel-reject "$@"
+
+channel-continue *args:
+    @uv run orchestrator-channel-continue "$@"
+
 # Drive one subtask through a repo's full lifecycle (clone→gate→PR/merge):
 # `just repo-task <repo> <persona> "<task>"`. `<repo>` is a GitHub name/slug/URL
 # or a local path; direct base merge requires an explicit registered local workflow.
@@ -177,7 +187,7 @@ history-show *args:
 # Only successful graph completion exits 0 — waiting/failed/stopped heartbeat on.
 # llmlint: ignore[tool_output_is_signal] the requested continuous event stream is this viewing command's product.
 monitor *args:
-    uv run orchestrator-monitor {{args}}
+    @uv run orchestrator-monitor "$@"
 
 telemetry *args:
     @uv run orchestrator-telemetry {{args}}

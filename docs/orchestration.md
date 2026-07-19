@@ -14,7 +14,10 @@ Plans that omit the version retain version-1 behavior for compatibility.
 ## The planner<->orchestrator channel
 
 `just orchestrate <plan.json>` starts a detached orchestrator onejudge run and
-prints its run id. The orchestrator is the graph executor; its supervisor is the
+prints a JSON launch record containing the exact `run_id`, `channel_id`, and
+literal `commands.channel_next` / `commands.monitor` commands. It also writes the
+record to `runs/<run-id>/launch.json` and copyable commands to `planner.md`. The
+orchestrator is the graph executor; its supervisor is the
 live planner rather than a simulated-user model. During a round, the reconciler
 converges the actual frontier toward a desired graph that the planner may edit
 while nodes run. Recorded rounds are checkpoints and labels, not stop-the-world
@@ -38,7 +41,9 @@ newline-delimited JSON frame to the planner:
 
 The orchestrator persona defines the boundary-kind vocabulary. `surface.options`
 is optional and, when present, is a list of strings. `messages` is the onejudge
-conversation context. Settled workers may also surface `kind: "proposal"` while
+conversation context. Every surface says whether it is `blocking`: supervisor
+boundaries are blocking, while settled-worker proposals are informational.
+Settled workers may also surface `kind: "proposal"` while
 the round continues. Proposals are advice only: workers never receive the down
 FIFO, and only the planner can issue edits. The planner replies with one of these
 legacy verdict shapes:
@@ -53,12 +58,16 @@ requires `reason`. Completion is reserved for a verified `closeout` after the
 whole graph is published and follow-ups are triaged. See [Live graph edits](#live-graph-edits)
 to change the graph without waiting for a round boundary.
 
-The three planner-facing recipes are:
+The planner-facing recipes are:
 
 ```sh
 just orchestrate plan.json --runs-dir /host/path/runs
 just channel-next RUN --runs-dir /host/path/runs
 just channel-reply RUN reply.json --runs-dir /host/path/runs
+just channel-continue RUN "retry X with the fixture requirement" --runs-dir /host/path/runs
+just channel-reject RUN "the proposal is outside this change" --runs-dir /host/path/runs
+just channel-approve RUN --runs-dir /host/path/runs
+just monitor RUN --runs-dir /host/path/runs
 ```
 
 `channel-next` waits for one surface. A bounded wait with no message returns
@@ -66,7 +75,33 @@ just channel-reply RUN reply.json --runs-dir /host/path/runs
 `{"status":"finished"}`. `channel-reply` accepts a reply file or reads JSON from
 stdin when its file argument is omitted. Both sides may exit and reattach between
 messages: transport state lives under `runs/<run-id>/channel/` as `up.fifo`,
-`down.fifo`, `channel.json`, and the last `planner-verdict.json`.
+`down.fifo`, `channel.json`, the pending surface, and the last
+`planner-verdict.json`. An answered proposal is consumed once and is not replayed.
+
+`RUN` is the launch record's run id. Every supervision verb also accepts the plan
+name when it identifies exactly one active orchestration. Ambiguous names fail
+with the valid active run ids; unknown or stale names fail with the valid run ids
+rather than selecting historical state. `monitor` renders journaled node starts,
+branches, verification, PRs, merges, and failures, and reports `PLANNER REPLY
+REQUIRED` while a blocking surface is pending. `runs` marks a live detached run
+`[ACTIVE]`.
+
+The complete raw reply schema, with worked examples, is:
+
+```json
+{"completion":false,"message":"continue guidance","reason":"why work continues"}
+{"completion":true,"reason":"why verified closeout is accepted"}
+{"version":1,"commands":[{"op":"attest","ref":"approval"}]}
+{"completion":false,"message":"continue","reason":"graph changed","version":1,"commands":[{"op":"drop","id":"obsolete","dependents":"detach"}]}
+```
+
+`completion` is boolean. Continuing requires string `message` and `reason`;
+completion requires `reason` and omits `message`. `version` is currently `1`, and
+`commands` is an array of the edit objects below. Commands may stand alone or
+accompany either verdict. The convenience recipes build ordinary verdicts:
+approve completes verified closeout, reject uses its argument as the reason, and
+continue uses its argument as guidance. Use raw `channel-reply` for edit commands
+or custom reasons.
 
 Only the orchestrator crosses round boundaries. Worker onejudge processes remain
 bounded to the graph round that dispatched them and never use the planner channel.

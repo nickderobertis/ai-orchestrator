@@ -161,6 +161,26 @@ class RoundStatus(TypedDict, total=False):
     finished: str
 
 
+class LaunchCommands(TypedDict):
+    channel_next: str
+    monitor: str
+
+
+class LaunchRecord(TypedDict):
+    schema_version: Literal[1]
+    run_id: str
+    channel_id: str
+    plan_name: str
+    pid: int
+    host: str
+    started: str
+    commands: LaunchCommands
+
+
+LAUNCH_STRING_FIELDS = ("run_id", "channel_id", "plan_name", "host", "started")
+LAUNCH_COMMAND_FIELDS = ("channel_next", "monitor")
+
+
 def _round_status(status: Literal["running", "completed"]) -> RoundStatus:
     timestamp = datetime.now(UTC).isoformat()
     record = RoundStatus(status=status, pid=os.getpid(), host=socket.gethostname())
@@ -197,6 +217,96 @@ def resolve_run_dir(
         return candidate
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
     return runs_dir / f"{base}-{stamp}"
+
+
+def resolve_supervision_run(runs_dir: Path, identifier: str) -> RunId:
+    """Resolve an exact run id or one plan name naming a single active launch."""
+    if identifier in {".", ".."} or "/" in identifier or "\\" in identifier:
+        validate_run_id(identifier)
+    try:
+        exact = validate_run_id(identifier)
+    except ConfigError:
+        exact = None
+    if exact is not None and (runs_dir / exact).is_dir():
+        return exact
+    matches: list[RunId] = []
+    if runs_dir.is_dir():
+        for entry in runs_dir.iterdir():
+            if not entry.is_dir() or not (entry / "launch.json").is_file():
+                continue
+            try:
+                launch = load_launch_record(entry)
+                candidate = validate_run_id(entry.name)
+            # llmlint: ignore[changed_behavior_has_e2e] malformed durable metadata is a
+            # trust-boundary unit case; exact, named, ambiguous, and stale resolution run e2e.
+            except (ConfigError, OSError):
+                continue
+            if launch.get("plan_name") == identifier and launch_may_be_active(entry, launch):
+                matches.append(candidate)
+    if len(matches) == 1:
+        return matches[0]
+    valid = (
+        sorted(
+            entry.name
+            for entry in runs_dir.iterdir()
+            if entry.is_dir() and (entry / "launch.json").is_file()
+        )
+        if runs_dir.is_dir()
+        else []
+    )
+    if len(matches) > 1:
+        raise ConfigError(
+            f"plan name {identifier!r} is ambiguous; valid active run ids: {', '.join(matches)}"
+        )
+    suffix = f"; valid run ids: {', '.join(valid)}" if valid else ""
+    raise ConfigError(f"no active orchestration matches {identifier!r}{suffix}")
+
+
+def load_launch_record(run_dir: Path) -> LaunchRecord:
+    """Load and validate the durable planner launch record."""
+    value = load_mapping(run_dir / "launch.json")
+    commands = value.get("commands")
+    if not (
+        value.get("schema_version") == 1
+        and value.get("run_id") == run_dir.name
+        and value.get("channel_id") == run_dir.name
+        and all(isinstance(value.get(key), str) and value[key] for key in LAUNCH_STRING_FIELDS)
+        and isinstance(value.get("pid"), int)
+        and not isinstance(value["pid"], bool)
+        and isinstance(commands, dict)
+        and all(
+            isinstance(commands.get(key), str) and commands[key] for key in LAUNCH_COMMAND_FIELDS
+        )
+    ):
+        raise ConfigError(f"invalid launch record: {run_dir / 'launch.json'}")
+    return cast(LaunchRecord, value)
+
+
+def launch_may_be_active(run_dir: Path, launch: LaunchRecord | None = None) -> bool:
+    """Conservatively report a launch that may still have a live unfinished owner."""
+    # llmlint: ignore[changed_behavior_has_e2e] real active and completed owners run e2e;
+    # malformed reports and unverifiable remote/permission states are deterministic units.
+    report = run_dir / "orchestrator" / "report.json"
+    if report.is_file() and report.stat().st_size:
+        try:
+            load_mapping(report)
+        except (ConfigError, OSError):
+            pass
+        else:
+            return False
+    value = launch if launch is not None else load_launch_record(run_dir)
+    pid = value.get("pid")
+    if not isinstance(pid, int) or isinstance(pid, bool) or pid < 1:
+        return False
+    if value.get("host") != socket.gethostname():
+        return True
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
 
 
 def latest_round(run_dir: Path) -> tuple[int, Path] | None:

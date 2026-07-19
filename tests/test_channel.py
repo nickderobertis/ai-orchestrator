@@ -19,7 +19,10 @@ from orchestrator.channel import (
     _reply,
     _surface,
     create_channel,
+    main_approve,
+    main_continue,
     main_next,
+    main_reject,
     main_relay,
     main_reply,
     read_message,
@@ -140,7 +143,11 @@ def test_proposal_pump_round_trips_and_persists_on_reconciler_drain(tmp_path: Pa
         "op": "supervisor",
         "run_id": "live",
         "round": 3,
-        "surface": {"kind": "proposal", "message": "worker: found adjacent work"},
+        "surface": {
+            "kind": "proposal",
+            "message": "worker: found adjacent work",
+            "blocking": False,
+        },
         "messages": [],
     }
 
@@ -159,6 +166,9 @@ def test_proposal_pump_round_trips_and_persists_on_reconciler_drain(tmp_path: Pa
     sender.join()
     pump.close()
     assert json.loads(verdict.read_text(encoding="utf-8")) == reply
+    assert not (channel / "pending.json").exists()
+    with pytest.raises(ChannelTimeout):
+        read_message(channel / "up.fifo", timeout=0.01)
 
 
 def test_unanswered_proposal_releases_down_fifo_before_boundary(tmp_path: Path) -> None:
@@ -250,7 +260,7 @@ def test_frame_and_supervisor_shapes_are_validated(tmp_path: Path) -> None:
         "op": "supervisor",
         "run_id": "live",
         "round": 2,
-        "surface": {"kind": "milestone", "message": "round ran"},
+        "surface": {"kind": "milestone", "message": "round ran", "blocking": True},
         "messages": [],
     }
     assert _reply({"completion": False, "message": "retry X", "reason": "failed"}) == {
@@ -389,7 +399,12 @@ def test_surface_accepts_agent_emitted_shape_and_options() -> None:
         ],
     }
     value = _surface(request, "orch", 1)
-    assert value["surface"] == {"kind": "choice", "message": "pick", "options": ["a", "b"]}
+    assert value["surface"] == {
+        "kind": "choice",
+        "message": "pick",
+        "blocking": True,
+        "options": ["a", "b"],
+    }
     with pytest.raises(ChannelError, match="options"):
         _surface({"task": "x", "messages": [], "options": "bad"}, "orch", 1)
     with pytest.raises(ChannelError, match="messages"):
@@ -430,6 +445,71 @@ def test_bridge_main_success_finished_and_errors(
     bad.write_text("[]", encoding="utf-8")
     assert main_reply(["orch", str(bad), "--runs-dir", str(runs)]) == 2
     assert "JSON object" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    ("entrypoint", "extra", "expected"),
+    [
+        (
+            main_approve,
+            [],
+            {"completion": True, "reason": "planner approved verified closeout"},
+        ),
+        (
+            main_reject,
+            ["not in scope"],
+            {
+                "completion": False,
+                "message": "stop and address planner rejection",
+                "reason": "not in scope",
+            },
+        ),
+        (
+            main_continue,
+            ["retry with fixture"],
+            {
+                "completion": False,
+                "message": "retry with fixture",
+                "reason": "planner directed continuation",
+            },
+        ),
+    ],
+)
+def test_convenience_replies_drive_real_fifo(
+    tmp_path: Path,
+    entrypoint,
+    extra: list[str],
+    expected: dict[str, object],
+) -> None:
+    runs = tmp_path / "runs"
+    channel = create_channel(runs / "orch")
+    received: list[dict[str, object]] = []
+
+    def receive() -> None:
+        received.append(read_message(channel / "down.fifo", timeout=1))
+
+    reader = threading.Thread(target=receive)
+    reader.start()
+    assert entrypoint(["orch", *extra, "--runs-dir", str(runs), "--timeout", "1"]) == 0
+    reader.join()
+    assert received == [expected]
+
+
+def test_channel_cli_rejects_unknown_supervision_identifier(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert main_next(["mistyped", "--runs-dir", str(tmp_path)]) == 2
+    assert "no active orchestration" in capsys.readouterr().err
+
+    create_channel(tmp_path / "orch")
+    monkeypatch.setattr(
+        "orchestrator.channel.write_message",
+        lambda *args, **kwargs: (_ for _ in ()).throw(ChannelTimeout("no reader")),
+    )
+    assert main_continue(["orch", "continue", "--runs-dir", str(tmp_path)]) == 2
+    assert "no reader" in capsys.readouterr().err
 
 
 def test_main_relay_and_relay_errors(
@@ -517,6 +597,18 @@ def test_finished_handles_missing_status_and_dead_owner(
 
     monkeypatch.setattr("orchestrator.channel.os.kill", inaccessible)
     assert _finished(run) is False
+
+
+def test_finished_uses_unified_launch_owner(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run = tmp_path / "run"
+    run.mkdir()
+    (run / "launch.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr("orchestrator.channel.launch_may_be_active", lambda path: True)
+    assert _finished(run) is False
+    monkeypatch.setattr("orchestrator.channel.launch_may_be_active", lambda path: False)
+    assert _finished(run) is True
 
 
 @pytest.mark.parametrize(
@@ -610,7 +702,7 @@ def test_surface_ignores_non_json_assistant_content() -> None:
         "run",
         1,
     )
-    assert value["surface"] == {"kind": "supervisor", "message": "fallback"}
+    assert value["surface"] == {"kind": "supervisor", "message": "fallback", "blocking": True}
 
 
 def test_surface_accepts_emitted_shape_without_options() -> None:
@@ -622,7 +714,7 @@ def test_surface_accepts_emitted_shape_without_options() -> None:
         "run",
         1,
     )
-    assert value["surface"] == {"kind": "closeout", "message": "done"}
+    assert value["surface"] == {"kind": "closeout", "message": "done", "blocking": True}
 
 
 def test_finished_reports_live_local_owner_as_running(tmp_path: Path) -> None:
@@ -670,4 +762,4 @@ def test_surface_ignores_json_without_emitted_surface_shape(content: str) -> Non
         "run",
         1,
     )
-    assert value["surface"] == {"kind": "supervisor", "message": "fallback"}
+    assert value["surface"] == {"kind": "supervisor", "message": "fallback", "blocking": True}

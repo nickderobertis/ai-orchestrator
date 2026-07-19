@@ -154,21 +154,21 @@ def main() -> int:
                         text=True,
                     )
                 elif orchestrator_turn == 1 and "continuation-channel" in plan_text:
-                    nested_runs = [
+                    settled_runs = [
                         path
                         for path in orchestrator_plan.runs_dir.iterdir()
                         if path.is_dir()
-                        and path.name.startswith("continuation-channel-")
+                        and path.name.startswith("continuation-channel")
                         and (path / "round-01" / "result.json").is_file()
                     ]
-                    if len(nested_runs) != 1:
+                    if len(settled_runs) != 1:
                         raise RuntimeError("expected one settled continuation-channel run")
                     forwarded = orchestrator_plan.argv[orchestrator_plan.argv.index("--runs-dir") :]
                     subprocess.run(
                         [
                             "just",
                             "next-round",
-                            nested_runs[0].name,
+                            settled_runs[0].name,
                             "--complete-human",
                             "gate",
                             *forwarded,

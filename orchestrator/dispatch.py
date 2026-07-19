@@ -18,6 +18,7 @@ import asyncio
 import contextlib
 import json
 import os
+import shlex
 import socket
 import subprocess
 import sys
@@ -44,7 +45,7 @@ from .config import ConfigError, build_effective_config, load_yaml
 from .coordination import atomic_json
 from .labels import LABEL_ENV, LabelError, merge_labels
 from .personas import persona_path
-from .runs import resolve_run_dir
+from .runs import LaunchRecord, resolve_run_dir
 
 # onejudge's own exit codes (see docs/cli.md): 0 completed + boolean evals passed,
 # 1 hit the turn cap / a boolean eval failed, 2 bad config or usage.
@@ -368,8 +369,6 @@ def launch_orchestrator(
     run_dir = resolve_run_dir(root, plan_mapping, plan, run_id)
     run_dir.mkdir(parents=True, exist_ok=False)
     channel_dir = create_channel(run_dir)
-    round_dir = run_dir / "round-01"
-    round_dir.mkdir()
     config = build_effective_config(load_yaml(base_path), {}, max_turns=max_turns)
     # The live planner's supervisor verdict is the completion authority. Standalone
     # simulated-model eval/assessment calls do not belong on this command relay.
@@ -422,10 +421,25 @@ def launch_orchestrator(
     worker_base_path.write_text(yaml.safe_dump(worker_base, sort_keys=False), encoding="utf-8")
     report_path = effective.parent / "report.json"
     stderr_path = effective.parent / "stderr.log"
+    run_command = shlex.join(
+        [
+            "just",
+            "run-plan",
+            str(plan),
+            "--run",
+            run_dir.name,
+            "--runs-dir",
+            str(root),
+            "--base",
+            str(worker_base_path),
+            "--provider",
+            provider_kind,
+        ]
+    )
     task = (
         "Drive this tracked orchestration plan one round at a time. Execute the real command "
-        f"`just run-plan {plan} --runs-dir {root} --base {worker_base_path} "
-        f"--provider {provider_kind}` for each required round, review its recorded "
+        f"`{run_command}` "
+        "for each required round, review its recorded "
         "result, and surface milestones, blockers, departures, and closeout to your supervisor."
     )
     command = [onejudge_bin, "run", str(effective), "--task", task, "--format", "json"]
@@ -450,16 +464,31 @@ def launch_orchestrator(
             )
     except FileNotFoundError as exc:
         raise DispatchError(f"onejudge binary not found: {onejudge_bin!r}") from exc
-    atomic_json(
-        round_dir / "status.json",
-        {
-            "status": "running",
-            "pid": proc.pid,
-            "host": socket.gethostname(),
-            "started": datetime.now(UTC).isoformat(),
+    plan_name = plan_mapping.get("name")
+    if not isinstance(plan_name, str) or not plan_name.strip():
+        plan_name = plan.stem
+    next_command = shlex.join(["just", "channel-next", run_dir.name, "--runs-dir", str(root)])
+    monitor_command = shlex.join(["just", "monitor", run_dir.name, "--runs-dir", str(root)])
+    launch_record: LaunchRecord = {
+        "schema_version": 1,
+        "run_id": run_dir.name,
+        "channel_id": run_dir.name,
+        "plan_name": plan_name,
+        "pid": proc.pid,
+        "host": socket.gethostname(),
+        "started": datetime.now(UTC).isoformat(),
+        "commands": {
+            "channel_next": next_command,
+            "monitor": monitor_command,
         },
+    }
+    atomic_json(run_dir / "launch.json", launch_record)
+    (run_dir / "planner.md").write_text(
+        f"# Planner supervision\n\nRun: `{run_dir.name}`\n\n"
+        f"Channel: `{run_dir.name}`\n\n"
+        f"```sh\n{next_command}\n{monitor_command}\n```\n",
+        encoding="utf-8",
     )
-    atomic_json(round_dir / "plan.json", {"name": run_dir.name, "nodes": []})
     return run_dir.name
 
 
@@ -478,15 +507,16 @@ def main_orchestrate(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         skill = {"kind": "command", "command": args.skill_command} if args.skill_command else None
+        launched = launch_orchestrator(
+            args.plan,
+            runs_dir=args.runs_dir,
+            run_id=args.run_id,
+            base_path=args.base,
+            onejudge_bin=args.onejudge_bin,
+            skill_provider=skill,
+        )
         print(
-            launch_orchestrator(
-                args.plan,
-                runs_dir=args.runs_dir,
-                run_id=args.run_id,
-                base_path=args.base,
-                onejudge_bin=args.onejudge_bin,
-                skill_provider=skill,
-            )
+            (args.runs_dir.resolve() / launched / "launch.json").read_text(encoding="utf-8").strip()
         )
     except (DispatchError, ConfigError) as exc:
         print(f"orchestrate: {exc}", file=sys.stderr)

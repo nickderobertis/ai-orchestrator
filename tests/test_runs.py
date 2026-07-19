@@ -286,6 +286,33 @@ def test_plan_only_and_runs_cli(tmp_path, capsys) -> None:
     assert main_runs(["--runs-dir", str(tmp_path)]) == 0
     assert "demo  round-01" in capsys.readouterr().out
 
+    (run / "launch.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "run_id": "demo",
+                "channel_id": "demo",
+                "plan_name": "demo",
+                "pid": os.getpid(),
+                "host": socket.gethostname(),
+                "started": "2026-01-01T00:00:00+00:00",
+                "commands": {
+                    "channel_next": "just channel-next demo",
+                    "monitor": "just monitor demo",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert main_runs(["--runs-dir", str(tmp_path)]) == 0
+    assert "[ACTIVE]" in capsys.readouterr().out
+
+    report = run / "orchestrator" / "report.json"
+    report.parent.mkdir()
+    report.write_text('{"completed":true}', encoding="utf-8")
+    assert main_runs(["--runs-dir", str(tmp_path)]) == 0
+    assert "[ACTIVE]" not in capsys.readouterr().out
+
 
 def test_runs_cli_no_recorded_runs(tmp_path, capsys) -> None:
     assert main_runs(["--runs-dir", str(tmp_path)]) == 0

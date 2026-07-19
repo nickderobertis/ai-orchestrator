@@ -76,6 +76,7 @@ from .runs import (
     as_result_payload,
     latest_round,
     load_mapping,
+    resolve_supervision_run,
     result_state,
     rounds,
     validate_run_id,
@@ -997,6 +998,26 @@ def _executor_live(round_dir: Path) -> bool:
 
 def run_state(run_dir: Path, run_id: RunId) -> RunState:
     """Read the run's current state from its newest round."""
+    pending = run_dir / "channel" / "pending.json"
+    if pending.is_file():
+        # llmlint: ignore[changed_behavior_has_e2e] malformed observation fallback is a
+        # defensive unit branch; real blocking and informational pending surfaces run e2e.
+        try:
+            surface = load_mapping(pending).get("surface")
+        except (ConfigError, OSError):
+            surface = None
+        if isinstance(surface, dict):
+            kind = surface.get("kind", "decision")
+            blocking = surface.get("blocking") is True
+            detail = (
+                f"PLANNER REPLY REQUIRED ({kind})"
+                if blocking
+                else f"planner proposal awaiting optional reply ({kind})"
+            )
+            latest = latest_round(run_dir)
+            return RunState(
+                run_id, latest[0] if latest else None, "awaiting-planner", False, True, detail
+            )
     latest = latest_round(run_dir)
     if latest is None:
         return RunState(run_id, None, "unknown", False, False, "no recorded rounds yet")
@@ -1074,11 +1095,9 @@ def resolve_run(runs_dir: Path, run_id: str | None) -> RunId:
     """Resolve the run to watch: the named one, else the newest active one."""
     if run_id is not None:
         try:
-            resolved = validate_run_id(run_id)
+            resolved = resolve_supervision_run(runs_dir, run_id)
         except ConfigError as exc:
             raise MonitorError(str(exc)) from exc
-        if not (runs_dir / resolved).is_dir():
-            raise MonitorError(f"no recorded run {resolved!r} under {runs_dir}/")
         return resolved
     if active := active_runs(runs_dir):
         return active[0]

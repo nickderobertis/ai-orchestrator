@@ -30,7 +30,13 @@ from .config import ConfigError
 from .coordination import advisory_lock, atomic_json
 from .edits import EDIT_PROTOCOL_VERSION, EditCommand, EditError, parse_commands
 from .environment import CHANNEL_ENV_PREFIX
-from .runs import latest_round, load_mapping, validate_run_id
+from .runs import (
+    latest_round,
+    launch_may_be_active,
+    load_mapping,
+    resolve_supervision_run,
+    validate_run_id,
+)
 
 
 class ChannelError(Exception):
@@ -207,7 +213,7 @@ def _surface(request: Mapping[str, Any], run_id: str, round_number: int) -> dict
                 message = emitted["message"]
                 if "options" in emitted:
                     request = {**request, "options": emitted["options"]}
-    surface: dict[str, Any] = {"kind": kind, "message": message}
+    surface: dict[str, Any] = {"kind": kind, "message": message, "blocking": True}
     options = request.get("options")
     if options is not None:
         if not isinstance(options, list) or not all(isinstance(item, str) for item in options):
@@ -293,7 +299,11 @@ class ProposalPump:
                 "op": "supervisor",
                 "run_id": self._run_id,
                 "round": self._round,
-                "surface": {"kind": "proposal", "message": f"{node}: {message}"},
+                "surface": {
+                    "kind": "proposal",
+                    "message": f"{node}: {message}",
+                    "blocking": False,
+                },
                 "messages": [],
             }
         )
@@ -327,6 +337,7 @@ class ProposalPump:
         while (proposal := self._proposals.get()) is not None:
             self._reply_received.clear()
             self._awaiting_reply.set()
+            atomic_json(self._channel_dir / "pending.json", proposal)
             while True:
                 if self._stop.is_set():
                     return
@@ -340,6 +351,8 @@ class ProposalPump:
             while not self._stop.is_set() and not self._reply_received.wait(0.1):
                 pass
             self._awaiting_reply.clear()
+            with suppress(FileNotFoundError):
+                (self._channel_dir / "pending.json").unlink()
 
     def _receive(self) -> None:
         """Continuously receive planner edits, independent of proposal timing."""
@@ -393,11 +406,13 @@ def relay_supervisor(channel_dir: Path, run_id: str, round_number: int, *, timeo
                     raise ChannelError("numeric judge max must be a non-negative number")
                 print(json.dumps({"value": maximum, "reason": "live planner completed the run"}))
             return 0
-        write_message(
-            channel_dir / "up.fifo", _surface(request, run_id, round_number), timeout=timeout
-        )
+        surfaced = _surface(request, run_id, round_number)
+        atomic_json(channel_dir / "pending.json", surfaced)
+        write_message(channel_dir / "up.fifo", surfaced, timeout=timeout)
         response = _reply(read_message(channel_dir / "down.fifo", timeout=timeout))
         atomic_json(channel_dir / "planner-verdict.json", response)
+        with suppress(FileNotFoundError):
+            (channel_dir / "pending.json").unlink()
     except (ChannelError, ChannelTimeout, EditError, json.JSONDecodeError, OSError) as exc:
         print(f"relay-supervisor: {exc}", file=sys.stderr)
         return 1
@@ -414,6 +429,12 @@ def _finished(run_dir: Path) -> bool:
             pass
         else:
             return True
+    launch_path = run_dir / "launch.json"
+    if launch_path.is_file():
+        try:
+            return not launch_may_be_active(run_dir)
+        except (ConfigError, OSError):
+            pass
     latest = latest_round(run_dir)
     if latest is None:
         return False
@@ -449,7 +470,12 @@ def main_next(argv: list[str] | None = None) -> int:
     parser.add_argument("--runs-dir", type=Path, default=Path("runs"))
     parser.add_argument("--timeout", type=float, default=30.0)
     args = parser.parse_args(argv)
-    run_dir = args.runs_dir / validate_run_id(args.run_id)
+    try:
+        run_id = resolve_supervision_run(args.runs_dir, args.run_id)
+    except ConfigError as exc:
+        print(f"channel-next: {exc}", file=sys.stderr)
+        return 2
+    run_dir = args.runs_dir / run_id
     if _finished(run_dir):
         print(json.dumps({"status": "finished"}))
         return 0
@@ -482,8 +508,9 @@ def main_reply(argv: list[str] | None = None) -> int:
         value = json.loads(raw)
         if not isinstance(value, dict):
             raise ChannelError("reply must be a JSON object")
+        run_id = resolve_supervision_run(args.runs_dir, args.run_id)
         write_message(
-            args.runs_dir / validate_run_id(args.run_id) / "channel" / "down.fifo",
+            args.runs_dir / run_id / "channel" / "down.fifo",
             _reply(value),
             timeout=args.timeout,
         )
@@ -491,6 +518,53 @@ def main_reply(argv: list[str] | None = None) -> int:
         print(f"channel-reply: {exc}", file=sys.stderr)
         return 2
     return 0
+
+
+def _main_convenience(kind: str, argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=f"Send a {kind} planner reply")
+    parser.add_argument("run_id")
+    if kind != "approve":
+        parser.add_argument("text")
+    parser.add_argument("--runs-dir", type=Path, default=Path("runs"))
+    parser.add_argument("--timeout", type=float, default=30.0)
+    args = parser.parse_args(argv)
+    if kind == "approve":
+        value = {"completion": True, "reason": "planner approved verified closeout"}
+    elif kind == "reject":
+        value = {
+            "completion": False,
+            "message": "stop and address planner rejection",
+            "reason": args.text,
+        }
+    else:
+        value = {
+            "completion": False,
+            "message": args.text,
+            "reason": "planner directed continuation",
+        }
+    try:
+        run_id = resolve_supervision_run(args.runs_dir, args.run_id)
+        write_message(
+            args.runs_dir / run_id / "channel" / "down.fifo",
+            _reply(value),
+            timeout=args.timeout,
+        )
+    except (ChannelError, ChannelTimeout, ConfigError, EditError, OSError) as exc:
+        print(f"channel-{kind}: {exc}", file=sys.stderr)
+        return 2
+    return 0
+
+
+def main_approve(argv: list[str] | None = None) -> int:
+    return _main_convenience("approve", argv)
+
+
+def main_reject(argv: list[str] | None = None) -> int:
+    return _main_convenience("reject", argv)
+
+
+def main_continue(argv: list[str] | None = None) -> int:
+    return _main_convenience("continue", argv)
 
 
 def main_relay(argv: list[str] | None = None) -> int:
