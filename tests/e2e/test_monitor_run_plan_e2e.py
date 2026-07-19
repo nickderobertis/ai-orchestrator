@@ -298,10 +298,56 @@ def test_real_history_labels_and_cursor_watch(oneharness_bin: str, tmp_path: Pat
     )
     assert indexed.returncode == 0, indexed.stderr
     run = json.loads(indexed.stdout)["runs"][0]
-    assert run["providers"][0]["provider"] == "oneharness"
-    assert run["providers"][0]["harness"]
-    assert run["providers"][0]["model"]
-    assert run["timing"]["agent_seconds"] > 0
+    assert json.loads(indexed.stdout)["schema_version"] == 2
+    native_records = {
+        role: [json.loads(line) for line in Path(record["path"]).read_text().splitlines()]
+        for role, record in by_role.items()
+    }
+    expected_providers = {
+        (
+            str(items[-1].get("provider", "oneharness")),
+            str(items[-1].get("harness", "")),
+            str(items[-1].get("model", "")),
+        )
+        for role, items in native_records.items()
+        if role != "llmlint"
+    }
+    assert {
+        (provider["provider"], provider.get("harness", ""), provider.get("model", ""))
+        for provider in run["providers"]
+    } == expected_providers
+    expected_agent_ms = sum(
+        int(item["duration_ms"])
+        for role in ("agent",)
+        for item in native_records[role]
+        if isinstance(item.get("duration_ms"), int)
+        and not isinstance(item["duration_ms"], bool)
+        and item["duration_ms"] >= 0
+    )
+    assert round(run["timing"]["agent_seconds"] * 1000) == expected_agent_ms
+    expected_judge_ms = sum(
+        int(item["duration_ms"])
+        for item in native_records["judge"]
+        if isinstance(item.get("duration_ms"), int)
+        and not isinstance(item["duration_ms"], bool)
+        and item["duration_ms"] >= 0
+    )
+    assert round(run["timing"]["judge_seconds"] * 1000) == expected_judge_ms
+    assert run["turns"] == sum(
+        len(items) for role, items in native_records.items() if role != "llmlint"
+    )
+    breakdown = _just(
+        "telemetry",
+        "--runs-dir",
+        str(runs_dir),
+        "--oneharness-bin",
+        oneharness_bin,
+        "--breakdown",
+        environment=environment,
+    )
+    assert breakdown.returncode == 0, breakdown.stderr
+    assert "history-turns" in breakdown.stdout
+    assert "Turn histogram:" in breakdown.stdout
 
 
 def test_real_run_plan_waits_then_monitor_exits_only_after_attestation(
@@ -346,6 +392,13 @@ def test_real_run_plan_waits_then_monitor_exits_only_after_attestation(
     assert first["state"] == "waiting" and first["ok"] is False
     assert first["results"]["prepare"]["status"] == "done"
     assert first["results"]["approve"]["status"] == "waiting"
+    indexed = _just("telemetry", "--runs-dir", str(runs_dir), "--oneharness-bin", "absent")
+    assert indexed.returncode == 0, indexed.stderr
+    prepare_node = next(
+        node for node in json.loads(indexed.stdout)["runs"][0]["nodes"] if node["node"] == "prepare"
+    )
+    assert prepare_node["timing"]["wall_ms"] > 0
+    assert prepare_node["timing"]["fractions"]["idle_orchestration"] == 1.0
 
     waiting = _just(
         "monitor",

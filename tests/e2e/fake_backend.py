@@ -233,12 +233,19 @@ def main() -> int:
             resp = {
                 "message": agent_message,
                 "done": done,
-                "usage": {"input_tokens": 10, "output_tokens": 5},
+                "usage": {
+                    "input_tokens": 10,
+                    "output_tokens": 5,
+                    "cache_read_tokens": 4,
+                    "cache_write_tokens": 1,
+                    "cost_usd": 0.002,
+                },
                 "events": [
                     {
                         "kind": "tool_call",
                         "name": "bash",
                         "input": {"command": "just check"},
+                        "duration_ms": 7,
                         "index": 0,
                     }
                 ],
