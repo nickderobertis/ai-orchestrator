@@ -72,6 +72,7 @@ def test_lifecycle_clis_reject_unknown_local_aliases_before_dispatch(
     checkout = tmp_path / "checkout"
     git("clone", str(bare_origin()), str(checkout))
     Registry().register(str(checkout), workflow="local")
+    assert Registry().resolve("local/checkout") == checkout.resolve()
 
     unknown_repo = _cli(
         "orchestrator-repo-task",
