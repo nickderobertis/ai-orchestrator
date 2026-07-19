@@ -793,8 +793,6 @@ def test_recover_interrupted_real_cli_does_not_duplicate_node_start(
         (2, "shape", "invalid human_actions for done"),
     ],
 )
-# llmlint: ignore[tests_mirror_real_usage] These mutations model corrupt durable prefixes that
-# have no valid producer; recovery itself is exercised exclusively through the public CLI.
 def test_real_cli_rejects_terminal_prefix_without_required_payload(
     tmp_path: Path, event_version: int, mutation: str, diagnostic: str
 ) -> None:
@@ -824,6 +822,8 @@ def test_real_cli_rejects_terminal_prefix_without_required_payload(
     events_path = runs / f"bad-payload-v{event_version}-{mutation}" / "events.jsonl"
     events = [json.loads(line) for line in events_path.read_text().splitlines()]
     prefix = []
+    # llmlint: ignore[tests_mirror_real_usage] Invalid versioned terminal payloads have no
+    # public producer; mutate the CLI-produced prefix solely to exercise its recovery boundary.
     for event in events:
         if event["kind"] == "round-finished":
             continue
@@ -839,8 +839,13 @@ def test_real_cli_rejects_terminal_prefix_without_required_payload(
                 case _:
                     event["detail"]["result"]["human_actions"] = "invalid"
         prefix.append(event)
+    # llmlint: ignore[tests_mirror_real_usage] Installing a corrupt dead-owner prefix necessarily
+    # writes durable artifacts directly; recovery itself is invoked only through `run-plan`.
     events_path.write_text("".join(json.dumps(event) + "\n" for event in prefix))
+    # llmlint: ignore[tests_mirror_real_usage] A crash before round closeout has no result file.
     (round_dir / "result.json").unlink()
+    # llmlint: ignore[tests_mirror_real_usage] A dead owner cannot be produced synchronously by
+    # this test process; this status is the documented precondition for public `--recover`.
     (round_dir / "status.json").write_text(
         json.dumps({"status": "running", "pid": 999_999_999, "host": socket.gethostname()})
     )
