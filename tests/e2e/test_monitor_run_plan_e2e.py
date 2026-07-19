@@ -392,6 +392,13 @@ def test_real_run_plan_waits_then_monitor_exits_only_after_attestation(
     assert first["state"] == "waiting" and first["ok"] is False
     assert first["results"]["prepare"]["status"] == "done"
     assert first["results"]["approve"]["status"] == "waiting"
+    indexed = _just("telemetry", "--runs-dir", str(runs_dir), "--oneharness-bin", "absent")
+    assert indexed.returncode == 0, indexed.stderr
+    prepare_node = next(
+        node for node in json.loads(indexed.stdout)["runs"][0]["nodes"] if node["node"] == "prepare"
+    )
+    assert prepare_node["timing"]["wall_ms"] > 0
+    assert prepare_node["timing"]["fractions"]["idle_orchestration"] == 1.0
 
     waiting = _just(
         "monitor",

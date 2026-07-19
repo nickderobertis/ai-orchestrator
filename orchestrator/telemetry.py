@@ -460,15 +460,18 @@ def _summarize_session(session: HistorySession, records: list[HistoryRecord]) ->
             raise HistoryError("oneharness history schema v2 record has invalid required timing")
         if schema_version in {"0.3", 2}:
             start_at = _utc_datetime(record.get("started_at"))
-            finish_at = _utc_datetime(record.get("finished_at"))
+            raw_finish = record.get("finished_at")
+            finish_at = _utc_datetime(raw_finish) if raw_finish is not None else None
             duration = record["duration_ms"]
             if (
                 start_at is None
-                or finish_at is None
-                or finish_at < start_at
+                or (raw_finish is not None and finish_at is None)
+                or (finish_at is not None and finish_at < start_at)
                 or cast(int, model) + cast(int, tool) > duration
             ):
                 raise HistoryError("oneharness history schema v2 record has invalid interval")
+            if finish_at is None:
+                interval_complete = False
         if model is None or tool is None:
             interval_complete = False
         else:
