@@ -40,7 +40,6 @@ class ChannelTimeout(TimeoutError):
 MAX_FRAME_BYTES = select.PIPE_BUF
 CHANNEL_DIR_ENV = "AI_ORCHESTRATOR_CHANNEL_DIR"
 CHANNEL_RUN_ID_ENV = "AI_ORCHESTRATOR_CHANNEL_RUN_ID"
-CHANNEL_ROUND_ENV = "AI_ORCHESTRATOR_CHANNEL_ROUND"
 
 
 class ProposalSink(Protocol):
@@ -197,6 +196,7 @@ class ProposalPump:
         self._round = round_number
         self._proposals: queue.Queue[dict[str, Any] | None] = queue.Queue()
         self._replies: queue.Queue[dict[str, Any]] = queue.Queue()
+        self._stop = threading.Event()
         self._thread = threading.Thread(target=self._service, daemon=True)
         self._thread.start()
 
@@ -221,13 +221,16 @@ class ProposalPump:
             atomic_json(self._channel_dir / "planner-verdict.json", response)
 
     def close(self) -> None:
+        self._stop.set()
         self._proposals.put(None)
-        self._thread.join(timeout=1)
+        self._thread.join()
         self.persist_replies()
 
     def _service(self) -> None:
         while (proposal := self._proposals.get()) is not None:
             while True:
+                if self._stop.is_set():
+                    return
                 try:
                     write_message(self._channel_dir / "up.fifo", proposal, timeout=0.1)
                     break
@@ -236,6 +239,8 @@ class ProposalPump:
                 except OSError:
                     return
             while True:
+                if self._stop.is_set():
+                    return
                 try:
                     response = _reply(read_message(self._channel_dir / "down.fifo", timeout=0.1))
                     self._replies.put(response)

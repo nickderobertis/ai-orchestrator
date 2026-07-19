@@ -12,6 +12,7 @@ from pathlib import Path
 import yaml
 
 from orchestrator import BASE_CONFIG, REPO_ROOT
+from orchestrator.channel import CHANNEL_DIR_ENV, CHANNEL_RUN_ID_ENV, create_channel
 from orchestrator.dispatch import launch_orchestrator
 
 FAKE_BACKEND = REPO_ROOT / "tests" / "e2e" / "fake_backend.py"
@@ -287,6 +288,120 @@ def test_reattached_planner_replies_to_mid_run_proposal_without_stopping_graph(
     assert boundary["surface"]["kind"] in {"milestone", "closeout"}
     _reply_cli(run_id, runs, {"completion": True, "reason": "verified"})
     _wait_report(runs / run_id / "orchestrator" / "report.json")
+
+
+def test_unanswered_mid_run_proposal_does_not_compete_with_boundary_verdict(
+    tmp_path: Path, onejudge_bin: str
+) -> None:
+    runs = tmp_path / "unanswered-proposal-runs"
+    witness = tmp_path / "unanswered-unrelated.ticks"
+    run_id = _launch_cli(_proposal_plan(tmp_path, witness), runs, _base(tmp_path), onejudge_bin)
+
+    proposal = _next_cli(run_id, runs)
+    assert proposal["surface"]["kind"] == "proposal"
+    # Deliberately leave the proposal unanswered. The unrelated node still settles,
+    # then the pump must relinquish sole FIFO ownership before this boundary appears.
+    boundary = _next_cli(run_id, runs)
+    assert boundary["surface"]["kind"] in {"milestone", "closeout"}
+    assert witness.read_text(encoding="utf-8").count("tick") >= 2
+    _reply_cli(run_id, runs, {"completion": True, "reason": "boundary verified"})
+    report = _wait_report(runs / run_id / "orchestrator" / "report.json")
+    assert report["stopped_early"] is False
+
+
+def test_continuation_round_proposal_uses_reconciled_round_number(
+    tmp_path: Path, onejudge_bin: str
+) -> None:
+    runs = tmp_path / "continuation-runs"
+    witness = tmp_path / "round-two-unrelated.ticks"
+    plan = tmp_path / "continuation-plan.json"
+    plan.write_text(
+        json.dumps(
+            {
+                "schema_version": 3,
+                "name": "continuation-proposal",
+                "concurrency": 2,
+                "tasks": [
+                    {"id": "gate", "kind": "human", "task": "Approve continuation"},
+                    {
+                        "id": "discoverer",
+                        "persona": "engineer",
+                        "task": "complete-now discover-follow-up",
+                        "deps": ["gate"],
+                    },
+                    {
+                        "id": "unrelated",
+                        "persona": "engineer",
+                        "task": f"slow-branch {witness}",
+                        "deps": ["gate"],
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    base = _base(tmp_path)
+    first = subprocess.run(
+        [
+            "just",
+            "run-plan",
+            str(plan),
+            "--run",
+            "continuation-proposal",
+            "--runs-dir",
+            str(runs),
+            "--base",
+            str(base),
+            "--provider",
+            "command",
+        ],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+    )
+    assert first.returncode == 1
+    channel = create_channel(runs / "continuation-proposal")
+    env = {
+        **os.environ,
+        CHANNEL_DIR_ENV: str(channel),
+        CHANNEL_RUN_ID_ENV: "continuation-proposal",
+    }
+    resumed = subprocess.Popen(
+        [
+            "just",
+            "next-round",
+            "continuation-proposal",
+            "--complete-human",
+            "gate",
+            "--runs-dir",
+            str(runs),
+            "--base",
+            str(base),
+            "--provider",
+            "command",
+            "--onejudge-bin",
+            onejudge_bin,
+        ],
+        cwd=REPO_ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=env,
+    )
+    deadline = time.monotonic() + 10
+    round_two_status = runs / "continuation-proposal" / "round-02" / "status.json"
+    while time.monotonic() < deadline and not round_two_status.is_file():
+        time.sleep(0.02)
+    assert round_two_status.is_file()
+    proposal = _next_cli("continuation-proposal", runs)
+    assert proposal["round"] == 2
+    _reply_cli(
+        "continuation-proposal",
+        runs,
+        {"completion": False, "message": "defer", "reason": "next continuation"},
+    )
+    stdout, stderr = resumed.communicate(timeout=15)
+    assert resumed.returncode == 0, (stdout, stderr)
 
 
 def test_orchestrate_cli_reports_launch_boundary_failures(tmp_path: Path) -> None:

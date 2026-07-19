@@ -74,6 +74,25 @@ def test_proposal_pump_round_trips_and_persists_on_reconciler_drain(tmp_path: Pa
     assert json.loads(verdict.read_text(encoding="utf-8")) == reply
 
 
+def test_unanswered_proposal_releases_down_fifo_before_boundary(tmp_path: Path) -> None:
+    channel = create_channel(tmp_path / "run")
+    pump = ProposalPump(channel, "live", 1)
+    pump.propose("worker", "discovery")
+    assert read_message(channel / "up.fifo", timeout=1)["surface"]["kind"] == "proposal"
+    pump.close()
+    assert not pump._thread.is_alive()
+
+    boundary_reply = {"completion": True, "reason": "closeout verified"}
+    sender = threading.Thread(
+        target=write_message,
+        args=(channel / "down.fifo", boundary_reply),
+        kwargs={"timeout": 1},
+    )
+    sender.start()
+    assert read_message(channel / "down.fifo", timeout=1) == boundary_reply
+    sender.join()
+
+
 @pytest.mark.parametrize("failure", ["write", "read", "write_timeout", "read_timeout"])
 def test_proposal_pump_stops_on_broken_fifo(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str

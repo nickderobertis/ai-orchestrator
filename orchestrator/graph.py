@@ -22,7 +22,6 @@ from typing import Any, Literal, cast
 from . import REPO_ROOT
 from .channel import (
     CHANNEL_DIR_ENV,
-    CHANNEL_ROUND_ENV,
     CHANNEL_RUN_ID_ENV,
     ProposalPump,
     ProposalSink,
@@ -889,22 +888,13 @@ def main(argv: list[str] | None = None) -> int:
     proposal_pump: ProposalPump | None = None
     channel_path = os.environ.get(CHANNEL_DIR_ENV)
     channel_run_id = os.environ.get(CHANNEL_RUN_ID_ENV)
-    channel_round = os.environ.get(CHANNEL_ROUND_ENV)
-    configured_channel_values = (channel_path, channel_run_id, channel_round)
+    configured_channel_values = (channel_path, channel_run_id)
     # llmlint: ignore[changed_behavior_has_e2e] internal env; malformed only in unit
     if any(configured_channel_values) and not all(configured_channel_values):
         print("run-plan: incomplete proposal channel environment", file=sys.stderr)
         return 2
-    if channel_path and channel_run_id and channel_round:
+    if channel_path and channel_run_id and round_number is not None:
         # llmlint: ignore-block[changed_behavior_has_e2e] internal env; malformed only in unit
-        try:
-            parsed_channel_round = int(channel_round)
-        except ValueError:
-            print("run-plan: invalid proposal channel round", file=sys.stderr)
-            return 2
-        if parsed_channel_round < 1:
-            print("run-plan: proposal channel round must be positive", file=sys.stderr)
-            return 2
         try:
             validated_run_id = str(validate_run_id(channel_run_id))
             resolved_channel = Path(channel_path).resolve(strict=True)
@@ -915,7 +905,7 @@ def main(argv: list[str] | None = None) -> int:
         except (OSError, ValueError) as exc:
             print(f"run-plan: invalid proposal channel: {exc}", file=sys.stderr)
             return 2
-        proposal_pump = ProposalPump(resolved_channel, validated_run_id, parsed_channel_round)
+        proposal_pump = ProposalPump(resolved_channel, validated_run_id, round_number)
         # llmlint: ignore-end[changed_behavior_has_e2e]
     try:
         result = run_graph(

@@ -95,39 +95,29 @@ def test_main_validates_and_services_inherited_proposal_channel(
     channel = create_channel(tmp_path / "outer")
     monkeypatch.setenv("AI_ORCHESTRATOR_CHANNEL_DIR", str(channel))
     monkeypatch.setenv("AI_ORCHESTRATOR_CHANNEL_RUN_ID", "outer")
-    monkeypatch.setenv("AI_ORCHESTRATOR_CHANNEL_ROUND", "invalid")
-    assert main([str(plan), "--no-record"]) == 2
-    assert "invalid proposal channel round" in capsys.readouterr().err
-    monkeypatch.setenv("AI_ORCHESTRATOR_CHANNEL_ROUND", "0")
-    assert main([str(plan), "--no-record"]) == 2
-    assert "round must be positive" in capsys.readouterr().err
 
     pumps: list[_RecordingProposalPump] = []
 
     def make_pump(path: Path, run_id: str, round_number: int) -> _RecordingProposalPump:
-        assert (path, run_id, round_number) == (channel, "outer", 2)
+        assert (path, run_id, round_number) == (channel, "outer", 1)
         pump = _RecordingProposalPump()
         pump.close = lambda: pump.persist_replies()  # type: ignore[attr-defined]
         pumps.append(pump)
         return pump
 
-    monkeypatch.setenv("AI_ORCHESTRATOR_CHANNEL_ROUND", "2")
     monkeypatch.setattr("orchestrator.graph.ProposalPump", make_pump)
     monkeypatch.setattr(
         "orchestrator.graph.make_dispatch_runner",
         lambda **kwargs: lambda node, **labels: _report(node.persona),
     )
     assert main([str(plan), "--no-record"]) == 0
-    assert len(pumps) == 1 and pumps[0].drains >= 2
-
-    for key in (
-        "AI_ORCHESTRATOR_CHANNEL_DIR",
-        "AI_ORCHESTRATOR_CHANNEL_RUN_ID",
-        "AI_ORCHESTRATOR_CHANNEL_ROUND",
-    ):
-        monkeypatch.delenv(key)
+    assert not pumps
     assert main([str(plan), "--run", "recorded", "--runs-dir", str(tmp_path / "runs")]) == 0
+    assert len(pumps) == 1 and pumps[0].drains >= 2
     assert (tmp_path / "runs" / "recorded" / "round-01" / "result.json").is_file()
+
+    for key in ("AI_ORCHESTRATOR_CHANNEL_DIR", "AI_ORCHESTRATOR_CHANNEL_RUN_ID"):
+        monkeypatch.delenv(key)
 
 
 def _lifecycle(outcome: str = "merged", **kw) -> LifecycleResult:
