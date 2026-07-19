@@ -217,9 +217,12 @@ def main() -> int:
                         {"kind": "blocker", "message": "plan departure needs a decision"}
                     )
                 elif turn == 0:
-                    agent_message = json.dumps(
-                        {"kind": "milestone", "message": "tracked round completed"}
+                    summary = (
+                        "tracked round completed " + "x" * 100_000
+                        if "surface-large-summary" in plan_text
+                        else "tracked round completed"
                     )
+                    agent_message = json.dumps({"kind": "milestone", "message": summary})
                 else:
                     suffix = f"; received {guidance}" if guidance else ""
                     agent_message = json.dumps(

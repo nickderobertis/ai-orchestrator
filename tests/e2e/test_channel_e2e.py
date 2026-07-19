@@ -158,6 +158,21 @@ def test_live_channel_runs_real_nested_graph_and_round_trips_guidance(
     assert not (nested[0] / "channel").exists()
 
 
+def test_live_channel_surfaces_large_round_summary(tmp_path: Path, onejudge_bin: str) -> None:
+    runs = tmp_path / "large-summary-runs"
+    run_id = _launch_cli(
+        _plan(tmp_path, "surface-large-summary"), runs, _base(tmp_path), onejudge_bin
+    )
+    summary = _next_cli(run_id, runs)
+    message = summary["surface"]["message"]
+    assert isinstance(message, str)
+    assert message.startswith("tracked round completed ")
+    assert len(message) > 100_000
+    _reply_cli(run_id, runs, {"completion": True, "reason": "large summary verified"})
+    report = _wait_report(runs / run_id / "orchestrator" / "report.json")
+    assert report["stopped_early"] is False
+
+
 def test_launch_api_records_detached_owner_and_real_report(
     tmp_path: Path, onejudge_bin: str
 ) -> None:
