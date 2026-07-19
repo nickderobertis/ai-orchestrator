@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from orchestrator.edits import EditCommand, EditError, apply_edit
+from orchestrator.edits import EditCommand, EditError, apply_edit, graph_mapping, parse_commands
 from orchestrator.graph import parse_graph
 
 
@@ -99,3 +99,107 @@ def test_retry_and_attestation_require_the_current_frontier() -> None:
             states={"approve": "pending"},
             attestations=(),
         )
+
+
+def test_drop_detach_cascade_anchor_and_complete_deltas() -> None:
+    detached, events = apply_edit(
+        _graph(),
+        EditCommand("drop", {"op": "drop", "id": "root", "dependents": "detach"}),
+        states={},
+        attestations=(),
+    )
+    assert [node.id for node in detached.tasks] == ["leaf", "approve"]
+    assert detached.tasks[0].deps == []
+    assert [event["kind"] for event in events] == ["edge-removed", "node-dropped"]
+
+    cascaded, events = apply_edit(
+        _graph(),
+        EditCommand("drop", {"op": "drop", "id": "root", "dependents": "drop"}),
+        states={},
+        attestations=(),
+    )
+    assert [node.id for node in cascaded.tasks] == ["approve"]
+    assert [event["node"] for event in events] == ["leaf", "root"]
+
+    same_repo = parse_graph(
+        {
+            "schema_version": 3,
+            "tasks": [
+                {"id": "anchor", "repo": "acme/widget", "task": "No diff", "expects_no_diff": True},
+                {
+                    "id": "stacked",
+                    "repo": "acme/widget",
+                    "task": "No diff",
+                    "expects_no_diff": True,
+                    "deps": ["anchor"],
+                },
+            ],
+        }
+    )
+    with pytest.raises(EditError, match="last unresolved publication anchor"):
+        apply_edit(
+            same_repo,
+            EditCommand("drop", {"op": "drop", "id": "anchor", "dependents": "detach"}),
+            states={},
+            attestations=(),
+        )
+
+    unchanged, complete = apply_edit(
+        _graph(),
+        EditCommand("complete", {"op": "complete", "reason": "published"}),
+        states={},
+        attestations=(),
+    )
+    assert unchanged.tasks[0].id == "root"
+    assert complete == [{"kind": "run-completed", "detail": {"reason": "published"}}]
+
+
+def test_attestation_and_command_boundary_rejections() -> None:
+    _, events = apply_edit(
+        _graph(),
+        EditCommand("attest", {"op": "attest", "ref": "approve"}),
+        states={"approve": "waiting"},
+        attestations=(),
+    )
+    assert events[0]["kind"] == "human-attested"
+    with pytest.raises(EditError, match="already attested"):
+        apply_edit(
+            _graph(),
+            EditCommand("attest", {"op": "attest", "ref": "approve"}),
+            states={"approve": "waiting"},
+            attestations=("approve",),
+        )
+
+    assert parse_commands({}) == ()
+    with pytest.raises(EditError, match="version 1"):
+        parse_commands({"version": 2, "commands": []})
+    with pytest.raises(EditError, match="must be a list"):
+        parse_commands({"version": 1, "commands": {}})
+    with pytest.raises(EditError, match="unknown op"):
+        parse_commands({"version": 1, "commands": [{"op": "split"}]})
+
+
+@pytest.mark.parametrize(
+    ("command", "message"),
+    [
+        (EditCommand("add", {"op": "add", "node": "bad"}), "node mapping"),
+        (EditCommand("reparent", {"op": "reparent", "id": "missing", "deps": []}), "existing"),
+        (EditCommand("reparent", {"op": "reparent", "id": "leaf", "deps": "bad"}), "list"),
+        (EditCommand("drop", {"op": "drop", "id": "missing", "dependents": "drop"}), "existing"),
+        (EditCommand("retry", {"op": "retry", "id": "root", "node": {}}), "retryable"),
+        (EditCommand("complete", {"op": "complete", "reason": 1}), "string reason"),
+    ],
+)
+def test_malformed_delta_variants_are_rejected(command: EditCommand, message: str) -> None:
+    with pytest.raises(EditError, match=message):
+        apply_edit(_graph(), command, states={}, attestations=())
+
+
+def test_graph_mapping_falls_back_for_programmatic_nodes() -> None:
+    graph = _graph()
+    graph.tasks[0].definition.clear()
+    assert graph_mapping(graph)["tasks"][0] == {
+        "id": "root",
+        "kind": "agent",
+        "task": "Root",
+    }

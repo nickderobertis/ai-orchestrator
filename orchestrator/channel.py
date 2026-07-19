@@ -224,6 +224,8 @@ class ProposalPump:
         self._replies: queue.Queue[dict[str, Any]] = queue.Queue()
         self._commands: queue.Queue[EditCommand] = queue.Queue()
         self._stop = threading.Event()
+        self._awaiting_reply = threading.Event()
+        self._reply_received = threading.Event()
         self._thread = threading.Thread(target=self._service, daemon=True)
         self._receiver = threading.Thread(target=self._receive, daemon=True)
         self._thread.start()
@@ -267,6 +269,8 @@ class ProposalPump:
 
     def _service(self) -> None:
         while (proposal := self._proposals.get()) is not None:
+            self._reply_received.clear()
+            self._awaiting_reply.set()
             while True:
                 if self._stop.is_set():
                     return
@@ -277,6 +281,9 @@ class ProposalPump:
                     continue
                 except OSError:
                     return
+            while not self._stop.is_set() and not self._reply_received.wait(0.1):
+                pass
+            self._awaiting_reply.clear()
 
     def _receive(self) -> None:
         """Continuously receive planner edits, independent of proposal timing."""
@@ -286,6 +293,8 @@ class ProposalPump:
                 for command in parse_commands(response):
                     self._commands.put(command)
                 self._replies.put(response)
+                if self._awaiting_reply.is_set():
+                    self._reply_received.set()
             except ChannelTimeout:
                 continue
             except (ChannelError, OSError):

@@ -61,12 +61,12 @@ def test_real_cli_mutates_live_frontier_and_replays_atomic_edits(
                     {
                         "id": "slow_a",
                         "persona": "engineer",
-                        "task": f"slow-branch {tmp_path / 'a.ticks'}",
+                        "task": f"slow-branch {tmp_path / 'a.ticks'} live-edit-slow",
                     },
                     {
                         "id": "slow_b",
                         "persona": "engineer",
-                        "task": f"slow-branch {tmp_path / 'b.ticks'}",
+                        "task": f"slow-branch {tmp_path / 'b.ticks'} live-edit-slow",
                     },
                     {"id": "failed", "persona": "engineer", "task": "should-fail", "max_turns": 1},
                     {"id": "approve", "kind": "human", "task": "Approve"},
@@ -126,9 +126,20 @@ def test_real_cli_mutates_live_frontier_and_replays_atomic_edits(
             capture_output=True,
             check=True,
         )
-        messages.append(json.loads(rejected.stdout)["surface"]["message"])
+        message = json.loads(rejected.stdout)["surface"]["message"]
+        messages.append(message)
         if any("depends on itself" in message for message in messages):
             break
+        subprocess.run(
+            ["just", "channel-reply", run_id, "--runs-dir", str(runs)],
+            cwd=REPO_ROOT,
+            input=json.dumps(
+                {"completion": False, "message": "continue", "reason": "proposal observed"}
+            ),
+            text=True,
+            capture_output=True,
+            check=True,
+        )
     assert any("depends on itself" in message for message in messages)
     before = events.read_text(encoding="utf-8").count('"kind": "edit-committed"')
 

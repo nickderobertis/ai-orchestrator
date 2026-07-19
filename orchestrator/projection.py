@@ -65,6 +65,7 @@ class _RoundBuilder:
     results: dict[str, GraphResultItem] = field(default_factory=dict)
     attestations: list[str] = field(default_factory=list)
     result: GraphPayload | None = None
+    dropped_ids: set[str] = field(default_factory=set)
 
 
 def read_strict_events(path: Path, run_id: RunId) -> list[Event]:
@@ -199,6 +200,11 @@ def project_round(events: list[Event], run_id: RunId, round_number: int) -> Roun
                     raise ProjectionError("node-settled requires a terminal status")
                 builder.states[event.node] = status
                 _fold_node_result(builder, event)
+                if event.node in builder.dropped_ids:
+                    if status != "cancelled":
+                        raise ProjectionError("a dropped running node must settle cancelled")
+                    builder.states.pop(event.node, None)
+                    builder.results.pop(event.node, None)
             case "human-attested":
                 ref = detail.get("ref")
                 if not isinstance(ref, str) or not ref:
@@ -310,6 +316,7 @@ def _copy_builder(builder: _RoundBuilder) -> _RoundBuilder:
         results=dict(builder.results),
         attestations=list(builder.attestations),
         result=builder.result,
+        dropped_ids=set(builder.dropped_ids),
     )
 
 
@@ -346,10 +353,12 @@ def _fold_edit_operation(builder: _RoundBuilder, operation: object) -> None:
         if not isinstance(node, str) or node not in builder.node_ids:
             raise ProjectionError("node-dropped references an unknown node")
         builder.node_ids.remove(node)
+        builder.dropped_ids.add(node)
         builder.nodes = [definition for definition in builder.nodes if definition["id"] != node]
         builder.edges = [edge for edge in builder.edges if node not in edge]
-        builder.states.pop(node, None)
-        builder.results.pop(node, None)
+        if builder.states.get(node) != "running":
+            builder.states.pop(node, None)
+            builder.results.pop(node, None)
     elif kind == "human-attested":
         ref = detail.get("ref")
         if not isinstance(ref, str) or ref != node or builder.states.get(ref) != "waiting":

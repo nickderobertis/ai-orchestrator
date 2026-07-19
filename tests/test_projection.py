@@ -117,6 +117,98 @@ def test_invalid_committed_cycle_rejects_the_entire_delta() -> None:
         project_round(events, RunId("r"), 1)
 
 
+def test_committed_drop_and_attestation_fold_live_state() -> None:
+    events = [
+        _event(
+            "node-added",
+            1,
+            detail={"definition": {"id": "approve", "kind": "human", "task": "Approve"}},
+        ),
+        _event(
+            "node-added", 2, detail={"definition": {"id": "work", "persona": "p", "task": "Work"}}
+        ),
+        _event("round-started", 3, detail={"plan": {"schema_version": 3}}),
+        _event("human-waiting", 4, node="approve"),
+        _event(
+            "edit-committed",
+            5,
+            detail={
+                "operations": [
+                    {"kind": "human-attested", "node": "approve", "detail": {"ref": "approve"}}
+                ]
+            },
+        ),
+        _event(
+            "edit-committed",
+            6,
+            detail={
+                "operations": [
+                    {"kind": "node-dropped", "node": "work", "detail": {"dependents": "drop"}}
+                ]
+            },
+        ),
+        _event(
+            "edit-committed",
+            7,
+            detail={"operations": [{"kind": "run-completed", "detail": {"reason": "done"}}]},
+        ),
+    ]
+    projection = project_round(events, RunId("r"), 1)
+    assert projection.node_states == {"approve": "done"}
+    assert projection.attestations == ("approve",)
+    assert [node["id"] for node in projection.plan["tasks"]] == ["approve"]
+
+
+def test_running_drop_replays_cancellation_after_atomic_removal() -> None:
+    events = [
+        _event(
+            "node-added", 1, detail={"definition": {"id": "work", "persona": "p", "task": "Work"}}
+        ),
+        _event(
+            "node-added", 2, detail={"definition": {"id": "keep", "persona": "p", "task": "Keep"}}
+        ),
+        _event("round-started", 3, detail={"plan": {"schema_version": 3}}),
+        _event("node-started", 4, node="work"),
+        _event(
+            "edit-committed",
+            5,
+            detail={
+                "operations": [
+                    {"kind": "node-dropped", "node": "work", "detail": {"dependents": "drop"}}
+                ]
+            },
+        ),
+        _event("node-settled", 6, node="work", detail={"status": "cancelled"}),
+    ]
+    projection = project_round(events, RunId("r"), 1)
+    assert [node["id"] for node in projection.plan["tasks"]] == ["keep"]
+    assert projection.node_states == {}
+
+
+@pytest.mark.parametrize(
+    ("operation", "message"),
+    [
+        ({}, "contain a kind"),
+        ({"kind": "node-added", "detail": "bad"}, "detail must be a mapping"),
+        ({"kind": "node-added", "detail": {"definition": "bad"}}, "node definition"),
+        ({"kind": "edge-added", "detail": {"from": 1, "to": "a"}}, "endpoints"),
+        ({"kind": "edge-removed", "detail": {"from": "a", "to": "b"}}, "absent edge"),
+        ({"kind": "node-dropped", "node": "missing"}, "unknown node"),
+        ({"kind": "human-attested", "node": "a", "detail": {"ref": "a"}}, "currently waiting"),
+        ({"kind": "future-edit"}, "unknown committed"),
+    ],
+)
+def test_malformed_committed_operations_fail_atomically(operation, message: str) -> None:
+    events = [
+        _event("node-added", 1, detail={"definition": {"id": "a", "persona": "p", "task": "a"}}),
+        _event("node-added", 2, detail={"definition": {"id": "b", "persona": "p", "task": "b"}}),
+        _event("round-started", 3, detail={"plan": {"schema_version": 3}}),
+        _event("edit-committed", 4, detail={"operations": [operation]}),
+    ]
+    with pytest.raises(ProjectionError, match=message):
+        project_round(events, RunId("r"), 1)
+
+
 def test_strict_reader_rejects_uncommitted_edit_vocabulary(tmp_path: Path) -> None:
     path = tmp_path / "events.jsonl"
     path.write_text(
