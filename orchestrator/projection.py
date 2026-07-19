@@ -23,7 +23,7 @@ from .journal import (
     parse_event,
 )
 from .plan import PlanError
-from .runs import GraphPayload, RunId, as_result_payload
+from .runs import GraphPayload, GraphResultItem, RunId, as_result_payload
 
 
 class ProjectionError(ValueError):
@@ -48,6 +48,7 @@ class RoundProjection:
     round: int
     plan: ProjectedPlan
     node_states: dict[str, NodeState]
+    node_results: dict[str, GraphResultItem]
     attestations: tuple[str, ...]
     result: GraphPayload | None
     last_seq: int
@@ -60,6 +61,7 @@ class _RoundBuilder:
     node_ids: set[str] = field(default_factory=set)
     edges: list[tuple[str, str]] = field(default_factory=list)
     states: dict[str, NodeState] = field(default_factory=dict)
+    results: dict[str, GraphResultItem] = field(default_factory=dict)
     attestations: list[str] = field(default_factory=list)
     result: GraphPayload | None = None
 
@@ -166,6 +168,7 @@ def project_round(events: list[Event], run_id: RunId, round_number: int) -> Roun
                 if event.node in builder.states:
                     raise ProjectionError(f"node {event.node!r} started more than once")
                 builder.states[event.node] = "waiting"
+                _fold_node_result(builder, event)
             case "node-settled" | "node-failed" if event.node is not None:
                 if builder.states.get(event.node) != "running":
                     raise ProjectionError(f"node {event.node!r} settled without one start")
@@ -173,6 +176,7 @@ def project_round(events: list[Event], run_id: RunId, round_number: int) -> Roun
                 if status not in {"done", "failed", "waiting"}:
                     raise ProjectionError("node-settled requires a terminal status")
                 builder.states[event.node] = status
+                _fold_node_result(builder, event)
             case "human-attested":
                 ref = detail.get("ref")
                 if not isinstance(ref, str) or not ref:
@@ -267,6 +271,7 @@ def project_round(events: list[Event], run_id: RunId, round_number: int) -> Roun
         round_number,
         plan,
         dict(builder.states),
+        dict(builder.results),
         tuple(builder.attestations),
         builder.result,
         last_seq,
@@ -275,3 +280,30 @@ def project_round(events: list[Event], run_id: RunId, round_number: int) -> Roun
 
 def project_run(path: Path, run_id: RunId, round_number: int) -> RoundProjection:
     return project_round(read_strict_events(path, run_id), run_id, round_number)
+
+
+def _fold_node_result(builder: _RoundBuilder, event: Event) -> None:
+    """Validate and retain a v2 terminal node payload when one is present."""
+    raw = event.detail.get("result")
+    if raw is None:
+        if event.version >= 2:
+            raise ProjectionError(f"{event.kind} requires a serialized node result")
+        return
+    if not isinstance(raw, dict) or event.node is None:
+        raise ProjectionError(f"{event.kind} has an invalid serialized node result")
+    status = raw.get("status")
+    if status != builder.states.get(str(event.node)):
+        raise ProjectionError(f"{event.kind} has an invalid serialized node result status")
+    state = "complete" if status == "done" else "waiting" if status == "waiting" else "failed"
+    payload = {
+        "schema_version": 2,
+        "ok": status == "done",
+        "state": state,
+        "started_order": [str(event.node)],
+        "results": {str(event.node): raw},
+    }
+    try:
+        validated = as_result_payload(payload)
+    except ConfigError as exc:
+        raise ProjectionError(f"{event.kind} has an invalid serialized node result: {exc}") from exc
+    builder.results[str(event.node)] = validated["results"][str(event.node)]

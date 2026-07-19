@@ -13,7 +13,7 @@ import threading
 import pytest
 
 from orchestrator.dispatch import DispatchError, Report
-from orchestrator.plan import Plan, PlanError, PlanNode, load_plan, run_plan
+from orchestrator.plan import NodeRun, Plan, PlanError, PlanNode, load_plan, run_plan, schedule_dag
 
 
 def _report(persona: str, completed: bool) -> Report:
@@ -121,6 +121,27 @@ def test_concurrency_override_wins() -> None:
     result = run_plan(plan, runner, concurrency=2)
     assert result.ok
     assert set(started) == {"a", "b"}
+
+
+def test_reconciler_resumes_running_and_retains_settled_actual_state() -> None:
+    called: list[str] = []
+
+    def run_one(node_id: str) -> NodeRun:
+        called.append(node_id)
+        return NodeRun("done")
+
+    runs, order = schedule_dag(
+        ["settled", "interrupted", "downstream"],
+        {"settled": [], "interrupted": [], "downstream": ["settled", "interrupted"]},
+        run_one,
+        concurrency=2,
+        actual={"settled": NodeRun("done"), "interrupted": NodeRun("running")},
+        started_order=["settled", "interrupted"],
+    )
+
+    assert called == ["interrupted", "downstream"]
+    assert order == ["settled", "interrupted", "downstream"]
+    assert all(run.status == "done" for run in runs.values())
 
 
 def test_plan_result_summary_and_render() -> None:

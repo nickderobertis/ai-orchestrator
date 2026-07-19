@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "state_changing_kinds": [
     "node-added",
     "edge-added",
@@ -12,5 +12,6 @@
     "round-finished"
   ],
   "required_envelope": ["version", "seq", "at", "kind", "run_id", "round"],
-  "optional_envelope": ["node", "step", "detail"]
+  "optional_envelope": ["node", "step", "detail"],
+  "terminal_detail": {"required": ["result"], "result": "GraphResultItem"}
 }

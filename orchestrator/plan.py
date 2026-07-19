@@ -101,6 +101,7 @@ class NodeRun:
     status: str  # "done" | "failed" | "skipped" | "waiting" | "blocked"
     error: str | None = None
     payload: Any = None
+    recorded: Mapping[str, Any] | None = None
 
 
 _UNMET = ("failed", "skipped")
@@ -113,8 +114,30 @@ def schedule_dag(
     run_one: Callable[[str], NodeRun],
     *,
     concurrency: int,
+    actual: Mapping[str, NodeRun] | None = None,
+    started_order: list[str] | None = None,
 ) -> tuple[dict[str, NodeRun], list[str]]:
-    """Run a DAG of nodes concurrently, honoring deps and cascading non-completion.
+    """Backward-compatible adapter over the long-lived reconciler."""
+    return reconcile_dag(
+        lambda: node_ids,
+        deps,
+        run_one,
+        concurrency=concurrency,
+        actual=actual,
+        started_order=started_order,
+    )
+
+
+def reconcile_dag(
+    desired_nodes: Callable[[], list[str]],
+    deps: dict[str, list[str]],
+    run_one: Callable[[str], NodeRun],
+    *,
+    concurrency: int,
+    actual: Mapping[str, NodeRun] | None = None,
+    started_order: list[str] | None = None,
+) -> tuple[dict[str, NodeRun], list[str]]:
+    """Converge desired nodes against replayed and in-flight actual state.
 
     A node runs once every dep is ``done``. If any dep failed or was skipped, the
     node is skipped. If a dep is waiting on a human action, or blocked behind one,
@@ -126,15 +149,17 @@ def schedule_dag(
     worker pool, which bounds parallelism. Returns each node's `NodeRun` plus the
     order nodes were started.
     """
-    status = {nid: "pending" for nid in node_ids}
-    results: dict[str, NodeRun] = {}
-    started_order: list[str] = []
+    desired = desired_nodes()
+    results = dict(actual or {})
+    status = {nid: results[nid].status if nid in results else "pending" for nid in desired}
+    order = list(started_order or [])
+    resumable = {nid for nid, state in status.items() if state == "running"}
 
     def resolve_gated() -> None:
         changed = True
         while changed:
             changed = False
-            for nid in node_ids:
+            for nid in desired:
                 if status[nid] != "pending":
                     continue
                 settled = [status[d] for d in deps[nid]]
@@ -151,12 +176,18 @@ def schedule_dag(
 
     with ThreadPoolExecutor(max_workers=concurrency) as pool:
         futures: dict[Any, str] = {}
-        while any(s in ("pending", "running") for s in status.values()):
+        while True:
+            desired = desired_nodes()
+            for nid in desired:
+                status.setdefault(nid, "pending")
             resolve_gated()
-            for nid in node_ids:
-                if status[nid] == "pending" and all(status[d] == "done" for d in deps[nid]):
+            for nid in desired:
+                ready = status[nid] == "pending" and all(status[d] == "done" for d in deps[nid])
+                if nid in resumable or ready:
+                    resumable.discard(nid)
                     status[nid] = "running"
-                    started_order.append(nid)
+                    if nid not in order:
+                        order.append(nid)
                     futures[pool.submit(run_one, nid)] = nid
             if not futures:
                 break
@@ -170,7 +201,7 @@ def schedule_dag(
                 status[nid] = run.status
                 results[nid] = run
 
-    return results, started_order
+    return results, order
 
 
 def _topological_order(nodes: dict[str, PlanNode]) -> list[str]:

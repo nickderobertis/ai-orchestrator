@@ -12,6 +12,7 @@ from orchestrator.dispatch import DispatchError, Report
 from orchestrator.gitops import GitError
 from orchestrator.graph import (
     HumanAction,
+    _replay_node_run,
     first_line,
     graph_payload,
     load_graph,
@@ -94,8 +95,134 @@ def test_run_graph_journals_what_the_round_actually_did(tmp_path: Path) -> None:
     # Sequence numbers are dense and monotonic even though nodes ran concurrently.
     assert [e.seq for e in events] == list(range(1, len(events) + 1))
     settled = next(e for e in events if e.kind == "node-settled" and e.node == "repo")
-    assert settled.detail == {"status": "done", "outcome": "merged"}
+    assert settled.detail["status"] == "done"
+    assert settled.detail["outcome"] == "merged"
+    assert (
+        settled.detail["result"]
+        == graph_payload(
+            run_graph(
+                parse_graph(
+                    {
+                        "tasks": [
+                            {"id": "repo", "repo": "o/r", "persona": "engineer", "task": "Patch"}
+                        ]
+                    }
+                ),
+                agent_runner=lambda node, **_: _report(node.persona),
+                lifecycle_runner=lambda node, **_: _lifecycle(outcome="merged", branch="feature"),
+            )
+        )["results"]["repo"]
+    )
     assert all(e.round == 1 and e.run_id == "run-j" for e in events)
+
+
+def test_replayed_lifecycle_result_preserves_payload_and_unblocks_stack_dependency() -> None:
+    graph = parse_graph(
+        {
+            "tasks": [
+                {"id": "parent", "repo": "o/r", "persona": "engineer", "task": "Parent"},
+                {
+                    "id": "child",
+                    "repo": "o/r",
+                    "persona": "engineer",
+                    "task": "Child",
+                    "deps": ["parent"],
+                },
+            ]
+        }
+    )
+    parent_item = {
+        "kind": "agent",
+        "status": "done",
+        "task": "Parent",
+        "repo": "o/r",
+        "branch": "feature/parent",
+        "base_branch": "main",
+        "pr_base": "main",
+        "stack_bases": [
+            {
+                "branch": "feature/grandparent",
+                "repo": "o/r",
+                "identity": "github:o/r",
+                "base_branch": "main",
+                "pr": "https://example.test/1",
+                "pr_base": "main",
+            }
+        ],
+        "outcome": "pr-open",
+        "detail": "published",
+        "publication_identity": "github:o/r",
+        "publication_workflow": "remote",
+        "repository_type": "team",
+        "merge_policy": "none",
+        "synthetic_stack_base": "feature/stack",
+        "waiting_steps": ["approval"],
+        "error": None,
+    }
+    replayed = _replay_node_run(graph.tasks[0], parent_item)
+    seen_bases = []
+
+    def lifecycle(node, **_):
+        seen_bases.extend(node.stack_bases)
+        return _lifecycle(branch="feature/child")
+
+    result = run_graph(
+        graph,
+        agent_runner=lambda node, **_: _report(node.persona),
+        lifecycle_runner=lifecycle,
+        replayed_runs={"parent": replayed},
+        replayed_order=["parent"],
+    )
+
+    assert result.results["parent"].recorded == parent_item
+    assert result.started_order == ["parent", "child"]
+    assert [anchor.branch for anchor in seen_bases] == ["feature/parent"]
+
+
+def test_lifecycle_expected_no_diff_terminal_payload_and_direct_replay() -> None:
+    graph = parse_graph(
+        {
+            "schema_version": 2,
+            "tasks": [
+                {
+                    "id": "repo",
+                    "repo": "o/r",
+                    "task": "Inspect",
+                    "steps": [
+                        {
+                            "id": "inspect",
+                            "task": "Confirm no change",
+                            "expects_no_diff": True,
+                        }
+                    ],
+                }
+            ],
+        }
+    )
+    result = run_graph(
+        graph,
+        agent_runner=lambda node, **_: _report(node.persona),
+        lifecycle_runner=lambda node, **_: _lifecycle(outcome="no-changes"),
+    )
+    assert result.results["repo"].status == "done"
+
+    direct = parse_graph(
+        {
+            "schema_version": 2,
+            "tasks": [{"id": "empty", "task": "No change", "expects_no_diff": True}],
+        }
+    ).tasks[0]
+    replayed = _replay_node_run(
+        direct,
+        {
+            "kind": "agent",
+            "status": "done",
+            "task": "No change",
+            "outcome": "no-changes",
+            "completed": True,
+        },
+    )
+    assert replayed.payload == "no-changes"
 
 
 def test_run_graph_journals_a_direct_node_whose_runner_raised(tmp_path: Path) -> None:

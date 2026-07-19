@@ -750,11 +750,30 @@ def test_recover_interrupted_real_cli_does_not_duplicate_node_start(
         pytest.fail("run-plan did not reach the settled-prefix recovery boundary")
     os.killpg(settled_process.pid, signal.SIGKILL)
     settled_process.wait()
-    refused = subprocess.run(
+    converged = subprocess.run(
         [*settled_command, "--recover"], cwd=REPO_ROOT, text=True, capture_output=True, check=False
     )
-    assert refused.returncode == 2
-    assert "settled nodes before its terminal event: first" in refused.stderr
+    assert converged.returncode == 0, converged.stderr
+    settled_records = [json.loads(line) for line in settled_events.read_text().splitlines()]
+    for node_id in ("first", "second"):
+        assert (
+            sum(
+                event["kind"] == "node-started" and event.get("node") == node_id
+                for event in settled_records
+            )
+            == 1
+        )
+        assert (
+            sum(
+                event["kind"] == "node-settled" and event.get("node") == node_id
+                for event in settled_records
+            )
+            == 1
+        )
+    assert (
+        json.loads((runs / "settled-prefix" / "round-01" / "result.json").read_text())["state"]
+        == "complete"
+    )
 
 
 def test_recover_completes_a_partially_emitted_graph_without_duplicates(tmp_path: Path) -> None:

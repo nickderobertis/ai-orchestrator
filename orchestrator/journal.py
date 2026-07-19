@@ -38,7 +38,8 @@ from .runs import NodeId, RunId, StepId
 
 # Bump when a record's *shape* changes incompatibly. Readers skip records they do
 # not understand rather than failing a round that is only being observed.
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
+SUPPORTED_SCHEMA_VERSIONS = frozenset({1, SCHEMA_VERSION})
 
 JOURNAL_NAME = "events.jsonl"
 REQUIRED_EVENT_FIELDS = ("version", "seq", "at", "kind", "run_id", "round")
@@ -237,7 +238,7 @@ def parse_event(record: object) -> Event | None:
     if not isinstance(record, dict):
         return None
     version = record.get("version")
-    if not _is_int(version) or version != SCHEMA_VERSION:
+    if not _is_int(version) or version not in SUPPORTED_SCHEMA_VERSIONS:
         return None
     kind = record.get("kind")
     run_id = record.get("run_id")
