@@ -188,6 +188,8 @@ def _reply(value: Mapping[str, Any]) -> dict[str, Any]:
     if completion is None and commands:
         completes = [command for command in commands if command.op == "complete"]
         complete_reason = completes[-1].payload.get("reason") if completes else None
+        if completes and not isinstance(complete_reason, str):
+            raise ChannelError("complete edit requires a string reason")
         response: dict[str, Any] = {
             "completion": bool(completes),
             "reason": complete_reason or "versioned edit commands",

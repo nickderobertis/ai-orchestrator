@@ -208,6 +208,8 @@ def test_versioned_edits_are_independent_of_completion() -> None:
     }
     with pytest.raises(ChannelError, match="version 1"):
         _reply({"version": 2, "commands": [{"op": "complete", "reason": "done"}]})
+    with pytest.raises(ChannelError, match="string reason"):
+        _reply({"version": 1, "commands": [{"op": "complete", "reason": 1}]})
 
 
 def test_channel_metadata_is_durable(tmp_path: Path) -> None:
