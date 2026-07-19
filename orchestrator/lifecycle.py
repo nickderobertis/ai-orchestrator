@@ -34,7 +34,7 @@ from typing import Any, Protocol, cast
 
 from . import BASE_CONFIG, PERSONA_DIR, gitops
 from .config import ConfigError, load_yaml
-from .coordination import advisory_lock
+from .coordination import LockTimeout, advisory_lock
 from .dispatch import Report, dispatch
 from .github import CliGitHubBackend, GitHubBackend, GitHubError, PullRequest
 from .gitops import GitError
@@ -261,6 +261,7 @@ class LifecycleResult:
     waiting_steps: list[str] = field(default_factory=list)
     resume: Resume | None = None
     retry_lineage: RetryLineage | None = None
+    deferred_cleanup: list[str] = field(default_factory=list)
 
     @property
     def ok(self) -> bool:
@@ -1038,6 +1039,9 @@ def _build_synthetic_stack_base(
     workspace: Workspace,
     root_base: str,
     anchors: list[StackBase],
+    *,
+    result: LifecycleResult,
+    journal: NodeSink,
 ) -> StackBuildResult:
     """Build and push a multi-parent base, or return a stack-conflict detail."""
     key = "\x00".join(anchor.branch for anchor in anchors)
@@ -1065,9 +1069,43 @@ def _build_synthetic_stack_base(
         pushed = True
         return SyntheticStackBase(branch)
     finally:
-        workspace.remove_worktree(ref, worktree)
+        _best_effort_cleanup(
+            result,
+            journal,
+            operation="remove-worktree",
+            target=str(worktree),
+            cleanup=lambda: workspace.remove_worktree(ref, worktree),
+        )
         if not pushed:
-            workspace.delete_branch(ref, branch)
+            # llmlint: ignore[changed_behavior_has_e2e] The real-git synthetic-stack
+            # conflict e2e exercises both deferred teardown operations on this path.
+            _best_effort_cleanup(
+                result,
+                journal,
+                operation="delete-branch",
+                target=branch,
+                cleanup=lambda: workspace.delete_branch(ref, branch),
+            )
+
+
+def _best_effort_cleanup(
+    result: LifecycleResult,
+    journal: NodeSink,
+    *,
+    operation: str,
+    target: str,
+    cleanup: Callable[[], None],
+) -> None:
+    """Record teardown failures without changing the lifecycle's real outcome."""
+    try:
+        cleanup()
+    except (LockTimeout, WorkspaceError, GitError) as exc:
+        detail = f"{operation} deferred for {target}: {exc}"
+        result.deferred_cleanup.append(detail)
+        journal.append(
+            "cleanup-deferred",
+            detail={"operation": operation, "target": target, "error": str(exc)},
+        )
 
 
 def _pause_at_human_step(
@@ -1358,7 +1396,14 @@ def run_repo_task(
         if resume is not None:
             pr_base = resume.pr_base
         elif len(applicable_stack) > 1:
-            stack_result = _build_synthetic_stack_base(ref, workspace, root_base, applicable_stack)
+            stack_result = _build_synthetic_stack_base(
+                ref,
+                workspace,
+                root_base,
+                applicable_stack,
+                result=result,
+                journal=log,
+            )
             if isinstance(stack_result, StackConflict):
                 result.outcome = "stack-conflict"
                 result.detail = stack_result.detail
@@ -1718,7 +1763,13 @@ def run_repo_task(
         return result
     finally:
         if cleanup and worktree is not None:
-            workspace.remove_worktree(ref, worktree)
+            _best_effort_cleanup(
+                result,
+                log,
+                operation="remove-worktree",
+                target=str(worktree),
+                cleanup=lambda: workspace.remove_worktree(ref, worktree),
+            )
 
 
 # --- multi-PR plans --------------------------------------------------------
@@ -2443,6 +2494,7 @@ def result_payload(result: LifecycleResult) -> dict[str, Any]:
         "ok": result.ok,
         "pr": result.pr.url if result.pr else None,
         "detail": result.detail,
+        **({"deferred_cleanup": result.deferred_cleanup} if result.deferred_cleanup else {}),
         "follow_ups": result.report.assessment if result.report else None,
         "steps": [
             {"id": s.id, "kind": s.kind, "persona": s.persona, "status": s.status}
