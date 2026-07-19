@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import errno
+import fcntl
 import json
 import math
 import os
@@ -20,7 +21,8 @@ import socket
 import sys
 import threading
 import time
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager, suppress
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -38,7 +40,6 @@ class ChannelTimeout(TimeoutError):
     """The other side did not rendezvous before the bounded deadline."""
 
 
-MAX_FRAME_BYTES = select.PIPE_BUF
 CHANNEL_DIR_ENV = "AI_ORCHESTRATOR_CHANNEL_DIR"
 CHANNEL_RUN_ID_ENV = "AI_ORCHESTRATOR_CHANNEL_RUN_ID"
 CHANNEL_ENDPOINTS = ("up.fifo", "down.fifo")
@@ -75,62 +76,104 @@ def _remaining(deadline: float) -> float:
     return remaining
 
 
+def _acknowledgment_path(path: Path) -> Path:
+    return path.with_name(f"{path.name}.ack")
+
+
+@contextmanager
+def _channel_lock(path: Path, purpose: str, deadline: float) -> Iterator[None]:
+    """Hold one endpoint lock within the caller's transport deadline."""
+    lock_path = path.with_name(f"{path.name}.{purpose}.lock")
+    with lock_path.open("a+", encoding="utf-8") as handle:
+        while True:
+            try:
+                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                time.sleep(min(0.01, _remaining(deadline)))
+        try:
+            yield
+        finally:
+            fcntl.flock(handle, fcntl.LOCK_UN)
+
+
 def read_message(path: Path, *, timeout: float) -> dict[str, Any]:
-    """Read exactly one newline-delimited JSON mapping with a bounded wait."""
+    """Read exactly one locked, newline-delimited JSON mapping with a bounded wait."""
     if not math.isfinite(timeout) or timeout < 0:
         raise ChannelError("timeout must be finite and non-negative")
     deadline = time.monotonic() + timeout
-    fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
-    try:
-        data = bytearray()
-        while True:
-            ready, _, _ = select.select([fd], [], [], _remaining(deadline))
-            if not ready:
-                raise ChannelTimeout("channel read timed out")
-            chunk = os.read(fd, 65536)
-            if not chunk:
-                time.sleep(min(0.01, _remaining(deadline)))
-                continue
-            data.extend(chunk)
-            if len(data) > MAX_FRAME_BYTES:
-                raise ChannelError(f"channel frame exceeds limit ({MAX_FRAME_BYTES} bytes)")
-            if b"\n" in data:
-                line, trailing = bytes(data).split(b"\n", 1)
-                if trailing:
-                    raise ChannelError("channel frame contains trailing data")
-                try:
-                    value = json.loads(line)
-                except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-                    raise ChannelError("channel frame is not valid JSON") from exc
-                if not isinstance(value, dict):
-                    raise ChannelError("channel frame must be a JSON object")
-                return value
-    finally:
-        os.close(fd)
+    with _channel_lock(path, "read", deadline):
+        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+        acknowledge = False
+        try:
+            data = bytearray()
+            while b"\n" not in data:
+                ready, _, _ = select.select([fd], [], [], _remaining(deadline))
+                if not ready:
+                    raise ChannelTimeout("channel read timed out")
+                chunk = os.read(fd, 65536)
+                if not chunk:
+                    time.sleep(min(0.01, _remaining(deadline)))
+                    continue
+                data.extend(chunk)
+
+            # After seeing the writer's final newline, the reader closes this FIFO and
+            # creates its acknowledgment while still holding the read lock. The writer
+            # retains the write lock until that acknowledgment appears, so queued writers
+            # wait on the write lock; they do not wait for this read lock to be released.
+            acknowledge = True
+            line, trailing = bytes(data).split(b"\n", 1)
+            if trailing:
+                raise ChannelError("channel frame contains trailing data")
+            try:
+                value = json.loads(line)
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise ChannelError("channel frame is not valid JSON") from exc
+            if not isinstance(value, dict):
+                raise ChannelError("channel frame must be a JSON object")
+            return value
+        finally:
+            os.close(fd)
+            if acknowledge:
+                _acknowledgment_path(path).touch(mode=0o600)
 
 
 def write_message(path: Path, value: Mapping[str, Any], *, timeout: float) -> None:
-    """Write one atomic JSON-line frame after bounded writer/reader rendezvous."""
+    """Write one serialized JSON-line frame after bounded writer/reader rendezvous."""
     if not math.isfinite(timeout) or timeout < 0:
         raise ChannelError("timeout must be finite and non-negative")
     encoded = (json.dumps(dict(value), separators=(",", ":")) + "\n").encode()
-    if len(encoded) > MAX_FRAME_BYTES:
-        raise ChannelError(f"channel frame exceeds atomic FIFO limit ({MAX_FRAME_BYTES} bytes)")
     deadline = time.monotonic() + timeout
-    while True:
+    with _channel_lock(path, "write", deadline):
+        acknowledgment = _acknowledgment_path(path)
+        with suppress(FileNotFoundError):
+            acknowledgment.unlink()
+        while True:
+            try:
+                fd = os.open(path, os.O_WRONLY | os.O_NONBLOCK)
+                break
+            except OSError as exc:
+                if exc.errno != errno.ENXIO:
+                    raise
+                time.sleep(min(0.01, _remaining(deadline)))
         try:
-            fd = os.open(path, os.O_WRONLY | os.O_NONBLOCK)
-            break
-        except OSError as exc:
-            if exc.errno != errno.ENXIO:
-                raise
+            written = 0
+            while written < len(encoded):
+                _, ready, _ = select.select([], [fd], [], _remaining(deadline))
+                if not ready:
+                    raise ChannelTimeout("channel write timed out")
+                try:
+                    written += os.write(fd, encoded[written:])
+                except BlockingIOError:
+                    continue
+        finally:
+            os.close(fd)
+        # Do not hand the writer lock to the next frame until the reader has consumed
+        # this one and closed its descriptor. The sidecar is only a rendezvous token;
+        # the JSON line remains the complete external frame.
+        while not acknowledgment.is_file():
             time.sleep(min(0.01, _remaining(deadline)))
-    try:
-        _, ready, _ = select.select([], [fd], [], _remaining(deadline))
-        if not ready or os.write(fd, encoded) != len(encoded):
-            raise ChannelTimeout("channel write timed out")
-    finally:
-        os.close(fd)
+        acknowledgment.unlink()
 
 
 def _surface(request: Mapping[str, Any], run_id: str, round_number: int) -> dict[str, Any]:
