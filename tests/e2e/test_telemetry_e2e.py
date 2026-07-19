@@ -58,7 +58,11 @@ def test_breakdown_aggregates_real_multirole_history_records(tmp_path: Path) -> 
                         {
                             "kind": "tool_call",
                             "name": "command_execution",
+                            "tool_call_id": f"{role}-tool-1",
+                            "started_at": "2026-07-19T00:00:00+00:00",
+                            "finished_at": "2026-07-19T00:00:00.005000+00:00",
                             "duration_ms": tool_ms,
+                            "status": "completed",
                             "input": {"command": "just gate"},
                         }
                     ],
@@ -126,10 +130,43 @@ def test_breakdown_aggregates_real_multirole_history_records(tmp_path: Path) -> 
     assert "telemetry-e2e" in breakdown.stdout
     assert "2=1" in breakdown.stdout
 
+    judge_record = json.loads((tmp_path / "judge.jsonl").read_text(encoding="utf-8"))
+    judge_record["usage"].pop("cache_write_tokens")
+    (tmp_path / "judge.jsonl").write_text(json.dumps(judge_record) + "\n", encoding="utf-8")
+    unknown = subprocess.run(
+        command.args, cwd=REPO_ROOT, env=environment, text=True, capture_output=True, timeout=30
+    )
+    assert json.loads(unknown.stdout)["runs"][0]["usage"]["total"]["cache_write_tokens"] is None
+    unknown_breakdown = subprocess.run(
+        [*command.args, "--breakdown"],
+        cwd=REPO_ROOT,
+        env=environment,
+        text=True,
+        capture_output=True,
+        timeout=30,
+    )
+    assert "?" in unknown_breakdown.stdout
+
+    for history in (tmp_path / "agent.jsonl", tmp_path / "judge.jsonl"):
+        record = json.loads(history.read_text(encoding="utf-8"))
+        record.update({"duration_ms": 20_000, "model_ms": 10_000, "tool_ms": 10_000})
+        record["finished_at"] = "2026-07-19T00:00:20+00:00"
+        record["events"][0]["duration_ms"] = 10_000
+        record["events"][0]["finished_at"] = "2026-07-19T00:00:10+00:00"
+        history.write_text(json.dumps(record) + "\n", encoding="utf-8")
+    clipped = subprocess.run(
+        command.args, cwd=REPO_ROOT, env=environment, text=True, capture_output=True, timeout=30
+    )
+    clipped_timing = json.loads(clipped.stdout)["runs"][0]["timing"]
+    assert clipped_timing["tool_ms"] == clipped_timing["wall_ms"]
+    assert clipped_timing["agent_model_ms"] == clipped_timing["judge_model_ms"] == 0
+
     for history in (tmp_path / "agent.jsonl", tmp_path / "judge.jsonl"):
         record = json.loads(history.read_text(encoding="utf-8"))
         for field in ("schema_version", "model_ms", "tool_ms"):
             record.pop(field)
+        for field in ("tool_call_id", "started_at", "finished_at", "duration_ms", "status"):
+            record["events"][0].pop(field)
         history.write_text(json.dumps(record) + "\n", encoding="utf-8")
     legacy = subprocess.run(
         command.args, cwd=REPO_ROOT, env=environment, text=True, capture_output=True, timeout=30

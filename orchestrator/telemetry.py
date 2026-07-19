@@ -8,7 +8,7 @@ import math
 import sys
 import time
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal, TypedDict, cast
 
@@ -363,7 +363,7 @@ class _SessionSummary:
     tool_ms: int
     usage: UsageValues
     commands: dict[str, int]
-    native_timing: bool
+    interval_complete: bool
 
 
 def _number(value: object) -> int | float | None:
@@ -379,6 +379,20 @@ def _number(value: object) -> int | float | None:
 
 def _non_negative_int(value: object) -> int | None:
     return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
+
+
+def _utc_datetime(value: object) -> datetime | None:
+    if not isinstance(value, str) or not value.endswith(("Z", "+00:00")):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return (
+        parsed
+        if parsed.tzinfo is not None and parsed.utcoffset() == UTC.utcoffset(parsed)
+        else None
+    )
 
 
 def _command_class(command: str) -> str:
@@ -414,7 +428,7 @@ def _summarize_session(session: Any, records: list[dict[str, Any]]) -> _SessionS
         )
     model_ms = 0
     tool_ms = 0
-    native_timing = bool(records)
+    interval_complete = bool(records)
     commands: dict[str, int] = {}
     for record in records:
         schema_version = record.get("schema_version")
@@ -427,14 +441,8 @@ def _summarize_session(session: Any, records: list[dict[str, Any]]) -> _SessionS
         ):
             raise HistoryError("oneharness history schema v2 record has invalid required timing")
         if schema_version in {"0.3", 2}:
-            started, finished = record.get("started_at"), record.get("finished_at")
-            try:
-                start_at = datetime.fromisoformat(started) if isinstance(started, str) else None
-                finish_at = datetime.fromisoformat(finished) if isinstance(finished, str) else None
-            except ValueError as exc:
-                raise HistoryError(
-                    "oneharness history schema v2 record has invalid interval"
-                ) from exc
+            start_at = _utc_datetime(record.get("started_at"))
+            finish_at = _utc_datetime(record.get("finished_at"))
             duration = cast(int, record["duration_ms"])
             if (
                 start_at is None
@@ -444,7 +452,7 @@ def _summarize_session(session: Any, records: list[dict[str, Any]]) -> _SessionS
             ):
                 raise HistoryError("oneharness history schema v2 record has invalid interval")
         if model is None or tool is None:
-            native_timing = False
+            interval_complete = False
         else:
             model_ms += round(model)
             tool_ms += round(tool)
@@ -454,6 +462,21 @@ def _summarize_session(session: Any, records: list[dict[str, Any]]) -> _SessionS
         for event in events:
             if not isinstance(event, dict) or event.get("kind") != "tool_call":
                 continue
+            if schema_version in {"0.3", 2}:
+                event_start = _utc_datetime(event.get("started_at"))
+                raw_finish = event.get("finished_at")
+                event_finish = _utc_datetime(raw_finish) if raw_finish is not None else None
+                raw_duration = event.get("duration_ms")
+                if (
+                    not isinstance(event.get("tool_call_id"), str)
+                    or not event["tool_call_id"]
+                    or event_start is None
+                    or (raw_finish is not None and event_finish is None)
+                    or (event_finish is not None and event_finish < event_start)
+                    or (raw_duration is not None and _non_negative_int(raw_duration) is None)
+                    or event.get("status") not in {"completed", "failed", "timeout", "interrupted"}
+                ):
+                    raise HistoryError("oneharness history schema v2 record has invalid tool event")
             event_duration = _non_negative_int(event.get("duration_ms"))
             if tool is None and event_duration is not None:
                 tool_ms += event_duration
@@ -478,7 +501,7 @@ def _summarize_session(session: Any, records: list[dict[str, Any]]) -> _SessionS
         tool_ms=tool_ms,
         usage=usage,
         commands=commands,
-        native_timing=native_timing,
+        interval_complete=interval_complete,
     )
 
 
@@ -527,7 +550,7 @@ def _timing(
     idle = max(0, wall_ms - measured)
     unattributed = min(
         idle,
-        sum(item.duration_ms for item in summaries if not item.native_timing)
+        sum(item.duration_ms for item in summaries if not item.interval_complete)
         + max(0, idle - sum(item.duration_ms for item in summaries)),
     )
 
@@ -696,7 +719,7 @@ def collect_run(
         for node, item in items.items()
     ]
     timing = _timing(round(wall * 1000), summaries, gate_seconds, wait)
-    native = [summary.native_timing for summary in summaries]
+    native = [summary.interval_complete for summary in summaries]
     # History timing without authoritative onejudge linkage remains partial.
     quality: TelemetryQuality = "partial" if any(native) else "legacy"
     sources: list[TelemetrySource] = []
@@ -771,7 +794,7 @@ def _value(value: int | float | None) -> str:
 def _breakdown(runs: list[RunTelemetry]) -> str:
     header = (
         "RUN/NODE              WALL   AGENT       JUDGE       TOOL        IDLE        "
-        "UNATTR  TOKENS A/J  CACHE A/J  COST  TURNS QUALITY"
+        "UNATTR  TOKENS A/J  CACHE R/W  COST  TURNS QUALITY"
     )
     lines = [header]
     for run in runs:
@@ -798,7 +821,8 @@ def _breakdown(runs: list[RunTelemetry]) -> str:
                 f"{timing['idle_orchestration_ms']:5} {fractions['idle_orchestration']:5.1%}",
                 f"{timing['unattributed_ms']:6}",
                 f"{_value(usage['agent']['input_tokens'])}/{_value(usage['judge']['input_tokens'])}",
-                f"{_value(usage['agent']['cache_read_tokens'])}/{_value(usage['judge']['cache_read_tokens'])}",
+                f"{_value(usage['total']['cache_read_tokens'])}/"
+                f"{_value(usage['total']['cache_write_tokens'])}",
                 _value(usage["total"]["cost_usd"]),
                 str(turns),
                 run.telemetry_quality,
