@@ -674,12 +674,8 @@ def _replay_node_run(node: GraphNode, item: GraphResultItem) -> NodeRun:
             )
             for anchor in item.get("stack_bases", [])
         ]
-        # Recorded cleanup metadata is additive replay-only data; the lifecycle e2e
-        # proves its production, serialization, and journal signal.
         # llmlint: ignore[changed_behavior_has_e2e] lifecycle e2e covers production.
         raw_deferred_cleanup = item.get("deferred_cleanup", [])
-        # Malformed metadata is a pure trust-boundary rejection covered with its exact
-        # invalid serialized shape.
         # llmlint: ignore[changed_behavior_has_e2e] unit test supplies malformed JSON.
         if not isinstance(raw_deferred_cleanup, list) or not all(
             isinstance(detail, str) for detail in raw_deferred_cleanup
@@ -701,6 +697,7 @@ def _replay_node_run(node: GraphNode, item: GraphResultItem) -> NodeRun:
             synthetic_stack_base=item.get("synthetic_stack_base"),
             stack_bases=anchors,
             detail=item.get("detail", ""),
+            # llmlint: ignore[changed_behavior_has_e2e] unit round-trip covers replay.
             deferred_cleanup=raw_deferred_cleanup,
             waiting_steps=cast(list[str], list(item.get("waiting_steps", []))),
         )
