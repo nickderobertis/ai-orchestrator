@@ -22,6 +22,7 @@ from typing import Any, Literal, cast
 from . import REPO_ROOT
 from .channel import (
     CHANNEL_DIR_ENV,
+    CHANNEL_ENDPOINTS,
     CHANNEL_RUN_ID_ENV,
     ProposalPump,
     ProposalSink,
@@ -899,7 +900,7 @@ def main(argv: list[str] | None = None) -> int:
             validated_run_id = str(validate_run_id(channel_run_id))
             resolved_channel = Path(channel_path).resolve(strict=True)
             if resolved_channel.parent.name != validated_run_id or not all(
-                (resolved_channel / endpoint).is_fifo() for endpoint in ("up.fifo", "down.fifo")
+                (resolved_channel / endpoint).is_fifo() for endpoint in CHANNEL_ENDPOINTS
             ):
                 raise ValueError("channel identity or endpoints do not match")
         except (OSError, ValueError) as exc:

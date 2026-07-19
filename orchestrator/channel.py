@@ -40,6 +40,7 @@ class ChannelTimeout(TimeoutError):
 MAX_FRAME_BYTES = select.PIPE_BUF
 CHANNEL_DIR_ENV = "AI_ORCHESTRATOR_CHANNEL_DIR"
 CHANNEL_RUN_ID_ENV = "AI_ORCHESTRATOR_CHANNEL_RUN_ID"
+CHANNEL_ENDPOINTS = ("up.fifo", "down.fifo")
 
 
 class ProposalSink(Protocol):
@@ -53,7 +54,7 @@ def create_channel(run_dir: Path) -> Path:
     channel_dir = run_dir / "channel"
     channel_dir.mkdir(parents=True, exist_ok=True)
     with advisory_lock(f"channel-create:{channel_dir.resolve()}"):
-        for name in ("up.fifo", "down.fifo"):
+        for name in CHANNEL_ENDPOINTS:
             path = channel_dir / name
             if path.exists():
                 if not path.is_fifo():
@@ -403,7 +404,7 @@ def main_relay(argv: list[str] | None = None) -> int:
             raise ChannelError("channel directory must belong to the requested run id")
         metadata = load_mapping(channel_dir / "channel.json")
         if metadata.get("schema_version") != 1 or not all(
-            (channel_dir / name).is_fifo() for name in ("up.fifo", "down.fifo")
+            (channel_dir / name).is_fifo() for name in CHANNEL_ENDPOINTS
         ):
             raise ChannelError("channel directory has invalid metadata or endpoints")
     except (ChannelError, ConfigError, ValueError) as exc:
