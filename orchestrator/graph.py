@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import threading
 from collections import Counter
@@ -19,6 +20,7 @@ from pathlib import Path
 from typing import Any, Literal, cast
 
 from . import REPO_ROOT
+from .channel import ProposalPump
 from .config import ConfigError, load_yaml
 from .dispatch import Report
 from .journal import (
@@ -50,7 +52,7 @@ from .plan import (
     _topological_order,
     make_dispatch_runner,
     parse_agent_node,
-    schedule_dag,
+    reconcile_dag,
 )
 from .runs import (
     RECORDED_RESULT_SCHEMA_VERSION,
@@ -302,6 +304,7 @@ def run_graph(
     already_started: frozenset[str] = frozenset(),
     replayed_runs: Mapping[str, NodeRun] | None = None,
     replayed_order: list[str] | None = None,
+    proposal_pump: ProposalPump | None = None,
 ) -> GraphResult:
     """Schedule and run a mixed tracked graph, journaling each transition.
 
@@ -472,13 +475,23 @@ def run_graph(
 
     actual = dict(replayed_runs or {})
     actual.update({nid: NodeRun("running") for nid in already_started if nid not in actual})
-    runs, started_order = schedule_dag(
-        list(nodes),
+
+    def on_settled(nid: str, run: NodeRun) -> None:
+        if proposal_pump is None or not isinstance(run.payload, Report):
+            return
+        if run.payload.assessment and run.payload.assessment.strip().lower() != "none":
+            proposal_pump.propose(nid, run.payload.assessment)
+        proposal_pump.drain_replies()
+
+    runs, started_order = reconcile_dag(
+        lambda: list(nodes),
         deps,
         run_one,
         concurrency=conc,
         actual=actual,
         started_order=replayed_order,
+        on_settled=on_settled,
+        on_tick=proposal_pump.drain_replies if proposal_pump is not None else None,
     )
     return _collect(nodes, runs, started_order)
 
@@ -866,40 +879,56 @@ def main(argv: list[str] | None = None) -> int:
             )
 
     dispatch_timeout = args.dispatch_timeout if args.dispatch_timeout is not None else args.timeout
-    result = run_graph(
-        graph,
-        journal=journal,
-        run_id=run_id,
-        round_number=round_number,
-        already_started=already_started,
-        replayed_runs=replayed_runs,
-        replayed_order=replayed_order,
-        agent_runner=make_dispatch_runner(
-            base_path=args.base_config,
-            persona_dir=args.persona_dir,
-            cwd=args.cwd or REPO_ROOT,
-            project_dir=args.project_dir,
-            onejudge_bin=args.onejudge_bin,
-            provider=args.provider,
-            oneharness_mode=args.oneharness_mode,
-            timeout=dispatch_timeout,
-        ),
-        lifecycle_runner=make_repo_runner(
-            workspace=Workspace(args.workspace),
-            base_path=args.base_config,
-            persona_dir=args.persona_dir,
-            merge_policy=args.merge_policy,
-            merge_method=args.merge_method,
-            oneharness_mode=args.oneharness_mode,
-            skip_verify=args.skip_verify,
-            verify_via_ci=args.verify_via_ci,
-            poll_interval=args.poll_interval,
-            timeout=args.timeout,
-            publication_attempts=args.publication_attempts,
-            repo_type=args.repo_type,
-        ),
-        concurrency=args.concurrency,
-    )
+    proposal_pump: ProposalPump | None = None
+    channel_path = os.environ.get("AI_ORCHESTRATOR_CHANNEL_DIR")
+    channel_run_id = os.environ.get("AI_ORCHESTRATOR_CHANNEL_RUN_ID")
+    channel_round = os.environ.get("AI_ORCHESTRATOR_CHANNEL_ROUND")
+    if channel_path and channel_run_id and channel_round:
+        try:
+            parsed_channel_round = int(channel_round)
+        except ValueError:
+            print("run-plan: invalid proposal channel round", file=sys.stderr)
+            return 2
+        proposal_pump = ProposalPump(Path(channel_path), channel_run_id, parsed_channel_round)
+    try:
+        result = run_graph(
+            graph,
+            journal=journal,
+            run_id=run_id,
+            round_number=round_number,
+            already_started=already_started,
+            replayed_runs=replayed_runs,
+            replayed_order=replayed_order,
+            agent_runner=make_dispatch_runner(
+                base_path=args.base_config,
+                persona_dir=args.persona_dir,
+                cwd=args.cwd or REPO_ROOT,
+                project_dir=args.project_dir,
+                onejudge_bin=args.onejudge_bin,
+                provider=args.provider,
+                oneharness_mode=args.oneharness_mode,
+                timeout=dispatch_timeout,
+            ),
+            lifecycle_runner=make_repo_runner(
+                workspace=Workspace(args.workspace),
+                base_path=args.base_config,
+                persona_dir=args.persona_dir,
+                merge_policy=args.merge_policy,
+                merge_method=args.merge_method,
+                oneharness_mode=args.oneharness_mode,
+                skip_verify=args.skip_verify,
+                verify_via_ci=args.verify_via_ci,
+                poll_interval=args.poll_interval,
+                timeout=args.timeout,
+                publication_attempts=args.publication_attempts,
+                repo_type=args.repo_type,
+            ),
+            concurrency=args.concurrency,
+            proposal_pump=proposal_pump,
+        )
+    finally:
+        if proposal_pump is not None:
+            proposal_pump.close()
 
     payload = graph_payload(result, round_number=round_number)
     journal.append(

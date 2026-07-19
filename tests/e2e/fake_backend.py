@@ -26,6 +26,7 @@ import re
 import shlex
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Literal, NamedTuple, TypedDict, cast
 
@@ -129,6 +130,13 @@ def main() -> int:
 
     match op:
         case "respond":
+            if "slow-branch" in task:
+                witness = Path(task.split("slow-branch", 1)[1].strip().split()[0])
+                with witness.open("a", encoding="utf-8") as stream:
+                    stream.write("tick\n")
+                time.sleep(0.8)
+                with witness.open("a", encoding="utf-8") as stream:
+                    stream.write("tick\n")
             orchestrator_plan = _orchestrator_command(task)
             plan_text = ""
             if orchestrator_plan is not None:
@@ -233,7 +241,13 @@ def main() -> int:
         case "judge":
             resp = {"value": req.get("max", 5), "reason": "fake numeric verdict"}
         case "assess":
-            resp = {"text": "- Add a regression test for the adjacent edge case."}
+            resp = {
+                "text": (
+                    "None"
+                    if "slow-branch" in task or "surface-" in task
+                    else "- Add a regression test for the adjacent edge case."
+                )
+            }
         case _:
             sys.stderr.write(f"fake_backend: unknown op {op!r}\n")
             return 1

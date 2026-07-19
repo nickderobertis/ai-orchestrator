@@ -46,6 +46,33 @@ def _plan(tmp_path: Path, sentinel: str) -> Path:
     return path
 
 
+def _proposal_plan(tmp_path: Path, witness: Path) -> Path:
+    path = tmp_path / "plan-mid-run-proposal.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": 3,
+                "name": "mid-run-proposal",
+                "concurrency": 2,
+                "tasks": [
+                    {
+                        "id": "discoverer",
+                        "persona": "engineer",
+                        "task": "complete-now discover-follow-up",
+                    },
+                    {
+                        "id": "unrelated",
+                        "persona": "engineer",
+                        "task": f"slow-branch {witness}",
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
 def _wait_report(path: Path) -> dict[str, object]:
     deadline = time.monotonic() + 15
     while time.monotonic() < deadline:
@@ -216,6 +243,50 @@ def test_bridge_timeout_reattach_finished_and_monitorable(
     assert json.loads(finished.stdout) == {"status": "finished"}
     status = json.loads((runs / run_id / "round-01" / "status.json").read_text())
     assert isinstance(status["pid"], int) and status["host"]
+
+
+def test_reattached_planner_replies_to_mid_run_proposal_without_stopping_graph(
+    tmp_path: Path, onejudge_bin: str
+) -> None:
+    runs = tmp_path / "proposal-runs"
+    witness = tmp_path / "unrelated.ticks"
+    run_id = _launch_cli(_proposal_plan(tmp_path, witness), runs, _base(tmp_path), onejudge_bin)
+
+    detached = _next_cli(run_id, runs, timeout="0.001")
+    assert detached == {"status": "running", "surface": None}
+    proposal = _next_cli(run_id, runs)
+    assert proposal["surface"] == {
+        "kind": "proposal",
+        "message": "discoverer: - Add a regression test for the adjacent edge case.",
+    }
+    ticks_before_reply = witness.read_text(encoding="utf-8").count("tick")
+    _reply_cli(
+        run_id,
+        runs,
+        {"completion": False, "message": "defer to next round", "reason": "out of scope"},
+    )
+
+    verdict_path = runs / run_id / "channel" / "planner-verdict.json"
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline and not verdict_path.is_file():
+        time.sleep(0.02)
+    assert json.loads(verdict_path.read_text(encoding="utf-8")) == {
+        "completion": False,
+        "message": "defer to next round",
+        "reason": "out of scope",
+    }
+    assert not (runs / run_id / "orchestrator" / "report.json").stat().st_size
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        if witness.read_text(encoding="utf-8").count("tick") > ticks_before_reply:
+            break
+        time.sleep(0.02)
+    assert witness.read_text(encoding="utf-8").count("tick") > ticks_before_reply
+
+    boundary = _next_cli(run_id, runs)
+    assert boundary["surface"]["kind"] in {"milestone", "closeout"}
+    _reply_cli(run_id, runs, {"completion": True, "reason": "verified"})
+    _wait_report(runs / run_id / "orchestrator" / "report.json")
 
 
 def test_orchestrate_cli_reports_launch_boundary_failures(tmp_path: Path) -> None:

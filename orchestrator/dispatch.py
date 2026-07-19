@@ -399,6 +399,9 @@ def launch_orchestrator(
     command = [onejudge_bin, "run", str(effective), "--task", task, "--format", "json"]
     process_env = dict(os.environ)
     process_env["ONEHARNESS_TIMEOUT"] = str(turn_timeout)
+    process_env["AI_ORCHESTRATOR_CHANNEL_DIR"] = str(channel_dir)
+    process_env["AI_ORCHESTRATOR_CHANNEL_RUN_ID"] = run_dir.name
+    process_env["AI_ORCHESTRATOR_CHANNEL_ROUND"] = "1"
     _validate_oneharness_timeout(process_env["ONEHARNESS_TIMEOUT"])
     try:
         with (

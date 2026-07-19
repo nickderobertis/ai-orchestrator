@@ -14,9 +14,11 @@ import errno
 import json
 import math
 import os
+import queue
 import select
 import socket
 import sys
+import threading
 import time
 from collections.abc import Mapping
 from pathlib import Path
@@ -175,6 +177,64 @@ def _reply(value: Mapping[str, Any]) -> dict[str, Any]:
     if not isinstance(message, str):
         raise ChannelError("continue reply requires string message")
     return {"completion": False, "message": message, "reason": reason}
+
+
+class ProposalPump:
+    """Service mid-run proposal round trips without writing graph state off-thread."""
+
+    def __init__(self, channel_dir: Path, run_id: str, round_number: int) -> None:
+        self._channel_dir = channel_dir
+        self._run_id = run_id
+        self._round = round_number
+        self._proposals: queue.Queue[dict[str, Any] | None] = queue.Queue()
+        self._replies: queue.Queue[dict[str, Any]] = queue.Queue()
+        self._thread = threading.Thread(target=self._service, daemon=True)
+        self._thread.start()
+
+    def propose(self, node: str, message: str) -> None:
+        self._proposals.put(
+            {
+                "op": "supervisor",
+                "run_id": self._run_id,
+                "round": self._round,
+                "surface": {"kind": "proposal", "message": f"{node}: {message}"},
+                "messages": [],
+            }
+        )
+
+    def drain_replies(self) -> None:
+        """Persist transport replies on the reconciler's single-writer thread."""
+        while True:
+            try:
+                response = self._replies.get_nowait()
+            except queue.Empty:
+                return
+            atomic_json(self._channel_dir / "planner-verdict.json", response)
+
+    def close(self) -> None:
+        self._proposals.put(None)
+        self._thread.join(timeout=1)
+        self.drain_replies()
+
+    def _service(self) -> None:
+        while (proposal := self._proposals.get()) is not None:
+            while True:
+                try:
+                    write_message(self._channel_dir / "up.fifo", proposal, timeout=0.1)
+                    break
+                except ChannelTimeout:
+                    continue
+                except OSError:
+                    return
+            while True:
+                try:
+                    response = _reply(read_message(self._channel_dir / "down.fifo", timeout=0.1))
+                    self._replies.put(response)
+                    break
+                except ChannelTimeout:
+                    continue
+                except (ChannelError, OSError):
+                    return
 
 
 # llmlint: ignore[names_match_behavior] onejudge sends final evals to its supervisor command
