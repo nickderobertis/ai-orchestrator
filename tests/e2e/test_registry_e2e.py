@@ -61,6 +61,75 @@ def test_registry_register_discover_and_refresh_journey(
     assert (checkout / "new.txt").read_text(encoding="utf-8") == "new\n"
 
 
+def test_lifecycle_clis_reject_unknown_local_aliases_before_dispatch(
+    tmp_path: Path,
+    bare_origin: Callable[..., Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Every serialized lifecycle CLI rejects reserved aliases at its boundary."""
+    state = tmp_path / "state"
+    monkeypatch.setenv("AI_ORCHESTRATOR_HOME", str(state))
+    checkout = tmp_path / "checkout"
+    git("clone", str(bare_origin()), str(checkout))
+    Registry().register(str(checkout), workflow="local")
+
+    unknown_repo = _cli(
+        "orchestrator-repo-task",
+        "local/does-not-exist",
+        "engineer",
+        "must not dispatch",
+        check=False,
+    )
+    assert unknown_repo.returncode == 2
+    assert "unknown local checkout alias 'local/does-not-exist'" in unknown_repo.stderr
+    assert "just repos" in unknown_repo.stderr
+
+    unknown_execution = _cli(
+        "orchestrator-repo-task",
+        "local/checkout",
+        "engineer",
+        "must not dispatch",
+        "--execution-checkout",
+        "local/missing-execution",
+        check=False,
+    )
+    assert unknown_execution.returncode == 2
+    assert "unknown local checkout alias 'local/missing-execution'" in unknown_execution.stderr
+    assert "just repos" in unknown_execution.stderr
+
+    plan = tmp_path / "unknown-execution-plan.json"
+    plan.write_text(
+        json.dumps(
+            {
+                "schema_version": 3,
+                "tasks": [
+                    {
+                        "id": "unknown-execution",
+                        "repo": "local/checkout",
+                        "persona": "engineer",
+                        "task": "must not dispatch",
+                        "execution_checkout": "local/missing-execution",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    runs = tmp_path / "runs"
+    unknown_plan = _cli(
+        "orchestrator-repo-plan",
+        str(plan),
+        "--runs-dir",
+        str(runs),
+        check=False,
+    )
+    assert unknown_plan.returncode == 2
+    assert "unknown local checkout alias 'local/missing-execution'" in unknown_plan.stderr
+    assert "just repos" in unknown_plan.stderr
+    assert not runs.exists()
+    assert not (state / "worktrees").exists()
+
+
 def test_conflicting_legacy_aliases_require_and_support_cli_identity_migration(
     tmp_path: Path,
     bare_origin: Callable[..., Path],
