@@ -50,6 +50,10 @@ def test_default_branch() -> None:
     assert run.calls[0][:2] == ["repo", "view"]
 
 
+def test_default_branch_falls_back_when_gh_returns_empty_output() -> None:
+    assert CliGitHubBackend(run=RecordingRun(["\n"])).default_branch("o/r") == "main"
+
+
 def test_create_pr_reuses_open_pr_for_head() -> None:
     existing = '[{"number": 41, "url": "https://github.com/o/r/pull/41"}]'
     run = RecordingRun([existing])
@@ -127,6 +131,20 @@ def test_create_pr_bad_output_raises() -> None:
 
 def test_create_pr_bad_list_output_raises() -> None:
     run = RecordingRun(['{"number": 42}'])
+    with pytest.raises(GitHubError, match="could not parse PR from gh output"):
+        CliGitHubBackend(run=run).create_pr("o/r", head="f", base="main", title="t", body="b")
+
+
+@pytest.mark.parametrize(
+    "existing",
+    [
+        ["not an object"],
+        [{"number": True, "url": "https://github.com/o/r/pull/42"}],
+        [{"number": 42, "url": ""}],
+    ],
+)
+def test_create_pr_rejects_malformed_existing_pr_fields(existing: list[object]) -> None:
+    run = RecordingRun([json.dumps(existing)])
     with pytest.raises(GitHubError, match="could not parse PR from gh output"):
         CliGitHubBackend(run=run).create_pr("o/r", head="f", base="main", title="t", body="b")
 
@@ -224,6 +242,24 @@ def test_status_rejects_malformed_merge_queue_entry(entry: object, message: str)
         CliGitHubBackend(run=RecordingRun([json.dumps(payload), malformed])).status(_pr())
 
 
+@pytest.mark.parametrize(
+    ("repo", "queue_payload", "message"),
+    [
+        ("missing-owner", "", "invalid GitHub repository slug"),
+        ("o/r", "[]", "invalid JSON payload"),
+        ("o/r", json.dumps({"data": {"repository": {}}}), "invalid mergeQueueEntry payload"),
+    ],
+)
+def test_status_rejects_invalid_merge_queue_boundaries(
+    repo: str, queue_payload: str, message: str
+) -> None:
+    payload = {"number": 3, "state": "OPEN", "statusCheckRollup": []}
+    pr = PullRequest(number=3, url="u", repo=repo, head="feat", base="main")
+    outputs = [json.dumps(payload), queue_payload] if queue_payload else [json.dumps(payload)]
+    with pytest.raises(GitHubError, match=message):
+        CliGitHubBackend(run=RecordingRun(outputs)).status(pr)
+
+
 def test_status_merged() -> None:
     payload = {"number": 3, "state": "MERGED", "mergeStateStatus": "CLEAN", "statusCheckRollup": []}
     status = CliGitHubBackend(run=RecordingRun([json.dumps(payload)])).status(_pr())
@@ -269,6 +305,8 @@ def test_check_green_red_helpers() -> None:
     assert Check("a", "SUCCESS", True).green
     assert Check("a", "ERROR", True).red
     assert not Check("a", "PENDING", True).green
+    assert Check("a", "NEUTRAL", True).settled
+    assert not Check("a", "PENDING", True).settled
 
 
 def test_prstatus_no_required_is_vacuously_green() -> None:
