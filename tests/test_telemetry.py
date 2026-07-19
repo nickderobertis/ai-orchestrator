@@ -115,7 +115,22 @@ def test_collect_run_joins_ledger_journal_history_and_attestation(
         history_path,
         {"run_id": "observed"},
     )
-    monkeypatch.setattr(telemetry_module, "worker_sessions", lambda **_kwargs: [session])
+    judge_history = tmp_path / "judge-history.jsonl"
+    judge_history.write_text(
+        '{"provider":"oneharness","harness":"codex","model":"gpt-5","duration_ms":1000}\n',
+        encoding="utf-8",
+    )
+    judge_session = HistorySession(
+        SessionId("judge-session"),
+        "you-are-a-strict-careful-evaluator",
+        tmp_path,
+        "2026-01-01T00:00:01Z",
+        judge_history,
+        {"run_id": "observed", "role": "judge"},
+    )
+    monkeypatch.setattr(
+        telemetry_module, "all_sessions", lambda **_kwargs: [session, judge_session]
+    )
 
     telemetry = collect_run(run_dir, now=9999999999.0)
     assert telemetry is not None

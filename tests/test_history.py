@@ -13,6 +13,7 @@ from orchestrator.history import (
     _persisted_detail,
     _records,
     _render_persisted_detail,
+    all_sessions,
     digest,
     recent_runs,
     show_run,
@@ -68,6 +69,7 @@ def test_digest_parses_fixture_defensively() -> None:
     assert result.turns == 2
     assert (result.input_tokens, result.output_tokens) == (300, 50)
     assert result.commands == ["rg history", "just test"]
+    assert result.duration_ms == 3700
     assert result.text == "Tests pass."
 
 
@@ -78,6 +80,10 @@ def test_history_commands_cross_project_and_default_to_worker(tmp_path: Path) ->
     assert "build-history-command" in listing
     assert "gpt-5" in listing
     assert "evaluator" not in listing
+    assert {session.name for session in all_sessions(oneharness_bin=str(binary))} == {
+        "build-history-command",
+        "you-are-a-strict-careful-evaluator",
+    }
 
     output = show_run("history-command", oneharness_bin=str(binary))
     assert "Turns: 2" in output

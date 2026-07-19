@@ -298,10 +298,31 @@ def test_real_history_labels_and_cursor_watch(oneharness_bin: str, tmp_path: Pat
     )
     assert indexed.returncode == 0, indexed.stderr
     run = json.loads(indexed.stdout)["runs"][0]
-    assert run["providers"][0]["provider"] == "oneharness"
-    assert run["providers"][0]["harness"]
-    assert run["providers"][0]["model"]
-    assert run["timing"]["agent_seconds"] > 0
+    native_records = {
+        role: [json.loads(line) for line in Path(record["path"]).read_text().splitlines()]
+        for role, record in by_role.items()
+    }
+    expected_providers = {
+        (
+            str(items[-1].get("provider", "oneharness")),
+            str(items[-1].get("harness", "")),
+            str(items[-1].get("model", "")),
+        )
+        for items in native_records.values()
+    }
+    assert {
+        (provider["provider"], provider.get("harness", ""), provider.get("model", ""))
+        for provider in run["providers"]
+    } == expected_providers
+    expected_agent_ms = sum(
+        int(item["duration_ms"])
+        for role in ("agent", "llmlint")
+        for item in native_records[role]
+        if isinstance(item.get("duration_ms"), int)
+        and not isinstance(item["duration_ms"], bool)
+        and item["duration_ms"] >= 0
+    )
+    assert round(run["timing"]["agent_seconds"] * 1000) == expected_agent_ms
 
 
 def test_real_run_plan_waits_then_monitor_exits_only_after_attestation(

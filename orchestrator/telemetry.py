@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Literal, TypedDict, cast
 
 from .detail_snapshot import CheckRollup
-from .history import HistoryError, session_records, worker_sessions
+from .history import HistoryError, all_sessions, session_duration_ms, session_records, session_role
 from .journal import JOURNAL_NAME, Event, read_events
 from .monitor import DetailSnapshot, load_snapshot, run_state
 from .runs import (
@@ -262,20 +262,15 @@ def _providers(run_id: RunId, oneharness_bin: str) -> tuple[list[Provider], floa
     found: list[Provider] = []
     elapsed = 0.0
     try:
-        sessions = worker_sessions(oneharness_bin=oneharness_bin)
+        sessions = all_sessions(oneharness_bin=oneharness_bin)
     except HistoryError:
         return found, elapsed
     for session in sessions:
         if session.labels.get("run_id") != run_id:
             continue
         records = session_records(session)
-        elapsed += sum(
-            value / 1000
-            for record in records
-            if isinstance((value := record.get("duration_ms")), int)
-            and not isinstance(value, bool)
-            and value >= 0
-        )
+        if session_role(session) == "agent":
+            elapsed += session_duration_ms(records) / 1000
         latest = records[-1] if records else {}
         raw_provider = latest.get("provider", "oneharness")
         raw_harness = latest.get("harness", "")
