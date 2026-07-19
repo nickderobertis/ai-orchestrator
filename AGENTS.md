@@ -84,14 +84,16 @@ dispatch onejudge.
    encoding subtask details in a new persona.
 3. **Launch and supervise.** Start the graph with `just orchestrate <plan.json>`,
    then review each structured boundary surfaced by the orchestrator. Decide
-   retry/split/add/drop actions, approve or reject departures, triage follow-ups,
-   and keep the user informed. Require verified publication closeout before
-   accepting completion.
+   retry/split/add/drop actions, approve or reject departures, and triage
+   follow-ups. Keep the user informed at each milestone and never let more than
+   30 minutes pass between updates. When a completed task published a PR, include
+   the relevant PR link in its completion report. Require verified publication
+   closeout before accepting completion.
 
 After `just orchestrate`, the planner uses **only** `just channel-next`, `just
-channel-reply`, and the read-only `just monitor` / `just runs` views. It never runs
-`run-plan` or `next-round` itself: those commands belong to the orchestrator
-process, and two writers would race the ledger lock.
+channel-reply`, and the read-only `just monitor` / `just runs` / `just status`
+views. It never runs `run-plan` or `next-round` itself: those commands belong to
+the orchestrator process, and two writers would race the ledger lock.
 
 Judge a dispatched branch against its own base (`merge-base` / `base..branch`),
 never a moving `origin/main`; concurrent advancement can make a healthy branch
