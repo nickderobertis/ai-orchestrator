@@ -35,6 +35,21 @@ def _worktree_process(
     workspace.remove_worktree(repo, worktree)
 
 
+def _held_worktree_process(
+    canonical: str,
+    root: str,
+    branch: str,
+    ready: multiprocessing.Queue[str],
+    release: Any,
+) -> None:
+    repo = normalize_repo(canonical)
+    workspace = Workspace(root, resolver=lambda _spec: Path(canonical), workflow="local")
+    worktree = workspace.worktree(repo, branch, base="origin/main")
+    ready.put(str(worktree))
+    release.wait(10)
+    workspace.remove_worktree(repo, worktree)
+
+
 def _lifecycle_process(
     origin: str,
     canonical: str,
@@ -111,6 +126,32 @@ def test_separate_processes_create_and_remove_distinct_worktrees(
     assert all(not Path(path).exists() for path in paths)
     assert gitops.worktrees(canonical) == {"main": canonical.resolve()}
     assert _git(canonical, "config", "--bool", "core.bare") == "false"
+
+
+def test_active_cross_process_worktree_is_never_reclaimed(
+    tmp_path: Path, bare_origin: Callable[..., Path]
+) -> None:
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-active")
+    root = tmp_path / "worktrees-active"
+    ready: multiprocessing.Queue[str] = multiprocessing.Queue()
+    release = multiprocessing.Event()
+    process = multiprocessing.Process(
+        target=_held_worktree_process,
+        args=(str(canonical), str(root), "feature/held", ready, release),
+    )
+    process.start()
+    held_path = Path(ready.get(timeout=10))
+    repo = normalize_repo(str(canonical))
+    contender = Workspace(root, resolver=lambda _spec: canonical, workflow="local")
+    try:
+        with pytest.raises(RuntimeError, match="branch 'feature/held' is active"):
+            contender.worktree(repo, "feature/held", base="origin/main")
+        assert held_path.exists()
+        assert gitops.worktrees(canonical)["feature/held"] == held_path
+    finally:
+        release.set()
+        _join(process)
 
 
 def test_identical_simultaneous_lifecycles_get_unique_branches_and_both_land(

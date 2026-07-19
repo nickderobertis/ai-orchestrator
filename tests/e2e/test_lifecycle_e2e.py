@@ -18,7 +18,6 @@ from __future__ import annotations
 import json
 import os
 import shlex
-import shutil
 import subprocess
 import threading
 import time
@@ -115,6 +114,7 @@ def test_published_dispatch_survives_deferred_teardown_and_redispatch_reclaims_i
 
     class ContendedTeardownWorkspace(Workspace):
         def remove_worktree(self, repo, path) -> None:
+            self._release_worktree_lease(path)
             raise LockTimeout("shared .git remains busy")
 
     contended = ContendedTeardownWorkspace(
@@ -144,8 +144,6 @@ def test_published_dispatch_survives_deferred_teardown_and_redispatch_reclaims_i
     orphan = gitops.worktrees(canonical)["teardown-retry"]
     assert orphan.exists()
 
-    # Model the prunable registration left after a crashed host removes its run directory.
-    shutil.rmtree(orphan)
     recovered = Workspace(
         root, resolver=lambda _spec: canonical, workflow="local", repo_type="single-owner"
     )

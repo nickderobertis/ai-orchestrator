@@ -16,12 +16,13 @@ import os
 import re
 import threading
 from collections.abc import Callable
+from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, NewType, Protocol
 
 from . import gitops
-from .coordination import advisory_lock
+from .coordination import LockTimeout, advisory_lock
 
 if TYPE_CHECKING:
     from .registry import Registry
@@ -179,6 +180,7 @@ class Workspace:
         # (the dispatch) is never held.
         self._locks_guard = threading.Lock()
         self._locks: dict[str, threading.Lock] = {}
+        self._worktree_leases: dict[Path, AbstractContextManager[None]] = {}
 
     def workflow(self, repo: RepoRef) -> Workflow | None:
         """Return the registered workflow, if the resolver exposes registry metadata."""
@@ -207,6 +209,19 @@ class Workspace:
 
     def _worktree_root(self, repo: RepoRef) -> Path:
         return self.root / repo.dir_key
+
+    def _worktree_lease_identity(self, clone: Path, path: Path) -> str:
+        return f"worktree:{gitops.common_dir(clone)}:{path.resolve()}"
+
+    def _acquire_worktree_lease(self, clone: Path, path: Path) -> None:
+        lease = advisory_lock(self._worktree_lease_identity(clone, path), timeout=0)
+        lease.__enter__()
+        self._worktree_leases[path.resolve()] = lease
+
+    def _release_worktree_lease(self, path: str | Path) -> None:
+        lease = self._worktree_leases.pop(Path(path).resolve(), None)
+        if lease is not None:
+            lease.__exit__(None, None, None)
 
     def ensure_cache_dir(self, repo: RepoRef) -> Path:
         """Create and return this repository identity's persistent build cache."""
@@ -318,19 +333,30 @@ class Workspace:
                     gitops.worktree_prune(clone)
                     active = gitops.worktrees(clone)
                 if branch in active:
-                    raise RuntimeError(
-                        f"branch {branch!r} is active in {active[branch]}; use a unique run or "
-                        "resume that worktree explicitly"
-                    )
+                    try:
+                        self._acquire_worktree_lease(clone, registered)
+                    except LockTimeout:
+                        raise RuntimeError(
+                            f"branch {branch!r} is active in {active[branch]}; use a unique run "
+                            "or resume that worktree explicitly"
+                        ) from None
+                    gitops.worktree_remove(clone, registered)
+                    active = gitops.worktrees(clone)
             if path.exists():
                 raise RuntimeError(
                     f"worktree path {path} already exists; inspect and remove it only after "
                     "confirming its run is abandoned"
                 )
             path.parent.mkdir(parents=True, exist_ok=True)
-            if gitops.branch_exists(clone, branch):
-                return gitops.worktree_add_existing(clone, path, branch)
-            return gitops.worktree_add(clone, path, branch, base=base, reset=False)
+            if path.resolve() not in self._worktree_leases:
+                self._acquire_worktree_lease(clone, path)
+            try:
+                if gitops.branch_exists(clone, branch):
+                    return gitops.worktree_add_existing(clone, path, branch)
+                return gitops.worktree_add(clone, path, branch, base=base, reset=False)
+            except Exception:
+                self._release_worktree_lease(path)
+                raise
 
     def fast_forward(self, repo: RepoRef, branch: str) -> None:
         """Fetch and fast-forward the caller-selected publication checkout."""
@@ -344,6 +370,7 @@ class Workspace:
     def remove_worktree(self, repo: RepoRef, path: str | Path) -> None:
         """Tear down a worktree once its subtask is done."""
         clone = self.clone_dir(repo)
+        self._release_worktree_lease(path)
         with advisory_lock(f"git:{gitops.common_dir(clone)}"):
             gitops.worktree_remove(clone, path)
 
