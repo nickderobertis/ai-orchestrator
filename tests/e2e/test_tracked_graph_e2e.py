@@ -930,6 +930,104 @@ def test_real_cli_replays_failed_and_waiting_terminal_prefixes(
     assert waiting_result["results"]["blocked"]["status"] == "blocked"
 
 
+def test_real_cli_recovers_exception_terminal_result_without_duplicates(
+    tmp_path: Path, command_base, onejudge_bin: str
+) -> None:
+    runs = tmp_path / "runs"
+    plan = tmp_path / "exception-prefix.json"
+    plan.write_text(
+        json.dumps(
+            {
+                "concurrency": 2,
+                "tasks": [
+                    {
+                        "id": "raises",
+                        "persona": "engineer",
+                        "task": "provider-errors",
+                    },
+                    {
+                        "id": "in-flight",
+                        "persona": "engineer",
+                        "task": "should-fail",
+                        "max_turns": 5,
+                    },
+                ],
+            }
+        )
+    )
+    command = [
+        "just",
+        "run-plan",
+        str(plan),
+        "--run",
+        "exception-prefix",
+        "--runs-dir",
+        str(runs),
+        "--base",
+        str(command_base()),
+        "--onejudge-bin",
+        onejudge_bin,
+        "--format",
+        "json",
+    ]
+    process = subprocess.Popen(
+        command,
+        cwd=REPO_ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        start_new_session=True,
+    )
+    events_path = runs / "exception-prefix" / "events.jsonl"
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        records = (
+            [json.loads(line) for line in events_path.read_text().splitlines()]
+            if events_path.exists()
+            else []
+        )
+        raised = next(
+            (
+                event
+                for event in records
+                if event["kind"] == "node-failed"
+                and event.get("node") == "raises"
+                and event.get("detail", {}).get("error") == "DispatchError"
+            ),
+            None,
+        )
+        in_flight = any(
+            event["kind"] == "node-started" and event.get("node") == "in-flight"
+            for event in records
+        )
+        if raised is not None and in_flight:
+            break
+        time.sleep(0.005)
+    else:
+        process.kill()
+        pytest.fail("run-plan did not emit the exception terminal prefix")
+    os.killpg(process.pid, signal.SIGKILL)
+    process.wait()
+
+    recovered = subprocess.run(
+        [*command, "--recover"], cwd=REPO_ROOT, text=True, capture_output=True, check=False
+    )
+    assert recovered.returncode == 1, recovered.stderr
+    result = json.loads((runs / "exception-prefix" / "round-01" / "result.json").read_text())
+    records = [json.loads(line) for line in events_path.read_text().splitlines()]
+    raised_events = [
+        event
+        for event in records
+        if event["kind"] == "node-failed" and event.get("node") == "raises"
+    ]
+    assert len(raised_events) == 1
+    assert (
+        sum(event["kind"] == "node-started" and event.get("node") == "raises" for event in records)
+        == 1
+    )
+    assert raised_events[0]["detail"]["result"] == result["results"]["raises"]
+
+
 def test_recover_completes_a_partially_emitted_graph_without_duplicates(tmp_path: Path) -> None:
     runs = tmp_path / "runs"
     node_count = 2000
