@@ -367,6 +367,10 @@ make retry reuse, recovered/abandoned branches, no-diff dispatches, and time fro
 green gate to publication directly consumable. The default is active runs;
 `--all` includes settled runs.
 
+The additive, cross-layer timing and usage contract planned for the next index
+version is specified in [`telemetry-model.md`](telemetry-model.md); that document
+marks target behavior separately from the version-1 command above.
+
 ## Human completion attestations
 
 After doing a reported action, attest it explicitly:
