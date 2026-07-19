@@ -30,7 +30,7 @@ from orchestrator.plan import PLAN_SCHEMA_VERSION, PlanError, PlanNode
 from orchestrator.runs import NodeId, RunId
 
 
-def _report(persona: str, completed: bool = True) -> Report:
+def _report(persona: str, completed: bool = True, assessment: str | None = None) -> Report:
     return Report(
         persona=persona,
         exit_code=0 if completed else 1,
@@ -41,7 +41,43 @@ def _report(persona: str, completed: bool = True) -> Report:
         usage={},
         raw={},
         stderr="",
+        assessment=assessment,
     )
+
+
+class _RecordingProposalPump:
+    def __init__(self) -> None:
+        self.proposals: list[tuple[str, str]] = []
+        self.drains = 0
+
+    def propose(self, node: str, message: str) -> None:
+        self.proposals.append((node, message))
+
+    def drain_replies(self) -> None:
+        self.drains += 1
+
+
+def test_run_graph_enqueues_worker_assessment_through_reconciler() -> None:
+    graph = parse_graph(
+        {
+            "tasks": [
+                {"id": "discoverer", "persona": "engineer", "task": "Investigate"},
+                {"id": "quiet", "persona": "engineer", "task": "No discovery"},
+                {"id": "explicit-none", "persona": "engineer", "task": "No follow-up"},
+            ]
+        }
+    )
+    pump = _RecordingProposalPump()
+    assessments = {"discoverer": "follow up", "quiet": None, "explicit-none": "None"}
+    result = run_graph(
+        graph,
+        agent_runner=lambda node, **_: _report(node.persona, assessment=assessments[node.id]),
+        lifecycle_runner=lambda node, **_: _lifecycle(),
+        proposal_pump=pump,  # type: ignore[arg-type] - narrow transport test double
+    )
+    assert result.state == "complete"
+    assert pump.proposals == [("discoverer", "follow up")]
+    assert pump.drains >= 2
 
 
 def _lifecycle(outcome: str = "merged", **kw) -> LifecycleResult:
