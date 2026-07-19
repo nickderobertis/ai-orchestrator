@@ -268,6 +268,7 @@ def parse_event(record: object) -> Event | None:
             node=None if node is None else NodeId(node),
             step=None if step is None else StepId(step),
             detail=detail,
+            version=version,
         )
     except JournalError:
         # Well-shaped but out of contract (a non-positive round/seq, a non-finite

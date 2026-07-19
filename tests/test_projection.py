@@ -272,7 +272,11 @@ def test_v2_terminal_event_requires_and_round_trips_node_result() -> None:
     )
     assert projected.node_results == {"a": item}
 
-    for invalid in ("not-a-mapping", {"status": "bogus"}):
+    for invalid in (
+        "not-a-mapping",
+        {"status": "bogus"},
+        {"status": "done", "human_actions": "invalid"},
+    ):
         with pytest.raises(ProjectionError, match="invalid serialized node result"):
             project_round(
                 [

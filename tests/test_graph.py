@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import socket
 from collections.abc import Mapping
 from pathlib import Path
 
@@ -223,6 +224,68 @@ def test_lifecycle_expected_no_diff_terminal_payload_and_direct_replay() -> None
         },
     )
     assert replayed.payload == "no-changes"
+
+
+def test_main_replays_settled_v2_prefix_and_converges_without_dispatch(
+    tmp_path: Path, capsys
+) -> None:
+    plan = tmp_path / "plan.json"
+    plan.write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "tasks": [{"id": "done", "task": "No change", "expects_no_diff": True}],
+            }
+        )
+    )
+    runs = tmp_path / "runs"
+    args = [str(plan), "--run", "recover-v2", "--runs-dir", str(runs), "--format", "json"]
+    assert main(args) == 0
+    round_dir = runs / "recover-v2" / "round-01"
+    original = json.loads((round_dir / "result.json").read_text())
+    events_path = runs / "recover-v2" / "events.jsonl"
+    events = [json.loads(line) for line in events_path.read_text().splitlines()]
+    prefix = [event for event in events if event["kind"] != "round-finished"]
+    events_path.write_text("".join(json.dumps(event) + "\n" for event in prefix))
+    (round_dir / "result.json").unlink()
+    (round_dir / "status.json").write_text(
+        json.dumps({"status": "running", "pid": 999_999_999, "host": socket.gethostname()})
+    )
+
+    assert main([*args, "--recover"]) == 0
+    assert json.loads((round_dir / "result.json").read_text()) == original
+    recovered_events = [json.loads(line) for line in events_path.read_text().splitlines()]
+    assert sum(event["kind"] == "node-settled" for event in recovered_events) == 1
+    assert "complete" in capsys.readouterr().out
+
+    legacy_args = [
+        str(plan),
+        "--run",
+        "recover-v1",
+        "--runs-dir",
+        str(runs),
+        "--format",
+        "json",
+    ]
+    assert main(legacy_args) == 0
+    legacy_round = runs / "recover-v1" / "round-01"
+    legacy_events_path = runs / "recover-v1" / "events.jsonl"
+    legacy_events = [json.loads(line) for line in legacy_events_path.read_text().splitlines()]
+    legacy_prefix = []
+    for event in legacy_events:
+        if event["kind"] == "round-finished":
+            continue
+        event["version"] = 1
+        if event["kind"] == "node-settled":
+            event["detail"].pop("result")
+        legacy_prefix.append(event)
+    legacy_events_path.write_text("".join(json.dumps(event) + "\n" for event in legacy_prefix))
+    (legacy_round / "result.json").unlink()
+    (legacy_round / "status.json").write_text(
+        json.dumps({"status": "running", "pid": 999_999_999, "host": socket.gethostname()})
+    )
+    assert main([*legacy_args, "--recover"]) == 2
+    assert "legacy settled nodes without terminal payloads: done" in capsys.readouterr().err
 
 
 def test_run_graph_journals_a_direct_node_whose_runner_raised(tmp_path: Path) -> None:
