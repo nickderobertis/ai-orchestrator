@@ -59,6 +59,33 @@ def test_fifo_round_trips_frame_larger_than_pipe_buffer(tmp_path: Path) -> None:
     sender.join()
 
 
+def test_fifo_round_trips_large_versioned_edit_frame(tmp_path: Path) -> None:
+    channel = create_channel(tmp_path / "run")
+    value = {
+        "version": 1,
+        "commands": [
+            {
+                "op": "add",
+                "node": {
+                    "id": "large-followup",
+                    "persona": "engineer",
+                    "task": "x" * 100_000,
+                },
+            }
+        ],
+    }
+    sender = threading.Thread(
+        target=write_message,
+        args=(channel / "down.fifo", value),
+        kwargs={"timeout": 2},
+    )
+    sender.start()
+    received = read_message(channel / "down.fifo", timeout=2)
+    sender.join()
+    reply = _reply(received)
+    assert reply["commands"] == value["commands"]
+
+
 def test_concurrent_large_writers_do_not_interleave_frames(tmp_path: Path) -> None:
     channel = create_channel(tmp_path / "run")
     values = [{"writer": index, "body": str(index) * 100_000} for index in range(4)]
