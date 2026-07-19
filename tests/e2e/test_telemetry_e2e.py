@@ -113,6 +113,9 @@ def test_breakdown_aggregates_real_multirole_history_records(tmp_path: Path) -> 
     assert run["usage"]["total"]["input_tokens"] == 13
     assert run["usage"]["total"]["cost_usd"] == 0.03
     assert [link["role"] for link in run["nodes"][0]["sessions"]] == ["agent", "judge"]
+    assert run["nodes"][0]["usage"]["total"]["input_tokens"] == 13
+    assert set(run["nodes"][0]["timing"]["fractions"].values()) == {0.0}
+    assert run["nodes"][0]["turns"] == 2
     assert run["nodes"][0]["tool_commands"] == {"gate": 2}
     assert set(run["node_work_ms"]) == {"agent_model_ms", "judge_model_ms", "tool_ms", "wall_ms"}
     assert run["telemetry_quality"] == "partial"
@@ -128,15 +131,18 @@ def test_breakdown_aggregates_real_multirole_history_records(tmp_path: Path) -> 
     )
     assert breakdown.returncode == 0, breakdown.stderr
     assert "telemetry-e2e" in breakdown.stdout
+    assert "  api" in breakdown.stdout
     assert "2=1" in breakdown.stdout
 
     judge_record = json.loads((tmp_path / "judge.jsonl").read_text(encoding="utf-8"))
     judge_record["usage"].pop("cache_write_tokens")
+    judge_record["usage"]["cost_usd"] = True
     (tmp_path / "judge.jsonl").write_text(json.dumps(judge_record) + "\n", encoding="utf-8")
     unknown = subprocess.run(
         command.args, cwd=REPO_ROOT, env=environment, text=True, capture_output=True, timeout=30
     )
     assert json.loads(unknown.stdout)["runs"][0]["usage"]["total"]["cache_write_tokens"] is None
+    assert json.loads(unknown.stdout)["runs"][0]["usage"]["total"]["cost_usd"] is None
     unknown_breakdown = subprocess.run(
         [*command.args, "--breakdown"],
         cwd=REPO_ROOT,
@@ -146,6 +152,15 @@ def test_breakdown_aggregates_real_multirole_history_records(tmp_path: Path) -> 
         timeout=30,
     )
     assert "?" in unknown_breakdown.stdout
+
+    judge_record["events"][0]["tool_call_id"] = ""
+    (tmp_path / "judge.jsonl").write_text(json.dumps(judge_record) + "\n", encoding="utf-8")
+    malformed_tool = subprocess.run(
+        command.args, cwd=REPO_ROOT, env=environment, text=True, capture_output=True, timeout=30
+    )
+    assert malformed_tool.returncode == 2
+    judge_record["events"][0]["tool_call_id"] = "judge-tool-1"
+    (tmp_path / "judge.jsonl").write_text(json.dumps(judge_record) + "\n", encoding="utf-8")
 
     for history in (tmp_path / "agent.jsonl", tmp_path / "judge.jsonl"):
         record = json.loads(history.read_text(encoding="utf-8"))

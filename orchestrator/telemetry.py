@@ -10,14 +10,14 @@ import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Literal, TypedDict, cast
+from typing import Literal, TypedDict, cast
 
 from .detail_snapshot import CheckRollup
 from .history import (
     HistoryError,
+    HistorySession,
     SessionRole,
     all_sessions,
-    session_duration_ms,
     session_records,
     session_role,
 )
@@ -91,6 +91,17 @@ class SessionLink(TypedDict):
     history_id: str | None
     role: SessionRole
     turn_index: int | None
+
+
+class HistoryRecord(TypedDict, total=False):
+    schema_version: str | int
+    duration_ms: int
+    model_ms: int
+    tool_ms: int
+    started_at: str
+    finished_at: str
+    usage: dict[str, object]
+    events: list[object]
 
 
 class MetricsRecord(TypedDict):
@@ -188,6 +199,7 @@ class NodeTelemetry:
     usage: UsageRecord | None = None
     sessions: list[SessionLink] = field(default_factory=list)
     tool_commands: dict[str, int] = field(default_factory=dict)
+    turns: int = 0
 
     def record(self) -> dict[str, object]:
         result: dict[str, object] = {"node": self.node, "status": self.status}
@@ -212,6 +224,7 @@ class NodeTelemetry:
         result["sessions"] = self.sessions
         if self.tool_commands:
             result["tool_commands"] = self.tool_commands
+        result["turns"] = self.turns
         return result
 
 
@@ -406,7 +419,10 @@ def _command_class(command: str) -> str:
             return first
 
 
-def _summarize_session(session: Any, records: list[dict[str, Any]]) -> _SessionSummary:
+def _summarize_session(session: HistorySession, records: list[HistoryRecord]) -> _SessionSummary:
+    labelled_role = session.labels.get("role")
+    if labelled_role is not None and labelled_role not in {"agent", "judge"}:
+        raise HistoryError(f"unsupported oneharness session role {labelled_role!r}")
     role = session_role(session)
     usage = cast(UsageValues, {})
     for field_name in USAGE_FIELDS:
@@ -434,6 +450,8 @@ def _summarize_session(session: Any, records: list[dict[str, Any]]) -> _SessionS
         schema_version = record.get("schema_version")
         if schema_version is not None and schema_version not in SUPPORTED_HISTORY_SCHEMA_VERSIONS:
             raise HistoryError(f"unsupported oneharness history schema version {schema_version!r}")
+        if schema_version not in {"0.3", 2}:
+            interval_complete = False
         model = _non_negative_int(record.get("model_ms"))
         tool = _non_negative_int(record.get("tool_ms"))
         if schema_version in {"0.3", 2} and (
@@ -443,7 +461,7 @@ def _summarize_session(session: Any, records: list[dict[str, Any]]) -> _SessionS
         if schema_version in {"0.3", 2}:
             start_at = _utc_datetime(record.get("started_at"))
             finish_at = _utc_datetime(record.get("finished_at"))
-            duration = cast(int, record["duration_ms"])
+            duration = record["duration_ms"]
             if (
                 start_at is None
                 or finish_at is None
@@ -496,7 +514,11 @@ def _summarize_session(session: Any, records: list[dict[str, Any]]) -> _SessionS
         ),
         # A normalized history record is one provider invocation (one conversation turn).
         turns=len(records),
-        duration_ms=session_duration_ms(records),
+        duration_ms=sum(
+            record_duration
+            for record in records
+            if (record_duration := _non_negative_int(record.get("duration_ms"))) is not None
+        ),
         model_ms=model_ms,
         tool_ms=tool_ms,
         usage=usage,
@@ -583,13 +605,15 @@ def _providers(run_id: RunId, oneharness_bin: str) -> tuple[list[Provider], list
     summaries: list[_SessionSummary] = []
     try:
         sessions = all_sessions(oneharness_bin=oneharness_bin)
-    except HistoryError:
-        return found, summaries
+    except HistoryError as exc:
+        if str(exc).startswith("oneharness not found"):
+            return found, summaries
+        raise
     for session in sessions:
         if session.labels.get("run_id") != run_id:
             continue
         records = session_records(session)
-        summaries.append(_summarize_session(session, records))
+        summaries.append(_summarize_session(session, cast(list[HistoryRecord], records)))
         latest = records[-1] if records else {}
         raw_provider = latest.get("provider", "oneharness")
         raw_harness = latest.get("harness", "")
@@ -682,6 +706,7 @@ def _node_record(
         usage=_usage(linked),
         sessions=[summary.link for summary in linked],
         tool_commands=_command_counts(linked),
+        turns=sum(summary.turns for summary in linked),
     )
 
 
@@ -806,7 +831,7 @@ def _breakdown(runs: list[RunTelemetry]) -> str:
                 f"  {node.node}",
                 cast(TimingRecord, node.timing),
                 cast(UsageRecord, node.usage),
-                len(node.sessions),
+                node.turns,
             )
             for node in run.nodes
         )

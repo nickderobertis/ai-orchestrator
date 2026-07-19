@@ -203,6 +203,12 @@ def test_schema_v2_field_golden_prevents_cross_layer_drift() -> None:
         "usage": sorted(UsageValues.__required_keys__),
         "session_link": sorted(SessionLink.__required_keys__),
     }
+    contract = (Path(__file__).parents[1] / "docs" / "telemetry-model.md").read_text(
+        encoding="utf-8"
+    )
+    assert "schema version 1 to 2" in contract
+    for value in (*golden["roles"], *golden["qualities"], *golden["sources"]):
+        assert f"`{value}`" in contract
 
 
 def test_index_cli_defaults_to_active_and_all_includes_settled(
@@ -279,7 +285,7 @@ def test_native_timing_usage_tools_and_breakdown_are_role_and_node_scoped(
     assert record["usage"]["total"]["cost_usd"] == pytest.approx(0.03)
     assert record["nodes"][0]["sessions"][1]["role"] == "judge"
     assert record["nodes"][0]["tool_commands"] == {"gate": 2}
-    assert record["telemetry_quality"] == "partial"
+    assert record["telemetry_quality"] == "legacy"
     assert main(["--runs-dir", str(tmp_path / "runs"), "--all", "--breakdown"]) == 0
     assert "Turn histogram:" in capsys.readouterr().out
 
