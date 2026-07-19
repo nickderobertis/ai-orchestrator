@@ -1260,6 +1260,113 @@ def test_real_cli_recovers_settled_lifecycle_stack_anchor(
     assert result["results"]["parent"]["publication_workflow"] == "local"
 
 
+def test_real_cli_recovers_failed_lifecycle_result(
+    tmp_path: Path, bare_origin, command_base, onejudge_bin: str
+) -> None:
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "failed-lifecycle-canonical")
+    Registry().register(str(canonical), workflow="local")
+    runs = tmp_path / "runs"
+    plan = tmp_path / "failed-lifecycle-prefix.json"
+    plan.write_text(
+        json.dumps(
+            {
+                "concurrency": 2,
+                "tasks": [
+                    {
+                        "id": "failed-lifecycle",
+                        "repo": str(canonical),
+                        "persona": "engineer",
+                        "task": "should-fail write-change incomplete lifecycle",
+                        "branch": "feature/failed-lifecycle",
+                        "workflow": "local",
+                        "repo_type": "single-owner",
+                        "skip_verify": True,
+                        "max_turns": 1,
+                    },
+                    {
+                        "id": "in-flight",
+                        "persona": "engineer",
+                        "task": "should-fail",
+                        "max_turns": 5,
+                    },
+                ],
+            }
+        )
+    )
+    command = [
+        "just",
+        "run-plan",
+        str(plan),
+        "--run",
+        "failed-lifecycle-prefix",
+        "--runs-dir",
+        str(runs),
+        "--workspace",
+        str(tmp_path / "failed-lifecycle-worktrees"),
+        "--base",
+        str(command_base()),
+        "--onejudge-bin",
+        onejudge_bin,
+        "--format",
+        "json",
+    ]
+    process = subprocess.Popen(
+        command,
+        cwd=REPO_ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        start_new_session=True,
+    )
+    events_path = runs / "failed-lifecycle-prefix" / "events.jsonl"
+    deadline = time.monotonic() + 15
+    while time.monotonic() < deadline:
+        records = (
+            [json.loads(line) for line in events_path.read_text().splitlines()]
+            if events_path.exists()
+            else []
+        )
+        lifecycle_failed = any(
+            event["kind"] == "node-failed" and event.get("node") == "failed-lifecycle"
+            for event in records
+        )
+        in_flight = any(
+            event["kind"] == "node-started" and event.get("node") == "in-flight"
+            for event in records
+        )
+        if lifecycle_failed and in_flight:
+            break
+        time.sleep(0.01)
+    else:
+        process.kill()
+        pytest.fail("run-plan did not reach the failed lifecycle recovery boundary")
+    os.killpg(process.pid, signal.SIGKILL)
+    process.wait()
+
+    recovered = subprocess.run(
+        [*command, "--recover"], cwd=REPO_ROOT, text=True, capture_output=True, check=False
+    )
+    assert recovered.returncode == 1, recovered.stderr
+    result = json.loads((runs / "failed-lifecycle-prefix" / "round-01" / "result.json").read_text())
+    records = [json.loads(line) for line in events_path.read_text().splitlines()]
+    terminal = [
+        event
+        for event in records
+        if event["kind"] == "node-failed" and event.get("node") == "failed-lifecycle"
+    ]
+    assert len(terminal) == 1
+    assert (
+        sum(
+            event["kind"] == "node-started" and event.get("node") == "failed-lifecycle"
+            for event in records
+        )
+        == 1
+    )
+    assert terminal[0]["detail"]["result"] == result["results"]["failed-lifecycle"]
+    assert result["results"]["failed-lifecycle"]["outcome"] == "not-completed"
+
+
 def test_recover_completes_a_partially_emitted_graph_without_duplicates(tmp_path: Path) -> None:
     runs = tmp_path / "runs"
     node_count = 2000
