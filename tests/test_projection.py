@@ -10,6 +10,9 @@ from orchestrator.journal import (
     AUTHORITATIVE_EVENT_KINDS,
     OPTIONAL_EVENT_FIELDS,
     REQUIRED_EVENT_FIELDS,
+    TERMINAL_NODE_EVENT_KINDS,
+    TERMINAL_NODE_RESULT_FIELD,
+    TERMINAL_NODE_RESULT_TYPE,
     Event,
     EventKind,
     NodeId,
@@ -22,9 +25,14 @@ from orchestrator.runs import prepare_round
 
 def test_static_event_contract_golden() -> None:
     golden = json.loads(
-        (Path(__file__).parent / "golden" / "static-round-events-v1.json").read_text()
+        (Path(__file__).parent / "golden" / "static-round-events-v2.json").read_text()
     )
-    assert golden["version"] == 1
+    assert golden["version"] == 2
+    assert golden["terminal_node_kinds"] == list(TERMINAL_NODE_EVENT_KINDS)
+    assert golden["terminal_detail"] == {
+        "required": [TERMINAL_NODE_RESULT_FIELD],
+        TERMINAL_NODE_RESULT_FIELD: TERMINAL_NODE_RESULT_TYPE,
+    }
     assert golden["state_changing_kinds"] == list(AUTHORITATIVE_EVENT_KINDS)
     assert golden["required_envelope"] == list(REQUIRED_EVENT_FIELDS)
     assert golden["optional_envelope"] == list(OPTIONAL_EVENT_FIELDS)
@@ -41,7 +49,11 @@ def test_projection_reconstructs_plan_states_attestations_and_result(tmp_path: P
     )
     journal.append("edge-added", detail={"from": "approve", "to": "ship"})
     journal.append("round-started", detail={"plan": {"schema_version": 3, "concurrency": 1}})
-    journal.append("human-waiting", node=NodeId("approve"), detail={"task": "Approve"})
+    journal.append(
+        "human-waiting",
+        node=NodeId("approve"),
+        detail={"task": "Approve", "result": {"status": "waiting"}},
+    )
     journal.append("human-attested", node=NodeId("approve"), detail={"ref": "approve"})
     result = {
         "ok": False,
@@ -114,6 +126,7 @@ def _event(kind: EventKind, seq: int, *, node: str | None = None, detail=None) -
         at=0,
         node=None if node is None else NodeId(node),
         detail=detail or {},
+        version=1,
     )
 
 
@@ -202,6 +215,89 @@ def test_fold_records_failed_state_and_ignores_another_round() -> None:
         Event("round-started", RunId("r"), 2, 5, 0),
     ]
     assert project_round(events, RunId("r"), 1).node_states == {"a": "failed"}
+
+
+def test_v2_terminal_event_requires_and_round_trips_node_result() -> None:
+    prefix = [
+        Event(
+            "node-added",
+            RunId("r"),
+            1,
+            1,
+            0,
+            detail={"definition": {"id": "a", "persona": "p", "task": "x"}},
+        ),
+        Event("round-started", RunId("r"), 1, 2, 0, detail={"plan": {}}),
+        Event("node-started", RunId("r"), 1, 3, 0, node=NodeId("a")),
+    ]
+    with pytest.raises(ProjectionError, match="requires a serialized node result"):
+        project_round(
+            [
+                *prefix,
+                Event(
+                    "node-settled",
+                    RunId("r"),
+                    1,
+                    4,
+                    0,
+                    node=NodeId("a"),
+                    detail={"status": "done"},
+                ),
+            ],
+            RunId("r"),
+            1,
+        )
+
+    item = {
+        "kind": "agent",
+        "status": "done",
+        "task": "x",
+        "completed": True,
+        "exit_code": 0,
+        "verdicts": [{"kind": "boolean", "criterion": "done"}],
+        "usage": {"total_tokens": 12},
+        "error": None,
+    }
+    projected = project_round(
+        [
+            *prefix,
+            Event(
+                "node-settled",
+                RunId("r"),
+                1,
+                4,
+                0,
+                node=NodeId("a"),
+                detail={"status": "done", "result": item},
+            ),
+        ],
+        RunId("r"),
+        1,
+    )
+    assert projected.node_results == {"a": item}
+
+    for invalid in (
+        "not-a-mapping",
+        {"status": "bogus"},
+        {"status": "done", "human_actions": "invalid"},
+    ):
+        with pytest.raises(ProjectionError, match="invalid serialized node result"):
+            project_round(
+                [
+                    *prefix,
+                    Event(
+                        "node-settled",
+                        RunId("r"),
+                        1,
+                        4,
+                        0,
+                        node=NodeId("a"),
+                        detail={"status": "done", "result": invalid},
+                    ),
+                ],
+                RunId("r"),
+                1,
+            )
 
 
 @pytest.mark.parametrize(

@@ -253,6 +253,9 @@ def test_parse_event_round_trips_a_well_formed_record() -> None:
         detail={"status": "done"},
     )
     assert parse_event(event.to_record()) == event
+    legacy = event.to_record()
+    legacy["version"] = 1
+    assert parse_event(legacy).version == 1
 
 
 def test_event_rejects_a_non_json_detail_value() -> None:

@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import signal
+import socket
 import subprocess
 import time
 from datetime import datetime
@@ -711,15 +712,21 @@ def test_recover_interrupted_real_cli_does_not_duplicate_node_start(
     settled_plan.write_text(
         json.dumps(
             {
+                "schema_version": 2,
                 "tasks": [
-                    {"id": "first", "persona": "engineer", "task": "complete-now"},
+                    {
+                        "id": "first",
+                        "repo": "o/r",
+                        "task": "No lifecycle diff.",
+                        "expects_no_diff": True,
+                    },
                     {
                         "id": "second",
                         "persona": "engineer",
                         "task": "complete-now",
                         "deps": ["first"],
                     },
-                ]
+                ],
             }
         )
     )
@@ -750,11 +757,778 @@ def test_recover_interrupted_real_cli_does_not_duplicate_node_start(
         pytest.fail("run-plan did not reach the settled-prefix recovery boundary")
     os.killpg(settled_process.pid, signal.SIGKILL)
     settled_process.wait()
-    refused = subprocess.run(
+    converged = subprocess.run(
         [*settled_command, "--recover"], cwd=REPO_ROOT, text=True, capture_output=True, check=False
     )
-    assert refused.returncode == 2
-    assert "settled nodes before its terminal event: first" in refused.stderr
+    assert converged.returncode == 0, converged.stderr
+    settled_records = [json.loads(line) for line in settled_events.read_text().splitlines()]
+    for node_id in ("first", "second"):
+        assert (
+            sum(
+                event["kind"] == "node-started" and event.get("node") == node_id
+                for event in settled_records
+            )
+            == 1
+        )
+        assert (
+            sum(
+                event["kind"] == "node-settled" and event.get("node") == node_id
+                for event in settled_records
+            )
+            == 1
+        )
+    assert (
+        json.loads((runs / "settled-prefix" / "round-01" / "result.json").read_text())["state"]
+        == "complete"
+    )
+
+
+@pytest.mark.parametrize(
+    ("event_version", "mutation", "diagnostic"),
+    [
+        (1, "missing", "legacy settled nodes without terminal payloads: done"),
+        (2, "missing", "node-settled requires a serialized node result"),
+        (2, "non-mapping", "invalid serialized node result"),
+        (2, "status", "invalid serialized node result status"),
+        (2, "shape", "invalid human_actions for done"),
+    ],
+)
+def test_real_cli_rejects_terminal_prefix_without_required_payload(
+    tmp_path: Path, event_version: int, mutation: str, diagnostic: str
+) -> None:
+    runs = tmp_path / "runs"
+    plan = tmp_path / "legacy-prefix.json"
+    plan.write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "tasks": [{"id": "done", "task": "No diff.", "expects_no_diff": True}],
+            }
+        )
+    )
+    command = [
+        "run-plan",
+        str(plan),
+        "--run",
+        f"bad-payload-v{event_version}-{mutation}",
+        "--runs-dir",
+        str(runs),
+        "--format",
+        "json",
+    ]
+    completed = _just(*command)
+    assert completed.returncode == 0, completed.stderr
+    round_dir = runs / f"bad-payload-v{event_version}-{mutation}" / "round-01"
+    events_path = runs / f"bad-payload-v{event_version}-{mutation}" / "events.jsonl"
+    events = [json.loads(line) for line in events_path.read_text().splitlines()]
+    prefix = []
+    for event in events:
+        if event["kind"] == "round-finished":
+            continue
+        # llmlint: ignore[tests_mirror_real_usage] Invalid journal versions cannot be produced
+        # by the public CLI; this deliberate corruption exercises defensive recovery parsing.
+        event["version"] = event_version
+        # llmlint: ignore[tests_mirror_real_usage] Invalid terminal payloads cannot be produced
+        # by the public CLI; this deliberate corruption exercises defensive recovery parsing.
+        if event["kind"] == "node-settled":
+            match mutation:
+                case "missing":
+                    event["detail"].pop("result")
+                case "non-mapping":
+                    event["detail"]["result"] = "invalid"
+                case "status":
+                    event["detail"]["result"]["status"] = "failed"
+                case _:
+                    event["detail"]["result"]["human_actions"] = "invalid"
+        prefix.append(event)
+    # llmlint: ignore[tests_mirror_real_usage] Installing a corrupt dead-owner prefix necessarily
+    # writes durable artifacts directly; recovery itself is invoked only through `run-plan`.
+    events_path.write_text("".join(json.dumps(event) + "\n" for event in prefix))
+    # llmlint: ignore[tests_mirror_real_usage] A crash before round closeout has no result file.
+    (round_dir / "result.json").unlink()
+    # llmlint: ignore[tests_mirror_real_usage] A dead owner cannot be produced synchronously by
+    # this test process; this status is the documented precondition for public `--recover`.
+    (round_dir / "status.json").write_text(
+        json.dumps({"status": "running", "pid": 999_999_999, "host": socket.gethostname()})
+    )
+
+    recovered = _just(*command, "--recover")
+    assert recovered.returncode == 2
+    assert diagnostic in recovered.stderr
+
+
+def test_real_cli_replays_failed_and_waiting_terminal_prefixes(
+    tmp_path: Path, command_base, onejudge_bin: str
+) -> None:
+    runs = tmp_path / "runs"
+
+    def interrupt_and_recover(run_id: str, tasks: list[dict], terminal_kind: str):
+        plan = tmp_path / f"{run_id}.json"
+        plan.write_text(json.dumps({"tasks": tasks, "concurrency": 2}))
+        command = [
+            "just",
+            "run-plan",
+            str(plan),
+            "--run",
+            run_id,
+            "--runs-dir",
+            str(runs),
+            "--base",
+            str(command_base()),
+            "--onejudge-bin",
+            onejudge_bin,
+            "--format",
+            "json",
+        ]
+        process = subprocess.Popen(
+            command,
+            cwd=REPO_ROOT,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            start_new_session=True,
+        )
+        events_path = runs / run_id / "events.jsonl"
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            content = events_path.read_text() if events_path.exists() else ""
+            if (
+                f'"kind": "{terminal_kind}"' in content
+                and content.count('"kind": "node-started"') >= 1
+            ):
+                break
+            time.sleep(0.005)
+        else:
+            process.kill()
+            pytest.fail(f"run-plan did not emit {terminal_kind}")
+        os.killpg(process.pid, signal.SIGKILL)
+        process.wait()
+        recovered = subprocess.run(
+            [*command, "--recover"],
+            cwd=REPO_ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        return recovered, json.loads((runs / run_id / "round-01" / "result.json").read_text())
+
+    failed, failed_result = interrupt_and_recover(
+        "failed-prefix",
+        [
+            {"id": "failed", "persona": "engineer", "task": "should-fail", "max_turns": 1},
+            {"id": "running", "persona": "engineer", "task": "should-fail", "max_turns": 5},
+        ],
+        "node-failed",
+    )
+    assert failed.returncode == 1, failed.stderr
+    assert failed_result["results"]["failed"]["status"] == "failed"
+
+    waiting, waiting_result = interrupt_and_recover(
+        "waiting-prefix",
+        [
+            {"id": "approval", "kind": "human", "task": "Approve"},
+            {"id": "blocked", "persona": "engineer", "task": "complete-now", "deps": ["approval"]},
+            {"id": "running", "persona": "engineer", "task": "should-fail", "max_turns": 5},
+        ],
+        "human-waiting",
+    )
+    assert waiting.returncode == 1, waiting.stderr
+    assert waiting_result["results"]["approval"]["status"] == "waiting"
+    assert waiting_result["results"]["blocked"]["status"] == "blocked"
+
+
+def test_real_cli_recovers_exception_terminal_result_without_duplicates(
+    tmp_path: Path, command_base, onejudge_bin: str
+) -> None:
+    runs = tmp_path / "runs"
+    plan = tmp_path / "exception-prefix.json"
+    plan.write_text(
+        json.dumps(
+            {
+                "concurrency": 3,
+                "tasks": [
+                    {
+                        "id": "raises",
+                        "persona": "engineer",
+                        "task": "provider-errors",
+                    },
+                    {
+                        "id": "in-flight",
+                        "persona": "engineer",
+                        "task": "should-fail",
+                        "max_turns": 5,
+                    },
+                ],
+            }
+        )
+    )
+    command = [
+        "just",
+        "run-plan",
+        str(plan),
+        "--run",
+        "exception-prefix",
+        "--runs-dir",
+        str(runs),
+        "--base",
+        str(command_base()),
+        "--onejudge-bin",
+        onejudge_bin,
+        "--format",
+        "json",
+    ]
+    process = subprocess.Popen(
+        command,
+        cwd=REPO_ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        start_new_session=True,
+    )
+    events_path = runs / "exception-prefix" / "events.jsonl"
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        records = (
+            [json.loads(line) for line in events_path.read_text().splitlines()]
+            if events_path.exists()
+            else []
+        )
+        raised = next(
+            (
+                event
+                for event in records
+                if event["kind"] == "node-failed"
+                and event.get("node") == "raises"
+                and event.get("detail", {}).get("error") == "DispatchError"
+            ),
+            None,
+        )
+        in_flight = any(
+            event["kind"] == "node-started" and event.get("node") == "in-flight"
+            for event in records
+        )
+        if raised is not None and in_flight:
+            break
+        time.sleep(0.005)
+    else:
+        process.kill()
+        pytest.fail("run-plan did not emit the exception terminal prefix")
+    os.killpg(process.pid, signal.SIGKILL)
+    process.wait()
+
+    recovered = subprocess.run(
+        [*command, "--recover"], cwd=REPO_ROOT, text=True, capture_output=True, check=False
+    )
+    assert recovered.returncode == 1, recovered.stderr
+    result = json.loads((runs / "exception-prefix" / "round-01" / "result.json").read_text())
+    records = [json.loads(line) for line in events_path.read_text().splitlines()]
+    raised_events = [
+        event
+        for event in records
+        if event["kind"] == "node-failed" and event.get("node") == "raises"
+    ]
+    assert len(raised_events) == 1
+    assert (
+        sum(event["kind"] == "node-started" and event.get("node") == "raises" for event in records)
+        == 1
+    )
+    assert raised_events[0]["detail"]["result"] == result["results"]["raises"]
+
+
+def test_real_cli_recovers_successful_report_and_no_change_results(
+    tmp_path: Path, command_base, onejudge_bin: str
+) -> None:
+    runs = tmp_path / "runs"
+    plan = tmp_path / "successful-report-prefix.json"
+    plan.write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "concurrency": 3,
+                "tasks": [
+                    {
+                        "id": "successful-report",
+                        "persona": "engineer",
+                        "task": "complete-now",
+                    },
+                    {
+                        "id": "no-change",
+                        "task": "No diff.",
+                        "expects_no_diff": True,
+                    },
+                    {
+                        "id": "in-flight",
+                        "persona": "engineer",
+                        "task": "should-fail",
+                        "max_turns": 5,
+                    },
+                ],
+            }
+        )
+    )
+    command = [
+        "just",
+        "run-plan",
+        str(plan),
+        "--run",
+        "successful-report-prefix",
+        "--runs-dir",
+        str(runs),
+        "--base",
+        str(command_base()),
+        "--onejudge-bin",
+        onejudge_bin,
+        "--format",
+        "json",
+    ]
+    process = subprocess.Popen(
+        command,
+        cwd=REPO_ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        start_new_session=True,
+    )
+    events_path = runs / "successful-report-prefix" / "events.jsonl"
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        records = (
+            [json.loads(line) for line in events_path.read_text().splitlines()]
+            if events_path.exists()
+            else []
+        )
+        settled = {event.get("node") for event in records if event["kind"] == "node-settled"}
+        in_flight = any(
+            event["kind"] == "node-started" and event.get("node") == "in-flight"
+            for event in records
+        )
+        if {"successful-report", "no-change"} <= settled and in_flight:
+            break
+        time.sleep(0.005)
+    else:
+        process.kill()
+        pytest.fail("run-plan did not emit successful Report and no-change prefix")
+    os.killpg(process.pid, signal.SIGKILL)
+    process.wait()
+
+    recovered = subprocess.run(
+        [*command, "--recover"], cwd=REPO_ROOT, text=True, capture_output=True, check=False
+    )
+    assert recovered.returncode == 1, recovered.stderr
+    result = json.loads(
+        (runs / "successful-report-prefix" / "round-01" / "result.json").read_text()
+    )
+    records = [json.loads(line) for line in events_path.read_text().splitlines()]
+    for node_id in ("successful-report", "no-change"):
+        terminal = [
+            event
+            for event in records
+            if event["kind"] == "node-settled" and event.get("node") == node_id
+        ]
+        assert len(terminal) == 1
+        assert (
+            sum(
+                event["kind"] == "node-started" and event.get("node") == node_id
+                for event in records
+            )
+            == 1
+        )
+        assert terminal[0]["detail"]["result"] == result["results"][node_id]
+    report = result["results"]["successful-report"]
+    assert report["completed"] is True and report["exit_code"] == 0
+    assert isinstance(report["verdicts"], list) and isinstance(report["usage"], dict)
+    assert result["results"]["no-change"]["outcome"] == "no-changes"
+
+
+def test_real_cli_recovers_settled_lifecycle_stack_anchor(
+    tmp_path: Path, bare_origin, command_base, onejudge_bin: str
+) -> None:
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "stack-recovery-canonical")
+    Registry().register(str(canonical), workflow="local")
+    subprocess.run(
+        ["git", "checkout", "-b", "feature/anchor"],
+        cwd=canonical,
+        check=True,
+        capture_output=True,
+    )
+    (canonical / "ANCHOR.txt").write_text("stack anchor\n")
+    gitops.add_all(canonical)
+    gitops.commit(canonical, "test: add stack anchor")
+    gitops.push(canonical, "feature/anchor")
+    gitops.checkout(canonical, "main")
+
+    runs = tmp_path / "runs"
+    plan = tmp_path / "lifecycle-stack-prefix.json"
+    plan.write_text(
+        json.dumps(
+            {
+                "concurrency": 2,
+                "tasks": [
+                    {
+                        "id": "parent",
+                        "repo": str(canonical),
+                        "persona": "engineer",
+                        "task": "complete-now write-change parent stack work",
+                        "branch": "feature/parent",
+                        "workflow": "local",
+                        "repo_type": "single-owner",
+                        "skip_verify": True,
+                        "stack_bases": [
+                            {
+                                "branch": "feature/anchor",
+                                "base_branch": "main",
+                                "pr_base": "main",
+                            }
+                        ],
+                    },
+                    {
+                        "id": "child",
+                        "repo": str(canonical),
+                        "persona": "engineer",
+                        "task": "should-fail write-change child stack work",
+                        "branch": "feature/child",
+                        "workflow": "local",
+                        "repo_type": "single-owner",
+                        "skip_verify": True,
+                        "max_turns": 5,
+                        "deps": ["parent"],
+                    },
+                ],
+            }
+        )
+    )
+    command = [
+        "just",
+        "run-plan",
+        str(plan),
+        "--run",
+        "lifecycle-stack-prefix",
+        "--runs-dir",
+        str(runs),
+        "--workspace",
+        str(tmp_path / "stack-recovery-worktrees"),
+        "--base",
+        str(command_base()),
+        "--onejudge-bin",
+        onejudge_bin,
+        "--format",
+        "json",
+    ]
+    process = subprocess.Popen(
+        command,
+        cwd=REPO_ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        start_new_session=True,
+    )
+    events_path = runs / "lifecycle-stack-prefix" / "events.jsonl"
+    deadline = time.monotonic() + 20
+    while time.monotonic() < deadline:
+        records = (
+            [json.loads(line) for line in events_path.read_text().splitlines()]
+            if events_path.exists()
+            else []
+        )
+        parent_settled = any(
+            event["kind"] == "node-settled" and event.get("node") == "parent" for event in records
+        )
+        child_started = any(
+            event["kind"] == "node-started" and event.get("node") == "child" for event in records
+        )
+        if parent_settled and child_started:
+            break
+        time.sleep(0.01)
+    else:
+        process.kill()
+        pytest.fail("run-plan did not reach the lifecycle stack recovery boundary")
+    os.killpg(process.pid, signal.SIGKILL)
+    process.wait()
+
+    recovered = subprocess.run(
+        [*command, "--recover"], cwd=REPO_ROOT, text=True, capture_output=True, check=False
+    )
+    assert recovered.returncode == 1, recovered.stderr
+    result = json.loads((runs / "lifecycle-stack-prefix" / "round-01" / "result.json").read_text())
+    records = [json.loads(line) for line in events_path.read_text().splitlines()]
+    parent_terminal = [
+        event
+        for event in records
+        if event["kind"] == "node-settled" and event.get("node") == "parent"
+    ]
+    assert len(parent_terminal) == 1
+    assert (
+        sum(event["kind"] == "node-started" and event.get("node") == "parent" for event in records)
+        == 1
+    )
+    assert parent_terminal[0]["detail"]["result"] == result["results"]["parent"]
+    assert result["results"]["parent"]["pr_base"] == "feature/anchor"
+    assert result["results"]["parent"]["publication_workflow"] == "local"
+
+
+def test_real_cli_recovers_failed_lifecycle_result(
+    tmp_path: Path, bare_origin, command_base, onejudge_bin: str
+) -> None:
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "failed-lifecycle-canonical")
+    Registry().register(str(canonical), workflow="local")
+    runs = tmp_path / "runs"
+    plan = tmp_path / "failed-lifecycle-prefix.json"
+    plan.write_text(
+        json.dumps(
+            {
+                "concurrency": 2,
+                "tasks": [
+                    {
+                        "id": "failed-lifecycle",
+                        "repo": str(canonical),
+                        "persona": "engineer",
+                        "task": "should-fail write-change incomplete lifecycle",
+                        "branch": "feature/failed-lifecycle",
+                        "workflow": "local",
+                        "repo_type": "single-owner",
+                        "skip_verify": True,
+                        "max_turns": 1,
+                    },
+                    {
+                        "id": "gate-failed-lifecycle",
+                        "repo": str(canonical),
+                        "persona": "engineer",
+                        "task": "complete-now write-change gate failure",
+                        "branch": "feature/gate-failed-lifecycle",
+                        "workflow": "local",
+                        "repo_type": "single-owner",
+                        "verify_cmd": ["false"],
+                    },
+                    {
+                        "id": "in-flight",
+                        "persona": "engineer",
+                        "task": "should-fail",
+                        "max_turns": 5,
+                    },
+                ],
+            }
+        )
+    )
+    command = [
+        "just",
+        "run-plan",
+        str(plan),
+        "--run",
+        "failed-lifecycle-prefix",
+        "--runs-dir",
+        str(runs),
+        "--workspace",
+        str(tmp_path / "failed-lifecycle-worktrees"),
+        "--base",
+        str(command_base()),
+        "--onejudge-bin",
+        onejudge_bin,
+        "--format",
+        "json",
+    ]
+    process = subprocess.Popen(
+        command,
+        cwd=REPO_ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        start_new_session=True,
+    )
+    events_path = runs / "failed-lifecycle-prefix" / "events.jsonl"
+    deadline = time.monotonic() + 15
+    while time.monotonic() < deadline:
+        records = (
+            [json.loads(line) for line in events_path.read_text().splitlines()]
+            if events_path.exists()
+            else []
+        )
+        failed_lifecycles = {
+            event.get("node") for event in records if event["kind"] == "node-failed"
+        }
+        in_flight = any(
+            event["kind"] == "node-started" and event.get("node") == "in-flight"
+            for event in records
+        )
+        if {"failed-lifecycle", "gate-failed-lifecycle"} <= failed_lifecycles and in_flight:
+            break
+        time.sleep(0.01)
+    else:
+        process.kill()
+        pytest.fail("run-plan did not reach the failed lifecycle recovery boundary")
+    os.killpg(process.pid, signal.SIGKILL)
+    process.wait()
+
+    recovered = subprocess.run(
+        [*command, "--recover"], cwd=REPO_ROOT, text=True, capture_output=True, check=False
+    )
+    assert recovered.returncode == 1, recovered.stderr
+    result = json.loads((runs / "failed-lifecycle-prefix" / "round-01" / "result.json").read_text())
+    records = [json.loads(line) for line in events_path.read_text().splitlines()]
+    for node_id in ("failed-lifecycle", "gate-failed-lifecycle"):
+        terminal = [
+            event
+            for event in records
+            if event["kind"] == "node-failed" and event.get("node") == node_id
+        ]
+        assert len(terminal) == 1
+        assert (
+            sum(
+                event["kind"] == "node-started" and event.get("node") == node_id
+                for event in records
+            )
+            == 1
+        )
+        assert terminal[0]["detail"]["result"] == result["results"][node_id]
+    assert result["results"]["failed-lifecycle"]["outcome"] == "not-completed"
+    assert result["results"]["gate-failed-lifecycle"]["outcome"] == "gate-failed"
+
+
+def test_real_cli_recovers_waiting_and_no_change_lifecycle_results(
+    tmp_path: Path, bare_origin, command_base, onejudge_bin: str
+) -> None:
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "lifecycle-variants-canonical")
+    Registry().register(str(canonical), workflow="local")
+    runs = tmp_path / "runs"
+    plan = tmp_path / "lifecycle-variants-prefix.json"
+    plan.write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "concurrency": 3,
+                "tasks": [
+                    {
+                        "id": "waiting-lifecycle",
+                        "repo": str(canonical),
+                        "task": "Pause for approval",
+                        "branch": "feature/waiting-lifecycle",
+                        "workflow": "local",
+                        "repo_type": "single-owner",
+                        "skip_verify": True,
+                        "steps": [
+                            {
+                                "id": "prepare",
+                                "persona": "engineer",
+                                "task": "complete-now write-change prepare approval",
+                            },
+                            {
+                                "id": "approve",
+                                "kind": "human",
+                                "task": "Approve the prepared change.",
+                                "deps": ["prepare"],
+                            },
+                        ],
+                    },
+                    {
+                        "id": "no-change-lifecycle",
+                        "repo": str(canonical),
+                        "task": "Certify no lifecycle change",
+                        "branch": "feature/no-change-lifecycle",
+                        "workflow": "local",
+                        "repo_type": "single-owner",
+                        "skip_verify": True,
+                        "steps": [
+                            {
+                                "id": "certify",
+                                "task": "No diff.",
+                                "expects_no_diff": True,
+                            }
+                        ],
+                    },
+                    {
+                        "id": "blocked",
+                        "persona": "engineer",
+                        "task": "complete-now",
+                        "deps": ["waiting-lifecycle"],
+                    },
+                    {
+                        "id": "in-flight",
+                        "persona": "engineer",
+                        "task": "should-fail",
+                        "max_turns": 5,
+                    },
+                ],
+            }
+        )
+    )
+    command = [
+        "just",
+        "run-plan",
+        str(plan),
+        "--run",
+        "lifecycle-variants-prefix",
+        "--runs-dir",
+        str(runs),
+        "--workspace",
+        str(tmp_path / "lifecycle-variants-worktrees"),
+        "--base",
+        str(command_base()),
+        "--onejudge-bin",
+        onejudge_bin,
+        "--format",
+        "json",
+    ]
+    process = subprocess.Popen(
+        command,
+        cwd=REPO_ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        start_new_session=True,
+    )
+    events_path = runs / "lifecycle-variants-prefix" / "events.jsonl"
+    deadline = time.monotonic() + 20
+    while time.monotonic() < deadline:
+        records = (
+            [json.loads(line) for line in events_path.read_text().splitlines()]
+            if events_path.exists()
+            else []
+        )
+        settled = {event.get("node") for event in records if event["kind"] == "node-settled"}
+        in_flight = any(
+            event["kind"] == "node-started" and event.get("node") == "in-flight"
+            for event in records
+        )
+        if {"waiting-lifecycle", "no-change-lifecycle"} <= settled and in_flight:
+            break
+        time.sleep(0.01)
+    else:
+        process.kill()
+        pytest.fail("run-plan did not reach the waiting lifecycle recovery boundary")
+    os.killpg(process.pid, signal.SIGKILL)
+    process.wait()
+
+    recovered = subprocess.run(
+        [*command, "--recover"], cwd=REPO_ROOT, text=True, capture_output=True, check=False
+    )
+    assert recovered.returncode == 1, recovered.stderr
+    result = json.loads(
+        (runs / "lifecycle-variants-prefix" / "round-01" / "result.json").read_text()
+    )
+    records = [json.loads(line) for line in events_path.read_text().splitlines()]
+    for node_id in ("waiting-lifecycle", "no-change-lifecycle"):
+        terminal = [
+            event
+            for event in records
+            if event["kind"] == "node-settled" and event.get("node") == node_id
+        ]
+        assert len(terminal) == 1
+        assert (
+            sum(
+                event["kind"] == "node-started" and event.get("node") == node_id
+                for event in records
+            )
+            == 1
+        )
+        assert terminal[0]["detail"]["result"] == result["results"][node_id]
+    waiting = result["results"]["waiting-lifecycle"]
+    assert waiting["status"] == "waiting" and waiting["outcome"] == "waiting-human"
+    assert waiting["waiting_steps"] == ["approve"]
+    assert waiting["human_actions"][0]["ref"] == "waiting-lifecycle/approve"
+    assert result["results"]["blocked"]["status"] == "blocked"
+    assert result["results"]["no-change-lifecycle"]["outcome"] == "no-changes"
 
 
 def test_recover_completes_a_partially_emitted_graph_without_duplicates(tmp_path: Path) -> None:

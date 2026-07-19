@@ -164,6 +164,15 @@ result writes are atomic; a live round cannot be claimed by another process.
 `just runs` summarizes the latest completed round, including waiting action prose
 and what each action unblocks.
 
+Execution is a long-lived reconcile loop: it compares the round's fixed desired
+graph with actual node state projected from `events.jsonl`, starts the reachable
+frontier, and reacts to each completion until the graph is terminal. Journal
+schema 2 terminal node events carry the complete serialized node result, so
+`--recover` can replay a dead round's prefix, retain settled nodes byte-for-byte,
+resume nodes that were running without another start transition, and converge the
+remaining frontier. Schema 1 journals remain readable, but a schema 1 prefix with
+settled nodes cannot be recovered because it predates durable node results.
+
 ## Monitoring a live run
 
 `just runs` says where a round *ended* and `just history-show` says everything
@@ -299,7 +308,7 @@ results without `state` remain readable.
 
 - `orchestrator/graph.py` — canonical mixed-node validation, scheduling, result,
   output, and exit semantics.
-- `orchestrator/plan.py` — direct-agent parsing and the shared DAG scheduler.
+- `orchestrator/plan.py` — direct-agent parsing and the shared DAG reconciler.
 - `orchestrator/lifecycle.py` — repository nodes and resumable step workstreams.
 - `orchestrator/runs.py`, `next_round.py`, `replan.py` — durable rounds,
   attestations, and continuation.

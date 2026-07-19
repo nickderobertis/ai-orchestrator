@@ -21,11 +21,18 @@ from typing import Any, Literal, cast
 from . import REPO_ROOT
 from .config import ConfigError, load_yaml
 from .dispatch import Report
-from .journal import JournalSink, NodeJournal, NullJournal, open_journal
+from .journal import (
+    TERMINAL_NODE_RESULT_FIELD,
+    JournalSink,
+    NodeJournal,
+    NullJournal,
+    open_journal,
+)
 from .lifecycle import (
     LifecycleResult,
     LifecycleRunner,
     RepoPlanNode,
+    StackBase,
     add_lifecycle_args,
     combine_stack_bases,
     emit,
@@ -139,6 +146,7 @@ class NodeResult:
     blocked_by: list[str] = field(default_factory=list)
     human_actions: list[HumanAction] = field(default_factory=list)
     outcome: str | None = None
+    recorded: GraphResultItem | None = None
 
 
 @dataclass
@@ -292,6 +300,8 @@ def run_graph(
     run_id: RunId | None = None,
     round_number: int | None = None,
     already_started: frozenset[str] = frozenset(),
+    replayed_runs: Mapping[str, NodeRun] | None = None,
+    replayed_order: list[str] | None = None,
 ) -> GraphResult:
     """Schedule and run a mixed tracked graph, journaling each transition.
 
@@ -309,7 +319,15 @@ def run_graph(
     log: JournalSink = journal if journal is not None else NullJournal()
     nodes = {n.id: n for n in graph.tasks}
     deps = {nid: nodes[nid].deps for nid in nodes}
-    completed: dict[str, LifecycleResult] = {}
+    dependents: dict[str, list[str]] = {nid: [] for nid in nodes}
+    for nid, node in nodes.items():
+        for dep in node.deps:
+            dependents[dep].append(nid)
+    completed: dict[str, LifecycleResult] = {
+        nid: run.payload
+        for nid, run in (replayed_runs or {}).items()
+        if run.status == "done" and isinstance(run.payload, LifecycleResult)
+    }
     guard = threading.Lock()
 
     def settle(nid: str, node: GraphNode, node_log: NodeJournal) -> NodeRun:
@@ -319,8 +337,16 @@ def run_graph(
             or (node.lifecycle and node.lifecycle.expects_no_diff)
         )
         if expects_no_diff:
-            node_log.append("node-settled", detail={"status": "done", "outcome": "no-changes"})
-            return NodeRun("done", None, "no-changes")
+            run = NodeRun("done", None, "no-changes")
+            node_log.append(
+                "node-settled",
+                detail={
+                    "status": "done",
+                    "outcome": "no-changes",
+                    TERMINAL_NODE_RESULT_FIELD: cast(Any, _run_payload(node, run, dependents[nid])),
+                },
+            )
+            return run
         if node.lifecycle is not None:
             with guard:
                 anchors = combine_stack_bases(node.lifecycle, completed)
@@ -329,47 +355,96 @@ def run_graph(
                 journal=node_log,
             )
             if result.waiting:
+                run = NodeRun("waiting", result.detail, result)
                 node_log.append(
                     "node-settled",
-                    detail={"status": "waiting", "outcome": result.outcome},
+                    detail={
+                        "status": "waiting",
+                        "outcome": result.outcome,
+                        TERMINAL_NODE_RESULT_FIELD: cast(
+                            Any, _run_payload(node, run, dependents[nid])
+                        ),
+                    },
                 )
-                return NodeRun("waiting", result.detail, result)
+                return run
             agent_steps = [step for step in node.lifecycle.steps or [] if not step.human]
             expected_step_no_diff = bool(agent_steps) and all(
                 step.expects_no_diff for step in agent_steps
             )
             if result.outcome == "no-changes" and expected_step_no_diff:
-                node_log.append("node-settled", detail={"status": "done", "outcome": "no-changes"})
-                return NodeRun("done", None, result)
+                run = NodeRun("done", None, result)
+                node_log.append(
+                    "node-settled",
+                    detail={
+                        "status": "done",
+                        "outcome": "no-changes",
+                        TERMINAL_NODE_RESULT_FIELD: cast(
+                            Any, _run_payload(node, run, dependents[nid])
+                        ),
+                    },
+                )
+                return run
             if not result.ok:
+                run = NodeRun("failed", result.detail or result.outcome, result)
                 node_log.append(
                     "node-failed",
-                    detail={"outcome": result.outcome, "detail": result.detail},
+                    detail={
+                        "outcome": result.outcome,
+                        "detail": result.detail,
+                        TERMINAL_NODE_RESULT_FIELD: cast(
+                            Any, _run_payload(node, run, dependents[nid])
+                        ),
+                    },
                 )
-                return NodeRun("failed", result.detail or result.outcome, result)
+                return run
             with guard:
                 completed[nid] = result
-            node_log.append("node-settled", detail={"status": "done", "outcome": result.outcome})
-            return NodeRun("done", None, result)
-        report = agent_runner(cast(PlanNode, node.direct), labels=node_log.labels)
-        if report.completed:
+            run = NodeRun("done", None, result)
             node_log.append(
                 "node-settled",
-                detail={"status": "done", "turns": report.assistant_turns},
+                detail={
+                    "status": "done",
+                    "outcome": result.outcome,
+                    TERMINAL_NODE_RESULT_FIELD: cast(Any, _run_payload(node, run, dependents[nid])),
+                },
             )
-            return NodeRun("done", None, report)
+            return run
+        report = agent_runner(cast(PlanNode, node.direct), labels=node_log.labels)
+        if report.completed:
+            run = NodeRun("done", None, report)
+            node_log.append(
+                "node-settled",
+                detail={
+                    "status": "done",
+                    "turns": report.assistant_turns,
+                    TERMINAL_NODE_RESULT_FIELD: cast(Any, _run_payload(node, run, dependents[nid])),
+                },
+            )
+            return run
+        run = NodeRun("failed", "did not complete (hit the turn cap)", report)
         node_log.append(
             "node-failed",
-            detail={"detail": "hit the turn cap", "turns": report.assistant_turns},
+            detail={
+                "detail": "hit the turn cap",
+                "turns": report.assistant_turns,
+                TERMINAL_NODE_RESULT_FIELD: cast(Any, _run_payload(node, run, dependents[nid])),
+            },
         )
-        return NodeRun("failed", "did not complete (hit the turn cap)", report)
+        return run
 
     def run_one(nid: str) -> NodeRun:
         node = nodes[nid]
         node_log = NodeJournal(sink=log, node=NodeId(nid), run_id=run_id, round=round_number)
         if node.human:
-            node_log.append("human-waiting", detail={"task": first_line(node.task)})
-            return NodeRun("waiting", "awaiting human action")
+            run = NodeRun("waiting", "awaiting human action")
+            node_log.append(
+                "human-waiting",
+                detail={
+                    "task": first_line(node.task),
+                    TERMINAL_NODE_RESULT_FIELD: cast(Any, _run_payload(node, run, dependents[nid])),
+                },
+            )
+            return run
         if nid not in already_started:
             node_log.append(
                 "node-started",
@@ -382,11 +457,85 @@ def run_graph(
             # ledger records it either way. Journal it here as well: a `node-started`
             # with nothing to close it is how this journal says "still running", and
             # a node that raised is the one thing it is not.
-            node_log.append("node-failed", detail={"detail": str(exc), "error": type(exc).__name__})
+            failed = NodeRun("failed", str(exc))
+            node_log.append(
+                "node-failed",
+                detail={
+                    "detail": str(exc),
+                    "error": type(exc).__name__,
+                    TERMINAL_NODE_RESULT_FIELD: cast(
+                        Any, _run_payload(node, failed, dependents[nid])
+                    ),
+                },
+            )
             raise
 
-    runs, started_order = schedule_dag(list(nodes), deps, run_one, concurrency=conc)
+    actual = dict(replayed_runs or {})
+    actual.update({nid: NodeRun("running") for nid in already_started if nid not in actual})
+    runs, started_order = schedule_dag(
+        list(nodes),
+        deps,
+        run_one,
+        concurrency=conc,
+        actual=actual,
+        started_order=replayed_order,
+    )
     return _collect(nodes, runs, started_order)
+
+
+def _run_payload(node: GraphNode, run: NodeRun, dependents: list[str]) -> GraphResultItem:
+    """Serialize a settled run exactly as the eventual graph result will expose it."""
+    actions = _waiting_actions(node, run, dependents) if run.status == "waiting" else []
+    result = NodeResult(
+        id=node.id,
+        kind=node.kind,
+        status=run.status,
+        task=node.task,
+        report=run.payload if isinstance(run.payload, Report) else None,
+        lifecycle=run.payload if isinstance(run.payload, LifecycleResult) else None,
+        error=run.error,
+        unblocks=list(dependents) if run.status == "waiting" else [],
+        human_actions=actions,
+        outcome=run.payload if run.payload == "no-changes" else None,
+    )
+    return _node_payload(result)
+
+
+def _replay_node_run(node: GraphNode, item: GraphResultItem) -> NodeRun:
+    """Restore scheduler actual state while retaining the exact serialized result."""
+    status = item["status"]
+    error = item.get("error")
+    payload: Any = "no-changes" if item.get("outcome") == "no-changes" else None
+    if node.lifecycle is not None:
+        anchors = [
+            StackBase(
+                branch=anchor["branch"],
+                repo=anchor.get("repo"),
+                identity=cast(Any, anchor.get("identity")),
+                base_branch=anchor.get("base_branch"),
+                pr=anchor.get("pr"),
+                pr_base=anchor.get("pr_base"),
+            )
+            for anchor in item.get("stack_bases", [])
+        ]
+        payload = LifecycleResult(
+            repo=item.get("repo", node.lifecycle.repo),
+            task=node.task,
+            persona=node.lifecycle.persona or "workstream",
+            base_branch=item.get("base_branch", ""),
+            branch=item.get("branch", ""),
+            outcome=item.get("outcome", "error"),
+            publication_identity=cast(Any, item.get("publication_identity")),
+            publication_workflow=cast(Any, item.get("publication_workflow")),
+            repository_type=cast(Any, item.get("repository_type")),
+            merge_policy=cast(Any, item.get("merge_policy")),
+            pr_base=item.get("pr_base", ""),
+            synthetic_stack_base=item.get("synthetic_stack_base"),
+            stack_bases=anchors,
+            detail=item.get("detail", ""),
+            waiting_steps=cast(list[str], list(item.get("waiting_steps", []))),
+        )
+    return NodeRun(status, error, payload, item)
 
 
 def _collect(
@@ -435,6 +584,7 @@ def _collect(
             blocked_by=blocking(nid) if run.status == "blocked" else [],
             human_actions=actions.get(nid, []),
             outcome=run.payload if run.payload == "no-changes" else None,
+            recorded=cast(GraphResultItem, run.recorded) if run.recorded is not None else None,
         )
     return GraphResult(results=results, started_order=started_order)
 
@@ -478,6 +628,8 @@ def action_payload(action: HumanAction) -> HumanActionPayload:
 
 
 def _node_payload(result: NodeResult) -> GraphResultItem:
+    if result.recorded is not None:
+        return result.recorded
     item: dict[str, Any] = {}
     if result.lifecycle is not None:
         item.update(result_payload(result.lifecycle))
@@ -621,6 +773,8 @@ def main(argv: list[str] | None = None) -> int:
     run_id: RunId | None = None
     round_number: int | None = None
     already_started: frozenset[str] = frozenset()
+    replayed_runs: dict[str, NodeRun] = {}
+    replayed_order: list[str] = []
     if run_dir is not None and round_record is not None:
         run_id = RunId(run_dir.name)
         round_number = round_record[0]
@@ -673,17 +827,31 @@ def main(argv: list[str] | None = None) -> int:
         if args.recover and "round-started" in existing_kinds:
             from .projection import project_run
 
-            replayed = project_run(run_dir / "events.jsonl", run_id, round_number)
-            settled = sorted(
-                node for node, state in replayed.node_states.items() if state != "running"
-            )
-            if settled:
+            try:
+                replayed = project_run(run_dir / "events.jsonl", run_id, round_number)
+            except ProjectionError as exc:
                 print(
-                    "run-plan: could not recover round with settled nodes before its terminal "
-                    "event: " + ", ".join(settled),
+                    f"run-plan: cannot replay authoritative event log: {exc}",
                     file=sys.stderr,
                 )
                 return 2
+            settled = sorted(
+                node for node, state in replayed.node_states.items() if state != "running"
+            )
+            missing_payloads = [node for node in settled if node not in replayed.node_results]
+            if missing_payloads:
+                print(
+                    "run-plan: could not recover legacy settled nodes without terminal payloads: "
+                    + ", ".join(missing_payloads),
+                    file=sys.stderr,
+                )
+                return 2
+            nodes_by_id = {node.id: node for node in graph.tasks}
+            replayed_runs = {
+                node: _replay_node_run(nodes_by_id[node], replayed.node_results[node])
+                for node in settled
+            }
+            replayed_order = list(replayed.node_states)
             already_started = frozenset(
                 node for node, state in replayed.node_states.items() if state == "running"
             )
@@ -704,6 +872,8 @@ def main(argv: list[str] | None = None) -> int:
         run_id=run_id,
         round_number=round_number,
         already_started=already_started,
+        replayed_runs=replayed_runs,
+        replayed_order=replayed_order,
         agent_runner=make_dispatch_runner(
             base_path=args.base_config,
             persona_dir=args.persona_dir,
