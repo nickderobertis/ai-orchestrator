@@ -13,7 +13,7 @@ import json
 import sys
 import threading
 from collections import Counter
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Literal, cast
@@ -291,6 +291,7 @@ def run_graph(
     journal: JournalSink | None = None,
     run_id: RunId | None = None,
     round_number: int | None = None,
+    already_started: frozenset[str] = frozenset(),
 ) -> GraphResult:
     """Schedule and run a mixed tracked graph, journaling each transition.
 
@@ -369,10 +370,11 @@ def run_graph(
         if node.human:
             node_log.append("human-waiting", detail={"task": first_line(node.task)})
             return NodeRun("waiting", "awaiting human action")
-        node_log.append(
-            "node-started",
-            detail={"node_kind": "lifecycle" if node.lifecycle else "direct"},
-        )
+        if nid not in already_started:
+            node_log.append(
+                "node-started",
+                detail={"node_kind": "lifecycle" if node.lifecycle else "direct"},
+            )
         try:
             return settle(nid, node, node_log)
         except Exception as exc:
@@ -618,14 +620,82 @@ def main(argv: list[str] | None = None) -> int:
     journal: JournalSink = NullJournal()
     run_id: RunId | None = None
     round_number: int | None = None
+    already_started: frozenset[str] = frozenset()
     if run_dir is not None and round_record is not None:
         run_id = RunId(run_dir.name)
         round_number = round_record[0]
         journal = open_journal(run_dir, run_id, round_number)
-        journal.append(
-            "round-started",
-            detail={"nodes": len(graph.tasks), "concurrency": graph.concurrency},
-        )
+        from .projection import ProjectionError, read_strict_events
+
+        try:
+            durable_events = read_strict_events(run_dir / "events.jsonl", run_id)
+        except ProjectionError as exc:
+            print(f"run-plan: cannot replay authoritative event log: {exc}", file=sys.stderr)
+            return 2
+        round_events = [event for event in durable_events if event.round == round_number]
+        expected_definitions = [
+            {key: value for key, value in raw_node.items() if key != "deps" or value == []}
+            for raw_node in plan_mapping["tasks"]
+        ]
+        recorded_definitions: list[dict[str, Any]] = []
+        for event in round_events:
+            if event.kind != "node-added":
+                continue
+            definition = event.detail.get("definition")
+            if not isinstance(definition, Mapping):
+                print("run-plan: recorded node definition is malformed", file=sys.stderr)
+                return 2
+            recorded_definitions.append(dict(definition))
+        if recorded_definitions != expected_definitions[: len(recorded_definitions)]:
+            print(
+                "run-plan: recorded node definitions do not match the recovery plan",
+                file=sys.stderr,
+            )
+            return 2
+        for definition in expected_definitions[len(recorded_definitions) :]:
+            journal.append("node-added", detail={"definition": definition})
+        expected_edges = [
+            {"from": dependency, "to": raw_node["id"]}
+            for raw_node in plan_mapping["tasks"]
+            for dependency in raw_node.get("deps", [])
+        ]
+        recorded_edges = [
+            {"from": event.detail.get("from"), "to": event.detail.get("to")}
+            for event in round_events
+            if event.kind == "edge-added"
+        ]
+        if recorded_edges != expected_edges[: len(recorded_edges)]:
+            print("run-plan: recorded graph edges do not match the recovery plan", file=sys.stderr)
+            return 2
+        for edge in expected_edges[len(recorded_edges) :]:
+            journal.append("edge-added", detail=edge)
+        existing_kinds = {event.kind for event in round_events}
+        if args.recover and "round-started" in existing_kinds:
+            from .projection import project_run
+
+            replayed = project_run(run_dir / "events.jsonl", run_id, round_number)
+            settled = sorted(
+                node for node, state in replayed.node_states.items() if state != "running"
+            )
+            if settled:
+                print(
+                    "run-plan: could not recover round with settled nodes before its terminal "
+                    "event: " + ", ".join(settled),
+                    file=sys.stderr,
+                )
+                return 2
+            already_started = frozenset(
+                node for node, state in replayed.node_states.items() if state == "running"
+            )
+        if "round-started" not in existing_kinds:
+            journal.append(
+                "round-started",
+                detail={
+                    "nodes": len(graph.tasks),
+                    "concurrency": graph.concurrency,
+                    "plan": {key: value for key, value in plan_mapping.items() if key != "tasks"},
+                },
+            )
 
     dispatch_timeout = args.dispatch_timeout if args.dispatch_timeout is not None else args.timeout
     result = run_graph(
@@ -633,6 +703,7 @@ def main(argv: list[str] | None = None) -> int:
         journal=journal,
         run_id=run_id,
         round_number=round_number,
+        already_started=already_started,
         agent_runner=make_dispatch_runner(
             base_path=args.base_config,
             persona_dir=args.persona_dir,
@@ -661,13 +732,21 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     payload = graph_payload(result, round_number=round_number)
-    journal.append("round-finished", detail={"state": result.state, "ok": result.ok})
+    journal.append(
+        "round-finished",
+        detail={"state": result.state, "ok": result.ok, "result": cast(Any, payload)},
+    )
     rendered = json.dumps(payload, indent=2) if args.format == "json" else result.summary()
     emit(rendered, args.output)
     if run_dir is not None and round_record is not None:
         number, round_dir = round_record
         try:
-            write_result(round_dir, payload)
+            from .projection import project_run
+
+            projected = project_run(run_dir / "events.jsonl", cast(RunId, run_id), number)
+            if projected.result is None:  # round-finished above makes this an internal invariant
+                raise ConfigError("event projection has no terminal result")
+            write_result(round_dir, projected.result)
         except ConfigError as exc:
             print(f"run-plan: could not record run: {exc}", file=sys.stderr)
             return 2
