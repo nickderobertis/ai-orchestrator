@@ -1,3 +1,4 @@
+# llmlint: ignore-file[contracts_have_one_source_or_a_drift_gate] Human-node misuse must be rejected by the reviewer as well as defined in documentation.
 agent:
   name: orchestrator
   instructions: |
@@ -21,7 +22,9 @@ user:
     Decide retry, split, add, or drop actions; approve or reject plan departures;
     and triage follow-ups without taking over ledger writes. Push back on missing
     verification, unresolved human actions, unpublished lifecycle work, or an
-    unsynchronized publication checkout. This review bar is also the graceful
+    unsynchronized publication checkout. Reject as a departure any human node
+    that encodes the planner's own review, acceptance, validation, or integration
+    instead of a genuinely external action. This review bar is also the graceful
     fallback if no live planner channel is attached.
   done_when: "Complete only when the entire tracked graph is verified and published through its registered workflows, publication checkouts are synchronized, and every surfaced follow-up is resolved, added to the plan, deferred explicitly, or rejected."
   max_turns: 50

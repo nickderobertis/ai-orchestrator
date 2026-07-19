@@ -16,9 +16,10 @@
 # llmlint: ignore-file[robust_shell, tool_output_is_signal, boundary_inputs_validated] deliberate for a session-startup installer (see header): `set -e` is omitted so a flaky install can't abort the hook — the script owns its exit codes and always exits 0; success logs progress while failures log-and-continue rather than block startup; and the toolchain is installed from PyPI (`uv tool install llmlint-cli`) whose wheels ship with Trusted Publishing + PEP 740 attestations, so no unvalidated external input is executed.
 set -uo pipefail
 
-# Floor: llmlint >= 0.3.17 ships the changed-file-scoped `--diff`, three-dot
-# `--diff-base` default, and the model-free `validate` gate the recipes rely on.
-readonly LLMLINT_MIN="0.3.17"
+# Floor: llmlint >= 0.3.23 bundles config_lint v1.2, which embeds the
+# `line_localizable_rules_require_attribution` rule the llmlint tier relies on.
+# llmlint: ignore[changed_behavior_has_e2e] declarative dependency floor only; installer behavior is unchanged.
+readonly LLMLINT_MIN="0.3.23"
 readonly BIN_DIR="$HOME/.local/bin"
 
 log() { printf 'setup-llmlint: %s\n' "$*" >&2; }
