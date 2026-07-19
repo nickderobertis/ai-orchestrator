@@ -1028,6 +1028,133 @@ def test_real_cli_recovers_exception_terminal_result_without_duplicates(
     assert raised_events[0]["detail"]["result"] == result["results"]["raises"]
 
 
+def test_real_cli_recovers_settled_lifecycle_stack_anchor(
+    tmp_path: Path, bare_origin, command_base, onejudge_bin: str
+) -> None:
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "stack-recovery-canonical")
+    Registry().register(str(canonical), workflow="local")
+    subprocess.run(
+        ["git", "checkout", "-b", "feature/anchor"],
+        cwd=canonical,
+        check=True,
+        capture_output=True,
+    )
+    (canonical / "ANCHOR.txt").write_text("stack anchor\n")
+    gitops.add_all(canonical)
+    gitops.commit(canonical, "test: add stack anchor")
+    gitops.push(canonical, "feature/anchor")
+    gitops.checkout(canonical, "main")
+
+    runs = tmp_path / "runs"
+    plan = tmp_path / "lifecycle-stack-prefix.json"
+    plan.write_text(
+        json.dumps(
+            {
+                "concurrency": 2,
+                "tasks": [
+                    {
+                        "id": "parent",
+                        "repo": str(canonical),
+                        "persona": "engineer",
+                        "task": "complete-now write-change parent stack work",
+                        "branch": "feature/parent",
+                        "workflow": "local",
+                        "repo_type": "single-owner",
+                        "skip_verify": True,
+                        "stack_bases": [
+                            {
+                                "branch": "feature/anchor",
+                                "base_branch": "main",
+                                "pr_base": "main",
+                            }
+                        ],
+                    },
+                    {
+                        "id": "child",
+                        "repo": str(canonical),
+                        "persona": "engineer",
+                        "task": "should-fail write-change child stack work",
+                        "branch": "feature/child",
+                        "workflow": "local",
+                        "repo_type": "single-owner",
+                        "skip_verify": True,
+                        "max_turns": 5,
+                        "deps": ["parent"],
+                    },
+                ],
+            }
+        )
+    )
+    command = [
+        "just",
+        "run-plan",
+        str(plan),
+        "--run",
+        "lifecycle-stack-prefix",
+        "--runs-dir",
+        str(runs),
+        "--workspace",
+        str(tmp_path / "stack-recovery-worktrees"),
+        "--base",
+        str(command_base()),
+        "--onejudge-bin",
+        onejudge_bin,
+        "--format",
+        "json",
+    ]
+    process = subprocess.Popen(
+        command,
+        cwd=REPO_ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        start_new_session=True,
+    )
+    events_path = runs / "lifecycle-stack-prefix" / "events.jsonl"
+    deadline = time.monotonic() + 20
+    while time.monotonic() < deadline:
+        records = (
+            [json.loads(line) for line in events_path.read_text().splitlines()]
+            if events_path.exists()
+            else []
+        )
+        parent_settled = any(
+            event["kind"] == "node-settled" and event.get("node") == "parent" for event in records
+        )
+        child_started = any(
+            event["kind"] == "node-started" and event.get("node") == "child" for event in records
+        )
+        if parent_settled and child_started:
+            break
+        time.sleep(0.01)
+    else:
+        process.kill()
+        pytest.fail("run-plan did not reach the lifecycle stack recovery boundary")
+    os.killpg(process.pid, signal.SIGKILL)
+    process.wait()
+
+    recovered = subprocess.run(
+        [*command, "--recover"], cwd=REPO_ROOT, text=True, capture_output=True, check=False
+    )
+    assert recovered.returncode == 1, recovered.stderr
+    result = json.loads((runs / "lifecycle-stack-prefix" / "round-01" / "result.json").read_text())
+    records = [json.loads(line) for line in events_path.read_text().splitlines()]
+    parent_terminal = [
+        event
+        for event in records
+        if event["kind"] == "node-settled" and event.get("node") == "parent"
+    ]
+    assert len(parent_terminal) == 1
+    assert (
+        sum(event["kind"] == "node-started" and event.get("node") == "parent" for event in records)
+        == 1
+    )
+    assert parent_terminal[0]["detail"]["result"] == result["results"]["parent"]
+    assert result["results"]["parent"]["pr_base"] == "feature/anchor"
+    assert result["results"]["parent"]["publication_workflow"] == "local"
+
+
 def test_recover_completes_a_partially_emitted_graph_without_duplicates(tmp_path: Path) -> None:
     runs = tmp_path / "runs"
     node_count = 2000
