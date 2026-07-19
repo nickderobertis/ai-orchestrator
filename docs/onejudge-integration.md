@@ -3,12 +3,12 @@
 How this repo calls [onejudge](https://github.com/nickderobertis/onejudge) and how
 the two conversation sides are wired.
 
-This repository adopts exactly **onejudge 0.3.3**, declared once in
-`config/onejudge.version` and pinned as the PyPI distribution `onejudge`. That
-distribution exposes the Python SDK as `onejudge_sdk` and installs the matching
-`onejudge-cli==0.3.3` wheel. `just bootstrap` verifies both the SDK import and the
-resolved CLI's exact `onejudge --version` output; setup exits non-zero unless both
-report onejudge 0.3.3.
+This repository adopts the exact onejudge version declared in
+`config/onejudge.version` and pins that version of the PyPI distribution
+`onejudge`. The distribution exposes the Python SDK as `onejudge_sdk` and depends
+on the matching `onejudge-cli` wheel. `just bootstrap` verifies both the SDK import
+and the resolved CLI's exact `onejudge --version` output; setup exits non-zero
+unless the installed distribution and CLI match the declaration.
 
 ## The layering
 
@@ -78,8 +78,8 @@ as `crozier/crozier-corpus`; general cross-repo roles retain top-level names.
 transport, CLI invocation, and report-contract validation; the orchestrator maps
 its typed `RunResult` into the existing `Report`. Exit codes mirror onejudge: `0`
 completed, `1` incomplete, and `2` bad config or provider/runtime failure (raised
-as a `DispatchError` with onejudge's stderr). onejudge v0.3.3
-emits report schema v4, including the unified supervisor's completion reason and
+as a `DispatchError` with onejudge's stderr). The adopted version emits report
+schema v4, including the unified supervisor's completion reason and
 the optional final `assessment` this repository uses to surface follow-up work.
 
 ## The init process
@@ -100,7 +100,7 @@ both add an `IS_SANDBOX` env so claude-code runs under root. init's starter
 `onejudge.yaml` is not kept — `config/onejudge.base.yaml` supersedes it as the base
 this repo merges personas onto.
 
-The committed base and adapter follow the onejudge v0.3.3 schema: persona-authored
+The committed base and adapter follow the adopted onejudge schema: persona-authored
 `agent.instructions` is internal ai-orchestrator vocabulary and is translated to
 onejudge's `system_prompt`; no obsolete onejudge `agent` block reaches the CLI.
 The real-CLI e2e suite checks these schema and CLI surfaces before it drives the
@@ -218,6 +218,6 @@ so any command can stand in for the harness. The e2e suite points it at
 **real** onejudge CLI and loop across a real subprocess boundary, faking only the
 paid model/harness. This is the one sanctioned mock (a genuinely external service),
 and it is confined to the provider seam; the merge, SDK dispatch, CLI, and report
-validation all run for real. That backend implements onejudge v0.3.3's protocol v4 unified
+validation all run for real. That backend implements the adopted version's protocol v4 unified
 `supervisor` operation; the e2e fixture rejects any real CLI whose version is not
 the adopted `config/onejudge.version` value.
