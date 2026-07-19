@@ -38,8 +38,7 @@ rules:
       replan semantics, status/exit behavior, or documented repo-lifecycle policy.
     description: >-
       The diff updates the corresponding durable operator documentation in
-      AGENTS.md, docs/orchestration.md, or docs/repo-lifecycle.md so a planner or
-      operator would not find the docs stale or wrong.
+      AGENTS.md, docs/orchestration.md, or docs/repo-lifecycle.md.
     files:
       include:
         - "justfile"
