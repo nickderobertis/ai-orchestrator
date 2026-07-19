@@ -89,12 +89,18 @@ def test_main_validates_and_services_inherited_proposal_channel(
         json.dumps({"tasks": [{"id": "worker", "persona": "engineer", "task": "Work"}]}),
         encoding="utf-8",
     )
+    monkeypatch.setenv("AI_ORCHESTRATOR_CHANNEL_DIR", str(tmp_path / "channel"))
+    assert main([str(plan), "--no-record"]) == 2
+    assert "incomplete proposal channel" in capsys.readouterr().err
     channel = create_channel(tmp_path / "outer")
     monkeypatch.setenv("AI_ORCHESTRATOR_CHANNEL_DIR", str(channel))
     monkeypatch.setenv("AI_ORCHESTRATOR_CHANNEL_RUN_ID", "outer")
     monkeypatch.setenv("AI_ORCHESTRATOR_CHANNEL_ROUND", "invalid")
     assert main([str(plan), "--no-record"]) == 2
     assert "invalid proposal channel round" in capsys.readouterr().err
+    monkeypatch.setenv("AI_ORCHESTRATOR_CHANNEL_ROUND", "0")
+    assert main([str(plan), "--no-record"]) == 2
+    assert "round must be positive" in capsys.readouterr().err
 
     pumps: list[_RecordingProposalPump] = []
 

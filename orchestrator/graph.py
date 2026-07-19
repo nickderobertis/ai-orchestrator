@@ -890,12 +890,19 @@ def main(argv: list[str] | None = None) -> int:
     channel_path = os.environ.get(CHANNEL_DIR_ENV)
     channel_run_id = os.environ.get(CHANNEL_RUN_ID_ENV)
     channel_round = os.environ.get(CHANNEL_ROUND_ENV)
+    configured_channel_values = (channel_path, channel_run_id, channel_round)
+    if any(configured_channel_values) and not all(configured_channel_values):
+        print("run-plan: incomplete proposal channel environment", file=sys.stderr)
+        return 2
     if channel_path and channel_run_id and channel_round:
-        # llmlint: ignore[changed_behavior_has_e2e] launch-authored env; malformed only in unit
+        # llmlint: ignore-block[changed_behavior_has_e2e] internal env; malformed only in unit
         try:
             parsed_channel_round = int(channel_round)
         except ValueError:
             print("run-plan: invalid proposal channel round", file=sys.stderr)
+            return 2
+        if parsed_channel_round < 1:
+            print("run-plan: proposal channel round must be positive", file=sys.stderr)
             return 2
         try:
             validated_run_id = str(validate_run_id(channel_run_id))
@@ -908,6 +915,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"run-plan: invalid proposal channel: {exc}", file=sys.stderr)
             return 2
         proposal_pump = ProposalPump(resolved_channel, validated_run_id, parsed_channel_round)
+        # llmlint: ignore-end[changed_behavior_has_e2e]
     try:
         result = run_graph(
             graph,
