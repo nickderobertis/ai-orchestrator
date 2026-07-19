@@ -66,8 +66,14 @@ dispatch onejudge.
 
 1. **Decompose.** Apply the granularity rule below, then capture the work as a
    tracked DAG.
-   Agent nodes carry `persona` + `task` (and optionally `repo`/`steps` for a
-   lifecycle); `kind: human` nodes carry only the action prose; `deps` names real
+   When a user asks for a plan—through a harness plan mode or informally—and the
+   work is orchestration-worthy, present the plan in this tracked-DAG structure
+   and offer to capture it as `plan.json` and run it with `just orchestrate`.
+   Continue to apply [the granularity rule](#the-granularity-rule-the-core-judgment)
+   and the [direct-tweak exception](#your-loop-as-planner). Nodes have unique IDs;
+   agent nodes carry `persona` + concrete `task` prose (and optionally
+   `repo`/`steps` for a lifecycle that runs several steps on one branch);
+   `kind: human` nodes carry only the action prose; `deps` names real
    prerequisites. Specify each subtask with detailed `task` prose, per-node
    `done_when`, and `max_turns` when needed. Start from
    `examples/tracked-graph.example.json`. Before a
