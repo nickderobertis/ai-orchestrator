@@ -11,6 +11,7 @@ from orchestrator.journal import (
     AUTHORITATIVE_EVENT_KINDS,
     OPTIONAL_EVENT_FIELDS,
     REQUIRED_EVENT_FIELDS,
+    SCHEMA_VERSION,
     TERMINAL_NODE_EVENT_KINDS,
     TERMINAL_NODE_RESULT_FIELD,
     TERMINAL_NODE_RESULT_TYPE,
@@ -28,7 +29,7 @@ def test_static_event_contract_golden() -> None:
     golden = json.loads(
         (Path(__file__).parent / "golden" / "static-round-events-v3.json").read_text()
     )
-    assert golden["version"] == 3
+    assert golden["version"] == SCHEMA_VERSION
     assert golden["terminal_node_kinds"] == list(TERMINAL_NODE_EVENT_KINDS)
     assert golden["terminal_detail"] == {
         "required": [TERMINAL_NODE_RESULT_FIELD],

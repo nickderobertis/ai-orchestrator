@@ -213,6 +213,19 @@ def test_graph_mapping_falls_back_for_programmatic_nodes() -> None:
 
 
 def test_retry_replacement_shape_and_lineage_are_validated() -> None:
+    graph = _graph()
+    with pytest.raises(EditError, match="existing graph node"):
+        apply_edit(
+            graph,
+            EditCommand(
+                "retry",
+                {"op": "retry", "id": "dropped", "node": {"id": "replacement"}},
+            ),
+            states={"dropped": "cancelled"},
+            attestations=(),
+        )
+    assert [node.id for node in graph.tasks] == ["root", "leaf", "approve"]
+
     with pytest.raises(EditError, match="replacement node mapping"):
         apply_edit(
             _graph(),

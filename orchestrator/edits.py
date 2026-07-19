@@ -241,7 +241,9 @@ def apply_edit(
             )
         case "retry":
             node_id, node = item.get("id"), item.get("node")
-            if not isinstance(node_id, str) or states.get(node_id) not in {
+            if not isinstance(node_id, str) or node_id not in by_id:
+                raise EditError("retry requires an existing graph node")
+            if states.get(node_id) not in {
                 "running",
                 "failed",
                 "cancelled",

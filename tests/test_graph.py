@@ -197,6 +197,53 @@ def test_running_direct_and_lifecycle_drops_cancel_cooperatively() -> None:
     assert set(lifecycle_result.results) == {"keep"}
 
 
+def test_retry_of_a_dropped_node_is_rejected_and_reconciliation_continues() -> None:
+    graph = parse_graph(
+        {
+            "tasks": [
+                {"id": "running", "persona": "engineer", "task": "Wait"},
+                {"id": "keep", "kind": "human", "task": "Keep run alive"},
+            ]
+        }
+    )
+    pump = _EditingPump(
+        [
+            EditCommand("drop", {"op": "drop", "id": "running", "dependents": "drop"}),
+            EditCommand(
+                "retry",
+                {
+                    "op": "retry",
+                    "id": "running",
+                    "node": {"id": "replacement", "task": "No diff", "expects_no_diff": True},
+                },
+            ),
+            EditCommand("attest", {"op": "attest", "ref": "keep"}),
+        ],
+        wait_ticks=1,
+    )
+
+    def runner(
+        node: PlanNode,
+        *,
+        labels: Mapping[str, str] | None = None,
+        cancel: threading.Event | None = None,
+    ) -> Report:
+        assert cancel is not None and cancel.wait(1)
+        return _report(node.persona, completed=False)
+
+    result = run_graph(
+        graph,
+        agent_runner=runner,
+        lifecycle_runner=lambda node, **_: _lifecycle(),
+        proposal_pump=pump,  # type: ignore[arg-type] - focused in-memory command pump
+    )
+    assert set(result.results) == {"keep"}
+    assert result.results["keep"].status == "done"
+    assert pump.proposals == [
+        ("reconciler", "rejected retry: retry requires an existing graph node")
+    ]
+
+
 def test_reconciler_retries_failed_and_drops_unstarted_nodes() -> None:
     retry_graph = parse_graph(
         {
