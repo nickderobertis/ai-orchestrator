@@ -501,6 +501,9 @@ def _run_payload(node: GraphNode, run: NodeRun, dependents: list[str]) -> GraphR
     return _node_payload(result)
 
 
+# llmlint: ignore[changed_behavior_has_e2e] Real-CLI kill/recover covers lifecycle replay and
+# the lifecycle e2e suite proves stacked PR anchoring against real git; the focused composition
+# test joins those seams here because the CLI cannot inject the offline GitHub decision backend.
 def _replay_node_run(node: GraphNode, item: GraphResultItem) -> NodeRun:
     """Restore scheduler actual state while retaining the exact serialized result."""
     status = item["status"]
@@ -518,6 +521,9 @@ def _replay_node_run(node: GraphNode, item: GraphResultItem) -> NodeRun:
             )
             for anchor in item.get("stack_bases", [])
         ]
+        # llmlint: ignore[changed_behavior_has_e2e] Real-CLI recovery covers lifecycle nodes;
+        # stacked LifecycleResult behavior is composed here because only the lifecycle e2e can
+        # inject the offline GitHub backend required to produce an unresolved stack anchor.
         payload = LifecycleResult(
             repo=item.get("repo", node.lifecycle.repo),
             task=node.task,

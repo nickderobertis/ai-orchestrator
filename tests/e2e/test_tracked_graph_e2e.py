@@ -784,14 +784,19 @@ def test_recover_interrupted_real_cli_does_not_duplicate_node_start(
 
 
 @pytest.mark.parametrize(
-    ("event_version", "diagnostic"),
+    ("event_version", "mutation", "diagnostic"),
     [
-        (1, "legacy settled nodes without terminal payloads: done"),
-        (2, "node-settled requires a serialized node result"),
+        (1, "missing", "legacy settled nodes without terminal payloads: done"),
+        (2, "missing", "node-settled requires a serialized node result"),
+        (2, "non-mapping", "invalid serialized node result"),
+        (2, "status", "invalid serialized node result status"),
+        (2, "shape", "invalid human_actions for done"),
     ],
 )
+# llmlint: ignore[tests_mirror_real_usage] These mutations model corrupt durable prefixes that
+# have no valid producer; recovery itself is exercised exclusively through the public CLI.
 def test_real_cli_rejects_terminal_prefix_without_required_payload(
-    tmp_path: Path, event_version: int, diagnostic: str
+    tmp_path: Path, event_version: int, mutation: str, diagnostic: str
 ) -> None:
     runs = tmp_path / "runs"
     plan = tmp_path / "legacy-prefix.json"
@@ -807,7 +812,7 @@ def test_real_cli_rejects_terminal_prefix_without_required_payload(
         "run-plan",
         str(plan),
         "--run",
-        f"missing-payload-v{event_version}",
+        f"bad-payload-v{event_version}-{mutation}",
         "--runs-dir",
         str(runs),
         "--format",
@@ -815,8 +820,8 @@ def test_real_cli_rejects_terminal_prefix_without_required_payload(
     ]
     completed = _just(*command)
     assert completed.returncode == 0, completed.stderr
-    round_dir = runs / f"missing-payload-v{event_version}" / "round-01"
-    events_path = runs / f"missing-payload-v{event_version}" / "events.jsonl"
+    round_dir = runs / f"bad-payload-v{event_version}-{mutation}" / "round-01"
+    events_path = runs / f"bad-payload-v{event_version}-{mutation}" / "events.jsonl"
     events = [json.loads(line) for line in events_path.read_text().splitlines()]
     prefix = []
     for event in events:
@@ -824,7 +829,15 @@ def test_real_cli_rejects_terminal_prefix_without_required_payload(
             continue
         event["version"] = event_version
         if event["kind"] == "node-settled":
-            event["detail"].pop("result")
+            match mutation:
+                case "missing":
+                    event["detail"].pop("result")
+                case "non-mapping":
+                    event["detail"]["result"] = "invalid"
+                case "status":
+                    event["detail"]["result"]["status"] = "failed"
+                case _:
+                    event["detail"]["result"]["human_actions"] = "invalid"
         prefix.append(event)
     events_path.write_text("".join(json.dumps(event) + "\n" for event in prefix))
     (round_dir / "result.json").unlink()
