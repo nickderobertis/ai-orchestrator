@@ -8,20 +8,76 @@ deterministic double; everything else (the merge, the effective config, the real
 
 from __future__ import annotations
 
+import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import suppress
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import pytest
 import yaml
 
 from orchestrator import BASE_CONFIG, PERSONA_DIR, REPO_ROOT
 from orchestrator.config import load_yaml
+from orchestrator.environment import CHANNEL_ENV_PREFIX
 
 FAKE_BACKEND = REPO_ROOT / "tests" / "e2e" / "fake_backend.py"
+
+
+@dataclass(frozen=True)
+class _TrackedProcess:
+    process: subprocess.Popen[Any]
+    new_session: bool
+
+
+@pytest.fixture(autouse=True)
+def _isolate_orchestrator_channel(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep nested real CLI tests off the parent orchestrator's live channel."""
+    for key in tuple(os.environ):
+        if key.startswith(CHANNEL_ENV_PREFIX):
+            monkeypatch.delenv(key)
+
+
+@pytest.fixture(autouse=True)
+def _reap_real_subprocesses(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """Reap test subprocesses even when a test exits through an assertion."""
+    original_popen = subprocess.Popen
+    started: list[_TrackedProcess] = []
+
+    def tracked_popen(*args: Any, **kwargs: Any) -> subprocess.Popen[Any]:
+        if "start_new_session" not in kwargs and "process_group" not in kwargs:
+            kwargs["start_new_session"] = True
+        process = original_popen(*args, **kwargs)
+        started.append(
+            _TrackedProcess(process=process, new_session=kwargs.get("start_new_session") is True)
+        )
+        return process
+
+    monkeypatch.setattr(subprocess, "Popen", tracked_popen)
+    yield
+    for tracked in reversed(started):
+        process = tracked.process
+        if tracked.new_session:
+            with suppress(ProcessLookupError):
+                os.killpg(process.pid, signal.SIGTERM)
+        elif process.poll() is None:
+            process.terminate()
+        if process.poll() is not None:
+            continue
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            if tracked.new_session:
+                os.killpg(process.pid, signal.SIGKILL)
+            else:
+                process.kill()
+            process.wait(timeout=5)
 
 
 def git(*args: str, cwd: str | Path | None = None) -> str:
