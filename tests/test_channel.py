@@ -13,6 +13,7 @@ import pytest
 from orchestrator.channel import (
     ChannelError,
     ChannelTimeout,
+    ProposalPump,
     _finished,
     _reply,
     _surface,
@@ -42,6 +43,35 @@ def test_fifo_round_trip_and_reattach(tmp_path: Path) -> None:
     second.start()
     assert read_message(channel / "up.fifo", timeout=1) == {"sequence": 2}
     second.join()
+
+
+def test_proposal_pump_round_trips_and_persists_on_reconciler_drain(tmp_path: Path) -> None:
+    channel = create_channel(tmp_path / "run")
+    pump = ProposalPump(channel, "live", 3)
+    pump.propose("worker", "found adjacent work")
+    assert read_message(channel / "up.fifo", timeout=1) == {
+        "op": "supervisor",
+        "run_id": "live",
+        "round": 3,
+        "surface": {"kind": "proposal", "message": "worker: found adjacent work"},
+        "messages": [],
+    }
+
+    reply = {"completion": False, "message": "defer", "reason": "next round"}
+    sender = threading.Thread(
+        target=write_message,
+        args=(channel / "down.fifo", reply),
+        kwargs={"timeout": 1},
+    )
+    sender.start()
+    deadline = time.monotonic() + 1
+    verdict = channel / "planner-verdict.json"
+    while time.monotonic() < deadline and not verdict.is_file():
+        pump.drain_replies()
+        time.sleep(0.01)
+    sender.join()
+    pump.close()
+    assert json.loads(verdict.read_text(encoding="utf-8")) == reply
 
 
 def test_fifo_timeout_is_bounded(tmp_path: Path) -> None:
