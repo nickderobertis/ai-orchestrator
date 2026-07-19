@@ -39,7 +39,7 @@ from .runs import NodeId, RunId, StepId
 # Bump when a record's *shape* changes incompatibly. Readers skip records they do
 # not understand rather than failing a round that is only being observed.
 SCHEMA_VERSION = 3
-SUPPORTED_SCHEMA_VERSIONS = frozenset({1, SCHEMA_VERSION})
+SUPPORTED_SCHEMA_VERSIONS = frozenset({1, 2, SCHEMA_VERSION})
 
 JOURNAL_NAME = "events.jsonl"
 REQUIRED_EVENT_FIELDS = ("version", "seq", "at", "kind", "run_id", "round")

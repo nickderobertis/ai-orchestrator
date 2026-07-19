@@ -73,13 +73,13 @@ def test_retry_and_attestation_require_the_current_frontier() -> None:
         "persona": "engineer",
         "task": "Retry root",
     }
-    with pytest.raises(EditError, match="settled retryable"):
-        apply_edit(
-            _graph(),
-            EditCommand("retry", {"op": "retry", "id": "root", "node": replacement}),
-            states={"root": "running"},
-            attestations=(),
-        )
+    _, running_retry = apply_edit(
+        _graph(),
+        EditCommand("retry", {"op": "retry", "id": "root", "node": replacement}),
+        states={"root": "running"},
+        attestations=(),
+    )
+    assert running_retry[0]["kind"] == "retry-requested"
     _, retry_events = apply_edit(
         _graph(),
         EditCommand("retry", {"op": "retry", "id": "root", "node": replacement}),

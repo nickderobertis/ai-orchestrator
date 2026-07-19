@@ -127,8 +127,9 @@ def test_proposal_pump_stops_on_broken_fifo(
             )
     pump = ProposalPump(channel, "live", 1)
     pump.propose("worker", "discovery")
-    pump._thread.join(timeout=1)
-    assert not pump._thread.is_alive()
+    target = pump._receiver if failure.startswith("read") else pump._thread
+    target.join(timeout=1)
+    assert not target.is_alive()
     pump.close()
 
 

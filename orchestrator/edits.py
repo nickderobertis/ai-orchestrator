@@ -51,14 +51,9 @@ def graph_mapping(graph: Graph) -> dict[str, Any]:
     """Serialize the mutable graph through its existing public node contract."""
     tasks: list[dict[str, Any]] = []
     for node in graph.tasks:
-        if node.human:
-            raw: dict[str, Any] = {"id": node.id, "kind": "human", "task": node.task}
-        elif node.lifecycle is not None:
-            raw = {key: value for key, value in vars(node.lifecycle).items() if value is not None}
-            raw["id"] = node.id
-        else:
-            raw = {key: value for key, value in vars(node.direct).items() if value is not None}
-            raw["id"] = node.id
+        raw = dict(node.definition)
+        if not raw:
+            raw = {"id": node.id, "kind": node.kind, "task": node.task}
         if node.deps:
             raw["deps"] = list(node.deps)
         else:
@@ -155,7 +150,11 @@ def apply_edit(
         )
     elif op == "retry":
         node_id, node = item.get("id"), item.get("node")
-        if not isinstance(node_id, str) or states.get(node_id) not in {"failed", "cancelled"}:
+        if not isinstance(node_id, str) or states.get(node_id) not in {
+            "running",
+            "failed",
+            "cancelled",
+        }:
             raise EditError("retry requires a settled retryable node")
         if not isinstance(node, dict):
             raise EditError("retry requires a replacement node mapping")

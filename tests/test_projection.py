@@ -117,7 +117,7 @@ def test_invalid_committed_cycle_rejects_the_entire_delta() -> None:
         project_round(events, RunId("r"), 1)
 
 
-def test_strict_reader_accepts_reserved_edit_vocabulary(tmp_path: Path) -> None:
+def test_strict_reader_rejects_uncommitted_edit_vocabulary(tmp_path: Path) -> None:
     path = tmp_path / "events.jsonl"
     path.write_text(
         json.dumps(
@@ -125,7 +125,8 @@ def test_strict_reader_accepts_reserved_edit_vocabulary(tmp_path: Path) -> None:
         )
         + "\n"
     )
-    assert read_strict_events(path, RunId("r"))[0].kind == "node-dropped"
+    with pytest.raises(ProjectionError, match="unknown authoritative event"):
+        read_strict_events(path, RunId("r"))
 
 
 def test_strict_reader_handles_absence_torn_tail_and_invalid_utf8(tmp_path: Path) -> None:

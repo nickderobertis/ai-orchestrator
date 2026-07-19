@@ -87,6 +87,15 @@ def read_strict_events(path: Path, run_id: RunId) -> list[Event]:
         if not isinstance(record, dict) or record.get("kind") not in replay_kinds:
             kind = record.get("kind") if isinstance(record, dict) else None
             raise ProjectionError(f"unknown authoritative event at line {line_number}: {kind!r}")
+        if record.get("kind") in {
+            "node-dropped",
+            "edge-removed",
+            "reparent",
+            "retry-requested",
+        }:
+            raise ProjectionError(
+                f"unknown authoritative event at line {line_number}: {record.get('kind')!r}"
+            )
         unexpected = set(record) - set(REQUIRED_EVENT_FIELDS) - set(OPTIONAL_EVENT_FIELDS)
         if unexpected:
             raise ProjectionError(
@@ -186,7 +195,7 @@ def project_round(events: list[Event], run_id: RunId, round_number: int) -> Roun
                 if builder.states.get(event.node) != "running":
                     raise ProjectionError(f"node {event.node!r} settled without one start")
                 status = "failed" if event.kind == "node-failed" else detail.get("status")
-                if status not in {"done", "failed", "waiting"}:
+                if status not in {"done", "failed", "waiting", "cancelled"}:
                     raise ProjectionError("node-settled requires a terminal status")
                 builder.states[event.node] = status
                 _fold_node_result(builder, event)

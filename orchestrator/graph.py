@@ -9,6 +9,7 @@ settles as ``blocked`` until a later recorded round attests completion.
 from __future__ import annotations
 
 import argparse
+import inspect
 import json
 import os
 import sys
@@ -114,6 +115,7 @@ class GraphNode:
     repo: str | None = None
     direct: PlanNode | None = None
     lifecycle: RepoPlanNode | None = None
+    definition: dict[str, Any] = field(default_factory=dict)
 
     @property
     def human(self) -> bool:
@@ -171,7 +173,7 @@ class GraphResult:
     @property
     def state(self) -> str:
         statuses = {r.status for r in self.results.values()}
-        if statuses & {"failed", "skipped"}:
+        if statuses & {"failed", "skipped", "cancelled"}:
             return "failed"
         if statuses & {"waiting", "blocked"}:
             return "waiting"
@@ -276,7 +278,7 @@ def _parse_node(nid: str, raw: dict[str, Any]) -> GraphNode:
                 f"human task {nid!r} cannot set {', '.join(map(repr, present))}: "
                 "it names action for a person, not work the harness runs"
             )
-        return GraphNode(id=nid, kind="human", task=task, deps=list(deps))
+        return GraphNode(id=nid, kind="human", task=task, deps=list(deps), definition=dict(raw))
     if raw.get("repo") is not None:
         node = parse_repo_node(nid, raw)
         return GraphNode(
@@ -286,9 +288,17 @@ def _parse_node(nid: str, raw: dict[str, Any]) -> GraphNode:
             deps=list(deps),
             repo=node.repo,
             lifecycle=node,
+            definition=dict(raw),
         )
     direct = parse_agent_node(nid, raw)
-    return GraphNode(id=nid, kind="agent", task=direct.task, deps=list(deps), direct=direct)
+    return GraphNode(
+        id=nid,
+        kind="agent",
+        task=direct.task,
+        deps=list(deps),
+        direct=direct,
+        definition=dict(raw),
+    )
 
 
 def load_graph(path: str | Path) -> Graph:
@@ -340,6 +350,7 @@ def run_graph(
         if run.status == "done" and isinstance(run.payload, LifecycleResult)
     }
     guard = threading.Lock()
+    cancellations = {node.id: threading.Event() for node in graph.tasks}
     frontier = {nid: run.status for nid, run in (replayed_runs or {}).items()} | {
         nid: "running" for nid in already_started
     }
@@ -365,10 +376,25 @@ def run_graph(
         if node.lifecycle is not None:
             with guard:
                 anchors = combine_stack_bases(node.lifecycle, completed)
+            lifecycle_args: dict[str, Any] = {"journal": node_log}
+            if "cancel" in inspect.signature(lifecycle_runner).parameters:
+                lifecycle_args["cancel"] = cancellations[nid]
             result = lifecycle_runner(
-                replace(node.lifecycle, stack_bases=anchors),
-                journal=node_log,
+                replace(node.lifecycle, stack_bases=anchors), **lifecycle_args
             )
+            if cancellations[nid].is_set():
+                run = NodeRun("cancelled", "cancelled cooperatively", result)
+                node_log.append(
+                    "node-settled",
+                    detail={
+                        "status": "cancelled",
+                        "outcome": result.outcome,
+                        TERMINAL_NODE_RESULT_FIELD: cast(
+                            Any, _run_payload(node, run, dependents[nid])
+                        ),
+                    },
+                )
+                return run
             if result.waiting:
                 run = NodeRun("waiting", result.detail, result)
                 node_log.append(
@@ -424,7 +450,20 @@ def run_graph(
                 },
             )
             return run
-        report = agent_runner(cast(PlanNode, node.direct), labels=node_log.labels)
+        agent_args: dict[str, Any] = {"labels": node_log.labels}
+        if "cancel" in inspect.signature(agent_runner).parameters:
+            agent_args["cancel"] = cancellations[nid]
+        report = agent_runner(cast(PlanNode, node.direct), **agent_args)
+        if cancellations[nid].is_set():
+            run = NodeRun("cancelled", "cancelled cooperatively", report)
+            node_log.append(
+                "node-settled",
+                detail={
+                    "status": "cancelled",
+                    TERMINAL_NODE_RESULT_FIELD: cast(Any, _run_payload(node, run, dependents[nid])),
+                },
+            )
+            return run
         if report.completed:
             run = NodeRun("done", None, report)
             node_log.append(
@@ -517,6 +556,8 @@ def run_graph(
             graph = updated
             nodes.clear()
             nodes.update({node.id: node for node in graph.tasks})
+            for node in graph.tasks:
+                cancellations.setdefault(node.id, threading.Event())
             deps.clear()
             deps.update({node.id: node.deps for node in graph.tasks})
             dependents.clear()
@@ -530,8 +571,12 @@ def run_graph(
                     attestations.append(ref)
                     status[ref] = "done"
                     actual[ref] = NodeRun("done", payload="human-attested")
+                elif operation["kind"] == "retry-requested":
+                    retried = cast(str, operation["node"])
+                    cancellations[retried].set()
                 elif operation["kind"] == "node-dropped":
                     dropped = cast(str, operation["node"])
+                    cancellations[dropped].set()
                     if status.get(dropped) != "running":
                         status.pop(dropped, None)
                         actual.pop(dropped, None)

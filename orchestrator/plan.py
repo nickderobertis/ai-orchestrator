@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import threading
 from collections.abc import Callable, Mapping
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
@@ -64,7 +65,13 @@ class AgentRunner(Protocol):
     run, round, or node to name — calls this with the node alone.
     """
 
-    def __call__(self, node: PlanNode, *, labels: Mapping[str, str] | None = None) -> Report: ...
+    def __call__(
+        self,
+        node: PlanNode,
+        *,
+        labels: Mapping[str, str] | None = None,
+        cancel: threading.Event | None = None,
+    ) -> Report: ...
 
 
 @dataclass
@@ -365,7 +372,12 @@ def make_dispatch_runner(
 ) -> AgentRunner:
     """Build the production runner that dispatches each node through onejudge."""
 
-    def runner(node: PlanNode, *, labels: Mapping[str, str] | None = None) -> Report:
+    def runner(
+        node: PlanNode,
+        *,
+        labels: Mapping[str, str] | None = None,
+        cancel: threading.Event | None = None,
+    ) -> Report:
         return dispatch(
             node.persona,
             node.task,
@@ -381,6 +393,7 @@ def make_dispatch_runner(
             oneharness_mode=oneharness_mode,
             labels=labels,
             timeout=timeout,
+            cancel=cancel,
         )
 
     return runner

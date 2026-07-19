@@ -225,7 +225,9 @@ class ProposalPump:
         self._commands: queue.Queue[EditCommand] = queue.Queue()
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._service, daemon=True)
+        self._receiver = threading.Thread(target=self._receive, daemon=True)
         self._thread.start()
+        self._receiver.start()
 
     def propose(self, node: str, message: str) -> None:
         self._proposals.put(
@@ -260,6 +262,7 @@ class ProposalPump:
         self._stop.set()
         self._proposals.put(None)
         self._thread.join()
+        self._receiver.join()
         self.persist_replies()
 
     def _service(self) -> None:
@@ -274,19 +277,19 @@ class ProposalPump:
                     continue
                 except OSError:
                     return
-            while True:
-                if self._stop.is_set():
-                    return
-                try:
-                    response = _reply(read_message(self._channel_dir / "down.fifo", timeout=0.1))
-                    for command in parse_commands(response):
-                        self._commands.put(command)
-                    self._replies.put(response)
-                    break
-                except ChannelTimeout:
-                    continue
-                except (ChannelError, OSError):
-                    return
+
+    def _receive(self) -> None:
+        """Continuously receive planner edits, independent of proposal timing."""
+        while not self._stop.is_set():
+            try:
+                response = _reply(read_message(self._channel_dir / "down.fifo", timeout=0.1))
+                for command in parse_commands(response):
+                    self._commands.put(command)
+                self._replies.put(response)
+            except ChannelTimeout:
+                continue
+            except (ChannelError, OSError):
+                return
 
 
 # llmlint: ignore[names_match_behavior] onejudge sends final evals to its supervisor command

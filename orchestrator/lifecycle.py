@@ -24,6 +24,7 @@ import json
 import re
 import sys
 import tempfile
+import threading
 import time
 import uuid
 from collections.abc import Callable, Mapping
@@ -145,6 +146,7 @@ class DispatchFn(Protocol):
         extra_instructions: str | None = None,
         labels: Mapping[str, str] | None = None,
         env: dict[str, str] | None = None,
+        cancel: threading.Event | None = None,
     ) -> Report: ...
 
 
@@ -896,6 +898,7 @@ def _run_steps(
     dispatch_env: dict[str, str],
     extra_instructions: str | None = None,
     completed: frozenset[str] = frozenset(),
+    cancel: threading.Event | None = None,
 ) -> StepRun:
     """Run a step sub-DAG in the shared worktree, committing per step.
 
@@ -939,6 +942,7 @@ def _run_steps(
             extra_instructions=extra_instructions,
             labels=log.labels,
             env=dispatch_env,
+            cancel=cancel,
         )
         reports[sid] = report
         if not report.completed:
@@ -1229,6 +1233,7 @@ def run_repo_task(
     stack_bases: list[StackBase] | None = None,
     resume: Resume | None = None,
     journal: NodeSink | None = None,
+    cancel: threading.Event | None = None,
 ) -> LifecycleResult:
     """Take one subtask from a fresh branch to a merged change on ``repo``.
 
@@ -1432,6 +1437,7 @@ def run_repo_task(
             dispatch_env=cache_env,
             extra_instructions=CI_ITERATION_INSTRUCTIONS if verify_via_ci else None,
             completed=frozenset(resume.completed_steps) if resume else frozenset(),
+            cancel=cancel,
         )
         result.steps = step_run.results
         result.report = next(
@@ -1686,7 +1692,11 @@ class LifecycleRunner(Protocol):
     """
 
     def __call__(
-        self, node: RepoPlanNode, *, journal: NodeSink | None = None
+        self,
+        node: RepoPlanNode,
+        *,
+        journal: NodeSink | None = None,
+        cancel: threading.Event | None = None,
     ) -> LifecycleResult: ...
 
 
@@ -2124,7 +2134,12 @@ def run_repo_plan(
     """Run an all-lifecycle plan through the canonical tracked graph executor."""
     from .graph import Graph, GraphNode, run_graph
 
-    def no_direct(node: Any, *, labels: Mapping[str, str] | None = None) -> Report:
+    def no_direct(
+        node: Any,
+        *,
+        labels: Mapping[str, str] | None = None,
+        cancel: threading.Event | None = None,
+    ) -> Report:
         raise AssertionError("a repo plan has no direct agent nodes")
 
     result = run_graph(
@@ -2200,7 +2215,12 @@ def make_repo_runner(
 ) -> LifecycleRunner:
     """Build the production runner that drives each node through `run_repo_task`."""
 
-    def runner(node: RepoPlanNode, *, journal: NodeSink | None = None) -> LifecycleResult:
+    def runner(
+        node: RepoPlanNode,
+        *,
+        journal: NodeSink | None = None,
+        cancel: threading.Event | None = None,
+    ) -> LifecycleResult:
         return run_repo_task(
             node.repo,
             node.task,
@@ -2230,6 +2250,7 @@ def make_repo_runner(
             stack_bases=node.stack_bases,
             resume=node.resume,
             journal=journal,
+            cancel=cancel,
         )
 
     return runner

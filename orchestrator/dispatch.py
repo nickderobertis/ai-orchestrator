@@ -15,11 +15,13 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import json
 import os
 import socket
 import subprocess
 import sys
+import threading
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -147,6 +149,7 @@ def run_onejudge(
     env: dict[str, str] | None = None,
     labels: Mapping[str, str] | None = None,
     timeout: float | None = None,
+    cancel: threading.Event | None = None,
 ) -> Report:
     """Run an already-merged effective config through onejudge; return a Report.
 
@@ -172,8 +175,9 @@ def run_onejudge(
             process_env[LABEL_ENV] = normalized_labels
         else:
             process_env.pop(LABEL_ENV, None)
-    try:
-        result = asyncio.run(
+
+    async def execute() -> RunResult | None:
+        run = asyncio.create_task(
             OneJudge(executable=onejudge_bin).run(
                 cast(RunConfig, config),
                 task,
@@ -183,6 +187,20 @@ def run_onejudge(
                 timeout=timeout,
             )
         )
+        if cancel is None:
+            return await run
+        cancelled = asyncio.create_task(asyncio.to_thread(cancel.wait))
+        done, _ = await asyncio.wait({run, cancelled}, return_when=asyncio.FIRST_COMPLETED)
+        if run in done:
+            cancelled.cancel()
+            return await run
+        run.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await run
+        return None
+
+    try:
+        result = asyncio.run(execute())
     except FileNotFoundError as exc:
         raise DispatchError(
             f"onejudge binary not found: {onejudge_bin!r} — run 'just bootstrap'"
@@ -202,6 +220,8 @@ def run_onejudge(
         raise DispatchError(
             f"onejudge failed (exit 2 — bad config or provider/runtime error): {exc}"
         ) from exc
+    if result is None:
+        return Report(persona, 1, False, True, 0, [], {}, None, "cancelled cooperatively")
     return _build_report(persona, result)
 
 
@@ -256,6 +276,7 @@ def dispatch(
     labels: Mapping[str, str] | None = None,
     timeout: float | None = None,
     env: dict[str, str] | None = None,
+    cancel: threading.Event | None = None,
 ) -> Report:
     """Merge base ⊕ persona and drive the subtask to completion via onejudge.
 
@@ -300,6 +321,7 @@ def dispatch(
         env=process_env or None,
         labels=labels,
         timeout=timeout,
+        cancel=cancel,
     )
 
 
