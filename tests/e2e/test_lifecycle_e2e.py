@@ -337,10 +337,9 @@ def test_real_lifecycle_dispatch_drafts_pr_bodies_and_preserves_fallbacks(
         verify_cmd=["true"],
     )
     assert titled.outcome == "pr-open"
-    assert title_task in github._prs[titled.pr.number].body
-    assert (
-        "Adds the completed behavior from the branch diff" not in github._prs[titled.pr.number].body
-    )
+    assert github._prs[titled.pr.number].title == "feat: use supplied title"
+    assert "Adds the completed behavior from the branch diff" in github._prs[titled.pr.number].body
+    assert title_task not in github._prs[titled.pr.number].body
 
 
 def test_empty_orchestrator_home_fails_at_lifecycle_cache_boundary(
