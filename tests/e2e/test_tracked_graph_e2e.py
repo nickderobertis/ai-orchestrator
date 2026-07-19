@@ -322,6 +322,9 @@ def test_recover_interrupted_real_cli_does_not_duplicate_node_start(
             "unknown authoritative event",
         ),
         (
+            # llmlint: ignore[tests_mirror_real_usage] the public channel transactionally rejects
+            # this impossible topology; strict recovery can only be tested against it by writing a
+            # deliberately corrupt authoritative record, just like the malformed-byte cases above.
             (
                 json.dumps(
                     {
