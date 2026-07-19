@@ -44,11 +44,12 @@ publication path, normalized identity, effective repository type, workflow,
 merge policy, PR base, and synthetic stack base in human output, JSON, and the
 recorded run ledger.
 
-The registry's version 3 format stores `identities` keyed by normalized origin and
+The registry's version 4 format stores `identities` keyed by normalized origin and
 stores alias-to-path records separately under `checkouts`. Workflow exists only on
-the identity alongside `repo_type` (`single-owner` or `team`). Thus GitHub/SSH URL spellings, canonical clones, safety clones, linked
+the identity alongside `repo_type` (`single-owner` or `team`) and `gate`. Thus GitHub/SSH URL spellings, canonical clones, safety clones, linked
 worktrees, and auxiliary clones resolve to one workflow even when several aliases
-share the origin. Flat and v2 registries migrate lazily in one atomic replacement:
+share the origin. Flat, v2, and v3 registries migrate lazily in one atomic replacement;
+the migration detects a gate from a registered checkout or stores `<no-op>`:
 `local` is affirmative single-owner evidence; `remote` is inferred by comparing
 the normalized GitHub origin owner case-insensitively with `gh api user --jq
 .login`. Missing authentication or a non-GitHub origin fails before dispatch
@@ -121,6 +122,13 @@ just register-repo /path/to/ai-orchestrator --workflow local --repo-type single-
 just register-repo /path/to/ai-orchestrator-isolated
 ```
 
+Registration prints ranked gate candidates. Monorepo affected commands (Nx,
+Turborepo, Bazel, pnpm, or Lerna) rank ahead of whole-repository gates (`just
+check`, `make check`, `npm test`, Cargo, or pytest). Accept one, override it with
+`--gate`, or investigate first. A gateless checkout stores `<no-op>` and warns
+that it is unproven. Change the command across every alias with `just
+migrate-repo-gate <repo> --gate '<cmd>'`.
+
 A contradictory `--workflow` is rejected. Change publication policy only through
 the identity-wide migration command. For the current ai-orchestrator aliases, the
 remediation is:
@@ -139,11 +147,15 @@ passes. If the sync conflicts, the lifecycle aborts the merge, reports a
 
 This ordering makes the agent's gate exercise the same branch-plus-current-base
 diff that the target repo's pre-push boundary enforces, rather than proving a
-stale view of the base. `verify.py` detects the target repo's own gate — preferring
-an explicit `just check`, then `make check`, `npm test`, `cargo test`, `pytest` —
-and runs it in the worktree. A failing gate stops the lifecycle at `gate-failed`
+stale view of the base. Gate precedence is an explicit plan-node `verify_cmd`,
+then the identity-level registry command with `{base}` replaced by the resolved
+`origin/<pr-base>`. There is no dispatch-time detection fallback. A failing gate
+stops the lifecycle at `gate-failed`
 (nothing is pushed). Pass an explicit `verify_cmd`, or `--skip-verify` to skip the
 gate; the pre-handoff sync still occurs.
+
+An identity carrying `<no-op>` may publish, but its result always says `gate:
+no-op -- pushed unproven`; it is never presented as green verification.
 
 For work whose real verifier is remote CI, `verify_via_ci: true` (or the
 run-level `--verify-via-ci`) injects a standard CI iteration contract into the
@@ -513,6 +525,10 @@ its original workflow.
 Switch identity type only between runs with `just migrate-repo-type
 <alias-or-checkout> --repo-type <single-owner|team>`. Team selection atomically
 normalizes workflow to remote. Finish or recover active publication first.
+
+Switch the identity gate only between runs with `just migrate-repo-gate
+<alias-or-checkout> --gate '<command>'`. Templates may use `{base}` for the
+comparison ref, and the replacement is atomic for every alias.
 
 ## Auto mode without approvals — and why bypass
 

@@ -27,11 +27,14 @@ life cycle** against any repo (GitHub or a local path): resolve its normalized
 origin to one **repository identity**, choose a registered publication checkout,
 do the work in an **isolated worktree cut from an execution checkout**, verify it
 with the repo's own gate, and merge it. Checkout aliases share identity-level
-`workflow` and `repo_type` (`single-owner` or `team`). Schema-v3 identities infer
+`workflow`, `repo_type` (`single-owner` or `team`), and verification `gate`.
+Schema-v4 identities infer
 an omitted type from `gh api user --jq .login` versus the normalized GitHub origin
 owner; legacy `local` workflow is affirmative single-owner evidence. Type and
 workflow migrations are atomic (`just migrate-repo-type` /
-`migrate-repo-workflow`). Team repositories default to an ordinary ready-for-review
+`migrate-repo-workflow` / `migrate-repo-gate`). Gate candidates are ranked during
+onboarding; dispatch uses the stored identity gate and never auto-detects one.
+Team repositories default to an ordinary ready-for-review
 open PR; explicit `auto` or `direct` merges their remote PR. Single-owner
 repositories preserve local direct or remote auto behavior, while explicit `none`
 forces remote open-PR publication for that run without changing stored local

@@ -71,7 +71,7 @@ from .runs import (
     status_summary,
     write_result,
 )
-from .verify import VerifyResult, detect_gate, run_gate
+from .verify import NOOP_GATE, VerifyResult, resolve_gate_template, run_gate
 from .workspace import (
     CACHE_ENV,
     IdentityKey,
@@ -1126,7 +1126,7 @@ def _pause_at_human_step(
         )
         return result
     if not skip_verify:
-        cmd = verify_cmd or detect_gate(worktree)
+        cmd = verify_cmd
         if cmd is not None:
             verify = _verify_gate(
                 journal,
@@ -1365,6 +1365,23 @@ def run_repo_task(
         else:
             pr_base = root_base
         result.pr_base = pr_base
+        gate_template = selection.gate
+        if verify_cmd is not None:
+            resolved_verify_cmd = verify_cmd
+            noop_gate = False
+        elif gate_template == NOOP_GATE:
+            resolved_verify_cmd = None
+            noop_gate = True
+        elif gate_template is not None:
+            resolved_verify_cmd = resolve_gate_template(gate_template, f"origin/{pr_base}")
+            noop_gate = False
+        elif skip_verify or verify_via_ci:
+            resolved_verify_cmd = None
+            noop_gate = False
+        else:
+            raise ConfigError(
+                "no verification gate is configured; register or migrate the identity gate"
+            )
         branch = result.branch
         worktree_base = f"origin/{pr_base}"
         prepared: ResumePrep | None = None
@@ -1454,7 +1471,7 @@ def run_repo_task(
                 )
             return result
         if step_run.status == "waiting":
-            return _pause_at_human_step(
+            paused = _pause_at_human_step(
                 result,
                 step_run,
                 worktree=worktree,
@@ -1467,7 +1484,7 @@ def run_repo_task(
                 title=title,
                 body=body,
                 applicable_stack=applicable_stack,
-                verify_cmd=verify_cmd,
+                verify_cmd=resolved_verify_cmd,
                 skip_verify=skip_verify,
                 gate_timeout=gate_timeout,
                 recorded_pr=resume.pr if resume else None,
@@ -1478,6 +1495,9 @@ def run_repo_task(
                 base_path=base_path,
                 persona_dir=persona_dir,
             )
+            if noop_gate and paused.pr is not None and not skip_verify:
+                paused.detail = f"{paused.detail}; gate: no-op -- pushed unproven"
+            return paused
         if step_run.status != "done":
             result.outcome = "error"
             result.detail = f"unexpected step status: {step_run.status}"
@@ -1499,7 +1519,7 @@ def run_repo_task(
             return result
 
         if not skip_verify and not verify_via_ci:
-            cmd = verify_cmd or detect_gate(worktree)
+            cmd = resolved_verify_cmd
             if cmd is not None:
                 verify = _verify_gate(
                     log,
@@ -1518,7 +1538,7 @@ def run_repo_task(
                     result.detail = f"local gate failed: {' '.join(cmd)}"
                     return result
             else:
-                result.detail = "no local gate detected; relying on required CI checks"
+                result.detail = "no local gate configured; relying on required CI checks"
 
         if (
             result.retry_lineage
@@ -1620,7 +1640,7 @@ def run_repo_task(
             timeout=timeout,
             sleep=sleep,
             clock=clock,
-            verify_command=None if skip_verify else (verify_cmd or detect_gate(worktree)),
+            verify_command=None if skip_verify else resolved_verify_cmd,
             gate_timeout=gate_timeout,
             verify_env={
                 **cache_env,
@@ -1637,6 +1657,8 @@ def run_repo_task(
         result.pr = merge_outcome.pr
         result.outcome = merge_outcome.outcome
         result.detail = merge_outcome.detail
+        if noop_gate and not skip_verify:
+            result.detail = f"{result.detail}; gate: no-op -- pushed unproven"
         return result
     except (GitError, GitHubError, ConfigError, RegistryError, WorkspaceError) as exc:
         result.outcome = "error"

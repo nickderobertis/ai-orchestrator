@@ -548,6 +548,7 @@ def test_team_recovery_preserves_recorded_linear_stack_base(tmp_path, bare_origi
 def test_repo_recover_gate_failure_preserves_source_branch(tmp_path, bare_origin) -> None:
     repo = _clone(tmp_path, bare_origin())
     _allow_local(repo)
+    Registry.migrate_identity_gate(str(repo), "false")
     _branch(repo, "claude/failed-recovery", {"partial.txt": "partial\n"})
     _git(repo, "checkout", "claude/failed-recovery")
     _git(repo, "commit", "--amend", "-m", "wip: old preserved (incomplete step)")
@@ -558,7 +559,6 @@ def test_repo_recover_gate_failure_preserves_source_branch(tmp_path, bare_origin
         repo,
         "claude/failed-recovery",
         workspace_root=tmp_path / "failed-recovery-worktrees",
-        verify_cmd=["false"],
     )
 
     assert result.outcome == "gate-failed" and not result.ok
@@ -671,7 +671,7 @@ def test_repo_recover_rejects_missing_branch_and_missing_gate(tmp_path, bare_ori
     _git(repo, "checkout", "claude/no-gate")
     _git(repo, "commit", "--amend", "-m", "wip: old preserved (incomplete step)")
     _git(repo, "checkout", "main")
-    with pytest.raises(ValueError, match="no lifecycle gate detected"):
+    with pytest.raises(ValueError, match="identity has a no-op gate"):
         recover_repo(
             repo,
             "claude/no-gate",
@@ -683,6 +683,7 @@ def test_repo_recover_accepts_existing_matching_attestation(tmp_path, bare_origi
     origin = bare_origin()
     repo = _clone(tmp_path, origin)
     _allow_local(repo)
+    Registry.migrate_identity_gate(str(repo), "test {base} = origin/main")
     _branch(repo, "claude/attested", {"partial.txt": "partial\n"})
     _git(repo, "checkout", "claude/attested")
     _git(repo, "commit", "--amend", "-m", "wip: old preserved (incomplete step)")
@@ -701,7 +702,6 @@ def test_repo_recover_accepts_existing_matching_attestation(tmp_path, bare_origi
         repo,
         "claude/attested",
         workspace_root=tmp_path / "attested-recovery-worktrees",
-        verify_cmd=["true"],
     )
 
     assert result.ok
