@@ -111,8 +111,9 @@ def test_real_cli_mutates_live_frontier_and_replays_atomic_edits(
     events = run_dir / "events.jsonl"
     _wait_for(
         events,
-        lambda text: text.count('"kind": "node-started"') >= 3
-        and '"kind": "human-waiting"' in text,
+        lambda text: (
+            text.count('"kind": "node-started"') >= 3 and '"kind": "human-waiting"' in text
+        ),
     )
 
     _reply(run_id, runs, [{"op": "reparent", "id": "pending", "deps": ["pending"]}])
