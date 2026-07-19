@@ -10,14 +10,10 @@ import pytest
 from orchestrator import REPO_ROOT
 
 # DRIFT-GATE: config/onejudge.version is the single source of truth. Keep this
-# explicit list aligned with the human-readable files that intentionally state
-# the adopted onejudge version.
+# explicit list aligned with unavoidable human-readable version literals, such
+# as links to versioned external documentation.
 ONEJUDGE_VERSION_REFERENCE_COUNTS = {
-    Path("AGENTS.md"): 1,
-    Path("README.md"): 2,
-    Path("config/onejudge.base.yaml"): 1,
-    Path("docs/onejudge-integration.md"): 8,
-    Path("tests/e2e/fake_backend.py"): 1,
+    Path("docs/onejudge-integration.md"): 2,
 }
 ONEJUDGE_VERSION_REFERENCE = re.compile(
     r"(?:\bonejudge(?:-cli| SDK/CLI)?(?:'s)?(?: version)?[\s`*(=]+|/onejudge/(?:blob/)?)"

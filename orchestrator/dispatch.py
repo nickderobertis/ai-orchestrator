@@ -100,7 +100,7 @@ def _build_report(persona: str, result: RunResult) -> Report:
         completed=result.completed,
         stopped_early=bool(result.raw.get("stopped_early", False)),
         assistant_turns=result.assistant_turns,
-        verdicts=list(result.verdicts),
+        verdicts=cast(list[dict[str, Any]], list(result.verdicts)),
         usage=dict(result.usage),
         raw=dict(result.raw),
         stderr=result.stderr,

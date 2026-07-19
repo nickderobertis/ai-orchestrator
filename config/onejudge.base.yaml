@@ -1,6 +1,6 @@
 # The ONE base onejudge config: settings common to every dispatched subtask.
 #
-# This is a onejudge v0.3.2 config *fragment* (schema: `onejudge schema`) that carries
+# This is a config *fragment* for the adopted onejudge version (`onejudge schema`) that carries
 # only what every persona shares. It is never run directly — `dispatch` merges it
 # with a persona delta from `personas/` and the CLI `--task`, then runs
 # `onejudge run` on the effective result. See docs/onejudge-integration.md.
