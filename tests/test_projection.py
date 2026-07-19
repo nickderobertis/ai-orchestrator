@@ -25,9 +25,9 @@ from orchestrator.runs import prepare_round
 
 def test_static_event_contract_golden() -> None:
     golden = json.loads(
-        (Path(__file__).parent / "golden" / "static-round-events-v2.json").read_text()
+        (Path(__file__).parent / "golden" / "static-round-events-v3.json").read_text()
     )
-    assert golden["version"] == 2
+    assert golden["version"] == 3
     assert golden["terminal_node_kinds"] == list(TERMINAL_NODE_EVENT_KINDS)
     assert golden["terminal_detail"] == {
         "required": [TERMINAL_NODE_RESULT_FIELD],
@@ -69,7 +69,55 @@ def test_projection_reconstructs_plan_states_attestations_and_result(tmp_path: P
     assert projection.result == result
 
 
-def test_strict_reader_rejects_unknown_state_changing_event(tmp_path: Path) -> None:
+def test_committed_reparent_is_atomic_and_replays_as_one_delta(tmp_path: Path) -> None:
+    run_id = RunId("live-edit")
+    journal = open_journal(tmp_path, run_id, 1)
+    for node in ("a", "b", "c"):
+        journal.append(
+            "node-added",
+            detail={"definition": {"id": node, "persona": "engineer", "task": node}},
+        )
+    journal.append("edge-added", detail={"from": "a", "to": "c"})
+    journal.append("round-started", detail={"plan": {"schema_version": 3, "concurrency": 2}})
+    journal.append_transaction(
+        [
+            {"kind": "edge-removed", "detail": {"from": "a", "to": "c"}},
+            {"kind": "edge-added", "detail": {"from": "b", "to": "c"}},
+            {"kind": "reparent", "node": "c", "detail": {"from": ["a"], "to": ["b"]}},
+        ]
+    )
+
+    projection = project_run(tmp_path / "events.jsonl", run_id, 1)
+    by_id = {node["id"]: node for node in projection.plan["tasks"]}
+    assert by_id["c"]["deps"] == ["b"]
+    assert [event.kind for event in read_strict_events(tmp_path / "events.jsonl", run_id)].count(
+        "edit-committed"
+    ) == 1
+
+
+def test_invalid_committed_cycle_rejects_the_entire_delta() -> None:
+    events = [
+        _event("node-added", 1, detail={"definition": {"id": "a", "persona": "p", "task": "a"}}),
+        _event("node-added", 2, detail={"definition": {"id": "b", "persona": "p", "task": "b"}}),
+        _event("edge-added", 3, detail={"from": "a", "to": "b"}),
+        _event("round-started", 4, detail={"plan": {"schema_version": 3}}),
+        _event(
+            "edit-committed",
+            5,
+            detail={
+                "operations": [
+                    {"kind": "edge-removed", "detail": {"from": "a", "to": "b"}},
+                    {"kind": "edge-added", "detail": {"from": "b", "to": "a"}},
+                    {"kind": "edge-added", "detail": {"from": "a", "to": "b"}},
+                ]
+            },
+        ),
+    ]
+    with pytest.raises(ProjectionError, match="dependency cycle"):
+        project_round(events, RunId("r"), 1)
+
+
+def test_strict_reader_accepts_reserved_edit_vocabulary(tmp_path: Path) -> None:
     path = tmp_path / "events.jsonl"
     path.write_text(
         json.dumps(
@@ -77,8 +125,7 @@ def test_strict_reader_rejects_unknown_state_changing_event(tmp_path: Path) -> N
         )
         + "\n"
     )
-    with pytest.raises(ProjectionError, match="unknown authoritative event"):
-        read_strict_events(path, RunId("r"))
+    assert read_strict_events(path, RunId("r"))[0].kind == "node-dropped"
 
 
 def test_strict_reader_handles_absence_torn_tail_and_invalid_utf8(tmp_path: Path) -> None:

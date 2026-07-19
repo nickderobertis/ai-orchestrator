@@ -138,6 +138,7 @@ def reconcile_dag(
     started_order: list[str] | None = None,
     on_settled: Callable[[str, NodeRun], None] | None = None,
     on_tick: Callable[[], None] | None = None,
+    on_reconcile: Callable[[dict[str, str], dict[str, NodeRun]], None] | None = None,
 ) -> tuple[dict[str, NodeRun], list[str]]:
     """Converge desired nodes against replayed and in-flight actual state.
 
@@ -179,6 +180,8 @@ def reconcile_dag(
     with ThreadPoolExecutor(max_workers=concurrency) as pool:
         futures: dict[Any, str] = {}
         while True:
+            if on_reconcile is not None:
+                on_reconcile(status, results)
             desired = desired_nodes()
             for nid in desired:
                 status.setdefault(nid, "pending")
