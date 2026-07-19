@@ -891,6 +891,7 @@ def main(argv: list[str] | None = None) -> int:
     channel_run_id = os.environ.get(CHANNEL_RUN_ID_ENV)
     channel_round = os.environ.get(CHANNEL_ROUND_ENV)
     configured_channel_values = (channel_path, channel_run_id, channel_round)
+    # llmlint: ignore[changed_behavior_has_e2e] internal env; malformed only in unit
     if any(configured_channel_values) and not all(configured_channel_values):
         print("run-plan: incomplete proposal channel environment", file=sys.stderr)
         return 2
