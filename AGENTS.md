@@ -91,12 +91,11 @@ dispatch onejudge.
    encoding subtask details in a new persona.
 3. **Launch and supervise.** Start the graph with `just orchestrate <plan.json>`,
    then review each structured boundary and mid-run proposal surfaced by the
-   orchestrator. Issue valid live `add` / `drop` / `reparent` / `retry` / `attest`
-   edits when the running frontier should change; workers propose but never edit.
-   Triage follow-ups, keep the user informed at each milestone, and never let more
-   than 30 minutes pass between updates. When a completed task published a PR,
-   include the relevant PR link in its completion report. Require verified
-   publication closeout before issuing `complete`.
+   orchestrator. Issue valid live edits when the running frontier should change;
+   workers propose but never edit. Triage follow-ups, keep the user informed at
+   each milestone, and never let more than 30 minutes pass between updates. When
+   a completed task published a PR, include the relevant PR link in its completion
+   report. Require verified publication closeout before issuing `complete`.
 
 After `just orchestrate`, the planner uses **only** `just channel-next`, `just
 channel-reply`, and the read-only `just monitor` / `just runs` / `just status`
