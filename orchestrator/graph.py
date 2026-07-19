@@ -41,6 +41,7 @@ from .journal import (
 from .lifecycle import (
     LifecycleResult,
     LifecycleRunner,
+    RepoAliasResolver,
     RepoPlanNode,
     StackBase,
     add_lifecycle_args,
@@ -49,6 +50,7 @@ from .lifecycle import (
     make_repo_runner,
     parse_repo_node,
     result_payload,
+    validate_repo_aliases,
 )
 from .plan import (
     NODE_KINDS,
@@ -62,6 +64,7 @@ from .plan import (
     parse_agent_node,
     reconcile_dag,
 )
+from .registry import Registry
 from .runs import (
     RECORDED_RESULT_SCHEMA_VERSION,
     GraphPayload,
@@ -308,6 +311,14 @@ def load_graph(path: str | Path) -> Graph:
     except ConfigError as exc:
         raise PlanError(str(exc)) from exc
     return parse_graph(data)
+
+
+def validate_graph_repo_aliases(graph: Graph, registry: RepoAliasResolver | None = None) -> None:
+    """Validate registry-backed lifecycle inputs before a graph is launched."""
+    selected_registry = registry or Registry()
+    for node in graph.tasks:
+        if node.lifecycle is not None:
+            validate_repo_aliases(node.lifecycle, selected_registry)
 
 
 def run_graph(
@@ -895,6 +906,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         plan_mapping = load_yaml(args.plan)
         graph = parse_graph(plan_mapping)
+        validate_graph_repo_aliases(graph)
         if args.concurrency is not None and args.concurrency < 1:
             raise PlanError("'--concurrency' must be a positive integer")
         run_dir = (

@@ -153,6 +153,9 @@ migrate-repo-workflow *args:
 migrate-repo-type *args:
     @uv run orchestrator-migrate-repo-type "$@"
 
+migrate-repo-gate *args:
+    @uv run orchestrator-migrate-repo-gate "$@"
+
 # List repository identities and checkout aliases, optionally refreshing them.
 # llmlint: ignore[tool_output_is_signal] the requested repo registry listing is this viewing command's product.
 repos *args:

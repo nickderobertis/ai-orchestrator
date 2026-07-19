@@ -53,7 +53,7 @@ from orchestrator.next_round import main as next_round_main
 from orchestrator.next_round import main_runs
 from orchestrator.provenance import INCOMPLETE_TRAILER, PR_BASE_TRAILER, incomplete_commits
 from orchestrator.recover import recover_repo
-from orchestrator.registry import Registry
+from orchestrator.registry import Registry, RegistryEntry, Slug
 from orchestrator.replan import next_round
 from orchestrator.runs import NodeId, RunId, prepare_round, write_result
 from orchestrator.workspace import Workspace, normalize_repo
@@ -485,6 +485,127 @@ def test_repo_plan_ledger_and_guided_next_round(
 
 
 # --- local repo: direct merge into main after checks -----------------------
+
+
+def test_registered_aliases_drive_real_lifecycle_without_a_stray_clone(
+    tmp_path, bare_origin, command_base, personas_dir, capsys, monkeypatch
+) -> None:
+    """Repo and execution aliases reach the real onejudge lifecycle boundary."""
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical")
+    safety = gitops.clone(origin, tmp_path / "safety")
+    registry = Registry()
+    registry.register(str(canonical), workflow="local")
+    registry.register(str(safety))
+
+    result = run_repo_task(
+        "local/canonical",
+        "complete-now write-change alias lifecycle",
+        "engineer",
+        workspace=Workspace(tmp_path / "worktrees"),
+        execution_checkout="local/safety",
+        base_path=command_base(),
+        persona_dir=personas_dir,
+        verify_cmd=["true"],
+    )
+
+    assert result.ok and result.outcome == "merged", result.detail
+    assert Path(result.publication_checkout) == canonical
+    assert Path(result.execution_checkout) == safety
+    assert not (Path(os.environ["AI_ORCHESTRATOR_HOME"]) / "repos").exists()
+
+    plan = tmp_path / "alias-plan.json"
+    plan.write_text(
+        json.dumps(
+            {
+                "schema_version": 3,
+                "tasks": [
+                    {
+                        "id": "alias-node",
+                        "repo": "local/canonical",
+                        "persona": "engineer",
+                        "task": "complete-now write-unique-change alias plan lifecycle",
+                        "execution_checkout": "local/safety",
+                        "verify_cmd": ["true"],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    planned_rc = graph_module.main(
+        [
+            str(plan),
+            "--no-record",
+            "--workspace",
+            str(tmp_path / "plan-worktrees"),
+            "--base",
+            str(command_base()),
+            "--persona-dir",
+            str(personas_dir),
+            "--format",
+            "json",
+        ]
+    )
+    planned = json.loads(capsys.readouterr().out)
+
+    assert planned_rc == 0
+    planned_result = planned["results"]["alias-node"]
+    assert planned_result["outcome"] == "merged"
+    assert Path(planned_result["publication_checkout"]) == canonical
+    assert Path(planned_result["execution_checkout"]) == safety
+    assert not (Path(os.environ["AI_ORCHESTRATOR_HOME"]) / "repos").exists()
+
+    remote_origin = bare_origin()
+    remote_checkout = gitops.clone(remote_origin, tmp_path / "crozier")
+    remote_registry = Registry()
+    remote_registry.entries[Slug("nickderobertis/crozier")] = RegistryEntry(
+        str(remote_checkout.resolve()),
+        str(remote_origin),
+        "remote",
+        "single-owner",
+    )
+    remote_registry.save()
+    monkeypatch.setattr(lifecycle_module, "CliGitHubBackend", lambda: FakeGitHub(remote_origin))
+    remote_plan = tmp_path / "remote-alias-plan.json"
+    remote_plan.write_text(
+        json.dumps(
+            {
+                "schema_version": 3,
+                "tasks": [
+                    {
+                        "id": "remote-alias",
+                        "repo": "nickderobertis/crozier",
+                        "persona": "engineer",
+                        "task": "complete-now write-change registered remote alias",
+                        "verify_cmd": ["true"],
+                        "merge_policy": "none",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    remote_rc = graph_module.main(
+        [
+            str(remote_plan),
+            "--no-record",
+            "--workspace",
+            str(tmp_path / "remote-plan-worktrees"),
+            "--base",
+            str(command_base()),
+            "--persona-dir",
+            str(personas_dir),
+            "--format",
+            "json",
+        ]
+    )
+    remote = json.loads(capsys.readouterr().out)["results"]["remote-alias"]
+
+    assert remote_rc == 0
+    assert remote["outcome"] == "pr-open"
+    assert Path(remote["publication_checkout"]) == remote_checkout
+    assert remote["workflow"] == "remote" and remote["repo_type"] == "single-owner"
 
 
 def test_local_identity_executes_in_safety_clone_and_publishes_without_pr(
@@ -1153,21 +1274,150 @@ def test_local_repo_sync_conflict_aborts_before_gate_or_push(tmp_path, bare_orig
     )
 
 
-def test_local_repo_no_gate_detected_proceeds(tmp_path, bare_origin) -> None:
-    # The seed repo has no recognized gate; with no explicit verify_cmd the
-    # lifecycle notes that and relies on downstream checks, still merging.
+def test_local_repo_registry_gate_verifies_real_worktree(tmp_path, bare_origin) -> None:
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "registered")
+    marker = tmp_path / "gate-ran"
+    Registry().register(
+        str(canonical),
+        workflow="local",
+        repo_type="single-owner",
+        gate=(
+            f'sh -c \'test "$1" = origin/main && test -f feature.txt '
+            f"&& touch {marker}' -- {{base}}"
+        ),
+    )
+    result = run_repo_task(
+        str(canonical),
+        "Add a change verified by the identity gate.",
+        "engineer",
+        workspace=Workspace(tmp_path / "worktrees"),
+        dispatch_fn=make_writing_dispatch(filename="feature.txt"),
+    )
+    assert result.ok and result.outcome == "merged"
+    assert result.verify is not None and result.verify.ok
+    assert marker.exists()
+    assert _has_file(origin, "main", "feature.txt")
+
+
+def test_local_repo_registry_gate_failure_stops_publication(tmp_path, bare_origin) -> None:
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "registered")
+    Registry().register(str(canonical), workflow="local", repo_type="single-owner", gate="false")
+    result = run_repo_task(
+        str(canonical),
+        "Add a change rejected by the identity gate.",
+        "engineer",
+        workspace=Workspace(tmp_path / "worktrees"),
+        dispatch_fn=make_writing_dispatch(filename="feature.txt"),
+    )
+    assert result.outcome == "gate-failed"
+    assert result.verify is not None and not result.verify.ok
+    assert not _has_file(origin, "main", "feature.txt")
+
+
+def test_bazel_affected_candidate_runs_in_lifecycle_worktree(
+    tmp_path, bare_origin, monkeypatch
+) -> None:
+    origin = bare_origin({"WORKSPACE.bazel": ""})
+    canonical = gitops.clone(origin, tmp_path / "registered")
+    tools = tmp_path / "bin"
+    tools.mkdir()
+    bazel_diff = tools / "bazel-diff"
+    bazel_diff.write_text(
+        "#!/usr/bin/env python3\nimport pathlib, sys\n"
+        "pathlib.Path(sys.argv[sys.argv.index('--output') + 1]).write_text('//:affected\\n')\n",
+        encoding="utf-8",
+    )
+    bazel = tools / "bazel"
+    bazel.write_text(
+        '#!/bin/sh\ntest "$1" = test && test "$2" = -- && test "$3" = //:affected\n',
+        encoding="utf-8",
+    )
+    bazel_diff.chmod(0o755)
+    bazel.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{tools}:{os.environ['PATH']}")
+    Registry().register(str(canonical), workflow="local", repo_type="single-owner")
+    result = run_repo_task(
+        str(canonical),
+        "Add a Bazel-affected change.",
+        "engineer",
+        workspace=Workspace(tmp_path / "worktrees"),
+        dispatch_fn=make_writing_dispatch(filename="feature.txt"),
+    )
+    assert result.ok and result.verify is not None and result.verify.ok
+
+
+def test_local_repo_noop_registry_gate_surfaces_unproven_warning(tmp_path, bare_origin) -> None:
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "registered")
+    Registry().register(str(canonical), workflow="local", repo_type="single-owner")
+
+    result = run_repo_task(
+        str(canonical),
+        "Add a change with an explicit no-op identity gate.",
+        "engineer",
+        workspace=Workspace(tmp_path / "worktrees"),
+        dispatch_fn=make_writing_dispatch(filename="feature.txt"),
+    )
+
+    assert result.ok and result.outcome == "merged"
+    assert "gate: no-op -- pushed unproven" in result.detail
+    assert result.verify is None
+
+
+# llmlint: ignore[e2e_not_mocked] GitHub decisioning is the suite's documented external seam.
+def test_remote_human_checkpoint_noop_gate_surfaces_unproven_warning(tmp_path, bare_origin) -> None:
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "registered")
+    Registry().register(str(canonical), workflow="remote", repo_type="single-owner")
+    result = run_repo_task(
+        str(canonical),
+        workspace=Workspace(tmp_path / "worktrees"),
+        github=FakeGitHub(origin),
+        steps=[
+            Step("prepare", "engineer", "prepare a draft checkpoint"),
+            Step("approve", task="Approve the checkpoint.", kind="human", deps=["prepare"]),
+        ],
+        body="## What\nPrepare a checkpoint.\n\n## Why\nAwait approval.\n",
+        dispatch_fn=_per_step_dispatch(),
+    )
+    assert result.outcome == "waiting-human" and result.pr is not None
+    assert "gate: no-op -- pushed unproven" in result.detail
+
+
+# llmlint: ignore[e2e_not_mocked] GitHub decisioning is the suite's documented external seam.
+def test_remote_human_checkpoint_registry_gate_blocks_draft(tmp_path, bare_origin) -> None:
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "registered")
+    Registry().register(str(canonical), workflow="remote", repo_type="single-owner", gate="false")
+    github = FakeGitHub(origin)
+    result = run_repo_task(
+        str(canonical),
+        workspace=Workspace(tmp_path / "worktrees"),
+        github=github,
+        steps=[
+            Step("prepare", "engineer", "prepare a rejected draft checkpoint"),
+            Step("approve", task="Approve the checkpoint.", kind="human", deps=["prepare"]),
+        ],
+        body="## What\nPrepare a checkpoint.\n\n## Why\nAwait approval.\n",
+        dispatch_fn=_per_step_dispatch(),
+    )
+    assert result.outcome == "gate-failed" and result.pr is None
+    assert result.verify is not None and not result.verify.ok
+
+
+def test_lifecycle_without_explicit_or_registry_gate_errors(tmp_path, bare_origin) -> None:
     origin = bare_origin()
     result = run_repo_task(
         str(origin),
-        "Add a change with no detectable local gate.",
+        "Attempt an unconfigured lifecycle.",
         "engineer",
         workspace=_workspace(tmp_path, origin),
         dispatch_fn=make_writing_dispatch(filename="feature.txt"),
-        # no verify_cmd → detect_gate finds nothing (only README in the repo)
     )
-    assert result.ok and result.outcome == "merged"
-    assert "no local gate" in result.detail or result.verify is None
-    assert _has_file(origin, "main", "feature.txt")
+    assert result.outcome == "error"
+    assert "no verification gate is configured" in result.detail
 
 
 def test_skip_verify_bypasses_the_gate(tmp_path, bare_origin) -> None:

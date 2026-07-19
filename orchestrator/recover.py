@@ -20,7 +20,7 @@ from .provenance import (
     unattested_incomplete,
 )
 from .registry import Registry, RegistryEntry, RegistryError, Slug
-from .verify import detect_gate, run_gate
+from .verify import NOOP_GATE, resolve_gate_template, run_gate
 from .workspace import RepoRef, RepositoryType, Workspace, WorkspaceError
 
 
@@ -133,13 +133,19 @@ def recover_repo(
                     else None
                 ),
             )
-        command = verify_cmd or detect_gate(worktree)
+        command = verify_cmd or (
+            resolve_gate_template(identity.gate, remote_base)
+            if identity.gate != NOOP_GATE
+            else None
+        )
         env = {
             "ORCHESTRATOR_COMPARISON_REMOTE": "origin",
             "ORCHESTRATOR_COMPARISON_BASE": publication_base,
         }
         if command is None:
-            raise RegistryError("no lifecycle gate detected; pass --gate with the repository gate")
+            raise RegistryError(
+                "repository identity has a no-op gate; migrate it or pass --gate for recovery"
+            )
         verified = run_gate(worktree, command, env=env)
         if not verified.ok:
             return RecoveryResult(
