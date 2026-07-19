@@ -136,6 +136,8 @@ def reconcile_dag(
     concurrency: int,
     actual: Mapping[str, NodeRun] | None = None,
     started_order: list[str] | None = None,
+    on_settled: Callable[[str, NodeRun], None] | None = None,
+    on_tick: Callable[[], None] | None = None,
 ) -> tuple[dict[str, NodeRun], list[str]]:
     """Converge desired nodes against replayed and in-flight actual state.
 
@@ -191,7 +193,9 @@ def reconcile_dag(
                     futures[pool.submit(run_one, nid)] = nid
             if not futures:
                 break
-            done, _ = wait(futures, return_when=FIRST_COMPLETED)
+            done, _ = wait(futures, timeout=0.05, return_when=FIRST_COMPLETED)
+            if on_tick is not None:
+                on_tick()
             for fut in done:
                 nid = futures.pop(fut)
                 try:
@@ -200,6 +204,8 @@ def reconcile_dag(
                     run = NodeRun("failed", str(exc))
                 status[nid] = run.status
                 results[nid] = run
+                if on_settled is not None:
+                    on_settled(nid, run)
 
     return results, order
 

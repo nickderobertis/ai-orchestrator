@@ -26,6 +26,7 @@ import re
 import shlex
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Literal, NamedTuple, TypedDict, cast
 
@@ -129,14 +130,46 @@ def main() -> int:
 
     match op:
         case "respond":
+            if "slow-branch" in task:
+                witness = Path(task.split("slow-branch", 1)[1].strip().split()[0])
+                with witness.open("a", encoding="utf-8") as stream:
+                    stream.write("tick\n")
+                time.sleep(0.8)
+                with witness.open("a", encoding="utf-8") as stream:
+                    stream.write("tick\n")
             orchestrator_plan = _orchestrator_command(task)
             plan_text = ""
             if orchestrator_plan is not None:
                 plan_path = orchestrator_plan.plan
                 plan_text = plan_path.read_text(encoding="utf-8")
-                if _assistant_turns(messages) == 0:
+                orchestrator_turn = _assistant_turns(messages)
+                if orchestrator_turn == 0:
                     subprocess.run(
                         orchestrator_plan.argv,
+                        check="continuation-channel" not in plan_text,
+                        capture_output=True,
+                        text=True,
+                    )
+                elif orchestrator_turn == 1 and "continuation-channel" in plan_text:
+                    nested_runs = [
+                        path
+                        for path in orchestrator_plan.runs_dir.iterdir()
+                        if path.is_dir()
+                        and path.name.startswith("continuation-channel-")
+                        and (path / "round-01" / "result.json").is_file()
+                    ]
+                    if len(nested_runs) != 1:
+                        raise RuntimeError("expected one settled continuation-channel run")
+                    forwarded = orchestrator_plan.argv[orchestrator_plan.argv.index("--runs-dir") :]
+                    subprocess.run(
+                        [
+                            "just",
+                            "next-round",
+                            nested_runs[0].name,
+                            "--complete-human",
+                            "gate",
+                            *forwarded,
+                        ],
                         check=True,
                         capture_output=True,
                         text=True,
@@ -233,7 +266,13 @@ def main() -> int:
         case "judge":
             resp = {"value": req.get("max", 5), "reason": "fake numeric verdict"}
         case "assess":
-            resp = {"text": "- Add a regression test for the adjacent edge case."}
+            resp = {
+                "text": (
+                    "None"
+                    if "slow-branch" in task or "surface-" in task
+                    else "- Add a regression test for the adjacent edge case."
+                )
+            }
         case _:
             sys.stderr.write(f"fake_backend: unknown op {op!r}\n")
             return 1

@@ -13,6 +13,7 @@ import pytest
 from orchestrator.channel import (
     ChannelError,
     ChannelTimeout,
+    ProposalPump,
     _finished,
     _reply,
     _surface,
@@ -42,6 +43,93 @@ def test_fifo_round_trip_and_reattach(tmp_path: Path) -> None:
     second.start()
     assert read_message(channel / "up.fifo", timeout=1) == {"sequence": 2}
     second.join()
+
+
+def test_proposal_pump_round_trips_and_persists_on_reconciler_drain(tmp_path: Path) -> None:
+    channel = create_channel(tmp_path / "run")
+    pump = ProposalPump(channel, "live", 3)
+    pump.propose("worker", "found adjacent work")
+    assert read_message(channel / "up.fifo", timeout=1) == {
+        "op": "supervisor",
+        "run_id": "live",
+        "round": 3,
+        "surface": {"kind": "proposal", "message": "worker: found adjacent work"},
+        "messages": [],
+    }
+
+    reply = {"completion": False, "message": "defer", "reason": "next round"}
+    sender = threading.Thread(
+        target=write_message,
+        args=(channel / "down.fifo", reply),
+        kwargs={"timeout": 1},
+    )
+    sender.start()
+    deadline = time.monotonic() + 1
+    verdict = channel / "planner-verdict.json"
+    while time.monotonic() < deadline and not verdict.is_file():
+        pump.persist_replies()
+        time.sleep(0.01)
+    sender.join()
+    pump.close()
+    assert json.loads(verdict.read_text(encoding="utf-8")) == reply
+
+
+def test_unanswered_proposal_releases_down_fifo_before_boundary(tmp_path: Path) -> None:
+    channel = create_channel(tmp_path / "run")
+    pump = ProposalPump(channel, "live", 1)
+    pump.propose("worker", "discovery")
+    assert read_message(channel / "up.fifo", timeout=1)["surface"]["kind"] == "proposal"
+    pump.close()
+    assert not pump._thread.is_alive()
+
+    boundary_reply = {"completion": True, "reason": "closeout verified"}
+    sender = threading.Thread(
+        target=write_message,
+        args=(channel / "down.fifo", boundary_reply),
+        kwargs={"timeout": 1},
+    )
+    sender.start()
+    assert read_message(channel / "down.fifo", timeout=1) == boundary_reply
+    sender.join()
+
+
+@pytest.mark.parametrize("failure", ["write", "read", "write_timeout", "read_timeout"])
+def test_proposal_pump_stops_on_broken_fifo(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str
+) -> None:
+    channel = create_channel(tmp_path / "run")
+    calls = 0
+
+    def fail_after_timeout(*args: object, **kwargs: object) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise ChannelTimeout
+        raise OSError("closed")
+
+    match failure:
+        case "write":
+            monkeypatch.setattr(
+                "orchestrator.channel.write_message",
+                lambda *args, **kwargs: (_ for _ in ()).throw(OSError("closed")),
+            )
+        case "write_timeout":
+            monkeypatch.setattr("orchestrator.channel.write_message", fail_after_timeout)
+        case "read" | "read_timeout":
+            monkeypatch.setattr("orchestrator.channel.write_message", lambda *args, **kwargs: None)
+            monkeypatch.setattr(
+                "orchestrator.channel.read_message",
+                (
+                    fail_after_timeout
+                    if failure == "read_timeout"
+                    else lambda *args, **kwargs: (_ for _ in ()).throw(ChannelError("broken"))
+                ),
+            )
+    pump = ProposalPump(channel, "live", 1)
+    pump.propose("worker", "discovery")
+    pump._thread.join(timeout=1)
+    assert not pump._thread.is_alive()
+    pump.close()
 
 
 def test_fifo_timeout_is_bounded(tmp_path: Path) -> None:

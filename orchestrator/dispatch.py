@@ -37,7 +37,7 @@ from onejudge_sdk import (
 )
 
 from . import BASE_CONFIG, PERSONA_DIR, REPO_ROOT
-from .channel import create_channel
+from .channel import CHANNEL_DIR_ENV, CHANNEL_RUN_ID_ENV, create_channel
 from .config import ConfigError, build_effective_config, load_yaml
 from .coordination import atomic_json
 from .labels import LABEL_ENV, LabelError, merge_labels
@@ -399,6 +399,8 @@ def launch_orchestrator(
     command = [onejudge_bin, "run", str(effective), "--task", task, "--format", "json"]
     process_env = dict(os.environ)
     process_env["ONEHARNESS_TIMEOUT"] = str(turn_timeout)
+    process_env[CHANNEL_DIR_ENV] = str(channel_dir)
+    process_env[CHANNEL_RUN_ID_ENV] = run_dir.name
     _validate_oneharness_timeout(process_env["ONEHARNESS_TIMEOUT"])
     try:
         with (

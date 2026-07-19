@@ -14,13 +14,15 @@ import errno
 import json
 import math
 import os
+import queue
 import select
 import socket
 import sys
+import threading
 import time
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 from .config import ConfigError
 from .coordination import advisory_lock, atomic_json
@@ -36,6 +38,15 @@ class ChannelTimeout(TimeoutError):
 
 
 MAX_FRAME_BYTES = select.PIPE_BUF
+CHANNEL_DIR_ENV = "AI_ORCHESTRATOR_CHANNEL_DIR"
+CHANNEL_RUN_ID_ENV = "AI_ORCHESTRATOR_CHANNEL_RUN_ID"
+CHANNEL_ENDPOINTS = ("up.fifo", "down.fifo")
+
+
+class ProposalSink(Protocol):
+    def propose(self, node: str, message: str) -> None: ...
+
+    def persist_replies(self) -> None: ...
 
 
 def create_channel(run_dir: Path) -> Path:
@@ -43,7 +54,7 @@ def create_channel(run_dir: Path) -> Path:
     channel_dir = run_dir / "channel"
     channel_dir.mkdir(parents=True, exist_ok=True)
     with advisory_lock(f"channel-create:{channel_dir.resolve()}"):
-        for name in ("up.fifo", "down.fifo"):
+        for name in CHANNEL_ENDPOINTS:
             path = channel_dir / name
             if path.exists():
                 if not path.is_fifo():
@@ -175,6 +186,70 @@ def _reply(value: Mapping[str, Any]) -> dict[str, Any]:
     if not isinstance(message, str):
         raise ChannelError("continue reply requires string message")
     return {"completion": False, "message": message, "reason": reason}
+
+
+class ProposalPump:
+    """Service mid-run proposal round trips without writing graph state off-thread."""
+
+    def __init__(self, channel_dir: Path, run_id: str, round_number: int) -> None:
+        self._channel_dir = channel_dir
+        self._run_id = run_id
+        self._round = round_number
+        self._proposals: queue.Queue[dict[str, Any] | None] = queue.Queue()
+        self._replies: queue.Queue[dict[str, Any]] = queue.Queue()
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._service, daemon=True)
+        self._thread.start()
+
+    def propose(self, node: str, message: str) -> None:
+        self._proposals.put(
+            {
+                "op": "supervisor",
+                "run_id": self._run_id,
+                "round": self._round,
+                "surface": {"kind": "proposal", "message": f"{node}: {message}"},
+                "messages": [],
+            }
+        )
+
+    def persist_replies(self) -> None:
+        """Persist transport replies on the reconciler's single-writer thread."""
+        while True:
+            try:
+                response = self._replies.get_nowait()
+            except queue.Empty:
+                return
+            atomic_json(self._channel_dir / "planner-verdict.json", response)
+
+    def close(self) -> None:
+        self._stop.set()
+        self._proposals.put(None)
+        self._thread.join()
+        self.persist_replies()
+
+    def _service(self) -> None:
+        while (proposal := self._proposals.get()) is not None:
+            while True:
+                if self._stop.is_set():
+                    return
+                try:
+                    write_message(self._channel_dir / "up.fifo", proposal, timeout=0.1)
+                    break
+                except ChannelTimeout:
+                    continue
+                except OSError:
+                    return
+            while True:
+                if self._stop.is_set():
+                    return
+                try:
+                    response = _reply(read_message(self._channel_dir / "down.fifo", timeout=0.1))
+                    self._replies.put(response)
+                    break
+                except ChannelTimeout:
+                    continue
+                except (ChannelError, OSError):
+                    return
 
 
 # llmlint: ignore[names_match_behavior] onejudge sends final evals to its supervisor command
@@ -329,7 +404,7 @@ def main_relay(argv: list[str] | None = None) -> int:
             raise ChannelError("channel directory must belong to the requested run id")
         metadata = load_mapping(channel_dir / "channel.json")
         if metadata.get("schema_version") != 1 or not all(
-            (channel_dir / name).is_fifo() for name in ("up.fifo", "down.fifo")
+            (channel_dir / name).is_fifo() for name in CHANNEL_ENDPOINTS
         ):
             raise ChannelError("channel directory has invalid metadata or endpoints")
     except (ChannelError, ConfigError, ValueError) as exc:

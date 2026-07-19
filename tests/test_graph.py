@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+from orchestrator.channel import create_channel
 from orchestrator.dispatch import DispatchError, Report
 from orchestrator.gitops import GitError
 from orchestrator.graph import (
@@ -30,7 +31,7 @@ from orchestrator.plan import PLAN_SCHEMA_VERSION, PlanError, PlanNode
 from orchestrator.runs import NodeId, RunId
 
 
-def _report(persona: str, completed: bool = True) -> Report:
+def _report(persona: str, completed: bool = True, assessment: str | None = None) -> Report:
     return Report(
         persona=persona,
         exit_code=0 if completed else 1,
@@ -41,7 +42,82 @@ def _report(persona: str, completed: bool = True) -> Report:
         usage={},
         raw={},
         stderr="",
+        assessment=assessment,
     )
+
+
+class _RecordingProposalPump:
+    def __init__(self) -> None:
+        self.proposals: list[tuple[str, str]] = []
+        self.drains = 0
+
+    def propose(self, node: str, message: str) -> None:
+        self.proposals.append((node, message))
+
+    def persist_replies(self) -> None:
+        self.drains += 1
+
+
+def test_run_graph_enqueues_worker_assessment_through_reconciler() -> None:
+    graph = parse_graph(
+        {
+            "tasks": [
+                {"id": "discoverer", "persona": "engineer", "task": "Investigate"},
+                {"id": "quiet", "persona": "engineer", "task": "No discovery"},
+                {"id": "explicit-none", "persona": "engineer", "task": "No follow-up"},
+            ]
+        }
+    )
+    pump = _RecordingProposalPump()
+    assessments = {"discoverer": "follow up", "quiet": None, "explicit-none": "None"}
+    result = run_graph(
+        graph,
+        agent_runner=lambda node, **_: _report(node.persona, assessment=assessments[node.id]),
+        lifecycle_runner=lambda node, **_: _lifecycle(),
+        proposal_pump=pump,  # type: ignore[arg-type] - narrow transport test double
+    )
+    assert result.state == "complete"
+    assert pump.proposals == [("discoverer", "follow up")]
+    assert pump.drains >= 2
+
+
+def test_main_validates_and_services_inherited_proposal_channel(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    plan = tmp_path / "plan.json"
+    plan.write_text(
+        json.dumps({"tasks": [{"id": "worker", "persona": "engineer", "task": "Work"}]}),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("AI_ORCHESTRATOR_CHANNEL_DIR", str(tmp_path / "channel"))
+    assert main([str(plan), "--no-record"]) == 2
+    assert "incomplete proposal channel" in capsys.readouterr().err
+    channel = create_channel(tmp_path / "outer")
+    monkeypatch.setenv("AI_ORCHESTRATOR_CHANNEL_DIR", str(channel))
+    monkeypatch.setenv("AI_ORCHESTRATOR_CHANNEL_RUN_ID", "outer")
+
+    pumps: list[_RecordingProposalPump] = []
+
+    def make_pump(path: Path, run_id: str, round_number: int) -> _RecordingProposalPump:
+        assert (path, run_id, round_number) == (channel, "outer", 1)
+        pump = _RecordingProposalPump()
+        pump.close = lambda: pump.persist_replies()  # type: ignore[attr-defined]
+        pumps.append(pump)
+        return pump
+
+    monkeypatch.setattr("orchestrator.graph.ProposalPump", make_pump)
+    monkeypatch.setattr(
+        "orchestrator.graph.make_dispatch_runner",
+        lambda **kwargs: lambda node, **labels: _report(node.persona),
+    )
+    assert main([str(plan), "--no-record"]) == 0
+    assert not pumps
+    assert main([str(plan), "--run", "recorded", "--runs-dir", str(tmp_path / "runs")]) == 0
+    assert len(pumps) == 1 and pumps[0].drains >= 2
+    assert (tmp_path / "runs" / "recorded" / "round-01" / "result.json").is_file()
+
+    for key in ("AI_ORCHESTRATOR_CHANNEL_DIR", "AI_ORCHESTRATOR_CHANNEL_RUN_ID"):
+        monkeypatch.delenv(key)
 
 
 def _lifecycle(outcome: str = "merged", **kw) -> LifecycleResult:
