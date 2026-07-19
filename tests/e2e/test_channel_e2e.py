@@ -158,6 +158,21 @@ def test_live_channel_runs_real_nested_graph_and_round_trips_guidance(
     assert not (nested[0] / "channel").exists()
 
 
+def test_live_channel_surfaces_large_round_summary(tmp_path: Path, onejudge_bin: str) -> None:
+    runs = tmp_path / "large-summary-runs"
+    run_id = _launch_cli(
+        _plan(tmp_path, "surface-large-summary"), runs, _base(tmp_path), onejudge_bin
+    )
+    summary = _next_cli(run_id, runs)
+    message = summary["surface"]["message"]
+    assert isinstance(message, str)
+    assert message.startswith("tracked round completed ")
+    assert len(message) > 100_000
+    _reply_cli(run_id, runs, {"completion": True, "reason": "large summary verified"})
+    report = _wait_report(runs / run_id / "orchestrator" / "report.json")
+    assert report["stopped_early"] is False
+
+
 def test_launch_api_records_detached_owner_and_real_report(
     tmp_path: Path, onejudge_bin: str
 ) -> None:
@@ -368,6 +383,41 @@ def test_orchestrate_cli_reports_launch_boundary_failures(tmp_path: Path) -> Non
     )
     assert missing.returncode == 2
     assert "plan does not exist" in missing.stderr
+
+    unknown_alias_plan = tmp_path / "unknown-alias.json"
+    unknown_alias_plan.write_text(
+        json.dumps(
+            {
+                "schema_version": 3,
+                "tasks": [
+                    {
+                        "id": "unknown",
+                        "repo": "local/does-not-exist",
+                        "persona": "engineer",
+                        "task": "must not launch",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    unknown_runs = tmp_path / "unknown-runs"
+    unknown_alias = subprocess.run(
+        [
+            "orchestrator-orchestrate",
+            str(unknown_alias_plan),
+            "--runs-dir",
+            str(unknown_runs),
+            "--onejudge-bin",
+            "definitely-missing-onejudge",
+        ],
+        text=True,
+        capture_output=True,
+    )
+    assert unknown_alias.returncode == 2
+    assert "unknown local checkout alias 'local/does-not-exist'" in unknown_alias.stderr
+    assert "just repos" in unknown_alias.stderr
+    assert not unknown_runs.exists()
 
     plan = _plan(tmp_path, "surface-milestone")
     split_base = _base(tmp_path)

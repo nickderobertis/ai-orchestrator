@@ -134,7 +134,7 @@ def main() -> int:
                 witness = Path(task.split("slow-branch", 1)[1].strip().split()[0])
                 with witness.open("a", encoding="utf-8") as stream:
                     stream.write("tick\n")
-                time.sleep(0.8)
+                time.sleep(2 if "live-edit-slow" in task else 0.8)
                 with witness.open("a", encoding="utf-8") as stream:
                     stream.write("tick\n")
             orchestrator_plan = _orchestrator_command(task)
@@ -146,7 +146,10 @@ def main() -> int:
                 if orchestrator_turn == 0:
                     subprocess.run(
                         orchestrator_plan.argv,
-                        check="continuation-channel" not in plan_text,
+                        check=not any(
+                            sentinel in plan_text
+                            for sentinel in ("continuation-channel", '"name": "live-edit"')
+                        ),
                         capture_output=True,
                         text=True,
                     )
@@ -214,9 +217,12 @@ def main() -> int:
                         {"kind": "blocker", "message": "plan departure needs a decision"}
                     )
                 elif turn == 0:
-                    agent_message = json.dumps(
-                        {"kind": "milestone", "message": "tracked round completed"}
+                    summary = (
+                        "tracked round completed " + "x" * 100_000
+                        if "surface-large-summary" in plan_text
+                        else "tracked round completed"
                     )
+                    agent_message = json.dumps({"kind": "milestone", "message": summary})
                 else:
                     suffix = f"; received {guidance}" if guidance else ""
                     agent_message = json.dumps(
@@ -269,7 +275,7 @@ def main() -> int:
             resp = {
                 "text": (
                     "None"
-                    if "slow-branch" in task or "surface-" in task
+                    if "slow-branch" in task or "surface-" in task or "no-assessment" in task
                     else "- Add a regression test for the adjacent edge case."
                 )
             }

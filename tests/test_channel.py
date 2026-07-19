@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import io
 import json
 import os
@@ -43,6 +44,92 @@ def test_fifo_round_trip_and_reattach(tmp_path: Path) -> None:
     second.start()
     assert read_message(channel / "up.fifo", timeout=1) == {"sequence": 2}
     second.join()
+
+
+def test_fifo_round_trips_frame_larger_than_pipe_buffer(tmp_path: Path) -> None:
+    channel = create_channel(tmp_path / "run")
+    value = {"summary": "x" * 100_000}
+    sender = threading.Thread(
+        target=write_message,
+        args=(channel / "up.fifo", value),
+        kwargs={"timeout": 2},
+    )
+    sender.start()
+    assert read_message(channel / "up.fifo", timeout=2) == value
+    sender.join()
+
+
+def test_fifo_round_trips_large_versioned_edit_frame(tmp_path: Path) -> None:
+    channel = create_channel(tmp_path / "run")
+    value = {
+        "version": 1,
+        "commands": [
+            {
+                "op": "add",
+                "node": {
+                    "id": "large-followup",
+                    "persona": "engineer",
+                    "task": "x" * 100_000,
+                },
+            }
+        ],
+    }
+    sender = threading.Thread(
+        target=write_message,
+        args=(channel / "down.fifo", value),
+        kwargs={"timeout": 2},
+    )
+    sender.start()
+    received = read_message(channel / "down.fifo", timeout=2)
+    sender.join()
+    reply = _reply(received)
+    assert reply["commands"] == value["commands"]
+
+
+def test_concurrent_large_writers_do_not_interleave_frames(tmp_path: Path) -> None:
+    channel = create_channel(tmp_path / "run")
+    values = [{"writer": index, "body": str(index) * 100_000} for index in range(4)]
+    writers = [
+        threading.Thread(
+            target=write_message,
+            args=(channel / "up.fifo", value),
+            kwargs={"timeout": 5},
+        )
+        for value in values
+    ]
+    for writer in writers:
+        writer.start()
+    received = [read_message(channel / "up.fifo", timeout=5) for _ in writers]
+    for writer in writers:
+        writer.join()
+    assert sorted(received, key=lambda item: item["writer"]) == values
+
+
+def test_writer_retries_partial_writes_and_backpressure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    channel = create_channel(tmp_path / "run")
+    value = {"summary": "partial" * 20_000}
+    real_write = os.write
+    calls = 0
+
+    def pressured_write(fd: int, data: bytes) -> int:
+        nonlocal calls
+        calls += 1
+        if calls % 3 == 0:
+            raise BlockingIOError(errno.EAGAIN, "pipe full")
+        return real_write(fd, data[:997])
+
+    monkeypatch.setattr("orchestrator.channel.os.write", pressured_write)
+    sender = threading.Thread(
+        target=write_message,
+        args=(channel / "up.fifo", value),
+        kwargs={"timeout": 5},
+    )
+    sender.start()
+    assert read_message(channel / "up.fifo", timeout=5) == value
+    sender.join()
+    assert calls > 100
 
 
 def test_proposal_pump_round_trips_and_persists_on_reconciler_drain(tmp_path: Path) -> None:
@@ -127,8 +214,9 @@ def test_proposal_pump_stops_on_broken_fifo(
             )
     pump = ProposalPump(channel, "live", 1)
     pump.propose("worker", "discovery")
-    pump._thread.join(timeout=1)
-    assert not pump._thread.is_alive()
+    target = pump._receiver if failure.startswith("read") else pump._thread
+    target.join(timeout=1)
+    assert not target.is_alive()
     pump.close()
 
 
@@ -157,11 +245,6 @@ def test_writer_reports_writability_timeout(
 
 
 def test_frame_and_supervisor_shapes_are_validated(tmp_path: Path) -> None:
-    channel = create_channel(tmp_path / "run")
-    too_large = {"value": "x" * 5000}
-    with pytest.raises(ChannelError, match="atomic FIFO limit"):
-        write_message(channel / "up.fifo", too_large, timeout=0.01)
-
     request = {"kind": "milestone", "message": "round ran", "messages": []}
     assert _surface(request, "live", 2) == {
         "op": "supervisor",
@@ -181,6 +264,34 @@ def test_frame_and_supervisor_shapes_are_validated(tmp_path: Path) -> None:
     }
     with pytest.raises(ChannelError):
         _reply({"completion": False, "reason": "missing guidance"})
+
+
+def test_versioned_edits_are_independent_of_completion() -> None:
+    edit = _reply(
+        {
+            "version": 1,
+            "commands": [
+                {
+                    "op": "add",
+                    "node": {"id": "followup", "persona": "engineer", "task": "Follow up"},
+                }
+            ],
+        }
+    )
+    assert edit["completion"] is False
+    assert edit["commands"][0]["op"] == "add"
+
+    complete = _reply({"version": 1, "commands": [{"op": "complete", "reason": "published"}]})
+    assert complete == {
+        "completion": True,
+        "reason": "published",
+        "version": 1,
+        "commands": [{"op": "complete", "reason": "published"}],
+    }
+    with pytest.raises(ChannelError, match="version 1"):
+        _reply({"version": 2, "commands": [{"op": "complete", "reason": "done"}]})
+    with pytest.raises(ChannelError, match="string reason"):
+        _reply({"version": 1, "commands": [{"op": "complete", "reason": 1}]})
 
 
 def test_channel_metadata_is_durable(tmp_path: Path) -> None:
@@ -491,23 +602,6 @@ def test_finished_tolerates_partial_report_and_missing_status(tmp_path: Path) ->
     assert _finished(run) is False
     (run / "round-01").mkdir()
     assert _finished(run) is False
-
-
-def test_reader_rejects_oversized_frame(tmp_path: Path) -> None:
-    channel = create_channel(tmp_path / "run")
-
-    def raw_send() -> None:
-        fd = os.open(channel / "up.fifo", os.O_WRONLY)
-        try:
-            os.write(fd, b"x" * 5000)
-        finally:
-            os.close(fd)
-
-    sender = threading.Thread(target=raw_send)
-    sender.start()
-    with pytest.raises(ChannelError, match="exceeds limit"):
-        read_message(channel / "up.fifo", timeout=1)
-    sender.join()
 
 
 def test_surface_ignores_non_json_assistant_content() -> None:

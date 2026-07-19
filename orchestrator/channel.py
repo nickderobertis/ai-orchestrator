@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import errno
+import fcntl
 import json
 import math
 import os
@@ -20,12 +21,14 @@ import socket
 import sys
 import threading
 import time
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager, suppress
 from pathlib import Path
 from typing import Any, Protocol
 
 from .config import ConfigError
 from .coordination import advisory_lock, atomic_json
+from .edits import EDIT_PROTOCOL_VERSION, EditCommand, EditError, parse_commands
 from .runs import latest_round, load_mapping, validate_run_id
 
 
@@ -37,7 +40,6 @@ class ChannelTimeout(TimeoutError):
     """The other side did not rendezvous before the bounded deadline."""
 
 
-MAX_FRAME_BYTES = select.PIPE_BUF
 CHANNEL_DIR_ENV = "AI_ORCHESTRATOR_CHANNEL_DIR"
 CHANNEL_RUN_ID_ENV = "AI_ORCHESTRATOR_CHANNEL_RUN_ID"
 CHANNEL_ENDPOINTS = ("up.fifo", "down.fifo")
@@ -47,6 +49,8 @@ class ProposalSink(Protocol):
     def propose(self, node: str, message: str) -> None: ...
 
     def persist_replies(self) -> None: ...
+
+    def drain_commands(self) -> tuple[EditCommand, ...]: ...
 
 
 def create_channel(run_dir: Path) -> Path:
@@ -72,62 +76,104 @@ def _remaining(deadline: float) -> float:
     return remaining
 
 
+def _acknowledgment_path(path: Path) -> Path:
+    return path.with_name(f"{path.name}.ack")
+
+
+@contextmanager
+def _channel_lock(path: Path, purpose: str, deadline: float) -> Iterator[None]:
+    """Hold one endpoint lock within the caller's transport deadline."""
+    lock_path = path.with_name(f"{path.name}.{purpose}.lock")
+    with lock_path.open("a+", encoding="utf-8") as handle:
+        while True:
+            try:
+                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                time.sleep(min(0.01, _remaining(deadline)))
+        try:
+            yield
+        finally:
+            fcntl.flock(handle, fcntl.LOCK_UN)
+
+
 def read_message(path: Path, *, timeout: float) -> dict[str, Any]:
-    """Read exactly one newline-delimited JSON mapping with a bounded wait."""
+    """Read exactly one locked, newline-delimited JSON mapping with a bounded wait."""
     if not math.isfinite(timeout) or timeout < 0:
         raise ChannelError("timeout must be finite and non-negative")
     deadline = time.monotonic() + timeout
-    fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
-    try:
-        data = bytearray()
-        while True:
-            ready, _, _ = select.select([fd], [], [], _remaining(deadline))
-            if not ready:
-                raise ChannelTimeout("channel read timed out")
-            chunk = os.read(fd, 65536)
-            if not chunk:
-                time.sleep(min(0.01, _remaining(deadline)))
-                continue
-            data.extend(chunk)
-            if len(data) > MAX_FRAME_BYTES:
-                raise ChannelError(f"channel frame exceeds limit ({MAX_FRAME_BYTES} bytes)")
-            if b"\n" in data:
-                line, trailing = bytes(data).split(b"\n", 1)
-                if trailing:
-                    raise ChannelError("channel frame contains trailing data")
-                try:
-                    value = json.loads(line)
-                except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-                    raise ChannelError("channel frame is not valid JSON") from exc
-                if not isinstance(value, dict):
-                    raise ChannelError("channel frame must be a JSON object")
-                return value
-    finally:
-        os.close(fd)
+    with _channel_lock(path, "read", deadline):
+        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+        acknowledge = False
+        try:
+            data = bytearray()
+            while b"\n" not in data:
+                ready, _, _ = select.select([fd], [], [], _remaining(deadline))
+                if not ready:
+                    raise ChannelTimeout("channel read timed out")
+                chunk = os.read(fd, 65536)
+                if not chunk:
+                    time.sleep(min(0.01, _remaining(deadline)))
+                    continue
+                data.extend(chunk)
+
+            # After seeing the writer's final newline, the reader closes this FIFO and
+            # creates its acknowledgment while still holding the read lock. The writer
+            # retains the write lock until that acknowledgment appears, so queued writers
+            # wait on the write lock; they do not wait for this read lock to be released.
+            acknowledge = True
+            line, trailing = bytes(data).split(b"\n", 1)
+            if trailing:
+                raise ChannelError("channel frame contains trailing data")
+            try:
+                value = json.loads(line)
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise ChannelError("channel frame is not valid JSON") from exc
+            if not isinstance(value, dict):
+                raise ChannelError("channel frame must be a JSON object")
+            return value
+        finally:
+            os.close(fd)
+            if acknowledge:
+                _acknowledgment_path(path).touch(mode=0o600)
 
 
 def write_message(path: Path, value: Mapping[str, Any], *, timeout: float) -> None:
-    """Write one atomic JSON-line frame after bounded writer/reader rendezvous."""
+    """Write one serialized JSON-line frame after bounded writer/reader rendezvous."""
     if not math.isfinite(timeout) or timeout < 0:
         raise ChannelError("timeout must be finite and non-negative")
     encoded = (json.dumps(dict(value), separators=(",", ":")) + "\n").encode()
-    if len(encoded) > MAX_FRAME_BYTES:
-        raise ChannelError(f"channel frame exceeds atomic FIFO limit ({MAX_FRAME_BYTES} bytes)")
     deadline = time.monotonic() + timeout
-    while True:
+    with _channel_lock(path, "write", deadline):
+        acknowledgment = _acknowledgment_path(path)
+        with suppress(FileNotFoundError):
+            acknowledgment.unlink()
+        while True:
+            try:
+                fd = os.open(path, os.O_WRONLY | os.O_NONBLOCK)
+                break
+            except OSError as exc:
+                if exc.errno != errno.ENXIO:
+                    raise
+                time.sleep(min(0.01, _remaining(deadline)))
         try:
-            fd = os.open(path, os.O_WRONLY | os.O_NONBLOCK)
-            break
-        except OSError as exc:
-            if exc.errno != errno.ENXIO:
-                raise
+            written = 0
+            while written < len(encoded):
+                _, ready, _ = select.select([], [fd], [], _remaining(deadline))
+                if not ready:
+                    raise ChannelTimeout("channel write timed out")
+                try:
+                    written += os.write(fd, encoded[written:])
+                except BlockingIOError:
+                    continue
+        finally:
+            os.close(fd)
+        # Do not hand the writer lock to the next frame until the reader has consumed
+        # this one and closed its descriptor. The sidecar is only a rendezvous token;
+        # the JSON line remains the complete external frame.
+        while not acknowledgment.is_file():
             time.sleep(min(0.01, _remaining(deadline)))
-    try:
-        _, ready, _ = select.select([], [fd], [], _remaining(deadline))
-        if not ready or os.write(fd, encoded) != len(encoded):
-            raise ChannelTimeout("channel write timed out")
-    finally:
-        os.close(fd)
+        acknowledgment.unlink()
 
 
 def _surface(request: Mapping[str, Any], run_id: str, round_number: int) -> dict[str, Any]:
@@ -176,16 +222,50 @@ def _surface(request: Mapping[str, Any], run_id: str, round_number: int) -> dict
 
 
 def _reply(value: Mapping[str, Any]) -> dict[str, Any]:
+    try:
+        commands = parse_commands(value)
+    except EditError as exc:
+        raise ChannelError(str(exc)) from exc
     completion = value.get("completion")
     reason = value.get("reason")
+    if completion is None and commands:
+        completes = [command for command in commands if command.op == "complete"]
+        complete_reason = completes[-1].payload.get("reason") if completes else None
+        if completes and not isinstance(complete_reason, str):
+            raise ChannelError("complete edit requires a string reason")
+        response: dict[str, Any] = {
+            "completion": bool(completes),
+            "reason": complete_reason or "versioned edit commands",
+            "version": EDIT_PROTOCOL_VERSION,
+            "commands": [command.payload for command in commands],
+        }
+        if not completes:
+            response["message"] = "apply live graph edits"
+        return response
     if not isinstance(completion, bool) or not isinstance(reason, str):
         raise ChannelError("reply requires boolean completion and string reason")
     if completion:
-        return {"completion": True, "reason": reason}
+        response = {"completion": True, "reason": reason}
+        if commands:
+            response.update(
+                {
+                    "version": EDIT_PROTOCOL_VERSION,
+                    "commands": [command.payload for command in commands],
+                }
+            )
+        return response
     message = value.get("message")
     if not isinstance(message, str):
         raise ChannelError("continue reply requires string message")
-    return {"completion": False, "message": message, "reason": reason}
+    response = {"completion": False, "message": message, "reason": reason}
+    if commands:
+        response.update(
+            {
+                "version": EDIT_PROTOCOL_VERSION,
+                "commands": [command.payload for command in commands],
+            }
+        )
+    return response
 
 
 class ProposalPump:
@@ -197,9 +277,14 @@ class ProposalPump:
         self._round = round_number
         self._proposals: queue.Queue[dict[str, Any] | None] = queue.Queue()
         self._replies: queue.Queue[dict[str, Any]] = queue.Queue()
+        self._commands: queue.Queue[EditCommand] = queue.Queue()
         self._stop = threading.Event()
+        self._awaiting_reply = threading.Event()
+        self._reply_received = threading.Event()
         self._thread = threading.Thread(target=self._service, daemon=True)
+        self._receiver = threading.Thread(target=self._receive, daemon=True)
         self._thread.start()
+        self._receiver.start()
 
     def propose(self, node: str, message: str) -> None:
         self._proposals.put(
@@ -221,14 +306,26 @@ class ProposalPump:
                 return
             atomic_json(self._channel_dir / "planner-verdict.json", response)
 
+    def drain_commands(self) -> tuple[EditCommand, ...]:
+        """Return commands to the reconciler thread without applying them here."""
+        commands: list[EditCommand] = []
+        while True:
+            try:
+                commands.append(self._commands.get_nowait())
+            except queue.Empty:
+                return tuple(commands)
+
     def close(self) -> None:
         self._stop.set()
         self._proposals.put(None)
         self._thread.join()
+        self._receiver.join()
         self.persist_replies()
 
     def _service(self) -> None:
         while (proposal := self._proposals.get()) is not None:
+            self._reply_received.clear()
+            self._awaiting_reply.set()
             while True:
                 if self._stop.is_set():
                     return
@@ -239,17 +336,24 @@ class ProposalPump:
                     continue
                 except OSError:
                     return
-            while True:
-                if self._stop.is_set():
-                    return
-                try:
-                    response = _reply(read_message(self._channel_dir / "down.fifo", timeout=0.1))
-                    self._replies.put(response)
-                    break
-                except ChannelTimeout:
-                    continue
-                except (ChannelError, OSError):
-                    return
+            while not self._stop.is_set() and not self._reply_received.wait(0.1):
+                pass
+            self._awaiting_reply.clear()
+
+    def _receive(self) -> None:
+        """Continuously receive planner edits, independent of proposal timing."""
+        while not self._stop.is_set():
+            try:
+                response = _reply(read_message(self._channel_dir / "down.fifo", timeout=0.1))
+                for command in parse_commands(response):
+                    self._commands.put(command)
+                self._replies.put(response)
+                if self._awaiting_reply.is_set():
+                    self._reply_received.set()
+            except ChannelTimeout:
+                continue
+            except (ChannelError, OSError):
+                return
 
 
 # llmlint: ignore[names_match_behavior] onejudge sends final evals to its supervisor command
@@ -280,7 +384,7 @@ def relay_supervisor(channel_dir: Path, run_id: str, round_number: int, *, timeo
             else:
                 maximum = request.get("max", 5)
                 if (
-                    not isinstance(maximum, (int, float))
+                    not isinstance(maximum, int | float)
                     or isinstance(maximum, bool)
                     or not math.isfinite(maximum)
                     or maximum < 0
@@ -293,7 +397,7 @@ def relay_supervisor(channel_dir: Path, run_id: str, round_number: int, *, timeo
         )
         response = _reply(read_message(channel_dir / "down.fifo", timeout=timeout))
         atomic_json(channel_dir / "planner-verdict.json", response)
-    except (ChannelError, ChannelTimeout, json.JSONDecodeError, OSError) as exc:
+    except (ChannelError, ChannelTimeout, EditError, json.JSONDecodeError, OSError) as exc:
         print(f"relay-supervisor: {exc}", file=sys.stderr)
         return 1
     print(json.dumps(response))
@@ -382,7 +486,7 @@ def main_reply(argv: list[str] | None = None) -> int:
             _reply(value),
             timeout=args.timeout,
         )
-    except (ChannelError, ChannelTimeout, json.JSONDecodeError, OSError) as exc:
+    except (ChannelError, ChannelTimeout, EditError, json.JSONDecodeError, OSError) as exc:
         print(f"channel-reply: {exc}", file=sys.stderr)
         return 2
     return 0

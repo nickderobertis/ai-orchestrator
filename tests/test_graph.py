@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import socket
+import threading
 from collections.abc import Mapping
 from pathlib import Path
 
@@ -11,6 +12,7 @@ import pytest
 
 from orchestrator.channel import create_channel
 from orchestrator.dispatch import DispatchError, Report
+from orchestrator.edits import EditCommand
 from orchestrator.gitops import GitError
 from orchestrator.graph import (
     HumanAction,
@@ -27,7 +29,7 @@ from orchestrator.graph import (
 )
 from orchestrator.journal import JournalError, NodeSink, open_journal
 from orchestrator.lifecycle import LifecycleResult, RepoPlanNode, Step, StepResult
-from orchestrator.plan import PLAN_SCHEMA_VERSION, PlanError, PlanNode
+from orchestrator.plan import PLAN_SCHEMA_VERSION, NodeRun, PlanError, PlanNode
 from orchestrator.runs import NodeId, RunId
 
 
@@ -58,6 +60,20 @@ class _RecordingProposalPump:
         self.drains += 1
 
 
+class _EditingPump(_RecordingProposalPump):
+    def __init__(self, commands: list[EditCommand], *, wait_ticks: int = 0) -> None:
+        super().__init__()
+        self.commands = commands
+        self.wait_ticks = wait_ticks
+
+    def drain_commands(self) -> tuple[EditCommand, ...]:
+        if self.wait_ticks:
+            self.wait_ticks -= 1
+            return ()
+        commands, self.commands = self.commands, []
+        return tuple(commands)
+
+
 def test_run_graph_enqueues_worker_assessment_through_reconciler() -> None:
     graph = parse_graph(
         {
@@ -79,6 +95,215 @@ def test_run_graph_enqueues_worker_assessment_through_reconciler() -> None:
     assert result.state == "complete"
     assert pump.proposals == [("discoverer", "follow up")]
     assert pump.drains >= 2
+
+
+def test_reconciler_alone_applies_and_rejects_live_commands() -> None:
+    graph = parse_graph(
+        {
+            "schema_version": 3,
+            "tasks": [
+                {"id": "approve", "kind": "human", "task": "Approve"},
+                {
+                    "id": "pending",
+                    "task": "No diff",
+                    "expects_no_diff": True,
+                    "deps": ["approve"],
+                },
+            ],
+        }
+    )
+    pump = _EditingPump([EditCommand("attest", {"op": "attest", "ref": "approve"})], wait_ticks=1)
+    result = run_graph(
+        graph,
+        agent_runner=lambda node, **_: _report(node.persona),
+        lifecycle_runner=lambda node, **_: _lifecycle(),
+        proposal_pump=pump,  # type: ignore[arg-type] - focused in-memory command pump
+    )
+    assert result.results["approve"].status == "done"
+    assert result.results["pending"].status == "done"
+
+    rejected = _EditingPump(
+        [EditCommand("reparent", {"op": "reparent", "id": "pending", "deps": ["pending"]})]
+    )
+    run_graph(
+        graph,
+        agent_runner=lambda node, **_: _report(node.persona),
+        lifecycle_runner=lambda node, **_: _lifecycle(),
+        proposal_pump=rejected,  # type: ignore[arg-type] - focused in-memory command pump
+    )
+    assert rejected.proposals[0][0] == "reconciler"
+    assert "depends on itself" in rejected.proposals[0][1]
+
+
+def test_running_direct_and_lifecycle_drops_cancel_cooperatively() -> None:
+    direct = parse_graph(
+        {
+            "tasks": [
+                {"id": "direct", "persona": "engineer", "task": "Wait"},
+                {"id": "keep", "kind": "human", "task": "Keep run alive"},
+            ]
+        }
+    )
+    direct_pump = _EditingPump(
+        [EditCommand("drop", {"op": "drop", "id": "direct", "dependents": "drop"})],
+        wait_ticks=1,
+    )
+
+    def direct_runner(
+        node: PlanNode,
+        *,
+        labels: Mapping[str, str] | None = None,
+        cancel: threading.Event | None = None,
+    ) -> Report:
+        assert cancel is not None and cancel.wait(1)
+        return _report(node.persona, completed=False)
+
+    direct_result = run_graph(
+        direct,
+        agent_runner=direct_runner,
+        lifecycle_runner=lambda node, **_: _lifecycle(),
+        proposal_pump=direct_pump,  # type: ignore[arg-type] - focused in-memory command pump
+    )
+    assert set(direct_result.results) == {"keep"}
+
+    lifecycle_graph = parse_graph(
+        {
+            "tasks": [
+                {"id": "repo", "repo": "acme/widget", "persona": "engineer", "task": "Wait"},
+                {"id": "keep", "kind": "human", "task": "Keep run alive"},
+            ]
+        }
+    )
+    lifecycle_pump = _EditingPump(
+        [EditCommand("drop", {"op": "drop", "id": "repo", "dependents": "drop"})],
+        wait_ticks=1,
+    )
+
+    def lifecycle_runner(
+        node: RepoPlanNode,
+        *,
+        journal: NodeSink | None = None,
+        cancel: threading.Event | None = None,
+    ) -> LifecycleResult:
+        assert cancel is not None and cancel.wait(1)
+        return _lifecycle()
+
+    lifecycle_result = run_graph(
+        lifecycle_graph,
+        agent_runner=lambda node, **_: _report(node.persona),
+        lifecycle_runner=lifecycle_runner,
+        proposal_pump=lifecycle_pump,  # type: ignore[arg-type] - focused in-memory command pump
+    )
+    assert set(lifecycle_result.results) == {"keep"}
+
+
+def test_retry_of_a_dropped_node_is_rejected_and_reconciliation_continues() -> None:
+    graph = parse_graph(
+        {
+            "tasks": [
+                {"id": "running", "persona": "engineer", "task": "Wait"},
+                {"id": "keep", "kind": "human", "task": "Keep run alive"},
+            ]
+        }
+    )
+    pump = _EditingPump(
+        [
+            EditCommand("drop", {"op": "drop", "id": "running", "dependents": "drop"}),
+            EditCommand(
+                "retry",
+                {
+                    "op": "retry",
+                    "id": "running",
+                    "node": {"id": "replacement", "task": "No diff", "expects_no_diff": True},
+                },
+            ),
+            EditCommand("attest", {"op": "attest", "ref": "keep"}),
+        ],
+        wait_ticks=1,
+    )
+
+    def runner(
+        node: PlanNode,
+        *,
+        labels: Mapping[str, str] | None = None,
+        cancel: threading.Event | None = None,
+    ) -> Report:
+        assert cancel is not None and cancel.wait(1)
+        return _report(node.persona, completed=False)
+
+    result = run_graph(
+        graph,
+        agent_runner=runner,
+        lifecycle_runner=lambda node, **_: _lifecycle(),
+        proposal_pump=pump,  # type: ignore[arg-type] - focused in-memory command pump
+    )
+    assert set(result.results) == {"keep"}
+    assert result.results["keep"].status == "done"
+    assert pump.proposals == [
+        ("reconciler", "rejected retry: retry requires an existing graph node")
+    ]
+
+
+def test_reconciler_retries_failed_and_drops_unstarted_nodes() -> None:
+    retry_graph = parse_graph(
+        {
+            "schema_version": 3,
+            "tasks": [
+                {"id": "failed", "persona": "engineer", "task": "Failed"},
+                {
+                    "id": "dependent",
+                    "task": "No diff",
+                    "expects_no_diff": True,
+                    "deps": ["failed"],
+                },
+                {"id": "keep", "kind": "human", "task": "Keep"},
+            ],
+        }
+    )
+    retry_pump = _EditingPump(
+        [
+            EditCommand(
+                "retry",
+                {
+                    "op": "retry",
+                    "id": "failed",
+                    "node": {"id": "replacement", "task": "No diff", "expects_no_diff": True},
+                },
+            )
+        ]
+    )
+    retried = run_graph(
+        retry_graph,
+        agent_runner=lambda node, **_: _report(node.persona),
+        lifecycle_runner=lambda node, **_: _lifecycle(),
+        replayed_runs={
+            "failed": NodeRun("failed", "failed earlier"),
+            "dependent": NodeRun("skipped", "dependency failed"),
+        },
+        proposal_pump=retry_pump,  # type: ignore[arg-type] - focused in-memory command pump
+    )
+    assert retried.results["replacement"].status == "done"
+    assert retried.results["dependent"].status == "done"
+
+    drop_graph = parse_graph(
+        {
+            "schema_version": 3,
+            "tasks": [
+                {"id": "keep", "kind": "human", "task": "Keep"},
+                {"id": "pending", "task": "No diff", "expects_no_diff": True, "deps": ["keep"]},
+            ],
+        }
+    )
+    drop_pump = _EditingPump(
+        [EditCommand("drop", {"op": "drop", "id": "pending", "dependents": "drop"})]
+    )
+    dropped = run_graph(
+        drop_graph,
+        agent_runner=lambda node, **_: _report(node.persona),
+        lifecycle_runner=lambda node, **_: _lifecycle(),
+        proposal_pump=drop_pump,  # type: ignore[arg-type] - focused in-memory command pump
+    )
+    assert set(dropped.results) == {"keep"}
 
 
 def test_main_validates_and_services_inherited_proposal_channel(

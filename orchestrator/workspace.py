@@ -184,6 +184,10 @@ class Workspace:
         """Return the registered workflow, if the resolver exposes registry metadata."""
         return self._workflow(repo)
 
+    def repo_ref(self, spec: str) -> RepoRef:
+        """Normalize a repo spec through the registry when one backs this workspace."""
+        return self._registry.repo_ref(spec) if self._registry is not None else normalize_repo(spec)
+
     def selection(self, repo: RepoRef) -> WorkspaceSelection:
         """Return the resolved checkout roles and publication decision."""
         try:
@@ -242,7 +246,7 @@ class Workspace:
         with self._repo_lock(repo):
             if self._registry is not None:
                 selected = self._registry.select(
-                    repo.url,
+                    repo.slug if repo.local else repo.url,
                     execution_checkout=execution_checkout,
                     repo_type=repo_type or self._repo_type,
                 )

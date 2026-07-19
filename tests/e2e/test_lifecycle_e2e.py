@@ -19,6 +19,8 @@ import json
 import os
 import shlex
 import subprocess
+import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
@@ -51,7 +53,7 @@ from orchestrator.next_round import main as next_round_main
 from orchestrator.next_round import main_runs
 from orchestrator.provenance import INCOMPLETE_TRAILER, PR_BASE_TRAILER, incomplete_commits
 from orchestrator.recover import recover_repo
-from orchestrator.registry import Registry
+from orchestrator.registry import Registry, RegistryEntry, Slug
 from orchestrator.replan import next_round
 from orchestrator.runs import NodeId, RunId, prepare_round, write_result
 from orchestrator.workspace import Workspace, normalize_repo
@@ -483,6 +485,127 @@ def test_repo_plan_ledger_and_guided_next_round(
 
 
 # --- local repo: direct merge into main after checks -----------------------
+
+
+def test_registered_aliases_drive_real_lifecycle_without_a_stray_clone(
+    tmp_path, bare_origin, command_base, personas_dir, capsys, monkeypatch
+) -> None:
+    """Repo and execution aliases reach the real onejudge lifecycle boundary."""
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical")
+    safety = gitops.clone(origin, tmp_path / "safety")
+    registry = Registry()
+    registry.register(str(canonical), workflow="local")
+    registry.register(str(safety))
+
+    result = run_repo_task(
+        "local/canonical",
+        "complete-now write-change alias lifecycle",
+        "engineer",
+        workspace=Workspace(tmp_path / "worktrees"),
+        execution_checkout="local/safety",
+        base_path=command_base(),
+        persona_dir=personas_dir,
+        verify_cmd=["true"],
+    )
+
+    assert result.ok and result.outcome == "merged", result.detail
+    assert Path(result.publication_checkout) == canonical
+    assert Path(result.execution_checkout) == safety
+    assert not (Path(os.environ["AI_ORCHESTRATOR_HOME"]) / "repos").exists()
+
+    plan = tmp_path / "alias-plan.json"
+    plan.write_text(
+        json.dumps(
+            {
+                "schema_version": 3,
+                "tasks": [
+                    {
+                        "id": "alias-node",
+                        "repo": "local/canonical",
+                        "persona": "engineer",
+                        "task": "complete-now write-unique-change alias plan lifecycle",
+                        "execution_checkout": "local/safety",
+                        "verify_cmd": ["true"],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    planned_rc = graph_module.main(
+        [
+            str(plan),
+            "--no-record",
+            "--workspace",
+            str(tmp_path / "plan-worktrees"),
+            "--base",
+            str(command_base()),
+            "--persona-dir",
+            str(personas_dir),
+            "--format",
+            "json",
+        ]
+    )
+    planned = json.loads(capsys.readouterr().out)
+
+    assert planned_rc == 0
+    planned_result = planned["results"]["alias-node"]
+    assert planned_result["outcome"] == "merged"
+    assert Path(planned_result["publication_checkout"]) == canonical
+    assert Path(planned_result["execution_checkout"]) == safety
+    assert not (Path(os.environ["AI_ORCHESTRATOR_HOME"]) / "repos").exists()
+
+    remote_origin = bare_origin()
+    remote_checkout = gitops.clone(remote_origin, tmp_path / "crozier")
+    remote_registry = Registry()
+    remote_registry.entries[Slug("nickderobertis/crozier")] = RegistryEntry(
+        str(remote_checkout.resolve()),
+        str(remote_origin),
+        "remote",
+        "single-owner",
+    )
+    remote_registry.save()
+    monkeypatch.setattr(lifecycle_module, "CliGitHubBackend", lambda: FakeGitHub(remote_origin))
+    remote_plan = tmp_path / "remote-alias-plan.json"
+    remote_plan.write_text(
+        json.dumps(
+            {
+                "schema_version": 3,
+                "tasks": [
+                    {
+                        "id": "remote-alias",
+                        "repo": "nickderobertis/crozier",
+                        "persona": "engineer",
+                        "task": "complete-now write-change registered remote alias",
+                        "verify_cmd": ["true"],
+                        "merge_policy": "none",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    remote_rc = graph_module.main(
+        [
+            str(remote_plan),
+            "--no-record",
+            "--workspace",
+            str(tmp_path / "remote-plan-worktrees"),
+            "--base",
+            str(command_base()),
+            "--persona-dir",
+            str(personas_dir),
+            "--format",
+            "json",
+        ]
+    )
+    remote = json.loads(capsys.readouterr().out)["results"]["remote-alias"]
+
+    assert remote_rc == 0
+    assert remote["outcome"] == "pr-open"
+    assert Path(remote["publication_checkout"]) == remote_checkout
+    assert remote["workflow"] == "remote" and remote["repo_type"] == "single-owner"
 
 
 def test_local_identity_executes_in_safety_clone_and_publishes_without_pr(
@@ -1505,6 +1628,150 @@ def test_clean_committed_partial_work_is_marked_and_recoverable(tmp_path, bare_o
     assert f"Orchestrator-Recovered-Incomplete: {marker_sha}" in attestation[0].message
     assert gitops.is_ancestor(canonical, attestation[0].sha, "origin/main")
     assert _has_file(origin, "main", "partial.txt")
+
+
+def test_cooperative_real_dispatch_cancellation_preserves_and_recovers_branch(
+    tmp_path, bare_origin, command_base, personas_dir
+) -> None:
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-cancelled")
+    Registry().register(str(canonical), workflow="local", repo_type="single-owner")
+    workspace = Workspace(tmp_path / "cancelled-worktrees")
+    cancel = threading.Event()
+    witness = tmp_path / "cancelled.ticks"
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(
+            run_repo_task,
+            str(canonical),
+            f"slow-branch {witness} write-change",
+            "engineer",
+            workspace=workspace,
+            base_path=command_base(),
+            persona_dir=personas_dir,
+            branch="feature/cooperative-cancel",
+            verify_cmd=["test", "-f", "CHANGE.txt"],
+            cancel=cancel,
+        )
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline:
+            ticks = witness.read_text(encoding="utf-8").count("tick") if witness.exists() else 0
+            changes = list((tmp_path / "cancelled-worktrees").rglob("CHANGE.txt"))
+            if ticks >= 3 and changes:
+                break
+            time.sleep(0.02)
+        else:
+            pytest.fail("real dispatch did not produce partial work before cancellation")
+        cancel.set()
+        result = future.result(timeout=15)
+
+    assert result.outcome == "not-completed"
+    assert isinstance(result.resume, Resume)
+    assert result.resume.checkpoint == gitops.ref_sha(canonical, result.branch)
+    assert result.branch not in gitops.worktrees(canonical)
+    assert incomplete_commits(canonical, "origin/main", result.branch)
+
+    recovered = recover_repo(
+        canonical,
+        result.branch,
+        workspace_root=tmp_path / "cancelled-recovery-worktrees",
+        verify_cmd=["test", "-f", "CHANGE.txt"],
+    )
+    assert recovered.ok and recovered.outcome == "merged"
+    assert _has_file(origin, "main", "CHANGE.txt")
+
+
+def test_cancellation_during_verification_preserves_before_publication(
+    tmp_path, bare_origin, command_base, personas_dir
+) -> None:
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-verification-cancel")
+    Registry().register(str(canonical), workflow="local", repo_type="single-owner")
+    cancel = threading.Event()
+    gate_started = tmp_path / "verification.started"
+    branch = "feature/verification-cancel"
+    gate = [
+        "sh",
+        "-c",
+        f"touch {shlex.quote(str(gate_started))}; sleep 1; test -f CHANGE.txt",
+    ]
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(
+            run_repo_task,
+            str(canonical),
+            "complete-now write-change",
+            "engineer",
+            workspace=Workspace(tmp_path / "verification-cancel-worktrees"),
+            base_path=command_base(),
+            persona_dir=personas_dir,
+            branch=branch,
+            verify_cmd=gate,
+            cancel=cancel,
+        )
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline and not gate_started.exists():
+            time.sleep(0.02)
+        assert gate_started.exists()
+        cancel.set()
+        result = future.result(timeout=15)
+
+    assert result.outcome == "not-completed"
+    assert result.detail.startswith("cancelled cooperatively after verification")
+    assert isinstance(result.resume, Resume)
+    assert result.resume.checkpoint == gitops.ref_sha(canonical, branch)
+    assert incomplete_commits(canonical, "origin/main", branch)
+    assert not _has_file(origin, "main", "CHANGE.txt")
+
+    recovered = recover_repo(
+        canonical,
+        branch,
+        workspace_root=tmp_path / "verification-cancel-recovery",
+        verify_cmd=["test", "-f", "CHANGE.txt"],
+    )
+    assert recovered.ok and recovered.outcome == "merged"
+    assert _has_file(origin, "main", "CHANGE.txt")
+
+
+def test_cancellation_after_publication_starts_finishes_authoritatively(
+    tmp_path, bare_origin, command_base, personas_dir
+) -> None:
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-publication-cancel")
+    Registry().register(str(canonical), workflow="local", repo_type="single-owner")
+    push_started = tmp_path / "publication.started"
+    hook = origin / "hooks" / "pre-receive"
+    hook.write_text(
+        f"#!/bin/sh\ntouch {shlex.quote(str(push_started))}\nsleep 1\nexit 0\n",
+        encoding="utf-8",
+    )
+    hook.chmod(0o755)
+    cancel = threading.Event()
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(
+            run_repo_task,
+            str(canonical),
+            "complete-now write-change",
+            "engineer",
+            workspace=Workspace(tmp_path / "publication-cancel-worktrees"),
+            base_path=command_base(),
+            persona_dir=personas_dir,
+            branch="feature/publication-cancel",
+            verify_cmd=["test", "-f", "CHANGE.txt"],
+            cancel=cancel,
+        )
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline and not push_started.exists():
+            time.sleep(0.02)
+        assert push_started.exists()
+        cancel.set()
+        result = future.result(timeout=20)
+
+    assert cancel.is_set()
+    assert result.ok and result.outcome == "merged"
+    assert result.resume is None
+    assert _has_file(origin, "main", "CHANGE.txt")
 
 
 def test_no_changes_produces_no_pr(tmp_path, bare_origin) -> None:
