@@ -25,6 +25,7 @@ from orchestrator.telemetry import (
     _metrics,
     _summarize_session,
     _timing,
+    _utc_datetime,
     collect_run,
     main,
 )
@@ -329,3 +330,58 @@ def test_session_normalization_degrades_each_field_independently(tmp_path: Path)
     assert set(zero["fractions"].values()) == {0.0}
     with pytest.raises(telemetry_module.HistoryError, match="unsupported.*schema"):
         _summarize_session(session, [{"schema_version": 99}])
+
+
+def test_new_history_schema_rejects_invalid_intervals_roles_and_tool_events(tmp_path: Path) -> None:
+    session = HistorySession(
+        SessionId("new"), "agent", tmp_path, "now", tmp_path / "history", {"role": "agent"}
+    )
+    base = {
+        "schema_version": "0.3",
+        "duration_ms": 5,
+        "model_ms": 3,
+        "tool_ms": 2,
+        "started_at": "2026-01-01T00:00:00Z",
+        "finished_at": "2026-01-01T00:00:00.005Z",
+        "usage": {},
+        "events": [],
+    }
+    assert _utc_datetime("2026-01-01") is None
+    assert _utc_datetime("not-a-dateZ") is None
+    assert _utc_datetime(1) is None
+    for changed in (
+        {"duration_ms": 4},
+        {"started_at": "2026-01-01"},
+        {"finished_at": "2025-01-01T00:00:00Z"},
+        {
+            "events": [
+                {
+                    "kind": "tool_call",
+                    "tool_call_id": "",
+                    "started_at": base["started_at"],
+                    "finished_at": None,
+                    "duration_ms": None,
+                    "status": "completed",
+                }
+            ]
+        },
+        {
+            "events": [
+                {
+                    "kind": "tool_call",
+                    "tool_call_id": "x",
+                    "started_at": base["started_at"],
+                    "finished_at": "bad",
+                    "duration_ms": -1,
+                    "status": "unknown",
+                }
+            ]
+        },
+    ):
+        with pytest.raises(telemetry_module.HistoryError, match="invalid"):
+            _summarize_session(session, [{**base, **changed}])
+    bad_role = HistorySession(
+        SessionId("bad"), "agent", tmp_path, "now", tmp_path / "history", {"role": "other"}
+    )
+    with pytest.raises(telemetry_module.HistoryError, match="role"):
+        _summarize_session(bad_role, [])

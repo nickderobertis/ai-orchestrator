@@ -309,7 +309,8 @@ def test_real_history_labels_and_cursor_watch(oneharness_bin: str, tmp_path: Pat
             str(items[-1].get("harness", "")),
             str(items[-1].get("model", "")),
         )
-        for items in native_records.values()
+        for role, items in native_records.items()
+        if role != "llmlint"
     }
     assert {
         (provider["provider"], provider.get("harness", ""), provider.get("model", ""))
@@ -317,7 +318,7 @@ def test_real_history_labels_and_cursor_watch(oneharness_bin: str, tmp_path: Pat
     } == expected_providers
     expected_agent_ms = sum(
         int(item["duration_ms"])
-        for role in ("agent", "llmlint")
+        for role in ("agent",)
         for item in native_records[role]
         if isinstance(item.get("duration_ms"), int)
         and not isinstance(item["duration_ms"], bool)
@@ -332,7 +333,9 @@ def test_real_history_labels_and_cursor_watch(oneharness_bin: str, tmp_path: Pat
         and item["duration_ms"] >= 0
     )
     assert round(run["timing"]["judge_seconds"] * 1000) == expected_judge_ms
-    assert run["turns"] == sum(len(items) for items in native_records.values())
+    assert run["turns"] == sum(
+        len(items) for role, items in native_records.items() if role != "llmlint"
+    )
     breakdown = _just(
         "telemetry",
         "--runs-dir",

@@ -612,6 +612,8 @@ def _providers(run_id: RunId, oneharness_bin: str) -> tuple[list[Provider], list
     for session in sessions:
         if session.labels.get("run_id") != run_id:
             continue
+        if session.labels.get("role") == "llmlint":
+            continue
         records = session_records(session)
         summaries.append(_summarize_session(session, cast(list[HistoryRecord], records)))
         latest = records[-1] if records else {}
