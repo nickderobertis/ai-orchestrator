@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import signal
+import socket
 import subprocess
 import time
 from datetime import datetime
@@ -711,15 +712,21 @@ def test_recover_interrupted_real_cli_does_not_duplicate_node_start(
     settled_plan.write_text(
         json.dumps(
             {
+                "schema_version": 2,
                 "tasks": [
-                    {"id": "first", "persona": "engineer", "task": "complete-now"},
+                    {
+                        "id": "first",
+                        "repo": "o/r",
+                        "task": "No lifecycle diff.",
+                        "expects_no_diff": True,
+                    },
                     {
                         "id": "second",
                         "persona": "engineer",
                         "task": "complete-now",
                         "deps": ["first"],
                     },
-                ]
+                ],
             }
         )
     )
@@ -774,6 +781,51 @@ def test_recover_interrupted_real_cli_does_not_duplicate_node_start(
         json.loads((runs / "settled-prefix" / "round-01" / "result.json").read_text())["state"]
         == "complete"
     )
+
+
+def test_real_cli_refuses_legacy_settled_prefix_without_terminal_payload(tmp_path: Path) -> None:
+    runs = tmp_path / "runs"
+    plan = tmp_path / "legacy-prefix.json"
+    plan.write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "tasks": [{"id": "done", "task": "No diff.", "expects_no_diff": True}],
+            }
+        )
+    )
+    command = [
+        "run-plan",
+        str(plan),
+        "--run",
+        "legacy-prefix",
+        "--runs-dir",
+        str(runs),
+        "--format",
+        "json",
+    ]
+    completed = _just(*command)
+    assert completed.returncode == 0, completed.stderr
+    round_dir = runs / "legacy-prefix" / "round-01"
+    events_path = runs / "legacy-prefix" / "events.jsonl"
+    events = [json.loads(line) for line in events_path.read_text().splitlines()]
+    prefix = []
+    for event in events:
+        if event["kind"] == "round-finished":
+            continue
+        event["version"] = 1
+        if event["kind"] == "node-settled":
+            event["detail"].pop("result")
+        prefix.append(event)
+    events_path.write_text("".join(json.dumps(event) + "\n" for event in prefix))
+    (round_dir / "result.json").unlink()
+    (round_dir / "status.json").write_text(
+        json.dumps({"status": "running", "pid": 999_999_999, "host": socket.gethostname()})
+    )
+
+    recovered = _just(*command, "--recover")
+    assert recovered.returncode == 2
+    assert "legacy settled nodes without terminal payloads: done" in recovered.stderr
 
 
 def test_recover_completes_a_partially_emitted_graph_without_duplicates(tmp_path: Path) -> None:
