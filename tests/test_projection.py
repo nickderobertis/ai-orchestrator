@@ -150,7 +150,7 @@ def test_committed_drop_and_attestation_fold_live_state() -> None:
         _event(
             "edit-committed",
             7,
-            detail={"operations": [{"kind": "run-completed", "detail": {"reason": "done"}}]},
+            detail={"operations": [{"kind": "completion-requested", "detail": {"reason": "done"}}]},
         ),
     ]
     projection = project_round(events, RunId("r"), 1)

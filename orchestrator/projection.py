@@ -367,7 +367,7 @@ def _fold_edit_operation(builder: _RoundBuilder, operation: object) -> None:
             raise ProjectionError(f"human action {ref!r} was attested more than once")
         builder.attestations.append(ref)
         builder.states[ref] = "done"
-    elif kind in {"reparent", "retry-requested", "run-completed"}:
+    elif kind in {"reparent", "retry-requested", "completion-requested"}:
         return
     else:
         raise ProjectionError(f"unknown committed edit operation {kind!r}")

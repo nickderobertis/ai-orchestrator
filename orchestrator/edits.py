@@ -4,19 +4,40 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Literal, TypeAlias, cast
+from typing import TYPE_CHECKING, Any, Literal, TypeAlias, TypedDict, cast, get_args
 
 if TYPE_CHECKING:
     from .graph import Graph
 
 EditOp = Literal["add", "drop", "reparent", "retry", "attest", "complete"]
+EDIT_OPS = frozenset(get_args(EditOp))
 JsonValue: TypeAlias = str | int | float | bool | None | list["JsonValue"] | dict[str, "JsonValue"]
+
+
+class EditPayload(TypedDict, total=False):
+    """Validated union carrier; fields are required by their discriminated op."""
+
+    op: EditOp
+    node: dict[str, Any]
+    id: str
+    deps: list[str]
+    dependents: Literal["drop", "detach"]
+    ref: str
+    reason: str
+
+
+class EditOperation(TypedDict, total=False):
+    """One compiled operation inside an atomic edit commit."""
+
+    kind: str
+    node: str
+    detail: dict[str, Any]
 
 
 @dataclass(frozen=True)
 class EditCommand:
     op: EditOp
-    payload: dict[str, Any]
+    payload: EditPayload
 
 
 class EditError(ValueError):
@@ -34,16 +55,9 @@ def parse_commands(value: Mapping[str, Any]) -> tuple[EditCommand, ...]:
         raise EditError("edit commands must be a list")
     commands: list[EditCommand] = []
     for index, item in enumerate(raw):
-        if not isinstance(item, dict) or item.get("op") not in {
-            "add",
-            "drop",
-            "reparent",
-            "retry",
-            "attest",
-            "complete",
-        }:
+        if not isinstance(item, dict) or item.get("op") not in EDIT_OPS:
             raise EditError(f"edit command #{index} has an unknown op")
-        commands.append(EditCommand(cast(EditOp, item["op"]), dict(item)))
+        commands.append(EditCommand(cast(EditOp, item["op"]), cast(EditPayload, dict(item))))
     return tuple(commands)
 
 
@@ -68,7 +82,7 @@ def apply_edit(
     *,
     states: Mapping[str, str],
     attestations: Sequence[str],
-) -> tuple[Graph, list[dict[str, Any]]]:
+) -> tuple[Graph, list[EditOperation]]:
     """Validate one delta against the frontier, returning a new graph and event specs."""
     op, item = command.op, command.payload
     from .graph import parse_graph
@@ -77,113 +91,127 @@ def apply_edit(
     mapping = graph_mapping(graph)
     tasks = cast(list[dict[str, Any]], mapping["tasks"])
     by_id = {task["id"]: task for task in tasks}
-    events: list[dict[str, Any]] = []
-    if op == "add":
-        node = item.get("node")
-        if not isinstance(node, dict):
-            raise EditError("add requires a node mapping")
-        tasks.append(dict(node))
-        events.append({"kind": "node-added", "detail": {"definition": _definition(node)}})
-        for dependency in node.get("deps", []):
-            events.append(
-                {"kind": "edge-added", "detail": {"from": dependency, "to": node.get("id")}}
-            )
-    elif op == "reparent":
-        node_id, deps = item.get("id"), item.get("deps")
-        if not isinstance(node_id, str) or node_id not in by_id:
-            raise EditError("reparent requires an existing node id")
-        if states.get(node_id) is not None:
-            raise EditError("reparent requires an unstarted node")
-        if not isinstance(deps, list) or not all(isinstance(dep, str) for dep in deps):
-            raise EditError("reparent deps must be a list of node ids")
-        old = list(by_id[node_id].get("deps", []))
-        by_id[node_id]["deps"] = list(deps)
-        for dependency in old:
-            events.append({"kind": "edge-removed", "detail": {"from": dependency, "to": node_id}})
-        for dependency in deps:
-            events.append({"kind": "edge-added", "detail": {"from": dependency, "to": node_id}})
-        events.append({"kind": "reparent", "node": node_id, "detail": {"from": old, "to": deps}})
-    elif op == "drop":
-        node_id, fate = item.get("id"), item.get("dependents")
-        if not isinstance(node_id, str) or node_id not in by_id:
-            raise EditError("drop requires an existing node id")
-        if fate not in {"drop", "detach"}:
-            raise EditError("drop must define dependents as 'drop' or 'detach'")
-        dependents = [task for task in tasks if node_id in task.get("deps", [])]
-        target = by_id[node_id]
-        target_repo = target.get("repo")
-        unresolved_same_identity = [
-            task
-            for task in dependents
-            if target_repo is not None
-            and task.get("repo") == target_repo
-            and states.get(task["id"]) != "done"
-        ]
-        alternative_anchors = [
-            task
-            for task in tasks
-            if task["id"] != node_id
-            and task.get("repo") == target_repo
-            and states.get(task["id"]) == "done"
-        ]
-        if unresolved_same_identity and not alternative_anchors:
-            raise EditError("drop would remove the last unresolved publication anchor")
-        removed = {node_id}
-        if fate == "drop":
-            pending = [task["id"] for task in dependents]
-            while pending:
-                candidate = pending.pop()
-                if candidate in removed:
-                    continue
-                removed.add(candidate)
-                pending.extend(task["id"] for task in tasks if candidate in task.get("deps", []))
-        else:
-            for task in dependents:
-                task["deps"] = [dep for dep in task.get("deps", []) if dep != node_id]
+    events: list[EditOperation] = []
+    match op:
+        case "add":
+            node = item.get("node")
+            if not isinstance(node, dict):
+                raise EditError("add requires a node mapping")
+            tasks.append(dict(node))
+            events.append({"kind": "node-added", "detail": {"definition": _definition(node)}})
+            for dependency in node.get("deps", []):
                 events.append(
-                    {"kind": "edge-removed", "detail": {"from": node_id, "to": task["id"]}}
+                    {"kind": "edge-added", "detail": {"from": dependency, "to": node.get("id")}}
                 )
-        tasks[:] = [task for task in tasks if task["id"] not in removed]
-        events.extend(
-            {"kind": "node-dropped", "node": dropped, "detail": {"dependents": fate}}
-            for dropped in sorted(removed)
-        )
-    elif op == "retry":
-        node_id, node = item.get("id"), item.get("node")
-        if not isinstance(node_id, str) or states.get(node_id) not in {
-            "running",
-            "failed",
-            "cancelled",
-        }:
-            raise EditError("retry requires a settled retryable node")
-        if not isinstance(node, dict):
-            raise EditError("retry requires a replacement node mapping")
-        if node.get("id") in by_id:
-            raise EditError("retry replacement id must be new")
-        tasks.append(dict(node))
-        events.append(
-            {"kind": "retry-requested", "node": node_id, "detail": {"replacement": node.get("id")}}
-        )
-        events.append(
-            {"kind": "node-added", "detail": {"definition": _definition(node), "retry_of": node_id}}
-        )
-        for dependency in node.get("deps", []):
+        case "reparent":
+            node_id, deps = item.get("id"), item.get("deps")
+            if not isinstance(node_id, str) or node_id not in by_id:
+                raise EditError("reparent requires an existing node id")
+            if states.get(node_id) is not None:
+                raise EditError("reparent requires an unstarted node")
+            if not isinstance(deps, list) or not all(isinstance(dep, str) for dep in deps):
+                raise EditError("reparent deps must be a list of node ids")
+            old = list(by_id[node_id].get("deps", []))
+            by_id[node_id]["deps"] = list(deps)
+            for dependency in old:
+                events.append(
+                    {"kind": "edge-removed", "detail": {"from": dependency, "to": node_id}}
+                )
+            for dependency in deps:
+                events.append({"kind": "edge-added", "detail": {"from": dependency, "to": node_id}})
             events.append(
-                {"kind": "edge-added", "detail": {"from": dependency, "to": node.get("id")}}
+                {"kind": "reparent", "node": node_id, "detail": {"from": old, "to": deps}}
             )
-    elif op == "attest":
-        ref = item.get("ref")
-        if not isinstance(ref, str) or states.get(ref) != "waiting":
-            raise EditError("attest requires a currently-ready human action")
-        if ref in attestations:
-            raise EditError("human action was already attested")
-        events.append({"kind": "human-attested", "node": ref, "detail": {"ref": ref}})
-    elif op == "complete":
-        reason = item.get("reason")
-        if not isinstance(reason, str):
-            raise EditError("complete requires a string reason")
-        events.append({"kind": "run-completed", "detail": {"reason": reason}})
-        return graph, events
+        case "drop":
+            node_id, fate = item.get("id"), item.get("dependents")
+            if not isinstance(node_id, str) or node_id not in by_id:
+                raise EditError("drop requires an existing node id")
+            if fate not in {"drop", "detach"}:
+                raise EditError("drop must define dependents as 'drop' or 'detach'")
+            dependents = [task for task in tasks if node_id in task.get("deps", [])]
+            target = by_id[node_id]
+            target_repo = target.get("repo")
+            unresolved_same_identity = [
+                task
+                for task in dependents
+                if target_repo is not None
+                and task.get("repo") == target_repo
+                and states.get(task["id"]) != "done"
+            ]
+            alternative_anchors = [
+                task
+                for task in tasks
+                if task["id"] != node_id
+                and task.get("repo") == target_repo
+                and states.get(task["id"]) == "done"
+            ]
+            if unresolved_same_identity and not alternative_anchors:
+                raise EditError("drop would remove the last unresolved publication anchor")
+            removed = {node_id}
+            if fate == "drop":
+                pending = [task["id"] for task in dependents]
+                while pending:
+                    candidate = pending.pop()
+                    if candidate in removed:
+                        continue
+                    removed.add(candidate)
+                    pending.extend(
+                        task["id"] for task in tasks if candidate in task.get("deps", [])
+                    )
+            else:
+                for task in dependents:
+                    task["deps"] = [dep for dep in task.get("deps", []) if dep != node_id]
+                    events.append(
+                        {"kind": "edge-removed", "detail": {"from": node_id, "to": task["id"]}}
+                    )
+            tasks[:] = [task for task in tasks if task["id"] not in removed]
+            events.extend(
+                {"kind": "node-dropped", "node": dropped, "detail": {"dependents": fate}}
+                for dropped in sorted(removed)
+            )
+        case "retry":
+            node_id, node = item.get("id"), item.get("node")
+            if not isinstance(node_id, str) or states.get(node_id) not in {
+                "running",
+                "failed",
+                "cancelled",
+            }:
+                raise EditError("retry requires a settled retryable node")
+            if not isinstance(node, dict):
+                raise EditError("retry requires a replacement node mapping")
+            if node.get("id") in by_id:
+                raise EditError("retry replacement id must be new")
+            tasks.append(dict(node))
+            events.append(
+                {
+                    "kind": "retry-requested",
+                    "node": node_id,
+                    "detail": {"replacement": node.get("id")},
+                }
+            )
+            events.append(
+                {
+                    "kind": "node-added",
+                    "detail": {"definition": _definition(node), "retry_of": node_id},
+                }
+            )
+            for dependency in node.get("deps", []):
+                events.append(
+                    {"kind": "edge-added", "detail": {"from": dependency, "to": node.get("id")}}
+                )
+        case "attest":
+            ref = item.get("ref")
+            if not isinstance(ref, str) or states.get(ref) != "waiting":
+                raise EditError("attest requires a currently-ready human action")
+            if ref in attestations:
+                raise EditError("human action was already attested")
+            events.append({"kind": "human-attested", "node": ref, "detail": {"ref": ref}})
+        case "complete":
+            reason = item.get("reason")
+            if not isinstance(reason, str):
+                raise EditError("complete requires a string reason")
+            events.append({"kind": "completion-requested", "detail": {"reason": reason}})
+            return graph, events
     try:
         updated = parse_graph(mapping)
     except PlanError as exc:

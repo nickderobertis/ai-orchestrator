@@ -323,6 +323,26 @@ def test_recover_interrupted_real_cli_does_not_duplicate_node_start(
         ),
         (
             (
+                json.dumps(
+                    {
+                        **envelope,
+                        "kind": "edit-committed",
+                        "detail": {
+                            "operations": [
+                                {
+                                    "kind": "edge-added",
+                                    "detail": {"from": "work", "to": "missing"},
+                                }
+                            ]
+                        },
+                    }
+                )
+                + "\n"
+            ).encode(),
+            "follows round-finished",
+        ),
+        (
+            (
                 json.dumps({**envelope, "kind": "node-added", "detail": events[0]["detail"]}) + "\n"
             ).encode(),
             "follows round-finished",

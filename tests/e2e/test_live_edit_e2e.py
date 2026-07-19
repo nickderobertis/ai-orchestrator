@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 import subprocess
 import sys
 import time
@@ -12,7 +11,6 @@ from pathlib import Path
 import yaml
 
 from orchestrator import BASE_CONFIG, REPO_ROOT
-from orchestrator.channel import create_channel
 from orchestrator.projection import project_run
 from orchestrator.runs import RunId
 
@@ -44,9 +42,6 @@ def test_real_cli_mutates_live_frontier_and_replays_atomic_edits(
     tmp_path: Path, onejudge_bin: str
 ) -> None:
     runs = tmp_path / "runs"
-    run_id = "live-edit"
-    run_dir = runs / run_id
-    channel = create_channel(run_dir)
     base = yaml.safe_load(BASE_CONFIG.read_text(encoding="utf-8"))
     base["provider"] = {"kind": "command", "command": [sys.executable, str(FAKE_BACKEND)]}
     base_path = tmp_path / "base.yaml"
@@ -56,6 +51,7 @@ def test_real_cli_mutates_live_frontier_and_replays_atomic_edits(
         json.dumps(
             {
                 "schema_version": 3,
+                "name": "live-edit",
                 "concurrency": 4,
                 "tasks": [
                     {
@@ -68,7 +64,12 @@ def test_real_cli_mutates_live_frontier_and_replays_atomic_edits(
                         "persona": "engineer",
                         "task": f"slow-branch {tmp_path / 'b.ticks'} live-edit-slow",
                     },
-                    {"id": "failed", "persona": "engineer", "task": "should-fail", "max_turns": 1},
+                    {
+                        "id": "failed",
+                        "persona": "engineer",
+                        "task": "should-fail no-assessment",
+                        "max_turns": 1,
+                    },
                     {"id": "approve", "kind": "human", "task": "Approve"},
                     {
                         "id": "pending",
@@ -76,38 +77,60 @@ def test_real_cli_mutates_live_frontier_and_replays_atomic_edits(
                         "expects_no_diff": True,
                         "deps": ["slow_a"],
                     },
+                    {
+                        "id": "anchor",
+                        "repo": "acme/widget",
+                        "task": "No diff",
+                        "expects_no_diff": True,
+                        "deps": ["approve"],
+                    },
+                    {
+                        "id": "stacked",
+                        "repo": "acme/widget",
+                        "task": "No diff",
+                        "expects_no_diff": True,
+                        "deps": ["anchor"],
+                    },
                 ],
             }
         ),
         encoding="utf-8",
     )
-    env = {
-        **os.environ,
-        "AI_ORCHESTRATOR_CHANNEL_DIR": str(channel),
-        "AI_ORCHESTRATOR_CHANNEL_RUN_ID": run_id,
-    }
-    process = subprocess.Popen(
+    launched = subprocess.run(
         [
             "just",
-            "run-plan",
+            "orchestrate",
             str(plan),
-            "--run",
-            run_id,
             "--runs-dir",
             str(runs),
             "--base",
             str(base_path),
             "--onejudge-bin",
             onejudge_bin,
-            "--format",
-            "json",
+            "--skill-command",
+            sys.executable,
+            str(FAKE_BACKEND),
         ],
         cwd=REPO_ROOT,
-        env=env,
         text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
+        check=True,
     )
+    run_id = launched.stdout.strip()
+    outer_run = runs / run_id
+    deadline = time.monotonic() + 15
+    run_dir: Path | None = None
+    while time.monotonic() < deadline:
+        candidates = [
+            path
+            for path in runs.iterdir()
+            if path != outer_run and (path / "events.jsonl").is_file()
+        ]
+        if candidates:
+            run_dir = candidates[0]
+            break
+        time.sleep(0.02)
+    assert run_dir is not None
     events = run_dir / "events.jsonl"
     _wait_for(
         events,
@@ -141,6 +164,24 @@ def test_real_cli_mutates_live_frontier_and_replays_atomic_edits(
             check=True,
         )
     assert any("depends on itself" in message for message in messages)
+    for command, diagnostic in (
+        ({"op": "add", "node": "malformed"}, "node mapping"),
+        ({"op": "drop", "id": "pending"}, "define dependents"),
+        (
+            {"op": "drop", "id": "anchor", "dependents": "detach"},
+            "last unresolved publication anchor",
+        ),
+        ({"op": "retry", "id": "approve", "node": "bad"}, "settled retryable"),
+    ):
+        _reply(run_id, runs, [command])
+        rejected = subprocess.run(
+            ["just", "channel-next", run_id, "--runs-dir", str(runs), "--timeout", "10"],
+            cwd=REPO_ROOT,
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+        assert diagnostic in json.loads(rejected.stdout)["surface"]["message"]
     before = events.read_text(encoding="utf-8").count('"kind": "edit-committed"')
 
     _reply(
@@ -176,14 +217,14 @@ def test_real_cli_mutates_live_frontier_and_replays_atomic_edits(
     )
     _reply(run_id, runs, [{"op": "complete", "reason": "planner verified publication anchors"}])
 
-    stdout, stderr = process.communicate(timeout=20)
-    assert process.returncode == 1, stderr
-    payload = json.loads(stdout)
+    result_path = run_dir / "round-01" / "result.json"
+    _wait_for(result_path, lambda text: bool(text.strip()), timeout=25)
+    payload = json.loads(result_path.read_text(encoding="utf-8"))
     assert payload["results"]["added"]["status"] == "done"
     assert payload["results"]["pending"]["status"] == "done"
     assert payload["results"]["retry"]["status"] == "done"
     assert "slow_b" not in payload["results"]
-    projection = project_run(events, RunId(run_id), 1)
+    projection = project_run(events, RunId(run_dir.name), 1)
     assert {node["id"] for node in projection.plan["tasks"]} == set(payload["results"])
     committed = [
         line for line in events.read_text().splitlines() if '"kind": "edit-committed"' in line
@@ -194,3 +235,22 @@ def test_real_cli_mutates_live_frontier_and_replays_atomic_edits(
         "edge-added",
         "reparent",
     ]
+    boundary = subprocess.run(
+        ["just", "channel-next", run_id, "--runs-dir", str(runs), "--timeout", "10"],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    boundary_payload = json.loads(boundary.stdout)
+    if boundary_payload.get("status") != "finished":
+        assert boundary_payload["surface"]["kind"] in {"milestone", "closeout"}
+        subprocess.run(
+            ["just", "channel-reply", run_id, "--runs-dir", str(runs)],
+            cwd=REPO_ROOT,
+            input=json.dumps({"completion": True, "reason": "verified"}),
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+    _wait_for(outer_run / "orchestrator" / "report.json", lambda text: bool(text.strip()))

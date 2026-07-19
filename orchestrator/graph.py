@@ -572,10 +572,10 @@ def run_graph(
                     status[ref] = "done"
                     actual[ref] = NodeRun("done", payload="human-attested")
                 elif operation["kind"] == "retry-requested":
-                    retried = cast(str, operation["node"])
+                    retried = operation["node"]
                     cancellations[retried].set()
                 elif operation["kind"] == "node-dropped":
-                    dropped = cast(str, operation["node"])
+                    dropped = operation["node"]
                     cancellations[dropped].set()
                     if status.get(dropped) != "running":
                         status.pop(dropped, None)

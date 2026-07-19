@@ -117,7 +117,7 @@ def test_reconciler_alone_applies_and_rejects_live_commands() -> None:
         graph,
         agent_runner=lambda node, **_: _report(node.persona),
         lifecycle_runner=lambda node, **_: _lifecycle(),
-        proposal_pump=pump,  # type: ignore[arg-type]
+        proposal_pump=pump,  # type: ignore[arg-type] - focused in-memory command pump
     )
     assert result.results["approve"].status == "done"
     assert result.results["pending"].status == "done"
@@ -129,7 +129,7 @@ def test_reconciler_alone_applies_and_rejects_live_commands() -> None:
         graph,
         agent_runner=lambda node, **_: _report(node.persona),
         lifecycle_runner=lambda node, **_: _lifecycle(),
-        proposal_pump=rejected,  # type: ignore[arg-type]
+        proposal_pump=rejected,  # type: ignore[arg-type] - focused in-memory command pump
     )
     assert rejected.proposals[0][0] == "reconciler"
     assert "depends on itself" in rejected.proposals[0][1]
@@ -162,7 +162,7 @@ def test_running_direct_and_lifecycle_drops_cancel_cooperatively() -> None:
         direct,
         agent_runner=direct_runner,
         lifecycle_runner=lambda node, **_: _lifecycle(),
-        proposal_pump=direct_pump,  # type: ignore[arg-type]
+        proposal_pump=direct_pump,  # type: ignore[arg-type] - focused in-memory command pump
     )
     assert set(direct_result.results) == {"keep"}
 
@@ -192,7 +192,7 @@ def test_running_direct_and_lifecycle_drops_cancel_cooperatively() -> None:
         lifecycle_graph,
         agent_runner=lambda node, **_: _report(node.persona),
         lifecycle_runner=lifecycle_runner,
-        proposal_pump=lifecycle_pump,  # type: ignore[arg-type]
+        proposal_pump=lifecycle_pump,  # type: ignore[arg-type] - focused in-memory command pump
     )
     assert set(lifecycle_result.results) == {"keep"}
 
@@ -223,7 +223,7 @@ def test_reconciler_retries_failed_and_drops_unstarted_nodes() -> None:
         agent_runner=lambda node, **_: _report(node.persona),
         lifecycle_runner=lambda node, **_: _lifecycle(),
         replayed_runs={"failed": NodeRun("failed", "failed earlier")},
-        proposal_pump=retry_pump,  # type: ignore[arg-type]
+        proposal_pump=retry_pump,  # type: ignore[arg-type] - focused in-memory command pump
     )
     assert retried.results["replacement"].status == "done"
 
@@ -243,7 +243,7 @@ def test_reconciler_retries_failed_and_drops_unstarted_nodes() -> None:
         drop_graph,
         agent_runner=lambda node, **_: _report(node.persona),
         lifecycle_runner=lambda node, **_: _lifecycle(),
-        proposal_pump=drop_pump,  # type: ignore[arg-type]
+        proposal_pump=drop_pump,  # type: ignore[arg-type] - focused in-memory command pump
     )
     assert set(dropped.results) == {"keep"}
 

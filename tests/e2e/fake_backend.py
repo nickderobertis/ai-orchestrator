@@ -146,7 +146,10 @@ def main() -> int:
                 if orchestrator_turn == 0:
                     subprocess.run(
                         orchestrator_plan.argv,
-                        check="continuation-channel" not in plan_text,
+                        check=not any(
+                            sentinel in plan_text
+                            for sentinel in ("continuation-channel", '"name": "live-edit"')
+                        ),
                         capture_output=True,
                         text=True,
                     )
@@ -269,7 +272,7 @@ def main() -> int:
             resp = {
                 "text": (
                     "None"
-                    if "slow-branch" in task or "surface-" in task
+                    if "slow-branch" in task or "surface-" in task or "no-assessment" in task
                     else "- Add a regression test for the adjacent edge case."
                 )
             }

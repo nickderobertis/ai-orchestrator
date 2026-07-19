@@ -151,7 +151,7 @@ def test_drop_detach_cascade_anchor_and_complete_deltas() -> None:
         attestations=(),
     )
     assert unchanged.tasks[0].id == "root"
-    assert complete == [{"kind": "run-completed", "detail": {"reason": "published"}}]
+    assert complete == [{"kind": "completion-requested", "detail": {"reason": "published"}}]
 
 
 def test_attestation_and_command_boundary_rejections() -> None:

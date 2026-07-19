@@ -4,7 +4,7 @@
     "node-added",
     "edge-added",
     "edit-committed",
-    "run-completed",
+    "completion-requested",
     "round-started",
     "node-started",
     "human-waiting",
