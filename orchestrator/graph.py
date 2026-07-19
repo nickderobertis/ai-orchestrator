@@ -674,6 +674,11 @@ def _replay_node_run(node: GraphNode, item: GraphResultItem) -> NodeRun:
             )
             for anchor in item.get("stack_bases", [])
         ]
+        raw_deferred_cleanup = item.get("deferred_cleanup", [])
+        if not isinstance(raw_deferred_cleanup, list) or not all(
+            isinstance(detail, str) for detail in raw_deferred_cleanup
+        ):
+            raise ConfigError("recorded lifecycle result has invalid deferred_cleanup")
         payload = LifecycleResult(
             repo=item.get("repo", node.lifecycle.repo),
             task=node.task,
@@ -689,7 +694,7 @@ def _replay_node_run(node: GraphNode, item: GraphResultItem) -> NodeRun:
             synthetic_stack_base=item.get("synthetic_stack_base"),
             stack_bases=anchors,
             detail=item.get("detail", ""),
-            deferred_cleanup=cast(list[str], list(item.get("deferred_cleanup", []))),
+            deferred_cleanup=raw_deferred_cleanup,
             waiting_steps=cast(list[str], list(item.get("waiting_steps", []))),
         )
     return NodeRun(status, error, payload, item)

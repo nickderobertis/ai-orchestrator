@@ -420,34 +420,6 @@ def test_cleanup_suppression_does_not_mask_inflight_failure() -> None:
     assert result.deferred_cleanup == ["remove-worktree deferred for /tmp/worktree: busy"]
 
 
-def test_synthetic_stack_cleanup_contention_is_deferred(monkeypatch, tmp_path) -> None:
-    from orchestrator.coordination import LockTimeout
-    from orchestrator.journal import NullNodeJournal
-
-    class StackWorkspace:
-        def worktree(self, repo, branch, *, base):
-            return tmp_path
-
-        def remove_worktree(self, repo, path) -> None:
-            raise LockTimeout("busy")
-
-    monkeypatch.setattr(lc.gitops, "is_ancestor", lambda *args: True)
-    monkeypatch.setattr(lc.gitops, "push", lambda *args: None)
-    result = LifecycleResult("o/r", "task", "engineer", "main", "branch", "error")
-
-    built = lc._build_synthetic_stack_base(
-        normalize_repo("o/r"),
-        StackWorkspace(),
-        "main",
-        [StackBase("parent")],
-        result=result,
-        journal=NullNodeJournal(),
-    )
-
-    assert isinstance(built, lc.SyntheticStackBase)
-    assert result.deferred_cleanup and "remove-worktree deferred" in result.deferred_cleanup[0]
-
-
 # --- repo-plan loading -----------------------------------------------------
 
 

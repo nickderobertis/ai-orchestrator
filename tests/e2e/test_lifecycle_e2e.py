@@ -120,6 +120,8 @@ def test_published_dispatch_survives_deferred_teardown_and_redispatch_reclaims_i
     contended = ContendedTeardownWorkspace(
         root, resolver=lambda _spec: canonical, workflow="local", repo_type="single-owner"
     )
+    journal = open_journal(tmp_path / "run", RunId("teardown"), 1)
+    scope = NodeJournal(journal, NodeId("publish"), RunId("teardown"), 1)
     first = run_repo_task(
         str(origin),
         "complete-now write-unique-change first",
@@ -129,11 +131,16 @@ def test_published_dispatch_survives_deferred_teardown_and_redispatch_reclaims_i
         base_path=command_base(),
         persona_dir=personas_dir,
         verify_cmd=["true"],
+        journal=scope,
     )
 
     assert first.outcome == "merged", first.detail
     assert first.deferred_cleanup and "remove-worktree deferred" in first.deferred_cleanup[0]
-    assert json.loads(json.dumps(result_payload(first)))["outcome"] == "merged"
+    serialized = json.loads(json.dumps(result_payload(first)))
+    assert serialized["outcome"] == "merged"
+    assert serialized["deferred_cleanup"] == first.deferred_cleanup
+    deferred = [event for event in journal.events() if event.kind == "cleanup-deferred"]
+    assert deferred and deferred[0].detail["operation"] == "remove-worktree"
     orphan = gitops.worktrees(canonical)["teardown-retry"]
     assert orphan.exists()
 
@@ -153,6 +160,43 @@ def test_published_dispatch_survives_deferred_teardown_and_redispatch_reclaims_i
         verify_cmd=["true"],
     )
     assert second.outcome == "merged", second.detail
+
+
+def test_synthetic_stack_teardown_contention_is_deferred_with_real_git(
+    tmp_path, bare_origin
+) -> None:
+    """The other lifecycle teardown site preserves its real synthetic push outcome."""
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-stack")
+
+    class ContendedStackWorkspace(Workspace):
+        def remove_worktree(self, repo, path) -> None:
+            raise LockTimeout("shared .git remains busy")
+
+    workspace = ContendedStackWorkspace(
+        tmp_path / "stack-worktrees",
+        resolver=lambda _spec: canonical,
+        workflow="local",
+        repo_type="single-owner",
+    )
+    ref = normalize_repo(str(origin))
+    workspace.ensure_clone(ref)
+    result = lifecycle_module.LifecycleResult(
+        ref.slug, "stack", "engineer", "main", "stack", "error"
+    )
+
+    built = lifecycle_module._build_synthetic_stack_base(
+        ref,
+        workspace,
+        "main",
+        [StackBase("main")],
+        result=result,
+        journal=lifecycle_module.NullNodeJournal(),
+    )
+
+    assert isinstance(built, lifecycle_module.SyntheticStackBase)
+    assert _tip(origin, f"refs/heads/{built.branch}")
+    assert result.deferred_cleanup and "remove-worktree deferred" in result.deferred_cleanup[0]
 
 
 def test_identity_cache_and_repo_post_checkout_hook_are_wired_across_dispatches(

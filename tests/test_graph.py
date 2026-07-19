@@ -7,14 +7,17 @@ import socket
 import threading
 from collections.abc import Mapping
 from pathlib import Path
+from typing import cast
 
 import pytest
 
 from orchestrator.channel import create_channel
+from orchestrator.config import ConfigError
 from orchestrator.dispatch import DispatchError, Report
 from orchestrator.edits import EditCommand
 from orchestrator.gitops import GitError
 from orchestrator.graph import (
+    GraphNode,
     HumanAction,
     _replay_node_run,
     first_line,
@@ -30,7 +33,7 @@ from orchestrator.graph import (
 from orchestrator.journal import JournalError, NodeSink, open_journal
 from orchestrator.lifecycle import LifecycleResult, RepoPlanNode, Step, StepResult
 from orchestrator.plan import PLAN_SCHEMA_VERSION, NodeRun, PlanError, PlanNode
-from orchestrator.runs import NodeId, RunId
+from orchestrator.runs import GraphResultItem, NodeId, RunId
 
 
 def _report(persona: str, completed: bool = True, assessment: str | None = None) -> Report:
@@ -821,6 +824,18 @@ def test_plan_schema_version_documentation_cannot_drift() -> None:
     for example in ("plan.example.json", "repo-plan.example.json", "tracked-graph.example.json"):
         mapping = json.loads((root / "examples" / example).read_text(encoding="utf-8"))
         assert mapping["schema_version"] == PLAN_SCHEMA_VERSION
+
+
+def test_replay_rejects_invalid_deferred_cleanup() -> None:
+    node = GraphNode(
+        id="work",
+        task="task",
+        lifecycle=RepoPlanNode("work", "o/r", "engineer", "task"),
+    )
+    item = cast(GraphResultItem, {"status": "done", "deferred_cleanup": "not-a-list"})
+
+    with pytest.raises(ConfigError, match="invalid deferred_cleanup"):
+        _replay_node_run(node, item)
 
 
 def test_schema_v2_remains_compatible_but_verify_via_ci_requires_v3() -> None:
