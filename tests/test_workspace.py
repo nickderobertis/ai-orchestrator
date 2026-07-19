@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import shutil
+
 import pytest
 
 from orchestrator import gitops
@@ -87,8 +89,14 @@ def test_workspace_clone_worktree_lifecycle(tmp_path, bare_origin) -> None:
     with pytest.raises(RuntimeError, match="branch 'feat' is active.*resume"):
         ws.worktree(ref, "feat", base="origin/main")
 
-    ws.remove_worktree(ref, wt)
-    assert not wt.exists()
+    # A crashed teardown can leave Git's registration after its directory is gone.
+    shutil.rmtree(wt)
+    replacement = ws.worktree(ref, "feat", base="origin/main")
+    assert replacement == wt
+    assert gitops.current_branch(replacement) == "feat"
+
+    ws.remove_worktree(ref, replacement)
+    assert not replacement.exists()
 
 
 def test_workspace_fast_forwards_canonical_before_cutting_worktree(tmp_path, bare_origin) -> None:
@@ -107,6 +115,19 @@ def test_workspace_fast_forwards_canonical_before_cutting_worktree(tmp_path, bar
 
     assert (canonical / "new.txt").read_text(encoding="utf-8") == "current\n"
     assert (worktree / "new.txt").read_text(encoding="utf-8") == "current\n"
+
+
+def test_workspace_refuses_unregistered_path_collision(tmp_path, bare_origin) -> None:
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical")
+    ref = normalize_repo(str(origin))
+    ws = Workspace(tmp_path / "worktrees", resolver=lambda _: canonical)
+    ws.ensure_clone(ref)
+    collision = ws._worktree_root(ref) / _safe_branch_dir("feat")
+    collision.mkdir(parents=True)
+
+    with pytest.raises(RuntimeError, match="worktree path.*already exists"):
+        ws.worktree(ref, "feat", base="origin/main")
 
 
 def test_workspace_refuses_dirty_execution_checkout(tmp_path, bare_origin) -> None:

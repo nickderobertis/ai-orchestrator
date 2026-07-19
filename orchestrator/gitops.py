@@ -299,6 +299,31 @@ def worktrees(cwd: str | Path) -> dict[str, Path]:
     return result
 
 
+def stale_worktree_branches(cwd: str | Path) -> dict[str, Path]:
+    """Map branches whose registered worktrees Git reports as safely prunable."""
+    proc = _git(["worktree", "list", "--porcelain"], cwd=cwd)
+    result: dict[str, Path] = {}
+    path: Path | None = None
+    branch: str | None = None
+    for line in [*proc.stdout.splitlines(), ""]:
+        if line.startswith("worktree "):
+            path = Path(line.removeprefix("worktree "))
+            branch = None
+        elif line.startswith("branch refs/heads/"):
+            branch = line.removeprefix("branch refs/heads/")
+        elif line.startswith("prunable ") and path is not None and branch is not None:
+            result[branch] = path
+        elif not line:
+            path = None
+            branch = None
+    return result
+
+
+def worktree_prune(cwd: str | Path) -> None:
+    """Remove registrations Git considers prunable without an expiry delay."""
+    _git(["worktree", "prune", "--expire", "now"], cwd=cwd)
+
+
 def has_commits_ahead(cwd: str | Path, base: str) -> bool:
     """True if the current branch has commits ``base`` does not (something to PR)."""
     proc = _git(["rev-list", "--count", f"{base}..HEAD"], cwd=cwd)

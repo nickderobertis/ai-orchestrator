@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import os
 import shlex
+import shutil
 import subprocess
 import threading
 import time
@@ -32,6 +33,7 @@ from fakes import FakeGitHub, make_writing_dispatch
 import orchestrator.graph as graph_module
 import orchestrator.lifecycle as lifecycle_module
 from orchestrator import gitops
+from orchestrator.coordination import LockTimeout
 from orchestrator.dispatch import Report
 from orchestrator.github import PullRequest
 from orchestrator.graph import graph_payload, parse_graph, run_graph
@@ -101,6 +103,56 @@ def _tip(origin: Path, ref: str) -> str:
     return subprocess.run(
         ["git", "-C", str(origin), "rev-parse", ref], text=True, capture_output=True
     ).stdout.strip()
+
+
+def test_published_dispatch_survives_deferred_teardown_and_redispatch_reclaims_it(
+    tmp_path, bare_origin, command_base, personas_dir
+) -> None:
+    """A real merged lifecycle self-heals after teardown leaves its worktree registered."""
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical")
+    root = tmp_path / "worktrees"
+
+    class ContendedTeardownWorkspace(Workspace):
+        def remove_worktree(self, repo, path) -> None:
+            raise LockTimeout("shared .git remains busy")
+
+    contended = ContendedTeardownWorkspace(
+        root, resolver=lambda _spec: canonical, workflow="local", repo_type="single-owner"
+    )
+    first = run_repo_task(
+        str(origin),
+        "complete-now write-unique-change first",
+        "engineer",
+        workspace=contended,
+        branch="teardown-retry",
+        base_path=command_base(),
+        persona_dir=personas_dir,
+        verify_cmd=["true"],
+    )
+
+    assert first.outcome == "merged", first.detail
+    assert first.deferred_cleanup and "remove-worktree deferred" in first.deferred_cleanup[0]
+    assert json.loads(json.dumps(result_payload(first)))["outcome"] == "merged"
+    orphan = gitops.worktrees(canonical)["teardown-retry"]
+    assert orphan.exists()
+
+    # Model the prunable registration left after a crashed host removes its run directory.
+    shutil.rmtree(orphan)
+    recovered = Workspace(
+        root, resolver=lambda _spec: canonical, workflow="local", repo_type="single-owner"
+    )
+    second = run_repo_task(
+        str(origin),
+        "complete-now write-change second",
+        "engineer",
+        workspace=recovered,
+        branch="teardown-retry",
+        base_path=command_base(),
+        persona_dir=personas_dir,
+        verify_cmd=["true"],
+    )
+    assert second.outcome == "merged", second.detail
 
 
 def test_identity_cache_and_repo_post_checkout_hook_are_wired_across_dispatches(
@@ -418,7 +470,7 @@ def test_repo_plan_ledger_and_guided_next_round(
     captured = capsys.readouterr()
     assert rc == 1 and json.loads(captured.out)["results"]["change"]["status"] == "failed"
     first_result = json.loads((runs_dir / "fixed-run" / "round-01" / "result.json").read_text())
-    assert first_result["schema_version"] == 2
+    assert first_result["schema_version"] == 3
     preserved_branch = first_result["results"]["change"]["branch"]
     preserved_checkpoint = first_result["results"]["change"]["resume"]["checkpoint"]
     assert first_result["results"]["change"]["resume"]["mode"] == "retry"
@@ -481,7 +533,7 @@ def test_repo_plan_ledger_and_guided_next_round(
     plan_path.write_text(json.dumps(unrecorded_plan), encoding="utf-8")
     assert main_plan([str(plan_path), "--no-record", *common]) == 0
     unrecorded = json.loads(capsys.readouterr().out)
-    assert unrecorded["schema_version"] == 2 and "round" not in unrecorded
+    assert unrecorded["schema_version"] == 3 and "round" not in unrecorded
 
 
 # --- local repo: direct merge into main after checks -----------------------

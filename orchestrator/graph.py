@@ -689,6 +689,7 @@ def _replay_node_run(node: GraphNode, item: GraphResultItem) -> NodeRun:
             synthetic_stack_base=item.get("synthetic_stack_base"),
             stack_bases=anchors,
             detail=item.get("detail", ""),
+            deferred_cleanup=cast(list[str], list(item.get("deferred_cleanup", []))),
             waiting_steps=cast(list[str], list(item.get("waiting_steps", []))),
         )
     return NodeRun(status, error, payload, item)

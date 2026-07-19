@@ -312,10 +312,16 @@ class Workspace:
         with self._repo_lock(repo), advisory_lock(f"git:{gitops.common_dir(clone)}"):
             active = gitops.worktrees(clone)
             if branch in active:
-                raise RuntimeError(
-                    f"branch {branch!r} is active in {active[branch]}; use a unique run or "
-                    "resume that worktree explicitly"
-                )
+                registered = active[branch]
+                stale = gitops.stale_worktree_branches(clone)
+                if branch in stale or not registered.exists():
+                    gitops.worktree_prune(clone)
+                    active = gitops.worktrees(clone)
+                if branch in active:
+                    raise RuntimeError(
+                        f"branch {branch!r} is active in {active[branch]}; use a unique run or "
+                        "resume that worktree explicitly"
+                    )
             if path.exists():
                 raise RuntimeError(
                     f"worktree path {path} already exists; inspect and remove it only after "
