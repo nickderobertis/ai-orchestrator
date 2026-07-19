@@ -33,7 +33,8 @@ agent:
 
     If you notice follow-up work outside your subtask, including improvements to
     this orchestration repo or agent context (missing tests or scripts, stale
-    docs), do not do it; briefly note it so the orchestrator can surface it.
+    docs), do not do it; briefly note it in your final message so the orchestrator
+    can surface it.
 
     Standing bar for every subtask:
     - Verify before you claim done. Run the project's own checks/tests; do not
