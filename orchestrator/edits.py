@@ -54,7 +54,7 @@ class ReparentPayload(TypedDict):
 
 
 class RetryPayload(TypedDict):
-    """Cancel a settled node and schedule a fresh replacement in its place."""
+    """Supersede a node's execution lineage with a fresh replacement."""
 
     op: Literal["retry"]
     id: str

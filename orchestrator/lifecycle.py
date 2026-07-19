@@ -1607,6 +1607,10 @@ def run_repo_task(
                 dispatch_env=cache_env,
             )
 
+        # llmlint: ignore[changed_behavior_has_e2e] no blocking external operation exists between
+        # the tested post-verification checkpoint and this final race-closing check: only local
+        # result/metadata construction runs here. Cancellation during the reachable blocking
+        # publication stage below is covered with a real delayed git receive hook.
         if preserve_cancelled("before publication"):
             return result
         # Publication is the lifecycle's commit point: cancellation is cooperative

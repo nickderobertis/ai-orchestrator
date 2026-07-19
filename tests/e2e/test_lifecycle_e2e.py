@@ -1483,6 +1483,47 @@ def test_cancellation_during_verification_preserves_before_publication(
     assert _has_file(origin, "main", "CHANGE.txt")
 
 
+def test_cancellation_after_publication_starts_finishes_authoritatively(
+    tmp_path, bare_origin, command_base, personas_dir
+) -> None:
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-publication-cancel")
+    Registry().register(str(canonical), workflow="local", repo_type="single-owner")
+    push_started = tmp_path / "publication.started"
+    hook = origin / "hooks" / "pre-receive"
+    hook.write_text(
+        f"#!/bin/sh\ntouch {shlex.quote(str(push_started))}\nsleep 1\nexit 0\n",
+        encoding="utf-8",
+    )
+    hook.chmod(0o755)
+    cancel = threading.Event()
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(
+            run_repo_task,
+            str(canonical),
+            "complete-now write-change",
+            "engineer",
+            workspace=Workspace(tmp_path / "publication-cancel-worktrees"),
+            base_path=command_base(),
+            persona_dir=personas_dir,
+            branch="feature/publication-cancel",
+            verify_cmd=["test", "-f", "CHANGE.txt"],
+            cancel=cancel,
+        )
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline and not push_started.exists():
+            time.sleep(0.02)
+        assert push_started.exists()
+        cancel.set()
+        result = future.result(timeout=20)
+
+    assert cancel.is_set()
+    assert result.ok and result.outcome == "merged"
+    assert result.resume is None
+    assert _has_file(origin, "main", "CHANGE.txt")
+
+
 def test_no_changes_produces_no_pr(tmp_path, bare_origin) -> None:
     origin = bare_origin()
     result = run_repo_task(
