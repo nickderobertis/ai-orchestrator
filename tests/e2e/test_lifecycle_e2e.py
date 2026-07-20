@@ -2046,6 +2046,79 @@ def test_no_changes_produces_no_pr(tmp_path, bare_origin) -> None:
     assert not result.ok
 
 
+def test_resumed_branch_setup_round_trips_through_telemetry_cli(tmp_path, bare_origin) -> None:
+    """A tracked retry journals and surfaces setup for its existing branch worktree."""
+    origin = bare_origin()
+    workspace = _workspace(tmp_path / "workspace", origin)
+    partial = run_repo_task(
+        str(origin),
+        "Preserve work for a real retry.",
+        "engineer",
+        workspace=workspace,
+        dispatch_fn=make_writing_dispatch(filename="partial.txt", completed=False),
+        verify_cmd=["true"],
+    )
+    assert isinstance(partial.resume, Resume)
+
+    runs_dir = tmp_path / "runs"
+    run_dir = runs_dir / "existing-branch"
+    _, round_dir = prepare_round(
+        run_dir,
+        {"tasks": [{"id": "retry", "task": "Continue the preserved branch."}]},
+    )
+    journal = open_journal(run_dir, RunId("existing-branch"), 1)
+
+    def lifecycle_runner(node: RepoPlanNode, *, journal: NodeSink | None = None):
+        return run_repo_task(
+            node.repo,
+            node.task,
+            node.persona,
+            workspace=workspace,
+            dispatch_fn=make_writing_dispatch(filename="completed.txt"),
+            verify_cmd=["true"],
+            resume=partial.resume,
+            journal=journal,
+        )
+
+    result = run_graph(
+        parse_graph(
+            {
+                "tasks": [
+                    {
+                        "id": "retry",
+                        "repo": str(origin),
+                        "persona": "engineer",
+                        "task": "Continue the preserved branch.",
+                    }
+                ]
+            }
+        ),
+        agent_runner=lambda _node: (_ for _ in ()).throw(
+            AssertionError("this graph contains no direct agent")
+        ),
+        lifecycle_runner=lifecycle_runner,
+        journal=journal,
+        run_id=RunId("existing-branch"),
+        round_number=1,
+    )
+    assert result.ok
+    write_result(round_dir, graph_payload(result))
+
+    setup_events = [event for event in journal.events() if event.kind == "setup-finished"]
+    assert any(event.detail["operation"] == "worktree" for event in setup_events)
+
+    indexed = subprocess.run(
+        ["just", "telemetry", "--runs-dir", str(runs_dir), "--all"],
+        cwd=Path(__file__).parents[2],
+        text=True,
+        capture_output=True,
+        timeout=180,
+    )
+    assert indexed.returncode == 0, indexed.stderr
+    observed = json.loads(indexed.stdout)["runs"][0]["timing"]
+    assert observed["setup_seconds"] > 0
+
+
 def test_real_lifecycle_outcomes_round_trip_through_telemetry_cli(tmp_path, bare_origin) -> None:
     """Produce every classification and metric from real git lifecycle journeys."""
     runs_dir = tmp_path / "runs"
