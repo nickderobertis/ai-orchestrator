@@ -23,6 +23,7 @@ class ProcessTreeGuard:
 
     popen: type[subprocess.Popen[Any]] = subprocess.Popen
     grace_seconds: float = 5.0
+    track_worktrees: bool = True
     processes: list[subprocess.Popen[Any]] = field(default_factory=list)
     worktrees: set[Path] = field(default_factory=set)
 
@@ -39,6 +40,8 @@ class ProcessTreeGuard:
         return process
 
     def _register_git_worktree_command(self, args: tuple[Any, ...], kwargs: dict[str, Any]) -> None:
+        if not self.track_worktrees:
+            return
         if not args or not isinstance(args[0], (list, tuple)):
             return
         command = [os.fspath(part) for part in args[0]]

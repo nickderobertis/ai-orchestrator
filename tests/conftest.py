@@ -38,20 +38,22 @@ def _isolate_orchestrator_channel(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.fixture(autouse=True)
 def process_tree_guard(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, request: pytest.FixtureRequest
 ) -> Iterator[ProcessTreeGuard]:
     """Reap complete subprocess trees and report test-owned resource leaks."""
     original_popen = subprocess.Popen
-    guard = ProcessTreeGuard(popen=original_popen)
+    e2e_test = "e2e" in Path(str(request.node.path)).parts
+    guard = ProcessTreeGuard(popen=original_popen, track_worktrees=e2e_test)
 
     def tracked_popen(*args: Any, **kwargs: Any) -> subprocess.Popen[Any]:
         return guard.spawn(*args, **kwargs)
 
     monkeypatch.setattr(subprocess, "Popen", tracked_popen)
     yield guard
-    for git_file in tmp_path.rglob(".git"):
-        if guard.is_linked_worktree(git_file.parent):
-            guard.register_worktree(git_file.parent)
+    if e2e_test:
+        for git_file in tmp_path.rglob(".git"):
+            if guard.is_linked_worktree(git_file.parent):
+                guard.register_worktree(git_file.parent)
     guard.finish()
 
 
