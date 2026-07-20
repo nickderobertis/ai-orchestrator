@@ -94,7 +94,74 @@ def _commit_and_push_ci_iteration(state: str) -> None:
     subprocess.run(["git", "push", "-u", "origin", branch], check=True, capture_output=True)
 
 
+def _onejudge_report_proxy(argv: list[str]) -> int:
+    """Run the adopted CLI and emulate its additive report-v5 producer fields."""
+    executable = os.environ.get("REAL_ONEJUDGE")
+    if not executable:
+        sys.stderr.write("fake_backend: REAL_ONEJUDGE is required for report proxy mode\n")
+        return 2
+    process = subprocess.run([executable, *argv], text=True, capture_output=True, check=False)
+    sys.stderr.write(process.stderr)
+    if not process.stdout.strip():
+        return process.returncode
+    report = json.loads(process.stdout)
+    telemetry_mode = os.environ.get("FAKE_REPORT_TELEMETRY", "legacy")
+    if telemetry_mode != "legacy":
+        telemetry = {
+            "wall_ms": 25,
+            "agent": {
+                "model_ms": 12,
+                "tool_ms": 5,
+                "usage": {
+                    "input_tokens": 10,
+                    "output_tokens": 2,
+                    "cache_read_tokens": 1,
+                    "cache_write_tokens": 0,
+                    "cost_usd": 0.02,
+                },
+            },
+            "judge": {
+                "model_ms": 8,
+                "tool_ms": 0,
+                "usage": {
+                    "input_tokens": 3,
+                    "output_tokens": 2,
+                    "cache_read_tokens": 1,
+                    "cache_write_tokens": 0,
+                    "cost_usd": 0.01,
+                },
+            },
+            "orchestration_ms": 0,
+            "sessions": [
+                {
+                    "session_id": "agent-history",
+                    "history_id": "agent-record",
+                    "role": "agent",
+                    "turn_index": 0,
+                    "started_at": "2026-07-19T00:00:00+00:00",
+                    "finished_at": "2026-07-19T00:00:00.017000+00:00",
+                },
+                {
+                    "session_id": "judge-history",
+                    "history_id": "judge-record",
+                    "role": "judge",
+                    "turn_index": 1,
+                    "started_at": "2026-07-19T00:00:00.017000+00:00",
+                    "finished_at": "2026-07-19T00:00:00.025000+00:00",
+                },
+            ],
+        }
+        if telemetry_mode == "invalid":
+            telemetry["judge"]["usage"].pop("cache_write_tokens")
+            telemetry["judge"]["usage"]["cost_usd"] = True
+        report["telemetry"] = telemetry
+    sys.stdout.write(json.dumps(report))
+    return process.returncode
+
+
 def main() -> int:
+    if len(sys.argv) > 1 and sys.argv[1] == "onejudge-report-proxy":
+        return _onejudge_report_proxy(sys.argv[2:])
     req = json.loads(sys.stdin.read())
     if not isinstance(req, dict):
         sys.stderr.write("fake_backend: request must be a JSON object\n")

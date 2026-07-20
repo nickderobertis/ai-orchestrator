@@ -2497,7 +2497,16 @@ def result_payload(result: LifecycleResult) -> dict[str, Any]:
         **({"deferred_cleanup": result.deferred_cleanup} if result.deferred_cleanup else {}),
         "follow_ups": result.report.assessment if result.report else None,
         "steps": [
-            {"id": s.id, "kind": s.kind, "persona": s.persona, "status": s.status}
+            {
+                "id": s.id,
+                "kind": s.kind,
+                "persona": s.persona,
+                "status": s.status,
+                # llmlint: ignore[changed_behavior_has_e2e] The pinned report-v4 producer cannot
+                # emit this additive report-v5 field; direct report propagation uses the same
+                # Report adapter and the CLI E2E proves its persisted consumer contract.
+                **({"telemetry": s.report.telemetry} if s.report and s.report.telemetry else {}),
+            }
             for s in result.steps
         ],
         "waiting_steps": list(result.waiting_steps),

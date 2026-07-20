@@ -76,6 +76,12 @@ class Report:
     raw: dict[str, Any] | None
     stderr: str
     assessment: str | None = None
+    telemetry_data: dict[str, Any] | None = None
+
+    @property
+    def telemetry(self) -> dict[str, Any] | None:
+        """Return optional report-v5 telemetry without requiring a newer SDK type."""
+        return dict(self.telemetry_data) if self.telemetry_data is not None else None
 
     def summary(self) -> str:
         state = "completed" if self.completed else "NOT completed"
@@ -96,6 +102,9 @@ def _build_report(persona: str, result: RunResult) -> Report:
         if isinstance(raw_assessment, str) and raw_assessment.strip()
         else None
     )
+    raw_telemetry = getattr(result, "telemetry", None)
+    if raw_telemetry is None:
+        raw_telemetry = result.raw.get("telemetry")
     return Report(
         persona=persona,
         exit_code=result.exit_code,
@@ -107,6 +116,7 @@ def _build_report(persona: str, result: RunResult) -> Report:
         raw=dict(result.raw),
         stderr=result.stderr,
         assessment=assessment,
+        telemetry_data=dict(raw_telemetry) if isinstance(raw_telemetry, dict) else None,
     )
 
 

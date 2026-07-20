@@ -82,6 +82,7 @@ class StepResultPayload(TypedDict):
     kind: str
     persona: str | None
     status: str
+    telemetry: NotRequired[dict[str, Any]]
 
 
 class RetryLineagePayload(TypedDict):
@@ -107,6 +108,7 @@ class GraphResultItem(TypedDict, total=False):
     exit_code: int | None
     verdicts: list[Any]
     usage: dict[str, Any]
+    telemetry: dict[str, Any]
     repo: str
     branch: str
     base_branch: str

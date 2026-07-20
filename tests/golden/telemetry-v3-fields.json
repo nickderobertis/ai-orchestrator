@@ -2,7 +2,7 @@
   "history_schema_versions": ["0.2", "0.3", 1, 2],
   "qualities": ["complete", "legacy", "partial"],
   "roles": ["agent", "judge"],
-  "schema_version": 2,
+  "schema_version": 3,
   "sources": ["history_legacy", "journal_legacy", "oneharness", "onejudge"],
   "fractions": [
     "agent_model",
@@ -11,9 +11,11 @@
     "tool"
   ],
   "session_link": [
+    "finished_at",
     "history_id",
     "role",
     "session_id",
+    "started_at",
     "turn_index"
   ],
   "timing": [

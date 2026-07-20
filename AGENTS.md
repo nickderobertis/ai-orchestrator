@@ -239,6 +239,8 @@ Human completion is never inferred and enters the graph only as an explicit live
 syntax and result contracts in
 `docs/orchestration.md` and lifecycle policy in `docs/repo-lifecycle.md` rather
 than duplicating command help here.
+Use `docs/telemetry.md` to inspect session timing, usage, and the agent/judge
+turn timeline with `just telemetry`.
 
 A dispatched change is not done until `just gate` is green. Its agent clears its
 own llmlint findings—by fixing them, adding a justified `ignore-file`, or disabling

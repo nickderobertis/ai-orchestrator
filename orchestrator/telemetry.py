@@ -20,7 +20,7 @@ import json
 import math
 import sys
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal, TypedDict, cast
@@ -49,7 +49,7 @@ from .runs import (
 )
 from .verify import GateAttestation
 
-TELEMETRY_SCHEMA_VERSION = 2
+TELEMETRY_SCHEMA_VERSION = 3
 SUPPORTED_HISTORY_SCHEMA_VERSIONS = ("0.2", "0.3", 1, 2)
 TelemetryQuality = Literal["complete", "partial", "legacy"]
 TelemetrySource = Literal["onejudge", "oneharness", "history_legacy", "journal_legacy"]
@@ -99,11 +99,13 @@ UsageKey = Literal[
 ]
 
 
-class SessionLink(TypedDict):
+class SessionLink(TypedDict, total=False):
     session_id: str
     history_id: str | None
     role: SessionRole
     turn_index: int | None
+    started_at: str
+    finished_at: str | None
 
 
 class HistoryRecord(TypedDict, total=False):
@@ -379,6 +381,12 @@ USAGE_FIELDS: tuple[UsageKey, ...] = (
 
 
 @dataclass(frozen=True)
+class _Interval:
+    start_ms: int
+    finish_ms: int
+
+
+@dataclass(frozen=True)
 class _SessionSummary:
     role: Literal["agent", "judge"]
     labels: dict[str, str]
@@ -390,6 +398,27 @@ class _SessionSummary:
     usage: UsageValues
     commands: dict[str, int]
     validated_native_fields: bool
+    tool_intervals: list[_Interval]
+
+
+@dataclass(frozen=True)
+class _NativeParty:
+    model_ms: int | None
+    tool_ms: int | None
+    usage: UsageValues | None
+    invalid: bool
+
+
+@dataclass(frozen=True)
+class _NativeTelemetry:
+    wall_ms: int | None
+    orchestration_ms: int | None
+    agent_model_ms: int | None
+    judge_model_ms: int | None
+    tool_ms: int | None
+    usage: UsageRecord | None
+    sessions: list[SessionLink]
+    invalid: bool = False
 
 
 def _number(value: object) -> int | float | None:
@@ -459,6 +488,7 @@ def _summarize_session(session: HistorySession, records: list[HistoryRecord]) ->
     tool_ms = 0
     validated_native_fields = bool(records)
     commands: dict[str, int] = {}
+    tool_intervals: list[_Interval] = []
     for record in records:
         schema_version = record.get("schema_version")
         if schema_version is not None and schema_version not in SUPPORTED_HISTORY_SCHEMA_VERSIONS:
@@ -496,6 +526,8 @@ def _summarize_session(session: HistorySession, records: list[HistoryRecord]) ->
         for event in events:
             if not isinstance(event, dict) or event.get("kind") != "tool_call":
                 continue
+            event_start: datetime | None = None
+            event_finish: datetime | None = None
             if schema_version in {"0.3", 2}:
                 event_start = _utc_datetime(event.get("started_at"))
                 raw_finish = event.get("finished_at")
@@ -512,6 +544,13 @@ def _summarize_session(session: HistorySession, records: list[HistoryRecord]) ->
                 ):
                     raise HistoryError("oneharness history schema v2 record has invalid tool event")
             event_duration = _non_negative_int(event.get("duration_ms"))
+            if event_start is not None and event_finish is not None:
+                tool_intervals.append(
+                    _Interval(
+                        round(event_start.timestamp() * 1000),
+                        round(event_finish.timestamp() * 1000),
+                    )
+                )
             if tool is None and event_duration is not None:
                 tool_ms += event_duration
             if event.get("name") not in {"command_execution", "bash"}:
@@ -540,6 +579,166 @@ def _summarize_session(session: HistorySession, records: list[HistoryRecord]) ->
         usage=usage,
         commands=commands,
         validated_native_fields=validated_native_fields,
+        tool_intervals=tool_intervals,
+    )
+
+
+def _native_party(value: object) -> _NativeParty:
+    if value is None:
+        return _NativeParty(None, None, None, False)
+    if not isinstance(value, dict):
+        return _NativeParty(None, None, None, True)
+    invalid = False
+    model = _non_negative_int(value.get("model_ms"))
+    tool = _non_negative_int(value.get("tool_ms"))
+    if "model_ms" in value and model is None:
+        invalid = True
+    if "tool_ms" in value and tool is None:
+        invalid = True
+    raw_usage = value.get("usage")
+    usage: UsageValues | None = None
+    if raw_usage is not None:
+        if not isinstance(raw_usage, dict):
+            invalid = True
+        else:
+            usage = cast(UsageValues, {})
+            for key in USAGE_FIELDS:
+                raw = raw_usage.get(key)
+                parsed = _number(raw) if key == "cost_usd" else _non_negative_int(raw)
+                if key in raw_usage and parsed is None:
+                    invalid = True
+                usage[key] = parsed
+    return _NativeParty(model, tool, usage, invalid)
+
+
+def _native_telemetry(value: object) -> _NativeTelemetry | None:
+    """Validate report telemetry per field; invalid optional data degrades locally."""
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        return _NativeTelemetry(None, None, None, None, None, None, [], True)
+    invalid = False
+    wall = _non_negative_int(value.get("wall_ms"))
+    orchestration = _non_negative_int(value.get("orchestration_ms"))
+    if "wall_ms" in value and wall is None:
+        invalid = True
+    if "orchestration_ms" in value and orchestration is None:
+        invalid = True
+    agent = _native_party(value.get("agent"))
+    judge = _native_party(value.get("judge"))
+    invalid |= agent.invalid or judge.invalid
+    tool = (
+        agent.tool_ms + judge.tool_ms
+        if agent.tool_ms is not None and judge.tool_ms is not None
+        else agent.tool_ms
+        if judge.tool_ms is None
+        else judge.tool_ms
+    )
+    usage = None
+    if agent.usage is not None or judge.usage is not None:
+        unknown = cast(UsageValues, {key: None for key in USAGE_FIELDS})
+        agent_values = agent.usage or unknown
+        judge_values = judge.usage or unknown
+        total = cast(
+            UsageValues,
+            {
+                key: cast(int | float, agent_values[key]) + cast(int | float, judge_values[key])
+                if agent_values[key] is not None and judge_values[key] is not None
+                else None
+                for key in USAGE_FIELDS
+            },
+        )
+        usage = UsageRecord(agent=agent_values, judge=judge_values, total=total)
+    links: list[SessionLink] = []
+    raw_sessions = value.get("sessions", [])
+    if not isinstance(raw_sessions, list):
+        invalid = True
+    else:
+        for raw in raw_sessions:
+            if not isinstance(raw, dict):
+                invalid = True
+                continue
+            session_id, history_id, role, turn = (
+                raw.get("session_id"),
+                raw.get("history_id"),
+                raw.get("role"),
+                raw.get("turn_index"),
+            )
+            started = _utc_datetime(raw.get("started_at"))
+            raw_finished = raw.get("finished_at")
+            finished = _utc_datetime(raw_finished) if raw_finished is not None else None
+            if not (
+                isinstance(session_id, str)
+                and session_id
+                and (history_id is None or isinstance(history_id, str))
+                and role in {"agent", "judge"}
+                and _non_negative_int(turn) is not None
+                and started is not None
+                and (raw_finished is None or finished is not None)
+                and (finished is None or finished >= started)
+            ):
+                invalid = True
+                continue
+            links.append(
+                SessionLink(
+                    session_id=session_id,
+                    history_id=history_id,
+                    role=cast(SessionRole, role),
+                    turn_index=cast(int, turn),
+                    started_at=cast(str, raw["started_at"]),
+                    finished_at=cast(str | None, raw_finished),
+                )
+            )
+    return _NativeTelemetry(
+        wall, orchestration, agent.model_ms, judge.model_ms, tool, usage, links, invalid
+    )
+
+
+def _link_native_roles(
+    summaries: list[_SessionSummary], native: _NativeTelemetry | None
+) -> list[_SessionSummary]:
+    if native is None or not native.sessions:
+        return summaries
+    links = {link["session_id"]: link for link in native.sessions}
+    return [
+        replace(summary, role=link["role"], link=link)
+        if (link := links.get(summary.link["session_id"])) is not None
+        else summary
+        for summary in summaries
+    ]
+
+
+def _item_native(item: GraphResultItem) -> _NativeTelemetry | None:
+    direct = _native_telemetry(item.get("telemetry"))
+    if direct is not None:
+        return direct
+    steps = item.get("steps")
+    if not isinstance(steps, list):
+        return None
+    parts = [
+        parsed
+        for step in steps
+        if isinstance(step, dict)
+        if (parsed := _native_telemetry(step.get("telemetry"))) is not None
+    ]
+    if not parts:
+        return None
+
+    def summed(
+        name: Literal["wall_ms", "orchestration_ms", "agent_model_ms", "judge_model_ms", "tool_ms"],
+    ) -> int | None:
+        values = [getattr(part, name) for part in parts]
+        return sum(cast(list[int], values)) if all(value is not None for value in values) else None
+
+    return _NativeTelemetry(
+        summed("wall_ms"),
+        summed("orchestration_ms"),
+        summed("agent_model_ms"),
+        summed("judge_model_ms"),
+        summed("tool_ms"),
+        None,
+        [link for part in parts for link in part.sessions],
+        any(part.invalid for part in parts),
     )
 
 
@@ -571,16 +770,77 @@ def _usage(summaries: list[_SessionSummary]) -> UsageRecord:
     return {"agent": agent, "judge": judge, "total": total}
 
 
+def _merge_usage(preferred: UsageRecord | None, fallback: UsageRecord) -> UsageRecord:
+    """Select each native usage field independently, then recompute party totals."""
+    parties: dict[str, UsageValues] = {}
+    for role in cast(tuple[Literal["agent", "judge"], ...], ("agent", "judge")):
+        values = cast(UsageValues, {})
+        for key in USAGE_FIELDS:
+            native_value = preferred[role][key] if preferred is not None else None
+            values[key] = native_value if native_value is not None else fallback[role][key]
+        parties[role] = values
+    total = cast(
+        UsageValues,
+        {
+            key: cast(int | float, parties["agent"][key]) + cast(int | float, parties["judge"][key])
+            if parties["agent"][key] is not None and parties["judge"][key] is not None
+            else None
+            for key in USAGE_FIELDS
+        },
+    )
+    return {"agent": parties["agent"], "judge": parties["judge"], "total": total}
+
+
+def _aggregate_usage(records: list[UsageRecord]) -> UsageRecord | None:
+    if not records:
+        return None
+    parties: dict[str, UsageValues] = {}
+    for role in cast(tuple[Literal["agent", "judge"], ...], ("agent", "judge")):
+        values = cast(UsageValues, {})
+        for key in USAGE_FIELDS:
+            contributions = [record[role][key] for record in records]
+            values[key] = (
+                sum(cast(list[int | float], contributions))
+                if all(value is not None for value in contributions)
+                else None
+            )
+        parties[role] = values
+    total = cast(
+        UsageValues,
+        {
+            key: cast(int | float, parties["agent"][key]) + cast(int | float, parties["judge"][key])
+            if parties["agent"][key] is not None and parties["judge"][key] is not None
+            else None
+            for key in USAGE_FIELDS
+        },
+    )
+    return {"agent": parties["agent"], "judge": parties["judge"], "total": total}
+
+
 def _timing(
-    wall_ms: int, summaries: list[_SessionSummary], gate: float = 0.0, wait: float = 0.0
+    wall_ms: int,
+    summaries: list[_SessionSummary],
+    gate: float = 0.0,
+    wait: float = 0.0,
+    native: _NativeTelemetry | None = None,
 ) -> TimingRecord:
     agent_duration = sum(item.duration_ms for item in summaries if item.role == "agent")
     judge_duration = sum(item.duration_ms for item in summaries if item.role == "judge")
-    raw_agent_model = sum(item.model_ms for item in summaries if item.role == "agent")
-    raw_judge_model = sum(item.model_ms for item in summaries if item.role == "judge")
-    raw_tool = sum(item.tool_ms for item in summaries)
-    # Without native intervals, enforce the contract's tool > judge > agent precedence
-    # while clipping the sequential sums to the observed row wall.
+    raw_agent_model = (
+        native.agent_model_ms
+        if native is not None and native.agent_model_ms is not None
+        else sum(item.model_ms for item in summaries if item.role == "agent")
+    )
+    raw_judge_model = (
+        native.judge_model_ms
+        if native is not None and native.judge_model_ms is not None
+        else sum(item.model_ms for item in summaries if item.role == "judge")
+    )
+    raw_tool = (
+        native.tool_ms
+        if native is not None and native.tool_ms is not None
+        else sum(item.tool_ms for item in summaries)
+    )
     tool = min(wall_ms, raw_tool)
     judge_model = min(max(0, wall_ms - tool), raw_judge_model)
     agent_model = min(max(0, wall_ms - tool - judge_model), raw_agent_model)
@@ -614,6 +874,62 @@ def _timing(
             idle_orchestration=fraction(idle),
         ),
     )
+
+
+def _union_interval_ms(start_ms: int, finish_ms: int, intervals: list[_Interval]) -> int:
+    clipped = sorted(
+        (max(start_ms, interval.start_ms), min(finish_ms, interval.finish_ms))
+        for interval in intervals
+        if min(finish_ms, interval.finish_ms) > max(start_ms, interval.start_ms)
+    )
+    total = 0
+    cursor = start_ms
+    for start, finish in clipped:
+        total += max(0, finish - max(start, cursor))
+        cursor = max(cursor, finish)
+    return total
+
+
+def _run_timing(
+    start_ms: int,
+    finish_ms: int,
+    summaries: list[_SessionSummary],
+    nodes: list[NodeTelemetry],
+    native_by_node: dict[str, _NativeTelemetry | None],
+    gate: float,
+    wait: float,
+) -> TimingRecord:
+    wall_ms = max(0, finish_ms - start_ms)
+    explicit_tool_nodes = {
+        summary.labels.get("node")
+        for summary in summaries
+        if summary.tool_intervals
+        and (native := native_by_node.get(summary.labels.get("node", ""))) is not None
+        and native.tool_ms is None
+    } | {
+        summary.labels.get("node")
+        for summary in summaries
+        if summary.tool_intervals and native_by_node.get(summary.labels.get("node", "")) is None
+    }
+    tool_intervals = [
+        interval
+        for summary in summaries
+        if summary.labels.get("node") in explicit_tool_nodes
+        for interval in summary.tool_intervals
+    ]
+    tool = _union_interval_ms(start_ms, finish_ms, tool_intervals)
+    tool += sum(
+        cast(TimingRecord, node.timing)["tool_ms"]
+        for node in nodes
+        if node.node not in explicit_tool_nodes
+    )
+    agent = sum(cast(TimingRecord, node.timing)["agent_model_ms"] for node in nodes)
+    judge = sum(cast(TimingRecord, node.timing)["judge_model_ms"] for node in nodes)
+    tool = min(wall_ms, tool)
+    judge = min(max(0, wall_ms - tool), judge)
+    agent = min(max(0, wall_ms - tool - judge), agent)
+    native = _NativeTelemetry(None, None, agent, judge, tool, None, [])
+    return _timing(wall_ms, summaries, gate, wait, native=native)
 
 
 def _history_telemetry(
@@ -710,7 +1026,16 @@ def _node_record(
         )
         comparison_remote = remote if isinstance(remote, str) else ""
         comparison_base = base if isinstance(base, str) else ""
-    linked = [summary for summary in summaries if summary.labels.get("node") == node]
+    native = _item_native(item)
+    linked = _link_native_roles(
+        [summary for summary in summaries if summary.labels.get("node") == node], native
+    )
+    wall_ms = (
+        native.wall_ms
+        if native is not None and native.wall_ms is not None
+        else _node_wall_ms(node, events, active_at=active_at)
+    )
+    usage = _merge_usage(native.usage if native is not None else None, _usage(linked))
     return NodeTelemetry(
         node=node,
         status=str(item.get("status", "unknown")),
@@ -722,9 +1047,11 @@ def _node_record(
         commit=commits[-1] if commits else "",
         retry_lineage=RetryLineageTelemetry.from_value(item.get("retry_lineage")),
         gate_attestation=attestation,
-        timing=_timing(_node_wall_ms(node, events, active_at=active_at), linked),
-        usage=_usage(linked),
-        sessions=[summary.link for summary in linked],
+        timing=_timing(wall_ms, linked, native=native),
+        usage=usage,
+        sessions=(
+            native.sessions if native is not None and native.sessions else [s.link for s in linked]
+        ),
         tool_commands=_command_counts(linked),
         turns=sum(summary.turns for summary in linked),
     )
@@ -748,10 +1075,21 @@ def collect_run(
         items = {node: GraphResultItem(status="running", kind="agent") for node in active_nodes}
     last = events[-1] if events else None
     providers, summaries = _history_telemetry(RunId(run_dir.name), oneharness_bin)
+    native_by_node = {node: _item_native(item) for node, item in items.items()}
+    native_links = [
+        link
+        for native_item in native_by_node.values()
+        if native_item is not None
+        for link in native_item.sessions
+    ]
+    if native_links:
+        summaries = _link_native_roles(
+            summaries,
+            _NativeTelemetry(None, None, None, None, None, None, native_links),
+        )
     gate_seconds = _gate_seconds(events)
     current = time.time() if now is None else now
     wall_end = last.at if result_state_is_terminal(state) and last else current
-    wall = max(0.0, wall_end - events[0].at) if events else 0.0
     publication_waits = _publication_waits(events)
     wait = _publication_wait_seconds(
         events, active_at=None if result_state_is_terminal(state) else current
@@ -763,11 +1101,40 @@ def collect_run(
         _node_record(node, item, events, summaries, active_at=node_active_at)
         for node, item in items.items()
     ]
-    timing = _timing(round(wall * 1000), summaries, gate_seconds, wait)
+    native_parts = [part for part in native_by_node.values() if part is not None]
+    timing = _run_timing(
+        round(events[0].at * 1000) if events else 0,
+        round(wall_end * 1000) if events else 0,
+        summaries,
+        nodes,
+        native_by_node,
+        gate_seconds,
+        wait,
+    )
+    contributing_nodes = [
+        node
+        for node in nodes
+        if native_by_node.get(node.node) is not None
+        or any(summary.labels.get("node") == node.node for summary in summaries)
+    ]
+    run_usage = _aggregate_usage(
+        [node.usage for node in contributing_nodes if node.usage is not None]
+    )
     native = [summary.validated_native_fields for summary in summaries]
-    # History timing without authoritative onejudge linkage remains partial.
-    quality: TelemetryQuality = "partial" if any(native) else "legacy"
+    # Complete requires authoritative linkage plus valid interval-complete history.
+    quality: TelemetryQuality = (
+        "complete"
+        if native_parts
+        and all(not part.invalid and part.sessions for part in native_parts)
+        and native
+        and all(native)
+        else "partial"
+        if native_parts or any(native)
+        else "legacy"
+    )
     sources: list[TelemetrySource] = []
+    if native_parts:
+        sources.append("onejudge")
     if any(native):
         sources.append("oneharness")
     if summaries:
@@ -786,7 +1153,7 @@ def collect_run(
         failure=failure,
         check_rollup=snapshot.check_rollup,
         green_to_publication_seconds=publication_waits,
-        usage=_usage(summaries),
+        usage=run_usage or _usage(summaries),
         telemetry_quality=quality,
         sources=sources,
         node_work_ms=NodeWorkRecord(
@@ -839,7 +1206,7 @@ def _value(value: int | float | None) -> str:
 def _breakdown(runs: list[RunTelemetry]) -> str:
     header = (
         "RUN/NODE              WALL   AGENT       JUDGE       TOOL        IDLE        "
-        "UNATTR  TOKENS A/J  CACHE R/W  COST  TURNS QUALITY"
+        "UNATTR  TOKENS IN A/J OUT A/J  CACHE R/W  COST  TURNS QUALITY"
     )
     lines = [header]
     for run in runs:
@@ -866,6 +1233,8 @@ def _breakdown(runs: list[RunTelemetry]) -> str:
                 f"{timing['idle_orchestration_ms']:5} {fractions['idle_orchestration']:5.1%}",
                 f"{timing['unattributed_ms']:6}",
                 f"{_value(usage['agent']['input_tokens'])}/{_value(usage['judge']['input_tokens'])}",
+                f"{_value(usage['agent']['output_tokens'])}/"
+                f"{_value(usage['judge']['output_tokens'])}",
                 f"{_value(usage['total']['cache_read_tokens'])}/"
                 f"{_value(usage['total']['cache_write_tokens'])}",
                 _value(usage["total"]["cost_usd"]),
@@ -873,6 +1242,25 @@ def _breakdown(runs: list[RunTelemetry]) -> str:
                 run.telemetry_quality,
             ]
             lines.append(" ".join(columns))
+        timeline = sorted(
+            (
+                link
+                for node in run.nodes
+                for link in node.sessions
+                if "started_at" in link and link.get("turn_index") is not None
+            ),
+            key=lambda link: (link["started_at"], cast(int, link["turn_index"])),
+        )
+        if timeline:
+            lines.append("  Timeline (UTC):")
+            for link in timeline:
+                finished = link.get("finished_at") or "active/interrupted"
+                lines.append(
+                    f"    turn {link['turn_index']} {link['role']}: "
+                    f"{link['started_at']} -> {finished} [{link['session_id']}]"
+                )
+        else:
+            lines.append("  Timeline: unavailable (legacy session linkage)")
     lines.append(
         "Turn histogram: "
         + ", ".join(f"{turn}={count}" for turn, count in sorted(_metrics(runs)["turns"].items()))

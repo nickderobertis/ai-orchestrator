@@ -1,5 +1,10 @@
 # Telemetry model
 
+<!-- llmlint: ignore[no_redundant_instruction_pointers] The task explicitly requires the
+spec to cross-link the operator guide so readers entering here do not mistake it for a how-to. -->
+For operator commands, example output, and a diagnostic workflow, see
+[`telemetry.md`](telemetry.md). This document remains the data contract.
+
 This document is the target cross-layer contract for explaining where a
 onejudge session's wall time goes. It is an implementation specification, not a
 description of the current schema. Wall time is the primary signal. Tokens,
@@ -137,8 +142,9 @@ as `null`.
 
 ### Orchestrator index and command surface
 
-The telemetry index moves from schema version 1 to 2 when these fields land, and
-its checked-in golden must move in the same change. `RunTelemetry` adds:
+The timing model landed in index version 2. Index version 3 adds the optional
+onejudge-linked session timestamps used by the human timeline; its checked-in
+golden moves in the same change. `RunTelemetry` includes:
 
 - `timing.agent_model_ms`, `timing.judge_model_ms`, `timing.tool_ms`,
   `timing.idle_orchestration_ms`, `timing.unattributed_ms`, and
@@ -163,7 +169,7 @@ The existing seconds fields remain readable aliases during one schema version:
 `timing.publication_wait_seconds` remains publication wait. They do not
 participate in the new four-way fractions.
 
-The version-2 command keeps JSON as the default and adds `--breakdown` for a stable
+The version-3 command keeps JSON as the default and provides `--breakdown` for a stable
 human-readable view. The breakdown shows one run row followed by node rows with
 wall duration, milliseconds and percentages for the four categories,
 unattributed duration, agent/judge input and output tokens, cache tokens, total
@@ -303,7 +309,7 @@ upstream schema additions:
   aggregation helper. The latest record continues to supply latest status and
   text, never total duration.
 
-The version-2 implementation requires realistic fixtures containing linked
+The version-3 implementation requires realistic fixtures containing linked
 agent and judge sessions, multiple records, timed tool events, partial new
 fields, and pure legacy records. Its acceptance must exercise the real `just
 telemetry` command and prove exact per-node/run arithmetic, overlap handling,

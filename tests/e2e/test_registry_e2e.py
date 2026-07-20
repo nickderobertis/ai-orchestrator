@@ -39,7 +39,10 @@ def test_registry_register_discover_and_refresh_journey(
     remote_url = "https://github.com/acme/widget.git"
     git("remote", "set-url", "origin", remote_url, cwd=checkout)
     registry = Registry()
-    assert registry.resolve("acme/widget", search_roots=[checkout.parent]) == checkout.resolve()
+    assert (
+        registry.resolve("acme/widget", search_roots=[checkout.parent], repo_type="single-owner")
+        == checkout.resolve()
+    )
     persisted = Registry()
     assert persisted.entries["acme/widget"].path == str(checkout.resolve())
     assert persisted.resolve("acme/widget", search_roots=[]) == checkout.resolve()

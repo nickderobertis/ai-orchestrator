@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -189,9 +190,9 @@ def test_optional_record_fields_are_omitted() -> None:
     assert Provider("oneharness").record() == {"provider": "oneharness"}
 
 
-def test_schema_v2_field_golden_prevents_cross_layer_drift() -> None:
+def test_schema_v3_field_golden_prevents_cross_layer_drift() -> None:
     golden = json.loads(
-        (Path(__file__).parent / "golden" / "telemetry-v2-fields.json").read_text(encoding="utf-8")
+        (Path(__file__).parent / "golden" / "telemetry-v3-fields.json").read_text(encoding="utf-8")
     )
     assert golden == {
         "schema_version": TELEMETRY_SCHEMA_VERSION,
@@ -202,12 +203,12 @@ def test_schema_v2_field_golden_prevents_cross_layer_drift() -> None:
         "timing": sorted(TimingRecord.__required_keys__),
         "fractions": sorted(FractionsRecord.__required_keys__),
         "usage": sorted(UsageValues.__required_keys__),
-        "session_link": sorted(SessionLink.__required_keys__),
+        "session_link": sorted(SessionLink.__required_keys__ | SessionLink.__optional_keys__),
     }
     contract = (Path(__file__).parents[1] / "docs" / "telemetry-model.md").read_text(
         encoding="utf-8"
     )
-    assert "schema version 1 to 2" in contract
+    assert "Index version 3" in contract
     for value in (*golden["roles"], *golden["qualities"], *golden["sources"]):
         assert f"`{value}`" in contract
 
@@ -220,7 +221,7 @@ def test_index_cli_defaults_to_active_and_all_includes_settled(
     completed.rename(tmp_path / "runs" / "complete")
     assert main(["--runs-dir", str(tmp_path / "runs"), "--oneharness-bin", "absent"]) == 0
     active = json.loads(capsys.readouterr().out)
-    assert active["schema_version"] == 2
+    assert active["schema_version"] == 3
     assert active["runs"] == []
     assert active["metrics"]["recovered_branches"] == 0
 
@@ -279,7 +280,7 @@ def test_native_timing_usage_tools_and_breakdown_are_role_and_node_scoped(
     telemetry = collect_run(run_dir)
     assert telemetry is not None
     record = telemetry.record()
-    assert record["timing"]["agent_model_ms"] == 12
+    assert record["timing"]["agent_model_ms"] == record["nodes"][0]["timing"]["agent_model_ms"]
     assert record["timing"]["judge_model_ms"] == 8
     assert record["timing"]["tool_ms"] == 5
     assert record["usage"]["total"]["input_tokens"] == 13
@@ -385,3 +386,242 @@ def test_new_history_schema_rejects_invalid_intervals_roles_and_tool_events(tmp_
     )
     with pytest.raises(telemetry_module.HistoryError, match="role"):
         _summarize_session(bad_role, [])
+
+
+def test_report_telemetry_validates_linkage_usage_and_step_aggregation(tmp_path: Path) -> None:
+    usage = {
+        "input_tokens": 2,
+        "output_tokens": 1,
+        "cache_read_tokens": 3,
+        "cache_write_tokens": 0,
+        "cost_usd": 0.01,
+    }
+    value = {
+        "wall_ms": 12,
+        "orchestration_ms": 1,
+        "agent": {"model_ms": 5, "tool_ms": 2, "usage": usage},
+        "judge": {"model_ms": 4, "tool_ms": 0, "usage": usage},
+        "sessions": [
+            {
+                "session_id": "native",
+                "history_id": "record",
+                "role": "judge",
+                "turn_index": 1,
+                "started_at": "2026-07-19T00:00:00Z",
+                "finished_at": "2026-07-19T00:00:00.004Z",
+            }
+        ],
+    }
+    native = telemetry_module._native_telemetry(value)
+    assert native is not None
+    assert native.tool_ms == 2
+    assert native.usage is not None
+    assert native.usage["total"]["input_tokens"] == 4
+    assert native.sessions[0]["history_id"] == "record"
+    assert not native.invalid
+
+    session = HistorySession(
+        SessionId("native"), "agent", tmp_path, "now", tmp_path / "history", {"role": "agent"}
+    )
+    summary = _summarize_session(session, [{"duration_ms": 4, "usage": usage}])
+    linked = telemetry_module._link_native_roles([summary], native)
+    assert linked[0].role == "judge"
+    assert linked[0].link["turn_index"] == 1
+
+    steps = telemetry_module._item_native(
+        {"steps": [{"telemetry": value}, {"telemetry": {**value, "wall_ms": 8}}]}
+    )
+    assert steps is not None
+    assert steps.wall_ms == 20
+    assert steps.agent_model_ms == 10
+    assert len(steps.sessions) == 2
+    assert telemetry_module._item_native({"steps": []}) is None
+    assert telemetry_module._item_native({}) is None
+
+    combined = telemetry_module._aggregate_usage([native.usage, native.usage])
+    assert combined is not None
+    assert combined["total"]["input_tokens"] == 8
+    assert telemetry_module._aggregate_usage([]) is None
+
+    native.usage["judge"]["cache_write_tokens"] = None
+    native.usage["judge"]["cost_usd"] = None
+    fallback = telemetry_module._usage(linked)
+    merged = telemetry_module._merge_usage(native.usage, fallback)
+    assert merged["judge"]["cache_write_tokens"] == 0
+    assert merged["judge"]["cost_usd"] == 0.01
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "bad",
+        {"wall_ms": True, "orchestration_ms": -1, "agent": "bad", "judge": []},
+        {"agent": {"model_ms": -1, "tool_ms": True, "usage": "bad"}},
+        {"judge": {"usage": {"input_tokens": True, "cost_usd": float("inf")}}},
+        {"sessions": "bad"},
+        {"sessions": ["bad"]},
+        {
+            "sessions": [
+                {
+                    "session_id": "",
+                    "history_id": 1,
+                    "role": "other",
+                    "turn_index": -1,
+                    "started_at": "bad",
+                    "finished_at": "earlier",
+                }
+            ]
+        },
+        {
+            "sessions": [
+                {
+                    "session_id": "x",
+                    "role": "agent",
+                    "turn_index": 0,
+                    "started_at": "2026-07-19T00:00:01Z",
+                    "finished_at": "2026-07-19T00:00:00Z",
+                }
+            ]
+        },
+    ],
+)
+def test_invalid_report_telemetry_degrades_without_rejecting_run(value: object) -> None:
+    native = telemetry_module._native_telemetry(value)
+    assert native is not None
+    assert native.invalid
+
+
+def test_run_timing_retains_native_values_and_old_history_is_unattributed(tmp_path: Path) -> None:
+    session = HistorySession(
+        SessionId("legacy"),
+        "legacy",
+        tmp_path,
+        "now",
+        tmp_path / "legacy",
+        {"node": "legacy", "role": "agent"},
+    )
+    legacy = _summarize_session(
+        session,
+        [{"duration_ms": 30, "usage": {}}],
+    )
+    native = telemetry_module._NativeTelemetry(20, None, 12, 0, 3, None, [])
+    native_node = telemetry_module.NodeTelemetry(
+        "native", "done", timing=_timing(20, [], native=native)
+    )
+    legacy_node = telemetry_module.NodeTelemetry("legacy", "done", timing=_timing(30, [legacy]))
+    timing = telemetry_module._run_timing(
+        0,
+        100,
+        [legacy],
+        [native_node, legacy_node],
+        {"native": native, "legacy": None},
+        0,
+        0,
+    )
+    assert native_node.timing["agent_model_ms"] == 12
+    assert legacy_node.timing["agent_model_ms"] == 0
+    assert legacy_node.timing["tool_ms"] == 0
+    assert legacy_node.timing["unattributed_ms"] == 30
+    assert timing["agent_model_ms"] == 12
+    assert timing["tool_ms"] == 3
+    assert timing["unattributed_ms"] >= 30
+
+
+def test_collect_run_prefers_native_scalars_and_unions_fallback_tool_intervals(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run_dir = tmp_path / "runs" / "overlap"
+    _, round_dir = prepare_round(
+        run_dir, {"tasks": [{"id": node, "task": node} for node in ("native", "b", "c")]}
+    )
+    journal = open_journal(run_dir, RunId("overlap"), 1)
+    journal.append("round-started", detail={"nodes": 3})
+    for name in ("native", "b", "c"):
+        node = NodeJournal(journal, NodeId(name), RunId("overlap"), 1)
+        node.append("node-started", detail={"persona": "engineer"})
+        node.append("node-settled", detail={"status": "done"})
+    journal.append("round-finished", detail={"state": "complete", "ok": True})
+    base = datetime(2026, 7, 19, tzinfo=UTC)
+    event_path = run_dir / "events.jsonl"
+    events = [json.loads(line) for line in event_path.read_text(encoding="utf-8").splitlines()]
+    for event in events:
+        event["at"] = (
+            base
+            + timedelta(
+                milliseconds=140
+                if event["kind"].endswith("finished") or event["kind"] == "node-settled"
+                else 0
+            )
+        ).timestamp()
+    event_path.write_text("".join(json.dumps(event) + "\n" for event in events), encoding="utf-8")
+    write_result(
+        round_dir,
+        {
+            "ok": True,
+            "state": "complete",
+            "started_order": ["native", "b", "c"],
+            "results": {
+                "native": {
+                    "status": "done",
+                    "telemetry": {
+                        "wall_ms": 140,
+                        "agent": {"model_ms": 12, "tool_ms": 7},
+                    },
+                },
+                "b": {"status": "done"},
+                "c": {"status": "done"},
+            },
+        },
+    )
+
+    def history(node: str, model: int, start: int, finish: int) -> HistorySession:
+        path = tmp_path / f"{node}.jsonl"
+        record_start = base.isoformat().replace("+00:00", "Z")
+        record_finish = (base + timedelta(milliseconds=140)).isoformat().replace("+00:00", "Z")
+        tool_start = (base + timedelta(milliseconds=start)).isoformat().replace("+00:00", "Z")
+        tool_finish = (base + timedelta(milliseconds=finish)).isoformat().replace("+00:00", "Z")
+        path.write_text(
+            json.dumps(
+                {
+                    "schema_version": "0.3",
+                    "duration_ms": 140,
+                    "model_ms": model,
+                    "tool_ms": finish - start,
+                    "started_at": record_start,
+                    "finished_at": record_finish,
+                    "usage": {},
+                    "events": [
+                        {
+                            "kind": "tool_call",
+                            "name": "bash",
+                            "tool_call_id": f"{node}-tool",
+                            "started_at": tool_start,
+                            "finished_at": tool_finish,
+                            "duration_ms": finish - start,
+                            "status": "completed",
+                        }
+                    ],
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        return HistorySession(
+            SessionId(node),
+            node,
+            tmp_path,
+            record_start,
+            path,
+            {"run_id": "overlap", "node": node, "role": "agent"},
+        )
+
+    sessions = [history("native", 80, 40, 60), history("b", 20, 50, 90), history("c", 15, 70, 110)]
+    monkeypatch.setattr(telemetry_module, "all_sessions", lambda **_kwargs: sessions)
+
+    telemetry = collect_run(run_dir)
+    assert telemetry is not None
+    timing = telemetry.record()["timing"]
+    assert timing["wall_ms"] == 140
+    assert timing["agent_model_ms"] == 47
+    assert timing["tool_ms"] == 67
+    assert timing["idle_orchestration_ms"] == 26

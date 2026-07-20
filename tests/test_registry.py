@@ -115,7 +115,9 @@ def test_resolve_finds_checkout_by_origin_and_registers(
 
     remote_url = "https://github.com/acme/widget.git"
     git("remote", "set-url", "origin", remote_url, cwd=checkout)
-    found = registry.resolve("acme/widget", search_roots=[checkout.parent])
+    found = registry.resolve(
+        "acme/widget", search_roots=[checkout.parent], repo_type="single-owner"
+    )
     assert found == checkout.resolve()
     assert registry.entries["acme/widget"].origin == remote_url
 

@@ -33,6 +33,25 @@ def test_build_report_maps_incomplete_sdk_result() -> None:
     assert report.assistant_turns == 0
     assert report.verdicts == []
     assert report.usage == {}
+    assert report.telemetry is None
+
+
+def test_build_report_preserves_usage_assessment_and_real_telemetry_field() -> None:
+    result = RunResult(
+        exit_code=0,
+        stderr="",
+        raw={
+            "schema_version": 5,
+            "transcript": {"messages": []},
+            "usage": {"input_tokens": 4, "vendor": "kept"},
+            "assessment": "ordinary follow-up",
+            "telemetry": {"wall_ms": 7},
+        },
+    )
+    report = _build_report("p", result)
+    assert report.usage == {"input_tokens": 4, "vendor": "kept"}
+    assert report.assessment == "ordinary follow-up"
+    assert report.telemetry == {"wall_ms": 7}
 
 
 def test_build_report_counts_assistant_turns() -> None:

@@ -332,9 +332,9 @@ make retry reuse, recovered/abandoned branches, no-diff dispatches, and time fro
 green gate to publication directly consumable. The default is active runs;
 `--all` includes settled runs.
 
-The additive, cross-layer timing and usage contract planned for the next index
-version is specified in [`telemetry-model.md`](telemetry-model.md); that document
-marks target behavior separately from the version-1 command above.
+Use `just telemetry --breakdown [--all]` for the operator view. The practical
+field guide and diagnostic workflow are in [`telemetry.md`](telemetry.md); the
+versioned cross-layer contract is in [`telemetry-model.md`](telemetry-model.md).
 
 ## Human completion attestations
 

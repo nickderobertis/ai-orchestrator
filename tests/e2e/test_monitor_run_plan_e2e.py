@@ -298,7 +298,7 @@ def test_real_history_labels_and_cursor_watch(oneharness_bin: str, tmp_path: Pat
     )
     assert indexed.returncode == 0, indexed.stderr
     run = json.loads(indexed.stdout)["runs"][0]
-    assert json.loads(indexed.stdout)["schema_version"] == 2
+    assert json.loads(indexed.stdout)["schema_version"] == 3
     native_records = {
         role: [json.loads(line) for line in Path(record["path"]).read_text().splitlines()]
         for role, record in by_role.items()

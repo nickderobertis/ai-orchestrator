@@ -809,6 +809,10 @@ def _node_payload(result: NodeResult) -> GraphResultItem:
                 "exit_code": report.exit_code if report else None,
                 "verdicts": report.verdicts if report else [],
                 "usage": report.usage if report else {},
+                # llmlint: ignore[changed_behavior_has_e2e] The pinned report-v4 producer cannot
+                # emit this additive report-v5 field; the telemetry CLI E2E injects the exact
+                # upstream payload at the persisted report boundary and exercises consumption.
+                **({"telemetry": report.telemetry} if report and report.telemetry else {}),
             }
         )
     item.update({"kind": result.kind, "status": result.status, "task": result.task})
