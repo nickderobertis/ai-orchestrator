@@ -154,7 +154,9 @@ its checked-in golden moves in the same change. `RunTelemetry` includes:
   `timing.scheduling_seconds`, derived from node-scoped journal records and graph
   transitions. Older journals render these as zero.
 - `timing.fractions.agent_model`, `timing.fractions.judge_model`,
-  `timing.fractions.tool`, and `timing.fractions.idle_orchestration`.
+  `timing.fractions.tool`, `timing.fractions.idle_orchestration`,
+  `timing.fractions.lock_wait`, `timing.fractions.setup`, and
+  `timing.fractions.scheduling`.
 - `usage.agent`, `usage.judge`, and `usage.total`, each with
   `input_tokens`, `output_tokens`, `cache_read_tokens`,
   `cache_write_tokens`, and `cost_usd`.
