@@ -936,28 +936,33 @@ class Registry:
         repo_type: RepositoryType | None = None,
         gate: str | None = None,
     ) -> Path:
-        repo = normalize_repo(spec)
-        chosen = (
-            Path(path).expanduser().resolve()
-            if path is not None
-            else (Path(repo.url) if repo.local else self._find(repo, _default_search_roots()))
-        )
-        if chosen is None:
-            raise RegistryError(f"no existing checkout found for {repo.slug}")
         try:
-            valid = (
-                chosen.is_dir() and gitops.is_repo(chosen)
-                if repo.local
-                else self._valid_checkout(chosen, repo.url)
-            )
-            if not valid:
-                raise RegistryError(
-                    f"{chosen} is not a git checkout whose origin matches {repo.url}"
-                )
-        except gitops.GitError as exc:
-            raise RegistryError(f"could not validate checkout {chosen}: {exc}") from exc
+            repo = normalize_repo(spec)
+        except ValueError as exc:
+            raise RegistryError(str(exc)) from exc
         with advisory_lock(f"registry-resolve:{self.path.resolve()}:{repo.slug}"):
             self._reload()
+            chosen = (
+                Path(path).expanduser().resolve()
+                if path is not None
+                else (Path(repo.url) if repo.local else self._find(repo, _default_search_roots()))
+            )
+            if chosen is None:
+                chosen = _base_dir() / "repos" / repo.dir_key
+                chosen.parent.mkdir(parents=True, exist_ok=True)
+                gitops.clone(repo.url, chosen)
+            try:
+                valid = (
+                    chosen.is_dir() and gitops.is_repo(chosen)
+                    if repo.local
+                    else self._valid_checkout(chosen, repo.url)
+                )
+                if not valid:
+                    raise RegistryError(
+                        f"{chosen} is not a git checkout whose origin matches {repo.url}"
+                    )
+            except gitops.GitError as exc:
+                raise RegistryError(f"could not validate checkout {chosen}: {exc}") from exc
             return self._store(repo, chosen, workflow, repo_type, gate)
 
     @classmethod

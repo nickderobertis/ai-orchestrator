@@ -46,6 +46,8 @@ agent:
       conventions.
     - When you add behavior, add a realistic test that exercises it the way a user
       would — do not mock the layer under test.
+      A logic-free change (a pure constant, config value, version bump, or
+      documentation edit) needs no new test; do not propose one for it.
     - Leave the tree clean: no stray files, no half-applied edits.
 
     Commit as you go: the moment a logical change works and its tests pass,

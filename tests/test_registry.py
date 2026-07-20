@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
@@ -138,6 +139,38 @@ def test_resolve_clones_when_no_checkout_exists(
 
     assert resolved == destination
     assert gitops.is_repo(destination)
+
+
+def test_register_clones_when_no_checkout_exists(
+    tmp_path: Path, bare_origin: Callable[..., Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    origin = bare_origin()
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    real_git = shutil.which("git")
+    assert real_git is not None
+    git_wrapper = bin_dir / "git"
+    git_wrapper.write_text(
+        "#!/bin/sh\n"
+        f'if [ "$1" = clone ]; then exec "{real_git}" -c '
+        f'url."{origin}".insteadOf=https://github.com/acme/cloned.git "$@"; fi\n'
+        f'exec "{real_git}" "$@"\n',
+        encoding="utf-8",
+    )
+    git_wrapper.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+    monkeypatch.setenv("AI_ORCHESTRATOR_HOME", str(tmp_path / "state"))
+    monkeypatch.setenv("AI_ORCHESTRATOR_SEARCH_ROOTS", str(tmp_path / "empty"))
+
+    destination = Registry().register("acme/cloned", repo_type="single-owner")
+
+    assert destination == tmp_path / "state" / "repos" / "acme__cloned"
+    assert gitops.is_repo(destination)
+
+
+def test_register_validates_repository_spec(tmp_path: Path) -> None:
+    with pytest.raises(RegistryError, match="empty repo spec"):
+        Registry(tmp_path / "registry.json").register(" ")
 
 
 @pytest.mark.parametrize(

@@ -123,6 +123,11 @@ just register-repo /path/to/ai-orchestrator --workflow local --repo-type single-
 just register-repo /path/to/ai-orchestrator-isolated
 ```
 
+When `register-repo` receives a GitHub repository spec such as `owner/name` and
+finds no existing checkout, it clones directly into the managed default
+`~/.ai-orchestrator/repos/owner__name` and registers that checkout. An explicit
+path or an already discovered checkout keeps the existing selection behavior.
+
 Registration prints ranked gate candidates. Monorepo affected commands (Nx,
 Turborepo, Bazel, pnpm, or Lerna) rank ahead of whole-repository gates (`just
 check`, `make check`, `npm test`, Cargo, or pytest). Accept one, override it with
@@ -455,6 +460,17 @@ explicitly as `--base <root> --pr-base <recorded-pr-base>`; recovery never
 fast-forwards the root publication checkout after a merge into a non-root base.
 `repo-task-auto` prints this
 command when it reports `not-completed`.
+
+To continue authoring after a lifecycle node hits its turn cap, do not relaunch
+the original plan. While supervising its existing `orchestrate` run, send a
+`retry` live edit through `just channel-reply` to replace only the capped node.
+Give the replacement a new id, copy the original node (including
+routing fields such as `execution_checkout`, dependencies, or `steps`), and set
+the larger `max_turns`. The reconciler discovers the capped node's preserved
+lifecycle branch and checkpoint from the run ledger, adds retry-resume metadata
+to the replacement, and continues authoring on that branch. `repo-recover` is
+different: use it when the preserved commits are already complete and need
+verification and publication, not when the worker needs more turns.
 
 ### Complete branch after publication failure
 

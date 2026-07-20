@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import shutil
 import subprocess
 import sys
 from collections.abc import Callable
@@ -64,6 +66,51 @@ def test_registry_register_discover_and_refresh_journey(
     output = listed.stdout
     assert '"refreshed": true' in output
     assert (checkout / "new.txt").read_text(encoding="utf-8") == "new\n"
+
+
+def test_register_recipe_clones_missing_checkout_to_managed_path(
+    tmp_path: Path,
+    bare_origin: Callable[..., Path],
+) -> None:
+    state = tmp_path / "state"
+    origin = bare_origin()
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    real_git = shutil.which("git")
+    assert real_git is not None
+    git_wrapper = bin_dir / "git"
+    git_wrapper.write_text(
+        "#!/bin/sh\n"
+        f'if [ "$1" = clone ]; then exec "{real_git}" -c '
+        f'url."{origin}".insteadOf=https://github.com/acme/widget.git "$@"; fi\n'
+        f'exec "{real_git}" "$@"\n',
+        encoding="utf-8",
+    )
+    git_wrapper.chmod(0o755)
+    env = {
+        **os.environ,
+        "AI_ORCHESTRATOR_HOME": str(state),
+        "AI_ORCHESTRATOR_SEARCH_ROOTS": str(tmp_path / "empty"),
+        "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+    }
+
+    registered = subprocess.run(
+        ["just", "register-repo", "acme/widget", "--repo-type", "single-owner"],
+        cwd=REPO_ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert registered.returncode == 0, registered.stderr
+    checkout = state / "repos" / "acme__widget"
+    assert f"checkout={checkout}" in registered.stdout
+    assert git("remote", "get-url", "origin", cwd=checkout).strip() == (
+        "https://github.com/acme/widget.git"
+    )
+    stored = json.loads((state / "repos.json").read_text(encoding="utf-8"))
+    assert stored["checkouts"]["acme/widget"]["path"] == str(checkout)
 
 
 def test_lifecycle_clis_reject_unknown_local_aliases_before_dispatch(

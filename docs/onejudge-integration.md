@@ -209,6 +209,16 @@ no-unprivileged-userns host, dispatch codex with
 See [the repository lifecycle](repo-lifecycle.md) for clone, gate, recovery, and
 merge mechanics.
 
+## Rolling out a bundled llmlint plugin
+
+For a bundled plugin such as `config_lint`, land the rule change in llmlint and
+release that llmlint version to PyPI first. The consumer gate resolves bundled
+plugins offline from its installed llmlint binary, not from the plugin URL, so an
+unreleased rule cannot be activated downstream. After the release is available,
+bump each consumer's `LLMLINT_MIN` floor and refresh its lock/install state; that
+floor bump is the rollout switch that makes the normal gate use the new bundled
+rule. Run the llmlint release gate before downstream consumer gates.
+
 ## Testing against onejudge without a paid model
 
 onejudge's `command` provider speaks a small JSON-lines protocol
