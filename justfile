@@ -100,6 +100,15 @@ channel-next *args:
 channel-reply *args:
     @uv run orchestrator-channel-reply "$@"
 
+channel-approve *args:
+    @uv run orchestrator-channel-approve "$@"
+
+channel-reject *args:
+    @uv run orchestrator-channel-reject "$@"
+
+channel-continue *args:
+    @uv run orchestrator-channel-continue "$@"
+
 # Drive one subtask through a repo's full lifecycle (clone→gate→PR/merge):
 # `just repo-task <repo> <persona> "<task>"`. `<repo>` is a GitHub name/slug/URL
 # or a local path; direct base merge requires an explicit registered local workflow.

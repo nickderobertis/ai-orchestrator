@@ -17,6 +17,7 @@ from .runs import (
     as_result_payload,
     human_actions,
     latest_round,
+    launch_is_active,
     list_runs,
     load_completions,
     load_mapping,
@@ -176,11 +177,24 @@ def main_runs(argv: list[str] | None = None) -> int:
     parser.add_argument("--runs-dir", type=Path, default=Path("runs"))
     args = parser.parse_args(argv)
     rows = list_runs(args.runs_dir)
-    if not rows:
+    active_launches = (
+        {
+            path.name
+            for path in args.runs_dir.iterdir()
+            if path.is_dir() and (path / "launch.json").is_file() and launch_is_active(path)
+        }
+        if args.runs_dir.is_dir()
+        else set()
+    )
+    if not rows and not active_launches:
         print("No recorded runs.")
         return 0
+    recorded = {row.run_id for row in rows}
+    for run_id in sorted(active_launches - recorded):
+        print(f"* {run_id}  ACTIVE  (orchestrator running)")
     for run_id, number, summary in rows:
-        print(f"{run_id}  round-{number:02d}  ({summary})")
+        marker = "* " if run_id in active_launches else "  "
+        print(f"{marker}{run_id}  round-{number:02d}  ({summary})")
     return 0
 
 

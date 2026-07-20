@@ -26,7 +26,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, TypedDict, cast
 
 import yaml
 from onejudge_sdk import (
@@ -44,7 +44,7 @@ from .config import ConfigError, build_effective_config, load_yaml
 from .coordination import atomic_json
 from .labels import LABEL_ENV, LabelError, merge_labels
 from .personas import persona_path
-from .runs import resolve_run_dir
+from .runs import resolve_run_dir, slugify
 
 # onejudge's own exit codes (see docs/cli.md): 0 completed + boolean evals passed,
 # 1 hit the turn cap / a boolean eval failed, 2 bad config or usage.
@@ -60,6 +60,16 @@ AGENT_ONEHARNESS_BIN = REPO_ROOT / "scripts" / "oneharness-agent.sh"
 
 class DispatchError(Exception):
     """onejudge could not be run, or rejected the config (a loud failure)."""
+
+
+class LaunchRecord(TypedDict):
+    """Stable planner handoff persisted for one orchestrator launch."""
+
+    schema_version: int
+    run_id: str
+    channel_id: str
+    plan_name: str
+    commands: dict[str, str]
 
 
 @dataclass
@@ -378,8 +388,6 @@ def launch_orchestrator(
     run_dir = resolve_run_dir(root, plan_mapping, plan, run_id)
     run_dir.mkdir(parents=True, exist_ok=False)
     channel_dir = create_channel(run_dir)
-    round_dir = run_dir / "round-01"
-    round_dir.mkdir()
     config = build_effective_config(load_yaml(base_path), {}, max_turns=max_turns)
     # The live planner's supervisor verdict is the completion authority. Standalone
     # simulated-model eval/assessment calls do not belong on this command relay.
@@ -434,7 +442,7 @@ def launch_orchestrator(
     stderr_path = effective.parent / "stderr.log"
     task = (
         "Drive this tracked orchestration plan one round at a time. Execute the real command "
-        f"`just run-plan {plan} --runs-dir {root} --base {worker_base_path} "
+        f"`just run-plan {plan} --run {run_dir.name} --runs-dir {root} --base {worker_base_path} "
         f"--provider {provider_kind}` for each required round, review its recorded "
         "result, and surface milestones, blockers, departures, and closeout to your supervisor."
     )
@@ -461,7 +469,7 @@ def launch_orchestrator(
     except FileNotFoundError as exc:
         raise DispatchError(f"onejudge binary not found: {onejudge_bin!r}") from exc
     atomic_json(
-        round_dir / "status.json",
+        effective.parent / "status.json",
         {
             "status": "running",
             "pid": proc.pid,
@@ -469,7 +477,29 @@ def launch_orchestrator(
             "started": datetime.now(UTC).isoformat(),
         },
     )
-    atomic_json(round_dir / "plan.json", {"name": run_dir.name, "nodes": []})
+    raw_plan_name = plan_mapping.get("name")
+    plan_name = slugify(
+        raw_plan_name if isinstance(raw_plan_name, str) and raw_plan_name.strip() else plan.stem
+    )
+    launch: LaunchRecord = {
+        "schema_version": 1,
+        "run_id": run_dir.name,
+        "channel_id": run_dir.name,
+        "plan_name": plan_name,
+        "commands": {
+            "channel_next": f"just channel-next {run_dir.name}",
+            "monitor": f"just monitor {run_dir.name}",
+        },
+    }
+    atomic_json(run_dir / "launch.json", launch)
+    (run_dir / "planner.md").write_text(
+        "# Planner launch\n\n"
+        f"- Run id: `{run_dir.name}`\n"
+        f"- Channel id: `{run_dir.name}`\n"
+        f"- Next surface: `just channel-next {run_dir.name}`\n"
+        f"- Monitor: `just monitor {run_dir.name}`\n",
+        encoding="utf-8",
+    )
     return run_dir.name
 
 
@@ -488,15 +518,16 @@ def main_orchestrate(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         skill = {"kind": "command", "command": args.skill_command} if args.skill_command else None
+        launched = launch_orchestrator(
+            args.plan,
+            runs_dir=args.runs_dir,
+            run_id=args.run_id,
+            base_path=args.base,
+            onejudge_bin=args.onejudge_bin,
+            skill_provider=skill,
+        )
         print(
-            launch_orchestrator(
-                args.plan,
-                runs_dir=args.runs_dir,
-                run_id=args.run_id,
-                base_path=args.base,
-                onejudge_bin=args.onejudge_bin,
-                skill_provider=skill,
-            )
+            (args.runs_dir.resolve() / launched / "launch.json").read_text(encoding="utf-8").strip()
         )
     except (DispatchError, ConfigError) as exc:
         print(f"orchestrate: {exc}", file=sys.stderr)
