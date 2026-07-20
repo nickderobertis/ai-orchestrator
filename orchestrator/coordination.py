@@ -88,13 +88,8 @@ def advisory_lock(identity: str, *, timeout: float = 30.0) -> Iterator[None]:
                 break
             except BlockingIOError:
                 if time.monotonic() >= deadline:
-                    # llmlint: ignore[changed_behavior_has_e2e] The real subprocess contention
-                    # test exercises this timeout boundary directly; the tracked-graph E2E
-                    # separately proves lock-wait journal and telemetry propagation.
                     waited = max(0.0, time.monotonic() - started)
                     if not identity.startswith("journal:"):
-                        # llmlint: ignore[changed_behavior_has_e2e] Real subprocess contention
-                        # covers acquired=False; tracked-graph E2E covers event propagation.
                         observe_harness(
                             "lock-wait",
                             {"identity": identity, "seconds": waited, "acquired": False},
