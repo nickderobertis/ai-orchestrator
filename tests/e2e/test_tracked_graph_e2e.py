@@ -1478,6 +1478,8 @@ def test_real_cli_recovers_waiting_and_no_change_lifecycle_results(
     canonical = gitops.clone(origin, tmp_path / "lifecycle-variants-canonical")
     Registry().register(str(canonical), workflow="local")
     runs = tmp_path / "runs"
+    provider_ready = tmp_path / "in-flight-provider-ready"
+    provider_release = tmp_path / "in-flight-provider-release"
     plan = tmp_path / "lifecycle-variants-prefix.json"
     plan.write_text(
         json.dumps(
@@ -1532,7 +1534,10 @@ def test_real_cli_recovers_waiting_and_no_change_lifecycle_results(
                     {
                         "id": "in-flight",
                         "persona": "engineer",
-                        "task": "should-fail",
+                        "task": (
+                            f"should-fail provider-barrier-ready={provider_ready} "
+                            f"provider-barrier-release={provider_release}"
+                        ),
                         "max_turns": 5,
                     },
                 ],
@@ -1573,11 +1578,7 @@ def test_real_cli_recovers_waiting_and_no_change_lifecycle_results(
             else []
         )
         settled = {event.get("node") for event in records if event["kind"] == "node-settled"}
-        in_flight = any(
-            event["kind"] == "node-started" and event.get("node") == "in-flight"
-            for event in records
-        )
-        if {"waiting-lifecycle", "no-change-lifecycle"} <= settled and in_flight:
+        if {"waiting-lifecycle", "no-change-lifecycle"} <= settled and provider_ready.exists():
             break
         time.sleep(0.01)
     else:
@@ -1585,6 +1586,7 @@ def test_real_cli_recovers_waiting_and_no_change_lifecycle_results(
         pytest.fail("run-plan did not reach the waiting lifecycle recovery boundary")
     os.killpg(process.pid, signal.SIGKILL)
     process.wait()
+    provider_release.write_text("release\n", encoding="utf-8")
 
     recovered = subprocess.run(
         [*command, "--recover"], cwd=REPO_ROOT, text=True, capture_output=True, check=False

@@ -81,6 +81,20 @@ def _planner_guidance(messages: list[dict]) -> str | None:
     return None
 
 
+def _wait_at_provider_barrier(task: str) -> None:
+    """Expose a deterministic real-provider boundary for crash-recovery tests."""
+    match = re.search(r"provider-barrier-ready=(\S+) provider-barrier-release=(\S+)", task)
+    if match is None:
+        return
+    ready, release = (Path(value) for value in match.groups())
+    ready.write_text("ready\n", encoding="utf-8")
+    deadline = time.monotonic() + 30
+    while not release.exists():
+        if time.monotonic() >= deadline:
+            raise TimeoutError(f"provider barrier was not released: {release}")
+        time.sleep(0.01)
+
+
 def _commit_and_push_ci_iteration(state: str) -> None:
     """Act like the paid agent iterating a branch against authoritative CI."""
     Path("CI_STATE.txt").write_text(state + "\n", encoding="utf-8")
@@ -197,6 +211,7 @@ def main() -> int:
 
     match op:
         case "respond":
+            _wait_at_provider_barrier(task)
             if "slow-branch" in task:
                 witness = Path(task.split("slow-branch", 1)[1].strip().split()[0])
                 with witness.open("a", encoding="utf-8") as stream:
