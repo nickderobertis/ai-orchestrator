@@ -26,7 +26,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "onejudge", specifier = "==0.3.3" },
+    { name = "onejudge", specifier = "==0.3.4" },
     { name = "pyyaml", specifier = ">=6.0" },
 ]
 
@@ -361,27 +361,27 @@ wheels = [
 
 [[package]]
 name = "onejudge"
-version = "0.3.3"
+version = "0.3.4"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "jsonschema" },
     { name = "onejudge-cli" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/0c/2c/e5b485c0852e7d48e0f78c87ab79f167c158a5282940dc762718329722ea/onejudge-0.3.3.tar.gz", hash = "sha256:eee9a57c3298047a39c3a2071abf889541576e07612dee1d9b0637bbd4daa029", size = 11099, upload-time = "2026-07-18T23:52:00.261Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/77/80/601cd9f5d3247ecc1636f549d827e4e4abd08417718d4e49084660df46c9/onejudge-0.3.4.tar.gz", hash = "sha256:f0a693f4405a33357f1b11e12bde896672250eaacd363f648ed75edc703fecbd", size = 12086, upload-time = "2026-07-20T12:54:03.284Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/0d/2d/8c327016f4a04a7f1f1d1bd573a11fe191ce82fe854a8dcc273980448b40/onejudge-0.3.3-py3-none-any.whl", hash = "sha256:66516e036fa2f0586eec1f1111e07e12c39f6a54a916ed698df26c9812d595c7", size = 14095, upload-time = "2026-07-18T23:51:58.937Z" },
+    { url = "https://files.pythonhosted.org/packages/ae/a7/c864c54506fa24a9251d45c822f2d8e84064cc67d1d851e6d34bf018b1bc/onejudge-0.3.4-py3-none-any.whl", hash = "sha256:a01cd930444c37108ef1f9cbf837ab11d01aaddf8b6d81c5677640425421a47f", size = 15094, upload-time = "2026-07-20T12:54:02.265Z" },
 ]
 
 [[package]]
 name = "onejudge-cli"
-version = "0.3.3"
+version = "0.3.4"
 source = { registry = "https://pypi.org/simple" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/de/1f/aa36ff1bab46fd437f6be8adb62e86942778de4289525de4b5d080beaa31/onejudge_cli-0.3.3-py3-none-macosx_10_12_x86_64.whl", hash = "sha256:1c656793493e7792c54079456d6a8b9c9902641d74963fc66be31a1ee2b5f08d", size = 682084, upload-time = "2026-07-18T23:51:25.61Z" },
-    { url = "https://files.pythonhosted.org/packages/b7/67/258a81896c8188a33d6c91ec0c85c6cfde03a1d464595cbeab1be2c522c2/onejudge_cli-0.3.3-py3-none-macosx_11_0_arm64.whl", hash = "sha256:3c096391a82c1f10d6b77035adf5eca4e0ebce883dacf117a1925b7e2c0df456", size = 649379, upload-time = "2026-07-18T23:51:27.301Z" },
-    { url = "https://files.pythonhosted.org/packages/0f/fb/ff3dd848cd746218e38244cbc0174a7b48443567d86b5ad3d85692e38263/onejudge_cli-0.3.3-py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:b0f461457a04cd6210067bae8627c776c21d5911565828f5e9346dfaf8b2707a", size = 657265, upload-time = "2026-07-18T23:51:28.899Z" },
-    { url = "https://files.pythonhosted.org/packages/12/a4/409732514a20b006a6e6f31fe18d819d51c705ff56d3d8b203de31efb29e/onejudge_cli-0.3.3-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:29134bdf53a4f751f0539a8b74af7cb89a508ba3a8f86858fa4febd106f62855", size = 701798, upload-time = "2026-07-18T23:51:30.163Z" },
-    { url = "https://files.pythonhosted.org/packages/30/25/a4b50015a57c058c6eb3f786012757402e978bba4848fe41631dec71f077/onejudge_cli-0.3.3-py3-none-win_amd64.whl", hash = "sha256:ff0ff344811cadd93d5c239738529c209e935e0d0ef4497353cadd800341c557", size = 627698, upload-time = "2026-07-18T23:51:31.813Z" },
+    { url = "https://files.pythonhosted.org/packages/09/dd/3270839e0bd7718c7fb0ac6cb8d13f0456cb58ccf9b2ae24fd86601c93f1/onejudge_cli-0.3.4-py3-none-macosx_10_12_x86_64.whl", hash = "sha256:883de25517e36bc2bb7f27cf33fa25856621a73a861c964dcfbb741a5cc79265", size = 693784, upload-time = "2026-07-20T12:53:39.224Z" },
+    { url = "https://files.pythonhosted.org/packages/6a/28/a680bfb377ed30a7db3d007d51865ce9e049df42496a125dc14ce75f35c9/onejudge_cli-0.3.4-py3-none-macosx_11_0_arm64.whl", hash = "sha256:58b990515f9de6998ae57357afcf9417f853f0ae3e7fdbaa9a4bee2e1458da45", size = 660221, upload-time = "2026-07-20T12:53:40.792Z" },
+    { url = "https://files.pythonhosted.org/packages/a4/35/408dec267a4589041dfb1dc455661a0726c552365f386ceeeaa6d0c686d5/onejudge_cli-0.3.4-py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:7844d4c7d95b0f8b88ce73f80609d47ea44cee03fb8cdb3da0bc1c0e6f892283", size = 667977, upload-time = "2026-07-20T12:53:41.989Z" },
+    { url = "https://files.pythonhosted.org/packages/2d/a3/de2a76e9bba42838576323c61980e331c09eb06a17fdbeeca3b92ab0993d/onejudge_cli-0.3.4-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:62c6191d3fec08299adccf2f6c72064eac25ea76056498ca8756c867b7965bc9", size = 712827, upload-time = "2026-07-20T12:53:43.516Z" },
+    { url = "https://files.pythonhosted.org/packages/5f/82/0117ac516bc7bf2a5ffa196c230eb94556b85bafd14f09bc29b354f69560/onejudge_cli-0.3.4-py3-none-win_amd64.whl", hash = "sha256:a5ce4d3a4234fe72de86789b7063bc7680b7a626badae264468d3748be3ba192", size = 637711, upload-time = "2026-07-20T12:53:44.742Z" },
 ]
 
 [[package]]

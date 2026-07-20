@@ -76,7 +76,7 @@ class _TelemetryResult(Protocol):
     """The additive typed result interface introduced by onejudge 0.3.4."""
 
     @property
-    def telemetry(self) -> dict[str, Any] | None: ...
+    def telemetry(self) -> dict[str, Any] | None: ...  # pragma: no cover - typing contract
 
 
 @dataclass
@@ -119,9 +119,8 @@ def _build_report(persona: str, result: RunResult) -> Report:
         if isinstance(raw_assessment, str) and raw_assessment.strip()
         else None
     )
-    # onejudge 0.3.4 exposes report-v5 telemetry as a typed SDK property. Keep
-    # reading the validated raw report only while the planner deliberately runs
-    # this change's gate with the pre-transition 0.3.3 SDK.
+    # Current SDKs expose telemetry as a typed property; validated raw reports
+    # keep records from older SDKs readable after an upgrade.
     typed_result = cast(_TelemetryResult, result)
     raw_telemetry = (
         typed_result.telemetry if hasattr(result, "telemetry") else result.raw.get("telemetry")

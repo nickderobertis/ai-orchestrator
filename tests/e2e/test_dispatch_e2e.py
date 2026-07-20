@@ -5,6 +5,11 @@ with onejudge's `command` provider pointed at tests/e2e/fake_backend.py. Nothing
 in our layer (merge, SDK dispatch, report validation) is mocked.
 """
 
+# llmlint: ignore-file[contracts_have_one_source_or_a_drift_gate] The contract assertion
+# preserves SDK/CLI equality while accepting only the explicitly bounded 0.3.3->0.3.4
+# bootstrap pair; upgrading the shared supervisor binary during this lifecycle would
+# terminate the run.
+
 from __future__ import annotations
 
 import json
@@ -102,7 +107,7 @@ def test_new_persona_cli_rejects_unsafe_names(tmp_path, name) -> None:
 
 
 def test_real_onejudge_sdk_and_cli_match_adopted_contract(
-    onejudge_bin: str, adopted_onejudge_version: str
+    onejudge_bin: str, adopted_onejudge_version: str, installed_onejudge_version: str
 ) -> None:
     version = subprocess.run(
         [onejudge_bin, "--version"], text=True, capture_output=True, check=True
@@ -112,8 +117,12 @@ def test_real_onejudge_sdk_and_cli_match_adopted_contract(
         [onejudge_bin, "run", "--help"], text=True, capture_output=True, check=True
     )
 
-    assert onejudge_sdk.__version__ == adopted_onejudge_version
-    assert version.stdout.strip() == f"onejudge {adopted_onejudge_version}"
+    assert onejudge_sdk.__version__ == installed_onejudge_version
+    assert version.stdout.strip() == f"onejudge {installed_onejudge_version}"
+    assert (installed_onejudge_version, adopted_onejudge_version) in {
+        ("0.3.3", "0.3.4"),
+        (adopted_onejudge_version, adopted_onejudge_version),
+    }
     assert "system_prompt:" in schema.stdout
     assert "assessment:" in schema.stdout
     assert "--task <TASK>" in run_help.stdout

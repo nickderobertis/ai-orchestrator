@@ -222,7 +222,7 @@ rule. Run the llmlint release gate before downstream consumer gates.
 ## Testing against onejudge without a paid model
 
 onejudge's `command` provider speaks a small JSON-lines protocol
-([onejudge v0.3.3 docs/protocol.md](https://github.com/nickderobertis/onejudge/blob/v0.3.3/docs/protocol.md)),
+([onejudge v0.3.4 docs/protocol.md](https://github.com/nickderobertis/onejudge/blob/v0.3.4/docs/protocol.md)),
 so any command can stand in for the harness. The e2e suite points it at
 `tests/e2e/fake_backend.py` — a deterministic backend — so the gate drives the
 **real** onejudge CLI and loop across a real subprocess boundary, faking only the
