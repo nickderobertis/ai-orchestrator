@@ -13,8 +13,20 @@ from typing import Any
 
 import pytest
 
-from orchestrator.coordination import GitLockIdentity, reset_harness_observer, set_harness_observer
-from orchestrator.merge_queue import _process_start_identity, _queue_path, merge_queue_turn
+from orchestrator.coordination import (
+    GitLockIdentity,
+    advisory_lock,
+    atomic_json,
+    reset_harness_observer,
+    set_harness_observer,
+)
+from orchestrator.merge_queue import (
+    _process_start_identity,
+    _queue_path,
+    _read_state,
+    _state_identity,
+    merge_queue_turn,
+)
 
 MP = multiprocessing.get_context("spawn")
 
@@ -37,7 +49,7 @@ def _remove_ticket_process(
 ) -> None:
     os.environ["AI_ORCHESTRATOR_HOME"] = state_root
     _ticket_count(identity, expected)
-    _remove_ticket(_queue_path(identity), pid=pid)
+    _remove_ticket(identity, pid=pid)
 
 
 def _kill_after_ticket_count(
@@ -52,8 +64,8 @@ def _ticket_count(identity: GitLockIdentity, expected: int) -> None:
     path = _queue_path(identity)
     deadline = time.monotonic() + 10
     while time.monotonic() < deadline:
-        if path.exists():
-            value = json.loads(path.read_text(encoding="utf-8"))
+        with advisory_lock(_state_identity(identity)):
+            value = _read_state(path)
             if len(value["tickets"]) == expected:
                 return
         time.sleep(0.01)
@@ -66,10 +78,12 @@ def _join(process: multiprocessing.Process) -> None:
     assert process.exitcode == 0
 
 
-def _remove_ticket(path: Path, *, pid: int) -> None:
-    state = json.loads(path.read_text(encoding="utf-8"))
-    state["tickets"] = [ticket for ticket in state["tickets"] if ticket["pid"] != pid]
-    path.write_text(json.dumps(state), encoding="utf-8")
+def _remove_ticket(identity: GitLockIdentity, *, pid: int) -> None:
+    path = _queue_path(identity)
+    with advisory_lock(_state_identity(identity)):
+        state = _read_state(path)
+        state["tickets"] = [ticket for ticket in state["tickets"] if ticket["pid"] != pid]
+        atomic_json(path, state)
 
 
 def test_missing_process_start_token_fails_without_creating_queue(
