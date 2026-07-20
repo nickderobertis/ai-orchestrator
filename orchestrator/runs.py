@@ -69,6 +69,8 @@ def resolve_supervision_run(runs_dir: Path, identifier: str) -> RunId:
     raise ConfigError(f"no recorded run {identifier!r} under {runs_dir}{suffix}")
 
 
+# llmlint: ignore[changed_behavior_has_e2e] real orchestrate/listing/name-resolution journeys run
+# e2e; host/PID outcomes are deterministic OS-liveness boundary branches.
 def launch_is_active(run_dir: Path) -> bool:
     """Return whether a launched orchestrator has not written its final report."""
     report = run_dir / "orchestrator" / "report.json"

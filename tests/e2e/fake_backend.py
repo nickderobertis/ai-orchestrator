@@ -209,6 +209,11 @@ def main() -> int:
             if orchestrator_plan is not None:
                 plan_path = orchestrator_plan.plan
                 plan_text = plan_path.read_text(encoding="utf-8")
+                if "pre-round-pause " in plan_text:
+                    release = Path(plan_text.split("pre-round-pause ", 1)[1].split('"', 1)[0])
+                    deadline = time.monotonic() + 10
+                    while not release.exists() and time.monotonic() < deadline:
+                        time.sleep(0.02)
                 orchestrator_turn = _assistant_turns(messages)
                 if orchestrator_turn == 0:
                     subprocess.run(

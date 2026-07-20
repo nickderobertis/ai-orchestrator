@@ -125,6 +125,15 @@ def _next_cli(run_id: str, runs: Path, timeout: str = "10") -> dict[str, object]
     return json.loads(result.stdout)
 
 
+def _wait_surface(run_id: str, runs: Path) -> dict[str, object]:
+    deadline = time.monotonic() + 15
+    while time.monotonic() < deadline:
+        value = _next_cli(run_id, runs, timeout="2")
+        if value.get("surface") is not None:
+            return value
+    raise AssertionError(f"surface did not arrive for {run_id}")
+
+
 def _reply_cli(run_id: str, runs: Path, value: dict[str, object]) -> None:
     subprocess.run(
         ["just", "channel-reply", run_id, "--runs-dir", str(runs)],
@@ -176,13 +185,25 @@ def test_live_channel_runs_real_nested_graph_and_round_trips_guidance(
     )
     assert unknown.returncode == 2
     assert f"valid run ids: {run_id}" in unknown.stderr
-    pre_round = runs / "pre-round"
-    (pre_round / "orchestrator").mkdir(parents=True)
-    (pre_round / "launch.json").write_text('{"plan_name":"pre-round-plan"}', encoding="utf-8")
-    (pre_round / "orchestrator" / "status.json").write_text(
-        json.dumps({"status": "running", "pid": os.getpid(), "host": os.uname().nodename}),
+    release = tmp_path / "release-pre-round"
+    pre_round_plan = tmp_path / "pre-round.json"
+    pre_round_plan.write_text(
+        json.dumps(
+            {
+                "schema_version": 3,
+                "name": "pre-round-plan",
+                "tasks": [
+                    {
+                        "id": "worker",
+                        "persona": "engineer",
+                        "task": f"pre-round-pause {release} complete-now",
+                    }
+                ],
+            }
+        ),
         encoding="utf-8",
     )
+    pre_round_id = _launch_cli(pre_round_plan, runs, _base(tmp_path), onejudge_bin)
     pre_round_listing = subprocess.run(
         ["just", "runs", "--runs-dir", str(runs)],
         cwd=REPO_ROOT,
@@ -190,7 +211,11 @@ def test_live_channel_runs_real_nested_graph_and_round_trips_guidance(
         capture_output=True,
         check=True,
     )
-    assert "* pre-round  ACTIVE  (orchestrator running)" in pre_round_listing.stdout
+    assert f"* {pre_round_id}  ACTIVE  (orchestrator running)" in pre_round_listing.stdout
+    release.touch()
+    assert _wait_surface(pre_round_id, runs)["surface"]["kind"] == "milestone"
+    _convenience_cli("channel-approve", pre_round_id, runs)
+    _wait_report(runs / pre_round_id / "orchestrator" / "report.json")
     blocker = _next_cli("nested-surface-blocker", runs)
     assert blocker["surface"] == {
         "kind": "blocker",
@@ -220,7 +245,7 @@ def test_live_channel_runs_real_nested_graph_and_round_trips_guidance(
 
     report = _wait_report(run_dir / "orchestrator" / "report.json")
     assert report["stopped_early"] is False
-    assert set(runs.iterdir()) == {pre_round, run_dir}
+    assert set(runs.iterdir()) == {runs / pre_round_id, run_dir}
     nested_result = json.loads((run_dir / "round-01" / "result.json").read_text())
     assert nested_result["results"]["worker"]["status"] == "done"
     assert (run_dir / "channel").exists()

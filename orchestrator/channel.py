@@ -425,7 +425,14 @@ def relay_supervisor(channel_dir: Path, run_id: str, round_number: int, *, timeo
         with suppress(FileNotFoundError):
             (channel_dir / "planner-pending.json").unlink()
         atomic_json(channel_dir / "planner-verdict.json", response)
-    except (ChannelError, ChannelTimeout, EditError, json.JSONDecodeError, OSError) as exc:
+    except (
+        ChannelError,
+        ChannelTimeout,
+        ConfigError,
+        EditError,
+        json.JSONDecodeError,
+        OSError,
+    ) as exc:
         print(f"relay-supervisor: {exc}", file=sys.stderr)
         return 1
     print(json.dumps(response))
@@ -536,7 +543,14 @@ def main_reply(argv: list[str] | None = None) -> int:
             _reply(value),
             timeout=args.timeout,
         )
-    except (ChannelError, ChannelTimeout, EditError, json.JSONDecodeError, OSError) as exc:
+    except (
+        ChannelError,
+        ChannelTimeout,
+        ConfigError,
+        EditError,
+        json.JSONDecodeError,
+        OSError,
+    ) as exc:
         print(
             f"channel-reply: {exc}; check the run id and reply shape, then rerun the command",
             file=sys.stderr,
