@@ -43,7 +43,7 @@ def process_tree_guard(
     """Reap complete subprocess trees and report test-owned resource leaks."""
     original_popen = subprocess.Popen
     e2e_test = "e2e" in Path(str(request.node.path)).parts
-    guard = ProcessTreeGuard(popen=original_popen, track_worktrees=e2e_test)
+    guard = ProcessTreeGuard(popen=original_popen)
 
     def tracked_popen(*args: Any, **kwargs: Any) -> subprocess.Popen[Any]:
         return guard.spawn(*args, **kwargs)

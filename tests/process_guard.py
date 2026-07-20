@@ -29,7 +29,6 @@ class ProcessTreeGuard:
 
     popen: PopenFactory = subprocess.Popen
     grace_seconds: float = 5.0
-    track_worktrees: bool = True
     processes: list[subprocess.Popen[Any]] = field(default_factory=list)
     worktrees: set[Path] = field(default_factory=set)
 
@@ -49,30 +48,7 @@ class ProcessTreeGuard:
             lambda: self._signal_group(process.pid, signal.SIGKILL)
         )
         self.processes.append(process)
-        self._register_git_worktree_command(args, kwargs)
         return process
-
-    def _register_git_worktree_command(self, args: tuple[Any, ...], kwargs: dict[str, Any]) -> None:
-        if not self.track_worktrees:
-            return
-        if not args or not isinstance(args[0], (list, tuple)):
-            return
-        command = [os.fspath(part) for part in args[0]]
-        try:
-            add = command.index("add", command.index("worktree") + 1)
-        except ValueError:
-            return
-        operands = command[add + 1 :]
-        if operands[:1] in (["-b"], ["-B"]):
-            operands = operands[2:]
-        elif operands[:1] == ["--detach"]:
-            operands = operands[1:]
-        if not operands:
-            return
-        path = Path(operands[0])
-        if not path.is_absolute():
-            path = Path(kwargs.get("cwd") or os.getcwd()) / path
-        self.register_worktree(path)
 
     @staticmethod
     def _signal_group(pid: int, sig: signal.Signals) -> None:
