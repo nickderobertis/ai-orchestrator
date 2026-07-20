@@ -132,6 +132,9 @@ def test_bridge_recipes_reference_declared_console_scripts() -> None:
         "orchestrator-orchestrate",
         "orchestrator-channel-next",
         "orchestrator-channel-reply",
+        "orchestrator-channel-approve",
+        "orchestrator-channel-reject",
+        "orchestrator-channel-continue",
     ):
         assert command in scripts
         assert f"uv run {command}" in justfile

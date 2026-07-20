@@ -1006,7 +1006,12 @@ def run_state(run_dir: Path, run_id: RunId) -> RunState:
             surface = load_mapping(pending)
             kind = surface.get("kind", "decision")
             message = surface.get("message", "planner reply required")
-            required = "ACK REQUIRED" if surface.get("blocking", True) else "REPLY REQUESTED"
+            if not isinstance(kind, str) or not isinstance(message, str):
+                raise ConfigError("persisted planner surface kind and message must be strings")
+            blocking = surface.get("blocking", True)
+            if not isinstance(blocking, bool):
+                raise ConfigError("persisted planner surface blocking must be boolean")
+            required = "ACK REQUIRED" if blocking else "REPLY REQUESTED"
             pending_round = latest_round(run_dir)
             return RunState(
                 run_id,
