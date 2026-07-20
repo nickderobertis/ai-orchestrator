@@ -10,18 +10,24 @@ import time
 from contextlib import suppress
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 
 class ResourceLeak(AssertionError):
     """A test left one of its own registered resources alive."""
 
 
+class PopenFactory(Protocol):
+    """Callable subprocess-construction boundary used by the guard."""
+
+    def __call__(self, *args: Any, **kwargs: Any) -> subprocess.Popen[Any]: ...
+
+
 @dataclass
 class ProcessTreeGuard:
     """Track test-owned process groups and worktrees, then clean them boundedly."""
 
-    popen: type[subprocess.Popen[Any]] = subprocess.Popen
+    popen: PopenFactory = subprocess.Popen
     grace_seconds: float = 5.0
     track_worktrees: bool = True
     processes: list[subprocess.Popen[Any]] = field(default_factory=list)
@@ -29,12 +35,19 @@ class ProcessTreeGuard:
 
     def spawn(self, *args: Any, **kwargs: Any) -> subprocess.Popen[Any]:
         """Start and register a subprocess as leader of a fresh process group."""
-        if "start_new_session" not in kwargs and "process_group" not in kwargs:
-            kwargs["start_new_session"] = True
+        if kwargs.get("start_new_session") is False or kwargs.get("process_group", -1) not in (
+            -1,
+            None,
+        ):
+            raise ValueError("guarded subprocesses must use a fresh session")
+        kwargs["start_new_session"] = True
         process = self.popen(*args, **kwargs)
-        if kwargs.get("start_new_session") is True:
-            process.terminate = lambda: self._signal_group(process.pid, signal.SIGTERM)  # type: ignore[method-assign]
-            process.kill = lambda: self._signal_group(process.pid, signal.SIGKILL)  # type: ignore[method-assign]
+        process.terminate = (  # type: ignore[method-assign]  # Make legacy teardown group-safe.
+            lambda: self._signal_group(process.pid, signal.SIGTERM)
+        )
+        process.kill = (  # type: ignore[method-assign]  # Make legacy teardown group-safe.
+            lambda: self._signal_group(process.pid, signal.SIGKILL)
+        )
         self.processes.append(process)
         self._register_git_worktree_command(args, kwargs)
         return process
