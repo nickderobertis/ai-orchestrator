@@ -130,18 +130,13 @@ def test_real_cli_mutates_live_frontier_and_replays_atomic_edits(
         capture_output=True,
         check=True,
     )
-    run_id = launched.stdout.strip()
+    run_id = str(json.loads(launched.stdout)["run_id"])
     outer_run = runs / run_id
     deadline = time.monotonic() + 15
     run_dir: Path | None = None
     while time.monotonic() < deadline:
-        candidates = [
-            path
-            for path in runs.iterdir()
-            if path != outer_run and (path / "events.jsonl").is_file()
-        ]
-        if candidates:
-            run_dir = candidates[0]
+        if (outer_run / "events.jsonl").is_file():
+            run_dir = outer_run
             break
         time.sleep(0.02)
     assert run_dir is not None
@@ -363,18 +358,13 @@ def test_real_cli_live_drop_preserves_and_recovers_running_lifecycle(
         capture_output=True,
         check=True,
     )
-    run_id = launched.stdout.strip()
+    run_id = str(json.loads(launched.stdout)["run_id"])
     outer_run = runs / run_id
     nested: Path | None = None
     deadline = time.monotonic() + 15
     while time.monotonic() < deadline:
-        candidates = [
-            path
-            for path in runs.iterdir()
-            if path != outer_run and (path / "events.jsonl").is_file()
-        ]
-        if candidates:
-            nested = candidates[0]
+        if (outer_run / "events.jsonl").is_file():
+            nested = outer_run
             break
         time.sleep(0.02)
     assert nested is not None

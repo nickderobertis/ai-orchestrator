@@ -27,6 +27,7 @@ PLAN = {
     "name": "owned run",
     "tasks": [{"id": "change", "repo": "/unused", "persona": "backend", "task": "x"}],
 }
+MP = multiprocessing.get_context("spawn")
 
 
 def _worktree_process(
@@ -143,9 +144,9 @@ def test_separate_processes_create_and_remove_distinct_worktrees(
 ) -> None:
     origin = bare_origin()
     canonical = gitops.clone(origin, tmp_path / "canonical")
-    queue: multiprocessing.Queue[str] = multiprocessing.Queue()
+    queue: multiprocessing.Queue[str] = MP.Queue()
     processes = [
-        multiprocessing.Process(
+        MP.Process(
             target=_worktree_process,
             args=(str(canonical), str(tmp_path / "worktrees"), f"feature/{index}", queue),
         )
@@ -171,10 +172,9 @@ def test_active_cross_process_worktree_is_never_reclaimed(
     root = tmp_path / "worktrees-active"
     # Python 3.14's shared forkserver captures the prior test's isolated
     # AI_ORCHESTRATOR_HOME. Spawn proves both contenders use this test's lock root.
-    context = multiprocessing.get_context("spawn")
-    ready: multiprocessing.Queue[str] = context.Queue()
-    release = context.Event()
-    process = context.Process(
+    ready: multiprocessing.Queue[str] = MP.Queue()
+    release = MP.Event()
+    process = MP.Process(
         target=_held_worktree_process,
         args=(str(canonical), str(root), "feature/held", ready, release),
     )
@@ -198,10 +198,10 @@ def test_same_branch_redispatch_cannot_overtake_paused_teardown(
     origin = bare_origin()
     canonical = gitops.clone(origin, tmp_path / "canonical-teardown-race")
     root = tmp_path / "worktrees-teardown-race"
-    ready: multiprocessing.Queue[str] = multiprocessing.Queue()
-    begin = multiprocessing.Event()
-    teardown_started = multiprocessing.Event()
-    process = multiprocessing.Process(
+    ready: multiprocessing.Queue[str] = MP.Queue()
+    begin = MP.Event()
+    teardown_started = MP.Event()
+    process = MP.Process(
         target=_paused_teardown_process,
         args=(
             str(canonical),
@@ -247,8 +247,8 @@ def test_failed_abandoned_reclaim_releases_lease_for_retry(
     origin = bare_origin()
     canonical = gitops.clone(origin, tmp_path / "canonical-locked-orphan")
     root = tmp_path / "worktrees-locked-orphan"
-    ready: multiprocessing.Queue[str] = multiprocessing.Queue()
-    process = multiprocessing.Process(
+    ready: multiprocessing.Queue[str] = MP.Queue()
+    process = MP.Process(
         target=_orphan_worktree_process,
         args=(str(canonical), str(root), "feature/orphan", ready),
     )
@@ -273,8 +273,8 @@ def test_abandoned_branch_at_different_path_moves_to_new_owned_worktree(
 ) -> None:
     origin = bare_origin()
     canonical = gitops.clone(origin, tmp_path / "canonical-moved-orphan")
-    ready: multiprocessing.Queue[str] = multiprocessing.Queue()
-    process = multiprocessing.Process(
+    ready: multiprocessing.Queue[str] = MP.Queue()
+    process = MP.Process(
         target=_orphan_worktree_process,
         args=(str(canonical), str(tmp_path / "old-root"), "feature/moved", ready),
     )
@@ -299,8 +299,8 @@ def test_missing_abandoned_worktree_registration_is_pruned_and_recreated(
     origin = bare_origin()
     canonical = gitops.clone(origin, tmp_path / "canonical-missing-orphan")
     root = tmp_path / "worktrees-missing-orphan"
-    ready: multiprocessing.Queue[str] = multiprocessing.Queue()
-    process = multiprocessing.Process(
+    ready: multiprocessing.Queue[str] = MP.Queue()
+    process = MP.Process(
         target=_orphan_worktree_process,
         args=(str(canonical), str(root), "feature/missing", ready),
     )
@@ -327,9 +327,9 @@ def test_identical_simultaneous_lifecycles_get_unique_branches_and_both_land(
 ) -> None:
     origin = bare_origin()
     canonical = gitops.clone(origin, tmp_path / "canonical")
-    queue: multiprocessing.Queue[dict[str, object]] = multiprocessing.Queue()
+    queue: multiprocessing.Queue[dict[str, object]] = MP.Queue()
     processes = [
-        multiprocessing.Process(
+        MP.Process(
             target=_lifecycle_process,
             args=(
                 str(origin),
@@ -364,7 +364,7 @@ def test_concurrent_registry_initialization_retains_both_entries(
         checkout = gitops.clone(bare_origin(), tmp_path / name)
         checkouts.append(checkout)
     processes = [
-        multiprocessing.Process(target=_register_process, args=(str(registry_path), str(checkout)))
+        MP.Process(target=_register_process, args=(str(registry_path), str(checkout)))
         for checkout in checkouts
     ]
     for process in processes:
@@ -382,9 +382,9 @@ def test_explicit_run_owner_blocks_contention_and_only_dead_owner_can_be_recover
     tmp_path: Path,
 ) -> None:
     run_dir = tmp_path / "runs" / "explicit"
-    ready = multiprocessing.Event()
-    release = multiprocessing.Event()
-    owner = multiprocessing.Process(target=_own_round, args=(str(run_dir), ready, release))
+    ready = MP.Event()
+    release = MP.Event()
+    owner = MP.Process(target=_own_round, args=(str(run_dir), ready, release))
     owner.start()
     assert ready.wait(5), "owner never claimed the explicit run"
 

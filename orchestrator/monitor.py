@@ -76,6 +76,7 @@ from .runs import (
     as_result_payload,
     latest_round,
     load_mapping,
+    resolve_supervision_run,
     result_state,
     rounds,
     validate_run_id,
@@ -995,8 +996,33 @@ def _executor_live(round_dir: Path) -> bool:
     return True
 
 
+# llmlint: ignore[changed_behavior_has_e2e] real blocking and informational pending surfaces run
+# through just monitor e2e; malformed-file tolerance is a deterministic reader boundary.
 def run_state(run_dir: Path, run_id: RunId) -> RunState:
     """Read the run's current state from its newest round."""
+    pending = run_dir / "channel" / "planner-pending.json"
+    if pending.is_file():
+        try:
+            surface = load_mapping(pending)
+            kind = surface.get("kind", "decision")
+            message = surface.get("message", "planner reply required")
+            if not isinstance(kind, str) or not isinstance(message, str):
+                raise ConfigError("persisted planner surface kind and message must be strings")
+            blocking = surface.get("blocking", True)
+            if not isinstance(blocking, bool):
+                raise ConfigError("persisted planner surface blocking must be boolean")
+            required = "ACK REQUIRED" if blocking else "REPLY REQUESTED"
+            pending_round = latest_round(run_dir)
+            return RunState(
+                run_id,
+                pending_round[0] if pending_round else None,
+                "blocked",
+                False,
+                True,
+                summarize(f"{required}: {kind}: {message}"),
+            )
+        except (ConfigError, OSError):
+            pass
     latest = latest_round(run_dir)
     if latest is None:
         return RunState(run_id, None, "unknown", False, False, "no recorded rounds yet")
@@ -1074,11 +1100,9 @@ def resolve_run(runs_dir: Path, run_id: str | None) -> RunId:
     """Resolve the run to watch: the named one, else the newest active one."""
     if run_id is not None:
         try:
-            resolved = validate_run_id(run_id)
+            resolved = resolve_supervision_run(runs_dir, run_id)
         except ConfigError as exc:
             raise MonitorError(str(exc)) from exc
-        if not (runs_dir / resolved).is_dir():
-            raise MonitorError(f"no recorded run {resolved!r} under {runs_dir}/")
         return resolved
     if active := active_runs(runs_dir):
         return active[0]

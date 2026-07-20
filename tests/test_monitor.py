@@ -536,6 +536,21 @@ def test_a_run_with_no_recorded_rounds_has_nothing_to_report_yet(tmp_path: Path)
     assert (state.round, state.state, state.finished) == (None, "unknown", False)
 
 
+def test_non_boolean_persisted_pending_state_is_ignored(tmp_path: Path) -> None:
+    run_dir = tmp_path / RUN
+    prepare_round(run_dir, PLAN)
+    pending = run_dir / "channel" / "planner-pending.json"
+    pending.parent.mkdir()
+    pending.write_text(
+        json.dumps({"kind": "proposal", "message": "review", "blocking": "false"}),
+        encoding="utf-8",
+    )
+
+    state = run_state(run_dir, RUN)
+    assert state.state == "running"
+    assert state.detail == "round in progress"
+
+
 def test_only_a_complete_and_ok_result_counts_as_finished(tmp_path: Path) -> None:
     """`ok` and the state are recorded separately, and both must agree."""
     run_dir = tmp_path / RUN

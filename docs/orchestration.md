@@ -59,7 +59,16 @@ The three planner-facing recipes are:
 just orchestrate plan.json --runs-dir /host/path/runs
 just channel-next RUN --runs-dir /host/path/runs
 just channel-reply RUN reply.json --runs-dir /host/path/runs
+just channel-approve RUN --runs-dir /host/path/runs
+just channel-reject RUN "verification failed" --runs-dir /host/path/runs
+just channel-continue RUN "apply the edit and continue" --runs-dir /host/path/runs
 ```
+
+`orchestrate` prints a JSON launch record containing `run_id`, `channel_id`, and
+literal `commands.channel_next` / `commands.monitor` values, and persists the same
+handoff at `runs/<run-id>/planner.md`. Use that `run_id` for every supervision
+recipe. A plan name is also accepted when it identifies exactly one active launch;
+an ambiguous or stale name fails and lists valid run ids.
 
 `channel-next` waits for one surface. A bounded wait with no message returns
 `{"status":"running","surface":null}`; a settled run returns
@@ -67,6 +76,20 @@ just channel-reply RUN reply.json --runs-dir /host/path/runs
 stdin when its file argument is omitted. Both sides may exit and reattach between
 messages: transport state lives under `runs/<run-id>/channel/` as `up.fifo`,
 `down.fifo`, `channel.json`, and the last `planner-verdict.json`.
+
+Every proposal includes `surface.blocking`: `true` means the worker or orchestrator
+is awaiting the decision, while `false` is an informational follow-up that does
+not stop the graph frontier. `monitor` renders `ACK REQUIRED` while any blocking
+supervisor boundary, including closeout, awaits a reply.
+
+The raw reply schema remains available for edits and automation. A continuing
+reply is `{"completion":false,"message":"what to do next","reason":"why"}`;
+an approval is `{"completion":true,"reason":"what was verified"}`. Either may
+also contain `"version":1` plus a `"commands"` array using the operations below.
+The convenience recipes construct the common forms: `channel-approve` sends a
+completed verdict, `channel-reject` sends a continuing verdict whose reason and
+message are the supplied text, and `channel-continue` sends the same continuing
+shape for a non-rejection instruction.
 
 Only the orchestrator crosses round boundaries. Worker onejudge processes remain
 bounded to the graph round that dispatched them and never use the planner channel.

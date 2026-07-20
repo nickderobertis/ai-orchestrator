@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import tomllib
 from pathlib import Path
 
@@ -77,6 +78,11 @@ def test_orchestrate_cli_prints_run_id(
 
     def fake_launch(path: Path, **kwargs: object) -> str:
         received.update({"path": path, **kwargs})
+        run = tmp_path / "runs" / "live-run"
+        run.mkdir(parents=True)
+        (run / "launch.json").write_text(
+            '{"run_id":"live-run","channel_id":"live-run"}', encoding="utf-8"
+        )
         return "live-run"
 
     monkeypatch.setattr("orchestrator.dispatch.launch_orchestrator", fake_launch)
@@ -94,7 +100,10 @@ def test_orchestrate_cli_prints_run_id(
         )
         == 0
     )
-    assert capsys.readouterr().out == "live-run\n"
+    assert json.loads(capsys.readouterr().out) == {
+        "run_id": "live-run",
+        "channel_id": "live-run",
+    }
     assert received["skill_provider"] == {
         "kind": "command",
         "command": ["fake-provider"],
@@ -123,6 +132,9 @@ def test_bridge_recipes_reference_declared_console_scripts() -> None:
         "orchestrator-orchestrate",
         "orchestrator-channel-next",
         "orchestrator-channel-reply",
+        "orchestrator-channel-approve",
+        "orchestrator-channel-reject",
+        "orchestrator-channel-continue",
     ):
         assert command in scripts
         assert f"uv run {command}" in justfile

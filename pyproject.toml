@@ -34,6 +34,9 @@ orchestrator-repos = "orchestrator.registry:main_repos"
 orchestrator-orchestrate = "orchestrator.dispatch:main_orchestrate"
 orchestrator-channel-next = "orchestrator.channel:main_next"
 orchestrator-channel-reply = "orchestrator.channel:main_reply"
+orchestrator-channel-approve = "orchestrator.channel:main_approve"
+orchestrator-channel-reject = "orchestrator.channel:main_reject"
+orchestrator-channel-continue = "orchestrator.channel:main_continue"
 orchestrator-relay-supervisor = "orchestrator.channel:main_relay"
 
 [dependency-groups]

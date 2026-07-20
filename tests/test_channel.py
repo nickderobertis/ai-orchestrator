@@ -7,6 +7,7 @@ import os
 import socket
 import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -19,7 +20,10 @@ from orchestrator.channel import (
     _reply,
     _surface,
     create_channel,
+    main_approve,
+    main_continue,
     main_next,
+    main_reject,
     main_relay,
     main_reply,
     read_message,
@@ -140,8 +144,13 @@ def test_proposal_pump_round_trips_and_persists_on_reconciler_drain(tmp_path: Pa
         "op": "supervisor",
         "run_id": "live",
         "round": 3,
-        "surface": {"kind": "proposal", "message": "worker: found adjacent work"},
+        "surface": {
+            "kind": "proposal",
+            "message": "worker: found adjacent work",
+            "blocking": False,
+        },
         "messages": [],
+        "proposal_id": "worker:found adjacent work",
     }
 
     reply = {"completion": False, "message": "defer", "reason": "next round"}
@@ -157,8 +166,82 @@ def test_proposal_pump_round_trips_and_persists_on_reconciler_drain(tmp_path: Pa
         pump.persist_replies()
         time.sleep(0.01)
     sender.join()
-    pump.close()
     assert json.loads(verdict.read_text(encoding="utf-8")) == reply
+    pump.propose("worker", "found adjacent work")
+    with pytest.raises(ChannelTimeout):
+        read_message(channel / "up.fifo", timeout=0.1)
+    pump.close()
+
+
+@pytest.mark.parametrize(
+    ("entrypoint", "arguments", "expected"),
+    [
+        (main_approve, [], {"completion": True, "reason": "approved"}),
+        (
+            main_reject,
+            ["verification failed"],
+            {
+                "completion": False,
+                "message": "verification failed",
+                "reason": "verification failed",
+            },
+        ),
+        (
+            main_continue,
+            ["keep going"],
+            {"completion": False, "message": "keep going", "reason": "keep going"},
+        ),
+    ],
+)
+def test_convenience_recipe_builds_reply_over_real_fifo(
+    tmp_path: Path,
+    entrypoint: Callable[[list[str] | None], int],
+    arguments: list[str],
+    expected: dict[str, object],
+) -> None:
+    runs = tmp_path / "runs"
+    channel = create_channel(runs / "orch")
+    received: list[dict[str, object]] = []
+
+    def receive() -> None:
+        received.append(read_message(channel / "down.fifo", timeout=1))
+
+    reader = threading.Thread(target=receive)
+    reader.start()
+    assert entrypoint(["orch", *arguments, "--runs-dir", str(runs)]) == 0
+    reader.join()
+    assert received == [expected]
+
+
+def test_channel_run_resolution_accepts_unique_active_plan_name_and_lists_ambiguity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    runs = tmp_path / "runs"
+    for run_id in ("launch-1", "launch-2"):
+        channel = create_channel(runs / run_id)
+        atomic_json(channel.parent / "launch.json", {"plan_name": "friendly"})
+        (channel.parent / "orchestrator").mkdir()
+        atomic_json(
+            channel.parent / "orchestrator" / "status.json",
+            {"status": "running", "pid": os.getpid(), "host": socket.gethostname()},
+        )
+    report = runs / "launch-2" / "orchestrator" / "report.json"
+    report.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr("orchestrator.channel._finished", lambda path: False)
+    monkeypatch.setattr(
+        "orchestrator.channel.read_message",
+        lambda path, timeout: {"resolved": path.parent.parent.name},
+    )
+    assert main_next(["friendly", "--runs-dir", str(runs)]) == 0
+    assert json.loads(capsys.readouterr().out) == {"resolved": "launch-1"}
+
+    report.unlink()
+    assert main_next(["friendly", "--runs-dir", str(runs)]) == 2
+    error = capsys.readouterr().err
+    assert "ambiguous" in error
+    assert "launch-1, launch-2" in error
 
 
 def test_unanswered_proposal_releases_down_fifo_before_boundary(tmp_path: Path) -> None:

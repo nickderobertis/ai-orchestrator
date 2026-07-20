@@ -728,6 +728,26 @@ def test_the_monitor_command_streams_a_run_and_only_success_exits_zero(tmp_path:
     assert "id" not in records[-1]
 
 
+def test_monitor_recovers_from_a_malformed_pending_surface(tmp_path: Path) -> None:
+    """A corrupt planner-pending.json is a deterministic reader boundary: the real
+    monitor CLI silently ignores it and falls back to the recorded round state rather
+    than surfacing a spurious blocked ACK or crashing."""
+    runs_dir = tmp_path / "runs"
+    run_dir = runs_dir / RUN
+    journal = open_journal(run_dir, RUN, 1)
+    journal.append("node-settled", node=NodeId("api"), detail={"status": "done"})
+    _settle(run_dir, {"api": {"status": "done"}}, ok=True, state="complete")
+    pending = run_dir / "channel" / "planner-pending.json"
+    pending.parent.mkdir(parents=True, exist_ok=True)
+    pending.write_text("{ not valid json", encoding="utf-8")
+
+    reported = _monitor_cli("--runs-dir", str(runs_dir), "--once", RUN)
+    assert reported.returncode == 0, reported.stderr
+    assert "ACK REQUIRED" not in reported.stdout
+    assert "REPLY REQUESTED" not in reported.stdout
+    assert "Traceback" not in reported.stderr
+
+
 def test_the_monitor_command_reports_a_run_it_cannot_watch_actionably(tmp_path: Path) -> None:
     runs_dir = tmp_path / "runs"
     _settle(runs_dir / RUN, {"api": {"status": "done"}}, ok=True, state="complete")

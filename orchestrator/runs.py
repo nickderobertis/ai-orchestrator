@@ -42,6 +42,60 @@ class RunLedgerRow(NamedTuple):
     summary: str
 
 
+def resolve_supervision_run(runs_dir: Path, identifier: str) -> RunId:
+    """Resolve an exact run id or one plan name to a single active launch."""
+    requested = validate_run_id(identifier)
+    exact = runs_dir / requested
+    if exact.is_dir():
+        return requested
+    matches: list[RunId] = []
+    if runs_dir.is_dir():
+        for run_dir in runs_dir.iterdir():
+            metadata = run_dir / "launch.json"
+            if not metadata.is_file():
+                continue
+            value = load_mapping(metadata)
+            if value.get("plan_name") == identifier and launch_is_active(run_dir):
+                matches.append(validate_run_id(run_dir.name))
+    if len(matches) == 1:
+        return matches[0]
+    valid = (
+        sorted(run.name for run in runs_dir.iterdir() if run.is_dir()) if runs_dir.is_dir() else []
+    )
+    if len(matches) > 1:
+        choices = ", ".join(sorted(matches))
+        raise ConfigError(f"plan name {identifier!r} is ambiguous; valid active run ids: {choices}")
+    suffix = f"; valid run ids: {', '.join(valid)}" if valid else ""
+    raise ConfigError(f"no recorded run {identifier!r} under {runs_dir}{suffix}")
+
+
+# llmlint: ignore[changed_behavior_has_e2e] real orchestrate/listing/name-resolution journeys run
+# e2e; host/PID outcomes are deterministic OS-liveness boundary branches.
+def launch_is_active(run_dir: Path) -> bool:
+    """Return whether a launched orchestrator has not written its final report."""
+    report = run_dir / "orchestrator" / "report.json"
+    if report.is_file() and report.stat().st_size > 0:
+        return False
+    status = run_dir / "orchestrator" / "status.json"
+    if not status.is_file():
+        return False
+    value = load_mapping(status)
+    if value.get("status") != "running":
+        return False
+    pid = value.get("pid")
+    if not isinstance(pid, int) or isinstance(pid, bool) or pid < 1:
+        return False
+    if value.get("host") != socket.gethostname():
+        return True
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
 class StackBasePayload(TypedDict):
     """Stable serialized form of one typed lifecycle stack anchor."""
 
