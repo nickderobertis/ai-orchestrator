@@ -216,7 +216,7 @@ def main() -> int:
                 witness = Path(task.split("slow-branch", 1)[1].strip().split()[0])
                 with witness.open("a", encoding="utf-8") as stream:
                     stream.write("tick\n")
-                time.sleep(2 if "live-edit-slow" in task else 0.8)
+                time.sleep(10 if "live-edit-slow" in task else 0.8)
                 with witness.open("a", encoding="utf-8") as stream:
                     stream.write("tick\n")
             orchestrator_plan = _orchestrator_command(task)

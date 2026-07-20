@@ -25,7 +25,7 @@ from orchestrator.runs import RunId
 FAKE_BACKEND = REPO_ROOT / "tests" / "e2e" / "fake_backend.py"
 
 
-def _wait_for(path: Path, predicate, timeout: float = 15) -> None:
+def _wait_for(path: Path, predicate, timeout: float = 30) -> None:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if path.is_file() and predicate(path.read_text(encoding="utf-8")):
@@ -42,7 +42,7 @@ def _reply(run_id: str, runs: Path, commands: list[dict[str, object]]) -> None:
         text=True,
         capture_output=True,
         check=True,
-        timeout=10,
+        timeout=30,
     )
 
 

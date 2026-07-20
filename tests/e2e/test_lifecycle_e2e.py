@@ -222,6 +222,10 @@ def test_lifecycle_failure_survives_simultaneous_deferred_teardown(
     assert result.outcome == "not-completed"
     assert "step 'main' hit the turn cap" in result.detail
     assert result.deferred_cleanup and "remove-worktree deferred" in result.deferred_cleanup[0]
+    cleanup = Workspace(tmp_path / "failed-worktrees", resolver=lambda _spec: canonical)
+    cleanup.remove_worktree(
+        normalize_repo(str(origin)), gitops.worktrees(canonical)["failed-teardown"]
+    )
 
 
 def test_real_git_teardown_refusal_is_deferred_after_publication(tmp_path, bare_origin) -> None:
@@ -292,6 +296,8 @@ def test_synthetic_stack_teardown_contention_is_deferred_with_real_git(
     assert isinstance(built, lifecycle_module.SyntheticStackBase)
     assert _tip(origin, f"refs/heads/{built.branch}")
     assert result.deferred_cleanup and "remove-worktree deferred" in result.deferred_cleanup[0]
+    cleanup = Workspace(tmp_path / "stack-worktrees", resolver=lambda _spec: canonical)
+    cleanup.remove_worktree(ref, gitops.worktrees(canonical)[built.branch])
 
 
 def test_failed_synthetic_stack_defers_worktree_and_branch_cleanup_with_real_git(
@@ -340,6 +346,14 @@ def test_failed_synthetic_stack_defers_worktree_and_branch_cleanup_with_real_git
         "remove-worktree",
         "delete-branch",
     ]
+    synthetic = next(
+        branch
+        for branch in gitops.worktrees(canonical)
+        if branch.startswith("ai-orchestrator/stack-base/")
+    )
+    cleanup = Workspace(tmp_path / "conflict-worktrees", resolver=lambda _spec: canonical)
+    cleanup.remove_worktree(ref, gitops.worktrees(canonical)[synthetic])
+    cleanup.delete_branch(ref, synthetic)
 
 
 def test_identity_cache_and_repo_post_checkout_hook_are_wired_across_dispatches(
