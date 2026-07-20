@@ -780,7 +780,10 @@ def test_the_monitor_command_reports_a_run_it_cannot_watch_actionably(tmp_path: 
             assert f"{option} must be a positive number of seconds" in invalid.stderr
 
 
-def test_monitor_command_backs_off_to_its_bounded_interval(tmp_path: Path) -> None:
+def test_monitor_command_backs_off_to_its_bounded_interval(
+    tmp_path: Path,
+    terminate_subprocess_tree,
+) -> None:
     runs_dir = tmp_path / "runs"
     run_dir = runs_dir / RUN
     open_journal(run_dir, RUN, 1).append("node-started", node=NodeId("api"))
@@ -810,8 +813,7 @@ def test_monitor_command_backs_off_to_its_bounded_interval(tmp_path: Path) -> No
         assert process.stdout is not None
         records = [json.loads(process.stdout.readline()) for _ in range(5)]
     finally:
-        process.terminate()
-        process.wait(timeout=5)
+        terminate_subprocess_tree(process)
     intervals = [record["next_poll_seconds"] for record in records if record["type"] == "heartbeat"]
     assert 0.02 in intervals
     assert intervals[-1] == 0.04

@@ -85,16 +85,6 @@ def _drain_jsonl(process: subprocess.Popen[str], minimum: int) -> list[dict[str,
     return records
 
 
-def _terminate(process: subprocess.Popen[str]) -> None:
-    if process.poll() is None:
-        process.terminate()
-    try:
-        process.wait(timeout=5)
-    except subprocess.TimeoutExpired:
-        process.kill()
-        process.wait(timeout=5)
-
-
 def _run_record(
     oneharness_bin: str,
     *,
@@ -153,7 +143,11 @@ def _watch(
     )
 
 
-def test_real_history_labels_and_cursor_watch(oneharness_bin: str, tmp_path: Path) -> None:
+def test_real_history_labels_and_cursor_watch(
+    oneharness_bin: str,
+    tmp_path: Path,
+    terminate_subprocess_tree: Callable[[subprocess.Popen[Any]], None],
+) -> None:
     history_dir = tmp_path / "history"
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
@@ -233,7 +227,7 @@ def test_real_history_labels_and_cursor_watch(oneharness_bin: str, tmp_path: Pat
     try:
         envelopes = _drain_jsonl(watcher, 3)
     finally:
-        _terminate(watcher)
+        terminate_subprocess_tree(watcher)
     assert len(envelopes) == 3, envelopes
     assert {envelope["type"] for envelope in envelopes} == {"record"}
     watched_ids = [envelope["record"]["history_id"] for envelope in envelopes]
@@ -243,7 +237,7 @@ def test_real_history_labels_and_cursor_watch(oneharness_bin: str, tmp_path: Pat
     try:
         resumed = _drain_jsonl(resumed_watcher, 2)
     finally:
-        _terminate(resumed_watcher)
+        terminate_subprocess_tree(resumed_watcher)
     resumed_ids = [envelope["record"]["history_id"] for envelope in resumed]
     assert watched_ids[0] not in resumed_ids
     assert resumed_ids == watched_ids[1:]
@@ -529,7 +523,10 @@ def test_real_failed_run_telemetry_stops_wall_time_at_settlement(
     assert json.loads(missing.stdout)["runs"] == []
 
 
-def test_monitor_backoff_resets_after_real_human_attestation(tmp_path: Path) -> None:
+def test_monitor_backoff_resets_after_real_human_attestation(
+    tmp_path: Path,
+    terminate_subprocess_tree: Callable[[subprocess.Popen[Any]], None],
+) -> None:
     runs_dir = tmp_path / "runs"
     plan_path = tmp_path / "human-plan.json"
     plan_path.write_text(
@@ -615,7 +612,7 @@ def test_monitor_backoff_resets_after_real_human_attestation(tmp_path: Path) -> 
         remainder, stderr = process.communicate(timeout=30)
         assert process.returncode == 0, stderr
     finally:
-        _terminate(process)
+        terminate_subprocess_tree(process)
     after = [json.loads(line) for line in remainder.splitlines()]
     assert after[-1]["state"] == "complete"
     events = [

@@ -11,29 +11,22 @@ from __future__ import annotations
 import os
 import re
 import shutil
-import signal
 import subprocess
 import sys
 from collections.abc import Callable, Iterator
-from contextlib import suppress
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import pytest
 import yaml
+from e2e.resources import ResourceGuard, TrackedProcess, terminate_process_tree
 
 from orchestrator import BASE_CONFIG, PERSONA_DIR, REPO_ROOT
 from orchestrator.config import load_yaml
 from orchestrator.environment import CHANNEL_ENV_PREFIX
+from orchestrator.workspace import Workspace
 
 FAKE_BACKEND = REPO_ROOT / "tests" / "e2e" / "fake_backend.py"
-
-
-@dataclass(frozen=True)
-class _TrackedProcess:
-    process: subprocess.Popen[Any]
-    new_session: bool
 
 
 @pytest.fixture(autouse=True)
@@ -46,38 +39,38 @@ def _isolate_orchestrator_channel(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.fixture(autouse=True)
 def _reap_real_subprocesses(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
-    """Reap test subprocesses even when a test exits through an assertion."""
+    """Reap process groups and real-git worktrees at every test boundary."""
     original_popen = subprocess.Popen
-    started: list[_TrackedProcess] = []
+    original_worktree = Workspace.worktree
+    guard = ResourceGuard()
 
     def tracked_popen(*args: Any, **kwargs: Any) -> subprocess.Popen[Any]:
         if "start_new_session" not in kwargs and "process_group" not in kwargs:
             kwargs["start_new_session"] = True
         process = original_popen(*args, **kwargs)
-        started.append(
-            _TrackedProcess(process=process, new_session=kwargs.get("start_new_session") is True)
-        )
+        isolated = kwargs.get("start_new_session") is True or kwargs.get("process_group") == 0
+        guard.track_process(process, process_group=process.pid if isolated else None)
         return process
 
+    def tracked_worktree(self: Workspace, *args: Any, **kwargs: Any) -> Path:
+        path = original_worktree(self, *args, **kwargs)
+        guard.track_worktree(self.clone_dir(args[0]), path)
+        return path
+
     monkeypatch.setattr(subprocess, "Popen", tracked_popen)
+    monkeypatch.setattr(Workspace, "worktree", tracked_worktree)
     yield
-    for tracked in reversed(started):
-        process = tracked.process
-        if tracked.new_session:
-            with suppress(ProcessLookupError):
-                os.killpg(process.pid, signal.SIGTERM)
-        elif process.poll() is None:
-            process.terminate()
-        if process.poll() is not None:
-            continue
-        try:
-            process.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            if tracked.new_session:
-                os.killpg(process.pid, signal.SIGKILL)
-            else:
-                process.kill()
-            process.wait(timeout=5)
+    guard.cleanup()
+
+
+@pytest.fixture
+def terminate_subprocess_tree() -> Callable[[subprocess.Popen[Any]], None]:
+    """Return the shared bounded process-group teardown helper."""
+
+    def terminate(process: subprocess.Popen[Any]) -> None:
+        terminate_process_tree(TrackedProcess(process, process.pid))
+
+    return terminate
 
 
 def git(*args: str, cwd: str | Path | None = None) -> str:
