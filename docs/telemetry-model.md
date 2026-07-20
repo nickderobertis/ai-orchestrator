@@ -142,13 +142,17 @@ as `null`.
 
 ### Orchestrator index and command surface
 
-The timing model landed in index version 2. Index version 3 adds the optional
-onejudge-linked session timestamps used by the human timeline; its checked-in
-golden moves in the same change. `RunTelemetry` includes:
+The timing model landed in index version 2. Index version 3 added optional
+onejudge-linked session timestamps used by the human timeline. Index version 4
+adds harness-overhead timing for lock waits, repository setup, and scheduling;
+its checked-in golden moves in the same change. `RunTelemetry` includes:
 
 - `timing.agent_model_ms`, `timing.judge_model_ms`, `timing.tool_ms`,
   `timing.idle_orchestration_ms`, `timing.unattributed_ms`, and
   `timing.wall_ms`.
+- `timing.lock_wait_seconds`, `timing.setup_seconds`, and
+  `timing.scheduling_seconds`, derived from node-scoped journal records and graph
+  transitions. Older journals render these as zero.
 - `timing.fractions.agent_model`, `timing.fractions.judge_model`,
   `timing.fractions.tool`, and `timing.fractions.idle_orchestration`.
 - `usage.agent`, `usage.judge`, and `usage.total`, each with
@@ -169,7 +173,7 @@ The existing seconds fields remain readable aliases during one schema version:
 `timing.publication_wait_seconds` remains publication wait. They do not
 participate in the new four-way fractions.
 
-The version-3 command keeps JSON as the default and provides `--breakdown` for a stable
+The version-4 command keeps JSON as the default and provides `--breakdown` for a stable
 human-readable view. The breakdown shows one run row followed by node rows with
 wall duration, milliseconds and percentages for the four categories,
 unattributed duration, agent/judge input and output tokens, cache tokens, total
@@ -309,7 +313,7 @@ upstream schema additions:
   aggregation helper. The latest record continues to supply latest status and
   text, never total duration.
 
-The version-3 implementation requires realistic fixtures containing linked
+The version-4 implementation requires realistic fixtures containing linked
 agent and judge sessions, multiple records, timed tool events, partial new
 fields, and pure legacy records. Its acceptance must exercise the real `just
 telemetry` command and prove exact per-node/run arithmetic, overlap handling,

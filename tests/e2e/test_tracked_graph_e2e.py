@@ -1322,7 +1322,11 @@ def test_real_cli_recovers_failed_lifecycle_result(
                         "branch": "feature/gate-failed-lifecycle",
                         "workflow": "local",
                         "repo_type": "single-owner",
-                        "verify_cmd": ["false"],
+                        "verify_cmd": [
+                            "sh",
+                            "-c",
+                            "printf 'tracked gate tail failed\\n'; exit 1",
+                        ],
                     },
                     {
                         "id": "in-flight",
@@ -1406,6 +1410,37 @@ def test_real_cli_recovers_failed_lifecycle_result(
         assert terminal[0]["detail"]["result"] == result["results"][node_id]
     assert result["results"]["failed-lifecycle"]["outcome"] == "not-completed"
     assert result["results"]["gate-failed-lifecycle"]["outcome"] == "gate-failed"
+    assert "tracked gate tail failed" in result["results"]["gate-failed-lifecycle"]["detail"]
+    verification = next(
+        event
+        for event in records
+        if event["kind"] == "verification-finished" and event.get("node") == "gate-failed-lifecycle"
+    )
+    assert "tracked gate tail failed" in verification["detail"]["output_tail"]
+    assert any(event["kind"] == "lock-wait" for event in records)
+    setup_operations = {
+        event["detail"]["operation"] for event in records if event["kind"] == "setup-finished"
+    }
+    assert {"fetch", "worktree"} <= setup_operations
+
+    telemetry = subprocess.run(
+        [
+            "just",
+            "telemetry",
+            "--runs-dir",
+            str(runs),
+            "--all",
+            "--oneharness-bin",
+            "absent",
+        ],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    observed = json.loads(telemetry.stdout)["runs"][0]["timing"]
+    assert observed["lock_wait_seconds"] >= 0
+    assert observed["setup_seconds"] > 0
 
 
 def test_real_cli_recovers_waiting_and_no_change_lifecycle_results(

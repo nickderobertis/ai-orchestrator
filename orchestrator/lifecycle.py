@@ -879,6 +879,8 @@ def _verify_gate(
         "command": list(verify.command),
         "reused": verify.reused,
     }
+    if not verify.ok:
+        finished["output_tail"] = verify.tail()
     if verify.attestation is not None:
         finished["gate_attestation"] = cast(DetailValue, verify.attestation.to_record())
     journal.append("verification-finished", detail=finished)
@@ -1185,7 +1187,9 @@ def _pause_at_human_step(
             if not verify.ok:
                 result.outcome = "gate-failed"
                 result.detail = (
-                    f"local gate failed at the human pause: {' '.join(cmd)}; no draft was published"
+                    f"local gate failed at the human pause: {' '.join(cmd)}; "
+                    "no draft was published\n"
+                    f"{verify.tail()}"
                 )
                 return result
     checkpoint = gitops.head_sha(worktree)
@@ -1619,7 +1623,7 @@ def run_repo_task(
                 result.verify = verify
                 if not verify.ok:
                     result.outcome = "gate-failed"
-                    result.detail = f"local gate failed: {' '.join(cmd)}"
+                    result.detail = f"local gate failed: {' '.join(cmd)}\n{verify.tail()}"
                     return result
             else:
                 result.detail = "no local gate configured; relying on required CI checks"

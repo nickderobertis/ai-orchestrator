@@ -1442,11 +1442,12 @@ def test_local_repo_gate_failure_blocks_merge(tmp_path, bare_origin) -> None:
         "engineer",
         workspace=_workspace(tmp_path, origin),
         dispatch_fn=make_writing_dispatch(filename="feature.txt"),
-        verify_cmd=["false"],  # gate fails → never pushes or merges
+        verify_cmd=["sh", "-c", "printf 'lint tier: bad import\\n'; exit 1"],
     )
     assert not result.ok
     assert result.outcome == "gate-failed"
     assert result.pr is None
+    assert "lint tier: bad import" in result.detail
     assert _tip(origin, "main") == before  # origin main untouched
 
 
@@ -1641,7 +1642,12 @@ def test_remote_human_checkpoint_noop_gate_surfaces_unproven_warning(tmp_path, b
 def test_remote_human_checkpoint_registry_gate_blocks_draft(tmp_path, bare_origin) -> None:
     origin = bare_origin()
     canonical = gitops.clone(origin, tmp_path / "registered")
-    Registry().register(str(canonical), workflow="remote", repo_type="single-owner", gate="false")
+    Registry().register(
+        str(canonical),
+        workflow="remote",
+        repo_type="single-owner",
+        gate="sh -c 'printf human-pause-gate-failed; exit 1'",
+    )
     github = FakeGitHub(origin)
     result = run_repo_task(
         str(canonical),
@@ -1656,6 +1662,7 @@ def test_remote_human_checkpoint_registry_gate_blocks_draft(tmp_path, bare_origi
     )
     assert result.outcome == "gate-failed" and result.pr is None
     assert result.verify is not None and not result.verify.ok
+    assert "human-pause-gate-failed" in result.detail
 
 
 def test_lifecycle_without_explicit_or_registry_gate_errors(tmp_path, bare_origin) -> None:

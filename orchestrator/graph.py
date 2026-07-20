@@ -29,10 +29,12 @@ from .channel import (
     ProposalSink,
 )
 from .config import ConfigError, load_yaml
+from .coordination import reset_harness_observer, set_harness_observer
 from .dispatch import Report
 from .edits import EditError, apply_edit
 from .journal import (
     TERMINAL_NODE_RESULT_FIELD,
+    EventKind,
     JournalSink,
     NodeJournal,
     NullJournal,
@@ -533,6 +535,11 @@ def run_graph(
                 "node-started",
                 detail={"node_kind": "lifecycle" if node.lifecycle else "direct"},
             )
+
+        def observe(kind: EventKind, detail: Mapping[str, str | float | bool]) -> None:
+            node_log.append(kind, detail=detail)
+
+        token = set_harness_observer(observe)
         try:
             return settle(nid, node, node_log)
         except Exception as exc:
@@ -552,6 +559,8 @@ def run_graph(
                 },
             )
             raise
+        finally:
+            reset_harness_observer(token)
 
     actual = dict(replayed_runs or {})
     actual.update({nid: NodeRun("running") for nid in already_started if nid not in actual})

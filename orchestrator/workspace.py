@@ -15,6 +15,7 @@ import hashlib
 import os
 import re
 import threading
+import time
 from collections.abc import Callable
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
@@ -22,7 +23,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Literal, NewType, Protocol
 
 from . import gitops
-from .coordination import LockTimeout, advisory_lock
+from .coordination import LockTimeout, advisory_lock, observe_harness
 
 if TYPE_CHECKING:
     from .registry import Registry
@@ -302,7 +303,12 @@ class Workspace:
                     raise WorkspaceError(
                         f"execution checkout {checkout} is dirty; clean it before dispatch"
                     )
+                started = time.monotonic()
                 gitops.fetch(checkout)
+                observe_harness(
+                    "setup-finished",
+                    {"operation": "fetch", "seconds": max(0.0, time.monotonic() - started)},
+                )
                 base = base_branch or gitops.default_branch(checkout)
                 publication = selection.publication_checkout
                 if gitops.common_dir(publication) == gitops.common_dir(checkout):
@@ -360,9 +366,16 @@ class Workspace:
             if path.resolve() not in self._worktree_leases:
                 self._acquire_worktree_lease(clone, path)
             try:
+                started = time.monotonic()
                 if gitops.branch_exists(clone, branch):
-                    return gitops.worktree_add_existing(clone, path, branch)
-                return gitops.worktree_add(clone, path, branch, base=base, reset=False)
+                    result = gitops.worktree_add_existing(clone, path, branch)
+                else:
+                    result = gitops.worktree_add(clone, path, branch, base=base, reset=False)
+                observe_harness(
+                    "setup-finished",
+                    {"operation": "worktree", "seconds": max(0.0, time.monotonic() - started)},
+                )
+                return result
             except Exception:
                 self._release_worktree_lease(path)
                 raise

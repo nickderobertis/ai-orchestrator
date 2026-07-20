@@ -168,6 +168,9 @@ def test_breakdown_aggregates_real_multirole_history_records(
         "judge_model": 0.32,
         "tool": 0.2,
         "idle_orchestration": 0.0,
+        "lock_wait": 0.0,
+        "setup": 0.0,
+        "scheduling": 0.0,
     }
     assert run["nodes"][0]["turns"] == 2
     assert run["nodes"][0]["tool_commands"] == {"gate": 2}

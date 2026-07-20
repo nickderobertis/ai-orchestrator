@@ -169,9 +169,12 @@ def test_active_cross_process_worktree_is_never_reclaimed(
     origin = bare_origin()
     canonical = gitops.clone(origin, tmp_path / "canonical-active")
     root = tmp_path / "worktrees-active"
-    ready: multiprocessing.Queue[str] = multiprocessing.Queue()
-    release = multiprocessing.Event()
-    process = multiprocessing.Process(
+    # Python 3.14's shared forkserver captures the prior test's isolated
+    # AI_ORCHESTRATOR_HOME. Spawn proves both contenders use this test's lock root.
+    context = multiprocessing.get_context("spawn")
+    ready: multiprocessing.Queue[str] = context.Queue()
+    release = context.Event()
+    process = context.Process(
         target=_held_worktree_process,
         args=(str(canonical), str(root), "feature/held", ready, release),
     )
