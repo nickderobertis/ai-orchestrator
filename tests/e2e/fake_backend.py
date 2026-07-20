@@ -109,7 +109,7 @@ def _commit_and_push_ci_iteration(state: str) -> None:
 
 
 def _onejudge_report_proxy(argv: list[str]) -> int:
-    """Run the adopted CLI and emulate its additive report-v5 producer fields."""
+    """Run the adopted CLI and supply deterministic report-v5 producer fields."""
     executable = os.environ.get("REAL_ONEJUDGE")
     if not executable:
         sys.stderr.write("fake_backend: REAL_ONEJUDGE is required for report proxy mode\n")
@@ -126,6 +126,8 @@ def _onejudge_report_proxy(argv: list[str]) -> int:
             "agent": {
                 "model_ms": 12,
                 "tool_ms": 5,
+                "time_to_first_token_ms": 3,
+                "session_ids": ["agent-history"],
                 "usage": {
                     "input_tokens": 10,
                     "output_tokens": 2,
@@ -137,6 +139,8 @@ def _onejudge_report_proxy(argv: list[str]) -> int:
             "judge": {
                 "model_ms": 8,
                 "tool_ms": 0,
+                "time_to_first_token_ms": 2,
+                "session_ids": ["judge-history"],
                 "usage": {
                     "input_tokens": 3,
                     "output_tokens": 2,

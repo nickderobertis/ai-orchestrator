@@ -43,12 +43,14 @@ measured zero. JSON contains the same counters separately under `usage.agent`,
 
 ## Full timing versus fallback
 
-With current upstream data, `AGENT`/`JUDGE` use onejudge's party summaries,
-`TOOL` uses timed oneharness tool calls, and the timeline interleaves native
+For records produced after the 0.4.2/0.3.4 upgrade, `AGENT`/`JUDGE` use
+onejudge's typed party summaries, `TOOL` uses oneharness' normalized `tool_ms`
+and per-tool-call `duration_ms`, and the timeline interleaves native
 agent and judge sessions by `turn_index`. `QUALITY complete` means authoritative
 role linkage and complete timing were available.
 
-Older reports and history remain readable. Missing onejudge linkage falls back
+Pre-upgrade reports and history remain readable through a documented fallback.
+Missing onejudge linkage falls back
 to `labels.role` (then recognized legacy judge names), and missing timed fields
 fall back to journal wall time. Untimed `command_execution` events still identify
 the dominant command class, but do not invent a duration: model and tool time
@@ -87,8 +89,3 @@ no time.
    `verification-finished.detail.output_tail` journal field. Both contain the same
    bounded tail from the captured gate output, so reproducing the gate is not
    required to identify the failing tier.
-
-The pinned onejudge and oneharness versions may not yet emit every field even
-though the reader supports them. A separate version-bump follow-up is still
-required; once adopted, it unlocks the full party linkage, timed tool breakdown,
-and interleaved timeline for newly recorded runs without changing this command.

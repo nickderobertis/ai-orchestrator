@@ -36,7 +36,13 @@ def test_build_report_maps_incomplete_sdk_result() -> None:
     assert report.telemetry is None
 
 
-def test_build_report_preserves_usage_assessment_and_real_telemetry_field() -> None:
+def test_build_report_preserves_usage_assessment_and_real_telemetry_field(monkeypatch) -> None:
+    monkeypatch.setattr(
+        RunResult,
+        "telemetry",
+        property(lambda result: result.raw.get("telemetry")),
+        raising=False,
+    )
     result = RunResult(
         exit_code=0,
         stderr="",

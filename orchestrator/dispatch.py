@@ -26,7 +26,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, TypedDict, cast
+from typing import Any, Protocol, TypedDict, cast
 
 import yaml
 from onejudge_sdk import (
@@ -72,6 +72,13 @@ class LaunchRecord(TypedDict):
     commands: dict[str, str]
 
 
+class _TelemetryResult(Protocol):
+    """The additive typed result interface introduced by onejudge 0.3.4."""
+
+    @property
+    def telemetry(self) -> dict[str, Any] | None: ...
+
+
 @dataclass
 class Report:
     """The outcome of one dispatched subtask, parsed from onejudge's report."""
@@ -90,7 +97,7 @@ class Report:
 
     @property
     def telemetry(self) -> dict[str, Any] | None:
-        """Return optional report-v5 telemetry without requiring a newer SDK type."""
+        """Return SDK-validated report-v5 telemetry when the producer supplied it."""
         return dict(self.telemetry_data) if self.telemetry_data is not None else None
 
     def summary(self) -> str:
@@ -112,9 +119,13 @@ def _build_report(persona: str, result: RunResult) -> Report:
         if isinstance(raw_assessment, str) and raw_assessment.strip()
         else None
     )
-    raw_telemetry = getattr(result, "telemetry", None)
-    if raw_telemetry is None:
-        raw_telemetry = result.raw.get("telemetry")
+    # onejudge 0.3.4 exposes report-v5 telemetry as a typed SDK property. Keep
+    # reading the validated raw report only while the planner deliberately runs
+    # this change's gate with the pre-transition 0.3.3 SDK.
+    typed_result = cast(_TelemetryResult, result)
+    raw_telemetry = (
+        typed_result.telemetry if hasattr(result, "telemetry") else result.raw.get("telemetry")
+    )
     return Report(
         persona=persona,
         exit_code=result.exit_code,
