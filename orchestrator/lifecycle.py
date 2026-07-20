@@ -113,6 +113,8 @@ _TYPE_PRIORITY = {"feat": 0, "fix": 1, "perf": 2, "refactor": 3}
 # the checked-in template, pr-author persona, and lifecycle documentation.
 PR_REQUIRED_SECTIONS = ("What", "Why")
 PR_OPTIONAL_SECTIONS = ("Additional info",)
+TASK_REQUIRED_SECTIONS = (*PR_REQUIRED_SECTIONS, "Acceptance criteria")
+TASK_OPTIONAL_SECTIONS = PR_OPTIONAL_SECTIONS
 
 # Outcomes that count as the subtask succeeding.
 _SUCCESS_OUTCOMES = frozenset({"merged", "pr-open"})
@@ -439,7 +441,28 @@ def _validate_explicit_title(title: str) -> None:
         )
 
 
+@dataclass(frozen=True)
+class TaskPRContext:
+    what: str
+    why: str
+
+
+def _task_pr_context(task: str) -> TaskPRContext | None:
+    """Extract PR context from structured task prose without leaking later sections."""
+    sections = re.split(r"(?m)^\s*##\s+([^\n]+?)\s*$", task.strip())
+    parsed = {
+        name.strip().casefold(): content.strip()
+        for name, content in zip(sections[1::2], sections[2::2], strict=True)
+    }
+    what = parsed.get(TASK_REQUIRED_SECTIONS[0].casefold(), "")
+    why = parsed.get(TASK_REQUIRED_SECTIONS[1].casefold(), "")
+    return TaskPRContext(what, why) if what and why else None
+
+
 def _default_body(persona: str, task: str, report: Report | None) -> str:
+    context = _task_pr_context(task)
+    if context is not None:
+        return f"## What\n{context.what}\n\n## Why\n{context.why}\n"
     turns = report.assistant_turns if report else 0
     return (
         "## What\n"
@@ -485,10 +508,33 @@ def _workstream_body(steps: list[Step], results: list[StepResult]) -> str:
     if len(steps) == 1:
         report = results[0].report if results else None
         return _default_body(_step_label(steps[0]), steps[0].task, report)
+    contexts = [_task_pr_context(step.task) for step in steps]
+    if any(context is not None for context in contexts):
+        fallback = {
+            step.id: (
+                f"**{step.id}** (`{_step_label(step)}`): "
+                f"{step.task.strip().splitlines()[0] if step.task.strip() else step.id}"
+            )
+            for step, context in zip(steps, contexts, strict=True)
+            if context is None
+        }
+        what = [
+            context.what if context is not None else fallback[step.id]
+            for step, context in zip(steps, contexts, strict=True)
+        ]
+        why = [
+            context.why if context is not None else fallback[step.id]
+            for step, context in zip(steps, contexts, strict=True)
+        ]
+        lines = ["## What", *[f"- {item}" for item in what], "", "## Why"]
+        lines.extend(f"- {item}" for item in why)
+        lines.append("")
+        return "\n".join(lines)
+
     lines = ["## What", "This PR bundles an ordered workstream of subtasks:", ""]
-    for s in steps:
-        first = s.task.strip().splitlines()[0] if s.task.strip() else s.id
-        lines.append(f"- **{s.id}** (`{_step_label(s)}`): {first}")
+    for step in steps:
+        first = step.task.strip().splitlines()[0] if step.task.strip() else step.id
+        lines.append(f"- **{step.id}** (`{_step_label(step)}`): {first}")
     lines += [
         "",
         "## Why",
@@ -500,8 +546,17 @@ def _workstream_body(steps: list[Step], results: list[StepResult]) -> str:
 
 
 def _drafting_task(output_path: Path, remote_base: str, steps: list[Step]) -> str:
+    def task_context(step: Step) -> str:
+        structured = _task_pr_context(step.task)
+        if structured is None:
+            return "Legacy task without structured What/Why"
+        return f"## What\n{structured.what}\n\n## Why\n{structured.why}"
+
     context = "\n\n".join(
-        f"Persona: {_step_label(step)}\nOriginal task context:\n{step.task.strip()}"
+        f"Persona: {_step_label(step)}\n"
+        f"Task What/Why (the PR Why must come from this task Why):\n"
+        f"{task_context(step)}\n"
+        f"Original task context:\n{step.task.strip()}"
         for step in steps
     )
     what, why = PR_REQUIRED_SECTIONS
@@ -516,9 +571,12 @@ understand its driver:
 Write the final body, and nothing else, to this absolute path:
 {output_path}
 
-Follow `.github/pull_request_template.md`: include `## {what}` describing observable behavior
-from the diff and `## {why}` describing its driver. Add `## {additional}` only when useful.
-Stay terse. Never restate the handoff or paste the original task prose verbatim.
+Follow `.github/pull_request_template.md`: include a terse, high-level `## {what}` describing
+what changed and its impact, not a walkthrough of individual diff hunks. The `## {why}` must
+state the user-facing motivation from the task's `## Why`: its impact and decision driver.
+Never substitute an orchestration handoff (dispatch details, agent-turn counts, or local
+verification) for that Why. Add `## {additional}` only when useful. Never paste the original
+task prose verbatim.
 Do not modify, stage, or commit any file in the worktree.
 """
 

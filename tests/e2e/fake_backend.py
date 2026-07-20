@@ -269,11 +269,33 @@ def main() -> int:
                 output = task.split(
                     "Write the final body, and nothing else, to this absolute path:\n", 1
                 )[1].splitlines()[0]
+                task_why = None
+                if "derive-workstream-why" in task:
+                    expected_contexts = (
+                        "## Why\nLet users call the drafted API.",
+                        "Legacy task without structured What/Why",
+                        "## Why\nKeep the drafted API reliable.",
+                    )
+                    if not all(context in task for context in expected_contexts):
+                        raise AssertionError(
+                            "drafting task did not pass every structured workstream context"
+                        )
+                    task_why = "Let users call the drafted API while keeping it reliable."
+                elif "derive-task-why" in task:
+                    why_match = re.search(r"## Why\n(.+?)\nOriginal task context:", task, re.DOTALL)
+                    if why_match is None:
+                        raise AssertionError("drafting task did not pass structured Why context")
+                    task_why = why_match.group(1).strip()
                 drafted = (
                     "nonempty malformed drafting output\n"
                     if "drafting-invalid" in task
-                    else "## What\nAdds the completed behavior from the branch diff.\n\n"
-                    "## Why\nMakes the requested capability available.\n"
+                    else (
+                        "## What\nAdds the completed behavior from the branch diff.\n\n"
+                        f"## Why\n{task_why}\n"
+                        if task_why is not None
+                        else "## What\nAdds the completed behavior from the branch diff.\n\n"
+                        "## Why\nMakes the requested capability available.\n"
+                    )
                 )
                 Path(output).write_text(drafted, encoding="utf-8")
             if "capture-cache-env" in task:

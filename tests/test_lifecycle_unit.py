@@ -16,6 +16,8 @@ from orchestrator.journal import NodeJournal, open_journal
 from orchestrator.lifecycle import (
     PR_OPTIONAL_SECTIONS,
     PR_REQUIRED_SECTIONS,
+    TASK_OPTIONAL_SECTIONS,
+    TASK_REQUIRED_SECTIONS,
     LifecycleResult,
     RepoPlan,
     RepoPlanNode,
@@ -163,6 +165,33 @@ def test_pr_author_contract_tracks_checked_in_template_persona_and_docs() -> Non
         assert section in docs
 
 
+def test_task_prose_contract_tracks_docs_and_agent_tasks_in_example() -> None:
+    root = Path(__file__).parents[1]
+    docs = (root / "docs/orchestration.md").read_text(encoding="utf-8")
+    agents = (root / "AGENTS.md").read_text(encoding="utf-8")
+    example = json.loads((root / "examples/tracked-graph.example.json").read_text(encoding="utf-8"))
+    expected = [*TASK_REQUIRED_SECTIONS, *TASK_OPTIONAL_SECTIONS]
+    for section in expected:
+        assert f"## {section}" in docs
+        assert f"`## {section}`" in agents or section == "Additional info"
+
+    agent_tasks = []
+    for node in example["tasks"]:
+        if node.get("kind", "agent") == "agent":
+            agent_tasks.extend(
+                step["task"]
+                for step in node.get("steps", [])
+                if step.get("kind", "agent") == "agent"
+            )
+            if "task" in node and "steps" not in node:
+                agent_tasks.append(node["task"])
+    assert agent_tasks
+    for task in agent_tasks:
+        headings = re.findall(r"(?m)^## ([^\n]+)$", task)
+        assert headings[: len(TASK_REQUIRED_SECTIONS)] == list(TASK_REQUIRED_SECTIONS)
+        assert headings[len(TASK_REQUIRED_SECTIONS) :] in ([], list(TASK_OPTIONAL_SECTIONS))
+
+
 def _commit_messages(*messages: str) -> list[lc.gitops.CommitMessage]:
     return [lc.gitops.CommitMessage(str(index), message) for index, message in enumerate(messages)]
 
@@ -297,12 +326,71 @@ def test_incomplete_commit_is_non_releasing_and_preserves_trailers() -> None:
     assert body.endswith("\nOrchestrator-Status: incomplete\nOrchestrator-PR-Base: main")
 
 
-def test_default_body_mentions_persona_and_turns() -> None:
+def test_default_body_uses_structured_task_what_and_why() -> None:
+    task = """
+      ## What
+      Add safer publication behavior.
+
+      ## Why
+      Prevent users from publishing incomplete work.
+    """
+    assert _default_body("reviewer", task, None) == (
+        "## What\nAdd safer publication behavior.\n\n"
+        "## Why\nPrevent users from publishing incomplete work.\n"
+    )
+
+
+def test_default_body_preserves_legacy_fallback() -> None:
     from orchestrator.dispatch import Report
 
     report = Report("p", 0, True, False, 3, [], {}, {}, "")
     body = _default_body("reviewer", "Do the thing.", report)
-    assert "reviewer" in body and "3 agent turn" in body and "## What" in body
+    assert "## What\nDo the thing." in body
+    assert "reviewer" in body and "3 agent turn" in body
+
+
+def test_task_pr_context_stops_at_acceptance_criteria_and_additional_info() -> None:
+    task = """## What
+Ship the user-visible behavior.
+
+## Why
+Remove a recurring user failure.
+
+## Acceptance criteria
+- The real request succeeds.
+
+## Additional info
+Internal rollout note that must not leak.
+"""
+    body = _default_body("engineer", task, None)
+    assert body == (
+        "## What\nShip the user-visible behavior.\n\n## Why\nRemove a recurring user failure.\n"
+    )
+    assert "Acceptance criteria" not in body
+    assert "Internal rollout" not in body
+
+
+def test_structured_workstream_body_uses_each_steps_what_and_why() -> None:
+    steps = [
+        Step("one", "engineer", "## What\nChange one.\n\n## Why\nHelp one."),
+        Step("two", "writer", "## What\nChange two.\n\n## Why\nHelp two."),
+    ]
+    assert lc._workstream_body(steps, []) == (
+        "## What\n- Change one.\n- Change two.\n\n## Why\n- Help one.\n- Help two.\n"
+    )
+
+
+def test_mixed_workstream_body_includes_structured_and_legacy_steps() -> None:
+    steps = [
+        Step("one", "engineer", "## What\nChange one.\n\n## Why\nHelp one."),
+        Step("approval", None, "Approve the change.\nDo not include this line.", kind="human"),
+        Step("two", "writer", "## What\nChange two.\n\n## Why\nHelp two."),
+    ]
+    assert lc._workstream_body(steps, []) == (
+        "## What\n- Change one.\n- **approval** (`human`): Approve the change.\n"
+        "- Change two.\n\n## Why\n- Help one.\n"
+        "- **approval** (`human`): Approve the change.\n- Help two.\n"
+    )
 
 
 def test_summary_includes_pr_and_gate() -> None:

@@ -49,10 +49,17 @@ def _held_worktree_process(
     canonical: str,
     root: str,
     branch: str,
+    state_root: str,
     ready: multiprocessing.Queue[str],
     release: Any,
 ) -> None:
+    # The persistent multiprocessing forkserver retains the environment from the
+    # first test that starts it. Pass this per-test fixture boundary explicitly so
+    # owner and contender open the same process-shared lock file.
+    os.environ["AI_ORCHESTRATOR_HOME"] = state_root
     repo = normalize_repo(canonical)
+    # llmlint: ignore[tests_mirror_real_usage] This lease-level e2e must hold the
+    # worktree between acquisition and teardown, a pause no public CLI exposes.
     workspace = Workspace(root, resolver=lambda _spec: Path(canonical), workflow="local")
     worktree = workspace.worktree(repo, branch, base="origin/main")
     ready.put(str(worktree))
@@ -181,7 +188,14 @@ def test_active_cross_process_worktree_is_never_reclaimed(
     release = MP.Event()
     process = MP.Process(
         target=_held_worktree_process,
-        args=(str(canonical), str(root), "feature/held", ready, release),
+        args=(
+            str(canonical),
+            str(root),
+            "feature/held",
+            os.environ["AI_ORCHESTRATOR_HOME"],
+            ready,
+            release,
+        ),
     )
     process.start()
     held_path = Path(ready.get(timeout=10))

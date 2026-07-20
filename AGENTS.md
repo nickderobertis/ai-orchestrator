@@ -80,8 +80,16 @@ dispatch onejudge.
    agent nodes carry `persona` + concrete `task` prose (and optionally
    `repo`/`steps` for a lifecycle that runs several steps on one branch);
    `kind: human` nodes carry only the action prose; `deps` names real
-   prerequisites. Specify each subtask with detailed `task` prose, per-node
-   `done_when`, and `max_turns` when needed. Start from
+   prerequisites. Write every agent node and step `task` with `## What`, `## Why`,
+   and `## Acceptance criteria`, followed by `## Additional info` only when it is
+   nonempty. `Why` records the user's motivation—the impact and decision driver
+   that a diff cannot recover. If that why is unclear or absent from the request,
+   ask the user before dispatch; never invent it or use the orchestration handoff
+   as motivation. Acceptance criteria is the detailed source of truth visible to
+   both worker and judge. The judge-only `done_when` must always require that all
+   task acceptance criteria are met and may add broader quality measures such as
+   a green gate, held coverage, or no regressions. Keep those specific criteria in
+   the task, not only in `done_when`; use `max_turns` when needed. Start from
    `examples/tracked-graph.example.json`. Reserve `kind: human` for an action only
    an external person or outside system can perform: merge a PR, publish or
    release, trigger CI, register or change infrastructure, or provide external

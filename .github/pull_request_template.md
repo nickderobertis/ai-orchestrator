@@ -1,7 +1,6 @@
 <!--
-Terse and pithy. Describe the behavior change and what drives it — not a
-walkthrough of the code. The diff already shows what the code does; this explains
-what changes and why. Delete these comments as you fill in.
+Terse and high-level. Describe what changed and its impact, not a walkthrough of
+diff hunks. Reviewers already have the diff. Delete these comments as you fill in.
 -->
 
 ## What
@@ -10,7 +9,7 @@ what changes and why. Delete these comments as you fill in.
 
 ## Why
 
-<!-- The driver: the impact of this change and what motivated it. -->
+<!-- The user impact and decision driver: why this change is worth making. -->
 
 ## Additional info
 

@@ -46,7 +46,17 @@ def _plan(tmp_path: Path, sentinel: str) -> Path:
     return path
 
 
-def _proposal_plan(tmp_path: Path, witness: Path) -> Path:
+def _proposal_plan(
+    tmp_path: Path,
+    witness: Path,
+    provider_barrier: tuple[Path, Path] | None = None,
+) -> Path:
+    barrier = (
+        ""
+        if provider_barrier is None
+        else f" provider-barrier-ready={provider_barrier[0]} "
+        f"provider-barrier-release={provider_barrier[1]}"
+    )
     path = tmp_path / "plan-mid-run-proposal.json"
     path.write_text(
         json.dumps(
@@ -63,7 +73,7 @@ def _proposal_plan(tmp_path: Path, witness: Path) -> Path:
                     {
                         "id": "unrelated",
                         "persona": "engineer",
-                        "task": f"slow-branch {witness}",
+                        "task": f"slow-branch {witness}{barrier}",
                     },
                 ],
             }
@@ -412,7 +422,14 @@ def test_reattached_planner_replies_to_mid_run_proposal_without_stopping_graph(
 ) -> None:
     runs = tmp_path / "proposal-runs"
     witness = tmp_path / "unrelated.ticks"
-    run_id = _launch_cli(_proposal_plan(tmp_path, witness), runs, _base(tmp_path), onejudge_bin)
+    provider_ready = tmp_path / "unrelated.ready"
+    provider_release = tmp_path / "unrelated.release"
+    run_id = _launch_cli(
+        _proposal_plan(tmp_path, witness, (provider_ready, provider_release)),
+        runs,
+        _base(tmp_path),
+        onejudge_bin,
+    )
 
     detached = _next_cli(run_id, runs, timeout="0.001")
     assert detached == {"status": "running", "surface": None}
@@ -430,7 +447,7 @@ def test_reattached_planner_replies_to_mid_run_proposal_without_stopping_graph(
         check=False,
     )
     assert "REPLY REQUESTED" in monitored.stdout
-    ticks_before_reply = witness.read_text(encoding="utf-8").count("tick")
+    assert provider_ready.read_text(encoding="utf-8") == "ready\n"
     _convenience_cli("channel-reject", run_id, runs, "defer to next round")
 
     verdict_path = runs / run_id / "channel" / "planner-verdict.json"
@@ -443,12 +460,13 @@ def test_reattached_planner_replies_to_mid_run_proposal_without_stopping_graph(
         "reason": "defer to next round",
     }
     assert not (runs / run_id / "orchestrator" / "report.json").stat().st_size
+    provider_release.write_text("release\n", encoding="utf-8")
     deadline = time.monotonic() + 5
     while time.monotonic() < deadline:
-        if witness.read_text(encoding="utf-8").count("tick") > ticks_before_reply:
+        if witness.is_file() and witness.read_text(encoding="utf-8").count("tick") == 2:
             break
         time.sleep(0.02)
-    assert witness.read_text(encoding="utf-8").count("tick") > ticks_before_reply
+    assert witness.read_text(encoding="utf-8").count("tick") == 2
 
     boundary = _next_cli(run_id, runs)
     assert boundary["surface"]["kind"] in {"milestone", "closeout"}

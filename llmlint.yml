@@ -59,3 +59,11 @@ rules:
   - name: async_typed_clients_at_boundaries
     override: true
     relevance: false
+  # Tests read suite-controlled environment variables set by the suite itself,
+  # not inputs crossing an external trust boundary.
+  - name: boundary_inputs_validated
+    override: true
+    files:
+      include:
+        - "orchestrator/**"
+        - "scripts/**"

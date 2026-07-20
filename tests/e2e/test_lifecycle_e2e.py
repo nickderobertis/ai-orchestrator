@@ -378,7 +378,12 @@ def test_real_lifecycle_dispatch_drafts_pr_bodies_and_preserves_fallbacks(
     github = FakeGitHub(origin)
     base = command_base(max_turns=2)
 
-    single_task = "complete-now write-change raw single-lifecycle handoff"
+    single_task = (
+        "## What\ncomplete-now write-change the single lifecycle behavior.\n\n"
+        "## Why\nGive users the requested capability.\n\n"
+        "## Acceptance criteria\n- The branch publishes through the real lifecycle.\n\n"
+        "## Additional info\nderive-task-why"
+    )
     single = run_repo_task(
         "acme/widget",
         single_task,
@@ -399,7 +404,7 @@ def test_real_lifecycle_dispatch_drafts_pr_bodies_and_preserves_fallbacks(
     assert single.outcome == "pr-open"
     assert single_body == (
         "## What\nAdds the completed behavior from the branch diff.\n\n"
-        "## Why\nMakes the requested capability available.\n"
+        "## Why\nGive users the requested capability.\n"
     )
     assert single_task not in single_body
 
@@ -430,7 +435,56 @@ def test_real_lifecycle_dispatch_drafts_pr_bodies_and_preserves_fallbacks(
     assert workstream_body.startswith("## What\nAdds the completed behavior from the branch diff.")
     assert "raw implementation handoff" not in workstream_body
 
-    fallback_task = "complete-now write-change drafting-fails fallback handoff"
+    structured_draft = run_repo_task(
+        "acme/widget",
+        workspace=workspace,
+        github=github,
+        url=str(origin),
+        workflow="remote",
+        repo_type="single-owner",
+        merge_policy="none",
+        branch="draft-structured-workstream",
+        steps=[
+            Step(
+                "implement",
+                "engineer",
+                "## What\ncomplete-now write-change the drafted API.\n\n"
+                "## Why\nLet users call the drafted API.\n\n"
+                "## Acceptance criteria\n- The drafted API is available.\n\n"
+                "## Additional info\nderive-workstream-why",
+            ),
+            Step(
+                "compatibility",
+                "engineer",
+                "complete-now write-unique-change preserve legacy callers",
+                deps=["implement"],
+            ),
+            Step(
+                "verify",
+                "test-engineer",
+                "## What\ncomplete-now capture-cache-env verify the drafted API.\n\n"
+                "## Why\nKeep the drafted API reliable.\n\n"
+                "## Acceptance criteria\n- The drafted API is verified.",
+                deps=["compatibility"],
+            ),
+        ],
+        base_path=base,
+        persona_dir=personas_dir,
+        verify_cmd=["true"],
+    )
+    assert structured_draft.outcome == "pr-open"
+    assert structured_draft.pr is not None
+    assert github._prs[structured_draft.pr.number].body == (
+        "## What\nAdds the completed behavior from the branch diff.\n\n"
+        "## Why\nLet users call the drafted API while keeping it reliable.\n"
+    )
+
+    fallback_task = (
+        "## What\ncomplete-now write-change with a deterministic fallback.\n\n"
+        "## Why\nKeep the user's publication context when drafting-fails.\n\n"
+        "## Acceptance criteria\n- The fallback is published.\n\n"
+        "## Additional info\nThis must not appear in the PR body."
+    )
     fallback = run_repo_task(
         "acme/widget",
         fallback_task,
@@ -447,9 +501,63 @@ def test_real_lifecycle_dispatch_drafts_pr_bodies_and_preserves_fallbacks(
         verify_cmd=["true"],
     )
     assert fallback.outcome == "pr-open"
-    assert fallback_task in github._prs[fallback.pr.number].body
+    assert github._prs[fallback.pr.number].body == (
+        "## What\ncomplete-now write-change with a deterministic fallback.\n\n"
+        "## Why\nKeep the user's publication context when drafting-fails.\n"
+    )
 
-    empty_task = "complete-now write-change drafting-empty empty fallback handoff"
+    structured_workstream = run_repo_task(
+        "acme/widget",
+        workspace=workspace,
+        github=github,
+        url=str(origin),
+        workflow="remote",
+        repo_type="single-owner",
+        merge_policy="none",
+        branch="draft-structured-workstream-fallback",
+        steps=[
+            Step(
+                "implement",
+                "engineer",
+                "## What\ncomplete-now write-change the API.\n\n"
+                "## Why\nLet users call the API.\n\n"
+                "## Acceptance criteria\n- The API is available.",
+            ),
+            Step(
+                "legacy",
+                "engineer",
+                "complete-now write-unique-change legacy compatibility step",
+                deps=["implement"],
+            ),
+            Step(
+                "verify",
+                "test-engineer",
+                "## What\ncomplete-now capture-cache-env verify the API.\n\n"
+                "## Why\nPrevent regressions when drafting-fails.\n\n"
+                "## Acceptance criteria\n- The API is verified.",
+                deps=["legacy"],
+            ),
+        ],
+        base_path=base,
+        persona_dir=personas_dir,
+        verify_cmd=["true"],
+    )
+    assert structured_workstream.outcome == "pr-open"
+    assert github._prs[structured_workstream.pr.number].body == (
+        "## What\n- complete-now write-change the API.\n"
+        "- **legacy** (`engineer`): complete-now write-unique-change legacy compatibility step\n"
+        "- complete-now capture-cache-env verify the API.\n\n"
+        "## Why\n- Let users call the API.\n"
+        "- **legacy** (`engineer`): complete-now write-unique-change legacy compatibility step\n"
+        "- Prevent regressions when drafting-fails.\n"
+    )
+
+    empty_task = (
+        "## What\ncomplete-now write-change drafting-empty empty fallback handoff.\n\n"
+        "## Why\nPreserve structured context after empty drafting output.\n\n"
+        "## Acceptance criteria\n- The deterministic fallback is published.\n\n"
+        "## Additional info\nThis orchestration detail must not appear."
+    )
     empty = run_repo_task(
         "acme/widget",
         empty_task,
@@ -466,7 +574,10 @@ def test_real_lifecycle_dispatch_drafts_pr_bodies_and_preserves_fallbacks(
         verify_cmd=["true"],
     )
     assert empty.outcome == "pr-open"
-    assert empty_task in github._prs[empty.pr.number].body
+    assert github._prs[empty.pr.number].body == (
+        "## What\ncomplete-now write-change drafting-empty empty fallback handoff.\n\n"
+        "## Why\nPreserve structured context after empty drafting output.\n"
+    )
 
     invalid_task = "complete-now write-change drafting-invalid invalid fallback handoff"
     invalid = run_repo_task(
@@ -488,6 +599,33 @@ def test_real_lifecycle_dispatch_drafts_pr_bodies_and_preserves_fallbacks(
     assert invalid_task in github._prs[invalid.pr.number].body
     assert "nonempty malformed drafting output" not in github._prs[invalid.pr.number].body
 
+    structured_invalid_task = (
+        "## What\ncomplete-now write-change drafting-invalid structured invalid fallback.\n\n"
+        "## Why\nPreserve structured context after malformed drafting output.\n\n"
+        "## Acceptance criteria\n- The deterministic fallback is published.\n\n"
+        "## Additional info\nThis orchestration detail must not appear."
+    )
+    structured_invalid = run_repo_task(
+        "acme/widget",
+        structured_invalid_task,
+        "engineer",
+        workspace=workspace,
+        github=github,
+        url=str(origin),
+        workflow="remote",
+        repo_type="single-owner",
+        merge_policy="none",
+        branch="draft-structured-invalid",
+        base_path=base,
+        persona_dir=personas_dir,
+        verify_cmd=["true"],
+    )
+    assert structured_invalid.outcome == "pr-open"
+    assert github._prs[structured_invalid.pr.number].body == (
+        "## What\ncomplete-now write-change drafting-invalid structured invalid fallback.\n\n"
+        "## Why\nPreserve structured context after malformed drafting output.\n"
+    )
+
     error_task = "complete-now write-change drafting-errors error fallback handoff"
     error = run_repo_task(
         "acme/widget",
@@ -506,6 +644,33 @@ def test_real_lifecycle_dispatch_drafts_pr_bodies_and_preserves_fallbacks(
     )
     assert error.outcome == "pr-open"
     assert error_task in github._prs[error.pr.number].body
+
+    structured_error_task = (
+        "## What\ncomplete-now write-change drafting-errors structured error fallback.\n\n"
+        "## Why\nPreserve structured context after a drafting exception.\n\n"
+        "## Acceptance criteria\n- The deterministic fallback is published.\n\n"
+        "## Additional info\nThis orchestration detail must not appear."
+    )
+    structured_error = run_repo_task(
+        "acme/widget",
+        structured_error_task,
+        "engineer",
+        workspace=workspace,
+        github=github,
+        url=str(origin),
+        workflow="remote",
+        repo_type="single-owner",
+        merge_policy="none",
+        branch="draft-structured-error",
+        base_path=base,
+        persona_dir=personas_dir,
+        verify_cmd=["true"],
+    )
+    assert structured_error.outcome == "pr-open"
+    assert github._prs[structured_error.pr.number].body == (
+        "## What\ncomplete-now write-change drafting-errors structured error fallback.\n\n"
+        "## Why\nPreserve structured context after a drafting exception.\n"
+    )
 
     explicit = run_repo_task(
         "acme/widget",

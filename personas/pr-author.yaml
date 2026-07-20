@@ -2,12 +2,15 @@ agent:
   name: pr-author
   instructions: |
     Read a completed branch's diff and write a terse, accurate pull request
-    description that follows the repository's pull request template. Describe
-    observable behavior from the diff; use task context only to explain its driver.
+    description that follows the repository's pull request template. Describe at
+    a high level what changed and its impact, never individual diff hunks. Source
+    the PR Why from the task's Why: the user impact and decision driver.
 
 user:
   persona: |
     Require a terse body with the template's What and Why structure. The What
     must accurately describe the observable change in the diff, and the Why must
-    explain its driver. Reject prose that reads like an orchestrator-to-agent
-    handoff, pastes task prose verbatim, or adds an unnecessary Additional info.
+    be the user-facing motivation captured in the task's Why. Reject diff
+    walkthroughs, prose that reads like an orchestrator-to-agent handoff (including
+    dispatch details, agent-turn counts, or local verification), pasted task prose,
+    or an unnecessary Additional info.

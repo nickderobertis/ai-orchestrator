@@ -163,6 +163,31 @@ work with [`just repo-recover`](repo-lifecycle.md#integrating-completed-workstre
 Every top-level node needs a unique `id`; `deps` is an optional list of other
 top-level ids. Omitted `kind` defaults to `agent` for compatibility.
 
+The planner writes every agent node and step `task` with this prose template:
+
+```markdown
+## What
+<the change>
+
+## Why
+<the user's motivation: impact and decision driver>
+
+## Acceptance criteria
+<detailed, specific source of truth for done>
+
+## Additional info
+<optional; omit the section when empty>
+```
+
+The task is visible to both the worker and judge, so its Acceptance criteria hold
+all detailed, change-specific requirements. `done_when` is judge-only: it must
+always require that all task acceptance criteria are met, and may add broader
+quality measures such as a green gate, held coverage, or no regressions. Do not
+hide specific acceptance criteria only in `done_when`. `Why` is the user-facing
+impact and what drove the decision, not an orchestration handoff. If the request
+does not make that why clear, the planner must ask the user before dispatch rather
+than inventing it.
+
 | Shape | Required fields | Meaning |
 | --- | --- | --- |
 | Direct agent | `persona`, `task`; no `repo` | Dispatch one real onejudge process in the selected project directory. |
@@ -200,8 +225,9 @@ by a simulated-user supervisor that pushes back until the task is actually done.
 Bias toward fewer, larger coherent tasks that amortize setup. Split only for
 genuine parallelism, a real dependency, or a genuinely different role or review
 bar — not simply to give a capable agent a smaller slice. Put subtask-specific
-requirements in detailed `task` prose and explicit per-node `done_when` acceptance
-criteria, using `max_turns` when a task needs more room, rather than proliferating
+requirements in the structured `task` prose and use a terse per-node `done_when`
+that references all task acceptance criteria plus any broader bar. Use `max_turns`
+when a task needs more room, rather than proliferating
 personas. Every dispatch already has the built-in supervisor/reviewer; reserve a
 dedicated `reviewer` step for complex DAGs where it reviews and integrates several
 agents' independently produced work. Dependencies should name only real inputs so
