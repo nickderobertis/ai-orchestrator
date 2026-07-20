@@ -379,7 +379,7 @@ def test_full_setup_reports_missing_bun_and_returns_failure(tmp_path: Path) -> N
     assert "bun is required — the oneharness sdk-check gate will fail" in proc.stderr
 
 
-def test_persist_session_env_writes_path_once(tmp_path: Path) -> None:
+def test_persist_session_env_writes_worker_sandbox_environment_once(tmp_path: Path) -> None:
     env_file = tmp_path / "claude-env"
     script = REPO_ROOT / "scripts" / "session-setup.sh"
     for live_path in ("/usr/bin:/bin", f"{tmp_path}/.local/node/bin:/usr/bin:/bin"):
@@ -402,6 +402,7 @@ def test_persist_session_env_writes_path_once(tmp_path: Path) -> None:
         assert proc.returncode == 0, proc.stderr
 
     lines = env_file.read_text(encoding="utf-8").splitlines()
-    assert len(lines) == 1
+    assert len(lines) == 2
     assert lines[0].startswith("export PATH=")
     assert f"{tmp_path}/.local/node/bin" in lines[0]
+    assert lines[1] == f"export LLMLINT_ONEHARNESS_BIN={REPO_ROOT}/scripts/llmlint-oneharness.sh"

@@ -152,6 +152,14 @@ harness has an **environment requirement** for its tools to actually execute:
 Net: the orchestration setup is harness-agnostic and correct. On a
 no-unprivileged-userns host, dispatch codex with
 `--oneharness-mode bypass` and the allowlister gate; run-plan takes the same flag.
+The same constraint applies inside a worker's gate: llmlint normally requests a
+read-only oneharness judge, which makes codex create a bubblewrap network
+namespace and can fail at loopback setup with `RTM_NEWADDR`. llmlint 0.3.23 has
+no mode override, so bypass dispatches point `LLMLINT_ONEHARNESS_BIN` at
+`scripts/llmlint-oneharness.sh`, which changes only its `--mode read-only` pair
+to `bypass`; `scripts/session-setup.sh` also persists that setting for interactive
+sessions. The surrounding container remains the sandbox, and the judge can read
+the files it was asked to assess.
 
 ## Dispatching playbook
 
