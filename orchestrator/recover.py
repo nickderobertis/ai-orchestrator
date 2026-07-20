@@ -190,6 +190,7 @@ def recover_repo(
             ),
             method=merge_method,
             policy=decision.merge_policy,
+            repository_type=identity.repo_type,
             verify_command=command,
             verify_env=env,
         )

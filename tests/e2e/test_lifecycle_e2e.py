@@ -21,10 +21,12 @@ import shlex
 import subprocess
 import threading
 import time
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FutureTimeout
 from dataclasses import replace
 from pathlib import Path
-from typing import cast
+from typing import TypeVar, cast
 
 import pytest
 from fakes import FakeGitHub, make_writing_dispatch
@@ -50,6 +52,7 @@ from orchestrator.lifecycle import (
     run_repo_task,
 )
 from orchestrator.merge import GitHubMergeStrategy
+from orchestrator.merge_queue import merge_queue_turn
 from orchestrator.next_round import main as next_round_main
 from orchestrator.next_round import main_runs
 from orchestrator.provenance import INCOMPLETE_TRAILER, PR_BASE_TRAILER, incomplete_commits
@@ -58,6 +61,8 @@ from orchestrator.registry import Registry, RegistryEntry, Slug
 from orchestrator.replan import next_round
 from orchestrator.runs import NodeId, RunId, prepare_round, write_result
 from orchestrator.workspace import Workspace, normalize_repo
+
+_T = TypeVar("_T")
 
 
 def _workspace(tmp_path: Path, *origins: Path, workflow: str = "local") -> Workspace:
@@ -102,6 +107,33 @@ def _tip(origin: Path, ref: str) -> str:
     return subprocess.run(
         ["git", "-C", str(origin), "rev-parse", ref], text=True, capture_output=True
     ).stdout.strip()
+
+
+def _run_while_merge_turn_is_held(
+    canonical: Path, operation: Callable[[], _T], *, should_wait: bool
+) -> _T:
+    acquired = threading.Event()
+    release = threading.Event()
+
+    def hold_turn() -> None:
+        with merge_queue_turn(git_lock_identity(gitops.common_dir(canonical))):
+            acquired.set()
+            release.wait(10)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        holder = pool.submit(hold_turn)
+        assert acquired.wait(5)
+        publication = pool.submit(operation)
+        try:
+            if should_wait:
+                with pytest.raises(FutureTimeout):
+                    publication.result(timeout=0.2)
+                release.set()
+            result = publication.result(timeout=10)
+        finally:
+            release.set()
+            holder.result(timeout=10)
+    return result
 
 
 def test_published_dispatch_survives_deferred_teardown_and_redispatch_reclaims_it(
@@ -1365,6 +1397,74 @@ def test_team_explicit_auto_merges_remote_pr(tmp_path, bare_origin) -> None:
     assert _has_file(origin, "main", "team-auto.txt")
 
 
+@pytest.mark.parametrize(("repo_type", "should_wait"), [("single-owner", True), ("team", False)])
+def test_remote_lifecycle_routes_only_single_owner_auto_merge_through_queue(
+    tmp_path, bare_origin, repo_type, should_wait
+) -> None:
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / f"canonical-routing-{repo_type}")
+    Registry().register(str(canonical), workflow="remote", repo_type=repo_type)
+
+    result = _run_while_merge_turn_is_held(
+        canonical,
+        lambda: run_repo_task(
+            str(canonical),
+            "Publish an automated remote change.",
+            "engineer",
+            workspace=Workspace(tmp_path / f"routing-{repo_type}-worktrees"),
+            github=FakeGitHub(origin),
+            dispatch_fn=make_writing_dispatch(filename=f"routing-{repo_type}.txt"),
+            verify_cmd=["true"],
+            merge_policy="auto",
+            sleep=lambda _: None,
+        ),
+        should_wait=should_wait,
+    )
+
+    assert result.ok and result.outcome == "merged", result.detail
+    assert result.repository_type == repo_type and result.merge_policy == "auto"
+    assert _has_file(origin, "main", f"routing-{repo_type}.txt")
+
+
+@pytest.mark.parametrize(("repo_type", "should_wait"), [("single-owner", True), ("team", False)])
+def test_remote_recovery_routes_only_single_owner_auto_merge_through_queue(
+    tmp_path, bare_origin, repo_type, should_wait
+) -> None:
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / f"canonical-recovery-routing-{repo_type}")
+    Registry().register(str(canonical), workflow="remote", repo_type=repo_type, gate="true")
+    branch = f"feature/recovery-routing-{repo_type}"
+    preserved = run_repo_task(
+        str(canonical),
+        "Preserve an incomplete remote change.",
+        "engineer",
+        workspace=Workspace(tmp_path / f"preserve-routing-{repo_type}-worktrees"),
+        branch=branch,
+        dispatch_fn=make_writing_dispatch(
+            filename=f"recovery-routing-{repo_type}.txt", completed=False
+        ),
+        verify_cmd=["true"],
+    )
+    assert preserved.outcome == "not-completed" and preserved.resume is not None
+
+    recovered = _run_while_merge_turn_is_held(
+        canonical,
+        lambda: recover_repo(
+            canonical,
+            branch,
+            workspace_root=tmp_path / f"recovery-routing-{repo_type}-worktrees",
+            github=FakeGitHub(origin),
+            verify_cmd=["true"],
+            merge_policy="auto",
+        ),
+        should_wait=should_wait,
+    )
+
+    assert recovered.ok and recovered.outcome == "merged", recovered.detail
+    assert recovered.repo_type == repo_type and recovered.merge_policy == "auto"
+    assert _has_file(origin, "main", f"recovery-routing-{repo_type}.txt")
+
+
 def test_local_single_owner_none_opens_pr_without_mutating_stored_workflow(
     tmp_path, bare_origin
 ) -> None:
@@ -1468,6 +1568,7 @@ def test_public_lifecycle_type_workflow_policy_matrix(
 
 def test_local_repo_direct_merge(tmp_path, bare_origin) -> None:
     origin = bare_origin()
+    prior_base = _tip(origin, "main")
     ws = _workspace(tmp_path, origin)
     result = run_repo_task(
         str(origin),  # a local path → local direct-merge strategy is auto-selected
@@ -1484,6 +1585,47 @@ def test_local_repo_direct_merge(tmp_path, bare_origin) -> None:
     canonical = ws.clone_dir(normalize_repo(str(origin)))
     assert gitops.current_branch(canonical) == "main"
     assert gitops.head_sha(canonical) == _tip(origin, "main")
+    landed = _tip(origin, "main")
+    assert (
+        subprocess.run(
+            ["git", "-C", str(origin), "rev-list", "--count", f"{prior_base}..{landed}"],
+            text=True,
+            capture_output=True,
+            check=True,
+        ).stdout.strip()
+        == "1"
+    )
+    assert (
+        subprocess.run(
+            ["git", "-C", str(origin), "show", "-s", "--format=%P", landed],
+            text=True,
+            capture_output=True,
+            check=True,
+        ).stdout.strip()
+        == prior_base
+    )
+    assert (
+        subprocess.run(
+            ["git", "-C", str(origin), "show", "-s", "--format=%s", landed],
+            text=True,
+            capture_output=True,
+            check=True,
+        ).stdout.strip()
+        == "chore: Add a change file."
+    )
+    branch_commits = {
+        commit.sha for commit in gitops.log_delta(canonical, prior_base, result.branch)
+    }
+    base_commits = set(
+        subprocess.run(
+            ["git", "-C", str(origin), "rev-list", "main"],
+            text=True,
+            capture_output=True,
+            check=True,
+        ).stdout.splitlines()
+    )
+    assert landed not in branch_commits
+    assert branch_commits.isdisjoint(base_commits)
 
 
 def test_local_merge_gate_does_not_hold_the_shared_git_lock(tmp_path, bare_origin) -> None:
@@ -2049,7 +2191,7 @@ def test_clean_committed_partial_work_is_marked_and_recoverable(tmp_path, bare_o
     attestation = gitops.log_messages(canonical, marker_sha, result.branch)
     assert len(attestation) == 1
     assert f"Orchestrator-Recovered-Incomplete: {marker_sha}" in attestation[0].message
-    assert gitops.is_ancestor(canonical, attestation[0].sha, "origin/main")
+    assert not gitops.is_ancestor(canonical, attestation[0].sha, "origin/main")
     assert _has_file(origin, "main", "partial.txt")
 
 

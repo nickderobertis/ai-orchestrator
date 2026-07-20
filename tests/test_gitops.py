@@ -163,6 +163,31 @@ def test_merge_fast_forward_without_no_ff(tmp_path, bare_origin) -> None:
     gitops.worktree_remove(clone, wt, force=False)
 
 
+def test_merge_squash_creates_one_single_parent_commit(tmp_path, bare_origin) -> None:
+    origin = bare_origin()
+    clone = gitops.clone(str(origin), tmp_path / "clone-squash")
+    base_sha = gitops.head_sha(clone)
+    wt = gitops.worktree_add(clone, tmp_path / "wt-squash", "feat", base="origin/main")
+    (wt / "one.txt").write_text("one\n", encoding="utf-8")
+    gitops.add_all(wt)
+    first_sha = gitops.commit(wt, "first")
+    (wt / "two.txt").write_text("two\n", encoding="utf-8")
+    gitops.add_all(wt)
+    second_sha = gitops.commit(wt, "second")
+
+    squashed_sha = gitops.merge_squash(clone, "feat", message="squashed feature")
+
+    assert gitops.head_sha(clone) == squashed_sha
+    assert gitops._git(["show", "-s", "--format=%s", "HEAD"], cwd=clone).stdout.strip() == (
+        "squashed feature"
+    )
+    assert gitops.ref_sha(clone, "HEAD^") == base_sha
+    history = gitops._git(["rev-list", "HEAD"], cwd=clone).stdout.splitlines()
+    assert first_sha not in history
+    assert second_sha not in history
+    gitops.worktree_remove(clone, wt, force=False)
+
+
 def test_git_error_on_non_repo(tmp_path) -> None:
     with pytest.raises(gitops.GitError, match="git rev-parse"):
         gitops.head_sha(tmp_path)

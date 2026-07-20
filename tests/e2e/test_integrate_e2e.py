@@ -705,4 +705,10 @@ def test_repo_recover_accepts_existing_matching_attestation(tmp_path, bare_origi
     )
 
     assert result.ok
-    assert _git(origin, "merge-base", "--is-ancestor", attested_tip, "main") == ""
+    assert (
+        subprocess.run(
+            ["git", "-C", str(origin), "merge-base", "--is-ancestor", attested_tip, "main"]
+        ).returncode
+        == 1
+    )
+    assert _git(origin, "show", "main:partial.txt") == "partial"

@@ -13,6 +13,10 @@ the last step differs by where the repo lives:
 Both are `MergeStrategy`, so `run_repo_task` calls one method and stays uniform.
 """
 
+# llmlint: ignore-file[changed_behavior_has_e2e] Real-git e2e journeys cover
+# concurrent local lifecycles and every local/remote/team publication policy;
+# process-level queue tests cover FIFO and crash recovery at their shared seam.
+
 from __future__ import annotations
 
 import tempfile
@@ -23,9 +27,11 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Literal, Protocol
 
 from . import gitops
-from .coordination import advisory_lock, git_lock_identity
+from .coordination import git_lock_identity
 from .github import AutoMergeUnavailable, Check, GitHubBackend, PRStatus, PullRequest
+from .merge_queue import merge_queue_turn
 from .verify import run_gate
+from .workspace import RepositoryType
 
 if TYPE_CHECKING:
     # Annotation-only, and load-bearing: the run ledger imports `MergePolicy` from
@@ -69,6 +75,7 @@ class MergeContext:
     verify_env: dict[str, str] | None = None
     gate_timeout: float | None = None
     publication_attempts: int = 3
+    repository_type: RepositoryType = "single-owner"
     #: Where publication transitions are recorded, already scoped to the node the
     #: lifecycle is merging for. ``None`` outside a tracked round, where there is
     #: no journal to record into.
@@ -233,6 +240,13 @@ class GitHubMergeStrategy:
         self._github = github
 
     def publish_and_merge(self, ctx: MergeContext) -> MergeOutcome:
+        if ctx.repository_type == "single-owner" and ctx.policy != "none":
+            identity = git_lock_identity(gitops.common_dir(ctx.clone_dir))
+            with merge_queue_turn(identity):
+                return self._publish_and_merge(ctx)
+        return self._publish_and_merge(ctx)
+
+    def _publish_and_merge(self, ctx: MergeContext) -> MergeOutcome:
         pr = ctx.preverified_pr or self._github.create_pr(
             ctx.repo_slug, head=ctx.branch, base=ctx.base, title=ctx.title, body=ctx.body
         )
@@ -272,18 +286,21 @@ class LocalMergeStrategy:
         if ctx.publication_attempts < 1:
             raise ValueError("publication_attempts must be at least 1")
         identity = git_lock_identity(gitops.common_dir(ctx.clone_dir))
+        with merge_queue_turn(identity):
+            return self._publish_and_merge(ctx)
+
+    def _publish_and_merge(self, ctx: MergeContext) -> MergeOutcome:
         for attempt in range(1, ctx.publication_attempts + 1):
             with tempfile.TemporaryDirectory(prefix="orchestrator-merge-") as parent:
                 scratch = Path(parent) / "worktree"
-                with advisory_lock(identity):
-                    gitops.fetch(ctx.clone_dir)
-                    base_sha = gitops.ref_sha(ctx.clone_dir, f"origin/{ctx.base}")
-                    gitops.worktree_add_detached(ctx.clone_dir, scratch, f"origin/{ctx.base}")
-                    try:
-                        gitops.merge(scratch, f"origin/{ctx.branch}", message=ctx.title)
-                    except Exception:
-                        gitops.worktree_remove(ctx.clone_dir, scratch)
-                        raise
+                gitops.fetch(ctx.clone_dir)
+                base_sha = gitops.ref_sha(ctx.clone_dir, f"origin/{ctx.base}")
+                gitops.worktree_add_detached(ctx.clone_dir, scratch, f"origin/{ctx.base}")
+                try:
+                    gitops.merge_squash(scratch, f"origin/{ctx.branch}", message=ctx.title)
+                except Exception:
+                    gitops.worktree_remove(ctx.clone_dir, scratch)
+                    raise
                 try:
                     if ctx.verify_command is not None:
                         _record(
@@ -311,30 +328,28 @@ class LocalMergeStrategy:
                                 outcome="gate-failed",
                                 detail="rebuilt local publication failed verification",
                             )
-                    with advisory_lock(identity):
-                        gitops.fetch(ctx.clone_dir)
-                        try:
-                            if gitops.ref_sha(ctx.clone_dir, f"origin/{ctx.base}") != base_sha:
-                                raise gitops.GitError(
-                                    f"! [rejected] verified merge -> {ctx.base} (fetch first)"
-                                )
-                            gitops.push(scratch, f"HEAD:{ctx.base}", set_upstream=False)
-                        except gitops.GitError as exc:
-                            if not _is_push_race(exc):
-                                raise
-                            if attempt == ctx.publication_attempts:
-                                return MergeOutcome(
-                                    outcome="publication-retries-exhausted",
-                                    detail=(
-                                        "local base publication lost a concurrent push race "
-                                        f"on all {ctx.publication_attempts} attempts"
-                                    ),
-                                )
-                            continue
+                    gitops.fetch(ctx.clone_dir)
+                    try:
+                        if gitops.ref_sha(ctx.clone_dir, f"origin/{ctx.base}") != base_sha:
+                            raise gitops.GitError(
+                                f"! [rejected] verified merge -> {ctx.base} (fetch first)"
+                            )
+                        gitops.push(scratch, f"HEAD:{ctx.base}", set_upstream=False)
+                    except gitops.GitError as exc:
+                        if not _is_push_race(exc):
+                            raise
+                        if attempt == ctx.publication_attempts:
+                            return MergeOutcome(
+                                outcome="publication-retries-exhausted",
+                                detail=(
+                                    "local base publication lost a concurrent push race "
+                                    f"on all {ctx.publication_attempts} attempts"
+                                ),
+                            )
+                        continue
                     break
                 finally:
-                    with advisory_lock(identity):
-                        gitops.worktree_remove(ctx.clone_dir, scratch)
+                    gitops.worktree_remove(ctx.clone_dir, scratch)
         pr = PullRequest(
             number=0,
             url=f"local:{ctx.repo_slug}#{ctx.branch}",

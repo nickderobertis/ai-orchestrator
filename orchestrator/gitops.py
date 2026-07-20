@@ -464,14 +464,21 @@ def reset_hard(cwd: str | Path, ref: str) -> None:
 def merge(cwd: str | Path, ref: str, *, message: str, no_ff: bool = True) -> str:
     """Merge ``ref`` into the checked-out branch; return the new HEAD sha.
 
-    ``--no-ff`` by default so the merge is an explicit, revertable commit even when
-    a fast-forward is possible — the local equivalent of a squash/merge PR.
+    ``--no-ff`` by default so the merge is represented by an explicit merge commit
+    even when a fast-forward is possible.
     """
     args = ["merge", "--no-edit", "-m", message]
     if no_ff:
         args.append("--no-ff")
     args.append(ref)
     _git(args, cwd=cwd)
+    return head_sha(cwd)
+
+
+def merge_squash(cwd: str | Path, ref: str, *, message: str) -> str:
+    """Squash-merge ``ref``, commit ``message``, and return the new HEAD sha."""
+    _git(["merge", "--squash", ref], cwd=cwd)
+    _git(["commit", "-m", message], cwd=cwd)
     return head_sha(cwd)
 
 

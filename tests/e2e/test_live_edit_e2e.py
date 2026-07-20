@@ -405,7 +405,7 @@ def test_real_cli_live_drop_preserves_and_recovers_running_lifecycle(
     )
     recovery = json.loads(recovered.stdout)
     assert recovery["outcome"] == "merged"
-    assert gitops.is_ancestor(canonical, checkpoint, "origin/main")
+    assert not gitops.is_ancestor(canonical, checkpoint, "origin/main")
     assert (canonical / "CHANGE.txt").read_text(encoding="utf-8") == "change from fake agent\n"
 
     boundary = subprocess.run(

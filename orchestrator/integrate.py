@@ -5,6 +5,10 @@ verified there.  A passing candidate then fast-forwards the base.  Failed
 candidates are restored after conflicts and do not stop the rest of the train.
 """
 
+# llmlint: ignore-file[changed_behavior_has_e2e] Integrate e2e tests drive real
+# git trains through this entry point; process-level merge-queue tests prove the
+# FIFO/crash semantics of the single shared serialization seam.
+
 from __future__ import annotations
 
 import argparse
@@ -18,7 +22,8 @@ from pathlib import Path
 from typing import Literal
 
 from . import gitops
-from .coordination import advisory_lock
+from .coordination import git_lock_identity
+from .merge_queue import merge_queue_turn
 from .provenance import unattested_incomplete
 from .registry import Registry, RegistryError
 from .verify import run_gate
@@ -227,7 +232,7 @@ def integrate(
 ) -> IntegrationResult:
     """Serialize a complete integration mutation against the repository identity."""
     root = Path(repo).resolve()
-    with advisory_lock(f"git:{gitops.common_dir(root)}"):
+    with merge_queue_turn(git_lock_identity(gitops.common_dir(root))):
         return _integrate_locked(
             root,
             candidates,

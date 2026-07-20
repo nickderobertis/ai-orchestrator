@@ -1807,6 +1807,7 @@ def run_repo_task(
                 "ORCHESTRATOR_COMPARISON_BASE": pr_base,
             },
             publication_attempts=publication_attempts,
+            repository_type=effective_type,
             journal=log,
             preverified_pr=preverified_pr,
         )

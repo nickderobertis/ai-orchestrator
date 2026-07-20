@@ -205,6 +205,18 @@ then repository-type defaults apply.
   local strategy only supports direct publication, an explicit `auto` is reported
   as the effective `direct` policy when the stored workflow remains local.
 
+Single-owner automated publication is serialized by a process-shared FIFO merge
+queue keyed by the repository's git common directory. Worktrees and checkout
+aliases of one identity therefore enqueue together, including local direct merges,
+remote `auto`/`direct` merges, recovery, and the direct `integrate` train. Each
+writer waits for its queue position without a bounded merge-lock timeout and runs
+its own in-memory merge context when it reaches the head; there is no daemon.
+Every waiter may act as the opportunistic queue leader: dead-PID tickets are
+reaped before advancing, so a process killed during its turn cannot strand later
+writers or cause its unexecuted merge to be replayed. Team PR publication remains
+outside this host-side queue. Queue wait telemetry is emitted as `lock-wait` with
+the git identity, elapsed seconds, and the original one-based queue position.
+
 - **`GitHubMergeStrategy`** (GitHub repos) — opens a PR, then merges it **only
   once the repo's required (blocking) checks are green**. The default policy is
   GitHub **native auto-merge** (`gh pr merge --auto`), which by construction gates
@@ -215,8 +227,10 @@ then repository-type defaults apply.
   `statusCheckRollup.isRequired`; a failed required check ends at `checks-failed`.
 - **`LocalMergeStrategy`** (`workflow: local`) — there is no PR/CI to wait on, so
   it builds the verified branch-to-base merge in a detached scratch worktree and
-  pushes the result to the origin. This is the model for direct merge into main
-  after the checks pass, including GitHub origins intentionally marked local.
+  pushes the result to the origin. The branch lands as one squashed commit whose
+  single parent is the prior base tip and whose message is the merge title. This
+  is the model for direct merge into main after the checks pass, including GitHub
+  origins intentionally marked local.
   A **bare** local origin accepts the push directly; a non-bare origin needs
   `receive.denyCurrentBranch=updateInstead` so its working tree updates too.
 
@@ -510,7 +524,9 @@ the result.
   Per-repo in-process locks serialize short canonical-checkout operations; agent
   dispatches in separate worktrees remain concurrent.
 - **Several processes on one machine:** OS advisory locks serialize registry,
-  ledger-claim, and shared-git-common-dir mutations. Locks live under
+  ledger-claim, and short shared-state mutations. Automated single-owner merges
+  use the FIFO queue above instead of racing a bounded git lock. Locks and queue
+  state live under
   `$AI_ORCHESTRATOR_HOME/locks` (normally `~/.ai-orchestrator/locks`) and protect
   only that machine. On timeout, inspect the reported PID and host rather than
   deleting a live lock or worktree.

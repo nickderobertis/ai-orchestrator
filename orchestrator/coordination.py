@@ -13,7 +13,7 @@ from collections.abc import Iterator, Mapping
 from contextlib import contextmanager, suppress
 from contextvars import ContextVar, Token
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Any, NewType, Protocol
 
 if TYPE_CHECKING:
     from .journal import EventKind
@@ -21,6 +21,9 @@ if TYPE_CHECKING:
 
 class LockTimeout(TimeoutError):
     """A process-shared resource remained owned beyond the bounded wait."""
+
+
+GitLockIdentity = NewType("GitLockIdentity", str)
 
 
 class HarnessObserver(Protocol):
@@ -69,9 +72,9 @@ def lock_path(identity: str) -> Path:
     return _lock_root() / f"{digest}.lock"
 
 
-def git_lock_identity(common_dir: str | Path) -> str:
+def git_lock_identity(common_dir: str | Path) -> GitLockIdentity:
     """Return the advisory-lock identity for a repository's git common directory."""
-    return f"git:{Path(common_dir)}"
+    return GitLockIdentity(f"git:{Path(common_dir)}")
 
 
 @contextmanager

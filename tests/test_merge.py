@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from pathlib import Path
 
 from orchestrator import gitops
@@ -95,6 +96,28 @@ def test_policy_none_opens_pr_only() -> None:
     backend = PolicyBackend(checks=())
     out = GitHubMergeStrategy(backend).publish_and_merge(_ctx(policy="none"))
     assert out.outcome == "pr-open" and out.pr is not None and not backend.merged
+
+
+def test_only_single_owner_automated_github_publication_uses_queue(monkeypatch) -> None:
+    turns: list[str] = []
+
+    @contextmanager
+    def record_turn(identity):
+        turns.append(str(identity))
+        yield
+
+    monkeypatch.setattr("orchestrator.merge.merge_queue_turn", record_turn)
+    checks = (Check("ci", "SUCCESS", True),)
+    GitHubMergeStrategy(PolicyBackend(checks=checks, merge_on="auto")).publish_and_merge(
+        _ctx(policy="auto")
+    )
+    GitHubMergeStrategy(PolicyBackend(checks=checks, merge_on="auto")).publish_and_merge(
+        _ctx(policy="auto", repository_type="team")
+    )
+    GitHubMergeStrategy(PolicyBackend(checks=())).publish_and_merge(_ctx(policy="none"))
+
+    assert len(turns) == 1
+    assert turns[0].startswith("git:")
 
 
 def test_auto_merges_when_required_green() -> None:
