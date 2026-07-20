@@ -880,8 +880,8 @@ def _timing(
     return TimingRecord(
         agent_seconds=agent_duration / 1000,
         judge_seconds=judge_duration / 1000,
-        gate_seconds=gate,
-        publication_wait_seconds=wait,
+        gate_seconds=gate_ms / 1000,
+        publication_wait_seconds=publication_ms / 1000,
         lock_wait_seconds=lock_ms / 1000,
         setup_seconds=setup_ms / 1000,
         scheduling_seconds=scheduling_ms / 1000,

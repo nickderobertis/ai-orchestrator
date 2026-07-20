@@ -168,10 +168,12 @@ its checked-in golden moves in the same change. `RunTelemetry` includes:
   `wall_ms` summed across nodes without overlap removal.
 
 The existing seconds fields remain readable aliases during one schema version:
-`timing.agent_seconds` maps to combined model-plus-tool legacy agent time,
-`timing.gate_seconds` remains gate process time, and
-`timing.publication_wait_seconds` remains publication wait. They do not
-participate in the new four-way fractions.
+`timing.agent_seconds` maps to combined model-plus-tool legacy agent time.
+`timing.gate_seconds` and `timing.publication_wait_seconds` are accounted,
+non-overlapping portions of those observed intervals, clipped to the remaining
+wall budget in display order. Together with model, tool, lock, setup, scheduling,
+and idle fields, their millisecond values sum exactly to `wall_ms`. They do not
+participate in the model/tool/idle fractions.
 
 The version-4 command keeps JSON as the default and provides `--breakdown` for a stable
 human-readable view. The breakdown shows one run row followed by node rows with

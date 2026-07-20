@@ -30,7 +30,10 @@ from dependency readiness until the node worker starts. `UNATTR` is the part of 
 legacy inputs cannot classify. Each timing category shows milliseconds and its
 share of wall time.
 `GATE` is repository verification and `PUB` is the wait from a green gate to
-publication closeout.
+publication closeout. Both are clipped to their non-overlapping share of the
+remaining wall budget, so the displayed model, tool, gate, publication, lock,
+setup, scheduling, and idle buckets sum exactly to `WALL` even when raw journal
+intervals overlap.
 
 `TOKENS IN A/J` and `OUT A/J` are agent/judge input and output tokens. `CACHE
 R/W` is total cache-read/cache-write tokens, `COST` is total `cost_usd`, and

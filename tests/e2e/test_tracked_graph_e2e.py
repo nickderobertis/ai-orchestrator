@@ -19,6 +19,7 @@ from pathlib import Path
 import pytest
 
 from orchestrator import REPO_ROOT, gitops
+from orchestrator.coordination import advisory_lock, git_lock_identity
 from orchestrator.registry import Registry
 
 
@@ -1355,15 +1356,37 @@ def test_real_cli_recovers_failed_lifecycle_result(
         "--format",
         "json",
     ]
-    process = subprocess.Popen(
-        command,
-        cwd=REPO_ROOT,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        start_new_session=True,
-    )
     events_path = runs / "failed-lifecycle-prefix" / "events.jsonl"
+    held = advisory_lock(git_lock_identity(gitops.common_dir(canonical)))
+    held.__enter__()
+    try:
+        process = subprocess.Popen(
+            command,
+            cwd=REPO_ROOT,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            start_new_session=True,
+        )
+        contention_deadline = time.monotonic() + 15
+        while time.monotonic() < contention_deadline:
+            contention_records = (
+                [json.loads(line) for line in events_path.read_text().splitlines()]
+                if events_path.exists()
+                else []
+            )
+            if any(
+                event["kind"] == "node-started" and event.get("node") == "gate-failed-lifecycle"
+                for event in contention_records
+            ):
+                time.sleep(0.1)
+                break
+            time.sleep(0.01)
+        else:
+            process.kill()
+            pytest.fail("lifecycle node did not reach the contended git lock")
+    finally:
+        held.__exit__(None, None, None)
     deadline = time.monotonic() + 15
     while time.monotonic() < deadline:
         records = (
@@ -1417,7 +1440,12 @@ def test_real_cli_recovers_failed_lifecycle_result(
         if event["kind"] == "verification-finished" and event.get("node") == "gate-failed-lifecycle"
     )
     assert "tracked gate tail failed" in verification["detail"]["output_tail"]
-    assert any(event["kind"] == "lock-wait" for event in records)
+    lock_waits = [
+        event["detail"]["seconds"]
+        for event in records
+        if event["kind"] == "lock-wait" and event["detail"]["identity"].startswith("git:")
+    ]
+    assert any(waited > 0.05 for waited in lock_waits)
     setup_operations = {
         event["detail"]["operation"] for event in records if event["kind"] == "setup-finished"
     }
@@ -1439,7 +1467,7 @@ def test_real_cli_recovers_failed_lifecycle_result(
         check=True,
     )
     observed = json.loads(telemetry.stdout)["runs"][0]["timing"]
-    assert observed["lock_wait_seconds"] >= 0
+    assert observed["lock_wait_seconds"] > 0.05
     assert observed["setup_seconds"] > 0
 
 

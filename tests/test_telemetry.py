@@ -199,6 +199,7 @@ def test_harness_buckets_decompose_wall_time() -> None:
         1000,
         [],
         gate=0.1,
+        wait=0.1,
         lock_wait=0.2,
         setup=0.1,
         scheduling=0.2,
@@ -215,8 +216,37 @@ def test_harness_buckets_decompose_wall_time() -> None:
         + round(timing["lock_wait_seconds"] * 1000)
         + round(timing["setup_seconds"] * 1000)
         + round(timing["scheduling_seconds"] * 1000)
+        + round(timing["publication_wait_seconds"] * 1000)
         + timing["idle_orchestration_ms"]
     ) == timing["wall_ms"]
+
+
+def test_over_budget_buckets_are_clipped_to_exactly_wall_time() -> None:
+    timing = _timing(
+        100,
+        [],
+        gate=0.08,
+        wait=0.08,
+        lock_wait=0.08,
+        setup=0.08,
+        scheduling=0.08,
+    )
+
+    displayed_ms = sum(
+        round(timing[field] * 1000)
+        for field in (
+            "gate_seconds",
+            "publication_wait_seconds",
+            "lock_wait_seconds",
+            "setup_seconds",
+            "scheduling_seconds",
+        )
+    )
+    assert displayed_ms + timing["idle_orchestration_ms"] == timing["wall_ms"]
+    assert timing["gate_seconds"] == 0.08
+    assert timing["lock_wait_seconds"] == 0.02
+    assert timing["setup_seconds"] == timing["scheduling_seconds"] == 0
+    assert timing["publication_wait_seconds"] == 0
 
 
 def test_schema_v4_field_golden_prevents_cross_layer_drift() -> None:
