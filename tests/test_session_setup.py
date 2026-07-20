@@ -257,6 +257,33 @@ def test_install_oneharness_rejects_wrong_version_from_pypi(tmp_path: Path) -> N
     assert f"required oneharness {ADOPTED_ONEHARNESS_VERSION} is unavailable" in proc.stderr
 
 
+def test_ensure_codex_exposes_asdf_install_on_stable_worker_path(tmp_path: Path) -> None:
+    script = REPO_ROOT / "scripts" / "session-setup.sh"
+    asdf_bin = tmp_path / ".asdf" / "installs" / "nodejs" / "26.5.0" / "bin"
+    codex = asdf_bin / "codex"
+    _write_executable(codex, "#!/bin/sh\nprintf 'subscription codex\\n'\n")
+
+    proc = subprocess.run(
+        [
+            "bash",
+            "-c",
+            'source "$1"; ensure_codex; PATH="$HOME/.local/bin:/usr/bin:/bin" codex',
+            "test-ensure-codex",
+            str(script),
+        ],
+        text=True,
+        capture_output=True,
+        env={
+            "HOME": str(tmp_path),
+            "PATH": f"{asdf_bin}:/usr/bin:/bin",
+        },
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout == "subscription codex\n"
+    assert (tmp_path / ".local" / "bin" / "codex").resolve() == codex
+
+
 def test_persist_session_env_writes_path_once(tmp_path: Path) -> None:
     env_file = tmp_path / "claude-env"
     script = REPO_ROOT / "scripts" / "session-setup.sh"

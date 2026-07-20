@@ -123,12 +123,29 @@ ensure_codex() {
   # process, so its tools execute directly (nested claude-code defers them; see
   # docs/onejudge-integration.md "Harnesses and the live path"). Install the CLI;
   # authentication is a one-time manual step (`codex login`).
-  if command -v codex >/dev/null 2>&1; then
+  local codex_binary
+  if codex_binary="$(command -v codex 2>/dev/null)"; then
+    # npm under asdf installs codex inside the selected Node version, while
+    # nested workers reliably inherit ~/.local/bin. Refresh a stable entry there
+    # on every session so llmlint's oneharness subprocess can resolve the already
+    # authenticated subscription CLI without an OPENAI_API_KEY.
+    if [ "$codex_binary" != "$BIN_DIR/codex" ]; then
+      mkdir -p "$BIN_DIR"
+      ln -sfn "$codex_binary" "$BIN_DIR/codex" \
+        || log "could not expose $codex_binary at $BIN_DIR/codex (continuing)"
+      hash -r
+    fi
     return 0
   fi
   if command -v npm >/dev/null 2>&1; then
     log "installing @openai/codex via npm"
     npm install -g @openai/codex >&2 2>&1 || log "codex install failed (continuing)"
+    hash -r
+    if codex_binary="$(command -v codex 2>/dev/null)" && [ "$codex_binary" != "$BIN_DIR/codex" ]; then
+      mkdir -p "$BIN_DIR"
+      ln -sfn "$codex_binary" "$BIN_DIR/codex" \
+        || log "could not expose $codex_binary at $BIN_DIR/codex (continuing)"
+    fi
   else
     log "npm not found; cannot install codex (live path can still use claude-code)"
   fi
