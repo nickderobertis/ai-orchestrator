@@ -118,6 +118,15 @@ verify_onejudge() {
   return 0
 }
 
+expose_codex() {
+  local codex_binary="$1"
+  [ "$codex_binary" != "$BIN_DIR/codex" ] || return 0
+  if ! mkdir -p "$BIN_DIR" || ! ln -sfn "$codex_binary" "$BIN_DIR/codex"; then
+    log "could not expose $codex_binary at $BIN_DIR/codex (continuing)"
+  fi
+  hash -r
+}
+
 ensure_codex() {
   # codex is the fallback PRIMARY harness in oneharness.toml — it runs as its own
   # process, so its tools execute directly (nested claude-code defers them; see
@@ -129,22 +138,15 @@ ensure_codex() {
     # nested workers reliably inherit ~/.local/bin. Refresh a stable entry there
     # on every session so llmlint's oneharness subprocess can resolve the already
     # authenticated subscription CLI without an OPENAI_API_KEY.
-    if [ "$codex_binary" != "$BIN_DIR/codex" ]; then
-      mkdir -p "$BIN_DIR"
-      ln -sfn "$codex_binary" "$BIN_DIR/codex" \
-        || log "could not expose $codex_binary at $BIN_DIR/codex (continuing)"
-      hash -r
-    fi
+    expose_codex "$codex_binary"
     return 0
   fi
   if command -v npm >/dev/null 2>&1; then
     log "installing @openai/codex via npm"
     npm install -g @openai/codex >&2 2>&1 || log "codex install failed (continuing)"
     hash -r
-    if codex_binary="$(command -v codex 2>/dev/null)" && [ "$codex_binary" != "$BIN_DIR/codex" ]; then
-      mkdir -p "$BIN_DIR"
-      ln -sfn "$codex_binary" "$BIN_DIR/codex" \
-        || log "could not expose $codex_binary at $BIN_DIR/codex (continuing)"
+    if codex_binary="$(command -v codex 2>/dev/null)"; then
+      expose_codex "$codex_binary"
     fi
   else
     log "npm not found; cannot install codex (live path can still use claude-code)"

@@ -284,6 +284,60 @@ def test_ensure_codex_exposes_asdf_install_on_stable_worker_path(tmp_path: Path)
     assert (tmp_path / ".local" / "bin" / "codex").resolve() == codex
 
 
+def test_ensure_codex_exposes_new_npm_install_on_stable_worker_path(tmp_path: Path) -> None:
+    script = REPO_ROOT / "scripts" / "session-setup.sh"
+    tools = tmp_path / "tools"
+    npm = tools / "npm"
+    installed_codex = tmp_path / ".local" / "node" / "bin" / "codex"
+    _write_executable(
+        npm,
+        """#!/bin/sh
+mkdir -p "$HOME/.local/node/bin"
+printf '#!/bin/sh\nprintf "npm subscription codex\\\\n"\n' >"$HOME/.local/node/bin/codex"
+chmod +x "$HOME/.local/node/bin/codex"
+""",
+    )
+
+    proc = subprocess.run(
+        [
+            "bash",
+            "-c",
+            'source "$1"; ensure_codex; PATH="$HOME/.local/bin:/usr/bin:/bin" codex',
+            "test-install-codex",
+            str(script),
+        ],
+        text=True,
+        capture_output=True,
+        env={"HOME": str(tmp_path), "PATH": f"{tools}:/usr/bin:/bin"},
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout == "npm subscription codex\n"
+    assert (tmp_path / ".local" / "bin" / "codex").resolve() == installed_codex
+
+
+def test_expose_codex_logs_stable_path_failure_without_blocking(tmp_path: Path) -> None:
+    script = REPO_ROOT / "scripts" / "session-setup.sh"
+    local_path_blocker = tmp_path / ".local"
+    local_path_blocker.write_text("not a directory", encoding="utf-8")
+
+    proc = subprocess.run(
+        [
+            "bash",
+            "-c",
+            'source "$1"; expose_codex /asdf/bin/codex',
+            "test-expose-codex-failure",
+            str(script),
+        ],
+        text=True,
+        capture_output=True,
+        env={"HOME": str(tmp_path), "PATH": "/usr/bin:/bin"},
+    )
+
+    assert proc.returncode == 0
+    assert f"could not expose /asdf/bin/codex at {tmp_path}/.local/bin/codex" in proc.stderr
+
+
 def test_persist_session_env_writes_path_once(tmp_path: Path) -> None:
     env_file = tmp_path / "claude-env"
     script = REPO_ROOT / "scripts" / "session-setup.sh"
