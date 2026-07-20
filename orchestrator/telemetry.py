@@ -34,7 +34,7 @@ from .history import (
     session_records,
     session_role,
 )
-from .journal import JOURNAL_NAME, Event, read_events
+from .journal import JOURNAL_NAME, Event, EventKind, read_events
 from .monitor import DetailSnapshot, load_snapshot, run_state
 from .runs import (
     RETRY_DISPOSITIONS,
@@ -49,7 +49,7 @@ from .runs import (
 )
 from .verify import GateAttestation
 
-TELEMETRY_SCHEMA_VERSION = 3
+TELEMETRY_SCHEMA_VERSION = 4
 SUPPORTED_HISTORY_SCHEMA_VERSIONS = ("0.2", "0.3", 1, 2)
 TelemetryQuality = Literal["complete", "partial", "legacy"]
 TelemetrySource = Literal["onejudge", "oneharness", "history_legacy", "journal_legacy"]
@@ -63,6 +63,9 @@ class TimingRecord(TypedDict):
     judge_seconds: float
     gate_seconds: float
     publication_wait_seconds: float
+    lock_wait_seconds: float
+    setup_seconds: float
+    scheduling_seconds: float
     wall_seconds: float
     agent_model_ms: int
     judge_model_ms: int
@@ -78,6 +81,9 @@ class FractionsRecord(TypedDict):
     judge_model: float
     tool: float
     idle_orchestration: float
+    lock_wait: float
+    setup: float
+    scheduling: float
 
 
 class UsageValues(TypedDict):
@@ -128,6 +134,9 @@ class MetricsRecord(TypedDict):
     green_to_publication_seconds: list[float]
     turns: dict[int, int]
     usage: UsageValues
+    lock_wait_seconds: float
+    setup_seconds: float
+    scheduling_seconds: float
 
 
 class NodeWorkRecord(TypedDict):
@@ -823,6 +832,9 @@ def _timing(
     gate: float = 0.0,
     wait: float = 0.0,
     native: _NativeTelemetry | None = None,
+    lock_wait: float = 0.0,
+    setup: float = 0.0,
+    scheduling: float = 0.0,
 ) -> TimingRecord:
     agent_duration = sum(item.duration_ms for item in summaries if item.role == "agent")
     judge_duration = sum(item.duration_ms for item in summaries if item.role == "judge")
@@ -845,7 +857,17 @@ def _timing(
     judge_model = min(max(0, wall_ms - tool), raw_judge_model)
     agent_model = min(max(0, wall_ms - tool - judge_model), raw_agent_model)
     measured = agent_model + judge_model + tool
-    idle = max(0, wall_ms - measured)
+    remaining = max(0, wall_ms - measured)
+    gate_ms = min(remaining, round(gate * 1000))
+    remaining -= gate_ms
+    lock_ms = min(remaining, round(lock_wait * 1000))
+    remaining -= lock_ms
+    setup_ms = min(remaining, round(setup * 1000))
+    remaining -= setup_ms
+    scheduling_ms = min(remaining, round(scheduling * 1000))
+    remaining -= scheduling_ms
+    publication_ms = min(remaining, round(wait * 1000))
+    idle = remaining - publication_ms
     unattributed = min(
         idle,
         sum(item.duration_ms for item in summaries if not item.validated_native_fields)
@@ -858,8 +880,11 @@ def _timing(
     return TimingRecord(
         agent_seconds=agent_duration / 1000,
         judge_seconds=judge_duration / 1000,
-        gate_seconds=gate,
-        publication_wait_seconds=wait,
+        gate_seconds=gate_ms / 1000,
+        publication_wait_seconds=publication_ms / 1000,
+        lock_wait_seconds=lock_ms / 1000,
+        setup_seconds=setup_ms / 1000,
+        scheduling_seconds=scheduling_ms / 1000,
         wall_seconds=wall_ms / 1000,
         agent_model_ms=agent_model,
         judge_model_ms=judge_model,
@@ -872,8 +897,55 @@ def _timing(
             judge_model=fraction(judge_model),
             tool=fraction(tool),
             idle_orchestration=fraction(idle),
+            lock_wait=fraction(lock_ms),
+            setup=fraction(setup_ms),
+            scheduling=fraction(scheduling_ms),
         ),
     )
+
+
+def _event_seconds(events: list[Event], kind: EventKind, *, node: str | None = None) -> float:
+    total = 0.0
+    for event in events:
+        if event.kind != kind or (node is not None and event.node != node):
+            continue
+        value = event.detail.get("seconds")
+        if isinstance(value, (int, float)) and not isinstance(value, bool) and value >= 0:
+            total += float(value)
+    return total
+
+
+def _scheduling_seconds(events: list[Event], node: str) -> float:
+    starts = [event.at for event in events if event.node == node and event.kind == "node-started"]
+    if not starts:
+        return 0.0
+    definitions = [
+        cast(dict[str, object], event.detail.get("definition"))
+        for event in events
+        if event.kind == "node-added" and isinstance(event.detail.get("definition"), dict)
+    ]
+    definition = next(
+        (item for item in reversed(definitions) if item.get("id") == node),
+        None,
+    )
+    deps = definition.get("deps", []) if isinstance(definition, dict) else []
+    ready = max(
+        (
+            event.at
+            for event in events
+            if event.at <= starts[0]
+            and (
+                event.kind == "round-started"
+                or (
+                    isinstance(deps, list)
+                    and event.node in deps
+                    and event.kind in {"node-settled", "node-failed", "human-attested"}
+                )
+            )
+        ),
+        default=starts[0],
+    )
+    return max(0.0, starts[0] - ready)
 
 
 def _union_interval_ms(start_ms: int, finish_ms: int, intervals: list[_Interval]) -> int:
@@ -898,7 +970,9 @@ def _run_timing(
     native_by_node: dict[str, _NativeTelemetry | None],
     gate: float,
     wait: float,
+    events: list[Event] | None = None,
 ) -> TimingRecord:
+    events = events or []
     wall_ms = max(0, finish_ms - start_ms)
     explicit_tool_nodes = {
         summary.labels.get("node")
@@ -929,7 +1003,21 @@ def _run_timing(
     judge = min(max(0, wall_ms - tool), judge)
     agent = min(max(0, wall_ms - tool - judge), agent)
     native = _NativeTelemetry(None, None, agent, judge, tool, None, [])
-    return _timing(wall_ms, summaries, gate, wait, native=native)
+    scheduling = sum(
+        _scheduling_seconds(events, str(event.node))
+        for event in events
+        if event.kind == "node-started" and event.node is not None
+    )
+    return _timing(
+        wall_ms,
+        summaries,
+        gate,
+        wait,
+        native=native,
+        lock_wait=_event_seconds(events, "lock-wait"),
+        setup=_event_seconds(events, "setup-finished"),
+        scheduling=scheduling,
+    )
 
 
 def _history_telemetry(
@@ -1047,7 +1135,15 @@ def _node_record(
         commit=commits[-1] if commits else "",
         retry_lineage=RetryLineageTelemetry.from_value(item.get("retry_lineage")),
         gate_attestation=attestation,
-        timing=_timing(wall_ms, linked, native=native),
+        timing=_timing(
+            wall_ms,
+            linked,
+            gate=_gate_seconds([event for event in events if event.node == node]),
+            lock_wait=_event_seconds(events, "lock-wait", node=node),
+            setup=_event_seconds(events, "setup-finished", node=node),
+            scheduling=_scheduling_seconds(events, node),
+            native=native,
+        ),
         usage=usage,
         sessions=(
             native.sessions if native is not None and native.sessions else [s.link for s in linked]
@@ -1110,6 +1206,7 @@ def collect_run(
         native_by_node,
         gate_seconds,
         wait,
+        events,
     )
     contributing_nodes = [
         node
@@ -1196,6 +1293,9 @@ def _metrics(runs: list[RunTelemetry]) -> MetricsRecord:
         ],
         turns=turns,
         usage=usage,
+        lock_wait_seconds=sum(run.timing["lock_wait_seconds"] for run in runs),
+        setup_seconds=sum(run.timing["setup_seconds"] for run in runs),
+        scheduling_seconds=sum(run.timing["scheduling_seconds"] for run in runs),
     )
 
 
@@ -1205,7 +1305,8 @@ def _value(value: int | float | None) -> str:
 
 def _breakdown(runs: list[RunTelemetry]) -> str:
     header = (
-        "RUN/NODE              WALL   AGENT       JUDGE       TOOL        IDLE        "
+        "RUN/NODE              WALL   AGENT       JUDGE       TOOL        "
+        "GATE  PUB   LOCK  SETUP SCHED IDLE "
         "UNATTR  TOKENS IN A/J OUT A/J  CACHE R/W  COST  TURNS QUALITY"
     )
     lines = [header]
@@ -1230,6 +1331,11 @@ def _breakdown(runs: list[RunTelemetry]) -> str:
                 f"{timing['agent_model_ms']:5} {fractions['agent_model']:5.1%}",
                 f"{timing['judge_model_ms']:5} {fractions['judge_model']:5.1%}",
                 f"{timing['tool_ms']:5} {fractions['tool']:5.1%}",
+                f"{round(timing['gate_seconds'] * 1000):4}",
+                f"{round(timing['publication_wait_seconds'] * 1000):4}",
+                f"{round(timing['lock_wait_seconds'] * 1000):4}",
+                f"{round(timing['setup_seconds'] * 1000):5}",
+                f"{round(timing['scheduling_seconds'] * 1000):5}",
                 f"{timing['idle_orchestration_ms']:5} {fractions['idle_orchestration']:5.1%}",
                 f"{timing['unattributed_ms']:6}",
                 f"{_value(usage['agent']['input_tokens'])}/{_value(usage['judge']['input_tokens'])}",

@@ -19,6 +19,7 @@ from pathlib import Path
 import pytest
 
 from orchestrator import REPO_ROOT, gitops
+from orchestrator.coordination import advisory_lock, git_lock_identity
 from orchestrator.registry import Registry
 
 
@@ -1322,7 +1323,11 @@ def test_real_cli_recovers_failed_lifecycle_result(
                         "branch": "feature/gate-failed-lifecycle",
                         "workflow": "local",
                         "repo_type": "single-owner",
-                        "verify_cmd": ["false"],
+                        "verify_cmd": [
+                            "sh",
+                            "-c",
+                            "printf 'tracked gate tail failed\\n'; exit 1",
+                        ],
                     },
                     {
                         "id": "in-flight",
@@ -1351,15 +1356,37 @@ def test_real_cli_recovers_failed_lifecycle_result(
         "--format",
         "json",
     ]
-    process = subprocess.Popen(
-        command,
-        cwd=REPO_ROOT,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        start_new_session=True,
-    )
     events_path = runs / "failed-lifecycle-prefix" / "events.jsonl"
+    held = advisory_lock(git_lock_identity(gitops.common_dir(canonical)))
+    held.__enter__()
+    try:
+        process = subprocess.Popen(
+            command,
+            cwd=REPO_ROOT,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            start_new_session=True,
+        )
+        contention_deadline = time.monotonic() + 15
+        while time.monotonic() < contention_deadline:
+            contention_records = (
+                [json.loads(line) for line in events_path.read_text().splitlines()]
+                if events_path.exists()
+                else []
+            )
+            if any(
+                event["kind"] == "node-started" and event.get("node") == "gate-failed-lifecycle"
+                for event in contention_records
+            ):
+                time.sleep(0.1)
+                break
+            time.sleep(0.01)
+        else:
+            process.kill()
+            pytest.fail("lifecycle node did not reach the contended git lock")
+    finally:
+        held.__exit__(None, None, None)
     deadline = time.monotonic() + 15
     while time.monotonic() < deadline:
         records = (
@@ -1406,6 +1433,42 @@ def test_real_cli_recovers_failed_lifecycle_result(
         assert terminal[0]["detail"]["result"] == result["results"][node_id]
     assert result["results"]["failed-lifecycle"]["outcome"] == "not-completed"
     assert result["results"]["gate-failed-lifecycle"]["outcome"] == "gate-failed"
+    assert "tracked gate tail failed" in result["results"]["gate-failed-lifecycle"]["detail"]
+    verification = next(
+        event
+        for event in records
+        if event["kind"] == "verification-finished" and event.get("node") == "gate-failed-lifecycle"
+    )
+    assert "tracked gate tail failed" in verification["detail"]["output_tail"]
+    lock_waits = [
+        event["detail"]["seconds"]
+        for event in records
+        if event["kind"] == "lock-wait" and event["detail"]["identity"].startswith("git:")
+    ]
+    assert any(waited > 0.05 for waited in lock_waits)
+    setup_operations = {
+        event["detail"]["operation"] for event in records if event["kind"] == "setup-finished"
+    }
+    assert {"fetch", "worktree"} <= setup_operations
+
+    telemetry = subprocess.run(
+        [
+            "just",
+            "telemetry",
+            "--runs-dir",
+            str(runs),
+            "--all",
+            "--oneharness-bin",
+            "absent",
+        ],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    observed = json.loads(telemetry.stdout)["runs"][0]["timing"]
+    assert observed["lock_wait_seconds"] > 0.05
+    assert observed["setup_seconds"] > 0
 
 
 def test_real_cli_recovers_waiting_and_no_change_lifecycle_results(
@@ -1415,6 +1478,8 @@ def test_real_cli_recovers_waiting_and_no_change_lifecycle_results(
     canonical = gitops.clone(origin, tmp_path / "lifecycle-variants-canonical")
     Registry().register(str(canonical), workflow="local")
     runs = tmp_path / "runs"
+    provider_ready = tmp_path / "in-flight-provider-ready"
+    provider_release = tmp_path / "in-flight-provider-release"
     plan = tmp_path / "lifecycle-variants-prefix.json"
     plan.write_text(
         json.dumps(
@@ -1469,7 +1534,10 @@ def test_real_cli_recovers_waiting_and_no_change_lifecycle_results(
                     {
                         "id": "in-flight",
                         "persona": "engineer",
-                        "task": "should-fail",
+                        "task": (
+                            f"should-fail provider-barrier-ready={provider_ready} "
+                            f"provider-barrier-release={provider_release}"
+                        ),
                         "max_turns": 5,
                     },
                 ],
@@ -1510,11 +1578,7 @@ def test_real_cli_recovers_waiting_and_no_change_lifecycle_results(
             else []
         )
         settled = {event.get("node") for event in records if event["kind"] == "node-settled"}
-        in_flight = any(
-            event["kind"] == "node-started" and event.get("node") == "in-flight"
-            for event in records
-        )
-        if {"waiting-lifecycle", "no-change-lifecycle"} <= settled and in_flight:
+        if {"waiting-lifecycle", "no-change-lifecycle"} <= settled and provider_ready.exists():
             break
         time.sleep(0.01)
     else:
@@ -1522,6 +1586,7 @@ def test_real_cli_recovers_waiting_and_no_change_lifecycle_results(
         pytest.fail("run-plan did not reach the waiting lifecycle recovery boundary")
     os.killpg(process.pid, signal.SIGKILL)
     process.wait()
+    provider_release.write_text("release\n", encoding="utf-8")
 
     recovered = subprocess.run(
         [*command, "--recover"], cwd=REPO_ROOT, text=True, capture_output=True, check=False

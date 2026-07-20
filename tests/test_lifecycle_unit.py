@@ -12,6 +12,7 @@ import pytest
 import orchestrator.lifecycle as lc
 from orchestrator.config import ConfigError
 from orchestrator.github import CliGitHubBackend, PRStatus, PullRequest
+from orchestrator.journal import NodeJournal, open_journal
 from orchestrator.lifecycle import (
     PR_OPTIONAL_SECTIONS,
     PR_REQUIRED_SECTIONS,
@@ -31,6 +32,7 @@ from orchestrator.lifecycle import (
     _should_draft_pr_body,
     _subject_from_messages,
     _valid_drafted_body,
+    _verify_gate,
     _workstream_branch_name,
     load_repo_plan,
     make_repo_runner,
@@ -40,7 +42,7 @@ from orchestrator.lifecycle import (
 from orchestrator.merge import GitHubMergeStrategy, LocalMergeStrategy
 from orchestrator.plan import PlanError
 from orchestrator.registry import Registry
-from orchestrator.runs import ResumePayload, RetryLineagePayload
+from orchestrator.runs import NodeId, ResumePayload, RetryLineagePayload, RunId
 from orchestrator.workspace import Workspace, normalize_repo
 
 
@@ -61,6 +63,23 @@ def test_resume_and_retry_lineage_payload_contracts_cannot_drift() -> None:
 
 
 # --- helpers ---------------------------------------------------------------
+
+
+def test_failed_gate_tail_is_journaled_from_real_subprocess(tmp_path: Path) -> None:
+    journal = open_journal(tmp_path / "run", RunId("run"), 1)
+    node = NodeJournal(journal, NodeId("build"), RunId("run"), 1)
+    verify = _verify_gate(
+        node,
+        tmp_path,
+        ["sh", "-c", "printf 'tier: typecheck failed\\n'; exit 7"],
+        timeout=None,
+        env={},
+    )
+
+    assert not verify.ok
+    finished = journal.events()[-1]
+    assert finished.kind == "verification-finished"
+    assert "tier: typecheck failed" in str(finished.detail["output_tail"])
 
 
 def test_branch_name_is_deterministic() -> None:

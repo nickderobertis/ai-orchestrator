@@ -10,7 +10,13 @@ from pathlib import Path
 
 import pytest
 
-from orchestrator.coordination import LockTimeout, advisory_lock, atomic_json
+from orchestrator.coordination import (
+    LockTimeout,
+    advisory_lock,
+    atomic_json,
+    reset_harness_observer,
+    set_harness_observer,
+)
 
 
 def test_advisory_lock_reports_live_owner(monkeypatch, tmp_path) -> None:
@@ -39,6 +45,31 @@ def test_advisory_lock_reports_live_owner(monkeypatch, tmp_path) -> None:
         process.stdin.write("release\n")
         process.stdin.flush()
     assert process.wait(timeout=2) == 0
+
+
+def test_advisory_lock_observes_success_and_timeout_waits(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("AI_ORCHESTRATOR_HOME", str(tmp_path))
+    observed: list[tuple[str, dict[str, str | float | bool]]] = []
+    token = set_harness_observer(lambda kind, detail: observed.append((kind, dict(detail))))
+    try:
+        with advisory_lock("available"):
+            pass
+        held = advisory_lock("held")
+        held.__enter__()
+        try:
+            with pytest.raises(LockTimeout), advisory_lock("held", timeout=0.02):
+                pass
+        finally:
+            held.__exit__(None, None, None)
+    finally:
+        reset_harness_observer(token)
+
+    assert [(kind, detail["acquired"]) for kind, detail in observed] == [
+        ("lock-wait", True),
+        ("lock-wait", True),
+        ("lock-wait", False),
+    ]
+    assert all(float(detail["seconds"]) >= 0 for _, detail in observed)
 
 
 def test_atomic_json_interrupted_replace_preserves_old_file(monkeypatch, tmp_path) -> None:

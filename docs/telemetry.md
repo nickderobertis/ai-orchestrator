@@ -12,8 +12,8 @@ The breakdown prints a run row and an indented row for every node. A typical
 enriched row and timeline look like this:
 
 ```text
-RUN/NODE              WALL   AGENT       JUDGE       TOOL        IDLE        UNATTR  TOKENS IN A/J OUT A/J  CACHE R/W  COST  TURNS QUALITY
-deploy                 950ms   500 52.6%   120 12.6%   250 26.3%    80  8.4%      0  420/90 85/18 300/0 0.014 4 complete
+RUN/NODE              WALL   AGENT       JUDGE       TOOL        GATE PUB LOCK SETUP SCHED IDLE UNATTR  TOKENS IN A/J OUT A/J  CACHE R/W  COST  TURNS QUALITY
+deploy                 950ms   500 52.6%   120 12.6%   100 10.5%   40  20   10    30    20   110 11.6%      0  420/90 85/18 300/0 0.014 4 complete
   Timeline (UTC):
     turn 0 agent: 2026-07-19T12:00:00Z -> 2026-07-19T12:00:00.600Z [agent-7]
     turn 1 judge: 2026-07-19T12:00:00.600Z -> 2026-07-19T12:00:00.720Z [judge-2]
@@ -24,9 +24,16 @@ Turn histogram: 4=1
 available as `node_work_ms` in JSON. `AGENT` and `JUDGE` are measured provider
 latency for their respective roles. `TOOL` is measured execution inside tool
 calls. `IDLE` is the non-negative remainder: orchestration, process handoffs,
-queueing, and any unknown time. `UNATTR` is the part of that remainder that
+unknown time after the explicit harness buckets. `LOCK` is time waiting for
+process-shared locks, `SETUP` is fetch and worktree creation, and `SCHED` is time
+from dependency readiness until the node worker starts. `UNATTR` is the part of the remainder that
 legacy inputs cannot classify. Each timing category shows milliseconds and its
 share of wall time.
+`GATE` is repository verification and `PUB` is the wait from a green gate to
+publication closeout. Both are clipped to their non-overlapping share of the
+remaining wall budget, so the displayed model, tool, gate, publication, lock,
+setup, scheduling, and idle buckets sum exactly to `WALL` even when raw journal
+intervals overlap.
 
 `TOKENS IN A/J` and `OUT A/J` are agent/judge input and output tokens. `CACHE
 R/W` is total cache-read/cache-write tokens, `COST` is total `cost_usd`, and
@@ -65,6 +72,21 @@ no time.
    upstream telemetry before optimizing from the apparent split.
 5. Correlate long turns with token/cache/cost growth. A high turn-histogram bucket
    can expose stalled agents even when individual calls are not unusually slow.
+
+## Diagnosing a slow or stalled run
+
+1. Run `just telemetry --breakdown --all` and locate the largest run and node.
+2. A large `LOCK` bucket means another process held a shared registry, journal,
+   checkout, or worktree resource. Inspect `lock-wait` journal events for the
+   recorded lock identity and whether acquisition timed out.
+3. A large `SETUP` bucket distinguishes repository fetch cost from `git worktree
+   add`; inspect `setup-finished.detail.operation` in `events.jsonl`.
+4. A large `SCHED` bucket means the node was dependency-ready but waited for a
+   worker slot. Compare it with the graph concurrency and adjacent node intervals.
+5. For a failed gate, read the node result detail or the
+   `verification-finished.detail.output_tail` journal field. Both contain the same
+   bounded tail from the captured gate output, so reproducing the gate is not
+   required to identify the failing tier.
 
 The pinned onejudge and oneharness versions may not yet emit every field even
 though the reader supports them. A separate version-bump follow-up is still

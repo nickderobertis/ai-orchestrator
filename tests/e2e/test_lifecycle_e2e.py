@@ -1442,11 +1442,12 @@ def test_local_repo_gate_failure_blocks_merge(tmp_path, bare_origin) -> None:
         "engineer",
         workspace=_workspace(tmp_path, origin),
         dispatch_fn=make_writing_dispatch(filename="feature.txt"),
-        verify_cmd=["false"],  # gate fails → never pushes or merges
+        verify_cmd=["sh", "-c", "printf 'lint tier: bad import\\n'; exit 1"],
     )
     assert not result.ok
     assert result.outcome == "gate-failed"
     assert result.pr is None
+    assert "lint tier: bad import" in result.detail
     assert _tip(origin, "main") == before  # origin main untouched
 
 
@@ -1641,7 +1642,12 @@ def test_remote_human_checkpoint_noop_gate_surfaces_unproven_warning(tmp_path, b
 def test_remote_human_checkpoint_registry_gate_blocks_draft(tmp_path, bare_origin) -> None:
     origin = bare_origin()
     canonical = gitops.clone(origin, tmp_path / "registered")
-    Registry().register(str(canonical), workflow="remote", repo_type="single-owner", gate="false")
+    Registry().register(
+        str(canonical),
+        workflow="remote",
+        repo_type="single-owner",
+        gate="sh -c 'printf human-pause-gate-failed; exit 1'",
+    )
     github = FakeGitHub(origin)
     result = run_repo_task(
         str(canonical),
@@ -1656,6 +1662,7 @@ def test_remote_human_checkpoint_registry_gate_blocks_draft(tmp_path, bare_origi
     )
     assert result.outcome == "gate-failed" and result.pr is None
     assert result.verify is not None and not result.verify.ok
+    assert "human-pause-gate-failed" in result.detail
 
 
 def test_lifecycle_without_explicit_or_registry_gate_errors(tmp_path, bare_origin) -> None:
@@ -2037,6 +2044,79 @@ def test_no_changes_produces_no_pr(tmp_path, bare_origin) -> None:
     )
     assert result.outcome == "no-changes"
     assert not result.ok
+
+
+def test_resumed_branch_setup_round_trips_through_telemetry_cli(tmp_path, bare_origin) -> None:
+    """A tracked retry journals and surfaces setup for its existing branch worktree."""
+    origin = bare_origin()
+    workspace = _workspace(tmp_path / "workspace", origin)
+    partial = run_repo_task(
+        str(origin),
+        "Preserve work for a real retry.",
+        "engineer",
+        workspace=workspace,
+        dispatch_fn=make_writing_dispatch(filename="partial.txt", completed=False),
+        verify_cmd=["true"],
+    )
+    assert isinstance(partial.resume, Resume)
+
+    runs_dir = tmp_path / "runs"
+    run_dir = runs_dir / "existing-branch"
+    _, round_dir = prepare_round(
+        run_dir,
+        {"tasks": [{"id": "retry", "task": "Continue the preserved branch."}]},
+    )
+    journal = open_journal(run_dir, RunId("existing-branch"), 1)
+
+    def lifecycle_runner(node: RepoPlanNode, *, journal: NodeSink | None = None):
+        return run_repo_task(
+            node.repo,
+            node.task,
+            node.persona,
+            workspace=workspace,
+            dispatch_fn=make_writing_dispatch(filename="completed.txt"),
+            verify_cmd=["true"],
+            resume=partial.resume,
+            journal=journal,
+        )
+
+    result = run_graph(
+        parse_graph(
+            {
+                "tasks": [
+                    {
+                        "id": "retry",
+                        "repo": str(origin),
+                        "persona": "engineer",
+                        "task": "Continue the preserved branch.",
+                    }
+                ]
+            }
+        ),
+        agent_runner=lambda _node: (_ for _ in ()).throw(
+            AssertionError("this graph contains no direct agent")
+        ),
+        lifecycle_runner=lifecycle_runner,
+        journal=journal,
+        run_id=RunId("existing-branch"),
+        round_number=1,
+    )
+    assert result.ok
+    write_result(round_dir, graph_payload(result))
+
+    setup_events = [event for event in journal.events() if event.kind == "setup-finished"]
+    assert any(event.detail["operation"] == "worktree" for event in setup_events)
+
+    indexed = subprocess.run(
+        ["just", "telemetry", "--runs-dir", str(runs_dir), "--all"],
+        cwd=Path(__file__).parents[2],
+        text=True,
+        capture_output=True,
+        timeout=180,
+    )
+    assert indexed.returncode == 0, indexed.stderr
+    observed = json.loads(indexed.stdout)["runs"][0]["timing"]
+    assert observed["setup_seconds"] > 0
 
 
 def test_real_lifecycle_outcomes_round_trip_through_telemetry_cli(tmp_path, bare_origin) -> None:

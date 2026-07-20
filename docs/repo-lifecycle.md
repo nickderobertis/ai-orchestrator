@@ -156,8 +156,10 @@ diff that the target repo's pre-push boundary enforces, rather than proving a
 stale view of the base. Gate precedence is an explicit plan-node `verify_cmd`,
 then the identity-level registry command with `{base}` replaced by the resolved
 `origin/<pr-base>`. There is no dispatch-time detection fallback. A failing gate
-stops the lifecycle at `gate-failed`
-(nothing is pushed). Pass an explicit `verify_cmd`, or `--skip-verify` to skip the
+stops the lifecycle at `gate-failed` (nothing is pushed). Its result detail and
+the `verification-finished.detail.output_tail` journal field carry the same
+bounded captured-output tail for diagnosis without reproduction. Pass an
+explicit `verify_cmd`, or `--skip-verify` to skip the
 gate; the pre-handoff sync still occurs.
 
 An identity carrying `<no-op>` may publish, but its result always says `gate:

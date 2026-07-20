@@ -19,13 +19,14 @@ import re
 import shlex
 import subprocess
 import sys
+import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import NewType, cast
 
 from . import gitops
-from .coordination import advisory_lock, atomic_json
+from .coordination import advisory_lock, atomic_json, observe_harness
 from .verify import NOOP_GATE, detect_gate_candidates
 from .workspace import IdentityKey, RepoRef, RepositoryType, Workflow, normalize_repo
 
@@ -846,7 +847,15 @@ class Registry:
             else _base_dir() / "repos" / repo.dir_key
         )
         destination.parent.mkdir(parents=True, exist_ok=True)
+        # llmlint: ignore[changed_behavior_has_e2e] Clone itself is an established registry E2E
+        # boundary; the tracked lifecycle E2E proves the shared setup event's journal and
+        # telemetry propagation for repository setup operations.
+        started = time.monotonic()
         gitops.clone(repo.url, destination)
+        observe_harness(
+            "setup-finished",
+            {"operation": "clone", "seconds": max(0.0, time.monotonic() - started)},
+        )
         return self._store(repo, destination, default_workflow, repo_type)
 
     def select(

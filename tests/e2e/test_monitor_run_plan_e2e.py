@@ -298,7 +298,7 @@ def test_real_history_labels_and_cursor_watch(oneharness_bin: str, tmp_path: Pat
     )
     assert indexed.returncode == 0, indexed.stderr
     run = json.loads(indexed.stdout)["runs"][0]
-    assert json.loads(indexed.stdout)["schema_version"] == 3
+    assert json.loads(indexed.stdout)["schema_version"] == 4
     native_records = {
         role: [json.loads(line) for line in Path(record["path"]).read_text().splitlines()]
         for role, record in by_role.items()
@@ -398,7 +398,8 @@ def test_real_run_plan_waits_then_monitor_exits_only_after_attestation(
         node for node in json.loads(indexed.stdout)["runs"][0]["nodes"] if node["node"] == "prepare"
     )
     assert prepare_node["timing"]["wall_ms"] > 0
-    assert prepare_node["timing"]["fractions"]["idle_orchestration"] == 1.0
+    assert prepare_node["timing"]["scheduling_seconds"] > 0
+    assert prepare_node["timing"]["fractions"]["idle_orchestration"] < 1.0
 
     waiting = _just(
         "monitor",

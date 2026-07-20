@@ -11,12 +11,49 @@ import tempfile
 import time
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager, suppress
+from contextvars import ContextVar, Token
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any, Protocol
+
+if TYPE_CHECKING:
+    from .journal import EventKind
 
 
 class LockTimeout(TimeoutError):
     """A process-shared resource remained owned beyond the bounded wait."""
+
+
+class HarnessObserver(Protocol):
+    """Receive one typed harness-overhead observation for the active node."""
+
+    def __call__(self, kind: EventKind, detail: Mapping[str, str | float | bool]) -> None: ...
+
+
+_observer: ContextVar[HarnessObserver | None] = ContextVar("harness_observer", default=None)
+_notifying_observer: ContextVar[bool] = ContextVar("notifying_harness_observer", default=False)
+
+
+def set_harness_observer(observer: HarnessObserver) -> Token[HarnessObserver | None]:
+    """Attach node-scoped telemetry to coordination and workspace operations."""
+    return _observer.set(observer)
+
+
+def reset_harness_observer(token: Token[HarnessObserver | None]) -> None:
+    """Restore the observer that preceded a node execution."""
+    _observer.reset(token)
+
+
+def observe_harness(kind: EventKind, detail: Mapping[str, str | float | bool]) -> None:
+    """Report harness overhead without allowing observation to affect execution."""
+    observer = _observer.get()
+    if observer is None or _notifying_observer.get():
+        return
+    token = _notifying_observer.set(True)
+    try:
+        with suppress(Exception):
+            observer(kind, detail)
+    finally:
+        _notifying_observer.reset(token)
 
 
 def _lock_root() -> Path:
@@ -43,19 +80,35 @@ def advisory_lock(identity: str, *, timeout: float = 30.0) -> Iterator[None]:
     path = lock_path(identity)
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a+", encoding="utf-8") as handle:
-        deadline = time.monotonic() + timeout
+        started = time.monotonic()
+        deadline = started + timeout
         while True:
             try:
                 fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 break
             except BlockingIOError:
                 if time.monotonic() >= deadline:
+                    waited = max(0.0, time.monotonic() - started)
+                    if not identity.startswith("journal:"):
+                        observe_harness(
+                            "lock-wait",
+                            {"identity": identity, "seconds": waited, "acquired": False},
+                        )
                     handle.seek(0)
                     owner = handle.read().strip() or "unknown owner"
                     raise LockTimeout(
                         f"timed out after {timeout:g}s waiting for {identity!r}; owner: {owner}"
                     ) from None
                 time.sleep(min(0.05, max(0.0, deadline - time.monotonic())))
+        if not identity.startswith("journal:"):
+            observe_harness(
+                "lock-wait",
+                {
+                    "identity": identity,
+                    "seconds": max(0.0, time.monotonic() - started),
+                    "acquired": True,
+                },
+            )
         handle.seek(0)
         handle.truncate()
         handle.write(f"pid={os.getpid()} host={socket.gethostname()} acquired={time.time():.0f}\n")

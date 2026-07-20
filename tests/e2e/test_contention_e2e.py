@@ -17,10 +17,15 @@ import pytest
 
 from orchestrator import gitops
 from orchestrator.config import ConfigError
-from orchestrator.coordination import advisory_lock
+from orchestrator.coordination import (
+    advisory_lock,
+    reset_harness_observer,
+    set_harness_observer,
+)
+from orchestrator.journal import NodeJournal, open_journal
 from orchestrator.lifecycle import run_repo_task
 from orchestrator.registry import Registry
-from orchestrator.runs import prepare_round
+from orchestrator.runs import NodeId, RunId, prepare_round
 from orchestrator.workspace import Workspace, normalize_repo
 
 PLAN = {
@@ -170,6 +175,8 @@ def test_active_cross_process_worktree_is_never_reclaimed(
     origin = bare_origin()
     canonical = gitops.clone(origin, tmp_path / "canonical-active")
     root = tmp_path / "worktrees-active"
+    # Python 3.14's shared forkserver captures the prior test's isolated
+    # AI_ORCHESTRATOR_HOME. Spawn proves both contenders use this test's lock root.
     ready: multiprocessing.Queue[str] = MP.Queue()
     release = MP.Event()
     process = MP.Process(
@@ -180,14 +187,30 @@ def test_active_cross_process_worktree_is_never_reclaimed(
     held_path = Path(ready.get(timeout=10))
     repo = normalize_repo(str(canonical))
     contender = Workspace(root, resolver=lambda _spec: canonical, workflow="local")
+    run_id = RunId("worktree-lock-timeout")
+    run_dir = tmp_path / "runs" / run_id
+    prepare_round(run_dir, PLAN)
+    journal = open_journal(run_dir, run_id, 1)
+    node_journal = NodeJournal(journal, NodeId("change"), run_id, 1)
+    observer = set_harness_observer(lambda kind, detail: node_journal.append(kind, detail=detail))
     try:
         with pytest.raises(RuntimeError, match="branch 'feature/held' is active"):
             contender.worktree(repo, "feature/held", base="origin/main")
         assert held_path.exists()
         assert gitops.worktrees(canonical)["feature/held"] == held_path
     finally:
+        reset_harness_observer(observer)
         release.set()
         _join(process)
+
+    timed_out = [
+        event
+        for event in journal.events()
+        if event.kind == "lock-wait" and event.detail.get("acquired") is False
+    ]
+    assert len(timed_out) == 1
+    assert str(timed_out[0].detail["identity"]).startswith("worktree:")
+    assert float(timed_out[0].detail["seconds"]) >= 0
 
 
 def test_same_branch_redispatch_cannot_overtake_paused_teardown(

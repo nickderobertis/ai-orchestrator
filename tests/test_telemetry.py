@@ -39,6 +39,8 @@ def _recorded_run(tmp_path: Path, *, state: str = "failed") -> Path:
     node = NodeJournal(journal, NodeId("api"), RunId("observed"), 1)
     journal.append("round-started", detail={"nodes": 1})
     node.append("node-started", detail={"persona": "engineer"})
+    node.append("lock-wait", detail={"identity": "git:/repo", "seconds": 0.001, "acquired": True})
+    node.append("setup-finished", detail={"operation": "fetch", "seconds": 0.001})
     node.append(
         "verification-started",
         detail={
@@ -160,6 +162,8 @@ def test_collect_run_joins_ledger_journal_history_and_attestation(
     assert record["timing"]["judge_seconds"] == 1.0
     assert record["timing"]["agent_model_ms"] == 0
     assert record["timing"]["unattributed_ms"] > 0
+    assert record["timing"]["lock_wait_seconds"] > 0
+    assert record["timing"]["setup_seconds"] > 0
     assert record["telemetry_quality"] == "legacy"
     node = record["nodes"][0]
     assert node["checkpoint"] == "b" * 40
@@ -190,9 +194,64 @@ def test_optional_record_fields_are_omitted() -> None:
     assert Provider("oneharness").record() == {"provider": "oneharness"}
 
 
-def test_schema_v3_field_golden_prevents_cross_layer_drift() -> None:
+def test_harness_buckets_decompose_wall_time() -> None:
+    timing = _timing(
+        1000,
+        [],
+        gate=0.1,
+        wait=0.1,
+        lock_wait=0.2,
+        setup=0.1,
+        scheduling=0.2,
+    )
+
+    assert timing["lock_wait_seconds"] == 0.2
+    assert timing["setup_seconds"] == 0.1
+    assert timing["scheduling_seconds"] == 0.2
+    assert (
+        timing["agent_model_ms"]
+        + timing["judge_model_ms"]
+        + timing["tool_ms"]
+        + round(timing["gate_seconds"] * 1000)
+        + round(timing["lock_wait_seconds"] * 1000)
+        + round(timing["setup_seconds"] * 1000)
+        + round(timing["scheduling_seconds"] * 1000)
+        + round(timing["publication_wait_seconds"] * 1000)
+        + timing["idle_orchestration_ms"]
+    ) == timing["wall_ms"]
+
+
+def test_over_budget_buckets_are_clipped_to_exactly_wall_time() -> None:
+    timing = _timing(
+        100,
+        [],
+        gate=0.08,
+        wait=0.08,
+        lock_wait=0.08,
+        setup=0.08,
+        scheduling=0.08,
+    )
+
+    displayed_ms = sum(
+        round(timing[field] * 1000)
+        for field in (
+            "gate_seconds",
+            "publication_wait_seconds",
+            "lock_wait_seconds",
+            "setup_seconds",
+            "scheduling_seconds",
+        )
+    )
+    assert displayed_ms + timing["idle_orchestration_ms"] == timing["wall_ms"]
+    assert timing["gate_seconds"] == 0.08
+    assert timing["lock_wait_seconds"] == 0.02
+    assert timing["setup_seconds"] == timing["scheduling_seconds"] == 0
+    assert timing["publication_wait_seconds"] == 0
+
+
+def test_schema_v4_field_golden_prevents_cross_layer_drift() -> None:
     golden = json.loads(
-        (Path(__file__).parent / "golden" / "telemetry-v3-fields.json").read_text(encoding="utf-8")
+        (Path(__file__).parent / "golden" / "telemetry-v4-fields.json").read_text(encoding="utf-8")
     )
     assert golden == {
         "schema_version": TELEMETRY_SCHEMA_VERSION,
@@ -208,7 +267,7 @@ def test_schema_v3_field_golden_prevents_cross_layer_drift() -> None:
     contract = (Path(__file__).parents[1] / "docs" / "telemetry-model.md").read_text(
         encoding="utf-8"
     )
-    assert "Index version 3" in contract
+    assert "Index version 4" in contract
     for value in (*golden["roles"], *golden["qualities"], *golden["sources"]):
         assert f"`{value}`" in contract
 
@@ -221,7 +280,7 @@ def test_index_cli_defaults_to_active_and_all_includes_settled(
     completed.rename(tmp_path / "runs" / "complete")
     assert main(["--runs-dir", str(tmp_path / "runs"), "--oneharness-bin", "absent"]) == 0
     active = json.loads(capsys.readouterr().out)
-    assert active["schema_version"] == 3
+    assert active["schema_version"] == 4
     assert active["runs"] == []
     assert active["metrics"]["recovered_branches"] == 0
 

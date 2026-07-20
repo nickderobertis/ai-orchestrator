@@ -2,12 +2,15 @@
   "history_schema_versions": ["0.2", "0.3", 1, 2],
   "qualities": ["complete", "legacy", "partial"],
   "roles": ["agent", "judge"],
-  "schema_version": 3,
+  "schema_version": 4,
   "sources": ["history_legacy", "journal_legacy", "oneharness", "onejudge"],
   "fractions": [
     "agent_model",
     "idle_orchestration",
     "judge_model",
+    "lock_wait",
+    "scheduling",
+    "setup",
     "tool"
   ],
   "session_link": [
@@ -26,7 +29,10 @@
     "idle_orchestration_ms",
     "judge_model_ms",
     "judge_seconds",
+    "lock_wait_seconds",
     "publication_wait_seconds",
+    "scheduling_seconds",
+    "setup_seconds",
     "tool_ms",
     "unattributed_ms",
     "wall_ms",
