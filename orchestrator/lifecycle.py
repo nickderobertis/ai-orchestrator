@@ -908,6 +908,15 @@ class StepRun:
     waiting: list[str] = field(default_factory=list)
 
 
+# Lifecycle work commonly includes repository orientation, implementation, and a
+# complete gate in one agent step. Twenty-four turns gives each segment room for
+# those phases while two bounded continuations prevent a permanently stuck agent
+# from looping forever (72 turns total). Direct dispatches retain the lean shared
+# default from onejudge.base.yaml, and an explicit per-step max_turns still wins.
+DEFAULT_LIFECYCLE_STEP_MAX_TURNS = 24
+MAX_AUTOMATIC_STEP_RESUMES = 2
+
+
 def _verify_gate(
     journal: NodeSink,
     worktree: Path,
@@ -998,7 +1007,7 @@ def _run_steps(
             base_path=base_path,
             persona_dir=persona_dir,
             session=f"{branch}:{sid}",
-            max_turns=step.max_turns,
+            max_turns=step.max_turns or DEFAULT_LIFECYCLE_STEP_MAX_TURNS,
             done_when=step.done_when,
             extra_instructions=extra_instructions,
             labels=log.labels,
@@ -1575,21 +1584,48 @@ def run_repo_task(
             result.detail = f"cancelled cooperatively {stage}; partial work preserved"
             return True
 
-        step_run = _run_steps(
-            effective_steps,
-            worktree=worktree,
-            branch=branch,
-            pr_base=pr_base,
-            dispatch_fn=dispatch_fn,
-            oneharness_mode=oneharness_mode,
-            base_path=base_path,
-            persona_dir=persona_dir,
-            journal=log,
-            dispatch_env=cache_env,
-            extra_instructions=CI_ITERATION_INSTRUCTIONS if verify_via_ci else None,
-            completed=frozenset(resume.completed_steps) if resume else frozenset(),
-            cancel=cancel,
-        )
+        completed_step_ids = set(resume.completed_steps) if resume else set()
+        prior_step_results: dict[str, StepResult] = {}
+        automatic_resumes = 0
+        while True:
+            step_run = _run_steps(
+                effective_steps,
+                worktree=worktree,
+                branch=branch,
+                pr_base=pr_base,
+                dispatch_fn=dispatch_fn,
+                oneharness_mode=oneharness_mode,
+                base_path=base_path,
+                persona_dir=persona_dir,
+                journal=log,
+                dispatch_env=cache_env,
+                extra_instructions=CI_ITERATION_INSTRUCTIONS if verify_via_ci else None,
+                completed=frozenset(completed_step_ids),
+                cancel=cancel,
+            )
+            for step_result in step_run.results:
+                previous = prior_step_results.get(step_result.id)
+                if step_result.report is None and previous is not None:
+                    step_result.report = previous.report
+                prior_step_results[step_result.id] = step_result
+                if step_result.status == "done":
+                    completed_step_ids.add(step_result.id)
+            if (
+                step_run.status != "not-completed"
+                or cancel is not None
+                and cancel.is_set()
+                or not incomplete_commits(worktree, remote_base, "HEAD")
+                or automatic_resumes >= MAX_AUTOMATIC_STEP_RESUMES
+            ):
+                break
+            if result.retry_lineage is None:
+                result.retry_lineage = RetryLineage(
+                    branch,
+                    gitops.head_sha(worktree),
+                    "reused",
+                )
+            automatic_resumes += 1
+        step_run.results = [prior_step_results[step.id] for step in effective_steps]
         result.steps = step_run.results
         result.report = next(
             (r.report for r in reversed(step_run.results) if r.status == "done" and r.report), None

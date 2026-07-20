@@ -27,6 +27,17 @@ publication with policy `none`),
 `not-completed` (agent hit the turn cap), `gate-failed`, `no-changes`,
 `checks-failed`, `closed`, `timeout`, `stack-conflict`, `error`.
 
+Lifecycle agent steps use a larger turn segment than the shared direct-dispatch
+budget: repository orientation, implementation, and the complete gate commonly
+need more than one short conversation. The executable segment size and bounded
+continuation count live in `DEFAULT_LIFECYCLE_STEP_MAX_TURNS` and
+`MAX_AUTOMATIC_STEP_RESUMES` in `orchestrator/lifecycle.py`. A step that hits its
+cap and leaves a preserved incomplete commit automatically continues on the same
+branch, carrying completed step IDs so earlier steps are not re-run. An explicit
+step or node `max_turns` replaces the default segment size. Cancellation, missing
+preserved work, or exhausted automatic continuations settles as `not-completed`
+for planner review; later explicit retry uses the same recorded resume metadata.
+
 `just repo-task <repo> <persona> "<task>"` runs one. `<repo>` is a GitHub
 `name` / `owner/name` / URL, a **local filesystem path**, or an exact checkout alias
 shown by `just repos`. It selects the publication repository identity and checkout.

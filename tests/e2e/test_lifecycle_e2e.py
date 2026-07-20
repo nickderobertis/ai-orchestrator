@@ -224,6 +224,51 @@ def test_lifecycle_failure_survives_simultaneous_deferred_teardown(
     assert result.deferred_cleanup and "remove-worktree deferred" in result.deferred_cleanup[0]
 
 
+def test_turn_cap_auto_resumes_preserved_branch_without_rerunning_completed_steps(
+    tmp_path, bare_origin, command_base, personas_dir
+) -> None:
+    """A real onejudge cap continues its preserved workstream in place."""
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-auto-resume")
+    prepare_runs = tmp_path / "prepare-runs.log"
+    implement_runs = tmp_path / "implement-runs.log"
+
+    result = run_repo_task(
+        str(origin),
+        workspace=Workspace(
+            tmp_path / "auto-resume-worktrees",
+            resolver=lambda _spec: canonical,
+            workflow="local",
+            repo_type="single-owner",
+        ),
+        steps=[
+            Step(
+                "prepare",
+                "engineer",
+                f"complete-after-13 write-change record-run={prepare_runs}",
+            ),
+            Step(
+                "implement",
+                "engineer",
+                f"complete-now resume-after-cap write-change record-run={implement_runs}",
+                deps=["prepare"],
+                max_turns=1,
+            ),
+        ],
+        branch="feature/automatic-turn-cap-resume",
+        base_path=command_base(),
+        persona_dir=personas_dir,
+        verify_cmd=["true"],
+    )
+
+    assert result.outcome == "merged", result.detail
+    assert prepare_runs.read_text(encoding="utf-8").splitlines() == ["run"] * 13
+    assert implement_runs.read_text(encoding="utf-8").splitlines() == ["run", "run"]
+    assert _has_file(origin, "main", ".fake-turn-cap-preserved")
+    assert result.retry_lineage is not None
+    assert result.retry_lineage.disposition == "recovered"
+
+
 def test_real_git_teardown_refusal_is_deferred_after_publication(tmp_path, bare_origin) -> None:
     origin = bare_origin()
     canonical = gitops.clone(origin, tmp_path / "canonical-locked-cleanup")
@@ -2014,7 +2059,8 @@ def test_agent_not_completed_stops_early(tmp_path, bare_origin) -> None:
     )
     assert result.outcome == "not-completed"
     assert not result.ok
-    assert f"committed to branch '{result.branch}'" in result.detail
+    assert "hit the turn cap" in result.detail
+    assert result.resume is not None
 
     clone = ws.clone_dir(normalize_repo(str(origin)))
     assert _has_file(clone, result.branch, "partial.txt")
@@ -2138,9 +2184,11 @@ def test_clean_committed_partial_work_is_marked_and_recoverable(tmp_path, bare_o
 
     def committing_dispatch(persona: str, task: str, *, project_dir: str, **_: object) -> Report:
         worktree = Path(project_dir)
-        (worktree / "partial.txt").write_text("agent-owned partial work\n", encoding="utf-8")
-        gitops.add_all(worktree)
-        partial_shas.append(gitops.commit(worktree, "wip: agent commits partial work"))
+        partial = worktree / "partial.txt"
+        if not partial.exists():
+            partial.write_text("agent-owned partial work\n", encoding="utf-8")
+            gitops.add_all(worktree)
+            partial_shas.append(gitops.commit(worktree, "wip: agent commits partial work"))
         assert not gitops.is_dirty(worktree)
         return Report(persona, 1, False, False, 2, [], {}, {}, "")
 
@@ -2155,7 +2203,8 @@ def test_clean_committed_partial_work_is_marked_and_recoverable(tmp_path, bare_o
     )
 
     assert result.outcome == "not-completed" and not result.ok
-    assert "partial work was committed" in result.detail
+    assert "hit the turn cap" in result.detail
+    assert result.resume is not None and result.retry_lineage is not None
     assert result.branch not in gitops.worktrees(canonical)
     assert partial_shas and gitops.is_ancestor(canonical, partial_shas[0], result.branch)
     marker_sha = gitops.ref_sha(canonical, result.branch)
