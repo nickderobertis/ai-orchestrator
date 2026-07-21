@@ -18,7 +18,7 @@ from .workspace import IdentityKey, RepositoryType, Workflow
 
 _RUN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 _ROUND = re.compile(r"^round-(\d+)$")
-RECORDED_RESULT_SCHEMA_VERSION = 3
+RECORDED_RESULT_SCHEMA_VERSION = 4
 ResumeMode = Literal["pause", "retry"]
 RESUME_MODES = frozenset(get_args(ResumeMode))
 RetryDisposition = Literal["reused", "recovered", "abandoned"]
@@ -129,6 +129,14 @@ class HumanActionPayload(TypedDict):
     unblocks_publication: bool
 
 
+class ArtifactPaths(TypedDict, total=False):
+    """Durable files and session locator for one framework execution."""
+
+    gate_log: str
+    worker_report: str
+    oneharness_session: str
+
+
 class StepResultPayload(TypedDict):
     """One workstream step's recorded outcome."""
 
@@ -137,6 +145,7 @@ class StepResultPayload(TypedDict):
     persona: str | None
     status: str
     telemetry: NotRequired[dict[str, Any]]
+    artifacts: NotRequired[ArtifactPaths]
 
 
 class RetryLineagePayload(TypedDict):
@@ -185,6 +194,7 @@ class GraphResultItem(TypedDict, total=False):
     error: str | None
     retry_lineage: RetryLineagePayload
     deferred_cleanup: list[str]
+    artifacts: ArtifactPaths
 
 
 class GraphPayload(TypedDict, total=False):

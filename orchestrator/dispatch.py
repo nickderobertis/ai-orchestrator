@@ -23,7 +23,7 @@ import subprocess
 import sys
 import threading
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol, TypedDict, cast
@@ -94,6 +94,7 @@ class Report:
     stderr: str
     assessment: str | None = None
     telemetry_data: dict[str, Any] | None = None
+    artifacts: dict[str, str] = field(default_factory=dict)
 
     @property
     def telemetry(self) -> dict[str, Any] | None:

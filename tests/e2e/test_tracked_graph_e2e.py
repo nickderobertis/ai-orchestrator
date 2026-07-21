@@ -125,7 +125,7 @@ def test_direct_human_pause_attestation_and_release_use_real_onejudge(
 
     assert paused.returncode == 1, paused.stderr
     first = json.loads(paused.stdout)
-    assert first["schema_version"] == 3 and first["round"] == 1
+    assert first["schema_version"] == 4 and first["round"] == 1
     assert first["ok"] is False and first["state"] == "waiting"
     assert first["started_order"] == ["prepare", "approve"]
     assert first["results"]["prepare"]["status"] == "done"
@@ -1326,7 +1326,9 @@ def test_real_cli_recovers_failed_lifecycle_result(
                         "verify_cmd": [
                             "sh",
                             "-c",
-                            "printf 'tracked gate tail failed\\n'; exit 1",
+                            "printf 'full-gate-start\\n'; i=0; while [ $i -lt 2200 ]; do "
+                            "printf x; i=$((i + 1)); done; "
+                            "printf '\\ntracked gate tail failed\\n'; exit 1",
                         ],
                     },
                     {
@@ -1434,6 +1436,16 @@ def test_real_cli_recovers_failed_lifecycle_result(
     assert result["results"]["failed-lifecycle"]["outcome"] == "not-completed"
     assert result["results"]["gate-failed-lifecycle"]["outcome"] == "gate-failed"
     assert "tracked gate tail failed" in result["results"]["gate-failed-lifecycle"]["detail"]
+    gate_log = Path(result["results"]["gate-failed-lifecycle"]["artifacts"]["gate_log"])
+    assert gate_log.is_file()
+    assert gate_log.read_text().startswith("full-gate-start\n")
+    step_artifacts = result["results"]["gate-failed-lifecycle"]["steps"][0]["artifacts"]
+    assert Path(step_artifacts["worker_report"]).is_file()
+    assert Path(step_artifacts["oneharness_session"]).is_file()
+    viewed = _just("results", "failed-lifecycle-prefix", "--runs-dir", str(runs))
+    assert viewed.returncode == 0, viewed.stderr
+    assert str(gate_log) in viewed.stdout
+    assert "gate-failed-lifecycle  failed  gate-failed" in viewed.stdout
     verification = next(
         event
         for event in records
@@ -1850,7 +1862,7 @@ def test_legacy_direct_plan_and_recorded_ledger_still_run(
     )
     assert direct.returncode == 0, direct.stderr
     direct_payload = json.loads(direct.stdout)
-    assert direct_payload["schema_version"] == 3 and "round" not in direct_payload
+    assert direct_payload["schema_version"] == 4 and "round" not in direct_payload
     assert direct_payload["state"] == "complete"
     assert direct_payload["results"]["legacy-agent"]["status"] == "done"
 
