@@ -1889,6 +1889,69 @@ def test_local_repo_registry_gate_failure_stops_publication(tmp_path, bare_origi
     assert not _has_file(origin, "main", "feature.txt")
 
 
+def test_registered_complete_gate_catches_strict_tier_before_publish_then_allows_clean_work(
+    tmp_path, bare_origin
+) -> None:
+    gate_log = tmp_path / "complete-gate.log"
+    origin = bare_origin(
+        {
+            "Makefile": (
+                ".PHONY: check strict-tier gate\n"
+                "check:\n"
+                f"\t@printf 'check\\n' >> {shlex.quote(str(gate_log))}\n"
+                "\t@test -f README.md\n"
+                "strict-tier:\n"
+                f"\t@printf 'strict-tier\\n' >> {shlex.quote(str(gate_log))}\n"
+                "\t@! grep -R -F complete-gate-finding -- feature.txt 2>/dev/null\n"
+                "gate: check strict-tier\n"
+            )
+        }
+    )
+    base_before_failure = _tip(origin, "main")
+    canonical = gitops.clone(origin, tmp_path / "registered-complete-gate")
+    Registry().register(
+        str(canonical), workflow="local", repo_type="single-owner", gate="make gate"
+    )
+    workspace = Workspace(tmp_path / "complete-gate-worktrees")
+
+    rejected = run_repo_task(
+        str(canonical),
+        "Add a change rejected only by the strict gate tier.",
+        "engineer",
+        workspace=workspace,
+        branch="strict-tier-failure",
+        dispatch_fn=make_writing_dispatch(filename="feature.txt", content="complete-gate-finding"),
+    )
+
+    assert rejected.outcome == "gate-failed"
+    assert rejected.verify is not None and not rejected.verify.ok
+    assert gate_log.read_text(encoding="utf-8").splitlines() == ["check", "strict-tier"]
+    assert _tip(origin, "main") == base_before_failure
+    assert not _has_file(origin, "main", "feature.txt")
+
+    published = run_repo_task(
+        str(canonical),
+        "Add a change accepted by the complete gate.",
+        "engineer",
+        workspace=workspace,
+        branch="complete-gate-success",
+        dispatch_fn=make_writing_dispatch(filename="feature.txt", content="clean change"),
+    )
+
+    assert published.ok and published.outcome == "merged", published.detail
+    assert published.verify is not None and published.verify.ok
+    assert gate_log.read_text(encoding="utf-8").splitlines() == [
+        "check",
+        "strict-tier",
+        "check",
+        "strict-tier",
+        "check",
+        "strict-tier",
+    ]
+    assert _tip(origin, "main") != base_before_failure
+    assert _has_file(origin, "main", "feature.txt")
+
+
 def test_bazel_affected_candidate_runs_in_lifecycle_worktree(
     tmp_path, bare_origin, monkeypatch
 ) -> None:

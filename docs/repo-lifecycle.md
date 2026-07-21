@@ -132,8 +132,12 @@ Registration prints ranked gate candidates. Monorepo affected commands (Nx,
 Turborepo, Bazel, pnpm, or Lerna) rank ahead of whole-repository gates (`just
 check`, `make check`, `npm test`, Cargo, or pytest). Accept one, override it with
 `--gate`, or investigate first. A gateless checkout stores `<no-op>` and warns
-that it is unproven. Change the command across every alias with `just
-migrate-repo-gate <repo> --gate '<cmd>'`.
+that it is unproven. The stored identity gate must be the repository's complete
+pre-push bar, including stricter tiers that a deterministic `check` subset omits.
+Lifecycle verification runs this stored command; registering only the subset can
+let gate-only findings escape until publication's pre-push hook. Correct an
+existing identity across every alias with `just migrate-repo-gate <repo> --gate
+'<complete-gate-command>'`.
 
 A contradictory `--workflow` is rejected. Change publication policy only through
 the identity-wide migration command. For the current ai-orchestrator aliases, the
