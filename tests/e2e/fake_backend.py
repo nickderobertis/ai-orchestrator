@@ -211,11 +211,24 @@ def main() -> int:
     if drafting and "drafting-errors" in task:
         sys.stderr.write("fake_backend: forced drafting provider failure\n")
         return 1
-    fail = "should-fail" in task or (drafting and "drafting-fails" in task)
+    resume_marker = Path(".fake-turn-cap-preserved")
+    resume_segments = (
+        int(resume_marker.read_text(encoding="utf-8").strip())
+        if "resume-after-cap" in task and resume_marker.exists()
+        else 0
+    )
+    capped_resume_segment = "resume-after-cap" in task and resume_segments <= 1
+    fail = "should-fail" in task or capped_resume_segment or (drafting and "drafting-fails" in task)
 
     match op:
         case "respond":
             _wait_at_provider_barrier(task)
+            run_log = re.search(r"record-run=(\S+)", task)
+            if run_log is not None:
+                with Path(run_log.group(1)).open("a", encoding="utf-8") as stream:
+                    stream.write("run\n")
+            if "resume-after-cap" in task:
+                resume_marker.write_text(str(resume_segments + 1), encoding="utf-8")
             if "slow-branch" in task:
                 witness = Path(task.split("slow-branch", 1)[1].strip().split()[0])
                 with witness.open("a", encoding="utf-8") as stream:
@@ -366,7 +379,12 @@ def main() -> int:
                 sys.stderr.write("fake_backend: supervisor task must be a string\n")
                 return 1
             supervisor = cast(SupervisorRequest, req)
-            complete = (not fail) and _assistant_turns(messages) >= 2
+            completion_turn = 13 if "complete-after-13" in task else 2
+            complete = (not fail) and (
+                _assistant_turns(messages) >= completion_turn
+                or "resume-after-cap" in task
+                and resume_segments >= 2
+            )
             if complete:
                 supervisor_resp: SupervisorCompleted | SupervisorContinue = {
                     "completion": True,
@@ -382,7 +400,10 @@ def main() -> int:
         case "judge" if req.get("kind") == "boolean":
             # Final evals still use the standalone judge operation. The loop's
             # The adopted version routes the completion decision through `supervisor` above.
-            value = (not fail) and ("complete-now" in task or _assistant_turns(messages) >= 2)
+            completion_turn = 13 if "complete-after-13" in task else 2
+            value = (not fail) and (
+                "complete-now" in task or _assistant_turns(messages) >= completion_turn
+            )
             resp = {"value": value, "reason": "fake judge verdict"}
         case "judge":
             resp = {"value": req.get("max", 5), "reason": "fake numeric verdict"}
