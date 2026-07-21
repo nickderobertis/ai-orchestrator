@@ -969,7 +969,7 @@ def persist_report_artifacts(journal: NodeSink, report: Report, *, session: str)
     report_path = (directory / "worker-report.json").resolve()
     session_path = (directory / "oneharness-session.json").resolve()
     atomic_json(report_path, report.raw or {})
-    run_id = labels.get("run")
+    run_id = labels.get("run_id")
     round_value = labels.get("round")
     node = labels.get("node")
     typed_id = None

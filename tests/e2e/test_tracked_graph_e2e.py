@@ -129,6 +129,10 @@ def test_direct_human_pause_attestation_and_release_use_real_onejudge(
     assert first["ok"] is False and first["state"] == "waiting"
     assert first["started_order"] == ["prepare", "approve"]
     assert first["results"]["prepare"]["status"] == "done"
+    direct_artifacts = first["results"]["prepare"]["artifacts"]
+    assert Path(direct_artifacts["worker_report"]).is_file()
+    session_pointer = json.loads(Path(direct_artifacts["oneharness_session"]).read_text())
+    assert session_pointer["typed_id"] == "graph:human-direct/1/prepare"
     assert first["results"]["approve"] == {
         "kind": "human",
         "status": "waiting",

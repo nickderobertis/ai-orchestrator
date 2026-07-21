@@ -270,6 +270,9 @@ Recording is on by default:
 runs/<run-id>/round-01/plan.json
 runs/<run-id>/round-01/status.json
 runs/<run-id>/round-01/result.json
+runs/<run-id>/round-01/<node>/gate.log
+runs/<run-id>/round-01/<node>[/<step>]/worker-report.json
+runs/<run-id>/round-01/<node>[/<step>]/oneharness-session.json
 runs/<run-id>/humans.json
 ```
 
@@ -278,7 +281,18 @@ unique. `--runs-dir` moves the ledger, `--no-record` opts out, and `--recover`
 claims a `running` round only after its recorded owner is proven gone. Plan and
 result writes are atomic; a live round cannot be claimed by another process.
 `just runs` summarizes the latest completed round, including waiting action prose
-and what each action unblocks.
+and what each action unblocks, then points to `just results <run>`. The results
+view lists every node's status and outcome, links its typed-id detail view, and
+prints the concrete full-artifact paths for failures. A run containing failed
+nodes is still a successful results lookup; only an invalid invocation exits
+non-zero. `just status` gives the same next step when a worker maps to a ledger
+round.
+
+Each recorded schema-v4 node result carries its own `artifacts` paths. Lifecycle
+step payloads carry their step-specific raw onejudge report and stable
+oneharness-session pointer; complete gate stdout and stderr are atomically stored
+as `gate.log` before the terminal result is journaled. Because those paths are in
+the terminal `GraphResultItem`, crash projection retains them byte-for-byte.
 
 Execution is a long-lived reconcile loop: it compares the round's live desired
 graph with actual node state projected from `events.jsonl`, starts the reachable

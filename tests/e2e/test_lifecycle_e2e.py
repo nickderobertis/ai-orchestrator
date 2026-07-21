@@ -929,7 +929,9 @@ def test_repo_plan_ledger_and_guided_next_round(
     assert telemetry["metrics"]["recovered_branches"] == 1
     assert telemetry["metrics"]["green_to_publication_seconds"]
     assert main_runs(["--runs-dir", str(runs_dir)]) == 0
-    assert follow_up in capsys.readouterr().out
+    runs_output = capsys.readouterr().out
+    assert follow_up in runs_output
+    assert f"just results fixed-run --runs-dir {runs_dir}" in runs_output
     assert "nothing to iterate" in captured.err
 
     unrecorded_plan = {
