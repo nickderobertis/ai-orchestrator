@@ -577,7 +577,9 @@ def run_graph(
         nonlocal graph
         if proposal_pump is None:
             return
-        proposal_pump.heartbeat_tick()
+        heartbeat_tick = getattr(proposal_pump, "heartbeat_tick", None)
+        if heartbeat_tick is not None:
+            heartbeat_tick()
         proposal_pump.persist_replies()
         drain = getattr(proposal_pump, "drain_commands", lambda: ())
         for command in drain():

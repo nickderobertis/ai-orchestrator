@@ -29,6 +29,7 @@ from orchestrator.channel import (
     main_reject,
     main_relay,
     main_reply,
+    main_surface,
     mark_heartbeat_due,
     read_message,
     record_surface,
@@ -172,6 +173,13 @@ def test_proposal_pump_round_trips_and_persists_on_reconciler_drain(tmp_path: Pa
         time.sleep(0.01)
     sender.join()
     assert json.loads(verdict.read_text(encoding="utf-8")) == reply
+    state = heartbeat_state(channel)
+    assert state is not None
+    state.update({"last_surface_at": 0, "interval_s": 1})
+    atomic_json(channel / "heartbeat.json", state)
+    pump.heartbeat_tick()
+    assert heartbeat_state(channel)["due"] is True  # type: ignore[index]
+    assert pump.drain_commands() == ()
     pump.propose("worker", "found adjacent work")
     with pytest.raises(ChannelTimeout):
         read_message(channel / "up.fifo", timeout=0.1)
@@ -392,6 +400,8 @@ def test_heartbeat_is_sticky_durable_and_reset_by_surface(tmp_path: Path) -> Non
     channel = create_channel(tmp_path / "run", heartbeat_interval=10)
     initial = heartbeat_state(channel)
     assert initial is not None
+    mark_heartbeat_due(channel, now=float(initial["last_surface_at"]) + 5)
+    assert heartbeat_state(channel)["due"] is False  # type: ignore[index]
     mark_heartbeat_due(channel, now=float(initial["last_surface_at"]) + 11)
     assert due_indicator(channel, now=float(initial["last_surface_at"]) + 125) == (
         "planner update due (2m since last update)"
@@ -430,6 +440,63 @@ def test_heartbeat_reply_adjusts_or_disables_without_changing_verdict(tmp_path: 
     assert heartbeat_state(channel)["enabled"] is False  # type: ignore[index]
     with pytest.raises(ChannelError, match="positive, finite"):
         _reply({"completion": True, "reason": "bad", "heartbeat_interval": 0})
+
+
+def test_nonblocking_surface_cli_writes_real_fifo_and_resets_clock(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    runs = tmp_path / "runs"
+    run_dir = runs / "orch"
+    channel = create_channel(run_dir, heartbeat_interval=1)
+    initial = heartbeat_state(channel)
+    assert initial is not None
+    mark_heartbeat_due(channel, now=float(initial["last_surface_at"]) + 2)
+    received: list[dict[str, object]] = []
+
+    def receive() -> None:
+        received.append(read_message(channel / "up.fifo", timeout=1))
+
+    reader = threading.Thread(target=receive)
+    reader.start()
+    assert (
+        main_surface(
+            ["orch", "worker active; no follow-ups", "--runs-dir", str(runs), "--timeout", "1"]
+        )
+        == 0
+    )
+    reader.join()
+    assert received == [
+        {
+            "op": "supervisor",
+            "run_id": "orch",
+            "round": 1,
+            "surface": {
+                "kind": "heartbeat",
+                "message": "worker active; no follow-ups",
+                "blocking": False,
+            },
+            "messages": [],
+        }
+    ]
+    assert heartbeat_state(channel)["due"] is False  # type: ignore[index]
+    assert main_surface(["orch", " ", "--runs-dir", str(runs)]) == 2
+    assert "non-empty" in capsys.readouterr().err
+
+
+def test_heartbeat_legacy_and_corrupt_state_boundaries(tmp_path: Path) -> None:
+    channel = tmp_path / "legacy-channel"
+    channel.mkdir()
+    assert heartbeat_state(channel) is None
+    mark_heartbeat_due(channel)
+    record_surface(channel)
+    with pytest.raises(ChannelError, match="unavailable"):
+        apply_heartbeat_reply(channel, {"heartbeat_interval": 10})
+    atomic_json(
+        channel / "heartbeat.json",
+        {"last_surface_at": -1, "interval_s": 10, "due": False, "enabled": True},
+    )
+    with pytest.raises(ChannelError, match="state is invalid"):
+        heartbeat_state(channel)
 
 
 def test_relay_shapes_supervisor_and_persists_verdict(
