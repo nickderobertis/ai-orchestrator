@@ -406,3 +406,27 @@ def test_persist_session_env_writes_worker_sandbox_environment_once(tmp_path: Pa
     assert lines[0].startswith("export PATH=")
     assert f"{tmp_path}/.local/node/bin" in lines[0]
     assert lines[1] == f"export LLMLINT_ONEHARNESS_BIN={REPO_ROOT}/scripts/llmlint-oneharness.sh"
+
+
+def test_persist_session_env_adds_wrapper_when_path_was_already_saved(tmp_path: Path) -> None:
+    env_file = tmp_path / "claude-env"
+    saved_path = f"{tmp_path}/.local/node/bin:/usr/bin:/bin"
+    env_file.write_text(f"export PATH={saved_path}\n", encoding="utf-8")
+    script = REPO_ROOT / "scripts" / "session-setup.sh"
+
+    proc = subprocess.run(
+        ["bash", "-c", 'source "$1"; persist_session_env', "test-persist", str(script)],
+        text=True,
+        capture_output=True,
+        env={
+            "HOME": str(tmp_path),
+            "PATH": "/usr/bin:/bin",
+            "CLAUDE_ENV_FILE": str(env_file),
+        },
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    assert env_file.read_text(encoding="utf-8").splitlines() == [
+        f"export PATH={saved_path}",
+        f"export LLMLINT_ONEHARNESS_BIN={REPO_ROOT}/scripts/llmlint-oneharness.sh",
+    ]

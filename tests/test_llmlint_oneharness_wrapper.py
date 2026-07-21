@@ -65,6 +65,7 @@ def test_oneharness_failure_output_and_status_are_propagated(tmp_path: Path) -> 
 
     assert proc.returncode == 42
     assert "provider failed to start" in proc.stderr
+    assert "run 'oneharness doctor', and retry" in proc.stderr
 
 
 def test_missing_oneharness_reports_recovery_action(tmp_path: Path) -> None:

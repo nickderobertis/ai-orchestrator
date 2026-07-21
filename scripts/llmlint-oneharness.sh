@@ -18,4 +18,10 @@ if ! command -v oneharness >/dev/null 2>&1; then
     exit 127
 fi
 
-exec oneharness "${args[@]}"
+if oneharness "${args[@]}"; then
+    exit 0
+else
+    status=$?
+    echo "llmlint oneharness wrapper: oneharness failed (exit $status); inspect the error above, run 'oneharness doctor', and retry" >&2
+    exit "$status"
+fi
