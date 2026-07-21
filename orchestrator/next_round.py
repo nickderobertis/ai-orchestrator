@@ -195,6 +195,7 @@ def main_runs(argv: list[str] | None = None) -> int:
     for run_id, number, summary in rows:
         marker = "* " if run_id in active_launches else "  "
         print(f"{marker}{run_id}  round-{number:02d}  ({summary})")
+        print(f"    Results: just results {run_id} --runs-dir {args.runs_dir}")
     return 0
 
 

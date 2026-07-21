@@ -95,6 +95,7 @@ def test_status_joins_real_history_worktree_commits_and_ledger(
         f"Execution checkout: {worktree}",
         "type=single-owner",
         "workflow=local",
+        "Results: just results status-run; per-node detail is listed there",
     ):
         assert expected in shown.stdout
 

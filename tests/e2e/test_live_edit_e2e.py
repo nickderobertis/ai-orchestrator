@@ -25,6 +25,7 @@ from orchestrator.registry import Registry
 from orchestrator.runs import RunId
 
 FAKE_BACKEND = REPO_ROOT / "tests" / "e2e" / "fake_backend.py"
+LIVE_PROCESS_TIMEOUT = 60
 
 
 def _wait_for(path: Path, predicate, timeout: float = 30) -> None:
@@ -244,7 +245,7 @@ def test_real_cli_mutates_live_frontier_and_replays_atomic_edits(
     _wait_for(events, lambda text: text.count('"kind": "edit-committed"') >= before + 7)
 
     result_path = run_dir / "round-01" / "result.json"
-    _wait_for(result_path, lambda text: bool(text.strip()), timeout=25)
+    _wait_for(result_path, lambda text: bool(text.strip()))
     payload = json.loads(result_path.read_text(encoding="utf-8"))
     assert payload["state"] == "failed"
     assert payload["results"]["added"]["status"] == "done"
@@ -398,14 +399,17 @@ def test_real_cli_live_drop_preserves_and_recovers_running_lifecycle(
     _wait_for(
         witness,
         lambda text: text.count("tick") >= 3,
-        timeout=20,
+        # Tick three begins the second provider turn. Reaching it necessarily includes
+        # the first turn's intentional ten-second cancellation window plus startup of
+        # the nested orchestrator, onejudge, lifecycle worktree, and two providers.
+        timeout=LIVE_PROCESS_TIMEOUT,
     )
     _wait_for(events, lambda text: '"kind": "node-started"' in text)
     _reply(run_id, runs, [{"op": "drop", "id": "lifecycle", "dependents": "drop"}])
     _wait_for(
         events,
         lambda text: '"kind": "node-settled"' in text and '"status": "cancelled"' in text,
-        timeout=20,
+        timeout=LIVE_PROCESS_TIMEOUT,
     )
 
     checkpoint = gitops.ref_sha(canonical, branch)

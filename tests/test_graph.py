@@ -7,7 +7,7 @@ import socket
 import threading
 from collections.abc import Mapping
 from pathlib import Path
-from typing import cast
+from typing import NotRequired, cast, get_origin, get_type_hints
 
 import pytest
 
@@ -33,7 +33,15 @@ from orchestrator.graph import (
 from orchestrator.journal import JournalError, NodeSink, open_journal
 from orchestrator.lifecycle import LifecycleResult, RepoPlanNode, Step, StepResult, result_payload
 from orchestrator.plan import PLAN_SCHEMA_VERSION, NodeRun, PlanError, PlanNode
-from orchestrator.runs import GraphResultItem, NodeId, RunId
+from orchestrator.runs import (
+    RECORDED_RESULT_SCHEMA_VERSION,
+    ArtifactPaths,
+    GraphResultItem,
+    NodeId,
+    RunId,
+    StepResultPayload,
+)
+from orchestrator.verify import VerifyResult
 
 
 def _report(persona: str, completed: bool = True, assessment: str | None = None) -> Report:
@@ -824,6 +832,73 @@ def test_plan_schema_version_documentation_cannot_drift() -> None:
     for example in ("plan.example.json", "repo-plan.example.json", "tracked-graph.example.json"):
         mapping = json.loads((root / "examples" / example).read_text(encoding="utf-8"))
         assert mapping["schema_version"] == PLAN_SCHEMA_VERSION
+
+
+def test_recorded_result_schema_v4_field_golden_cannot_drift() -> None:
+    golden = json.loads(
+        (Path(__file__).parent / "golden" / "recorded-result-v4-fields.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    step_hints = get_type_hints(StepResultPayload, include_extras=True)
+    step_optional = sorted(
+        key for key, annotation in step_hints.items() if get_origin(annotation) is NotRequired
+    )
+    assert golden == {
+        "schema_version": RECORDED_RESULT_SCHEMA_VERSION,
+        "artifact_paths": sorted(ArtifactPaths.__optional_keys__),
+        "graph_result_item_optional": sorted(GraphResultItem.__optional_keys__),
+        "step_result_required": sorted(set(step_hints) - set(step_optional)),
+        "step_result_optional": step_optional,
+    }
+
+
+def test_recorded_artifacts_round_trip_and_empty_fields_are_omitted() -> None:
+    populated = LifecycleResult(
+        "o/r",
+        "task",
+        "engineer",
+        "main",
+        "branch",
+        "merged",
+        report=_report("engineer"),
+        verify=VerifyResult(
+            True,
+            ["just", "gate"],
+            "green\n",
+            log_path="/runs/demo/round-01/work/gate.log",
+        ),
+        steps=[StepResult("work", "engineer", "done", report=_report("engineer"))],
+    )
+    populated.steps[0].report.artifacts.update(
+        {
+            "worker_report": "/runs/demo/round-01/work/worker-report.json",
+            "oneharness_session": "/runs/demo/round-01/work/oneharness-session.json",
+        }
+    )
+    serialized = json.loads(json.dumps(result_payload(populated)))
+
+    assert serialized["artifacts"] == {
+        "gate_log": "/runs/demo/round-01/work/gate.log",
+        **populated.steps[0].report.artifacts,
+    }
+    assert serialized["steps"][0]["artifacts"] == populated.steps[0].report.artifacts
+
+    empty = LifecycleResult(
+        "o/r",
+        "task",
+        "engineer",
+        "main",
+        "branch",
+        "merged",
+        report=_report("engineer"),
+        steps=[StepResult("work", "engineer", "done", report=_report("engineer"))],
+    )
+    empty_payload = result_payload(empty)
+
+    assert "artifacts" not in empty_payload
+    assert "artifacts" not in empty_payload["steps"][0]
 
 
 def test_replay_rejects_invalid_deferred_cleanup() -> None:

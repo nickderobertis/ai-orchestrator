@@ -153,6 +153,11 @@ next-round *args:
 runs *args:
     @uv run orchestrator-runs "$@"
 
+# Show every node outcome in one run and concrete full-log paths for failures.
+# llmlint: ignore[tool_output_is_signal] this command is the requested results view.
+results *args:
+    @uv run orchestrator-results "$@"
+
 # Register a repository checkout alias. Workflow belongs to its shared identity.
 register-repo *args:
     @uv run orchestrator-register-repo "$@"

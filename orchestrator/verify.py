@@ -81,6 +81,7 @@ class VerifyResult:
     output: str
     reused: bool = False
     attestation: GateAttestation | None = None
+    log_path: str | None = None
 
     def tail(self, limit: int = 2000) -> str:
         """The trailing slice of output, for a compact failure report."""

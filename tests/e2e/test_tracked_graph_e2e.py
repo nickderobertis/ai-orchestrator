@@ -126,10 +126,14 @@ def test_direct_human_pause_attestation_and_release_use_real_onejudge(
 
     assert paused.returncode == 1, paused.stderr
     first = json.loads(paused.stdout)
-    assert first["schema_version"] == 3 and first["round"] == 1
+    assert first["schema_version"] == 4 and first["round"] == 1
     assert first["ok"] is False and first["state"] == "waiting"
     assert first["started_order"] == ["prepare", "approve"]
     assert first["results"]["prepare"]["status"] == "done"
+    direct_artifacts = first["results"]["prepare"]["artifacts"]
+    assert Path(direct_artifacts["worker_report"]).is_file()
+    session_pointer = json.loads(Path(direct_artifacts["oneharness_session"]).read_text())
+    assert session_pointer["typed_id"] == "graph:human-direct/1/prepare"
     assert first["results"]["approve"] == {
         "kind": "human",
         "status": "waiting",
@@ -147,6 +151,10 @@ def test_direct_human_pause_attestation_and_release_use_real_onejudge(
     }
     assert first["results"]["publish"]["status"] == "blocked"
     assert first["results"]["publish"]["blocked_by"] == ["approve"]
+    blocked_results = _just("results", "human-direct", "--runs-dir", str(runs))
+    assert blocked_results.returncode == 0, blocked_results.stderr
+    assert "publish  blocked" in blocked_results.stdout
+    assert "Full logs: unavailable (node recorded no artifacts)" in blocked_results.stdout
     assert "Approve the prepared release." in paused.stderr
     assert "--complete-human approve" in paused.stderr
 
@@ -1184,6 +1192,8 @@ def test_real_cli_recovers_settled_lifecycle_stack_anchor(
     gitops.checkout(canonical, "main")
 
     runs = tmp_path / "runs"
+    child_ready = tmp_path / "child.ready"
+    child_release = tmp_path / "child.release"
     plan = tmp_path / "lifecycle-stack-prefix.json"
     plan.write_text(
         json.dumps(
@@ -1209,13 +1219,11 @@ def test_real_cli_recovers_settled_lifecycle_stack_anchor(
                     },
                     {
                         "id": "child",
-                        "repo": str(canonical),
                         "persona": "engineer",
-                        "task": "should-fail write-change child stack work",
-                        "branch": "feature/child",
-                        "workflow": "local",
-                        "repo_type": "single-owner",
-                        "skip_verify": True,
+                        "task": (
+                            f"should-fail provider-barrier-ready={child_ready} "
+                            f"provider-barrier-release={child_release}"
+                        ),
                         "max_turns": 5,
                         "deps": ["parent"],
                     },
@@ -1259,10 +1267,7 @@ def test_real_cli_recovers_settled_lifecycle_stack_anchor(
         parent_settled = any(
             event["kind"] == "node-settled" and event.get("node") == "parent" for event in records
         )
-        child_started = any(
-            event["kind"] == "node-started" and event.get("node") == "child" for event in records
-        )
-        if parent_settled and child_started:
+        if parent_settled and child_ready.is_file():
             break
         time.sleep(0.01)
     else:
@@ -1270,6 +1275,7 @@ def test_real_cli_recovers_settled_lifecycle_stack_anchor(
         pytest.fail("run-plan did not reach the lifecycle stack recovery boundary")
     os.killpg(process.pid, signal.SIGKILL)
     process.wait()
+    child_release.write_text("release\n", encoding="utf-8")
 
     recovered = subprocess.run(
         [*command, "--recover"], cwd=REPO_ROOT, text=True, capture_output=True, check=False
@@ -1327,7 +1333,9 @@ def test_real_cli_recovers_failed_lifecycle_result(
                         "verify_cmd": [
                             "sh",
                             "-c",
-                            "printf 'tracked gate tail failed\\n'; exit 1",
+                            "printf 'full-gate-start\\n'; i=0; while [ $i -lt 2200 ]; do "
+                            "printf x; i=$((i + 1)); done; "
+                            "printf '\\ntracked gate tail failed\\n'; exit 1",
                         ],
                     },
                     {
@@ -1435,6 +1443,23 @@ def test_real_cli_recovers_failed_lifecycle_result(
     assert result["results"]["failed-lifecycle"]["outcome"] == "not-completed"
     assert result["results"]["gate-failed-lifecycle"]["outcome"] == "gate-failed"
     assert "tracked gate tail failed" in result["results"]["gate-failed-lifecycle"]["detail"]
+    gate_log = Path(result["results"]["gate-failed-lifecycle"]["artifacts"]["gate_log"])
+    assert gate_log.is_file()
+    assert gate_log.read_text().startswith("full-gate-start\n")
+    step_artifacts = result["results"]["gate-failed-lifecycle"]["steps"][0]["artifacts"]
+    assert Path(step_artifacts["worker_report"]).is_file()
+    assert Path(step_artifacts["oneharness_session"]).is_file()
+    viewed = _just("results", "failed-lifecycle-prefix", "--runs-dir", str(runs))
+    assert viewed.returncode == 0, viewed.stderr
+    assert str(gate_log) in viewed.stdout
+    assert "gate-failed-lifecycle  failed  gate-failed" in viewed.stdout
+    (runs / "failed-lifecycle-prefix" / "round-02").mkdir()
+    while_in_progress = _just("results", "failed-lifecycle-prefix", "--runs-dir", str(runs))
+    assert while_in_progress.returncode == 0, while_in_progress.stderr
+    assert "Run failed-lifecycle-prefix round-01" in while_in_progress.stdout
+    missing_results = _just("results", "missing-run", "--runs-dir", str(runs))
+    assert missing_results.returncode == 2
+    assert "no completed round" in missing_results.stderr
     verification = next(
         event
         for event in records
@@ -1470,6 +1495,15 @@ def test_real_cli_recovers_failed_lifecycle_result(
     observed = json.loads(telemetry.stdout)["runs"][0]["timing"]
     assert observed["lock_wait_seconds"] > 0.05
     assert observed["setup_seconds"] > 0
+    invalid_results = _just("results", "invalid/run", "--runs-dir", str(runs))
+    assert invalid_results.returncode == 2
+    assert "run id" in invalid_results.stderr
+    malformed_round = runs / "malformed-run" / "round-01"
+    malformed_round.mkdir(parents=True)
+    (malformed_round / "result.json").write_text("not: [valid", encoding="utf-8")
+    malformed_results = _just("results", "malformed-run", "--runs-dir", str(runs))
+    assert malformed_results.returncode == 2
+    assert "results:" in malformed_results.stderr
 
 
 def test_real_cli_recovers_waiting_and_no_change_lifecycle_results(
@@ -1851,7 +1885,7 @@ def test_legacy_direct_plan_and_recorded_ledger_still_run(
     )
     assert direct.returncode == 0, direct.stderr
     direct_payload = json.loads(direct.stdout)
-    assert direct_payload["schema_version"] == 3 and "round" not in direct_payload
+    assert direct_payload["schema_version"] == 4 and "round" not in direct_payload
     assert direct_payload["state"] == "complete"
     assert direct_payload["results"]["legacy-agent"]["status"] == "done"
 

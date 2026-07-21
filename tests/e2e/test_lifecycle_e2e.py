@@ -56,7 +56,6 @@ from orchestrator.lifecycle import (
 from orchestrator.merge import GitHubMergeStrategy
 from orchestrator.merge_queue import merge_queue_turn
 from orchestrator.next_round import main as next_round_main
-from orchestrator.next_round import main_runs
 from orchestrator.provenance import INCOMPLETE_TRAILER, PR_BASE_TRAILER, incomplete_commits
 from orchestrator.recover import recover_repo
 from orchestrator.registry import Registry, RegistryEntry, Slug
@@ -883,7 +882,7 @@ def test_repo_plan_ledger_and_guided_next_round(
     captured = capsys.readouterr()
     assert rc == 1 and json.loads(captured.out)["results"]["change"]["status"] == "failed"
     first_result = json.loads((runs_dir / "fixed-run" / "round-01" / "result.json").read_text())
-    assert first_result["schema_version"] == 3
+    assert first_result["schema_version"] == 4
     preserved_branch = first_result["results"]["change"]["branch"]
     preserved_checkpoint = first_result["results"]["change"]["resume"]["checkpoint"]
     assert first_result["results"]["change"]["resume"]["mode"] == "retry"
@@ -906,6 +905,8 @@ def test_repo_plan_ledger_and_guided_next_round(
     assert second_result["results"]["change"]["status"] == "done"
     assert second_result["results"]["change"]["follow_ups"] == follow_up
     publication = second_result["results"]["change"]
+    successful_gate_log = Path(publication["artifacts"]["gate_log"])
+    assert successful_gate_log.is_file()
     assert publication["branch"] == preserved_branch
     assert publication["retry_lineage"] == {
         "supersedes_branch": preserved_branch,
@@ -930,8 +931,16 @@ def test_repo_plan_ledger_and_guided_next_round(
     telemetry = json.loads(indexed.stdout)
     assert telemetry["metrics"]["recovered_branches"] == 1
     assert telemetry["metrics"]["green_to_publication_seconds"]
-    assert main_runs(["--runs-dir", str(runs_dir)]) == 0
-    assert follow_up in capsys.readouterr().out
+    listed = subprocess.run(
+        ["just", "runs", "--runs-dir", str(runs_dir)],
+        cwd=Path(__file__).parents[2],
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    runs_output = listed.stdout
+    assert follow_up in runs_output
+    assert f"just results fixed-run --runs-dir {runs_dir}" in runs_output
     assert "nothing to iterate" in captured.err
 
     unrecorded_plan = {
@@ -946,7 +955,7 @@ def test_repo_plan_ledger_and_guided_next_round(
     plan_path.write_text(json.dumps(unrecorded_plan), encoding="utf-8")
     assert main_plan([str(plan_path), "--no-record", *common]) == 0
     unrecorded = json.loads(capsys.readouterr().out)
-    assert unrecorded["schema_version"] == 3 and "round" not in unrecorded
+    assert unrecorded["schema_version"] == 4 and "round" not in unrecorded
 
 
 # --- local repo: direct merge into main after checks -----------------------

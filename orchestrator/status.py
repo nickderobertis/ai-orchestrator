@@ -188,6 +188,9 @@ def _human(tasks: list[TaskStatus]) -> str:
                 f"  Round: {task.ledger.run_id} round-{task.ledger.round:02d} — "
                 f"{task.ledger.summary}"
             )
+            lines.append(
+                f"  Results: just results {task.ledger.run_id}; per-node detail is listed there"
+            )
         else:
             lines.append("  Round: none")
     return "\n".join(lines)
