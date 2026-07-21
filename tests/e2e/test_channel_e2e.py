@@ -205,6 +205,28 @@ def test_due_heartbeat_is_agent_synthesized_and_normal_surface_resets_clock(
         assert rejected.returncode == 2
         assert diagnostic in rejected.stderr
 
+    heartbeat_path.write_text(
+        json.dumps({"last_surface_at": "bad", "interval_s": 1, "due": False, "enabled": True}),
+        encoding="utf-8",
+    )
+    corrupt_monitor = subprocess.run(
+        ["just", "monitor", run_id, "--once", "--runs-dir", str(runs)],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert corrupt_monitor.returncode == 0
+    assert "Traceback" not in corrupt_monitor.stderr
+    corrupt_status = subprocess.run(
+        ["just", "status", "--runs-dir", str(runs)],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    assert "planner update due" not in corrupt_status.stdout
+
 
 def _next_cli(run_id: str, runs: Path, timeout: str | None = None) -> dict[str, object]:
     wait_timeout = str(e2e_timeout(10)) if timeout is None else timeout
