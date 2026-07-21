@@ -62,7 +62,7 @@ def test_render_lists_outcomes_detail_and_failure_artifacts(tmp_path: Path) -> N
 
     assert "bad  failed  gate-failed" in output
     assert "/tmp/gate.log" in output and "/tmp/report.json" in output
-    assert f"Full logs: {runs / 'demo' / 'round-01' / 'blocked'}" in output
+    assert "Full logs: unavailable (node recorded no artifacts)" in output
     assert "good  done  completed" in output
     assert "just history-show graph:demo/1/bad" in output
 

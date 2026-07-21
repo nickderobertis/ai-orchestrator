@@ -39,7 +39,7 @@ def render(run: str, runs_dir: Path) -> str:
                 lines.append("  Full logs:")
                 lines.extend(f"    {path}" for path in dict.fromkeys(paths))
             else:
-                lines.append(f"  Full logs: {round_dir / node}")
+                lines.append("  Full logs: unavailable (node recorded no artifacts)")
     return "\n".join(lines)
 
 
@@ -54,7 +54,3 @@ def main(argv: list[str] | None = None) -> int:
         print(f"results: {exc}", file=sys.stderr)
         return 2
     return 0
-
-
-if __name__ == "__main__":  # pragma: no cover
-    raise SystemExit(main())

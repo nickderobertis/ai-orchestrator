@@ -1450,6 +1450,9 @@ def test_real_cli_recovers_failed_lifecycle_result(
     assert viewed.returncode == 0, viewed.stderr
     assert str(gate_log) in viewed.stdout
     assert "gate-failed-lifecycle  failed  gate-failed" in viewed.stdout
+    missing_results = _just("results", "missing-run", "--runs-dir", str(runs))
+    assert missing_results.returncode == 2
+    assert "no completed round" in missing_results.stderr
     verification = next(
         event
         for event in records
