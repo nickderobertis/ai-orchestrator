@@ -1237,8 +1237,10 @@ def test_run_repo_task_journals_a_step_that_hit_the_turn_cap(tmp_path, bare_orig
 
     origin = bare_origin()
     publication = gitops.clone(origin, tmp_path / "publication")
+    turn_budgets = []
 
     def fake_dispatch(persona, task, *, project_dir, labels=None, **kw):
+        turn_budgets.append(kw["max_turns"])
         Path(project_dir, "partial.txt").write_text("partial\n", encoding="utf-8")
         return Report(persona, 0, False, False, 9, [], {}, {}, "")
 
@@ -1267,6 +1269,7 @@ def test_run_repo_task_journals_a_step_that_hit_the_turn_cap(tmp_path, bare_orig
     assert settled.detail["turns"] == 9
     # The turn cap preserved partial work on the branch; the journal is what says so.
     assert settled.detail["preserved"] is True
+    assert turn_budgets == [lc.DEFAULT_LIFECYCLE_STEP_MAX_TURNS] * 3
     assert "pr-merged" not in [e.kind for e in journal.events()]
 
 
