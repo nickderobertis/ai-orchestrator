@@ -1,11 +1,11 @@
-"""Real oneharness history/watch acceptance for graph-labelled monitor inputs."""
+"""Oneharness history/watch acceptance for graph-labelled monitor inputs."""
 
-# llmlint: ignore-file[e2e_not_mocked] the first two tests cross real oneharness and
-# onejudge subprocess boundaries with only the paid model behind the established
-# command-provider seam. The lifecycle slice uses the repository's sanctioned
-# make_writing_dispatch paid-harness seam and FakeGitHub PR/CI decision seam while
-# driving real git, lifecycle commits/merge, journal, snapshots, and public CLIs;
-# the real dispatch boundary is exercised immediately above and in test_dispatch_e2e.py.
+# llmlint: ignore-file[e2e_not_mocked] the smoke test crosses the real oneharness
+# and Codex boundary. Deterministic history behavior uses oneharness's shipped mock
+# harness at that paid-provider seam. The lifecycle slice uses the repository's
+# sanctioned make_writing_dispatch paid-harness seam and FakeGitHub PR/CI decision
+# seam while driving real git, lifecycle commits/merge, journal, snapshots, and
+# public CLIs; the real dispatch boundary is exercised here and in test_dispatch_e2e.py.
 
 from __future__ import annotations
 
@@ -33,7 +33,6 @@ from orchestrator.monitor import Monitor, load_snapshot
 from orchestrator.runs import NodeId, RunId, prepare_round, write_result
 from orchestrator.workspace import Workspace
 
-FAKE_HARNESS = REPO_ROOT / "tests" / "e2e" / "fake_harness.py"
 RUN_ID = "real-monitor-e2e"
 LIFECYCLE_RUN_ID = "real-lifecycle-monitor-e2e"
 GRAPH_LABELS = (
@@ -41,6 +40,19 @@ GRAPH_LABELS = (
     "round=1",
     "node=history-turns",
     "step=record",
+)
+MOCK_CODEX_STDOUT = "\n".join(
+    (
+        json.dumps({"type": "turn.started"}),
+        json.dumps({"type": "thread.started", "thread_id": "mock-codex-thread"}),
+        json.dumps({"type": "item.completed", "item": {"type": "agent_message", "text": "done"}}),
+        json.dumps(
+            {
+                "type": "turn.completed",
+                "usage": {"input_tokens": 4, "cached_input_tokens": 0, "output_tokens": 1},
+            }
+        ),
+    )
 )
 
 
@@ -103,15 +115,19 @@ def _run_record(
     config: Path,
     name: str,
     environment: dict[str, str],
+    mock_harness: bool = True,
+    prompt: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
+    mock_args = ["--mock-harness", "codex"] if mock_harness else []
     return subprocess.run(
         [
             oneharness_bin,
             "run",
+            *mock_args,
             "--config",
             str(config),
             "--prompt",
-            f"record {name}",
+            prompt or f"record {name}",
             "--history",
             "--history-name",
             name,
@@ -155,24 +171,54 @@ def _watch(
     )
 
 
-def test_real_history_labels_and_cursor_watch(oneharness_bin: str, tmp_path: Path) -> None:
-    history_dir = tmp_path / "history"
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    (bin_dir / "codex").symlink_to(FAKE_HARNESS)
-    (bin_dir / "claude").symlink_to(FAKE_HARNESS)
-
+def test_real_oneharness_codex_smoke(oneharness_bin: str, tmp_path: Path) -> None:
     environment = os.environ.copy()
-    for inherited in ("ONEHARNESS_MODELS", "ONEHARNESS_HISTORY_LABELS"):
+    for inherited in (
+        "MOCK_STDOUT",
+        "ONEHARNESS_BIN_CODEX",
+        "ONEHARNESS_HARNESSES",
+        "ONEHARNESS_HISTORY_LABELS",
+    ):
         environment.pop(inherited, None)
     environment.update(
         {
-            "ONEHARNESS_BIN_CODEX": str(bin_dir / "codex"),
-            "ONEHARNESS_BIN_CLAUDE_CODE": str(bin_dir / "claude"),
+            "ONEHARNESS_HARNESSES": "codex",
+            "ONEHARNESS_HISTORY_DIR": str(tmp_path / "history"),
+        }
+    )
+
+    completed = _run_record(
+        oneharness_bin,
+        config=REPO_ROOT / "oneharness.toml",
+        name="real-oneharness-codex-smoke",
+        environment=environment,
+        mock_harness=False,
+        prompt="Reply with exactly oneharness-codex-smoke and do nothing else.",
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    result = json.loads(completed.stdout)["results"][0]
+    assert result["harness"] == "codex"
+    assert result["status"] == "ok"
+    assert "oneharness-codex-smoke" in result["text"]
+
+
+def test_history_labels_and_cursor_watch(oneharness_bin: str, tmp_path: Path) -> None:
+    history_dir = tmp_path / "history"
+
+    environment = os.environ.copy()
+    for inherited in (
+        "ONEHARNESS_BIN_CODEX",
+        "ONEHARNESS_BIN_CLAUDE_CODE",
+        "ONEHARNESS_MODELS",
+        "ONEHARNESS_HISTORY_LABELS",
+    ):
+        environment.pop(inherited, None)
+    environment.update(
+        {
             "ONEHARNESS_HARNESSES": "codex",
             "ONEHARNESS_HISTORY_DIR": str(history_dir),
-            "FAKE_HARNESS_LOG": str(tmp_path / "fake-harness.jsonl"),
-            "FAKE_HARNESS_WITH_TELEMETRY": "1",
+            "MOCK_STDOUT": MOCK_CODEX_STDOUT,
         }
     )
 
