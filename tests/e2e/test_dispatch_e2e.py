@@ -154,7 +154,7 @@ def test_just_dispatch_preserves_metacharacter_laden_arguments(command_base, one
     )
 
     assert subject.returncode == 0, subject.stderr
-    assert json.loads(subject.stdout)["schema_version"] == 4
+    assert json.loads(subject.stdout)["schema_version"] == 5
 
 
 def test_dispatch_completes_via_supervisor_loop(command_base, onejudge_bin) -> None:
@@ -304,7 +304,7 @@ def test_dispatch_cli_json_output(command_base, onejudge_bin, capsys) -> None:
     )
     assert rc == 0
     report = json.loads(capsys.readouterr().out)
-    assert report["schema_version"] == 4
+    assert report["schema_version"] == 5
 
 
 def test_dispatch_cli_human_reads_task_from_stdin(command_base, onejudge_bin, capsys) -> None:
@@ -383,7 +383,7 @@ def test_dispatch_cli_applies_ordered_models_to_real_oneharness(
     log_path = tmp_path / "harness.jsonl"
     env = {
         **os.environ,
-        "ONEHARNESS_BIN_CODEX": str(bin_dir / "codex"),
+        "ONEHARNESS_BIN_CODEX": str(bin_dir / "missing-codex"),
         "ONEHARNESS_BIN_CLAUDE_CODE": str(bin_dir / "claude"),
         "FAKE_HARNESS_LOG": str(log_path),
     }
@@ -413,6 +413,8 @@ def test_dispatch_cli_applies_ordered_models_to_real_oneharness(
             session,
             "--onejudge-bin",
             onejudge_bin,
+            "--format",
+            "json",
         ],
         cwd=target,
         env=env,
@@ -423,8 +425,11 @@ def test_dispatch_cli_applies_ordered_models_to_real_oneharness(
     assert proc.returncode == 0, proc.stderr
     attempts = [json.loads(line) for line in log_path.read_text().splitlines()]
     assert attempts == [
-        {"harness": "codex", "model": "gpt-5.6-sol"},
+        {"harness": "claude", "model": "claude-opus-4-8"},
     ]
+    report = json.loads(proc.stdout)
+    assert report["schema_version"] == 5
+    assert "telemetry" not in report
     effective = subprocess.run(
         [
             oneharness_bin,

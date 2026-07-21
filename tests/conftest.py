@@ -8,7 +8,7 @@ deterministic double; everything else (the merge, the effective config, the real
 
 # llmlint: ignore-file[contracts_have_one_source_or_a_drift_gate] The adopted version files
 # remain authoritative targets. These e2e fixtures deliberately permit only the immediately
-# preceding installed releases during the one-step 0.3.3->0.3.4 / 0.4.1->0.4.2 bootstrap:
+# preceding onejudge release during the one-step 0.3.3->0.3.4 bootstrap:
 # installing the target binaries inside their own running lifecycle would replace and crash
 # the shared supervisor. session-setup restores exact-match enforcement after publication.
 
@@ -185,14 +185,12 @@ def adopted_oneharness_version() -> str:
 
 @pytest.fixture(scope="session")
 def oneharness_bin(adopted_oneharness_version: str) -> str:
-    """Resolve oneharness, allowing only the deliberate 0.4.1 -> 0.4.2 transition."""
+    """Resolve oneharness and require the exact adopted release."""
     found = shutil.which("oneharness")
     if not found:
         pytest.fail("oneharness not on PATH — run 'just bootstrap' (the e2e gate needs it)")
     version = subprocess.run([found, "--version"], text=True, capture_output=True, check=False)
     allowed = {adopted_oneharness_version}
-    if adopted_oneharness_version == "0.4.2":
-        allowed.add("0.4.1")
     actual_version = version.stdout.strip().removeprefix("oneharness ")
     if version.returncode != 0 or actual_version not in allowed:
         actual = version.stdout.strip() or version.stderr.strip() or "<no version output>"

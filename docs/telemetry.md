@@ -43,7 +43,7 @@ measured zero. JSON contains the same counters separately under `usage.agent`,
 
 ## Full timing versus fallback
 
-For records produced after the 0.4.2/0.3.4 upgrade, `AGENT`/`JUDGE` use
+For records produced after the 0.4.4/0.3.4 upgrade, `AGENT`/`JUDGE` use
 onejudge's typed party summaries, `TOOL` uses oneharness' normalized `tool_ms`
 and per-tool-call `duration_ms`, and the timeline interleaves native
 agent and judge sessions by `turn_index`. `QUALITY complete` means authoritative
