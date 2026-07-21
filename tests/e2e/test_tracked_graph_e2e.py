@@ -150,6 +150,10 @@ def test_direct_human_pause_attestation_and_release_use_real_onejudge(
     }
     assert first["results"]["publish"]["status"] == "blocked"
     assert first["results"]["publish"]["blocked_by"] == ["approve"]
+    blocked_results = _just("results", "human-direct", "--runs-dir", str(runs))
+    assert blocked_results.returncode == 0, blocked_results.stderr
+    assert "publish  blocked" in blocked_results.stdout
+    assert "Full logs: unavailable (node recorded no artifacts)" in blocked_results.stdout
     assert "Approve the prepared release." in paused.stderr
     assert "--complete-human approve" in paused.stderr
 
@@ -1450,6 +1454,10 @@ def test_real_cli_recovers_failed_lifecycle_result(
     assert viewed.returncode == 0, viewed.stderr
     assert str(gate_log) in viewed.stdout
     assert "gate-failed-lifecycle  failed  gate-failed" in viewed.stdout
+    (runs / "failed-lifecycle-prefix" / "round-02").mkdir()
+    while_in_progress = _just("results", "failed-lifecycle-prefix", "--runs-dir", str(runs))
+    assert while_in_progress.returncode == 0, while_in_progress.stderr
+    assert "Run failed-lifecycle-prefix round-01" in while_in_progress.stdout
     missing_results = _just("results", "missing-run", "--runs-dir", str(runs))
     assert missing_results.returncode == 2
     assert "no completed round" in missing_results.stderr
