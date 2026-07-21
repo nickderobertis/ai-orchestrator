@@ -53,6 +53,10 @@ def _write_oneharness(path: Path, version: str) -> None:
     _write_executable(path, f"#!/bin/sh\nprintf 'oneharness {version}\\n'\n")
 
 
+def _write_bun(path: Path, version: str = "1.2.3") -> None:
+    _write_executable(path, f"#!/bin/sh\nprintf '{version}\\n'\n")
+
+
 def _fake_install_commands(tmp_path: Path) -> None:
     tools = tmp_path / "tools"
     uv = tools / "uv"
@@ -126,6 +130,36 @@ chmod +x "$HOME/.local/bin/oneharness"
     }
     return subprocess.run(
         ["bash", "-c", 'source "$1"; install_oneharness', "test-install", str(script)],
+        text=True,
+        capture_output=True,
+        env=env,
+    )
+
+
+def _run_bun_install(tmp_path: Path, **extra_env: str) -> subprocess.CompletedProcess[str]:
+    script = REPO_ROOT / "scripts" / "session-setup.sh"
+    tools = tmp_path / "tools"
+    npm = tools / "npm"
+    _write_executable(
+        npm,
+        """#!/bin/sh
+printf '%s\n' "$*" >"$TEST_NPM_ARGS"
+if [ "${TEST_NPM_FAIL:-0}" = 1 ]; then
+  exit 1
+fi
+mkdir -p "$HOME/.local/node/bin"
+cp "$TEST_BUN_BINARY" "$HOME/.local/node/bin/bun"
+chmod +x "$HOME/.local/node/bin/bun"
+""",
+    )
+    env = {
+        "HOME": str(tmp_path),
+        "PATH": f"{tools}:/usr/bin:/bin",
+        "TEST_NPM_ARGS": str(tmp_path / "npm.args"),
+        **extra_env,
+    }
+    return subprocess.run(
+        ["bash", "-c", 'source "$1"; install_bun', "test-install", str(script)],
         text=True,
         capture_output=True,
         env=env,
@@ -255,6 +289,40 @@ def test_install_oneharness_rejects_wrong_version_from_pypi(tmp_path: Path) -> N
         in proc.stderr
     )
     assert f"required oneharness {ADOPTED_ONEHARNESS_VERSION} is unavailable" in proc.stderr
+
+
+def test_install_bun_skips_invocable_binary(tmp_path: Path) -> None:
+    _write_bun(tmp_path / ".local" / "node" / "bin" / "bun")
+
+    proc = _run_bun_install(tmp_path)
+
+    assert proc.returncode == 0, proc.stderr
+    assert not (tmp_path / "npm.args").exists()
+
+
+def test_install_bun_installs_with_npm_and_verifies_binary(tmp_path: Path) -> None:
+    replacement = tmp_path / "bun-current"
+    _write_bun(replacement)
+
+    proc = _run_bun_install(tmp_path, TEST_BUN_BINARY=str(replacement))
+
+    assert proc.returncode == 0, proc.stderr
+    assert (tmp_path / "npm.args").read_text(encoding="utf-8").strip() == "install -g bun"
+    version = subprocess.run(
+        [tmp_path / ".local" / "node" / "bin" / "bun", "--version"],
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    assert version.stdout.strip() == "1.2.3"
+
+
+def test_install_bun_failure_is_required(tmp_path: Path) -> None:
+    proc = _run_bun_install(tmp_path, TEST_NPM_FAIL="1")
+
+    assert proc.returncode == 1
+    assert (tmp_path / "npm.args").read_text(encoding="utf-8").strip() == "install -g bun"
+    assert "bun npm install failed" in proc.stderr
 
 
 def test_persist_session_env_writes_path_once(tmp_path: Path) -> None:

@@ -14,13 +14,15 @@
 #      prebuilt release binary. See docs/onejudge-integration.md.
 #   3. `codex` (the fallback PRIMARY harness) is installed via npm. Auth is a
 #      one-time manual `codex login`. See docs/onejudge-integration.md.
-#   4. Hands off to `setup-llmlint.sh` to install the llmlint LLM-judge tier.
+#   4. `bun` is installed via npm and verified so oneharness's `sdk-check` gate
+#      can run in dispatched worktrees.
+#   5. Hands off to `setup-llmlint.sh` to install the llmlint LLM-judge tier.
 #
 # `set -e` is omitted so optional tool failures do not prevent the remaining
-# setup steps. Missing or wrong onejudge/oneharness binaries are different: the
-# script finishes the other setup work, then exits non-zero because dispatch and
-# the gate require them.
-# llmlint: ignore-file[robust_shell, tool_output_is_signal, boundary_inputs_validated] deliberate for a session-startup installer: `set -e` is omitted so optional tool failures don't abort later setup; progress is logged to stderr; the required onejudge and oneharness dependencies are verified explicitly and control the final exit status. CLAUDE_ENV_FILE is a path Claude Code itself provides for the session (a trusted platform input, not external/untrusted data); persist_session_env reads and appends to it exactly as the harness intends, so there is no untrusted boundary to validate.
+# setup steps. Missing or unusable onejudge, oneharness, or bun binaries are
+# different: the script finishes the other setup work, then exits non-zero because
+# dispatch and the complete local gate require them.
+# llmlint: ignore-file[robust_shell, tool_output_is_signal, boundary_inputs_validated] deliberate for a session-startup installer: `set -e` is omitted so optional tool failures don't abort later setup; progress is logged to stderr; the required onejudge, oneharness, and bun dependencies are verified explicitly and control the final exit status. CLAUDE_ENV_FILE is a path Claude Code itself provides for the session (a trusted platform input, not external/untrusted data); persist_session_env reads and appends to it exactly as the harness intends, so there is no untrusted boundary to validate.
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -190,6 +192,41 @@ verify_oneharness() {
   return 0
 }
 
+install_bun() {
+  if verify_bun >/dev/null 2>&1; then
+    return 0
+  fi
+  if ! command -v npm >/dev/null 2>&1; then
+    log "cannot install required bun: npm is not installed"
+    return 1
+  fi
+  log "installing bun via npm"
+  if ! npm install -g bun >&2; then
+    log "bun npm install failed"
+    return 1
+  fi
+  hash -r
+  if verify_bun; then
+    log "bun ready ($(bun --version))"
+    return 0
+  fi
+  log "required bun is unavailable after npm install"
+  return 1
+}
+
+verify_bun() {
+  local binary actual
+  if ! binary="$(command -v bun 2>/dev/null)"; then
+    log "bun verification failed: no binary is on PATH"
+    return 1
+  fi
+  if ! actual="$("$binary" --version 2>&1)" || [ -z "$actual" ]; then
+    log "bun verification failed: $binary could not report its version"
+    return 1
+  fi
+  return 0
+}
+
 ensure_codex_gate() {
   # allowlister gates codex's tool calls via its PreToolUse hook, so codex can run
   # in `--oneharness-mode bypass` (needed where its OS sandbox can't initialize —
@@ -223,6 +260,7 @@ fi
 toolchain_failed=0
 install_onejudge || toolchain_failed=1
 install_oneharness || toolchain_failed=1
+install_bun || toolchain_failed=1
 ensure_codex
 ensure_codex_gate
 persist_session_env
@@ -238,6 +276,10 @@ else
 fi
 if ! verify_oneharness; then
   log "oneharness $ADOPTED_ONEHARNESS_VERSION is required — 'just check' will fail until setup succeeds"
+  toolchain_failed=1
+fi
+if ! verify_bun; then
+  log "bun is required — the oneharness sdk-check gate will fail until setup succeeds"
   toolchain_failed=1
 fi
 exit "$toolchain_failed"

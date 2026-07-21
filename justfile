@@ -201,7 +201,7 @@ status *args:
 new-persona *args:
     @uv run orchestrator-new-persona "$@"
 
-# Provision the session toolchain (installs onejudge; ensures oneharness; llmlint).
+# Provision the session toolchain (installs onejudge, oneharness, bun, and llmlint).
 # Idempotent; runs automatically via the SessionStart hook. No-ops in CI.
 session-setup:
     ./scripts/session-setup.sh
