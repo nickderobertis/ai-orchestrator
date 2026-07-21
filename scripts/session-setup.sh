@@ -266,20 +266,20 @@ ensure_codex_gate() {
 
 persist_session_env() {
   [ -n "${CLAUDE_ENV_FILE:-}" ] || return 0
-  local path_export has_path=0 has_llmlint_bin=0
-  while IFS= read -r path_export; do
-    case "$path_export" in
+  local env_export has_path=0 has_llmlint_bin=0
+  while IFS= read -r env_export; do
+    case "$env_export" in
       "export PATH="*"$NODE_BIN"*) has_path=1 ;;
       "export LLMLINT_ONEHARNESS_BIN="*) has_llmlint_bin=1 ;;
     esac
   done <"$CLAUDE_ENV_FILE" 2>/dev/null
   if [ "$has_path" -eq 0 ]; then
-    printf -v path_export 'export PATH=%q' "$PATH"
-    printf '%s\n' "$path_export" >>"$CLAUDE_ENV_FILE"
+    printf -v env_export 'export PATH=%q' "$PATH"
+    printf '%s\n' "$env_export" >>"$CLAUDE_ENV_FILE"
   fi
   if [ "$has_llmlint_bin" -eq 0 ]; then
-    printf -v path_export 'export LLMLINT_ONEHARNESS_BIN=%q' "$LLMLINT_ONEHARNESS_BIN"
-    printf '%s\n' "$path_export" >>"$CLAUDE_ENV_FILE"
+    printf -v env_export 'export LLMLINT_ONEHARNESS_BIN=%q' "$LLMLINT_ONEHARNESS_BIN"
+    printf '%s\n' "$env_export" >>"$CLAUDE_ENV_FILE"
   fi
 }
 
