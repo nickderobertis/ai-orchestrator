@@ -396,6 +396,10 @@ def main() -> int:
                 (Path.cwd() / "CACHE_ENV.txt").write_text(
                     os.environ["ORCHESTRATOR_CACHE_DIR"], encoding="utf-8"
                 )
+            if "capture-llmlint-env" in task:
+                (Path.cwd() / "LLMLINT_ENV.txt").write_text(
+                    os.environ.get("LLMLINT_ONEHARNESS_BIN", "<absent>"), encoding="utf-8"
+                )
             if "write-change" in task:
                 (Path.cwd() / "CHANGE.txt").write_text("change from fake agent\n", encoding="utf-8")
             if "write-unique-change" in task:

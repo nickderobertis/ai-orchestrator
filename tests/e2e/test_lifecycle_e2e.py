@@ -42,6 +42,7 @@ from orchestrator.github import PullRequest
 from orchestrator.graph import graph_payload, parse_graph, run_graph
 from orchestrator.journal import NodeJournal, NodeSink, open_journal
 from orchestrator.lifecycle import (
+    AI_ORCHESTRATOR_IDENTITY,
     RepoPlan,
     RepoPlanNode,
     Resume,
@@ -61,7 +62,7 @@ from orchestrator.recover import recover_repo
 from orchestrator.registry import Registry, RegistryEntry, Slug
 from orchestrator.replan import next_round
 from orchestrator.runs import NodeId, RunId, prepare_round, write_result
-from orchestrator.workspace import Workspace, normalize_repo
+from orchestrator.workspace import IdentityKey, Workspace, normalize_repo
 
 _T = TypeVar("_T")
 
@@ -959,6 +960,73 @@ def test_repo_plan_ledger_and_guided_next_round(
 
 
 # --- local repo: direct merge into main after checks -----------------------
+
+
+@pytest.mark.parametrize(
+    ("identity", "expected_wrapper", "human_pause"),
+    [
+        (AI_ORCHESTRATOR_IDENTITY, True, False),
+        (AI_ORCHESTRATOR_IDENTITY, True, True),
+        ("https://github.com/nickderobertis/llmlint", False, False),
+        ("https://github.com/nickderobertis/llmlint", False, True),
+    ],
+)
+def test_lifecycle_scopes_llmlint_wrapper_from_resolved_repository_identity(
+    tmp_path, bare_origin, identity, expected_wrapper, human_pause
+) -> None:
+    """Resolved identity reaches worker and PR-author dispatches over real git."""
+
+    class IdentityWorkspace(Workspace):
+        def selection(self, repo):
+            return replace(super().selection(repo), publication_identity=IdentityKey(identity))
+
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical")
+    seen: list[tuple[str, bool]] = []
+
+    def writing_dispatch(persona, task, *, project_dir, use_llmlint_wrapper, **_):
+        seen.append((persona, use_llmlint_wrapper))
+        if persona == "pr-author":
+            output = task.split(
+                "Write the final body, and nothing else, to this absolute path:\n", 1
+            )[1].splitlines()[0]
+            Path(output).write_text(
+                "## What\nRoutes the wrapper.\n\n## Why\nKeeps target gates isolated.\n",
+                encoding="utf-8",
+            )
+            return Report(persona, 0, True, False, 1, [], {}, {}, "")
+        Path(project_dir, "change.txt").write_text("change\n", encoding="utf-8")
+        return Report(persona, 0, True, False, 1, [], {}, {}, "")
+
+    result = run_repo_task(
+        "acme/widget",
+        "change wrapper routing" if not human_pause else None,
+        "engineer" if not human_pause else None,
+        workspace=IdentityWorkspace(
+            tmp_path / "worktrees",
+            resolver=lambda _spec: canonical,
+            workflow="remote",
+            repo_type="single-owner",
+        ),
+        url=str(origin),
+        workflow="remote",
+        repo_type="single-owner",
+        merge_policy="none",
+        github=FakeGitHub(origin),
+        steps=(
+            [
+                Step("prepare", "engineer", "change wrapper routing"),
+                Step("approve", task="Approve routing.", kind="human", deps=["prepare"]),
+            ]
+            if human_pause
+            else None
+        ),
+        verify_cmd=["true"],
+        dispatch_fn=writing_dispatch,
+    )
+
+    assert result.outcome == ("waiting-human" if human_pause else "pr-open")
+    assert seen == [("engineer", expected_wrapper), ("pr-author", expected_wrapper)]
 
 
 def test_registered_aliases_drive_real_lifecycle_without_a_stray_clone(

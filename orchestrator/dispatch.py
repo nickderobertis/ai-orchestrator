@@ -18,6 +18,7 @@ import asyncio
 import contextlib
 import json
 import os
+import shutil
 import socket
 import subprocess
 import sys
@@ -184,6 +185,7 @@ def run_onejudge(
     onejudge_bin: str = "onejudge",
     provider: str | None = None,
     env: dict[str, str] | None = None,
+    unset_llmlint_wrapper: bool = False,
     labels: Mapping[str, str] | None = None,
     timeout: float | None = None,
     cancel: threading.Event | None = None,
@@ -200,6 +202,8 @@ def run_onejudge(
     """
     _validate_environment(env or {})
     process_env = {**os.environ, **(env or {})}
+    if unset_llmlint_wrapper:
+        process_env.pop("LLMLINT_ONEHARNESS_BIN", None)
     process_env.setdefault("ONEHARNESS_TIMEOUT", DEFAULT_ONEHARNESS_TIMEOUT)
     _validate_oneharness_timeout(process_env["ONEHARNESS_TIMEOUT"])
     inherited_labels = process_env.get(LABEL_ENV)
@@ -214,8 +218,20 @@ def run_onejudge(
             process_env.pop(LABEL_ENV, None)
 
     async def execute() -> RunResult | None:
+        runner = (
+            OneJudge(
+                executable=shutil.which("env") or "env",
+                executable_args=(
+                    "-u",
+                    "LLMLINT_ONEHARNESS_BIN",
+                    onejudge_bin,
+                ),
+            )
+            if unset_llmlint_wrapper
+            else OneJudge(executable=onejudge_bin)
+        )
         run = asyncio.create_task(
-            OneJudge(executable=onejudge_bin).run(
+            runner.run(
                 cast(RunConfig, config),
                 task,
                 provider=provider,
@@ -273,6 +289,7 @@ def _agent_run_context(
     cwd: str | Path,
     project_dir: str | None,
     oneharness_mode: str | None,
+    use_llmlint_wrapper: bool = True,
 ) -> tuple[str | Path, dict[str, str]]:
     """Compute the (cwd, env) for the onejudge run, mutating `config` as needed.
 
@@ -288,7 +305,7 @@ def _agent_run_context(
     env: dict[str, str] = {}
     if oneharness_mode is not None:
         env["ONEHARNESS_MODE"] = oneharness_mode
-        if oneharness_mode == "bypass":
+        if oneharness_mode == "bypass" and use_llmlint_wrapper:
             env["LLMLINT_ONEHARNESS_BIN"] = str(REPO_ROOT / "scripts/llmlint-oneharness.sh")
     if project_dir is not None:
         run_cwd = project_dir
@@ -319,6 +336,7 @@ def dispatch(
     onejudge_bin: str = "onejudge",
     provider: str | None = None,
     oneharness_mode: str | None = None,
+    use_llmlint_wrapper: bool = True,
     labels: Mapping[str, str] | None = None,
     timeout: float | None = None,
     env: dict[str, str] | None = None,
@@ -353,7 +371,11 @@ def dispatch(
     )
 
     run_cwd, context_env = _agent_run_context(
-        config, cwd=cwd, project_dir=project_dir, oneharness_mode=oneharness_mode
+        config,
+        cwd=cwd,
+        project_dir=project_dir,
+        oneharness_mode=oneharness_mode,
+        use_llmlint_wrapper=use_llmlint_wrapper,
     )
     process_env = {**context_env, **(env or {})}
     _validate_environment(process_env)
@@ -365,6 +387,7 @@ def dispatch(
         onejudge_bin=onejudge_bin,
         provider=provider,
         env=process_env or None,
+        unset_llmlint_wrapper=not use_llmlint_wrapper,
         labels=labels,
         timeout=timeout,
         cancel=cancel,

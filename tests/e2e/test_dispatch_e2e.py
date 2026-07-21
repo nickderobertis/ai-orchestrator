@@ -207,6 +207,34 @@ def test_dispatch_forwards_validated_environment_to_real_provider(
 
 
 @pytest.mark.parametrize(
+    ("use_llmlint_wrapper", "expected"),
+    [
+        (True, str(REPO_ROOT / "scripts/llmlint-oneharness.sh")),
+        (False, "<absent>"),
+    ],
+)
+def test_bypass_dispatch_scopes_llmlint_wrapper_to_harness_repository(
+    tmp_path, command_base, onejudge_bin, use_llmlint_wrapper, expected
+) -> None:
+    project = tmp_path / ("harness" if use_llmlint_wrapper else "foreign")
+    project.mkdir()
+
+    report = dispatch(
+        "engineer",
+        "complete-now capture-llmlint-env",
+        base_path=command_base(),
+        persona_dir=PERSONA_DIR,
+        project_dir=str(project),
+        onejudge_bin=onejudge_bin,
+        oneharness_mode="bypass",
+        use_llmlint_wrapper=use_llmlint_wrapper,
+    )
+
+    assert report.completed
+    assert (project / "LLMLINT_ENV.txt").read_text(encoding="utf-8") == expected
+
+
+@pytest.mark.parametrize(
     "env, message",
     [
         ({"BAD=NAME": "value"}, "name is invalid"),
