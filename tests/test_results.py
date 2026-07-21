@@ -57,6 +57,7 @@ def _result(runs: Path) -> None:
 def test_render_lists_outcomes_detail_and_failure_artifacts(tmp_path: Path) -> None:
     runs = tmp_path / "runs"
     _result(runs)
+    (runs / "demo" / "round-02").mkdir()
 
     output = render("demo", runs)
 

@@ -903,6 +903,8 @@ def test_repo_plan_ledger_and_guided_next_round(
     assert second_result["results"]["change"]["status"] == "done"
     assert second_result["results"]["change"]["follow_ups"] == follow_up
     publication = second_result["results"]["change"]
+    successful_gate_log = Path(publication["artifacts"]["gate_log"])
+    assert successful_gate_log.is_file()
     assert publication["branch"] == preserved_branch
     assert publication["retry_lineage"] == {
         "supersedes_branch": preserved_branch,

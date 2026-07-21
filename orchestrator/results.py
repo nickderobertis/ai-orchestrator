@@ -8,17 +8,17 @@ from pathlib import Path
 
 from .config import ConfigError
 from .ids import GraphId
-from .runs import as_result_payload, latest_round, load_mapping, validate_run_id
+from .runs import as_result_payload, load_mapping, rounds, validate_run_id
 
 
 def render(run: str, runs_dir: Path) -> str:
     """Render the latest completed round; node failures remain successful viewing."""
     run_id = validate_run_id(run)
     run_dir = runs_dir / run_id
-    latest = latest_round(run_dir)
-    if latest is None or not (latest[1] / "result.json").is_file():
+    completed = [item for item in rounds(run_dir) if (item[1] / "result.json").is_file()]
+    if not completed:
         raise ConfigError(f"no completed round for run {run!r} under {runs_dir}")
-    number, round_dir = latest
+    number, round_dir = completed[-1]
     payload = as_result_payload(load_mapping(round_dir / "result.json"))
     lines = [f"Run {run_id} round-{number:02d} — {payload['state']}"]
     for node, item in payload["results"].items():
