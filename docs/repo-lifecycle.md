@@ -592,6 +592,10 @@ namespaces, which this host disables, so `auto` can't initialize here anyway —
 you want a guardrail in place of the OS sandbox, the allowlister `repo-write` hook
 is still wired (see [onejudge-integration.md](./onejudge-integration.md)); with a
 container boundary it is belt-and-suspenders rather than the containment line.
+The lifecycle also exports `LLMLINT_ONEHARNESS_BIN` only when the resolved target
+identity is `https://github.com/nickderobertis/ai-orchestrator`. That wrapper is
+part of this harness's own gate; foreign repository workers inherit
+`ONEHARNESS_MODE` but explicitly receive no harness-specific llmlint wrapper.
 
 ## The two external seams (and how they're tested)
 
