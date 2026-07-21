@@ -13,4 +13,9 @@ while (( $# > 0 )); do
     fi
 done
 
+if ! command -v oneharness >/dev/null 2>&1; then
+    echo "llmlint oneharness wrapper: required 'oneharness' executable was not found; run 'just bootstrap' from the repository root to install it, then retry" >&2
+    exit 127
+fi
+
 exec oneharness "${args[@]}"

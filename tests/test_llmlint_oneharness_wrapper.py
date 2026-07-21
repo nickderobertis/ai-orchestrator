@@ -45,3 +45,36 @@ def test_other_modes_and_arguments_are_unchanged(tmp_path: Path) -> None:
         "--prompt",
         "read-only",
     ]
+
+
+def test_oneharness_failure_output_and_status_are_propagated(tmp_path: Path) -> None:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    oneharness = bin_dir / "oneharness"
+    oneharness.write_text(
+        "#!/bin/sh\necho 'provider failed to start' >&2\nexit 42\n", encoding="utf-8"
+    )
+    oneharness.chmod(0o755)
+
+    proc = subprocess.run(
+        [WRAPPER, "run", "--mode", "read-only"],
+        text=True,
+        capture_output=True,
+        env={**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}"},
+    )
+
+    assert proc.returncode == 42
+    assert "provider failed to start" in proc.stderr
+
+
+def test_missing_oneharness_reports_recovery_action(tmp_path: Path) -> None:
+    proc = subprocess.run(
+        ["/bin/bash", WRAPPER, "run", "--mode", "read-only"],
+        text=True,
+        capture_output=True,
+        env={**os.environ, "PATH": str(tmp_path)},
+    )
+
+    assert proc.returncode == 127
+    assert "required 'oneharness' executable was not found" in proc.stderr
+    assert "run 'just bootstrap'" in proc.stderr
