@@ -3,15 +3,25 @@
 set -euo pipefail
 
 args=()
+read_only=false
 while (( $# > 0 )); do
     if [[ $1 == --mode && ${2-} == read-only ]]; then
-        args+=(--mode bypass)
+        args+=(--mode read-only)
+        read_only=true
         shift 2
     else
         args+=("$1")
         shift
     fi
 done
+
+# Codex's read-only filesystem sandbox is usable on this host, but its default
+# network isolation asks bubblewrap to configure loopback in a namespace that the
+# outer container forbids. Grant network only: Codex retains its OS-enforced
+# read-only filesystem while avoiding that unsupported namespace operation.
+if [[ $read_only == true ]]; then
+    args+=(-- -c 'sandbox_permissions=["disk-full-read-access","network-full-access"]')
+fi
 
 if ! command -v oneharness >/dev/null 2>&1; then
     echo "llmlint oneharness wrapper: required 'oneharness' executable was not found; run 'just bootstrap' from the repository root to install it, then retry" >&2

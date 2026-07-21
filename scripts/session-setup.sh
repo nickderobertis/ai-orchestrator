@@ -40,10 +40,9 @@ readonly CARGO_BIN="$HOME/.cargo/bin"
 readonly NODE_BIN="$HOME/.local/node/bin"   # npm global prefix (codex lands here)
 readonly PROJECT_VENV_BIN="$REPO_ROOT/.venv/bin"
 export PATH="$PROJECT_VENV_BIN:$BIN_DIR:$CARGO_BIN:$NODE_BIN:$PATH"
-# llmlint otherwise forces its nested judge into oneharness read-only mode. For
-# codex that starts bubblewrap with a private network namespace; this host denies
-# the loopback RTM_NEWADDR operation. The container is already the worker sandbox,
-# so bypass the unsupported nested OS sandbox just as lifecycle dispatch does.
+# llmlint forces its nested judge into oneharness read-only mode. The wrapper
+# retains that filesystem boundary while granting network capability so codex
+# does not ask bubblewrap to configure loopback in a forbidden namespace.
 export LLMLINT_ONEHARNESS_BIN="$REPO_ROOT/scripts/llmlint-oneharness.sh"
 
 log() { printf 'session-setup: %s\n' "$*" >&2; }
