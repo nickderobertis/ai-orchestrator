@@ -1912,7 +1912,7 @@ def test_local_conflict_resolves_outside_queue_then_requeues_and_merges(
 
     assert [result.outcome for result in results] == ["merged", "merged"]
     assert len(resolution_calls) == 1
-    assert "merge-conflict-1" in resolution_calls[0]
+    assert resolution_calls[0].endswith(":main")
     final = subprocess.run(
         ["git", "-C", str(origin), "show", "main:shared.txt"],
         check=True,
@@ -2349,6 +2349,58 @@ def test_clean_committed_partial_work_is_marked_and_recoverable(tmp_path, bare_o
     assert f"Orchestrator-Recovered-Incomplete: {marker_sha}" in attestation[0].message
     assert not gitops.is_ancestor(canonical, attestation[0].sha, "origin/main")
     assert _has_file(origin, "main", "partial.txt")
+
+
+def test_local_recovery_conflict_resumes_worker_then_requeues(tmp_path, bare_origin) -> None:
+    origin = bare_origin({"shared.txt": "original\n"})
+    canonical = gitops.clone(origin, tmp_path / "canonical-recovery-conflict")
+    Registry().register(str(canonical), workflow="local", repo_type="single-owner")
+    partial = run_repo_task(
+        str(canonical),
+        "Preserve a conflicting edit.",
+        "engineer",
+        workspace=Workspace(tmp_path / "recovery-conflict-initial"),
+        branch="feature/recovery-conflict",
+        dispatch_fn=make_writing_dispatch(
+            filename="shared.txt", content="preserved branch", completed=False
+        ),
+        verify_cmd=["true"],
+    )
+    assert partial.outcome == "not-completed"
+    _advance_origin(tmp_path, origin, "shared.txt", "advanced base\n")
+    sessions: list[str] = []
+
+    def resolving_dispatch(
+        persona: str, task: str, *, project_dir: str, session: str, **_: object
+    ) -> Report:
+        path = Path(project_dir) / "shared.txt"
+        assert "Resolve the content conflict" in task
+        assert "<<<<<<<" in path.read_text(encoding="utf-8")
+        sessions.append(session)
+        path.write_text("advanced base\npreserved branch by engineer\n", encoding="utf-8")
+        gitops.add_all(project_dir)
+        gitops.commit(project_dir, "fix: resolve preserved recovery conflict")
+        return Report(persona, 0, True, False, 2, [], {}, {}, "")
+
+    recovered = recover_repo(
+        canonical,
+        partial.branch,
+        workspace_root=tmp_path / "recovery-conflict-worktrees",
+        verify_cmd=["git", "diff", "--check", "origin/main...HEAD"],
+        dispatch_fn=resolving_dispatch,
+    )
+
+    assert recovered.outcome == "merged"
+    assert sessions == [f"{partial.branch}:main"]
+    assert (
+        subprocess.run(
+            ["git", "-C", str(origin), "show", "main:shared.txt"],
+            check=True,
+            text=True,
+            capture_output=True,
+        ).stdout
+        == "advanced base\npreserved branch by engineer\n"
+    )
 
 
 def test_cooperative_real_dispatch_cancellation_preserves_and_recovers_branch(

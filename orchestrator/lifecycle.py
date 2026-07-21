@@ -1961,7 +1961,7 @@ def run_repo_task(
                 oneharness_mode=oneharness_mode,
                 base_path=base_path,
                 persona_dir=persona_dir,
-                session=f"{branch}:merge-conflict-{merge_resolutions}",
+                session=f"{branch}:{lead.id}",
                 max_turns=lead.max_turns or DEFAULT_LIFECYCLE_STEP_MAX_TURNS,
                 done_when="The conflict is resolved, committed, and the gate is green.",
                 labels=log.labels,
@@ -1971,7 +1971,7 @@ def run_repo_task(
             persist_report_artifacts(
                 log,
                 report,
-                session=f"{branch}:merge-conflict-{merge_resolutions}",
+                session=f"{branch}:{lead.id}",
             )
             unresolved = gitops.unmerged_paths(worktree)
             if unresolved:
