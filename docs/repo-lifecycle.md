@@ -231,6 +231,11 @@ reaped before advancing, so a process killed during its turn cannot strand later
 writers or cause its unexecuted merge to be replayed. Team PR publication remains
 outside this host-side queue. Queue wait telemetry is emitted as `lock-wait` with
 the git identity, elapsed seconds, and the original one-based queue position.
+If the current base content-conflicts with a local branch at the head, the turn is
+dequeued before its original `branch:step` worker session resolves the conflict.
+The resolved branch takes a new ticket at the queue tail; it never holds the head
+while authoring. Resolve-and-requeue attempts are bounded before the lifecycle
+returns `sync-conflict` and retains the branch for manual recovery.
 
 - **`GitHubMergeStrategy`** (GitHub repos) — opens a PR, then merges it **only
   once the repo's required (blocking) checks are green**. The default policy is
@@ -491,6 +496,13 @@ explicitly as `--base <root> --pr-base <recorded-pr-base>`; recovery never
 fast-forwards the root publication checkout after a merge into a non-root base.
 `repo-task-auto` prints this
 command when it reports `not-completed`.
+
+Local recovery performs its base sync, complete gate, recovery attestation, branch
+push, and direct merge inside one FIFO turn. A content conflict dequeues the turn,
+resumes the worker session recorded by the incomplete step commit, and requeues at
+the tail after the worker commits a resolution. Recovery uses the same bounded
+retry policy. Missing or invalid worker metadata, an incomplete resolver, or exhausted
+cycles returns `sync-conflict` without discarding the preserved branch.
 
 To continue authoring after a lifecycle node hits its turn cap, do not relaunch
 the original plan. While supervising its existing `orchestrate` run, send a

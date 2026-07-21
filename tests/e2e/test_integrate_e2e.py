@@ -72,6 +72,28 @@ def _integrate(repo: Path, *branches: str, extra: tuple[str, ...] = ()) -> dict[
     return json.loads(proc.stdout)
 
 
+def _recover_cli(
+    repo: Path, branch: str, workspace: Path, *, gate: str = "true", extra: tuple[str, ...] = ()
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [
+            "orchestrator-repo-recover",
+            branch,
+            "--repo",
+            str(repo),
+            "--workspace",
+            str(workspace),
+            "--gate",
+            gate,
+            "--format",
+            "json",
+            *extra,
+        ],
+        text=True,
+        capture_output=True,
+    )
+
+
 def test_merge_train_pushes_all_branches_and_rerun_is_idempotent(tmp_path, bare_origin) -> None:
     origin = bare_origin()
     repo = _clone(tmp_path, origin)
@@ -585,10 +607,13 @@ def test_repo_recover_rejects_branch_without_incomplete_provenance(tmp_path, bar
         )
 
 
-def test_repo_recover_reports_remote_base_sync_conflict(tmp_path, bare_origin) -> None:
+@pytest.mark.parametrize("workflow", ["local", "remote"])
+def test_repo_recover_reports_remote_base_sync_conflict(
+    tmp_path, bare_origin, workflow: str
+) -> None:
     origin = bare_origin({"shared.txt": "seed\n"})
     repo = _clone(tmp_path, origin)
-    _allow_local(repo)
+    Registry().register(str(repo), workflow=workflow, repo_type="single-owner")
     _branch(repo, "claude/conflicted-recovery", {"shared.txt": "partial\n"})
     _git(repo, "checkout", "claude/conflicted-recovery")
     _git(repo, "commit", "--amend", "-m", "wip: old preserved (incomplete step)")
@@ -600,15 +625,51 @@ def test_repo_recover_reports_remote_base_sync_conflict(tmp_path, bare_origin) -
     _git(updater, "commit", "-m", "advance shared on remote")
     _git(updater, "push", "origin", "main")
 
-    result = recover_repo(
+    recovered = _recover_cli(
         repo,
         "claude/conflicted-recovery",
-        workspace_root=tmp_path / "conflicted-recovery-worktrees",
+        tmp_path / f"conflicted-{workflow}-recovery-worktrees",
+    )
+    result = json.loads(recovered.stdout)
+
+    assert recovered.returncode == 1
+    assert result["outcome"] == "sync-conflict"
+    assert "resolve the conflict" in result["detail"]
+    repeated = recover_repo(
+        repo,
+        "claude/conflicted-recovery",
+        workspace_root=tmp_path / f"conflicted-{workflow}-coverage-worktrees",
         verify_cmd=["true"],
     )
+    assert repeated.outcome == "sync-conflict"
 
-    assert result.outcome == "sync-conflict"
-    assert "resolve the conflict" in result.detail
+
+def test_remote_repo_recovery_gate_failure_stops_before_publication(tmp_path, bare_origin) -> None:
+    repo = _clone(tmp_path, bare_origin())
+    Registry().register(str(repo), workflow="remote", repo_type="single-owner")
+    _branch(repo, "claude/remote-red-recovery", {"partial.txt": "partial\n"})
+    _git(repo, "checkout", "claude/remote-red-recovery")
+    _git(repo, "commit", "--amend", "-m", "wip: old preserved (incomplete step)")
+    _git(repo, "checkout", "main")
+
+    recovered = _recover_cli(
+        repo,
+        "claude/remote-red-recovery",
+        tmp_path / "remote-red-recovery-worktrees",
+        gate="false",
+    )
+    result = json.loads(recovered.stdout)
+
+    assert recovered.returncode == 1
+    assert result["outcome"] == "gate-failed"
+    assert "recovery gate failed" in result["detail"]
+    repeated = recover_repo(
+        repo,
+        "claude/remote-red-recovery",
+        workspace_root=tmp_path / "remote-red-coverage-worktrees",
+        verify_cmd=["false"],
+    )
+    assert repeated.outcome == "gate-failed"
 
 
 def test_repo_recover_rejects_missing_branch_and_missing_gate(tmp_path, bare_origin) -> None:
@@ -622,6 +683,22 @@ def test_repo_recover_rejects_missing_branch_and_missing_gate(tmp_path, bare_ori
             verify_cmd=["true"],
         )
     _branch(repo, "claude/conflicting-base", {"partial.txt": "partial\n"})
+    invalid_base = _recover_cli(
+        repo,
+        "claude/conflicting-base",
+        tmp_path / "invalid-pr-base-recovery-worktrees",
+        extra=("--pr-base", "bad..base"),
+    )
+    assert invalid_base.returncode == 2
+    assert "pr_base 'bad..base' is not a valid Git branch" in invalid_base.stderr
+    with pytest.raises(ValueError, match="pr_base .* is not a valid Git branch"):
+        recover_repo(
+            repo,
+            "claude/conflicting-base",
+            pr_base="bad..base",
+            workspace_root=tmp_path / "invalid-pr-base-coverage-worktrees",
+            verify_cmd=["true"],
+        )
     _git(repo, "checkout", "claude/conflicting-base")
     _git(
         repo,

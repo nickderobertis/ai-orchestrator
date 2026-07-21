@@ -4,15 +4,31 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import shlex
 import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from . import gitops
+from . import BASE_CONFIG, PERSONA_DIR, gitops
+from .dispatch import Report, dispatch
 from .github import CliGitHubBackend, GitHubBackend, GitHubError
-from .lifecycle import _default_title, _effective_publication
-from .merge import GitHubMergeStrategy, LocalMergeStrategy, MergeContext, MergePolicy
+from .lifecycle import (
+    DEFAULT_LIFECYCLE_STEP_MAX_TURNS,
+    MAX_MERGE_CONFLICT_RESOLUTIONS,
+    DispatchFn,
+    _default_title,
+    _effective_publication,
+)
+from .merge import (
+    MERGE_CONFLICT_RETRY,
+    GitHubMergeStrategy,
+    LocalMergeStrategy,
+    MergeContext,
+    MergeOutcome,
+    MergePolicy,
+)
+from .personas import persona_path
 from .provenance import (
     RECOVERY_TRAILER,
     incomplete_commits,
@@ -22,6 +38,9 @@ from .provenance import (
 from .registry import Registry, RegistryEntry, RegistryError, Slug
 from .verify import NOOP_GATE, resolve_gate_template, run_gate
 from .workspace import RepoRef, RepositoryType, Workspace, WorkspaceError
+
+_PRESERVED_STEP = re.compile(r"Partial work from step (\S+) \(persona: ([^)]+)\)")
+_STEP_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 
 @dataclass(frozen=True)
@@ -73,6 +92,10 @@ def recover_repo(
     repo_type: RepositoryType | None = None,
     merge_method: str = "squash",
     cleanup: bool = True,
+    dispatch_fn: DispatchFn = dispatch,
+    oneharness_mode: str | None = "bypass",
+    base_path: str | Path = BASE_CONFIG,
+    persona_dir: str | Path = PERSONA_DIR,
 ) -> RecoveryResult:
     """Verify and publish a preserved branch through its registered workflow."""
     registry = registry or Registry()
@@ -114,25 +137,6 @@ def recover_repo(
             raise RegistryError(
                 f"branch {branch!r} has no lifecycle-preserved incomplete provenance"
             )
-        if not gitops.merge_base_into_branch(
-            worktree, remote_base, message=f"Merge {remote_base} into {branch} for recovery"
-        ):
-            return RecoveryResult(
-                str(slug),
-                branch,
-                target,
-                decision.workflow,
-                identity.repo_type,
-                decision.merge_policy,
-                "sync-conflict",
-                f"merge current {remote_base} into {branch!r}, resolve the conflict, then retry",
-                pr_base=publication_base,
-                synthetic_stack_base=(
-                    publication_base
-                    if publication_base.startswith("ai-orchestrator/stack-base/")
-                    else None
-                ),
-            )
         command = verify_cmd or (
             resolve_gate_template(identity.gate, remote_base)
             if identity.gate != NOOP_GATE
@@ -146,32 +150,67 @@ def recover_repo(
             raise RegistryError(
                 "repository identity has a no-op gate; migrate it or pass --gate for recovery"
             )
-        verified = run_gate(worktree, command, env=env)
-        if not verified.ok:
-            return RecoveryResult(
-                str(slug),
-                branch,
-                target,
-                decision.workflow,
-                identity.repo_type,
-                decision.merge_policy,
-                "gate-failed",
-                f"recovery gate failed; fix {branch!r} in its preserved branch and retry",
-                pr_base=publication_base,
-                synthetic_stack_base=(
-                    publication_base
-                    if publication_base.startswith("ai-orchestrator/stack-base/")
-                    else None
-                ),
-            )
-        missing = sorted(unattested_incomplete(worktree, remote_base, branch))
-        if missing:
-            trailers = "\n".join(f"{RECOVERY_TRAILER} {sha}" for sha in missing)
-            gitops.commit_empty(
+
+        def verify_attest_push() -> MergeOutcome | None:
+            verified = run_gate(worktree, command, env=env)
+            if not verified.ok:
+                return MergeOutcome(
+                    "gate-failed",
+                    f"recovery gate failed; fix {branch!r} in its preserved branch and retry",
+                )
+            missing = sorted(unattested_incomplete(worktree, remote_base, branch))
+            if missing:
+                trailers = "\n".join(f"{RECOVERY_TRAILER} {sha}" for sha in missing)
+                gitops.commit_empty(
+                    worktree,
+                    "chore: attest verified recovery of preserved work\n\n" + trailers,
+                )
+            gitops.push(worktree, branch)
+            return None
+
+        def synchronize_verify_attest_and_push_local_recovery() -> MergeOutcome | None:
+            gitops.fetch(worktree)
+            if not gitops.merge_base_into_branch(
                 worktree,
-                "chore: attest verified recovery of preserved work\n\n" + trailers,
-            )
-        gitops.push(worktree, branch)
+                remote_base,
+                message=f"Merge {remote_base} into {branch} for recovery",
+                abort_on_conflict=False,
+            ):
+                return MergeOutcome(
+                    MERGE_CONFLICT_RETRY,
+                    f"current {remote_base} conflicts with preserved branch {branch}",
+                )
+            return verify_attest_push()
+
+        if decision.workflow != "local":
+            if not gitops.merge_base_into_branch(
+                worktree, remote_base, message=f"Merge {remote_base} into {branch} for recovery"
+            ):
+                return RecoveryResult(
+                    str(slug),
+                    branch,
+                    target,
+                    decision.workflow,
+                    identity.repo_type,
+                    decision.merge_policy,
+                    "sync-conflict",
+                    f"merge current {remote_base} into {branch!r}, resolve the conflict, "
+                    "then retry",
+                    pr_base=publication_base,
+                )
+            failed = verify_attest_push()
+            if failed is not None:
+                return RecoveryResult(
+                    str(slug),
+                    branch,
+                    target,
+                    decision.workflow,
+                    identity.repo_type,
+                    decision.merge_policy,
+                    failed.outcome,
+                    failed.detail,
+                    pr_base=publication_base,
+                )
         strategy = (
             LocalMergeStrategy()
             if decision.workflow == "local"
@@ -193,8 +232,100 @@ def recover_repo(
             repository_type=identity.repo_type,
             verify_command=command,
             verify_env=env,
+            local_prepare=(
+                synchronize_verify_attest_and_push_local_recovery
+                if decision.workflow == "local"
+                else None
+            ),
         )
         published = strategy.publish_and_merge(context)
+        conflict_resolutions = 0
+        while published.outcome == MERGE_CONFLICT_RETRY:
+            if conflict_resolutions >= MAX_MERGE_CONFLICT_RESOLUTIONS:
+                published = MergeOutcome(
+                    "sync-conflict",
+                    "base conflict remained unresolved after "
+                    f"{MAX_MERGE_CONFLICT_RESOLUTIONS} resolve-and-requeue cycles; "
+                    f"preserved branch {branch!r} requires manual recovery",
+                )
+                break
+            conflict_resolutions += 1
+            preserved = incomplete_commits(worktree, remote_base, branch)
+            messages = [
+                commit.message
+                for commit in gitops.log_messages(worktree, remote_base, branch)
+                if commit.sha in preserved
+            ]
+            match = next((_PRESERVED_STEP.search(message) for message in messages), None)
+            if match is None:
+                gitops.merge_abort(worktree)
+                published = MergeOutcome(
+                    "sync-conflict",
+                    f"preserved branch {branch!r} has no resumable worker metadata; "
+                    "resolve the conflict manually, then retry",
+                )
+                break
+            step_id, persona = match.groups()
+            if not _STEP_ID.fullmatch(step_id):
+                gitops.merge_abort(worktree)
+                published = MergeOutcome(
+                    "sync-conflict",
+                    f"preserved branch {branch!r} has invalid resumable step metadata",
+                )
+                break
+            try:
+                persona_path(persona, Path(persona_dir))
+            except ValueError:
+                gitops.merge_abort(worktree)
+                published = MergeOutcome(
+                    "sync-conflict",
+                    f"preserved branch {branch!r} has invalid resumable persona metadata",
+                )
+                break
+            task = (
+                "## What\n"
+                f"Resolve the content conflict between this preserved branch and {remote_base}, "
+                "preserve both sets of behavior, and commit the resolution.\n\n"
+                "## Why\nThe base advanced while this completed partial work awaited recovery.\n\n"
+                "## Acceptance criteria\n"
+                "- The current merge conflict is fully resolved and committed.\n"
+                "- Preserved work and current base behavior both remain.\n"
+                "- The repository gate remains green.\n"
+            )
+            report: Report = dispatch_fn(
+                persona,
+                task,
+                project_dir=str(worktree),
+                oneharness_mode=oneharness_mode,
+                base_path=base_path,
+                persona_dir=persona_dir,
+                session=f"{branch}:{step_id}",
+                max_turns=DEFAULT_LIFECYCLE_STEP_MAX_TURNS,
+                done_when="The conflict is resolved, committed, and the gate is green.",
+                env={},
+            )
+            if gitops.unmerged_paths(worktree):
+                gitops.merge_abort(worktree)
+                if not report.completed:
+                    published = MergeOutcome(
+                        "sync-conflict",
+                        "conflict-resolution worker did not complete; preserved branch "
+                        f"{branch!r} requires manual recovery",
+                    )
+                    break
+                published = strategy.publish_and_merge(context)
+                continue
+            if gitops.is_dirty(worktree):
+                gitops.add_all(worktree)
+                gitops.commit(worktree, f"fix: resolve {publication_base} recovery conflict")
+            if not report.completed:
+                published = MergeOutcome(
+                    "sync-conflict",
+                    "conflict-resolution worker did not complete; preserved branch "
+                    f"{branch!r} requires manual recovery",
+                )
+                break
+            published = strategy.publish_and_merge(context)
         if published.outcome == "merged" and publication_base == target:
             workspace.fast_forward(ref, target)
         return RecoveryResult(

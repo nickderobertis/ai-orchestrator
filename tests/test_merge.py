@@ -5,6 +5,8 @@ from __future__ import annotations
 from contextlib import contextmanager
 from pathlib import Path
 
+import pytest
+
 from orchestrator import gitops
 from orchestrator.github import AutoMergeUnavailable, Check, PRStatus, PullRequest
 from orchestrator.gitops import GitError
@@ -335,6 +337,37 @@ def test_local_merge_journals_verification_and_the_merge(tmp_path: Path, bare_or
     assert events[0].detail == {"command": ["true"], "attempt": 1}
     assert events[1].detail == {"ok": True, "command": ["true"], "attempt": 1}
     assert events[2].detail == {"pr": "local:o/r#feature", "branch": "feature", "base": "main"}
+
+
+def test_local_merge_rejects_zero_publication_attempts(tmp_path: Path, bare_origin) -> None:
+    clone = gitops.clone(bare_origin(), tmp_path / "clone-zero-attempts")
+
+    with pytest.raises(ValueError, match="at least 1"):
+        LocalMergeStrategy().publish_and_merge(_ctx(clone_dir=clone, publication_attempts=0))
+
+
+def test_local_merge_cleans_scratch_worktree_after_content_conflict(
+    tmp_path: Path, bare_origin
+) -> None:
+    origin = bare_origin({"shared.txt": "original\n"})
+    clone = gitops.clone(origin, tmp_path / "clone-conflict")
+    feature = gitops.worktree_add(
+        clone, tmp_path / "feature-conflict", "feature", base="origin/main"
+    )
+    (feature / "shared.txt").write_text("feature\n", encoding="utf-8")
+    gitops.add_all(feature)
+    gitops.commit(feature, "feat: edit shared file")
+    gitops.push(feature, "feature")
+    updater = gitops.clone(origin, tmp_path / "updater-conflict")
+    (updater / "shared.txt").write_text("base\n", encoding="utf-8")
+    gitops.add_all(updater)
+    gitops.commit(updater, "feat: advance base")
+    gitops.push(updater, "main")
+
+    with pytest.raises(GitError):
+        LocalMergeStrategy().publish_and_merge(
+            _ctx(clone_dir=clone, branch="feature", verify_command=["true"])
+        )
 
 
 def test_local_merge_journals_a_gate_failure_without_claiming_a_merge(

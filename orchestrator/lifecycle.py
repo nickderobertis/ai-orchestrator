@@ -42,9 +42,11 @@ from .gitops import GitError
 from .ids import GraphId
 from .journal import DetailValue, NodeSink, NullNodeJournal
 from .merge import (
+    MERGE_CONFLICT_RETRY,
     GitHubMergeStrategy,
     LocalMergeStrategy,
     MergeContext,
+    MergeOutcome,
     MergePolicy,
     MergeStrategy,
     assess_blocking_checks,
@@ -922,6 +924,7 @@ class StepRun:
 # from onejudge.base.yaml, and an explicit per-step max_turns still wins.
 DEFAULT_LIFECYCLE_STEP_MAX_TURNS = 24
 MAX_AUTOMATIC_STEP_RESUMES = 2
+MAX_MERGE_CONFLICT_RESOLUTIONS = 2
 
 
 def _verify_gate(
@@ -1483,6 +1486,7 @@ def run_repo_task(
         result.repository_type = effective_type
         result.merge_policy = decision.merge_policy
         strategy = _select_merge_strategy(ref, merge, github, decision.workflow)
+        local_publication = isinstance(strategy, LocalMergeStrategy)
         root_base = (
             base_branch or (resume.base_branch if resume else None) or gitops.default_branch(clone)
         )
@@ -1734,21 +1738,22 @@ def run_repo_task(
         if preserve_cancelled("after dispatch"):
             return result
 
-        with advisory_lock(f"git:{gitops.common_dir(worktree)}"):
-            gitops.fetch(worktree)
-        if not gitops.merge_base_into_branch(
-            worktree,
-            remote_base,
-            message=f"Merge {remote_base} into {branch}",
-        ):
-            result.outcome = "gate-failed"
-            result.detail = (
-                f"sync-conflict: could not merge current {remote_base} into {branch}; "
-                "merge aborted and branch was not pushed"
-            )
-            return result
+        if not local_publication:
+            with advisory_lock(f"git:{gitops.common_dir(worktree)}"):
+                gitops.fetch(worktree)
+            if not gitops.merge_base_into_branch(
+                worktree,
+                remote_base,
+                message=f"Merge {remote_base} into {branch}",
+            ):
+                result.outcome = "gate-failed"
+                result.detail = (
+                    f"sync-conflict: could not merge current {remote_base} into {branch}; "
+                    "merge aborted and branch was not pushed"
+                )
+                return result
 
-        if not skip_verify and not verify_via_ci:
+        if not local_publication and not skip_verify and not verify_via_ci:
             cmd = resolved_verify_cmd
             if cmd is not None:
                 verify = _verify_gate(
@@ -1773,7 +1778,7 @@ def run_repo_task(
         if preserve_cancelled("after verification"):
             return result
 
-        if (
+        if not local_publication and (
             result.retry_lineage
             and result.retry_lineage.disposition == "reused"
             and result.verify is not None
@@ -1787,7 +1792,11 @@ def run_repo_task(
                     "chore: attest verified recovery of preserved work\n\n" + trailers,
                 )
                 result.retry_lineage.disposition = "recovered"
-        if result.retry_lineage and unattested_incomplete(worktree, remote_base, "HEAD"):
+        if (
+            not local_publication
+            and result.retry_lineage
+            and unattested_incomplete(worktree, remote_base, "HEAD")
+        ):
             result.outcome = "not-completed"
             result.detail = (
                 "preserved retry completed but cannot be recovered without a successful "
@@ -1829,7 +1838,8 @@ def run_repo_task(
         # only at the checkpoints above. Once push/publication begins, it runs to an
         # authoritative outcome so a late request cannot strand a pushed branch or
         # report already-merged work as discarded.
-        gitops.push(worktree, branch)
+        if not local_publication:
+            gitops.push(worktree, branch)
         preverified_pr: PullRequest | None = None
         if verify_via_ci:
             backend = cast(GitHubBackend, ci_backend)
@@ -1871,6 +1881,62 @@ def run_repo_task(
                 qualifier = "settled but not green" if assessment.settled else "not settled"
                 result.detail = f"authoritative CI {qualifier}; {assessment.detail}"
                 return result
+
+        def synchronize_verify_and_push_local_publication() -> MergeOutcome | None:
+            """Synchronize, verify, and push while holding this local queue turn."""
+            gitops.fetch(worktree)
+            if not gitops.merge_base_into_branch(
+                worktree,
+                remote_base,
+                message=f"Merge {remote_base} into {branch}",
+                abort_on_conflict=False,
+            ):
+                return MergeOutcome(
+                    MERGE_CONFLICT_RETRY,
+                    f"current {remote_base} conflicts with {branch}",
+                )
+            if not skip_verify:
+                cmd = resolved_verify_cmd
+                if cmd is not None:
+                    verify = _verify_gate(
+                        log,
+                        worktree,
+                        cmd,
+                        timeout=gate_timeout,
+                        env={
+                            **cache_env,
+                            "ORCHESTRATOR_COMPARISON_REMOTE": "origin",
+                            "ORCHESTRATOR_COMPARISON_BASE": pr_base,
+                        },
+                    )
+                    result.verify = verify
+                    if not verify.ok:
+                        return MergeOutcome(
+                            "gate-failed",
+                            f"local gate failed: {' '.join(cmd)}\n{verify.tail()}",
+                        )
+                else:
+                    result.detail = "no local gate configured; relying on required CI checks"
+            if preserve_cancelled("after verification"):
+                return MergeOutcome(result.outcome, result.detail)
+            if result.retry_lineage and result.verify is not None and result.verify.ok:
+                missing = sorted(unattested_incomplete(worktree, remote_base, "HEAD"))
+                if missing:
+                    trailers = "\n".join(f"{RECOVERY_TRAILER} {sha}" for sha in missing)
+                    gitops.commit_empty(
+                        worktree,
+                        "chore: attest verified recovery of preserved work\n\n" + trailers,
+                    )
+                    result.retry_lineage.disposition = "recovered"
+            if result.retry_lineage and unattested_incomplete(worktree, remote_base, "HEAD"):
+                return MergeOutcome(
+                    "not-completed",
+                    "preserved retry completed but cannot be recovered without a successful "
+                    "complete gate; retry with the repository gate enabled",
+                )
+            gitops.push(worktree, branch)
+            return None
+
         ctx = MergeContext(
             repo_slug=ref.slug,
             clone_dir=clone,
@@ -1895,8 +1961,80 @@ def run_repo_task(
             repository_type=effective_type,
             journal=log,
             preverified_pr=preverified_pr,
+            local_prepare=(
+                synchronize_verify_and_push_local_publication if local_publication else None
+            ),
         )
-        merge_outcome = strategy.publish_and_merge(ctx)
+        merge_resolutions = 0
+        while True:
+            merge_outcome = strategy.publish_and_merge(ctx)
+            if merge_outcome.outcome != MERGE_CONFLICT_RETRY:
+                break
+            if merge_resolutions >= MAX_MERGE_CONFLICT_RESOLUTIONS:
+                merge_outcome = MergeOutcome(
+                    "sync-conflict",
+                    "base conflict remained unresolved after "
+                    f"{MAX_MERGE_CONFLICT_RESOLUTIONS} resolve-and-requeue cycles; "
+                    f"preserved branch {branch!r} requires manual recovery",
+                )
+                break
+            merge_resolutions += 1
+            resolution_task = (
+                "## What\n"
+                f"Resolve the content conflict between this branch and {remote_base}. "
+                "Preserve both the completed branch work and the current base behavior, "
+                "then commit the resolution.\n\n"
+                "## Why\n"
+                "The base advanced after the original work completed; resolving on the "
+                "preserved branch salvages that work before it re-enters the merge queue.\n\n"
+                "## Acceptance criteria\n"
+                "- The branch merges the current base without conflicts.\n"
+                "- Existing completed work is preserved.\n"
+                "- The repository gate remains green.\n"
+            )
+            report = dispatch_fn(
+                cast(str, lead.persona),
+                resolution_task,
+                project_dir=str(worktree),
+                oneharness_mode=oneharness_mode,
+                base_path=base_path,
+                persona_dir=persona_dir,
+                session=f"{branch}:{lead.id}",
+                max_turns=lead.max_turns or DEFAULT_LIFECYCLE_STEP_MAX_TURNS,
+                done_when="The conflict is resolved, committed, and the gate is green.",
+                labels=log.labels,
+                env=cache_env,
+                cancel=cancel,
+            )
+            persist_report_artifacts(
+                log,
+                report,
+                session=f"{branch}:{lead.id}",
+            )
+            unresolved = gitops.unmerged_paths(worktree)
+            if unresolved:
+                gitops.merge_abort(worktree)
+                if not report.completed:
+                    merge_outcome = MergeOutcome(
+                        "sync-conflict",
+                        "conflict-resolution worker did not complete; preserved branch "
+                        f"{branch!r} requires manual recovery",
+                    )
+                    break
+                continue
+            if gitops.is_dirty(worktree):
+                gitops.add_all(worktree)
+                gitops.commit(
+                    worktree,
+                    f"fix: resolve {pr_base} integration conflict",
+                )
+            if not report.completed:
+                merge_outcome = MergeOutcome(
+                    "sync-conflict",
+                    "conflict-resolution worker did not complete; preserved branch "
+                    f"{branch!r} requires manual recovery",
+                )
+                break
         if merge_outcome.outcome == "merged" and pr_base == root_base:
             workspace.fast_forward(ref, root_base)
         result.pr = merge_outcome.pr
