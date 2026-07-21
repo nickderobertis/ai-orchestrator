@@ -51,6 +51,7 @@ from .lifecycle import (
     emit,
     make_repo_runner,
     parse_repo_node,
+    persist_report_artifacts,
     result_payload,
     validate_repo_aliases,
 )
@@ -475,7 +476,13 @@ def run_graph(
         agent_args: dict[str, Any] = {"labels": node_log.labels}
         if "cancel" in inspect.signature(agent_runner).parameters:
             agent_args["cancel"] = cancellations[nid]
-        report = agent_runner(cast(PlanNode, node.direct), **agent_args)
+        direct = cast(PlanNode, node.direct)
+        report = agent_runner(direct, **agent_args)
+        persist_report_artifacts(
+            node_log,
+            report,
+            session=direct.session or f"dispatch-{direct.persona}",
+        )
         if cancellations[nid].is_set():
             run = NodeRun("cancelled", "cancelled cooperatively", report)
             node_log.append(
@@ -818,6 +825,7 @@ def _node_payload(result: NodeResult) -> GraphResultItem:
                 "exit_code": report.exit_code if report else None,
                 "verdicts": report.verdicts if report else [],
                 "usage": report.usage if report else {},
+                **({"artifacts": report.artifacts} if report and report.artifacts else {}),
                 # llmlint: ignore[changed_behavior_has_e2e] The pinned report-v4 producer cannot
                 # emit this additive report-v5 field; the telemetry CLI E2E injects the exact
                 # upstream payload at the persisted report boundary and exercises consumption.

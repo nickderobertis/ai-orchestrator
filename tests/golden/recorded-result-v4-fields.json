@@ -1,0 +1,54 @@
+{
+  "schema_version": 4,
+  "artifact_paths": [
+    "gate_log",
+    "oneharness_session",
+    "worker_report"
+  ],
+  "graph_result_item_optional": [
+    "artifacts",
+    "base_branch",
+    "blocked_by",
+    "branch",
+    "completed",
+    "deferred_cleanup",
+    "detail",
+    "error",
+    "exit_code",
+    "follow_ups",
+    "human_actions",
+    "kind",
+    "merge_policy",
+    "ok",
+    "outcome",
+    "pr",
+    "pr_base",
+    "publication_workflow",
+    "repo",
+    "repo_type",
+    "repository_type",
+    "resume",
+    "retry_lineage",
+    "stack_bases",
+    "status",
+    "steps",
+    "synthetic_stack_base",
+    "task",
+    "telemetry",
+    "unblocks",
+    "usage",
+    "verdicts",
+    "waiting_steps",
+    "workflow"
+  ],
+  "step_result_required": [
+    "id",
+    "kind",
+    "persona",
+    "status"
+  ],
+  "step_result_optional": [
+    "artifacts",
+    "telemetry"
+  ]
+}

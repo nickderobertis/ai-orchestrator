@@ -546,6 +546,9 @@ class NodeSink(Protocol):
     @property
     def labels(self) -> Mapping[str, str]: ...
 
+    @property
+    def artifact_dir(self) -> Path | None: ...
+
 
 @dataclass(frozen=True)
 class NodeJournal:
@@ -569,6 +572,14 @@ class NodeJournal:
     run_id: RunId | None = None
     round: int | None = None
     step: StepId | None = None
+
+    @property
+    def artifact_dir(self) -> Path | None:
+        """Stable directory for this node or step's full execution artifacts."""
+        if not isinstance(self.sink, Journal) or self.round is None:
+            return None
+        root = self.sink.path.parent / f"round-{self.round:02d}" / str(self.node)
+        return root / str(self.step) if self.step is not None else root
 
     def __post_init__(self) -> None:
         if not self.node:
@@ -652,3 +663,7 @@ class NullNodeJournal:
     @property
     def labels(self) -> dict[str, str]:
         return {}
+
+    @property
+    def artifact_dir(self) -> None:
+        return None

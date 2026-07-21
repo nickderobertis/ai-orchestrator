@@ -29,15 +29,17 @@ import time
 import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
+from dataclasses import replace as dataclass_replace
 from pathlib import Path
 from typing import Any, Protocol, cast
 
 from . import BASE_CONFIG, PERSONA_DIR, gitops
 from .config import ConfigError, load_yaml
-from .coordination import LockTimeout, advisory_lock
+from .coordination import LockTimeout, advisory_lock, atomic_json, atomic_text
 from .dispatch import Report, dispatch
 from .github import CliGitHubBackend, GitHubBackend, GitHubError, PullRequest
 from .gitops import GitError
+from .ids import GraphId
 from .journal import DetailValue, NodeSink, NullNodeJournal
 from .merge import (
     GitHubMergeStrategy,
@@ -941,6 +943,10 @@ def _verify_gate(
         },
     )
     verify = run_gate(worktree, cmd, timeout=timeout, env=env)
+    if journal.artifact_dir is not None:
+        gate_path = (journal.artifact_dir / "gate.log").resolve()
+        atomic_text(gate_path, verify.output)
+        verify = dataclass_replace(verify, log_path=str(gate_path))
     finished: dict[str, DetailValue] = {
         "ok": verify.ok,
         "command": list(verify.command),
@@ -952,6 +958,33 @@ def _verify_gate(
         finished["gate_attestation"] = cast(DetailValue, verify.attestation.to_record())
     journal.append("verification-finished", detail=finished)
     return verify
+
+
+def persist_report_artifacts(journal: NodeSink, report: Report, *, session: str) -> None:
+    """Persist a dispatch's raw report and stable oneharness correlation pointer."""
+    directory = journal.artifact_dir
+    labels = journal.labels
+    if directory is None:
+        return
+    report_path = (directory / "worker-report.json").resolve()
+    session_path = (directory / "oneharness-session.json").resolve()
+    atomic_json(report_path, report.raw or {})
+    run_id = labels.get("run_id")
+    round_value = labels.get("round")
+    node = labels.get("node")
+    typed_id = None
+    if run_id and round_value and node:
+        typed_id = str(GraphId(run_id, int(round_value), node))
+    atomic_json(
+        session_path,
+        {
+            "session": session,
+            "typed_id": typed_id,
+            "labels": dict(labels),
+        },
+    )
+    report.artifacts["worker_report"] = str(report_path)
+    report.artifacts["oneharness_session"] = str(session_path)
 
 
 def _run_steps(
@@ -1014,6 +1047,7 @@ def _run_steps(
             env=dispatch_env,
             cancel=cancel,
         )
+        persist_report_artifacts(log, report, session=f"{branch}:{sid}")
         reports[sid] = report
         if not report.completed:
             preserved = False
@@ -2564,6 +2598,15 @@ _emit = emit
 
 def result_payload(result: LifecycleResult) -> dict[str, Any]:
     """Serialize one lifecycle outcome for JSON output and the run ledger."""
+    artifacts: dict[str, str] = {}
+    if result.verify is not None and result.verify.log_path:
+        artifacts["gate_log"] = result.verify.log_path
+    if len(result.steps) == 1 and result.steps[0].report is not None:
+        report_artifacts = result.steps[0].report.artifacts
+        if worker_report := report_artifacts.get("worker_report"):
+            artifacts["worker_report"] = worker_report
+        if oneharness_session := report_artifacts.get("oneharness_session"):
+            artifacts["oneharness_session"] = oneharness_session
     return {
         "repo": result.repo,
         "execution_checkout": result.execution_checkout,
@@ -2593,6 +2636,7 @@ def result_payload(result: LifecycleResult) -> dict[str, Any]:
         "ok": result.ok,
         "pr": result.pr.url if result.pr else None,
         "detail": result.detail,
+        **({"artifacts": artifacts} if artifacts else {}),
         **({"deferred_cleanup": result.deferred_cleanup} if result.deferred_cleanup else {}),
         "follow_ups": result.report.assessment if result.report else None,
         "steps": [
@@ -2605,6 +2649,7 @@ def result_payload(result: LifecycleResult) -> dict[str, Any]:
                 # emit this additive report-v5 field; direct report propagation uses the same
                 # Report adapter and the CLI E2E proves its persisted consumer contract.
                 **({"telemetry": s.report.telemetry} if s.report and s.report.telemetry else {}),
+                **({"artifacts": s.report.artifacts} if s.report and s.report.artifacts else {}),
             }
             for s in result.steps
         ],

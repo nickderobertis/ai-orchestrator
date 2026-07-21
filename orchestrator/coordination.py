@@ -142,3 +142,23 @@ def atomic_json(path: Path, value: Mapping[str, Any]) -> None:
     finally:
         with suppress(FileNotFoundError):
             os.unlink(temporary)
+
+
+def atomic_text(path: Path, value: str) -> None:
+    """Atomically replace a UTF-8 text file and durably sync its directory."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(value)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+        directory = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+    finally:
+        with suppress(FileNotFoundError):
+            os.unlink(temporary)

@@ -23,7 +23,7 @@ import subprocess
 import sys
 import threading
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol, TypedDict, cast
@@ -44,7 +44,7 @@ from .config import ConfigError, build_effective_config, load_yaml
 from .coordination import atomic_json
 from .labels import LABEL_ENV, LabelError, merge_labels
 from .personas import persona_path
-from .runs import resolve_run_dir, slugify
+from .runs import ArtifactPaths, resolve_run_dir, slugify
 
 # onejudge's own exit codes (see docs/cli.md): 0 completed + boolean evals passed,
 # 1 hit the turn cap / a boolean eval failed, 2 bad config or usage.
@@ -94,6 +94,7 @@ class Report:
     stderr: str
     assessment: str | None = None
     telemetry_data: dict[str, Any] | None = None
+    artifacts: ArtifactPaths = field(default_factory=ArtifactPaths)
 
     @property
     def telemetry(self) -> dict[str, Any] | None:
