@@ -909,10 +909,10 @@ class StepRun:
 
 
 # Lifecycle work commonly includes repository orientation, implementation, and a
-# complete gate in one agent step. Twenty-four turns gives each segment room for
-# those phases while two bounded continuations prevent a permanently stuck agent
-# from looping forever (72 turns total). Direct dispatches retain the lean shared
-# default from onejudge.base.yaml, and an explicit per-step max_turns still wins.
+# complete gate in one agent step. The lifecycle-specific budget gives each
+# segment room for those phases while bounded continuations prevent a permanently
+# stuck agent from looping forever. Direct dispatches retain the lean shared default
+# from onejudge.base.yaml, and an explicit per-step max_turns still wins.
 DEFAULT_LIFECYCLE_STEP_MAX_TURNS = 24
 MAX_AUTOMATIC_STEP_RESUMES = 2
 

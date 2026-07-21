@@ -1269,7 +1269,7 @@ def test_run_repo_task_journals_a_step_that_hit_the_turn_cap(tmp_path, bare_orig
     assert settled.detail["turns"] == 9
     # The turn cap preserved partial work on the branch; the journal is what says so.
     assert settled.detail["preserved"] is True
-    assert turn_budgets == [24, 24, 24]
+    assert turn_budgets == [lc.DEFAULT_LIFECYCLE_STEP_MAX_TURNS] * 3
     assert "pr-merged" not in [e.kind for e in journal.events()]
 
 
