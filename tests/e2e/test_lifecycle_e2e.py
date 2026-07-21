@@ -42,6 +42,7 @@ from orchestrator.github import PullRequest
 from orchestrator.graph import graph_payload, parse_graph, run_graph
 from orchestrator.journal import NodeJournal, NodeSink, open_journal
 from orchestrator.lifecycle import (
+    MAX_MERGE_CONFLICT_RESOLUTIONS,
     RepoPlan,
     RepoPlanNode,
     Resume,
@@ -1884,7 +1885,6 @@ def test_local_conflict_resolves_outside_queue_then_requeues_and_merges(
             resolution_calls.append(str(kwargs["session"]))
             path.write_text("first branch\nsecond branch\n", encoding="utf-8")
             gitops.add_all(project_dir)
-            gitops.commit(project_dir, "fix: resolve concurrent local edits")
         else:
             content = "first branch\n" if "first" in task else "second branch\n"
             path.write_text(content, encoding="utf-8")
@@ -1978,8 +1978,8 @@ def test_local_conflict_resolution_exhaustion_is_bounded(tmp_path, bare_origin) 
     )
 
     assert result.outcome == "sync-conflict"
-    assert resolutions == 2
-    assert "after 2 resolve-and-requeue cycles" in result.detail
+    assert resolutions == MAX_MERGE_CONFLICT_RESOLUTIONS
+    assert f"after {MAX_MERGE_CONFLICT_RESOLUTIONS} resolve-and-requeue cycles" in result.detail
 
 
 def test_local_repo_registry_gate_verifies_real_worktree(tmp_path, bare_origin) -> None:
@@ -2439,7 +2439,6 @@ def test_local_recovery_conflict_resumes_worker_then_requeues(tmp_path, bare_ori
         sessions.append(session)
         path.write_text("advanced base\npreserved branch by engineer\n", encoding="utf-8")
         gitops.add_all(project_dir)
-        gitops.commit(project_dir, "fix: resolve preserved recovery conflict")
         return Report(persona, 0, True, False, 2, [], {}, {}, "")
 
     recovered = recover_repo(
@@ -2533,8 +2532,8 @@ def test_local_recovery_conflict_resolution_exhaustion_is_bounded(tmp_path, bare
     )
 
     assert recovered.outcome == "sync-conflict"
-    assert resolutions == 2
-    assert "after 2 resolve-and-requeue cycles" in recovered.detail
+    assert resolutions == MAX_MERGE_CONFLICT_RESOLUTIONS
+    assert f"after {MAX_MERGE_CONFLICT_RESOLUTIONS} resolve-and-requeue cycles" in recovered.detail
 
 
 @pytest.mark.parametrize(

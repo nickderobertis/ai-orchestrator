@@ -234,7 +234,7 @@ the git identity, elapsed seconds, and the original one-based queue position.
 If the current base content-conflicts with a local branch at the head, the turn is
 dequeued before its original `branch:step` worker session resolves the conflict.
 The resolved branch takes a new ticket at the queue tail; it never holds the head
-while authoring. Two resolve-and-requeue cycles are allowed before the lifecycle
+while authoring. Resolve-and-requeue attempts are bounded before the lifecycle
 returns `sync-conflict` and retains the branch for manual recovery.
 
 - **`GitHubMergeStrategy`** (GitHub repos) — opens a PR, then merges it **only
@@ -500,8 +500,8 @@ command when it reports `not-completed`.
 Local recovery performs its base sync, complete gate, recovery attestation, branch
 push, and direct merge inside one FIFO turn. A content conflict dequeues the turn,
 resumes the worker session recorded by the incomplete step commit, and requeues at
-the tail after the worker commits a resolution. Recovery uses the same two-cycle
-bound. Missing or invalid worker metadata, an incomplete resolver, or exhausted
+the tail after the worker commits a resolution. Recovery uses the same bounded
+retry policy. Missing or invalid worker metadata, an incomplete resolver, or exhausted
 cycles returns `sync-conflict` without discarding the preserved branch.
 
 To continue authoring after a lifecycle node hits its turn cap, do not relaunch

@@ -52,7 +52,7 @@ __all__ = [
 ]
 
 MergePolicy = Literal["auto", "direct", "none"]
-MERGE_CONFLICT_RETRY = "merge-conflict-retry"
+MERGE_CONFLICT_RETRY: Literal["merge-conflict-retry"] = "merge-conflict-retry"
 
 
 @dataclass

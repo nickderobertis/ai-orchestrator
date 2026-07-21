@@ -168,7 +168,7 @@ def recover_repo(
             gitops.push(worktree, branch)
             return None
 
-        def prepare_local_recovery() -> MergeOutcome | None:
+        def synchronize_verify_attest_and_push_local_recovery() -> MergeOutcome | None:
             gitops.fetch(worktree)
             if not gitops.merge_base_into_branch(
                 worktree,
@@ -232,7 +232,11 @@ def recover_repo(
             repository_type=identity.repo_type,
             verify_command=command,
             verify_env=env,
-            local_prepare=(prepare_local_recovery if decision.workflow == "local" else None),
+            local_prepare=(
+                synchronize_verify_attest_and_push_local_recovery
+                if decision.workflow == "local"
+                else None
+            ),
         )
         published = strategy.publish_and_merge(context)
         conflict_resolutions = 0

@@ -1867,7 +1867,7 @@ def run_repo_task(
                 result.detail = f"authoritative CI {qualifier}; {assessment.detail}"
                 return result
 
-        def prepare_local_publication() -> MergeOutcome | None:
+        def synchronize_verify_and_push_local_publication() -> MergeOutcome | None:
             """Synchronize, verify, and push while holding this local queue turn."""
             gitops.fetch(worktree)
             if not gitops.merge_base_into_branch(
@@ -1946,7 +1946,9 @@ def run_repo_task(
             repository_type=effective_type,
             journal=log,
             preverified_pr=preverified_pr,
-            local_prepare=(prepare_local_publication if local_publication else None),
+            local_prepare=(
+                synchronize_verify_and_push_local_publication if local_publication else None
+            ),
         )
         merge_resolutions = 0
         while True:
