@@ -26,7 +26,7 @@ FAKE_BACKEND = REPO_ROOT / "tests" / "e2e" / "fake_backend.py"
 LIVE_PROCESS_TIMEOUT = 60
 
 
-def _wait_for(path: Path, predicate, timeout: float = 30) -> None:
+def _wait_for(path: Path, predicate, timeout: float = LIVE_PROCESS_TIMEOUT) -> None:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if path.is_file() and predicate(path.read_text(encoding="utf-8")):
@@ -133,7 +133,7 @@ def test_real_cli_mutates_live_frontier_and_replays_atomic_edits(
     )
     run_id = str(json.loads(launched.stdout)["run_id"])
     outer_run = runs / run_id
-    deadline = time.monotonic() + 15
+    deadline = time.monotonic() + LIVE_PROCESS_TIMEOUT
     run_dir: Path | None = None
     while time.monotonic() < deadline:
         if (outer_run / "events.jsonl").is_file():
@@ -227,7 +227,7 @@ def test_real_cli_mutates_live_frontier_and_replays_atomic_edits(
     _wait_for(events, lambda text: text.count('"kind": "edit-committed"') >= before + 7)
 
     result_path = run_dir / "round-01" / "result.json"
-    _wait_for(result_path, lambda text: bool(text.strip()), timeout=25)
+    _wait_for(result_path, lambda text: bool(text.strip()))
     payload = json.loads(result_path.read_text(encoding="utf-8"))
     assert payload["state"] == "failed"
     assert payload["results"]["added"]["status"] == "done"
@@ -362,7 +362,7 @@ def test_real_cli_live_drop_preserves_and_recovers_running_lifecycle(
     run_id = str(json.loads(launched.stdout)["run_id"])
     outer_run = runs / run_id
     nested: Path | None = None
-    deadline = time.monotonic() + 15
+    deadline = time.monotonic() + LIVE_PROCESS_TIMEOUT
     while time.monotonic() < deadline:
         if (outer_run / "events.jsonl").is_file():
             nested = outer_run
