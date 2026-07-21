@@ -40,6 +40,11 @@ readonly CARGO_BIN="$HOME/.cargo/bin"
 readonly NODE_BIN="$HOME/.local/node/bin"   # npm global prefix (codex lands here)
 readonly PROJECT_VENV_BIN="$REPO_ROOT/.venv/bin"
 export PATH="$PROJECT_VENV_BIN:$BIN_DIR:$CARGO_BIN:$NODE_BIN:$PATH"
+# llmlint otherwise forces its nested judge into oneharness read-only mode. For
+# codex that starts bubblewrap with a private network namespace; this host denies
+# the loopback RTM_NEWADDR operation. The container is already the worker sandbox,
+# so bypass the unsupported nested OS sandbox just as lifecycle dispatch does.
+export LLMLINT_ONEHARNESS_BIN="$REPO_ROOT/scripts/llmlint-oneharness.sh"
 
 log() { printf 'session-setup: %s\n' "$*" >&2; }
 
@@ -262,14 +267,21 @@ ensure_codex_gate() {
 
 persist_session_env() {
   [ -n "${CLAUDE_ENV_FILE:-}" ] || return 0
-  local path_export
+  local path_export has_path=0 has_llmlint_bin=0
   while IFS= read -r path_export; do
     case "$path_export" in
-      "export PATH="*"$NODE_BIN"*) return 0 ;;
+      "export PATH="*"$NODE_BIN"*) has_path=1 ;;
+      "export LLMLINT_ONEHARNESS_BIN="*) has_llmlint_bin=1 ;;
     esac
   done <"$CLAUDE_ENV_FILE" 2>/dev/null
-  printf -v path_export 'export PATH=%q' "$PATH"
-  printf '%s\n' "$path_export" >>"$CLAUDE_ENV_FILE"
+  if [ "$has_path" -eq 0 ]; then
+    printf -v path_export 'export PATH=%q' "$PATH"
+    printf '%s\n' "$path_export" >>"$CLAUDE_ENV_FILE"
+  fi
+  if [ "$has_llmlint_bin" -eq 0 ]; then
+    printf -v path_export 'export LLMLINT_ONEHARNESS_BIN=%q' "$LLMLINT_ONEHARNESS_BIN"
+    printf '%s\n' "$path_export" >>"$CLAUDE_ENV_FILE"
+  fi
 }
 
 if [[ ${BASH_SOURCE[0]} != "$0" ]]; then

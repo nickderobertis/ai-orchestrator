@@ -274,11 +274,15 @@ def _agent_run_context(
     cwd: the agent provider uses a wrapper that passes oneharness `--config`, and
     the judge side gets an absolute `provider.judge_config`. `oneharness_mode` is forwarded as
     `ONEHARNESS_MODE` (e.g. "bypass" where codex's OS sandbox can't initialize).
+    Bypass also tells llmlint to use the container boundary instead of asking its
+    nested read-only judge to create a network namespace unavailable on this host.
     """
     run_cwd: str | Path = cwd
     env: dict[str, str] = {}
     if oneharness_mode is not None:
         env["ONEHARNESS_MODE"] = oneharness_mode
+        if oneharness_mode == "bypass":
+            env["LLMLINT_ONEHARNESS_BIN"] = str(REPO_ROOT / "scripts/llmlint-oneharness.sh")
     if project_dir is not None:
         run_cwd = project_dir
         prov = config.get("provider", {})
