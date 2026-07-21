@@ -249,7 +249,8 @@ def recover_repo(
                 gitops.merge_abort(worktree)
                 published = MergeOutcome(
                     "sync-conflict",
-                    f"preserved branch {branch!r} has no resumable worker metadata",
+                    f"preserved branch {branch!r} has no resumable worker metadata; "
+                    "resolve the conflict manually, then retry",
                 )
                 break
             step_id, persona = match.groups()

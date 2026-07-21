@@ -1475,6 +1475,7 @@ def run_repo_task(
         result.repository_type = effective_type
         result.merge_policy = decision.merge_policy
         strategy = _select_merge_strategy(ref, merge, github, decision.workflow)
+        local_publication = isinstance(strategy, LocalMergeStrategy)
         root_base = (
             base_branch or (resume.base_branch if resume else None) or gitops.default_branch(clone)
         )
@@ -1724,7 +1725,7 @@ def run_repo_task(
         if preserve_cancelled("after dispatch"):
             return result
 
-        if decision.workflow != "local":
+        if not local_publication:
             with advisory_lock(f"git:{gitops.common_dir(worktree)}"):
                 gitops.fetch(worktree)
             if not gitops.merge_base_into_branch(
@@ -1739,7 +1740,7 @@ def run_repo_task(
                 )
                 return result
 
-        if decision.workflow != "local" and not skip_verify and not verify_via_ci:
+        if not local_publication and not skip_verify and not verify_via_ci:
             cmd = resolved_verify_cmd
             if cmd is not None:
                 verify = _verify_gate(
@@ -1764,7 +1765,7 @@ def run_repo_task(
         if preserve_cancelled("after verification"):
             return result
 
-        if (
+        if not local_publication and (
             result.retry_lineage
             and result.retry_lineage.disposition == "reused"
             and result.verify is not None
@@ -1778,7 +1779,11 @@ def run_repo_task(
                     "chore: attest verified recovery of preserved work\n\n" + trailers,
                 )
                 result.retry_lineage.disposition = "recovered"
-        if result.retry_lineage and unattested_incomplete(worktree, remote_base, "HEAD"):
+        if (
+            not local_publication
+            and result.retry_lineage
+            and unattested_incomplete(worktree, remote_base, "HEAD")
+        ):
             result.outcome = "not-completed"
             result.detail = (
                 "preserved retry completed but cannot be recovered without a successful "
@@ -1819,7 +1824,7 @@ def run_repo_task(
         # only at the checkpoints above. Once push/publication begins, it runs to an
         # authoritative outcome so a late request cannot strand a pushed branch or
         # report already-merged work as discarded.
-        if decision.workflow != "local":
+        if not local_publication:
             gitops.push(worktree, branch)
         preverified_pr: PullRequest | None = None
         if verify_via_ci:
@@ -1898,6 +1903,23 @@ def run_repo_task(
                         )
                 else:
                     result.detail = "no local gate configured; relying on required CI checks"
+            if preserve_cancelled("after verification"):
+                return MergeOutcome(result.outcome, result.detail)
+            if result.retry_lineage and result.verify is not None and result.verify.ok:
+                missing = sorted(unattested_incomplete(worktree, remote_base, "HEAD"))
+                if missing:
+                    trailers = "\n".join(f"{RECOVERY_TRAILER} {sha}" for sha in missing)
+                    gitops.commit_empty(
+                        worktree,
+                        "chore: attest verified recovery of preserved work\n\n" + trailers,
+                    )
+                    result.retry_lineage.disposition = "recovered"
+            if result.retry_lineage and unattested_incomplete(worktree, remote_base, "HEAD"):
+                return MergeOutcome(
+                    "not-completed",
+                    "preserved retry completed but cannot be recovered without a successful "
+                    "complete gate; retry with the repository gate enabled",
+                )
             gitops.push(worktree, branch)
             return None
 
@@ -1925,7 +1947,7 @@ def run_repo_task(
             repository_type=effective_type,
             journal=log,
             preverified_pr=preverified_pr,
-            local_prepare=(prepare_local_publication if decision.workflow == "local" else None),
+            local_prepare=(prepare_local_publication if local_publication else None),
         )
         merge_resolutions = 0
         while True:
