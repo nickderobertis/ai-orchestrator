@@ -14,6 +14,7 @@ from orchestrator.config import ConfigError
 from orchestrator.github import CliGitHubBackend, PRStatus, PullRequest
 from orchestrator.journal import NodeJournal, open_journal
 from orchestrator.lifecycle import (
+    AI_ORCHESTRATOR_IDENTITY,
     PR_OPTIONAL_SECTIONS,
     PR_REQUIRED_SECTIONS,
     TASK_OPTIONAL_SECTIONS,
@@ -62,6 +63,13 @@ def test_resume_and_retry_lineage_payload_contracts_cannot_drift() -> None:
     assert {field.name for field in fields(RetryLineage)} == (
         RetryLineagePayload.__required_keys__ | RetryLineagePayload.__optional_keys__
     )
+
+
+def test_documented_llmlint_wrapper_identity_matches_routing_constant() -> None:
+    documentation = (Path(__file__).parents[1] / "docs" / "repo-lifecycle.md").read_text(
+        encoding="utf-8"
+    )
+    assert f"identity is `{AI_ORCHESTRATOR_IDENTITY}`" in documentation
 
 
 # --- helpers ---------------------------------------------------------------
@@ -1180,9 +1188,11 @@ def test_run_repo_task_journals_the_workstream_and_labels_each_dispatch(
     origin = bare_origin()
     publication = gitops.clone(origin, tmp_path / "publication")
     labelled: dict[str, dict[str, str]] = {}
+    wrapper_modes: list[bool] = []
 
     def fake_dispatch(persona, task, *, project_dir, labels=None, **kw):
         labelled[task] = dict(labels or {})
+        wrapper_modes.append(kw["use_llmlint_wrapper"])
         Path(project_dir, f"{task}.txt").write_text(f"{task}\n", encoding="utf-8")
         return Report(persona, 0, True, False, 1, [], {}, {}, "")
 
@@ -1208,6 +1218,7 @@ def test_run_repo_task_journals_the_workstream_and_labels_each_dispatch(
     )
 
     assert result.outcome == "merged"
+    assert wrapper_modes == [False, False]
     events = journal.events()
     located = [(e.kind, e.step) for e in events]
     assert ("branch-discovered", None) in located

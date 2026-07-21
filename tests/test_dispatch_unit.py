@@ -182,6 +182,18 @@ def test_agent_run_context_forwards_mode() -> None:
     assert env["LLMLINT_ONEHARNESS_BIN"] == str(REPO_ROOT / "scripts/llmlint-oneharness.sh")
 
 
+def test_agent_run_context_omits_llmlint_wrapper_for_foreign_repository() -> None:
+    cfg: dict = {"provider": {}}
+    _, env = _agent_run_context(
+        cfg,
+        cwd="/repo",
+        project_dir="/work/foreign",
+        oneharness_mode="bypass",
+        use_llmlint_wrapper=False,
+    )
+    assert env == {"ONEHARNESS_MODE": "bypass"}
+
+
 def test_agent_run_context_keeps_llmlint_sandbox_for_non_bypass_mode() -> None:
     cfg: dict = {"provider": {}}
     _, env = _agent_run_context(cfg, cwd="/repo", project_dir=None, oneharness_mode="auto")

@@ -131,6 +131,8 @@ watch the CI run for that pushed head. If any required (blocking) check fails, r
 the cause, commit and push again, and repeat until every required check is green. A passing local
 gate alone is not done."""
 
+AI_ORCHESTRATOR_IDENTITY = IdentityKey("https://github.com/nickderobertis/ai-orchestrator")
+
 
 class DispatchFn(Protocol):
     """Structural boundary implemented by the real and deterministic dispatchers."""
@@ -142,6 +144,7 @@ class DispatchFn(Protocol):
         *,
         project_dir: str | None = None,
         oneharness_mode: str | None = None,
+        use_llmlint_wrapper: bool = True,
         base_path: str | Path = BASE_CONFIG,
         persona_dir: str | Path = PERSONA_DIR,
         session: str | None = None,
@@ -609,6 +612,7 @@ def _draft_pr_body(
     persona_dir: str | Path,
     journal: NodeSink,
     dispatch_env: dict[str, str],
+    use_llmlint_wrapper: bool = True,
 ) -> str:
     """Draft a diff-derived body, falling back without blocking publication."""
     journal.append("pr-drafting-started", detail={"base": remote_base})
@@ -620,6 +624,7 @@ def _draft_pr_body(
                 _drafting_task(output_path, remote_base, steps),
                 project_dir=str(worktree),
                 oneharness_mode=oneharness_mode,
+                use_llmlint_wrapper=use_llmlint_wrapper,
                 base_path=base_path,
                 persona_dir=persona_dir,
                 session="pr-author",
@@ -995,6 +1000,7 @@ def _run_steps(
     pr_base: str,
     dispatch_fn: DispatchFn,
     oneharness_mode: str | None,
+    use_llmlint_wrapper: bool,
     base_path: str | Path,
     persona_dir: str | Path,
     journal: NodeSink,
@@ -1037,6 +1043,7 @@ def _run_steps(
             step.task,
             project_dir=str(worktree),
             oneharness_mode=oneharness_mode,
+            use_llmlint_wrapper=use_llmlint_wrapper,
             base_path=base_path,
             persona_dir=persona_dir,
             session=f"{branch}:{sid}",
@@ -1233,6 +1240,7 @@ def _pause_at_human_step(
     cache_env: dict[str, str],
     dispatch_fn: DispatchFn,
     oneharness_mode: str | None,
+    use_llmlint_wrapper: bool,
     base_path: str | Path,
     persona_dir: str | Path,
 ) -> LifecycleResult:
@@ -1309,6 +1317,7 @@ def _pause_at_human_step(
                 fallback=fallback_body,
                 dispatch_fn=dispatch_fn,
                 oneharness_mode=oneharness_mode,
+                use_llmlint_wrapper=use_llmlint_wrapper,
                 base_path=base_path,
                 persona_dir=persona_dir,
                 journal=journal,
@@ -1436,6 +1445,9 @@ def run_repo_task(
             repo_type=repo_type,
         )
         selection = workspace.selection(ref)
+        use_llmlint_wrapper = (
+            str(selection.publication_identity).casefold() == AI_ORCHESTRATOR_IDENTITY
+        )
         cache_env = {CACHE_ENV: str(workspace.ensure_cache_dir(ref))}
         registered_workflow = selection.workflow
         if (
@@ -1629,6 +1641,7 @@ def run_repo_task(
                 pr_base=pr_base,
                 dispatch_fn=dispatch_fn,
                 oneharness_mode=oneharness_mode,
+                use_llmlint_wrapper=use_llmlint_wrapper,
                 base_path=base_path,
                 persona_dir=persona_dir,
                 journal=log,
@@ -1706,6 +1719,7 @@ def run_repo_task(
                 cache_env=cache_env,
                 dispatch_fn=dispatch_fn,
                 oneharness_mode=oneharness_mode,
+                use_llmlint_wrapper=use_llmlint_wrapper,
                 base_path=base_path,
                 persona_dir=persona_dir,
             )
@@ -1798,6 +1812,7 @@ def run_repo_task(
                 fallback=fallback_body,
                 dispatch_fn=dispatch_fn,
                 oneharness_mode=oneharness_mode,
+                use_llmlint_wrapper=use_llmlint_wrapper,
                 base_path=base_path,
                 persona_dir=persona_dir,
                 journal=log,
