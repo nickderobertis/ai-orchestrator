@@ -167,6 +167,7 @@ def test_breakdown_aggregates_real_multirole_history_records(
     assert run["nodes"][0]["timing"]["fractions"] == {
         "agent_model": 0.48,
         "judge_model": 0.32,
+        "llmlint_model": 0.0,
         "tool": 0.2,
         "idle_orchestration": 0.0,
         "lock_wait": 0.0,
@@ -175,7 +176,13 @@ def test_breakdown_aggregates_real_multirole_history_records(
     }
     assert run["nodes"][0]["turns"] == 2
     assert run["nodes"][0]["tool_commands"] == {"gate": 2}
-    assert set(run["node_work_ms"]) == {"agent_model_ms", "judge_model_ms", "tool_ms", "wall_ms"}
+    assert set(run["node_work_ms"]) == {
+        "agent_model_ms",
+        "judge_model_ms",
+        "llmlint_model_ms",
+        "tool_ms",
+        "wall_ms",
+    }
     assert run["telemetry_quality"] == "complete"
     assert run["sources"] == ["onejudge", "oneharness", "history_legacy", "journal_legacy"]
 

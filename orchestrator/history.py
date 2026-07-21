@@ -34,8 +34,15 @@ JUDGE_PREFIXES = (
     "you-are-a-strict-careful-evaluator",
     "you-are-roleplaying-the-user-in",
 )
+LLMLINT_PROMPT_PREFIXES = (
+    "Evaluate each rule against the target files",
+    "Your previous verdict reported rule violations in files that those rules do not cover",
+)
+LLMLINT_NAME_PREFIXES = tuple(
+    re.sub(r"[^a-z0-9]+", "-", prompt.lower()).strip("-") for prompt in LLMLINT_PROMPT_PREFIXES
+)
 SessionId = NewType("SessionId", str)
-SessionRole = Literal["agent", "judge"]
+SessionRole = Literal["agent", "judge", "llmlint"]
 
 
 def _session_labels(value: object) -> dict[str, str]:
@@ -132,15 +139,40 @@ def _records(path: Path) -> list[dict[str, Any]]:
 
 
 def _is_worker(session: HistorySession) -> bool:
-    return not session.name.startswith(JUDGE_PREFIXES)
+    return session_role(session) == "agent"
+
+
+def _strings(value: object) -> Iterator[str]:
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for item in value.values():
+            yield from _strings(item)
+    elif isinstance(value, list):
+        for item in value:
+            yield from _strings(item)
+
+
+def _is_llmlint(session: HistorySession) -> bool:
+    if session.name.startswith(LLMLINT_NAME_PREFIXES):
+        return True
+    try:
+        records = _records(session.path)
+    except HistoryError:
+        return False
+    return bool(records) and any(
+        value.startswith(LLMLINT_PROMPT_PREFIXES) for value in _strings(records[0])
+    )
 
 
 def session_role(session: HistorySession) -> SessionRole:
     """Classify a session from its validated label, falling back for legacy history."""
     role = session.labels.get("role")
-    if role in {"agent", "judge"}:
+    if role in {"agent", "judge", "llmlint"}:
         return cast(SessionRole, role)
-    return "agent" if _is_worker(session) else "judge"
+    if _is_llmlint(session):
+        return "llmlint"
+    return "judge" if session.name.startswith(JUDGE_PREFIXES) else "agent"
 
 
 def _sessions(value: Any) -> list[HistorySession]:

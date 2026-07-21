@@ -20,7 +20,7 @@ For every graph node, and for the run as a whole, telemetry must answer:
 - How much and what fraction was tool execution?
 - How much and what fraction was idle/orchestration time?
 - How many input, output, cache-read, and cache-write tokens were consumed, and
-  what was their `cost_usd`, separately for the agent and judge?
+  what was their `cost_usd`, separately for the agent, judge, and llmlint?
 - Which values are measured from the new contracts, which are derived from
   legacy data, and how much wall time remains unattributed?
 
@@ -144,8 +144,16 @@ as `null`.
 
 The timing model landed in index version 2. Index version 3 added optional
 onejudge-linked session timestamps used by the human timeline. Index version 4
-adds harness-overhead timing for lock waits, repository setup, and scheduling;
-its checked-in golden moves in the same change. `RunTelemetry` includes:
+added harness-overhead timing for lock waits, repository setup, and scheduling.
+Index version 5 adds the third `llmlint` session role and its checked-in golden.
+`RunTelemetry` includes:
+
+### Three session roles
+
+`agent` (shown as WORKER) and `judge` are the supervised conversation roles and
+alone contribute to `turns`, the quantity bounded by `max_turns`. `llmlint` is a
+nested lint role and never consumes that turn budget. Its wrong-file correction
+prompt is the lint retry loop, so those invocations contribute to `lint` instead.
 
 - `timing.agent_model_ms`, `timing.judge_model_ms`, `timing.tool_ms`,
   `timing.idle_orchestration_ms`, `timing.unattributed_ms`, and
@@ -157,10 +165,13 @@ its checked-in golden moves in the same change. `RunTelemetry` includes:
   `timing.fractions.tool`, `timing.fractions.idle_orchestration`,
   `timing.fractions.lock_wait`, `timing.fractions.setup`, and
   `timing.fractions.scheduling`.
-- `usage.agent`, `usage.judge`, and `usage.total`, each with
+- `usage.agent`, `usage.judge`, `usage.llmlint`, and `usage.total`, each with
   `input_tokens`, `output_tokens`, `cache_read_tokens`,
   `cache_write_tokens`, and `cost_usd`.
 - `nodes[].timing` and `nodes[].usage` with the same shapes.
+- Run and node `lint` counts, distinct from worker/judge `turns`, plus
+  `timing.llmlint_model_ms`, `timing.llmlint_seconds`, and
+  `timing.fractions.llmlint_model`.
 - `nodes[].sessions`, containing the linked `session_id`, `history_id`, `role`,
   and `turn_index` for drill-down.
 - `telemetry_quality`: `complete`, `partial`, or `legacy`, plus `sources`, the
@@ -177,7 +188,7 @@ wall budget in display order. Together with model, tool, lock, setup, scheduling
 and idle fields, their millisecond values sum exactly to `wall_ms`. They do not
 participate in the model/tool/idle fractions.
 
-The version-4 command keeps JSON as the default and provides `--breakdown` for a stable
+The version-5 command keeps JSON as the default and provides `--breakdown` for a stable
 human-readable view. The breakdown shows one run row followed by node rows with
 wall duration, milliseconds and percentages for the four categories,
 unattributed duration, agent/judge input and output tokens, cache tokens, total
@@ -194,8 +205,9 @@ fallback inputs are `labels.role`, `labels.run_id`, per-record `duration_ms`,
 Session selection is common to every row below. Prefer onejudge's native
 `telemetry.sessions` linkage. Otherwise select sessions whose `labels.run_id`
 matches the run and classify each by `labels.role`. Only when `labels.role` is
-absent may the existing recognized judge name prefixes classify a legacy session;
-all other legacy sessions are agent sessions. A node additionally requires the
+absent, recognize llmlint's evaluation and wrong-file-correction prompt prefixes
+(or their slugified session names) before applying the existing judge-name
+fallback; all other legacy sessions are agent sessions. A node additionally requires the
 matching `labels.node` (and `labels.step` when producing a step-scoped value).
 Records that cannot be linked to the run are not consumed.
 
@@ -236,8 +248,9 @@ same field from role-linked oneharness records, then aggregate today's per-recor
 `null` when any contributing linked record lacks that field; it is `0` only when
 all contributing records report measured zero. An empty party with authoritative
 native linkage has measured zero usage; a party that cannot be linked has unknown
-usage (`null`). Totals are `null` if either party is unknown and otherwise are
-the arithmetic sum; this prevents a partial total from looking complete.
+usage (`null`). An absent llmlint role is measured zero. Totals are `null` if any
+contributing role is unknown and otherwise are the arithmetic sum; this prevents
+a partial total from looking complete.
 
 | Consumer field | Preferred source | Exact legacy fallback and emitted value |
 | --- | --- | --- |
@@ -251,11 +264,8 @@ the arithmetic sum; this prevents a partial total from looking complete.
 | `usage.judge.cache_read_tokens` | onejudge `telemetry.judge.usage.cache_read_tokens` | Sum judge-linked `usage.cache_read_tokens`; otherwise `null`. |
 | `usage.judge.cache_write_tokens` | onejudge `telemetry.judge.usage.cache_write_tokens` | Sum judge-linked `usage.cache_write_tokens`; otherwise `null`. |
 | `usage.judge.cost_usd` | onejudge `telemetry.judge.usage.cost_usd` | Sum judge-linked `usage.cost_usd`; otherwise `null`. Never derive cost from tokens locally. |
-| `usage.total.input_tokens` | Sum emitted agent and judge `input_tokens` | Sum only when both are known; otherwise `null`. |
-| `usage.total.output_tokens` | Sum emitted agent and judge `output_tokens` | Sum only when both are known; otherwise `null`. |
-| `usage.total.cache_read_tokens` | Sum emitted agent and judge `cache_read_tokens` | Sum only when both are known; otherwise `null`. |
-| `usage.total.cache_write_tokens` | Sum emitted agent and judge `cache_write_tokens` | Sum only when both are known; otherwise `null`. |
-| `usage.total.cost_usd` | Sum emitted agent and judge `cost_usd` | Sum only when both are known; otherwise `null`. |
+| `usage.llmlint.*` | Linked llmlint oneharness records | Apply the same per-field aggregation and unknown rules as agent and judge; emit measured zero when no llmlint session is linked. |
+| `usage.total.*` | Sum emitted agent, judge, and llmlint fields | Sum only when all contributing roles are known; otherwise `null`. |
 
 `nodes[].usage` applies this exact table to sessions selected by the node labels.
 It does not apportion a run-level usage value across nodes. Unknown fields render
@@ -317,8 +327,8 @@ upstream schema additions:
   aggregation helper. The latest record continues to supply latest status and
   text, never total duration.
 
-The version-4 implementation requires realistic fixtures containing linked
-agent and judge sessions, multiple records, timed tool events, partial new
+The version-5 implementation requires realistic fixtures containing linked
+agent, judge, and llmlint sessions, multiple records, timed tool events, partial new
 fields, and pure legacy records. Its acceptance must exercise the real `just
 telemetry` command and prove exact per-node/run arithmetic, overlap handling,
 token/cost preservation, invalid-field degradation, omission on round-trip, and

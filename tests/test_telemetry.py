@@ -249,14 +249,14 @@ def test_over_budget_buckets_are_clipped_to_exactly_wall_time() -> None:
     assert timing["publication_wait_seconds"] == 0
 
 
-def test_schema_v4_field_golden_prevents_cross_layer_drift() -> None:
+def test_schema_v5_field_golden_prevents_cross_layer_drift() -> None:
     golden = json.loads(
-        (Path(__file__).parent / "golden" / "telemetry-v4-fields.json").read_text(encoding="utf-8")
+        (Path(__file__).parent / "golden" / "telemetry-v5-fields.json").read_text(encoding="utf-8")
     )
     assert golden == {
         "schema_version": TELEMETRY_SCHEMA_VERSION,
         "history_schema_versions": list(SUPPORTED_HISTORY_SCHEMA_VERSIONS),
-        "roles": ["agent", "judge"],
+        "roles": ["agent", "judge", "llmlint"],
         "qualities": ["complete", "legacy", "partial"],
         "sources": ["history_legacy", "journal_legacy", "oneharness", "onejudge"],
         "timing": sorted(TimingRecord.__required_keys__),
@@ -267,7 +267,7 @@ def test_schema_v4_field_golden_prevents_cross_layer_drift() -> None:
     contract = (Path(__file__).parents[1] / "docs" / "telemetry-model.md").read_text(
         encoding="utf-8"
     )
-    assert "Index version 4" in contract
+    assert "Index version 5" in contract
     for value in (*golden["roles"], *golden["qualities"], *golden["sources"]):
         assert f"`{value}`" in contract
 
@@ -280,7 +280,7 @@ def test_index_cli_defaults_to_active_and_all_includes_settled(
     completed.rename(tmp_path / "runs" / "complete")
     assert main(["--runs-dir", str(tmp_path / "runs"), "--oneharness-bin", "absent"]) == 0
     active = json.loads(capsys.readouterr().out)
-    assert active["schema_version"] == 4
+    assert active["schema_version"] == 5
     assert active["runs"] == []
     assert active["metrics"]["recovered_branches"] == 0
 
@@ -334,21 +334,32 @@ def test_native_timing_usage_tools_and_breakdown_are_role_and_node_scoped(
             {"run_id": "observed", "node": "api", "role": role},
         )
 
-    sessions = [session("agent", 20, 12, 5), session("judge", 10, 8, 0)]
+    sessions = [
+        session("agent", 20, 12, 5),
+        session("judge", 10, 8, 0),
+        session("llmlint", 30, 20, 1),
+    ]
     monkeypatch.setattr(telemetry_module, "all_sessions", lambda **_kwargs: sessions)
     telemetry = collect_run(run_dir)
     assert telemetry is not None
     record = telemetry.record()
     assert record["timing"]["agent_model_ms"] == record["nodes"][0]["timing"]["agent_model_ms"]
     assert record["timing"]["judge_model_ms"] == 8
-    assert record["timing"]["tool_ms"] == 5
-    assert record["usage"]["total"]["input_tokens"] == 13
-    assert record["usage"]["total"]["cost_usd"] == pytest.approx(0.03)
+    assert record["timing"]["llmlint_model_ms"] == 20
+    assert record["timing"]["tool_ms"] == 6
+    assert record["usage"]["llmlint"]["input_tokens"] == 3
+    assert record["usage"]["total"]["input_tokens"] == 16
+    assert record["usage"]["total"]["cost_usd"] == pytest.approx(0.04)
     assert record["nodes"][0]["sessions"][1]["role"] == "judge"
-    assert record["nodes"][0]["tool_commands"] == {"gate": 2}
+    assert record["nodes"][0]["sessions"][2]["role"] == "llmlint"
+    assert record["nodes"][0]["tool_commands"] == {"gate": 3}
+    assert record["turns"] == record["nodes"][0]["turns"] == 2
+    assert record["lint"] == record["nodes"][0]["lint"] == 1
     assert record["telemetry_quality"] == "legacy"
     assert main(["--runs-dir", str(tmp_path / "runs"), "--all", "--breakdown"]) == 0
-    assert "Turn histogram:" in capsys.readouterr().out
+    breakdown = capsys.readouterr().out
+    assert "WORKER" in breakdown and "JUDGE" in breakdown and "LLMLINT" in breakdown
+    assert "Turn histogram (worker<->judge only): 2=1" in breakdown
 
 
 def test_session_normalization_degrades_each_field_independently(tmp_path: Path) -> None:

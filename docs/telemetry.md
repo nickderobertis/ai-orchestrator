@@ -12,17 +12,17 @@ The breakdown prints a run row and an indented row for every node. A typical
 enriched row and timeline look like this:
 
 ```text
-RUN/NODE              WALL   AGENT       JUDGE       TOOL        GATE PUB LOCK SETUP SCHED IDLE UNATTR  TOKENS IN A/J OUT A/J  CACHE R/W  COST  TURNS QUALITY
-deploy                 950ms   500 52.6%   120 12.6%   100 10.5%   40  20   10    30    20   110 11.6%      0  420/90 85/18 300/0 0.014 4 complete
+RUN/NODE              WALL   WORKER      JUDGE       LLMLINT     TOOL        ... WORKER S/M/T JUDGE S/M/T LLMLINT S/M/T ... TURNS LINT QUALITY
+deploy                 950ms   500 52.6%   120 12.6%    80 8.4%   100 10.5%  ... 2/0.01/505 2/0.00/108 3/0.00/72 ... 4 3 complete
   Timeline (UTC):
     turn 0 agent: 2026-07-19T12:00:00Z -> 2026-07-19T12:00:00.600Z [agent-7]
     turn 1 judge: 2026-07-19T12:00:00.600Z -> 2026-07-19T12:00:00.720Z [judge-2]
-Turn histogram: 4=1
+Turn histogram (worker<->judge only): 4=1
 ```
 
 `WALL` is elapsed run or node time, not summed work; concurrent node time is
-available as `node_work_ms` in JSON. `AGENT` and `JUDGE` are measured provider
-latency for their respective roles. `TOOL` is measured execution inside tool
+available as `node_work_ms` in JSON. `WORKER`, `JUDGE`, and `LLMLINT` are measured
+provider latency for their respective roles. `TOOL` is measured execution inside tool
 calls. `IDLE` is the non-negative remainder: orchestration, process handoffs,
 unknown time after the explicit harness buckets. `LOCK` is time waiting for
 process-shared locks, `SETUP` is fetch and worktree creation, and `SCHED` is time
@@ -35,11 +35,21 @@ remaining wall budget, so the displayed model, tool, gate, publication, lock,
 setup, scheduling, and idle buckets sum exactly to `WALL` even when raw journal
 intervals overlap.
 
-`TOKENS IN A/J` and `OUT A/J` are agent/judge input and output tokens. `CACHE
-R/W` is total cache-read/cache-write tokens, `COST` is total `cost_usd`, and
-`TURNS` feeds the histogram at the bottom. A `?` means unknown; it never means
+Each `S/M/T` bucket is sessions/measured-model-minutes/total input-plus-output
+tokens. `CACHE R/W` is total cache-read/cache-write tokens, `COST` is total
+`cost_usd`, and `TURNS` feeds the worker/judge-only histogram at the bottom.
+`LINT` counts llmlint provider invocations. A `?` means unknown; it never means
 measured zero. JSON contains the same counters separately under `usage.agent`,
-`usage.judge`, and `usage.total`, both per run and per node.
+`usage.judge`, `usage.llmlint`, and `usage.total`, both per run and per node;
+`timing.llmlint_model_ms` and `lint` carry the corresponding timing and count.
+
+## Three session roles
+
+Worker (`agent`) and judge sessions form the supervised conversation, so only
+they count toward `turns` and the configured `max_turns`. `llmlint` sessions are
+nested rule evaluations and never count against that budget. A wrong-file
+correction prompt is llmlint's retry loop, and is counted under `lint` rather
+than as worker or judge pushback.
 
 ## Full timing versus fallback
 
@@ -50,8 +60,8 @@ agent and judge sessions by `turn_index`. `QUALITY complete` means authoritative
 role linkage and complete timing were available.
 
 Pre-upgrade reports and history remain readable through a documented fallback.
-Missing onejudge linkage falls back
-to `labels.role` (then recognized legacy judge names), and missing timed fields
+Missing onejudge linkage falls back to `labels.role`, then recognized legacy
+llmlint prompt/name signatures before recognized judge names, and missing timed fields
 fall back to journal wall time. Untimed `command_execution` events still identify
 the dominant command class, but do not invent a duration: model and tool time
 remain zero and the unknown share appears in `UNATTR`. The breakdown says

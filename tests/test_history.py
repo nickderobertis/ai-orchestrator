@@ -140,6 +140,38 @@ def test_session_identity_role_and_duration_accept_legacy_records_defensively(
     )
     assert session_role(labelled) == session_role(legacy_judge) == "judge"
     assert session_role(legacy_agent) == "agent"
+    evaluation_path = tmp_path / "evaluation.jsonl"
+    evaluation_path.write_text(
+        '{"prompt":"Evaluate each rule against the target files in this repository"}\n',
+        encoding="utf-8",
+    )
+    legacy_llmlint = HistorySession(
+        SessionId("legacy-lint"),
+        "unhelpful-legacy-name",
+        tmp_path,
+        "now",
+        evaluation_path,
+        {},
+    )
+    correction_llmlint = HistorySession(
+        SessionId("correction-lint"),
+        "your-previous-verdict-reported-rule-violations-in-files-that-those-rules-do-not-cover",
+        tmp_path,
+        "now",
+        tmp_path / "missing",
+        {},
+    )
+    labelled_llmlint = HistorySession(
+        SessionId("labelled-lint"),
+        "anything",
+        tmp_path,
+        "now",
+        tmp_path / "missing",
+        {"role": "llmlint"},
+    )
+    assert session_role(legacy_llmlint) == "llmlint"
+    assert session_role(correction_llmlint) == "llmlint"
+    assert session_role(labelled_llmlint) == "llmlint"
     assert (
         session_duration_ms(
             [{"duration_ms": 5}, {"duration_ms": -1}, {"duration_ms": True}, {"duration_ms": 2.5}]

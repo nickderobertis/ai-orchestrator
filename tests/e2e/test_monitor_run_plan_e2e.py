@@ -298,7 +298,7 @@ def test_real_history_labels_and_cursor_watch(oneharness_bin: str, tmp_path: Pat
     )
     assert indexed.returncode == 0, indexed.stderr
     run = json.loads(indexed.stdout)["runs"][0]
-    assert json.loads(indexed.stdout)["schema_version"] == 4
+    assert json.loads(indexed.stdout)["schema_version"] == 5
     native_records = {
         role: [json.loads(line) for line in Path(record["path"]).read_text().splitlines()]
         for role, record in by_role.items()
@@ -336,6 +336,8 @@ def test_real_history_labels_and_cursor_watch(oneharness_bin: str, tmp_path: Pat
     assert run["turns"] == sum(
         len(items) for role, items in native_records.items() if role != "llmlint"
     )
+    assert run["lint"] == len(native_records["llmlint"])
+    assert run["usage"]["llmlint"]["input_tokens"] is not None
     breakdown = _just(
         "telemetry",
         "--runs-dir",
@@ -347,7 +349,8 @@ def test_real_history_labels_and_cursor_watch(oneharness_bin: str, tmp_path: Pat
     )
     assert breakdown.returncode == 0, breakdown.stderr
     assert "history-turns" in breakdown.stdout
-    assert "Turn histogram:" in breakdown.stdout
+    assert "Turn histogram (worker<->judge only):" in breakdown.stdout
+    assert "LLMLINT" in breakdown.stdout and "LINT" in breakdown.stdout
 
 
 def test_real_run_plan_waits_then_monitor_exits_only_after_attestation(
