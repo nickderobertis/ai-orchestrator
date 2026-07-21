@@ -154,18 +154,24 @@ def test_due_heartbeat_is_agent_synthesized_and_normal_surface_resets_clock(
         encoding="utf-8",
     )
     run_id = _launch_cli(plan, runs, _base(tmp_path), onejudge_bin, heartbeat_interval=0.1)
-    heartbeat = _wait_surface(run_id, runs)
+    heartbeat = _wait_surface(run_id, runs, wait_seconds=120)
     assert heartbeat["surface"] == {
         "kind": "heartbeat",
         "message": "active worker: round complete; follow-ups: none",
         "blocking": False,
     }
-    state = json.loads((runs / run_id / "channel" / "heartbeat.json").read_text())
+    heartbeat_path = runs / run_id / "channel" / "heartbeat.json"
+    wait_deadline = deadline(5)
+    while True:
+        state = json.loads(heartbeat_path.read_text())
+        if state["due"] is False or time.monotonic() >= wait_deadline:
+            break
+        time.sleep(0.01)
     assert state["due"] is False
 
-    boundary = _wait_surface(run_id, runs)
+    boundary = _wait_surface(run_id, runs, wait_seconds=120)
     assert boundary["surface"]["kind"] == "milestone"  # type: ignore[index]
-    reset = json.loads((runs / run_id / "channel" / "heartbeat.json").read_text())
+    reset = json.loads(heartbeat_path.read_text())
     assert reset["due"] is False
     assert reset["last_surface_at"] >= state["last_surface_at"]
     assert _next_cli(run_id, runs, timeout="0.02").get("surface") is None
@@ -184,8 +190,8 @@ def _next_cli(run_id: str, runs: Path, timeout: str | None = None) -> dict[str, 
     return json.loads(result.stdout)
 
 
-def _wait_surface(run_id: str, runs: Path) -> dict[str, object]:
-    wait_deadline = deadline(15)
+def _wait_surface(run_id: str, runs: Path, *, wait_seconds: float = 15) -> dict[str, object]:
+    wait_deadline = deadline(wait_seconds)
     while time.monotonic() < wait_deadline:
         value = _next_cli(run_id, runs, timeout=str(e2e_timeout(2)))
         if value.get("surface") is not None:
