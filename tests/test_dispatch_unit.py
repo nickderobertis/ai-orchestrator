@@ -179,6 +179,13 @@ def test_agent_run_context_forwards_mode() -> None:
     cfg: dict = {"provider": {}}
     _, env = _agent_run_context(cfg, cwd="/repo", project_dir=None, oneharness_mode="bypass")
     assert env["ONEHARNESS_MODE"] == "bypass"
+    assert env["LLMLINT_ONEHARNESS_BIN"] == str(REPO_ROOT / "scripts/llmlint-oneharness.sh")
+
+
+def test_agent_run_context_keeps_llmlint_sandbox_for_non_bypass_mode() -> None:
+    cfg: dict = {"provider": {}}
+    _, env = _agent_run_context(cfg, cwd="/repo", project_dir=None, oneharness_mode="auto")
+    assert env == {"ONEHARNESS_MODE": "auto"}
 
 
 def test_agent_run_context_project_dir_absolutizes_judge_config() -> None:
@@ -189,6 +196,7 @@ def test_agent_run_context_project_dir_absolutizes_judge_config() -> None:
     assert run_cwd == "/work/target"
     assert cfg["provider"]["bin"] == str(AGENT_ONEHARNESS_BIN)
     assert env["ONEHARNESS_MODE"] == "bypass"
+    assert env["LLMLINT_ONEHARNESS_BIN"] == str(REPO_ROOT / "scripts/llmlint-oneharness.sh")
     assert cfg["provider"]["judge_config"] == str((REPO_ROOT / "oneharness.judge.toml").resolve())
 
 

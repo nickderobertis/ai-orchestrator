@@ -40,6 +40,10 @@ readonly CARGO_BIN="$HOME/.cargo/bin"
 readonly NODE_BIN="$HOME/.local/node/bin"   # npm global prefix (codex lands here)
 readonly PROJECT_VENV_BIN="$REPO_ROOT/.venv/bin"
 export PATH="$PROJECT_VENV_BIN:$BIN_DIR:$CARGO_BIN:$NODE_BIN:$PATH"
+# llmlint forces its nested judge into oneharness read-only mode. The wrapper
+# retains that filesystem boundary while granting network capability so codex
+# does not ask bubblewrap to configure loopback in a forbidden namespace.
+export LLMLINT_ONEHARNESS_BIN="$REPO_ROOT/scripts/llmlint-oneharness.sh"
 
 log() { printf 'session-setup: %s\n' "$*" >&2; }
 
@@ -262,14 +266,21 @@ ensure_codex_gate() {
 
 persist_session_env() {
   [ -n "${CLAUDE_ENV_FILE:-}" ] || return 0
-  local path_export
-  while IFS= read -r path_export; do
-    case "$path_export" in
-      "export PATH="*"$NODE_BIN"*) return 0 ;;
+  local env_export has_path=0 has_llmlint_bin=0
+  while IFS= read -r env_export; do
+    case "$env_export" in
+      "export PATH="*"$NODE_BIN"*) has_path=1 ;;
+      "export LLMLINT_ONEHARNESS_BIN="*) has_llmlint_bin=1 ;;
     esac
   done <"$CLAUDE_ENV_FILE" 2>/dev/null
-  printf -v path_export 'export PATH=%q' "$PATH"
-  printf '%s\n' "$path_export" >>"$CLAUDE_ENV_FILE"
+  if [ "$has_path" -eq 0 ]; then
+    printf -v env_export 'export PATH=%q' "$PATH"
+    printf '%s\n' "$env_export" >>"$CLAUDE_ENV_FILE"
+  fi
+  if [ "$has_llmlint_bin" -eq 0 ]; then
+    printf -v env_export 'export LLMLINT_ONEHARNESS_BIN=%q' "$LLMLINT_ONEHARNESS_BIN"
+    printf '%s\n' "$env_export" >>"$CLAUDE_ENV_FILE"
+  fi
 }
 
 if [[ ${BASH_SOURCE[0]} != "$0" ]]; then
