@@ -126,6 +126,49 @@ def test_breakdown_aggregates_real_multirole_history_records(
                 "labels": {"run_id": "telemetry-e2e", "node": "api", "role": role},
             }
         )
+    for session_id, name, prompt in (
+        (
+            "legacy-lint-prompt",
+            "unhelpful-legacy-name",
+            "Evaluate each rule against the target files in this repository",
+        ),
+        (
+            "legacy-lint-slug",
+            "your-previous-verdict-reported-rule-violations-in-files-that-those-rules-do-not-cover",
+            "legacy record without a direct prompt",
+        ),
+    ):
+        history = tmp_path / f"{session_id}.jsonl"
+        history.write_text(
+            json.dumps(
+                {
+                    "prompt": prompt,
+                    "duration_ms": 1,
+                    "model_ms": 0,
+                    "tool_ms": 0,
+                    "usage": {
+                        "input_tokens": 1,
+                        "output_tokens": 1,
+                        "cache_read_tokens": 0,
+                        "cache_write_tokens": 0,
+                        "cost_usd": 0.001,
+                    },
+                    "events": [],
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        sessions.append(
+            {
+                "id": session_id,
+                "name": name,
+                "project": str(tmp_path),
+                "started": "2026-07-19T00:00:00Z",
+                "path": str(history),
+                "labels": {"run_id": "telemetry-e2e", "node": "api"},
+            }
+        )
     store = tmp_path / "store.json"
     store.write_text(json.dumps({"sessions": sessions}), encoding="utf-8")
     oneharness = tmp_path / "oneharness"
@@ -160,10 +203,15 @@ def test_breakdown_aggregates_real_multirole_history_records(
     assert run["timing"]["agent_model_ms"] == 12
     assert run["timing"]["judge_model_ms"] == 8
     assert run["timing"]["tool_ms"] == 5
-    assert run["usage"]["total"]["input_tokens"] == 13
-    assert run["usage"]["total"]["cost_usd"] == 0.03
-    assert [link["role"] for link in run["nodes"][0]["sessions"]] == ["agent", "judge"]
-    assert run["nodes"][0]["usage"]["total"]["input_tokens"] == 13
+    assert run["usage"]["total"]["input_tokens"] == 15
+    assert run["usage"]["total"]["cost_usd"] == 0.032
+    assert [link["role"] for link in run["nodes"][0]["sessions"]] == [
+        "agent",
+        "judge",
+        "llmlint",
+        "llmlint",
+    ]
+    assert run["nodes"][0]["usage"]["total"]["input_tokens"] == 15
     assert run["nodes"][0]["timing"]["fractions"] == {
         "agent_model": 0.48,
         "judge_model": 0.32,
@@ -175,6 +223,7 @@ def test_breakdown_aggregates_real_multirole_history_records(
         "scheduling": 0.0,
     }
     assert run["nodes"][0]["turns"] == 2
+    assert run["nodes"][0]["lint"] == 2
     assert run["nodes"][0]["tool_commands"] == {"gate": 2}
     assert set(run["node_work_ms"]) == {
         "agent_model_ms",
@@ -183,7 +232,7 @@ def test_breakdown_aggregates_real_multirole_history_records(
         "tool_ms",
         "wall_ms",
     }
-    assert run["telemetry_quality"] == "complete"
+    assert run["telemetry_quality"] == "partial"
     assert run["sources"] == ["onejudge", "oneharness", "history_legacy", "journal_legacy"]
 
     breakdown = subprocess.run(
@@ -231,7 +280,7 @@ def test_breakdown_aggregates_real_multirole_history_records(
         run for run in json.loads(fallback.stdout)["runs"] if run["run_id"] == "telemetry-invalid"
     )
     assert fallback_run["usage"]["total"]["cache_write_tokens"] == 0
-    assert fallback_run["usage"]["total"]["cost_usd"] == 0.03
+    assert fallback_run["usage"]["total"]["cost_usd"] == 0.032
     assert fallback_run["telemetry_quality"] == "partial"
 
     judge_record = json.loads((tmp_path / "judge.jsonl").read_text(encoding="utf-8"))

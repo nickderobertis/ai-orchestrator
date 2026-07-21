@@ -143,14 +143,15 @@ def _is_worker(session: HistorySession) -> bool:
 
 
 def _strings(value: object) -> Iterator[str]:
-    if isinstance(value, str):
-        yield value
-    elif isinstance(value, dict):
-        for item in value.values():
-            yield from _strings(item)
-    elif isinstance(value, list):
-        for item in value:
-            yield from _strings(item)
+    match value:
+        case str(text):
+            yield text
+        case dict() as items:
+            for item in items.values():
+                yield from _strings(item)
+        case list() as items:
+            for item in items:
+                yield from _strings(item)
 
 
 def _is_llmlint(session: HistorySession) -> bool:
