@@ -5,11 +5,12 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import get_args
 
 import pytest
 
 import orchestrator.telemetry as telemetry_module
-from orchestrator.history import HistorySession, SessionId
+from orchestrator.history import HistorySession, SessionId, SessionRole
 from orchestrator.journal import NodeJournal, open_journal
 from orchestrator.runs import NodeId, RunId, prepare_round, write_result
 from orchestrator.telemetry import (
@@ -256,7 +257,7 @@ def test_schema_v5_field_golden_prevents_cross_layer_drift() -> None:
     assert golden == {
         "schema_version": TELEMETRY_SCHEMA_VERSION,
         "history_schema_versions": list(SUPPORTED_HISTORY_SCHEMA_VERSIONS),
-        "roles": ["agent", "judge", "llmlint"],
+        "roles": list(get_args(SessionRole)),
         "qualities": ["complete", "legacy", "partial"],
         "sources": ["history_legacy", "journal_legacy", "oneharness", "onejudge"],
         "timing": sorted(TimingRecord.__required_keys__),
