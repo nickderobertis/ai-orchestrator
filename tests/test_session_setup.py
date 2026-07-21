@@ -136,13 +136,16 @@ chmod +x "$HOME/.local/bin/oneharness"
     )
 
 
-def _run_bun_install(tmp_path: Path, **extra_env: str) -> subprocess.CompletedProcess[str]:
+def _run_bun_install(
+    tmp_path: Path, *, with_npm: bool = True, **extra_env: str
+) -> subprocess.CompletedProcess[str]:
     script = REPO_ROOT / "scripts" / "session-setup.sh"
     tools = tmp_path / "tools"
     npm = tools / "npm"
-    _write_executable(
-        npm,
-        """#!/bin/sh
+    if with_npm:
+        _write_executable(
+            npm,
+            """#!/bin/sh
 printf '%s\n' "$*" >"$TEST_NPM_ARGS"
 if [ "${TEST_NPM_FAIL:-0}" = 1 ]; then
   exit 1
@@ -151,7 +154,7 @@ mkdir -p "$HOME/.local/node/bin"
 cp "$TEST_BUN_BINARY" "$HOME/.local/node/bin/bun"
 chmod +x "$HOME/.local/node/bin/bun"
 """,
-    )
+        )
     env = {
         "HOME": str(tmp_path),
         "PATH": f"{tools}:/usr/bin:/bin",
@@ -323,6 +326,24 @@ def test_install_bun_failure_is_required(tmp_path: Path) -> None:
     assert proc.returncode == 1
     assert (tmp_path / "npm.args").read_text(encoding="utf-8").strip() == "install -g bun"
     assert "bun npm install failed" in proc.stderr
+
+
+def test_install_bun_fails_loudly_when_npm_is_unavailable(tmp_path: Path) -> None:
+    proc = _run_bun_install(tmp_path, with_npm=False)
+
+    assert proc.returncode == 1
+    assert "cannot install required bun: npm is not installed" in proc.stderr
+
+
+def test_install_bun_rejects_unusable_binary_after_npm_succeeds(tmp_path: Path) -> None:
+    replacement = tmp_path / "broken-bun"
+    _write_executable(replacement, "#!/bin/sh\nexit 1\n")
+
+    proc = _run_bun_install(tmp_path, TEST_BUN_BINARY=str(replacement))
+
+    assert proc.returncode == 1
+    assert "could not report its version" in proc.stderr
+    assert "required bun is unavailable after npm install" in proc.stderr
 
 
 def test_persist_session_env_writes_path_once(tmp_path: Path) -> None:
