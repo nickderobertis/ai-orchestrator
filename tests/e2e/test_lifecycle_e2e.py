@@ -58,7 +58,12 @@ from orchestrator.lifecycle import (
 from orchestrator.merge import GitHubMergeStrategy
 from orchestrator.merge_queue import merge_queue_turn
 from orchestrator.next_round import main as next_round_main
-from orchestrator.provenance import INCOMPLETE_TRAILER, PR_BASE_TRAILER, incomplete_commits
+from orchestrator.provenance import (
+    INCOMPLETE_TRAILER,
+    PR_BASE_TRAILER,
+    format_preserved_step_metadata,
+    incomplete_commits,
+)
 from orchestrator.recover import recover_repo
 from orchestrator.registry import Registry, RegistryEntry, Slug
 from orchestrator.replan import next_round
@@ -2477,6 +2482,52 @@ def test_clean_committed_partial_work_is_marked_and_recoverable(tmp_path, bare_o
     assert f"Orchestrator-Recovered-Incomplete: {marker_sha}" in attestation[0].message
     assert not gitops.is_ancestor(canonical, attestation[0].sha, "origin/main")
     assert _has_file(origin, "main", "partial.txt")
+
+
+@pytest.mark.parametrize(
+    ("failure", "expected_outcome"),
+    [("conflict", "sync-conflict"), ("gate", "gate-failed")],
+)
+def test_remote_stacked_recovery_failures_preserve_synthetic_base(
+    tmp_path, bare_origin, failure: str, expected_outcome: str
+) -> None:
+    origin = bare_origin({"shared.txt": "root\n"})
+    canonical = gitops.clone(origin, tmp_path / f"canonical-stacked-recovery-{failure}")
+    Registry().register(str(canonical), workflow="remote", repo_type="team")
+    synthetic = f"ai-orchestrator/stack-base/recovery-{failure}"
+    branch = f"feature/stacked-recovery-{failure}"
+    subprocess.run(["git", "branch", synthetic, "main"], cwd=canonical, check=True)
+    gitops.push(canonical, synthetic, set_upstream=False)
+    subprocess.run(["git", "checkout", "-b", branch, synthetic], cwd=canonical, check=True)
+    (canonical / "shared.txt").write_text("preserved\n", encoding="utf-8")
+    gitops.add_all(canonical)
+    metadata = format_preserved_step_metadata("main", "engineer")
+    gitops.commit(
+        canonical,
+        "chore: preserve stacked recovery (incomplete step)\n\n"
+        f"{metadata}, preserved by ai-orchestrator after the dispatch did not complete.\n\n"
+        f"{INCOMPLETE_TRAILER}\n{PR_BASE_TRAILER} {synthetic}",
+    )
+    gitops.push(canonical, branch, set_upstream=False)
+    subprocess.run(["git", "checkout", synthetic], cwd=canonical, check=True)
+    if failure == "conflict":
+        (canonical / "shared.txt").write_text("advanced\n", encoding="utf-8")
+        gitops.add_all(canonical)
+        gitops.commit(canonical, "advance synthetic stack base")
+        gitops.push(canonical, synthetic, set_upstream=False)
+    subprocess.run(["git", "checkout", "main"], cwd=canonical, check=True)
+
+    recovered = recover_repo(
+        canonical,
+        branch,
+        workspace_root=tmp_path / f"stacked-recovery-{failure}-worktrees",
+        github=FakeGitHub(origin),
+        verify_cmd=["false" if failure == "gate" else "true"],
+    )
+
+    assert recovered.outcome == expected_outcome
+    assert recovered.pr_base == synthetic
+    assert recovered.synthetic_stack_base == synthetic
 
 
 def test_local_recovery_conflict_resumes_worker_then_requeues(tmp_path, bare_origin) -> None:

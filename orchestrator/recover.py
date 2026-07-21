@@ -130,6 +130,9 @@ def recover_repo(
                 f"pr_base={recorded_base!r}"
             )
         publication_base = pr_base or recorded_base or target
+        synthetic_stack_base = (
+            publication_base if publication_base.startswith("ai-orchestrator/stack-base/") else None
+        )
         if not gitops.is_valid_branch_name(publication_base):
             raise RegistryError(f"pr_base {publication_base!r} is not a valid Git branch")
         worktree = workspace.worktree(ref, branch, base=f"origin/{publication_base}")
@@ -200,6 +203,7 @@ def recover_repo(
                     f"merge current {remote_base} into {branch!r}, resolve the conflict, "
                     "then retry",
                     pr_base=publication_base,
+                    synthetic_stack_base=synthetic_stack_base,
                 )
             failed = verify_attest_push()
             if failed is not None:
@@ -213,6 +217,7 @@ def recover_repo(
                     failed.outcome,
                     failed.detail,
                     pr_base=publication_base,
+                    synthetic_stack_base=synthetic_stack_base,
                 )
         strategy = (
             LocalMergeStrategy()
@@ -275,7 +280,7 @@ def recover_repo(
                     "resolve the conflict manually, then retry",
                 )
                 break
-            step_id, persona = metadata
+            step_id, persona = metadata.step_id, metadata.persona
             if not _STEP_ID.fullmatch(step_id):
                 gitops.merge_abort(worktree)
                 published = MergeOutcome(

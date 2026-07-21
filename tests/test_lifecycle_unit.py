@@ -44,7 +44,11 @@ from orchestrator.lifecycle import (
 )
 from orchestrator.merge import GitHubMergeStrategy, LocalMergeStrategy
 from orchestrator.plan import PlanError
-from orchestrator.provenance import format_preserved_step_metadata, parse_preserved_step_metadata
+from orchestrator.provenance import (
+    PreservedStepMetadata,
+    format_preserved_step_metadata,
+    parse_preserved_step_metadata,
+)
 from orchestrator.recover import RecoveryResult
 from orchestrator.registry import Registry
 from orchestrator.runs import NodeId, ResumePayload, RetryLineagePayload, RunId
@@ -77,9 +81,11 @@ def test_documented_llmlint_wrapper_identity_matches_routing_constant() -> None:
 def test_preserved_step_metadata_contract_round_trips() -> None:
     metadata = format_preserved_step_metadata("repair-1", "backend")
 
-    assert parse_preserved_step_metadata(f"subject\n\n{metadata}, preserved by orchestrator") == (
-        "repair-1",
-        "backend",
+    assert parse_preserved_step_metadata(
+        f"subject\n\n{metadata}, preserved by orchestrator"
+    ) == PreservedStepMetadata(
+        step_id="repair-1",
+        persona="backend",
     )
 
 
