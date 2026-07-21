@@ -230,7 +230,17 @@ def main() -> int:
                 witness = Path(task.split("slow-branch", 1)[1].strip().split()[0])
                 with witness.open("a", encoding="utf-8") as stream:
                     stream.write("tick\n")
-                time.sleep(10 if "live-edit-slow" in task else 0.8)
+                if "live-edit-slow" in task and _assistant_turns(messages) > 0:
+                    ready_match = re.search(r"live-edit-ready=(\S+)", task)
+                    release_match = re.search(r"live-edit-release=(\S+)", task)
+                    if ready_match is None or release_match is None:
+                        raise AssertionError("live-edit-slow requires ready and release paths")
+                    Path(ready_match.group(1)).write_text("ready\n", encoding="utf-8")
+                    release = Path(release_match.group(1))
+                    while not release.exists():
+                        time.sleep(0.02)
+                elif "live-edit-slow" not in task:
+                    time.sleep(0.8)
                 with witness.open("a", encoding="utf-8") as stream:
                     stream.write("tick\n")
             orchestrator_plan = _orchestrator_command(task)

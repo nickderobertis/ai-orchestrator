@@ -68,12 +68,20 @@ def test_real_cli_mutates_live_frontier_and_replays_atomic_edits(
                     {
                         "id": "slow_a",
                         "persona": "engineer",
-                        "task": f"slow-branch {tmp_path / 'a.ticks'} live-edit-slow",
+                        "task": (
+                            f"slow-branch {tmp_path / 'a.ticks'} live-edit-slow "
+                            f"live-edit-ready={tmp_path / 'a.ready'} "
+                            f"live-edit-release={tmp_path / 'a.release'}"
+                        ),
                     },
                     {
                         "id": "slow_b",
                         "persona": "engineer",
-                        "task": f"slow-branch {tmp_path / 'b.ticks'} live-edit-slow",
+                        "task": (
+                            f"slow-branch {tmp_path / 'b.ticks'} live-edit-slow "
+                            f"live-edit-ready={tmp_path / 'b.ready'} "
+                            f"live-edit-release={tmp_path / 'b.release'}"
+                        ),
                     },
                     {
                         "id": "failed",
@@ -342,6 +350,8 @@ def test_real_cli_live_drop_preserves_and_recovers_running_lifecycle(
     base_path = tmp_path / "lifecycle-base.yaml"
     base_path.write_text(yaml.safe_dump(base), encoding="utf-8")
     witness = tmp_path / "lifecycle.ticks"
+    provider_ready = tmp_path / "lifecycle.ready"
+    provider_release = tmp_path / "lifecycle.release"
     branch = "feature/live-cancel"
     plan = tmp_path / "lifecycle-plan.json"
     plan.write_text(
@@ -355,7 +365,11 @@ def test_real_cli_live_drop_preserves_and_recovers_running_lifecycle(
                         "repo": str(canonical),
                         "execution_checkout": str(canonical),
                         "persona": "engineer",
-                        "task": f"slow-branch {witness} live-edit-slow write-change",
+                        "task": (
+                            f"slow-branch {witness} live-edit-slow write-change "
+                            f"live-edit-ready={provider_ready} "
+                            f"live-edit-release={provider_release}"
+                        ),
                         "branch": branch,
                         "verify_cmd": ["test", "-f", "CHANGE.txt"],
                     },
@@ -396,16 +410,10 @@ def test_real_cli_live_drop_preserves_and_recovers_running_lifecycle(
         time.sleep(0.02)
     assert nested is not None
     events = nested / "events.jsonl"
-    _wait_for(
-        witness,
-        lambda text: text.count("tick") >= 3,
-        # Tick three begins the second provider turn. Reaching it necessarily includes
-        # the first turn's intentional ten-second cancellation window plus startup of
-        # the nested orchestrator, onejudge, lifecycle worktree, and two providers.
-        timeout=LIVE_PROCESS_TIMEOUT,
-    )
     _wait_for(events, lambda text: '"kind": "node-started"' in text)
+    _wait_for(provider_ready, lambda text: text == "ready\n", timeout=LIVE_PROCESS_TIMEOUT)
     _reply(run_id, runs, [{"op": "drop", "id": "lifecycle", "dependents": "drop"}])
+    provider_release.write_text("release\n", encoding="utf-8")
     _wait_for(
         events,
         lambda text: '"kind": "node-settled"' in text and '"status": "cancelled"' in text,
