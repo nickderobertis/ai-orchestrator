@@ -497,12 +497,25 @@ def test_reattached_planner_replies_to_mid_run_proposal_without_stopping_graph(
 
     detached = _next_cli(run_id, runs, timeout="0.001")
     assert detached == {"status": "running", "surface": None}
+    heartbeat_path = runs / run_id / "channel" / "heartbeat.json"
+    before_proposal = json.loads(heartbeat_path.read_text(encoding="utf-8"))
     proposal = _next_cli(run_id, runs)
     assert proposal["surface"] == {
         "kind": "proposal",
         "message": "discoverer: - Add a regression test for the adjacent edge case.",
         "blocking": False,
     }
+    wait_deadline = deadline(5)
+    while True:
+        after_proposal = json.loads(heartbeat_path.read_text(encoding="utf-8"))
+        if (
+            after_proposal["last_surface_at"] > before_proposal["last_surface_at"]
+            or time.monotonic() >= wait_deadline
+        ):
+            break
+        time.sleep(0.01)
+    assert after_proposal["last_surface_at"] > before_proposal["last_surface_at"]
+    assert after_proposal["due"] is False
     monitored = subprocess.run(
         ["just", "monitor", run_id, "--once", "--runs-dir", str(runs)],
         cwd=REPO_ROOT,
@@ -512,16 +525,31 @@ def test_reattached_planner_replies_to_mid_run_proposal_without_stopping_graph(
     )
     assert "REPLY REQUESTED" in monitored.stdout
     assert provider_ready.read_text(encoding="utf-8") == "ready\n"
-    _convenience_cli("channel-reject", run_id, runs, "defer to next round")
+    _reply_cli(
+        run_id,
+        runs,
+        {
+            "completion": False,
+            "message": "defer to next round",
+            "reason": "defer to next round",
+            "heartbeat_interval": 2,
+        },
+    )
 
     verdict_path = runs / run_id / "channel" / "planner-verdict.json"
     wait_deadline = deadline(5)
-    while time.monotonic() < wait_deadline and not verdict_path.is_file():
+    while time.monotonic() < wait_deadline:
+        heartbeat_state = json.loads(heartbeat_path.read_text(encoding="utf-8"))
+        if verdict_path.is_file() and heartbeat_state["interval_s"] == 2:
+            break
         time.sleep(0.02)
+    assert heartbeat_state["enabled"] is True
+    assert heartbeat_state["interval_s"] == 2
     assert json.loads(verdict_path.read_text(encoding="utf-8")) == {
         "completion": False,
         "message": "defer to next round",
         "reason": "defer to next round",
+        "heartbeat_interval": 2,
     }
     assert not (runs / run_id / "orchestrator" / "report.json").stat().st_size
     provider_release.write_text("release\n", encoding="utf-8")
@@ -534,8 +562,13 @@ def test_reattached_planner_replies_to_mid_run_proposal_without_stopping_graph(
 
     boundary = _next_cli(run_id, runs)
     assert boundary["surface"]["kind"] in {"milestone", "closeout"}
-    _reply_cli(run_id, runs, {"completion": True, "reason": "verified"})
+    _reply_cli(
+        run_id,
+        runs,
+        {"completion": True, "reason": "verified", "heartbeat_interval": False},
+    )
     _wait_report(runs / run_id / "orchestrator" / "report.json")
+    assert json.loads(heartbeat_path.read_text(encoding="utf-8"))["enabled"] is False
 
 
 def test_unanswered_mid_run_proposal_does_not_compete_with_boundary_verdict(
