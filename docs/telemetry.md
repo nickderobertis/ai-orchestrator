@@ -43,7 +43,7 @@ measured zero. JSON contains the same counters separately under `usage.agent`,
 
 ## Full timing versus fallback
 
-For records produced after the 0.4.6/0.3.4 upgrade, `AGENT`/`JUDGE` use
+For records produced after the 0.4.6/0.3.4 upgrade, `AGENT`/`JUDGE` use <!-- llmlint: ignore[contracts_have_one_source_or_a_drift_gate] tests/test_onejudge_version.py::test_telemetry_upgrade_boundary_matches_authoritative_versions enforces this version boundary against the authoritative pins. -->
 onejudge's typed party summaries, `TOOL` uses oneharness' normalized `tool_ms`
 and per-tool-call `duration_ms`, and the timeline interleaves native
 agent and judge sessions by `turn_index`. `QUALITY complete` means authoritative
