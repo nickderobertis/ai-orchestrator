@@ -169,6 +169,31 @@ chmod +x "$HOME/.local/node/bin/bun"
     )
 
 
+def _run_full_setup_without_bun(tmp_path: Path) -> subprocess.CompletedProcess[str]:
+    test_repo = tmp_path / "repo"
+    scripts = test_repo / "scripts"
+    config = test_repo / "config"
+    scripts.mkdir(parents=True)
+    config.mkdir()
+    session_setup = scripts / "session-setup.sh"
+    session_setup.write_text(
+        (REPO_ROOT / "scripts" / "session-setup.sh").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    _write_executable(scripts / "setup-llmlint.sh", "#!/bin/sh\nexit 0\n")
+    (config / "onejudge.version").write_text(f"{ADOPTED_ONEJUDGE_VERSION}\n", encoding="utf-8")
+    (config / "oneharness.version").write_text(f"{ADOPTED_ONEHARNESS_VERSION}\n", encoding="utf-8")
+    _write_onejudge(test_repo / ".venv" / "bin" / "onejudge", ADOPTED_ONEJUDGE_VERSION)
+    _write_sdk_python(test_repo / ".venv" / "bin" / "python", ADOPTED_ONEJUDGE_VERSION)
+    _write_oneharness(tmp_path / ".local" / "bin" / "oneharness", ADOPTED_ONEHARNESS_VERSION)
+    return subprocess.run(
+        ["bash", str(session_setup)],
+        text=True,
+        capture_output=True,
+        env={"HOME": str(tmp_path), "PATH": "/usr/bin:/bin"},
+    )
+
+
 def _write_sdk_python(path: Path, version: str) -> None:
     _write_executable(path, f"#!/bin/sh\nprintf '{version}\\n'\n")
 
@@ -344,6 +369,14 @@ def test_install_bun_rejects_unusable_binary_after_npm_succeeds(tmp_path: Path) 
     assert proc.returncode == 1
     assert "could not report its version" in proc.stderr
     assert "required bun is unavailable after npm install" in proc.stderr
+
+
+def test_full_setup_reports_missing_bun_and_returns_failure(tmp_path: Path) -> None:
+    proc = _run_full_setup_without_bun(tmp_path)
+
+    assert proc.returncode == 1
+    assert "cannot install required bun: npm is not installed" in proc.stderr
+    assert "bun is required — the oneharness sdk-check gate will fail" in proc.stderr
 
 
 def test_persist_session_env_writes_path_once(tmp_path: Path) -> None:
