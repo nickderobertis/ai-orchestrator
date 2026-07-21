@@ -161,18 +161,16 @@ def test_real_history_labels_and_cursor_watch(oneharness_bin: str, tmp_path: Pat
     (bin_dir / "claude").symlink_to(FAKE_HARNESS)
 
     environment = os.environ.copy()
-    for inherited in (
-        "ONEHARNESS_HARNESSES",
-        "ONEHARNESS_MODELS",
-        "ONEHARNESS_HISTORY_LABELS",
-    ):
+    for inherited in ("ONEHARNESS_MODELS", "ONEHARNESS_HISTORY_LABELS"):
         environment.pop(inherited, None)
     environment.update(
         {
             "ONEHARNESS_BIN_CODEX": str(bin_dir / "codex"),
             "ONEHARNESS_BIN_CLAUDE_CODE": str(bin_dir / "claude"),
+            "ONEHARNESS_HARNESSES": "codex",
             "ONEHARNESS_HISTORY_DIR": str(history_dir),
             "FAKE_HARNESS_LOG": str(tmp_path / "fake-harness.jsonl"),
+            "FAKE_HARNESS_WITH_TELEMETRY": "1",
         }
     )
 

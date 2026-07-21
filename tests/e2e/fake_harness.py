@@ -31,12 +31,27 @@ def main() -> int:
         print(f"unknown model: {model}", file=sys.stderr)
         return 1
     if harness == "codex":
+        if os.environ.get("FAKE_HARNESS_WITH_TELEMETRY") == "1":
+            print(json.dumps({"type": "turn.started"}))
         print(json.dumps({"type": "thread.started", "thread_id": "fake-codex-thread"}))
         print(
             json.dumps(
                 {"type": "item.completed", "item": {"type": "agent_message", "text": "done"}}
             )
         )
+        if os.environ.get("FAKE_HARNESS_WITH_TELEMETRY") == "1":
+            print(
+                json.dumps(
+                    {
+                        "type": "turn.completed",
+                        "usage": {
+                            "input_tokens": 4,
+                            "cached_input_tokens": 0,
+                            "output_tokens": 1,
+                        },
+                    }
+                )
+            )
         return 0
 
     print(json.dumps({"result": "done", "session_id": "fake-claude-session"}))

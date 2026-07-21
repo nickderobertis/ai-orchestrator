@@ -206,7 +206,7 @@ def test_breakdown_aggregates_real_multirole_history_records(
         capture_output=True,
         timeout=30,
     )
-    assert invalid_produced.returncode == 0, invalid_produced.stderr
+    assert invalid_produced.returncode == 1, invalid_produced.stderr
     for session in sessions:
         session["labels"]["run_id"] = "telemetry-invalid"
     store.write_text(json.dumps({"sessions": sessions}), encoding="utf-8")
