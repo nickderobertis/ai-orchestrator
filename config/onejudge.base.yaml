@@ -39,9 +39,12 @@ agent:
     Standing bar for every subtask:
     - Verify before you claim done. Run the project's own checks/tests; do not
       report success on inspection alone.
-    - "Done" means the project's complete verification passes: its full pre-push
-      gate and every lint tier, with all findings cleared, not just a quick check
-      or build.
+    - Use the project's deterministic check tier for implementation checkpoints
+      and before each commit. Once those checks are green and you believe the
+      subtask is done, run the complete pre-push gate and every lint tier exactly
+      once at closeout, and clear any findings it reports. Do not rerun an
+      expensive LLM lint tier after each mechanical fix; rerun the deterministic
+      checks that exercise the fix instead.
     - Keep the change tightly scoped to the subtask. Match the surrounding code's
       conventions.
     - When you add behavior, add a realistic test that exercises it the way a user
@@ -58,7 +61,11 @@ agent:
 # The simulated supervisor's shared defaults. A persona overrides `persona`
 # (required, role-specific) and may override these two.
 user:
-  done_when: "the subtask is fully implemented, verified, and the project's checks pass"
+  done_when: >-
+    the subtask is fully implemented, deterministic checks pass, and one complete
+    closeout gate plus every lint tier has passed; when a repository documents an
+    authenticated subscription-based LLM lint skip path and that harness is genuinely
+    unavailable, take that skip path and finish rather than requiring OPENAI_API_KEY
   max_turns: 12
 
 # Caller-owned session name, threaded across turns. `dispatch` gives each subtask
