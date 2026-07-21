@@ -11,29 +11,21 @@ from __future__ import annotations
 import os
 import re
 import shutil
-import signal
 import subprocess
 import sys
 from collections.abc import Callable, Iterator
-from contextlib import suppress
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import pytest
 import yaml
+from leak_guard import ResourceLeakGuard
 
 from orchestrator import BASE_CONFIG, PERSONA_DIR, REPO_ROOT
 from orchestrator.config import load_yaml
 from orchestrator.environment import CHANNEL_ENV_PREFIX
 
 FAKE_BACKEND = REPO_ROOT / "tests" / "e2e" / "fake_backend.py"
-
-
-@dataclass(frozen=True)
-class _TrackedProcess:
-    process: subprocess.Popen[Any]
-    new_session: bool
 
 
 @pytest.fixture(autouse=True)
@@ -45,39 +37,24 @@ def _isolate_orchestrator_channel(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(autouse=True)
-def _reap_real_subprocesses(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
-    """Reap test subprocesses even when a test exits through an assertion."""
+def resource_leak_guard(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, request: pytest.FixtureRequest
+) -> Iterator[ResourceLeakGuard]:
+    """Reap complete subprocess trees and report test-owned resource leaks."""
     original_popen = subprocess.Popen
-    started: list[_TrackedProcess] = []
+    e2e_test = "e2e" in Path(str(request.node.path)).parts
+    guard = ResourceLeakGuard(popen=original_popen)
 
     def tracked_popen(*args: Any, **kwargs: Any) -> subprocess.Popen[Any]:
-        if "start_new_session" not in kwargs and "process_group" not in kwargs:
-            kwargs["start_new_session"] = True
-        process = original_popen(*args, **kwargs)
-        started.append(
-            _TrackedProcess(process=process, new_session=kwargs.get("start_new_session") is True)
-        )
-        return process
+        return guard.spawn(*args, **kwargs)
 
     monkeypatch.setattr(subprocess, "Popen", tracked_popen)
-    yield
-    for tracked in reversed(started):
-        process = tracked.process
-        if tracked.new_session:
-            with suppress(ProcessLookupError):
-                os.killpg(process.pid, signal.SIGTERM)
-        elif process.poll() is None:
-            process.terminate()
-        if process.poll() is not None:
-            continue
-        try:
-            process.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            if tracked.new_session:
-                os.killpg(process.pid, signal.SIGKILL)
-            else:
-                process.kill()
-            process.wait(timeout=5)
+    yield guard
+    if e2e_test:
+        for git_file in tmp_path.rglob(".git"):
+            if guard.is_linked_worktree(git_file.parent):
+                guard.register_worktree(git_file.parent)
+    guard.finish()
 
 
 def git(*args: str, cwd: str | Path | None = None) -> str:

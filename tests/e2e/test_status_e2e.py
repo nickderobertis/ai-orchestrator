@@ -116,6 +116,7 @@ def test_status_joins_real_history_worktree_commits_and_ledger(
     direct_human = capsys.readouterr().out
     assert "feat: add status view" in direct_human
     assert "status-run round-01" in direct_human
+    workspace.remove_worktree(ref, worktree)
 
 
 def test_status_recent_handles_gone_worktree_and_no_ledger(

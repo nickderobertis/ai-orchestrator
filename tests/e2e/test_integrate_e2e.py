@@ -206,6 +206,7 @@ def test_dirty_candidate_worktree_is_rejected(tmp_path, bare_origin) -> None:
         integrate(repo, ["claude/dirty"], gate_command=["true"])
 
     assert _git(repo, "status", "--porcelain") == ""
+    _git(repo, "worktree", "remove", "--force", str(candidate))
 
 
 def test_base_merge_failure_is_aborted_and_skipped(tmp_path, bare_origin) -> None:
