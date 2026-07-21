@@ -9,6 +9,9 @@ import time
 from pathlib import Path
 from typing import Any
 
+from waits import deadline
+from waits import timeout as e2e_timeout
+
 from orchestrator import REPO_ROOT
 
 TIMEOUT_HARNESS = REPO_ROOT / "tests" / "e2e" / "timeout_harness.py"
@@ -16,7 +19,7 @@ TIMEOUT_HARNESS = REPO_ROOT / "tests" / "e2e" / "timeout_harness.py"
 
 def _assert_descendant_stopped(tick_file: Path) -> None:
     """Prove the fixture existed and cannot keep working after CLI return."""
-    witness_deadline = time.monotonic() + 2
+    witness_deadline = deadline(2)
     while time.monotonic() < witness_deadline:
         witnessed = tick_file.stat().st_size if tick_file.exists() else 0
         if witnessed:
@@ -63,7 +66,7 @@ def test_timeout_kills_process_tree_and_preserves_real_partial_telemetry(
         env=env,
         text=True,
         capture_output=True,
-        timeout=7,
+        timeout=e2e_timeout(7),
     )
     elapsed = time.monotonic() - started
 

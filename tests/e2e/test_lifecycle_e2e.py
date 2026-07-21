@@ -30,6 +30,8 @@ from typing import TypeVar, cast
 
 import pytest
 from fakes import FakeGitHub, make_writing_dispatch
+from waits import deadline as e2e_deadline
+from waits import timeout as e2e_timeout
 
 import orchestrator.graph as graph_module
 import orchestrator.lifecycle as lifecycle_module
@@ -118,21 +120,21 @@ def _run_while_merge_turn_is_held(
     def hold_turn() -> None:
         with merge_queue_turn(git_lock_identity(gitops.common_dir(canonical))):
             acquired.set()
-            release.wait(10)
+            release.wait(e2e_timeout(10))
 
     with ThreadPoolExecutor(max_workers=2) as pool:
         holder = pool.submit(hold_turn)
-        assert acquired.wait(5)
+        assert acquired.wait(e2e_timeout(5))
         publication = pool.submit(operation)
         try:
             if should_wait:
                 with pytest.raises(FutureTimeout):
                     publication.result(timeout=0.2)
                 release.set()
-            result = publication.result(timeout=10)
+            result = publication.result(timeout=e2e_timeout(10))
         finally:
             release.set()
-            holder.result(timeout=10)
+            holder.result(timeout=e2e_timeout(10))
     return result
 
 
@@ -1710,7 +1712,7 @@ def test_local_merge_gate_does_not_hold_the_shared_git_lock(tmp_path, bare_origi
             dispatch_fn=make_writing_dispatch(filename="feature.txt"),
             verify_cmd=gate,
         )
-        deadline = time.monotonic() + 10
+        deadline = e2e_deadline(10)
         while not verification_started.exists() and time.monotonic() < deadline:
             time.sleep(0.01)
         assert verification_started.exists(), "publication verification did not start"
@@ -1722,7 +1724,7 @@ def test_local_merge_gate_does_not_hold_the_shared_git_lock(tmp_path, bare_origi
                 gitops.fetch(clone)
         finally:
             verification_release.touch()
-        result = future.result(timeout=10)
+        result = future.result(timeout=e2e_timeout(10))
 
     assert result.ok and result.outcome == "merged", result.detail
     assert _has_file(origin, "main", "feature.txt")
@@ -2344,7 +2346,7 @@ def test_cooperative_real_dispatch_cancellation_preserves_and_recovers_branch(
             verify_cmd=["test", "-f", "CHANGE.txt"],
             cancel=cancel,
         )
-        deadline = time.monotonic() + 15
+        deadline = e2e_deadline(15)
         while time.monotonic() < deadline:
             ticks = witness.read_text(encoding="utf-8").count("tick") if witness.exists() else 0
             changes = list((tmp_path / "cancelled-worktrees").rglob("CHANGE.txt"))
@@ -2354,7 +2356,7 @@ def test_cooperative_real_dispatch_cancellation_preserves_and_recovers_branch(
         else:
             pytest.fail("real dispatch did not produce partial work before cancellation")
         cancel.set()
-        result = future.result(timeout=15)
+        result = future.result(timeout=e2e_timeout(15))
 
     assert result.outcome == "not-completed"
     assert isinstance(result.resume, Resume)
@@ -2400,12 +2402,12 @@ def test_cancellation_during_verification_preserves_before_publication(
             verify_cmd=gate,
             cancel=cancel,
         )
-        deadline = time.monotonic() + 15
+        deadline = e2e_deadline(15)
         while time.monotonic() < deadline and not gate_started.exists():
             time.sleep(0.02)
         assert gate_started.exists()
         cancel.set()
-        result = future.result(timeout=15)
+        result = future.result(timeout=e2e_timeout(15))
 
     assert result.outcome == "not-completed"
     assert result.detail.startswith("cancelled cooperatively after verification")
@@ -2452,12 +2454,12 @@ def test_cancellation_after_publication_starts_finishes_authoritatively(
             verify_cmd=["test", "-f", "CHANGE.txt"],
             cancel=cancel,
         )
-        deadline = time.monotonic() + 15
+        deadline = e2e_deadline(15)
         while time.monotonic() < deadline and not push_started.exists():
             time.sleep(0.02)
         assert push_started.exists()
         cancel.set()
-        result = future.result(timeout=20)
+        result = future.result(timeout=e2e_timeout(20))
 
     assert cancel.is_set()
     assert result.ok and result.outcome == "merged"

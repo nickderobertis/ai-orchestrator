@@ -6,6 +6,8 @@ import os
 import subprocess
 import sys
 
+from waits import timeout as e2e_timeout
+
 from orchestrator import REPO_ROOT
 
 
@@ -23,7 +25,7 @@ def test_real_pytest_path_ignores_parent_orchestrator_channel() -> None:
         env=environment,
         text=True,
         capture_output=True,
-        timeout=60,
+        timeout=e2e_timeout(60),
     )
 
     assert completed.returncode == 0, completed.stdout + completed.stderr

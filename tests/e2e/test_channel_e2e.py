@@ -10,6 +10,7 @@ import time
 from pathlib import Path
 
 import yaml
+from waits import deadline
 
 from orchestrator import BASE_CONFIG, REPO_ROOT
 from orchestrator.dispatch import launch_orchestrator
@@ -84,8 +85,8 @@ def _proposal_plan(
 
 
 def _wait_report(path: Path) -> dict[str, object]:
-    deadline = time.monotonic() + 15
-    while time.monotonic() < deadline:
+    wait_deadline = deadline(15)
+    while time.monotonic() < wait_deadline:
         if path.is_file() and path.stat().st_size:
             return json.loads(path.read_text(encoding="utf-8"))
         time.sleep(0.02)
@@ -136,8 +137,8 @@ def _next_cli(run_id: str, runs: Path, timeout: str = "10") -> dict[str, object]
 
 
 def _wait_surface(run_id: str, runs: Path) -> dict[str, object]:
-    deadline = time.monotonic() + 15
-    while time.monotonic() < deadline:
+    wait_deadline = deadline(15)
+    while time.monotonic() < wait_deadline:
         value = _next_cli(run_id, runs, timeout="2")
         if value.get("surface") is not None:
             return value
@@ -451,8 +452,8 @@ def test_reattached_planner_replies_to_mid_run_proposal_without_stopping_graph(
     _convenience_cli("channel-reject", run_id, runs, "defer to next round")
 
     verdict_path = runs / run_id / "channel" / "planner-verdict.json"
-    deadline = time.monotonic() + 5
-    while time.monotonic() < deadline and not verdict_path.is_file():
+    wait_deadline = deadline(5)
+    while time.monotonic() < wait_deadline and not verdict_path.is_file():
         time.sleep(0.02)
     assert json.loads(verdict_path.read_text(encoding="utf-8")) == {
         "completion": False,
@@ -461,8 +462,8 @@ def test_reattached_planner_replies_to_mid_run_proposal_without_stopping_graph(
     }
     assert not (runs / run_id / "orchestrator" / "report.json").stat().st_size
     provider_release.write_text("release\n", encoding="utf-8")
-    deadline = time.monotonic() + 5
-    while time.monotonic() < deadline:
+    wait_deadline = deadline(5)
+    while time.monotonic() < wait_deadline:
         if witness.is_file() and witness.read_text(encoding="utf-8").count("tick") == 2:
             break
         time.sleep(0.02)

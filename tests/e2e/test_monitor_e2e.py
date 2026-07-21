@@ -26,6 +26,7 @@ from typing import Any
 
 import pytest
 from fakes import FakeGitHub
+from waits import timeout as e2e_timeout
 
 from orchestrator import REPO_ROOT, gitops
 from orchestrator.github import Check, GitHubError, PRStatus, PullRequest
@@ -696,7 +697,11 @@ def test_a_run_folds_its_journal_and_its_real_branch_into_one_stream(
 
 def _monitor_cli(*args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        ["just", "monitor", *args], cwd=REPO_ROOT, text=True, capture_output=True, timeout=180
+        ["just", "monitor", *args],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(180),
     )
 
 
@@ -811,7 +816,7 @@ def test_monitor_command_backs_off_to_its_bounded_interval(tmp_path: Path) -> No
         records = [json.loads(process.stdout.readline()) for _ in range(5)]
     finally:
         process.terminate()
-        process.wait(timeout=5)
+        process.wait(timeout=e2e_timeout(5))
     intervals = [record["next_poll_seconds"] for record in records if record["type"] == "heartbeat"]
     assert 0.02 in intervals
     assert intervals[-1] == 0.04

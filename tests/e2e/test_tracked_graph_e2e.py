@@ -17,6 +17,7 @@ from datetime import datetime
 from pathlib import Path
 
 import pytest
+from waits import deadline as e2e_deadline
 
 from orchestrator import REPO_ROOT, gitops
 from orchestrator.coordination import advisory_lock, git_lock_identity
@@ -273,7 +274,7 @@ def test_recover_interrupted_real_cli_does_not_duplicate_node_start(
         start_new_session=True,
     )
     events_path = runs / "interrupted" / "events.jsonl"
-    deadline = time.monotonic() + 10
+    deadline = e2e_deadline(10)
     while time.monotonic() < deadline:
         if events_path.exists() and '"kind": "node-started"' in events_path.read_text():
             break
@@ -770,7 +771,7 @@ def test_recover_interrupted_real_cli_does_not_duplicate_node_start(
         start_new_session=True,
     )
     settled_events = runs / "settled-prefix" / "events.jsonl"
-    deadline = time.monotonic() + 10
+    deadline = e2e_deadline(10)
     while time.monotonic() < deadline:
         content = settled_events.read_text() if settled_events.exists() else ""
         if '"kind": "node-settled"' in content and content.count('"kind": "node-started"') >= 2:
@@ -913,7 +914,7 @@ def test_real_cli_replays_failed_and_waiting_terminal_prefixes(
             start_new_session=True,
         )
         events_path = runs / run_id / "events.jsonl"
-        deadline = time.monotonic() + 10
+        deadline = e2e_deadline(10)
         while time.monotonic() < deadline:
             content = events_path.read_text() if events_path.exists() else ""
             if (
@@ -1010,7 +1011,7 @@ def test_real_cli_recovers_exception_terminal_result_without_duplicates(
         start_new_session=True,
     )
     events_path = runs / "exception-prefix" / "events.jsonl"
-    deadline = time.monotonic() + 10
+    deadline = e2e_deadline(10)
     while time.monotonic() < deadline:
         records = (
             [json.loads(line) for line in events_path.read_text().splitlines()]
@@ -1114,7 +1115,7 @@ def test_real_cli_recovers_successful_report_and_no_change_results(
         start_new_session=True,
     )
     events_path = runs / "successful-report-prefix" / "events.jsonl"
-    deadline = time.monotonic() + 10
+    deadline = e2e_deadline(10)
     while time.monotonic() < deadline:
         records = (
             [json.loads(line) for line in events_path.read_text().splitlines()]
@@ -1248,7 +1249,7 @@ def test_real_cli_recovers_settled_lifecycle_stack_anchor(
         start_new_session=True,
     )
     events_path = runs / "lifecycle-stack-prefix" / "events.jsonl"
-    deadline = time.monotonic() + 20
+    deadline = e2e_deadline(20)
     while time.monotonic() < deadline:
         records = (
             [json.loads(line) for line in events_path.read_text().splitlines()]
@@ -1368,7 +1369,7 @@ def test_real_cli_recovers_failed_lifecycle_result(
             stderr=subprocess.PIPE,
             start_new_session=True,
         )
-        contention_deadline = time.monotonic() + 15
+        contention_deadline = e2e_deadline(15)
         while time.monotonic() < contention_deadline:
             contention_records = (
                 [json.loads(line) for line in events_path.read_text().splitlines()]
@@ -1387,7 +1388,7 @@ def test_real_cli_recovers_failed_lifecycle_result(
             pytest.fail("lifecycle node did not reach the contended git lock")
     finally:
         held.__exit__(None, None, None)
-    deadline = time.monotonic() + 15
+    deadline = e2e_deadline(15)
     while time.monotonic() < deadline:
         records = (
             [json.loads(line) for line in events_path.read_text().splitlines()]
@@ -1570,7 +1571,7 @@ def test_real_cli_recovers_waiting_and_no_change_lifecycle_results(
         start_new_session=True,
     )
     events_path = runs / "lifecycle-variants-prefix" / "events.jsonl"
-    deadline = time.monotonic() + 20
+    deadline = e2e_deadline(20)
     while time.monotonic() < deadline:
         records = (
             [json.loads(line) for line in events_path.read_text().splitlines()]
@@ -1659,7 +1660,7 @@ def test_recover_completes_a_partially_emitted_graph_without_duplicates(tmp_path
         start_new_session=True,
     )
     events_path = runs / "partial-topology" / "events.jsonl"
-    deadline = time.monotonic() + 10
+    deadline = e2e_deadline(10)
     durable = 0
     while time.monotonic() < deadline:
         if events_path.exists():

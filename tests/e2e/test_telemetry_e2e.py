@@ -13,6 +13,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from waits import timeout as e2e_timeout
+
 from orchestrator import REPO_ROOT
 
 FAKE_ONEHARNESS = REPO_ROOT / "tests" / "e2e" / "fake_oneharness.py"
@@ -67,7 +69,7 @@ def test_breakdown_aggregates_real_multirole_history_records(
         env=producer_env,
         text=True,
         capture_output=True,
-        timeout=30,
+        timeout=e2e_timeout(30),
     )
     assert planned.returncode == 0, planned.stderr
     persisted = json.loads(
@@ -150,7 +152,7 @@ def test_breakdown_aggregates_real_multirole_history_records(
         env=environment,
         text=True,
         capture_output=True,
-        timeout=30,
+        timeout=e2e_timeout(30),
     )
     assert command.returncode == 0, command.stderr
     indexed = {run["run_id"]: run for run in json.loads(command.stdout)["runs"]}
@@ -183,7 +185,7 @@ def test_breakdown_aggregates_real_multirole_history_records(
         env=environment,
         text=True,
         capture_output=True,
-        timeout=30,
+        timeout=e2e_timeout(30),
     )
     assert breakdown.returncode == 0, breakdown.stderr
     assert "telemetry-e2e" in breakdown.stdout
@@ -204,14 +206,19 @@ def test_breakdown_aggregates_real_multirole_history_records(
         env=producer_env,
         text=True,
         capture_output=True,
-        timeout=30,
+        timeout=e2e_timeout(30),
     )
     assert invalid_produced.returncode == 1, invalid_produced.stderr
     for session in sessions:
         session["labels"]["run_id"] = "telemetry-invalid"
     store.write_text(json.dumps({"sessions": sessions}), encoding="utf-8")
     fallback = subprocess.run(
-        command.args, cwd=REPO_ROOT, env=environment, text=True, capture_output=True, timeout=30
+        command.args,
+        cwd=REPO_ROOT,
+        env=environment,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(30),
     )
     fallback_run = next(
         run for run in json.loads(fallback.stdout)["runs"] if run["run_id"] == "telemetry-invalid"
@@ -225,7 +232,12 @@ def test_breakdown_aggregates_real_multirole_history_records(
     judge_record["usage"]["cost_usd"] = True
     (tmp_path / "judge.jsonl").write_text(json.dumps(judge_record) + "\n", encoding="utf-8")
     unknown = subprocess.run(
-        command.args, cwd=REPO_ROOT, env=environment, text=True, capture_output=True, timeout=30
+        command.args,
+        cwd=REPO_ROOT,
+        env=environment,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(30),
     )
     unknown_run = next(
         run for run in json.loads(unknown.stdout)["runs"] if run["run_id"] == "telemetry-invalid"
@@ -238,14 +250,19 @@ def test_breakdown_aggregates_real_multirole_history_records(
         env=environment,
         text=True,
         capture_output=True,
-        timeout=30,
+        timeout=e2e_timeout(30),
     )
     assert "?" in unknown_breakdown.stdout
 
     judge_record["events"][0]["tool_call_id"] = ""
     (tmp_path / "judge.jsonl").write_text(json.dumps(judge_record) + "\n", encoding="utf-8")
     malformed_tool = subprocess.run(
-        command.args, cwd=REPO_ROOT, env=environment, text=True, capture_output=True, timeout=30
+        command.args,
+        cwd=REPO_ROOT,
+        env=environment,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(30),
     )
     assert malformed_tool.returncode == 2
     judge_record["events"][0]["tool_call_id"] = "judge-tool-1"
@@ -254,14 +271,24 @@ def test_breakdown_aggregates_real_multirole_history_records(
     invalid_timing["duration_ms"] = True
     (tmp_path / "judge.jsonl").write_text(json.dumps(invalid_timing) + "\n", encoding="utf-8")
     rejected_timing = subprocess.run(
-        command.args, cwd=REPO_ROOT, env=environment, text=True, capture_output=True, timeout=30
+        command.args,
+        cwd=REPO_ROOT,
+        env=environment,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(30),
     )
     assert rejected_timing.returncode == 2
     (tmp_path / "judge.jsonl").write_text(json.dumps(judge_record) + "\n", encoding="utf-8")
     sessions[1]["labels"]["role"] = "other"
     store.write_text(json.dumps({"sessions": sessions}), encoding="utf-8")
     rejected_role = subprocess.run(
-        command.args, cwd=REPO_ROOT, env=environment, text=True, capture_output=True, timeout=30
+        command.args,
+        cwd=REPO_ROOT,
+        env=environment,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(30),
     )
     assert rejected_role.returncode == 2
     sessions[1]["labels"]["role"] = "judge"
@@ -286,14 +313,19 @@ def test_breakdown_aggregates_real_multirole_history_records(
         env=producer_env,
         text=True,
         capture_output=True,
-        timeout=30,
+        timeout=e2e_timeout(30),
     )
     assert legacy_produced.returncode == 0, legacy_produced.stderr
     for session in sessions:
         session["labels"]["run_id"] = "telemetry-legacy"
     store.write_text(json.dumps({"sessions": sessions}), encoding="utf-8")
     legacy = subprocess.run(
-        command.args, cwd=REPO_ROOT, env=environment, text=True, capture_output=True, timeout=30
+        command.args,
+        cwd=REPO_ROOT,
+        env=environment,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(30),
     )
     legacy_run = next(
         run for run in json.loads(legacy.stdout)["runs"] if run["run_id"] == "telemetry-legacy"
@@ -306,7 +338,7 @@ def test_breakdown_aggregates_real_multirole_history_records(
         env=environment,
         text=True,
         capture_output=True,
-        timeout=30,
+        timeout=e2e_timeout(30),
     )
     assert "Timeline: unavailable (legacy session linkage)" in legacy_breakdown.stdout
 
@@ -314,7 +346,12 @@ def test_breakdown_aggregates_real_multirole_history_records(
     invalid["schema_version"] = 99
     (tmp_path / "agent.jsonl").write_text(json.dumps(invalid) + "\n", encoding="utf-8")
     rejected = subprocess.run(
-        command.args, cwd=REPO_ROOT, env=environment, text=True, capture_output=True, timeout=30
+        command.args,
+        cwd=REPO_ROOT,
+        env=environment,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(30),
     )
     assert rejected.returncode == 2
     assert "unsupported oneharness history schema" in rejected.stderr
@@ -329,7 +366,7 @@ def test_breakdown_aggregates_real_multirole_history_records(
         env=environment,
         text=True,
         capture_output=True,
-        timeout=30,
+        timeout=e2e_timeout(30),
     )
     assert shown.returncode == 0, shown.stderr
     assert "Latest: completed (3.7s)" in shown.stdout

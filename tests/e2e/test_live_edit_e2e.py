@@ -15,6 +15,8 @@ import time
 from pathlib import Path
 
 import yaml
+from waits import deadline
+from waits import timeout as e2e_timeout
 
 from orchestrator import BASE_CONFIG, REPO_ROOT, gitops
 from orchestrator.projection import project_run
@@ -26,8 +28,8 @@ FAKE_BACKEND = REPO_ROOT / "tests" / "e2e" / "fake_backend.py"
 
 
 def _wait_for(path: Path, predicate, timeout: float = 30) -> None:
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
+    wait_deadline = deadline(timeout)
+    while time.monotonic() < wait_deadline:
         if path.is_file() and predicate(path.read_text(encoding="utf-8")):
             return
         time.sleep(0.02)
@@ -42,7 +44,7 @@ def _reply(run_id: str, runs: Path, commands: list[dict[str, object]]) -> None:
         text=True,
         capture_output=True,
         check=True,
-        timeout=30,
+        timeout=e2e_timeout(30),
     )
 
 
@@ -132,9 +134,9 @@ def test_real_cli_mutates_live_frontier_and_replays_atomic_edits(
     )
     run_id = str(json.loads(launched.stdout)["run_id"])
     outer_run = runs / run_id
-    deadline = time.monotonic() + 15
+    wait_deadline = deadline(15)
     run_dir: Path | None = None
-    while time.monotonic() < deadline:
+    while time.monotonic() < wait_deadline:
         if (outer_run / "events.jsonl").is_file():
             run_dir = outer_run
             break
@@ -361,8 +363,8 @@ def test_real_cli_live_drop_preserves_and_recovers_running_lifecycle(
     run_id = str(json.loads(launched.stdout)["run_id"])
     outer_run = runs / run_id
     nested: Path | None = None
-    deadline = time.monotonic() + 15
-    while time.monotonic() < deadline:
+    wait_deadline = deadline(15)
+    while time.monotonic() < wait_deadline:
         if (outer_run / "events.jsonl").is_file():
             nested = outer_run
             break
@@ -372,14 +374,14 @@ def test_real_cli_live_drop_preserves_and_recovers_running_lifecycle(
     _wait_for(
         witness,
         lambda text: text.count("tick") >= 3,
-        timeout=20,
+        timeout=e2e_timeout(20),
     )
     _wait_for(events, lambda text: '"kind": "node-started"' in text)
     _reply(run_id, runs, [{"op": "drop", "id": "lifecycle", "dependents": "drop"}])
     _wait_for(
         events,
         lambda text: '"kind": "node-settled"' in text and '"status": "cancelled"' in text,
-        timeout=20,
+        timeout=e2e_timeout(20),
     )
 
     checkpoint = gitops.ref_sha(canonical, branch)

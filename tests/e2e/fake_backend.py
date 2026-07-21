@@ -88,10 +88,7 @@ def _wait_at_provider_barrier(task: str) -> None:
         return
     ready, release = (Path(value) for value in match.groups())
     ready.write_text("ready\n", encoding="utf-8")
-    deadline = time.monotonic() + 30
     while not release.exists():
-        if time.monotonic() >= deadline:
-            raise TimeoutError(f"provider barrier was not released: {release}")
         time.sleep(0.01)
 
 
@@ -242,9 +239,8 @@ def main() -> int:
                 plan_path = orchestrator_plan.plan
                 plan_text = plan_path.read_text(encoding="utf-8")
                 if "pre-round-pause " in plan_text:
-                    release = Path(plan_text.split("pre-round-pause ", 1)[1].split('"', 1)[0])
-                    deadline = time.monotonic() + 10
-                    while not release.exists() and time.monotonic() < deadline:
+                    release = Path(plan_text.split("pre-round-pause ", 1)[1].split()[0])
+                    while not release.exists():
                         time.sleep(0.02)
                 orchestrator_turn = _assistant_turns(messages)
                 if orchestrator_turn == 0:

@@ -21,6 +21,8 @@ from pathlib import Path
 from typing import Any
 
 from fakes import FakeGitHub, make_writing_dispatch
+from waits import deadline as e2e_deadline
+from waits import timeout as e2e_timeout
 
 from orchestrator import REPO_ROOT, gitops
 from orchestrator.github import Check, GitHubError, PRStatus, PullRequest
@@ -51,7 +53,7 @@ def _just(
         env=environment,
         text=True,
         capture_output=True,
-        timeout=180,
+        timeout=e2e_timeout(180),
     )
 
 
@@ -70,7 +72,7 @@ def _drain_jsonl(process: subprocess.Popen[str], minimum: int) -> list[dict[str,
 
     threading.Thread(target=pump, daemon=True).start()
     records: list[dict[str, Any]] = []
-    deadline = time.monotonic() + 15
+    deadline = e2e_deadline(15)
     while len(records) < minimum:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
@@ -89,10 +91,10 @@ def _terminate(process: subprocess.Popen[str]) -> None:
     if process.poll() is None:
         process.terminate()
     try:
-        process.wait(timeout=5)
+        process.wait(timeout=e2e_timeout(5))
     except subprocess.TimeoutExpired:
         process.kill()
-        process.wait(timeout=5)
+        process.wait(timeout=e2e_timeout(5))
 
 
 def _run_record(
@@ -120,7 +122,7 @@ def _run_record(
         env=environment,
         text=True,
         capture_output=True,
-        timeout=60,
+        timeout=e2e_timeout(60),
     )
 
 
@@ -211,7 +213,7 @@ def test_real_history_labels_and_cursor_watch(oneharness_bin: str, tmp_path: Pat
         cwd=REPO_ROOT,
         text=True,
         capture_output=True,
-        timeout=60,
+        timeout=e2e_timeout(60),
     )
     assert listed.returncode == 0, listed.stderr
     records = json.loads(listed.stdout)
@@ -610,7 +612,7 @@ def test_monitor_backoff_resets_after_real_human_attestation(tmp_path: Path) -> 
             "json",
         )
         assert released.returncode == 0, released.stderr
-        remainder, stderr = process.communicate(timeout=30)
+        remainder, stderr = process.communicate(timeout=e2e_timeout(30))
         assert process.returncode == 0, stderr
     finally:
         _terminate(process)
@@ -641,7 +643,7 @@ class _PausingGitHub(FakeGitHub):
         # loop. Pause that second read before either direct or native auto-merge.
         if self.status_calls == 2 and not state.merged:
             self.ready.set()
-            if not self.release.wait(15):
+            if not self.release.wait(e2e_timeout(15)):
                 raise AssertionError("test did not release the paused auto-merge")
         return super().status(pr)
 
@@ -762,8 +764,8 @@ def test_real_lifecycle_commit_and_pr_survive_live_state(
             sleep=lambda _seconds: None,
             journal=second_node,
         )
-        if not lifecycle_github.ready.wait(15):
-            early = future.result(timeout=1)
+        if not lifecycle_github.ready.wait(e2e_timeout(15)):
+            early = future.result(timeout=e2e_timeout(1))
             raise AssertionError(
                 f"lifecycle did not reach its PR merge wait: {early.outcome}: {early.detail}"
             )
@@ -789,7 +791,7 @@ def test_real_lifecycle_commit_and_pr_survive_live_state(
             assert active_record["timing"]["publication_wait_seconds"] > 0
         finally:
             lifecycle_github.release.set()
-        result = future.result(timeout=30)
+        result = future.result(timeout=e2e_timeout(30))
 
     assert result.ok and result.outcome == "merged"
     assert result.pr is not None and result.pr.number == 1

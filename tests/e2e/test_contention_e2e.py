@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from waits import timeout as e2e_timeout
 
 from orchestrator import gitops
 from orchestrator.config import ConfigError
@@ -63,7 +64,7 @@ def _held_worktree_process(
     workspace = Workspace(root, resolver=lambda _spec: Path(canonical), workflow="local")
     worktree = workspace.worktree(repo, branch, base="origin/main")
     ready.put(str(worktree))
-    release.wait(10)
+    release.wait(e2e_timeout(10))
     workspace.remove_worktree(repo, worktree)
 
 
@@ -86,7 +87,7 @@ def _paused_teardown_process(
     )
     worktree = workspace.worktree(repo, branch, base="origin/main")
     ready.put(str(worktree))
-    begin.wait(10)
+    begin.wait(e2e_timeout(10))
     workspace.remove_worktree(repo, worktree)
 
 
@@ -133,7 +134,7 @@ def _register_process(registry_path: str, checkout: str) -> None:
 def _own_round(run_dir: str, ready: Any, release: Any) -> None:
     prepare_round(Path(run_dir), PLAN)
     ready.set()
-    release.wait(10)
+    release.wait(e2e_timeout(10))
 
 
 def _join(process: multiprocessing.Process) -> None:
@@ -166,7 +167,7 @@ def test_separate_processes_create_and_remove_distinct_worktrees(
     ]
     for process in processes:
         process.start()
-    paths = {queue.get(timeout=10) for _ in processes}
+    paths = {queue.get(timeout=e2e_timeout(10)) for _ in processes}
     for process in processes:
         _join(process)
 
@@ -198,7 +199,7 @@ def test_active_cross_process_worktree_is_never_reclaimed(
         ),
     )
     process.start()
-    held_path = Path(ready.get(timeout=10))
+    held_path = Path(ready.get(timeout=e2e_timeout(10)))
     repo = normalize_repo(str(canonical))
     contender = Workspace(root, resolver=lambda _spec: canonical, workflow="local")
     run_id = RunId("worktree-lock-timeout")
@@ -248,19 +249,19 @@ def test_same_branch_redispatch_cannot_overtake_paused_teardown(
         ),
     )
     process.start()
-    original = Path(ready.get(timeout=10))
+    original = Path(ready.get(timeout=e2e_timeout(10)))
     repo = normalize_repo(str(canonical))
     contender = Workspace(root, resolver=lambda _spec: canonical, workflow="local")
     pool = ThreadPoolExecutor(max_workers=1)
     try:
         with advisory_lock(f"git:{gitops.common_dir(canonical)}"):
             begin.set()
-            assert teardown_started.wait(10)
+            assert teardown_started.wait(e2e_timeout(10))
             redispatch = pool.submit(contender.worktree, repo, "feature/race", base="origin/main")
             with pytest.raises(FutureTimeout):
                 redispatch.result(timeout=0.1)
         try:
-            replacement = redispatch.result(timeout=10)
+            replacement = redispatch.result(timeout=e2e_timeout(10))
         except RuntimeError as exc:
             assert "branch 'feature/race' is active" in str(exc)
             replacement = None
@@ -288,7 +289,7 @@ def test_failed_abandoned_reclaim_releases_lease_for_retry(
         args=(str(canonical), str(root), "feature/orphan", ready),
     )
     process.start()
-    orphan = Path(ready.get(timeout=10))
+    orphan = Path(ready.get(timeout=e2e_timeout(10)))
     _join(process)
     subprocess.run(["git", "-C", str(canonical), "worktree", "lock", str(orphan)], check=True)
 
@@ -314,7 +315,7 @@ def test_abandoned_branch_at_different_path_moves_to_new_owned_worktree(
         args=(str(canonical), str(tmp_path / "old-root"), "feature/moved", ready),
     )
     process.start()
-    old_path = Path(ready.get(timeout=10))
+    old_path = Path(ready.get(timeout=e2e_timeout(10)))
     _join(process)
 
     repo = normalize_repo(str(canonical))
@@ -340,7 +341,7 @@ def test_missing_abandoned_worktree_registration_is_pruned_and_recreated(
         args=(str(canonical), str(root), "feature/missing", ready),
     )
     process.start()
-    missing = Path(ready.get(timeout=10))
+    missing = Path(ready.get(timeout=e2e_timeout(10)))
     _join(process)
     shutil.rmtree(missing)
 
@@ -379,7 +380,7 @@ def test_identical_simultaneous_lifecycles_get_unique_branches_and_both_land(
     ]
     for process in processes:
         process.start()
-    results = [queue.get(timeout=15) for _ in processes]
+    results = [queue.get(timeout=e2e_timeout(15)) for _ in processes]
     for process in processes:
         _join(process)
 
@@ -421,7 +422,7 @@ def test_explicit_run_owner_blocks_contention_and_only_dead_owner_can_be_recover
     release = MP.Event()
     owner = MP.Process(target=_own_round, args=(str(run_dir), ready, release))
     owner.start()
-    assert ready.wait(5), "owner never claimed the explicit run"
+    assert ready.wait(e2e_timeout(5)), "owner never claimed the explicit run"
 
     with pytest.raises(ConfigError, match="already running"):
         prepare_round(run_dir, PLAN)
