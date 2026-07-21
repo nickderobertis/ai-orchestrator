@@ -205,6 +205,9 @@ def test_due_heartbeat_is_agent_synthesized_and_normal_surface_resets_clock(
         assert rejected.returncode == 2
         assert diagnostic in rejected.stderr
 
+    # llmlint: ignore[tests_mirror_real_usage] No public command can write invalid
+    # heartbeat state; direct corruption exercises the defensive parser used after
+    # disk damage or a torn legacy write while the surrounding poll views stay public.
     heartbeat_path.write_text(
         json.dumps({"last_surface_at": "bad", "interval_s": 1, "due": False, "enabled": True}),
         encoding="utf-8",
