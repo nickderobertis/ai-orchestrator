@@ -395,8 +395,9 @@ def merge_base_into_branch(
     base: str,
     *,
     message: str,
+    abort_on_conflict: bool = True,
 ) -> bool:
-    """Merge ``base`` into the checked-out branch, aborting on conflict.
+    """Merge ``base`` into the checked-out branch, optionally retaining conflicts.
 
     Return ``False`` only when the merge conflicts. Other git failures remain
     errors so callers do not mistake an invalid ref or broken repository for a
@@ -408,9 +409,19 @@ def merge_base_into_branch(
         unmerged = _git(["diff", "--name-only", "--diff-filter=U"], cwd=cwd, check=False)
         if unmerged.returncode != 0 or not unmerged.stdout.strip():
             raise
-        merge_abort(cwd)
+        if abort_on_conflict:
+            merge_abort(cwd)
         return False
     return True
+
+
+def unmerged_paths(cwd: str | Path) -> list[str]:
+    """Return paths that still have unresolved merge stages."""
+    return [
+        path
+        for path in _git(["diff", "--name-only", "--diff-filter=U"], cwd=cwd).stdout.splitlines()
+        if path
+    ]
 
 
 def push(

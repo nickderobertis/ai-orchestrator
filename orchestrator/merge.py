@@ -86,6 +86,7 @@ class MergeContext:
     #: it is the type.
     journal: NodeSink | None = None
     preverified_pr: PullRequest | None = None
+    local_prepare: Callable[[], MergeOutcome | None] | None = None
 
 
 @dataclass
@@ -290,6 +291,10 @@ class LocalMergeStrategy:
             return self._publish_and_merge(ctx)
 
     def _publish_and_merge(self, ctx: MergeContext) -> MergeOutcome:
+        if ctx.local_prepare is not None:
+            prepared = ctx.local_prepare()
+            if prepared is not None:
+                return prepared
         for attempt in range(1, ctx.publication_attempts + 1):
             with tempfile.TemporaryDirectory(prefix="orchestrator-merge-") as parent:
                 scratch = Path(parent) / "worktree"

@@ -1867,40 +1867,59 @@ def test_local_repo_syncs_advanced_base_before_gate(tmp_path, bare_origin) -> No
     )
 
 
-def test_local_repo_sync_conflict_aborts_before_gate_or_push(tmp_path, bare_origin) -> None:
+def test_local_conflict_resolves_outside_queue_then_requeues_and_merges(
+    tmp_path, bare_origin
+) -> None:
     origin = bare_origin({"shared.txt": "original\n"})
-    branch_dispatch = make_writing_dispatch(filename="shared.txt", content="agent")
+    workspace = _workspace(tmp_path, origin)
+    dispatched = threading.Barrier(2)
+    resolution_calls: list[str] = []
 
-    def conflicting_dispatch(
+    def concurrent_dispatch(
         persona: str, task: str, *, project_dir: str, **kwargs: object
     ) -> Report:
-        report = branch_dispatch(persona, task, project_dir=project_dir, **kwargs)
-        _advance_origin(tmp_path, origin, "shared.txt", "concurrent base\n")
-        return report
+        path = Path(project_dir) / "shared.txt"
+        if "Resolve the content conflict" in task:
+            assert "<<<<<<<" in path.read_text(encoding="utf-8")
+            resolution_calls.append(str(kwargs["session"]))
+            path.write_text("first branch\nsecond branch\n", encoding="utf-8")
+            gitops.add_all(project_dir)
+            gitops.commit(project_dir, "fix: resolve concurrent local edits")
+        else:
+            content = "first branch\n" if "first" in task else "second branch\n"
+            path.write_text(content, encoding="utf-8")
+            dispatched.wait(timeout=e2e_timeout(10))
+        return Report(persona, 0, True, False, 2, [], {}, {}, "")
 
-    result = run_repo_task(
-        str(origin),
-        "Edit the same file as a concurrent main change.",
-        "engineer",
-        workspace=_workspace(tmp_path, origin),
-        dispatch_fn=conflicting_dispatch,
-        verify_cmd=["sh", "-c", "touch GATE_RAN && false"],
-    )
+    def run(name: str):
+        return run_repo_task(
+            str(origin),
+            f"Edit the shared file from the {name} local run.",
+            "engineer",
+            branch=f"feature/{name}-local-conflict",
+            workspace=workspace,
+            dispatch_fn=concurrent_dispatch,
+            verify_cmd=["git", "diff", "--check", "origin/main...HEAD"],
+        )
 
-    assert not result.ok and result.outcome == "gate-failed"
-    assert "sync-conflict" in result.detail
-    assert result.verify is None
-    assert not _has_file(origin, result.branch, "shared.txt")
-    assert not _has_file(origin, "main", "GATE_RAN")
-    assert (
-        subprocess.run(
-            ["git", "-C", str(origin), "show", "main:shared.txt"],
-            check=True,
-            text=True,
-            capture_output=True,
-        ).stdout
-        == "concurrent base\n"
-    )
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first_future = pool.submit(run, "first")
+        second_future = pool.submit(run, "second")
+        results = [
+            first_future.result(timeout=e2e_timeout(30)),
+            second_future.result(timeout=e2e_timeout(30)),
+        ]
+
+    assert [result.outcome for result in results] == ["merged", "merged"]
+    assert len(resolution_calls) == 1
+    assert "merge-conflict-1" in resolution_calls[0]
+    final = subprocess.run(
+        ["git", "-C", str(origin), "show", "main:shared.txt"],
+        check=True,
+        text=True,
+        capture_output=True,
+    ).stdout
+    assert final == "first branch\nsecond branch\n"
 
 
 def test_local_repo_registry_gate_verifies_real_worktree(tmp_path, bare_origin) -> None:
