@@ -253,6 +253,47 @@ def main() -> int:
                         capture_output=True,
                         text=True,
                     )
+                    if "heartbeat-channel" in plan_text:
+                        run_id = orchestrator_plan.argv[orchestrator_plan.argv.index("--run") + 1]
+                        monitor = subprocess.run(
+                            [
+                                "just",
+                                "monitor",
+                                run_id,
+                                "--runs-dir",
+                                str(orchestrator_plan.runs_dir),
+                                "--once",
+                            ],
+                            check=True,
+                            capture_output=True,
+                            text=True,
+                        )
+                        status = subprocess.run(
+                            [
+                                "just",
+                                "status",
+                                "--runs-dir",
+                                str(orchestrator_plan.runs_dir),
+                            ],
+                            check=True,
+                            capture_output=True,
+                            text=True,
+                        )
+                        if "planner update due" not in monitor.stdout + status.stdout:
+                            raise AssertionError("orchestrator poll views did not expose heartbeat")
+                        subprocess.run(
+                            [
+                                "just",
+                                "channel-surface",
+                                run_id,
+                                "active worker: round complete; follow-ups: none",
+                                "--runs-dir",
+                                str(orchestrator_plan.runs_dir),
+                            ],
+                            check=True,
+                            capture_output=True,
+                            text=True,
+                        )
                 elif orchestrator_turn == 1 and "continuation-channel" in plan_text:
                     run_id = orchestrator_plan.argv[orchestrator_plan.argv.index("--run") + 1]
                     settled_run = orchestrator_plan.runs_dir / run_id

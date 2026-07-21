@@ -55,6 +55,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from . import gitops
+from .channel import ChannelError, due_indicator
 from .config import ConfigError
 from .coordination import advisory_lock, atomic_json
 from .detail_snapshot import SNAPSHOT_VERSION, CheckRollup, CommitDetail, PrDetail
@@ -1204,6 +1205,14 @@ class Writer:
         line = json.dumps(beat.record(), sort_keys=True) if self._json else beat.text()
         print(line, file=self._out, flush=True)
 
+    def planner_due(self, message: str) -> None:
+        line = (
+            json.dumps({"type": "planner_update_due", "message": message})
+            if self._json
+            else message
+        )
+        print(line, file=self._out, flush=True)
+
 
 def stream(
     monitor: Monitor,
@@ -1226,9 +1235,16 @@ def stream(
     the one lie a watching command must not tell.
     """
     writer.header()
+    shown_due = False
     last = monitor.clock()
     delay = poll_interval
     while True:
+        indicator = due_indicator(monitor.run_dir)
+        if indicator is not None and not shown_due:
+            writer.planner_due(indicator)
+            shown_due = True
+        elif indicator is None:
+            shown_due = False
         events = monitor.poll()
         delay = poll_interval if events else min(max_poll_interval, delay * 2)
         for event in events:
@@ -1351,7 +1367,7 @@ def main(argv: list[str] | None = None) -> int:
             poll_interval=args.poll_interval,
             max_poll_interval=args.max_poll_interval,
         )
-    except KeyboardInterrupt:
+    except (ChannelError, KeyboardInterrupt):
         # Ctrl-C is how a person ends a follow that is working as designed, so it is
         # a clean stop rather than a traceback.
         return 0

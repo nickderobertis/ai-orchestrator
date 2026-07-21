@@ -15,6 +15,14 @@ agent:
     continue only by applying the returned retry, split, add, drop, or human-action
     decision as the next-round edits. Workers remain bounded to their assigned
     round and never communicate with the planner channel directly.
+
+    Treat the durable planner-update pacemaker as a first-class duty. Whenever
+    `just status` or `just monitor` shows `planner update due`, inspect both views
+    and any further evidence needed, then use `just channel-surface` to compose a
+    non-blocking status update covering progress for every active workstream and
+    any non-blocking follow-ups that surfaced. Continue the run immediately; a
+    heartbeat update never waits for a planner reply. Any planner-visible surface
+    resets the clock, so do not emit a redundant heartbeat after another update.
 user:
   persona: |
     Act as the live planner and reviewer of the executing orchestrator. Evaluate

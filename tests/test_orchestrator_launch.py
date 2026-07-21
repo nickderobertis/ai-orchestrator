@@ -69,6 +69,22 @@ def test_launch_rejects_nul_onejudge_binary(tmp_path: Path) -> None:
         launch_orchestrator(plan, runs_dir=tmp_path / "runs", onejudge_bin="bad\0binary")
 
 
+@pytest.mark.parametrize("interval", [0, -1, float("inf"), float("nan")])
+def test_launch_rejects_invalid_heartbeat_interval(tmp_path: Path, interval: float) -> None:
+    plan = tmp_path / "plan.json"
+    plan.write_text(
+        '{"schema_version":3,"tasks":[{"id":"approval","kind":"human","task":"approve"}]}',
+        encoding="utf-8",
+    )
+    with pytest.raises(DispatchError, match="positive, finite"):
+        launch_orchestrator(
+            plan,
+            runs_dir=tmp_path / "runs",
+            run_id=f"invalid-{str(interval).replace('.', '-')}",
+            heartbeat_interval=interval,
+        )
+
+
 def test_orchestrate_cli_prints_run_id(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

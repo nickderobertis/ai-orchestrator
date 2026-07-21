@@ -100,8 +100,12 @@ def _launch_cli(
     base: Path,
     onejudge_bin: str,
     requested_run_id: str | None = None,
+    heartbeat_interval: float | None = None,
 ) -> str:
     run_id_args = ["--run-id", requested_run_id] if requested_run_id else []
+    heartbeat_args = (
+        ["--heartbeat-interval", str(heartbeat_interval)] if heartbeat_interval is not None else []
+    )
     launched = subprocess.run(
         [
             "just",
@@ -114,6 +118,7 @@ def _launch_cli(
             "--onejudge-bin",
             onejudge_bin,
             *run_id_args,
+            *heartbeat_args,
             "--skill-command",
             sys.executable,
             str(FAKE_BACKEND),
@@ -124,6 +129,47 @@ def _launch_cli(
         check=True,
     )
     return str(json.loads(launched.stdout)["run_id"])
+
+
+def test_due_heartbeat_is_agent_synthesized_and_normal_surface_resets_clock(
+    tmp_path: Path, onejudge_bin: str
+) -> None:
+    runs = tmp_path / "runs"
+    witness = tmp_path / "slow-witness"
+    plan = tmp_path / "heartbeat-channel.json"
+    plan.write_text(
+        json.dumps(
+            {
+                "schema_version": 3,
+                "name": "heartbeat-channel",
+                "tasks": [
+                    {
+                        "id": "active-worker",
+                        "persona": "engineer",
+                        "task": f"slow-branch {witness} complete-now heartbeat-channel",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    run_id = _launch_cli(plan, runs, _base(tmp_path), onejudge_bin, heartbeat_interval=0.1)
+    heartbeat = _wait_surface(run_id, runs)
+    assert heartbeat["surface"] == {
+        "kind": "heartbeat",
+        "message": "active worker: round complete; follow-ups: none",
+        "blocking": False,
+    }
+    state = json.loads((runs / run_id / "channel" / "heartbeat.json").read_text())
+    assert state["due"] is False
+
+    boundary = _wait_surface(run_id, runs)
+    assert boundary["surface"]["kind"] == "milestone"  # type: ignore[index]
+    reset = json.loads((runs / run_id / "channel" / "heartbeat.json").read_text())
+    assert reset["due"] is False
+    assert reset["last_surface_at"] >= state["last_surface_at"]
+    assert _next_cli(run_id, runs, timeout="0.02").get("surface") is None
+    _reply_cli(run_id, runs, {"completion": True, "reason": "verified heartbeat"})
 
 
 def _next_cli(run_id: str, runs: Path, timeout: str | None = None) -> dict[str, object]:

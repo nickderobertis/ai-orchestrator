@@ -100,6 +100,10 @@ channel-next *args:
 channel-reply *args:
     @uv run orchestrator-channel-reply "$@"
 
+# Send an agent-authored, non-blocking progress update when the pacemaker is due.
+channel-surface *args:
+    @uv run orchestrator-channel-surface "$@"
+
 channel-approve *args:
     @uv run orchestrator-channel-approve "$@"
 

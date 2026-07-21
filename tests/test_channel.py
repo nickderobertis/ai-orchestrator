@@ -19,14 +19,19 @@ from orchestrator.channel import (
     _finished,
     _reply,
     _surface,
+    apply_heartbeat_reply,
     create_channel,
+    due_indicator,
+    heartbeat_state,
     main_approve,
     main_continue,
     main_next,
     main_reject,
     main_relay,
     main_reply,
+    mark_heartbeat_due,
     read_message,
+    record_surface,
     relay_supervisor,
     write_message,
 )
@@ -381,6 +386,50 @@ def test_channel_metadata_is_durable(tmp_path: Path) -> None:
     channel = create_channel(tmp_path / "run")
     assert json.loads((channel / "channel.json").read_text()) == {"schema_version": 1}
     assert create_channel(tmp_path / "run") == channel
+
+
+def test_heartbeat_is_sticky_durable_and_reset_by_surface(tmp_path: Path) -> None:
+    channel = create_channel(tmp_path / "run", heartbeat_interval=10)
+    initial = heartbeat_state(channel)
+    assert initial is not None
+    mark_heartbeat_due(channel, now=float(initial["last_surface_at"]) + 11)
+    assert due_indicator(channel, now=float(initial["last_surface_at"]) + 125) == (
+        "planner update due (2m since last update)"
+    )
+    assert create_channel(tmp_path / "run", heartbeat_interval=99) == channel
+    assert heartbeat_state(channel)["interval_s"] == 10  # type: ignore[index]
+    record_surface(channel, now=float(initial["last_surface_at"]) + 126)
+    assert due_indicator(channel, now=float(initial["last_surface_at"]) + 200) is None
+
+
+def test_heartbeat_reply_adjusts_or_disables_without_changing_verdict(tmp_path: Path) -> None:
+    channel = create_channel(tmp_path / "run")
+    initial = heartbeat_state(channel)
+    assert initial is not None
+    mark_heartbeat_due(channel, now=float(initial["last_surface_at"]) + 1801)
+    adjusted = _reply(
+        {
+            "completion": False,
+            "message": "continue",
+            "reason": "cadence",
+            "heartbeat_interval": 12.5,
+        }
+    )
+    apply_heartbeat_reply(channel, adjusted)
+    assert heartbeat_state(channel)["interval_s"] == 12.5  # type: ignore[index]
+    assert heartbeat_state(channel)["due"] is True  # type: ignore[index]
+    disabled = _reply(
+        {
+            "completion": False,
+            "message": "continue",
+            "reason": "quiet",
+            "heartbeat_interval": False,
+        }
+    )
+    apply_heartbeat_reply(channel, disabled)
+    assert heartbeat_state(channel)["enabled"] is False  # type: ignore[index]
+    with pytest.raises(ChannelError, match="positive, finite"):
+        _reply({"completion": True, "reason": "bad", "heartbeat_interval": 0})
 
 
 def test_relay_shapes_supervisor_and_persists_verdict(

@@ -125,6 +125,14 @@ edits](docs/orchestration.md#live-graph-edits). The planner never runs `run-plan
 or `next-round` itself: those commands belong to the orchestrator process, and
 two writers would race the ledger lock.
 
+The orchestrator also surfaces an agent-written, non-blocking per-workstream
+status when its durable planner-update pacemaker becomes due (30 minutes by
+default). Every planner-visible surface resets that clock. Set a launch interval
+with `just orchestrate ... --heartbeat-interval SECONDS`; include
+`"heartbeat_interval": SECONDS` in a normal `channel-reply` to adjust it live, or
+`"heartbeat_interval": false` to disable it. The orchestrator continues without
+waiting for a reply to these heartbeat surfaces.
+
 Judge a dispatched branch against its own base (`merge-base` / `base..branch`),
 never a moving `origin/main`; concurrent advancement can make a healthy branch
 appear to delete files.

@@ -44,6 +44,8 @@ class ChannelTimeout(TimeoutError):
 CHANNEL_DIR_ENV = f"{CHANNEL_ENV_PREFIX}DIR"
 CHANNEL_RUN_ID_ENV = f"{CHANNEL_ENV_PREFIX}RUN_ID"
 CHANNEL_ENDPOINTS = ("up.fifo", "down.fifo")
+HEARTBEAT_FILE = "heartbeat.json"
+DEFAULT_HEARTBEAT_INTERVAL = 1800.0
 
 
 class ProposalSink(Protocol):
@@ -53,9 +55,122 @@ class ProposalSink(Protocol):
 
     def drain_commands(self) -> tuple[EditCommand, ...]: ...
 
+    def heartbeat_tick(self) -> None: ...
 
-def create_channel(run_dir: Path) -> Path:
+
+def _heartbeat_path(channel_dir: Path) -> Path:
+    return channel_dir / HEARTBEAT_FILE
+
+
+def _validated_interval(value: Any, *, field: str = "heartbeat_interval") -> float:
+    if (
+        not isinstance(value, int | float)
+        or isinstance(value, bool)
+        or not math.isfinite(value)
+        or value <= 0
+    ):
+        raise ChannelError(f"{field} must be a positive, finite number of seconds")
+    return float(value)
+
+
+def initialize_heartbeat(channel_dir: Path, interval_s: float = DEFAULT_HEARTBEAT_INTERVAL) -> None:
+    """Seed heartbeat state once without resetting an existing run's clock."""
+    interval = _validated_interval(interval_s, field="heartbeat interval")
+    path = _heartbeat_path(channel_dir)
+    with advisory_lock(f"channel-heartbeat:{channel_dir.resolve()}"):
+        if not path.exists():
+            atomic_json(
+                path,
+                {
+                    "last_surface_at": time.time(),
+                    "interval_s": interval,
+                    "due": False,
+                    "enabled": True,
+                },
+            )
+
+
+def _load_heartbeat(channel_dir: Path) -> dict[str, Any] | None:
+    path = _heartbeat_path(channel_dir)
+    if not path.is_file():
+        return None
+    value = load_mapping(path)
+    last = value.get("last_surface_at")
+    interval = value.get("interval_s")
+    due = value.get("due")
+    enabled = value.get("enabled")
+    if (
+        not isinstance(last, int | float)
+        or isinstance(last, bool)
+        or not math.isfinite(last)
+        or last < 0
+        or not isinstance(due, bool)
+        or not isinstance(enabled, bool)
+    ):
+        raise ChannelError("heartbeat state is invalid")
+    _validated_interval(interval, field="heartbeat interval_s")
+    return dict(value)
+
+
+def heartbeat_state(channel_dir: Path) -> dict[str, Any] | None:
+    """Read validated heartbeat state, or None for legacy/non-channel runs."""
+    with advisory_lock(f"channel-heartbeat:{channel_dir.resolve()}"):
+        return _load_heartbeat(channel_dir)
+
+
+def mark_heartbeat_due(channel_dir: Path, *, now: float | None = None) -> None:
+    """Persist the sticky due bit once the configured interval has elapsed."""
+    with advisory_lock(f"channel-heartbeat:{channel_dir.resolve()}"):
+        state = _load_heartbeat(channel_dir)
+        if state is None or state["due"] or not state["enabled"]:
+            return
+        current = time.time() if now is None else now
+        if current - float(state["last_surface_at"]) >= float(state["interval_s"]):
+            state["due"] = True
+            atomic_json(_heartbeat_path(channel_dir), state)
+
+
+def record_surface(channel_dir: Path, *, now: float | None = None) -> None:
+    """Reset the pacemaker after a planner-visible up-channel surface."""
+    with advisory_lock(f"channel-heartbeat:{channel_dir.resolve()}"):
+        state = _load_heartbeat(channel_dir)
+        if state is None:
+            return
+        state["last_surface_at"] = time.time() if now is None else now
+        state["due"] = False
+        atomic_json(_heartbeat_path(channel_dir), state)
+
+
+def apply_heartbeat_reply(channel_dir: Path, response: Mapping[str, Any]) -> None:
+    """Apply an optional live interval update without changing verdict semantics."""
+    if "heartbeat_interval" not in response:
+        return
+    setting = response["heartbeat_interval"]
+    enabled = setting is not False
+    interval = None if setting is False else _validated_interval(setting)
+    with advisory_lock(f"channel-heartbeat:{channel_dir.resolve()}"):
+        state = _load_heartbeat(channel_dir)
+        if state is None:
+            raise ChannelError("heartbeat state is unavailable")
+        state["enabled"] = enabled
+        if interval is not None:
+            state["interval_s"] = interval
+        atomic_json(_heartbeat_path(channel_dir), state)
+
+
+def due_indicator(channel_dir: Path, *, now: float | None = None) -> str | None:
+    state = heartbeat_state(channel_dir)
+    if state is None or not state["enabled"] or not state["due"]:
+        return None
+    elapsed = max(0.0, (time.time() if now is None else now) - float(state["last_surface_at"]))
+    return f"planner update due ({int(elapsed // 60)}m since last update)"
+
+
+def create_channel(
+    run_dir: Path, *, heartbeat_interval: float = DEFAULT_HEARTBEAT_INTERVAL
+) -> Path:
     """Create (or validate) the two FIFOs and durable channel metadata."""
+    interval = _validated_interval(heartbeat_interval, field="heartbeat interval")
     channel_dir = run_dir / "channel"
     channel_dir.mkdir(parents=True, exist_ok=True)
     with advisory_lock(f"channel-create:{channel_dir.resolve()}"):
@@ -67,6 +182,7 @@ def create_channel(run_dir: Path) -> Path:
             else:
                 os.mkfifo(path, 0o600)
         atomic_json(channel_dir / "channel.json", {"schema_version": 1})
+    initialize_heartbeat(channel_dir, interval)
     return channel_dir
 
 
@@ -225,6 +341,9 @@ def _surface(request: Mapping[str, Any], run_id: str, round_number: int) -> dict
 
 
 def _reply(value: Mapping[str, Any]) -> dict[str, Any]:
+    heartbeat = value.get("heartbeat_interval")
+    if "heartbeat_interval" in value and heartbeat is not False:
+        _validated_interval(heartbeat)
     try:
         commands = parse_commands(value)
     except EditError as exc:
@@ -244,6 +363,8 @@ def _reply(value: Mapping[str, Any]) -> dict[str, Any]:
         }
         if not completes:
             response["message"] = "apply live graph edits"
+        if "heartbeat_interval" in value:
+            response["heartbeat_interval"] = heartbeat
         return response
     if not isinstance(completion, bool) or not isinstance(reason, str):
         raise ChannelError("reply requires boolean completion and string reason")
@@ -256,6 +377,8 @@ def _reply(value: Mapping[str, Any]) -> dict[str, Any]:
                     "commands": [command.payload for command in commands],
                 }
             )
+        if "heartbeat_interval" in value:
+            response["heartbeat_interval"] = heartbeat
         return response
     message = value.get("message")
     if not isinstance(message, str):
@@ -268,6 +391,8 @@ def _reply(value: Mapping[str, Any]) -> dict[str, Any]:
                 "commands": [command.payload for command in commands],
             }
         )
+    if "heartbeat_interval" in value:
+        response["heartbeat_interval"] = heartbeat
     return response
 
 
@@ -329,6 +454,9 @@ class ProposalPump:
             except queue.Empty:
                 return tuple(commands)
 
+    def heartbeat_tick(self) -> None:
+        mark_heartbeat_due(self._channel_dir)
+
     def close(self) -> None:
         self._stop.set()
         self._proposals.put(None)
@@ -352,6 +480,7 @@ class ProposalPump:
                     return
                 try:
                     write_message(self._channel_dir / "up.fifo", proposal, timeout=0.1)
+                    record_surface(self._channel_dir)
                     break
                 except ChannelTimeout:
                     continue
@@ -371,6 +500,7 @@ class ProposalPump:
         while not self._stop.is_set():
             try:
                 response = _reply(read_message(self._channel_dir / "down.fifo", timeout=0.1))
+                apply_heartbeat_reply(self._channel_dir, response)
                 for command in parse_commands(response):
                     self._commands.put(command)
                 self._replies.put(response)
@@ -421,7 +551,9 @@ def relay_supervisor(channel_dir: Path, run_id: str, round_number: int, *, timeo
         surfaced = _surface(request, run_id, round_number)
         atomic_json(channel_dir / "planner-pending.json", surfaced["surface"])
         write_message(channel_dir / "up.fifo", surfaced, timeout=timeout)
+        record_surface(channel_dir)
         response = _reply(read_message(channel_dir / "down.fifo", timeout=timeout))
+        apply_heartbeat_reply(channel_dir, response)
         with suppress(FileNotFoundError):
             (channel_dir / "planner-pending.json").unlink()
         atomic_json(channel_dir / "planner-verdict.json", response)
@@ -555,6 +687,37 @@ def main_reply(argv: list[str] | None = None) -> int:
             f"channel-reply: {exc}; check the run id and reply shape, then rerun the command",
             file=sys.stderr,
         )
+        return 2
+    return 0
+
+
+def main_surface(argv: list[str] | None = None) -> int:
+    """Send one agent-authored, non-blocking status update to the planner."""
+    parser = argparse.ArgumentParser(description="Surface a non-blocking planner status update")
+    parser.add_argument("run_id")
+    parser.add_argument("message", nargs="?", default="-")
+    parser.add_argument("--runs-dir", type=Path, default=Path("runs"))
+    parser.add_argument("--timeout", type=float, default=30.0)
+    args = parser.parse_args(argv)
+    try:
+        message = sys.stdin.read() if args.message == "-" else args.message
+        if not message.strip():
+            raise ChannelError("status update must be a non-empty string")
+        resolved = resolve_supervision_run(args.runs_dir, args.run_id)
+        channel_dir = args.runs_dir / resolved / "channel"
+        latest = latest_round(args.runs_dir / resolved)
+        round_number = latest[0] if latest is not None else 1
+        value = {
+            "op": "supervisor",
+            "run_id": str(resolved),
+            "round": round_number,
+            "surface": {"kind": "heartbeat", "message": message, "blocking": False},
+            "messages": [],
+        }
+        write_message(channel_dir / "up.fifo", value, timeout=args.timeout)
+        record_surface(channel_dir)
+    except (ChannelError, ChannelTimeout, ConfigError, OSError) as exc:
+        print(f"channel-surface: {exc}", file=sys.stderr)
         return 2
     return 0
 

@@ -39,7 +39,7 @@ from onejudge_sdk import (
 )
 
 from . import BASE_CONFIG, PERSONA_DIR, REPO_ROOT
-from .channel import CHANNEL_DIR_ENV, CHANNEL_RUN_ID_ENV, create_channel
+from .channel import CHANNEL_DIR_ENV, CHANNEL_RUN_ID_ENV, ChannelError, create_channel
 from .config import ConfigError, build_effective_config, load_yaml
 from .coordination import atomic_json
 from .labels import LABEL_ENV, LabelError, merge_labels
@@ -380,6 +380,7 @@ def launch_orchestrator(
     skill_provider: Mapping[str, Any] | None = None,
     max_turns: int = 100,
     turn_timeout: int = int(ORCHESTRATOR_ONEHARNESS_TIMEOUT),
+    heartbeat_interval: float = 1800.0,
     cwd: str | Path = REPO_ROOT,
 ) -> str:
     """Launch a detached live-supervised orchestrator and return its run id."""
@@ -401,7 +402,10 @@ def launch_orchestrator(
     root = Path(runs_dir).resolve()
     run_dir = resolve_run_dir(root, plan_mapping, plan, run_id)
     run_dir.mkdir(parents=True, exist_ok=False)
-    channel_dir = create_channel(run_dir)
+    try:
+        channel_dir = create_channel(run_dir, heartbeat_interval=heartbeat_interval)
+    except ChannelError as exc:
+        raise DispatchError(str(exc)) from exc
     config = build_effective_config(load_yaml(base_path), {}, max_turns=max_turns)
     # The live planner's supervisor verdict is the completion authority. Standalone
     # simulated-model eval/assessment calls do not belong on this command relay.
@@ -525,6 +529,13 @@ def main_orchestrate(argv: list[str] | None = None) -> int:
     parser.add_argument("--base", type=Path, default=BASE_CONFIG)
     parser.add_argument("--onejudge-bin", default="onejudge")
     parser.add_argument(
+        "--heartbeat-interval",
+        type=float,
+        default=1800.0,
+        metavar="SECONDS",
+        help="planner status-update interval (default: 1800)",
+    )
+    parser.add_argument(
         "--skill-command",
         nargs="+",
         help="command-provider argv for the orchestrator agent (primarily for deterministic tests)",
@@ -539,6 +550,7 @@ def main_orchestrate(argv: list[str] | None = None) -> int:
             base_path=args.base,
             onejudge_bin=args.onejudge_bin,
             skill_provider=skill,
+            heartbeat_interval=args.heartbeat_interval,
         )
         print(
             (args.runs_dir.resolve() / launched / "launch.json").read_text(encoding="utf-8").strip()

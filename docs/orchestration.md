@@ -77,6 +77,25 @@ stdin when its file argument is omitted. Both sides may exit and reattach betwee
 messages: transport state lives under `runs/<run-id>/channel/` as `up.fifo`,
 `down.fifo`, `channel.json`, and the last `planner-verdict.json`.
 
+### Planner-update pacemaker
+
+`just orchestrate` seeds a durable 1800-second planner-update interval; override
+it at launch with `--heartbeat-interval SECONDS`. Reconcile ticks persist a sticky
+due signal in `channel/heartbeat.json`, and `just monitor` and `just status` show
+`planner update due (Nm since last update)` until the orchestrator agent sends a
+non-blocking, synthesized per-workstream update with `just channel-surface`. The
+agent inspects current status and monitor evidence, includes active-workstream
+progress and non-blocking follow-ups, sends the update, and continues without a
+planner reply. The reconciler only sets the due signal; it never authors content.
+
+Every planner-visible update—round boundary, proposal, or heartbeat—clears the
+due signal and restarts the clock. A new round process reads the same durable
+timestamp rather than resetting it. To adjust the cadence, add
+`"heartbeat_interval": SECONDS` to an otherwise normal `channel-reply`; use
+`"heartbeat_interval": false` to disable it. Values must be positive finite
+seconds. This pacemaker is independent of the reader-side `just monitor
+--heartbeat` silence display described below.
+
 Every proposal includes `surface.blocking`: `true` means the worker or orchestrator
 is awaiting the decision, while `false` is an informational follow-up that does
 not stop the graph frontier. `monitor` renders `ACK REQUIRED` while any blocking
