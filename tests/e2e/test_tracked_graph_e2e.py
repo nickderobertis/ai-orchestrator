@@ -1496,6 +1496,15 @@ def test_real_cli_recovers_failed_lifecycle_result(
     observed = json.loads(telemetry.stdout)["runs"][0]["timing"]
     assert observed["lock_wait_seconds"] > 0.05
     assert observed["setup_seconds"] > 0
+    invalid_results = _just("results", "invalid/run", "--runs-dir", str(runs))
+    assert invalid_results.returncode == 2
+    assert "run id" in invalid_results.stderr
+    malformed_round = runs / "malformed-run" / "round-01"
+    malformed_round.mkdir(parents=True)
+    (malformed_round / "result.json").write_text("not: [valid", encoding="utf-8")
+    malformed_results = _just("results", "malformed-run", "--runs-dir", str(runs))
+    assert malformed_results.returncode == 2
+    assert "results:" in malformed_results.stderr
 
 
 def test_real_cli_recovers_waiting_and_no_change_lifecycle_results(
