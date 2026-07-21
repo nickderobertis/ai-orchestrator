@@ -983,10 +983,8 @@ def persist_report_artifacts(journal: NodeSink, report: Report, *, session: str)
             "labels": dict(labels),
         },
     )
-    report.artifacts.update(
-        worker_report=str(report_path),
-        oneharness_session=str(session_path),
-    )
+    report.artifacts["worker_report"] = str(report_path)
+    report.artifacts["oneharness_session"] = str(session_path)
 
 
 def _run_steps(
@@ -2604,7 +2602,11 @@ def result_payload(result: LifecycleResult) -> dict[str, Any]:
     if result.verify is not None and result.verify.log_path:
         artifacts["gate_log"] = result.verify.log_path
     if len(result.steps) == 1 and result.steps[0].report is not None:
-        artifacts.update(result.steps[0].report.artifacts)
+        report_artifacts = result.steps[0].report.artifacts
+        if worker_report := report_artifacts.get("worker_report"):
+            artifacts["worker_report"] = worker_report
+        if oneharness_session := report_artifacts.get("oneharness_session"):
+            artifacts["oneharness_session"] = oneharness_session
     return {
         "repo": result.repo,
         "execution_checkout": result.execution_checkout,

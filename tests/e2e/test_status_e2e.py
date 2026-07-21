@@ -95,6 +95,7 @@ def test_status_joins_real_history_worktree_commits_and_ledger(
         f"Execution checkout: {worktree}",
         "type=single-owner",
         "workflow=local",
+        "Results: just results status-run; per-node detail is listed there",
     ):
         assert expected in shown.stdout
 
@@ -116,7 +117,6 @@ def test_status_joins_real_history_worktree_commits_and_ledger(
     direct_human = capsys.readouterr().out
     assert "feat: add status view" in direct_human
     assert "status-run round-01" in direct_human
-    assert "Results: just results status-run; per-node detail is listed there" in direct_human
     workspace.remove_worktree(ref, worktree)
 
 

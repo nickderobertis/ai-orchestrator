@@ -54,7 +54,6 @@ from orchestrator.lifecycle import (
 from orchestrator.merge import GitHubMergeStrategy
 from orchestrator.merge_queue import merge_queue_turn
 from orchestrator.next_round import main as next_round_main
-from orchestrator.next_round import main_runs
 from orchestrator.provenance import INCOMPLETE_TRAILER, PR_BASE_TRAILER, incomplete_commits
 from orchestrator.recover import recover_repo
 from orchestrator.registry import Registry, RegistryEntry, Slug
@@ -928,8 +927,14 @@ def test_repo_plan_ledger_and_guided_next_round(
     telemetry = json.loads(indexed.stdout)
     assert telemetry["metrics"]["recovered_branches"] == 1
     assert telemetry["metrics"]["green_to_publication_seconds"]
-    assert main_runs(["--runs-dir", str(runs_dir)]) == 0
-    runs_output = capsys.readouterr().out
+    listed = subprocess.run(
+        ["just", "runs", "--runs-dir", str(runs_dir)],
+        cwd=Path(__file__).parents[2],
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    runs_output = listed.stdout
     assert follow_up in runs_output
     assert f"just results fixed-run --runs-dir {runs_dir}" in runs_output
     assert "nothing to iterate" in captured.err
