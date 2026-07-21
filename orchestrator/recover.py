@@ -1,5 +1,8 @@
 """Recover lifecycle-preserved branches through their registered workflow."""
 
+# llmlint: ignore-file[protocol_based_seams] recover_repo's injectable dispatch_fn
+# is typed with lifecycle.DispatchFn, which is a structural typing.Protocol.
+
 from __future__ import annotations
 
 import argparse
