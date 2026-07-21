@@ -37,15 +37,16 @@ def _wait_for(path: Path, predicate, timeout: float = 30) -> None:
 
 
 def _reply(run_id: str, runs: Path, commands: list[dict[str, object]]) -> None:
-    subprocess.run(
+    replied = subprocess.run(
         ["just", "channel-reply", run_id, "--runs-dir", str(runs)],
         cwd=REPO_ROOT,
         input=json.dumps({"version": 1, "commands": commands}),
         text=True,
         capture_output=True,
-        check=True,
+        check=False,
         timeout=e2e_timeout(30),
     )
+    assert replied.returncode == 0, replied.stderr
 
 
 def test_real_cli_mutates_live_frontier_and_replays_atomic_edits(
@@ -56,6 +57,9 @@ def test_real_cli_mutates_live_frontier_and_replays_atomic_edits(
     base["provider"] = {"kind": "command", "command": [sys.executable, str(FAKE_BACKEND)]}
     base_path = tmp_path / "base.yaml"
     base_path.write_text(yaml.safe_dump(base), encoding="utf-8")
+    slow_a_ready = tmp_path / "slow-a.ready"
+    slow_b_ready = tmp_path / "slow-b.ready"
+    slow_release = tmp_path / "slow.release"
     plan = tmp_path / "plan.json"
     plan.write_text(
         json.dumps(
@@ -67,12 +71,20 @@ def test_real_cli_mutates_live_frontier_and_replays_atomic_edits(
                     {
                         "id": "slow_a",
                         "persona": "engineer",
-                        "task": f"slow-branch {tmp_path / 'a.ticks'} live-edit-slow",
+                        "task": (
+                            f"slow-branch {tmp_path / 'a.ticks'} live-edit-slow "
+                            f"provider-barrier-ready={slow_a_ready} "
+                            f"provider-barrier-release={slow_release}"
+                        ),
                     },
                     {
                         "id": "slow_b",
                         "persona": "engineer",
-                        "task": f"slow-branch {tmp_path / 'b.ticks'} live-edit-slow",
+                        "task": (
+                            f"slow-branch {tmp_path / 'b.ticks'} live-edit-slow "
+                            f"provider-barrier-ready={slow_b_ready} "
+                            f"provider-barrier-release={slow_release}"
+                        ),
                     },
                     {
                         "id": "failed",
@@ -149,6 +161,8 @@ def test_real_cli_mutates_live_frontier_and_replays_atomic_edits(
             text.count('"kind": "node-started"') >= 3 and '"kind": "human-waiting"' in text
         ),
     )
+    _wait_for(slow_a_ready, lambda text: text == "ready\n")
+    _wait_for(slow_b_ready, lambda text: text == "ready\n")
 
     _reply(run_id, runs, [{"op": "reparent", "id": "pending", "deps": ["pending"]}])
     messages: list[str] = []
