@@ -1922,6 +1922,66 @@ def test_local_conflict_resolves_outside_queue_then_requeues_and_merges(
     assert final == "first branch\nsecond branch\n"
 
 
+@pytest.mark.parametrize("resolver_commits", [False, True])
+def test_local_conflict_incomplete_resolver_preserves_branch(
+    tmp_path, bare_origin, resolver_commits: bool
+) -> None:
+    origin = bare_origin({"shared.txt": "original\n"})
+    initial = make_writing_dispatch(filename="shared.txt", content="preserved")
+
+    def dispatch_fn(persona: str, task: str, *, project_dir: str, **kwargs: object) -> Report:
+        if "Resolve the content conflict" not in task:
+            report = initial(persona, task, project_dir=project_dir, **kwargs)
+            _advance_origin(tmp_path, origin, "shared.txt", "advanced\n")
+            return report
+        if resolver_commits:
+            path = Path(project_dir) / "shared.txt"
+            path.write_text("advanced\npreserved by engineer\n", encoding="utf-8")
+            gitops.add_all(project_dir)
+        return Report(persona, 1, False, False, 2, [], {}, {}, "")
+
+    result = run_repo_task(
+        str(origin),
+        "Create a conflicting local edit.",
+        "engineer",
+        workspace=_workspace(tmp_path, origin),
+        dispatch_fn=dispatch_fn,
+        verify_cmd=["true"],
+    )
+
+    assert result.outcome == "sync-conflict"
+    assert "did not complete" in result.detail
+    assert not _has_file(origin, result.branch, "shared.txt")
+
+
+def test_local_conflict_resolution_exhaustion_is_bounded(tmp_path, bare_origin) -> None:
+    origin = bare_origin({"shared.txt": "original\n"})
+    initial = make_writing_dispatch(filename="shared.txt", content="preserved")
+    resolutions = 0
+
+    def dispatch_fn(persona: str, task: str, *, project_dir: str, **kwargs: object) -> Report:
+        nonlocal resolutions
+        if "Resolve the content conflict" not in task:
+            report = initial(persona, task, project_dir=project_dir, **kwargs)
+            _advance_origin(tmp_path, origin, "shared.txt", "advanced\n")
+            return report
+        resolutions += 1
+        return Report(persona, 0, True, False, 2, [], {}, {}, "")
+
+    result = run_repo_task(
+        str(origin),
+        "Create a persistently conflicting local edit.",
+        "engineer",
+        workspace=_workspace(tmp_path, origin),
+        dispatch_fn=dispatch_fn,
+        verify_cmd=["true"],
+    )
+
+    assert result.outcome == "sync-conflict"
+    assert resolutions == 2
+    assert "after 2 resolve-and-requeue cycles" in result.detail
+
+
 def test_local_repo_registry_gate_verifies_real_worktree(tmp_path, bare_origin) -> None:
     origin = bare_origin()
     canonical = gitops.clone(origin, tmp_path / "registered")
@@ -2401,6 +2461,130 @@ def test_local_recovery_conflict_resumes_worker_then_requeues(tmp_path, bare_ori
         ).stdout
         == "advanced base\npreserved branch by engineer\n"
     )
+
+
+@pytest.mark.parametrize("resolver_commits", [False, True])
+def test_local_recovery_incomplete_resolver_preserves_branch(
+    tmp_path, bare_origin, resolver_commits: bool
+) -> None:
+    origin = bare_origin({"shared.txt": "original\n"})
+    canonical = gitops.clone(origin, tmp_path / "canonical-incomplete-recovery")
+    Registry().register(str(canonical), workflow="local", repo_type="single-owner")
+    partial = run_repo_task(
+        str(canonical),
+        "Preserve a conflicting recovery edit.",
+        "engineer",
+        workspace=Workspace(tmp_path / "incomplete-recovery-initial"),
+        dispatch_fn=make_writing_dispatch(
+            filename="shared.txt", content="preserved", completed=False
+        ),
+        verify_cmd=["true"],
+    )
+    _advance_origin(tmp_path, origin, "shared.txt", "advanced\n")
+
+    def incomplete_dispatch(persona: str, task: str, *, project_dir: str, **_: object) -> Report:
+        if resolver_commits:
+            path = Path(project_dir) / "shared.txt"
+            path.write_text("advanced\npreserved by engineer\n", encoding="utf-8")
+            gitops.add_all(project_dir)
+        return Report(persona, 1, False, False, 2, [], {}, {}, "")
+
+    recovered = recover_repo(
+        canonical,
+        partial.branch,
+        workspace_root=tmp_path / "incomplete-recovery-worktrees",
+        verify_cmd=["true"],
+        dispatch_fn=incomplete_dispatch,
+    )
+
+    assert recovered.outcome == "sync-conflict"
+    assert "did not complete" in recovered.detail
+    assert gitops.branch_exists(canonical, partial.branch)
+
+
+def test_local_recovery_conflict_resolution_exhaustion_is_bounded(tmp_path, bare_origin) -> None:
+    origin = bare_origin({"shared.txt": "original\n"})
+    canonical = gitops.clone(origin, tmp_path / "canonical-exhausted-recovery")
+    Registry().register(str(canonical), workflow="local", repo_type="single-owner")
+    partial = run_repo_task(
+        str(canonical),
+        "Preserve a persistently conflicting recovery edit.",
+        "engineer",
+        workspace=Workspace(tmp_path / "exhausted-recovery-initial"),
+        dispatch_fn=make_writing_dispatch(
+            filename="shared.txt", content="preserved", completed=False
+        ),
+        verify_cmd=["true"],
+    )
+    _advance_origin(tmp_path, origin, "shared.txt", "advanced\n")
+    resolutions = 0
+
+    def unresolved_dispatch(persona: str, task: str, **_: object) -> Report:
+        nonlocal resolutions
+        resolutions += 1
+        return Report(persona, 0, True, False, 2, [], {}, {}, "")
+
+    recovered = recover_repo(
+        canonical,
+        partial.branch,
+        workspace_root=tmp_path / "exhausted-recovery-worktrees",
+        verify_cmd=["true"],
+        dispatch_fn=unresolved_dispatch,
+    )
+
+    assert recovered.outcome == "sync-conflict"
+    assert resolutions == 2
+    assert "after 2 resolve-and-requeue cycles" in recovered.detail
+
+
+@pytest.mark.parametrize(
+    ("step_id", "persona", "expected"),
+    [("bad/step", "engineer", "step metadata"), ("main", "Engineer!", "persona metadata")],
+)
+def test_local_recovery_rejects_invalid_worker_metadata(
+    tmp_path, bare_origin, step_id: str, persona: str, expected: str
+) -> None:
+    origin = bare_origin({"shared.txt": "original\n"})
+    label = expected.split()[0]
+    canonical = gitops.clone(origin, tmp_path / f"canonical-invalid-{label}")
+    Registry().register(str(canonical), workflow="local", repo_type="single-owner")
+    partial = run_repo_task(
+        str(canonical),
+        "Preserve work with metadata that will be corrupted.",
+        "engineer",
+        workspace=Workspace(tmp_path / f"invalid-{label}-initial"),
+        dispatch_fn=make_writing_dispatch(
+            filename="shared.txt", content="preserved", completed=False
+        ),
+        verify_cmd=["true"],
+    )
+    subprocess.run(["git", "checkout", partial.branch], cwd=canonical, check=True)
+    subprocess.run(
+        [
+            "git",
+            "commit",
+            "--amend",
+            "-m",
+            "chore: corrupted preserved metadata\n\n"
+            f"Partial work from step {step_id} (persona: {persona}), preserved by "
+            "ai-orchestrator after the dispatch did not complete.\n\n"
+            f"{INCOMPLETE_TRAILER}\n{PR_BASE_TRAILER} main",
+        ],
+        cwd=canonical,
+        check=True,
+    )
+    subprocess.run(["git", "checkout", "main"], cwd=canonical, check=True)
+    _advance_origin(tmp_path, origin, "shared.txt", "advanced\n")
+
+    recovered = recover_repo(
+        canonical,
+        partial.branch,
+        workspace_root=tmp_path / f"invalid-{label}-recovery",
+        verify_cmd=["true"],
+    )
+
+    assert recovered.outcome == "sync-conflict"
+    assert expected in recovered.detail
 
 
 def test_cooperative_real_dispatch_cancellation_preserves_and_recovers_branch(

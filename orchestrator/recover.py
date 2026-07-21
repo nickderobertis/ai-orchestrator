@@ -20,7 +20,15 @@ from .lifecycle import (
     _default_title,
     _effective_publication,
 )
-from .merge import GitHubMergeStrategy, LocalMergeStrategy, MergeContext, MergeOutcome, MergePolicy
+from .merge import (
+    MERGE_CONFLICT_RETRY,
+    GitHubMergeStrategy,
+    LocalMergeStrategy,
+    MergeContext,
+    MergeOutcome,
+    MergePolicy,
+)
+from .personas import persona_path
 from .provenance import (
     RECOVERY_TRAILER,
     incomplete_commits,
@@ -32,7 +40,7 @@ from .verify import NOOP_GATE, resolve_gate_template, run_gate
 from .workspace import RepoRef, RepositoryType, Workspace, WorkspaceError
 
 _PRESERVED_STEP = re.compile(r"Partial work from step (\S+) \(persona: ([^)]+)\)")
-_MERGE_CONFLICT_RETRY = "merge-conflict-retry"
+_STEP_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 
 @dataclass(frozen=True)
@@ -169,7 +177,7 @@ def recover_repo(
                 abort_on_conflict=False,
             ):
                 return MergeOutcome(
-                    _MERGE_CONFLICT_RETRY,
+                    MERGE_CONFLICT_RETRY,
                     f"current {remote_base} conflicts with preserved branch {branch}",
                 )
             return verify_attest_push()
@@ -228,7 +236,7 @@ def recover_repo(
         )
         published = strategy.publish_and_merge(context)
         conflict_resolutions = 0
-        while published.outcome == _MERGE_CONFLICT_RETRY:
+        while published.outcome == MERGE_CONFLICT_RETRY:
             if conflict_resolutions >= MAX_MERGE_CONFLICT_RESOLUTIONS:
                 published = MergeOutcome(
                     "sync-conflict",
@@ -254,6 +262,22 @@ def recover_repo(
                 )
                 break
             step_id, persona = match.groups()
+            if not _STEP_ID.fullmatch(step_id):
+                gitops.merge_abort(worktree)
+                published = MergeOutcome(
+                    "sync-conflict",
+                    f"preserved branch {branch!r} has invalid resumable step metadata",
+                )
+                break
+            try:
+                persona_path(persona, Path(persona_dir))
+            except ValueError:
+                gitops.merge_abort(worktree)
+                published = MergeOutcome(
+                    "sync-conflict",
+                    f"preserved branch {branch!r} has invalid resumable persona metadata",
+                )
+                break
             task = (
                 "## What\n"
                 f"Resolve the content conflict between this preserved branch and {remote_base}, "

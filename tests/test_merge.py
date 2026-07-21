@@ -5,6 +5,8 @@ from __future__ import annotations
 from contextlib import contextmanager
 from pathlib import Path
 
+import pytest
+
 from orchestrator import gitops
 from orchestrator.github import AutoMergeUnavailable, Check, PRStatus, PullRequest
 from orchestrator.gitops import GitError
@@ -335,6 +337,13 @@ def test_local_merge_journals_verification_and_the_merge(tmp_path: Path, bare_or
     assert events[0].detail == {"command": ["true"], "attempt": 1}
     assert events[1].detail == {"ok": True, "command": ["true"], "attempt": 1}
     assert events[2].detail == {"pr": "local:o/r#feature", "branch": "feature", "base": "main"}
+
+
+def test_local_merge_rejects_zero_publication_attempts(tmp_path: Path, bare_origin) -> None:
+    clone = gitops.clone(bare_origin(), tmp_path / "clone-zero-attempts")
+
+    with pytest.raises(ValueError, match="at least 1"):
+        LocalMergeStrategy().publish_and_merge(_ctx(clone_dir=clone, publication_attempts=0))
 
 
 def test_local_merge_journals_a_gate_failure_without_claiming_a_merge(

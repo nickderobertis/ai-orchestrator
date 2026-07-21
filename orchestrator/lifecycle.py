@@ -42,6 +42,7 @@ from .gitops import GitError
 from .ids import GraphId
 from .journal import DetailValue, NodeSink, NullNodeJournal
 from .merge import (
+    MERGE_CONFLICT_RETRY,
     GitHubMergeStrategy,
     LocalMergeStrategy,
     MergeContext,
@@ -919,8 +920,6 @@ class StepRun:
 DEFAULT_LIFECYCLE_STEP_MAX_TURNS = 24
 MAX_AUTOMATIC_STEP_RESUMES = 2
 MAX_MERGE_CONFLICT_RESOLUTIONS = 2
-
-_MERGE_CONFLICT_RETRY = "merge-conflict-retry"
 
 
 def _verify_gate(
@@ -1878,7 +1877,7 @@ def run_repo_task(
                 abort_on_conflict=False,
             ):
                 return MergeOutcome(
-                    _MERGE_CONFLICT_RETRY,
+                    MERGE_CONFLICT_RETRY,
                     f"current {remote_base} conflicts with {branch}",
                 )
             if not skip_verify:
@@ -1952,7 +1951,7 @@ def run_repo_task(
         merge_resolutions = 0
         while True:
             merge_outcome = strategy.publish_and_merge(ctx)
-            if merge_outcome.outcome != _MERGE_CONFLICT_RETRY:
+            if merge_outcome.outcome != MERGE_CONFLICT_RETRY:
                 break
             if merge_resolutions >= MAX_MERGE_CONFLICT_RESOLUTIONS:
                 merge_outcome = MergeOutcome(

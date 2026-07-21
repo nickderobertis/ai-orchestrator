@@ -43,6 +43,7 @@ from orchestrator.lifecycle import (
 )
 from orchestrator.merge import GitHubMergeStrategy, LocalMergeStrategy
 from orchestrator.plan import PlanError
+from orchestrator.recover import RecoveryResult
 from orchestrator.registry import Registry
 from orchestrator.runs import NodeId, ResumePayload, RetryLineagePayload, RunId
 from orchestrator.workspace import Workspace, normalize_repo
@@ -1840,3 +1841,11 @@ def test_main_plan_human_format(monkeypatch, tmp_path, capsys) -> None:
     rc = lc.main_plan([plan_file])  # human format (default)
     assert rc == 1  # not ok
     assert "repo-plan" in capsys.readouterr().out
+
+
+def test_recovery_result_defaults_publication_base() -> None:
+    result = RecoveryResult(
+        "local/repo", "feature", "main", "local", "single-owner", "direct", "merged", "done"
+    )
+
+    assert result.pr_base == "main" and result.ok
