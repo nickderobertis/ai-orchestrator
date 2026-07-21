@@ -41,3 +41,11 @@ def test_onejudge_version_references_match_single_source(
         f"{relative_path} references onejudge versions {sorted(referenced_versions)}; "
         f"expected only config/onejudge.version ({adopted_onejudge_version})"
     )
+
+
+def test_telemetry_upgrade_boundary_matches_authoritative_versions(
+    adopted_onejudge_version: str, adopted_oneharness_version: str
+) -> None:
+    """Drift-gate the historical boundary documented for enriched records."""
+    text = (REPO_ROOT / "docs" / "telemetry.md").read_text(encoding="utf-8")
+    assert f"{adopted_oneharness_version}/{adopted_onejudge_version} upgrade" in text

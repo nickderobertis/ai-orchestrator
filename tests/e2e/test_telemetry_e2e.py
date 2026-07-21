@@ -2,9 +2,8 @@
 
 # llmlint: ignore-file[e2e_not_mocked] oneharness' history reader is the subprocess
 # boundary under test; fake_oneharness serves the same normalized store because the
-# new upstream fields cannot be produced by the repository's older pinned binary.
-# The report proxy runs the adopted real onejudge and only adds the not-yet-pinned report-v5
-# object to its stdout, preserving the real dispatch, SDK validation, and persistence path.
+# normalized history boundary under test. The report-producing backend supplies deterministic
+# report-v5 values while the real onejudge and SDK exercise validation and persistence.
 
 from __future__ import annotations
 

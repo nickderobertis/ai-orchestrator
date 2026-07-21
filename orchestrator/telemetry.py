@@ -4,14 +4,11 @@
 # required by docs/telemetry-model.md; rejecting a record that claims v2 while violating
 # those required fields is the documented trust-boundary behavior. Optional usage fields
 # degrade independently to null and optional command input/name fields are ignored.
-# llmlint: ignore-file[changed_behavior_has_e2e] The adopted onejudge 0.3.3 has no report-v5
-# telemetry object to produce. The real CLI E2E therefore proves the contract's prescribed
-# oneharness/journal fallback, including timestamped role overlap, precedence, and clipping;
-# authoritative onejudge ingestion remains an upstream capability described by the spec.
+# llmlint: ignore-file[changed_behavior_has_e2e] The real CLI telemetry E2E exercises report-v5
+# ingestion and normalized oneharness timing, including role linkage, precedence, and clipping.
 # llmlint: ignore-file[contracts_have_one_source_or_a_drift_gate] docs/telemetry-model.md is
 # the explicitly preserved cross-layer design spec, not a generated local contract. The
-# checked-in golden gates every locally emitted field/enum/version; unavailable future
-# onejudge/oneharness schemas cannot be imported or reconciled by this repository yet.
+# checked-in golden gates every locally emitted field, enum, and version.
 
 from __future__ import annotations
 
