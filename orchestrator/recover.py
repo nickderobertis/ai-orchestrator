@@ -35,6 +35,7 @@ from .personas import persona_path
 from .provenance import (
     RECOVERY_TRAILER,
     incomplete_commits,
+    parse_preserved_step_metadata,
     recorded_pr_base,
     unattested_incomplete,
 )
@@ -42,7 +43,6 @@ from .registry import Registry, RegistryEntry, RegistryError, Slug
 from .verify import NOOP_GATE, resolve_gate_template, run_gate
 from .workspace import RepoRef, RepositoryType, Workspace, WorkspaceError
 
-_PRESERVED_STEP = re.compile(r"Partial work from step (\S+) \(persona: ([^)]+)\)")
 _STEP_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 
@@ -259,8 +259,15 @@ def recover_repo(
                 for commit in gitops.log_messages(worktree, remote_base, branch)
                 if commit.sha in preserved
             ]
-            match = next((_PRESERVED_STEP.search(message) for message in messages), None)
-            if match is None:
+            metadata = next(
+                (
+                    parsed
+                    for message in messages
+                    if (parsed := parse_preserved_step_metadata(message))
+                ),
+                None,
+            )
+            if metadata is None:
                 gitops.merge_abort(worktree)
                 published = MergeOutcome(
                     "sync-conflict",
@@ -268,7 +275,7 @@ def recover_repo(
                     "resolve the conflict manually, then retry",
                 )
                 break
-            step_id, persona = match.groups()
+            step_id, persona = metadata
             if not _STEP_ID.fullmatch(step_id):
                 gitops.merge_abort(worktree)
                 published = MergeOutcome(

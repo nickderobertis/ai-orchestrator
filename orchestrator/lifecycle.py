@@ -56,6 +56,7 @@ from .provenance import (
     INCOMPLETE_TRAILER,
     PR_BASE_TRAILER,
     RECOVERY_TRAILER,
+    format_preserved_step_metadata,
     incomplete_commits,
     unattested_incomplete,
 )
@@ -498,7 +499,7 @@ def _incomplete_commit_message(step: Step, pr_base: str) -> str:
     )
     return (
         f"{subject}\n\n"
-        f"Partial work from step {step.id} (persona: {step.persona}), preserved by "
+        f"{format_preserved_step_metadata(step.id, step.persona)}, preserved by "
         "ai-orchestrator after the dispatch did not complete.\n\n"
         f"{INCOMPLETE_TRAILER}\n"
         f"{PR_BASE_TRAILER} {pr_base}"

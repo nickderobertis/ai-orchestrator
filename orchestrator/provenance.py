@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from . import gitops
@@ -13,6 +14,21 @@ LEGACY_INCOMPLETE_MARKERS = (
     "(incomplete step)",
     "preserved by ai-orchestrator after the dispatch did not complete",
 )
+_PRESERVED_STEP = re.compile(r"Partial work from step (\S+) \(persona: ([^)]+)\)")
+
+
+def format_preserved_step_metadata(step_id: str, persona: str | None) -> str:
+    """Format the stable worker metadata embedded in incomplete commits."""
+    return f"Partial work from step {step_id} (persona: {persona})"
+
+
+def parse_preserved_step_metadata(message: str) -> tuple[str, str] | None:
+    """Parse worker metadata from an incomplete commit message."""
+    match = _PRESERVED_STEP.search(message)
+    if match is None:
+        return None
+    step_id, persona = match.groups()
+    return step_id, persona
 
 
 def incomplete_commits(repo: str | Path, base: str, branch: str) -> set[str]:
