@@ -282,6 +282,22 @@ def main() -> int:
                             text=True,
                             env=poll_env,
                         )
+                        json_monitor = subprocess.run(
+                            [
+                                "just",
+                                "monitor",
+                                run_id,
+                                "--runs-dir",
+                                str(orchestrator_plan.runs_dir),
+                                "--once",
+                                "--format",
+                                "jsonl",
+                            ],
+                            check=True,
+                            capture_output=True,
+                            text=True,
+                            env=poll_env,
+                        )
                         status = subprocess.run(
                             [
                                 "just",
@@ -296,6 +312,13 @@ def main() -> int:
                         )
                         if "planner update due" not in monitor.stdout:
                             raise AssertionError("monitor did not expose heartbeat")
+                        json_events = [
+                            json.loads(line) for line in json_monitor.stdout.splitlines() if line
+                        ]
+                        if not any(
+                            event.get("type") == "planner_update_due" for event in json_events
+                        ):
+                            raise AssertionError("JSON monitor did not expose heartbeat")
                         if "planner update due" not in status.stdout:
                             raise AssertionError("status did not expose heartbeat")
                         subprocess.run(
