@@ -11,6 +11,7 @@ from pathlib import Path
 
 import yaml
 from waits import deadline
+from waits import timeout as e2e_timeout
 
 from orchestrator import BASE_CONFIG, REPO_ROOT
 from orchestrator.dispatch import launch_orchestrator
@@ -125,9 +126,10 @@ def _launch_cli(
     return str(json.loads(launched.stdout)["run_id"])
 
 
-def _next_cli(run_id: str, runs: Path, timeout: str = "10") -> dict[str, object]:
+def _next_cli(run_id: str, runs: Path, timeout: str | None = None) -> dict[str, object]:
+    wait_timeout = str(e2e_timeout(10)) if timeout is None else timeout
     result = subprocess.run(
-        ["just", "channel-next", run_id, "--runs-dir", str(runs), "--timeout", timeout],
+        ["just", "channel-next", run_id, "--runs-dir", str(runs), "--timeout", wait_timeout],
         cwd=REPO_ROOT,
         text=True,
         capture_output=True,
@@ -139,7 +141,7 @@ def _next_cli(run_id: str, runs: Path, timeout: str = "10") -> dict[str, object]
 def _wait_surface(run_id: str, runs: Path) -> dict[str, object]:
     wait_deadline = deadline(15)
     while time.monotonic() < wait_deadline:
-        value = _next_cli(run_id, runs, timeout="2")
+        value = _next_cli(run_id, runs, timeout=str(e2e_timeout(2)))
         if value.get("surface") is not None:
             return value
     raise AssertionError(f"surface did not arrive for {run_id}")
@@ -342,7 +344,7 @@ def test_launch_api_records_detached_owner_and_real_report(
         base_path=_base(tmp_path),
         onejudge_bin=onejudge_bin,
         skill_provider={"kind": "command", "command": [sys.executable, str(FAKE_BACKEND)]},
-        turn_timeout=10,
+        turn_timeout=int(e2e_timeout(10)),
     )
     run_dir = runs / run_id
     status = json.loads((run_dir / "orchestrator" / "status.json").read_text(encoding="utf-8"))
@@ -389,7 +391,14 @@ def test_bridge_timeout_reattach_finished_and_monitorable(
 
     # A fresh process reattaches to the persisted FIFO and receives the pending surface.
     surface = subprocess.run(
-        ["orchestrator-channel-next", run_id, "--runs-dir", str(runs), "--timeout", "10"],
+        [
+            "orchestrator-channel-next",
+            run_id,
+            "--runs-dir",
+            str(runs),
+            "--timeout",
+            str(e2e_timeout(10)),
+        ],
         text=True,
         capture_output=True,
         check=True,

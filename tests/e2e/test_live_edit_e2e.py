@@ -154,7 +154,15 @@ def test_real_cli_mutates_live_frontier_and_replays_atomic_edits(
     messages: list[str] = []
     for _ in range(4):
         rejected = subprocess.run(
-            ["just", "channel-next", run_id, "--runs-dir", str(runs), "--timeout", "10"],
+            [
+                "just",
+                "channel-next",
+                run_id,
+                "--runs-dir",
+                str(runs),
+                "--timeout",
+                str(e2e_timeout(10)),
+            ],
             cwd=REPO_ROOT,
             text=True,
             capture_output=True,
@@ -186,7 +194,15 @@ def test_real_cli_mutates_live_frontier_and_replays_atomic_edits(
     ):
         _reply(run_id, runs, [command])
         rejected = subprocess.run(
-            ["just", "channel-next", run_id, "--runs-dir", str(runs), "--timeout", "10"],
+            [
+                "just",
+                "channel-next",
+                run_id,
+                "--runs-dir",
+                str(runs),
+                "--timeout",
+                str(e2e_timeout(10)),
+            ],
             cwd=REPO_ROOT,
             text=True,
             capture_output=True,
@@ -285,7 +301,15 @@ def test_real_cli_mutates_live_frontier_and_replays_atomic_edits(
     # completion-requested operation rather than being silently dropped.
     assert any('"completion-requested"' in line for line in committed)
     boundary = subprocess.run(
-        ["just", "channel-next", run_id, "--runs-dir", str(runs), "--timeout", "10"],
+        [
+            "just",
+            "channel-next",
+            run_id,
+            "--runs-dir",
+            str(runs),
+            "--timeout",
+            str(e2e_timeout(10)),
+        ],
         cwd=REPO_ROOT,
         text=True,
         capture_output=True,
@@ -374,14 +398,14 @@ def test_real_cli_live_drop_preserves_and_recovers_running_lifecycle(
     _wait_for(
         witness,
         lambda text: text.count("tick") >= 3,
-        timeout=e2e_timeout(20),
+        timeout=20,
     )
     _wait_for(events, lambda text: '"kind": "node-started"' in text)
     _reply(run_id, runs, [{"op": "drop", "id": "lifecycle", "dependents": "drop"}])
     _wait_for(
         events,
         lambda text: '"kind": "node-settled"' in text and '"status": "cancelled"' in text,
-        timeout=e2e_timeout(20),
+        timeout=20,
     )
 
     checkpoint = gitops.ref_sha(canonical, branch)
@@ -411,7 +435,15 @@ def test_real_cli_live_drop_preserves_and_recovers_running_lifecycle(
     assert (canonical / "CHANGE.txt").read_text(encoding="utf-8") == "change from fake agent\n"
 
     boundary = subprocess.run(
-        ["just", "channel-next", run_id, "--runs-dir", str(runs), "--timeout", "10"],
+        [
+            "just",
+            "channel-next",
+            run_id,
+            "--runs-dir",
+            str(runs),
+            "--timeout",
+            str(e2e_timeout(10)),
+        ],
         cwd=REPO_ROOT,
         text=True,
         capture_output=True,
