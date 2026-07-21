@@ -215,7 +215,8 @@ side lives in oneharness config, not onejudge:
 
 `onejudge init` scaffolds both files plus a starter `onejudge.yaml`. The adopted
 exact oneharness release is declared in `config/oneharness.version`, installed as
-the `oneharness-cli` PyPI wheel, and verified by `scripts/session-setup.sh`. The
+the `oneharness-cli` PyPI wheel, and verified by `scripts/session-setup.sh`. Session
+setup also installs and verifies Bun for oneharness's SDK gate. The
 committed configs are that output with two
 customizations — a cheaper judge model and the `IS_SANDBOX` env — and
 `config/onejudge.base.yaml` supersedes init's starter `onejudge.yaml`. Regenerate
