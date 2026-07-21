@@ -178,6 +178,32 @@ def test_due_heartbeat_is_agent_synthesized_and_normal_surface_resets_clock(
     assert reset["last_surface_at"] >= state["last_surface_at"]
     assert _next_cli(run_id, runs, timeout="0.02").get("surface") is None
     _reply_cli(run_id, runs, {"completion": True, "reason": "verified heartbeat"})
+    _wait_report(runs / run_id / "orchestrator" / "report.json")
+
+    for target, message, timeout, diagnostic in (
+        (run_id, "", "1", "non-empty"),
+        (run_id, "status", "-1", "positive, finite"),
+        ("missing-run", "status", "1", "valid run ids"),
+        (run_id, "status", "0.01", "timed out"),
+    ):
+        rejected = subprocess.run(
+            [
+                "just",
+                "channel-surface",
+                target,
+                message,
+                "--runs-dir",
+                str(runs),
+                "--timeout",
+                timeout,
+            ],
+            cwd=REPO_ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert rejected.returncode == 2
+        assert diagnostic in rejected.stderr
 
 
 def _next_cli(run_id: str, runs: Path, timeout: str | None = None) -> dict[str, object]:
