@@ -1239,7 +1239,7 @@ def stream(
     last = monitor.clock()
     delay = poll_interval
     while True:
-        indicator = due_indicator(monitor.run_dir)
+        indicator = due_indicator(monitor.run_dir / "channel")
         if indicator is not None and not shown_due:
             writer.planner_due(indicator)
             shown_due = True

@@ -170,7 +170,9 @@ def test_due_heartbeat_is_agent_synthesized_and_normal_surface_resets_clock(
     assert state["due"] is False
 
     boundary = _wait_surface(run_id, runs, wait_seconds=120)
-    assert boundary["surface"]["kind"] == "milestone"  # type: ignore[index]
+    boundary_surface = boundary["surface"]
+    assert isinstance(boundary_surface, dict)
+    assert boundary_surface["kind"] == "milestone"
     reset = json.loads(heartbeat_path.read_text())
     assert reset["due"] is False
     assert reset["last_surface_at"] >= state["last_surface_at"]
@@ -261,7 +263,7 @@ def test_live_channel_runs_real_nested_graph_and_round_trips_guidance(
                     {
                         "id": "worker",
                         "persona": "engineer",
-                        "task": f"pre-round-pause {release} complete-now",
+                        "task": f"pre-round-pause {release} complete-now no-assessment",
                     }
                 ],
             }

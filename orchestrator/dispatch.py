@@ -39,7 +39,13 @@ from onejudge_sdk import (
 )
 
 from . import BASE_CONFIG, PERSONA_DIR, REPO_ROOT
-from .channel import CHANNEL_DIR_ENV, CHANNEL_RUN_ID_ENV, ChannelError, create_channel
+from .channel import (
+    CHANNEL_DIR_ENV,
+    CHANNEL_RUN_ID_ENV,
+    DEFAULT_HEARTBEAT_INTERVAL,
+    ChannelError,
+    create_channel,
+)
 from .config import ConfigError, build_effective_config, load_yaml
 from .coordination import atomic_json
 from .labels import LABEL_ENV, LabelError, merge_labels
@@ -380,7 +386,7 @@ def launch_orchestrator(
     skill_provider: Mapping[str, Any] | None = None,
     max_turns: int = 100,
     turn_timeout: int = int(ORCHESTRATOR_ONEHARNESS_TIMEOUT),
-    heartbeat_interval: float = 1800.0,
+    heartbeat_interval: float = DEFAULT_HEARTBEAT_INTERVAL,
     cwd: str | Path = REPO_ROOT,
 ) -> str:
     """Launch a detached live-supervised orchestrator and return its run id."""
@@ -531,9 +537,9 @@ def main_orchestrate(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--heartbeat-interval",
         type=float,
-        default=1800.0,
+        default=DEFAULT_HEARTBEAT_INTERVAL,
         metavar="SECONDS",
-        help="planner status-update interval (default: 1800)",
+        help=f"planner status-update interval (default: {DEFAULT_HEARTBEAT_INTERVAL:g})",
     )
     parser.add_argument(
         "--skill-command",

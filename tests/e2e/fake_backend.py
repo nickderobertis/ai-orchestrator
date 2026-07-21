@@ -254,6 +254,9 @@ def main() -> int:
                         text=True,
                     )
                     if "heartbeat-channel" in plan_text:
+                        history_dir = orchestrator_plan.runs_dir / "heartbeat-history"
+                        history_dir.mkdir(exist_ok=True)
+                        poll_env = {**os.environ, "ONEHARNESS_HISTORY_DIR": str(history_dir)}
                         run_id = orchestrator_plan.argv[orchestrator_plan.argv.index("--run") + 1]
                         monitor = subprocess.run(
                             [
@@ -267,6 +270,7 @@ def main() -> int:
                             check=True,
                             capture_output=True,
                             text=True,
+                            env=poll_env,
                         )
                         status = subprocess.run(
                             [
@@ -278,9 +282,12 @@ def main() -> int:
                             check=True,
                             capture_output=True,
                             text=True,
+                            env=poll_env,
                         )
-                        if "planner update due" not in monitor.stdout + status.stdout:
-                            raise AssertionError("orchestrator poll views did not expose heartbeat")
+                        if "planner update due" not in monitor.stdout:
+                            raise AssertionError("monitor did not expose heartbeat")
+                        if "planner update due" not in status.stdout:
+                            raise AssertionError("status did not expose heartbeat")
                         subprocess.run(
                             [
                                 "just",

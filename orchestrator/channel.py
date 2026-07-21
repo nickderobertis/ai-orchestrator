@@ -700,6 +700,7 @@ def main_surface(argv: list[str] | None = None) -> int:
     parser.add_argument("--timeout", type=float, default=30.0)
     args = parser.parse_args(argv)
     try:
+        _validated_interval(args.timeout, field="timeout")
         message = sys.stdin.read() if args.message == "-" else args.message
         if not message.strip():
             raise ChannelError("status update must be a non-empty string")
@@ -717,7 +718,10 @@ def main_surface(argv: list[str] | None = None) -> int:
         write_message(channel_dir / "up.fifo", value, timeout=args.timeout)
         record_surface(channel_dir)
     except (ChannelError, ChannelTimeout, ConfigError, OSError) as exc:
-        print(f"channel-surface: {exc}", file=sys.stderr)
+        print(
+            f"channel-surface: {exc}; correct the input or channel state, then retry",
+            file=sys.stderr,
+        )
         return 2
     return 0
 
