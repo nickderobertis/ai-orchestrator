@@ -153,6 +153,10 @@ next-round *args:
 runs *args:
     @uv run orchestrator-runs "$@"
 
+# List active DAG goals and their targeted repository identities across projects.
+goals *args:
+    @uv run orchestrator-goals "$@"
+
 # Show every node outcome in one run and concrete full-log paths for failures.
 # llmlint: ignore[tool_output_is_signal] this command is the requested results view.
 results *args:

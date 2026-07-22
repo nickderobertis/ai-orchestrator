@@ -96,6 +96,7 @@ EventKind = Literal[
     "cleanup-deferred",
     "lock-wait",
     "setup-finished",
+    "concurrent-acknowledged",
 ]
 
 # Typed as the literal it enumerates, so iterating it yields `EventKind` and a
@@ -123,7 +124,7 @@ TERMINAL_NODE_RESULT_FIELD = "result"
 TERMINAL_NODE_RESULT_TYPE = "GraphResultItem"
 AUDIT_EVENT_KINDS: frozenset[EventKind] = EVENT_KINDS - frozenset(AUTHORITATIVE_EVENT_KINDS)
 ROUND_EVENT_KINDS: frozenset[EventKind] = frozenset(
-    {"round-started", "round-finished", "completion-requested"}
+    {"round-started", "round-finished", "completion-requested", "concurrent-acknowledged"}
 )
 GRAPH_EVENT_KINDS: frozenset[EventKind] = frozenset(
     {

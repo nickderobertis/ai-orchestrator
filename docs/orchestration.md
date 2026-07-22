@@ -8,8 +8,12 @@ the canonical executor for direct onejudge work, full repository lifecycles, and
 explicit actions that only a person can complete. `just repo-plan` is a deprecated
 alias retained so old lifecycle-only plan files keep working.
 
-The current tracked-plan contract is schema version 3 (`"schema_version": 3`).
+The current tracked-plan contract is schema version 4 (`"schema_version": 4`).
 Plans that omit the version retain version-1 behavior for compatibility.
+
+Version 4 adds an optional top-level `goal` mapping with required non-empty
+`text` and optional `id`; when omitted, the id is derived from the text. Active
+goals and their repository identities are visible across projects with `just goals`.
 
 ## The planner<->orchestrator channel
 

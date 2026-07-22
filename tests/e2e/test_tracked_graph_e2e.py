@@ -2061,7 +2061,7 @@ def test_expects_no_diff_contract_is_rejected_at_cli_boundary(tmp_path: Path) ->
         ),
         (
             {"schema_version": 99, "tasks": [{"id": "x", "persona": "p", "task": "x"}]},
-            "current version 3",
+            "current version 4",
         ),
         (
             {

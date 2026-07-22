@@ -49,6 +49,7 @@ from .channel import (
 )
 from .config import ConfigError, build_effective_config, load_yaml
 from .coordination import atomic_json
+from .goals import Goal, graph_identities, register_run, update_run_owner
 from .labels import LABEL_ENV, LabelError, merge_labels
 from .personas import persona_path
 from .runs import ArtifactPaths, resolve_run_dir, slugify
@@ -77,6 +78,7 @@ class LaunchRecord(TypedDict):
     channel_id: str
     plan_name: str
     commands: dict[str, str]
+    goal: Goal | None
 
 
 class _TelemetryResult(Protocol):
@@ -412,6 +414,7 @@ def launch_orchestrator(
     turn_timeout: int = int(ORCHESTRATOR_ONEHARNESS_TIMEOUT),
     heartbeat_interval: float = DEFAULT_HEARTBEAT_INTERVAL,
     cwd: str | Path = REPO_ROOT,
+    acknowledge_concurrent: bool = False,
 ) -> str:
     """Launch a detached live-supervised orchestrator and return its run id."""
     plan = Path(plan_path).resolve()
@@ -431,6 +434,17 @@ def launch_orchestrator(
         raise DispatchError(f"invalid plan: {exc}") from exc
     root = Path(runs_dir).resolve()
     run_dir = resolve_run_dir(root, plan_mapping, plan, run_id)
+    if run_dir.exists():
+        raise DispatchError(f"run already exists: {run_dir}")
+    goal = graph.goal
+    register_run(
+        run_id=run_dir.name,
+        run_dir=run_dir,
+        goal=goal,
+        identities=graph_identities(graph),
+        pid=os.getpid(),
+        acknowledge_concurrent=acknowledge_concurrent,
+    )
     run_dir.mkdir(parents=True, exist_ok=False)
     try:
         channel_dir = create_channel(run_dir, heartbeat_interval=heartbeat_interval)
@@ -491,7 +505,9 @@ def launch_orchestrator(
     task = (
         "Drive this tracked orchestration plan one round at a time. Execute the real command "
         f"`just run-plan {plan} --run {run_dir.name} --runs-dir {root} --base {worker_base_path} "
-        f"--provider {provider_kind}` for each required round, review its recorded "
+        f"--provider {provider_kind}"
+        f"{' --acknowledge-concurrent' if acknowledge_concurrent else ''}` for each required "
+        "round, review its recorded "
         "result, and surface milestones, blockers, departures, and closeout to your supervisor."
     )
     command = [onejudge_bin, "run", str(effective), "--task", task, "--format", "json"]
@@ -525,6 +541,7 @@ def launch_orchestrator(
             "started": datetime.now(UTC).isoformat(),
         },
     )
+    update_run_owner(run_dir.name, run_dir, proc.pid)
     raw_plan_name = plan_mapping.get("name")
     plan_name = slugify(
         raw_plan_name if isinstance(raw_plan_name, str) and raw_plan_name.strip() else plan.stem
@@ -534,6 +551,7 @@ def launch_orchestrator(
         "run_id": run_dir.name,
         "channel_id": run_dir.name,
         "plan_name": plan_name,
+        "goal": goal,
         "commands": {
             "channel_next": f"just channel-next {run_dir.name}",
             "monitor": f"just monitor {run_dir.name}",
@@ -558,6 +576,7 @@ def main_orchestrate(argv: list[str] | None = None) -> int:
     parser.add_argument("--run-id")
     parser.add_argument("--base", type=Path, default=BASE_CONFIG)
     parser.add_argument("--onejudge-bin", default="onejudge")
+    parser.add_argument("--acknowledge-concurrent", action="store_true")
     parser.add_argument(
         "--heartbeat-interval",
         type=float,
@@ -581,6 +600,7 @@ def main_orchestrate(argv: list[str] | None = None) -> int:
             onejudge_bin=args.onejudge_bin,
             skill_provider=skill,
             heartbeat_interval=args.heartbeat_interval,
+            acknowledge_concurrent=args.acknowledge_concurrent,
         )
         print(
             (args.runs_dir.resolve() / launched / "launch.json").read_text(encoding="utf-8").strip()
