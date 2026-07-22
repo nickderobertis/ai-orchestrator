@@ -138,6 +138,28 @@ def test_report_sweep_and_invalid_or_missing_index_paths(
     )
     with pytest.raises(ConfigError, match="invalid runs index entry.*broken"):
         sweep_and_list_active_runs()
+    (state / "runs-index.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "runs": {
+                    "relative": {
+                        "run_id": "relative",
+                        "run_dir": "relative/path",
+                        "goal": None,
+                        "identities": [],
+                        "pid": os.getpid(),
+                        "host": socket.gethostname(),
+                        "started": "earlier",
+                        "status": "active",
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ConfigError, match="invalid runs index entry.*relative"):
+        sweep_and_list_active_runs()
     monkeypatch.setenv("AI_ORCHESTRATOR_HOME", " ")
     with pytest.raises(ValueError, match="must not be empty"):
         sweep_and_list_active_runs()

@@ -120,6 +120,8 @@ def _valid_acknowledgements(value: object) -> bool:
     )
 
 
+# llmlint: ignore-block[changed_behavior_has_e2e] malformed shared-index states
+# cannot be produced through the command surface; the serialized IO boundary is unit-proven.
 def _load_active() -> dict[str, ActiveRun]:
     path = _index_path()
     if not path.exists():
@@ -164,6 +166,7 @@ def _load_active() -> dict[str, ActiveRun]:
             or run_id != key
             or not isinstance(run_dir, str)
             or not run_dir
+            or not Path(run_dir).is_absolute()
             or goal is not None
             and (
                 not isinstance(goal, Mapping)
@@ -211,6 +214,9 @@ def _load_active() -> dict[str, ActiveRun]:
     return validated
 
 
+# llmlint: ignore-end[changed_behavior_has_e2e]
+
+
 def _has_durable_report(run_dir: str) -> bool:
     report = Path(run_dir) / "orchestrator" / "report.json"
     if not report.is_file() or report.stat().st_size == 0:
@@ -222,12 +228,15 @@ def _has_durable_report(run_dir: str) -> bool:
     return True
 
 
-# llmlint: ignore[changed_behavior_has_e2e] normal CLI completion cleanup is e2e;
-# process-death and corrupt/durable report boundary branches are unit-proven.
+# llmlint: ignore-block[changed_behavior_has_e2e] normal CLI completion cleanup is
+# e2e; process-death and corrupt/durable report boundary branches are unit-proven.
 def _sweep(runs: dict[str, ActiveRun]) -> None:
     for run_id, entry in list(runs.items()):
         if _has_durable_report(entry["run_dir"]) or _owner_is_provably_dead(entry):
             del runs[run_id]
+
+
+# llmlint: ignore-end[changed_behavior_has_e2e]
 
 
 def register_run(
@@ -275,8 +284,8 @@ def register_run(
                     "identities": sorted(set().union(*map(set, shared.values()))),
                 }
             )
-        # llmlint: ignore[changed_behavior_has_e2e] detached multi-round ownership
-        # cannot be driven by standalone run-plan; preservation is unit-proven.
+        # llmlint: ignore-block[changed_behavior_has_e2e] detached multi-round
+        # ownership cannot be driven by standalone run-plan; preservation is unit-proven.
         existing = runs.get(run_id)
         started = existing.get("started", now) if existing else now
         same_run = existing is not None and Path(existing["run_dir"]).resolve() == absolute_dir
@@ -295,6 +304,7 @@ def register_run(
         prior = list(existing.get("acknowledgements", [])) if existing else []
         if prior or acknowledgements:
             entry["acknowledgements"] = [*prior, *acknowledgements]
+        # llmlint: ignore-end[changed_behavior_has_e2e]
         runs[run_id] = entry
         atomic_json(_index_path(), {"schema_version": RUNS_INDEX_SCHEMA_VERSION, "runs": runs})
         return [*prior, *acknowledgements] if same_run else acknowledgements
