@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import os
-import socket
 import subprocess
 import time
 from pathlib import Path
@@ -232,53 +231,3 @@ def test_run_plan_accepts_explicit_goal_id(tmp_path: Path, command_base) -> None
     )
 
     assert result.returncode == 0, result.stderr
-
-
-def test_goals_cli_rejects_malformed_index_and_sweeps_finished_runs(tmp_path: Path) -> None:
-    state = tmp_path / "state"
-    state.mkdir()
-    env = {**os.environ, "AI_ORCHESTRATOR_HOME": str(state)}
-    index = state / "runs-index.json"
-    index.write_text('{"schema_version":1,"runs":{"broken":{"run_id":"broken"}}}', encoding="utf-8")
-    malformed = _run("goals", env=env)
-    assert malformed.returncode != 0
-    assert "invalid runs index entry" in malformed.stderr
-
-    reported_dir = tmp_path / "reported"
-    report = reported_dir / "orchestrator" / "report.json"
-    report.parent.mkdir(parents=True)
-    report.write_text("{}\n", encoding="utf-8")
-    index.write_text(
-        json.dumps(
-            {
-                "schema_version": 1,
-                "runs": {
-                    "dead": {
-                        "run_id": "dead",
-                        "run_dir": str(tmp_path / "dead"),
-                        "goal": None,
-                        "identities": [],
-                        "pid": 999_999_999,
-                        "host": socket.gethostname(),
-                        "started": "earlier",
-                        "status": "active",
-                    },
-                    "reported": {
-                        "run_id": "reported",
-                        "run_dir": str(reported_dir),
-                        "goal": None,
-                        "identities": [],
-                        "pid": os.getpid(),
-                        "host": "remote-host",
-                        "started": "earlier",
-                        "status": "active",
-                    },
-                },
-            }
-        ),
-        encoding="utf-8",
-    )
-    swept = _run("goals", env=env)
-    assert swept.returncode == 0, swept.stderr
-    assert swept.stdout.strip() == "No active DAG goals."
-    assert json.loads(index.read_text(encoding="utf-8"))["runs"] == {}

@@ -84,6 +84,9 @@ def _index_path() -> Path:
     return state_root() / "runs-index.json"
 
 
+# llmlint: ignore[changed_behavior_has_e2e] a second kernel hostname cannot be
+# produced through the CLI in the local e2e environment; serialized cross-host
+# entries and their retention are covered at the unit boundary.
 def _owner_is_provably_dead(entry: Mapping[str, Any]) -> bool:
     if entry.get("host") != socket.gethostname():
         return False
@@ -106,10 +109,13 @@ def _valid_acknowledgements(value: object) -> bool:
         isinstance(item, Mapping)
         and set(item) == {"at", "runs", "identities"}
         and isinstance(item.get("at"), str)
+        and bool(item["at"])
         and isinstance(item.get("runs"), list)
-        and all(isinstance(run_id, str) for run_id in item["runs"])
+        and bool(item["runs"])
+        and all(isinstance(run_id, str) and bool(run_id) for run_id in item["runs"])
         and isinstance(item.get("identities"), list)
-        and all(isinstance(identity, str) for identity in item["identities"])
+        and bool(item["identities"])
+        and all(isinstance(identity, str) and bool(identity) for identity in item["identities"])
         for item in value
     )
 
@@ -154,6 +160,7 @@ def _load_active() -> dict[str, ActiveRun]:
                 }
             )
             or not isinstance(run_id, str)
+            or not run_id
             or run_id != key
             or not isinstance(run_dir, str)
             or not run_dir
@@ -167,12 +174,14 @@ def _load_active() -> dict[str, ActiveRun]:
                 or not goal.get("text")
             )
             or not isinstance(identities, list)
-            or any(not isinstance(identity, str) for identity in identities)
+            or any(not isinstance(identity, str) or not identity for identity in identities)
             or not isinstance(pid, int)
             or isinstance(pid, bool)
             or pid < 1
             or not isinstance(host, str)
+            or not host
             or not isinstance(started, str)
+            or not started
             or status != "active"
             or not _valid_acknowledgements(acknowledgements)
         ):

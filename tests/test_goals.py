@@ -149,6 +149,37 @@ def test_owner_transfer_rejects_missing_reservation(
         update_run_owner("missing", tmp_path / "missing", os.getpid())
 
 
+def test_remote_owner_reservation_is_retained(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state = tmp_path / "state"
+    monkeypatch.setenv("AI_ORCHESTRATOR_HOME", str(state))
+    state.mkdir()
+    run_dir = tmp_path / "remote"
+    (state / "runs-index.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "runs": {
+                    "remote": {
+                        "run_id": "remote",
+                        "run_dir": str(run_dir),
+                        "goal": None,
+                        "identities": ["shared"],
+                        "pid": 999_999_999,
+                        "host": "other-host",
+                        "started": "earlier",
+                        "status": "active",
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert sweep_and_list_active_runs()[0]["run_id"] == "remote"
+
+
 def test_identity_enumeration_uses_only_lifecycle_nodes(tmp_path: Path) -> None:
     graph = SimpleNamespace(
         tasks=[
