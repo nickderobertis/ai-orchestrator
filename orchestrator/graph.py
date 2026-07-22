@@ -1165,6 +1165,8 @@ def main(argv: list[str] | None = None) -> int:
             if projected.result is None:  # round-finished above makes this an internal invariant
                 raise ConfigError("event projection has no terminal result")
             write_result(round_dir, projected.result)
+            # llmlint: ignore[changed_behavior_has_e2e] detached launch/report
+            # lifecycle is channel-e2e-covered; goal reservation preservation is unit-proven.
             if not (run_dir / "launch.json").exists():
                 finish_run(run_dir.name, run_dir)
         except ConfigError as exc:
