@@ -14,6 +14,7 @@ from orchestrator.dispatch import (
     Report,
     _agent_run_context,
     _build_report,
+    _file_progress,
     run_onejudge,
 )
 from orchestrator.dispatch import main as dispatch_main
@@ -312,6 +313,18 @@ def test_run_onejudge_allows_slow_dispatch_with_real_io_progress(tmp_path) -> No
     assert report.completed is True
 
 
+def test_dispatch_file_progress_records_files_and_skips_disappeared_entries(tmp_path) -> None:
+    progress_file = tmp_path / "progress.log"
+    progress_file.write_text("working", encoding="utf-8")
+    (tmp_path / "disappeared").symlink_to(tmp_path / "absent")
+
+    progress = _file_progress(tmp_path)
+
+    assert len(progress) == 1
+    assert progress[0][0] == os.fspath(progress_file)
+    assert progress[0][2] == len("working")
+
+
 def test_watchdog_process_probe_identifies_current_process() -> None:
     activity = process_activity(os.getpid())
     assert os.getpid() in activity.pids
@@ -323,6 +336,25 @@ def test_watchdog_cleanup_and_usage_are_safe_for_absent_process(capsys) -> None:
     terminate_tree(2**31 - 1)
     assert watchdog_main([]) == 2
     assert "usage: watchdog" in capsys.readouterr().err
+
+
+def test_watchdog_records_pid_and_executes_command(tmp_path, monkeypatch) -> None:
+    pid_file = tmp_path / "watchdog.pid"
+    monkeypatch.setenv("ORCHESTRATOR_WATCHDOG_UNSET_LLMLINT", "1")
+    monkeypatch.setenv("LLMLINT_ONEHARNESS_BIN", "oneharness")
+
+    def execvpe(command: str, args: list[str], env: dict[str, str]) -> None:
+        assert command == "worker"
+        assert args == ["worker", "--flag"]
+        assert "ORCHESTRATOR_WATCHDOG_UNSET_LLMLINT" not in env
+        assert "LLMLINT_ONEHARNESS_BIN" not in env
+        raise RuntimeError("exec boundary reached")
+
+    monkeypatch.setattr(os, "execvpe", execvpe)
+    with pytest.raises(RuntimeError, match="exec boundary reached"):
+        watchdog_main([os.fspath(pid_file), "worker", "--flag"])
+
+    assert pid_file.read_text(encoding="utf-8") == str(os.getpid())
 
 
 def _label_echoing_onejudge(tmp_path) -> str:
