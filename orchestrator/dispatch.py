@@ -22,7 +22,9 @@ import shutil
 import socket
 import subprocess
 import sys
+import tempfile
 import threading
+import time
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -52,6 +54,7 @@ from .coordination import atomic_json
 from .labels import LABEL_ENV, LabelError, merge_labels
 from .personas import persona_path
 from .runs import ArtifactPaths, resolve_run_dir, slugify
+from .watchdog import process_activity, terminate_tree
 
 # onejudge's own exit codes (see docs/cli.md): 0 completed + boolean evals passed,
 # 1 hit the turn cap / a boolean eval failed, 2 bad config or usage.
@@ -61,6 +64,7 @@ EXIT_CONFIG_ERROR = 2
 # Temporary hard per-turn ceiling for legitimate long-running agents. Issue #6
 # will replace this coarse bound with separate inactivity and phase budgets.
 DEFAULT_ONEHARNESS_TIMEOUT = "10800"
+DEFAULT_DISPATCH_STALL_TIMEOUT = "600"
 ORCHESTRATOR_ONEHARNESS_TIMEOUT = "86400"
 AGENT_ONEHARNESS_BIN = REPO_ROOT / "scripts" / "oneharness-agent.sh"
 
@@ -167,6 +171,37 @@ def _validate_oneharness_timeout(value: str) -> None:
         )
 
 
+def _stall_timeout(env: Mapping[str, str]) -> float:
+    value = env.get("ORCHESTRATOR_DISPATCH_STALL_TIMEOUT", DEFAULT_DISPATCH_STALL_TIMEOUT)
+    try:
+        seconds = float(value)
+    except (TypeError, ValueError):
+        raise DispatchError(
+            "ORCHESTRATOR_DISPATCH_STALL_TIMEOUT must be a positive number of seconds, "
+            f"got {value!r}"
+        ) from None
+    if seconds <= 0:
+        raise DispatchError(
+            "ORCHESTRATOR_DISPATCH_STALL_TIMEOUT must be a positive number of seconds, "
+            f"got {value!r}"
+        )
+    return seconds
+
+
+def _file_progress(root: Path) -> tuple[tuple[str, int, int], ...]:
+    if not root.exists():
+        return ()
+    records: list[tuple[str, int, int]] = []
+    for path in root.rglob("*"):
+        try:
+            stat = path.stat()
+        except (FileNotFoundError, PermissionError):
+            continue
+        if path.is_file():
+            records.append((os.fspath(path), stat.st_mtime_ns, stat.st_size))
+    return tuple(sorted(records))
+
+
 def _validate_environment(env: Mapping[str, str]) -> None:
     """Validate caller-provided values before they reach the process boundary."""
     for key, value in env.items():
@@ -204,8 +239,12 @@ def run_onejudge(
     process_env = {**os.environ, **(env or {})}
     if unset_llmlint_wrapper:
         process_env.pop("LLMLINT_ONEHARNESS_BIN", None)
+        process_env["ORCHESTRATOR_WATCHDOG_UNSET_LLMLINT"] = "1"
     process_env.setdefault("ONEHARNESS_TIMEOUT", DEFAULT_ONEHARNESS_TIMEOUT)
     _validate_oneharness_timeout(process_env["ONEHARNESS_TIMEOUT"])
+    stall_timeout = _stall_timeout(process_env)
+    if shutil.which(onejudge_bin, path=process_env.get("PATH")) is None:
+        raise DispatchError(f"onejudge binary not found: {onejudge_bin!r} — run 'just bootstrap'")
     inherited_labels = process_env.get(LABEL_ENV)
     if labels or inherited_labels is not None:
         try:
@@ -218,44 +257,72 @@ def run_onejudge(
             process_env.pop(LABEL_ENV, None)
 
     async def execute() -> RunResult | None:
-        runner = (
-            OneJudge(
-                executable=shutil.which("env") or "env",
-                executable_args=(
-                    "-u",
-                    "LLMLINT_ONEHARNESS_BIN",
-                    onejudge_bin,
-                ),
+        with tempfile.TemporaryDirectory(prefix="orchestrator-watchdog-") as directory:
+            pid_file = Path(directory) / "pid"
+            runner = OneJudge(
+                executable=sys.executable,
+                executable_args=("-m", "orchestrator.watchdog", os.fspath(pid_file), onejudge_bin),
             )
-            if unset_llmlint_wrapper
-            else OneJudge(executable=onejudge_bin)
-        )
-        run = asyncio.create_task(
-            runner.run(
-                cast(RunConfig, config),
-                task,
-                provider=provider,
-                cwd=str(cwd),
-                env=process_env,
-                timeout=timeout,
+            run = asyncio.create_task(
+                runner.run(
+                    cast(RunConfig, config),
+                    task,
+                    provider=provider,
+                    cwd=str(cwd),
+                    env=process_env,
+                    timeout=timeout,
+                )
             )
-        )
-        if cancel is None:
-            return await run
 
-        async def cancellation_requested() -> None:
-            while not cancel.is_set():
-                await asyncio.sleep(0.05)
+            async def stalled() -> int:
+                while not pid_file.exists():
+                    if run.done():
+                        return 0
+                    await asyncio.sleep(min(0.05, stall_timeout / 4))
+                pid = int(pid_file.read_text(encoding="utf-8"))
+                previous = (process_activity(pid), _file_progress(Path(cwd) / ".git"))
+                last_progress = time.monotonic()
+                while not run.done():
+                    await asyncio.sleep(min(1.0, stall_timeout / 4))
+                    current = (process_activity(pid), _file_progress(Path(cwd) / ".git"))
+                    if current != previous:
+                        previous = current
+                        last_progress = time.monotonic()
+                    elif time.monotonic() - last_progress >= stall_timeout:
+                        return pid
+                return 0
 
-        cancelled = asyncio.create_task(cancellation_requested())
-        done, _ = await asyncio.wait({run, cancelled}, return_when=asyncio.FIRST_COMPLETED)
-        if run in done:
-            cancelled.cancel()
-            return await run
-        run.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await run
-        return None
+            watcher = asyncio.create_task(stalled())
+            cancellation: asyncio.Task[None] | None = None
+            if cancel is not None:
+
+                async def cancellation_requested() -> None:
+                    while not cancel.is_set():
+                        await asyncio.sleep(0.05)
+
+                cancellation = asyncio.create_task(cancellation_requested())
+            waiting: set[asyncio.Task[Any]] = {run, watcher}
+            if cancellation is not None:
+                waiting.add(cancellation)
+            done, pending = await asyncio.wait(waiting, return_when=asyncio.FIRST_COMPLETED)
+            if run in done:
+                for pending_task in pending:
+                    pending_task.cancel()
+                return await run
+            if watcher in done and (pid := await watcher):
+                terminate_tree(pid)
+                run.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await run
+                raise DispatchError(
+                    f"dispatch stalled for {stall_timeout:g}s with no process-tree CPU/I/O "
+                    "or repository progress; terminated onejudge/provider worker tree"
+                )
+            watcher.cancel()
+            run.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await run
+            return None
 
     try:
         result = asyncio.run(execute())

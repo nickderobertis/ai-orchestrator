@@ -161,6 +161,33 @@ adds only its network permission, avoiding the unsupported network namespace
 while retaining the OS-enforced read-only filesystem; `scripts/session-setup.sh`
 also persists that setting for interactive sessions.
 
+### Dispatch inactivity watchdog
+
+The July 22, 2026 `merge-queue-local` closeout exposed a failure mode distinct
+from a slow model turn. The worker had completed its gate (the final llmlint
+record was around 19:27 local time), then the oneharness/Codex descendants
+disappeared without another history record or commit. The parent orchestrator
+remained live because the Python SDK was still awaiting `onejudge`'s
+`process.communicate()`. With no caller-wide timeout and no inactivity
+supervision at that boundary, neither a report nor an exception reached the
+lifecycle journal, so the node could not settle or surface a failure. The
+evidence path is the run's oneharness history timeline, lifecycle `events.jsonl`,
+worktree commit log, and contemporaneous process tree: the first three stop
+after the green gate while the last shows the provider descendants gone and the
+owning orchestrator still alive.
+
+Dispatch now wraps the SDK-owned `onejudge` process with a stable pid and watches
+the complete descendant tree. Changes in descendant membership, cumulative CPU
+or I/O counters, or files under the checkout's `.git` directory reset the
+inactivity clock. A continuously running gate therefore remains healthy even
+when it emits no onejudge history turn, while a parent waiting on a dead or
+sleeping provider tree becomes a `DispatchError`; the tree is terminated and the
+normal node/lifecycle error path records and surfaces that outcome. Configure the
+bounded interval with `ORCHESTRATOR_DISPATCH_STALL_TIMEOUT` in seconds (positive
+integer or decimal); it defaults to 600 seconds. This differs from
+`ONEHARNESS_TIMEOUT`, which limits one model turn regardless of intervening
+process activity.
+
 ## Dispatching playbook
 
 - **Prepare the harness environment.** codex is oneharness's preferred agent
@@ -170,8 +197,8 @@ also persists that setting for interactive sessions.
   `ONEHARNESS_TIMEOUT` to 10,800 seconds (three hours), a temporary hard per-turn
   ceiling so legitimate build-heavy agents can finish. Set the variable
   explicitly to override it; onejudge's `max_turns` and the lifecycle `--timeout`
-  still bound the whole run independently. Finer inactivity and phase budgets
-  remain tracked in issue #6. Project dispatch also pins the agent-side
+  still bound the whole run independently. Finer phase budgets remain tracked
+  in issue #6. Project dispatch also pins the agent-side
   oneharness `--config` to this repo's config, which forces codex to
   `gpt-5.6-sol` while retaining claude-code's Claude fallback model. A global
   `ONEHARNESS_MODELS` chain cannot be used here: onejudge supplies `--session`,
