@@ -23,7 +23,7 @@ from orchestrator.dispatch import main as dispatch_main
 from orchestrator.labels import parse_labels
 from orchestrator.plan import PlanNode, PlanResult, TaskResult, _render
 from orchestrator.plan import main as plan_main
-from orchestrator.watchdog import ProcessId, process_activity, terminate_tree
+from orchestrator.watchdog import ProcessId, _parse_stat, process_activity, terminate_tree
 from orchestrator.watchdog import main as watchdog_main
 
 
@@ -347,6 +347,19 @@ def test_watchdog_process_probe_identifies_current_process() -> None:
     assert os.getpid() in activity.pids
     assert activity.cpu_ticks > 0
     assert activity.io_bytes >= 0
+
+
+@pytest.mark.parametrize(
+    ("raw_stat", "io_fields"),
+    [
+        ("missing delimiter", ["rchar: 1"]),
+        ("1 (worker) S 2", ["rchar: 1"]),
+        ("1 (worker) S 2 0 0 0 0 0 0 0 0 0 bad 5", ["rchar: 1"]),
+        ("1 (worker) S 2 0 0 0 0 0 0 0 0 0 4 5", ["rchar: bad"]),
+    ],
+)
+def test_watchdog_rejects_malformed_procfs_records(raw_stat: str, io_fields: list[str]) -> None:
+    assert _parse_stat(raw_stat, io_fields) is None
 
 
 def test_watchdog_cleanup_and_usage_are_safe_for_absent_process(capsys) -> None:

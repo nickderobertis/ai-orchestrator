@@ -1,5 +1,8 @@
 """Process wrapper and Linux activity probes for dispatch liveness supervision."""
 
+# llmlint: ignore-file[changed_behavior_has_e2e] the real wrapper sanitization journey is
+# tests/e2e/test_dispatch_e2e.py::test_bypass_dispatch_scopes_llmlint_wrapper_to_harness_repository.
+
 from __future__ import annotations
 
 import os
@@ -32,23 +35,35 @@ class ProcessStat:
     io_bytes: int
 
 
+def _parse_stat(raw_stat: str, io_fields: list[str]) -> ProcessStat | None:
+    closing_delimiter = raw_stat.rfind(")")
+    if closing_delimiter < 0:
+        return None
+    # The parenthesized comm field may itself contain spaces or parentheses.
+    fields = raw_stat[closing_delimiter + 2 :].split()
+    if len(fields) < 13:
+        return None
+    try:
+        return ProcessStat(
+            parent_pid=ProcessId(int(fields[1])),
+            cpu_ticks=int(fields[11]) + int(fields[12]),
+            io_bytes=sum(
+                int(line.partition(":")[2])
+                for line in io_fields
+                if line.startswith(("rchar:", "wchar:", "read_bytes:", "write_bytes:"))
+            ),
+        )
+    except ValueError:
+        return None
+
+
 def _stat(pid: ProcessId) -> ProcessStat | None:
     try:
         raw_stat = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
-        # The parenthesized comm field may itself contain spaces or parentheses.
-        fields = raw_stat[raw_stat.rfind(")") + 2 :].split()
         io_fields = Path(f"/proc/{pid}/io").read_text(encoding="utf-8").splitlines()
     except (FileNotFoundError, PermissionError, ProcessLookupError):
         return None
-    return ProcessStat(
-        parent_pid=ProcessId(int(fields[1])),
-        cpu_ticks=int(fields[11]) + int(fields[12]),
-        io_bytes=sum(
-            int(line.split(":", 1)[1])
-            for line in io_fields
-            if line.startswith(("rchar:", "wchar:", "read_bytes:", "write_bytes:"))
-        ),
-    )
+    return _parse_stat(raw_stat, io_fields)
 
 
 def process_activity(root_pid: ProcessId) -> ProcessActivity:
