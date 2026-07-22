@@ -184,7 +184,7 @@ when it emits no onejudge history turn, while a parent waiting on a dead or
 sleeping provider tree becomes a `DispatchError`; the tree is terminated and the
 normal node/lifecycle error path records and surfaces that outcome. Configure the
 bounded interval with `ORCHESTRATOR_DISPATCH_STALL_TIMEOUT` in seconds (positive
-integer or decimal); it defaults to 600 seconds. This differs from
+integer or decimal); it defaults to `600` seconds. This differs from
 `ONEHARNESS_TIMEOUT`, which limits one model turn regardless of intervening
 process activity.
 

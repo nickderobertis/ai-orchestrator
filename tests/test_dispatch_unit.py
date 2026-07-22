@@ -10,11 +10,13 @@ from onejudge_sdk import RunResult
 from orchestrator import BASE_CONFIG, REPO_ROOT
 from orchestrator.dispatch import (
     AGENT_ONEHARNESS_BIN,
+    DEFAULT_DISPATCH_STALL_TIMEOUT,
     DispatchError,
     Report,
     _agent_run_context,
     _build_report,
     _file_progress,
+    _read_watchdog_pid,
     run_onejudge,
 )
 from orchestrator.dispatch import main as dispatch_main
@@ -268,7 +270,7 @@ def test_run_onejudge_rejects_invalid_timeout(monkeypatch, bad_timeout: str) -> 
         run_onejudge({}, "task")
 
 
-@pytest.mark.parametrize("bad_timeout", ["", "never", "0", "-1"])
+@pytest.mark.parametrize("bad_timeout", ["", "never", "nan", "inf", "0", "-1"])
 def test_run_onejudge_rejects_invalid_stall_timeout(monkeypatch, bad_timeout: str) -> None:
     monkeypatch.setenv("ORCHESTRATOR_DISPATCH_STALL_TIMEOUT", bad_timeout)
     with pytest.raises(DispatchError, match="DISPATCH_STALL_TIMEOUT must be a positive number"):
@@ -321,8 +323,23 @@ def test_dispatch_file_progress_records_files_and_skips_disappeared_entries(tmp_
     progress = _file_progress(tmp_path)
 
     assert len(progress) == 1
-    assert progress[0][0] == os.fspath(progress_file)
-    assert progress[0][2] == len("working")
+    assert progress[0].path == os.fspath(progress_file)
+    assert progress[0].size == len("working")
+
+
+@pytest.mark.parametrize("contents", ["", "not-a-pid", "0", "-1"])
+def test_watchdog_pid_file_rejects_invalid_contents(tmp_path, contents: str) -> None:
+    pid_file = tmp_path / "watchdog.pid"
+    pid_file.write_text(contents, encoding="utf-8")
+
+    with pytest.raises(DispatchError, match="watchdog pid file is invalid"):
+        _read_watchdog_pid(pid_file)
+
+
+def test_dispatch_stall_default_documentation_cannot_drift() -> None:
+    documentation = (REPO_ROOT / "docs" / "onejudge-integration.md").read_text(encoding="utf-8")
+
+    assert f"defaults to `{DEFAULT_DISPATCH_STALL_TIMEOUT}` seconds" in documentation
 
 
 def test_watchdog_process_probe_identifies_current_process() -> None:

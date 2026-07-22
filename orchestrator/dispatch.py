@@ -17,6 +17,7 @@ import argparse
 import asyncio
 import contextlib
 import json
+import math
 import os
 import shutil
 import socket
@@ -90,6 +91,15 @@ class _TelemetryResult(Protocol):
 
     @property
     def telemetry(self) -> dict[str, Any] | None: ...  # pragma: no cover - typing contract
+
+
+@dataclass(frozen=True)
+class FileProgress:
+    """A filesystem entry whose changes demonstrate dispatch progress."""
+
+    path: str
+    modified_ns: int
+    size: int
 
 
 @dataclass
@@ -182,7 +192,7 @@ def _stall_timeout(env: Mapping[str, str]) -> float:
             "ORCHESTRATOR_DISPATCH_STALL_TIMEOUT must be a positive number of seconds, "
             f"got {value!r}"
         ) from None
-    if seconds <= 0:
+    if not math.isfinite(seconds) or seconds <= 0:
         raise DispatchError(
             "ORCHESTRATOR_DISPATCH_STALL_TIMEOUT must be a positive number of seconds, "
             f"got {value!r}"
@@ -190,18 +200,28 @@ def _stall_timeout(env: Mapping[str, str]) -> float:
     return seconds
 
 
-def _file_progress(root: Path) -> tuple[tuple[str, int, int], ...]:
+def _file_progress(root: Path) -> tuple[FileProgress, ...]:
     if not root.exists():
         return ()
-    records: list[tuple[str, int, int]] = []
+    records: list[FileProgress] = []
     for path in root.rglob("*"):
         try:
             stat = path.stat()
         except (FileNotFoundError, PermissionError):
             continue
         if path.is_file():
-            records.append((os.fspath(path), stat.st_mtime_ns, stat.st_size))
-    return tuple(sorted(records))
+            records.append(FileProgress(os.fspath(path), stat.st_mtime_ns, stat.st_size))
+    return tuple(sorted(records, key=lambda record: record.path))
+
+
+def _read_watchdog_pid(pid_file: Path) -> int:
+    try:
+        pid = int(pid_file.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        raise DispatchError(f"watchdog pid file is invalid: {pid_file}") from None
+    if pid <= 0:
+        raise DispatchError(f"watchdog pid file is invalid: {pid_file}")
+    return pid
 
 
 def _validate_environment(env: Mapping[str, str]) -> None:
@@ -281,7 +301,7 @@ def run_onejudge(
                     if run.done():
                         return 0
                     await asyncio.sleep(min(0.05, stall_timeout / 4))
-                pid = int(pid_file.read_text(encoding="utf-8"))
+                pid = _read_watchdog_pid(pid_file)
                 previous = (process_activity(pid), _file_progress(Path(cwd) / ".git"))
                 last_progress = time.monotonic()
                 while not run.done():

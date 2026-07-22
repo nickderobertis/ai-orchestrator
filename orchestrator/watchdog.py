@@ -20,7 +20,16 @@ class ProcessActivity:
     io_bytes: int
 
 
-def _stat(pid: int) -> tuple[int, int, int] | None:
+@dataclass(frozen=True)
+class ProcessStat:
+    """The process relationship and cumulative work read from procfs."""
+
+    parent_pid: int
+    cpu_ticks: int
+    io_bytes: int
+
+
+def _stat(pid: int) -> ProcessStat | None:
     try:
         raw_stat = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
         # The parenthesized comm field may itself contain spaces or parentheses.
@@ -28,10 +37,10 @@ def _stat(pid: int) -> tuple[int, int, int] | None:
         io_fields = Path(f"/proc/{pid}/io").read_text(encoding="utf-8").splitlines()
     except (FileNotFoundError, PermissionError, ProcessLookupError):
         return None
-    return (
-        int(fields[1]),
-        int(fields[11]) + int(fields[12]),
-        sum(
+    return ProcessStat(
+        parent_pid=int(fields[1]),
+        cpu_ticks=int(fields[11]) + int(fields[12]),
+        io_bytes=sum(
             int(line.split(":", 1)[1])
             for line in io_fields
             if line.startswith(("rchar:", "wchar:", "read_bytes:", "write_bytes:"))
@@ -41,7 +50,7 @@ def _stat(pid: int) -> tuple[int, int, int] | None:
 
 def process_activity(root_pid: int) -> ProcessActivity:
     """Return live descendants and cumulative CPU/I/O for ``root_pid``."""
-    records: dict[int, tuple[int, int, int]] = {}
+    records: dict[int, ProcessStat] = {}
     for entry in Path("/proc").iterdir():
         if entry.name.isdigit() and (record := _stat(int(entry.name))) is not None:
             records[int(entry.name)] = record
@@ -49,14 +58,14 @@ def process_activity(root_pid: int) -> ProcessActivity:
     changed = True
     while changed:
         changed = False
-        for pid, (parent, _, _) in records.items():
-            if parent in selected and pid not in selected:
+        for pid, record in records.items():
+            if record.parent_pid in selected and pid not in selected:
                 selected.add(pid)
                 changed = True
     return ProcessActivity(
         tuple(sorted(selected)),
-        sum(records[pid][1] for pid in selected),
-        sum(records[pid][2] for pid in selected),
+        sum(records[pid].cpu_ticks for pid in selected),
+        sum(records[pid].io_bytes for pid in selected),
     )
 
 
