@@ -506,6 +506,36 @@ def _incomplete_commit_message(step: Step, pr_base: str) -> str:
     )
 
 
+def _preserve_failed_retry(
+    result: LifecycleResult,
+    *,
+    worktree: Path,
+    remote_base: str,
+    root_base: str,
+    pr_base: str,
+    lead: Step,
+) -> None:
+    """Record committed failed work so the next lifecycle retry resumes it."""
+    if result.outcome != "sync-conflict" or result.resume is not None:
+        return
+    if not gitops.has_commits_ahead(worktree, remote_base):
+        return
+    if gitops.unmerged_paths(worktree):
+        gitops.merge_abort(worktree)
+    if gitops.is_dirty(worktree):
+        return
+    if not incomplete_commits(worktree, remote_base, "HEAD"):
+        gitops.commit_empty(worktree, _incomplete_commit_message(lead, pr_base))
+    result.resume = Resume(
+        branch=result.branch,
+        base_branch=root_base,
+        pr_base=pr_base,
+        checkpoint=gitops.head_sha(worktree),
+        completed_steps=tuple(step.id for step in result.steps if step.status == "done"),
+        mode="retry",
+    )
+
+
 def _workstream_branch_name(steps: list[Step]) -> str:
     lead = steps[0]
     key = "\x00".join(f"{_step_label(s)}:{s.task}" for s in steps)
@@ -2049,6 +2079,15 @@ def run_repo_task(
         result.detail = str(exc)
         return result
     finally:
+        if worktree is not None:
+            _preserve_failed_retry(
+                result,
+                worktree=worktree,
+                remote_base=f"origin/{result.pr_base}",
+                root_base=result.base_branch,
+                pr_base=result.pr_base,
+                lead=lead,
+            )
         if cleanup and worktree is not None:
             _best_effort_cleanup(
                 result,
@@ -2353,7 +2392,7 @@ def _parse_resume(nid: str, raw: object, steps: list[Step] | None) -> Resume | N
         raise PlanError(f"task {nid!r} resume 'completed_steps' must be a list of step ids")
     if len(set(completed)) != len(completed):
         raise PlanError(f"task {nid!r} resume 'completed_steps' must be unique")
-    known = {s.id for s in steps or []}
+    known = {s.id for s in steps} if steps is not None else {"main"}
     if unknown_steps := set(completed) - known:
         raise PlanError(
             f"task {nid!r} resume 'completed_steps' names unknown steps: "

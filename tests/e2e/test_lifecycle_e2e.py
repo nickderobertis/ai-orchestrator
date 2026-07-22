@@ -2027,25 +2027,32 @@ def test_local_conflict_incomplete_resolver_preserves_branch(
     assert not _has_file(origin, result.branch, "shared.txt")
 
 
-def test_local_conflict_resolution_exhaustion_is_bounded(tmp_path, bare_origin) -> None:
+def test_local_conflict_retry_resumes_committed_branch(tmp_path, bare_origin) -> None:
     origin = bare_origin({"shared.txt": "original\n"})
     initial = make_writing_dispatch(filename="shared.txt", content="preserved")
     resolutions = 0
+    initial_runs = 0
+    finish_resolution = False
 
     def dispatch_fn(persona: str, task: str, *, project_dir: str, **kwargs: object) -> Report:
-        nonlocal resolutions
+        nonlocal initial_runs, resolutions
         if "Resolve the content conflict" not in task:
+            initial_runs += 1
             report = initial(persona, task, project_dir=project_dir, **kwargs)
             _advance_origin(tmp_path, origin, "shared.txt", "advanced\n")
             return report
         resolutions += 1
+        if finish_resolution:
+            (Path(project_dir) / "shared.txt").write_text("advanced\npreserved\n", encoding="utf-8")
+            gitops.add_all(project_dir)
         return Report(persona, 0, True, False, 2, [], {}, {}, "")
 
+    workspace = _workspace(tmp_path, origin)
     result = run_repo_task(
         str(origin),
         "Create a persistently conflicting local edit.",
         "engineer",
-        workspace=_workspace(tmp_path, origin),
+        workspace=workspace,
         dispatch_fn=dispatch_fn,
         verify_cmd=["true"],
     )
@@ -2053,6 +2060,94 @@ def test_local_conflict_resolution_exhaustion_is_bounded(tmp_path, bare_origin) 
     assert result.outcome == "sync-conflict"
     assert resolutions == MAX_MERGE_CONFLICT_RESOLUTIONS
     assert f"after {MAX_MERGE_CONFLICT_RESOLUTIONS} resolve-and-requeue cycles" in result.detail
+    assert result.resume is not None and result.resume.mode == "retry"
+    preserved_branch = result.branch
+    preserved_checkpoint = result.resume.checkpoint
+    prior_plan = {
+        "tasks": [
+            {
+                "id": "change",
+                "repo": str(origin),
+                "persona": "engineer",
+                "task": "Create a persistently conflicting local edit.",
+                "verify_cmd": ["true"],
+            }
+        ]
+    }
+    retry_plan = next_round(
+        prior_plan,
+        {"round": 1, "results": {"change": {"status": "failed", **result_payload(result)}}},
+        {"retry": {"change": {}}},
+    )
+    assert retry_plan["tasks"][0]["resume"]["checkpoint"] == preserved_checkpoint
+
+    finish_resolution = True
+    retried = run_repo_task(
+        str(origin),
+        "Create a persistently conflicting local edit.",
+        "engineer",
+        workspace=workspace,
+        dispatch_fn=dispatch_fn,
+        verify_cmd=["true"],
+        resume=result.resume,
+    )
+
+    assert retried.outcome == "merged", retried.detail
+    assert retried.branch == preserved_branch
+    assert initial_runs == 1
+    assert gitops.is_ancestor(
+        workspace.clone_dir(normalize_repo(str(origin))), preserved_checkpoint, preserved_branch
+    )
+    assert _has_file(origin, "main", "shared.txt")
+
+
+def test_failed_lifecycle_without_commits_retries_fresh(tmp_path, bare_origin) -> None:
+    origin = bare_origin()
+    workspace = _workspace(tmp_path, origin)
+
+    def no_work(persona: str, task: str, *, project_dir: str, **kwargs: object) -> Report:
+        return Report(persona, 1, False, False, 1, [], {}, {}, "")
+
+    failed = run_repo_task(
+        str(origin),
+        "Fail before producing work.",
+        "engineer",
+        workspace=workspace,
+        dispatch_fn=no_work,
+        verify_cmd=["true"],
+    )
+
+    assert failed.outcome == "not-completed"
+    assert failed.resume is None
+    retry_plan = next_round(
+        {
+            "tasks": [
+                {
+                    "id": "change",
+                    "repo": str(origin),
+                    "persona": "engineer",
+                    "task": "Fail before producing work.",
+                    "verify_cmd": ["true"],
+                }
+            ]
+        },
+        {"round": 1, "results": {"change": {"status": "failed", **result_payload(failed)}}},
+        {"retry": {"change": {}}},
+    )
+    assert "resume" not in retry_plan["tasks"][0]
+
+    retried = run_repo_task(
+        str(origin),
+        "Produce work on the fresh retry.",
+        "engineer",
+        workspace=workspace,
+        dispatch_fn=make_writing_dispatch(filename="fresh.txt", content="fresh"),
+        verify_cmd=["true"],
+    )
+
+    assert retried.outcome == "merged", retried.detail
+    assert retried.branch != failed.branch
+    assert _has_file(origin, "main", "fresh.txt")
 
 
 def test_local_repo_registry_gate_verifies_real_worktree(tmp_path, bare_origin) -> None:
