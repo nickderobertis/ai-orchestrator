@@ -38,8 +38,8 @@ from .runs import NodeId, RunId, StepId
 
 # Bump when a record's *shape* changes incompatibly. Readers skip records they do
 # not understand rather than failing a round that is only being observed.
-SCHEMA_VERSION = 3
-SUPPORTED_SCHEMA_VERSIONS = frozenset({1, 2, SCHEMA_VERSION})
+SCHEMA_VERSION = 4
+SUPPORTED_SCHEMA_VERSIONS = frozenset({1, 2, 3, SCHEMA_VERSION})
 
 JOURNAL_NAME = "events.jsonl"
 REQUIRED_EVENT_FIELDS = ("version", "seq", "at", "kind", "run_id", "round")
@@ -97,6 +97,7 @@ EventKind = Literal[
     "lock-wait",
     "setup-finished",
     "concurrent-acknowledged",
+    "upstream-modified",
 ]
 
 # Typed as the literal it enumerates, so iterating it yields `EventKind` and a

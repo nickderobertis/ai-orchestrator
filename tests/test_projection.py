@@ -27,7 +27,7 @@ from orchestrator.runs import prepare_round
 
 def test_static_event_contract_golden() -> None:
     golden = json.loads(
-        (Path(__file__).parent / "golden" / "static-round-events-v3.json").read_text()
+        (Path(__file__).parent / "golden" / "static-round-events-v4.json").read_text()
     )
     assert golden["version"] == SCHEMA_VERSION
     assert golden["terminal_node_kinds"] == list(TERMINAL_NODE_EVENT_KINDS)

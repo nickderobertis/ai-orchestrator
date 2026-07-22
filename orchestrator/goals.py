@@ -355,6 +355,13 @@ def sweep_and_list_active_runs() -> list[ActiveRun]:
         return [runs[key] for key in sorted(runs)]
 
 
+def find_active_run(run_id: str) -> ActiveRun | None:
+    """Resolve one run through the central active-runs index."""
+    return next(
+        (entry for entry in sweep_and_list_active_runs() if entry["run_id"] == run_id), None
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     argparse.ArgumentParser(description="List active DAG goals across projects.").parse_args(argv)
     rows = sweep_and_list_active_runs()

@@ -8,7 +8,7 @@ the canonical executor for direct onejudge work, full repository lifecycles, and
 explicit actions that only a person can complete. `just repo-plan` is a deprecated
 alias retained so old lifecycle-only plan files keep working.
 
-The current tracked-plan contract is schema version 4 (`"schema_version": 4`).
+The current tracked-plan contract is schema version 5 (`"schema_version": 5`).
 Plans that omit the version retain version-1 behavior for compatibility.
 
 Version 4 adds an optional top-level `goal` mapping with required non-empty
@@ -142,9 +142,9 @@ The accepted commands are:
 
 | `op` | Required fields | Effect |
 | --- | --- | --- |
-| `add` | `node`: full node mapping | Add a new node. Its `deps`, if any, must name graph nodes. |
+| `add` | `node`: full node mapping | Add a new node. Its `deps`, if any, must name graph nodes or valid cross-DAG references. |
 | `drop` | `id`; `dependents`: `"drop"` or `"detach"` | Remove the node and recursively drop its dependents, or detach its direct dependents. |
-| `reparent` | `id`; `deps`: list of node ids | Replace an unstarted node's dependencies. |
+| `reparent` | `id`; `deps`: list of dependency references | Replace an unstarted node's dependencies. |
 | `retry` | `id`; `node`: full replacement node mapping with a new id | Supersede a running, failed, or cancelled node with a fresh lineage and redirect its direct dependents. |
 | `attest` | `ref` | Complete a currently ready, waiting human action. |
 | `complete` | `reason` | Journal the planner's completion request independently of graph mutation. |
@@ -190,7 +190,13 @@ work with [`just repo-recover`](repo-lifecycle.md#integrating-completed-workstre
 ## Node shapes
 
 Every top-level node needs a unique `id`; `deps` is an optional list of other
-top-level ids. Omitted `kind` defaults to `agent` for compatibility.
+top-level ids or wait-only cross-DAG references of the form
+`run:<run_id>#<node_id>`. Omitted `kind` defaults to `agent` for compatibility.
+Cross-DAG edges resolve through the active-runs index and the upstream journal.
+An unknown or inactive run, unfinished node, or failed node leaves the consumer
+blocked. Once an upstream succeeds, the consumer records its journal sequence;
+if that journal later advances, the consumer emits a non-crashing
+`upstream-modified` event for planner review without rerunning work.
 
 The planner writes every agent node and step `task` with this prose template:
 

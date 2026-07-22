@@ -13,7 +13,16 @@ import threading
 import pytest
 
 from orchestrator.dispatch import DispatchError, Report
-from orchestrator.plan import NodeRun, Plan, PlanError, PlanNode, load_plan, run_plan, schedule_dag
+from orchestrator.plan import (
+    NodeRun,
+    Plan,
+    PlanError,
+    PlanNode,
+    load_plan,
+    parse_cross_dag_dependency,
+    run_plan,
+    schedule_dag,
+)
 
 
 def _report(persona: str, completed: bool) -> Report:
@@ -259,3 +268,13 @@ def test_plan_rejects_bad_deps(tmp_path) -> None:
         load_plan(
             _write(tmp_path, {"tasks": [{"id": "a", "persona": "p", "task": "t", "deps": "x"}]})
         )
+
+
+def test_cross_dag_dependency_parser_distinguishes_local_and_validates_shape() -> None:
+    assert parse_cross_dag_dependency("local") is None
+    parsed = parse_cross_dag_dependency("run:release-12#publish")
+    assert parsed is not None
+    assert (parsed.run_id, parsed.node_id) == ("release-12", "publish")
+    for malformed in ("run:", "run:other", "run:#node", "run:other#", "run:bad/id#node"):
+        with pytest.raises(PlanError, match="malformed cross-DAG dependency"):
+            parse_cross_dag_dependency(malformed)

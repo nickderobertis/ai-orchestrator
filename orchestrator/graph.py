@@ -29,17 +29,20 @@ from .channel import (
     ProposalSink,
 )
 from .config import ConfigError, load_yaml
-from .coordination import reset_harness_observer, set_harness_observer
+from .coordination import advisory_lock, reset_harness_observer, set_harness_observer
 from .dispatch import Report
 from .edits import EditError, apply_edit
-from .goals import Goal, finish_run, graph_identities, parse_goal, register_run
+from .goals import Goal, find_active_run, finish_run, graph_identities, parse_goal, register_run
 from .journal import (
+    JOURNAL_NAME,
     TERMINAL_NODE_RESULT_FIELD,
     EventKind,
     JournalSink,
     NodeJournal,
     NullJournal,
     open_journal,
+    read_events,
+    reconcile,
 )
 from .lifecycle import (
     LifecycleResult,
@@ -66,6 +69,7 @@ from .plan import (
     _topological_order,
     make_dispatch_runner,
     parse_agent_node,
+    parse_cross_dag_dependency,
     reconcile_dag,
 )
 from .registry import Registry
@@ -221,6 +225,13 @@ def parse_graph(data: dict[str, Any]) -> Graph:
         raise PlanError(
             "'verify_via_ci' requires schema_version 3; legacy plans must omit the field"
         )
+    if schema_version < 5 and any(
+        isinstance(task, Mapping)
+        and isinstance(task.get("deps"), list)
+        and any(isinstance(dep, str) and dep.startswith("run:") for dep in task["deps"])
+        for task in raw_tasks
+    ):
+        raise PlanError("cross-DAG dependencies require schema_version 5")
     concurrency = data.get("concurrency", 4)
     if not isinstance(concurrency, int) or isinstance(concurrency, bool) or concurrency < 1:
         raise PlanError("'concurrency' must be a positive integer")
@@ -238,6 +249,8 @@ def parse_graph(data: dict[str, Any]) -> Graph:
 
     for nid, node in nodes.items():
         for dep in node.deps:
+            if parse_cross_dag_dependency(dep) is not None:
+                continue
             if dep not in nodes:
                 raise PlanError(f"task {nid!r} depends on unknown task {dep!r}")
             if dep == nid:
@@ -249,6 +262,64 @@ def parse_graph(data: dict[str, Any]) -> Graph:
         }
     )
     return Graph(tasks=list(nodes.values()), concurrency=concurrency, goal=goal)
+
+
+@dataclass
+class CrossDagObserver:
+    """Resolve and remember external edges through the shared active-runs index."""
+
+    journal: JournalSink
+    baselines: dict[str, int] = field(default_factory=dict)
+    signalled: set[tuple[str, str]] = field(default_factory=set)
+
+    def reconcile_edges(
+        self, deps: Iterable[str], consumers: Mapping[str, list[str]]
+    ) -> dict[str, str]:
+        statuses: dict[str, str] = {}
+        for raw in deps:
+            ref = parse_cross_dag_dependency(raw)
+            if ref is None:
+                continue
+            active = find_active_run(ref.run_id)
+            if active is None:
+                statuses[raw] = "blocked"
+                continue
+            path = Path(active["run_dir"]) / JOURNAL_NAME
+            with advisory_lock(f"journal:{path}"):
+                state = reconcile(path, RunId(ref.run_id))
+            terminal = [
+                event
+                for event in read_events(path)
+                if event.run_id == ref.run_id
+                and event.node == ref.node_id
+                and event.kind in {"node-settled", "node-failed"}
+            ]
+            done = (
+                bool(terminal)
+                and terminal[-1].kind == "node-settled"
+                and (terminal[-1].detail.get("status") == "done")
+            )
+            statuses[raw] = "done" if done else "blocked"
+            if not done:
+                continue
+            baseline = self.baselines.setdefault(raw, state.last_seq)
+            if state.last_seq <= baseline:
+                continue
+            for consumer in consumers.get(raw, []):
+                key = (raw, consumer)
+                if key in self.signalled:
+                    continue
+                self.journal.append(
+                    "upstream-modified",
+                    node=NodeId(consumer),
+                    detail={
+                        "dependency": raw,
+                        "captured_last_seq": baseline,
+                        "observed_last_seq": state.last_seq,
+                    },
+                )
+                self.signalled.add(key)
+        return statuses
 
 
 def _contains_field(tasks: list[Any], field: str, *, include_steps: bool = False) -> bool:
@@ -363,7 +434,11 @@ def run_graph(
     dependents: dict[str, list[str]] = {nid: [] for nid in nodes}
     for nid, node in nodes.items():
         for dep in node.deps:
-            dependents[dep].append(nid)
+            dependents.setdefault(dep, []).append(nid)
+    external_deps = {
+        dep for node in nodes.values() for dep in node.deps if parse_cross_dag_dependency(dep)
+    }
+    cross_dag = CrossDagObserver(log)
     completed: dict[str, LifecycleResult] = {
         nid: run.payload
         for nid, run in (replayed_runs or {}).items()
@@ -613,11 +688,18 @@ def run_graph(
                 cancellations.setdefault(node.id, threading.Event())
             deps.clear()
             deps.update({node.id: node.deps for node in graph.tasks})
+            external_deps.clear()
+            external_deps.update(
+                dependency
+                for node in graph.tasks
+                for dependency in node.deps
+                if parse_cross_dag_dependency(dependency)
+            )
             dependents.clear()
             dependents.update({node.id: [] for node in graph.tasks})
             for node in graph.tasks:
                 for dependency in node.deps:
-                    dependents[dependency].append(node.id)
+                    dependents.setdefault(dependency, []).append(node.id)
             # `completion-requested` is intentionally not dispatched below: completion is the
             # planner's closeout verdict to the onejudge supervisor (committed above for audit and
             # replay), not a scheduler transition. run_graph settles its own frontier; the verdict
@@ -650,6 +732,11 @@ def run_graph(
                         status.pop(dropped, None)
                         actual.pop(dropped, None)
 
+    def observe_tick() -> None:
+        cross_dag.reconcile_edges(external_deps, dependents)
+        if proposal_pump is not None:
+            proposal_pump.persist_replies()
+
     runs, started_order = reconcile_dag(
         lambda: list(nodes),
         deps,
@@ -658,8 +745,9 @@ def run_graph(
         actual=actual,
         started_order=replayed_order,
         on_settled=on_settled,
-        on_tick=proposal_pump.persist_replies if proposal_pump is not None else None,
+        on_tick=observe_tick,
         on_reconcile=reconcile_commands if proposal_pump is not None else None,
+        external_status=lambda: cross_dag.reconcile_edges(external_deps, dependents),
     )
     return _collect(nodes, runs, [node for node in started_order if node in nodes])
 
@@ -735,7 +823,7 @@ def _collect(
     dependents: dict[str, list[str]] = {nid: [] for nid in nodes}
     for nid, node in nodes.items():
         for dep in node.deps:
-            dependents[dep].append(nid)
+            dependents.setdefault(dep, []).append(nid)
     status = {nid: run.status for nid, run in runs.items()}
     actions = {
         nid: _waiting_actions(node, runs[nid], dependents[nid])
@@ -753,7 +841,7 @@ def _collect(
             refs = [action.ref for action in actions.get(nid, [])]
         elif status.get(nid) == "blocked":
             for dep in nodes[nid].deps:
-                if status.get(dep) in ("waiting", "blocked"):
+                if dep in nodes and status.get(dep) in ("waiting", "blocked"):
                     refs.extend(blocking(dep))
         cache[nid] = _dedupe(refs)
         return cache[nid]

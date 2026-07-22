@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 import threading
 from collections.abc import Callable, Mapping
@@ -35,7 +36,34 @@ class PlanError(Exception):
 #: for backward-compatible plans; ``human`` names action the harness must never
 #: infer or execute.
 NODE_KINDS = ("agent", "human")
-PLAN_SCHEMA_VERSION = 4
+PLAN_SCHEMA_VERSION = 5
+
+_CROSS_DAG_DEP = re.compile(r"^run:([A-Za-z0-9][A-Za-z0-9._-]*)#([^#]+)$")
+
+
+@dataclass(frozen=True)
+class CrossDagDependency:
+    """A validated wait-only edge into another tracked run."""
+
+    run_id: str
+    node_id: str
+
+
+def parse_cross_dag_dependency(value: str) -> CrossDagDependency | None:
+    """Parse an external dependency, rejecting malformed ``run:`` references."""
+    match = _CROSS_DAG_DEP.fullmatch(value)
+    if match is not None:
+        return CrossDagDependency(run_id=match.group(1), node_id=match.group(2))
+    if value.startswith("run:"):
+        raise PlanError(
+            f"malformed cross-DAG dependency {value!r}; expected 'run:<run_id>#<node_id>'"
+        )
+    return None
+
+
+def is_cross_dag_dependency(value: str) -> bool:
+    """Return whether a dependency is a validated external-run reference."""
+    return parse_cross_dag_dependency(value) is not None
 
 
 @dataclass
@@ -146,6 +174,7 @@ def reconcile_dag(
     on_settled: Callable[[str, NodeRun], None] | None = None,
     on_tick: Callable[[], None] | None = None,
     on_reconcile: Callable[[dict[str, str], dict[str, NodeRun]], None] | None = None,
+    external_status: Callable[[], Mapping[str, str]] | None = None,
 ) -> tuple[dict[str, NodeRun], list[str]]:
     """Converge desired nodes against replayed and in-flight actual state.
 
@@ -187,6 +216,8 @@ def reconcile_dag(
     with ThreadPoolExecutor(max_workers=concurrency) as pool:
         futures: dict[Any, str] = {}
         while True:
+            if external_status is not None:
+                status.update(external_status())
             if on_reconcile is not None:
                 on_reconcile(status, results)
             desired = desired_nodes()
@@ -234,7 +265,8 @@ def _topological_order(nodes: dict[str, PlanNode]) -> list[str]:
             raise PlanError(f"dependency cycle: {cycle}")
         color[nid] = GREY
         for dep in nodes[nid].deps:
-            visit(dep, stack + (nid,))
+            if not is_cross_dag_dependency(dep):
+                visit(dep, stack + (nid,))
         color[nid] = BLACK
         order.append(nid)
 
@@ -271,6 +303,9 @@ def load_plan(path: str | Path) -> Plan:
 
     for nid, node in nodes.items():
         for dep in node.deps:
+            external = parse_cross_dag_dependency(dep)
+            if external is not None:
+                continue
             if dep not in nodes:
                 raise PlanError(f"task {nid!r} depends on unknown task {dep!r}")
             if dep == nid:
@@ -292,6 +327,8 @@ def parse_agent_node(nid: str, t: dict[str, Any]) -> PlanNode:
     deps = t.get("deps", [])
     if not isinstance(deps, list) or not all(isinstance(d, str) for d in deps):
         raise PlanError(f"task {nid!r} 'deps' must be a list of ids")
+    for dep in deps:
+        parse_cross_dag_dependency(dep)
     return PlanNode(
         id=nid,
         persona=persona or "",

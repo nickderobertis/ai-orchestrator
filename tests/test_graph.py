@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import socket
 import threading
 from collections.abc import Mapping
@@ -16,6 +17,7 @@ from orchestrator.config import ConfigError
 from orchestrator.dispatch import DispatchError, Report
 from orchestrator.edits import EditCommand
 from orchestrator.gitops import GitError
+from orchestrator.goals import register_run
 from orchestrator.graph import (
     GraphNode,
     HumanAction,
@@ -832,6 +834,95 @@ def test_plan_schema_version_documentation_cannot_drift() -> None:
     for example in ("plan.example.json", "repo-plan.example.json", "tracked-graph.example.json"):
         mapping = json.loads((root / "examples" / example).read_text(encoding="utf-8"))
         assert mapping["schema_version"] == PLAN_SCHEMA_VERSION
+
+
+def test_cross_dag_dependency_resolves_done_and_surfaces_later_journal_advance(
+    tmp_path: Path,
+) -> None:
+    upstream_dir = tmp_path / "runs" / "upstream"
+    upstream = open_journal(upstream_dir, RunId("upstream"), 1)
+    upstream.append("node-started", node=NodeId("produce"))
+    upstream.append("node-settled", node=NodeId("produce"), detail={"status": "done"})
+    register_run(
+        run_id="upstream",
+        run_dir=upstream_dir,
+        goal=None,
+        identities=[],
+        pid=os.getpid(),
+        acknowledge_concurrent=False,
+    )
+    downstream = open_journal(tmp_path / "runs" / "downstream", RunId("downstream"), 1)
+    graph = parse_graph(
+        {
+            "schema_version": 5,
+            "tasks": [
+                {
+                    "id": "consume",
+                    "persona": "engineer",
+                    "task": "Consume it",
+                    "deps": ["run:upstream#produce"],
+                }
+            ],
+        }
+    )
+
+    def consume(node: PlanNode, **_: object) -> Report:
+        upstream.append("setup-finished", node=NodeId("produce"), detail={"changed": True})
+        return _report(node.persona)
+
+    result = run_graph(
+        graph,
+        agent_runner=consume,
+        lifecycle_runner=lambda node, **_: _lifecycle(),
+        journal=downstream,
+        run_id=RunId("downstream"),
+        round_number=1,
+    )
+
+    assert result.results["consume"].status == "done"
+    signals = [event for event in downstream.events() if event.kind == "upstream-modified"]
+    assert len(signals) == 1
+    assert signals[0].node == "consume"
+    assert signals[0].detail["dependency"] == "run:upstream#produce"
+
+
+def test_cross_dag_unknown_or_failed_upstream_blocks_without_dispatch(tmp_path: Path) -> None:
+    graph = parse_graph(
+        {
+            "schema_version": 5,
+            "tasks": [
+                {
+                    "id": "consume",
+                    "persona": "engineer",
+                    "task": "Consume it",
+                    "deps": ["run:unknown#produce"],
+                }
+            ],
+        }
+    )
+    result = run_graph(
+        graph,
+        agent_runner=lambda node, **_: pytest.fail("blocked dependency dispatched"),
+        lifecycle_runner=lambda node, **_: _lifecycle(),
+    )
+    assert result.results["consume"].status == "blocked"
+
+
+def test_cross_dag_dependency_requires_current_plan_schema() -> None:
+    with pytest.raises(PlanError, match="require schema_version 5"):
+        parse_graph(
+            {
+                "schema_version": 4,
+                "tasks": [
+                    {
+                        "id": "consume",
+                        "persona": "engineer",
+                        "task": "Consume it",
+                        "deps": ["run:upstream#produce"],
+                    }
+                ],
+            }
+        )
 
 
 def test_goal_is_normalized_and_legacy_goal_less_plans_still_load() -> None:

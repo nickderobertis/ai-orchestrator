@@ -28,7 +28,7 @@ from .journal import (
     Event,
     parse_event,
 )
-from .plan import PlanError
+from .plan import PlanError, parse_cross_dag_dependency
 from .runs import GraphPayload, GraphResultItem, RunId, as_result_payload
 
 
@@ -296,7 +296,9 @@ def project_round(events: list[Event], run_id: RunId, round_number: int) -> Roun
     plan = cast(ProjectedPlan, {**builder.meta, "tasks": builder.nodes})
     by_id = {node["id"]: node for node in builder.nodes}
     for source, target in builder.edges:
-        if source not in by_id or target not in by_id:
+        if target not in by_id or (
+            source not in by_id and parse_cross_dag_dependency(source) is None
+        ):
             raise ProjectionError(f"edge {source!r} -> {target!r} references an unknown node")
         deps = by_id[target].setdefault("deps", [])
         if source in deps:

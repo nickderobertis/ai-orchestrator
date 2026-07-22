@@ -157,6 +157,222 @@ def test_overlapping_goals_require_and_record_acknowledgement(tmp_path: Path, co
     assert goals.stdout.strip() == "No active DAG goals."
 
 
+def test_cross_dag_dependency_waits_then_reports_upstream_modification(
+    tmp_path: Path, command_base, onejudge_bin: str
+) -> None:
+    state = tmp_path / "state"
+    runs = tmp_path / "runs"
+    env = {**os.environ, "AI_ORCHESTRATOR_HOME": str(state)}
+    producer_ready, producer_release = tmp_path / "producer.ready", tmp_path / "producer.release"
+    amend_ready, amend_release = tmp_path / "amend.ready", tmp_path / "amend.release"
+    hold_ready, hold_release = tmp_path / "hold.ready", tmp_path / "hold.release"
+    fail_ready, fail_release = tmp_path / "fail.ready", tmp_path / "fail.release"
+    consume_ready, consume_release = tmp_path / "consume.ready", tmp_path / "consume.release"
+    plan_a = tmp_path / "a.json"
+    plan_a.write_text(
+        json.dumps(
+            {
+                "schema_version": 5,
+                "tasks": [
+                    {
+                        "id": "produce",
+                        "persona": "engineer",
+                        "task": (
+                            f"complete-now provider-barrier-ready={producer_ready} "
+                            f"provider-barrier-release={producer_release}"
+                        ),
+                    },
+                    {
+                        "id": "amend",
+                        "persona": "engineer",
+                        "task": (
+                            f"complete-now provider-barrier-ready={amend_ready} "
+                            f"provider-barrier-release={amend_release}"
+                        ),
+                        "deps": ["produce"],
+                    },
+                    {
+                        "id": "hold",
+                        "persona": "engineer",
+                        "task": (
+                            f"complete-now provider-barrier-ready={hold_ready} "
+                            f"provider-barrier-release={hold_release}"
+                        ),
+                    },
+                    {
+                        "id": "fail",
+                        "persona": "engineer",
+                        "task": (
+                            f"should-fail provider-barrier-ready={fail_ready} "
+                            f"provider-barrier-release={fail_release}"
+                        ),
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    plan_b = tmp_path / "b.json"
+    plan_b.write_text(
+        json.dumps(
+            {
+                "schema_version": 5,
+                "tasks": [
+                    {
+                        "id": "consume",
+                        "persona": "engineer",
+                        "task": (
+                            f"complete-now provider-barrier-ready={consume_ready} "
+                            f"provider-barrier-release={consume_release}"
+                        ),
+                        "deps": ["run:A#produce"],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    common = [
+        "--runs-dir",
+        str(runs),
+        "--base",
+        str(command_base()),
+        "--onejudge-bin",
+        onejudge_bin,
+        "--provider",
+        "command",
+        "--format",
+        "json",
+    ]
+    upstream = subprocess.Popen(
+        ["just", "run-plan", str(plan_a), "--run", "A", *common],
+        cwd=REPO_ROOT,
+        env=env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline and not (
+        producer_ready.exists() and hold_ready.exists() and fail_ready.exists()
+    ):
+        time.sleep(0.02)
+    assert producer_ready.exists() and hold_ready.exists() and fail_ready.exists()
+
+    blocked = subprocess.run(
+        ["just", "run-plan", str(plan_b), "--run", "B-blocked", *common],
+        cwd=REPO_ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert blocked.returncode == 1, blocked.stderr
+    assert json.loads(blocked.stdout)["results"]["consume"]["status"] == "blocked"
+
+    failed_plan = tmp_path / "failed.json"
+    failed_mapping = json.loads(plan_b.read_text(encoding="utf-8"))
+    failed_mapping["tasks"][0]["deps"] = ["run:A#fail"]
+    failed_plan.write_text(json.dumps(failed_mapping), encoding="utf-8")
+    fail_release.write_text("release\n", encoding="utf-8")
+    deadline = time.monotonic() + 10
+    upstream_events = runs / "A" / "events.jsonl"
+    while time.monotonic() < deadline:
+        if upstream_events.exists() and '"kind": "node-failed"' in upstream_events.read_text(
+            encoding="utf-8"
+        ):
+            break
+        time.sleep(0.02)
+    failed = subprocess.run(
+        ["just", "run-plan", str(failed_plan), "--run", "B-failed", *common],
+        cwd=REPO_ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert failed.returncode == 1, failed.stderr
+    assert json.loads(failed.stdout)["results"]["consume"]["status"] == "blocked"
+
+    producer_release.write_text("release\n", encoding="utf-8")
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline and not amend_ready.exists():
+        time.sleep(0.02)
+    assert amend_ready.exists()
+    downstream = subprocess.Popen(
+        ["just", "run-plan", str(plan_b), "--run", "B", *common],
+        cwd=REPO_ROOT,
+        env=env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline and not consume_ready.exists():
+        time.sleep(0.02)
+    assert consume_ready.exists()
+
+    amend_release.write_text("release\n", encoding="utf-8")
+    deadline = time.monotonic() + 10
+    events = runs / "B" / "events.jsonl"
+    while time.monotonic() < deadline:
+        if events.exists() and "upstream-modified" in events.read_text(encoding="utf-8"):
+            break
+        time.sleep(0.02)
+    else:
+        raise AssertionError("downstream did not surface the upstream journal advance")
+    consume_release.write_text("release\n", encoding="utf-8")
+    downstream_out, downstream_err = downstream.communicate(timeout=10)
+    assert downstream.returncode == 0, downstream_out + downstream_err
+    assert json.loads(downstream_out)["results"]["consume"]["status"] == "done"
+
+    hold_release.write_text("release\n", encoding="utf-8")
+    upstream_out, upstream_err = upstream.communicate(timeout=10)
+    assert upstream.returncode == 1, upstream_out + upstream_err
+    assert json.loads(upstream_out)["results"]["fail"]["status"] == "failed"
+
+
+@pytest.mark.parametrize(
+    "schema_version,dependency,message",
+    [
+        (4, "run:upstream#produce", "require schema_version 5"),
+        (5, "run:upstream", "malformed cross-DAG dependency"),
+    ],
+)
+def test_cross_dag_dependency_validation_reaches_cli_boundary(
+    tmp_path: Path,
+    schema_version: int,
+    dependency: str,
+    message: str,
+) -> None:
+    plan = tmp_path / "invalid-cross-dag.json"
+    plan.write_text(
+        json.dumps(
+            {
+                "schema_version": schema_version,
+                "tasks": [
+                    {
+                        "id": "consume",
+                        "task": "This must not dispatch.",
+                        "expects_no_diff": True,
+                        "deps": [dependency],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    rejected = subprocess.run(
+        ["just", "run-plan", str(plan), "--no-record"],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert rejected.returncode == 2
+    assert message in rejected.stderr
+
+
 @pytest.mark.parametrize(
     ("schema_version", "goal", "message"),
     [

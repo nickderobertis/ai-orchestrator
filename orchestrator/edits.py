@@ -130,6 +130,8 @@ def parse_commands(value: Mapping[str, Any]) -> tuple[EditCommand, ...]:
 
 def graph_mapping(graph: Graph) -> dict[str, Any]:
     """Serialize the mutable graph through its existing public node contract."""
+    from .plan import PLAN_SCHEMA_VERSION
+
     tasks: list[dict[str, Any]] = []
     for node in graph.tasks:
         raw = dict(node.definition)
@@ -140,7 +142,7 @@ def graph_mapping(graph: Graph) -> dict[str, Any]:
         else:
             raw.pop("deps", None)
         tasks.append(raw)
-    return {"schema_version": 3, "concurrency": graph.concurrency, "tasks": tasks}
+    return {"schema_version": PLAN_SCHEMA_VERSION, "concurrency": graph.concurrency, "tasks": tasks}
 
 
 def apply_edit(
