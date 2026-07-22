@@ -67,6 +67,10 @@ def test_overlapping_goals_require_and_record_acknowledgement(tmp_path: Path, co
         ),
         encoding="utf-8",
     )
+    goal_less_plan = tmp_path / "goal-less-plan.json"
+    goal_less_payload = json.loads(plan.read_text(encoding="utf-8"))
+    del goal_less_payload["goal"]
+    goal_less_plan.write_text(json.dumps(goal_less_payload), encoding="utf-8")
     base = command_base()
     command = [
         "just",
@@ -79,6 +83,8 @@ def test_overlapping_goals_require_and_record_acknowledgement(tmp_path: Path, co
         "--provider",
         "command",
     ]
+    goal_less_command = [*command]
+    goal_less_command[2] = str(goal_less_plan)
     first = subprocess.Popen(
         [*command, "--run", "first"],
         cwd=REPO_ROOT,
@@ -98,7 +104,7 @@ def test_overlapping_goals_require_and_record_acknowledgement(tmp_path: Path, co
         raise AssertionError("first run did not register in the goals index")
 
     refused = subprocess.run(
-        [*command, "--run", "second"],
+        [*goal_less_command, "--run", "second"],
         cwd=REPO_ROOT,
         env=env,
         text=True,
@@ -111,7 +117,7 @@ def test_overlapping_goals_require_and_record_acknowledgement(tmp_path: Path, co
     assert str(target) in refused.stderr
 
     acknowledged = subprocess.Popen(
-        [*command, "--run", "second", "--acknowledge-concurrent"],
+        [*goal_less_command, "--run", "second", "--acknowledge-concurrent"],
         cwd=REPO_ROOT,
         env=env,
         text=True,
@@ -133,6 +139,7 @@ def test_overlapping_goals_require_and_record_acknowledgement(tmp_path: Path, co
     assert goals.returncode == 0, goals.stderr
     assert "Protect the shared target" in goals.stdout
     assert "Protect-the-shared-target" in goals.stdout
+    assert "second  (no goal)" in goals.stdout
     assert str((tmp_path / "runs" / "first").resolve()) in goals.stdout
     assert str(target.resolve()) in goals.stdout
 

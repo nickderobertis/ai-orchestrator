@@ -13,6 +13,7 @@ from typing import Any, Literal, NewType, NotRequired, Protocol, TypedDict
 from .config import ConfigError, load_yaml
 from .coordination import advisory_lock, atomic_json, state_root
 from .registry import Registry, RegistryEntry, Slug, _target_identity
+from .report_contract import ONEJUDGE_REPORT_SCHEMA_VERSIONS
 from .runs import RunId, slugify
 
 GoalId = NewType("GoalId", str)
@@ -231,7 +232,7 @@ def _has_valid_final_report(run_dir: str) -> bool:
         return False
     transcript = value.get("transcript")
     return (
-        value.get("schema_version") in {4, 5}
+        value.get("schema_version") in ONEJUDGE_REPORT_SCHEMA_VERSIONS
         and isinstance(transcript, Mapping)
         and isinstance(transcript.get("messages"), list)
         and isinstance(value.get("stopped_early"), bool)
