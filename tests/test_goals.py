@@ -127,7 +127,16 @@ def test_report_sweep_and_invalid_or_missing_index_paths(
     report.parent.mkdir(parents=True)
     report.write_text("not json\n", encoding="utf-8")
     assert len(sweep_and_list_active_runs()) == 1
-    report.write_text("{}\n", encoding="utf-8")
+    report.write_text(
+        json.dumps(
+            {
+                "schema_version": 5,
+                "transcript": {"messages": []},
+                "stopped_early": False,
+            }
+        ),
+        encoding="utf-8",
+    )
     assert sweep_and_list_active_runs() == []
 
     (state / "runs-index.json").write_text('{"schema_version":99,"runs":{}}', encoding="utf-8")

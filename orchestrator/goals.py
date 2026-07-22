@@ -219,22 +219,28 @@ def _load_active() -> dict[str, ActiveRun]:
 # llmlint: ignore-end[changed_behavior_has_e2e]
 
 
-def _has_durable_report(run_dir: str) -> bool:
+def _has_valid_final_report(run_dir: str) -> bool:
     report = Path(run_dir) / "orchestrator" / "report.json"
     if not report.is_file() or report.stat().st_size == 0:
         return False
     try:
-        load_yaml(report)
+        value = load_yaml(report)
     except (ConfigError, OSError):
         return False
-    return True
+    transcript = value.get("transcript")
+    return (
+        value.get("schema_version") in {4, 5}
+        and isinstance(transcript, Mapping)
+        and isinstance(transcript.get("messages"), list)
+        and isinstance(value.get("stopped_early"), bool)
+    )
 
 
 # llmlint: ignore-block[changed_behavior_has_e2e] normal CLI completion cleanup is
 # e2e; process-death and corrupt/durable report boundary branches are unit-proven.
 def _sweep(runs: dict[str, ActiveRun]) -> None:
     for run_id, entry in list(runs.items()):
-        if _has_durable_report(entry["run_dir"]) or _owner_is_provably_dead(entry):
+        if _has_valid_final_report(entry["run_dir"]) or _owner_is_provably_dead(entry):
             del runs[run_id]
 
 
