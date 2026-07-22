@@ -13,12 +13,6 @@ ONEJUDGE_VERSION = (REPO_ROOT / "config" / "onejudge.version").read_text().strip
 ONEHARNESS_VERSION = (REPO_ROOT / "config" / "oneharness.version").read_text().strip()
 
 
-def _executable(path: Path, body: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(body, encoding="utf-8")
-    path.chmod(0o755)
-
-
 def _setup_repo(
     tmp_path: Path,
     *,
@@ -45,10 +39,9 @@ def _setup_repo(
             encoding="utf-8",
         )
     shutil.copy2(REPO_ROOT / "scripts" / "session-setup.sh", scripts / "session-setup.sh")
-    _executable(scripts / "setup-llmlint.sh", "#!/bin/sh\nexit 0\n")
+    shutil.copy2(REPO_ROOT / "scripts" / "setup-llmlint.sh", scripts / "setup-llmlint.sh")
     (config / "onejudge.version").write_text(f"{ONEJUDGE_VERSION}\n", encoding="utf-8")
     (config / "oneharness.version").write_text(f"{adopted_oneharness}\n", encoding="utf-8")
-    _executable(tmp_path / ".local" / "node" / "bin" / "bun", "#!/bin/sh\nprintf '1.2.3\n'\n")
     return repo
 
 
@@ -61,6 +54,15 @@ def _run_setup(
         capture_output=True,
         env={**os.environ, "HOME": str(tmp_path), "PATH": path or os.environ["PATH"]},
     )
+
+
+def _path_without_uv(tmp_path: Path) -> str:
+    bun = shutil.which("bun")
+    assert bun is not None
+    tools = tmp_path / "real-tools"
+    tools.mkdir(exist_ok=True)
+    (tools / "bun").symlink_to(Path(bun).resolve())
+    return f"{tools}:/usr/bin:/bin"
 
 
 def test_session_setup_syncs_real_pinned_clis_and_then_needs_no_uv(tmp_path: Path) -> None:
@@ -80,7 +82,7 @@ def test_session_setup_syncs_real_pinned_clis_and_then_needs_no_uv(tmp_path: Pat
     )
     assert not (tmp_path / ".local" / "bin" / "oneharness").exists()
 
-    without_uv = _run_setup(repo, tmp_path, path="/usr/bin:/bin")
+    without_uv = _run_setup(repo, tmp_path, path=_path_without_uv(tmp_path))
     assert without_uv.returncode == 0, without_uv.stderr
     assert "cannot install required project dependencies" not in without_uv.stderr
 
@@ -103,3 +105,33 @@ def test_session_setup_surfaces_real_uv_resolution_failure(tmp_path: Path) -> No
     assert result.returncode == 1
     assert "project dependency sync failed" in result.stderr
     assert "required pinned onejudge and oneharness dependencies are unavailable" in result.stderr
+
+
+def test_session_setup_reports_missing_uv_at_full_entry_point(tmp_path: Path) -> None:
+    repo = _setup_repo(tmp_path)
+
+    result = _run_setup(repo, tmp_path, path=_path_without_uv(tmp_path))
+
+    assert result.returncode == 1
+    assert "cannot install required project dependencies: uv is not installed" in result.stderr
+
+
+def test_session_setup_rejects_corrupt_distribution_metadata(tmp_path: Path) -> None:
+    repo = _setup_repo(tmp_path)
+    installed = _run_setup(repo, tmp_path)
+    assert installed.returncode == 0, installed.stderr
+    metadata = next(
+        (repo / ".venv").glob("lib/python*/site-packages/oneharness_cli-*.dist-info/METADATA")
+    )
+    metadata.write_text(
+        metadata.read_text(encoding="utf-8").replace(
+            f"Version: {ONEHARNESS_VERSION}", "Version: 99.99.99"
+        ),
+        encoding="utf-8",
+    )
+
+    result = _run_setup(repo, tmp_path, path=_path_without_uv(tmp_path))
+
+    assert result.returncode == 1
+    assert "oneharness distribution verification failed" in result.stderr
+    assert "expected '0.4.6', got '99.99.99'" in result.stderr
