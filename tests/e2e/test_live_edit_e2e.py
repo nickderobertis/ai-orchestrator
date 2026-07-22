@@ -61,7 +61,7 @@ def test_real_cli_mutates_live_frontier_and_replays_atomic_edits(
     plan.write_text(
         json.dumps(
             {
-                "schema_version": 3,
+                "schema_version": 5,
                 "name": "live-edit",
                 "concurrency": 4,
                 "tasks": [
@@ -234,7 +234,20 @@ def test_real_cli_mutates_live_frontier_and_replays_atomic_edits(
                     "deps": ["slow_a"],
                 },
             },
-            {"op": "reparent", "id": "pending", "deps": ["slow_b"]},
+            {
+                "op": "add",
+                "node": {
+                    "id": "external_added",
+                    "task": "No diff",
+                    "expects_no_diff": True,
+                    "deps": ["run:missing-upstream#publish"],
+                },
+            },
+            {
+                "op": "reparent",
+                "id": "pending",
+                "deps": ["run:missing-upstream#publish"],
+            },
             {"op": "drop", "id": "slow_b", "dependents": "detach"},
             {"op": "attest", "ref": "approve"},
             {
@@ -250,14 +263,15 @@ def test_real_cli_mutates_live_frontier_and_replays_atomic_edits(
             {"op": "complete", "reason": "planner verified publication anchors"},
         ],
     )
-    _wait_for(events, lambda text: text.count('"kind": "edit-committed"') >= before + 7)
+    _wait_for(events, lambda text: text.count('"kind": "edit-committed"') >= before + 8)
 
     result_path = run_dir / "round-01" / "result.json"
     _wait_for(result_path, lambda text: bool(text.strip()))
     payload = json.loads(result_path.read_text(encoding="utf-8"))
     assert payload["state"] == "failed"
     assert payload["results"]["added"]["status"] == "done"
-    assert payload["results"]["pending"]["status"] == "done"
+    assert payload["results"]["external_added"]["status"] == "blocked"
+    assert payload["results"]["pending"]["status"] == "blocked"
     assert payload["results"]["retry"]["status"] == "done"
     assert payload["results"]["after_retry"]["status"] == "done"
     assert payload["results"]["slow_a_retry"]["status"] == "done"

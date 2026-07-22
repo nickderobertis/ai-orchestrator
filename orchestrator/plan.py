@@ -220,6 +220,8 @@ def reconcile_dag(
                 status.update(external_status())
             if on_reconcile is not None:
                 on_reconcile(status, results)
+            if external_status is not None:
+                status.update(external_status())
             desired = desired_nodes()
             for nid in desired:
                 status.setdefault(nid, "pending")

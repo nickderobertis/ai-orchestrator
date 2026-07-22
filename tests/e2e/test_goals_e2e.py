@@ -400,6 +400,35 @@ def test_cross_dag_dependency_validation_reaches_cli_boundary(
     assert message in rejected.stderr
 
 
+def test_unknown_cross_dag_run_blocks_through_cli(tmp_path: Path) -> None:
+    plan = tmp_path / "unknown-cross-dag.json"
+    plan.write_text(
+        json.dumps(
+            {
+                "schema_version": 5,
+                "tasks": [
+                    {
+                        "id": "consume",
+                        "task": "This must remain blocked.",
+                        "expects_no_diff": True,
+                        "deps": ["run:not-active#publish"],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    blocked = subprocess.run(
+        ["just", "run-plan", str(plan), "--no-record", "--format", "json"],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert blocked.returncode == 1, blocked.stderr
+    assert json.loads(blocked.stdout)["results"]["consume"]["status"] == "blocked"
+
+
 @pytest.mark.parametrize(
     ("schema_version", "goal", "message"),
     [
