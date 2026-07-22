@@ -8,16 +8,18 @@ import socket
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, NotRequired, TypedDict
+from typing import Any, NewType, NotRequired, TypedDict
 
 from .config import ConfigError, load_yaml
 from .coordination import advisory_lock, atomic_json, state_root
 from .registry import Registry, _target_identity
-from .runs import slugify
+from .runs import RunId, slugify
+
+GoalId = NewType("GoalId", str)
 
 
 class Goal(TypedDict):
-    id: str
+    id: GoalId
     text: str
 
 
@@ -28,7 +30,7 @@ class ConcurrentAcknowledgement(TypedDict):
 
 
 class ActiveRun(TypedDict):
-    run_id: str
+    run_id: RunId
     run_dir: str
     goal: Goal | None
     identities: list[str]
@@ -57,7 +59,7 @@ def parse_goal(data: Mapping[str, Any], *, schema_version: int) -> Goal | None:
     raw_id = raw.get("id")
     if raw_id is not None and (not isinstance(raw_id, str) or not raw_id.strip()):
         raise ConfigError("'goal.id' must be a non-empty string when provided")
-    goal_id = raw_id.strip() if isinstance(raw_id, str) else slugify(text)
+    goal_id = GoalId(raw_id.strip() if isinstance(raw_id, str) else slugify(text))
     return {"id": goal_id, "text": text.strip()}
 
 
@@ -92,6 +94,20 @@ def _owner_is_provably_dead(entry: Mapping[str, Any]) -> bool:
     return False
 
 
+def _valid_acknowledgements(value: object) -> bool:
+    if value is None:
+        return True
+    return isinstance(value, list) and all(
+        isinstance(item, Mapping)
+        and isinstance(item.get("at"), str)
+        and isinstance(item.get("runs"), list)
+        and all(isinstance(run_id, str) for run_id in item["runs"])
+        and isinstance(item.get("identities"), list)
+        and all(isinstance(identity, str) for identity in item["identities"])
+        for item in value
+    )
+
+
 def _load_active() -> dict[str, ActiveRun]:
     path = _index_path()
     if not path.exists():
@@ -100,7 +116,66 @@ def _load_active() -> dict[str, ActiveRun]:
     runs = raw.get("runs")
     if raw.get("schema_version") != 1 or not isinstance(runs, dict):
         raise ConfigError(f"invalid runs index: {path}")
-    return {str(key): value for key, value in runs.items() if isinstance(value, dict)}  # type: ignore[misc]
+    validated: dict[str, ActiveRun] = {}
+    for key, value in runs.items():
+        if not isinstance(key, str) or not isinstance(value, Mapping):
+            raise ConfigError(f"invalid runs index entry: {key!r}")
+        run_id = value.get("run_id")
+        run_dir = value.get("run_dir")
+        goal = value.get("goal")
+        identities = value.get("identities")
+        pid = value.get("pid")
+        host = value.get("host")
+        started = value.get("started")
+        status = value.get("status")
+        acknowledgements = value.get("acknowledgements")
+        if (
+            not isinstance(run_id, str)
+            or run_id != key
+            or not isinstance(run_dir, str)
+            or not run_dir
+            or goal is not None
+            and (
+                not isinstance(goal, Mapping)
+                or not isinstance(goal.get("id"), str)
+                or not goal.get("id")
+                or not isinstance(goal.get("text"), str)
+                or not goal.get("text")
+            )
+            or not isinstance(identities, list)
+            or any(not isinstance(identity, str) for identity in identities)
+            or not isinstance(pid, int)
+            or isinstance(pid, bool)
+            or pid < 1
+            or not isinstance(host, str)
+            or not isinstance(started, str)
+            or status != "active"
+            or not _valid_acknowledgements(acknowledgements)
+        ):
+            raise ConfigError(f"invalid runs index entry: {key!r}")
+        entry: ActiveRun = {
+            "run_id": RunId(run_id),
+            "run_dir": run_dir,
+            "goal": (
+                None if goal is None else {"id": GoalId(str(goal["id"])), "text": str(goal["text"])}
+            ),
+            "identities": identities,
+            "pid": pid,
+            "host": host,
+            "started": started,
+            "status": "active",
+        }
+        if acknowledgements is not None:
+            entry["acknowledgements"] = [
+                {
+                    "at": str(item["at"]),
+                    "runs": list(item["runs"]),
+                    "identities": list(item["identities"]),
+                }
+                for item in acknowledgements
+            ]
+        validated[key] = entry
+    return validated
 
 
 def _sweep(runs: dict[str, ActiveRun]) -> None:
@@ -161,7 +236,7 @@ def register_run(
         owner_pid = existing["pid"] if same_run and existing is not None else pid
         owner_host = existing["host"] if same_run and existing is not None else socket.gethostname()
         entry: ActiveRun = {
-            "run_id": run_id,
+            "run_id": RunId(run_id),
             "run_dir": str(absolute_dir),
             "goal": goal,
             "identities": identities,
@@ -201,7 +276,7 @@ def update_run_owner(run_id: str, run_dir: Path, pid: int) -> None:
         atomic_json(_index_path(), {"schema_version": 1, "runs": runs})
 
 
-def active_runs() -> list[ActiveRun]:
+def sweep_and_list_active_runs() -> list[ActiveRun]:
     """Read active runs, sweeping only owners proven dead."""
     with advisory_lock("runs-index"):
         runs = _load_active()
@@ -212,7 +287,7 @@ def active_runs() -> list[ActiveRun]:
 
 def main(argv: list[str] | None = None) -> int:
     argparse.ArgumentParser(description="List active DAG goals across projects.").parse_args(argv)
-    rows = active_runs()
+    rows = sweep_and_list_active_runs()
     if not rows:
         print("No active DAG goals.")
         return 0

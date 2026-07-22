@@ -153,7 +153,7 @@ next-round *args:
 runs *args:
     @uv run orchestrator-runs "$@"
 
-# List active DAG goals and their targeted repository identities across projects.
+# llmlint: ignore[tool_output_is_signal] the requested cross-project goal inventory is this viewing command's product.
 goals *args:
     @uv run orchestrator-goals "$@"
 

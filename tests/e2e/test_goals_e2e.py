@@ -8,6 +8,8 @@ import subprocess
 import time
 from pathlib import Path
 
+import pytest
+
 from orchestrator import REPO_ROOT
 
 
@@ -44,7 +46,7 @@ def test_overlapping_goals_require_and_record_acknowledgement(tmp_path: Path, co
         json.dumps(
             {
                 "schema_version": 4,
-                "goal": {"text": "Protect the shared target"},
+                "goal": {"id": "shared-target", "text": "Protect the shared target"},
                 "tasks": [
                     {
                         "id": "hold",
@@ -130,6 +132,7 @@ def test_overlapping_goals_require_and_record_acknowledgement(tmp_path: Path, co
     goals = _run("goals", env=env)
     assert goals.returncode == 0, goals.stderr
     assert "Protect the shared target" in goals.stdout
+    assert "shared-target" in goals.stdout
     assert str((tmp_path / "runs" / "first").resolve()) in goals.stdout
     assert str(target.resolve()) in goals.stdout
 
@@ -140,3 +143,55 @@ def test_overlapping_goals_require_and_record_acknowledgement(tmp_path: Path, co
     assert acknowledged.returncode == 0, second_out + second_err
     events = (tmp_path / "runs" / "second" / "events.jsonl").read_text(encoding="utf-8")
     assert "concurrent-acknowledged" in events
+    indexed = json.loads(index.read_text(encoding="utf-8"))
+    assert indexed["runs"] == {}
+    goals = _run("goals", env=env)
+    assert goals.returncode == 0, goals.stderr
+    assert goals.stdout.strip() == "No active DAG goals."
+
+
+@pytest.mark.parametrize(
+    ("schema_version", "goal", "message"),
+    [
+        (3, {"text": "Too new"}, "requires schema_version 4"),
+        (4, {"text": ""}, "goal.text' must be a non-empty string"),
+    ],
+)
+def test_run_plan_rejects_invalid_goal_contract(
+    tmp_path: Path,
+    command_base,
+    schema_version: int,
+    goal: dict[str, str],
+    message: str,
+) -> None:
+    plan = tmp_path / "invalid-goal.json"
+    plan.write_text(
+        json.dumps(
+            {
+                "schema_version": schema_version,
+                "goal": goal,
+                "tasks": [
+                    {
+                        "id": "unused",
+                        "persona": "engineer",
+                        "task": "This invalid plan must never dispatch.",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = _run(
+        "run-plan",
+        str(plan),
+        "--no-record",
+        "--base",
+        str(command_base()),
+        "--provider",
+        "command",
+        env=os.environ.copy(),
+    )
+
+    assert result.returncode == 2
+    assert message in result.stderr

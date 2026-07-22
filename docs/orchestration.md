@@ -14,6 +14,12 @@ Plans that omit the version retain version-1 behavior for compatibility.
 Version 4 adds an optional top-level `goal` mapping with required non-empty
 `text` and optional `id`; when omitted, the id is derived from the text. Active
 goals and their repository identities are visible across projects with `just goals`.
+Before a recorded run starts, `run-plan` refuses to overlap any active run that
+targets the same registered repository identity. An operator may deliberately
+proceed with `--acknowledge-concurrent`; the shared identities and active run IDs
+are then recorded as a `concurrent-acknowledged` journal event for audit. The
+reservation remains visible across incomplete orchestrated rounds and is removed
+after a standalone run completes or the final orchestrator report is durable.
 
 ## The planner<->orchestrator channel
 
