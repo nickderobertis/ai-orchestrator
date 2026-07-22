@@ -2,10 +2,10 @@
 
 The monitor's history source *shells out* to `oneharness history list`, so covering
 how it parses that response means driving the real subprocess boundary rather than
-patching the function behind it. The real CLI can only report sessions it itself
-ran, and the sessions this source exists to find are dispatched agent runs — the
-paid harness the offline gate cannot spawn. This serves a recorded store instead,
-which is what lets a test state the labels and records those sessions would have had.
+patching the function behind it. ``--mock-harness`` can create real history only for
+the mock runs it launches; it cannot seed the arbitrary canned session shapes,
+timestamps, and labels these history-reader tests must consume. This serves that
+recorded store while preserving the subprocess boundary.
 
 `FAKE_ONEHARNESS_STORE` names a JSON file holding ``{"sessions": [...]}`` exactly as
 ``oneharness history list --all-projects --format json`` emits it. Keep this

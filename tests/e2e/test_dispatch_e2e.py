@@ -27,7 +27,7 @@ from orchestrator.config import build_effective_config, load_yaml
 from orchestrator.dispatch import DispatchError, dispatch, main, run_onejudge
 
 FAKE_BACKEND = REPO_ROOT / "tests" / "e2e" / "fake_backend.py"
-FAKE_HARNESS = REPO_ROOT / "tests" / "e2e" / "fake_harness.py"
+MOCK_ONEHARNESS = REPO_ROOT / "tests" / "e2e" / "mock_oneharness.py"
 
 
 def test_subdir_persona_scaffolding_and_recursive_validation_cli(tmp_path) -> None:
@@ -406,20 +406,20 @@ def test_dispatch_cli_applies_ordered_models_to_real_oneharness(
 
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
-    for harness in ("codex", "claude"):
-        (bin_dir / harness).symlink_to(FAKE_HARNESS)
-    log_path = tmp_path / "harness.jsonl"
+    (bin_dir / "oneharness").symlink_to(MOCK_ONEHARNESS)
+    argv_path = tmp_path / "mock-argv.txt"
     env = {
         **os.environ,
-        "ONEHARNESS_BIN_CODEX": str(bin_dir / "missing-codex"),
-        "ONEHARNESS_BIN_CLAUDE_CODE": str(bin_dir / "claude"),
-        "FAKE_HARNESS_LOG": str(log_path),
+        "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+        "REAL_ONEHARNESS_BIN": oneharness_bin,
+        "MOCK_HARNESSES": "claude-code",
+        "MOCK_ARGV_FILE": str(argv_path),
+        "ONEHARNESS_HARNESSES": "claude-code",
+        "ONEHARNESS_MODELS": "claude-opus-4-8",
+        "XDG_STATE_HOME": str(tmp_path / "state"),
     }
-    # The surrounding recovery dispatch forces claude-code through the
-    # environment; this test must exercise its own configured ordered chain, so
-    # both the model and harness overrides are dropped from the inherited env.
-    env.pop("ONEHARNESS_MODELS", None)
-    env.pop("ONEHARNESS_HARNESSES", None)
+    # Pin the selected harness and model so every provider invocation crosses the
+    # matching shipped mock while still proving dispatch forwards ordered models.
     # The default session ("dispatch-<persona>") is a fixed global name: oneharness
     # would resume whatever harness a previous run of it bound, so a stored
     # codex-bound session silently overrides the claude-code model asserted here.
@@ -428,7 +428,7 @@ def test_dispatch_cli_applies_ordered_models_to_real_oneharness(
     session = f"dispatch-models-{tmp_path.parent.name}-{target.name}"
     proc = subprocess.run(
         [
-            "orchestrator-dispatch",
+            str(Path(onejudge_bin).with_name("orchestrator-dispatch")),
             "engineer",
             "complete-now: prove model fallback",
             "--base",
@@ -451,13 +451,15 @@ def test_dispatch_cli_applies_ordered_models_to_real_oneharness(
     )
 
     assert proc.returncode == 0, proc.stderr
-    attempts = [json.loads(line) for line in log_path.read_text().splitlines()]
-    assert attempts == [
-        {"harness": "claude", "model": "claude-opus-4-8"},
-    ]
+    assert argv_path.exists(), (proc.stdout, proc.stderr)
+    argv = argv_path.read_text(encoding="utf-8").splitlines()
+    assert argv[argv.index("--model") + 1] == "claude-opus-4-8"
     report = json.loads(proc.stdout)
     assert report["schema_version"] == 5
     assert "telemetry" not in report
+    config_env = env.copy()
+    config_env.pop("ONEHARNESS_HARNESSES")
+    config_env.pop("ONEHARNESS_MODELS")
     effective = subprocess.run(
         [
             oneharness_bin,
@@ -469,7 +471,7 @@ def test_dispatch_cli_applies_ordered_models_to_real_oneharness(
         text=True,
         capture_output=True,
         check=True,
-        env=env,
+        env=config_env,
     )
     effective_config = json.loads(effective.stdout)
     assert effective_config["run_mode"]["value"] == "fallback"

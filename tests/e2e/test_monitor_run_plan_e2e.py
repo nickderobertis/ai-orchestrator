@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any
 
 from fakes import FakeGitHub, make_writing_dispatch
+from mock_oneharness import run_mock_oneharness
 from waits import deadline as e2e_deadline
 from waits import timeout as e2e_timeout
 
@@ -118,22 +119,21 @@ def _run_record(
     mock_harness: bool = True,
     prompt: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
-    mock_args = ["--mock-harness", "codex"] if mock_harness else []
+    args = [
+        "--config",
+        str(config),
+        "--prompt",
+        prompt or f"record {name}",
+        "--history",
+        "--history-name",
+        name,
+        "--compact",
+        *_graph_label_args(),
+    ]
+    if mock_harness:
+        return run_mock_oneharness(oneharness_bin, *args, cwd=REPO_ROOT, env=environment)
     return subprocess.run(
-        [
-            oneharness_bin,
-            "run",
-            *mock_args,
-            "--config",
-            str(config),
-            "--prompt",
-            prompt or f"record {name}",
-            "--history",
-            "--history-name",
-            name,
-            "--compact",
-            *_graph_label_args(),
-        ],
+        [oneharness_bin, "run", *args],
         cwd=REPO_ROOT,
         env=environment,
         text=True,
@@ -172,6 +172,7 @@ def _watch(
 
 
 def test_real_oneharness_codex_smoke(oneharness_bin: str, tmp_path: Path) -> None:
+    """Intentionally cross the real oneharness-to-Codex provider boundary once."""
     environment = os.environ.copy()
     for inherited in (
         "MOCK_STDOUT",

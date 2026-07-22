@@ -37,7 +37,7 @@ def _assert_descendant_stopped(tick_file: Path) -> None:
 def test_timeout_kills_process_tree_and_preserves_real_partial_telemetry(
     tmp_path: Path, oneharness_bin: str
 ) -> None:
-    """Drive the adopted binary across the subprocess, parser, and history boundaries."""
+    """Intentionally drive the real harness process tree; the mock cannot prove termination."""
     tick_file = tmp_path / "descendant.ticks"
     history_dir = tmp_path / "history"
     env = {key: value for key, value in os.environ.items() if not key.startswith("ONEHARNESS_")}
