@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 import subprocess
 import time
 from pathlib import Path
@@ -46,7 +47,7 @@ def test_overlapping_goals_require_and_record_acknowledgement(tmp_path: Path, co
         json.dumps(
             {
                 "schema_version": 4,
-                "goal": {"id": "shared-target", "text": "Protect the shared target"},
+                "goal": {"text": "Protect the shared target"},
                 "tasks": [
                     {
                         "id": "hold",
@@ -132,7 +133,7 @@ def test_overlapping_goals_require_and_record_acknowledgement(tmp_path: Path, co
     goals = _run("goals", env=env)
     assert goals.returncode == 0, goals.stderr
     assert "Protect the shared target" in goals.stdout
-    assert "shared-target" in goals.stdout
+    assert "Protect-the-shared-target" in goals.stdout
     assert str((tmp_path / "runs" / "first").resolve()) in goals.stdout
     assert str(target.resolve()) in goals.stdout
 
@@ -155,13 +156,16 @@ def test_overlapping_goals_require_and_record_acknowledgement(tmp_path: Path, co
     [
         (3, {"text": "Too new"}, "requires schema_version 4"),
         (4, {"text": ""}, "goal.text' must be a non-empty string"),
+        (4, [], "goal' must be a mapping"),
+        (4, {"text": "Unknown", "extra": "field"}, "goal' has unknown field"),
+        (4, {"id": "", "text": "Empty ID"}, "goal.id' must be a non-empty string"),
     ],
 )
 def test_run_plan_rejects_invalid_goal_contract(
     tmp_path: Path,
     command_base,
     schema_version: int,
-    goal: dict[str, str],
+    goal: object,
     message: str,
 ) -> None:
     plan = tmp_path / "invalid-goal.json"
@@ -195,3 +199,86 @@ def test_run_plan_rejects_invalid_goal_contract(
 
     assert result.returncode == 2
     assert message in result.stderr
+
+
+def test_run_plan_accepts_explicit_goal_id(tmp_path: Path, command_base) -> None:
+    plan = tmp_path / "explicit-goal.json"
+    plan.write_text(
+        json.dumps(
+            {
+                "schema_version": 4,
+                "goal": {"id": "operator-chosen", "text": "Use an explicit ID"},
+                "tasks": [
+                    {
+                        "id": "done",
+                        "persona": "engineer",
+                        "task": "complete-now",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = _run(
+        "run-plan",
+        str(plan),
+        "--no-record",
+        "--base",
+        str(command_base()),
+        "--provider",
+        "command",
+        env=os.environ.copy(),
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_goals_cli_rejects_malformed_index_and_sweeps_finished_runs(tmp_path: Path) -> None:
+    state = tmp_path / "state"
+    state.mkdir()
+    env = {**os.environ, "AI_ORCHESTRATOR_HOME": str(state)}
+    index = state / "runs-index.json"
+    index.write_text('{"schema_version":1,"runs":{"broken":{"run_id":"broken"}}}', encoding="utf-8")
+    malformed = _run("goals", env=env)
+    assert malformed.returncode != 0
+    assert "invalid runs index entry" in malformed.stderr
+
+    reported_dir = tmp_path / "reported"
+    report = reported_dir / "orchestrator" / "report.json"
+    report.parent.mkdir(parents=True)
+    report.write_text("{}\n", encoding="utf-8")
+    index.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "runs": {
+                    "dead": {
+                        "run_id": "dead",
+                        "run_dir": str(tmp_path / "dead"),
+                        "goal": None,
+                        "identities": [],
+                        "pid": 999_999_999,
+                        "host": socket.gethostname(),
+                        "started": "earlier",
+                        "status": "active",
+                    },
+                    "reported": {
+                        "run_id": "reported",
+                        "run_dir": str(reported_dir),
+                        "goal": None,
+                        "identities": [],
+                        "pid": os.getpid(),
+                        "host": "remote-host",
+                        "started": "earlier",
+                        "status": "active",
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    swept = _run("goals", env=env)
+    assert swept.returncode == 0, swept.stderr
+    assert swept.stdout.strip() == "No active DAG goals."
+    assert json.loads(index.read_text(encoding="utf-8"))["runs"] == {}

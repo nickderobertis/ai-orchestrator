@@ -8,14 +8,15 @@ import socket
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, NewType, NotRequired, TypedDict
+from typing import Any, Literal, NewType, NotRequired, Protocol, TypedDict
 
 from .config import ConfigError, load_yaml
 from .coordination import advisory_lock, atomic_json, state_root
-from .registry import Registry, _target_identity
+from .registry import Registry, RegistryEntry, Slug, _target_identity
 from .runs import RunId, slugify
 
 GoalId = NewType("GoalId", str)
+RUNS_INDEX_SCHEMA_VERSION = 1
 
 
 class Goal(TypedDict):
@@ -37,7 +38,7 @@ class ActiveRun(TypedDict):
     pid: int
     host: str
     started: str
-    status: str
+    status: Literal["active"]
     acknowledgements: NotRequired[list[ConcurrentAcknowledgement]]
 
 
@@ -63,7 +64,11 @@ def parse_goal(data: Mapping[str, Any], *, schema_version: int) -> Goal | None:
     return {"id": goal_id, "text": text.strip()}
 
 
-def graph_identities(graph: Any, registry: Registry | None = None) -> list[str]:
+class RegistryEntries(Protocol):
+    entries: dict[Slug, RegistryEntry]
+
+
+def graph_identities(graph: Any, registry: RegistryEntries | None = None) -> list[str]:
     """Return canonical identities targeted by lifecycle nodes only."""
     selected = registry or Registry()
     return sorted(
@@ -99,6 +104,7 @@ def _valid_acknowledgements(value: object) -> bool:
         return True
     return isinstance(value, list) and all(
         isinstance(item, Mapping)
+        and set(item) == {"at", "runs", "identities"}
         and isinstance(item.get("at"), str)
         and isinstance(item.get("runs"), list)
         and all(isinstance(run_id, str) for run_id in item["runs"])
@@ -114,7 +120,11 @@ def _load_active() -> dict[str, ActiveRun]:
         return {}
     raw = load_yaml(path)
     runs = raw.get("runs")
-    if raw.get("schema_version") != 1 or not isinstance(runs, dict):
+    if (
+        set(raw) != {"schema_version", "runs"}
+        or raw.get("schema_version") != RUNS_INDEX_SCHEMA_VERSION
+        or not isinstance(runs, dict)
+    ):
         raise ConfigError(f"invalid runs index: {path}")
     validated: dict[str, ActiveRun] = {}
     for key, value in runs.items():
@@ -130,13 +140,27 @@ def _load_active() -> dict[str, ActiveRun]:
         status = value.get("status")
         acknowledgements = value.get("acknowledgements")
         if (
-            not isinstance(run_id, str)
+            not set(value).issubset(
+                {
+                    "run_id",
+                    "run_dir",
+                    "goal",
+                    "identities",
+                    "pid",
+                    "host",
+                    "started",
+                    "status",
+                    "acknowledgements",
+                }
+            )
+            or not isinstance(run_id, str)
             or run_id != key
             or not isinstance(run_dir, str)
             or not run_dir
             or goal is not None
             and (
                 not isinstance(goal, Mapping)
+                or set(goal) != {"id", "text"}
                 or not isinstance(goal.get("id"), str)
                 or not goal.get("id")
                 or not isinstance(goal.get("text"), str)
@@ -249,7 +273,7 @@ def register_run(
         if prior or acknowledgements:
             entry["acknowledgements"] = [*prior, *acknowledgements]
         runs[run_id] = entry
-        atomic_json(_index_path(), {"schema_version": 1, "runs": runs})
+        atomic_json(_index_path(), {"schema_version": RUNS_INDEX_SCHEMA_VERSION, "runs": runs})
         return [*prior, *acknowledgements] if same_run else acknowledgements
 
 
@@ -261,7 +285,7 @@ def finish_run(run_id: str, run_dir: Path) -> None:
         if entry is not None and Path(entry["run_dir"]).resolve() == run_dir.resolve():
             del runs[run_id]
         _sweep(runs)
-        atomic_json(_index_path(), {"schema_version": 1, "runs": runs})
+        atomic_json(_index_path(), {"schema_version": RUNS_INDEX_SCHEMA_VERSION, "runs": runs})
 
 
 def update_run_owner(run_id: str, run_dir: Path, pid: int) -> None:
@@ -273,7 +297,7 @@ def update_run_owner(run_id: str, run_dir: Path, pid: int) -> None:
             raise ConfigError(f"active run reservation disappeared for {run_id!r}")
         entry["pid"] = pid
         entry["host"] = socket.gethostname()
-        atomic_json(_index_path(), {"schema_version": 1, "runs": runs})
+        atomic_json(_index_path(), {"schema_version": RUNS_INDEX_SCHEMA_VERSION, "runs": runs})
 
 
 def sweep_and_list_active_runs() -> list[ActiveRun]:
@@ -281,7 +305,7 @@ def sweep_and_list_active_runs() -> list[ActiveRun]:
     with advisory_lock("runs-index"):
         runs = _load_active()
         _sweep(runs)
-        atomic_json(_index_path(), {"schema_version": 1, "runs": runs})
+        atomic_json(_index_path(), {"schema_version": RUNS_INDEX_SCHEMA_VERSION, "runs": runs})
         return [runs[key] for key in sorted(runs)]
 
 
