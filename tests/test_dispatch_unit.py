@@ -1,4 +1,4 @@
-"""Unit tests for dispatch/plan helpers and error paths (no onejudge process)."""
+"""Dispatch/plan tests, including small real subprocess liveness journeys."""
 
 from __future__ import annotations
 
@@ -20,6 +20,8 @@ from orchestrator.dispatch import main as dispatch_main
 from orchestrator.labels import parse_labels
 from orchestrator.plan import PlanNode, PlanResult, TaskResult, _render
 from orchestrator.plan import main as plan_main
+from orchestrator.watchdog import main as watchdog_main
+from orchestrator.watchdog import process_activity, terminate_tree
 
 
 def test_build_report_maps_incomplete_sdk_result() -> None:
@@ -263,6 +265,64 @@ def test_run_onejudge_rejects_invalid_timeout(monkeypatch, bad_timeout: str) -> 
     monkeypatch.setenv("ONEHARNESS_TIMEOUT", bad_timeout)
     with pytest.raises(DispatchError, match="ONEHARNESS_TIMEOUT must be a positive integer"):
         run_onejudge({}, "task")
+
+
+@pytest.mark.parametrize("bad_timeout", ["", "never", "0", "-1"])
+def test_run_onejudge_rejects_invalid_stall_timeout(monkeypatch, bad_timeout: str) -> None:
+    monkeypatch.setenv("ORCHESTRATOR_DISPATCH_STALL_TIMEOUT", bad_timeout)
+    with pytest.raises(DispatchError, match="DISPATCH_STALL_TIMEOUT must be a positive number"):
+        run_onejudge({}, "task")
+
+
+def test_run_onejudge_surfaces_a_quiet_wedged_process_tree(tmp_path) -> None:
+    onejudge = tmp_path / "onejudge"
+    onejudge.write_text("#!/bin/sh\nsleep 30\n", encoding="utf-8")
+    onejudge.chmod(0o700)
+
+    with pytest.raises(DispatchError, match="dispatch stalled for 0.3s.*terminated"):
+        run_onejudge(
+            {},
+            "task",
+            onejudge_bin=os.fspath(onejudge),
+            cwd=tmp_path,
+            env={"ORCHESTRATOR_DISPATCH_STALL_TIMEOUT": "0.3"},
+        )
+
+
+def test_run_onejudge_allows_slow_dispatch_with_real_io_progress(tmp_path) -> None:
+    onejudge = tmp_path / "onejudge"
+    onejudge.write_text(
+        "#!/bin/sh\n"
+        "i=0\n"
+        "while [ $i -lt 8 ]; do printf progress >&2; sleep 0.08; i=$((i + 1)); done\n"
+        'printf \'%s\\n\' \'{"schema_version":4,"transcript":{"messages":[]},'
+        '"stopped_early":false}\'\n',
+        encoding="utf-8",
+    )
+    onejudge.chmod(0o700)
+
+    report = run_onejudge(
+        {},
+        "task",
+        onejudge_bin=os.fspath(onejudge),
+        cwd=tmp_path,
+        env={"ORCHESTRATOR_DISPATCH_STALL_TIMEOUT": "0.2"},
+    )
+
+    assert report.completed is True
+
+
+def test_watchdog_process_probe_identifies_current_process() -> None:
+    activity = process_activity(os.getpid())
+    assert os.getpid() in activity.pids
+    assert activity.cpu_ticks > 0
+    assert activity.io_bytes >= 0
+
+
+def test_watchdog_cleanup_and_usage_are_safe_for_absent_process(capsys) -> None:
+    terminate_tree(2**31 - 1)
+    assert watchdog_main([]) == 2
+    assert "usage: watchdog" in capsys.readouterr().err
 
 
 def _label_echoing_onejudge(tmp_path) -> str:
