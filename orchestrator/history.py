@@ -13,7 +13,7 @@ import re
 import subprocess
 import sys
 import uuid
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -35,7 +35,15 @@ JUDGE_PREFIXES = (
     "you-are-roleplaying-the-user-in",
 )
 SessionId = NewType("SessionId", str)
-SessionRole = Literal["agent", "judge"]
+SessionRole = Literal["agent", "judge", "llmlint"]
+LLMLINT_PROMPT_PREFIXES = (
+    "Evaluate each rule against the target files",
+    "Your previous verdict reported rule violations in files that those rules do not cover",
+)
+LLMLINT_NAME_PREFIXES = (
+    "evaluate-each-rule-against-the-target",
+    "your-previous-verdict-reported-rule-violations",
+)
 
 
 def _session_labels(value: object) -> dict[str, str]:
@@ -131,16 +139,40 @@ def _records(path: Path) -> list[dict[str, Any]]:
     return records
 
 
-def _is_worker(session: HistorySession) -> bool:
+def _is_agent_name(session: HistorySession) -> bool:
+    return not session.name.startswith((*JUDGE_PREFIXES, *LLMLINT_NAME_PREFIXES))
+
+
+def _is_non_judge_name(session: HistorySession) -> bool:
     return not session.name.startswith(JUDGE_PREFIXES)
 
 
-def session_role(session: HistorySession) -> SessionRole:
+def _llmlint_signature(session: HistorySession, records: Sequence[Mapping[str, Any]]) -> bool:
+    first = records[0] if records else {}
+    prompt = first.get("prompt")
+    return (
+        isinstance(prompt, str) and prompt.startswith(LLMLINT_PROMPT_PREFIXES)
+    ) or session.name.startswith(LLMLINT_NAME_PREFIXES)
+
+
+def session_role(
+    session: HistorySession, records: Sequence[Mapping[str, Any]] | None = None
+) -> SessionRole:
     """Classify a session from its validated label, falling back for legacy history."""
     role = session.labels.get("role")
-    if role in {"agent", "judge"}:
+    if role in {"agent", "judge", "llmlint"}:
         return cast(SessionRole, role)
-    return "agent" if _is_worker(session) else "judge"
+    if role is None:
+        if session.name.startswith(LLMLINT_NAME_PREFIXES):
+            return "llmlint"
+        if records is None:
+            try:
+                records = _records(session.path)
+            except HistoryError:
+                records = []
+        if _llmlint_signature(session, records):
+            return "llmlint"
+    return "agent" if _is_agent_name(session) else "judge"
 
 
 def _sessions(value: Any) -> list[HistorySession]:
@@ -152,7 +184,9 @@ def _sessions(value: Any) -> list[HistorySession]:
 def worker_sessions(*, oneharness_bin: str = "oneharness") -> list[HistorySession]:
     """Return validated worker sessions, newest first, across every project."""
     return [
-        session for session in all_sessions(oneharness_bin=oneharness_bin) if _is_worker(session)
+        session
+        for session in all_sessions(oneharness_bin=oneharness_bin)
+        if session_role(session) == "agent"
     ]
 
 
@@ -563,7 +597,7 @@ def _show_session(query: str, *, oneharness_bin: str = "oneharness") -> str:
     matches = [
         session
         for session in _sessions(_run_history("list", oneharness_bin=oneharness_bin))
-        if _is_worker(session) and (query in session.session_id or query in session.name)
+        if _is_non_judge_name(session) and (query in session.session_id or query in session.name)
     ]
     if matches:
         item = matches[0]

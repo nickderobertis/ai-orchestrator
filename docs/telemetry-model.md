@@ -17,6 +17,7 @@ For every graph node, and for the run as a whole, telemetry must answer:
 
 - How much wall time, and what fraction of wall time, was agent-model latency?
 - How much and what fraction was judge/supervisor-model latency?
+- How much and what fraction was nested llmlint-model latency?
 - How much and what fraction was tool execution?
 - How much and what fraction was idle/orchestration time?
 - How many input, output, cache-read, and cache-write tokens were consumed, and
@@ -26,7 +27,7 @@ For every graph node, and for the run as a whole, telemetry must answer:
 
 The categories are mutually exclusive on a single node's wall-clock timeline:
 
-`wall_ms = agent_model_ms + judge_model_ms + tool_ms + idle_orchestration_ms`
+`wall_ms = agent_model_ms + judge_model_ms + llmlint_model_ms + tool_ms + idle_orchestration_ms`
 
 `idle_orchestration_ms` is the non-negative remainder, not a synonym for a
 known wait state. It includes onejudge loop overhead, provider startup, process
@@ -41,7 +42,7 @@ from the first run event to terminal settlement (or observation time while
 active), and must not be the sum of node wall times. For each category, the run
 view unions that category's node intervals and clips them to the run interval.
 If differently classified intervals overlap, precedence is `tool`,
-`judge_model`, then `agent_model`; this deterministic presentation rule prevents
+`judge_model`, `llmlint_model`, then `agent_model`; this deterministic presentation rule prevents
 fractions above 100% and does not alter the per-node work totals. The remaining
 run interval is `idle_orchestration_ms`. The view must additionally expose raw
 `node_work_ms` sums so parallel work is visible rather than discarded.
@@ -145,19 +146,21 @@ as `null`.
 The timing model landed in index version 2. Index version 3 added optional
 onejudge-linked session timestamps used by the human timeline. Index version 4
 adds harness-overhead timing for lock waits, repository setup, and scheduling;
-its checked-in golden moves in the same change. `RunTelemetry` includes:
+Index version 5 adds the third `llmlint` session role and its separate counters.
+Its checked-in golden moves in the same change. `RunTelemetry` includes:
 
-- `timing.agent_model_ms`, `timing.judge_model_ms`, `timing.tool_ms`,
+- `timing.agent_model_ms`, `timing.judge_model_ms`, `timing.llmlint_model_ms`, `timing.tool_ms`,
   `timing.idle_orchestration_ms`, `timing.unattributed_ms`, and
   `timing.wall_ms`.
 - `timing.lock_wait_seconds`, `timing.setup_seconds`, and
   `timing.scheduling_seconds`, derived from node-scoped journal records and graph
   transitions. Older journals render these as zero.
 - `timing.fractions.agent_model`, `timing.fractions.judge_model`,
+  `timing.fractions.llmlint_model`,
   `timing.fractions.tool`, `timing.fractions.idle_orchestration`,
   `timing.fractions.lock_wait`, `timing.fractions.setup`, and
   `timing.fractions.scheduling`.
-- `usage.agent`, `usage.judge`, and `usage.total`, each with
+- `usage.agent`, `usage.judge`, `usage.llmlint`, and `usage.total`, each with
   `input_tokens`, `output_tokens`, `cache_read_tokens`,
   `cache_write_tokens`, and `cost_usd`.
 - `nodes[].timing` and `nodes[].usage` with the same shapes.
@@ -166,8 +169,21 @@ its checked-in golden moves in the same change. `RunTelemetry` includes:
 - `telemetry_quality`: `complete`, `partial`, or `legacy`, plus `sources`, the
   ordered set of `onejudge`, `oneharness`, `history_legacy`, and `journal_legacy`
   actually used.
-- `node_work_ms`, with `agent_model_ms`, `judge_model_ms`, `tool_ms`, and
-  `wall_ms` summed across nodes without overlap removal.
+- `node_work_ms`, with `agent_model_ms`, `judge_model_ms`, `llmlint_model_ms`,
+  `tool_ms`, and `wall_ms` summed across nodes without overlap removal.
+- `turns`, counting only worker/judge conversation invocations, and `lint`,
+  counting nested llmlint invocations, both on runs and nodes.
+
+### Three session roles
+
+The history taxonomy is `agent` (shown as WORKER), `judge`, and `llmlint`.
+Llmlint is nested inside verification and never counts against onejudge's
+`max_turns`; wrong-file correction prompts are its retry loop. For legacy
+sessions without `labels.role`, readers first recognize the evaluation prompt
+beginning `Evaluate each rule against the target files` and the correction prompt
+beginning `Your previous verdict reported rule violations in files that those
+rules do not cover` (including their slugified session names), then apply the
+existing judge-name/worker fallback.
 
 The existing seconds fields remain readable aliases during one schema version:
 `timing.agent_seconds` maps to combined model-plus-tool legacy agent time.
@@ -177,10 +193,11 @@ wall budget in display order. Together with model, tool, lock, setup, scheduling
 and idle fields, their millisecond values sum exactly to `wall_ms`. They do not
 participate in the model/tool/idle fractions.
 
-The version-4 command keeps JSON as the default and provides `--breakdown` for a stable
+The version-5 command keeps JSON as the default and provides `--breakdown` for a stable
 human-readable view. The breakdown shows one run row followed by node rows with
-wall duration, milliseconds and percentages for the four categories,
-unattributed duration, agent/judge input and output tokens, cache tokens, total
+wall duration, milliseconds and percentages for the five categories—worker,
+judge, llmlint, tool, and idle—unattributed duration, worker/judge/llmlint input
+and output tokens, cache tokens, total
 `cost_usd`, and telemetry quality. `just telemetry --breakdown --all` includes
 settled runs exactly as the JSON view does. Unknown usage renders `?`, not `0`.
 
@@ -188,13 +205,13 @@ settled runs exactly as the JSON view does. Unknown usage renders `?`, not `0`.
 
 **Every consumer field consumes new upstream data when present and falls back to
 today's fields when absent, so local value never blocks on upstream.** The
-fallback inputs are `labels.role`, `labels.run_id`, per-record `duration_ms`,
+fallback inputs are `labels.role`, llmlint prompt/name signatures, `labels.run_id`, per-record `duration_ms`,
 `command_execution` events, and `usage`.
 
 Session selection is common to every row below. Prefer onejudge's native
 `telemetry.sessions` linkage. Otherwise select sessions whose `labels.run_id`
 matches the run and classify each by `labels.role`. Only when `labels.role` is
-absent may the existing recognized judge name prefixes classify a legacy session;
+absent, known llmlint signatures are checked before the existing recognized judge name prefixes;
 all other legacy sessions are agent sessions. A node additionally requires the
 matching `labels.node` (and `labels.step` when producing a step-scoped value).
 Records that cannot be linked to the run are not consumed.

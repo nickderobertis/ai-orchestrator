@@ -244,6 +244,23 @@ def test_history_labels_and_cursor_watch(oneharness_bin: str, tmp_path: Path) ->
         environment={**environment, "ONEHARNESS_HISTORY_LABELS": "role=llmlint"},
     )
     assert llmlint.returncode == 0, llmlint.stderr
+    legacy_config = tmp_path / "oneharness-legacy.toml"
+    legacy_config.write_text(
+        (REPO_ROOT / "oneharness.toml")
+        .read_text(encoding="utf-8")
+        .replace('history_labels = { role = "agent" }', ""),
+        encoding="utf-8",
+    )
+    correction = _run_record(
+        oneharness_bin,
+        config=legacy_config,
+        name="ordinary-history-session",
+        environment=environment,
+        prompt=(
+            "Your previous verdict reported rule violations in files that those rules do not cover"
+        ),
+    )
+    assert correction.returncode == 0, correction.stderr
 
     listed = subprocess.run(
         [
@@ -264,31 +281,40 @@ def test_history_labels_and_cursor_watch(oneharness_bin: str, tmp_path: Path) ->
     )
     assert listed.returncode == 0, listed.stderr
     records = json.loads(listed.stdout)
-    assert isinstance(records, list) and len(records) == 3
-    by_role = {record["labels"]["role"]: record for record in records}
+    assert isinstance(records, list) and len(records) == 4
+    by_role = {record["labels"]["role"]: record for record in records if "role" in record["labels"]}
     assert set(by_role) == {"agent", "judge", "llmlint"}
     for record in records:
-        assert record["labels"] == {
+        expected_labels = {
             "node": "history-turns",
-            "role": record["labels"]["role"],
             "round": "1",
             "run_id": RUN_ID,
             "step": "record",
         }
+        if "role" in record["labels"]:
+            expected_labels["role"] = record["labels"]["role"]
+        assert record["labels"] == expected_labels
+
+    recent = _just("history", environment=environment)
+    assert recent.returncode == 0, recent.stderr
+    assert "agent-invocation" in recent.stdout
+    assert "judge-invocation" not in recent.stdout
+    assert "llmlint-invocation" not in recent.stdout
+    assert "ordinary-history-session" not in recent.stdout
 
     watcher = _watch(oneharness_bin, history_dir)
     try:
-        envelopes = _drain_jsonl(watcher, 3)
+        envelopes = _drain_jsonl(watcher, 4)
     finally:
         _terminate(watcher)
-    assert len(envelopes) == 3, envelopes
+    assert len(envelopes) == 4, envelopes
     assert {envelope["type"] for envelope in envelopes} == {"record"}
     watched_ids = [envelope["record"]["history_id"] for envelope in envelopes]
-    assert len(watched_ids) == len(set(watched_ids)) == 3
+    assert len(watched_ids) == len(set(watched_ids)) == 4
 
     resumed_watcher = _watch(oneharness_bin, history_dir, after=watched_ids[0])
     try:
-        resumed = _drain_jsonl(resumed_watcher, 2)
+        resumed = _drain_jsonl(resumed_watcher, 3)
     finally:
         _terminate(resumed_watcher)
     resumed_ids = [envelope["record"]["history_id"] for envelope in resumed]
@@ -345,7 +371,7 @@ def test_history_labels_and_cursor_watch(oneharness_bin: str, tmp_path: Path) ->
     )
     assert indexed.returncode == 0, indexed.stderr
     run = json.loads(indexed.stdout)["runs"][0]
-    assert json.loads(indexed.stdout)["schema_version"] == 4
+    assert json.loads(indexed.stdout)["schema_version"] == 5
     native_records = {
         role: [json.loads(line) for line in Path(record["path"]).read_text().splitlines()]
         for role, record in by_role.items()
