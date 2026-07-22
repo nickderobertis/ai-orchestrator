@@ -231,3 +231,10 @@ def test_run_plan_accepts_explicit_goal_id(tmp_path: Path, command_base) -> None
     )
 
     assert result.returncode == 0, result.stderr
+
+
+def test_goals_rejects_empty_state_root_override() -> None:
+    result = _run("goals", env={**os.environ, "AI_ORCHESTRATOR_HOME": " "})
+
+    assert result.returncode != 0
+    assert "AI_ORCHESTRATOR_HOME must not be empty" in result.stderr

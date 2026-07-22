@@ -127,6 +127,8 @@ def _load_active() -> dict[str, ActiveRun]:
     if not path.exists():
         return {}
     raw = load_yaml(path)
+    if not isinstance(raw, Mapping):
+        raise ConfigError(f"invalid runs index: {path}")
     runs = raw.get("runs")
     if (
         set(raw) != {"schema_version", "runs"}
