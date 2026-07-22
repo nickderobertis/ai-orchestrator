@@ -167,7 +167,6 @@ def test_cross_dag_dependency_waits_then_reports_upstream_modification(
     amend_ready, amend_release = tmp_path / "amend.ready", tmp_path / "amend.release"
     hold_ready, hold_release = tmp_path / "hold.ready", tmp_path / "hold.release"
     fail_ready, fail_release = tmp_path / "fail.ready", tmp_path / "fail.release"
-    consume_ready, consume_release = tmp_path / "consume.ready", tmp_path / "consume.release"
     plan_a = tmp_path / "a.json"
     plan_a.write_text(
         json.dumps(
@@ -220,11 +219,8 @@ def test_cross_dag_dependency_waits_then_reports_upstream_modification(
                 "tasks": [
                     {
                         "id": "consume",
-                        "persona": "engineer",
-                        "task": (
-                            f"complete-now provider-barrier-ready={consume_ready} "
-                            f"provider-barrier-release={consume_release}"
-                        ),
+                        "task": "Observe the external dependency without dispatching.",
+                        "expects_no_diff": True,
                         "deps": ["run:A#produce"],
                     }
                 ],
@@ -299,32 +295,63 @@ def test_cross_dag_dependency_waits_then_reports_upstream_modification(
     while time.monotonic() < deadline and not amend_ready.exists():
         time.sleep(0.02)
     assert amend_ready.exists()
-    downstream = subprocess.Popen(
-        ["just", "run-plan", str(plan_b), "--run", "B", *common],
+    restart_plan = tmp_path / "restart.json"
+    restart_plan.write_text(
+        json.dumps(
+            {
+                "schema_version": 5,
+                "tasks": [
+                    {
+                        "id": "consume",
+                        "task": "Record the satisfied external dependency.",
+                        "expects_no_diff": True,
+                        "deps": ["run:A#produce"],
+                    },
+                    {
+                        "id": "pause",
+                        "kind": "human",
+                        "task": "Keep the downstream run resumable.",
+                        "deps": ["consume"],
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    snapshotted = subprocess.run(
+        ["just", "run-plan", str(restart_plan), "--run", "B", *common],
         cwd=REPO_ROOT,
         env=env,
         text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
+        check=False,
     )
-    deadline = time.monotonic() + 10
-    while time.monotonic() < deadline and not consume_ready.exists():
-        time.sleep(0.02)
-    assert consume_ready.exists()
+    assert snapshotted.returncode == 1, snapshotted.stderr
+    assert json.loads(snapshotted.stdout)["results"]["consume"]["status"] == "done"
 
     amend_release.write_text("release\n", encoding="utf-8")
     deadline = time.monotonic() + 10
-    events = runs / "B" / "events.jsonl"
     while time.monotonic() < deadline:
-        if events.exists() and "upstream-modified" in events.read_text(encoding="utf-8"):
+        upstream_records = [
+            json.loads(line) for line in upstream_events.read_text(encoding="utf-8").splitlines()
+        ]
+        if any(
+            record.get("node") == "amend" and record.get("kind") == "node-settled"
+            for record in upstream_records
+        ):
             break
         time.sleep(0.02)
-    else:
-        raise AssertionError("downstream did not surface the upstream journal advance")
-    consume_release.write_text("release\n", encoding="utf-8")
-    downstream_out, downstream_err = downstream.communicate(timeout=10)
-    assert downstream.returncode == 0, downstream_out + downstream_err
-    assert json.loads(downstream_out)["results"]["consume"]["status"] == "done"
+    resumed = subprocess.run(
+        ["just", "run-plan", str(restart_plan), "--run", "B", *common],
+        cwd=REPO_ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert resumed.returncode == 1, resumed.stderr
+    events = runs / "B" / "events.jsonl"
+    assert "upstream-modified" in events.read_text(encoding="utf-8")
 
     hold_release.write_text("release\n", encoding="utf-8")
     upstream_out, upstream_err = upstream.communicate(timeout=10)

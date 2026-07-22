@@ -98,6 +98,7 @@ EventKind = Literal[
     "setup-finished",
     "concurrent-acknowledged",
     "upstream-modified",
+    "cross-dag-satisfied",
 ]
 
 # Typed as the literal it enumerates, so iterating it yields `EventKind` and a

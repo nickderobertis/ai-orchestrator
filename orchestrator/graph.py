@@ -36,6 +36,7 @@ from .goals import Goal, find_active_run, finish_run, graph_identities, parse_go
 from .journal import (
     JOURNAL_NAME,
     TERMINAL_NODE_RESULT_FIELD,
+    Event,
     EventKind,
     JournalSink,
     NodeJournal,
@@ -272,6 +273,16 @@ class CrossDagObserver:
     baselines: dict[str, int] = field(default_factory=dict)
     signalled: set[tuple[str, str]] = field(default_factory=set)
 
+    def __post_init__(self) -> None:
+        events: list[Event] = getattr(self.journal, "events", lambda: [])()
+        for event in events:
+            if event.kind != "cross-dag-satisfied":
+                continue
+            dependency = event.detail.get("dependency")
+            last_seq = event.detail.get("last_seq")
+            if isinstance(dependency, str) and isinstance(last_seq, int):
+                self.baselines.setdefault(dependency, last_seq)
+
     def reconcile_edges(
         self, deps: Iterable[str], consumers: Mapping[str, list[str]]
     ) -> dict[str, str]:
@@ -302,7 +313,17 @@ class CrossDagObserver:
             statuses[raw] = "done" if done else "blocked"
             if not done:
                 continue
-            baseline = self.baselines.setdefault(raw, state.last_seq)
+            baseline = self.baselines.get(raw)
+            if baseline is None:
+                baseline = state.last_seq
+                self.baselines[raw] = baseline
+                consumer = next(iter(consumers.get(raw, [])), None)
+                if consumer is not None:
+                    self.journal.append(
+                        "cross-dag-satisfied",
+                        node=NodeId(consumer),
+                        detail={"dependency": raw, "last_seq": baseline},
+                    )
             if state.last_seq <= baseline:
                 continue
             for consumer in consumers.get(raw, []):
