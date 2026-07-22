@@ -162,3 +162,19 @@ def test_session_setup_rejects_corrupt_distribution_metadata(tmp_path: Path) -> 
     assert result.returncode == 1
     assert "oneharness distribution verification failed" in result.stderr
     assert f"expected '{ONEHARNESS_VERSION}', got '99.99.99'" in result.stderr
+
+
+def test_session_setup_rejects_missing_distribution_metadata(tmp_path: Path) -> None:
+    repo = _setup_repo(tmp_path)
+    installed = _run_setup(repo, tmp_path)
+    assert installed.returncode == 0, installed.stderr
+    metadata = next(
+        (repo / ".venv").glob("lib/python*/site-packages/oneharness_cli-*.dist-info/METADATA")
+    )
+    shutil.rmtree(metadata.parent)
+
+    result = _run_setup(repo, tmp_path, path=_path_without_uv(tmp_path))
+
+    assert result.returncode == 1
+    assert "oneharness distribution verification failed" in result.stderr
+    assert "oneharness-cli metadata is unavailable" in result.stderr
