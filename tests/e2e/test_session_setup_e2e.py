@@ -48,11 +48,25 @@ def _setup_repo(
 def _run_setup(
     repo: Path, tmp_path: Path, *, path: str | None = None
 ) -> subprocess.CompletedProcess[str]:
+    bun = shutil.which("bun")
+    assert bun is not None
+    bun_version = subprocess.run(
+        [bun, "--version"],
+        text=True,
+        capture_output=True,
+        check=True,
+    ).stdout.strip()
     return subprocess.run(
         ["bash", str(repo / "scripts" / "session-setup.sh")],
         text=True,
         capture_output=True,
-        env={**os.environ, "HOME": str(tmp_path), "PATH": path or os.environ["PATH"]},
+        env={
+            **os.environ,
+            "ASDF_BUN_VERSION": bun_version,
+            "ASDF_DATA_DIR": os.environ.get("ASDF_DATA_DIR", str(Path.home() / ".asdf")),
+            "HOME": str(tmp_path),
+            "PATH": path or os.environ["PATH"],
+        },
     )
 
 
