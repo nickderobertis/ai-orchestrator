@@ -126,6 +126,58 @@ def test_breakdown_aggregates_real_multirole_history_records(
                 "labels": {"run_id": "telemetry-e2e", "node": "api", "role": role},
             }
         )
+    for identity, labelled, name, prompt in (
+        ("labelled-lint", True, "lint", "lint"),
+        (
+            "legacy-lint",
+            False,
+            "ordinary-evaluation-session",
+            "Evaluate each rule against the target files in this change",
+        ),
+        (
+            "legacy-lint-correction",
+            False,
+            "your-previous-verdict-reported-rule-violations",
+            "lint correction",
+        ),
+    ):
+        history = tmp_path / f"{identity}.jsonl"
+        history.write_text(
+            json.dumps(
+                {
+                    "schema_version": "0.3",
+                    "prompt": prompt,
+                    "started_at": "2026-07-19T00:00:00+00:00",
+                    "finished_at": "2026-07-19T00:00:00.002000+00:00",
+                    "duration_ms": 2,
+                    "model_ms": 2,
+                    "tool_ms": 0,
+                    "usage": {
+                        "input_tokens": 1,
+                        "output_tokens": 1,
+                        "cache_read_tokens": 0,
+                        "cache_write_tokens": 0,
+                        "cost_usd": 0.001,
+                    },
+                    "events": [],
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        labels = {"run_id": "telemetry-e2e", "node": "api"}
+        if labelled:
+            labels["role"] = "llmlint"
+        sessions.append(
+            {
+                "id": identity,
+                "name": name,
+                "project": str(tmp_path),
+                "started": "2026-07-19T00:00:00Z",
+                "path": str(history),
+                "labels": labels,
+            }
+        )
     store = tmp_path / "store.json"
     store.write_text(json.dumps({"sessions": sessions}), encoding="utf-8")
     oneharness = tmp_path / "oneharness"
@@ -157,16 +209,25 @@ def test_breakdown_aggregates_real_multirole_history_records(
     assert command.returncode == 0, command.stderr
     indexed = {run["run_id"]: run for run in json.loads(command.stdout)["runs"]}
     run = indexed["telemetry-e2e"]
-    assert run["timing"]["agent_model_ms"] == 12
+    assert run["timing"]["agent_model_ms"] == 6
     assert run["timing"]["judge_model_ms"] == 8
+    assert run["timing"]["llmlint_model_ms"] == 6
     assert run["timing"]["tool_ms"] == 5
-    assert run["usage"]["total"]["input_tokens"] == 13
-    assert run["usage"]["total"]["cost_usd"] == 0.03
-    assert [link["role"] for link in run["nodes"][0]["sessions"]] == ["agent", "judge"]
-    assert run["nodes"][0]["usage"]["total"]["input_tokens"] == 13
+    assert run["usage"]["llmlint"]["input_tokens"] == 3
+    assert run["usage"]["total"]["input_tokens"] == 16
+    assert run["usage"]["total"]["cost_usd"] == 0.033
+    assert [link["role"] for link in run["nodes"][0]["sessions"]] == [
+        "agent",
+        "judge",
+        "llmlint",
+        "llmlint",
+        "llmlint",
+    ]
+    assert run["nodes"][0]["usage"]["total"]["input_tokens"] == 16
     assert run["nodes"][0]["timing"]["fractions"] == {
-        "agent_model": 0.48,
+        "agent_model": 0.24,
         "judge_model": 0.32,
+        "llmlint_model": 0.24,
         "tool": 0.2,
         "idle_orchestration": 0.0,
         "lock_wait": 0.0,
@@ -174,8 +235,15 @@ def test_breakdown_aggregates_real_multirole_history_records(
         "scheduling": 0.0,
     }
     assert run["nodes"][0]["turns"] == 2
+    assert run["nodes"][0]["lint"] == 3
     assert run["nodes"][0]["tool_commands"] == {"gate": 2}
-    assert set(run["node_work_ms"]) == {"agent_model_ms", "judge_model_ms", "tool_ms", "wall_ms"}
+    assert set(run["node_work_ms"]) == {
+        "agent_model_ms",
+        "judge_model_ms",
+        "llmlint_model_ms",
+        "tool_ms",
+        "wall_ms",
+    }
     assert run["telemetry_quality"] == "complete"
     assert run["sources"] == ["onejudge", "oneharness", "history_legacy", "journal_legacy"]
 
@@ -192,6 +260,7 @@ def test_breakdown_aggregates_real_multirole_history_records(
     assert "  api" in breakdown.stdout
     assert "turn 0 agent" in breakdown.stdout
     assert "turn 1 judge" in breakdown.stdout
+    assert "TURNS LINT" in breakdown.stdout
     assert "2=1" in breakdown.stdout
 
     plan.write_text(
@@ -224,7 +293,7 @@ def test_breakdown_aggregates_real_multirole_history_records(
         run for run in json.loads(fallback.stdout)["runs"] if run["run_id"] == "telemetry-invalid"
     )
     assert fallback_run["usage"]["total"]["cache_write_tokens"] == 0
-    assert fallback_run["usage"]["total"]["cost_usd"] == 0.03
+    assert fallback_run["usage"]["total"]["cost_usd"] == 0.033
     assert fallback_run["telemetry_quality"] == "partial"
 
     judge_record = json.loads((tmp_path / "judge.jsonl").read_text(encoding="utf-8"))
@@ -294,12 +363,19 @@ def test_breakdown_aggregates_real_multirole_history_records(
     sessions[1]["labels"]["role"] = "judge"
     store.write_text(json.dumps({"sessions": sessions}), encoding="utf-8")
 
-    for history in (tmp_path / "agent.jsonl", tmp_path / "judge.jsonl"):
+    for history in (
+        tmp_path / "agent.jsonl",
+        tmp_path / "judge.jsonl",
+        tmp_path / "labelled-lint.jsonl",
+        tmp_path / "legacy-lint.jsonl",
+        tmp_path / "legacy-lint-correction.jsonl",
+    ):
         record = json.loads(history.read_text(encoding="utf-8"))
         for field in ("schema_version", "model_ms", "tool_ms"):
             record.pop(field)
-        for field in ("tool_call_id", "started_at", "finished_at", "duration_ms", "status"):
-            record["events"][0].pop(field)
+        if record["events"]:
+            for field in ("tool_call_id", "started_at", "finished_at", "duration_ms", "status"):
+                record["events"][0].pop(field)
         history.write_text(json.dumps(record) + "\n", encoding="utf-8")
     plan.write_text(
         plan.read_text(encoding="utf-8").replace("telemetry-native-invalid", "telemetry-legacy"),

@@ -11,6 +11,7 @@ from orchestrator.history import (
     HistoryError,
     HistorySession,
     SessionId,
+    _is_agent_name,
     _persisted_detail,
     _records,
     _render_persisted_detail,
@@ -150,6 +151,36 @@ def test_session_identity_role_and_duration_accept_legacy_records_defensively(
     )
     assert session_role(labelled) == session_role(legacy_judge) == "judge"
     assert session_role(legacy_agent) == "agent"
+    labelled_lint = HistorySession(
+        SessionId("lint"), "lint", tmp_path, "now", tmp_path / "missing", {"role": "llmlint"}
+    )
+    legacy_lint = HistorySession(
+        SessionId("legacy-lint"),
+        "evaluate-each-rule-against-the-target",
+        tmp_path,
+        "now",
+        tmp_path / "missing",
+        {},
+    )
+    prompt_lint = HistorySession(
+        SessionId("prompt-lint"), "ordinary", tmp_path, "now", tmp_path / "missing", {}
+    )
+    assert session_role(labelled_lint) == session_role(legacy_lint) == "llmlint"
+    assert not _is_agent_name(legacy_lint)
+    assert (
+        session_role(
+            prompt_lint,
+            [
+                {
+                    "prompt": (
+                        "Your previous verdict reported rule violations in files that those rules "
+                        "do not cover: x"
+                    )
+                }
+            ],
+        )
+        == "llmlint"
+    )
     assert (
         session_duration_ms(
             [{"duration_ms": 5}, {"duration_ms": -1}, {"duration_ms": True}, {"duration_ms": 2.5}]

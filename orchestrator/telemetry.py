@@ -46,7 +46,7 @@ from .runs import (
 )
 from .verify import GateAttestation
 
-TELEMETRY_SCHEMA_VERSION = 4
+TELEMETRY_SCHEMA_VERSION = 5
 SUPPORTED_HISTORY_SCHEMA_VERSIONS = ("0.2", "0.3", 1, 2)
 TelemetryQuality = Literal["complete", "partial", "legacy"]
 TelemetrySource = Literal["onejudge", "oneharness", "history_legacy", "journal_legacy"]
@@ -58,6 +58,7 @@ FailureClass = Literal[
 class TimingRecord(TypedDict):
     agent_seconds: float
     judge_seconds: float
+    llmlint_seconds: float
     gate_seconds: float
     publication_wait_seconds: float
     lock_wait_seconds: float
@@ -66,6 +67,7 @@ class TimingRecord(TypedDict):
     wall_seconds: float
     agent_model_ms: int
     judge_model_ms: int
+    llmlint_model_ms: int
     tool_ms: int
     idle_orchestration_ms: int
     unattributed_ms: int
@@ -76,6 +78,7 @@ class TimingRecord(TypedDict):
 class FractionsRecord(TypedDict):
     agent_model: float
     judge_model: float
+    llmlint_model: float
     tool: float
     idle_orchestration: float
     lock_wait: float
@@ -94,6 +97,7 @@ class UsageValues(TypedDict):
 class UsageRecord(TypedDict):
     agent: UsageValues
     judge: UsageValues
+    llmlint: UsageValues
     total: UsageValues
 
 
@@ -139,6 +143,7 @@ class MetricsRecord(TypedDict):
 class NodeWorkRecord(TypedDict):
     agent_model_ms: int
     judge_model_ms: int
+    llmlint_model_ms: int
     tool_ms: int
     wall_ms: int
 
@@ -221,6 +226,7 @@ class NodeTelemetry:
     sessions: list[SessionLink] = field(default_factory=list)
     tool_commands: dict[str, int] = field(default_factory=dict)
     turns: int = 0
+    lint: int = 0
 
     def record(self) -> dict[str, object]:
         result: dict[str, object] = {"node": self.node, "status": self.status}
@@ -246,6 +252,7 @@ class NodeTelemetry:
         if self.tool_commands:
             result["tool_commands"] = self.tool_commands
         result["turns"] = self.turns
+        result["lint"] = self.lint
         return result
 
 
@@ -267,6 +274,7 @@ class RunTelemetry:
     sources: list[TelemetrySource] = field(default_factory=list)
     node_work_ms: NodeWorkRecord = field(default_factory=lambda: cast(NodeWorkRecord, {}))
     turns: int = 0
+    lint: int = 0
     tool_commands: dict[str, int] = field(default_factory=dict)
 
     def record(self) -> dict[str, object]:
@@ -282,6 +290,7 @@ class RunTelemetry:
             "sources": self.sources,
             "node_work_ms": self.node_work_ms,
             "turns": self.turns,
+            "lint": self.lint,
         }
         if self.last_progress_at is not None:
             result["last_progress_at"] = self.last_progress_at
@@ -394,7 +403,7 @@ class _Interval:
 
 @dataclass(frozen=True)
 class _SessionSummary:
-    role: Literal["agent", "judge"]
+    role: SessionRole
     labels: dict[str, str]
     link: SessionLink
     turns: int
@@ -469,9 +478,9 @@ def _command_class(command: str) -> str:
 
 def _summarize_session(session: HistorySession, records: list[HistoryRecord]) -> _SessionSummary:
     labelled_role = session.labels.get("role")
-    if labelled_role is not None and labelled_role not in {"agent", "judge"}:
+    if labelled_role is not None and labelled_role not in {"agent", "judge", "llmlint"}:
         raise HistoryError(f"unsupported oneharness session role {labelled_role!r}")
-    role = session_role(session)
+    role = session_role(session, records)
     usage = cast(UsageValues, {})
     for field_name in USAGE_FIELDS:
         values = [
@@ -654,7 +663,14 @@ def _native_telemetry(value: object) -> _NativeTelemetry | None:
                 for key in USAGE_FIELDS
             },
         )
-        usage = UsageRecord(agent=agent_values, judge=judge_values, total=total)
+        usage = UsageRecord(
+            agent=agent_values,
+            judge=judge_values,
+            # Native onejudge linkage predates the nested llmlint role, so its
+            # two-party report authoritatively contains no lint contribution.
+            llmlint=cast(UsageValues, {key: 0 for key in USAGE_FIELDS}),
+            total=total,
+        )
     links: list[SessionLink] = []
     raw_sessions = value.get("sessions", [])
     if not isinstance(raw_sessions, list):
@@ -750,6 +766,8 @@ def _item_native(item: GraphResultItem) -> _NativeTelemetry | None:
 
 def _party_usage(summaries: list[_SessionSummary], role: str) -> UsageValues:
     party = [summary for summary in summaries if summary.role == role]
+    if not party and role == "llmlint":
+        return cast(UsageValues, {key: 0 for key in USAGE_FIELDS})
     result = cast(UsageValues, {})
     for field_name in USAGE_FIELDS:
         values = [item.usage[field_name] for item in party]
@@ -764,44 +782,54 @@ def _party_usage(summaries: list[_SessionSummary], role: str) -> UsageValues:
 def _usage(summaries: list[_SessionSummary]) -> UsageRecord:
     agent = _party_usage(summaries, "agent")
     judge = _party_usage(summaries, "judge")
+    llmlint = _party_usage(summaries, "llmlint")
     total = cast(
         UsageValues,
         {
-            key: cast(int | float, agent[key]) + cast(int | float, judge[key])
-            if agent[key] is not None and judge[key] is not None
+            key: sum(cast(list[int | float], [agent[key], judge[key], llmlint[key]]))
+            if agent[key] is not None and judge[key] is not None and llmlint[key] is not None
             else None
             for key in USAGE_FIELDS
         },
     )
-    return {"agent": agent, "judge": judge, "total": total}
+    return {"agent": agent, "judge": judge, "llmlint": llmlint, "total": total}
 
 
 def _merge_usage(preferred: UsageRecord | None, fallback: UsageRecord) -> UsageRecord:
     """Select each native usage field independently, then recompute party totals."""
     parties: dict[str, UsageValues] = {}
-    for role in cast(tuple[Literal["agent", "judge"], ...], ("agent", "judge")):
+    for role in cast(tuple[SessionRole, ...], ("agent", "judge", "llmlint")):
         values = cast(UsageValues, {})
         for key in USAGE_FIELDS:
-            native_value = preferred[role][key] if preferred is not None else None
+            native_value = (
+                preferred[role][key] if preferred is not None and role != "llmlint" else None
+            )
             values[key] = native_value if native_value is not None else fallback[role][key]
         parties[role] = values
     total = cast(
         UsageValues,
         {
-            key: cast(int | float, parties["agent"][key]) + cast(int | float, parties["judge"][key])
-            if parties["agent"][key] is not None and parties["judge"][key] is not None
+            key: sum(
+                cast(list[int | float], [parties[r][key] for r in ("agent", "judge", "llmlint")])
+            )
+            if all(parties[r][key] is not None for r in ("agent", "judge", "llmlint"))
             else None
             for key in USAGE_FIELDS
         },
     )
-    return {"agent": parties["agent"], "judge": parties["judge"], "total": total}
+    return {
+        "agent": parties["agent"],
+        "judge": parties["judge"],
+        "llmlint": parties["llmlint"],
+        "total": total,
+    }
 
 
 def _aggregate_usage(records: list[UsageRecord]) -> UsageRecord | None:
     if not records:
         return None
     parties: dict[str, UsageValues] = {}
-    for role in cast(tuple[Literal["agent", "judge"], ...], ("agent", "judge")):
+    for role in cast(tuple[SessionRole, ...], ("agent", "judge", "llmlint")):
         values = cast(UsageValues, {})
         for key in USAGE_FIELDS:
             contributions = [record[role][key] for record in records]
@@ -814,13 +842,20 @@ def _aggregate_usage(records: list[UsageRecord]) -> UsageRecord | None:
     total = cast(
         UsageValues,
         {
-            key: cast(int | float, parties["agent"][key]) + cast(int | float, parties["judge"][key])
-            if parties["agent"][key] is not None and parties["judge"][key] is not None
+            key: sum(
+                cast(list[int | float], [parties[r][key] for r in ("agent", "judge", "llmlint")])
+            )
+            if all(parties[r][key] is not None for r in ("agent", "judge", "llmlint"))
             else None
             for key in USAGE_FIELDS
         },
     )
-    return {"agent": parties["agent"], "judge": parties["judge"], "total": total}
+    return {
+        "agent": parties["agent"],
+        "judge": parties["judge"],
+        "llmlint": parties["llmlint"],
+        "total": total,
+    }
 
 
 def _timing(
@@ -835,6 +870,7 @@ def _timing(
 ) -> TimingRecord:
     agent_duration = sum(item.duration_ms for item in summaries if item.role == "agent")
     judge_duration = sum(item.duration_ms for item in summaries if item.role == "judge")
+    llmlint_duration = sum(item.duration_ms for item in summaries if item.role == "llmlint")
     raw_agent_model = (
         native.agent_model_ms
         if native is not None and native.agent_model_ms is not None
@@ -845,6 +881,7 @@ def _timing(
         if native is not None and native.judge_model_ms is not None
         else sum(item.model_ms for item in summaries if item.role == "judge")
     )
+    raw_llmlint_model = sum(item.model_ms for item in summaries if item.role == "llmlint")
     raw_tool = (
         native.tool_ms
         if native is not None and native.tool_ms is not None
@@ -852,8 +889,9 @@ def _timing(
     )
     tool = min(wall_ms, raw_tool)
     judge_model = min(max(0, wall_ms - tool), raw_judge_model)
-    agent_model = min(max(0, wall_ms - tool - judge_model), raw_agent_model)
-    measured = agent_model + judge_model + tool
+    llmlint_model = min(max(0, wall_ms - tool - judge_model), raw_llmlint_model)
+    agent_model = min(max(0, wall_ms - tool - judge_model - llmlint_model), raw_agent_model)
+    measured = agent_model + judge_model + llmlint_model + tool
     remaining = max(0, wall_ms - measured)
     gate_ms = min(remaining, round(gate * 1000))
     remaining -= gate_ms
@@ -877,6 +915,7 @@ def _timing(
     return TimingRecord(
         agent_seconds=agent_duration / 1000,
         judge_seconds=judge_duration / 1000,
+        llmlint_seconds=llmlint_duration / 1000,
         gate_seconds=gate_ms / 1000,
         publication_wait_seconds=publication_ms / 1000,
         lock_wait_seconds=lock_ms / 1000,
@@ -885,6 +924,7 @@ def _timing(
         wall_seconds=wall_ms / 1000,
         agent_model_ms=agent_model,
         judge_model_ms=judge_model,
+        llmlint_model_ms=llmlint_model,
         tool_ms=tool,
         idle_orchestration_ms=idle,
         unattributed_ms=unattributed,
@@ -892,6 +932,7 @@ def _timing(
         fractions=FractionsRecord(
             agent_model=fraction(agent_model),
             judge_model=fraction(judge_model),
+            llmlint_model=fraction(llmlint_model),
             tool=fraction(tool),
             idle_orchestration=fraction(idle),
             lock_wait=fraction(lock_ms),
@@ -1031,8 +1072,6 @@ def _history_telemetry(
     for session in sessions:
         if session.labels.get("run_id") != run_id:
             continue
-        if session.labels.get("role") == "llmlint":
-            continue
         records = session_records(session)
         summaries.append(_summarize_session(session, cast(list[HistoryRecord], records)))
         latest = records[-1] if records else {}
@@ -1143,10 +1182,13 @@ def _node_record(
         ),
         usage=usage,
         sessions=(
-            native.sessions if native is not None and native.sessions else [s.link for s in linked]
+            native.sessions + [s.link for s in linked if s.role == "llmlint"]
+            if native is not None and native.sessions
+            else [s.link for s in linked]
         ),
         tool_commands=_command_counts(linked),
-        turns=sum(summary.turns for summary in linked),
+        turns=sum(summary.turns for summary in linked if summary.role != "llmlint"),
+        lint=sum(summary.turns for summary in linked if summary.role == "llmlint"),
     )
 
 
@@ -1253,10 +1295,14 @@ def collect_run(
         node_work_ms=NodeWorkRecord(
             agent_model_ms=sum(cast(TimingRecord, node.timing)["agent_model_ms"] for node in nodes),
             judge_model_ms=sum(cast(TimingRecord, node.timing)["judge_model_ms"] for node in nodes),
+            llmlint_model_ms=sum(
+                cast(TimingRecord, node.timing)["llmlint_model_ms"] for node in nodes
+            ),
             tool_ms=sum(cast(TimingRecord, node.timing)["tool_ms"] for node in nodes),
             wall_ms=sum(cast(TimingRecord, node.timing)["wall_ms"] for node in nodes),
         ),
-        turns=sum(summary.turns for summary in summaries),
+        turns=sum(summary.turns for summary in summaries if summary.role != "llmlint"),
+        lint=sum(summary.turns for summary in summaries if summary.role == "llmlint"),
         tool_commands=_command_counts(summaries),
     )
 
@@ -1302,14 +1348,14 @@ def _value(value: int | float | None) -> str:
 
 def _breakdown(runs: list[RunTelemetry]) -> str:
     header = (
-        "RUN/NODE              WALL   AGENT       JUDGE       TOOL        "
+        "RUN/NODE              WALL   WORKER      JUDGE       LLMLINT     TOOL        "
         "GATE  PUB   LOCK  SETUP SCHED IDLE "
-        "UNATTR  TOKENS IN A/J OUT A/J  CACHE R/W  COST  TURNS QUALITY"
+        "UNATTR  TOKENS IN W/J/L OUT W/J/L  CACHE R/W  COST  TURNS LINT QUALITY"
     )
     lines = [header]
     for run in runs:
-        rows: list[tuple[str, TimingRecord, UsageRecord, int]] = [
-            (str(run.run_id), run.timing, run.usage, run.turns)
+        rows: list[tuple[str, TimingRecord, UsageRecord, int, int]] = [
+            (str(run.run_id), run.timing, run.usage, run.turns, run.lint)
         ]
         rows.extend(
             (
@@ -1317,16 +1363,18 @@ def _breakdown(runs: list[RunTelemetry]) -> str:
                 cast(TimingRecord, node.timing),
                 cast(UsageRecord, node.usage),
                 node.turns,
+                node.lint,
             )
             for node in run.nodes
         )
-        for name, timing, usage, turns in rows:
+        for name, timing, usage, turns, lint in rows:
             fractions = timing["fractions"]
             columns = [
                 f"{name[:20]:20}",
                 f"{timing['wall_ms']:6}ms",
                 f"{timing['agent_model_ms']:5} {fractions['agent_model']:5.1%}",
                 f"{timing['judge_model_ms']:5} {fractions['judge_model']:5.1%}",
+                f"{timing['llmlint_model_ms']:5} {fractions['llmlint_model']:5.1%}",
                 f"{timing['tool_ms']:5} {fractions['tool']:5.1%}",
                 f"{round(timing['gate_seconds'] * 1000):4}",
                 f"{round(timing['publication_wait_seconds'] * 1000):4}",
@@ -1335,13 +1383,16 @@ def _breakdown(runs: list[RunTelemetry]) -> str:
                 f"{round(timing['scheduling_seconds'] * 1000):5}",
                 f"{timing['idle_orchestration_ms']:5} {fractions['idle_orchestration']:5.1%}",
                 f"{timing['unattributed_ms']:6}",
-                f"{_value(usage['agent']['input_tokens'])}/{_value(usage['judge']['input_tokens'])}",
+                f"{_value(usage['agent']['input_tokens'])}/{_value(usage['judge']['input_tokens'])}/"
+                f"{_value(usage['llmlint']['input_tokens'])}",
                 f"{_value(usage['agent']['output_tokens'])}/"
-                f"{_value(usage['judge']['output_tokens'])}",
+                f"{_value(usage['judge']['output_tokens'])}/"
+                f"{_value(usage['llmlint']['output_tokens'])}",
                 f"{_value(usage['total']['cache_read_tokens'])}/"
                 f"{_value(usage['total']['cache_write_tokens'])}",
                 _value(usage["total"]["cost_usd"]),
                 str(turns),
+                str(lint),
                 run.telemetry_quality,
             ]
             lines.append(" ".join(columns))
