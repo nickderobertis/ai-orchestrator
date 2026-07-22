@@ -32,8 +32,8 @@
     "by_node",
     "by_repository",
     "initial_calls",
+    "latest_session_start",
     "oneharness_retry_sessions",
-    "period_end",
     "period_start",
     "wrong_file_correction_rate",
     "wrong_file_corrections"

@@ -151,9 +151,16 @@ class LlmlintRetryRate(TypedDict):
 
 class LlmlintRetryMetrics(LlmlintRetryRate):
     period_start: str | None
-    period_end: str | None
+    latest_session_start: str | None
     by_repository: dict[str, LlmlintRetryRate]
     by_node: dict[str, LlmlintRetryRate]
+
+
+@dataclass(frozen=True)
+class LlmlintRetryObservation:
+    session: HistorySession
+    is_initial: bool
+    is_correction: bool
 
 
 class NodeWorkRecord(TypedDict):
@@ -1375,7 +1382,7 @@ def _empty_llmlint_retry_metrics() -> LlmlintRetryMetrics:
     return LlmlintRetryMetrics(
         **_retry_rate(0, 0, 0),
         period_start=None,
-        period_end=None,
+        latest_session_start=None,
         by_repository={},
         by_node={},
     )
@@ -1384,7 +1391,7 @@ def _empty_llmlint_retry_metrics() -> LlmlintRetryMetrics:
 def _llmlint_retry_metrics(
     sessions: list[HistorySession], *, since: datetime | None = None, until: datetime | None = None
 ) -> LlmlintRetryMetrics:
-    rows: list[tuple[HistorySession, bool, bool]] = []
+    rows: list[LlmlintRetryObservation] = []
     for session in sessions:
         started = _utc_datetime(session.started)
         if (
@@ -1399,28 +1406,34 @@ def _llmlint_retry_metrics(
         prompt = records[0].get("prompt") if records else None
         initial = isinstance(prompt, str) and prompt.startswith(LLMLINT_PROMPT_PREFIXES[0])
         correction = isinstance(prompt, str) and prompt.startswith(LLMLINT_PROMPT_PREFIXES[1])
-        rows.append((session, initial, correction))
+        rows.append(
+            LlmlintRetryObservation(
+                session=session,
+                is_initial=initial,
+                is_correction=correction,
+            )
+        )
 
-    def aggregate(items: list[tuple[HistorySession, bool, bool]]) -> LlmlintRetryRate:
+    def aggregate(items: list[LlmlintRetryObservation]) -> LlmlintRetryRate:
         return _retry_rate(
-            sum(initial for _, initial, _ in items),
-            sum(correction for _, _, correction in items),
+            sum(item.is_initial for item in items),
+            sum(item.is_correction for item in items),
             len(items),
         )
 
-    repositories = sorted({str(session.project) for session, _, _ in rows})
-    nodes = sorted({node for session, _, _ in rows if (node := session.labels.get("node"))})
-    starts = sorted(session.started for session, _, _ in rows)
+    repositories = sorted({str(row.session.project) for row in rows})
+    nodes = sorted({node for row in rows if (node := row.session.labels.get("node"))})
+    starts = sorted(row.session.started for row in rows)
     return LlmlintRetryMetrics(
         **aggregate(rows),
         period_start=starts[0] if starts else None,
-        period_end=starts[-1] if starts else None,
+        latest_session_start=starts[-1] if starts else None,
         by_repository={
-            repository: aggregate([row for row in rows if str(row[0].project) == repository])
+            repository: aggregate([row for row in rows if str(row.session.project) == repository])
             for repository in repositories
         },
         by_node={
-            node: aggregate([row for row in rows if row[0].labels.get("node") == node])
+            node: aggregate([row for row in rows if row.session.labels.get("node") == node])
             for node in nodes
         },
     )

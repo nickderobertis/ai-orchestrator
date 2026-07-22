@@ -57,7 +57,8 @@ The bottom of the breakdown reports wrong-file correction sessions divided by
 initial llmlint evaluation sessions, overall, by oneharness repository project,
 and by node when the session has a `node` label. JSON exposes the same cohort as
 `metrics.llmlint_wrong_file_retries`, including the numerator, denominator, rate,
-observed `period_start`/`period_end`, and the `by_repository` and `by_node` splits.
+observed `period_start`/`latest_session_start`, and the `by_repository` and
+`by_node` splits.
 
 `oneharness_retry_sessions` is the broader guardrail: it counts all llmlint
 oneharness sessions in the cohort that are not initial evaluations. Compare it

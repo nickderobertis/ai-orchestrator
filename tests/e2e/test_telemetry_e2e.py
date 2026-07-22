@@ -253,6 +253,8 @@ def test_breakdown_aggregates_real_multirole_history_records(
     assert retries["wrong_file_corrections"] == 1
     assert retries["wrong_file_correction_rate"] == 0.5
     assert retries["oneharness_retry_sessions"] == 1
+    assert retries["period_start"] == "2026-07-19T00:00:00Z"
+    assert retries["latest_session_start"] == "2026-07-19T00:00:00Z"
     assert retries["by_repository"][str(repo_a)]["wrong_file_correction_rate"] == 1.0
     assert retries["by_repository"][str(repo_b)]["wrong_file_correction_rate"] == 0.0
     assert retries["by_node"]["api"]["wrong_file_corrections"] == 1
