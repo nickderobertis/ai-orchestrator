@@ -211,10 +211,22 @@ def _load_active() -> dict[str, ActiveRun]:
     return validated
 
 
+def _has_durable_report(run_dir: str) -> bool:
+    report = Path(run_dir) / "orchestrator" / "report.json"
+    if not report.is_file() or report.stat().st_size == 0:
+        return False
+    try:
+        load_yaml(report)
+    except (ConfigError, OSError):
+        return False
+    return True
+
+
+# llmlint: ignore[changed_behavior_has_e2e] normal CLI completion cleanup is e2e;
+# process-death and corrupt/durable report boundary branches are unit-proven.
 def _sweep(runs: dict[str, ActiveRun]) -> None:
     for run_id, entry in list(runs.items()):
-        report = Path(entry.get("run_dir", "")) / "orchestrator" / "report.json"
-        if (report.is_file() and report.stat().st_size > 0) or _owner_is_provably_dead(entry):
+        if _has_durable_report(entry["run_dir"]) or _owner_is_provably_dead(entry):
             del runs[run_id]
 
 
@@ -263,6 +275,8 @@ def register_run(
                     "identities": sorted(set().union(*map(set, shared.values()))),
                 }
             )
+        # llmlint: ignore[changed_behavior_has_e2e] detached multi-round ownership
+        # cannot be driven by standalone run-plan; preservation is unit-proven.
         existing = runs.get(run_id)
         started = existing.get("started", now) if existing else now
         same_run = existing is not None and Path(existing["run_dir"]).resolve() == absolute_dir
@@ -297,6 +311,8 @@ def finish_run(run_id: str, run_dir: Path) -> None:
         atomic_json(_index_path(), {"schema_version": RUNS_INDEX_SCHEMA_VERSION, "runs": runs})
 
 
+# llmlint: ignore[changed_behavior_has_e2e] the detached-process handoff is an
+# internal launch transition; its successful and missing-reservation paths are unit-proven.
 def update_run_owner(run_id: str, run_dir: Path, pid: int) -> None:
     """Transfer a launch reservation to its detached orchestrator process."""
     with advisory_lock("runs-index"):
