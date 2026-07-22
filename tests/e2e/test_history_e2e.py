@@ -125,3 +125,21 @@ def test_history_show_bad_or_judge_id_is_actionable(tmp_path: Path) -> None:
         assert result.returncode == 2
         assert f"no worker history session matches {query!r}" in result.stderr
         assert "Traceback" not in result.stderr
+
+
+def test_history_show_reports_missing_explicit_oneharness_binary(tmp_path: Path) -> None:
+    history_dir = _history_store(tmp_path)
+    missing_binary = tmp_path / "missing-oneharness"
+
+    result = _run(
+        "just",
+        "history-show",
+        "build-history",
+        "--oneharness-bin",
+        str(missing_binary),
+        history_dir=history_dir,
+    )
+
+    assert result.returncode == 2
+    assert "history: oneharness not found — run 'just bootstrap'" in result.stderr
+    assert "Traceback" not in result.stderr
