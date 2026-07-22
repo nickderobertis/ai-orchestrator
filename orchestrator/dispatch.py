@@ -63,8 +63,8 @@ from .watchdog import ProcessId, process_activity, terminate_tree
 EXIT_COMPLETED = 0
 EXIT_INCOMPLETE = 1
 EXIT_CONFIG_ERROR = 2
-# Temporary hard per-turn ceiling for legitimate long-running agents. Issue #6
-# will replace this coarse bound with separate inactivity and phase budgets.
+# Temporary hard per-turn ceiling for legitimate long-running agents. Dispatch
+# inactivity is bounded separately below; issue #6 tracks finer phase budgets.
 DEFAULT_ONEHARNESS_TIMEOUT = "10800"
 DEFAULT_DISPATCH_STALL_TIMEOUT = "600"
 ORCHESTRATOR_ONEHARNESS_TIMEOUT = "86400"
