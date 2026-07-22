@@ -8,10 +8,8 @@
 #      installed from PyPI. Its dependency supplies the matching `onejudge-cli`
 #      wheel, and setup verifies both the Python import and resolved binary.
 #   2. The exact `oneharness` version adopted in `config/oneharness.version` is
-#      installed via the PyPI `oneharness-cli` manylinux wheel and verified — the
-#      live dispatch path, `onejudge init`, and timeout e2e gate need it. The wheel
-#      is used because it runs on older glibc and carries `init`, unlike the
-#      prebuilt release binary. See docs/onejudge-integration.md.
+#      installed into this worktree's project venv by the same `uv sync` and
+#      verified as both a distribution and CLI.
 #   3. `codex` (the fallback PRIMARY harness) is installed via npm. Auth is a
 #      one-time manual `codex login`. See docs/onejudge-integration.md.
 #   4. `bun` is installed via npm and verified so oneharness's `sdk-check` gate
@@ -68,28 +66,24 @@ if [ -n "${CI:-}" ]; then
   exit 0
 fi
 
-install_onejudge() {
-  local current="not installed"
-  if command -v onejudge >/dev/null 2>&1; then
-    current="$(onejudge --version 2>&1 || echo unusable)"
-  fi
-  if verify_onejudge >/dev/null 2>&1; then
+install_project_dependencies() {
+  if verify_onejudge >/dev/null 2>&1 && verify_oneharness >/dev/null 2>&1; then
     return 0
   fi
   if ! command -v uv >/dev/null 2>&1; then
-    log "cannot install required onejudge $ADOPTED_ONEJUDGE_VERSION: uv is not installed"
+    log "cannot install required project dependencies: uv is not installed"
     return 1
   fi
-  log "installing onejudge SDK $ADOPTED_ONEJUDGE_VERSION from PyPI (current CLI: $current)"
+  log "syncing pinned project dependencies into $REPO_ROOT/.venv"
   if uv sync --project "$REPO_ROOT" >&2; then
     hash -r
-    if verify_onejudge; then
+    if verify_onejudge && verify_oneharness; then
       return 0
     fi
   else
-    log "onejudge $ADOPTED_ONEJUDGE_VERSION PyPI install failed"
+    log "project dependency sync failed"
   fi
-  log "required onejudge SDK and CLI $ADOPTED_ONEJUDGE_VERSION are unavailable after pinned PyPI install"
+  log "required pinned onejudge and oneharness dependencies are unavailable after uv sync"
   return 1
 }
 
@@ -159,49 +153,13 @@ ensure_codex() {
   fi
 }
 
-install_oneharness() {
-  # The manylinux `oneharness-cli` wheel both runs on the host glibc and carries
-  # `init` (the prebuilt release binary does not on both counts). uv is a
-  # clean-clone prerequisite. Accept an existing binary only when it is the exact
-  # adopted release; otherwise install the exact wheel and verify it before use.
-  local current="not installed"
-  if command -v oneharness >/dev/null 2>&1; then
-    current="$(oneharness --version 2>&1 || echo unusable)"
-  fi
-  if verify_oneharness >/dev/null 2>&1; then
-    return 0
-  fi
-  if ! command -v uv >/dev/null 2>&1; then
-    log "cannot install required oneharness $ADOPTED_ONEHARNESS_VERSION: uv is not installed"
-    return 1
-  fi
-  log "installing oneharness $ADOPTED_ONEHARNESS_VERSION via uv tool (current: $current)"
-  if ! uv tool install --upgrade "oneharness-cli==$ADOPTED_ONEHARNESS_VERSION" >&2; then
-    log "oneharness-cli $ADOPTED_ONEHARNESS_VERSION install failed"
-    return 1
-  fi
-  hash -r
-  # Remove any stale cargo-installed oneharness. The 0.2.x crates.io build lags the
-  # init-capable wheel and its `run` lacks `--mode`, which onejudge's provider
-  # needs; if it shadows the wheel on PATH, live dispatch dies with a confusing
-  # "provider error ... Broken pipe". Keep only the wheel (on ~/.local/bin).
-  if [ -x "$CARGO_BIN/oneharness" ] && [ -x "$BIN_DIR/oneharness" ]; then
-    log "removing stale cargo oneharness ($("$CARGO_BIN/oneharness" --version 2>/dev/null || echo unknown)); the wheel supersedes it"
-    rm -f "$CARGO_BIN/oneharness"
-  fi
-  if verify_oneharness; then
-    log "oneharness ready ($(oneharness --version))"
-    return 0
-  fi
-  log "required oneharness $ADOPTED_ONEHARNESS_VERSION is unavailable after pinned PyPI install"
-  return 1
-}
-
 verify_oneharness() {
-  local binary actual expected
+  local binary actual distribution_actual expected python_bin
   expected="oneharness $ADOPTED_ONEHARNESS_VERSION"
-  if ! binary="$(command -v oneharness 2>/dev/null)"; then
-    log "oneharness verification failed: expected '$expected', but no binary is on PATH"
+  binary="$PROJECT_VENV_BIN/oneharness"
+  python_bin="$PROJECT_VENV_BIN/python"
+  if [ ! -x "$binary" ]; then
+    log "oneharness verification failed: expected '$expected' at $binary"
     return 1
   fi
   if ! actual="$("$binary" --version 2>&1)"; then
@@ -210,6 +168,14 @@ verify_oneharness() {
   fi
   if [[ $actual != "$expected" ]]; then
     log "oneharness verification failed: expected '$expected', got '$actual' from $binary"
+    return 1
+  fi
+  if ! distribution_actual="$("$python_bin" -c 'import importlib.metadata as metadata; print(metadata.version("oneharness-cli"))' 2>&1)"; then
+    log "oneharness distribution verification failed: oneharness-cli metadata is unavailable from $python_bin"
+    return 1
+  fi
+  if [[ $distribution_actual != "$ADOPTED_ONEHARNESS_VERSION" ]]; then
+    log "oneharness distribution verification failed: expected '$ADOPTED_ONEHARNESS_VERSION', got '$distribution_actual'"
     return 1
   fi
   return 0
@@ -288,8 +254,7 @@ if [[ ${BASH_SOURCE[0]} != "$0" ]]; then
 fi
 
 toolchain_failed=0
-install_onejudge || toolchain_failed=1
-install_oneharness || toolchain_failed=1
+install_project_dependencies || toolchain_failed=1
 install_bun || toolchain_failed=1
 ensure_codex
 ensure_codex_gate

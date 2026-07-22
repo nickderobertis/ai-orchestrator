@@ -17,6 +17,7 @@ from orchestrator.history import (
     _session_labels,
     all_sessions,
     digest,
+    main_show,
     recent_runs,
     session_duration_ms,
     session_role,
@@ -97,6 +98,15 @@ def test_history_commands_cross_project_and_default_to_worker(tmp_path: Path) ->
     assert (
         "oneharness history show build-history-command-20260714T100000Z-123 --format text" in output
     )
+
+
+def test_history_show_cli_selects_explicit_oneharness(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    binary = _fake_oneharness(tmp_path)
+
+    assert main_show(["history-command", "--oneharness-bin", str(binary)]) == 0
+    assert "Turns: 2" in capsys.readouterr().out
 
 
 def test_bad_inputs_are_actionable(tmp_path: Path) -> None:

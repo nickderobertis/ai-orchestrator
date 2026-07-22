@@ -361,7 +361,7 @@ def test_breakdown_aggregates_real_multirole_history_records(
         encoding="utf-8",
     )
     shown = subprocess.run(
-        ["just", "history-show", "agent-history"],
+        ["just", "history-show", "agent-history", "--oneharness-bin", str(oneharness)],
         cwd=REPO_ROOT,
         env=environment,
         text=True,

@@ -14,6 +14,7 @@ deterministic double; everything else (the merge, the effective config, the real
 
 from __future__ import annotations
 
+import importlib.metadata
 import os
 import re
 import shutil
@@ -185,10 +186,19 @@ def adopted_oneharness_version() -> str:
 
 @pytest.fixture(scope="session")
 def oneharness_bin(adopted_oneharness_version: str) -> str:
-    """Resolve oneharness and require the exact adopted release."""
-    found = shutil.which("oneharness")
-    if not found:
-        pytest.fail("oneharness not on PATH — run 'just bootstrap' (the e2e gate needs it)")
+    """Resolve the worktree-local oneharness and require the exact adopted release."""
+    found = REPO_ROOT / ".venv" / "bin" / "oneharness"
+    if not found.is_file():
+        pytest.fail(f"worktree-local oneharness missing at {found} — run 'just bootstrap'")
+    try:
+        distribution_version = importlib.metadata.version("oneharness-cli")
+    except importlib.metadata.PackageNotFoundError:
+        pytest.fail("oneharness-cli is not installed in the project environment")
+    if distribution_version != adopted_oneharness_version:
+        pytest.fail(
+            "wrong worktree-local oneharness-cli distribution: "
+            f"expected {adopted_oneharness_version!r}, got {distribution_version!r}"
+        )
     version = subprocess.run([found, "--version"], text=True, capture_output=True, check=False)
     allowed = {adopted_oneharness_version}
     actual_version = version.stdout.strip().removeprefix("oneharness ")
@@ -199,7 +209,7 @@ def oneharness_bin(adopted_oneharness_version: str) -> str:
             f"got {actual!r} from {found} — "
             "run 'just bootstrap'"
         )
-    return found
+    return str(found)
 
 
 @pytest.fixture
