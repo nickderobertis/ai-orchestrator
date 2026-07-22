@@ -126,19 +126,30 @@ def test_breakdown_aggregates_real_multirole_history_records(
                 "labels": {"run_id": "telemetry-e2e", "node": "api", "role": role},
             }
         )
-    for identity, labelled, name, prompt in (
-        ("labelled-lint", True, "lint", "lint"),
+    repo_a = tmp_path / "repo-a"
+    repo_b = tmp_path / "repo-b"
+    for identity, labelled, name, prompt, project in (
+        (
+            "labelled-lint",
+            True,
+            "lint",
+            "Evaluate each rule against the target files in repository B",
+            repo_b,
+        ),
         (
             "legacy-lint",
             False,
             "ordinary-evaluation-session",
             "Evaluate each rule against the target files in this change",
+            repo_a,
         ),
         (
             "legacy-lint-correction",
             False,
             "your-previous-verdict-reported-rule-violations",
-            "lint correction",
+            "Your previous verdict reported rule violations in files that those rules do not "
+            "cover; correct it",
+            repo_a,
         ),
     ):
         history = tmp_path / f"{identity}.jsonl"
@@ -172,7 +183,7 @@ def test_breakdown_aggregates_real_multirole_history_records(
             {
                 "id": identity,
                 "name": name,
-                "project": str(tmp_path),
+                "project": str(project),
                 "started": "2026-07-19T00:00:00Z",
                 "path": str(history),
                 "labels": labels,
@@ -237,6 +248,16 @@ def test_breakdown_aggregates_real_multirole_history_records(
     assert run["nodes"][0]["turns"] == 2
     assert run["nodes"][0]["lint"] == 3
     assert run["nodes"][0]["tool_commands"] == {"gate": 2}
+    retries = json.loads(command.stdout)["metrics"]["llmlint_wrong_file_retries"]
+    assert retries["initial_calls"] == 2
+    assert retries["wrong_file_corrections"] == 1
+    assert retries["wrong_file_correction_rate"] == 0.5
+    assert retries["oneharness_retry_sessions"] == 1
+    assert retries["period_start"] == "2026-07-19T00:00:00Z"
+    assert retries["latest_session_start"] == "2026-07-19T00:00:00Z"
+    assert retries["by_repository"][str(repo_a)]["wrong_file_correction_rate"] == 1.0
+    assert retries["by_repository"][str(repo_b)]["wrong_file_correction_rate"] == 0.0
+    assert retries["by_node"]["api"]["wrong_file_corrections"] == 1
     assert set(run["node_work_ms"]) == {
         "agent_model_ms",
         "judge_model_ms",
@@ -262,6 +283,23 @@ def test_breakdown_aggregates_real_multirole_history_records(
     assert "turn 1 judge" in breakdown.stdout
     assert "TURNS LINT" in breakdown.stdout
     assert "2=1" in breakdown.stdout
+    assert "Llmlint wrong-file retries: 1/2 (50.0%)" in breakdown.stdout
+    assert "oneharness retry/guardrail sessions=1" in breakdown.stdout
+    assert f"repo {repo_a}: 1/1 (100.0%)" in breakdown.stdout
+    assert "node api: 1/2 (50.0%)" in breakdown.stdout
+
+    after_cohort = subprocess.run(
+        [*command.args, "--since", "2026-07-20T00:00:00Z"],
+        cwd=REPO_ROOT,
+        env=environment,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(30),
+    )
+    assert after_cohort.returncode == 0, after_cohort.stderr
+    after_retries = json.loads(after_cohort.stdout)["metrics"]["llmlint_wrong_file_retries"]
+    assert after_retries["initial_calls"] == 0
+    assert after_retries["wrong_file_correction_rate"] is None
 
     plan.write_text(
         plan.read_text(encoding="utf-8").replace("telemetry-native", "telemetry-native-invalid"),

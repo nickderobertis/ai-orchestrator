@@ -147,6 +147,10 @@ The timing model landed in index version 2. Index version 3 added optional
 onejudge-linked session timestamps used by the human timeline. Index version 4
 adds harness-overhead timing for lock waits, repository setup, and scheduling;
 Index version 5 adds the third `llmlint` session role and its separate counters.
+Index version 6 adds `metrics.llmlint_wrong_file_retries`: `initial_calls`,
+`wrong_file_corrections`, `wrong_file_correction_rate`, the broader
+`oneharness_retry_sessions` guardrail, observed `period_start` and
+`latest_session_start` boundaries, and `by_repository` / `by_node` cohorts.
 Its checked-in golden moves in the same change. `RunTelemetry` includes:
 
 - `timing.agent_model_ms`, `timing.judge_model_ms`, `timing.llmlint_model_ms`, `timing.tool_ms`,
