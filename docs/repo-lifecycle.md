@@ -504,6 +504,12 @@ the tail after the worker commits a resolution. Recovery uses the same bounded
 retry policy. Missing or invalid worker metadata, an incomplete resolver, or exhausted
 cycles returns `sync-conflict` without discarding the preserved branch.
 
+When a lifecycle attempt exhausts those conflict-resolution cycles after committing
+clean work, it records the preserved branch and commit as a retry resume checkpoint.
+A later graph retry carries that checkpoint forward and resumes the same branch;
+automatic retry behavior is unchanged. An attempt that produced no commit has no
+checkpoint and retries from a fresh worktree as before.
+
 To continue authoring after a lifecycle node hits its turn cap, do not relaunch
 the original plan. While supervising its existing `orchestrate` run, send a
 `retry` live edit through `just channel-reply` to replace only the capped node.
