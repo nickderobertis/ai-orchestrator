@@ -16,6 +16,7 @@ ONEHARNESS_VERSION = (REPO_ROOT / "config" / "oneharness.version").read_text().s
 def _setup_repo(
     tmp_path: Path,
     *,
+    adopted_onejudge: str = ONEJUDGE_VERSION,
     adopted_oneharness: str = ONEHARNESS_VERSION,
     dependency_oneharness: str = ONEHARNESS_VERSION,
 ) -> Path:
@@ -40,7 +41,7 @@ def _setup_repo(
         )
     shutil.copy2(REPO_ROOT / "scripts" / "session-setup.sh", scripts / "session-setup.sh")
     shutil.copy2(REPO_ROOT / "scripts" / "setup-llmlint.sh", scripts / "setup-llmlint.sh")
-    (config / "onejudge.version").write_text(f"{ONEJUDGE_VERSION}\n", encoding="utf-8")
+    (config / "onejudge.version").write_text(f"{adopted_onejudge}\n", encoding="utf-8")
     (config / "oneharness.version").write_text(f"{adopted_oneharness}\n", encoding="utf-8")
     return repo
 
@@ -108,6 +109,18 @@ def test_session_setup_fails_when_synced_cli_misses_adopted_version(tmp_path: Pa
 
     assert result.returncode == 1
     assert "oneharness verification failed" in result.stderr
+    assert "required pinned onejudge and oneharness dependencies are unavailable" in result.stderr
+
+
+def test_session_setup_fails_when_synced_onejudge_misses_adopted_version(
+    tmp_path: Path,
+) -> None:
+    repo = _setup_repo(tmp_path, adopted_onejudge="99.99.99")
+
+    result = _run_setup(repo, tmp_path)
+
+    assert result.returncode == 1
+    assert "onejudge verification failed" in result.stderr
     assert "required pinned onejudge and oneharness dependencies are unavailable" in result.stderr
 
 
