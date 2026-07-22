@@ -134,4 +134,4 @@ def test_session_setup_rejects_corrupt_distribution_metadata(tmp_path: Path) -> 
 
     assert result.returncode == 1
     assert "oneharness distribution verification failed" in result.stderr
-    assert "expected '0.4.6', got '99.99.99'" in result.stderr
+    assert f"expected '{ONEHARNESS_VERSION}', got '99.99.99'" in result.stderr
