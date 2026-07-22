@@ -49,6 +49,7 @@ from orchestrator.lifecycle import (
     Resume,
     StackBase,
     Step,
+    load_repo_plan,
     main_plan,
     main_task,
     result_payload,
@@ -2080,6 +2081,11 @@ def test_local_conflict_retry_resumes_committed_branch(tmp_path, bare_origin) ->
         {"retry": {"change": {}}},
     )
     assert retry_plan["tasks"][0]["resume"]["checkpoint"] == preserved_checkpoint
+    retry_plan_path = tmp_path / "retry-plan.json"
+    retry_plan_path.write_text(json.dumps(retry_plan), encoding="utf-8")
+    parsed_retry = load_repo_plan(retry_plan_path).tasks[0]
+    assert parsed_retry.resume is not None
+    assert parsed_retry.resume.completed_steps == ("main",)
 
     finish_resolution = True
     retried = run_repo_task(
@@ -2089,7 +2095,7 @@ def test_local_conflict_retry_resumes_committed_branch(tmp_path, bare_origin) ->
         workspace=workspace,
         dispatch_fn=dispatch_fn,
         verify_cmd=["true"],
-        resume=result.resume,
+        resume=parsed_retry.resume,
     )
 
     assert retried.outcome == "merged", retried.detail
