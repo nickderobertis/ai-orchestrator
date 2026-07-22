@@ -834,6 +834,49 @@ def test_plan_schema_version_documentation_cannot_drift() -> None:
         assert mapping["schema_version"] == PLAN_SCHEMA_VERSION
 
 
+def test_goal_is_normalized_and_legacy_goal_less_plans_still_load() -> None:
+    graph = parse_graph(
+        {
+            "schema_version": 4,
+            "goal": {"text": "  Ship the safe release  "},
+            "tasks": [{"id": "x", "persona": "p", "task": "x"}],
+        }
+    )
+    legacy = parse_graph({"tasks": [{"id": "x", "persona": "p", "task": "x"}]})
+
+    assert graph.goal == {"id": "Ship-the-safe-release", "text": "Ship the safe release"}
+    assert legacy.goal is None
+
+
+@pytest.mark.parametrize(
+    ("goal", "message"),
+    [
+        ({"text": ""}, "goal.text"),
+        ({"id": "", "text": "ship"}, "goal.id"),
+        ({"text": "ship", "extra": True}, "unknown field"),
+        ("ship", "must be a mapping"),
+    ],
+)
+def test_goal_validation_rejects_malformed_contract(goal: object, message: str) -> None:
+    with pytest.raises(PlanError, match=message):
+        parse_graph(
+            {
+                "schema_version": 4,
+                "goal": goal,
+                "tasks": [{"id": "x", "persona": "p", "task": "x"}],
+            }
+        )
+
+    with pytest.raises(PlanError, match="requires schema_version 4"):
+        parse_graph(
+            {
+                "schema_version": 3,
+                "goal": {"text": "ship"},
+                "tasks": [{"id": "x", "persona": "p", "task": "x"}],
+            }
+        )
+
+
 def test_recorded_result_schema_v4_field_golden_cannot_drift() -> None:
     golden = json.loads(
         (Path(__file__).parent / "golden" / "recorded-result-v4-fields.json").read_text(

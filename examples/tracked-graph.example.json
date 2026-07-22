@@ -1,5 +1,8 @@
 {
-  "schema_version": 3,
+  "schema_version": 4,
+  "goal": {
+    "text": "Deliver the tracked release safely across its target projects"
+  },
   "name": "tracked-release",
   "concurrency": 3,
   "tasks": [

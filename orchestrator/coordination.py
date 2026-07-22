@@ -59,12 +59,16 @@ def observe_harness(kind: EventKind, detail: Mapping[str, str | float | bool]) -
         _notifying_observer.reset(token)
 
 
-def _lock_root() -> Path:
+def state_root() -> Path:
+    """Return the shared orchestrator state root, honoring its operator override."""
     override = os.environ.get("AI_ORCHESTRATOR_HOME")
     if override is not None and not override.strip():
         raise ValueError("AI_ORCHESTRATOR_HOME must not be empty")
-    root = Path(override) if override is not None else Path.home() / ".ai-orchestrator"
-    return root / "locks"
+    return Path(override).expanduser() if override is not None else Path.home() / ".ai-orchestrator"
+
+
+def _lock_root() -> Path:
+    return state_root() / "locks"
 
 
 def lock_path(identity: str) -> Path:

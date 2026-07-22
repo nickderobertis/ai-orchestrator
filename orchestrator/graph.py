@@ -32,6 +32,7 @@ from .config import ConfigError, load_yaml
 from .coordination import reset_harness_observer, set_harness_observer
 from .dispatch import Report
 from .edits import EditError, apply_edit
+from .goals import Goal, finish_run, graph_identities, parse_goal, register_run
 from .journal import (
     TERMINAL_NODE_RESULT_FIELD,
     EventKind,
@@ -132,6 +133,7 @@ class GraphNode:
 class Graph:
     tasks: list[GraphNode]
     concurrency: int = 4
+    goal: Goal | None = None
 
 
 @dataclass(frozen=True)
@@ -204,6 +206,10 @@ def parse_graph(data: dict[str, Any]) -> Graph:
         raise PlanError(
             f"'schema_version' must be between 1 and the current version {PLAN_SCHEMA_VERSION}"
         )
+    try:
+        goal = parse_goal(data, schema_version=schema_version)
+    except ConfigError as exc:
+        raise PlanError(str(exc)) from exc
     raw_tasks = data.get("tasks")
     if not isinstance(raw_tasks, list) or not raw_tasks:
         raise PlanError("plan must have a non-empty 'tasks' list")
@@ -242,7 +248,7 @@ def parse_graph(data: dict[str, Any]) -> Graph:
             for nid, node in nodes.items()
         }
     )
-    return Graph(tasks=list(nodes.values()), concurrency=concurrency)
+    return Graph(tasks=list(nodes.values()), concurrency=concurrency, goal=goal)
 
 
 def _contains_field(tasks: list[Any], field: str, *, include_steps: bool = False) -> bool:
@@ -921,6 +927,11 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="claim a recorded running round only after confirming its owner is gone",
     )
+    parser.add_argument(
+        "--acknowledge-concurrent",
+        action="store_true",
+        help="proceed despite active DAGs targeting the same repository identities",
+    )
     parser.add_argument("--runs-dir", type=Path, default=Path("runs"), help="run ledger root")
     parser.add_argument(
         "--project-dir", default=None, help="default target project dir for direct agent nodes"
@@ -948,6 +959,16 @@ def main(argv: list[str] | None = None) -> int:
             if args.no_record
             else resolve_run_dir(args.runs_dir, plan_mapping, args.plan, args.run)
         )
+        acknowledgements = []
+        if run_dir is not None:
+            acknowledgements = register_run(
+                run_id=run_dir.name,
+                run_dir=run_dir,
+                goal=graph.goal,
+                identities=graph_identities(graph),
+                pid=os.getpid(),
+                acknowledge_concurrent=args.acknowledge_concurrent,
+            )
     except (ConfigError, PlanError) as exc:
         print(f"run-plan: {exc}", file=sys.stderr)
         return 2
@@ -970,6 +991,15 @@ def main(argv: list[str] | None = None) -> int:
         run_id = RunId(run_dir.name)
         round_number = round_record[0]
         journal = open_journal(run_dir, run_id, round_number)
+        for acknowledgement in acknowledgements:
+            journal.append(
+                "concurrent-acknowledged",
+                detail={
+                    "at": acknowledgement["at"],
+                    "runs": acknowledgement["runs"],
+                    "identities": acknowledgement["identities"],
+                },
+            )
         from .projection import ProjectionError, read_strict_events
 
         try:
@@ -1135,6 +1165,8 @@ def main(argv: list[str] | None = None) -> int:
             if projected.result is None:  # round-finished above makes this an internal invariant
                 raise ConfigError("event projection has no terminal result")
             write_result(round_dir, projected.result)
+            if not (run_dir / "launch.json").exists():
+                finish_run(run_dir.name, run_dir)
         except ConfigError as exc:
             print(f"run-plan: could not record run: {exc}", file=sys.stderr)
             return 2
