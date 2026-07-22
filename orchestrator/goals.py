@@ -227,6 +227,8 @@ def _has_valid_final_report(run_dir: str) -> bool:
         value = load_yaml(report)
     except (ConfigError, OSError):
         return False
+    if not isinstance(value, Mapping):
+        return False
     transcript = value.get("transcript")
     return (
         value.get("schema_version") in {4, 5}

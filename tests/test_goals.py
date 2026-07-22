@@ -127,6 +127,8 @@ def test_report_sweep_and_invalid_or_missing_index_paths(
     report.parent.mkdir(parents=True)
     report.write_text("not json\n", encoding="utf-8")
     assert len(sweep_and_list_active_runs()) == 1
+    report.write_text("[]\n", encoding="utf-8")
+    assert len(sweep_and_list_active_runs()) == 1
     report.write_text(
         json.dumps(
             {
