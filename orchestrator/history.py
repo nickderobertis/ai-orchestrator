@@ -636,9 +636,10 @@ def main_show(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("session", metavar="ID-OR-SUBSTRING")
     parser.add_argument("--runs-dir", type=Path, default=DEFAULT_RUNS_DIR)
+    parser.add_argument("--oneharness-bin", default="oneharness")
     args = parser.parse_args(argv)
     try:
-        print(show_run(args.session, runs_dir=args.runs_dir))
+        print(show_run(args.session, runs_dir=args.runs_dir, oneharness_bin=args.oneharness_bin))
     except HistoryError as exc:
         return _exit_error(exc)
     return 0
