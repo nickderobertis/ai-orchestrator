@@ -19,6 +19,8 @@ from orchestrator.telemetry import (
     TELEMETRY_SCHEMA_VERSION,
     Failure,
     FractionsRecord,
+    LlmlintRetryMetrics,
+    LlmlintRetryRate,
     NodeWorkRecord,
     Provider,
     RunTelemetry,
@@ -254,9 +256,9 @@ def test_over_budget_buckets_are_clipped_to_exactly_wall_time() -> None:
     assert timing["publication_wait_seconds"] == 0
 
 
-def test_schema_v5_field_golden_prevents_cross_layer_drift() -> None:
+def test_schema_v6_field_golden_prevents_cross_layer_drift() -> None:
     golden = json.loads(
-        (Path(__file__).parent / "golden" / "telemetry-v5-fields.json").read_text(encoding="utf-8")
+        (Path(__file__).parent / "golden" / "telemetry-v6-fields.json").read_text(encoding="utf-8")
     )
     assert golden == {
         "schema_version": TELEMETRY_SCHEMA_VERSION,
@@ -268,11 +270,13 @@ def test_schema_v5_field_golden_prevents_cross_layer_drift() -> None:
         "fractions": sorted(FractionsRecord.__required_keys__),
         "usage": sorted(UsageValues.__required_keys__),
         "session_link": sorted(SessionLink.__required_keys__ | SessionLink.__optional_keys__),
+        "llmlint_retry_rate": sorted(LlmlintRetryRate.__required_keys__),
+        "llmlint_retry_metrics": sorted(LlmlintRetryMetrics.__required_keys__),
     }
     contract = (Path(__file__).parents[1] / "docs" / "telemetry-model.md").read_text(
         encoding="utf-8"
     )
-    assert "Index version 5" in contract
+    assert "Index version 6" in contract
     for value in (*golden["roles"], *golden["qualities"], *golden["sources"]):
         assert f"`{value}`" in contract
     documented_fields = (
@@ -288,6 +292,7 @@ def test_schema_v5_field_golden_prevents_cross_layer_drift() -> None:
         "nodes[].sessions",
         *(f"`{field}`" for field in golden["session_link"]),
         *(f"`{field}`" for field in NodeWorkRecord.__required_keys__),
+        *(f"`{field}`" for field in golden["llmlint_retry_metrics"]),
         *(
             field.name
             for field in fields(RunTelemetry)
@@ -307,7 +312,7 @@ def test_index_cli_defaults_to_active_and_all_includes_settled(
     completed.rename(tmp_path / "runs" / "complete")
     assert main(["--runs-dir", str(tmp_path / "runs"), "--oneharness-bin", "absent"]) == 0
     active = json.loads(capsys.readouterr().out)
-    assert active["schema_version"] == 5
+    assert active["schema_version"] == 6
     assert active["runs"] == []
     assert active["metrics"]["recovered_branches"] == 0
 

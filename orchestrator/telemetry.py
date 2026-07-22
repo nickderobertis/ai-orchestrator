@@ -24,6 +24,7 @@ from typing import Literal, TypedDict, cast
 
 from .detail_snapshot import CheckRollup
 from .history import (
+    LLMLINT_PROMPT_PREFIXES,
     HistoryError,
     HistorySession,
     SessionRole,
@@ -46,7 +47,7 @@ from .runs import (
 )
 from .verify import GateAttestation
 
-TELEMETRY_SCHEMA_VERSION = 5
+TELEMETRY_SCHEMA_VERSION = 6
 SUPPORTED_HISTORY_SCHEMA_VERSIONS = ("0.2", "0.3", 1, 2)
 TelemetryQuality = Literal["complete", "partial", "legacy"]
 TelemetrySource = Literal["onejudge", "oneharness", "history_legacy", "journal_legacy"]
@@ -138,6 +139,21 @@ class MetricsRecord(TypedDict):
     lock_wait_seconds: float
     setup_seconds: float
     scheduling_seconds: float
+    llmlint_wrong_file_retries: LlmlintRetryMetrics
+
+
+class LlmlintRetryRate(TypedDict):
+    initial_calls: int
+    wrong_file_corrections: int
+    wrong_file_correction_rate: float | None
+    oneharness_retry_sessions: int
+
+
+class LlmlintRetryMetrics(LlmlintRetryRate):
+    period_start: str | None
+    period_end: str | None
+    by_repository: dict[str, LlmlintRetryRate]
+    by_node: dict[str, LlmlintRetryRate]
 
 
 class NodeWorkRecord(TypedDict):
@@ -1339,6 +1355,74 @@ def _metrics(runs: list[RunTelemetry]) -> MetricsRecord:
         lock_wait_seconds=sum(run.timing["lock_wait_seconds"] for run in runs),
         setup_seconds=sum(run.timing["setup_seconds"] for run in runs),
         scheduling_seconds=sum(run.timing["scheduling_seconds"] for run in runs),
+        llmlint_wrong_file_retries=_empty_llmlint_retry_metrics(),
+    )
+
+
+def _retry_rate(initial: int, corrections: int, total_llmlint: int) -> LlmlintRetryRate:
+    return LlmlintRetryRate(
+        initial_calls=initial,
+        wrong_file_corrections=corrections,
+        wrong_file_correction_rate=corrections / initial if initial else None,
+        # Every llmlint history session that is not an initial evaluation is a
+        # retry/guardrail invocation. This deliberately remains broader than the
+        # correction signature so a future retry mechanism cannot hide the shift.
+        oneharness_retry_sessions=max(0, total_llmlint - initial),
+    )
+
+
+def _empty_llmlint_retry_metrics() -> LlmlintRetryMetrics:
+    return LlmlintRetryMetrics(
+        **_retry_rate(0, 0, 0),
+        period_start=None,
+        period_end=None,
+        by_repository={},
+        by_node={},
+    )
+
+
+def _llmlint_retry_metrics(
+    sessions: list[HistorySession], *, since: datetime | None = None, until: datetime | None = None
+) -> LlmlintRetryMetrics:
+    rows: list[tuple[HistorySession, bool, bool]] = []
+    for session in sessions:
+        started = _utc_datetime(session.started)
+        if (
+            started is None
+            or (since is not None and started < since)
+            or (until is not None and started >= until)
+        ):
+            continue
+        records = session_records(session)
+        if session_role(session, records) != "llmlint":
+            continue
+        prompt = records[0].get("prompt") if records else None
+        initial = isinstance(prompt, str) and prompt.startswith(LLMLINT_PROMPT_PREFIXES[0])
+        correction = isinstance(prompt, str) and prompt.startswith(LLMLINT_PROMPT_PREFIXES[1])
+        rows.append((session, initial, correction))
+
+    def aggregate(items: list[tuple[HistorySession, bool, bool]]) -> LlmlintRetryRate:
+        return _retry_rate(
+            sum(initial for _, initial, _ in items),
+            sum(correction for _, _, correction in items),
+            len(items),
+        )
+
+    repositories = sorted({str(session.project) for session, _, _ in rows})
+    nodes = sorted({node for session, _, _ in rows if (node := session.labels.get("node"))})
+    starts = sorted(session.started for session, _, _ in rows)
+    return LlmlintRetryMetrics(
+        **aggregate(rows),
+        period_start=starts[0] if starts else None,
+        period_end=starts[-1] if starts else None,
+        by_repository={
+            repository: aggregate([row for row in rows if str(row[0].project) == repository])
+            for repository in repositories
+        },
+        by_node={
+            node: aggregate([row for row in rows if row[0].labels.get("node") == node])
+            for node in nodes
+        },
     )
 
 
@@ -1346,7 +1430,8 @@ def _value(value: int | float | None) -> str:
     return "?" if value is None else f"{value:g}"
 
 
-def _breakdown(runs: list[RunTelemetry]) -> str:
+def _breakdown(runs: list[RunTelemetry], retry_metrics: LlmlintRetryMetrics | None = None) -> str:
+    retry_metrics = retry_metrics or _empty_llmlint_retry_metrics()
     header = (
         "RUN/NODE              WALL   WORKER      JUDGE       LLMLINT     TOOL        "
         "GATE  PUB   LOCK  SETUP SCHED IDLE "
@@ -1419,7 +1504,36 @@ def _breakdown(runs: list[RunTelemetry]) -> str:
         "Turn histogram: "
         + ", ".join(f"{turn}={count}" for turn, count in sorted(_metrics(runs)["turns"].items()))
     )
+    overall = retry_metrics
+    rate = overall["wrong_file_correction_rate"]
+    lines.append(
+        "Llmlint wrong-file retries: "
+        f"{overall['wrong_file_corrections']}/{overall['initial_calls']} "
+        f"({'?' if rate is None else f'{rate:.1%}'}); "
+        f"oneharness retry/guardrail sessions={overall['oneharness_retry_sessions']}"
+    )
+    for repository, values in overall["by_repository"].items():
+        repo_rate = values["wrong_file_correction_rate"]
+        lines.append(
+            f"  repo {repository}: {values['wrong_file_corrections']}/"
+            f"{values['initial_calls']} ({'?' if repo_rate is None else f'{repo_rate:.1%}'})"
+        )
+    for node, values in overall["by_node"].items():
+        node_rate = values["wrong_file_correction_rate"]
+        lines.append(
+            f"  node {node}: {values['wrong_file_corrections']}/"
+            f"{values['initial_calls']} ({'?' if node_rate is None else f'{node_rate:.1%}'})"
+        )
     return "\n".join(lines)
+
+
+def _boundary(value: str | None, name: str) -> datetime | None:
+    if value is None:
+        return None
+    parsed = _utc_datetime(value)
+    if parsed is None:
+        raise argparse.ArgumentTypeError(f"{name} must be an ISO-8601 UTC timestamp")
+    return parsed
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -1430,9 +1544,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--breakdown", action="store_true", help="render a human-readable timing breakdown"
     )
+    parser.add_argument("--since", help="include history at or after this ISO-8601 UTC timestamp")
+    parser.add_argument("--until", help="exclude history at or after this ISO-8601 UTC timestamp")
     args = parser.parse_args(argv)
     entries = sorted(args.runs_dir.iterdir()) if args.runs_dir.is_dir() else []
     try:
+        since = _boundary(args.since, "--since")
+        until = _boundary(args.until, "--until")
+        if since is not None and until is not None and since >= until:
+            parser.error("--since must be earlier than --until")
         records = [
             telemetry
             for entry in entries
@@ -1440,18 +1560,25 @@ def main(argv: list[str] | None = None) -> int:
             if (telemetry := collect_run(entry, oneharness_bin=args.oneharness_bin)) is not None
             and (args.all or not result_state_is_terminal(telemetry.state))
         ]
-    except HistoryError as exc:
+        try:
+            history_sessions = all_sessions(oneharness_bin=args.oneharness_bin)
+        except HistoryError as exc:
+            if not str(exc).startswith("oneharness not found"):
+                raise
+            history_sessions = []
+        retry_metrics = _llmlint_retry_metrics(history_sessions, since=since, until=until)
+    except (HistoryError, argparse.ArgumentTypeError) as exc:
         print(f"telemetry: {exc}", file=sys.stderr)
         return 2
     if args.breakdown:
-        print(_breakdown(records))
+        print(_breakdown(records, retry_metrics))
         return 0
     print(
         json.dumps(
             {
                 "schema_version": TELEMETRY_SCHEMA_VERSION,
                 "runs": [record.record() for record in records],
-                "metrics": _metrics(records),
+                "metrics": {**_metrics(records), "llmlint_wrong_file_retries": retry_metrics},
             },
             sort_keys=True,
         )

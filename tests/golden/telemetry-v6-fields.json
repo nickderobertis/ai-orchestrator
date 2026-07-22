@@ -2,7 +2,7 @@
   "history_schema_versions": ["0.2", "0.3", 1, 2],
   "qualities": ["complete", "legacy", "partial"],
   "roles": ["agent", "judge", "llmlint"],
-  "schema_version": 5,
+  "schema_version": 6,
   "sources": ["history_legacy", "journal_legacy", "oneharness", "onejudge"],
   "fractions": [
     "agent_model",
@@ -21,6 +21,22 @@
     "session_id",
     "started_at",
     "turn_index"
+  ],
+  "llmlint_retry_rate": [
+    "initial_calls",
+    "oneharness_retry_sessions",
+    "wrong_file_correction_rate",
+    "wrong_file_corrections"
+  ],
+  "llmlint_retry_metrics": [
+    "by_node",
+    "by_repository",
+    "initial_calls",
+    "oneharness_retry_sessions",
+    "period_end",
+    "period_start",
+    "wrong_file_correction_rate",
+    "wrong_file_corrections"
   ],
   "timing": [
     "agent_model_ms",

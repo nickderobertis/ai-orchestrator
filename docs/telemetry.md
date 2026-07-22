@@ -6,6 +6,7 @@ Use the telemetry view to answer “where did the time go?” for active runs:
 just telemetry --breakdown
 just telemetry --breakdown --all   # include settled runs
 just telemetry --all               # schema-versioned JSON for analysis
+just telemetry --breakdown --all --since 2026-07-01T00:00:00Z --until 2026-08-01T00:00:00Z
 ```
 
 The breakdown prints a run row and an indented row for every node. A typical
@@ -49,6 +50,21 @@ sessions are nested quality checks and do not count against onejudge's `max_turn
 Their wrong-file correction prompts are llmlint's retry loop, so they contribute to
 `LINT`, not `TURNS`. Legacy sessions without a role label retain the documented
 fallback, with the known llmlint prompt/name signatures checked first.
+
+## Llmlint wrong-file retry rate
+
+The bottom of the breakdown reports wrong-file correction sessions divided by
+initial llmlint evaluation sessions, overall, by oneharness repository project,
+and by node when the session has a `node` label. JSON exposes the same cohort as
+`metrics.llmlint_wrong_file_retries`, including the numerator, denominator, rate,
+observed `period_start`/`period_end`, and the `by_repository` and `by_node` splits.
+
+`oneharness_retry_sessions` is the broader guardrail: it counts all llmlint
+oneharness sessions in the cohort that are not initial evaluations. Compare it
+alongside `wrong_file_corrections` so a prompt or template change that moves
+rework away from the known correction signature remains visible. Use `--since`
+(inclusive) and `--until` (exclusive) with UTC ISO-8601 timestamps to create
+repeatable before/after cohorts.
 
 ## Full timing versus fallback
 
