@@ -56,7 +56,7 @@ from .goals import Goal, graph_identities, register_run, update_run_owner
 from .labels import LABEL_ENV, LabelError, merge_labels
 from .personas import persona_path
 from .runs import ArtifactPaths, resolve_run_dir, slugify
-from .watchdog import process_activity, terminate_tree
+from .watchdog import ProcessId, process_activity, terminate_tree
 
 # onejudge's own exit codes (see docs/cli.md): 0 completed + boolean evals passed,
 # 1 hit the turn cap / a boolean eval failed, 2 bad config or usage.
@@ -214,14 +214,14 @@ def _file_progress(root: Path) -> tuple[FileProgress, ...]:
     return tuple(sorted(records, key=lambda record: record.path))
 
 
-def _read_watchdog_pid(pid_file: Path) -> int:
+def _read_watchdog_pid(pid_file: Path) -> ProcessId:
     try:
         pid = int(pid_file.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         raise DispatchError(f"watchdog pid file is invalid: {pid_file}") from None
     if pid <= 0:
         raise DispatchError(f"watchdog pid file is invalid: {pid_file}")
-    return pid
+    return ProcessId(pid)
 
 
 def _validate_environment(env: Mapping[str, str]) -> None:
@@ -296,10 +296,10 @@ def run_onejudge(
                 )
             )
 
-            async def stalled() -> int:
+            async def stalled() -> ProcessId | None:
                 while not pid_file.exists():
                     if run.done():
-                        return 0
+                        return None
                     await asyncio.sleep(min(0.05, stall_timeout / 4))
                 pid = _read_watchdog_pid(pid_file)
                 previous = (process_activity(pid), _file_progress(Path(cwd) / ".git"))
@@ -312,7 +312,7 @@ def run_onejudge(
                         last_progress = time.monotonic()
                     elif time.monotonic() - last_progress >= stall_timeout:
                         return pid
-                return 0
+                return None
 
             watcher = asyncio.create_task(stalled())
             cancellation: asyncio.Task[None] | None = None

@@ -9,13 +9,16 @@ import time
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
+from typing import NewType
+
+ProcessId = NewType("ProcessId", int)
 
 
 @dataclass(frozen=True)
 class ProcessActivity:
     """A process-tree identity and its cumulative observable work counters."""
 
-    pids: tuple[int, ...]
+    pids: tuple[ProcessId, ...]
     cpu_ticks: int
     io_bytes: int
 
@@ -24,12 +27,12 @@ class ProcessActivity:
 class ProcessStat:
     """The process relationship and cumulative work read from procfs."""
 
-    parent_pid: int
+    parent_pid: ProcessId
     cpu_ticks: int
     io_bytes: int
 
 
-def _stat(pid: int) -> ProcessStat | None:
+def _stat(pid: ProcessId) -> ProcessStat | None:
     try:
         raw_stat = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
         # The parenthesized comm field may itself contain spaces or parentheses.
@@ -38,7 +41,7 @@ def _stat(pid: int) -> ProcessStat | None:
     except (FileNotFoundError, PermissionError, ProcessLookupError):
         return None
     return ProcessStat(
-        parent_pid=int(fields[1]),
+        parent_pid=ProcessId(int(fields[1])),
         cpu_ticks=int(fields[11]) + int(fields[12]),
         io_bytes=sum(
             int(line.split(":", 1)[1])
@@ -48,12 +51,13 @@ def _stat(pid: int) -> ProcessStat | None:
     )
 
 
-def process_activity(root_pid: int) -> ProcessActivity:
+def process_activity(root_pid: ProcessId) -> ProcessActivity:
     """Return live descendants and cumulative CPU/I/O for ``root_pid``."""
-    records: dict[int, ProcessStat] = {}
+    records: dict[ProcessId, ProcessStat] = {}
     for entry in Path("/proc").iterdir():
-        if entry.name.isdigit() and (record := _stat(int(entry.name))) is not None:
-            records[int(entry.name)] = record
+        pid = ProcessId(int(entry.name)) if entry.name.isdigit() else None
+        if pid is not None and (record := _stat(pid)) is not None:
+            records[pid] = record
     selected = {root_pid} if root_pid in records else set()
     changed = True
     while changed:
@@ -69,7 +73,7 @@ def process_activity(root_pid: int) -> ProcessActivity:
     )
 
 
-def terminate_tree(root_pid: int) -> None:
+def terminate_tree(root_pid: ProcessId) -> None:
     """Best-effort termination of a stalled dispatch and all its descendants."""
     pids = tuple(reversed(process_activity(root_pid).pids))
     for pid in pids:

@@ -23,8 +23,8 @@ from orchestrator.dispatch import main as dispatch_main
 from orchestrator.labels import parse_labels
 from orchestrator.plan import PlanNode, PlanResult, TaskResult, _render
 from orchestrator.plan import main as plan_main
+from orchestrator.watchdog import ProcessId, process_activity, terminate_tree
 from orchestrator.watchdog import main as watchdog_main
-from orchestrator.watchdog import process_activity, terminate_tree
 
 
 def test_build_report_maps_incomplete_sdk_result() -> None:
@@ -343,14 +343,14 @@ def test_dispatch_stall_default_documentation_cannot_drift() -> None:
 
 
 def test_watchdog_process_probe_identifies_current_process() -> None:
-    activity = process_activity(os.getpid())
+    activity = process_activity(ProcessId(os.getpid()))
     assert os.getpid() in activity.pids
     assert activity.cpu_ticks > 0
     assert activity.io_bytes >= 0
 
 
 def test_watchdog_cleanup_and_usage_are_safe_for_absent_process(capsys) -> None:
-    terminate_tree(2**31 - 1)
+    terminate_tree(ProcessId(2**31 - 1))
     assert watchdog_main([]) == 2
     assert "usage: watchdog" in capsys.readouterr().err
 
