@@ -295,22 +295,25 @@ self-dispatch result.
 
 How this repo was built up from the create-repo reference pieces:
 
-- **Product shape:** config / orchestration repo — closest to `shapes/skills-repo.md`
-  (determinism-vs-judgment split, validate-in-gate, narrow allowlist), applied to
-  onejudge configs + personas rather than skills.
+- **Product shape:** polyglot Nx monorepo for a local orchestration service and
+  React DAG-visualization applications, combining the config-oriented
+  `shapes/skills-repo.md` discipline with the workspace boundaries and
+  affected-only execution of `monorepo.md`.
 - **Language(s):** Python (uv, ruff, mypy, pytest) for the orchestration package
   in `orchestrator/` — including the repo-lifecycle layer (`workspace`, `gitops`,
   `verify`, `github`, `merge`, `lifecycle`, `replan`) that shells to real
-  `git`/`gh`; Bash
-  for `scripts/session-setup.sh`; YAML/TOML for configs.
-- **Composed:** `base.md` (always) + `shapes/skills-repo.md`.
+  `git`/`gh`; TypeScript and React (Bun, Nx, ESLint module boundaries, Biome) for
+  projects under `apps/` and `packages/`; Bash for operational scripts; YAML,
+  JSON, and TOML for contracts and configuration.
+- **Composed:** `base.md` (always) + `shapes/skills-repo.md` + `monorepo.md`;
+  React and TypeScript conventions apply to the DAG UI projects.
 - **Excluded, and why:** **CI** — deliberately, per the repo's charter: this is a
   local, private proof-of-concept ("local config/scripts/docs at this point"). The
   full gate still runs locally as `just gate` and at pre-push; add
   `.github/workflows/` mirroring it when this graduates past PoC. `releasing.md` —
   nothing versioned is
-  published. `monorepo.md` — single deliverable. asdf / direnv / `src` layout —
-  unneeded ceremony for a small Python package.
+  published. asdf / direnv — the pinned Bun workspace and uv environment already
+  provide reproducible tool entry points.
 - **Composed additionally:** the `llmlint` LLM-judge tier (`ci.md`'s companion) —
   `llmlint.yml` + the `lint-llm*` recipes, enforced at **pre-push**
   (`.githooks/pre-push`) since there is no CI.
