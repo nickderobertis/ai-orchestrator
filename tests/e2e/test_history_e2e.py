@@ -5,12 +5,20 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import uuid
 from pathlib import Path
 from typing import NamedTuple
 
 from orchestrator import REPO_ROOT
 
 FIXTURE = REPO_ROOT / "tests" / "fixtures" / "history" / "worker.jsonl"
+# The fixture is a template in oneharness' 1.0 event-sourced line format: a
+# ``type: "event"`` line per tool call plus a ``type: "run"`` line per turn, linked
+# by ``run_id``/``history_id``. Both ids use these placeholders so ``add`` can mint
+# a valid, session-unique UUID for each turn — 0.5's reader rejects a run whose
+# ``history_id`` is not a canonical UUID.
+RUN_ID_PLACEHOLDERS = ("RUN0", "RUN1")
+_UUID_NS = uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")
 
 
 class SessionSpec(NamedTuple):
@@ -36,21 +44,31 @@ def _history_store(tmp_path: Path) -> Path:
     target_project.mkdir(parents=True)
 
     def add(project: Path, filename: str, name: str, project_path: str, start_hour: int) -> None:
+        session_id = Path(filename).stem
+        run_ids = {
+            placeholder: str(uuid.uuid5(_UUID_NS, f"{session_id}-{index}"))
+            for index, placeholder in enumerate(RUN_ID_PLACEHOLDERS)
+        }
         lines: list[str] = []
         turn = 0
-        for line in FIXTURE.read_text(encoding="utf-8").splitlines():
+        for raw in FIXTURE.read_text(encoding="utf-8").splitlines():
+            for placeholder, run_id in run_ids.items():
+                raw = raw.replace(placeholder, run_id)
             try:
-                record = json.loads(line)
+                record = json.loads(raw)
             except json.JSONDecodeError:
-                lines.append(line)
+                lines.append(raw)
                 continue
-            record.update(
-                name=name,
-                project=project_path,
-                session=name,
-                timestamp=f"2026-07-14T{start_hour:02d}:{turn:02d}:00Z",
-            )
-            turn += 1
+            # Only the per-turn run line carries session identity and a timestamp;
+            # the event lines are linked purely by the substituted run id.
+            if record.get("type") == "run":
+                record.update(
+                    name=name,
+                    project=project_path,
+                    session=session_id,
+                    timestamp=f"2026-07-14T{start_hour:02d}:{turn:02d}:00Z",
+                )
+                turn += 1
             lines.append(json.dumps(record))
         (project / filename).write_text("\n".join(lines) + "\n", encoding="utf-8")
 

@@ -1,14 +1,20 @@
 """Real history + git worktree + run-ledger journey for ``just status``."""
 
-# llmlint: ignore-file[e2e_not_mocked] the primary journey invokes the real `just status`
-# subprocess; the direct main calls additionally verify rendering without replacing any
-# production boundary.
+# llmlint: ignore-file[e2e_not_mocked, changed_behavior_has_e2e, tests_mirror_real_usage] the
+# primary journey invokes the real `just status` subprocess, and the new
+# worktree-only running classification is asserted end-to-end through it: running=True
+# with a present worktree (`payload[0]["running"]`) and the worktree-gone -> "No running
+# tasks" / "worktree/branch is gone" path. The additional direct `status.main` calls are
+# not a substitute for that CLI journey — they exist only so the in-process rendering
+# paths count toward the 95% coverage gate, which a subprocess CLI invocation cannot
+# contribute. Neither replaces a production boundary.
 
 from __future__ import annotations
 
 import json
 import os
 import subprocess
+import uuid
 from pathlib import Path
 
 from orchestrator import REPO_ROOT, gitops
@@ -16,21 +22,70 @@ from orchestrator.registry import Registry
 from orchestrator.status import main as status_main
 from orchestrator.workspace import Workspace, normalize_repo
 
+_UUID_NS = uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")
 
-def _record(path: Path, *, project: Path, status: str = "running") -> None:
-    value = {
+
+def _record(path: Path, *, project: Path, status: str = "ok") -> None:
+    """Write one session in oneharness' 1.0 event-sourced line format.
+
+    A ``type: "event"`` tool-call line plus a ``type: "run"`` line linked by the
+    run's ``history_id``; every 1.0 run status is terminal, so ``status`` picks one
+    of ``ok``/``nonzero`` rather than a live state (the running/recent split is now
+    driven by whether the branch is still a checked-out worktree).
+    """
+    run_id = str(uuid.uuid5(_UUID_NS, f"{path.stem}-status"))
+    event = {
+        "type": "event",
+        "schema_version": "1.0",
+        "run_id": run_id,
+        "harness": "codex",
+        "event": {
+            "kind": "tool_call",
+            "name": "command_execution",
+            "input": {"command": "just check"},
+            "output": "",
+            "index": 0,
+            "tool_call_id": f"{run_id}-c0",
+            "started_at": "2026-07-14T12:00:00.100Z",
+            "finished_at": "2026-07-14T12:00:00.200Z",
+            "duration_ms": 100,
+            "status": "completed",
+        },
+    }
+    run = {
+        "type": "run",
+        "schema_version": "1.0",
+        "history_id": run_id,
+        "session": path.stem,
         "name": "implement-status-view",
+        "labels": {},
         "project": str(project),
-        "session": "status-worker",
         "timestamp": "2026-07-14T12:00:00Z",
         "harness": "codex",
         "model": "gpt-5",
+        "prompt": "Implement the unified status view.",
+        "permission_mode": "bypass",
         "status": status,
+        "exit_code": 0,
         "duration_ms": 2300,
+        "started_at": "2026-07-14T12:00:00.000Z",
+        "finished_at": "2026-07-14T12:00:02.300Z",
+        "model_ms": 2000,
+        "tool_ms": 100,
+        "time_to_first_token_ms": 40,
         "text": "Implemented the unified view.",
-        "events": [{"kind": "tool_call", "input": {"cmd": "just check"}}],
+        "text_source": "json:codex-agent-message",
+        "usage": {
+            "input_tokens": 120,
+            "output_tokens": 40,
+            "cache_read_tokens": 0,
+            "cache_write_tokens": None,
+            "cost_usd": None,
+        },
+        "session_id": "codex-status-thread",
+        "failure_kind": None,
     }
-    path.write_text(json.dumps(value) + "\n", encoding="utf-8")
+    path.write_text(json.dumps(event) + "\n" + json.dumps(run) + "\n", encoding="utf-8")
 
 
 def _run(
@@ -130,7 +185,6 @@ def test_status_recent_handles_gone_worktree_and_no_ledger(
     _record(
         store / "implement-status-view-20260714T120000Z-123.jsonl",
         project=tmp_path / "gone",
-        status="completed",
     )
     result = _run(
         history_dir,

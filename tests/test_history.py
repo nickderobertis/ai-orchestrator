@@ -12,6 +12,7 @@ from orchestrator.history import (
     HistorySession,
     SessionId,
     _is_agent_name,
+    _normalize_records,
     _persisted_detail,
     _records,
     _render_persisted_detail,
@@ -58,10 +59,13 @@ judge = {
 }
 if args[0] == "list": print(json.dumps([judge, worker]))
 elif args[0] == "show":
+    # `oneharness history show` returns the per-turn run records, not the
+    # standalone 1.0 event lines that share their session file.
     records = []
     for line in open(fixture):
-        try: records.append(json.loads(line))
-        except json.JSONDecodeError: pass
+        try: record = json.loads(line)
+        except json.JSONDecodeError: continue
+        if isinstance(record, dict) and record.get("type") != "event": records.append(record)
     print(json.dumps(records))
 """.replace("fixture = sys.argv[1]", f"fixture = {str(FIXTURE)!r}"),
         encoding="utf-8",
@@ -77,6 +81,27 @@ def test_digest_parses_fixture_defensively() -> None:
     assert result.commands == ["rg history", "just test"]
     assert result.duration_ms == 3700
     assert result.text == "Tests pass."
+
+
+def test_normalize_folds_event_lines_onto_their_run_and_keeps_legacy_records() -> None:
+    normalized = _normalize_records(
+        [
+            {"type": "event", "run_id": "r0", "event": {"kind": "tool_call", "name": "a"}},
+            {"type": "event", "run_id": "r0", "event": {"kind": "tool_call", "name": "b"}},
+            {"type": "event", "run_id": "orphan", "event": {"kind": "tool_call", "name": "c"}},
+            {"type": "run", "history_id": "r0", "text": "done"},
+            {"type": "run", "history_id": "r1", "text": "second"},
+            {"text": "legacy record with no type tag"},
+        ]
+    )
+    assert [record.get("text") for record in normalized] == [
+        "done",
+        "second",
+        "legacy record with no type tag",
+    ]
+    assert [event["name"] for event in normalized[0]["events"]] == ["a", "b"]
+    assert normalized[1]["events"] == []
+    assert "events" not in normalized[2]
 
 
 def test_history_commands_cross_project_and_default_to_worker(tmp_path: Path) -> None:

@@ -10,13 +10,10 @@ from orchestrator import gitops
 from orchestrator.status import GitState, _git_state, _human, _ledger_for_branch, is_running, main
 
 
-def test_running_requires_live_status_and_checked_out_branch(tmp_path: Path) -> None:
-    git = GitState("feature", "origin/main", [], True)
-    assert is_running("running", git)
-    assert is_running("IN_PROGRESS", git)
-    assert not is_running("completed", git)
-    assert not is_running("running", GitState("feature", "origin/main", [], False))
-    assert not is_running("running", None)
+def test_running_requires_checked_out_worktree() -> None:
+    assert is_running(GitState("feature", "origin/main", [], True))
+    assert not is_running(GitState("feature", "origin/main", [], False))
+    assert not is_running(None)
 
 
 def test_no_running_tasks_message() -> None:
