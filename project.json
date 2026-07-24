@@ -1,0 +1,28 @@
+{
+  "$schema": "./node_modules/nx/schemas/project-schema.json",
+  "name": "workspace-tooling",
+  "projectType": "application",
+  "root": ".",
+  "tags": ["scope:workspace", "type:util"],
+  "targets": {
+    "format": {
+      "cache": false,
+      "command": "bunx biome check --write package.json project.json nx.json biome.json tsconfig.base.json eslint.config.mjs && uv run ruff format .",
+      "options": {
+        "cwd": "{workspaceRoot}"
+      }
+    },
+    "format-check": {
+      "command": "bunx biome check package.json project.json nx.json biome.json tsconfig.base.json eslint.config.mjs && uv run ruff format --check .",
+      "options": {
+        "cwd": "{workspaceRoot}"
+      }
+    },
+    "lint": {
+      "command": "bunx eslint . && uv run ruff check . && shellcheck scripts/*.sh .githooks/pre-push && uv run orchestrator-validate-personas",
+      "options": {
+        "cwd": "{workspaceRoot}"
+      }
+    }
+  }
+}

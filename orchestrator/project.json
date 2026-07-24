@@ -1,0 +1,48 @@
+{
+  "$schema": "../node_modules/nx/schemas/project-schema.json",
+  "name": "orchestrator",
+  "projectType": "application",
+  "root": "orchestrator",
+  "sourceRoot": "orchestrator",
+  "tags": ["scope:orchestrator", "type:app"],
+  "targets": {
+    "build": {
+      "command": "uv build --out-dir dist/orchestrator",
+      "options": {
+        "cwd": "{workspaceRoot}"
+      },
+      "outputs": ["{workspaceRoot}/dist/orchestrator"]
+    },
+    "format": {
+      "cache": false,
+      "command": "uv run ruff format orchestrator tests",
+      "options": {
+        "cwd": "{workspaceRoot}"
+      }
+    },
+    "format-check": {
+      "command": "uv run ruff format --check orchestrator tests",
+      "options": {
+        "cwd": "{workspaceRoot}"
+      }
+    },
+    "lint": {
+      "command": "uv run ruff check orchestrator tests",
+      "options": {
+        "cwd": "{workspaceRoot}"
+      }
+    },
+    "test": {
+      "command": "uv run pytest --cov=orchestrator --cov-report=term-missing --cov-fail-under=95",
+      "options": {
+        "cwd": "{workspaceRoot}"
+      }
+    },
+    "typecheck": {
+      "command": "uv run mypy",
+      "options": {
+        "cwd": "{workspaceRoot}"
+      }
+    }
+  }
+}

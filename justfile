@@ -18,14 +18,18 @@ default:
 # activate the committed git hooks (the pre-push llmlint gate).
 bootstrap:
     ./scripts/session-setup.sh
+    bun install --frozen-lockfile
     uv sync
+    ./scripts/nx.sh run-many -t build --all --skip-nx-cache
     git config core.hooksPath .githooks
     # Allow local-mode lifecycle pushes into this non-bare checkout.
     git config receive.denyCurrentBranch updateInstead
 
-# Full quality gate: format check, lint, type check, persona validation, tests
-# (unit + e2e, coverage enforced). Must pass before any commit.
-check: format-check lint typecheck validate-personas test
+# Full affected quality gate. A cache-bypassed build runs first so a stale cache
+# can never hide a broken clean build.
+check:
+    ./scripts/nx.sh run-many -t build --all --skip-nx-cache
+    ./scripts/nx.sh affected -t format-check,lint,typecheck,test
 
 # Complete pre-push gate: deterministic checks followed by llmlint on this branch.
 gate remote=env_var_or_default("ORCHESTRATOR_COMPARISON_REMOTE", "origin") base=env_var_or_default("ORCHESTRATOR_COMPARISON_BASE", ""):
@@ -35,7 +39,7 @@ gate remote=env_var_or_default("ORCHESTRATOR_COMPARISON_REMOTE", "origin") base=
 
 # Whole suite (unit + e2e) with coverage enforced on the orchestrator package.
 test:
-    uv run pytest --cov=orchestrator --cov-report=term-missing --cov-fail-under={{coverage_min}}
+    ./scripts/nx.sh run-many -t test --all
 
 # The e2e suite alone (real onejudge subprocess boundary) — quick inner loop.
 test-e2e:
@@ -43,31 +47,35 @@ test-e2e:
 
 # Lint Python (ruff) and the shell script (shellcheck); fail on findings.
 lint:
-    uv run ruff check .
-    @command -v shellcheck >/dev/null 2>&1 || { echo "shellcheck not installed (needed to lint the shell scripts) — https://github.com/koalaman/shellcheck#installing"; exit 1; }
-    shellcheck scripts/*.sh .githooks/pre-push
+    ./scripts/nx.sh run-many -t lint --all
 
 # Static type check.
 typecheck:
-    uv run mypy
+    ./scripts/nx.sh run-many -t typecheck --all
 
 # Validate every persona against the delta contract (also part of `check`).
 validate-personas:
-    uv run orchestrator-validate-personas
+    ./scripts/nx.sh run workspace-tooling:lint
 
 # Format the codebase in place.
 format:
-    uv run ruff format .
+    ./scripts/nx.sh run-many -t format --all
 
 # Fail if anything is unformatted (used by the gate).
 format-check:
-    uv run ruff format --check .
+    ./scripts/nx.sh run-many -t format-check --all
 
 # Upgrade dependencies, then re-run the full gate; commit the refreshed lockfile.
 upgrade:
+    bun update --latest
     uv lock --upgrade
     uv sync
     @just check
+
+# Prove that a real cache-bypassed build succeeds, then that the same target is
+# restored from one shared Nx cache in a second linked worktree.
+prove-nx-cache:
+    ./scripts/prove-nx-cache.sh
 
 # Local-first runs no CI, but origin is the shared source of truth: push every
 # change that lands on main. The pre-push hook gates this like any push; if git
