@@ -31,6 +31,8 @@ class ProcessStat:
     """The process relationship and cumulative work read from procfs."""
 
     parent_pid: ProcessId
+    process_group: ProcessId
+    state: str
     cpu_ticks: int
     io_bytes: int
 
@@ -46,6 +48,8 @@ def _parse_stat(raw_stat: str, io_fields: list[str]) -> ProcessStat | None:
     try:
         return ProcessStat(
             parent_pid=ProcessId(int(fields[1])),
+            process_group=ProcessId(int(fields[2])),
+            state=fields[0],
             cpu_ticks=int(fields[11]) + int(fields[12]),
             io_bytes=sum(
                 int(line.partition(":")[2])
@@ -71,7 +75,7 @@ def process_activity(root_pid: ProcessId) -> ProcessActivity:
     records: dict[ProcessId, ProcessStat] = {}
     for entry in Path("/proc").iterdir():
         pid = ProcessId(int(entry.name)) if entry.name.isdigit() else None
-        if pid is not None and (record := _stat(pid)) is not None:
+        if pid is not None and (record := _stat(pid)) is not None and record.state != "Z":
             records[pid] = record
     selected = {root_pid} if root_pid in records else set()
     changed = True
@@ -98,6 +102,54 @@ def terminate_tree(root_pid: ProcessId) -> None:
     for pid in pids:
         with suppress(PermissionError, ProcessLookupError):
             os.kill(pid, signal.SIGKILL)
+
+
+def terminate_processes(pids: tuple[ProcessId, ...]) -> None:
+    """Best-effort termination of a previously observed worker process tree.
+
+    Descendants are reparented as soon as their worker exits, so walking from the
+    vanished root can no longer find them.  Callers retain the last affirmative
+    tree sample and use it here to reap those now-orphaned processes.
+    """
+    for pid in reversed(pids):
+        with suppress(PermissionError, ProcessLookupError):
+            os.kill(pid, signal.SIGTERM)
+    time.sleep(0.05)
+    for pid in reversed(pids):
+        with suppress(PermissionError, ProcessLookupError):
+            os.kill(pid, signal.SIGKILL)
+    deadline = time.monotonic() + 1.5
+    pending = set(pids)
+    while pending and time.monotonic() < deadline:
+        for pid in tuple(pending):
+            try:
+                reaped, _ = os.waitpid(pid, os.WNOHANG)
+            except ChildProcessError:
+                if not Path(f"/proc/{pid}").exists():
+                    pending.remove(pid)
+            else:
+                if reaped:
+                    pending.remove(pid)
+        if pending:
+            time.sleep(0.01)
+
+
+def terminate_process_group(group_id: ProcessId) -> None:
+    """Terminate and reap every process in a dispatch-owned process group."""
+    with suppress(PermissionError, ProcessLookupError):
+        os.killpg(group_id, signal.SIGTERM)
+    time.sleep(0.05)
+    with suppress(PermissionError, ProcessLookupError):
+        os.killpg(group_id, signal.SIGKILL)
+    members: list[ProcessId] = []
+    for entry in Path("/proc").iterdir():
+        if not entry.name.isdigit():
+            continue
+        pid = ProcessId(int(entry.name))
+        record = _stat(pid)
+        if record is not None and record.process_group == group_id:
+            members.append(pid)
+    terminate_processes(tuple(members))
 
 
 def main(argv: list[str] | None = None) -> int:

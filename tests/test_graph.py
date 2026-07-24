@@ -64,10 +64,14 @@ def _report(persona: str, completed: bool = True, assessment: str | None = None)
 class _RecordingProposalPump:
     def __init__(self) -> None:
         self.proposals: list[tuple[str, str]] = []
+        self.blocking_proposals: list[tuple[str, str]] = []
         self.drains = 0
 
     def propose(self, node: str, message: str) -> None:
         self.proposals.append((node, message))
+
+    def propose_blocking(self, node: str, message: str) -> None:
+        self.blocking_proposals.append((node, message))
 
     def persist_replies(self) -> None:
         self.drains += 1
@@ -108,6 +112,33 @@ def test_run_graph_enqueues_worker_assessment_through_reconciler() -> None:
     assert result.state == "complete"
     assert pump.proposals == [("discoverer", "follow up")]
     assert pump.drains >= 2
+
+
+def test_round_budget_surfaces_and_cooperatively_cancels_wedged_dispatch() -> None:
+    graph = parse_graph({"tasks": [{"id": "a", "persona": "engineer", "task": "wait"}]})
+    pump = _RecordingProposalPump()
+
+    def runner(node: PlanNode, *, cancel: threading.Event | None = None, **_kwargs) -> Report:
+        assert cancel is not None
+        assert cancel.wait(1)
+        return _report(node.persona, completed=False)
+
+    result = run_graph(
+        graph,
+        agent_runner=runner,
+        lifecycle_runner=lambda node, **_: _lifecycle(),
+        proposal_pump=pump,  # type: ignore[arg-type] - narrow transport test double
+        round_budget=0.01,
+    )
+
+    assert result.state == "failed"
+    assert pump.blocking_proposals == [
+        (
+            "round-budget",
+            "round exceeded its 0.01s liveness budget; in-flight workers were cancelled "
+            "and planner intervention is required",
+        )
+    ]
 
 
 def test_reconciler_alone_applies_and_rejects_live_commands() -> None:
@@ -1510,6 +1541,22 @@ def test_run_plan_cli_invalid_concurrency_override_exits_2(tmp_path, capsys) -> 
 
     assert main([str(plan), "--concurrency", "0", "--no-record"]) == 2
     assert "positive integer" in capsys.readouterr().err
+
+
+def test_run_plan_cli_rejects_invalid_round_budget(tmp_path, capsys) -> None:
+    plan = tmp_path / "plan.json"
+    plan.write_text(
+        json.dumps(
+            {
+                "schema_version": 5,
+                "tasks": [{"id": "a", "task": "none", "expects_no_diff": True}],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert main([str(plan), "--no-record", "--round-budget", "nan"]) == 2
+    assert "--round-budget" in capsys.readouterr().err
 
 
 def test_run_plan_cli_reports_pending_round_claim_failure(tmp_path, capsys) -> None:

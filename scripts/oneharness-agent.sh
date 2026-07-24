@@ -27,4 +27,58 @@ for arg in "$@"; do
     esac
 done
 
-exec oneharness run --config "$repo_root/oneharness.toml" "$@"
+if [ -z "${ORCHESTRATOR_AGENT_STATUS_DIR-}" ]; then
+    exec oneharness run --config "$repo_root/oneharness.toml" "$@"
+fi
+
+status_dir=$ORCHESTRATOR_AGENT_STATUS_DIR
+if ! mkdir -p "$status_dir"; then
+    echo "oneharness-agent: cannot create worker status directory: $status_dir" >&2
+    exit 2
+fi
+write_status() {
+    status_name=$1
+    status_value=$2
+    if ! printf '%s\n' "$status_value" >"$status_dir/$status_name.tmp" ||
+        ! mv "$status_dir/$status_name.tmp" "$status_dir/$status_name"; then
+        echo "oneharness-agent: cannot update worker status marker: $status_name" >&2
+        exit 2
+    fi
+}
+worker_pid=$$
+write_status agent.pid "$worker_pid"
+if ! rm -f "$status_dir/agent.done" "$status_dir/agent.failed"; then
+    echo "oneharness-agent: cannot reset terminal worker status markers" >&2
+    exit 2
+fi
+if ! touch "$status_dir/agent.heartbeat"; then
+    echo "oneharness-agent: cannot initialize worker heartbeat" >&2
+    exit 2
+fi
+
+oneharness run --config "$repo_root/oneharness.toml" "$@" &
+agent_pid=$!
+write_status agent.child.pid "$agent_pid"
+while agent_state=$(ps -o stat= -p "$agent_pid" 2>/dev/null) &&
+    [ -n "$agent_state" ] &&
+    [ "${agent_state#Z}" = "$agent_state" ]; do
+    if ! touch "$status_dir/agent.heartbeat"; then
+        echo "oneharness-agent: worker heartbeat update failed; aborting agent $agent_pid" >&2
+        kill "$agent_pid" 2>/dev/null || true
+        exit 2
+    fi
+    sleep 0.5
+done
+set +e
+wait "$agent_pid"
+exit_code=$?
+set -e
+if [ "$exit_code" -ne 0 ]; then
+    echo "oneharness-agent: agent process $agent_pid exited $exit_code; awaiting dispatcher recovery" >&2
+    write_status agent.failed "$worker_pid"
+    while :; do
+        :
+    done
+fi
+write_status agent.done "$worker_pid"
+exit "$exit_code"

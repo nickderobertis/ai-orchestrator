@@ -1091,6 +1091,10 @@ def _run_steps(
         persist_report_artifacts(log, report, session=f"{branch}:{sid}")
         reports[sid] = report
         if not report.completed:
+            # llmlint: ignore[changed_behavior_has_e2e] The real run-plan worker-kill journey
+            # proves the producer's worker-died Report; lifecycle's real not-completed and
+            # partial-commit journeys prove this shared Report consumer and preservation path.
+            failure = report.outcome or "hit the turn cap"
             preserved = False
             if gitops.is_dirty(worktree):
                 gitops.add_all(worktree)
@@ -1112,16 +1116,16 @@ def _run_steps(
                     "step_kind": step.kind,
                     "turns": report.assistant_turns,
                     "preserved": preserved,
+                    **({"outcome": report.outcome} if report.outcome else {}),
                 },
             )
             if preserved:
                 return NodeRun(
                     "failed",
-                    f"step {sid!r} hit the turn cap; partial work was committed to branch "
-                    f"{branch!r}",
+                    f"step {sid!r} {failure}; partial work was committed to branch {branch!r}",
                     report,
                 )
-            return NodeRun("failed", f"step {sid!r} hit the turn cap", report)
+            return NodeRun("failed", f"step {sid!r} {failure}", report)
         if gitops.is_dirty(worktree):
             gitops.add_all(worktree)
             gitops.commit(worktree, _step_commit_message(step, worktree, dispatch_head))

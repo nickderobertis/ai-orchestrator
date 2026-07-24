@@ -176,17 +176,24 @@ worktree commit log, and contemporaneous process tree: the first three stop
 after the green gate while the last shows the provider descendants gone and the
 owning orchestrator still alive.
 
-Dispatch now wraps the SDK-owned `onejudge` process with a stable pid and watches
-the complete descendant tree. Changes in descendant membership, cumulative CPU
-or I/O counters, or files under the checkout's `.git` directory reset the
-inactivity clock. A continuously running gate therefore remains healthy even
-when it emits no onejudge history turn, while a parent waiting on a dead or
-sleeping provider tree becomes a `DispatchError`; the tree is terminated and the
-normal node/lifecycle error path records and surfaces that outcome. Configure the
+Dispatch wraps the SDK-owned `onejudge` process with a stable pid and additionally
+wraps the agent-side oneharness process with its own pid, completion marker, and
+monotonic heartbeat. A vanished agent pid or heartbeat deadline settles as the
+distinct incomplete `worker-died` outcome within seconds, independent of CPU/I/O
+from leaked descendants or `.git` churn. The last observed process tree is reaped
+even after its root has vanished, so those descendants cannot pollute a retry.
+Set `ORCHESTRATOR_WORKER_HEARTBEAT_TIMEOUT` to a positive number of seconds; it
+defaults to `5`.
+
+The older activity watchdog remains as a separate slow-stall backstop. Changes
+in descendant membership, cumulative CPU or I/O counters, or files under the
+checkout's `.git` directory reset its inactivity clock. Configure that
 bounded interval with `ORCHESTRATOR_DISPATCH_STALL_TIMEOUT` in seconds (positive
 integer or decimal); it defaults to `600` seconds. This differs from
 `ONEHARNESS_TIMEOUT`, which limits one model turn regardless of intervening
-process activity.
+process activity. `run-plan --round-budget SECONDS` adds an outer round liveness
+budget (default `14400`); exceeding it cooperatively cancels workers and sends a
+blocking proposal over the planner channel.
 
 ## Dispatching playbook
 
