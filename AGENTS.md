@@ -295,22 +295,32 @@ self-dispatch result.
 
 How this repo was built up from the create-repo reference pieces:
 
-- **Product shape:** config / orchestration repo — closest to `shapes/skills-repo.md`
-  (determinism-vs-judgment split, validate-in-gate, narrow allowlist), applied to
-  onejudge configs + personas rather than skills.
-- **Language(s):** Python (uv, ruff, mypy, pytest) for the orchestration package
-  in `orchestrator/` — including the repo-lifecycle layer (`workspace`, `gitops`,
-  `verify`, `github`, `merge`, `lifecycle`, `replan`) that shells to real
-  `git`/`gh`; Bash
-  for `scripts/session-setup.sh`; YAML/TOML for configs.
-- **Composed:** `base.md` (always) + `shapes/skills-repo.md`.
+- **Product shape:** polyglot React web app + Python orchestration monorepo. The
+  orchestration/config core remains closest to `shapes/skills-repo.md`
+  (determinism-vs-judgment split, validate-in-gate, narrow allowlist); the DAG UI
+  composes the React/web-app guidance with feature-based boundaries.
+- **Language(s):** Python (uv, Ruff, mypy, pytest) for `orchestrator/`, TypeScript
+  (Bun, Nx, Biome, ESLint) for `apps/` and `packages/`, Bash for lifecycle and
+  setup scripts, and YAML/TOML/JSON for configuration. Nx gives both language
+  stacks uniform local targets and affected execution.
+- **Composed:** `base.md` (always) + `shapes/skills-repo.md` +
+  `languages/python.md` + `languages/typescript.md` + `web/react.md` +
+  `shapes/web-app.md`.
 - **Excluded, and why:** **CI** — deliberately, per the repo's charter: this is a
   local, private proof-of-concept ("local config/scripts/docs at this point"). The
   full gate still runs locally as `just gate` and at pre-push; add
   `.github/workflows/` mirroring it when this graduates past PoC. `releasing.md` —
-  nothing versioned is
-  published. `monorepo.md` — single deliverable. asdf / direnv / `src` layout —
-  unneeded ceremony for a small Python package.
+  nothing versioned is published. asdf / direnv — Bun and uv already pin and
+  provision the required toolchains.
+- **Monorepo composition:** `orchestrator/` is the Python application;
+  deployable TypeScript shells belong in `apps/`; framework-independent model,
+  data-access, layout, feature, and UI code belongs in `packages/`. Nested
+  `AGENTS.md` files define the local boundaries. Nx owns scheduling and a stable
+  cross-worktree cache; Bun owns JavaScript dependencies; Biome formats and
+  performs baseline lint, while ESLint owns Nx module-boundary enforcement.
+- **TypeScript compatibility:** TypeScript 6.0.3 is the newest stable release in
+  typescript-eslint 8.65.0's supported `>=4.8.4 <6.1.0` range. TypeScript 7 is
+  deferred until the parser required by Nx module-boundary lint supports it.
 - **Composed additionally:** the `llmlint` LLM-judge tier (`ci.md`'s companion) —
   `llmlint.yml` + the `lint-llm*` recipes, enforced at **pre-push**
   (`.githooks/pre-push`) since there is no CI.

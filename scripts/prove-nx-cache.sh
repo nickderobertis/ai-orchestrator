@@ -19,13 +19,14 @@ git -C "$workspace_root" worktree add --detach "$second_checkout" HEAD >/dev/nul
 ln -s "$workspace_root/node_modules" "$first_checkout/node_modules"
 ln -s "$workspace_root/node_modules" "$second_checkout/node_modules"
 
-NX_CACHE_DIRECTORY="$proof_cache" "$first_checkout/scripts/nx.sh" run orchestrator:build \
+NX_CACHE_DIRECTORY="$proof_cache" bash "$first_checkout/scripts/nx.sh" run orchestrator:build \
     --skip-nx-cache >/dev/null
 rm -rf "$first_checkout/dist"
-NX_CACHE_DIRECTORY="$proof_cache" "$first_checkout/scripts/nx.sh" run orchestrator:build >/dev/null
+NX_CACHE_DIRECTORY="$proof_cache" bash "$first_checkout/scripts/nx.sh" \
+    run orchestrator:build >/dev/null
 second_output=$(NX_CACHE_DIRECTORY="$proof_cache" \
     NX_TASKS_RUNNER_DYNAMIC_OUTPUT=false \
-    "$second_checkout/scripts/nx.sh" run orchestrator:build)
+    bash "$second_checkout/scripts/nx.sh" run orchestrator:build)
 
 if [[ "$second_output" != *"[local cache]"* && "$second_output" != *"existing outputs match the cache"* ]]; then
     echo "cross-worktree cache proof failed: second build was not restored from cache" >&2

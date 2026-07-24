@@ -4,7 +4,7 @@ import tseslint from "typescript-eslint";
 export default tseslint.config(
   ...tseslint.configs.recommended,
   {
-    ignores: ["**/dist/**", "**/node_modules/**"],
+    ignores: ["**/.nx/**", "**/.venv/**", "**/dist/**", "**/node_modules/**"],
   },
   {
     files: ["**/*.ts", "**/*.tsx"],
@@ -17,11 +17,20 @@ export default tseslint.config(
           depConstraints: [
             {
               sourceTag: "type:app",
-              onlyDependOnLibsWithTags: ["type:feature", "type:data-access", "type:ui", "type:util"],
+              onlyDependOnLibsWithTags: [
+                "type:feature",
+                "type:data-access",
+                "type:ui",
+                "type:util",
+              ],
             },
             {
               sourceTag: "type:feature",
-              onlyDependOnLibsWithTags: ["type:data-access", "type:ui", "type:util"],
+              onlyDependOnLibsWithTags: [
+                "type:data-access",
+                "type:ui",
+                "type:util",
+              ],
             },
             {
               sourceTag: "type:data-access",
@@ -34,11 +43,11 @@ export default tseslint.config(
             {
               sourceTag: "type:util",
               onlyDependOnLibsWithTags: ["type:util"],
-            }
+            },
           ],
-          enforceBuildableLibDependency: true
-        }
-      ]
-    }
-  }
+          enforceBuildableLibDependency: true,
+        },
+      ],
+    },
+  },
 );
