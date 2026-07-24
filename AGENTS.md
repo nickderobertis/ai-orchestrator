@@ -293,24 +293,28 @@ self-dispatch result.
 
 ## Stack and composition
 
-How this repo was built up from the create-repo reference pieces:
+How this polyglot monorepo was built up from the create-repo reference pieces:
 
-- **Product shape:** config / orchestration repo — closest to `shapes/skills-repo.md`
-  (determinism-vs-judgment split, validate-in-gate, narrow allowlist), applied to
-  onejudge configs + personas rather than skills.
-- **Language(s):** Python (uv, ruff, mypy, pytest) for the orchestration package
+- **Product shape:** Nx monorepo containing a config/orchestration engine, shared
+  libraries, and React applications. Its orchestration core remains closest to
+  `shapes/skills-repo.md` (determinism-vs-judgment split, validate-in-gate,
+  narrow allowlist), applied to onejudge configs + personas rather than skills.
+- **Language(s):** Python (uv, ruff, mypy, pytest) for the Nx `orchestrator` project
   in `orchestrator/` — including the repo-lifecycle layer (`workspace`, `gitops`,
   `verify`, `github`, `merge`, `lifecycle`, `replan`) that shells to real
-  `git`/`gh`; Bash
-  for `scripts/session-setup.sh`; YAML/TOML for configs.
-- **Composed:** `base.md` (always) + `shapes/skills-repo.md`.
+  `git`/`gh`; TypeScript and React (Bun, Nx, Biome, ESLint) for `apps/` and
+  framework-independent `packages/`; Bash for provisioning and wrappers; YAML,
+  JSON, and TOML for configs.
+- **Composed:** `base.md` (always) + `shapes/skills-repo.md` +
+  `monorepo.md` + the React and TypeScript references. Nx provides the project
+  graph, affected execution, module boundaries, and computation caching; the
+  underlying language tools remain the source of each check.
 - **Excluded, and why:** **CI** — deliberately, per the repo's charter: this is a
   local, private proof-of-concept ("local config/scripts/docs at this point"). The
   full gate still runs locally as `just gate` and at pre-push; add
   `.github/workflows/` mirroring it when this graduates past PoC. `releasing.md` —
-  nothing versioned is
-  published. `monorepo.md` — single deliverable. asdf / direnv / `src` layout —
-  unneeded ceremony for a small Python package.
+  nothing versioned is published. asdf / direnv — the committed Bun and uv
+  lockfiles already make the workspace reproducible.
 - **Composed additionally:** the `llmlint` LLM-judge tier (`ci.md`'s companion) —
   `llmlint.yml` + the `lint-llm*` recipes, enforced at **pre-push**
   (`.githooks/pre-push`) since there is no CI.

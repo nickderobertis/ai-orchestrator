@@ -1,0 +1,25 @@
+{
+  "name": "dag-layout",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "library",
+  "sourceRoot": "packages/dag-layout/src",
+  "tags": ["scope:shared", "type:layout"],
+  "targets": {
+    "build": {
+      "command": "bunx tsc -p packages/dag-layout/tsconfig.json --emitDeclarationOnly",
+      "outputs": ["{projectRoot}/dist"]
+    },
+    "lint": {
+      "command": "bunx biome check packages/dag-layout && bunx eslint packages/dag-layout"
+    },
+    "test": {
+      "command": "bun test packages/dag-layout"
+    },
+    "typecheck": {
+      "command": "bunx tsc -p packages/dag-layout/tsconfig.json --noEmit"
+    },
+    "format": {
+      "command": "bunx biome format --write packages/dag-layout"
+    }
+  }
+}

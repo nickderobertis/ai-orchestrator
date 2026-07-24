@@ -1,0 +1,31 @@
+{
+  "name": "orchestrator",
+  "$schema": "../node_modules/nx/schemas/project-schema.json",
+  "projectType": "library",
+  "sourceRoot": "orchestrator",
+  "tags": ["scope:orchestrator", "lang:python"],
+  "targets": {
+    "build": {
+      "command": "uv build",
+      "options": { "cwd": "." },
+      "outputs": ["{workspaceRoot}/dist"]
+    },
+    "lint": {
+      "command": "uv run ruff check . && command -v shellcheck >/dev/null && shellcheck scripts/*.sh .githooks/pre-push",
+      "options": { "cwd": "." }
+    },
+    "test": {
+      "command": "uv run pytest --cov=orchestrator --cov-report=term-missing --cov-fail-under=95",
+      "options": { "cwd": "." },
+      "outputs": ["{workspaceRoot}/.coverage"]
+    },
+    "typecheck": {
+      "command": "uv run mypy && uv run orchestrator-validate-personas && uv run ruff format --check .",
+      "options": { "cwd": "." }
+    },
+    "format": {
+      "command": "uv run ruff format .",
+      "options": { "cwd": "." }
+    }
+  }
+}

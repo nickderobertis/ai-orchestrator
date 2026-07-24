@@ -19,13 +19,15 @@ default:
 bootstrap:
     ./scripts/session-setup.sh
     uv sync
+    bun install --frozen-lockfile
     git config core.hooksPath .githooks
     # Allow local-mode lifecycle pushes into this non-bare checkout.
     git config receive.denyCurrentBranch updateInstead
 
 # Full quality gate: format check, lint, type check, persona validation, tests
 # (unit + e2e, coverage enforced). Must pass before any commit.
-check: format-check lint typecheck validate-personas test
+check:
+    ./scripts/nx.sh run-many -t lint,typecheck,test
 
 # Complete pre-push gate: deterministic checks followed by llmlint on this branch.
 gate remote=env_var_or_default("ORCHESTRATOR_COMPARISON_REMOTE", "origin") base=env_var_or_default("ORCHESTRATOR_COMPARISON_BASE", ""):
@@ -35,7 +37,7 @@ gate remote=env_var_or_default("ORCHESTRATOR_COMPARISON_REMOTE", "origin") base=
 
 # Whole suite (unit + e2e) with coverage enforced on the orchestrator package.
 test:
-    uv run pytest --cov=orchestrator --cov-report=term-missing --cov-fail-under={{coverage_min}}
+    ./scripts/nx.sh run-many -t test
 
 # The e2e suite alone (real onejudge subprocess boundary) — quick inner loop.
 test-e2e:
@@ -43,13 +45,11 @@ test-e2e:
 
 # Lint Python (ruff) and the shell script (shellcheck); fail on findings.
 lint:
-    uv run ruff check .
-    @command -v shellcheck >/dev/null 2>&1 || { echo "shellcheck not installed (needed to lint the shell scripts) — https://github.com/koalaman/shellcheck#installing"; exit 1; }
-    shellcheck scripts/*.sh .githooks/pre-push
+    ./scripts/nx.sh affected -t lint
 
 # Static type check.
 typecheck:
-    uv run mypy
+    ./scripts/nx.sh affected -t typecheck
 
 # Validate every persona against the delta contract (also part of `check`).
 validate-personas:
@@ -57,17 +57,18 @@ validate-personas:
 
 # Format the codebase in place.
 format:
-    uv run ruff format .
+    ./scripts/nx.sh affected -t format
 
 # Fail if anything is unformatted (used by the gate).
 format-check:
-    uv run ruff format --check .
+    ./scripts/nx.sh run-many -t typecheck
 
 # Upgrade dependencies, then re-run the full gate; commit the refreshed lockfile.
 upgrade:
     uv lock --upgrade
     uv sync
-    @just check
+    bun update --latest nx @nx/eslint @nx/eslint-plugin @nx/js eslint typescript@6 typescript-eslint @biomejs/biome
+    ./scripts/nx.sh run-many -t build,lint,typecheck,test
 
 # Local-first runs no CI, but origin is the shared source of truth: push every
 # change that lands on main. The pre-push hook gates this like any push; if git
