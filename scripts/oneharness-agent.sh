@@ -58,10 +58,8 @@ if ! rm -f "$status_dir/agent.done" "$status_dir/agent.failed"; then
     echo "oneharness-agent: cannot reset terminal markers; retry through orchestrator dispatch" >&2
     exit 2
 fi
-if ! touch "$status_dir/agent.heartbeat"; then
-    echo "oneharness-agent: cannot initialize heartbeat; retry through orchestrator dispatch" >&2
-    exit 2
-fi
+heartbeat_sequence=0
+write_status agent.heartbeat "$heartbeat_sequence"
 
 # llmlint: ignore[tool_output_is_signal] oneharness stdout is the provider protocol payload
 # consumed by onejudge; suppressing or replacing it would break the real provider boundary.
@@ -71,11 +69,8 @@ write_status agent.child.pid "$agent_pid"
 while agent_state=$(ps -o stat= -p "$agent_pid" 2>/dev/null) &&
     [ -n "$agent_state" ] &&
     [ "${agent_state#Z}" = "$agent_state" ]; do
-    if ! touch "$status_dir/agent.heartbeat"; then
-        echo "oneharness-agent: heartbeat failed; aborting agent $agent_pid; retry the dispatch" >&2
-        kill "$agent_pid" 2>/dev/null || true
-        exit 2
-    fi
+    heartbeat_sequence=$((heartbeat_sequence + 1))
+    write_status agent.heartbeat "$heartbeat_sequence"
     sleep 0.5
 done
 set +e
