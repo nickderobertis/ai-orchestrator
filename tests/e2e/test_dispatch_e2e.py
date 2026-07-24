@@ -285,6 +285,65 @@ def test_real_dispatch_detects_killed_agent_and_reaps_orphans(
         except ProcessLookupError:
             break
         time.sleep(0.02)
+    else:
+        pytest.fail(f"dispatch process group {process.pid} survived worker-death cleanup")
+
+
+def test_real_run_plan_preserves_activity_stall_detection(
+    tmp_path: Path, command_base, onejudge_bin: str
+) -> None:
+    """A quiet provider still reaches the established activity watchdog."""
+    target = tmp_path / "target"
+    target.mkdir()
+    ready = tmp_path / "ready"
+    release = tmp_path / "never-release"
+    plan = tmp_path / "plan.json"
+    plan.write_text(
+        json.dumps(
+            {
+                "tasks": [
+                    {
+                        "id": "stalled",
+                        "persona": "engineer",
+                        "task": (
+                            f"provider-barrier-ready={ready} provider-barrier-release={release}"
+                        ),
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    process = subprocess.run(
+        [
+            str(Path(onejudge_bin).with_name("orchestrator-run-plan")),
+            str(plan),
+            "--no-record",
+            "--base",
+            str(command_base()),
+            "--project-dir",
+            str(target),
+            "--onejudge-bin",
+            onejudge_bin,
+            "--format",
+            "json",
+        ],
+        cwd=target,
+        env={
+            **os.environ,
+            "ORCHESTRATOR_DISPATCH_STALL_TIMEOUT": "0.2",
+            "ORCHESTRATOR_WORKER_HEARTBEAT_TIMEOUT": "2",
+        },
+        text=True,
+        capture_output=True,
+        timeout=5,
+    )
+
+    assert process.returncode == 1
+    result = json.loads(process.stdout)
+    assert result["results"]["stalled"]["status"] == "failed"
+    assert "dispatch stalled for 0.2s" in result["results"]["stalled"]["error"]
 
 
 def test_real_run_plan_round_budget_surfaces_blocking_proposal(
