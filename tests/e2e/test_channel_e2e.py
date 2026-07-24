@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 import subprocess
 import sys
 import time
@@ -13,10 +14,13 @@ import yaml
 from waits import deadline
 from waits import timeout as e2e_timeout
 
-from orchestrator import BASE_CONFIG, REPO_ROOT
+from orchestrator import BASE_CONFIG, REPO_ROOT, gitops
 from orchestrator.dispatch import launch_orchestrator
+from orchestrator.registry import Registry
+from orchestrator.watchdog import ProcessId, process_activity
 
 FAKE_BACKEND = REPO_ROOT / "tests" / "e2e" / "fake_backend.py"
+MOCK_ONEHARNESS = REPO_ROOT / "tests" / "e2e" / "mock_oneharness.py"
 
 
 def _base(tmp_path: Path) -> Path:
@@ -274,6 +278,126 @@ def _convenience_cli(recipe: str, run_id: str, runs: Path, message: str | None =
         capture_output=True,
         check=True,
     )
+
+
+def _kill_new_agent_worker(
+    orchestrator_pid: int,
+    known_status_files: set[Path],
+    barrier: Path,
+) -> Path:
+    wait_deadline = deadline(10)
+    while time.monotonic() < wait_deadline:
+        descendants = process_activity(ProcessId(orchestrator_pid)).pids
+        candidates = (
+            set(Path("/tmp").glob("orchestrator-watchdog-*/agent/agent.child.pid"))
+            - known_status_files
+        )
+        if barrier.exists():
+            for status_file in candidates:
+                worker_pid = ProcessId(int(status_file.read_text(encoding="utf-8")))
+                if worker_pid in descendants:
+                    os.kill(worker_pid, signal.SIGTERM)
+                    return status_file
+        time.sleep(0.02)
+    raise AssertionError("lifecycle agent did not reach the provider barrier")
+
+
+def test_orchestrator_retries_dead_lifecycle_worker_then_surfaces_blocker(
+    tmp_path: Path,
+    bare_origin,
+    onejudge_bin: str,
+    oneharness_bin: str,
+    monkeypatch,
+) -> None:
+    """Kill both real lifecycle attempts and drive retry/exhaustion over the live channel."""
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical")
+    Registry().register(
+        str(canonical),
+        workflow="local",
+        repo_type="single-owner",
+        gate="true",
+    )
+    runs = tmp_path / "runs"
+    barrier = tmp_path / "worker-provider-ready"
+    pre_round_release = tmp_path / "start-first-round"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "oneharness").symlink_to(MOCK_ONEHARNESS)
+    plan = tmp_path / "dead-lifecycle.json"
+    plan.write_text(
+        json.dumps(
+            {
+                "schema_version": 3,
+                "name": "lifecycle-worker-death-retry",
+                "tasks": [
+                    {
+                        "id": "change",
+                        "repo": str(canonical),
+                        "persona": "engineer",
+                        "task": (
+                            "lifecycle-worker-death-retry "
+                            f"pre-round-pause {pre_round_release} start-worker"
+                        ),
+                        "verify_cmd": ["true"],
+                        "workflow": "local",
+                        "repo_type": "single-owner",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("ORCHESTRATOR_WORKER_HEARTBEAT_TIMEOUT", "1")
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+    monkeypatch.setenv("REAL_ONEHARNESS_BIN", oneharness_bin)
+    monkeypatch.setenv("MOCK_AGENT_BARRIER", str(barrier))
+    status_files = set(Path("/tmp").glob("orchestrator-watchdog-*/agent/agent.child.pid"))
+    run_id = _launch_cli(plan, runs, _base(tmp_path), onejudge_bin)
+    run_dir = runs / run_id
+    worker_base_path = run_dir / "orchestrator" / "worker-base.yaml"
+    worker_base = yaml.safe_load(worker_base_path.read_text(encoding="utf-8"))
+    worker_base["provider"] = {
+        "kind": "split",
+        "skill": {"kind": "oneharness", "bin": "oneharness"},
+        "judge": {
+            "kind": "command",
+            "command": [sys.executable, str(FAKE_BACKEND)],
+        },
+    }
+    worker_base_path.write_text(yaml.safe_dump(worker_base), encoding="utf-8")
+    pre_round_release.touch()
+    orchestrator_status = json.loads(
+        (run_dir / "orchestrator" / "status.json").read_text(encoding="utf-8")
+    )
+    first_status = _kill_new_agent_worker(orchestrator_status["pid"], status_files, barrier)
+
+    first_surface = _wait_surface(run_id, runs)
+    assert first_surface["surface"]["kind"] == "milestone"
+    first_result = json.loads((run_dir / "round-01" / "result.json").read_text(encoding="utf-8"))
+    assert first_result["results"]["change"]["status"] == "failed"
+    assert first_result["results"]["change"]["outcome"] == "not-completed"
+    assert first_result["results"]["change"]["error"].endswith("worker-died")
+
+    barrier.unlink()
+    _convenience_cli("channel-continue", run_id, runs, "retry change")
+    _kill_new_agent_worker(orchestrator_status["pid"], status_files | {first_status}, barrier)
+
+    exhausted = _wait_surface(run_id, runs)
+    assert exhausted["surface"] == {
+        "kind": "blocker",
+        "message": (
+            "lifecycle worker died after its bounded retry; planner intervention is required"
+        ),
+    }
+    second_result = json.loads((run_dir / "round-02" / "result.json").read_text(encoding="utf-8"))
+    assert second_result["results"]["change"]["status"] == "failed"
+    assert second_result["results"]["change"]["outcome"] == "not-completed"
+    assert second_result["results"]["change"]["error"].endswith("worker-died")
+    retry_plan = json.loads((run_dir / "round-02" / "plan.json").read_text(encoding="utf-8"))
+    assert retry_plan["tasks"][0]["id"] == "change"
+    _convenience_cli("channel-approve", run_id, runs)
+    _wait_report(run_dir / "orchestrator" / "report.json")
 
 
 def test_live_channel_runs_real_nested_graph_and_round_trips_guidance(
