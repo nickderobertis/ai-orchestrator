@@ -27,7 +27,7 @@ bootstrap:
 # Full quality gate: format check, lint, type check, persona validation, tests
 # (unit + e2e, coverage enforced). Must pass before any commit.
 check:
-    ./scripts/nx.sh run-many -t lint,typecheck,test
+    ./scripts/nx.sh run-many -t format-check,lint,typecheck,test
 
 # Complete pre-push gate: deterministic checks followed by llmlint on this branch.
 gate remote=env_var_or_default("ORCHESTRATOR_COMPARISON_REMOTE", "origin") base=env_var_or_default("ORCHESTRATOR_COMPARISON_BASE", ""):
@@ -61,7 +61,7 @@ format:
 
 # Fail if anything is unformatted (used by the gate).
 format-check:
-    ./scripts/nx.sh run-many -t typecheck
+    ./scripts/nx.sh run-many -t format-check
 
 # Upgrade dependencies, then re-run the full gate; commit the refreshed lockfile.
 upgrade:

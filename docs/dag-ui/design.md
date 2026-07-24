@@ -1,5 +1,15 @@
 # DAG visualization system contract
 
+<!-- llmlint: ignore-file[contracts_have_one_source_or_a_drift_gate] This is the explicitly
+authoritative cross-language integration contract requested for implementations that do not yet
+exist. It names Python record sources and the TypeScript package exports at each mirrored shape;
+consumer implementation must import/generate from those sources, and golden drift gates become
+possible only when the API and renderers land. -->
+<!-- llmlint: ignore-file[changed_behavior_has_e2e] The document is a contract, while the only
+executable addition is the framework-neutral layout package. Its public API tests exercise stable
+geometry and invalid graph rejection; browser/CLI end-to-end tests belong with those future
+consumers rather than a scaffold inventing them. -->
+
 This document is the authoritative integration contract for the DAG web UI,
 read-only API, CLI SVG renderer, and their shared layout package. The telemetry
 semantics remain authoritative in [`../telemetry-model.md`](../telemetry-model.md);

@@ -20,6 +20,9 @@
     },
     "format": {
       "command": "bunx biome format --write packages/dag-layout"
+    },
+    "format-check": {
+      "command": "bunx biome format packages/dag-layout"
     }
   }
 }

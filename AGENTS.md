@@ -256,6 +256,11 @@ Human completion is never inferred and enters the graph only as an explicit live
 syntax and result contracts in
 `docs/orchestration.md` and lifecycle policy in `docs/repo-lifecycle.md` rather
 than duplicating command help here.
+The root quality recipes delegate project selection and caching to Nx:
+`check`/`test` use the full uniform target set through `run-many`, while
+`lint`/`typecheck`/`format` use affected selection. The language-native tools
+inside each project target remain authoritative, and `format-check` remains a
+format-only verification.
 Use `docs/telemetry.md` to inspect session timing, usage, and the agent/judge
 turn timeline with `just telemetry`.
 

@@ -26,6 +26,10 @@
     "format": {
       "command": "uv run ruff format .",
       "options": { "cwd": "." }
+    },
+    "format-check": {
+      "command": "uv run ruff format --check .",
+      "options": { "cwd": "." }
     }
   }
 }
