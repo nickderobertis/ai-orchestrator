@@ -706,7 +706,8 @@ def launch_orchestrator(
     # simulated-model eval/assessment calls do not belong on this command relay.
     config.pop("evals", None)
     config.pop("assessment", None)
-    skill = dict(skill_provider or config.get("provider", {}))
+    worker_skill = dict(config.get("provider", {}))
+    skill = dict(skill_provider or worker_skill)
     provider_kind = skill.get("kind")
     if provider_kind not in {"command", "oneharness"}:
         raise DispatchError("orchestrator skill provider kind must be 'command' or 'oneharness'")
@@ -748,7 +749,9 @@ def launch_orchestrator(
     effective.parent.mkdir()
     effective.write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
     worker_base = load_yaml(base_path)
-    worker_base["provider"] = skill
+    worker_provider_kind = worker_skill.get("kind")
+    if worker_provider_kind not in {"command", "oneharness"}:
+        raise DispatchError("worker provider kind must be 'command' or 'oneharness'")
     worker_base_path = effective.parent / "worker-base.yaml"
     worker_base_path.write_text(yaml.safe_dump(worker_base, sort_keys=False), encoding="utf-8")
     report_path = effective.parent / "report.json"
@@ -756,7 +759,7 @@ def launch_orchestrator(
     task = (
         "Drive this tracked orchestration plan one round at a time. Execute the real command "
         f"`just run-plan {plan} --run {run_dir.name} --runs-dir {root} --base {worker_base_path} "
-        f"--provider {provider_kind}"
+        f"--provider {worker_provider_kind}"
         f"{' --acknowledge-concurrent' if acknowledge_concurrent else ''}` for each required "
         "round, review its recorded "
         "result, and surface milestones, blockers, departures, and closeout to your supervisor."

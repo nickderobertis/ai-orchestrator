@@ -31,6 +31,14 @@ def _base(tmp_path: Path) -> Path:
     return path
 
 
+def _oneharness_worker_base(tmp_path: Path) -> Path:
+    value = yaml.safe_load(BASE_CONFIG.read_text(encoding="utf-8"))
+    value["provider"] = {"kind": "oneharness", "bin": "oneharness"}
+    path = tmp_path / "oneharness-worker-base.yaml"
+    path.write_text(yaml.safe_dump(value), encoding="utf-8")
+    return path
+
+
 def _plan(tmp_path: Path, sentinel: str) -> Path:
     path = tmp_path / f"plan-{sentinel}.json"
     path.write_text(
@@ -355,22 +363,8 @@ def test_orchestrator_retries_dead_lifecycle_worker_then_surfaces_blocker(
     monkeypatch.setenv("REAL_ONEHARNESS_BIN", oneharness_bin)
     monkeypatch.setenv("MOCK_AGENT_BARRIER", str(barrier))
     status_files = set(Path("/tmp").glob("orchestrator-watchdog-*/agent/agent.child.pid"))
-    run_id = _launch_cli(plan, runs, _base(tmp_path), onejudge_bin)
+    run_id = _launch_cli(plan, runs, _oneharness_worker_base(tmp_path), onejudge_bin)
     run_dir = runs / run_id
-    worker_base_path = run_dir / "orchestrator" / "worker-base.yaml"
-    # llmlint: ignore[tests_mirror_real_usage] Selecting this generated provider config is
-    # the suite's paid-harness seam; orchestration is still launched and driven through
-    # the public orchestrate/channel/next-round commands.
-    worker_base = yaml.safe_load(worker_base_path.read_text(encoding="utf-8"))
-    worker_base["provider"] = {
-        "kind": "split",
-        "skill": {"kind": "oneharness", "bin": "oneharness"},
-        "judge": {
-            "kind": "command",
-            "command": [sys.executable, str(FAKE_BACKEND)],
-        },
-    }
-    worker_base_path.write_text(yaml.safe_dump(worker_base), encoding="utf-8")
     pre_round_release.touch()
     orchestrator_status = json.loads(
         (run_dir / "orchestrator" / "status.json").read_text(encoding="utf-8")

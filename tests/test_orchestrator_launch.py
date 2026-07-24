@@ -44,6 +44,26 @@ def test_launch_validates_provider_payload(tmp_path: Path, provider: dict[str, o
         launch_orchestrator(plan, runs_dir=tmp_path / "runs", skill_provider=provider)
 
 
+def test_launch_validates_worker_provider_separately_from_orchestrator_skill(
+    tmp_path: Path,
+) -> None:
+    plan = tmp_path / "plan.json"
+    plan.write_text(
+        '{"schema_version":3,"tasks":[{"id":"approval","kind":"human","task":"approve"}]}',
+        encoding="utf-8",
+    )
+    base = tmp_path / "base.yaml"
+    base.write_text("provider:\n  kind: split\n", encoding="utf-8")
+
+    with pytest.raises(DispatchError, match="worker provider kind"):
+        launch_orchestrator(
+            plan,
+            runs_dir=tmp_path / "runs",
+            base_path=base,
+            skill_provider={"kind": "command", "command": ["agent"]},
+        )
+
+
 def test_launch_reaches_real_process_boundary_for_valid_oneharness_provider(tmp_path: Path) -> None:
     plan = tmp_path / "plan.json"
     plan.write_text(
