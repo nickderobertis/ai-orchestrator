@@ -572,7 +572,7 @@ def test_watchdog_terminates_live_process_tree() -> None:
 
 
 def test_watchdog_process_group_cleanup_is_safe_for_absent_group() -> None:
-    terminate_process_group(ProcessId(2**31 - 1))
+    assert terminate_process_group(ProcessId(2**31 - 1)) is None
 
 
 def test_watchdog_terminates_live_process_group() -> None:

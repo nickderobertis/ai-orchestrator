@@ -1091,9 +1091,11 @@ def _run_steps(
         persist_report_artifacts(log, report, session=f"{branch}:{sid}")
         reports[sid] = report
         if not report.completed:
-            # llmlint: ignore[changed_behavior_has_e2e] The real run-plan worker-kill journey
-            # proves the producer's worker-died Report; lifecycle's real not-completed and
-            # partial-commit journeys prove this shared Report consumer and preservation path.
+            # llmlint: ignore[changed_behavior_has_e2e] The live orchestrator e2e kills this
+            # lifecycle worker and proves worker-died enters not-completed retry/exhaustion.
+            # Existing real-git lifecycle journeys cover this same shared preservation branch
+            # with dirty and agent-committed partial work; duplicating paid-agent authoring
+            # inside the kill journey would replace an additional layer under test.
             failure = report.outcome or "hit the turn cap"
             preserved = False
             if gitops.is_dirty(worktree):

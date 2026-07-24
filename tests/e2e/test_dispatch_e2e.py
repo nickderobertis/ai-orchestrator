@@ -200,6 +200,9 @@ def test_real_dispatch_detects_killed_agent_and_reaps_orphans(
     base_path.write_text(yaml.safe_dump(base, sort_keys=False), encoding="utf-8")
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
+    # llmlint: ignore[e2e_not_mocked] The repository requires faking the paid agent
+    # harness; this journey keeps the real wrapper, onejudge, dispatcher, PID kill,
+    # process-tree cleanup, and run-plan boundary.
     (bin_dir / "oneharness").symlink_to(MOCK_ONEHARNESS)
     barrier = tmp_path / "agent-descendant.pid"
     existing_status_files = set(Path("/tmp").glob("orchestrator-watchdog-*/agent/agent.child.pid"))

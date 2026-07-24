@@ -323,6 +323,8 @@ def test_orchestrator_retries_dead_lifecycle_worker_then_surfaces_blocker(
     pre_round_release = tmp_path / "start-first-round"
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
+    # llmlint: ignore[e2e_not_mocked] This replaces only the paid agent harness. The real
+    # onejudge, lifecycle, wrapper, tracked PID, process kill, git, retry, and channel run.
     (bin_dir / "oneharness").symlink_to(MOCK_ONEHARNESS)
     plan = tmp_path / "dead-lifecycle.json"
     plan.write_text(
@@ -356,6 +358,9 @@ def test_orchestrator_retries_dead_lifecycle_worker_then_surfaces_blocker(
     run_id = _launch_cli(plan, runs, _base(tmp_path), onejudge_bin)
     run_dir = runs / run_id
     worker_base_path = run_dir / "orchestrator" / "worker-base.yaml"
+    # llmlint: ignore[tests_mirror_real_usage] Selecting this generated provider config is
+    # the suite's paid-harness seam; orchestration is still launched and driven through
+    # the public orchestrate/channel/next-round commands.
     worker_base = yaml.safe_load(worker_base_path.read_text(encoding="utf-8"))
     worker_base["provider"] = {
         "kind": "split",
