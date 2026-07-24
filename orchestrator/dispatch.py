@@ -344,11 +344,21 @@ def run_onejudge(
 
             async def watch_liveness() -> WatchdogSignal | None:
                 nonlocal observed_tree
-                while not pid_file.exists():
+                pid_wait_started = time.monotonic()
+                while True:
                     if run.done():
                         return None
+                    if pid_file.exists():
+                        try:
+                            pid = _read_watchdog_pid(pid_file)
+                        except DispatchError:
+                            # The watchdog creates then fills this file. Under load,
+                            # existence can become visible during that short write.
+                            if time.monotonic() - pid_wait_started >= min(5.0, heartbeat_timeout):
+                                _read_watchdog_pid(pid_file)
+                        else:
+                            break
                     await asyncio.sleep(min(0.05, stall_timeout / 4))
-                pid = _read_watchdog_pid(pid_file)
                 activity = process_activity(pid)
                 observed = activity.pids
                 observed_tree = observed

@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 from onejudge_sdk import RunResult
@@ -323,6 +324,40 @@ def test_run_onejudge_allows_slow_dispatch_with_real_io_progress(tmp_path) -> No
         env={"ORCHESTRATOR_DISPATCH_STALL_TIMEOUT": "0.2"},
     )
 
+    assert report.completed is True
+
+
+def test_run_onejudge_retries_transient_empty_watchdog_pid(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    onejudge = tmp_path / "onejudge"
+    onejudge.write_text(
+        "#!/bin/sh\n"
+        "sleep 0.2\n"
+        'printf \'%s\\n\' \'{"schema_version":4,"transcript":{"messages":[]},'
+        '"stopped_early":false}\'\n',
+        encoding="utf-8",
+    )
+    onejudge.chmod(0o700)
+    original_read_text = Path.read_text
+    injected = False
+
+    def transient_empty(path: Path, *args: object, **kwargs: object) -> str:
+        nonlocal injected
+        if (
+            not injected
+            and path.name == "pid"
+            and path.parent.name.startswith("orchestrator-watchdog-")
+        ):
+            injected = True
+            return ""
+        return original_read_text(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", transient_empty)
+
+    report = run_onejudge({}, "task", onejudge_bin=os.fspath(onejudge))
+
+    assert injected
     assert report.completed is True
 
 
