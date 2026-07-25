@@ -82,11 +82,16 @@ def test_smoke_selector_covers_exact_documented_launch_paths(tmp_path: Path) -> 
         capture_output=True,
     )
     assert invalid.returncode == 2 and "not a commit" in invalid.stderr
-    malformed = subprocess.run(
-        [str(ROOT / "scripts/pre-push-smoke-needed.sh"), "origin/main"],
-        cwd=clone,
-        input="refs/heads/main nope refs/heads/main nope\n",
-        text=True,
-        capture_output=True,
-    )
-    assert malformed.returncode == 2 and "invalid ref update" in malformed.stderr
+    for update in (
+        "refs/heads/main nope refs/heads/main nope\n",
+        f"refs/heads/main {base}\n",
+        f"refs/heads/main {base}  {'0' * 40}\n",
+    ):
+        malformed = subprocess.run(
+            [str(ROOT / "scripts/pre-push-smoke-needed.sh"), "origin/main"],
+            cwd=clone,
+            input=update,
+            text=True,
+            capture_output=True,
+        )
+        assert malformed.returncode == 2 and "invalid ref update" in malformed.stderr

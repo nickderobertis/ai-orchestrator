@@ -21,13 +21,21 @@ git rev-parse --verify --quiet "$comparison^{commit}" >/dev/null || {
   exit 2
 }
 updates=()
-while read -r _local_ref local_sha _remote_ref remote_sha; do
-  [[ -n ${local_sha:-} ]] || continue
-  [[ $local_sha =~ ^[0-9a-f]{40}$ && ${remote_sha:-$zero} =~ ^[0-9a-f]{40}$ ]] || {
+while IFS= read -r update; do
+  read -r -a fields <<<"$update"
+  (( ${#fields[@]} == 4 )) || {
     echo "pre-push-smoke-needed: Git supplied an invalid ref update; retry the push after checking repository integrity" >&2
     exit 2
   }
-  updates+=("$local_sha ${remote_sha:-$zero}")
+  local_ref=${fields[0]}
+  local_sha=${fields[1]}
+  remote_ref=${fields[2]}
+  remote_sha=${fields[3]}
+  [[ -n $local_ref && -n $remote_ref && $local_sha =~ ^[0-9a-f]{40}$ && $remote_sha =~ ^[0-9a-f]{40}$ ]] || {
+    echo "pre-push-smoke-needed: Git supplied an invalid ref update; retry the push after checking repository integrity" >&2
+    exit 2
+  }
+  updates+=("$local_sha $remote_sha")
 done
 if (( ${#updates[@]} == 0 )); then
   updates+=("HEAD $zero")
