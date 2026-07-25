@@ -2,6 +2,18 @@
 # Exit 0 when any ref update changes the paid-smoke launch path; 1 otherwise.
 set -euo pipefail
 
+launch_paths=(
+  "scripts/"
+  "config/oneharness.version"
+  "config/onejudge.base.yaml"
+  "oneharness.toml"
+  "oneharness.judge.toml"
+)
+if [[ ${1:-} == --print-paths ]]; then
+  printf '%s\n' "${launch_paths[@]}"
+  exit 0
+fi
+
 comparison=${1:?comparison ref is required}
 zero=0000000000000000000000000000000000000000
 git rev-parse --verify --quiet "$comparison^{commit}" >/dev/null || {
@@ -34,8 +46,12 @@ for update in "${updates[@]}"; do
     echo "pre-push-smoke-needed: cannot compare '$base' with '$local_sha'; fetch the remote and retry" >&2
     exit 2
   }
-  if grep -Eq '^(scripts/|config/oneharness\.version$|config/onejudge\.base\.yaml$|oneharness\.toml$|oneharness\.judge\.toml$)' <<<"$changed"; then
-    exit 0
-  fi
+  while IFS= read -r path; do
+    for launch_path in "${launch_paths[@]}"; do
+      if [[ $launch_path == */ && $path == "$launch_path"* ]] || [[ $path == "$launch_path" ]]; then
+        exit 0
+      fi
+    done
+  done <<<"$changed"
 done
 exit 1

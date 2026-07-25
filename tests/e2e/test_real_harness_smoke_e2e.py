@@ -37,3 +37,20 @@ def test_launch_path_push_runs_real_smoke_then_gate(tmp_path: Path) -> None:
     )
     assert proc.returncode == 0, proc.stderr
     assert "launch path changed; running one real-harness smoke" in proc.stderr
+
+
+def test_real_wrapper_surfaces_unavailable_configured_harnesses() -> None:
+    proc = subprocess.run(
+        ["just", "smoke"],
+        cwd=ROOT,
+        env={
+            **os.environ,
+            "ONEHARNESS_BIN_CODEX": "/does/not/exist/codex",
+            "ONEHARNESS_BIN_CLAUDE_CODE": "/does/not/exist/claude",
+        },
+        text=True,
+        capture_output=True,
+    )
+    assert proc.returncode != 0
+    assert "real harness smoke failed" in proc.stderr
+    assert "rerun 'just smoke'" in proc.stderr

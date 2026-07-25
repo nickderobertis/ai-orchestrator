@@ -628,8 +628,8 @@ def _summarize_session(session: HistorySession, records: list[HistoryRecord]) ->
     )
 
 
-def history_session_has_complete_telemetry(session: HistorySession) -> bool:
-    """Whether oneharness persisted a complete native telemetry record."""
+def history_session_is_successful_with_complete_telemetry(session: HistorySession) -> bool:
+    """Whether oneharness persisted successful execution and complete native telemetry."""
     records = cast(list[HistoryRecord], session_records(session))
     summary = _summarize_session(session, records)
     return (

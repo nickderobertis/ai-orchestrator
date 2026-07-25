@@ -99,12 +99,14 @@ def test_pre_push_smoke_runs_only_for_launch_path_changes(tmp_path) -> None:
     assert not selected(base, ordinary)
 
     previous = ordinary
+    declared = subprocess.run(
+        [str(ROOT / "scripts/pre-push-smoke-needed.sh"), "--print-paths"],
+        text=True,
+        capture_output=True,
+        check=True,
+    ).stdout.splitlines()
     launch_paths = [
-        "scripts/launch-smoke-probe.sh",
-        "config/oneharness.version",
-        "config/onejudge.base.yaml",
-        "oneharness.toml",
-        "oneharness.judge.toml",
+        f"{path}launch-smoke-probe.sh" if path.endswith("/") else path for path in declared
     ]
     for relative in launch_paths:
         path = clone / relative
@@ -119,6 +121,23 @@ def test_pre_push_smoke_runs_only_for_launch_path_changes(tmp_path) -> None:
     documented = (ROOT / "AGENTS.md").read_text(encoding="utf-8") + (
         ROOT / "docs/onejudge-integration.md"
     ).read_text(encoding="utf-8")
-    for relative in launch_paths:
-        expected = "scripts/" if relative.startswith("scripts/") else relative
+    for expected in declared:
         assert expected in documented
+
+    invalid = subprocess.run(
+        [str(ROOT / "scripts/pre-push-smoke-needed.sh"), "not-a-revision"],
+        cwd=clone,
+        text=True,
+        capture_output=True,
+    )
+    assert invalid.returncode == 2
+    assert "not a commit" in invalid.stderr
+    malformed = subprocess.run(
+        [str(ROOT / "scripts/pre-push-smoke-needed.sh"), "origin/main"],
+        cwd=clone,
+        input="refs/heads/main nope refs/heads/main nope\n",
+        text=True,
+        capture_output=True,
+    )
+    assert malformed.returncode == 2
+    assert "invalid ref update" in malformed.stderr

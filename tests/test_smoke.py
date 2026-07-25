@@ -130,7 +130,9 @@ def test_run_smoke_rejects_broken_record_contracts(
     monkeypatch.setattr(smoke, "_run_wrapper", lambda *_args: None)
     monkeypatch.setattr(smoke, "all_sessions", lambda: [session])
     monkeypatch.setattr(smoke, "session_records", lambda _session: records)
-    monkeypatch.setattr(smoke, "history_session_has_complete_telemetry", lambda _session: complete)
+    monkeypatch.setattr(
+        smoke, "history_session_is_successful_with_complete_telemetry", lambda _session: complete
+    )
     with pytest.raises(HistoryError, match=message):
         smoke.run_smoke()
 
