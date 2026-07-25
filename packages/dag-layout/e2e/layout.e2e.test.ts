@@ -33,6 +33,71 @@ test("a package consumer receives connected geometry and routed edges", () => {
   });
 });
 
+test("a package consumer receives edges in stable ID order", () => {
+  const layout = layoutDag({
+    nodes: [
+      { id: "build", label: "Build", kind: "agent", state: "done" },
+      { id: "publish", label: "Publish", kind: "human", state: "waiting" },
+      { id: "test", label: "Test", kind: "agent", state: "running" },
+    ],
+    edges: [
+      { id: "test-publish", source: "test", target: "publish" },
+      { id: "build-publish", source: "build", target: "publish" },
+      { id: "build-test", source: "build", target: "test" },
+    ],
+  });
+
+  expect(layout.edges.map(({ id }) => id)).toEqual([
+    "build-publish",
+    "build-test",
+    "test-publish",
+  ]);
+});
+
+test("a package consumer receives the longest dependency rank", () => {
+  const layout = layoutDag({
+    nodes: [
+      { id: "build", label: "Build", kind: "agent", state: "done" },
+      { id: "publish", label: "Publish", kind: "human", state: "waiting" },
+      { id: "test", label: "Test", kind: "agent", state: "running" },
+    ],
+    edges: [
+      { id: "build-publish", source: "build", target: "publish" },
+      { id: "build-test", source: "build", target: "test" },
+      { id: "test-publish", source: "test", target: "publish" },
+    ],
+  });
+
+  expect(layout.nodes.find(({ id }) => id === "publish")).toMatchObject({
+    x: 560,
+  });
+});
+
+test("a package consumer receives a vertically routed edge", () => {
+  const layout = layoutDag({
+    nodes: [
+      { id: "build-a", label: "Build A", kind: "agent", state: "done" },
+      { id: "build-b", label: "Build B", kind: "agent", state: "done" },
+      { id: "test-a", label: "Test A", kind: "agent", state: "running" },
+      { id: "test-b", label: "Test B", kind: "agent", state: "running" },
+    ],
+    edges: [
+      { id: "build-a-test-a", source: "build-a", target: "test-a" },
+      { id: "build-b-test-b", source: "build-b", target: "test-b" },
+      { id: "build-b-test-a", source: "build-b", target: "test-a" },
+    ],
+  });
+
+  expect(
+    layout.edges.find(({ id }) => id === "build-b-test-a")?.points,
+  ).toEqual([
+    { x: 200, y: 140 },
+    { x: 240, y: 140 },
+    { x: 240, y: 36 },
+    { x: 280, y: 36 },
+  ]);
+});
+
 test("a package consumer cannot render a cyclic graph", () => {
   expect(() =>
     layoutDag({
