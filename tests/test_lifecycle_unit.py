@@ -1017,7 +1017,7 @@ def test_load_repo_plan_with_steps(tmp_path) -> None:
                             {"id": "impl", "persona": "engineer", "task": "build"},
                             {
                                 "id": "test",
-                                "persona": "test-engineer",
+                                "persona": "engineer",
                                 "task": "cover",
                                 "deps": ["impl"],
                                 "max_turns": 6,
@@ -1173,7 +1173,7 @@ def test_workstream_branch_name_unique_and_task_identifiable() -> None:
     a = _workstream_branch_name([Step("impl", "engineer", "x")])
     assert a != _workstream_branch_name([Step("impl", "engineer", "x")])
     assert "/37808517-" in a
-    b = _workstream_branch_name([Step("impl", "engineer", "x"), Step("test", "test-engineer", "y")])
+    b = _workstream_branch_name([Step("impl", "engineer", "x"), Step("test", "engineer", "y")])
     assert a != b and a.startswith("ai-orchestrator/engineer/")
 
 
@@ -1227,7 +1227,7 @@ def test_run_repo_task_journals_the_workstream_and_labels_each_dispatch(
         workspace=workspace,
         steps=[
             Step("impl", "engineer", "impl"),
-            Step("check", "test-engineer", "check", deps=["impl"]),
+            Step("check", "engineer", "check", deps=["impl"]),
         ],
         verify_cmd=["true"],
         dispatch_fn=fake_dispatch,
