@@ -1,7 +1,6 @@
 import { expect, test } from "bun:test";
 
-// This consumer journey intentionally resolves the workspace package export.
-// eslint-disable-next-line @nx/enforce-module-boundaries
+// eslint-disable-next-line @nx/enforce-module-boundaries -- This consumer journey intentionally resolves the workspace package export.
 import { layoutDag } from "@ai-orchestrator/dag-layout";
 
 test("a package consumer receives connected geometry and routed edges", () => {
