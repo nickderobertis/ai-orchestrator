@@ -54,6 +54,31 @@ def test_run_smoke_validates_prompt_and_complete_history(tmp_path, monkeypatch) 
     assert smoke.run_smoke() == smoke.SmokeResult("codex", None)
 
 
+def test_validation_mode_loads_isolated_store_through_public_cli(tmp_path: Path, capsys) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    history = project / "smoke.jsonl"
+    _record(history)
+    record = json.loads(history.read_text(encoding="utf-8"))
+    record.update(
+        session="smoke-session",
+        name="smoke",
+        project="/tmp/smoke-target",
+        timestamp="2026-07-25T00:00:00Z",
+        labels={"role": "agent", "smoke": "smoke-id", "ignored": 1},
+    )
+    history.write_text(json.dumps(record) + "\n", encoding="utf-8")
+    (project / "malformed.jsonl").write_text("{bad json\n", encoding="utf-8")
+    (project / "events-only.jsonl").write_text('{"type":"event"}\n', encoding="utf-8")
+
+    sessions = smoke._stored_sessions(tmp_path)
+
+    assert len(sessions) == 1
+    assert sessions[0].labels == {"role": "agent", "smoke": "smoke-id"}
+    assert smoke.main(["--validate-history", str(tmp_path), "--smoke-id", "smoke-id"]) == 0
+    assert "recorded cost: unreported" in capsys.readouterr().out
+
+
 @pytest.mark.parametrize("reported_cost", ["malformed", math.inf, -math.inf, math.nan])
 def test_run_smoke_renders_invalid_recorded_cost_as_unreported(
     tmp_path: Path, monkeypatch, capsys, reported_cost: object
@@ -75,7 +100,7 @@ def test_run_smoke_renders_invalid_recorded_cost_as_unreported(
     monkeypatch.setattr(smoke, "_run_wrapper", lambda *_args: None)
     monkeypatch.setattr(smoke, "all_sessions", lambda: [session])
 
-    assert smoke.main() == 0
+    assert smoke.main([]) == 0
     assert "recorded cost: unreported" in capsys.readouterr().out
 
 
@@ -165,14 +190,14 @@ def test_run_smoke_rejects_broken_record_contracts(
 
 def test_main_reports_success_and_failure(monkeypatch, capsys) -> None:
     monkeypatch.setattr(smoke, "run_smoke", lambda: smoke.SmokeResult("codex", 0.0123456))
-    assert smoke.main() == 0
+    assert smoke.main([]) == 0
     assert "$0.012346" in capsys.readouterr().out
 
     def fail() -> smoke.SmokeResult:
         raise HistoryError("broken")
 
     monkeypatch.setattr(smoke, "run_smoke", fail)
-    assert smoke.main() == 1
+    assert smoke.main([]) == 1
     assert "smoke: broken" in capsys.readouterr().err
 
 

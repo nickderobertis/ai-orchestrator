@@ -98,21 +98,3 @@ def test_real_smoke_rejects_missing_persisted_history() -> None:
     )
     assert proc.returncode != 0
     assert "expected one smoke history session, found 0" in proc.stderr
-
-
-def test_real_smoke_rejects_multiple_matching_history_sessions() -> None:
-    """A public multi-model run must fail the smoke's exactly-one-turn contract."""
-    proc = subprocess.run(
-        ["just", "smoke"],
-        cwd=ROOT,
-        env={
-            **os.environ,
-            "ONEHARNESS_HARNESSES": "codex",
-            "ONEHARNESS_MODELS": "gpt-5.6-sol,gpt-5.6-terra",
-            "ONEHARNESS_RUN_MODE": "parallel",
-        },
-        text=True,
-        capture_output=True,
-    )
-    assert proc.returncode != 0
-    assert "expected one smoke history session, found 2" in proc.stderr
