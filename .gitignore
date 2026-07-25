@@ -13,7 +13,6 @@ htmlcov/
 .mypy_cache/
 .ruff_cache/
 
-# JavaScript / Nx
 node_modules/
 .nx/
 dist/
