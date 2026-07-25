@@ -183,6 +183,75 @@ def test_dispatch_completes_via_supervisor_loop(command_base, onejudge_bin) -> N
     assert report.assessment == "- Add a regression test for the adjacent edge case."
 
 
+def test_real_dispatch_delivers_exact_task_to_agent_history(
+    tmp_path: Path, onejudge_bin: str, oneharness_bin: str
+) -> None:
+    target = tmp_path / "target"
+    target.mkdir()
+    task = "complete-now: preserve this exact dispatched task."
+    base = yaml.safe_load((REPO_ROOT / "config" / "onejudge.base.yaml").read_text())
+    base["provider"] = {
+        "kind": "split",
+        "skill": {"kind": "oneharness", "bin": "oneharness"},
+        "judge": {"kind": "command", "command": [sys.executable, str(FAKE_BACKEND)]},
+    }
+    base["user"]["max_turns"] = 1
+    base_path = tmp_path / "split.base.yaml"
+    base_path.write_text(yaml.safe_dump(base, sort_keys=False), encoding="utf-8")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "oneharness").symlink_to(MOCK_ONEHARNESS)
+    state_home = tmp_path / "state"
+    mock_stdout = "\n".join(
+        (
+            json.dumps({"type": "turn.started"}),
+            json.dumps({"type": "thread.started", "thread_id": "prompt-delivery-thread"}),
+            json.dumps(
+                {
+                    "type": "item.completed",
+                    "item": {"type": "agent_message", "text": "completed"},
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "turn.completed",
+                    "usage": {"input_tokens": 4, "cached_input_tokens": 0, "output_tokens": 1},
+                }
+            ),
+        )
+    )
+
+    report = dispatch(
+        "engineer",
+        task,
+        base_path=base_path,
+        project_dir=str(target),
+        onejudge_bin=onejudge_bin,
+        env={
+            "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+            "REAL_ONEHARNESS_BIN": oneharness_bin,
+            "MOCK_STDOUT": mock_stdout,
+            "ONEHARNESS_HISTORY": "true",
+            "XDG_STATE_HOME": str(state_home),
+        },
+    )
+
+    assert report.completed
+    records = [
+        json.loads(line)
+        for history_file in (state_home / "oneharness" / "history").glob("*/*.jsonl")
+        for line in history_file.read_text(encoding="utf-8").splitlines()
+    ]
+    agent_runs = [
+        record
+        for record in records
+        if record.get("type") == "run" and record.get("labels", {}).get("role") == "agent"
+    ]
+    assert len(agent_runs) == 1
+    assert agent_runs[0]["prompt"]
+    assert agent_runs[0]["prompt"] == task
+
+
 def test_real_dispatch_detects_killed_agent_and_reaps_orphans(
     tmp_path: Path, onejudge_bin: str, oneharness_bin: str
 ) -> None:
