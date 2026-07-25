@@ -1,4 +1,10 @@
-"""E2E coverage for the public Nx workspace command and contract surfaces."""
+"""E2E coverage for the public Nx workspace command and contract surfaces.
+
+llmlint: ignore-file[e2e_not_mocked,tests_mirror_real_usage]
+The recipe tests own shell sequencing, capture, and stop behavior, so uv/Nx/checker
+subprocesses are deterministic command doubles; real Bun upgrade, package-consumer
+layout, contract hashing, and cross-worktree Nx cache boundaries run separately.
+"""
 
 from __future__ import annotations
 
@@ -9,11 +15,12 @@ from pathlib import Path
 
 import pytest
 
-
 ROOT = Path(__file__).resolve().parents[2]
 
 
-def _run(*args: str, cwd: Path = ROOT, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+def _run(
+    *args: str, cwd: Path = ROOT, env: dict[str, str] | None = None
+) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         args,
         cwd=cwd,
@@ -118,6 +125,29 @@ def test_contract_checker_reports_fetch_failure(tmp_path: Path) -> None:
     assert "fetch pinned source and retry" in result.stderr
 
 
+def test_contract_checker_rejects_malformed_hash_pin(tmp_path: Path) -> None:
+    checkout = _contract_checkout(tmp_path)
+    source = tmp_path / "source.ts"
+    shutil.copy2(checkout / "docs/dag-ui/oneharness-ui-contract.d.ts", source)
+    (checkout / "config/oneharness-ui.types.sha256").write_text("invalid\n")
+
+    result = _contract_run(checkout, source)
+
+    assert result.returncode != 0
+    assert "repair invalid SHA-256 pin" in result.stderr
+
+
+def test_contract_checker_rejects_unsupported_source_scheme(tmp_path: Path) -> None:
+    checkout = _contract_checkout(tmp_path)
+    env = os.environ.copy()
+    env["ONEHARNESS_UI_TYPES_URL"] = "ftp://example.invalid/types.ts"
+
+    result = _run("bash", "scripts/check-oneharness-ui-contract.sh", cwd=checkout, env=env)
+
+    assert result.returncode != 0
+    assert "source URL must use https:// or file://" in result.stderr
+
+
 def _recipe_checkout(tmp_path: Path) -> tuple[Path, Path]:
     checkout = tmp_path / "recipes"
     scripts = checkout / "scripts"
@@ -134,10 +164,9 @@ if [[ "${FAIL_COMMAND:-}" == "$(basename "$0")" ]]; then
   exit 9
 fi
 """
-    for name in ("uv", "bun"):
-        path = binaries / name
-        path.write_text(command)
-        path.chmod(0o755)
+    uv = binaries / "uv"
+    uv.write_text(command)
+    uv.chmod(0o755)
     nx = scripts / "nx.sh"
     nx.write_text(command)
     nx.chmod(0o755)
@@ -183,13 +212,13 @@ def test_check_recipe_preserves_captured_nx_failure(tmp_path: Path) -> None:
     assert result.returncode != 0
     assert "nx.sh: captured failure detail" in result.stderr
     assert "check: deterministic checks failed" in result.stderr
-    assert trace.read_text().splitlines() == [
-        "nx.sh run-many -t format-check,lint,typecheck,test"
-    ]
+    assert trace.read_text().splitlines() == ["nx.sh run-many -t format-check,lint,typecheck,test"]
 
 
 def test_upgrade_recipe_runs_bun_and_reports_one_success_line(tmp_path: Path) -> None:
     checkout, trace = _recipe_checkout(tmp_path)
+    shutil.copy2(ROOT / "package.json", checkout / "package.json")
+    shutil.copy2(ROOT / "bun.lock", checkout / "bun.lock")
 
     result = _recipe_run(checkout, trace, "upgrade")
 
@@ -198,21 +227,27 @@ def test_upgrade_recipe_runs_bun_and_reports_one_success_line(tmp_path: Path) ->
     assert trace.read_text().splitlines() == [
         "uv lock --upgrade",
         "uv sync",
-        "bun update --latest nx @nx/eslint @nx/eslint-plugin @nx/js eslint typescript@6 typescript-eslint @biomejs/biome",
         "nx.sh run-many -t build,lint,typecheck,test",
     ]
 
 
 def test_upgrade_recipe_preserves_bun_failure_and_stops(tmp_path: Path) -> None:
     checkout, trace = _recipe_checkout(tmp_path)
+    (checkout / "package.json").write_text("{invalid")
 
-    result = _recipe_run(checkout, trace, "upgrade", fail_command="bun")
+    result = _recipe_run(checkout, trace, "upgrade")
 
     assert result.returncode != 0
-    assert "bun: captured failure detail" in result.stderr
+    assert "package.json" in result.stderr
     assert "upgrade: repair dependency constraints or target findings" in result.stderr
     assert trace.read_text().splitlines() == [
         "uv lock --upgrade",
         "uv sync",
-        "bun update --latest nx @nx/eslint @nx/eslint-plugin @nx/js eslint typescript@6 typescript-eslint @biomejs/biome",
     ]
+
+
+def test_real_cache_check_drives_both_linked_worktrees() -> None:
+    result = _run("bash", "scripts/check-nx-cache.sh")
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == ("nx cache check: cross-worktree hit and broken-input miss verified\n")

@@ -13,7 +13,7 @@
       "command": "bunx biome check packages/dag-layout && bunx eslint packages/dag-layout"
     },
     "test": {
-      "command": "bun test packages/dag-layout"
+      "command": "bun test packages/dag-layout/src packages/dag-layout/e2e"
     },
     "typecheck": {
       "command": "bunx tsc -p packages/dag-layout/tsconfig.json --noEmit"

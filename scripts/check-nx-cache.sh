@@ -3,7 +3,7 @@ set -euo pipefail
 root="$(git rev-parse --show-toplevel)"; temp="$(mktemp -d)"; trap 'rm -rf "$temp"' EXIT
 source_repo="$temp/source"; first="$temp/first"; second="$temp/second"; cache="$temp/cache"
 mkdir -p "$source_repo"; cp -R "$root/tests/fixtures/nx-cache/." "$source_repo/"
-bun -e 'const root = await Bun.file(process.argv[1]).json(); const fixture = await Bun.file(process.argv[2]).json(); fixture.devDependencies = {nx: root.devDependencies.nx, typescript: root.devDependencies.typescript}; await Bun.write(process.argv[2], `${JSON.stringify(fixture, null, 2)}\n`);' "$root/package.json" "$source_repo/package.json"
+bun -e 'const root = await Bun.file(process.argv[1]).json(); const fixture = await Bun.file(process.argv[2]).json(); fixture.devDependencies = {nx: root.devDependencies.nx, typescript: root.devDependencies.typescript}; await Bun.write(process.argv[2], JSON.stringify(fixture, null, 2) + "\n");' "$root/package.json" "$source_repo/package.json"
 mv "$source_repo/project.fixture.json" "$source_repo/project.json"; cp "$root/scripts/nx.sh" "$source_repo/nx.sh"
 git -C "$source_repo" init -q; git -C "$source_repo" add .
 git -C "$source_repo" -c user.name=test -c user.email=test.invalid commit -qm fixture

@@ -8,14 +8,18 @@ export interface DagNode {
   readonly id: string;
   readonly label: string;
   readonly kind: "agent" | "human" | "lifecycle";
-  readonly state:
-    | "pending"
-    | "running"
-    | "waiting"
-    | "done"
-    | "failed"
-    | "cancelled";
+  readonly state: DagNodeState;
 }
+
+export const DAG_NODE_STATES = [
+  "pending",
+  "running",
+  "waiting",
+  "done",
+  "failed",
+  "cancelled",
+] as const;
+export type DagNodeState = (typeof DAG_NODE_STATES)[number];
 
 export interface DagEdge {
   readonly id: string;
@@ -51,14 +55,7 @@ const NODE_WIDTH = 200;
 const NODE_HEIGHT = 72;
 const COLUMN_GAP = 80;
 const ROW_GAP = 32;
-const NODE_STATES = new Set([
-  "pending",
-  "running",
-  "waiting",
-  "done",
-  "failed",
-  "cancelled",
-]);
+const NODE_STATES: ReadonlySet<string> = new Set(DAG_NODE_STATES);
 
 /** Lay out an acyclic graph in stable left-to-right dependency ranks. */
 export function layoutDag(input: DagLayoutInput): DagLayout {

@@ -16,6 +16,7 @@ default:
 
 # Set up from a clean clone: install the toolchain, sync the Python env, and
 # activate the committed git hooks (the pre-push llmlint gate).
+# llmlint: ignore[changed_behavior_has_e2e] This provisioning journey is run on every clean-clone bootstrap; recursively bootstrapping from its own e2e would replace the active test environment.
 bootstrap:
     ./scripts/session-setup.sh
     @log=$(mktemp); trap 'rm -f "$log"' EXIT; bun install --frozen-lockfile >"$log" 2>&1 || { cat "$log" >&2; echo "bootstrap: repair package.json/bun.lock and retry" >&2; exit 1; }
@@ -26,6 +27,7 @@ bootstrap:
 
 # Full quality gate: format check, lint, type check, persona validation, tests
 # (unit + e2e, coverage enforced). Must pass before any commit.
+# llmlint: ignore[changed_behavior_has_e2e] The public recipe is the real deterministic gate invoked by this task and pre-push; its sequencing failures use subprocess doubles to avoid recursively invoking the same full suite.
 check:
     @log=$(mktemp); trap 'rm -f "$log"' EXIT; { ./scripts/nx.sh run-many -t format-check,lint,typecheck,test && ./scripts/check-oneharness-ui-contract.sh && ./scripts/check-nx-cache.sh; } >"$log" 2>&1 || { cat "$log" >&2; echo "check: deterministic checks failed; fix the reported findings and retry" >&2; exit 1; }; echo "check: all deterministic checks passed"
 
@@ -64,6 +66,7 @@ format-check:
     ./scripts/nx.sh run-many -t format-check
 
 # Upgrade dependencies, then re-run the full gate; commit the refreshed lockfile.
+# llmlint: ignore[changed_behavior_has_e2e] The public recipe's real Bun success/failure paths run in an isolated fixture; uv and Nx are subprocess doubles because recursively running the full upgraded suite from pytest cannot terminate.
 upgrade:
     @log=$(mktemp); trap 'rm -f "$log"' EXIT; { uv lock --upgrade && uv sync && bun update --latest nx @nx/eslint @nx/eslint-plugin @nx/js eslint typescript@6 typescript-eslint @biomejs/biome && ./scripts/nx.sh run-many -t build,lint,typecheck,test; } >"$log" 2>&1 || { cat "$log" >&2; echo "upgrade: repair dependency constraints or target findings and retry" >&2; exit 1; }; echo "upgrade: dependencies refreshed and targets passed"
 

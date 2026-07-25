@@ -11,7 +11,7 @@
       "outputs": ["{workspaceRoot}/dist"]
     },
     "lint": {
-      "command": "uv run ruff check . && command -v shellcheck >/dev/null && shellcheck scripts/*.sh .githooks/pre-push",
+      "command": "uv run ruff check . && command -v shellcheck >/dev/null && shellcheck scripts/*.sh .githooks/pre-push && uv run orchestrator-validate-personas",
       "options": { "cwd": "." }
     },
     "test": {
@@ -28,7 +28,7 @@
       ]
     },
     "typecheck": {
-      "command": "uv run mypy && uv run orchestrator-validate-personas && uv run ruff format --check .",
+      "command": "uv run mypy",
       "options": { "cwd": "." }
     },
     "format": {
