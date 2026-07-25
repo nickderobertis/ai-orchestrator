@@ -74,3 +74,34 @@ def test_non_run_subcommand_is_rejected(tmp_path: Path) -> None:
     proc, _ = _run_wrapper(tmp_path, ["config"])
     assert proc.returncode == 2
     assert "expected the 'run' subcommand" in proc.stderr
+
+
+def test_watchdog_path_forwards_the_task_on_stdin(tmp_path: Path) -> None:
+    """The backgrounded heartbeat path must still deliver the task on stdin."""
+    status_dir = tmp_path / "orchestrator-watchdog-1" / "agent"
+    status_dir.mkdir(parents=True)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    stdin_file = tmp_path / "agent-stdin"
+    stub = bin_dir / "oneharness"
+    stub.write_text(
+        '#!/usr/bin/env bash\ncat > "$ONEHARNESS_STDIN_FILE"\n',
+        encoding="utf-8",
+    )
+    stub.chmod(stub.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    task = "## What\nRegenerate the four stale baselines.\n"
+    proc = subprocess.run(
+        ["bash", str(WRAPPER), "run", "--compact", "--prompt-file", "-"],
+        text=True,
+        input=task,
+        capture_output=True,
+        env={
+            "PATH": f"{bin_dir}:/usr/bin:/bin",
+            "ONEHARNESS_STDIN_FILE": str(stdin_file),
+            "ORCHESTRATOR_AGENT_STATUS_DIR": str(status_dir),
+        },
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert stdin_file.read_text(encoding="utf-8") == task
+    # The heartbeat path is the one under test: it must have run, not the exec branch.
+    assert (status_dir / "agent.done").exists()
