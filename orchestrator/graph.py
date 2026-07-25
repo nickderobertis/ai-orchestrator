@@ -30,6 +30,7 @@ from .channel import (
     ProposalPump,
     ProposalSink,
 )
+from .cli_contract import ROUND_BUDGET_OPTION
 from .config import ConfigError, load_yaml
 from .coordination import advisory_lock, reset_harness_observer, set_harness_observer
 from .dispatch import Report
@@ -1082,7 +1083,7 @@ def main(argv: list[str] | None = None) -> int:
         help="wall-clock cap for one direct agent node's dispatch",
     )
     parser.add_argument(
-        "--round-budget",
+        ROUND_BUDGET_OPTION,
         type=float,
         default=DEFAULT_ROUND_BUDGET,
         metavar="SECONDS",
@@ -1098,7 +1099,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.concurrency is not None and args.concurrency < 1:
             raise PlanError("'--concurrency' must be a positive integer")
         if not math.isfinite(args.round_budget) or args.round_budget <= 0:
-            raise PlanError("'--round-budget' must be a positive finite number")
+            raise PlanError(f"'{ROUND_BUDGET_OPTION}' must be a positive finite number")
         run_dir = (
             None
             if args.no_record
