@@ -27,7 +27,24 @@ class SmokeResult:
     cost_usd: int | float | None
 
 
-def _run_wrapper(target: Path, status_dir: Path, history_dir: Path, smoke_id: str) -> None:
+def _timeout_seconds() -> int:
+    raw = os.environ.get("ORCHESTRATOR_SMOKE_TIMEOUT_SECONDS")
+    if raw is None:
+        return TIMEOUT_SECONDS
+    try:
+        value = int(raw)
+    except ValueError:
+        value = 0
+    if not 1 <= value <= TIMEOUT_SECONDS:
+        raise HistoryError(
+            f"ORCHESTRATOR_SMOKE_TIMEOUT_SECONDS must be between 1 and {TIMEOUT_SECONDS}"
+        )
+    return value
+
+
+def _run_wrapper(
+    target: Path, status_dir: Path, history_dir: Path, smoke_id: str, timeout_seconds: int
+) -> None:
     env = {
         **os.environ,
         "ONEHARNESS_HISTORY_DIR": str(history_dir),
@@ -45,7 +62,7 @@ def _run_wrapper(target: Path, status_dir: Path, history_dir: Path, smoke_id: st
             "--mode",
             "bypass",
             "--timeout",
-            str(TIMEOUT_SECONDS),
+            str(timeout_seconds),
         ],
         text=True,
         stdin=subprocess.PIPE,
@@ -58,7 +75,7 @@ def _run_wrapper(target: Path, status_dir: Path, history_dir: Path, smoke_id: st
     process.stdin.write(TASK)
     process.stdin.close()
     process.stdin = None
-    deadline = time.monotonic() + TIMEOUT_SECONDS + 10
+    deadline = time.monotonic() + timeout_seconds + 10
     while process.poll() is None and time.monotonic() < deadline:
         if (status_dir / "agent.failed").exists():
             os.killpg(process.pid, signal.SIGTERM)
@@ -86,7 +103,7 @@ def run_smoke() -> SmokeResult:
         history_dir = root / "history"
         target.mkdir()
         status_dir.mkdir()
-        _run_wrapper(target, status_dir, history_dir, smoke_id)
+        _run_wrapper(target, status_dir, history_dir, smoke_id, _timeout_seconds())
 
         previous = os.environ.get("ONEHARNESS_HISTORY_DIR")
         os.environ["ONEHARNESS_HISTORY_DIR"] = str(history_dir)

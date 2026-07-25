@@ -74,3 +74,27 @@ def test_ordinary_push_skips_real_smoke_and_runs_gate(tmp_path: Path) -> None:
     )
     assert proc.returncode == 0, proc.stderr
     assert "launch path changed" not in proc.stderr
+
+
+def test_real_smoke_surfaces_timeout() -> None:
+    proc = subprocess.run(
+        ["just", "smoke"],
+        cwd=ROOT,
+        env={**os.environ, "ORCHESTRATOR_SMOKE_TIMEOUT_SECONDS": "1"},
+        text=True,
+        capture_output=True,
+    )
+    assert proc.returncode != 0
+    assert "timed out" in proc.stderr or "real harness smoke failed" in proc.stderr
+
+
+def test_real_smoke_rejects_missing_persisted_history() -> None:
+    proc = subprocess.run(
+        ["just", "smoke"],
+        cwd=ROOT,
+        env={**os.environ, "ONEHARNESS_HISTORY": "false"},
+        text=True,
+        capture_output=True,
+    )
+    assert proc.returncode != 0
+    assert "expected one smoke history session, found 0" in proc.stderr

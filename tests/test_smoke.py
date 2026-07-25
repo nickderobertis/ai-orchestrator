@@ -1,4 +1,4 @@
-"""Process/history-boundary failure contracts around the paid real-harness smoke."""
+"""Deterministic mechanics around the explicitly paid real-harness smoke."""
 
 from __future__ import annotations
 
@@ -72,7 +72,9 @@ def test_wrapper_surfaces_backgrounded_harness_failure(tmp_path, monkeypatch) ->
     monkeypatch.setattr(smoke, "REPO_ROOT", root)
 
     with pytest.raises(HistoryError, match="provider rejected task"):
-        smoke._run_wrapper(tmp_path, status, tmp_path / "history", "smoke-id")
+        smoke._run_wrapper(
+            tmp_path, status, tmp_path / "history", "smoke-id", smoke.TIMEOUT_SECONDS
+        )
 
 
 @pytest.mark.parametrize(
@@ -94,10 +96,8 @@ def test_wrapper_surfaces_exit_and_timeout(
     status = tmp_path / "status"
     status.mkdir()
     monkeypatch.setattr(smoke, "REPO_ROOT", root)
-    monkeypatch.setattr(smoke, "TIMEOUT_SECONDS", timeout)
-
     with pytest.raises(HistoryError, match=message):
-        smoke._run_wrapper(tmp_path, status, tmp_path / "history", "smoke-id")
+        smoke._run_wrapper(tmp_path, status, tmp_path / "history", "smoke-id", timeout)
 
 
 def test_run_smoke_rejects_missing_matching_history(monkeypatch) -> None:
