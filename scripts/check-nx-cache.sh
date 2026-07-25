@@ -10,8 +10,8 @@ git -C "$source_repo" remote add origin https://example.invalid/nx-cache-proof.g
 git -C "$source_repo" worktree add -q --detach "$first" HEAD; git -C "$source_repo" worktree add -q --detach "$second" HEAD
 (cd "$first"; bun install >/dev/null; XDG_CACHE_HOME="$cache" AI_ORCHESTRATOR_NX_SHOW_OUTPUT=1 ./nx.sh run cache-proof:typecheck) >"$temp/first.log"
 (cd "$second"; bun install >/dev/null; XDG_CACHE_HOME="$cache" AI_ORCHESTRATOR_NX_SHOW_OUTPUT=1 ./nx.sh run cache-proof:typecheck) >"$temp/second.log"
-grep -Eq 'local cache|existing outputs match the cache' "$temp/second.log"
+grep -Eq 'local cache|existing outputs match the cache' "$temp/second.log" || { echo "nx cache check: second worktree missed" >&2; exit 1; }
 sed -i 's/"valid"/1/' "$second/src/index.ts"
-if (cd "$second"; XDG_CACHE_HOME="$cache" ./nx.sh run cache-proof:typecheck) >"$temp/broken.log" 2>&1; then exit 1; fi
-grep -Fq "not assignable to type 'string'" "$temp/broken.log"
+if (cd "$second"; XDG_CACHE_HOME="$cache" ./nx.sh run cache-proof:typecheck) >"$temp/broken.log" 2>&1; then echo "nx cache check: broken input replayed success" >&2; exit 1; fi
+grep -Fq "not assignable to type 'string'" "$temp/broken.log" || { echo "nx cache check: unexpected failure" >&2; cat "$temp/broken.log" >&2; exit 1; }
 printf 'nx cache check: cross-worktree hit and broken-input miss verified\n'

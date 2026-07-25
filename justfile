@@ -18,7 +18,7 @@ default:
 # activate the committed git hooks (the pre-push llmlint gate).
 bootstrap:
     ./scripts/session-setup.sh
-    bun install --frozen-lockfile
+    @log=$(mktemp); trap 'rm -f "$log"' EXIT; bun install --frozen-lockfile >"$log" 2>&1 || { cat "$log" >&2; echo "bootstrap: repair package.json/bun.lock and retry" >&2; exit 1; }
     ./scripts/nx.sh run-many -t bootstrap
     git config core.hooksPath .githooks
     # Allow local-mode lifecycle pushes into this non-bare checkout.

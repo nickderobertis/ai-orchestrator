@@ -11,9 +11,8 @@ geometry and invalid graph rejection; browser/CLI end-to-end tests belong with t
 consumers rather than a scaffold inventing them. -->
 
 This document is the authoritative integration contract for the DAG web UI,
-read-only API, CLI SVG renderer, and their shared layout package. The telemetry
-semantics remain authoritative in [`../telemetry-model.md`](../telemetry-model.md);
-this document fixes how those semantics are exposed and rendered. Implementations
+read-only API, CLI SVG renderer, and their shared layout package. It consumes the
+repository telemetry model and fixes how those semantics are exposed and rendered. Implementations
 must not infer state from display strings when a typed field exists.
 
 ## Boundaries and versioning
