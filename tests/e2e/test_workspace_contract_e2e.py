@@ -8,6 +8,7 @@ cross-worktree Nx cache boundaries run separately.
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -49,6 +50,25 @@ def test_root_recipe_routes_through_nx(recipe: str, target: str) -> None:
 
     assert result.returncode == 0, result.stderr
     assert f"./scripts/nx.sh {target}" in result.stderr
+
+
+def test_orchestrator_lint_target_reports_missing_shellcheck(tmp_path: Path) -> None:
+    command = json.loads((ROOT / "orchestrator/project.json").read_text())["targets"]["lint"][
+        "command"
+    ]
+    binaries = tmp_path / "bin"
+    binaries.mkdir()
+    uv = binaries / "uv"
+    uv.write_text("#!/bin/bash\nexit 0\n")
+    uv.chmod(0o755)
+    env = os.environ.copy()
+    env["PATH"] = str(binaries)
+
+    result = _run("/bin/bash", "-c", command, env=env)
+
+    assert result.returncode != 0
+    assert "shellcheck" in result.stderr
+    assert "just bootstrap" in result.stderr
 
 
 def _contract_checkout(tmp_path: Path) -> Path:

@@ -11,7 +11,7 @@
       "outputs": ["{workspaceRoot}/dist"]
     },
     "lint": {
-      "command": "uv run ruff check . && command -v shellcheck >/dev/null && shellcheck scripts/*.sh .githooks/pre-push && uv run orchestrator-validate-personas",
+      "command": "uv run ruff check . && { command -v shellcheck >/dev/null || { echo \"lint: required 'shellcheck' executable was not found; run 'just bootstrap' from the repository root to install it, then retry\" >&2; exit 1; }; } && shellcheck scripts/*.sh .githooks/pre-push && uv run orchestrator-validate-personas",
       "options": { "cwd": "." }
     },
     "test": {
