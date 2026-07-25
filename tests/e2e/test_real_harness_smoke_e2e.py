@@ -54,3 +54,23 @@ def test_real_wrapper_surfaces_unavailable_configured_harnesses() -> None:
     assert proc.returncode != 0
     assert "real harness smoke failed" in proc.stderr
     assert "rerun 'just smoke'" in proc.stderr
+
+
+def test_ordinary_push_skips_real_smoke_and_runs_gate(tmp_path: Path) -> None:
+    clone = gitops.clone(str(ROOT), tmp_path / "ordinary-clone")
+    before = gitops._git(["rev-parse", "HEAD"], cwd=clone).stdout.strip()
+    readme = clone / "README.md"
+    readme.write_text(readme.read_text(encoding="utf-8") + "\n", encoding="utf-8")
+    gitops._git(["add", str(readme)], cwd=clone)
+    gitops._git(["commit", "-m", "docs: ordinary probe"], cwd=clone)
+    after = gitops._git(["rev-parse", "HEAD"], cwd=clone).stdout.strip()
+
+    proc = subprocess.run(
+        [str(clone / ".githooks/pre-push"), "origin", str(ROOT)],
+        cwd=clone,
+        input=f"refs/heads/main {after} refs/heads/main {before}\n",
+        text=True,
+        capture_output=True,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert "launch path changed" not in proc.stderr
