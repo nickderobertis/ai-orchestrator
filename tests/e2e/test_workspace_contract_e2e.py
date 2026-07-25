@@ -1,9 +1,9 @@
 """E2E coverage for the public Nx workspace command and contract surfaces.
 
-llmlint: ignore-file[e2e_not_mocked,tests_mirror_real_usage]
-The recipe tests own shell sequencing, capture, and stop behavior, so uv/Nx/checker
-subprocesses are deterministic command doubles; real Bun upgrade, package-consumer
-layout, contract hashing, and cross-worktree Nx cache boundaries run separately.
+llmlint: ignore-file[e2e_not_mocked,tests_mirror_real_usage] Recipe tests own shell
+sequencing, capture, and stop behavior, so uv/Nx/checker subprocesses are deterministic
+command doubles; real Bun upgrade, package-consumer layout, contract hashing, and
+cross-worktree Nx cache boundaries run separately.
 """
 
 from __future__ import annotations
