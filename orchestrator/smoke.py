@@ -14,11 +14,12 @@ import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 
 from . import REPO_ROOT
 from .history import HistoryError, HistorySession, SessionId, all_sessions, session_records
 from .labels import format_labels
-from .telemetry import history_session_is_successful_with_complete_telemetry
+from .telemetry import HistoryRecord, history_session_is_successful_with_complete_telemetry
 
 TASK = "Reply with exactly: smoke-ok"
 TIMEOUT_SECONDS = 120
@@ -102,7 +103,7 @@ def _stored_sessions(history_dir: Path) -> list[HistorySession]:
     for path in history_dir.rglob("*.jsonl"):
         try:
             records = [
-                value
+                cast(HistoryRecord, value)
                 for line in path.read_text(encoding="utf-8").splitlines()
                 if isinstance((value := json.loads(line)), dict) and value.get("type") == "run"
             ]
@@ -151,9 +152,7 @@ def _validate_history(
     if len(matches) != 1:
         raise HistoryError(f"expected one smoke history session, found {len(matches)}")
     session = matches[0]
-    records = session_records(session)
-    if not all(isinstance(record, dict) for record in records):
-        raise HistoryError("real harness history contains a malformed record")
+    records = cast(list[HistoryRecord], session_records(session))
     prompts = [record.get("prompt") for record in records]
     if not prompts or any(prompt != TASK or not prompt for prompt in prompts):
         raise HistoryError("real harness did not receive the dispatched task")

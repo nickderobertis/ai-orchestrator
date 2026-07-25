@@ -165,6 +165,16 @@ def test_validation_command_rejects_multiple_matching_sessions(tmp_path: Path) -
     assert "expected one smoke history session, found 2" in result.stderr
 
 
+def test_validation_command_renders_numeric_recorded_cost_in_dollars(tmp_path: Path) -> None:
+    smoke_id = "reported-cost"
+    _record(tmp_path, smoke_id, cost=0.0123456)
+
+    result = _validate(tmp_path, smoke_id)
+
+    assert result.returncode == 0, result.stderr
+    assert "smoke: passed via codex (recorded cost: $0.012346)" in result.stdout
+
+
 @pytest.mark.parametrize("cost", ["malformed", float("inf"), float("-inf"), float("nan")])
 def test_validation_command_renders_invalid_recorded_cost_as_unreported(
     tmp_path: Path, cost: object

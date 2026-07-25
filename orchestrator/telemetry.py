@@ -122,7 +122,16 @@ class SessionLink(TypedDict, total=False):
 
 
 class HistoryRecord(TypedDict, total=False):
+    type: str
     schema_version: str | int
+    history_id: str
+    session: str
+    name: str
+    labels: dict[str, object]
+    project: str
+    timestamp: str
+    harness: str
+    prompt: str
     status: str
     exit_code: int
     duration_ms: int
