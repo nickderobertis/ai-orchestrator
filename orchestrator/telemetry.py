@@ -123,6 +123,8 @@ class SessionLink(TypedDict, total=False):
 
 class HistoryRecord(TypedDict, total=False):
     schema_version: str | int
+    status: str
+    exit_code: int
     duration_ms: int
     model_ms: int
     tool_ms: int
@@ -623,6 +625,17 @@ def _summarize_session(session: HistorySession, records: list[HistoryRecord]) ->
         commands=commands,
         validated_native_fields=validated_native_fields,
         tool_intervals=tool_intervals,
+    )
+
+
+def history_session_has_complete_telemetry(session: HistorySession) -> bool:
+    """Whether oneharness persisted a complete native telemetry record."""
+    records = cast(list[HistoryRecord], session_records(session))
+    summary = _summarize_session(session, records)
+    return (
+        bool(records)
+        and summary.validated_native_fields
+        and all(record.get("status") == "ok" and record.get("exit_code") == 0 for record in records)
     )
 
 

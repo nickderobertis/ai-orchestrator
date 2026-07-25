@@ -33,6 +33,11 @@ gate remote=env_var_or_default("ORCHESTRATOR_COMPARISON_REMOTE", "origin") base=
     @log=$(mktemp); trap 'rm -f "$log"' EXIT; just check >"$log" 2>&1 || { cat "$log" >&2; echo "gate: deterministic checks failed; fix the reported findings and rerun 'just gate'" >&2; exit 1; }
     @comparison=$(scripts/comparison-base.sh "$1" "$2"); log=$(mktemp); trap 'rm -f "$log"' EXIT; just lint-llm-diff "$comparison" >"$log" 2>&1 || { cat "$log" >&2; echo "gate: llmlint failed; clear the reported findings and rerun 'just gate $1 $2'" >&2; exit 1; }
 
+# Spend one real harness turn proving prompt delivery and complete history telemetry.
+# Kept out of `gate`; pre-push selects it only for launch-path changes.
+smoke:
+    @uv run orchestrator-smoke
+
 # Whole suite (unit + e2e) with coverage enforced on the orchestrator package.
 test:
     uv run pytest --cov=orchestrator --cov-report=term-missing --cov-fail-under={{coverage_min}}

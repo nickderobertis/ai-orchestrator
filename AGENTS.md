@@ -259,6 +259,13 @@ than duplicating command help here.
 Use `docs/telemetry.md` to inspect session timing, usage, and the agent/judge
 turn timeline with `just telemetry`.
 
+`just smoke` spends exactly one real agent-harness turn in a throwaway directory
+and verifies exact prompt delivery plus a complete native oneharness history
+record. It is deliberately outside `just gate`. The pre-push hook runs it only
+when the pushed diff touches `scripts/`, `config/oneharness.version`,
+`config/onejudge.base.yaml`, `oneharness.toml`, or `oneharness.judge.toml`;
+ordinary pushes consume no harness quota.
+
 A dispatched change is not done until `just gate` is green. Its agent clears its
 own llmlint findings—by fixing them, adding a justified `ignore-file`, or disabling
 an inapplicable rule in `llmlint.yml`—rather than leaving closeout to integration.
