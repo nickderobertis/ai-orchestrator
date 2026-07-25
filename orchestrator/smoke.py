@@ -9,6 +9,7 @@ import sys
 import tempfile
 import time
 import uuid
+from dataclasses import dataclass
 from pathlib import Path
 
 from . import REPO_ROOT
@@ -18,6 +19,12 @@ from .telemetry import history_session_has_complete_telemetry
 
 TASK = "Reply with exactly: smoke-ok"
 TIMEOUT_SECONDS = 120
+
+
+@dataclass(frozen=True)
+class SmokeResult:
+    harness: str
+    cost_usd: int | float | None
 
 
 def _run_wrapper(target: Path, status_dir: Path, history_dir: Path, smoke_id: str) -> None:
@@ -69,7 +76,7 @@ def _run_wrapper(target: Path, status_dir: Path, history_dir: Path, smoke_id: st
         raise HistoryError(f"real harness smoke failed: {detail}")
 
 
-def run_smoke() -> tuple[str, object]:
+def run_smoke() -> SmokeResult:
     """Run one real harness turn and validate its isolated history record."""
     smoke_id = str(uuid.uuid4())
     with tempfile.TemporaryDirectory(prefix="orchestrator-watchdog-smoke-") as root_name:
@@ -106,15 +113,18 @@ def run_smoke() -> tuple[str, object]:
             raise HistoryError("real harness history does not identify the selected harness")
         usage = records[-1].get("usage", {})
         cost = usage.get("cost_usd") if isinstance(usage, dict) else None
-        return harness, cost
+        return SmokeResult(
+            harness=harness,
+            cost_usd=cost if isinstance(cost, (int, float)) else None,
+        )
 
 
 def main() -> int:
     try:
-        harness, cost = run_smoke()
+        result = run_smoke()
     except HistoryError as exc:
         print(f"smoke: {exc}", file=sys.stderr)
         return 1
-    rendered_cost = f"${cost:.6f}" if isinstance(cost, (int, float)) else "unreported"
-    print(f"smoke: passed via {harness} (recorded cost: {rendered_cost})")
+    rendered_cost = f"${result.cost_usd:.6f}" if result.cost_usd is not None else "unreported"
+    print(f"smoke: passed via {result.harness} (recorded cost: {rendered_cost})")
     return 0

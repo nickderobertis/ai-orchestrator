@@ -76,47 +76,49 @@ def test_pre_push_hook_clears_git_environment_and_forwards_comparison(tmp_path) 
 
 def test_pre_push_smoke_runs_only_for_launch_path_changes(tmp_path) -> None:
     clone = gitops.clone(str(ROOT), tmp_path / "clone")
-    shutil.copy2(ROOT / ".githooks/pre-push", clone / ".githooks/pre-push")
-    shutil.copy2(
-        ROOT / "scripts/pre-push-smoke-needed.sh",
-        clone / "scripts/pre-push-smoke-needed.sh",
-    )
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    calls = tmp_path / "just-calls"
-    stub = bin_dir / "just"
-    stub.write_text('#!/bin/sh\nprintf "%s\\n" "$*" >>"$JUST_CALLS"\n', encoding="utf-8")
-    stub.chmod(0o755)
 
     def commit(message: str) -> str:
         gitops._git(["add", "-A"], cwd=clone)
         gitops._git(["commit", "-m", message], cwd=clone)
         return gitops._git(["rev-parse", "HEAD"], cwd=clone).stdout.strip()
 
-    def run_hook(before: str, after: str) -> list[str]:
+    def selected(before: str, after: str) -> bool:
         proc = subprocess.run(
-            [str(clone / ".githooks/pre-push"), "origin", str(ROOT)],
+            [str(ROOT / "scripts/pre-push-smoke-needed.sh"), "origin/main"],
             cwd=clone,
             input=f"refs/heads/main {after} refs/heads/main {before}\n",
-            env={
-                **os.environ,
-                "PATH": f"{bin_dir}:{os.environ['PATH']}",
-                "JUST_CALLS": str(calls),
-                "ORCHESTRATOR_COMPARISON_BASE": "main",
-            },
             text=True,
             capture_output=True,
         )
-        assert proc.returncode == 0, proc.stderr
-        observed = calls.read_text(encoding="utf-8").splitlines()
-        calls.unlink()
-        return observed
+        assert proc.returncode in {0, 1}, proc.stderr
+        return proc.returncode == 0
 
     base = gitops._git(["rev-parse", "HEAD"], cwd=clone).stdout.strip()
     (clone / "README.md").write_text("ordinary\n", encoding="utf-8")
     ordinary = commit("docs: ordinary")
-    assert run_hook(base, ordinary) == ["gate origin main"]
+    assert not selected(base, ordinary)
 
-    (clone / "scripts" / "launch-smoke-probe.sh").write_text("# probe\n", encoding="utf-8")
-    launch = commit("test: launch path")
-    assert run_hook(ordinary, launch) == ["smoke", "gate origin main"]
+    previous = ordinary
+    launch_paths = [
+        "scripts/launch-smoke-probe.sh",
+        "config/oneharness.version",
+        "config/onejudge.base.yaml",
+        "oneharness.toml",
+        "oneharness.judge.toml",
+    ]
+    for relative in launch_paths:
+        path = clone / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(path.read_text(encoding="utf-8") + "\n" if path.exists() else "# probe\n")
+        changed = commit(f"test: touch {relative}")
+        assert selected(previous, changed), relative
+        previous = changed
+    assert selected("0" * 40, previous)
+    assert not selected(previous, "0" * 40)
+
+    documented = (ROOT / "AGENTS.md").read_text(encoding="utf-8") + (
+        ROOT / "docs/onejudge-integration.md"
+    ).read_text(encoding="utf-8")
+    for relative in launch_paths:
+        expected = "scripts/" if relative.startswith("scripts/") else relative
+        assert expected in documented

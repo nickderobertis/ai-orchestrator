@@ -36,7 +36,7 @@ gate remote=env_var_or_default("ORCHESTRATOR_COMPARISON_REMOTE", "origin") base=
 # Spend one real harness turn proving prompt delivery and complete history telemetry.
 # Kept out of `gate`; pre-push selects it only for launch-path changes.
 smoke:
-    @uv run orchestrator-smoke
+    @uv run orchestrator-smoke || { echo "smoke: verify real-harness authentication/configuration, then rerun 'just smoke'" >&2; exit 1; }
 
 # Whole suite (unit + e2e) with coverage enforced on the orchestrator package.
 test:

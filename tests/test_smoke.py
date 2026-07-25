@@ -50,7 +50,7 @@ def test_run_smoke_validates_prompt_and_complete_history(tmp_path, monkeypatch) 
     monkeypatch.setattr(smoke.uuid, "uuid4", lambda: "smoke-id")
     monkeypatch.setattr(smoke, "_run_wrapper", lambda *_args: None)
     monkeypatch.setattr(smoke, "all_sessions", lambda: [session])
-    assert smoke.run_smoke() == ("codex", None)
+    assert smoke.run_smoke() == smoke.SmokeResult("codex", None)
 
 
 def test_wrapper_surfaces_backgrounded_harness_failure(tmp_path, monkeypatch) -> None:
@@ -136,11 +136,11 @@ def test_run_smoke_rejects_broken_record_contracts(
 
 
 def test_main_reports_success_and_failure(monkeypatch, capsys) -> None:
-    monkeypatch.setattr(smoke, "run_smoke", lambda: ("codex", 0.0123456))
+    monkeypatch.setattr(smoke, "run_smoke", lambda: smoke.SmokeResult("codex", 0.0123456))
     assert smoke.main() == 0
     assert "$0.012346" in capsys.readouterr().out
 
-    def fail() -> tuple[str, object]:
+    def fail() -> smoke.SmokeResult:
         raise HistoryError("broken")
 
     monkeypatch.setattr(smoke, "run_smoke", fail)
