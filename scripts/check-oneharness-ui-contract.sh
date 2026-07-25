@@ -13,7 +13,8 @@ source_url="${ONEHARNESS_UI_TYPES_URL:-https://raw.githubusercontent.com/nickder
 curl_log="$(mktemp)" || { echo "oneharness-ui contract: make temporary storage available and retry" >&2; exit 1; }
 trap 'rm -f "$temp" "$curl_log"' EXIT
 curl -fL "$source_url" -o "$temp" 2>"$curl_log" || { cat "$curl_log" >&2; echo "oneharness-ui contract: fetch pinned source and retry" >&2; exit 1; }
-actual="$(sha256sum "$temp" | cut -d' ' -f1)"
+actual="$(sha256sum "$temp" | cut -d' ' -f1)" || { echo "oneharness-ui contract: verify sha256sum and cut are available, then retry" >&2; exit 1; }
+[[ "$actual" =~ ^[0-9a-f]{64}$ ]] || { echo "oneharness-ui contract: integrity tools returned an invalid SHA-256 value; repair them and retry" >&2; exit 1; }
 [[ "$actual" == "$expected" ]] || { echo "oneharness-ui contract: expected $expected but fetched $actual; update reviewed fixture and hash together" >&2; exit 1; }
 cmp -s "$temp" "$root/docs/dag-ui/oneharness-ui-contract.d.ts" || { echo "oneharness-ui contract: regenerate the checked-in declaration from the pinned source" >&2; exit 1; }
 grep -Fq "$commit" "$root/docs/dag-ui/design.md" || { echo "oneharness-ui contract: synchronize design pin" >&2; exit 1; }
