@@ -38,6 +38,19 @@ from orchestrator.watchdog import ProcessId, process_activity
 
 FAKE_BACKEND = REPO_ROOT / "tests" / "e2e" / "fake_backend.py"
 MOCK_ONEHARNESS = REPO_ROOT / "tests" / "e2e" / "mock_oneharness.py"
+MOCK_CODEX_STDOUT = "\n".join(
+    (
+        json.dumps({"type": "turn.started"}),
+        json.dumps({"type": "thread.started", "thread_id": "prompt-delivery-e2e"}),
+        json.dumps({"type": "item.completed", "item": {"type": "agent_message", "text": "done"}}),
+        json.dumps(
+            {
+                "type": "turn.completed",
+                "usage": {"input_tokens": 4, "cached_input_tokens": 0, "output_tokens": 1},
+            }
+        ),
+    )
+)
 
 
 def test_subdir_persona_scaffolding_and_recursive_validation_cli(tmp_path) -> None:
@@ -181,6 +194,58 @@ def test_dispatch_completes_via_supervisor_loop(command_base, onejudge_bin) -> N
     assert report.usage.get("output_tokens", 0) > 0
     assert report.verdicts and report.verdicts[0]["verdict"]["value"] is True
     assert report.assessment == "- Add a regression test for the adjacent edge case."
+
+
+def test_real_dispatch_delivers_task_to_agent_history(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, onejudge_bin: str, oneharness_bin: str
+) -> None:
+    """The real onejudge-to-oneharness path preserves the agent task on stdin."""
+    target = tmp_path / "target"
+    target.mkdir()
+    task = "complete-now: preserve this exact dispatched task"
+    judge = {"kind": "command", "command": [sys.executable, str(FAKE_BACKEND)]}
+    base = yaml.safe_load((REPO_ROOT / "config" / "onejudge.base.yaml").read_text())
+    base["provider"] = {
+        "kind": "split",
+        "skill": {"kind": "oneharness", "bin": "oneharness"},
+        "judge": judge,
+    }
+    base_path = tmp_path / "split.base.yaml"
+    base_path.write_text(yaml.safe_dump(base, sort_keys=False), encoding="utf-8")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "oneharness").symlink_to(MOCK_ONEHARNESS)
+    history_dir = tmp_path / "history"
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+    monkeypatch.setenv("REAL_ONEHARNESS_BIN", oneharness_bin)
+    monkeypatch.setenv("ONEHARNESS_HISTORY_DIR", str(history_dir))
+    monkeypatch.setenv("MOCK_STDOUT", MOCK_CODEX_STDOUT)
+    monkeypatch.setenv("ORCHESTRATOR_WORKER_HEARTBEAT_TIMEOUT", "30")
+
+    report = dispatch(
+        "engineer",
+        task,
+        base_path=base_path,
+        persona_dir=PERSONA_DIR,
+        project_dir=target,
+        onejudge_bin=onejudge_bin,
+    )
+
+    assert report.completed
+    records = [
+        json.loads(line)
+        for history_file in history_dir.rglob("*.jsonl")
+        for line in history_file.read_text(encoding="utf-8").splitlines()
+    ]
+    agent_runs = [
+        record
+        for record in records
+        if record.get("type") == "run" and record.get("labels", {}).get("role") == "agent"
+    ]
+    assert agent_runs
+    initial_agent_run = min(agent_runs, key=lambda record: record["started_at"])
+    assert initial_agent_run["prompt"]
+    assert initial_agent_run["prompt"] == task
 
 
 def test_real_dispatch_detects_killed_agent_and_reaps_orphans(
