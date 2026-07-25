@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import os
 import signal
 import subprocess
@@ -132,10 +133,15 @@ def run_smoke() -> SmokeResult:
             raise HistoryError("real harness history does not identify the selected harness")
         usage = records[-1].get("usage", {})
         cost = usage.get("cost_usd") if isinstance(usage, dict) else None
-        return SmokeResult(
-            harness=harness,
-            cost_usd=cost if isinstance(cost, (int, float)) else None,
+        valid_cost = (
+            cost
+            if isinstance(cost, (int, float))
+            and not isinstance(cost, bool)
+            and math.isfinite(cost)
+            and cost >= 0
+            else None
         )
+        return SmokeResult(harness=harness, cost_usd=valid_cost)
 
 
 def main() -> int:
