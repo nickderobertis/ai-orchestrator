@@ -8,6 +8,7 @@ from typing import Any
 import pytest
 
 from orchestrator import REPO_ROOT
+from orchestrator.cli_contract import ROUND_BUDGET_OPTION
 from orchestrator.dispatch import DispatchError, launch_orchestrator, main_orchestrate
 
 
@@ -165,7 +166,7 @@ def test_launch_task_prose_preserves_default_and_passes_round_budget(
     expected_budget = (
         "Drive this tracked orchestration plan one round at a time. Execute the real command "
         f"`just run-plan {plan.resolve()} --run budget --runs-dir {budget_root} "
-        f"--base {budget_worker_base} --provider oneharness --round-budget 21600` for each "
+        f"--base {budget_worker_base} --provider oneharness {ROUND_BUDGET_OPTION} 21600` for each "
         "required round, review its recorded result, and surface milestones, blockers, "
         "departures, and closeout to your supervisor."
     )
