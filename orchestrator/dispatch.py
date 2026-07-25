@@ -666,6 +666,7 @@ def launch_orchestrator(
     heartbeat_interval: float = DEFAULT_HEARTBEAT_INTERVAL,
     cwd: str | Path = REPO_ROOT,
     acknowledge_concurrent: bool = False,
+    round_budget: float | None = None,
 ) -> str:
     """Launch a detached live-supervised orchestrator and return its run id."""
     plan = Path(plan_path).resolve()
@@ -673,6 +674,8 @@ def launch_orchestrator(
         raise DispatchError(f"plan does not exist: {plan}")
     if not isinstance(onejudge_bin, str) or not onejudge_bin or "\x00" in onejudge_bin:
         raise DispatchError("onejudge binary must be a non-empty, non-NUL string")
+    if round_budget is not None and (not math.isfinite(round_budget) or round_budget <= 0):
+        raise DispatchError("'--round-budget' must be a positive finite number")
     plan_mapping = load_yaml(plan)
     # Import locally because graph's direct-agent runner imports this module.
     from .graph import parse_graph, validate_graph_repo_aliases
@@ -756,11 +759,13 @@ def launch_orchestrator(
     worker_base_path.write_text(yaml.safe_dump(worker_base, sort_keys=False), encoding="utf-8")
     report_path = effective.parent / "report.json"
     stderr_path = effective.parent / "stderr.log"
+    round_budget_arg = "" if round_budget is None else f" --round-budget {round_budget:g}"
     task = (
         "Drive this tracked orchestration plan one round at a time. Execute the real command "
         f"`just run-plan {plan} --run {run_dir.name} --runs-dir {root} --base {worker_base_path} "
         f"--provider {worker_provider_kind}"
-        f"{' --acknowledge-concurrent' if acknowledge_concurrent else ''}` for each required "
+        f"{' --acknowledge-concurrent' if acknowledge_concurrent else ''}"
+        f"{round_budget_arg}` for each required "
         "round, review its recorded "
         "result, and surface milestones, blockers, departures, and closeout to your supervisor."
     )
@@ -838,6 +843,7 @@ def main_orchestrate(argv: list[str] | None = None) -> int:
         metavar="SECONDS",
         help=f"planner status-update interval (default: {DEFAULT_HEARTBEAT_INTERVAL:g})",
     )
+    parser.add_argument("--round-budget", type=float, metavar="SECONDS")
     parser.add_argument(
         "--skill-command",
         nargs="+",
@@ -855,6 +861,7 @@ def main_orchestrate(argv: list[str] | None = None) -> int:
             skill_provider=skill,
             heartbeat_interval=args.heartbeat_interval,
             acknowledge_concurrent=args.acknowledge_concurrent,
+            round_budget=args.round_budget,
         )
         print(
             (args.runs_dir.resolve() / launched / "launch.json").read_text(encoding="utf-8").strip()
