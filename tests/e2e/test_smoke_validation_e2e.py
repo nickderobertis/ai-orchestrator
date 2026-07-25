@@ -21,6 +21,8 @@ def _record(
     prompt: object = TASK,
     harness: object = "codex",
     finished_at: object = "2026-07-25T00:00:00.010Z",
+    status: object = "ok",
+    exit_code: object = 0,
     cost: object = None,
     suffix: str = "one",
 ) -> None:
@@ -40,8 +42,8 @@ def _record(
         "model": "gpt-5.6-sol",
         "prompt": prompt,
         "permission_mode": "bypass",
-        "status": "ok",
-        "exit_code": 0,
+        "status": status,
+        "exit_code": exit_code,
         "duration_ms": 10,
         "started_at": "2026-07-25T00:00:00Z",
         "finished_at": finished_at,
@@ -136,6 +138,8 @@ def test_validation_command_requires_history_and_smoke_id_together(arguments: li
         ("prompt", "wrong task", "did not receive the dispatched task"),
         ("finished_at", None, "history telemetry is incomplete"),
         ("harness", "", "does not identify the selected harness"),
+        ("status", "nonzero", "history telemetry is incomplete"),
+        ("exit_code", 2, "history telemetry is incomplete"),
     ],
 )
 def test_validation_command_rejects_broken_persisted_contract(
