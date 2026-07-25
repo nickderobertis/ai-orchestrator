@@ -55,6 +55,7 @@ def test_comparison_base_requires_explicit_base_when_ambiguous(tmp_path, bare_or
 
 def test_pre_push_hook_clears_git_environment_and_forwards_comparison(tmp_path) -> None:
     clone = gitops.clone(str(ROOT), tmp_path / "clone")
+    shutil.copy2(ROOT / ".githooks/pre-push", clone / ".githooks/pre-push")
     gitops._git(["remote", "rename", "origin", "upstream"], cwd=clone)
     proc = subprocess.run(
         [str(clone / ".githooks/pre-push"), "upstream", str(ROOT)],
@@ -111,7 +112,7 @@ def test_pre_push_smoke_runs_only_for_launch_path_changes(tmp_path) -> None:
         calls.unlink()
         return observed
 
-    base = commit("test: install current hook")
+    base = gitops._git(["rev-parse", "HEAD"], cwd=clone).stdout.strip()
     (clone / "README.md").write_text("ordinary\n", encoding="utf-8")
     ordinary = commit("docs: ordinary")
     assert run_hook(base, ordinary) == ["gate origin main"]
