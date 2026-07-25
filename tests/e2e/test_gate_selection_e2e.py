@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -54,6 +55,7 @@ def test_comparison_base_requires_explicit_base_when_ambiguous(tmp_path, bare_or
 
 def test_pre_push_hook_clears_git_environment_and_forwards_comparison(tmp_path) -> None:
     clone = gitops.clone(str(ROOT), tmp_path / "clone")
+    shutil.copy2(ROOT / ".githooks/pre-push", clone / ".githooks/pre-push")
     gitops._git(["remote", "rename", "origin", "upstream"], cwd=clone)
     proc = subprocess.run(
         [str(clone / ".githooks/pre-push"), "upstream", str(ROOT)],

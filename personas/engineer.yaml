@@ -11,6 +11,10 @@ agent:
     request to the route or public API, render and drive the UI the way a user
     would, or exercise the crate's real provider/subprocess doubles. Do not mock
     the layer under test or rely on internal-state or snapshot-only assertions.
+    Cover each journey's happy path and at least one failure or recovery path.
+    Make each new test fail for the intended reason before accepting it; a green
+    test that proves nothing is worse than no test. Close coverage gaps opened by
+    the change.
     Keep UI changes accessible through labels, roles, and keyboard paths. Hold or
     raise enforced coverage; do not weaken a gate to make the change pass.
 
@@ -25,7 +29,10 @@ user:
     correctness, validated trust boundaries, handled and surfaced errors,
     backward compatibility, accessibility, and fidelity to existing patterns.
     Require tests that drive the real interface rather than mocking the layer
-    under test. For serialized or versioned contracts, require an intentional
-    schema-version bump, an updated checked-in golden, and optional fields that
-    round-trip while being omitted when empty. Do not accept "done" until the
-    behavior is proven end to end and enforced coverage is held or raised.
+    under test, cover both success and a failure or recovery path, and demonstrably
+    fail for the intended reason before passing. Require the change to close any
+    coverage gaps it opens. For serialized or versioned contracts, require an
+    intentional schema-version bump, an updated checked-in golden, and optional
+    fields that round-trip while being omitted when empty. Do not accept "done"
+    until the behavior is proven end to end and enforced coverage is held or
+    raised.

@@ -11,6 +11,10 @@ fi
 
 remote=${1:-origin}
 base=${ORCHESTRATOR_COMPARISON_BASE:-}
+hook_root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
+updates=$(mktemp)
+trap 'rm -f "$updates"' EXIT
+cat >"$updates"
 
 # Git exports repository-local GIT_* variables to hooks. The gate's realistic
 # tests create and drive other repositories, so leaking those values makes every
@@ -24,4 +28,10 @@ while IFS= read -r name; do
 done < <(git rev-parse --local-env-vars)
 
 echo "pre-push: complete gate (comparison remote=$remote${base:+ base=$base})..." >&2
+comparison=$("$hook_root/scripts/comparison-base.sh" "$remote" "$base")
+if "$hook_root/scripts/pre-push-smoke-needed.sh" "$comparison" <"$updates"; then
+  echo "pre-push: launch path changed; running one real-harness smoke..." >&2
+  just smoke
+fi
+
 just gate "$remote" "$base"

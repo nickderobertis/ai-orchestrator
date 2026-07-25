@@ -3,10 +3,12 @@ from __future__ import annotations
 import json
 import tomllib
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from orchestrator import REPO_ROOT
+from orchestrator.cli_contract import ROUND_BUDGET_OPTION
 from orchestrator.dispatch import DispatchError, launch_orchestrator, main_orchestrate
 
 
@@ -105,6 +107,73 @@ def test_launch_rejects_invalid_heartbeat_interval(tmp_path: Path, interval: flo
         )
 
 
+@pytest.mark.parametrize("budget", [0, -1, float("inf"), float("nan")])
+def test_launch_rejects_invalid_round_budget(tmp_path: Path, budget: float) -> None:
+    plan = tmp_path / "plan.json"
+    plan.write_text(
+        '{"schema_version":3,"tasks":[{"id":"approval","kind":"human","task":"approve"}]}',
+        encoding="utf-8",
+    )
+    with pytest.raises(DispatchError, match="positive finite number"):
+        launch_orchestrator(plan, runs_dir=tmp_path / "runs", round_budget=budget)
+
+
+def test_launch_task_prose_preserves_default_and_passes_round_budget(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    plan = tmp_path / "plan.json"
+    plan.write_text(
+        '{"schema_version":3,"tasks":[{"id":"approval","kind":"human","task":"approve"}]}',
+        encoding="utf-8",
+    )
+    commands: list[list[str]] = []
+
+    class Process:
+        pid = 12345
+
+    def fake_popen(command: list[str], **_kwargs: Any) -> Process:
+        commands.append(command)
+        return Process()
+
+    monkeypatch.setattr("orchestrator.dispatch.subprocess.Popen", fake_popen)
+    skill = {"kind": "command", "command": ["fake-provider"]}
+
+    default_run = launch_orchestrator(
+        plan,
+        runs_dir=tmp_path / "default-runs",
+        run_id="default",
+        skill_provider=skill,
+    )
+    budget_run = launch_orchestrator(
+        plan,
+        runs_dir=tmp_path / "budget-runs",
+        run_id="budget",
+        skill_provider=skill,
+        round_budget=21600,
+    )
+
+    default_root = (tmp_path / "default-runs").resolve()
+    default_worker_base = default_root / default_run / "orchestrator" / "worker-base.yaml"
+    expected_default = (
+        "Drive this tracked orchestration plan one round at a time. Execute the real command "
+        f"`just run-plan {plan.resolve()} --run default --runs-dir {default_root} "
+        f"--base {default_worker_base} --provider oneharness` for each required round, review "
+        "its recorded result, and surface milestones, blockers, departures, and closeout to "
+        "your supervisor."
+    )
+    budget_root = (tmp_path / "budget-runs").resolve()
+    budget_worker_base = budget_root / budget_run / "orchestrator" / "worker-base.yaml"
+    expected_budget = (
+        "Drive this tracked orchestration plan one round at a time. Execute the real command "
+        f"`just run-plan {plan.resolve()} --run budget --runs-dir {budget_root} "
+        f"--base {budget_worker_base} --provider oneharness {ROUND_BUDGET_OPTION} 21600` for each "
+        "required round, review its recorded result, and surface milestones, blockers, "
+        "departures, and closeout to your supervisor."
+    )
+    assert commands[0][commands[0].index("--task") + 1] == expected_default
+    assert commands[1][commands[1].index("--task") + 1] == expected_budget
+
+
 def test_orchestrate_cli_prints_run_id(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -132,6 +201,8 @@ def test_orchestrate_cli_prints_run_id(
                 "chosen",
                 "--skill-command",
                 "fake-provider",
+                "--round-budget",
+                "21600",
             ]
         )
         == 0
@@ -144,6 +215,7 @@ def test_orchestrate_cli_prints_run_id(
         "kind": "command",
         "command": ["fake-provider"],
     }
+    assert received["round_budget"] == 21600
 
 
 def test_orchestrate_cli_reports_launch_error(

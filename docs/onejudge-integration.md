@@ -149,6 +149,18 @@ harness has an **environment requirement** for its tools to actually execute:
   *inside* such a session cannot dispatch tool-using claude-code agents. Run the
   orchestrator from a standalone shell (or CI), or use codex per above.
 
+Run `just smoke` for a minimal paid check of this seam. It sends one trivial
+prompt through the real `scripts/oneharness-agent.sh` heartbeat branch to the
+fallback-selected real harness, using a temporary target and history store. The
+command requires exactly one agent turn, then checks that the stored prompt is
+non-empty and byte-for-byte equal to the dispatched task and that the selected
+harness wrote a successful record with complete native telemetry. Its quota cost
+is therefore one real harness invocation; the provider may leave dollar cost
+unreported (Codex did so in the observed smoke). It is not part of `just gate`.
+Pre-push runs it only when the pushed endpoint diff touches `scripts/`,
+`config/oneharness.version`, `config/onejudge.base.yaml`, `oneharness.toml`, or
+`oneharness.judge.toml`; every other pushed diff skips it.
+
 Net: the orchestration setup is harness-agnostic and correct. On a
 no-unprivileged-userns host, dispatch codex with
 `--oneharness-mode bypass` and the allowlister gate; run-plan takes the same flag.
