@@ -260,7 +260,9 @@ The root quality recipes delegate project selection and caching to Nx:
 `check`/`test` use the full uniform target set through `run-many`, while
 `lint`/`typecheck`/`format` use affected selection. The language-native tools
 inside each project target remain authoritative, and `format-check` remains a
-format-only verification.
+format-only verification. Session provisioning and the initial locked Bun
+install precede Nx because they make Nx available; bootstrap then delegates
+project setup through uniform Nx `bootstrap` targets.
 Use `docs/telemetry.md` to inspect session timing, usage, and the agent/judge
 turn timeline with `just telemetry`.
 

@@ -1,0 +1,1 @@
+{ "targetDefaults": { "typecheck": { "cache": true, "inputs": ["default"] } } }

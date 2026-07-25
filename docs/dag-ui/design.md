@@ -254,17 +254,16 @@ prevents a pr-author worker from disappearing from worker timing.
 ## Agent and subagent conversations
 
 Every labeled oneharness session maps to one
-`@oneharness/ui` `Conversation`. The adapter must consume the package's exported
-type directly; the structural notation below defines the mapping, not a forked
-local type:
+`@oneharness/ui` `Conversation`. The authoritative version is `0.1.0` at immutable
+commit `5a2b48908ef84900a47eaccd7f616327b2997b6c`; the exact exported transcript
+types are checked in at `oneharness-ui-contract.d.ts` and their pin is validated
+by `scripts/check-oneharness-ui-contract.sh`. Consumers import the package type.
+Because that type has no metadata or parent field, the API uses this envelope:
 
 ```ts
-interface ConversationAdapterOutput {
-  id: string; // oneharness session_id
-  title: string;
-  status: "running" | "completed" | "failed" | "interrupted";
-  messages: OneHarnessUiMessage[];
-  metadata: {
+interface DagConversation {
+  conversation: import("@oneharness/ui").Conversation;
+  attribution: {
     runId?: string;
     round?: number;
     nodeId?: string;
@@ -275,8 +274,9 @@ interface ConversationAdapterOutput {
     agentRole: AgentRole;
     parentConversationId?: string;
     persona?: string;
-    startedAt?: string;
     finishedAt?: string | null;
+    inferred?: true;
+    timing?: Timing;
   };
 }
 type AgentRole =
@@ -287,13 +287,29 @@ type AgentRole =
   | "pr-author";
 ```
 
-Messages preserve oneharness order and IDs. Normalized user/assistant/system
-content maps to the corresponding `@oneharness/ui` message role; tool-call and
-tool-result events map to the package's tool parts with their name, call ID,
-status, timestamps, and text/structured payload. Unknown event kinds become a
-visibly unsupported event part and are not dropped. Provider, harness, model,
-usage, and timing populate the Conversation fields intended for those values;
-secrets, raw environment, absolute paths, and hidden reasoning never do.
+The package has turns, not a message union. Records map in source order:
+
+| Target | Exact transformation |
+| --- | --- |
+| `id`, `name`, `project`, `startedAt` | First record `session`, `name`, `project`, `timestamp`. |
+| `harnesses` | Ordered de-duplicated record harnesses. |
+| `state` | Last status: `ok→completed`; `nonzero`/`spawn-error→failed`; `timeout`/`skipped`/`planned→stopped`; otherwise unchanged. |
+| `canContinue` | Last record has native `session_id` and is not planned, skipped, or spawn-error. |
+| `turn.id` | ``${record.session}-${zeroBasedIndex}``. |
+| `turn.user`, `assistant` | `prompt`; `text ?? null`. |
+| `turn.reasoning` | First non-empty `reasoning` or `thinking`; strings unchanged, structured values two-space JSON, else null. |
+| `turn.harness`, `model`, `timestamp` | `harness`, `model ?? null`, `timestamp`. |
+| `turn.status`, `failureKind` | Status mapping above; `failure_kind ?? null`. |
+| `turn.usage` | Rename snake-case keys to `inputTokens`, `outputTokens`, `cacheReadTokens`, `cacheWriteTokens`, `costUsd`; preserve number/null and omit absent properties. |
+| `turn.tools` | Every event becomes required `index`/`kind` plus `input`, `name`, `output` only when present. Unsupported kinds remain visible generic tool events. |
+| `turn.unknown` | Every unconsumed record key and JSON value; system content without a public field stays here. |
+
+Timing, graph labels, launch provenance, semantic role, persona, finish time, and
+parent linkage live only in `attribution`; no invented Conversation fields are
+allowed. Native onejudge linkage supplies `parentConversationId`; fallback
+requires exact run/node/step labels and interval containment. Missing optional
+values are omitted, except an observed active finish is `null`. Secrets, paths,
+environment, and unrecorded reasoning are never serialized.
 
 Role assignment is deterministic:
 

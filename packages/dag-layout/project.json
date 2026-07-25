@@ -23,6 +23,9 @@
     },
     "format-check": {
       "command": "bunx biome format packages/dag-layout"
+    },
+    "bootstrap": {
+      "command": "bun install --frozen-lockfile"
     }
   }
 }

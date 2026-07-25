@@ -38,6 +38,9 @@
     "format-check": {
       "cache": true,
       "inputs": ["default"]
+    },
+    "bootstrap": {
+      "cache": false
     }
   }
 }

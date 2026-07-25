@@ -18,8 +18,8 @@ default:
 # activate the committed git hooks (the pre-push llmlint gate).
 bootstrap:
     ./scripts/session-setup.sh
-    uv sync
     bun install --frozen-lockfile
+    ./scripts/nx.sh run-many -t bootstrap
     git config core.hooksPath .githooks
     # Allow local-mode lifecycle pushes into this non-bare checkout.
     git config receive.denyCurrentBranch updateInstead
@@ -28,6 +28,8 @@ bootstrap:
 # (unit + e2e, coverage enforced). Must pass before any commit.
 check:
     ./scripts/nx.sh run-many -t format-check,lint,typecheck,test
+    ./scripts/check-oneharness-ui-contract.sh
+    ./scripts/check-nx-cache.sh
 
 # Complete pre-push gate: deterministic checks followed by llmlint on this branch.
 gate remote=env_var_or_default("ORCHESTRATOR_COMPARISON_REMOTE", "origin") base=env_var_or_default("ORCHESTRATOR_COMPARISON_BASE", ""):

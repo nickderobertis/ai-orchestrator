@@ -4,9 +4,8 @@
 # llmlint: ignore-file[boundary_inputs_validated] This is the trusted local operator command
 # surface: XDG_CACHE_HOME/HOME are platform-owned directory roots, and arguments are intentionally
 # Nx's own validated CLI. No value is interpreted as repository content or passed to eval.
-# llmlint: ignore-file[changed_behavior_has_e2e] The acceptance-specific real linked-worktree check
-# exercises a 100% cross-worktree cache hit and a changed-source typecheck failure; keeping that
-# destructive worktree operation out of the ordinary unit suite avoids mutating its checkout.
+# llmlint: ignore-file[changed_behavior_has_e2e] scripts/check-nx-cache.sh exercises this wrapper
+# through two real linked worktrees, including a cache hit and a changed-source typecheck failure.
 set -euo pipefail
 
 repo_identity="$(git config --get remote.origin.url || git rev-parse --show-toplevel)"
@@ -18,6 +17,7 @@ export NX_CACHE_DIRECTORY="$cache_root"
 log="$(mktemp)"
 trap 'rm -f "$log"' EXIT
 if bunx nx "$@" >"$log" 2>&1; then
+  if [[ "${AI_ORCHESTRATOR_NX_SHOW_OUTPUT:-}" == "1" ]]; then cat "$log"; fi
   printf 'nx: requested targets succeeded\n'
   exit 0
 fi
