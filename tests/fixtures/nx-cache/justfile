@@ -1,0 +1,4 @@
+set shell := ["bash", "-euo", "pipefail", "-c"]
+
+bootstrap:
+    @log=$(mktemp); trap 'rm -f "$log"' EXIT; bun install --frozen-lockfile >"$log" 2>&1 || { cat "$log" >&2; echo "bootstrap: repair package.json/bun.lock and retry" >&2; exit 1; }

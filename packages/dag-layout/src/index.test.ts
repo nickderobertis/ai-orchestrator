@@ -43,4 +43,76 @@ describe("layoutDag", () => {
       }),
     ).toThrow("cycle");
   });
+
+  test.each([
+    {
+      name: "duplicate nodes",
+      nodes: [
+        {
+          id: "a",
+          label: "A",
+          kind: "agent" as const,
+          state: "pending" as const,
+        },
+        {
+          id: "a",
+          label: "Again",
+          kind: "agent" as const,
+          state: "pending" as const,
+        },
+      ],
+      edges: [],
+      error: "node IDs must be unique",
+    },
+    {
+      name: "duplicate edges",
+      nodes: [
+        {
+          id: "a",
+          label: "A",
+          kind: "agent" as const,
+          state: "pending" as const,
+        },
+        {
+          id: "b",
+          label: "B",
+          kind: "agent" as const,
+          state: "pending" as const,
+        },
+      ],
+      edges: [
+        { id: "edge", source: "a", target: "b" },
+        { id: "edge", source: "a", target: "b" },
+      ],
+      error: "edge IDs must be unique",
+    },
+    {
+      name: "missing endpoints",
+      nodes: [
+        {
+          id: "a",
+          label: "A",
+          kind: "agent" as const,
+          state: "pending" as const,
+        },
+      ],
+      edges: [{ id: "edge", source: "a", target: "missing" }],
+      error: "missing endpoint",
+    },
+    {
+      name: "self edges",
+      nodes: [
+        {
+          id: "a",
+          label: "A",
+          kind: "agent" as const,
+          state: "pending" as const,
+        },
+      ],
+      edges: [{ id: "edge", source: "a", target: "a" }],
+      error: "self-edge",
+    },
+  ])("rejects $name at the package boundary", ({ nodes, edges, error }) => {
+    expect(() => layoutDag({ nodes, edges })).toThrow(error);
+  });
 });

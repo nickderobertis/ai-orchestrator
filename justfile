@@ -69,7 +69,7 @@ format-check:
 upgrade:
     uv lock --upgrade
     uv sync
-    bun update --latest nx @nx/eslint @nx/eslint-plugin @nx/js eslint typescript@6 typescript-eslint @biomejs/biome
+    @log=$(mktemp); trap 'rm -f "$log"' EXIT; bun update --latest nx @nx/eslint @nx/eslint-plugin @nx/js eslint typescript@6 typescript-eslint @biomejs/biome >"$log" 2>&1 || { cat "$log" >&2; echo "upgrade: repair package constraints and retry" >&2; exit 1; }
     ./scripts/nx.sh run-many -t build,lint,typecheck,test
 
 # Local-first runs no CI, but origin is the shared source of truth: push every
