@@ -61,14 +61,17 @@ fi
 heartbeat_sequence=0
 write_status agent.heartbeat "$heartbeat_sequence"
 
-# Heartbeating requires running the agent asynchronously, but a background command in a
-# non-interactive shell has its stdin reassigned to /dev/null — which would silently empty
-# the agent's prompt, since onejudge delivers it over the provider's stdin. Hold the real
-# stdin on fd 3 and redirect it back explicitly; an explicit redirection overrides the
-# implicit /dev/null. The exec paths above keep stdin for free.
+# onejudge hands the agent its task on stdin, but a non-interactive shell assigns /dev/null to
+# an asynchronous list's stdin before any explicit redirection, so the backgrounded agent below
+# would read an empty prompt and ask for a subtask every turn until it hit the cap. The judge,
+# which reaches oneharness through the `exec` pass-throughs above, is never backgrounded and so
+# always saw its task -- that asymmetry is the bug. `<&0` would only re-duplicate the /dev/null
+# already on fd 0, so save the real stdin here and redirect it back explicitly below.
+# llmlint: ignore[boundary_inputs_validated] this duplicates a file descriptor; the payload it
+# carries is the onejudge protocol that oneharness itself parses and validates.
 exec 3<&0
-# llmlint: ignore[tool_output_is_signal] oneharness stdout is the provider protocol payload
-# consumed by onejudge; suppressing or replacing it would break the real provider boundary.
+# llmlint: ignore[tool_output_is_signal, boundary_inputs_validated] this wrapper is a transparent
+# conduit for that protocol in both directions, exactly as the `exec` pass-throughs above are.
 oneharness run --config "$repo_root/oneharness.toml" "$@" <&3 &
 agent_pid=$!
 write_status agent.child.pid "$agent_pid"
