@@ -188,10 +188,62 @@ def _recipe_run(
     return _run("just", recipe, cwd=checkout, env=env)
 
 
+def _add_bun_install_double(checkout: Path) -> None:
+    bun = checkout / "bin/bun"
+    bun.write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+printf 'bun %s\\n' "$*" >>"$TRACE_FILE"
+if [[ "${FAIL_COMMAND:-}" == "bun" ]]; then
+  echo "bun: captured failure detail" >&2
+  exit 9
+fi
+mkdir -p node_modules/.bin
+touch node_modules/.bin/nx
+chmod +x node_modules/.bin/nx
+"""
+    )
+    bun.chmod(0o755)
+
+
+def _mark_nx_installed(checkout: Path) -> None:
+    nx = checkout / "node_modules/.bin/nx"
+    nx.parent.mkdir(parents=True)
+    nx.touch()
+    nx.chmod(0o755)
+
+
+def test_check_recipe_installs_locked_dependencies_when_nx_is_absent(
+    tmp_path: Path,
+) -> None:
+    checkout, trace = _recipe_checkout(tmp_path)
+    _add_bun_install_double(checkout)
+
+    result = _recipe_run(checkout, trace, "check")
+
+    assert result.returncode == 0, result.stderr
+    assert trace.read_text().splitlines()[0] == "bun install --frozen-lockfile"
+
+
+def test_check_recipe_preserves_locked_dependency_install_failure(
+    tmp_path: Path,
+) -> None:
+    checkout, trace = _recipe_checkout(tmp_path)
+    _add_bun_install_double(checkout)
+
+    result = _recipe_run(checkout, trace, "check", fail_command="bun")
+
+    assert result.returncode != 0
+    assert "bun: captured failure detail" in result.stderr
+    assert "check: install locked workspace dependencies" in result.stderr
+    assert trace.read_text().splitlines() == ["bun install --frozen-lockfile"]
+
+
 def test_check_recipe_runs_the_combined_public_journey_with_concise_output(
     tmp_path: Path,
 ) -> None:
     checkout, trace = _recipe_checkout(tmp_path)
+    _mark_nx_installed(checkout)
 
     result = _recipe_run(checkout, trace, "check")
 
@@ -206,6 +258,7 @@ def test_check_recipe_runs_the_combined_public_journey_with_concise_output(
 
 def test_check_recipe_preserves_captured_nx_failure(tmp_path: Path) -> None:
     checkout, trace = _recipe_checkout(tmp_path)
+    _mark_nx_installed(checkout)
 
     result = _recipe_run(checkout, trace, "check", fail_command="nx.sh")
 

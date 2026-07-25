@@ -29,6 +29,7 @@ bootstrap:
 # (unit + e2e, coverage enforced). Must pass before any commit.
 # llmlint: ignore[changed_behavior_has_e2e] The public recipe is the real deterministic gate invoked by this task and pre-push; its sequencing failures use subprocess doubles to avoid recursively invoking the same full suite.
 check:
+    @if [[ ! -x node_modules/.bin/nx ]]; then log=$(mktemp); trap 'rm -f "$log"' EXIT; bun install --frozen-lockfile >"$log" 2>&1 || { cat "$log" >&2; echo "check: install locked workspace dependencies and retry" >&2; exit 1; }; fi
     @log=$(mktemp); trap 'rm -f "$log"' EXIT; { ./scripts/nx.sh run-many -t format-check,lint,typecheck,test && ./scripts/check-oneharness-ui-contract.sh && ./scripts/check-nx-cache.sh; } >"$log" 2>&1 || { cat "$log" >&2; echo "check: deterministic checks failed; fix the reported findings and retry" >&2; exit 1; }; echo "check: all deterministic checks passed"
 
 # Complete pre-push gate: deterministic checks followed by llmlint on this branch.
