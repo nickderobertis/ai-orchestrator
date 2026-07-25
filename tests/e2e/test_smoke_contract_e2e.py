@@ -1,4 +1,4 @@
-"""Deterministic mechanics around the explicitly paid real-harness smoke."""
+"""Process/history-boundary failure contracts around the paid real-harness smoke."""
 
 from __future__ import annotations
 
