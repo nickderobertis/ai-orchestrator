@@ -532,7 +532,7 @@ def test_dispatch_complete_now_single_turn(command_base, onejudge_bin) -> None:
 
 def test_dispatch_hits_turn_cap_when_never_done(command_base, onejudge_bin) -> None:
     report = dispatch(
-        "test-engineer",
+        "engineer",
         "should-fail: this subtask never satisfies the supervisor.",
         base_path=command_base(max_turns=3),
         persona_dir=PERSONA_DIR,
@@ -546,7 +546,7 @@ def test_dispatch_hits_turn_cap_when_never_done(command_base, onejudge_bin) -> N
 def test_run_onejudge_returns_incomplete_report_for_exit_one(command_base, onejudge_bin) -> None:
     config = build_effective_config(
         load_yaml(command_base(max_turns=1)),
-        load_yaml(PERSONA_DIR / "test-engineer.yaml"),
+        load_yaml(PERSONA_DIR / "engineer.yaml"),
     )
     report = run_onejudge(
         config,

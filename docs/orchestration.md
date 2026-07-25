@@ -278,6 +278,11 @@ dedicated `reviewer` step for complex DAGs where it reviews and integrates sever
 agents' independently produced work. Dependencies should name only real inputs so
 unrelated branches remain parallel.
 
+Do not split implementation from the tests that prove it into separate nodes or
+steps: the implementing agent writes those tests in the same dispatch, and the
+unit settles fully proven. The narrow test-focused exception and persona choice
+are defined in [the granularity rule](../AGENTS.md#the-granularity-rule-the-core-judgment).
+
 `run-plan` starts every node whose dependencies are `done`, bounded by
 `concurrency`. Lifecycle dependencies on the same repository identity also carry
 publication/stack ancestry; cross-repository dependencies only schedule. During

@@ -187,10 +187,10 @@ def test_retry_overrides_fields() -> None:
     plan = next_round(
         _plan(A, B),
         _result(a="done", b="failed"),
-        {"retry": {"b": {"max_turns": 12, "persona": "test-engineer"}}},
+        {"retry": {"b": {"max_turns": 12, "persona": "engineer"}}},
     )
     b = plan["tasks"][0]
-    assert b["max_turns"] == 12 and b["persona"] == "test-engineer"
+    assert b["max_turns"] == 12 and b["persona"] == "engineer"
 
 
 def test_split_replaces_a_node() -> None:
