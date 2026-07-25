@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
 
 import pytest
@@ -51,6 +52,31 @@ def test_run_smoke_validates_prompt_and_complete_history(tmp_path, monkeypatch) 
     monkeypatch.setattr(smoke, "_run_wrapper", lambda *_args: None)
     monkeypatch.setattr(smoke, "all_sessions", lambda: [session])
     assert smoke.run_smoke() == smoke.SmokeResult("codex", None)
+
+
+@pytest.mark.parametrize("reported_cost", ["malformed", math.inf, -math.inf, math.nan])
+def test_run_smoke_renders_invalid_recorded_cost_as_unreported(
+    tmp_path: Path, monkeypatch, capsys, reported_cost: object
+) -> None:
+    history = tmp_path / "history.jsonl"
+    _record(history)
+    record = json.loads(history.read_text(encoding="utf-8"))
+    record["usage"]["cost_usd"] = reported_cost
+    history.write_text(json.dumps(record) + "\n", encoding="utf-8")
+    session = HistorySession(
+        SessionId("smoke-session"),
+        "smoke",
+        tmp_path,
+        "2026-07-25T00:00:00Z",
+        history,
+        {"role": "agent", "smoke": "smoke-id"},
+    )
+    monkeypatch.setattr(smoke.uuid, "uuid4", lambda: "smoke-id")
+    monkeypatch.setattr(smoke, "_run_wrapper", lambda *_args: None)
+    monkeypatch.setattr(smoke, "all_sessions", lambda: [session])
+
+    assert smoke.main() == 0
+    assert "recorded cost: unreported" in capsys.readouterr().out
 
 
 def test_wrapper_surfaces_backgrounded_harness_failure(tmp_path, monkeypatch) -> None:

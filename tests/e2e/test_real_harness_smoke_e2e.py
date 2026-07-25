@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import shutil
 import subprocess
 from pathlib import Path
 
@@ -57,23 +56,6 @@ def test_real_wrapper_surfaces_unavailable_configured_harnesses() -> None:
     assert "rerun 'just smoke'" in proc.stderr
 
 
-def test_real_wrapper_surfaces_background_process_failure(tmp_path: Path) -> None:
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    shim = bin_dir / "oneharness"
-    shim.write_text("#!/bin/sh\necho provider-crashed >&2\nexit 2\n", encoding="utf-8")
-    shim.chmod(0o755)
-    proc = subprocess.run(
-        ["just", "smoke"],
-        cwd=ROOT,
-        env={**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}"},
-        text=True,
-        capture_output=True,
-    )
-    assert proc.returncode != 0
-    assert "provider-crashed" in proc.stderr
-
-
 def test_ordinary_push_skips_real_smoke_and_runs_gate(tmp_path: Path) -> None:
     clone = gitops.clone(str(ROOT), tmp_path / "ordinary-clone")
     before = gitops._git(["rev-parse", "HEAD"], cwd=clone).stdout.strip()
@@ -118,56 +100,19 @@ def test_real_smoke_rejects_missing_persisted_history() -> None:
     assert "expected one smoke history session, found 0" in proc.stderr
 
 
-@pytest.mark.parametrize(
-    ("corruption", "diagnostic"),
-    [
-        ("prompt", "did not receive the dispatched task"),
-        ("telemetry", "history telemetry is incomplete"),
-        ("harness", "does not identify the selected harness"),
-    ],
-)
-def test_real_smoke_rejects_corrupt_persisted_contract(
-    tmp_path: Path, corruption: str, diagnostic: str
-) -> None:
-    real_oneharness = shutil.which("oneharness")
-    assert real_oneharness is not None
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    shim = bin_dir / "oneharness"
-    shim.write_text(
-        """#!/usr/bin/env bash
-set -euo pipefail
-"$REAL_ONEHARNESS" "$@"
-[[ ${1:-} == run ]] || exit 0
-case "$SMOKE_CORRUPTION" in
-  prompt)
-    find "$ONEHARNESS_HISTORY_DIR" -type f \
-      -exec sed -i 's/"prompt" *: *"[^"]*"/"prompt":"wrong"/g' {} +
-    ;;
-  telemetry)
-    find "$ONEHARNESS_HISTORY_DIR" -type f \
-      -exec sed -i 's/"finished_at" *: *"[^"]*"/"finished_at":null/g' {} +
-    ;;
-  harness)
-    find "$ONEHARNESS_HISTORY_DIR" -type f \
-      -exec sed -i 's/"harness" *: *"[^"]*"/"harness":""/g' {} +
-    ;;
-esac
-""",
-        encoding="utf-8",
-    )
-    shim.chmod(0o755)
+def test_real_smoke_rejects_multiple_matching_history_sessions() -> None:
+    """A public multi-model run must fail the smoke's exactly-one-turn contract."""
     proc = subprocess.run(
         ["just", "smoke"],
         cwd=ROOT,
         env={
             **os.environ,
-            "PATH": f"{bin_dir}:{os.environ['PATH']}",
-            "REAL_ONEHARNESS": real_oneharness,
-            "SMOKE_CORRUPTION": corruption,
+            "ONEHARNESS_HARNESSES": "codex",
+            "ONEHARNESS_MODELS": "gpt-5.6-sol,gpt-5.6-terra",
+            "ONEHARNESS_RUN_MODE": "parallel",
         },
         text=True,
         capture_output=True,
     )
     assert proc.returncode != 0
-    assert diagnostic in proc.stderr
+    assert "expected one smoke history session, found 2" in proc.stderr

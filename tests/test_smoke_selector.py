@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import subprocess
 from pathlib import Path
 
@@ -55,10 +56,24 @@ def test_smoke_selector_covers_exact_documented_launch_paths(tmp_path: Path) -> 
     assert selected("0" * 40, previous)
     assert not selected(previous, "0" * 40)
 
-    documented = (ROOT / "AGENTS.md").read_text(encoding="utf-8") + (
-        ROOT / "docs/onejudge-integration.md"
-    ).read_text(encoding="utf-8")
-    assert all(path in documented for path in declared)
+    documented_lists = {
+        "AGENTS.md": re.search(
+            r"when the pushed diff touches (?P<paths>.+?);\s+ordinary pushes",
+            (ROOT / "AGENTS.md").read_text(encoding="utf-8"),
+            re.DOTALL,
+        ),
+        "docs/onejudge-integration.md": re.search(
+            r"when the pushed endpoint diff touches (?P<paths>.+?);\s+every other",
+            (ROOT / "docs/onejudge-integration.md").read_text(encoding="utf-8"),
+            re.DOTALL,
+        ),
+    }
+    for document, match in documented_lists.items():
+        assert match is not None, f"{document} must retain its documented launch-path list"
+        documented = re.findall(r"`([^`]+)`", match.group("paths"))
+        assert documented == declared, (
+            f"{document} launch paths must exactly match pre-push-smoke-needed.sh"
+        )
 
     invalid = subprocess.run(
         [str(ROOT / "scripts/pre-push-smoke-needed.sh"), "not-a-revision"],
