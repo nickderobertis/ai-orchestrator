@@ -148,3 +148,14 @@ def test_main_reports_success_and_failure(monkeypatch, capsys) -> None:
     monkeypatch.setattr(smoke, "run_smoke", fail)
     assert smoke.main() == 1
     assert "smoke: broken" in capsys.readouterr().err
+
+
+def test_timeout_override_is_bounded(monkeypatch) -> None:
+    monkeypatch.delenv("ORCHESTRATOR_SMOKE_TIMEOUT_SECONDS", raising=False)
+    assert smoke._timeout_seconds() == smoke.TIMEOUT_SECONDS
+    monkeypatch.setenv("ORCHESTRATOR_SMOKE_TIMEOUT_SECONDS", "7")
+    assert smoke._timeout_seconds() == 7
+    for invalid in ("bad", "0", str(smoke.TIMEOUT_SECONDS + 1)):
+        monkeypatch.setenv("ORCHESTRATOR_SMOKE_TIMEOUT_SECONDS", invalid)
+        with pytest.raises(HistoryError, match="must be between"):
+            smoke._timeout_seconds()
