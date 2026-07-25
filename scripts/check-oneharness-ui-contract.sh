@@ -8,7 +8,9 @@ expected="$(tr -d '[:space:]' <"$root/config/oneharness-ui.types.sha256")"
 temp="$(mktemp)"; trap 'rm -f "$temp"' EXIT
 source_url="${ONEHARNESS_UI_TYPES_URL:-https://raw.githubusercontent.com/nickderobertis/oneharness-ui/$commit/packages/ui/src/types.ts}"
 [[ "$source_url" =~ ^(https|file):// ]] || { echo "oneharness-ui contract: source URL must use https:// or file://" >&2; exit 1; }
-curl -fsSL "$source_url" >"$temp" || { echo "oneharness-ui contract: fetch pinned source and retry" >&2; exit 1; }
+curl_log="$(mktemp)" || { echo "oneharness-ui contract: make temporary storage available and retry" >&2; exit 1; }
+trap 'rm -f "$temp" "$curl_log"' EXIT
+curl -fL "$source_url" -o "$temp" 2>"$curl_log" || { cat "$curl_log" >&2; echo "oneharness-ui contract: fetch pinned source and retry" >&2; exit 1; }
 actual="$(sha256sum "$temp" | cut -d' ' -f1)"
 [[ "$actual" == "$expected" ]] || { echo "oneharness-ui contract: update reviewed fixture and hash together" >&2; exit 1; }
 cmp -s "$temp" "$root/docs/dag-ui/oneharness-ui-contract.d.ts" || { echo "oneharness-ui contract: regenerate the checked-in declaration from the pinned source" >&2; exit 1; }

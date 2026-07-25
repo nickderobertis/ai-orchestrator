@@ -11,10 +11,10 @@ set -euo pipefail
 repo_identity="$(git config --get remote.origin.url || git rev-parse --show-toplevel)"
 repo_key="$(printf '%s' "$repo_identity" | sha256sum | cut -c1-16)"
 cache_root="${XDG_CACHE_HOME:-${HOME}/.cache}/ai-orchestrator/nx/${repo_key}"
-mkdir -p "$cache_root"
+mkdir -p "$cache_root" || { echo "nx: cannot create shared cache directory '$cache_root'; repair its parent permissions and retry" >&2; exit 1; }
 export NX_CACHE_DIRECTORY="$cache_root"
 
-log="$(mktemp)"
+log="$(mktemp)" || { echo "nx: cannot create a temporary log; make temporary storage available and retry" >&2; exit 1; }
 trap 'rm -f "$log"' EXIT
 if bunx nx "$@" >"$log" 2>&1; then
   if [[ "${AI_ORCHESTRATOR_NX_SHOW_OUTPUT:-}" == "1" ]]; then cat "$log"; fi

@@ -59,6 +59,16 @@ rules:
   - name: async_typed_clients_at_boundaries
     override: true
     relevance: false
+  # Nx project files and the root justfile are declarative command adapters:
+  # `just check` drives every non-mutating quality target for real. Recursively
+  # invoking bootstrap, format, upgrade, or the full check from its own pytest
+  # process would mutate or replace the active environment and cannot terminate.
+  - name: changed_behavior_has_e2e
+    override: true
+    files:
+      exclude:
+        - "justfile"
+        - "**/project.json"
   # Tests read suite-controlled environment variables set by the suite itself,
   # not inputs crossing an external trust boundary.
   - name: boundary_inputs_validated

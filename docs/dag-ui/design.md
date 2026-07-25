@@ -143,10 +143,9 @@ interface SessionLink {
 }
 ```
 
-Unknown usage is `null`, never zero. Timing categories and precedence, quality,
-sources, legacy aliases, node-work sums, metrics, and llmlint retry cohorts have
-exactly the meanings in `telemetry-model.md`. The API calls the same collector;
-it must not independently recalculate them.
+Unknown usage is `null`, never zero. The API returns the collector's timing,
+quality, source, legacy-alias, node-work, metric, and llmlint-cohort values
+verbatim; it must not independently recalculate or reinterpret them.
 
 ### Round projection
 
