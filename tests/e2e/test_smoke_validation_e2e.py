@@ -79,6 +79,39 @@ def _validate(history_dir: Path, smoke_id: str) -> subprocess.CompletedProcess[s
     )
 
 
+@pytest.mark.parametrize("timeout", ["bad", "0", "121"])
+def test_smoke_command_rejects_invalid_timeout_before_launch(timeout: str) -> None:
+    result = subprocess.run(
+        ["uv", "run", "orchestrator-smoke"],
+        cwd=REPO_ROOT,
+        env={**os.environ, "ORCHESTRATOR_SMOKE_TIMEOUT_SECONDS": timeout},
+        text=True,
+        capture_output=True,
+    )
+
+    assert result.returncode == 1
+    assert "ORCHESTRATOR_SMOKE_TIMEOUT_SECONDS must be between 1 and 120" in result.stderr
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        ["--validate-history", "/tmp/history"],
+        ["--smoke-id", "smoke-id"],
+    ],
+)
+def test_validation_command_requires_history_and_smoke_id_together(arguments: list[str]) -> None:
+    result = subprocess.run(
+        ["uv", "run", "orchestrator-smoke", *arguments],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+    )
+
+    assert result.returncode == 2
+    assert "--validate-history and --smoke-id must be supplied together" in result.stderr
+
+
 @pytest.mark.parametrize(
     ("field", "value", "diagnostic"),
     [
