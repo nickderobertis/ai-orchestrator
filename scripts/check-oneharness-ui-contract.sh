@@ -6,7 +6,8 @@ commit="$(tr -d '[:space:]' <"$root/config/oneharness-ui.commit")" || { echo "on
 expected="$(tr -d '[:space:]' <"$root/config/oneharness-ui.types.sha256")" || { echo "oneharness-ui contract: read the SHA-256 pin and retry" >&2; exit 1; }
 [[ "$commit" =~ ^[0-9a-f]{40}$ ]] || { echo "oneharness-ui contract: repair invalid commit pin" >&2; exit 1; }
 [[ "$expected" =~ ^[0-9a-f]{64}$ ]] || { echo "oneharness-ui contract: repair invalid SHA-256 pin" >&2; exit 1; }
-temp="$(mktemp)"; trap 'rm -f "$temp"' EXIT
+temp="$(mktemp)" || { echo "oneharness-ui contract: make temporary storage available and retry" >&2; exit 1; }
+trap 'rm -f "$temp"' EXIT
 source_url="${ONEHARNESS_UI_TYPES_URL:-https://raw.githubusercontent.com/nickderobertis/oneharness-ui/$commit/packages/ui/src/types.ts}"
 [[ "$source_url" =~ ^(https|file):// ]] || { echo "oneharness-ui contract: source URL must use https:// or file://" >&2; exit 1; }
 curl_log="$(mktemp)" || { echo "oneharness-ui contract: make temporary storage available and retry" >&2; exit 1; }
