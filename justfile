@@ -27,9 +27,7 @@ bootstrap:
 # Full quality gate: format check, lint, type check, persona validation, tests
 # (unit + e2e, coverage enforced). Must pass before any commit.
 check:
-    ./scripts/nx.sh run-many -t format-check,lint,typecheck,test
-    ./scripts/check-oneharness-ui-contract.sh
-    ./scripts/check-nx-cache.sh
+    @log=$(mktemp); trap 'rm -f "$log"' EXIT; { ./scripts/nx.sh run-many -t format-check,lint,typecheck,test && ./scripts/check-oneharness-ui-contract.sh && ./scripts/check-nx-cache.sh; } >"$log" 2>&1 || { cat "$log" >&2; echo "check: deterministic checks failed; fix the reported findings and retry" >&2; exit 1; }; echo "check: all deterministic checks passed"
 
 # Complete pre-push gate: deterministic checks followed by llmlint on this branch.
 gate remote=env_var_or_default("ORCHESTRATOR_COMPARISON_REMOTE", "origin") base=env_var_or_default("ORCHESTRATOR_COMPARISON_BASE", ""):
@@ -67,10 +65,7 @@ format-check:
 
 # Upgrade dependencies, then re-run the full gate; commit the refreshed lockfile.
 upgrade:
-    uv lock --upgrade
-    uv sync
-    @log=$(mktemp); trap 'rm -f "$log"' EXIT; bun update --latest nx @nx/eslint @nx/eslint-plugin @nx/js eslint typescript@6 typescript-eslint @biomejs/biome >"$log" 2>&1 || { cat "$log" >&2; echo "upgrade: repair package constraints and retry" >&2; exit 1; }
-    ./scripts/nx.sh run-many -t build,lint,typecheck,test
+    @log=$(mktemp); trap 'rm -f "$log"' EXIT; { uv lock --upgrade && uv sync && bun update --latest nx @nx/eslint @nx/eslint-plugin @nx/js eslint typescript@6 typescript-eslint @biomejs/biome && ./scripts/nx.sh run-many -t build,lint,typecheck,test; } >"$log" 2>&1 || { cat "$log" >&2; echo "upgrade: repair dependency constraints or target findings and retry" >&2; exit 1; }; echo "upgrade: dependencies refreshed and targets passed"
 
 # Local-first runs no CI, but origin is the shared source of truth: push every
 # change that lands on main. The pre-push hook gates this like any push; if git

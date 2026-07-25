@@ -51,6 +51,14 @@ const NODE_WIDTH = 200;
 const NODE_HEIGHT = 72;
 const COLUMN_GAP = 80;
 const ROW_GAP = 32;
+const NODE_STATES = new Set([
+  "pending",
+  "running",
+  "waiting",
+  "done",
+  "failed",
+  "cancelled",
+]);
 
 /** Lay out an acyclic graph in stable left-to-right dependency ranks. */
 export function layoutDag(input: DagLayoutInput): DagLayout {
@@ -63,6 +71,13 @@ export function layoutDag(input: DagLayoutInput): DagLayout {
   const byId = new Map(nodes.map((node) => [node.id, node]));
   if (byId.size !== nodes.length) {
     throw new Error("DAG node IDs must be unique");
+  }
+  for (const node of nodes) {
+    if (!NODE_STATES.has(node.state)) {
+      throw new Error(
+        `DAG node ${node.id} has unsupported state ${node.state}`,
+      );
+    }
   }
 
   const incoming = new Map(nodes.map((node) => [node.id, 0]));

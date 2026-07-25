@@ -44,6 +44,22 @@ describe("layoutDag", () => {
     ).toThrow("cycle");
   });
 
+  test("rejects an unsupported runtime node state at the package boundary", () => {
+    expect(() =>
+      layoutDag({
+        nodes: [
+          {
+            id: "agent",
+            label: "Agent",
+            kind: "agent",
+            state: "paused" as never,
+          },
+        ],
+        edges: [],
+      }),
+    ).toThrow("DAG node agent has unsupported state paused");
+  });
+
   test.each([
     {
       name: "duplicate nodes",
