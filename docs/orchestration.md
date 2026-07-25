@@ -80,6 +80,13 @@ handoff at `runs/<run-id>/planner.md`. Use that `run_id` for every supervision
 recipe. A plan name is also accepted when it identifies exactly one active launch;
 an ambiguous or stale name fails and lists valid run ids.
 
+Pass `--round-budget SECONDS` to `just orchestrate` to set the outer liveness
+window for each graph round; it defaults to 14400 seconds (four hours). Exceeding
+the window cooperatively cancels in-flight workers and emits a blocking
+`round-budget` proposal, so the planner must intervene before work continues.
+Raise the launch value when the graph contains lifecycle nodes whose legitimate
+verify or authoring work may run longer than four hours.
+
 `channel-next` waits for one surface. A bounded wait with no message returns
 `{"status":"running","surface":null}`; a settled run returns
 `{"status":"finished"}`. `channel-reply` accepts a reply file or reads JSON from
@@ -277,9 +284,9 @@ publication/stack ancestry; cross-repository dependencies only schedule. During
 an orchestrated run, [live edits](#live-graph-edits) can change the desired graph
 and the reconciler applies the new reachable frontier without waiting for the
 round to settle.
-The outer round budget defaults to four hours and is configurable with
-`run-plan --round-budget SECONDS`. It is a liveness backstop, not a replacement
-for per-dispatch timeout, heartbeat, or stall detection.
+Standalone `run-plan` accepts the same `--round-budget SECONDS` option described
+for orchestrated launches above. The budget is a liveness backstop, not a
+replacement for per-dispatch timeout, heartbeat, or stall detection.
 
 ## Status, state, and exit contract
 
