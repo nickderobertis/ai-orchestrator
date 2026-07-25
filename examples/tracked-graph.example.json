@@ -33,20 +33,14 @@
         {
           "id": "implement",
           "persona": "engineer",
-          "task": "## What\nImplement the approved API and rollout behavior.\n\n## Why\nDeliver the approved release behavior to service users without breaking the agreed contract.\n\n## Acceptance criteria\n- The approved API and rollout behavior are implemented.\n- Realistic request tests prove the contract.",
-          "done_when": "all task acceptance criteria are met, the approved contract is proven through real requests, and the repository's full gate passes"
+          "task": "## What\nImplement the approved API and rollout behavior and write the tests that prove it.\n\n## Why\nDeliver the approved release behavior to service users without breaking the agreed contract, with the implementation fully proven in its own dispatch.\n\n## Acceptance criteria\n- The approved API and rollout behavior are implemented.\n- Realistic request tests prove the happy path and a failure or recovery path.\n- Each new test is observed failing for the intended reason before it passes.",
+          "done_when": "all task acceptance criteria are met, the approved contract is proven through real requests without opening coverage gaps, and the repository's full gate passes"
         },
         {
           "id": "staging-approval",
           "kind": "human",
           "task": "Exercise the staged service and approve continuation on this branch.",
           "deps": ["implement"]
-        },
-        {
-          "id": "closeout",
-          "persona": "test-engineer",
-          "task": "## What\nRun the full acceptance journey after staging approval and close every verified gap.\n\n## Why\nPrevent user-visible release regressions from surviving the staged approval boundary.\n\n## Acceptance criteria\n- The full acceptance journey passes.\n- Every verified gap is fixed and covered.",
-          "deps": ["staging-approval"]
         }
       ]
     },
