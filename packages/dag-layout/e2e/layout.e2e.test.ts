@@ -1,6 +1,8 @@
 import { expect, test } from "bun:test";
 
-import { layoutDag } from "../src/index.js";
+// This consumer journey intentionally resolves the workspace package export.
+// eslint-disable-next-line @nx/enforce-module-boundaries
+import { layoutDag } from "@ai-orchestrator/dag-layout";
 
 test("a package consumer cannot render an unsupported runtime node state", () => {
   const payload = JSON.parse(
