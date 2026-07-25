@@ -61,9 +61,15 @@ fi
 heartbeat_sequence=0
 write_status agent.heartbeat "$heartbeat_sequence"
 
+# Heartbeating requires running the agent asynchronously, but a background command in a
+# non-interactive shell has its stdin reassigned to /dev/null — which would silently empty
+# the agent's prompt, since onejudge delivers it over the provider's stdin. Hold the real
+# stdin on fd 3 and redirect it back explicitly; an explicit redirection overrides the
+# implicit /dev/null. The exec paths above keep stdin for free.
+exec 3<&0
 # llmlint: ignore[tool_output_is_signal] oneharness stdout is the provider protocol payload
 # consumed by onejudge; suppressing or replacing it would break the real provider boundary.
-oneharness run --config "$repo_root/oneharness.toml" "$@" &
+oneharness run --config "$repo_root/oneharness.toml" "$@" <&3 &
 agent_pid=$!
 write_status agent.child.pid "$agent_pid"
 while agent_state=$(ps -o stat= -p "$agent_pid" 2>/dev/null) &&
