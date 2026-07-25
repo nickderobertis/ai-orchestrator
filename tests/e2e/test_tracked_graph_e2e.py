@@ -1656,7 +1656,11 @@ def test_real_cli_recovers_waiting_and_no_change_lifecycle_results(
 
 def test_recover_completes_a_partially_emitted_graph_without_duplicates(tmp_path: Path) -> None:
     runs = tmp_path / "runs"
-    node_count = 2000
+    # Graph definitions are durably emitted in bounded batches. Ten batches leave
+    # repeated observable recovery checkpoints without restoring the old 2,000-node
+    # runtime; the strict partial-prefix assertion below deliberately fails if that
+    # guarantee regresses and the writer completes before it can be interrupted.
+    node_count = 200
     plan = tmp_path / "large-static.json"
     plan.write_text(
         json.dumps(

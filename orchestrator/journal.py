@@ -455,25 +455,47 @@ class Journal:
         The record is built before the sequence advances, so an event that fails its
         contract raises without burning a sequence number the file will never hold.
         """
-        if kind not in EVENT_KINDS:
-            raise JournalError(f"unknown journal event kind: {kind!r}")
+        return self.append_batch([(kind, detail or {})], node=node, step=step)[0]
+
+    def append_batch(
+        self,
+        operations: Sequence[tuple[EventKind, Detail]],
+        *,
+        node: NodeId | None = None,
+        step: StepId | None = None,
+    ) -> list[Event]:
+        """Durably append individual events with one lock, open, flush, and fsync.
+
+        Each event remains its own newline-terminated replay record. A crash during
+        the write can therefore leave only a valid prefix and, at worst, one torn
+        trailing line for reconciliation to discard.
+        """
+        if not operations:
+            raise JournalError("a journal batch requires at least one operation")
         with advisory_lock(self.lock_identity):
-            event = Event(
-                kind=kind,
-                run_id=self.run_id,
-                round=self.round,
-                seq=self.seq + 1,
-                at=time.time(),
-                node=node,
-                step=step,
-                detail=dict(detail or {}),
-            )
+            events: list[Event] = []
+            for offset, (kind, detail) in enumerate(operations, start=1):
+                if kind not in EVENT_KINDS:
+                    raise JournalError(f"unknown journal event kind: {kind!r}")
+                events.append(
+                    Event(
+                        kind=kind,
+                        run_id=self.run_id,
+                        round=self.round,
+                        seq=self.seq + offset,
+                        at=time.time(),
+                        node=node,
+                        step=step,
+                        detail=dict(detail),
+                    )
+                )
             with self.path.open("a", encoding="utf-8") as handle:
-                handle.write(json.dumps(event.to_record(), sort_keys=True) + "\n")
+                for event in events:
+                    handle.write(json.dumps(event.to_record(), sort_keys=True) + "\n")
                 handle.flush()
                 os.fsync(handle.fileno())
-            self.seq = event.seq
-        return event
+            self.seq = events[-1].seq
+        return events
 
     def append_transaction(self, operations: Sequence[Mapping[str, DetailValue]]) -> Event:
         """Append a validated edit's events as one atomic replay record."""
