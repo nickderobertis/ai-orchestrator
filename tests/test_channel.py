@@ -151,7 +151,7 @@ def test_writer_retries_partial_writes_and_backpressure(
 def test_proposal_pump_round_trips_and_persists_on_reconciler_drain(tmp_path: Path) -> None:
     channel = create_channel(tmp_path / "run")
     pump = ProposalPump(channel, "live", 3)
-    pump.propose("worker", "found adjacent work")
+    pump.propose_blocking("worker", "found adjacent work")
     assert read_message(channel / "up.fifo", timeout=1) == {
         "op": "supervisor",
         "run_id": "live",
@@ -159,12 +159,11 @@ def test_proposal_pump_round_trips_and_persists_on_reconciler_drain(tmp_path: Pa
         "surface": {
             "kind": "proposal",
             "message": "worker: found adjacent work",
-            "blocking": False,
+            "blocking": True,
         },
         "messages": [],
         "proposal_id": "worker:found adjacent work",
     }
-
     reply = {"completion": False, "message": "defer", "reason": "next round"}
     sender = threading.Thread(
         target=write_message,
@@ -186,7 +185,7 @@ def test_proposal_pump_round_trips_and_persists_on_reconciler_drain(tmp_path: Pa
     pump.heartbeat_tick()
     assert _heartbeat(channel)["due"] is True
     assert pump.drain_commands() == ()
-    pump.propose("worker", "found adjacent work")
+    pump.propose_blocking("worker", "found adjacent work")
     with pytest.raises(ChannelTimeout):
         read_message(channel / "up.fifo", timeout=0.1)
     pump.close()

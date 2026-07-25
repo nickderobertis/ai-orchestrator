@@ -4,8 +4,10 @@
 from __future__ import annotations
 
 import os
+import signal
 import subprocess
 import sys
+import time
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
@@ -50,6 +52,19 @@ def main(argv: list[str]) -> int:
     if not argv or argv[0] != "run":
         print(f"mock_oneharness: unsupported invocation {argv}", file=sys.stderr)
         return 2
+    barrier = os.environ.get("MOCK_AGENT_BARRIER")
+    if barrier:
+        descendant = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+
+        def stop_descendant(_signum: int, _frame: object) -> None:
+            descendant.terminate()
+            descendant.wait(timeout=2)
+            raise SystemExit(143)
+
+        signal.signal(signal.SIGTERM, stop_descendant)
+        Path(barrier).write_text(str(descendant.pid), encoding="utf-8")
+        while True:
+            time.sleep(0.05)
     harnesses = tuple(filter(None, os.environ.get("MOCK_HARNESSES", "codex").split(",")))
     completed = subprocess.run(mock_run_command(oneharness_bin, *argv[1:], harnesses=harnesses))
     return completed.returncode

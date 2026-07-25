@@ -220,6 +220,7 @@ def main() -> int:
     match op:
         case "respond":
             _wait_at_provider_barrier(task)
+            guidance = _planner_guidance(messages)
             run_log = re.search(r"record-run=(\S+)", task)
             if run_log is not None:
                 with Path(run_log.group(1)).open("a", encoding="utf-8") as stream:
@@ -254,14 +255,32 @@ def main() -> int:
                         time.sleep(0.02)
                 orchestrator_turn = _assistant_turns(messages)
                 if orchestrator_turn == 0:
+                    run_argv = list(orchestrator_plan.argv)
+                    run_env = None
+                    if "lifecycle-worker-death-retry" in plan_text:
+                        provider_index = run_argv.index("--provider")
+                        del run_argv[provider_index : provider_index + 2]
+                        run_argv[:2] = [
+                            str(Path(sys.executable).with_name("orchestrator-run-plan"))
+                        ]
+                        run_env = dict(os.environ)
+                        mock_barrier = Path(os.environ["MOCK_AGENT_BARRIER"])
+                        run_env["PATH"] = (
+                            f"{mock_barrier.parent / 'bin'}{os.pathsep}{os.environ['PATH']}"
+                        )
                     subprocess.run(
-                        orchestrator_plan.argv,
+                        run_argv,
                         check=not any(
                             sentinel in plan_text
-                            for sentinel in ("continuation-channel", '"name": "live-edit"')
+                            for sentinel in (
+                                "continuation-channel",
+                                '"name": "live-edit"',
+                                "lifecycle-worker-death-retry",
+                            )
                         ),
                         capture_output=True,
                         text=True,
+                        env=run_env,
                     )
                     if "heartbeat-channel" in plan_text:
                         history_dir = orchestrator_plan.runs_dir / "heartbeat-history"
@@ -353,6 +372,38 @@ def main() -> int:
                         capture_output=True,
                         text=True,
                     )
+                elif (
+                    orchestrator_turn == 1
+                    and "lifecycle-worker-death-retry" in plan_text
+                    and guidance is not None
+                ):
+                    run_id = orchestrator_plan.argv[orchestrator_plan.argv.index("--run") + 1]
+                    edits = orchestrator_plan.runs_dir / run_id / "worker-death-retry.json"
+                    edits.write_text(
+                        json.dumps({"retry": {"change": {}}}),
+                        encoding="utf-8",
+                    )
+                    forwarded = orchestrator_plan.argv[orchestrator_plan.argv.index("--runs-dir") :]
+                    provider_index = forwarded.index("--provider")
+                    del forwarded[provider_index : provider_index + 2]
+                    subprocess.run(
+                        [
+                            str(Path(sys.executable).with_name("orchestrator-next-round")),
+                            run_id,
+                            str(edits),
+                            *forwarded,
+                        ],
+                        check=False,
+                        capture_output=True,
+                        text=True,
+                        env={
+                            **os.environ,
+                            "PATH": (
+                                f"{Path(os.environ['MOCK_AGENT_BARRIER']).parent / 'bin'}"
+                                f"{os.pathsep}{os.environ['PATH']}"
+                            ),
+                        },
+                    )
             if "ci-iterate" in task:
                 state = "RED" if _assistant_turns(messages) == 0 else "GREEN"
                 _commit_and_push_ci_iteration(state)
@@ -411,12 +462,21 @@ def main() -> int:
             # "not done" and completion is decided by the unified supervisor
             # below, which only passes on the second turn — exercising the loop.
             done = (not fail) and ("complete-now" in task)
-            guidance = _planner_guidance(messages)
             if orchestrator_plan is not None:
                 turn = _assistant_turns(messages)
                 if turn == 0 and "surface-blocker" in plan_text:
                     agent_message = json.dumps(
                         {"kind": "blocker", "message": "plan departure needs a decision"}
+                    )
+                elif turn == 1 and "lifecycle-worker-death-retry" in plan_text:
+                    agent_message = json.dumps(
+                        {
+                            "kind": "blocker",
+                            "message": (
+                                "lifecycle worker died after its bounded retry; "
+                                "planner intervention is required"
+                            ),
+                        }
                     )
                 elif turn == 0:
                     summary = (

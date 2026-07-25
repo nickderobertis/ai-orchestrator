@@ -1270,7 +1270,18 @@ def test_run_repo_task_journals_a_step_that_hit_the_turn_cap(tmp_path, bare_orig
     def fake_dispatch(persona, task, *, project_dir, labels=None, **kw):
         turn_budgets.append(kw["max_turns"])
         Path(project_dir, "partial.txt").write_text("partial\n", encoding="utf-8")
-        return Report(persona, 0, False, False, 9, [], {}, {}, "")
+        return Report(
+            persona,
+            1,
+            False,
+            True,
+            9,
+            [],
+            {},
+            {},
+            "worker died",
+            outcome="worker-died",
+        )
 
     workspace = Workspace(
         tmp_path / "ws",
@@ -1291,6 +1302,7 @@ def test_run_repo_task_journals_a_step_that_hit_the_turn_cap(tmp_path, bare_orig
     )
 
     assert result.outcome == "not-completed"
+    assert "worker-died" in result.detail
     settled = next(e for e in journal.events() if e.kind == "step-settled")
     assert settled.step == "impl"
     assert settled.detail["status"] == "not-completed"

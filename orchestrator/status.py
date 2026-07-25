@@ -15,11 +15,13 @@ from .config import ConfigError
 from .registry import Registry, RegistryError
 from .workspace import IdentityKey, RepositoryType, Workflow
 
-# A history record describes one harness invocation, not the whole onejudge task.
-# Therefore only an explicitly live state counts as running, and only while its
-# project remains a checked-out worktree. Everything else is available via N/--all.
-# llmlint: ignore[modern_domain_modeling] matches codebase string-status convention
-NON_TERMINAL_STATUSES = frozenset({"pending", "started", "running", "in_progress"})
+# A history record describes one completed harness invocation, not the whole
+# onejudge task. oneharness' 1.0 history writes a record only when a turn finishes,
+# always with a terminal status (`ok`/`nonzero`/`spawn-error`/`skipped`/`planned`),
+# so a live status can never appear here. The signal that a workstream is still in
+# flight is therefore its worktree: the orchestrator removes it once the branch
+# integrates, so a session whose project is still a checked-out worktree is running.
+# Everything else is a recent, integrated task available via N/--all.
 
 
 @dataclass(frozen=True)
@@ -61,9 +63,14 @@ class TaskStatus:
     ledger: LedgerState | None
 
 
-def is_running(latest_status: str, git: GitState | None) -> bool:
-    """True only for an explicitly live history status on an existing worktree."""
-    return latest_status.lower() in NON_TERMINAL_STATUSES and bool(git and git.checked_out)
+def is_running(git: GitState | None) -> bool:
+    """True while a session's branch is still a checked-out worktree.
+
+    Under oneharness' 1.0 history every recorded turn is already terminal, so a
+    live workstream can only be recognised by its still-present worktree — the
+    orchestrator removes it once the branch integrates.
+    """
+    return bool(git and git.checked_out)
 
 
 def _git_state(project: Path) -> GitState | None:
@@ -127,7 +134,7 @@ def collect(*, runs_dir: Path, oneharness_bin: str = "oneharness") -> list[TaskS
                 harness=str(latest.get("harness", "?")),
                 model=str(latest.get("model", "?")),
                 status=summary.status,
-                running=is_running(summary.status, git),
+                running=is_running(git),
                 turns=summary.turns,
                 elapsed_ms=sum(
                     record.get("duration_ms", 0)

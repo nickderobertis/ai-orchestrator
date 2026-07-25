@@ -34,9 +34,12 @@ continuation count live in `DEFAULT_LIFECYCLE_STEP_MAX_TURNS` and
 `MAX_AUTOMATIC_STEP_RESUMES` in `orchestrator/lifecycle.py`. A step that hits its
 cap and leaves a preserved incomplete commit automatically continues on the same
 branch, carrying completed step IDs so earlier steps are not re-run. An explicit
-step or node `max_turns` replaces the default segment size. Cancellation, missing
-preserved work, or exhausted automatic continuations settles as `not-completed`
-for planner review; later explicit retry uses the same recorded resume metadata.
+step or node `max_turns` replaces the default segment size. Cancellation, a
+`worker-died` dispatch signal, missing preserved work, or exhausted automatic
+continuations settles as `not-completed` for planner review; partial committed
+work retains the same incomplete provenance marker. The orchestrator can retry
+through its existing bounded continuation/live-edit path, and a later explicit
+retry uses the same recorded resume metadata.
 
 `just repo-task <repo> <persona> "<task>"` runs one. `<repo>` is a GitHub
 `name` / `owner/name` / URL, a **local filesystem path**, or an exact checkout alias

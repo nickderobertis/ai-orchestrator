@@ -11,9 +11,11 @@ from __future__ import annotations
 import argparse
 import inspect
 import json
+import math
 import os
 import sys
 import threading
+import time
 from collections import Counter
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field, replace
@@ -91,6 +93,7 @@ from .workspace import Workspace
 
 NodeKind = Literal["agent", "human"]
 EXIT_BY_STATE = {"complete": 0, "waiting": 1, "failed": 1}
+DEFAULT_ROUND_BUDGET = 14_400.0
 
 _AGENT_NODE_FIELDS = (
     "persona",
@@ -435,6 +438,7 @@ def run_graph(
     replayed_runs: Mapping[str, NodeRun] | None = None,
     replayed_order: list[str] | None = None,
     proposal_pump: ProposalSink | None = None,
+    round_budget: float | None = DEFAULT_ROUND_BUDGET,
 ) -> GraphResult:
     """Schedule and run a mixed tracked graph, journaling each transition.
 
@@ -471,6 +475,8 @@ def run_graph(
         nid: "running" for nid in already_started
     }
     attestations: list[str] = []
+    round_started = time.monotonic()
+    budget_surfaced = False
 
     def settle(nid: str, node: GraphNode, node_log: NodeJournal) -> NodeRun:
         """Run one already-started node to its outcome, journaling how it settled."""
@@ -610,11 +616,17 @@ def run_graph(
                 },
             )
             return run
-        run = NodeRun("failed", "did not complete (hit the turn cap)", report)
+        detail = (
+            "worker-died"
+            if report.outcome == "worker-died"
+            else "did not complete (hit the turn cap)"
+        )
+        run = NodeRun("failed", detail, report)
         node_log.append(
             "node-failed",
             detail={
-                "detail": "hit the turn cap",
+                "detail": detail,
+                **({"outcome": report.outcome} if report.outcome else {}),
                 "turns": report.assistant_turns,
                 TERMINAL_NODE_RESULT_FIELD: cast(
                     Any, _run_payload(node, run, dependents.get(nid, []))
@@ -754,9 +766,24 @@ def run_graph(
                         actual.pop(dropped, None)
 
     def observe_tick() -> None:
+        nonlocal budget_surfaced
         cross_dag.reconcile_edges(external_deps, dependents)
         if proposal_pump is not None:
             proposal_pump.persist_replies()
+        if (
+            not budget_surfaced
+            and round_budget is not None
+            and time.monotonic() - round_started >= round_budget
+        ):
+            budget_surfaced = True
+            for cancellation in cancellations.values():
+                cancellation.set()
+            if proposal_pump is not None:
+                proposal_pump.propose_blocking(
+                    "round-budget",
+                    f"round exceeded its {round_budget:g}s liveness budget; "
+                    "in-flight workers were cancelled and planner intervention is required",
+                )
 
     runs, started_order = reconcile_dag(
         lambda: list(nodes),
@@ -1054,6 +1081,13 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="wall-clock cap for one direct agent node's dispatch",
     )
+    parser.add_argument(
+        "--round-budget",
+        type=float,
+        default=DEFAULT_ROUND_BUDGET,
+        metavar="SECONDS",
+        help=f"outer liveness budget for this round (default: {DEFAULT_ROUND_BUDGET:g})",
+    )
     add_lifecycle_args(parser)
     args = parser.parse_args(argv)
 
@@ -1063,6 +1097,8 @@ def main(argv: list[str] | None = None) -> int:
         validate_graph_repo_aliases(graph)
         if args.concurrency is not None and args.concurrency < 1:
             raise PlanError("'--concurrency' must be a positive integer")
+        if not math.isfinite(args.round_budget) or args.round_budget <= 0:
+            raise PlanError("'--round-budget' must be a positive finite number")
         run_dir = (
             None
             if args.no_record
@@ -1253,6 +1289,7 @@ def main(argv: list[str] | None = None) -> int:
             ),
             concurrency=args.concurrency,
             proposal_pump=proposal_pump,
+            round_budget=args.round_budget,
         )
     finally:
         if proposal_pump is not None:

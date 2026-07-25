@@ -14,8 +14,10 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import onejudge_sdk
@@ -23,8 +25,16 @@ import pytest
 import yaml
 
 from orchestrator import PERSONA_DIR, REPO_ROOT
+from orchestrator.channel import (
+    CHANNEL_DIR_ENV,
+    CHANNEL_RUN_ID_ENV,
+    create_channel,
+    read_message,
+    write_message,
+)
 from orchestrator.config import build_effective_config, load_yaml
 from orchestrator.dispatch import DispatchError, dispatch, main, run_onejudge
+from orchestrator.watchdog import ProcessId, process_activity
 
 FAKE_BACKEND = REPO_ROOT / "tests" / "e2e" / "fake_backend.py"
 MOCK_ONEHARNESS = REPO_ROOT / "tests" / "e2e" / "mock_oneharness.py"
@@ -171,6 +181,181 @@ def test_dispatch_completes_via_supervisor_loop(command_base, onejudge_bin) -> N
     assert report.usage.get("output_tokens", 0) > 0
     assert report.verdicts and report.verdicts[0]["verdict"]["value"] is True
     assert report.assessment == "- Add a regression test for the adjacent edge case."
+
+
+def test_real_dispatch_detects_killed_agent_and_reaps_orphans(
+    tmp_path: Path, onejudge_bin: str, oneharness_bin: str
+) -> None:
+    """Kill the real provider worker while onejudge is awaiting it."""
+    target = tmp_path / "target"
+    target.mkdir()
+    judge = {"kind": "command", "command": [sys.executable, str(FAKE_BACKEND)]}
+    base = yaml.safe_load((REPO_ROOT / "config" / "onejudge.base.yaml").read_text())
+    base["provider"] = {
+        "kind": "split",
+        "skill": {"kind": "oneharness", "bin": "oneharness"},
+        "judge": judge,
+    }
+    base_path = tmp_path / "split.base.yaml"
+    base_path.write_text(yaml.safe_dump(base, sort_keys=False), encoding="utf-8")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    # llmlint: ignore[e2e_not_mocked] The repository requires faking the paid agent
+    # harness; this journey keeps the real wrapper, onejudge, dispatcher, PID kill,
+    # process-tree cleanup, and run-plan boundary.
+    (bin_dir / "oneharness").symlink_to(MOCK_ONEHARNESS)
+    barrier = tmp_path / "agent-descendant.pid"
+    existing_status_files = set(Path("/tmp").glob("orchestrator-watchdog-*/agent/agent.child.pid"))
+    plan = tmp_path / "plan.json"
+    plan.write_text(
+        json.dumps(
+            {
+                "tasks": [
+                    {
+                        "id": "worker",
+                        "persona": "engineer",
+                        "task": "complete-now: agent will be killed",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    env = {
+        **os.environ,
+        "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+        "REAL_ONEHARNESS_BIN": oneharness_bin,
+        "MOCK_AGENT_BARRIER": str(barrier),
+        "ORCHESTRATOR_WORKER_HEARTBEAT_TIMEOUT": "2",
+    }
+
+    started = time.monotonic()
+    process = subprocess.Popen(
+        [
+            str(Path(onejudge_bin).with_name("orchestrator-run-plan")),
+            str(plan),
+            "--no-record",
+            "--base",
+            str(base_path),
+            "--project-dir",
+            str(target),
+            "--onejudge-bin",
+            onejudge_bin,
+            "--format",
+            "json",
+        ],
+        cwd=target,
+        env=env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    deadline = started + 10
+    agent_pid = None
+    while time.monotonic() < deadline and agent_pid is None:
+        descendants = process_activity(ProcessId(process.pid)).pids
+        candidates = (
+            set(Path("/tmp").glob("orchestrator-watchdog-*/agent/agent.child.pid"))
+            - existing_status_files
+        )
+        if barrier.exists():
+            for agent_pid_path in candidates:
+                candidate = ProcessId(int(agent_pid_path.read_text(encoding="utf-8")))
+                if candidate in descendants:
+                    agent_pid = candidate
+                    break
+        time.sleep(0.02)
+    assert agent_pid is not None, "agent worker did not reach the provider barrier"
+    orphan_pid = int(barrier.read_text(encoding="utf-8"))
+    os.kill(agent_pid, signal.SIGTERM)
+    stdout, stderr = process.communicate(timeout=5)
+
+    assert process.returncode == 1, stderr
+    result = json.loads(stdout)
+    assert result["results"]["worker"]["error"] == "worker-died"
+    assert time.monotonic() - started < 5
+    deadline = time.monotonic() + 2
+    while Path(f"/proc/{orphan_pid}").exists() and time.monotonic() < deadline:
+        time.sleep(0.02)
+    assert not Path(f"/proc/{orphan_pid}").exists()
+    group_deadline = time.monotonic() + 5
+    while time.monotonic() < group_deadline:
+        try:
+            os.killpg(process.pid, 0)
+        except ProcessLookupError:
+            break
+        time.sleep(0.02)
+
+
+def test_real_run_plan_round_budget_surfaces_blocking_proposal(
+    tmp_path: Path, command_base, onejudge_bin: str
+) -> None:
+    runs = tmp_path / "runs"
+    run_dir = runs / "round-budget"
+    channel = create_channel(run_dir)
+    ready = tmp_path / "ready"
+    release = tmp_path / "never-release"
+    plan = tmp_path / "plan.json"
+    plan.write_text(
+        json.dumps(
+            {
+                "tasks": [
+                    {
+                        "id": "wedged",
+                        "persona": "engineer",
+                        "task": (
+                            f"provider-barrier-ready={ready} provider-barrier-release={release}"
+                        ),
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    env = {
+        **os.environ,
+        CHANNEL_DIR_ENV: str(channel),
+        CHANNEL_RUN_ID_ENV: "round-budget",
+    }
+    process = subprocess.Popen(
+        [
+            str(Path(onejudge_bin).with_name("orchestrator-run-plan")),
+            str(plan),
+            "--run",
+            "round-budget",
+            "--runs-dir",
+            str(runs),
+            "--base",
+            str(command_base()),
+            "--onejudge-bin",
+            onejudge_bin,
+            "--round-budget",
+            "0.2",
+        ],
+        cwd=REPO_ROOT,
+        env=env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+
+    proposal = read_message(channel / "up.fifo", timeout=5)
+    assert proposal["surface"] == {
+        "kind": "proposal",
+        "message": (
+            "round-budget: round exceeded its 0.2s liveness budget; "
+            "in-flight workers were cancelled and planner intervention is required"
+        ),
+        "blocking": True,
+    }
+    release.touch()
+    write_message(
+        channel / "down.fifo",
+        {"completion": False, "message": "stop", "reason": "budget exhausted"},
+        timeout=5,
+    )
+    stdout, stderr = process.communicate(timeout=5)
+    assert process.returncode == 1, (stdout, stderr)
 
 
 def test_dispatch_subdir_qualified_persona_via_real_onejudge(command_base, onejudge_bin) -> None:

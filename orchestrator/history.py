@@ -123,6 +123,47 @@ def _run_history(*args: str, oneharness_bin: str = "oneharness") -> Any:
         raise HistoryError("oneharness history returned invalid JSON") from exc
 
 
+# llmlint: ignore[modern_domain_modeling] These are heterogeneous raw JSON lines from
+# `oneharness history --format json` — `type: run`, `type: event`, legacy no-type, and
+# the `history show` envelope all arrive in one stream with format-varying keys. The
+# function's whole job is format-agnostic passthrough at that external boundary (parsed
+# defensively per the repo's trust-boundary invariant); a TypedDict would impose a single
+# shape the input deliberately does not have. Typed models live at the reader boundary.
+def _normalize_records(raw: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Fold oneharness' 1.0 event-sourced lines back into per-turn run records.
+
+    The 1.0 history format writes each provider turn as a ``type: "run"`` line plus
+    a separate ``type: "event"`` line per tool call, the two linked by the run's
+    ``history_id`` and the event's ``run_id``. Earlier formats embedded those tool
+    calls in an ``events`` list on the record itself, which is the shape every
+    reader in this module and in `telemetry.py` already understands. Rebuild that
+    shape so the rest of the code stays format-agnostic: attach each event to its
+    run in emission order and drop the standalone event lines. Records with no
+    ``type`` tag — legacy stores and the ``oneharness history show`` envelope —
+    pass through untouched.
+    """
+    events_by_run: dict[str, list[dict[str, Any]]] = {}
+    for record in raw:
+        if record.get("type") != "event":
+            continue
+        run_id = record.get("run_id")
+        event = record.get("event")
+        if isinstance(run_id, str) and isinstance(event, dict):
+            events_by_run.setdefault(run_id, []).append(event)
+    normalized: list[dict[str, Any]] = []
+    for record in raw:
+        record_type = record.get("type")
+        if record_type == "event":
+            continue
+        if record_type == "run":
+            history_id = record.get("history_id")
+            events = events_by_run.get(history_id, []) if isinstance(history_id, str) else []
+            normalized.append({**record, "events": events})
+        else:
+            normalized.append(record)
+    return normalized
+
+
 def _records(path: Path) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
     try:
@@ -136,7 +177,7 @@ def _records(path: Path) -> list[dict[str, Any]]:
             continue
         if isinstance(value, dict):
             records.append(value)
-    return records
+    return _normalize_records(records)
 
 
 def _is_agent_name(session: HistorySession) -> bool:

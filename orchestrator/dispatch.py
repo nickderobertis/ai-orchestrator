@@ -30,7 +30,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Protocol, TypedDict, cast
+from typing import Any, Literal, Protocol, TypedDict, cast
 
 import yaml
 from onejudge_sdk import (
@@ -56,7 +56,13 @@ from .goals import Goal, graph_identities, register_run, update_run_owner
 from .labels import LABEL_ENV, LabelError, merge_labels
 from .personas import persona_path
 from .runs import ArtifactPaths, resolve_run_dir, slugify
-from .watchdog import ProcessId, process_activity, terminate_tree
+from .watchdog import (
+    ProcessId,
+    process_activity,
+    terminate_process_group,
+    terminate_processes,
+    terminate_tree,
+)
 
 # onejudge's own exit codes (see docs/cli.md): 0 completed + boolean evals passed,
 # 1 hit the turn cap / a boolean eval failed, 2 bad config or usage.
@@ -67,8 +73,11 @@ EXIT_CONFIG_ERROR = 2
 # inactivity is bounded separately below; issue #6 tracks finer phase budgets.
 DEFAULT_ONEHARNESS_TIMEOUT = "10800"
 DEFAULT_DISPATCH_STALL_TIMEOUT = "600"
+DEFAULT_WORKER_HEARTBEAT_TIMEOUT = "5"
 ORCHESTRATOR_ONEHARNESS_TIMEOUT = "86400"
 AGENT_ONEHARNESS_BIN = REPO_ROOT / "scripts" / "oneharness-agent.sh"
+DispatchOutcome = Literal["worker-died"]
+WatchdogReason = Literal["worker-died", "stalled"]
 
 
 class DispatchError(Exception):
@@ -118,6 +127,7 @@ class Report:
     assessment: str | None = None
     telemetry_data: dict[str, Any] | None = None
     artifacts: ArtifactPaths = field(default_factory=ArtifactPaths)
+    outcome: DispatchOutcome | None = None
 
     @property
     def telemetry(self) -> dict[str, Any] | None:
@@ -133,6 +143,15 @@ class Report:
         if self.assessment:
             line += f"\n  follow-ups: {self.assessment}"
         return line
+
+
+@dataclass(frozen=True)
+class WatchdogSignal:
+    """A typed liveness decision and the process identities needed for cleanup."""
+
+    reason: WatchdogReason
+    root_pid: ProcessId
+    observed_pids: tuple[ProcessId, ...]
 
 
 def _build_report(persona: str, result: RunResult) -> Report:
@@ -195,6 +214,23 @@ def _stall_timeout(env: Mapping[str, str]) -> float:
     if not math.isfinite(seconds) or seconds <= 0:
         raise DispatchError(
             "ORCHESTRATOR_DISPATCH_STALL_TIMEOUT must be a positive number of seconds, "
+            f"got {value!r}"
+        )
+    return seconds
+
+
+def _worker_heartbeat_timeout(env: Mapping[str, str]) -> float:
+    value = env.get("ORCHESTRATOR_WORKER_HEARTBEAT_TIMEOUT", DEFAULT_WORKER_HEARTBEAT_TIMEOUT)
+    try:
+        seconds = float(value)
+    except (TypeError, ValueError):
+        raise DispatchError(
+            "ORCHESTRATOR_WORKER_HEARTBEAT_TIMEOUT must be a positive number of seconds, "
+            f"got {value!r}"
+        ) from None
+    if not math.isfinite(seconds) or seconds <= 0:
+        raise DispatchError(
+            "ORCHESTRATOR_WORKER_HEARTBEAT_TIMEOUT must be a positive number of seconds, "
             f"got {value!r}"
         )
     return seconds
@@ -265,6 +301,7 @@ def run_onejudge(
     process_env.setdefault("ONEHARNESS_TIMEOUT", DEFAULT_ONEHARNESS_TIMEOUT)
     _validate_oneharness_timeout(process_env["ONEHARNESS_TIMEOUT"])
     stall_timeout = _stall_timeout(process_env)
+    heartbeat_timeout = _worker_heartbeat_timeout(process_env)
     if shutil.which(onejudge_bin, path=process_env.get("PATH")) is None:
         raise DispatchError(f"onejudge binary not found: {onejudge_bin!r} — run 'just bootstrap'")
     inherited_labels = process_env.get(LABEL_ENV)
@@ -278,12 +315,20 @@ def run_onejudge(
         else:
             process_env.pop(LABEL_ENV, None)
 
-    async def execute() -> RunResult | None:
+    async def execute() -> RunResult | Report | None:
         with tempfile.TemporaryDirectory(prefix="orchestrator-watchdog-") as directory:
             pid_file = Path(directory) / "pid"
+            agent_status_dir = Path(directory) / "agent"
+            agent_status_dir.mkdir()
+            process_env["ORCHESTRATOR_AGENT_STATUS_DIR"] = os.fspath(agent_status_dir)
             runner = OneJudge(
                 executable=sys.executable,
-                executable_args=("-m", "orchestrator.watchdog", os.fspath(pid_file), onejudge_bin),
+                executable_args=(
+                    "-m",
+                    "orchestrator.watchdog",
+                    os.fspath(pid_file),
+                    onejudge_bin,
+                ),
             )
             run = asyncio.create_task(
                 runner.run(
@@ -295,26 +340,114 @@ def run_onejudge(
                     timeout=timeout,
                 )
             )
+            observed_tree: tuple[ProcessId, ...] = ()
 
-            async def stalled() -> ProcessId | None:
-                while not pid_file.exists():
+            async def watch_liveness() -> WatchdogSignal | None:
+                nonlocal observed_tree
+                pid_wait_started = time.monotonic()
+                while True:
                     if run.done():
                         return None
+                    if pid_file.exists():
+                        try:
+                            pid = _read_watchdog_pid(pid_file)
+                        except DispatchError:
+                            # The watchdog creates then fills this file. Under load,
+                            # existence can become visible during that short write.
+                            if time.monotonic() - pid_wait_started >= min(5.0, heartbeat_timeout):
+                                _read_watchdog_pid(pid_file)
+                        else:
+                            break
                     await asyncio.sleep(min(0.05, stall_timeout / 4))
-                pid = _read_watchdog_pid(pid_file)
-                previous = (process_activity(pid), _file_progress(Path(cwd) / ".git"))
+                activity = process_activity(pid)
+                observed = activity.pids
+                observed_tree = observed
+                previous = (activity, _file_progress(Path(cwd) / ".git"))
                 last_progress = time.monotonic()
+                agent_identity: str | None = None
+                last_agent_heartbeat_ns: int | None = None
+                last_agent_heartbeat = time.monotonic()
                 while not run.done():
-                    await asyncio.sleep(min(1.0, stall_timeout / 4))
-                    current = (process_activity(pid), _file_progress(Path(cwd) / ".git"))
+                    await asyncio.sleep(min(0.25, stall_timeout / 4, heartbeat_timeout / 4))
+                    activity = process_activity(pid)
+                    if activity.pids:
+                        observed = tuple(dict.fromkeys((*observed, *activity.pids)))
+                        observed_tree = observed
+                    else:
+                        # Normal process exit precedes SDK report parsing by a tiny
+                        # interval. Give that handoff one bounded grace period;
+                        # leaked pipe holders keep the awaitable pending beyond it.
+                        await asyncio.sleep(min(5.0, heartbeat_timeout))
+                        if run.done():  # pragma: no cover - real subprocess race
+                            return None
+                        return WatchdogSignal(  # pragma: no cover - real killed-worker e2e
+                            "worker-died", pid, observed
+                        )
+                    agent_pid_file = agent_status_dir / "agent.pid"
+                    if agent_pid_file.exists():
+                        try:
+                            current_agent = agent_pid_file.read_text(encoding="utf-8").strip()
+                            agent_pid = ProcessId(int(current_agent))
+                        except (OSError, ValueError):
+                            current_agent = ""
+                            agent_pid = ProcessId(0)
+                        done_file = agent_status_dir / "agent.done"
+                        done_agent = (
+                            done_file.read_text(encoding="utf-8").strip()
+                            if done_file.exists()
+                            else None
+                        )
+                        failed_file = agent_status_dir / "agent.failed"
+                        failed_agent = (
+                            failed_file.read_text(encoding="utf-8").strip()
+                            if failed_file.exists()
+                            else None
+                        )
+                        if (  # pragma: no cover - real killed-agent e2e
+                            current_agent and failed_agent == current_agent
+                        ):
+                            return WatchdogSignal("worker-died", pid, observed)
+                        if current_agent and done_agent != current_agent:
+                            if agent_pid not in activity.pids:
+                                return WatchdogSignal("worker-died", pid, observed)
+                            child_pid_file = agent_status_dir / "agent.child.pid"
+                            if child_pid_file.exists():
+                                try:
+                                    child_pid = ProcessId(
+                                        int(child_pid_file.read_text(encoding="utf-8"))
+                                    )
+                                except (OSError, ValueError):
+                                    pass
+                                else:
+                                    if child_pid in activity.pids:
+                                        observed = tuple(
+                                            dict.fromkeys((*observed, agent_pid, child_pid))
+                                        )
+                                        observed_tree = observed
+                            if agent_identity != current_agent:
+                                agent_identity = current_agent
+                                last_agent_heartbeat_ns = None
+                                last_agent_heartbeat = time.monotonic()
+                            try:
+                                observed_agent_heartbeat_ns: int | None = (
+                                    (agent_status_dir / "agent.heartbeat").stat().st_mtime_ns
+                                )
+                            except FileNotFoundError:
+                                observed_agent_heartbeat_ns = last_agent_heartbeat_ns
+                            if observed_agent_heartbeat_ns != last_agent_heartbeat_ns:
+                                last_agent_heartbeat_ns = observed_agent_heartbeat_ns
+                                last_agent_heartbeat = time.monotonic()
+                            elif time.monotonic() - last_agent_heartbeat >= heartbeat_timeout:
+                                return WatchdogSignal("worker-died", pid, observed)
+                    current = (activity, _file_progress(Path(cwd) / ".git"))
                     if current != previous:
                         previous = current
                         last_progress = time.monotonic()
                     elif time.monotonic() - last_progress >= stall_timeout:
-                        return pid
-                return None
+                        return WatchdogSignal("stalled", pid, observed)
+                return None  # pragma: no cover - watcher/run completion scheduling race
 
-            watcher = asyncio.create_task(stalled())
+            watcher = asyncio.create_task(watch_liveness())
             cancellation: asyncio.Task[None] | None = None
             if cancel is not None:
 
@@ -328,14 +461,38 @@ def run_onejudge(
                 waiting.add(cancellation)
             done, pending = await asyncio.wait(waiting, return_when=asyncio.FIRST_COMPLETED)
             if run in done:
+                signal = await watcher if watcher in done else None
                 for pending_task in pending:
                     pending_task.cancel()
+                if signal is not None:
+                    terminate_processes(signal.observed_pids)
+                elif pid_file.exists():
+                    terminate_processes(observed_tree)
+                if pid_file.exists():
+                    completed_pid = _read_watchdog_pid(pid_file)
+                    terminate_process_group(completed_pid)
+                    terminate_tree(completed_pid)
                 return await run
-            if watcher in done and (pid := await watcher):
-                terminate_tree(pid)
+            if watcher in done and (signal := await watcher):
+                terminate_processes(signal.observed_pids)
+                terminate_process_group(signal.root_pid)
+                terminate_tree(signal.root_pid)
                 run.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await run
+                if signal.reason == "worker-died":
+                    return Report(
+                        persona,
+                        EXIT_INCOMPLETE,
+                        False,
+                        True,
+                        0,
+                        [],
+                        {},
+                        None,
+                        "worker-died: tracked worker exited or stopped heartbeating",
+                        outcome="worker-died",
+                    )
                 raise DispatchError(
                     f"dispatch stalled for {stall_timeout:g}s with no process-tree CPU/I/O "
                     "or repository progress; terminated onejudge/provider worker tree"
@@ -344,6 +501,11 @@ def run_onejudge(
             run.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await run
+            terminate_processes(observed_tree)
+            if pid_file.exists():
+                cancelled_pid = _read_watchdog_pid(pid_file)
+                terminate_process_group(cancelled_pid)
+                terminate_tree(cancelled_pid)
             return None
 
     try:
@@ -367,6 +529,8 @@ def run_onejudge(
         raise DispatchError(
             f"onejudge failed (exit 2 — bad config or provider/runtime error): {exc}"
         ) from exc
+    if isinstance(result, Report):
+        return result
     if result is None:
         return Report(persona, 1, False, True, 0, [], {}, None, "cancelled cooperatively")
     return _build_report(persona, result)
@@ -542,7 +706,8 @@ def launch_orchestrator(
     # simulated-model eval/assessment calls do not belong on this command relay.
     config.pop("evals", None)
     config.pop("assessment", None)
-    skill = dict(skill_provider or config.get("provider", {}))
+    worker_skill = dict(config.get("provider", {}))
+    skill = dict(skill_provider or worker_skill)
     provider_kind = skill.get("kind")
     if provider_kind not in {"command", "oneharness"}:
         raise DispatchError("orchestrator skill provider kind must be 'command' or 'oneharness'")
@@ -584,7 +749,9 @@ def launch_orchestrator(
     effective.parent.mkdir()
     effective.write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
     worker_base = load_yaml(base_path)
-    worker_base["provider"] = skill
+    worker_provider_kind = worker_skill.get("kind")
+    if worker_provider_kind not in {"command", "oneharness"}:
+        raise DispatchError("worker provider kind must be 'command' or 'oneharness'")
     worker_base_path = effective.parent / "worker-base.yaml"
     worker_base_path.write_text(yaml.safe_dump(worker_base, sort_keys=False), encoding="utf-8")
     report_path = effective.parent / "report.json"
@@ -592,7 +759,7 @@ def launch_orchestrator(
     task = (
         "Drive this tracked orchestration plan one round at a time. Execute the real command "
         f"`just run-plan {plan} --run {run_dir.name} --runs-dir {root} --base {worker_base_path} "
-        f"--provider {provider_kind}"
+        f"--provider {worker_provider_kind}"
         f"{' --acknowledge-concurrent' if acknowledge_concurrent else ''}` for each required "
         "round, review its recorded "
         "result, and surface milestones, blockers, departures, and closeout to your supervisor."

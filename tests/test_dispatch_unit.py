@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import os
+import subprocess
+import sys
+from pathlib import Path
 
 import pytest
 from onejudge_sdk import RunResult
@@ -11,6 +14,7 @@ from orchestrator import BASE_CONFIG, REPO_ROOT
 from orchestrator.dispatch import (
     AGENT_ONEHARNESS_BIN,
     DEFAULT_DISPATCH_STALL_TIMEOUT,
+    DEFAULT_WORKER_HEARTBEAT_TIMEOUT,
     DispatchError,
     Report,
     _agent_run_context,
@@ -20,10 +24,18 @@ from orchestrator.dispatch import (
     run_onejudge,
 )
 from orchestrator.dispatch import main as dispatch_main
+from orchestrator.graph import DEFAULT_ROUND_BUDGET
 from orchestrator.labels import parse_labels
 from orchestrator.plan import PlanNode, PlanResult, TaskResult, _render
 from orchestrator.plan import main as plan_main
-from orchestrator.watchdog import ProcessId, _parse_stat, process_activity, terminate_tree
+from orchestrator.watchdog import (
+    ProcessId,
+    _parse_stat,
+    process_activity,
+    terminate_process_group,
+    terminate_processes,
+    terminate_tree,
+)
 from orchestrator.watchdog import main as watchdog_main
 
 
@@ -315,6 +327,177 @@ def test_run_onejudge_allows_slow_dispatch_with_real_io_progress(tmp_path) -> No
     assert report.completed is True
 
 
+def test_run_onejudge_retries_transient_empty_watchdog_pid(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    onejudge = tmp_path / "onejudge"
+    onejudge.write_text(
+        "#!/bin/sh\n"
+        "sleep 0.2\n"
+        'printf \'%s\\n\' \'{"schema_version":4,"transcript":{"messages":[]},'
+        '"stopped_early":false}\'\n',
+        encoding="utf-8",
+    )
+    onejudge.chmod(0o700)
+    original_read_text = Path.read_text
+    injected = False
+
+    def transient_empty(path: Path, *args: object, **kwargs: object) -> str:
+        nonlocal injected
+        if (
+            not injected
+            and path.name == "pid"
+            and path.parent.name.startswith("orchestrator-watchdog-")
+        ):
+            injected = True
+            return ""
+        return original_read_text(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", transient_empty)
+
+    report = run_onejudge({}, "task", onejudge_bin=os.fspath(onejudge))
+
+    assert injected
+    assert report.completed is True
+
+
+def test_worker_heartbeat_deadline_ignores_busy_descendant(tmp_path) -> None:
+    status = tmp_path / "agent-status"
+    onejudge = tmp_path / "onejudge"
+    onejudge.write_text(
+        "#!/bin/sh\n"
+        'printf "%s\\n" "$$" >"$ORCHESTRATOR_AGENT_STATUS_DIR/agent.pid"\n'
+        'touch "$ORCHESTRATOR_AGENT_STATUS_DIR/agent.heartbeat"\n'
+        "while :; do :; done &\n"
+        "child=$!\n"
+        'printf "%s\\n" "$child" >"$ORCHESTRATOR_AGENT_STATUS_DIR/agent.child.pid"\n'
+        'trap \'kill "$child" 2>/dev/null || true; wait "$child" 2>/dev/null || true; '
+        "exit 143' TERM\n"
+        'wait "$child"\n',
+        encoding="utf-8",
+    )
+    onejudge.chmod(0o700)
+
+    report = run_onejudge(
+        {},
+        "task",
+        onejudge_bin=os.fspath(onejudge),
+        cwd=tmp_path,
+        env={
+            "ORCHESTRATOR_AGENT_STATUS_DIR": os.fspath(status),
+            "ORCHESTRATOR_WORKER_HEARTBEAT_TIMEOUT": "0.2",
+            "ORCHESTRATOR_DISPATCH_STALL_TIMEOUT": "5",
+        },
+    )
+
+    assert report.outcome == "worker-died"
+    assert report.completed is False
+
+
+def test_missing_agent_heartbeat_reaches_worker_death_deadline(tmp_path) -> None:
+    status = tmp_path / "agent-status"
+    onejudge = tmp_path / "onejudge"
+    onejudge.write_text(
+        "#!/bin/sh\n"
+        'printf "%s\\n" "$$" >"$ORCHESTRATOR_AGENT_STATUS_DIR/agent.pid"\n'
+        "while :; do :; done &\n"
+        "child=$!\n"
+        'printf "%s\\n" "$child" >"$ORCHESTRATOR_AGENT_STATUS_DIR/agent.child.pid"\n'
+        'trap \'kill "$child" 2>/dev/null || true; wait "$child" 2>/dev/null || true; '
+        "exit 143' TERM\n"
+        'wait "$child"\n',
+        encoding="utf-8",
+    )
+    onejudge.chmod(0o700)
+
+    report = run_onejudge(
+        {},
+        "task",
+        onejudge_bin=os.fspath(onejudge),
+        env={
+            "ORCHESTRATOR_AGENT_STATUS_DIR": os.fspath(status),
+            "ORCHESTRATOR_WORKER_HEARTBEAT_TIMEOUT": "0.2",
+        },
+    )
+
+    assert report.outcome == "worker-died"
+
+
+def test_malformed_agent_identity_falls_back_to_stall_watchdog(tmp_path) -> None:
+    status = tmp_path / "agent-status"
+    onejudge = tmp_path / "onejudge"
+    onejudge.write_text(
+        '#!/bin/sh\nprintf "bad\\n" >"$ORCHESTRATOR_AGENT_STATUS_DIR/agent.pid"\nsleep 60\n',
+        encoding="utf-8",
+    )
+    onejudge.chmod(0o700)
+
+    with pytest.raises(DispatchError, match="dispatch stalled"):
+        run_onejudge(
+            {},
+            "task",
+            onejudge_bin=os.fspath(onejudge),
+            env={
+                "ORCHESTRATOR_AGENT_STATUS_DIR": os.fspath(status),
+                "ORCHESTRATOR_DISPATCH_STALL_TIMEOUT": "0.2",
+            },
+        )
+
+
+def test_malformed_agent_child_pid_does_not_mask_heartbeat_deadline(tmp_path) -> None:
+    status = tmp_path / "agent-status"
+    onejudge = tmp_path / "onejudge"
+    onejudge.write_text(
+        "#!/bin/sh\n"
+        'printf "%s\\n" "$$" >"$ORCHESTRATOR_AGENT_STATUS_DIR/agent.pid"\n'
+        'printf "bad\\n" >"$ORCHESTRATOR_AGENT_STATUS_DIR/agent.child.pid"\n'
+        'touch "$ORCHESTRATOR_AGENT_STATUS_DIR/agent.heartbeat"\n'
+        "sleep 60\n",
+        encoding="utf-8",
+    )
+    onejudge.chmod(0o700)
+
+    report = run_onejudge(
+        {},
+        "task",
+        onejudge_bin=os.fspath(onejudge),
+        env={
+            "ORCHESTRATOR_AGENT_STATUS_DIR": os.fspath(status),
+            "ORCHESTRATOR_WORKER_HEARTBEAT_TIMEOUT": "0.2",
+        },
+    )
+
+    assert report.outcome == "worker-died"
+
+
+def test_agent_pid_outside_dispatch_tree_is_rejected(tmp_path) -> None:
+    onejudge = tmp_path / "onejudge"
+    onejudge.write_text(
+        '#!/bin/sh\nprintf "2147483647\\n" >"$ORCHESTRATOR_AGENT_STATUS_DIR/agent.pid"\nsleep 60\n',
+        encoding="utf-8",
+    )
+    onejudge.chmod(0o700)
+
+    report = run_onejudge({}, "task", onejudge_bin=os.fspath(onejudge))
+
+    assert report.outcome == "worker-died"
+
+
+@pytest.mark.parametrize("value", ["bad", "0", "-1", "nan", "inf"])
+def test_worker_heartbeat_timeout_rejects_invalid_values(tmp_path, value: str) -> None:
+    onejudge = tmp_path / "onejudge"
+    onejudge.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    onejudge.chmod(0o700)
+
+    with pytest.raises(DispatchError, match="ORCHESTRATOR_WORKER_HEARTBEAT_TIMEOUT"):
+        run_onejudge(
+            {},
+            "task",
+            onejudge_bin=os.fspath(onejudge),
+            env={"ORCHESTRATOR_WORKER_HEARTBEAT_TIMEOUT": value},
+        )
+
+
 def test_dispatch_file_progress_records_files_and_skips_disappeared_entries(tmp_path) -> None:
     progress_file = tmp_path / "progress.log"
     progress_file.write_text("working", encoding="utf-8")
@@ -340,6 +523,8 @@ def test_dispatch_stall_default_documentation_cannot_drift() -> None:
     documentation = (REPO_ROOT / "docs" / "onejudge-integration.md").read_text(encoding="utf-8")
 
     assert f"defaults to `{DEFAULT_DISPATCH_STALL_TIMEOUT}` seconds" in documentation
+    assert f"defaults to `{DEFAULT_WORKER_HEARTBEAT_TIMEOUT}`" in documentation
+    assert f"default `{DEFAULT_ROUND_BUDGET:g}`" in documentation
 
 
 def test_watchdog_process_probe_identifies_current_process() -> None:
@@ -366,6 +551,40 @@ def test_watchdog_cleanup_and_usage_are_safe_for_absent_process(capsys) -> None:
     terminate_tree(ProcessId(2**31 - 1))
     assert watchdog_main([]) == 2
     assert "usage: watchdog" in capsys.readouterr().err
+
+
+def test_watchdog_reaps_previously_observed_process() -> None:
+    process = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+
+    terminate_processes((ProcessId(process.pid),))
+    process.wait(timeout=1)
+
+    assert process.returncode is not None
+
+
+def test_watchdog_terminates_live_process_tree() -> None:
+    process = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+
+    terminate_tree(ProcessId(process.pid))
+    process.wait(timeout=1)
+
+    assert process.returncode is not None
+
+
+def test_watchdog_process_group_cleanup_is_safe_for_absent_group() -> None:
+    assert terminate_process_group(ProcessId(2**31 - 1)) is None
+
+
+def test_watchdog_terminates_live_process_group() -> None:
+    process = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(60)"],
+        start_new_session=True,
+    )
+
+    terminate_process_group(ProcessId(process.pid))
+    process.wait(timeout=1)
+
+    assert process.returncode is not None
 
 
 def test_watchdog_records_pid_and_executes_command(tmp_path, monkeypatch) -> None:

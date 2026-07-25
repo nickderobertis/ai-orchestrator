@@ -51,6 +51,8 @@ DEFAULT_HEARTBEAT_INTERVAL = 1800.0
 class ProposalSink(Protocol):
     def propose(self, node: str, message: str) -> None: ...
 
+    def propose_blocking(self, node: str, message: str) -> None: ...
+
     def persist_replies(self) -> None: ...
 
     def drain_commands(self) -> tuple[EditCommand, ...]: ...
@@ -430,6 +432,23 @@ class ProposalPump:
                     "kind": "proposal",
                     "message": f"{node}: {message}",
                     "blocking": False,
+                },
+                "messages": [],
+                "proposal_id": f"{node}:{message}",
+            }
+        )
+
+    def propose_blocking(self, node: str, message: str) -> None:
+        """Surface a liveness failure that requires planner intervention."""
+        self._proposals.put(
+            {
+                "op": "supervisor",
+                "run_id": self._run_id,
+                "round": self._round,
+                "surface": {
+                    "kind": "proposal",
+                    "message": f"{node}: {message}",
+                    "blocking": True,
                 },
                 "messages": [],
                 "proposal_id": f"{node}:{message}",

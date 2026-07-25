@@ -48,7 +48,12 @@ from .runs import (
 from .verify import GateAttestation
 
 TELEMETRY_SCHEMA_VERSION = 6
-SUPPORTED_HISTORY_SCHEMA_VERSIONS = ("0.2", "0.3", 1, 2)
+SUPPORTED_HISTORY_SCHEMA_VERSIONS = ("0.2", "0.3", 1, 2, "1.0")
+#: History schema versions that carry validated native timing (per-turn
+#: ``model_ms``/``tool_ms`` plus interval-bearing tool events). oneharness 0.5's
+#: event-sourced 1.0 records keep the same required fields and event shape as the
+#: earlier 0.3/v2 tier once `history.py` folds their event lines back onto the run.
+NATIVE_TIMING_HISTORY_SCHEMAS: frozenset[str | int] = frozenset({"0.3", 2, "1.0"})
 TelemetryQuality = Literal["complete", "partial", "legacy"]
 TelemetrySource = Literal["onejudge", "oneharness", "history_legacy", "journal_legacy"]
 FailureClass = Literal[
@@ -531,15 +536,15 @@ def _summarize_session(session: HistorySession, records: list[HistoryRecord]) ->
         schema_version = record.get("schema_version")
         if schema_version is not None and schema_version not in SUPPORTED_HISTORY_SCHEMA_VERSIONS:
             raise HistoryError(f"unsupported oneharness history schema version {schema_version!r}")
-        if schema_version not in {"0.3", 2}:
+        if schema_version not in NATIVE_TIMING_HISTORY_SCHEMAS:
             validated_native_fields = False
         model = _non_negative_int(record.get("model_ms"))
         tool = _non_negative_int(record.get("tool_ms"))
-        if schema_version in {"0.3", 2} and (
+        if schema_version in NATIVE_TIMING_HISTORY_SCHEMAS and (
             _non_negative_int(record.get("duration_ms")) is None or model is None or tool is None
         ):
             raise HistoryError("oneharness history schema v2 record has invalid required timing")
-        if schema_version in {"0.3", 2}:
+        if schema_version in NATIVE_TIMING_HISTORY_SCHEMAS:
             start_at = _utc_datetime(record.get("started_at"))
             raw_finish = record.get("finished_at")
             finish_at = _utc_datetime(raw_finish) if raw_finish is not None else None
@@ -566,7 +571,7 @@ def _summarize_session(session: HistorySession, records: list[HistoryRecord]) ->
                 continue
             event_start: datetime | None = None
             event_finish: datetime | None = None
-            if schema_version in {"0.3", 2}:
+            if schema_version in NATIVE_TIMING_HISTORY_SCHEMAS:
                 event_start = _utc_datetime(event.get("started_at"))
                 raw_finish = event.get("finished_at")
                 event_finish = _utc_datetime(raw_finish) if raw_finish is not None else None

@@ -110,6 +110,9 @@ Every proposal includes `surface.blocking`: `true` means the worker or orchestra
 is awaiting the decision, while `false` is an informational follow-up that does
 not stop the graph frontier. `monitor` renders `ACK REQUIRED` while any blocking
 supervisor boundary, including closeout, awaits a reply.
+The executor also emits a blocking `round-budget` proposal if a round exceeds
+`--round-budget`; it cooperatively cancels in-flight nodes so a wedged dispatch
+layer cannot leave the planner channel silent.
 
 The raw reply schema remains available for edits and automation. A continuing
 reply is `{"completion":false,"message":"what to do next","reason":"why"}`;
@@ -274,6 +277,9 @@ publication/stack ancestry; cross-repository dependencies only schedule. During
 an orchestrated run, [live edits](#live-graph-edits) can change the desired graph
 and the reconciler applies the new reachable frontier without waiting for the
 round to settle.
+The outer round budget defaults to four hours and is configurable with
+`run-plan --round-budget SECONDS`. It is a liveness backstop, not a replacement
+for per-dispatch timeout, heartbeat, or stall detection.
 
 ## Status, state, and exit contract
 
