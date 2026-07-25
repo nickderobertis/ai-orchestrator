@@ -521,7 +521,7 @@ def test_real_lifecycle_dispatch_drafts_pr_bodies_and_preserves_fallbacks(
             Step("implement", "engineer", "complete-now write-change raw implementation handoff"),
             Step(
                 "verify",
-                "test-engineer",
+                "engineer",
                 "complete-now capture-cache-env raw verification handoff",
                 deps=["implement"],
             ),
@@ -561,7 +561,7 @@ def test_real_lifecycle_dispatch_drafts_pr_bodies_and_preserves_fallbacks(
             ),
             Step(
                 "verify",
-                "test-engineer",
+                "engineer",
                 "## What\ncomplete-now capture-cache-env verify the drafted API.\n\n"
                 "## Why\nKeep the drafted API reliable.\n\n"
                 "## Acceptance criteria\n- The drafted API is verified.",
@@ -631,7 +631,7 @@ def test_real_lifecycle_dispatch_drafts_pr_bodies_and_preserves_fallbacks(
             ),
             Step(
                 "verify",
-                "test-engineer",
+                "engineer",
                 "## What\ncomplete-now capture-cache-env verify the API.\n\n"
                 "## Why\nPrevent regressions when drafting-fails.\n\n"
                 "## Acceptance criteria\n- The API is verified.",
@@ -3791,7 +3791,7 @@ def test_remote_human_workstream_draft_checkpoint_and_safe_resume(tmp_path, bare
         Step("approve", task="Approve the checkpoint.", kind="human", deps=["prepare"]),
         Step("implement", "engineer", "implement after approval", deps=["approve"]),
         Step("release", task="Release the implementation.", kind="human", deps=["implement"]),
-        Step("finalize", "test-engineer", "finalize publication", deps=["release"]),
+        Step("finalize", "engineer", "finalize publication", deps=["release"]),
     ]
     paused = run_repo_task(
         "acme/widget",
@@ -4572,7 +4572,7 @@ def test_local_human_workstream_removes_worktree_and_resumes_same_branch(
     steps = [
         Step("prepare", "engineer", "prepare the change"),
         Step("approve", task="Approve the prepared change.", kind="human", deps=["prepare"]),
-        Step("finalize", "test-engineer", "finalize the change", deps=["approve"]),
+        Step("finalize", "engineer", "finalize the change", deps=["approve"]),
     ]
 
     paused = run_repo_task(
@@ -4639,7 +4639,7 @@ def test_workstream_multiple_onejudge_one_pr(tmp_path, bare_origin) -> None:
     before = _tip(origin, "main")
     steps = [
         Step("impl", "engineer", "implement the feature"),
-        Step("test", "test-engineer", "add tests", deps=["impl"]),
+        Step("test", "engineer", "add tests", deps=["impl"]),
         Step("docs", "docs-writer", "document it", deps=["impl"]),
     ]
     result = run_repo_task(
@@ -4705,7 +4705,7 @@ def test_workstream_step_failure_stops_and_skips_dependents(tmp_path, bare_origi
     workspace = _workspace(tmp_path, origin)
     steps = [
         Step("impl", "engineer", "implement"),
-        Step("test", "test-engineer", "add tests", deps=["impl"]),
+        Step("test", "engineer", "add tests", deps=["impl"]),
     ]
     result = run_repo_task(
         str(origin),

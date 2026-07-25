@@ -186,6 +186,14 @@ many micro-tasks that each re-pay the setup tax. When unsure, err toward fewer,
 larger subtasks and split further only if one proves too big. See
 `docs/orchestration.md`.
 
+An implementation dispatch owns the tests that prove its change. Keep
+implementation and those tests in the same node or lifecycle step so the unit
+settles fully proven; never split them into separate nodes or steps. A separate
+test-focused dispatch is appropriate only to close a pre-existing coverage gap
+or add a regression suite for code the planner is not otherwise changing. Use
+`engineer` for that work; there is no test-only persona. Operational guidance
+lives under [Decomposition and scheduling](docs/orchestration.md#decomposition-and-scheduling).
+
 ## Personas and the base config
 
 A persona is a small onejudge **delta** file in `personas/` — the agent's general
