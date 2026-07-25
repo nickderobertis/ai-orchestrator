@@ -79,6 +79,24 @@ def _validate(history_dir: Path, smoke_id: str) -> subprocess.CompletedProcess[s
     )
 
 
+def test_smoke_command_surfaces_real_wrapper_failure_without_a_paid_turn() -> None:
+    result = subprocess.run(
+        ["just", "smoke"],
+        cwd=REPO_ROOT,
+        env={
+            **os.environ,
+            "ONEHARNESS_BIN_CODEX": "/does/not/exist/codex",
+            "ONEHARNESS_BIN_CLAUDE_CODE": "/does/not/exist/claude",
+        },
+        text=True,
+        capture_output=True,
+    )
+
+    assert result.returncode == 1
+    assert "real harness smoke failed" in result.stderr
+    assert "rerun 'just smoke'" in result.stderr
+
+
 @pytest.mark.parametrize("timeout", ["bad", "0", "121"])
 def test_smoke_command_rejects_invalid_timeout_before_launch(timeout: str) -> None:
     result = subprocess.run(
