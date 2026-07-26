@@ -1086,6 +1086,35 @@ def test_ordinary_next_round_resumes_committed_lifecycle_branch(
     assert fresh_discovered[0]["detail"]["branch"] == fresh_branch
     assert fresh_discovered[0]["detail"]["resumed"] is False
 
+    pin = tmp_path / "pin-existing.json"
+    pin.write_text(
+        json.dumps({"retry": {"change": {"branch": branch}}}),
+        encoding="utf-8",
+    )
+    assert next_round_main(["ordinary-resume", str(pin), "--runs-dir", str(runs_dir), *common]) == 1
+    capsys.readouterr()
+    fourth = json.loads(
+        (runs_dir / "ordinary-resume" / "round-04" / "result.json").read_text(encoding="utf-8")
+    )["results"]["change"]
+    assert fourth["branch"] == branch
+    assert gitops.is_ancestor(clone, checkpoint, branch)
+    events = [
+        json.loads(line)
+        for line in (runs_dir / "ordinary-resume" / "events.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    ]
+    pinned_discovered = [
+        event
+        for event in events
+        if event["round"] == 4
+        and event["kind"] == "branch-discovered"
+        and event["node"] == "change"
+    ]
+    assert len(pinned_discovered) == 1
+    assert pinned_discovered[0]["detail"]["branch"] == branch
+    assert pinned_discovered[0]["detail"]["resumed"] is False
+
 
 def test_lifecycle_records_verified_change_already_integrated_on_base(
     tmp_path, bare_origin, command_base, personas_dir, capsys
