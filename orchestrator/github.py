@@ -15,10 +15,6 @@ CI *decisioning* is. The real backend shells to ``gh`` through an injectable
 ``run`` seam, itself unit-tested without a network.
 """
 
-# llmlint: ignore-file[changed_behavior_has_e2e] GitHub is the explicitly external,
-# offline-fakeable boundary. The CLI argv and defensive response parsing are unit-tested;
-# the registry e2e exercises the backend protocol without requiring live GitHub.
-
 from __future__ import annotations
 
 import json
