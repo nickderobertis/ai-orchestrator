@@ -55,6 +55,16 @@ from .config import ConfigError, build_effective_config, load_yaml
 from .coordination import atomic_json
 from .goals import Goal, graph_identities, register_run, update_run_owner
 from .labels import LABEL_ENV, LabelError, merge_labels
+from .launch import (
+    KNOWN_LAUNCHERS,
+    LAUNCHER_KINDS,
+    LaunchError,
+    LaunchInfo,
+    generate_launch_id,
+    resolve_launcher_kind,
+    validate_session_id,
+    write_provenance,
+)
 from .personas import persona_path
 from .runs import ArtifactPaths, resolve_run_dir, slugify
 from .watchdog import (
@@ -85,28 +95,13 @@ class DispatchError(Exception):
     """onejudge could not be run, or rejected the config (a loud failure)."""
 
 
-#: The top-level agent harnesses that may run ``just orchestrate``. ``unknown`` is
-#: recorded when the launcher did not identify itself, so a run is never silently
-#: mis-attributed to a harness it did not come from.
-LAUNCHER_KINDS: frozenset[str] = frozenset({"claude-code", "codex", "unknown"})
-
-
-class Launcher(TypedDict):
-    """Which top-level Claude/Codex session ran ``just orchestrate``.
-
-    Captured so the read API can group runs by the originating session. The
-    ``session_id`` is omitted rather than emitted empty when the launcher did not
-    supply one, so an old consumer and a session-less launch are indistinguishable
-    from the absence of the field — the additive-optional contract the read model
-    relies on.
-    """
-
-    kind: str
-    session_id: NotRequired[str]
-
-
 class LaunchRecord(TypedDict):
-    """Stable planner handoff persisted for one orchestrator launch."""
+    """Stable planner handoff persisted for one orchestrator launch.
+
+    The ``launch`` link is the non-sensitive half of the provenance scheme: it names
+    the ``launch_id`` the read API joins to the out-of-repo provenance record. The
+    launcher session id never enters the run directory (see `orchestrator.launch`).
+    """
 
     schema_version: int
     run_id: str
@@ -114,25 +109,36 @@ class LaunchRecord(TypedDict):
     plan_name: str
     commands: dict[str, str]
     goal: Goal | None
-    launcher: NotRequired[Launcher]
+    launch: NotRequired[LaunchInfo]
 
 
-def resolve_launcher(kind: str | None, session_id: str | None) -> Launcher:
-    """Validate launching-session provenance into a stored ``Launcher``.
+def _launch_provenance(
+    *,
+    launcher: str | None,
+    session_id: str | None,
+    repository_identity: str,
+) -> tuple[str, dict[str, str]]:
+    """Mint a launch id, persist provenance for a known launcher, and build labels.
 
-    ``kind`` falls back to ``unknown`` rather than raising: a missing launcher is a
-    normal state (a hand-run ``just orchestrate``), while a *wrong* value would
-    corrupt session grouping, so an unrecognised harness is rejected loudly.
+    Returns the ``launch_id`` and the history labels (``launch_id`` + ``launcher``)
+    to stamp on every oneharness invocation this launch makes, so any nested
+    worker/judge/orchestrator conversation joins back to its launching session. The
+    sensitive session id goes only to the protected out-of-repo provenance record.
     """
-    resolved_kind = kind if kind else "unknown"
-    if resolved_kind not in LAUNCHER_KINDS:
-        raise DispatchError("launcher kind must be one of " + ", ".join(sorted(LAUNCHER_KINDS)))
-    launcher = Launcher(kind=resolved_kind)
-    if session_id:
-        if "\x00" in session_id or "\n" in session_id or len(session_id) > 256:
-            raise DispatchError("launcher session id must be a single line of at most 256 chars")
-        launcher["session_id"] = session_id
-    return launcher
+    try:
+        kind = resolve_launcher_kind(launcher)
+        validated_session = validate_session_id(session_id)
+    except LaunchError as exc:
+        raise DispatchError(str(exc)) from exc
+    launch_id = generate_launch_id()
+    if kind in KNOWN_LAUNCHERS and validated_session is not None:
+        write_provenance(
+            launch_id=launch_id,
+            launcher=kind,
+            launcher_session_id=validated_session,
+            repository_identity=repository_identity,
+        )
+    return launch_id, {"launch_id": launch_id, "launcher": kind}
 
 
 class _TelemetryResult(Protocol):
@@ -711,7 +717,12 @@ def launch_orchestrator(
     launcher_session_id: str | None = None,
 ) -> str:
     """Launch a detached live-supervised orchestrator and return its run id."""
-    launcher_record = resolve_launcher(launcher, launcher_session_id)
+    # Validate launcher provenance up front so a bad value fails before any side effect.
+    try:
+        resolve_launcher_kind(launcher)
+        validate_session_id(launcher_session_id)
+    except LaunchError as exc:
+        raise DispatchError(str(exc)) from exc
     plan = Path(plan_path).resolve()
     if not plan.is_file():
         raise DispatchError(f"plan does not exist: {plan}")
@@ -813,10 +824,27 @@ def launch_orchestrator(
         "result, and surface milestones, blockers, departures, and closeout to your supervisor."
     )
     command = [onejudge_bin, "run", str(effective), "--task", task, "--format", "json"]
+    # Mint the launch id, write the out-of-repo provenance record, and stamp the
+    # launch_id + launcher (plus run_id) history labels onto the orchestrator's own
+    # environment. Every nested dispatch inherits ONEHARNESS_HISTORY_LABELS and layers
+    # its node labels over them (run_onejudge -> merge_labels), so each worker, judge,
+    # and check-in conversation carries the launch labels the read API joins on.
+    repository_identity = next(iter(sorted(str(item) for item in graph_identities(graph))), "")
+    launch_id, launch_labels = _launch_provenance(
+        launcher=launcher,
+        session_id=launcher_session_id,
+        repository_identity=repository_identity,
+    )
     process_env = dict(os.environ)
     process_env["ONEHARNESS_TIMEOUT"] = str(turn_timeout)
     process_env[CHANNEL_DIR_ENV] = str(channel_dir)
     process_env[CHANNEL_RUN_ID_ENV] = run_dir.name
+    try:
+        process_env[LABEL_ENV] = merge_labels(
+            process_env.get(LABEL_ENV), {**launch_labels, "run_id": run_dir.name}
+        )
+    except LabelError as exc:
+        raise DispatchError(f"invalid launch label: {exc}") from exc
     _validate_oneharness_timeout(process_env["ONEHARNESS_TIMEOUT"])
     try:
         with (
@@ -858,7 +886,7 @@ def launch_orchestrator(
             "channel_next": f"just channel-next {run_dir.name}",
             "monitor": f"just monitor {run_dir.name}",
         },
-        "launcher": launcher_record,
+        "launch": {"launch_id": launch_id},
     }
     atomic_json(run_dir / "launch.json", launch)
     (run_dir / "planner.md").write_text(

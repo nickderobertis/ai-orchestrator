@@ -73,10 +73,16 @@ def create_app(
     runs_dir: Path,
     *,
     oneharness_bin: str = "oneharness",
+    expose_launcher_session_id: bool = False,
     poll_interval: float = DEFAULT_POLL_INTERVAL,
     heartbeat_interval: float = DEFAULT_HEARTBEAT_INTERVAL,
 ) -> FastAPI:
-    """Build the read-only API bound to one runs root."""
+    """Build the read-only API bound to one runs root.
+
+    ``expose_launcher_session_id`` is the redaction switch: the launching session id
+    may be sensitive, so it is withheld by default and surfaced only when a deployment
+    explicitly opts in.
+    """
     app = FastAPI(title="ai-orchestrator DAG read API", version="1")
     root = Path(runs_dir)
 
@@ -93,7 +99,12 @@ def create_app(
     @app.get("/api/v1/runs")
     async def get_runs(include_settled: bool = False) -> Any:
         try:
-            return list_runs(root, include_settled=include_settled, oneharness_bin=oneharness_bin)
+            return list_runs(
+                root,
+                include_settled=include_settled,
+                oneharness_bin=oneharness_bin,
+                expose_launcher_session_id=expose_launcher_session_id,
+            )
         except ReadError as exc:  # pragma: no cover - list degrades rather than raising
             status, code = _status_for(exc)
             return _error(status, code, str(exc))
@@ -101,7 +112,12 @@ def create_app(
     @app.get("/api/v1/runs/{run_id}")
     async def get_run(run_id: str) -> Any:
         try:
-            return run_detail(root, run_id, oneharness_bin=oneharness_bin)
+            return run_detail(
+                root,
+                run_id,
+                oneharness_bin=oneharness_bin,
+                expose_launcher_session_id=expose_launcher_session_id,
+            )
         except ReadError as exc:
             status, code = _status_for(exc)
             return _error(status, code, str(exc))
@@ -222,6 +238,11 @@ def main(argv: list[str] | None = None) -> int:  # pragma: no cover - process en
         action="store_true",
         help="permit a non-loopback bind (deployment must add its own auth)",
     )
+    parser.add_argument(
+        "--expose-launcher-session-id",
+        action="store_true",
+        help="surface the (possibly sensitive) launcher session id in the read API",
+    )
     args = parser.parse_args(argv)
     if args.host not in _LOOPBACK_HOSTS and not args.allow_nonloopback:
         print(
@@ -230,7 +251,11 @@ def main(argv: list[str] | None = None) -> int:  # pragma: no cover - process en
             file=sys.stderr,
         )
         return 2
-    app = create_app(args.runs_dir, oneharness_bin=args.oneharness_bin)
+    app = create_app(
+        args.runs_dir,
+        oneharness_bin=args.oneharness_bin,
+        expose_launcher_session_id=args.expose_launcher_session_id,
+    )
     uvicorn.run(app, host=args.host, port=args.port, log_level="info")
     return 0
 

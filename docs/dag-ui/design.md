@@ -57,6 +57,16 @@ interface RunSummary {
   telemetry_quality: "complete" | "partial" | "legacy";
   timing: Timing;
   node_counts: Record<string, number>;
+  launch?: RunLaunch; // omitted when the run recorded no launch_id
+}
+
+// The run-level join of the recorded launch_id to its provenance record. See
+// "Launch and session provenance"; launcher_session_id appears only when the
+// server's redaction policy is configured to expose it.
+interface RunLaunch {
+  launch_id: string;
+  launcher: "claude-code" | "codex" | "unknown";
+  launcher_session_id?: string;
 }
 ```
 
@@ -73,9 +83,25 @@ interface RunDetail {
   observed_at: string;
   run: RunTelemetry;
   rounds: Round[];
-  conversations: NodeConversations[];
+  conversations: DagConversation[];
+  details: DetailSnapshot; // persisted PR/commit/check detail from monitor/details.json
+  logs?: Record<string, string>; // bounded, path-free tails of the run's own logs
+  launch?: RunLaunch; // same run-level launch join as RunSummary
+}
+
+// The persisted PR/commit/check observations, exactly as
+// orchestrator.monitor.DetailSnapshot.record() serializes them.
+interface DetailSnapshot {
+  version: number;
+  commits: Record<string, unknown>;
+  prs: Record<string, unknown>;
+  check_rollup?: unknown;
 }
 ```
+
+`details` always appears (an empty snapshot serializes as `{version, commits:{},
+prs:{}}`); `logs` and `launch` are omitted when the run wrote no logs or recorded no
+`launch_id`.
 
 `RunTelemetry` is exactly `RunTelemetry.record()` from
 `orchestrator/telemetry.py`: required `run_id`, `state`, `phase`, `last_event`,
@@ -242,6 +268,21 @@ redaction policy permits it. Missing/expired provenance yields
 `launcher: "unknown"` without changing graph attribution. Nested processes
 inherit labels through `orchestrator.labels.merge_labels`; the more-specific
 dispatch owns graph locator and semantic-role values.
+
+As landed here, `just orchestrate` (`orchestrator.launch` +
+`dispatch.launch_orchestrator`) mints the `launch_id`, writes the
+`LaunchProvenance` record to `$XDG_STATE_HOME/ai-orchestrator/launches/<launch_id>.json`
+(only for a known launcher with a session id), and stamps `launch_id` + `launcher`
+(plus `run_id`) onto the orchestrator's `ONEHARNESS_HISTORY_LABELS`. Every nested
+`run_onejudge` dispatch merges those inherited labels under its own graph locators,
+so each worker/judge/orchestrator conversation carries the join labels. The run
+directory records only the non-sensitive `launch_id` (in `launch.json` under a
+`launch: {launch_id}` object); the sensitive session id never enters the repository.
+The server resolves a run's `RunLaunch` by reading that `launch_id` and joining it to
+the provenance record — reporting `launcher: "unknown"` when the record is missing,
+malformed, or older than its short-lived max age — and includes
+`launcher_session_id` only when started with `--expose-launcher-session-id`
+(`create_app(expose_launcher_session_id=True)`), which is off by default.
 
 `role` in current oneharness history is a transport-party role:
 `agent`, `judge`, or `llmlint`. It remains untouched for telemetry

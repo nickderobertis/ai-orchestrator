@@ -29,10 +29,12 @@ import uvicorn
 
 from orchestrator import REPO_ROOT
 from orchestrator.journal import NodeId, RunId, open_journal
+from orchestrator.launch import write_provenance
 from orchestrator.runs import prepare_round, write_result
 from orchestrator.server import create_app
 
 FAKE_ONEHARNESS = REPO_ROOT / "tests" / "e2e" / "fake_oneharness.py"
+LAUNCH_ID = "a" * 32
 
 
 @contextmanager
@@ -74,7 +76,7 @@ def _active_run(runs_dir: Path, run_id: str) -> Path:
                 "channel_id": run_id,
                 "plan_name": run_id,
                 "commands": {},
-                "launcher": {"kind": "claude-code", "session_id": "top-session"},
+                "launch": {"launch_id": LAUNCH_ID},
             }
         ),
         encoding="utf-8",
@@ -196,6 +198,14 @@ def test_read_api_serves_projection_telemetry_and_role_tagged_conversations(
     _active_run(runs, "demo")
     store = _history_store(tmp_path, "demo")
     monkeypatch.setenv("FAKE_ONEHARNESS_STORE", str(store))
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    write_provenance(
+        launch_id=LAUNCH_ID,
+        launcher="claude-code",
+        launcher_session_id="top-session",
+        repository_identity="local/app",
+    )
+    # Default redaction: the join resolves the launcher but withholds the session id.
     app = create_app(runs, oneharness_bin=str(_oneharness_bin(tmp_path)))
 
     with _serve(app) as base:
@@ -205,15 +215,16 @@ def test_read_api_serves_projection_telemetry_and_role_tagged_conversations(
 
         runs_body = client.get("/api/v1/runs").json()
         assert [row["run_id"] for row in runs_body["runs"]] == ["demo"]
-        assert runs_body["runs"][0]["launcher"] == {
-            "kind": "claude-code",
-            "session_id": "top-session",
+        assert runs_body["runs"][0]["launch"] == {
+            "launch_id": LAUNCH_ID,
+            "launcher": "claude-code",
         }
 
         detail = client.get("/api/v1/runs/demo").json()
         assert detail["rounds"][0]["node_states"] == {"api": "running"}
         assert detail["run"]["run_id"] == "demo"
-        assert detail["launcher"]["session_id"] == "top-session"
+        assert detail["launch"] == {"launch_id": LAUNCH_ID, "launcher": "claude-code"}
+        assert "launcher_session_id" not in detail["launch"]  # redacted by default
         roles = {c["attribution"]["agentRole"] for c in detail["conversations"]}
         assert roles == {"worker", "judge"}
         worker = next(
@@ -236,6 +247,14 @@ def test_read_api_serves_projection_telemetry_and_role_tagged_conversations(
         bad_query = client.get("/api/v1/runs", params={"include_settled": "maybe"})
         assert bad_query.status_code == 422
         assert bad_query.json()["error"]["code"] == "invalid_request"
+
+    # A deployment that opts into exposing the session id sees it surfaced.
+    exposed_app = create_app(
+        runs, oneharness_bin=str(_oneharness_bin(tmp_path)), expose_launcher_session_id=True
+    )
+    with _serve(exposed_app) as base:
+        exposed = httpx.Client(base_url=base, timeout=10).get("/api/v1/runs/demo").json()
+        assert exposed["launch"]["launcher_session_id"] == "top-session"
 
 
 def test_events_stream_snapshots_then_invalidates_on_a_live_append(

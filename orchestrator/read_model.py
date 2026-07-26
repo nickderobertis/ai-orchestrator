@@ -24,19 +24,13 @@ from .config import ConfigError
 from .conversations import run_conversations
 from .history import HistoryError
 from .journal import JOURNAL_NAME
+from .launch import read_provenance, validate_launch_id
 from .monitor import load_snapshot
 from .projection import ProjectionError, project_round, read_strict_events
 from .runs import RunId, latest_round, load_mapping, result_state_is_terminal, validate_run_id
 from .telemetry import TELEMETRY_SCHEMA_VERSION, RunTelemetry, collect_run
 
 API_VERSION = 1
-
-#: The launcher harnesses a persisted ``launch.json`` may name. Kept local rather
-#: than imported from ``dispatch`` so the read path does not pull the whole dispatch
-#: /onejudge-SDK stack into a viewing process. ``dispatch.LAUNCHER_KINDS`` is the
-#: write-side source; ``test_read_model.test_launcher_kinds_match_dispatch`` is the
-#: drift gate that fails if the two ever diverge.
-_LAUNCHER_KINDS = frozenset({"claude-code", "codex", "unknown"})
 
 
 class ReadError(Exception):
@@ -67,11 +61,11 @@ def _run_dirs(runs_dir: Path) -> Iterator[Path]:
             yield entry
 
 
-def read_launcher(run_dir: Path) -> dict[str, Any] | None:
-    """The validated launching-session provenance, or ``None`` when absent/invalid.
+def read_launch_id(run_dir: Path) -> str | None:
+    """The non-sensitive ``launch_id`` the run recorded, or ``None`` when absent.
 
-    A launch record is a convenience join key, never a decision input, so a missing
-    or malformed one degrades to "unknown launcher" rather than failing the read.
+    The run directory stores only this join key; the launcher and the sensitive
+    session id live in the out-of-repo provenance record that ``launch_id`` resolves.
     """
     path = run_dir / "launch.json"
     if not path.is_file():
@@ -80,16 +74,33 @@ def read_launcher(run_dir: Path) -> dict[str, Any] | None:
         raw = load_mapping(path)
     except (ConfigError, OSError):
         return None
-    launcher = raw.get("launcher")
-    if not isinstance(launcher, dict):
+    launch = raw.get("launch")
+    return validate_launch_id(launch.get("launch_id")) if isinstance(launch, dict) else None
+
+
+def resolve_launch(
+    run_dir: Path,
+    *,
+    expose_launcher_session_id: bool = False,
+    now: datetime | None = None,
+) -> dict[str, Any] | None:
+    """Join a run to its launching session via ``launch_id``.
+
+    Returns the ``launch_id`` and the ``launcher`` resolved from the out-of-repo
+    provenance record — ``"unknown"`` when that record is missing, expired, or
+    invalid, without disturbing the graph. The launcher session id is included only
+    when the caller's redaction policy permits it, since it may be sensitive.
+    """
+    launch_id = read_launch_id(run_dir)
+    if launch_id is None:
         return None
-    kind = launcher.get("kind")
-    if not isinstance(kind, str) or kind not in _LAUNCHER_KINDS:
-        return None
-    result: dict[str, Any] = {"kind": kind}
-    session_id = launcher.get("session_id")
-    if isinstance(session_id, str) and session_id:
-        result["session_id"] = session_id
+    provenance = read_provenance(launch_id, now=now)
+    result: dict[str, Any] = {
+        "launch_id": launch_id,
+        "launcher": provenance["launcher"] if provenance is not None else "unknown",
+    }
+    if expose_launcher_session_id and provenance is not None:
+        result["launcher_session_id"] = provenance["launcher_session_id"]
     return result
 
 
@@ -129,7 +140,13 @@ def _node_counts(telemetry: RunTelemetry) -> dict[str, int]:
     return dict(Counter(node.status for node in telemetry.nodes))
 
 
-def run_summary(run_dir: Path, telemetry: RunTelemetry) -> dict[str, Any]:
+def run_summary(
+    run_dir: Path,
+    telemetry: RunTelemetry,
+    *,
+    expose_launcher_session_id: bool = False,
+    now: datetime | None = None,
+) -> dict[str, Any]:
     """One ``RunSummary`` row for the run-list view."""
     summary: dict[str, Any] = {
         "run_id": telemetry.run_id,
@@ -142,8 +159,11 @@ def run_summary(run_dir: Path, telemetry: RunTelemetry) -> dict[str, Any]:
     }
     if telemetry.last_progress_at is not None:
         summary["last_progress_at"] = telemetry.last_progress_at
-    if (launcher := read_launcher(run_dir)) is not None:
-        summary["launcher"] = launcher
+    launch = resolve_launch(
+        run_dir, expose_launcher_session_id=expose_launcher_session_id, now=now
+    )
+    if launch is not None:
+        summary["launch"] = launch
     return summary
 
 
@@ -152,6 +172,7 @@ def list_runs(
     *,
     include_settled: bool = False,
     oneharness_bin: str = "oneharness",
+    expose_launcher_session_id: bool = False,
     now: datetime | None = None,
 ) -> dict[str, Any]:
     """The ``RunList``: every watchable run, most recent progress first.
@@ -170,7 +191,14 @@ def list_runs(
             continue
         if not include_settled and result_state_is_terminal(telemetry.state):
             continue
-        summaries.append(run_summary(run_dir, telemetry))
+        summaries.append(
+            run_summary(
+                run_dir,
+                telemetry,
+                expose_launcher_session_id=expose_launcher_session_id,
+                now=now,
+            )
+        )
     summaries.sort(key=lambda item: (-(item.get("last_progress_at") or 0.0), item["run_id"]))
     return {
         "api_version": API_VERSION,
@@ -210,6 +238,7 @@ def run_detail(
     run_id: str,
     *,
     oneharness_bin: str = "oneharness",
+    expose_launcher_session_id: bool = False,
     now: datetime | None = None,
 ) -> dict[str, Any]:
     """The full ``RunDetail`` for one run: telemetry, rounds, and conversations."""
@@ -237,8 +266,11 @@ def run_detail(
     }
     if logs := read_logs(run_dir):
         detail["logs"] = logs
-    if (launcher := read_launcher(run_dir)) is not None:
-        detail["launcher"] = launcher
+    launch = resolve_launch(
+        run_dir, expose_launcher_session_id=expose_launcher_session_id, now=now
+    )
+    if launch is not None:
+        detail["launch"] = launch
     return detail
 
 

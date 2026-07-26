@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from orchestrator.journal import NodeId, RunId, open_journal
+from orchestrator.launch import write_provenance
 from orchestrator.projection import read_strict_events
 from orchestrator.read_model import (
     API_VERSION,
@@ -15,8 +16,9 @@ from orchestrator.read_model import (
     ProjectionFailed,
     RunNotFound,
     list_runs,
-    read_launcher,
+    read_launch_id,
     read_logs,
+    resolve_launch,
     round_record,
     run_conversation,
     run_detail,
@@ -27,12 +29,18 @@ from orchestrator.runs import prepare_round, write_result
 ABSENT = "definitely-not-a-real-oneharness-binary"
 
 
+@pytest.fixture(autouse=True)
+def _state_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep provenance records out of the real user state dir."""
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+
+
 def _build_run(
     runs_dir: Path,
     run_id: str,
     *,
     settle: bool = True,
-    launcher: dict[str, object] | None = None,
+    launch_id: str | None = None,
 ) -> Path:
     """Write a strict-valid single-node round, optionally settling it complete."""
     run_dir = runs_dir / run_id
@@ -60,7 +68,7 @@ def _build_run(
         }
         journal.append("round-finished", detail={"result": result})
         write_result(round_dir, result)
-    if launcher is not None:
+    if launch_id is not None:
         (run_dir / "launch.json").write_text(
             json.dumps(
                 {
@@ -69,7 +77,7 @@ def _build_run(
                     "channel_id": run_id,
                     "plan_name": run_id,
                     "commands": {},
-                    "launcher": launcher,
+                    "launch": {"launch_id": launch_id},
                 }
             ),
             encoding="utf-8",
@@ -116,13 +124,45 @@ def test_list_runs_skips_a_directory_with_no_rounds(tmp_path: Path) -> None:
     assert [row["run_id"] for row in result["runs"]] == ["healthy"]
 
 
-def test_run_detail_exposes_projection_telemetry_and_launcher(tmp_path: Path) -> None:
+def test_run_detail_joins_launch_provenance_with_redaction(tmp_path: Path) -> None:
     runs = tmp_path / "runs"
-    _build_run(runs, "demo", settle=True, launcher={"kind": "codex", "session_id": "sess-9"})
+    launch_id = "a" * 32
+    _build_run(runs, "demo", settle=True, launch_id=launch_id)
+    write_provenance(
+        launch_id=launch_id,
+        launcher="codex",
+        launcher_session_id="sess-9",
+        repository_identity="local/app",
+    )
+
+    # Redacted by default: launcher + launch_id, but no session id.
+    detail = run_detail(runs, "demo", oneharness_bin=ABSENT)
+    assert detail["run"]["run_id"] == "demo"
+    assert detail["launch"] == {"launch_id": launch_id, "launcher": "codex"}
+
+    # Exposed only when the caller opts in.
+    exposed = run_detail(runs, "demo", oneharness_bin=ABSENT, expose_launcher_session_id=True)
+    assert exposed["launch"] == {
+        "launch_id": launch_id,
+        "launcher": "codex",
+        "launcher_session_id": "sess-9",
+    }
+
+
+def test_run_detail_reports_unknown_launcher_when_provenance_missing(tmp_path: Path) -> None:
+    runs = tmp_path / "runs"
+    launch_id = "b" * 32
+    _build_run(runs, "demo", settle=True, launch_id=launch_id)  # no provenance record written
+    detail = run_detail(runs, "demo", oneharness_bin=ABSENT, expose_launcher_session_id=True)
+    assert detail["launch"] == {"launch_id": launch_id, "launcher": "unknown"}
+
+
+def test_run_detail_projection_telemetry(tmp_path: Path) -> None:
+    runs = tmp_path / "runs"
+    _build_run(runs, "demo", settle=True, launch_id="c" * 32)
 
     detail = run_detail(runs, "demo", oneharness_bin=ABSENT)
     assert detail["run"]["run_id"] == "demo"
-    assert detail["launcher"] == {"kind": "codex", "session_id": "sess-9"}
     assert len(detail["rounds"]) == 1
     round_zero = detail["rounds"][0]
     assert round_zero["node_states"] == {"api": "done"}
@@ -161,11 +201,11 @@ def test_run_detail_reports_a_corrupt_result_as_projection_error(tmp_path: Path)
         run_detail(runs, "demo", oneharness_bin=ABSENT)
 
 
-def test_run_detail_omits_launcher_when_absent(tmp_path: Path) -> None:
+def test_run_detail_omits_launch_when_absent(tmp_path: Path) -> None:
     runs = tmp_path / "runs"
     _build_run(runs, "demo", settle=True)  # no launch.json written
     detail = run_detail(runs, "demo", oneharness_bin=ABSENT)
-    assert "launcher" not in detail
+    assert "launch" not in detail
     assert "logs" not in detail  # no logs written for this run
 
 
@@ -215,35 +255,28 @@ def test_run_conversation_missing_run_and_conversation(tmp_path: Path) -> None:
         run_conversation(runs, "demo", "no-such-conversation", oneharness_bin=ABSENT)
 
 
-def test_read_launcher_degrades_on_missing_and_malformed(tmp_path: Path) -> None:
+def test_read_launch_id_degrades_on_missing_and_malformed(tmp_path: Path) -> None:
     runs = tmp_path / "runs"
     run_dir = _build_run(runs, "demo", settle=True)
-    assert read_launcher(run_dir) is None  # no launch.json written
+    assert read_launch_id(run_dir) is None  # no launch.json written
 
     (run_dir / "launch.json").write_text("{ not json", encoding="utf-8")
-    assert read_launcher(run_dir) is None
+    assert read_launch_id(run_dir) is None
 
-    (run_dir / "launch.json").write_text(json.dumps({"launcher": {"kind": "nope"}}), "utf-8")
-    assert read_launcher(run_dir) is None
+    (run_dir / "launch.json").write_text(json.dumps({"launch": "notdict"}), "utf-8")
+    assert read_launch_id(run_dir) is None
 
-    (run_dir / "launch.json").write_text(json.dumps({"launcher": "notdict"}), "utf-8")
-    assert read_launcher(run_dir) is None
+    (run_dir / "launch.json").write_text(json.dumps({"launch": {"launch_id": "bad"}}), "utf-8")
+    assert read_launch_id(run_dir) is None  # not a 32-hex id
 
-    (run_dir / "launch.json").write_text(json.dumps({"launcher": {"kind": "unknown"}}), "utf-8")
-    assert read_launcher(run_dir) == {"kind": "unknown"}
+    (run_dir / "launch.json").write_text(json.dumps({"launch": {"launch_id": "d" * 32}}), "utf-8")
+    assert read_launch_id(run_dir) == "d" * 32
 
 
-def test_launcher_kinds_match_dispatch() -> None:
-    """Drift gate: the read-side launcher enum must equal dispatch's write-side one.
-
-    ``read_model`` restates ``dispatch.LAUNCHER_KINDS`` locally to keep the heavy
-    dispatch/onejudge-SDK stack out of the viewing process; this asserts the two
-    cannot silently diverge and drop a launcher kind on read.
-    """
-    from orchestrator.dispatch import LAUNCHER_KINDS
-    from orchestrator.read_model import _LAUNCHER_KINDS
-
-    assert _LAUNCHER_KINDS == LAUNCHER_KINDS
+def test_resolve_launch_absent_returns_none(tmp_path: Path) -> None:
+    runs = tmp_path / "runs"
+    run_dir = _build_run(runs, "demo", settle=True)  # no launch.json
+    assert resolve_launch(run_dir) is None
 
 
 def test_run_signature_advances_with_journal_growth(tmp_path: Path) -> None:
