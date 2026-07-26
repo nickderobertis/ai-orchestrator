@@ -45,6 +45,7 @@ done
 # outer container forbids. Grant network only: Codex retains its OS-enforced
 # read-only filesystem while avoiding that unsupported namespace operation.
 if [[ $read_only == true ]]; then
+    # llmlint: ignore[least_privilege_grants] Codex exposes only coarse disk/network grants; llmlint needs repository reads and its model endpoint, with the outer container as boundary.
     args+=(-- -c 'sandbox_permissions=["disk-full-read-access","network-full-access"]')
 fi
 

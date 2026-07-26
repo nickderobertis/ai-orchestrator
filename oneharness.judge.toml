@@ -23,6 +23,7 @@ history_labels = { role = "judge" }
 
 # The supervisor stays on codex. Its fallback names the primary Claude identity
 # explicitly, so it can never consume the worker's alternate subscription.
+# llmlint: ignore[changed_behavior_has_e2e] integration tests exercise real oneharness fallback selection; paid-provider auth rejection cannot be deterministic.
 harnesses = ["codex", "claude-code:primary"]
 
 # [harness.<id>]: per-harness overrides. Model names differ per provider, so
