@@ -38,8 +38,8 @@ from .runs import NodeId, RunId, StepId
 
 # Bump when a record's *shape* changes incompatibly. Readers skip records they do
 # not understand rather than failing a round that is only being observed.
-SCHEMA_VERSION = 4
-SUPPORTED_SCHEMA_VERSIONS = frozenset({1, 2, 3, SCHEMA_VERSION})
+SCHEMA_VERSION = 5
+SUPPORTED_SCHEMA_VERSIONS = frozenset({1, 2, 3, 4, SCHEMA_VERSION})
 
 JOURNAL_NAME = "events.jsonl"
 REQUIRED_EVENT_FIELDS = ("version", "seq", "at", "kind", "run_id", "round")
@@ -75,6 +75,7 @@ EventKind = Literal[
     "completion-requested",
     "round-started",
     "round-finished",
+    "planner-surfaced",
     "node-started",
     "node-settled",
     "step-started",
@@ -126,7 +127,13 @@ TERMINAL_NODE_RESULT_FIELD = "result"
 TERMINAL_NODE_RESULT_TYPE = "GraphResultItem"
 AUDIT_EVENT_KINDS: frozenset[EventKind] = EVENT_KINDS - frozenset(AUTHORITATIVE_EVENT_KINDS)
 ROUND_EVENT_KINDS: frozenset[EventKind] = frozenset(
-    {"round-started", "round-finished", "completion-requested", "concurrent-acknowledged"}
+    {
+        "round-started",
+        "round-finished",
+        "completion-requested",
+        "concurrent-acknowledged",
+        "planner-surfaced",
+    }
 )
 GRAPH_EVENT_KINDS: frozenset[EventKind] = frozenset(
     {
@@ -485,6 +492,10 @@ class Journal:
         if not operations:
             raise JournalError("a journal batch requires at least one operation")
         with advisory_lock(self.lock_identity):
+            # A planner delivery can append from ``channel-next`` while the graph
+            # executor retains its own Journal instance. Refresh under the shared
+            # lock so independent writers cannot reuse a stale sequence number.
+            self.seq = max(self.seq, reconcile(self.path, self.run_id).last_seq)
             events: list[Event] = []
             for offset, operation in enumerate(operations, start=1):
                 if operation.kind not in EVENT_KINDS:

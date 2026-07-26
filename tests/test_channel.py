@@ -19,6 +19,7 @@ from orchestrator.channel import (
     _finished,
     _reply,
     _surface,
+    _validated_heartbeat_surface,
     apply_heartbeat_reply,
     create_channel,
     due_indicator,
@@ -43,6 +44,33 @@ def _heartbeat(channel: Path) -> dict[str, object]:
     state = heartbeat_state(channel)
     assert state is not None
     return state
+
+
+def test_heartbeat_surface_protocol_validates_every_external_field() -> None:
+    valid: dict[str, object] = {
+        "op": "supervisor",
+        "run_id": "orch",
+        "round": 1,
+        "surface": {
+            "kind": "heartbeat",
+            "message": "work continues",
+            "blocking": False,
+        },
+        "messages": [{"role": "assistant", "content": "status"}],
+    }
+    assert _validated_heartbeat_surface(valid, "orch") == valid
+
+    invalid = [
+        {**valid, "op": "other"},
+        {**valid, "run_id": "other"},
+        {**valid, "round": True},
+        {**valid, "surface": {"kind": "heartbeat", "message": 1, "blocking": False}},
+        {**valid, "messages": [{"role": "assistant", "content": 1}]},
+        {**valid, "unexpected": True},
+    ]
+    for value in invalid:
+        with pytest.raises(ChannelError, match="heartbeat surface"):
+            _validated_heartbeat_surface(value, "orch")
 
 
 def test_fifo_round_trip_and_reattach(tmp_path: Path) -> None:
@@ -150,7 +178,12 @@ def test_writer_retries_partial_writes_and_backpressure(
 
 def test_proposal_pump_round_trips_and_persists_on_reconciler_drain(tmp_path: Path) -> None:
     channel = create_channel(tmp_path / "run")
-    pump = ProposalPump(channel, "live", 3)
+    pump = ProposalPump(
+        channel,
+        "live",
+        3,
+        synthesize_heartbeat=lambda: "worker: implementing transport; follow-ups: none",
+    )
     pump.propose_blocking("worker", "found adjacent work")
     assert read_message(channel / "up.fifo", timeout=1) == {
         "op": "supervisor",
@@ -186,6 +219,16 @@ def test_proposal_pump_round_trips_and_persists_on_reconciler_drain(tmp_path: Pa
     assert _heartbeat(channel)["due"] is True
     assert pump.drain_commands() == ()
     pump.propose_blocking("worker", "found adjacent work")
+    deadline = time.monotonic() + 1
+    heartbeat_surface = channel / "heartbeat-surface.json"
+    while not heartbeat_surface.is_file() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert json.loads(heartbeat_surface.read_text(encoding="utf-8"))["surface"] == {
+        "kind": "heartbeat",
+        "message": "worker: implementing transport; follow-ups: none",
+        "blocking": False,
+    }
+    assert _heartbeat(channel)["last_surface_at"] == 0
     with pytest.raises(ChannelTimeout):
         read_message(channel / "up.fifo", timeout=0.1)
     pump.close()
@@ -204,6 +247,24 @@ def test_proposal_pump_defers_terminal_blocker_until_supervisor_relay(tmp_path: 
     }
     assert not (channel / "planner-pending.json").exists()
     pump.close()
+
+
+def test_new_proposal_pump_continues_persisted_heartbeat_countdown(tmp_path: Path) -> None:
+    channel = create_channel(tmp_path / "run", heartbeat_interval=0.1)
+    record_surface(channel, now=time.time() - 0.09)
+    pump = ProposalPump(
+        channel,
+        "continued",
+        2,
+        synthesize_heartbeat=lambda: "worker: still active; follow-ups: none",
+    )
+    queued = channel / "heartbeat-surface.json"
+    wait_until = time.monotonic() + 0.5
+    while not queued.is_file() and time.monotonic() < wait_until:
+        time.sleep(0.01)
+    pump.close()
+    assert queued.is_file()
+    assert json.loads(queued.read_text(encoding="utf-8"))["round"] == 2
 
 
 @pytest.mark.parametrize(
@@ -713,6 +774,32 @@ def test_bridge_main_success_finished_and_errors(
     assert json.loads(capsys.readouterr().out) == {"status": "finished"}
 
     monkeypatch.setattr("orchestrator.channel._finished", lambda path: False)
+    heartbeat_surface = runs / "orch" / "channel" / "heartbeat-surface.json"
+    valid_heartbeat = {
+        "op": "supervisor",
+        "run_id": "orch",
+        "round": 1,
+        "surface": {"kind": "heartbeat", "message": "status", "blocking": False},
+        "messages": [],
+    }
+    atomic_json(heartbeat_surface, valid_heartbeat)
+    assert main_next(["orch", "--runs-dir", str(runs)]) == 0
+    assert json.loads(capsys.readouterr().out) == valid_heartbeat
+    assert not heartbeat_surface.exists()
+
+    atomic_json(
+        heartbeat_surface,
+        {
+            "op": "supervisor",
+            "run_id": "wrong",
+            "round": 1,
+            "surface": {"kind": "heartbeat", "message": "status", "blocking": False},
+            "messages": [],
+        },
+    )
+    assert main_next(["orch", "--runs-dir", str(runs)]) == 2
+    assert "run id" in capsys.readouterr().err
+    heartbeat_surface.unlink()
     monkeypatch.setattr(
         "orchestrator.channel.read_message",
         lambda path, timeout: {

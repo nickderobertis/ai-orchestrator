@@ -19,6 +19,7 @@ import threading
 import time
 from collections import Counter
 from collections.abc import Iterable, Mapping
+from contextlib import suppress
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Literal, cast
@@ -34,7 +35,7 @@ from .channel import (
 from .cli_contract import ROUND_BUDGET_OPTION
 from .config import ConfigError, load_yaml
 from .coordination import advisory_lock, reset_harness_observer, set_harness_observer
-from .dispatch import Report
+from .dispatch import Report, dispatch
 from .edits import EditError, apply_edit
 from .goals import Goal, find_active_run, finish_run, graph_identities, parse_goal, register_run
 from .journal import (
@@ -1303,6 +1304,7 @@ def main(argv: list[str] | None = None) -> int:
         print("run-plan: incomplete proposal channel environment", file=sys.stderr)
         return 2
     if channel_path and channel_run_id and round_number is not None:
+        assert run_dir is not None
         # llmlint: ignore-block[changed_behavior_has_e2e] internal env; malformed only in unit
         try:
             validated_run_id = str(validate_run_id(channel_run_id))
@@ -1314,7 +1316,52 @@ def main(argv: list[str] | None = None) -> int:
         except (OSError, ValueError) as exc:
             print(f"run-plan: invalid proposal channel: {exc}", file=sys.stderr)
             return 2
-        proposal_pump = ProposalPump(resolved_channel, validated_run_id, round_number)
+
+        def synthesize_heartbeat() -> str:
+            output = resolved_channel / "check-in-message.txt"
+            with suppress(FileNotFoundError):
+                output.unlink()
+            task = (
+                "Read the durable evidence for this run and write exactly one concise, "
+                "agent-synthesized planner update to the supplied output file. Cover every "
+                "active workstream with concrete current progress and include any non-blocking "
+                "follow-ups. Do not wait for or contact the planner.\n\n"
+                f"Run directory: {run_dir.resolve()}\n"
+                f"Journal: {(run_dir / JOURNAL_NAME).resolve()}\n"
+                f"Status: {(run_dir / 'orchestrator' / 'status.json').resolve()}\n"
+                f"Monitor details: {(run_dir / 'monitor' / 'details.json').resolve()}\n"
+                f"Output file: {output.resolve()}"
+            )
+            report = dispatch(
+                "check-in",
+                task,
+                base_path=args.base_config,
+                persona_dir=args.persona_dir,
+                cwd=args.cwd or REPO_ROOT,
+                onejudge_bin=args.onejudge_bin,
+                provider=args.provider,
+                oneharness_mode=args.oneharness_mode,
+                labels={
+                    "run_id": validated_run_id,
+                    "round": str(round_number),
+                    "agent_role": "check-in",
+                    "persona": "check-in",
+                },
+                session=f"check-in-{validated_run_id}-{round_number}",
+                max_turns=1,
+                timeout=dispatch_timeout,
+            )
+            if not report.completed or not output.is_file():
+                raise RuntimeError("check-in agent did not write a completed status update")
+            return output.read_text(encoding="utf-8")
+
+        proposal_pump = ProposalPump(
+            resolved_channel,
+            validated_run_id,
+            round_number,
+            journal=journal,
+            synthesize_heartbeat=synthesize_heartbeat,
+        )
         # llmlint: ignore-end[changed_behavior_has_e2e]
     try:
         result = run_graph(
