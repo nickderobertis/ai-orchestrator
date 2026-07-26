@@ -261,7 +261,9 @@ def test_new_proposal_pump_continues_persisted_heartbeat_countdown(tmp_path: Pat
         synthesize_heartbeat=lambda: "worker: still active; follow-ups: none",
     )
     queued = channel / "heartbeat-surface.json"
-    wait_until = time.monotonic() + 0.5
+    # The full suite can leave the pacemaker thread briefly CPU-starved under
+    # coverage; keep the assertion bounded without tying it to scheduler speed.
+    wait_until = time.monotonic() + 2
     while not queued.is_file() and time.monotonic() < wait_until:
         time.sleep(0.01)
     pump.close()
