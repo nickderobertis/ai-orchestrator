@@ -33,6 +33,7 @@ __all__ = [
     "default_branch",
     "delete_branch",
     "fetch",
+    "hooks_dir",
     "has_commits_ahead",
     "head_sha",
     "is_bare",
@@ -87,6 +88,14 @@ def configure_repo_hooks(cwd: str | Path) -> Path | None:
         return None
     _git(["config", "core.hooksPath", str(hooks)], cwd=cwd)
     return hooks
+
+
+def hooks_dir(cwd: str | Path) -> Path:
+    """Return Git's effective hooks directory for this checkout."""
+    value = Path(_git(["rev-parse", "--git-path", "hooks"], cwd=cwd).stdout.strip())
+    if not value.is_absolute():
+        value = Path(cwd) / value
+    return value.resolve()
 
 
 def _git(

@@ -50,8 +50,67 @@ def test_default_branch() -> None:
     assert run.calls[0][:2] == ["repo", "view"]
 
 
-def test_default_branch_falls_back_when_gh_returns_empty_output() -> None:
-    assert CliGitHubBackend(run=RecordingRun(["\n"])).default_branch("o/r") == "main"
+def test_default_branch_rejects_empty_github_response() -> None:
+    with pytest.raises(GitHubError, match="no default branch"):
+        CliGitHubBackend(run=RecordingRun(["\n"])).default_branch("o/r")
+
+
+def test_required_status_checks_reads_branch_protection_contexts() -> None:
+    run = RecordingRun(
+        [
+            json.dumps(
+                {
+                    "protected": True,
+                    "protection": {"required_status_checks": {"contexts": ["gate", "lint"]}},
+                }
+            )
+        ]
+    )
+    assert CliGitHubBackend(run=run).required_status_checks("o/r", "master") == (
+        "gate",
+        "lint",
+    )
+    assert run.calls == [["api", "repos/o/r/branches/master"]]
+
+
+def test_required_status_checks_reports_unprotected_branch_as_known_empty() -> None:
+    run = RecordingRun([json.dumps({"protected": False})])
+    assert CliGitHubBackend(run=run).required_status_checks("o/r", "master") == ()
+
+
+def test_required_status_checks_reports_protection_without_checks_as_known_empty() -> None:
+    payload = {"protected": True, "protection": {"required_status_checks": None}}
+    assert (
+        CliGitHubBackend(run=RecordingRun([json.dumps(payload)])).required_status_checks(
+            "o/r", "master"
+        )
+        == ()
+    )
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {},
+        {"protected": "yes"},
+        {"protected": True, "protection": []},
+        {"protected": True, "protection": {"required_status_checks": []}},
+        {"protected": True, "protection": {"required_status_checks": {}}},
+        {
+            "protected": True,
+            "protection": {"required_status_checks": {"contexts": "gate"}},
+        },
+        {
+            "protected": True,
+            "protection": {"required_status_checks": {"contexts": [1]}},
+        },
+    ],
+)
+def test_required_status_checks_rejects_malformed_response(payload: object) -> None:
+    with pytest.raises(GitHubError, match="could not parse required status checks"):
+        CliGitHubBackend(run=RecordingRun([json.dumps(payload)])).required_status_checks(
+            "o/r", "main"
+        )
 
 
 def test_create_pr_reuses_open_pr_for_head() -> None:

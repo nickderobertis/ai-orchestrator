@@ -163,6 +163,23 @@ let gate-only findings escape until publication's pre-push hook. Correct an
 existing identity across every alias with `just migrate-repo-gate <repo> --gate
 '<complete-gate-command>'`.
 
+Registration also audits whether the merge path itself runs a gate. It reports an
+executable effective `pre-push` hook (respecting `core.hooksPath`) and required
+GitHub status checks on the repository's actual default branch. A configured
+hooks directory without an executable `pre-push` does not count. If neither is
+present, registration succeeds but prints an identity-specific warning; an
+unavailable GitHub response is reported as unknown, and local-only origins are
+reported as not applicable. Audit every existing identity without re-registering
+it with:
+
+```sh
+just repos --audit-gate-coverage
+```
+
+Run this audit and resolve every missing or unknown result before relying on the
+merge path to replace lifecycle-side verification. The command only reports
+coverage; it never installs hooks or changes branch protection.
+
 A contradictory `--workflow` is rejected. Change publication policy only through
 the identity-wide migration command. For the current ai-orchestrator aliases, the
 remediation is:

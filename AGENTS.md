@@ -101,7 +101,9 @@ dispatch onejudge.
    with no node. See [Node shapes](docs/orchestration.md#node-shapes). Before a
    lifecycle run, use `just repos` to confirm its repository identity, type,
    workflow, and available checkout aliases; make durable routing changes with
-   the register/migration recipes rather than accidental run-only overrides. Treat
+   the register/migration recipes rather than accidental run-only overrides. Run
+   `just repos --audit-gate-coverage` before relying on hooks or required PR checks
+   as merge-path verification; keep missing and unknown coverage visible. Treat
    an unfamiliar project-sounding name as a lookup, not a question: search local
    paths such as `~/projects`, then `just repos`, then the current GitHub account
    with `gh search repos <name>` and `gh repo list <owner>`. A hit whose description
