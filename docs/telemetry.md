@@ -80,7 +80,12 @@ Missing onejudge linkage falls back
 to `labels.role` (then recognized legacy judge names), and missing timed fields
 fall back to journal wall time. Untimed `command_execution` events still identify
 the dominant command class, but do not invent a duration: model and tool time
-remain zero and the unknown share appears in `UNATTR`. The breakdown says
+render as `?` and the unknown share appears in `UNATTR`. Records from a newer,
+unrecognized history schema are also read best-effort and marked degraded.
+Missing or null run timing and tool-event timing/status degrade only the affected
+session. In contrast, malformed present values and contradictory timing remain
+errors: finish cannot precede start, and model plus tool time cannot exceed the
+record duration. The breakdown says
 `Timeline: unavailable (legacy session linkage)`, and quality is `legacy` or
 `partial`. Treat that as degraded evidence, not proof that judging or tools took
 no time.

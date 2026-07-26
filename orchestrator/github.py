@@ -190,17 +190,23 @@ class CliGitHubBackend:
     def required_status_checks(self, repo: str, branch: str) -> tuple[str, ...]:
         """Return branch-protection status contexts required before merge."""
         encoded_branch = quote(branch, safe="")
-        try:
-            out = self._run(
-                ["api", f"repos/{repo}/branches/{encoded_branch}/protection/required_status_checks"]
-            )
-        except GitHubError as exc:
-            if "(HTTP 404)" in str(exc):
-                return ()
-            raise
+        out = self._run(["api", f"repos/{repo}/branches/{encoded_branch}"])
         try:
             payload = json.loads(out)
-            contexts = payload["contexts"]
+            protected = payload["protected"]
+            if not isinstance(protected, bool):
+                raise TypeError
+            if not protected:
+                return ()
+            protection = payload["protection"]
+            if not isinstance(protection, dict):
+                raise TypeError
+            required = protection.get("required_status_checks")
+            if required is None:
+                return ()
+            if not isinstance(required, dict):
+                raise TypeError
+            contexts = required["contexts"]
             if not isinstance(contexts, list) or not all(
                 isinstance(context, str) for context in contexts
             ):

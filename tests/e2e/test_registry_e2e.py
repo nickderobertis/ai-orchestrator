@@ -65,18 +65,23 @@ def _github_api_server(tmp_path: Path) -> Iterator[str]:
                 case [repo]:
                     branches = {"required": "master", "slash": "release/next"}
                     self._json({"default_branch": branches.get(repo, "main")})
-                case ["malformed", "branches", "main", "protection", "required_status_checks"]:
+                case ["malformed", "branches", "main"]:
                     self._json({})
-                case [repo, "branches", branch, "protection", "required_status_checks"]:
+                case [repo, "branches", branch]:
                     checks = {
                         ("required", "master"): ["complete-gate"],
                         ("slash", "release%2Fnext"): ["slash-gate"],
                     }
                     contexts = checks.get((repo, branch))
                     if contexts is None:
-                        self._json({"message": "Branch not protected"}, status=404)
+                        self._json({"protected": False})
                     else:
-                        self._json({"contexts": contexts})
+                        self._json(
+                            {
+                                "protected": True,
+                                "protection": {"required_status_checks": {"contexts": contexts}},
+                            }
+                        )
                 case _:
                     self._json({"message": f"unexpected path {self.path}"}, status=404)
 
