@@ -13,6 +13,7 @@ import inspect
 import json
 import math
 import os
+import shlex
 import sys
 import threading
 import time
@@ -96,6 +97,14 @@ from .workspace import Workspace
 NodeKind = Literal["agent", "human"]
 EXIT_BY_STATE = {"complete": 0, "waiting": 1, "failed": 1}
 DEFAULT_ROUND_BUDGET = 14_400.0
+
+
+def _check_in_surface_command(run_id: str, runs_dir: Path) -> str:
+    """Render the exact agent command without exposing CLI paths to shell parsing."""
+    return shlex.join(
+        ["just", "channel-surface", run_id, "-", "--runs-dir", str(runs_dir.resolve())]
+    )
+
 
 _AGENT_NODE_FIELDS = (
     "persona",
@@ -1270,6 +1279,7 @@ def main(argv: list[str] | None = None) -> int:
             return 2
 
         def dispatch_check_in() -> None:
+            surface_command = _check_in_surface_command(validated_run_id, args.runs_dir)
             task = (
                 "Read durable state for this run and send exactly one concise, non-blocking "
                 "per-workstream update. Do not wait for a reply.\n\n"
@@ -1277,8 +1287,7 @@ def main(argv: list[str] | None = None) -> int:
                 f"Journal: {(run_dir / 'events.jsonl').resolve()}\n"
                 f"Status: {(run_dir / 'orchestrator' / 'status.json').resolve()}\n"
                 f"Monitor details: {(run_dir / 'monitor' / 'details.json').resolve()}\n"
-                f"Send command: just channel-surface {validated_run_id} - "
-                f"--runs-dir {args.runs_dir.resolve()}"
+                f"Send command: {surface_command}"
             )
             dispatch(
                 "check-in",

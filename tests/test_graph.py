@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import socket
 import threading
 from collections.abc import Mapping
@@ -21,6 +22,7 @@ from orchestrator.goals import register_run
 from orchestrator.graph import (
     GraphNode,
     HumanAction,
+    _check_in_surface_command,
     _replay_node_run,
     first_line,
     graph_payload,
@@ -44,6 +46,19 @@ from orchestrator.runs import (
     StepResultPayload,
 )
 from orchestrator.verify import VerifyResult
+
+
+def test_check_in_surface_command_quotes_cli_controlled_runs_path(tmp_path: Path) -> None:
+    runs = tmp_path / "runs; with spaces"
+    command = _check_in_surface_command("run-1", runs)
+    assert shlex.split(command) == [
+        "just",
+        "channel-surface",
+        "run-1",
+        "-",
+        "--runs-dir",
+        str(runs.resolve()),
+    ]
 
 
 def _report(persona: str, completed: bool = True, assessment: str | None = None) -> Report:
