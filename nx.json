@@ -1,0 +1,46 @@
+{
+  "$schema": "./node_modules/nx/schemas/nx-schema.json",
+  "cacheDirectory": ".nx/cache",
+  "defaultBase": "main",
+  "namedInputs": {
+    "default": ["{projectRoot}/**/*", "sharedGlobals"],
+    "sharedGlobals": [
+      "{workspaceRoot}/package.json",
+      "{workspaceRoot}/bun.lock",
+      "{workspaceRoot}/nx.json",
+      "{workspaceRoot}/biome.json",
+      "{workspaceRoot}/eslint.config.mjs",
+      "{workspaceRoot}/tsconfig.base.json",
+      "{workspaceRoot}/pyproject.toml",
+      "{workspaceRoot}/uv.lock"
+    ]
+  },
+  "targetDefaults": {
+    "build": {
+      "cache": true,
+      "inputs": ["default"]
+    },
+    "lint": {
+      "cache": true,
+      "inputs": ["default"]
+    },
+    "test": {
+      "cache": true,
+      "inputs": ["default"]
+    },
+    "typecheck": {
+      "cache": true,
+      "inputs": ["default"]
+    },
+    "format": {
+      "cache": false
+    },
+    "format-check": {
+      "cache": true,
+      "inputs": ["default"]
+    },
+    "bootstrap": {
+      "cache": false
+    }
+  }
+}

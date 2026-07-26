@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import os
+import subprocess
+
 import pytest
 
 from orchestrator.labels import (
@@ -9,6 +12,7 @@ from orchestrator.labels import (
     LabelError,
     format_labels,
     graph_labels,
+    main,
     merge_labels,
     parse_labels,
     validate_key,
@@ -118,3 +122,33 @@ def test_graph_labels_omits_absent_components() -> None:
 def test_graph_labels_feed_format_labels_cleanly() -> None:
     labels = graph_labels(run_id="run-1", round_number=1, node="api", step="impl")
     assert format_labels(labels) == "run_id=run-1,round=1,node=api,step=impl"
+
+
+def test_history_labels_cli_layers_labels_at_the_public_boundary() -> None:
+    env = os.environ.copy()
+    env[LABEL_ENV] = "outer=keep,node=old"
+
+    result = subprocess.run(
+        ["uv", "run", "orchestrator-history-labels", "node=new", "role=llmlint"],
+        env=env,
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "outer=keep,node=new,role=llmlint\n"
+
+
+def test_history_labels_main_reports_invalid_cli_input(capsys: pytest.CaptureFixture[str]) -> None:
+    assert main(["not-a-pair"]) == 2
+    assert "expected KEY=VALUE" in capsys.readouterr().err
+
+
+def test_history_labels_main_reports_invalid_inherited_value(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv(LABEL_ENV, "outer=keep")
+
+    assert main(["role=bad,value"]) == 2
+    assert "history label value" in capsys.readouterr().err

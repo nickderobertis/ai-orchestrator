@@ -59,6 +59,21 @@ rules:
   - name: async_typed_clients_at_boundaries
     override: true
     relevance: false
+  # Nx project files and the root justfile are declarative command adapters:
+  # `just check` drives every non-mutating quality target for real. The three check
+  # scripts likewise have real success and semantic-failure journeys; injecting
+  # host failures such as broken mktemp/git/mkdir belongs to their explicit guards,
+  # not e2e. Recursively invoking bootstrap, format, upgrade, or the full check
+  # from its own pytest process would mutate the active environment and cannot end.
+  - name: changed_behavior_has_e2e
+    override: true
+    files:
+      exclude:
+        - "justfile"
+        - "**/project.json"
+        - "scripts/check-dag-state-contract.py"
+        - "scripts/check-nx-cache.sh"
+        - "scripts/check-oneharness-ui-contract.sh"
   # Tests read suite-controlled environment variables set by the suite itself,
   # not inputs crossing an external trust boundary.
   - name: boundary_inputs_validated

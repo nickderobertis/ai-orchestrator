@@ -1,0 +1,47 @@
+{
+  "name": "orchestrator",
+  "$schema": "../node_modules/nx/schemas/project-schema.json",
+  "projectType": "library",
+  "sourceRoot": "orchestrator",
+  "tags": ["scope:orchestrator", "lang:python"],
+  "targets": {
+    "build": {
+      "command": "uv build",
+      "options": { "cwd": "." },
+      "outputs": ["{workspaceRoot}/dist"]
+    },
+    "lint": {
+      "command": "uv run ruff check . && { command -v shellcheck >/dev/null || { echo \"lint: required 'shellcheck' executable was not found; run 'just bootstrap' from the repository root to install it, then retry\" >&2; exit 1; }; } && shellcheck scripts/*.sh .githooks/pre-push && uv run orchestrator-validate-personas",
+      "options": { "cwd": "." }
+    },
+    "test": {
+      "command": "env -u FORCE_COLOR NO_COLOR=1 uv run pytest --cov=orchestrator --cov-report=term-missing --cov-fail-under=95",
+      "options": { "cwd": "." },
+      "outputs": ["{workspaceRoot}/.coverage"],
+      "inputs": [
+        "{projectRoot}/**/*",
+        "{workspaceRoot}/tests/**/*",
+        "{workspaceRoot}/personas/**/*",
+        "{workspaceRoot}/config/**/*",
+        "{workspaceRoot}/pyproject.toml",
+        "{workspaceRoot}/uv.lock"
+      ]
+    },
+    "typecheck": {
+      "command": "uv run mypy",
+      "options": { "cwd": "." }
+    },
+    "format": {
+      "command": "uv run ruff format .",
+      "options": { "cwd": "." }
+    },
+    "format-check": {
+      "command": "uv run ruff format --check .",
+      "options": { "cwd": "." }
+    },
+    "bootstrap": {
+      "command": "uv sync --locked",
+      "options": { "cwd": "." }
+    }
+  }
+}
