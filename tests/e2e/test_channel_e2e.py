@@ -169,17 +169,18 @@ def test_due_heartbeat_surfaces_during_active_step_and_disabled_run_stays_silent
         encoding="utf-8",
     )
     run_id = _launch_cli(plan, runs, _base(tmp_path), onejudge_bin, heartbeat_interval=0.2)
-    # llmlint: ignore[tests_mirror_real_usage] The public channel commands prove delivery
-    # below; these durable records are inspected additionally to prove the required
-    # pre-consumption clock semantics and completed-run audit trail.
+    # llmlint: ignore[tests_mirror_real_usage] Required durable clock audit has no CLI view.
     heartbeat_path = runs / run_id / "channel" / "heartbeat.json"
+    # llmlint: ignore[tests_mirror_real_usage] Required queue audit has no CLI view.
     initial_state = json.loads(heartbeat_path.read_text())
     queued_path = runs / run_id / "channel" / "heartbeat-surface.json"
     queue_deadline = deadline(120)
     while not queued_path.is_file() and time.monotonic() < queue_deadline:
         time.sleep(0.01)
     assert queued_path.is_file()
+    # llmlint: ignore[tests_mirror_real_usage] Required pre-consumption audit has no CLI view.
     queued_state = json.loads(heartbeat_path.read_text(encoding="utf-8"))
+    # llmlint: ignore[tests_mirror_real_usage] Required journal audit has no CLI view.
     queued_events = (runs / run_id / "events.jsonl").read_text(encoding="utf-8")
     assert queued_state["last_surface_at"] == initial_state["last_surface_at"]
     assert queued_state["due"] is True
@@ -609,8 +610,7 @@ def test_live_channel_runs_real_nested_graph_and_round_trips_guidance(
     assert f"{run_id}: {expected_wait}" in status.stdout
     pending_path = run_dir / "channel" / "planner-pending.json"
     pending = pending_path.read_text(encoding="utf-8")
-    # llmlint: ignore[tests_mirror_real_usage] This durable file has no corrupting
-    # public producer; damage it directly to exercise the real read-side CLI trust boundary.
+    # llmlint: ignore[tests_mirror_real_usage] No public producer can corrupt this durable file.
     pending_path.write_text("{broken", encoding="utf-8")
     for command in ("runs", "status"):
         malformed = subprocess.run(

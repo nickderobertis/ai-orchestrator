@@ -21,7 +21,7 @@ import socket
 import sys
 import threading
 import time
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager, suppress
 from pathlib import Path
 from typing import Any, Literal, Protocol, get_args
@@ -83,6 +83,10 @@ class ProposalSink(Protocol):
     def drain_commands(self) -> tuple[EditCommand, ...]: ...
 
     def heartbeat_tick(self) -> None: ...
+
+
+class HeartbeatSynthesizer(Protocol):
+    def __call__(self) -> str: ...
 
 
 def _heartbeat_path(channel_dir: Path) -> Path:
@@ -423,28 +427,27 @@ def _validated_persisted_surface(value: Mapping[str, Any]) -> dict[str, Any]:
     return surface
 
 
-def _validated_heartbeat_surface(value: Mapping[str, Any], run_id: str) -> dict[str, Any]:
+def _validated_heartbeat_surface(
+    value: Mapping[str, Any], run_id: str, expected_round: int
+) -> dict[str, Any]:
     """Validate the durable, externally mutable heartbeat-surface frame."""
-    if set(value) != {"op", "run_id", "round", "surface", "messages"}:
-        raise ChannelError("heartbeat surface fields are invalid")
-    if value["op"] != "supervisor" or value["run_id"] != run_id:
-        raise ChannelError("heartbeat surface operation or run id is invalid")
-    round_number = value["round"]
-    if not isinstance(round_number, int) or isinstance(round_number, bool) or round_number < 1:
-        raise ChannelError("heartbeat surface round must be a positive integer")
-    surface = value["surface"]
-    if not isinstance(surface, Mapping) or set(surface) != {"kind", "message", "blocking"}:
-        raise ChannelError("heartbeat surface payload is invalid")
+    round_number = value.get("round")
     if (
-        surface["kind"] != "heartbeat"
-        or not isinstance(surface["message"], str)
-        or not surface["message"].strip()
-        or surface["blocking"] is not False
+        not isinstance(round_number, int)
+        or isinstance(round_number, bool)
+        or round_number != expected_round
     ):
+        raise ChannelError("heartbeat surface round does not match the active round")
+    if value.get("run_id") != run_id:
+        raise ChannelError("heartbeat surface run id does not match the active run")
+    surface = value.get("surface")
+    message = surface.get("message") if isinstance(surface, Mapping) else None
+    if not isinstance(message, str) or not message.strip():
         raise ChannelError("heartbeat surface values are invalid")
-    if value["messages"] != []:
-        raise ChannelError("heartbeat surface messages must be empty")
-    return _heartbeat_frame(run_id, round_number, surface["message"])
+    expected = _heartbeat_frame(run_id, expected_round, message)
+    if value != expected:
+        raise ChannelError("heartbeat surface frame is invalid")
+    return expected
 
 
 def _reply(value: Mapping[str, Any]) -> dict[str, Any]:
@@ -513,7 +516,7 @@ class ProposalPump:
         round_number: int,
         *,
         journal: JournalSink | None = None,
-        synthesize_heartbeat: Callable[[], str] | None = None,
+        synthesize_heartbeat: HeartbeatSynthesizer | None = None,
     ) -> None:
         self._channel_dir = channel_dir
         self._run_id = run_id
@@ -862,7 +865,11 @@ def main_next(argv: list[str] | None = None) -> int:
     with advisory_lock(f"channel-heartbeat-surface:{heartbeat_surface.resolve()}"):
         if heartbeat_surface.is_file():
             try:
-                value = _validated_heartbeat_surface(load_mapping(heartbeat_surface), run_dir.name)
+                if latest is None:
+                    raise ChannelError("heartbeat surface has no active round")
+                value = _validated_heartbeat_surface(
+                    load_mapping(heartbeat_surface), run_dir.name, latest[0]
+                )
                 heartbeat_surface.unlink()
             except (ChannelError, ConfigError, OSError) as exc:
                 print(f"channel-next: {exc}", file=sys.stderr)

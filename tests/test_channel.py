@@ -58,7 +58,7 @@ def test_heartbeat_surface_protocol_validates_every_external_field() -> None:
         },
         "messages": [],
     }
-    assert _validated_heartbeat_surface(valid, "orch") == valid
+    assert _validated_heartbeat_surface(valid, "orch", 1) == valid
 
     invalid = [
         {**valid, "op": "other"},
@@ -70,7 +70,7 @@ def test_heartbeat_surface_protocol_validates_every_external_field() -> None:
     ]
     for value in invalid:
         with pytest.raises(ChannelError, match="heartbeat surface"):
-            _validated_heartbeat_surface(value, "orch")
+            _validated_heartbeat_surface(value, "orch", 1)
 
 
 def test_fifo_round_trip_and_reattach(tmp_path: Path) -> None:
@@ -782,6 +782,7 @@ def test_bridge_main_success_finished_and_errors(
         "surface": {"kind": "heartbeat", "message": "status", "blocking": False},
         "messages": [],
     }
+    (runs / "orch" / "round-01").mkdir()
     atomic_json(heartbeat_surface, valid_heartbeat)
     assert main_next(["orch", "--runs-dir", str(runs)]) == 0
     assert json.loads(capsys.readouterr().out) == valid_heartbeat
