@@ -33,6 +33,7 @@ from .history import (
     session_records,
     session_role,
 )
+from .launch import KNOWN_LAUNCHERS
 from .runs import RunId
 
 #: History record keys this mapper consumes into a public ``Conversation`` field.
@@ -252,7 +253,7 @@ def attribution(session: HistorySession, records: list[dict[str, Any]]) -> dict[
     if (round_label := _label(session, "round")) is not None and round_label.isdigit():
         result["round"] = int(round_label)
     launcher = _label(session, "launcher")
-    result["launcher"] = launcher if launcher in {"claude-code", "codex"} else "unknown"
+    result["launcher"] = launcher if launcher in KNOWN_LAUNCHERS else "unknown"
     if records and "finished_at" in records[-1]:
         finished = records[-1]["finished_at"]
         result["finishedAt"] = finished if isinstance(finished, str) else None
