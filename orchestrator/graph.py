@@ -1316,6 +1316,7 @@ def main(argv: list[str] | None = None) -> int:
         except (OSError, ValueError) as exc:
             print(f"run-plan: invalid proposal channel: {exc}", file=sys.stderr)
             return 2
+        # llmlint: ignore-end[changed_behavior_has_e2e]
 
         def synthesize_heartbeat() -> str:
             output = resolved_channel / "check-in-message.txt"
@@ -1362,7 +1363,6 @@ def main(argv: list[str] | None = None) -> int:
             journal=journal,
             synthesize_heartbeat=synthesize_heartbeat,
         )
-        # llmlint: ignore-end[changed_behavior_has_e2e]
     try:
         result = run_graph(
             graph,

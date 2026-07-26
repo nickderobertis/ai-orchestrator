@@ -219,12 +219,16 @@ def main() -> int:
             _wait_at_provider_barrier(task)
             if "Output file: " in task and "agent-synthesized planner update" in task:
                 output = Path(task.split("Output file: ", 1)[1].splitlines()[0])
-                output.write_text(
-                    "active-worker: executing the slow agent step; "
-                    "evidence: node-started is recorded and node-settled is absent; "
-                    "follow-ups: none\n",
-                    encoding="utf-8",
-                )
+                failed_once = output.with_name("check-in-failed-once")
+                if "heartbeat-retry-channel" in task and not failed_once.exists():
+                    failed_once.write_text("failed\n", encoding="utf-8")
+                else:
+                    output.write_text(
+                        "active-worker: executing the slow agent step; "
+                        "evidence: node-started is recorded and node-settled is absent; "
+                        "follow-ups: none\n",
+                        encoding="utf-8",
+                    )
             guidance = _planner_guidance(messages)
             run_log = re.search(r"record-run=(\S+)", task)
             if run_log is not None:

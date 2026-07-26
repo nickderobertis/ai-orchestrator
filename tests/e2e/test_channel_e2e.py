@@ -308,6 +308,60 @@ def test_due_heartbeat_surfaces_during_active_step_and_disabled_run_stays_silent
     assert "planner update due" not in corrupt_status.stdout
 
 
+def test_failed_check_in_retries_while_active_step_continues(
+    tmp_path: Path, onejudge_bin: str
+) -> None:
+    runs = tmp_path / "runs"
+    witness = tmp_path / "retry-witness"
+    plan = tmp_path / "heartbeat-retry.json"
+    plan.write_text(
+        json.dumps(
+            {
+                "schema_version": 3,
+                "name": "heartbeat-retry",
+                "tasks": [
+                    {
+                        "id": "active-worker",
+                        "persona": "engineer",
+                        "task": (
+                            f"slow-branch {witness} pacemaker-slow complete-now "
+                            "heartbeat-retry-channel"
+                        ),
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    run_id = _launch_cli(
+        plan,
+        runs,
+        _base(tmp_path),
+        onejudge_bin,
+        heartbeat_interval=0.2,
+        requested_run_id="heartbeat-retry-channel",
+    )
+    run_dir = runs / run_id
+    heartbeat = _wait_surface(run_id, runs, wait_seconds=120)
+    assert heartbeat["surface"]["kind"] == "heartbeat"
+    listed = subprocess.run(
+        ["just", "runs", "--runs-dir", str(runs)],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    assert f"* {run_id}" in listed.stdout
+
+    while True:
+        boundary = _wait_surface(run_id, runs, wait_seconds=120)
+        if boundary["surface"]["kind"] != "heartbeat":
+            break
+    assert boundary["surface"]["kind"] == "milestone"
+    _reply_cli(run_id, runs, {"completion": True, "reason": "verified retry"})
+    _wait_report(run_dir / "orchestrator" / "report.json")
+
+
 @pytest.mark.parametrize(
     ("sentinel", "underlying_error"),
     [
