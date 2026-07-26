@@ -7,39 +7,33 @@ import math
 from pathlib import Path
 
 import pytest
+from harness_records import (
+    CLAUDE_RECORD,
+    CODEX_RECORD,
+    reported_usage,
+    smoke_history_record,
+)
 
 import orchestrator.smoke as smoke
 from orchestrator.history import HistoryError, HistorySession, SessionId
+from orchestrator.telemetry import history_session_launch_failure
 
 
-def _record(path: Path) -> None:
+def _record(path: Path, shape: dict[str, object] = CLAUDE_RECORD, **overrides: object) -> None:
+    """Persist one real provider record, defaulting to the claude-code shape.
+
+    claude-code is what the repository selects first, and its sparse record — a
+    measured duration, no ``started_at``, no phase split, a null ``finished_at`` —
+    is the one the launch guard used to reject.
+    """
     path.write_text(
-        json.dumps(
-            {
-                "type": "run",
-                "schema_version": "1.0",
-                "history_id": "turn-1",
-                "harness": "codex",
-                "prompt": smoke.TASK,
-                "status": "ok",
-                "exit_code": 0,
-                "duration_ms": 10,
-                "model_ms": 10,
-                "tool_ms": 0,
-                "started_at": "2026-07-25T00:00:00Z",
-                "finished_at": "2026-07-25T00:00:00.010Z",
-                "usage": {"cost_usd": None},
-            }
-        )
-        + "\n",
+        json.dumps(smoke_history_record(shape, **overrides)) + "\n",
         encoding="utf-8",
     )
 
 
-def test_run_smoke_validates_prompt_and_complete_history(tmp_path, monkeypatch) -> None:
-    history = tmp_path / "history.jsonl"
-    _record(history)
-    session = HistorySession(
+def _session(tmp_path: Path, history: Path) -> HistorySession:
+    return HistorySession(
         SessionId("smoke-session"),
         "smoke",
         tmp_path,
@@ -48,26 +42,32 @@ def test_run_smoke_validates_prompt_and_complete_history(tmp_path, monkeypatch) 
         {"role": "agent", "smoke": "smoke-id"},
     )
 
+
+@pytest.mark.parametrize("shape", [CLAUDE_RECORD, CODEX_RECORD], ids=["claude-code", "codex"])
+def test_run_smoke_validates_prompt_and_launch_contract(
+    tmp_path, monkeypatch, shape: dict[str, object]
+) -> None:
+    """Both real shapes are healthy launches, and each reports what it did record."""
+    history = tmp_path / "history.jsonl"
+    _record(history, shape)
+
     monkeypatch.setattr(smoke.uuid, "uuid4", lambda: "smoke-id")
     monkeypatch.setattr(smoke, "_run_wrapper", lambda *_args: None)
-    monkeypatch.setattr(smoke, "all_sessions", lambda: [session])
-    assert smoke.run_smoke() == smoke.SmokeResult("codex", None)
+    monkeypatch.setattr(smoke, "all_sessions", lambda: [_session(tmp_path, history)])
+    assert smoke.run_smoke() == smoke.SmokeResult(
+        str(shape["harness"]), reported_usage(shape)["cost_usd"]
+    )
 
 
 def test_validation_mode_loads_isolated_store_through_public_cli(tmp_path: Path, capsys) -> None:
     project = tmp_path / "project"
     project.mkdir()
     history = project / "smoke.jsonl"
-    _record(history)
-    record = json.loads(history.read_text(encoding="utf-8"))
-    record.update(
-        session="smoke-session",
+    _record(
+        history,
         name="smoke",
-        project="/tmp/smoke-target",
-        timestamp="2026-07-25T00:00:00Z",
         labels={"role": "agent", "smoke": "smoke-id", "ignored": 1},
     )
-    history.write_text(json.dumps(record) + "\n", encoding="utf-8")
     (project / "malformed.jsonl").write_text("{bad json\n", encoding="utf-8")
     (project / "events-only.jsonl").write_text('{"type":"event"}\n', encoding="utf-8")
 
@@ -76,7 +76,7 @@ def test_validation_mode_loads_isolated_store_through_public_cli(tmp_path: Path,
     assert len(sessions) == 1
     assert sessions[0].labels == {"role": "agent", "smoke": "smoke-id"}
     assert smoke.main(["--validate-history", str(tmp_path), "--smoke-id", "smoke-id"]) == 0
-    assert "recorded cost: unreported" in capsys.readouterr().out
+    assert "smoke: passed via claude-code (recorded cost: $0.063882)" in capsys.readouterr().out
 
 
 @pytest.mark.parametrize("reported_cost", ["malformed", math.inf, -math.inf, math.nan])
@@ -84,21 +84,10 @@ def test_run_smoke_renders_invalid_recorded_cost_as_unreported(
     tmp_path: Path, monkeypatch, capsys, reported_cost: object
 ) -> None:
     history = tmp_path / "history.jsonl"
-    _record(history)
-    record = json.loads(history.read_text(encoding="utf-8"))
-    record["usage"]["cost_usd"] = reported_cost
-    history.write_text(json.dumps(record) + "\n", encoding="utf-8")
-    session = HistorySession(
-        SessionId("smoke-session"),
-        "smoke",
-        tmp_path,
-        "2026-07-25T00:00:00Z",
-        history,
-        {"role": "agent", "smoke": "smoke-id"},
-    )
+    _record(history, usage=reported_usage(CLAUDE_RECORD, cost_usd=reported_cost))
     monkeypatch.setattr(smoke.uuid, "uuid4", lambda: "smoke-id")
     monkeypatch.setattr(smoke, "_run_wrapper", lambda *_args: None)
-    monkeypatch.setattr(smoke, "all_sessions", lambda: [session])
+    monkeypatch.setattr(smoke, "all_sessions", lambda: [_session(tmp_path, history)])
 
     assert smoke.main([]) == 0
     assert "recorded cost: unreported" in capsys.readouterr().out
@@ -159,33 +148,39 @@ def test_run_smoke_rejects_missing_matching_history(monkeypatch) -> None:
 
 
 @pytest.mark.parametrize(
-    ("records", "complete", "message"),
+    ("overrides", "message"),
     [
-        ([{"prompt": "", "harness": "codex"}], True, "did not receive"),
-        ([{"prompt": smoke.TASK, "harness": "codex"}], False, "telemetry is incomplete"),
-        ([{"prompt": smoke.TASK}], True, "does not identify"),
+        ({"prompt": "a different task"}, "did not receive the dispatched task"),
+        ({"harness": ""}, "does not identify the selected harness"),
+        ({"status": "error"}, r"records status 'error' with exit code 0"),
+        ({"exit_code": 1}, r"records status 'ok' with exit code 1"),
+        ({"schema_version": 99}, "records unsupported history schema 99"),
+        ({"duration_ms": None}, "records no measured duration"),
+        ({"usage": None}, "reports no token accounting"),
+        ({"usage": reported_usage(CLAUDE_RECORD, input_tokens=None)}, "reports no input_tokens"),
+        (
+            {"usage": reported_usage(CLAUDE_RECORD, output_tokens="eight")},
+            "malformed output_tokens",
+        ),
     ],
 )
 def test_run_smoke_rejects_broken_record_contracts(
-    monkeypatch, records: list[dict[str, object]], complete: bool, message: str
+    tmp_path: Path, monkeypatch, overrides: dict[str, object], message: str
 ) -> None:
-    session = HistorySession(
-        SessionId("smoke-session"),
-        "smoke",
-        Path("/tmp"),
-        "2026-07-25T00:00:00Z",
-        Path("/tmp/unused"),
-        {"role": "agent", "smoke": "smoke-id"},
-    )
+    history = tmp_path / "history.jsonl"
+    _record(history, **overrides)
     monkeypatch.setattr(smoke.uuid, "uuid4", lambda: "smoke-id")
     monkeypatch.setattr(smoke, "_run_wrapper", lambda *_args: None)
-    monkeypatch.setattr(smoke, "all_sessions", lambda: [session])
-    monkeypatch.setattr(smoke, "session_records", lambda _session: records)
-    monkeypatch.setattr(
-        smoke, "history_session_is_successful_with_complete_telemetry", lambda _session: complete
-    )
+    monkeypatch.setattr(smoke, "all_sessions", lambda: [_session(tmp_path, history)])
     with pytest.raises(HistoryError, match=message):
         smoke.run_smoke()
+
+
+def test_launch_contract_rejects_a_session_that_never_reached_a_harness(tmp_path: Path) -> None:
+    history = tmp_path / "history.jsonl"
+    history.write_text('{"type": "event", "run_id": "turn-1", "event": {}}\n', encoding="utf-8")
+
+    assert history_session_launch_failure(_session(tmp_path, history)) == "recorded no harness run"
 
 
 def test_main_reports_success_and_failure(monkeypatch, capsys) -> None:

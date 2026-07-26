@@ -11,6 +11,11 @@ Conventions for this repo's tests.
   JSON-lines protocol and is steered by task sentinels (`should-fail`,
   `complete-now`). Keep it deterministic and dependency-free (stdlib only) — it is
   spawned as a subprocess by onejudge.
+- **A fixture that encodes an external contract gets one home.** `harness_records.py`
+  holds the real oneharness provider records, captured from live turns, and both the
+  unit and e2e smoke suites derive from it. Modules at `tests/` are importable by
+  bare name from `tests/e2e/` too; restating such a shape in a suite is how one suite
+  keeps passing against a record the provider no longer writes.
 - **Unit tests inject the runner.** The scheduler (`run_plan`) takes the dispatch
   function as an argument, so scheduling behavior (ordering, parallelism,
   skip-on-failure) is tested without spawning onejudge. Prove parallelism with a
