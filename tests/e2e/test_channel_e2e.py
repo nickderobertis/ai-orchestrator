@@ -163,8 +163,7 @@ def test_due_heartbeat_surfaces_during_active_step_and_disabled_run_stays_silent
                         "id": "active-worker",
                         "persona": "engineer",
                         "task": (
-                            f"slow-branch {witness} pacemaker-slow complete-now "
-                            "heartbeat-channel"
+                            f"slow-branch {witness} pacemaker-slow complete-now heartbeat-channel"
                         ),
                     }
                 ],

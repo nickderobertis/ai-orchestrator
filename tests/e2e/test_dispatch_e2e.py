@@ -222,11 +222,11 @@ def test_real_dispatch_delivers_exact_task_to_agent_history(
     )
 
     dispatch_env = {
-            "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
-            "REAL_ONEHARNESS_BIN": oneharness_bin,
-            "MOCK_STDOUT": mock_stdout,
-            "ONEHARNESS_HISTORY": "true",
-            "XDG_STATE_HOME": str(state_home),
+        "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+        "REAL_ONEHARNESS_BIN": oneharness_bin,
+        "MOCK_STDOUT": mock_stdout,
+        "ONEHARNESS_HISTORY": "true",
+        "XDG_STATE_HOME": str(state_home),
     }
     dispatched = (
         ("engineer", task, "worker"),
