@@ -22,6 +22,7 @@ import subprocess
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Protocol
+from urllib.parse import quote
 
 __all__ = [
     "AutoMergeUnavailable",
@@ -114,6 +115,8 @@ class GitHubBackend(Protocol):
 
     def default_branch(self, repo: str) -> str: ...
 
+    def required_status_checks(self, repo: str, branch: str) -> tuple[str, ...]: ...
+
     def create_pr(
         self, repo: str, *, head: str, base: str, title: str, body: str, draft: bool = False
     ) -> PullRequest: ...
@@ -178,10 +181,41 @@ class CliGitHubBackend:
         return not repo.startswith("local/")
 
     def default_branch(self, repo: str) -> str:
-        out = self._run(
-            ["repo", "view", repo, "--json", "defaultBranchRef", "-q", ".defaultBranchRef.name"]
-        )
-        return out.strip() or "main"
+        out = self._run(["api", f"repos/{repo}", "--jq", ".default_branch"])
+        branch = out.strip()
+        if not branch:
+            raise GitHubError(f"GitHub returned no default branch for {repo}")
+        return branch
+
+    def required_status_checks(self, repo: str, branch: str) -> tuple[str, ...]:
+        """Return branch-protection status contexts required before merge."""
+        encoded_branch = quote(branch, safe="")
+        out = self._run(["api", f"repos/{repo}/branches/{encoded_branch}"])
+        try:
+            payload = json.loads(out)
+            protected = payload["protected"]
+            if not isinstance(protected, bool):
+                raise TypeError
+            if not protected:
+                return ()
+            protection = payload["protection"]
+            if not isinstance(protection, dict):
+                raise TypeError
+            required = protection.get("required_status_checks")
+            if required is None:
+                return ()
+            if not isinstance(required, dict):
+                raise TypeError
+            contexts = required["contexts"]
+            if not isinstance(contexts, list) or not all(
+                isinstance(context, str) for context in contexts
+            ):
+                raise TypeError
+        except (json.JSONDecodeError, KeyError, TypeError) as exc:
+            raise GitHubError(
+                f"could not parse required status checks from gh output: {out!r}"
+            ) from exc
+        return tuple(context for context in contexts if context)
 
     def create_pr(
         self, repo: str, *, head: str, base: str, title: str, body: str, draft: bool = False
