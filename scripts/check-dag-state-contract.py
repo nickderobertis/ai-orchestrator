@@ -73,7 +73,10 @@ def literal_values(path: Path, name: str) -> list[str]:
     try:
         tree = ast.parse(path.read_text(encoding="utf-8"))
     except (OSError, SyntaxError) as exc:
-        fail(f"read authoritative {path.name} {name}: {exc}")
+        fail(
+            f"read authoritative {path.name} {name}: {exc}; restore a valid {path} "
+            "from the repository and retry"
+        )
     declarations = [
         node.value
         for node in tree.body
@@ -103,7 +106,13 @@ def literal_values(path: Path, name: str) -> list[str]:
 
 
 def typescript_agent_roles(path: Path) -> list[str]:
-    source = path.read_text(encoding="utf-8")
+    try:
+        source = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        fail(
+            f"read TypeScript agent-role contract: {exc}; restore {path} from the "
+            "repository and retry"
+        )
     matches = re.findall(
         r"export\s+const\s+agentRoleSchema\s*=\s*z\.enum\(\[(.*?)\]\);",
         source,
@@ -115,7 +124,13 @@ def typescript_agent_roles(path: Path) -> list[str]:
 
 
 def documented_agent_roles(path: Path) -> list[str]:
-    source = path.read_text(encoding="utf-8")
+    try:
+        source = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        fail(
+            f"read documented agent-role contract: {exc}; restore {path} from the "
+            "repository and retry"
+        )
     matches = re.findall(r"type AgentRole =\n(.*?);", source, flags=re.DOTALL)
     if len(matches) != 1:
         fail("docs/dag-ui/design.md must declare exactly one AgentRole union")
