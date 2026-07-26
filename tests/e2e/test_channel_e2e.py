@@ -243,6 +243,45 @@ def test_due_heartbeat_is_agent_synthesized_and_normal_surface_resets_clock(
     assert "planner update due" not in corrupt_status.stdout
 
 
+def test_provider_failure_is_terminal_blocker_without_second_round(
+    tmp_path: Path, onejudge_bin: str
+) -> None:
+    """A real failed provider dispatch stops iteration and names its cause."""
+    runs = tmp_path / "infrastructure-runs"
+    run_id = _launch_cli(_plan(tmp_path, "provider-errors"), runs, _base(tmp_path), onejudge_bin)
+
+    blocker = _wait_surface(run_id, runs, wait_seconds=120)
+
+    surface = blocker["surface"]
+    assert isinstance(surface, dict)
+    assert surface["kind"] == "proposal" and surface["blocking"] is True
+    assert "terminal infrastructure failure; dispatch cannot run" in str(surface["message"])
+    assert "provider error" in str(surface["message"])
+    first_result = _wait_report(runs / run_id / "round-01" / "result.json")
+    failed = first_result["results"]["worker"]
+    assert failed["status"] == "failed"
+    assert failed["outcome"] == "infrastructure-failure"
+    assert "provider error" in failed["error"]
+    _reply_cli(
+        run_id,
+        runs,
+        {
+            "completion": False,
+            "message": "infrastructure failure acknowledged",
+            "reason": "the provider must be repaired outside this run",
+        },
+    )
+    boundary = _wait_surface(run_id, runs, wait_seconds=120)
+    assert boundary["surface"]["kind"] in {"milestone", "closeout"}
+    assert not (runs / run_id / "round-02").exists()
+    _reply_cli(
+        run_id,
+        runs,
+        {"completion": True, "reason": "terminal infrastructure blocker verified"},
+    )
+    _wait_report(runs / run_id / "orchestrator" / "report.json")
+
+
 def _next_cli(run_id: str, runs: Path, timeout: str | None = None) -> dict[str, object]:
     wait_timeout = str(e2e_timeout(10)) if timeout is None else timeout
     result = subprocess.run(

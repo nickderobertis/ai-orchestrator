@@ -306,6 +306,11 @@ Each node settles once per round:
 - `blocked`: execution is transitively gated by a waiting human. `blocked_by`
   contains the ready top-level or `NODE_ID/STEP_ID` human references.
 - `failed`: an executed agent or lifecycle failed.
+- `failed` with outcome `infrastructure-failure`: a recognized provider or
+  harness failure prevented dispatch from running. This is terminal across
+  rounds: the reconciler surfaces the underlying error as a blocking planner
+  proposal on first occurrence, and replanning does not dispatch the node again.
+  Unknown or ambiguous errors remain ordinary retryable task failures.
 - `skipped`: a failed dependency made execution unsafe. Failure takes precedence
   over a simultaneous waiting path, so such a descendant is skipped, not blocked.
 
@@ -313,7 +318,8 @@ The result's top-level `state` is `failed` if any node failed or skipped,
 otherwise `waiting` if any node waits or is blocked, otherwise `complete`. `ok` is
 true only for `complete`. Human and JSON output carry the same facts. Exit status
 is 0 for `complete`, 1 for `waiting` or `failed`, and 2 for invalid plan, ledger,
-or command input.
+configuration, or command input. Recorded result schema v5 adds the terminal
+`infrastructure-failure` and successful `already-integrated` outcome values.
 
 ## Recorded rounds
 

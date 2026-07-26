@@ -195,9 +195,6 @@ def main() -> int:
         sys.stderr.write("fake_backend: messages must be a list of objects\n")
         return 1
     task = _task_text(messages)
-    if "provider-errors" in task:
-        sys.stderr.write("fake_backend: provider error\n")
-        return 1
     if "configuration-errors" in task:
         sys.stderr.write("fake_backend: bad config\n")
         return 1
@@ -245,6 +242,9 @@ def main() -> int:
                 with witness.open("a", encoding="utf-8") as stream:
                     stream.write("tick\n")
             orchestrator_plan = _orchestrator_command(task)
+            if "provider-errors" in task and orchestrator_plan is None:
+                sys.stderr.write("fake_backend: provider error\n")
+                return 1
             plan_text = ""
             if orchestrator_plan is not None:
                 plan_path = orchestrator_plan.plan
@@ -276,6 +276,7 @@ def main() -> int:
                                 "continuation-channel",
                                 '"name": "live-edit"',
                                 "lifecycle-worker-death-retry",
+                                "provider-errors",
                             )
                         ),
                         capture_output=True,
@@ -453,6 +454,18 @@ def main() -> int:
                 )
             if "write-change" in task:
                 (Path.cwd() / "CHANGE.txt").write_text("change from fake agent\n", encoding="utf-8")
+            if "publish-change-to-base" in task:
+                subprocess.run(["git", "add", "CHANGE.txt"], check=True, capture_output=True)
+                subprocess.run(
+                    ["git", "commit", "-m", "test: publish change early"],
+                    check=True,
+                    capture_output=True,
+                )
+                subprocess.run(
+                    ["git", "push", "origin", "HEAD:main"],
+                    check=True,
+                    capture_output=True,
+                )
             if "write-unique-change" in task:
                 identity = re.sub(r"[^A-Za-z0-9._-]+", "-", Path.cwd().name)
                 (Path.cwd() / f"CHANGE-{identity}.txt").write_text(

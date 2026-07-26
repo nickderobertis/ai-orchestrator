@@ -304,6 +304,27 @@ class LocalMergeStrategy:
                 gitops.worktree_add_detached(ctx.clone_dir, scratch, f"origin/{ctx.base}")
                 try:
                     gitops.merge_squash(scratch, f"origin/{ctx.branch}", message=ctx.title)
+                except gitops.NothingToCommit:
+                    gitops.worktree_remove(ctx.clone_dir, scratch)
+                    pr = _local_publication_ref(ctx)
+                    _record(
+                        ctx,
+                        "publication-finished",
+                        {
+                            "pr": pr.url,
+                            "branch": ctx.branch,
+                            "base": ctx.base,
+                            "outcome": "already-integrated",
+                        },
+                    )
+                    return MergeOutcome(
+                        outcome="already-integrated",
+                        detail=(
+                            f"verified content from {ctx.branch} was already present "
+                            f"on {ctx.base}; no publication commit was needed"
+                        ),
+                        pr=pr,
+                    )
                 except Exception:
                     gitops.worktree_remove(ctx.clone_dir, scratch)
                     raise
@@ -356,13 +377,7 @@ class LocalMergeStrategy:
                     break
                 finally:
                     gitops.worktree_remove(ctx.clone_dir, scratch)
-        pr = PullRequest(
-            number=0,
-            url=f"local:{ctx.repo_slug}#{ctx.branch}",
-            repo=ctx.repo_slug,
-            head=ctx.branch,
-            base=ctx.base,
-        )
+        pr = _local_publication_ref(ctx)
         # No `pr-created` counterpart: this path never opened one. The identity
         # above is synthesized so the result has a stable ref to name, and claiming
         # a PR was created for it would put a transition in the journal that never
@@ -377,6 +392,17 @@ class LocalMergeStrategy:
             detail=f"local direct-merge of {ctx.branch} into {ctx.base} after checks",
             pr=pr,
         )
+
+
+def _local_publication_ref(ctx: MergeContext) -> PullRequest:
+    """Build the stable synthetic publication reference used by local workflows."""
+    return PullRequest(
+        number=0,
+        url=f"local:{ctx.repo_slug}#{ctx.branch}",
+        repo=ctx.repo_slug,
+        head=ctx.branch,
+        base=ctx.base,
+    )
 
 
 def _is_push_race(exc: gitops.GitError) -> bool:

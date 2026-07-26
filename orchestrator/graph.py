@@ -13,6 +13,7 @@ import inspect
 import json
 import math
 import os
+import re
 import sys
 import threading
 import time
@@ -96,6 +97,24 @@ from .workspace import Workspace
 NodeKind = Literal["agent", "human"]
 EXIT_BY_STATE = {"complete": 0, "waiting": 1, "failed": 1}
 DEFAULT_ROUND_BUDGET = 14_400.0
+INFRASTRUCTURE_FAILURE_OUTCOME = "infrastructure-failure"
+
+_INFRASTRUCTURE_FAILURE_PATTERNS = (
+    re.compile(r"provider error.*\b(?:respond|supervisor)\b", re.IGNORECASE | re.DOTALL),
+    re.compile(r"oneharness exited with signal:\s*9\b", re.IGNORECASE),
+    re.compile(r"harness failed\s*\(\s*auth\s*\)", re.IGNORECASE),
+    re.compile(r"cannot write v0\.3 history telemetry", re.IGNORECASE),
+    re.compile(r"new history record lacks complete v0\.3 telemetry", re.IGNORECASE),
+)
+
+
+def infrastructure_failure_detail(exc: BaseException) -> str | None:
+    """Return the durable underlying error only for known no-dispatch failures."""
+    detail = str(exc).strip()
+    if any(pattern.search(detail) for pattern in _INFRASTRUCTURE_FAILURE_PATTERNS):
+        return detail
+    return None
+
 
 _AGENT_NODE_FIELDS = (
     "persona",
@@ -670,17 +689,32 @@ def run_graph(
             # ledger records it either way. Journal it here as well: a `node-started`
             # with nothing to close it is how this journal says "still running", and
             # a node that raised is the one thing it is not.
-            failed = NodeRun("failed", str(exc))
+            infrastructure_detail = infrastructure_failure_detail(exc)
+            outcome = INFRASTRUCTURE_FAILURE_OUTCOME if infrastructure_detail is not None else None
+            failed = NodeRun("failed", str(exc), outcome)
             node_log.append(
                 "node-failed",
                 detail={
                     "detail": str(exc),
                     "error": type(exc).__name__,
+                    **({"outcome": outcome} if outcome is not None else {}),
                     TERMINAL_NODE_RESULT_FIELD: cast(
                         Any, _run_payload(node, failed, dependents.get(nid, []))
                     ),
                 },
             )
+            if infrastructure_detail is not None:
+                if proposal_pump is not None:
+                    message = (
+                        "terminal infrastructure failure; dispatch cannot run: "
+                        + infrastructure_detail
+                    )
+                    defer = getattr(proposal_pump, "defer_blocking", None)
+                    if defer is not None:
+                        defer(nid, message)
+                    else:
+                        proposal_pump.propose_blocking(nid, message)
+                return failed
             raise
         finally:
             reset_harness_observer(token)
@@ -815,7 +849,12 @@ def _run_payload(node: GraphNode, run: NodeRun, dependents: list[str]) -> GraphR
         error=run.error,
         unblocks=list(dependents) if run.status == "waiting" else [],
         human_actions=actions,
-        outcome=run.payload if run.payload == "no-changes" else None,
+        outcome=(
+            run.payload
+            if isinstance(run.payload, str)
+            and run.payload in {"no-changes", INFRASTRUCTURE_FAILURE_OUTCOME}
+            else None
+        ),
     )
     return _node_payload(result)
 
@@ -824,7 +863,11 @@ def _replay_node_run(node: GraphNode, item: GraphResultItem) -> NodeRun:
     """Restore scheduler actual state while retaining the exact serialized result."""
     status = item["status"]
     error = item.get("error")
-    payload: Any = "no-changes" if item.get("outcome") == "no-changes" else None
+    payload: Any = (
+        item.get("outcome")
+        if item.get("outcome") in {"no-changes", INFRASTRUCTURE_FAILURE_OUTCOME}
+        else None
+    )
     if node.lifecycle is not None:
         anchors = [
             StackBase(
@@ -912,7 +955,12 @@ def _collect(
             unblocks=list(dependents[nid]) if run.status == "waiting" else [],
             blocked_by=blocking(nid) if run.status == "blocked" else [],
             human_actions=actions.get(nid, []),
-            outcome=run.payload if run.payload == "no-changes" else None,
+            outcome=(
+                run.payload
+                if isinstance(run.payload, str)
+                and run.payload in {"no-changes", INFRASTRUCTURE_FAILURE_OUTCOME}
+                else None
+            ),
             recorded=cast(GraphResultItem, run.recorded) if run.recorded is not None else None,
         )
     return GraphResult(results=results, started_order=started_order)

@@ -440,19 +440,35 @@ class ProposalPump:
 
     def propose_blocking(self, node: str, message: str) -> None:
         """Surface a liveness failure that requires planner intervention."""
+        surface = {
+            "kind": "proposal",
+            "message": f"{node}: {message}",
+            "blocking": True,
+        }
+        # A terminal node can end the graph immediately after this call. Preserve
+        # the blocker for the outer supervisor relay, but do not advertise it as
+        # reply-ready until either this pump or that relay is listening.
+        atomic_json(self._channel_dir / "deferred-blocker.json", surface)
         self._proposals.put(
             {
                 "op": "supervisor",
                 "run_id": self._run_id,
                 "round": self._round,
-                "surface": {
-                    "kind": "proposal",
-                    "message": f"{node}: {message}",
-                    "blocking": True,
-                },
+                "surface": surface,
                 "messages": [],
                 "proposal_id": f"{node}:{message}",
             }
+        )
+
+    def defer_blocking(self, node: str, message: str) -> None:
+        """Preserve a terminal blocker for the next reply-ready supervisor relay."""
+        atomic_json(
+            self._channel_dir / "deferred-blocker.json",
+            {
+                "kind": "proposal",
+                "message": f"{node}: {message}",
+                "blocking": True,
+            },
         )
 
     def persist_replies(self) -> None:
@@ -491,7 +507,8 @@ class ProposalPump:
             with self._answer_lock:
                 if signature in self._answered:
                     continue
-            atomic_json(self._channel_dir / "planner-pending.json", surface)
+            if surface.get("blocking") is not True:
+                atomic_json(self._channel_dir / "planner-pending.json", surface)
             self._reply_received.clear()
             self._awaiting_reply.set()
             while True:
@@ -568,13 +585,23 @@ def relay_supervisor(channel_dir: Path, run_id: str, round_number: int, *, timeo
                 print(json.dumps({"value": maximum, "reason": "live planner completed the run"}))
             return 0
         surfaced = _surface(request, run_id, round_number)
-        atomic_json(channel_dir / "planner-pending.json", surfaced["surface"])
+        pending_path = channel_dir / "planner-pending.json"
+        deferred_blocker = channel_dir / "deferred-blocker.json"
+        if deferred_blocker.is_file():
+            surfaced["surface"] = load_mapping(deferred_blocker)
+        elif pending_path.is_file():
+            pending = load_mapping(pending_path)
+            if pending.get("blocking") is True:
+                surfaced["surface"] = pending
+        atomic_json(pending_path, surfaced["surface"])
         write_message(channel_dir / "up.fifo", surfaced, timeout=timeout)
         record_surface(channel_dir)
         response = _reply(read_message(channel_dir / "down.fifo", timeout=timeout))
         apply_heartbeat_reply(channel_dir, response)
         with suppress(FileNotFoundError):
             (channel_dir / "planner-pending.json").unlink()
+        with suppress(FileNotFoundError):
+            deferred_blocker.unlink()
         atomic_json(channel_dir / "planner-verdict.json", response)
     except (
         ChannelError,

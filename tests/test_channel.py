@@ -191,6 +191,21 @@ def test_proposal_pump_round_trips_and_persists_on_reconciler_drain(tmp_path: Pa
     pump.close()
 
 
+def test_proposal_pump_defers_terminal_blocker_until_supervisor_relay(tmp_path: Path) -> None:
+    channel = create_channel(tmp_path / "deferred-run")
+    pump = ProposalPump(channel, "live", 1)
+
+    pump.defer_blocking("worker", "provider unavailable")
+
+    assert json.loads((channel / "deferred-blocker.json").read_text()) == {
+        "kind": "proposal",
+        "message": "worker: provider unavailable",
+        "blocking": True,
+    }
+    assert not (channel / "planner-pending.json").exists()
+    pump.close()
+
+
 @pytest.mark.parametrize(
     ("entrypoint", "arguments", "expected"),
     [
@@ -536,6 +551,35 @@ def test_relay_mirrors_completed_verdict_for_boolean_eval(
     monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps({"op": "judge", "kind": "boolean"})))
     assert relay_supervisor(channel, "orch", 1, timeout=1) == 0
     assert json.loads(capsys.readouterr().out)["value"] is True
+
+
+def test_relay_preserves_an_existing_terminal_blocker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    channel = create_channel(tmp_path / "run-blocker")
+    blocker = {
+        "kind": "proposal",
+        "message": "worker: terminal infrastructure failure",
+        "blocking": True,
+    }
+    atomic_json(channel / "planner-pending.json", blocker)
+    sent: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        "orchestrator.channel.write_message",
+        lambda path, value, timeout: sent.append(dict(value)),
+    )
+    monkeypatch.setattr(
+        "orchestrator.channel.read_message",
+        lambda path, timeout: {"completion": True, "reason": "acknowledged"},
+    )
+    monkeypatch.setattr(
+        "sys.stdin",
+        io.StringIO(json.dumps({"op": "supervisor", "task": "round complete", "messages": []})),
+    )
+
+    assert relay_supervisor(channel, "orch", 1, timeout=1) == 0
+    assert sent[0]["surface"] == blocker
+    assert json.loads(capsys.readouterr().out)["completion"] is True
 
 
 def test_bridge_mains_render_bounded_states_and_validate_reply(
