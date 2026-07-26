@@ -30,6 +30,7 @@ from . import gitops
 from .coordination import git_lock_identity
 from .github import AutoMergeUnavailable, Check, GitHubBackend, PRStatus, PullRequest
 from .merge_queue import merge_queue_turn
+from .outcomes import ALREADY_INTEGRATED_OUTCOME, LifecycleOutcome
 from .verify import run_gate
 from .workspace import RepositoryType
 
@@ -92,7 +93,7 @@ class MergeContext:
 
 @dataclass
 class MergeOutcome:
-    outcome: str
+    outcome: LifecycleOutcome
     detail: str
     pr: PullRequest | None = None
 
@@ -138,7 +139,7 @@ def _record(ctx: MergeContext, kind: EventKind, detail: Detail) -> None:
 
 def _drive_github_merge(
     github: GitHubBackend, pr: PullRequest, ctx: MergeContext
-) -> tuple[str, str]:
+) -> tuple[LifecycleOutcome, str]:
     """Merge a PR per ``ctx.policy``, gating only on required checks."""
     if ctx.policy == "none":
         return "pr-open", f"PR #{pr.number} opened; auto-merge disabled by policy"
@@ -304,6 +305,27 @@ class LocalMergeStrategy:
                 gitops.worktree_add_detached(ctx.clone_dir, scratch, f"origin/{ctx.base}")
                 try:
                     gitops.merge_squash(scratch, f"origin/{ctx.branch}", message=ctx.title)
+                except gitops.NothingToCommit:
+                    gitops.worktree_remove(ctx.clone_dir, scratch)
+                    pr = _local_publication_ref(ctx)
+                    _record(
+                        ctx,
+                        "publication-finished",
+                        {
+                            "pr": pr.url,
+                            "branch": ctx.branch,
+                            "base": ctx.base,
+                            "outcome": ALREADY_INTEGRATED_OUTCOME,
+                        },
+                    )
+                    return MergeOutcome(
+                        outcome=ALREADY_INTEGRATED_OUTCOME,
+                        detail=(
+                            f"verified content from {ctx.branch} was already present "
+                            f"on {ctx.base}; no publication commit was needed"
+                        ),
+                        pr=pr,
+                    )
                 except Exception:
                     gitops.worktree_remove(ctx.clone_dir, scratch)
                     raise
@@ -356,13 +378,7 @@ class LocalMergeStrategy:
                     break
                 finally:
                     gitops.worktree_remove(ctx.clone_dir, scratch)
-        pr = PullRequest(
-            number=0,
-            url=f"local:{ctx.repo_slug}#{ctx.branch}",
-            repo=ctx.repo_slug,
-            head=ctx.branch,
-            base=ctx.base,
-        )
+        pr = _local_publication_ref(ctx)
         # No `pr-created` counterpart: this path never opened one. The identity
         # above is synthesized so the result has a stable ref to name, and claiming
         # a PR was created for it would put a transition in the journal that never
@@ -377,6 +393,17 @@ class LocalMergeStrategy:
             detail=f"local direct-merge of {ctx.branch} into {ctx.base} after checks",
             pr=pr,
         )
+
+
+def _local_publication_ref(ctx: MergeContext) -> PullRequest:
+    """Build the stable synthetic publication reference used by local workflows."""
+    return PullRequest(
+        number=0,
+        url=f"local:{ctx.repo_slug}#{ctx.branch}",
+        repo=ctx.repo_slug,
+        head=ctx.branch,
+        base=ctx.base,
+    )
 
 
 def _is_push_race(exc: gitops.GitError) -> bool:
