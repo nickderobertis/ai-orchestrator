@@ -24,7 +24,7 @@ import time
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager, suppress
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol, get_args
 
 from .config import ConfigError
 from .coordination import advisory_lock, atomic_json
@@ -47,11 +47,24 @@ CHANNEL_ENDPOINTS = ("up.fifo", "down.fifo")
 HEARTBEAT_FILE = "heartbeat.json"
 DEFAULT_HEARTBEAT_INTERVAL = 1800.0
 
+PlannerSurfaceKind = Literal[
+    "supervisor",
+    "milestone",
+    "blocker",
+    "choice",
+    "proposal",
+    "heartbeat",
+    "closeout",
+]
+PLANNER_SURFACE_KINDS: frozenset[PlannerSurfaceKind] = frozenset(get_args(PlannerSurfaceKind))
+
 
 class ProposalSink(Protocol):
     def propose(self, node: str, message: str) -> None: ...
 
     def propose_blocking(self, node: str, message: str) -> None: ...
+
+    def defer_blocking(self, node: str, message: str) -> None: ...
 
     def persist_replies(self) -> None: ...
 
@@ -342,6 +355,24 @@ def _surface(request: Mapping[str, Any], run_id: str, round_number: int) -> dict
     }
 
 
+def _validated_persisted_surface(value: Mapping[str, Any]) -> dict[str, Any]:
+    """Validate a persisted planner surface before forwarding it."""
+    kind = value.get("kind")
+    message = value.get("message")
+    blocking = value.get("blocking")
+    if not isinstance(kind, str) or not isinstance(message, str) or not isinstance(blocking, bool):
+        raise ChannelError("persisted planner surface has invalid kind, message, or blocking")
+    if kind not in PLANNER_SURFACE_KINDS:
+        raise ChannelError(f"persisted planner surface has unsupported kind: {kind!r}")
+    surface: dict[str, Any] = {"kind": kind, "message": message, "blocking": blocking}
+    if "options" in value:
+        options = value["options"]
+        if not isinstance(options, list) or not all(isinstance(item, str) for item in options):
+            raise ChannelError("persisted planner surface options must be a list of strings")
+        surface["options"] = options
+    return surface
+
+
 def _reply(value: Mapping[str, Any]) -> dict[str, Any]:
     heartbeat = value.get("heartbeat_interval")
     if "heartbeat_interval" in value and heartbeat is not False:
@@ -440,19 +471,35 @@ class ProposalPump:
 
     def propose_blocking(self, node: str, message: str) -> None:
         """Surface a liveness failure that requires planner intervention."""
+        surface = {
+            "kind": "proposal",
+            "message": f"{node}: {message}",
+            "blocking": True,
+        }
+        # A terminal node can end the graph immediately after this call. Preserve
+        # the blocker for the outer supervisor relay, but do not advertise it as
+        # reply-ready until either this pump or that relay is listening.
+        atomic_json(self._channel_dir / "deferred-blocker.json", surface)
         self._proposals.put(
             {
                 "op": "supervisor",
                 "run_id": self._run_id,
                 "round": self._round,
-                "surface": {
-                    "kind": "proposal",
-                    "message": f"{node}: {message}",
-                    "blocking": True,
-                },
+                "surface": surface,
                 "messages": [],
                 "proposal_id": f"{node}:{message}",
             }
+        )
+
+    def defer_blocking(self, node: str, message: str) -> None:
+        """Preserve a terminal blocker for the next reply-ready supervisor relay."""
+        atomic_json(
+            self._channel_dir / "deferred-blocker.json",
+            {
+                "kind": "proposal",
+                "message": f"{node}: {message}",
+                "blocking": True,
+            },
         )
 
     def persist_replies(self) -> None:
@@ -491,7 +538,8 @@ class ProposalPump:
             with self._answer_lock:
                 if signature in self._answered:
                     continue
-            atomic_json(self._channel_dir / "planner-pending.json", surface)
+            if surface.get("blocking") is not True:
+                atomic_json(self._channel_dir / "planner-pending.json", surface)
             self._reply_received.clear()
             self._awaiting_reply.set()
             while True:
@@ -568,13 +616,23 @@ def relay_supervisor(channel_dir: Path, run_id: str, round_number: int, *, timeo
                 print(json.dumps({"value": maximum, "reason": "live planner completed the run"}))
             return 0
         surfaced = _surface(request, run_id, round_number)
-        atomic_json(channel_dir / "planner-pending.json", surfaced["surface"])
+        pending_path = channel_dir / "planner-pending.json"
+        deferred_blocker = channel_dir / "deferred-blocker.json"
+        if deferred_blocker.is_file():
+            surfaced["surface"] = _validated_persisted_surface(load_mapping(deferred_blocker))
+        elif pending_path.is_file():
+            pending = load_mapping(pending_path)
+            if pending.get("blocking") is True:
+                surfaced["surface"] = _validated_persisted_surface(pending)
+        atomic_json(pending_path, surfaced["surface"])
         write_message(channel_dir / "up.fifo", surfaced, timeout=timeout)
         record_surface(channel_dir)
         response = _reply(read_message(channel_dir / "down.fifo", timeout=timeout))
         apply_heartbeat_reply(channel_dir, response)
         with suppress(FileNotFoundError):
             (channel_dir / "planner-pending.json").unlink()
+        with suppress(FileNotFoundError):
+            deferred_blocker.unlink()
         atomic_json(channel_dir / "planner-verdict.json", response)
     except (
         ChannelError,

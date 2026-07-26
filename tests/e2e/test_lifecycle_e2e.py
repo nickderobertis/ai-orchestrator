@@ -890,7 +890,7 @@ def test_repo_plan_ledger_and_guided_next_round(
     captured = capsys.readouterr()
     assert rc == 1 and json.loads(captured.out)["results"]["change"]["status"] == "failed"
     first_result = json.loads((runs_dir / "fixed-run" / "round-01" / "result.json").read_text())
-    assert first_result["schema_version"] == 4
+    assert first_result["schema_version"] == 5
     preserved_branch = first_result["results"]["change"]["branch"]
     preserved_checkpoint = first_result["results"]["change"]["resume"]["checkpoint"]
     assert first_result["results"]["change"]["resume"]["mode"] == "retry"
@@ -938,6 +938,7 @@ def test_repo_plan_ledger_and_guided_next_round(
     assert indexed.returncode == 0, indexed.stderr
     telemetry = json.loads(indexed.stdout)
     assert telemetry["metrics"]["recovered_branches"] == 1
+
     assert telemetry["metrics"]["green_to_publication_seconds"]
     listed = subprocess.run(
         ["just", "runs", "--runs-dir", str(runs_dir)],
@@ -963,7 +964,196 @@ def test_repo_plan_ledger_and_guided_next_round(
     plan_path.write_text(json.dumps(unrecorded_plan), encoding="utf-8")
     assert main_plan([str(plan_path), "--no-record", *common]) == 0
     unrecorded = json.loads(capsys.readouterr().out)
-    assert unrecorded["schema_version"] == 4 and "round" not in unrecorded
+    assert unrecorded["schema_version"] == 5 and "round" not in unrecorded
+
+
+def test_lifecycle_records_verified_change_already_integrated_on_base(
+    tmp_path, bare_origin, command_base, personas_dir, capsys
+) -> None:
+    """The real CLI, provider seam, and local publisher reconcile an early landing."""
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-already-integrated")
+    Registry().register(str(canonical), workflow="local")
+    plan_path = tmp_path / "already-integrated.json"
+    plan_path.write_text(
+        json.dumps(
+            {
+                "tasks": [
+                    {
+                        "id": "change",
+                        "repo": str(canonical),
+                        "persona": "engineer",
+                        "task": (
+                            "complete-now write-change publish-change-to-base: "
+                            "land before lifecycle closeout"
+                        ),
+                        "verify_cmd": ["true"],
+                        "workflow": "local",
+                        "repo_type": "single-owner",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    runs_dir = tmp_path / "runs"
+
+    rc = main_plan(
+        [
+            str(plan_path),
+            "--run",
+            "already-integrated",
+            "--runs-dir",
+            str(runs_dir),
+            "--base",
+            str(command_base()),
+            "--persona-dir",
+            str(personas_dir),
+            "--workspace",
+            str(tmp_path / "workspace"),
+            "--format",
+            "json",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    result = payload["results"]["change"]
+    assert rc == 0, json.dumps(result, indent=2)
+    assert payload["ok"] is True
+    assert result["status"] == "done" and result["outcome"] == "already-integrated"
+    assert "already present on main" in result["detail"]
+    assert (canonical / "CHANGE.txt").read_text(encoding="utf-8") == "change from fake agent\n"
+    recorded = json.loads(
+        (runs_dir / "already-integrated" / "round-01" / "result.json").read_text()
+    )
+    assert recorded["results"]["change"]["outcome"] == "already-integrated"
+
+
+def test_lifecycle_records_gate_failure_for_change_already_integrated_on_base(
+    tmp_path, bare_origin, command_base, personas_dir, capsys
+) -> None:
+    """An early landing remains a gate failure when its real closeout gate fails."""
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-integrated-gate-failure")
+    Registry().register(str(canonical), workflow="local")
+    plan_path = tmp_path / "integrated-gate-failure.json"
+    plan_path.write_text(
+        json.dumps(
+            {
+                "tasks": [
+                    {
+                        "id": "change",
+                        "repo": str(canonical),
+                        "persona": "engineer",
+                        "task": (
+                            "complete-now write-change publish-change-to-base: "
+                            "land invalid work before lifecycle closeout"
+                        ),
+                        "verify_cmd": ["false"],
+                        "workflow": "local",
+                        "repo_type": "single-owner",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    runs_dir = tmp_path / "runs"
+
+    rc = main_plan(
+        [
+            str(plan_path),
+            "--run",
+            "integrated-gate-failure",
+            "--runs-dir",
+            str(runs_dir),
+            "--base",
+            str(command_base()),
+            "--persona-dir",
+            str(personas_dir),
+            "--workspace",
+            str(tmp_path / "workspace"),
+            "--format",
+            "json",
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    result = payload["results"]["change"]
+    assert rc == 1
+    assert payload["ok"] is False
+    assert result["status"] == "failed" and result["outcome"] == "gate-failed"
+    assert "already-integrated change failed local gate: false" in result["detail"]
+    assert not (canonical / "CHANGE.txt").exists()
+    assert _has_file(origin, "main", "CHANGE.txt")
+    recorded = json.loads(
+        (runs_dir / "integrated-gate-failure" / "round-01" / "result.json").read_text()
+    )
+    assert recorded["results"]["change"]["outcome"] == "gate-failed"
+
+
+def test_lifecycle_fast_forwards_checkout_after_publication_race_is_already_integrated(
+    tmp_path, bare_origin, command_base, personas_dir, capsys
+) -> None:
+    """The real local publisher reconciles a base advance during its gate."""
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-publication-race")
+    Registry().register(str(canonical), workflow="local")
+    plan_path = tmp_path / "publication-race.json"
+    plan_path.write_text(
+        json.dumps(
+            {
+                "tasks": [
+                    {
+                        "id": "change",
+                        "repo": str(canonical),
+                        "persona": "engineer",
+                        "task": "complete-now write-change: race local publication",
+                        "verify_cmd": [
+                            "sh",
+                            "-c",
+                            "git symbolic-ref -q HEAD >/dev/null && "
+                            "git push origin HEAD:main || true",
+                        ],
+                        "workflow": "local",
+                        "repo_type": "single-owner",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    runs_dir = tmp_path / "runs"
+
+    rc = main_plan(
+        [
+            str(plan_path),
+            "--run",
+            "publication-race",
+            "--runs-dir",
+            str(runs_dir),
+            "--base",
+            str(command_base()),
+            "--persona-dir",
+            str(personas_dir),
+            "--workspace",
+            str(tmp_path / "workspace"),
+            "--format",
+            "json",
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    result = payload["results"]["change"]
+    assert rc == 0, json.dumps(result, indent=2)
+    assert payload["ok"] is True
+    assert result["status"] == "done" and result["outcome"] == "already-integrated"
+    assert "no publication commit was needed" in result["detail"]
+    assert (canonical / "CHANGE.txt").read_text(encoding="utf-8") == "change from fake agent\n"
+    assert gitops.head_sha(canonical) == _tip(origin, "main")
+    recorded = json.loads((runs_dir / "publication-race" / "round-01" / "result.json").read_text())
+    assert recorded["results"]["change"]["outcome"] == "already-integrated"
 
 
 # --- local repo: direct merge into main after checks -----------------------

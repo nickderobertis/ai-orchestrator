@@ -24,6 +24,7 @@ from orchestrator.graph import (
     _replay_node_run,
     first_line,
     graph_payload,
+    infrastructure_failure_detail,
     load_graph,
     main,
     main_repo_plan,
@@ -73,6 +74,9 @@ class _RecordingProposalPump:
     def propose_blocking(self, node: str, message: str) -> None:
         self.blocking_proposals.append((node, message))
 
+    def defer_blocking(self, node: str, message: str) -> None:
+        self.blocking_proposals.append((node, message))
+
     def persist_replies(self) -> None:
         self.drains += 1
 
@@ -112,6 +116,33 @@ def test_run_graph_enqueues_worker_assessment_through_reconciler() -> None:
     assert result.state == "complete"
     assert pump.proposals == [("discoverer", "follow up")]
     assert pump.drains >= 2
+
+
+def test_run_graph_records_and_surfaces_terminal_infrastructure_failure() -> None:
+    graph = parse_graph(
+        {"tasks": [{"id": "broken", "persona": "engineer", "task": "Dispatch work"}]}
+    )
+    pump = _RecordingProposalPump()
+    detail = "provider error (respond): harness unavailable"
+
+    def fail(_node: PlanNode, **_kwargs) -> Report:
+        raise RuntimeError(detail)
+
+    result = run_graph(
+        graph,
+        agent_runner=fail,
+        lifecycle_runner=lambda node, **_: _lifecycle(),
+        proposal_pump=pump,  # type: ignore[arg-type] - narrow transport test double
+    )
+
+    assert result.state == "failed"
+    item = graph_payload(result)["results"]["broken"]
+    assert item["status"] == "failed"
+    assert item["outcome"] == "infrastructure-failure"
+    assert item["error"] == detail
+    assert pump.blocking_proposals == [
+        ("broken", f"terminal infrastructure failure; dispatch cannot run: {detail}")
+    ]
 
 
 def test_round_budget_surfaces_and_cooperatively_cancels_wedged_dispatch() -> None:
@@ -1048,9 +1079,9 @@ def test_goal_validation_rejects_malformed_contract(goal: object, message: str) 
         )
 
 
-def test_recorded_result_schema_v4_field_golden_cannot_drift() -> None:
+def test_recorded_result_schema_v5_field_golden_cannot_drift() -> None:
     golden = json.loads(
-        (Path(__file__).parent / "golden" / "recorded-result-v4-fields.json").read_text(
+        (Path(__file__).parent / "golden" / "recorded-result-v5-fields.json").read_text(
             encoding="utf-8"
         )
     )
@@ -1124,6 +1155,26 @@ def test_replay_rejects_invalid_deferred_cleanup() -> None:
     item = cast(GraphResultItem, {"status": "done", "deferred_cleanup": "not-a-list"})
 
     with pytest.raises(ConfigError, match="invalid deferred_cleanup"):
+        _replay_node_run(node, item)
+
+
+@pytest.mark.parametrize("invalid_outcome", ["unknown", ["merged"]])
+def test_replay_rejects_invalid_lifecycle_outcome(invalid_outcome: object) -> None:
+    node = parse_graph(
+        {
+            "tasks": [
+                {
+                    "id": "work",
+                    "repo": "o/r",
+                    "persona": "engineer",
+                    "task": "Work",
+                }
+            ]
+        }
+    ).tasks[0]
+    item = cast(GraphResultItem, {"status": "done", "outcome": invalid_outcome})
+
+    with pytest.raises(ConfigError, match="invalid outcome"):
         _replay_node_run(node, item)
 
 
@@ -1620,3 +1671,33 @@ def test_repo_plan_alias_warns(monkeypatch, capsys) -> None:
     monkeypatch.setattr("orchestrator.graph.main", lambda argv=None: 0)
     assert main_repo_plan(["plan.json"]) == 0
     assert "deprecated" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    "detail",
+    [
+        "onejudge failed (exit 2 — bad config or provider/runtime error): "
+        "provider error (respond): connection closed",
+        "onejudge failed (exit 2): provider error (supervisor): Broken pipe",
+        "oneharness exited with signal: 9 (SIGKILL)",
+        "harness failed (auth): login required",
+        "harness claude-code cannot write v0.3 history telemetry",
+        "could not write history: new history record lacks complete v0.3 telemetry",
+    ],
+)
+def test_infrastructure_failure_classifier_recognizes_no_dispatch_errors(detail: str) -> None:
+    assert infrastructure_failure_detail(RuntimeError(detail)) == detail
+
+
+@pytest.mark.parametrize(
+    "detail",
+    [
+        "onejudge failed (exit 2 — bad config or provider/runtime error): bad config",
+        "unexpected runtime failure",
+        "agent failed its requested task",
+    ],
+)
+def test_infrastructure_failure_classifier_keeps_ambiguous_errors_retryable(
+    detail: str,
+) -> None:
+    assert infrastructure_failure_detail(RuntimeError(detail)) is None
