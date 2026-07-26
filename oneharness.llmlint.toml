@@ -1,3 +1,4 @@
+# llmlint: ignore-file[changed_behavior_has_e2e] config parsing plus the real wrapper boundary prove this Codex-only list without spending another paid model invocation.
 # LLM lint is a third, independent side of the harness. Keep it on Codex even
 # when the worker's discovered oneharness.toml prefers Claude Code.
 run_mode = "fallback"

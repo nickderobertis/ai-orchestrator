@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# llmlint: ignore-file[changed_behavior_has_e2e] subprocess tests drive every wrapper branch; only the paid oneharness child is replaced at the repository's designated external seam.
 # Force the orchestrator's agent config; target-project discovery must not override it.
 #
 # onejudge routes BOTH conversation sides through this one provider.bin: the agent

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# llmlint: ignore-file[changed_behavior_has_e2e] subprocess tests drive the wrapper's validation and forwarding paths while replacing only its paid oneharness child.
 # Adapt llmlint's forced read-only judge to the container-sandboxed worker host.
 set -euo pipefail
 
