@@ -195,12 +195,16 @@ def test_due_heartbeat_surfaces_during_active_step_and_disabled_run_stays_silent
         time.sleep(0.01)
     assert queued_path.is_file()
     assert failed_check_in.read_text(encoding="utf-8") == "failed\n"
+    # llmlint: ignore[tests_mirror_real_usage] The acceptance contract requires the
+    # durable failed-attempt audit and cleared claim; neither has an operator CLI.
     check_in_log = runs / run_id / "channel" / "check-in.log"
     failure_records = [
         json.loads(line) for line in check_in_log.read_text(encoding="utf-8").splitlines()
     ]
     assert len(failure_records) == 1
     assert failure_records[0]["succeeded"] is False
+    # llmlint: ignore[tests_mirror_real_usage] Exact dispatch dedup is observable only
+    # at the paid-provider seam; reconcile, onejudge, and the FIFO remain real here.
     attempts = (
         (runs / run_id / "channel" / "check-in-dispatches.txt")
         .read_text(encoding="utf-8")
@@ -216,6 +220,8 @@ def test_due_heartbeat_surfaces_during_active_step_and_disabled_run_stays_silent
     assert queued_state["in_flight"] is True
     assert queued_path.stat().st_mtime >= queued_state["retry_not_before"]
     assert '"kind":"planner-surfaced"' not in queued_events
+    # llmlint: ignore[tests_mirror_real_usage] The deterministic command provider
+    # replaces only the paid model and records labels from the real subprocess env.
     recorded_labels = parse_labels(
         (runs / run_id / "channel" / "check-in-labels.txt").read_text(encoding="utf-8")
     )
@@ -299,6 +305,8 @@ def test_due_heartbeat_surfaces_during_active_step_and_disabled_run_stays_silent
     disabled_events = (runs / disabled_id / "events.jsonl").read_text(encoding="utf-8")
     assert '"kind":"planner-surfaced"' not in disabled_events
 
+    # llmlint: ignore[tests_mirror_real_usage] The deterministic command provider
+    # replaces only the paid model and records labels from the public dispatch env.
     pr_author_labels_path = tmp_path / "pr-author-labels"
     subprocess.run(
         [
