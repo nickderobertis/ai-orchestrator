@@ -1054,6 +1054,38 @@ def test_ordinary_next_round_resumes_committed_lifecycle_branch(
     assert discovered[0]["detail"]["branch"] == branch
     assert discovered[0]["detail"]["resumed"] is True
 
+    edits = tmp_path / "fresh-start.json"
+    fresh_branch = "test/explicit-fresh-start"
+    edits.write_text(
+        json.dumps({"retry": {"change": {"branch": fresh_branch}}}),
+        encoding="utf-8",
+    )
+    assert (
+        next_round_main(["ordinary-resume", str(edits), "--runs-dir", str(runs_dir), *common]) == 1
+    )
+    capsys.readouterr()
+    third = json.loads(
+        (runs_dir / "ordinary-resume" / "round-03" / "result.json").read_text(encoding="utf-8")
+    )["results"]["change"]
+    assert third["branch"] == fresh_branch
+    assert not gitops.is_ancestor(clone, checkpoint, fresh_branch)
+    events = [
+        json.loads(line)
+        for line in (runs_dir / "ordinary-resume" / "events.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    ]
+    fresh_discovered = [
+        event
+        for event in events
+        if event["round"] == 3
+        and event["kind"] == "branch-discovered"
+        and event["node"] == "change"
+    ]
+    assert len(fresh_discovered) == 1
+    assert fresh_discovered[0]["detail"]["branch"] == fresh_branch
+    assert fresh_discovered[0]["detail"]["resumed"] is False
+
 
 def test_lifecycle_records_verified_change_already_integrated_on_base(
     tmp_path, bare_origin, command_base, personas_dir, capsys
