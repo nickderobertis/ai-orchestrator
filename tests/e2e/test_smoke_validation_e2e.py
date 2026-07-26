@@ -7,88 +7,43 @@ import os
 import subprocess
 import uuid
 from pathlib import Path
-from typing import cast
 
 import pytest
+from harness_records import (
+    CLAUDE_RECORD,
+    CODEX_RECORD,
+    reported_usage,
+    smoke_history_record,
+)
 
 from orchestrator import REPO_ROOT
-from orchestrator.smoke import TASK
-
-#: The two record shapes oneharness actually persists on the pinned release, copied
-#: from live turns. codex reports the native phase split but prices nothing;
-#: claude-code prices its turn but records only a measured duration, leaving
-#: ``started_at`` and the phase split absent and ``finished_at`` null. Fixtures that
-#: invented the missing fields are what let the launch guard ship broken.
-CODEX_RECORD: dict[str, object] = {
-    "harness": "codex",
-    "model": "gpt-5.6-sol",
-    "duration_ms": 2969,
-    "started_at": "2026-07-25T00:00:00Z",
-    "finished_at": "2026-07-25T00:00:02.969Z",
-    "model_ms": 2234,
-    "tool_ms": 0,
-    "time_to_first_token_ms": 2234,
-    "text_source": "json:codex-agent-message",
-    "usage": {
-        "input_tokens": 15472,
-        "output_tokens": 7,
-        "cache_read_tokens": 13056,
-        "cache_write_tokens": None,
-        "cost_usd": None,
-    },
-}
-CLAUDE_RECORD: dict[str, object] = {
-    "harness": "claude-code",
-    "variant": "alternate",
-    "harness_id": "claude-code:alternate",
-    "model": "claude-opus-5",
-    "duration_ms": 3455,
-    "finished_at": None,
-    "text_source": "stream-json:result",
-    "usage": {
-        "input_tokens": 2,
-        "output_tokens": 8,
-        "cache_read_tokens": 15268,
-        "cache_write_tokens": 5546,
-        "cost_usd": 0.063882,
-    },
-}
 
 
 def _record(
     history_dir: Path,
     smoke_id: str,
     *,
-    shape: dict[str, object] | None = None,
+    shape: dict[str, object] = CODEX_RECORD,
     suffix: str = "one",
     **overrides: object,
 ) -> None:
+    """Persist one real provider record where `orchestrator-smoke` will read it."""
     project = history_dir / "tmp-smoke-target"
     project.mkdir(parents=True, exist_ok=True)
     history_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"{smoke_id}-{suffix}"))
-    record: dict[str, object] = {
-        "type": "run",
-        "schema_version": "1.1",
-        "history_id": history_id,
-        "session": f"smoke-{suffix}",
-        "name": "reply-with-exactly-smoke-ok",
-        "labels": {"role": "agent", "smoke": smoke_id},
-        "project": "/tmp/smoke-target",
-        "timestamp": "2026-07-25T00:00:00Z",
-        "prompt": TASK,
-        "permission_mode": "bypass",
-        "status": "ok",
-        "exit_code": 0,
-        "text": "smoke-ok",
-        **(CODEX_RECORD if shape is None else shape),
+    record = smoke_history_record(
+        shape,
+        smoke_id=smoke_id,
+        session=f"smoke-{suffix}",
+        history_id=history_id,
         **overrides,
-    }
+    )
     path = project / f"smoke-{suffix}-20260725T000000Z-{history_id}.jsonl"
     path.write_text(json.dumps(record) + "\n", encoding="utf-8")
 
 
 def _usage(**overrides: object) -> dict[str, object]:
-    return {**cast(dict[str, object], CODEX_RECORD["usage"]), **overrides}
+    return reported_usage(CODEX_RECORD, **overrides)
 
 
 def _validate(history_dir: Path, smoke_id: str) -> subprocess.CompletedProcess[str]:
