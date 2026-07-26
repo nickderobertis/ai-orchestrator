@@ -21,7 +21,7 @@ import socket
 import sys
 import threading
 import time
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager, suppress
 from pathlib import Path
 from typing import Any, Protocol
@@ -88,6 +88,8 @@ def initialize_heartbeat(channel_dir: Path, interval_s: float = DEFAULT_HEARTBEA
                     "interval_s": interval,
                     "due": False,
                     "enabled": True,
+                    "in_flight": False,
+                    "retry_not_before": 0.0,
                 },
             )
 
@@ -101,6 +103,8 @@ def _load_heartbeat(channel_dir: Path) -> dict[str, Any] | None:
     interval = value.get("interval_s")
     due = value.get("due")
     enabled = value.get("enabled")
+    in_flight = value.get("in_flight", False)
+    retry_not_before = value.get("retry_not_before", 0.0)
     if (
         not isinstance(last, int | float)
         or isinstance(last, bool)
@@ -108,6 +112,11 @@ def _load_heartbeat(channel_dir: Path) -> dict[str, Any] | None:
         or last < 0
         or not isinstance(due, bool)
         or not isinstance(enabled, bool)
+        or not isinstance(in_flight, bool)
+        or not isinstance(retry_not_before, int | float)
+        or isinstance(retry_not_before, bool)
+        or not math.isfinite(retry_not_before)
+        or retry_not_before < 0
     ):
         raise ChannelError("heartbeat state is invalid")
     _validated_interval(interval, field="heartbeat interval_s")
@@ -124,12 +133,41 @@ def mark_heartbeat_due(channel_dir: Path, *, now: float | None = None) -> None:
     """Persist the sticky due bit once the configured interval has elapsed."""
     with advisory_lock(f"channel-heartbeat:{channel_dir.resolve()}"):
         state = _load_heartbeat(channel_dir)
-        if state is None or state["due"] or not state["enabled"]:
+        if state is None or state["due"] or state["in_flight"] or not state["enabled"]:
             return
         current = time.time() if now is None else now
-        if current - float(state["last_surface_at"]) >= float(state["interval_s"]):
+        if current >= float(state["retry_not_before"]) and current - float(
+            state["last_surface_at"]
+        ) >= float(state["interval_s"]):
             state["due"] = True
             atomic_json(_heartbeat_path(channel_dir), state)
+
+
+def claim_heartbeat(channel_dir: Path) -> bool:
+    """Atomically claim one due check-in dispatch."""
+    with advisory_lock(f"channel-heartbeat:{channel_dir.resolve()}"):
+        state = _load_heartbeat(channel_dir)
+        if state is None or not state["enabled"] or not state["due"] or state["in_flight"]:
+            return False
+        state["in_flight"] = True
+        atomic_json(_heartbeat_path(channel_dir), state)
+        return True
+
+
+def finish_heartbeat_attempt(
+    channel_dir: Path, *, succeeded: bool, now: float | None = None
+) -> None:
+    """Clear a check-in claim and defer a failed attempt until the next interval."""
+    with advisory_lock(f"channel-heartbeat:{channel_dir.resolve()}"):
+        state = _load_heartbeat(channel_dir)
+        if state is None:
+            return
+        state["in_flight"] = False
+        if not succeeded and state["due"]:
+            current = time.time() if now is None else now
+            state["due"] = False
+            state["retry_not_before"] = current + float(state["interval_s"])
+        atomic_json(_heartbeat_path(channel_dir), state)
 
 
 def record_surface(channel_dir: Path, *, now: float | None = None) -> None:
@@ -140,6 +178,8 @@ def record_surface(channel_dir: Path, *, now: float | None = None) -> None:
             return
         state["last_surface_at"] = time.time() if now is None else now
         state["due"] = False
+        state["in_flight"] = False
+        state["retry_not_before"] = 0.0
         atomic_json(_heartbeat_path(channel_dir), state)
 
 
@@ -401,7 +441,12 @@ def _reply(value: Mapping[str, Any]) -> dict[str, Any]:
 class ProposalPump:
     """Service mid-run proposal round trips without writing graph state off-thread."""
 
-    def __init__(self, channel_dir: Path, run_id: str, round_number: int) -> None:
+    def __init__(
+        self,
+        channel_dir: Path,
+        run_id: str,
+        round_number: int,
+    ) -> None:
         self._channel_dir = channel_dir
         self._run_id = run_id
         self._round = round_number
@@ -413,10 +458,15 @@ class ProposalPump:
         self._reply_received = threading.Event()
         self._answered: set[tuple[str, str]] = set()
         self._answer_lock = threading.Lock()
+        self._check_in: Callable[[], bool] | None = None
         self._thread = threading.Thread(target=self._service, daemon=True)
         self._receiver = threading.Thread(target=self._receive, daemon=True)
         self._thread.start()
         self._receiver.start()
+
+    def configure_check_in(self, check_in: Callable[[], bool]) -> None:
+        """Attach the infrastructure dispatch after channel validation."""
+        self._check_in = check_in
 
     def propose(self, node: str, message: str) -> None:
         signature = (node, message)
@@ -475,6 +525,32 @@ class ProposalPump:
 
     def heartbeat_tick(self) -> None:
         mark_heartbeat_due(self._channel_dir)
+        if self._check_in is None or not claim_heartbeat(self._channel_dir):
+            return
+        threading.Thread(target=self._run_check_in, daemon=True).start()
+
+    def _run_check_in(self) -> None:
+        succeeded = False
+        detail = "dispatch did not complete"
+        try:
+            succeeded = self._check_in() if self._check_in is not None else False
+            if succeeded:
+                detail = "surface sent"
+        except Exception as exc:
+            detail = f"{type(exc).__name__}: {exc}"
+        finally:
+            finish_heartbeat_attempt(self._channel_dir, succeeded=succeeded)
+            with (
+                advisory_lock(f"channel-check-in-log:{self._channel_dir.resolve()}"),
+                (self._channel_dir / "check-in.log").open("a", encoding="utf-8") as stream,
+            ):
+                stream.write(
+                    json.dumps(
+                        {"at": time.time(), "succeeded": succeeded, "detail": detail},
+                        sort_keys=True,
+                    )
+                    + "\n"
+                )
 
     def close(self) -> None:
         self._stop.set()

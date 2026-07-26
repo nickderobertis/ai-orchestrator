@@ -20,8 +20,10 @@ from orchestrator.channel import (
     _reply,
     _surface,
     apply_heartbeat_reply,
+    claim_heartbeat,
     create_channel,
     due_indicator,
+    finish_heartbeat_attempt,
     heartbeat_state,
     main_approve,
     main_continue,
@@ -188,6 +190,32 @@ def test_proposal_pump_round_trips_and_persists_on_reconciler_drain(tmp_path: Pa
     pump.propose_blocking("worker", "found adjacent work")
     with pytest.raises(ChannelTimeout):
         read_message(channel / "up.fifo", timeout=0.1)
+    pump.close()
+
+
+def test_proposal_pump_dispatches_one_claimed_check_in_off_frontier(tmp_path: Path) -> None:
+    channel = create_channel(tmp_path / "run", heartbeat_interval=1)
+    state = _heartbeat(channel)
+    state["last_surface_at"] = 0
+    atomic_json(channel / "heartbeat.json", state)
+    called = threading.Event()
+    pump = ProposalPump(channel, "live", 3)
+
+    def check_in() -> bool:
+        record_surface(channel)
+        called.set()
+        return True
+
+    pump.configure_check_in(check_in)
+    pump.heartbeat_tick()
+    pump.heartbeat_tick()
+    assert called.wait(1)
+    log_path = channel / "check-in.log"
+    wait_deadline = time.monotonic() + 1
+    while not log_path.is_file() and time.monotonic() < wait_deadline:
+        time.sleep(0.01)
+    assert json.loads(log_path.read_text(encoding="utf-8"))["detail"] == "surface sent"
+    assert _heartbeat(channel)["in_flight"] is False
     pump.close()
 
 
@@ -415,6 +443,31 @@ def test_heartbeat_is_sticky_durable_and_reset_by_surface(tmp_path: Path) -> Non
     assert _heartbeat(channel)["interval_s"] == 10
     record_surface(channel, now=float(initial["last_surface_at"]) + 126)
     assert due_indicator(channel, now=float(initial["last_surface_at"]) + 200) is None
+
+
+def test_heartbeat_claim_deduplicates_and_failure_retries_next_interval(tmp_path: Path) -> None:
+    channel = create_channel(tmp_path / "run", heartbeat_interval=10)
+    initial = _heartbeat(channel)
+    due_at = float(initial["last_surface_at"]) + 11
+    mark_heartbeat_due(channel, now=due_at)
+
+    assert claim_heartbeat(channel) is True
+    assert claim_heartbeat(channel) is False
+    assert _heartbeat(channel)["in_flight"] is True
+
+    finish_heartbeat_attempt(channel, succeeded=False, now=due_at)
+    failed = _heartbeat(channel)
+    assert failed["in_flight"] is False
+    assert failed["due"] is False
+    mark_heartbeat_due(channel, now=due_at + 9)
+    assert claim_heartbeat(channel) is False
+    mark_heartbeat_due(channel, now=due_at + 10)
+    assert claim_heartbeat(channel) is True
+
+    record_surface(channel, now=due_at + 11)
+    settled = _heartbeat(channel)
+    assert settled["in_flight"] is False
+    assert settled["due"] is False
 
 
 def test_heartbeat_reply_adjusts_or_disables_without_changing_verdict(tmp_path: Path) -> None:

@@ -165,11 +165,11 @@ def test_due_heartbeat_is_agent_synthesized_and_normal_surface_resets_clock(
         ),
         encoding="utf-8",
     )
-    run_id = _launch_cli(plan, runs, _base(tmp_path), onejudge_bin, heartbeat_interval=0.1)
+    run_id = _launch_cli(plan, runs, _base(tmp_path), onejudge_bin, heartbeat_interval=2)
     heartbeat = _wait_surface(run_id, runs, wait_seconds=120)
     assert heartbeat["surface"] == {
         "kind": "heartbeat",
-        "message": "active worker: round complete; follow-ups: none",
+        "message": "active worker: running; follow-ups: none",
         "blocking": False,
     }
     heartbeat_path = runs / run_id / "channel" / "heartbeat.json"
@@ -735,6 +735,9 @@ def test_reattached_planner_replies_to_mid_run_proposal_without_stopping_graph(
     assert witness.read_text(encoding="utf-8").count("tick") == 2
 
     boundary = _next_cli(run_id, runs)
+    while boundary.get("surface", {}).get("kind") == "heartbeat":
+        assert boundary["surface"]["blocking"] is False
+        boundary = _next_cli(run_id, runs)
     assert boundary["surface"]["kind"] in {"milestone", "closeout"}
     _reply_cli(
         run_id,

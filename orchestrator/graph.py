@@ -29,11 +29,12 @@ from .channel import (
     CHANNEL_RUN_ID_ENV,
     ProposalPump,
     ProposalSink,
+    heartbeat_state,
 )
 from .cli_contract import ROUND_BUDGET_OPTION
 from .config import ConfigError, load_yaml
 from .coordination import advisory_lock, reset_harness_observer, set_harness_observer
-from .dispatch import Report
+from .dispatch import Report, dispatch
 from .edits import EditError, apply_edit
 from .goals import Goal, find_active_run, finish_run, graph_identities, parse_goal, register_run
 from .journal import (
@@ -49,6 +50,7 @@ from .journal import (
     read_events,
     reconcile,
 )
+from .labels import graph_labels
 from .lifecycle import (
     LifecycleResult,
     LifecycleRunner,
@@ -1267,7 +1269,43 @@ def main(argv: list[str] | None = None) -> int:
         except (OSError, ValueError) as exc:
             print(f"run-plan: invalid proposal channel: {exc}", file=sys.stderr)
             return 2
+
+        def run_check_in() -> bool:
+            report = dispatch(
+                "check-in",
+                (
+                    "Produce the dedicated planner pacemaker update for this run "
+                    "(dedicated-check-in complete-now). Read durable run state under "
+                    f"{resolved_channel.parent}, synthesize one concise non-blocking "
+                    "per-workstream status update, send it with "
+                    f"`just channel-surface {validated_run_id} MESSAGE --runs-dir "
+                    f"{resolved_channel.parent.parent}`, and exit. Do not wait for a reply."
+                ),
+                base_path=args.base_config,
+                persona_dir=args.persona_dir,
+                cwd=args.cwd or REPO_ROOT,
+                onejudge_bin=args.onejudge_bin,
+                provider=args.provider,
+                oneharness_mode=args.oneharness_mode,
+                use_llmlint_wrapper=False,
+                session=f"check-in-{validated_run_id}-{round_number}",
+                labels={
+                    **graph_labels(
+                        run_id=cast(RunId, validated_run_id),
+                        round_number=round_number,
+                    ),
+                    "agent_role": "check-in",
+                    "persona": "check-in",
+                },
+                timeout=dispatch_timeout,
+            )
+            state = heartbeat_state(resolved_channel)
+            return report.completed and state is not None and not state["due"]
+
         proposal_pump = ProposalPump(resolved_channel, validated_run_id, round_number)
+        configure_check_in = getattr(proposal_pump, "configure_check_in", None)
+        if configure_check_in is not None:
+            configure_check_in(run_check_in)
         # llmlint: ignore-end[changed_behavior_has_e2e]
     try:
         result = run_graph(
