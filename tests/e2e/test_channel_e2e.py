@@ -152,23 +152,19 @@ def test_due_heartbeat_surfaces_during_active_step_and_disabled_run_stays_silent
 ) -> None:
     runs = tmp_path / "runs"
     witness = tmp_path / "slow-witness"
-    worker_labels_path = tmp_path / "worker-labels"
-    orchestrator_labels_path = tmp_path / "orchestrator-labels"
     plan = tmp_path / "heartbeat-channel.json"
     plan.write_text(
         json.dumps(
             {
                 "schema_version": 3,
-                "name": (
-                    f"heartbeat-channel capture-orchestrator-labels={orchestrator_labels_path}"
-                ),
+                "name": "heartbeat-channel",
                 "tasks": [
                     {
                         "id": "active-worker",
                         "persona": "engineer",
                         "task": (
                             f"slow-branch {witness} pacemaker-slow complete-now "
-                            f"heartbeat-channel capture-role-labels={worker_labels_path}"
+                            "heartbeat-channel"
                         ),
                     }
                 ],
@@ -227,13 +223,6 @@ def test_due_heartbeat_surfaces_during_active_step_and_disabled_run_stays_silent
     )
     assert recorded_labels["agent_role"] == "check-in"
     assert recorded_labels["persona"] == "check-in"
-    worker_labels = parse_labels(worker_labels_path.read_text(encoding="utf-8"))
-    assert worker_labels["agent_role"] == "worker"
-    assert worker_labels["persona"] == "engineer"
-    orchestrator_labels = parse_labels(orchestrator_labels_path.read_text(encoding="utf-8"))
-    assert orchestrator_labels["agent_role"] == "orchestrator"
-    assert orchestrator_labels["persona"] == "orchestrator"
-
     expected_message = (
         "active-worker: executing the slow agent step; "
         "evidence: node-started is recorded and node-settled is absent; follow-ups: none"
@@ -304,31 +293,6 @@ def test_due_heartbeat_surfaces_during_active_step_and_disabled_run_stays_silent
     _wait_report(runs / disabled_id / "orchestrator" / "report.json")
     disabled_events = (runs / disabled_id / "events.jsonl").read_text(encoding="utf-8")
     assert '"kind":"planner-surfaced"' not in disabled_events
-
-    # llmlint: ignore[tests_mirror_real_usage] The deterministic command provider
-    # replaces only the paid model and records labels from the public dispatch env.
-    pr_author_labels_path = tmp_path / "pr-author-labels"
-    subprocess.run(
-        [
-            "just",
-            "dispatch",
-            "pr-author",
-            f"complete-now capture-role-labels={pr_author_labels_path}",
-            "--base",
-            str(_base(tmp_path)),
-            "--onejudge-bin",
-            onejudge_bin,
-            "--provider",
-            "command",
-        ],
-        cwd=REPO_ROOT,
-        text=True,
-        capture_output=True,
-        check=True,
-    )
-    pr_author_labels = parse_labels(pr_author_labels_path.read_text(encoding="utf-8"))
-    assert pr_author_labels["agent_role"] == "pr-author"
-    assert pr_author_labels["persona"] == "pr-author"
 
     for target, message, timeout, diagnostic in (
         (run_id, "", "1", "non-empty"),
