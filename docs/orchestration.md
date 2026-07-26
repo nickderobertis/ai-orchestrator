@@ -97,13 +97,12 @@ messages: transport state lives under `runs/<run-id>/channel/` as `up.fifo`,
 ### Planner-update pacemaker
 
 `just orchestrate` seeds a durable 1800-second planner-update interval; override
-it at launch with `--heartbeat-interval SECONDS`. Reconcile ticks persist a sticky
-due signal in `channel/heartbeat.json`, and `just monitor` and `just status` show
-`planner update due (Nm since last update)` until the orchestrator agent sends a
-non-blocking, synthesized per-workstream update with `just channel-surface`. The
-agent inspects current status and monitor evidence, includes active-workstream
-progress and non-blocking follow-ups, sends the update, and continues without a
-planner reply. The reconciler only sets the due signal; it never authors content.
+it at launch with `--heartbeat-interval SECONDS`. A channel-side pacemaker keeps
+checking that clock independently of graph reconciliation, including while a node
+is inside a long-running agent step. When due, it sends a synthesized,
+non-blocking workstream update without waiting for a planner reply. Each delivered
+update is appended to `events.jsonl` as `planner-surfaced`, so completed runs retain
+auditable evidence of the surfaces the planner actually received.
 
 Every planner-visible update—round boundary, proposal, or heartbeat—clears the
 due signal and restarts the clock. A new round process reads the same durable
@@ -112,6 +111,12 @@ timestamp rather than resetting it. To adjust the cadence, add
 `"heartbeat_interval": false` to disable it. Values must be positive finite
 seconds. This pacemaker is independent of the reader-side `just monitor
 --heartbeat` silence display described below.
+
+While a surface is waiting to be consumed or answered, `just runs` and `just
+status` report `waiting for planner decision` for blocking surfaces and `waiting
+for planner reply` for informational ones, followed by the surface kind and
+message. This distinguishes completed work held at a planner boundary from an
+orchestrator that is actively executing work.
 
 Every proposal includes `surface.blocking`: `true` means the worker or orchestrator
 is awaiting the decision, while `false` is an informational follow-up that does

@@ -1267,7 +1267,9 @@ def main(argv: list[str] | None = None) -> int:
         except (OSError, ValueError) as exc:
             print(f"run-plan: invalid proposal channel: {exc}", file=sys.stderr)
             return 2
-        proposal_pump = ProposalPump(resolved_channel, validated_run_id, round_number)
+        proposal_pump = ProposalPump(
+            resolved_channel, validated_run_id, round_number, journal=journal
+        )
         # llmlint: ignore-end[changed_behavior_has_e2e]
     try:
         result = run_graph(

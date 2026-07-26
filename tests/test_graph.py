@@ -367,7 +367,9 @@ def test_main_validates_and_services_inherited_proposal_channel(
 
     pumps: list[_RecordingProposalPump] = []
 
-    def make_pump(path: Path, run_id: str, round_number: int) -> _RecordingProposalPump:
+    def make_pump(
+        path: Path, run_id: str, round_number: int, **kwargs: object
+    ) -> _RecordingProposalPump:
         assert (path, run_id, round_number) == (channel, "outer", 1)
         pump = _RecordingProposalPump()
         pump.close = lambda: pump.persist_replies()  # type: ignore[attr-defined]

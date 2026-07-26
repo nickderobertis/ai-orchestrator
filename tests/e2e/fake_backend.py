@@ -241,7 +241,7 @@ def main() -> int:
                     while not release.exists():
                         time.sleep(0.02)
                 elif "live-edit-slow" not in task:
-                    time.sleep(0.8)
+                    time.sleep(12 if "pacemaker-slow" in task else 0.8)
                 with witness.open("a", encoding="utf-8") as stream:
                     stream.write("tick\n")
             orchestrator_plan = _orchestrator_command(task)
@@ -282,77 +282,6 @@ def main() -> int:
                         text=True,
                         env=run_env,
                     )
-                    if "heartbeat-channel" in plan_text:
-                        history_dir = orchestrator_plan.runs_dir / "heartbeat-history"
-                        history_dir.mkdir(exist_ok=True)
-                        poll_env = {**os.environ, "ONEHARNESS_HISTORY_DIR": str(history_dir)}
-                        run_id = orchestrator_plan.argv[orchestrator_plan.argv.index("--run") + 1]
-                        monitor = subprocess.run(
-                            [
-                                "just",
-                                "monitor",
-                                run_id,
-                                "--runs-dir",
-                                str(orchestrator_plan.runs_dir),
-                                "--once",
-                            ],
-                            check=True,
-                            capture_output=True,
-                            text=True,
-                            env=poll_env,
-                        )
-                        json_monitor = subprocess.run(
-                            [
-                                "just",
-                                "monitor",
-                                run_id,
-                                "--runs-dir",
-                                str(orchestrator_plan.runs_dir),
-                                "--once",
-                                "--format",
-                                "jsonl",
-                            ],
-                            check=True,
-                            capture_output=True,
-                            text=True,
-                            env=poll_env,
-                        )
-                        status = subprocess.run(
-                            [
-                                "just",
-                                "status",
-                                "--runs-dir",
-                                str(orchestrator_plan.runs_dir),
-                            ],
-                            check=True,
-                            capture_output=True,
-                            text=True,
-                            env=poll_env,
-                        )
-                        if "planner update due" not in monitor.stdout:
-                            raise AssertionError("monitor did not expose heartbeat")
-                        json_events = [
-                            json.loads(line) for line in json_monitor.stdout.splitlines() if line
-                        ]
-                        if not any(
-                            event.get("type") == "planner_update_due" for event in json_events
-                        ):
-                            raise AssertionError("JSON monitor did not expose heartbeat")
-                        if "planner update due" not in status.stdout:
-                            raise AssertionError("status did not expose heartbeat")
-                        subprocess.run(
-                            [
-                                "just",
-                                "channel-surface",
-                                run_id,
-                                "active worker: round complete; follow-ups: none",
-                                "--runs-dir",
-                                str(orchestrator_plan.runs_dir),
-                            ],
-                            check=True,
-                            capture_output=True,
-                            text=True,
-                        )
                 elif orchestrator_turn == 1 and "continuation-channel" in plan_text:
                     run_id = orchestrator_plan.argv[orchestrator_plan.argv.index("--run") + 1]
                     settled_run = orchestrator_plan.runs_dir / run_id

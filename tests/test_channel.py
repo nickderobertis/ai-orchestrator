@@ -186,6 +186,15 @@ def test_proposal_pump_round_trips_and_persists_on_reconciler_drain(tmp_path: Pa
     assert _heartbeat(channel)["due"] is True
     assert pump.drain_commands() == ()
     pump.propose_blocking("worker", "found adjacent work")
+    deadline = time.monotonic() + 1
+    heartbeat_surface = channel / "heartbeat-surface.json"
+    while not heartbeat_surface.is_file() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert json.loads(heartbeat_surface.read_text(encoding="utf-8"))["surface"] == {
+        "kind": "heartbeat",
+        "message": "workstreams still in progress; follow-ups: none",
+        "blocking": False,
+    }
     with pytest.raises(ChannelTimeout):
         read_message(channel / "up.fifo", timeout=0.1)
     pump.close()

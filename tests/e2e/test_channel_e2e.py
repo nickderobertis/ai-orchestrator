@@ -15,6 +15,7 @@ from waits import deadline
 from waits import timeout as e2e_timeout
 
 from orchestrator import BASE_CONFIG, REPO_ROOT, gitops
+from orchestrator.channel import write_message
 from orchestrator.dispatch import launch_orchestrator
 from orchestrator.registry import Registry
 from orchestrator.watchdog import ProcessId, process_activity
@@ -143,7 +144,7 @@ def _launch_cli(
     return str(json.loads(launched.stdout)["run_id"])
 
 
-def test_due_heartbeat_is_agent_synthesized_and_normal_surface_resets_clock(
+def test_due_heartbeat_surfaces_during_active_step_and_disabled_run_stays_silent(
     tmp_path: Path, onejudge_bin: str
 ) -> None:
     runs = tmp_path / "runs"
@@ -158,20 +159,26 @@ def test_due_heartbeat_is_agent_synthesized_and_normal_surface_resets_clock(
                     {
                         "id": "active-worker",
                         "persona": "engineer",
-                        "task": f"slow-branch {witness} complete-now heartbeat-channel",
+                        "task": (
+                            f"slow-branch {witness} pacemaker-slow complete-now heartbeat-channel"
+                        ),
                     }
                 ],
             }
         ),
         encoding="utf-8",
     )
-    run_id = _launch_cli(plan, runs, _base(tmp_path), onejudge_bin, heartbeat_interval=0.1)
-    heartbeat = _wait_surface(run_id, runs, wait_seconds=120)
-    assert heartbeat["surface"] == {
-        "kind": "heartbeat",
-        "message": "active worker: round complete; follow-ups: none",
-        "blocking": False,
-    }
+    run_id = _launch_cli(plan, runs, _base(tmp_path), onejudge_bin, heartbeat_interval=0.2)
+    heartbeats = [_wait_surface(run_id, runs, wait_seconds=120) for _ in range(3)]
+    assert all(
+        heartbeat["surface"]
+        == {
+            "kind": "heartbeat",
+            "message": "workstreams still in progress; follow-ups: none",
+            "blocking": False,
+        }
+        for heartbeat in heartbeats
+    )
     heartbeat_path = runs / run_id / "channel" / "heartbeat.json"
     wait_deadline = deadline(5)
     while True:
@@ -181,9 +188,12 @@ def test_due_heartbeat_is_agent_synthesized_and_normal_surface_resets_clock(
         time.sleep(0.01)
     assert state["due"] is False
 
-    boundary = _wait_surface(run_id, runs, wait_seconds=120)
-    boundary_surface = boundary["surface"]
-    assert isinstance(boundary_surface, dict)
+    while True:
+        boundary = _wait_surface(run_id, runs, wait_seconds=120)
+        boundary_surface = boundary["surface"]
+        assert isinstance(boundary_surface, dict)
+        if boundary_surface["kind"] != "heartbeat":
+            break
     assert boundary_surface["kind"] == "milestone"
     reset = json.loads(heartbeat_path.read_text())
     assert reset["due"] is False
@@ -191,6 +201,42 @@ def test_due_heartbeat_is_agent_synthesized_and_normal_surface_resets_clock(
     assert _next_cli(run_id, runs, timeout="0.02").get("surface") is None
     _reply_cli(run_id, runs, {"completion": True, "reason": "verified heartbeat"})
     _wait_report(runs / run_id / "orchestrator" / "report.json")
+    events = [
+        json.loads(line)
+        for line in (runs / run_id / "events.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    surfaced = [event for event in events if event["kind"] == "planner-surfaced"]
+    assert len([event for event in surfaced if event["detail"]["kind"] == "heartbeat"]) >= 3
+
+    disabled_plan = json.loads(plan.read_text(encoding="utf-8"))
+    disabled_plan["tasks"][0]["task"] = f"slow-branch {witness} complete-now heartbeat-channel"
+    plan.write_text(json.dumps(disabled_plan), encoding="utf-8")
+    disabled_id = _launch_cli(
+        plan,
+        runs,
+        _base(tmp_path),
+        onejudge_bin,
+        heartbeat_interval=0.2,
+        requested_run_id="heartbeat-disabled",
+    )
+    disabled_channel = runs / disabled_id / "channel"
+    write_message(
+        disabled_channel / "down.fifo",
+        {
+            "completion": False,
+            "reason": "disable the pacemaker",
+            "message": "continue",
+            "heartbeat_interval": False,
+        },
+        timeout=120,
+    )
+    disabled_boundary = _wait_surface(disabled_id, runs, wait_seconds=120)
+    assert disabled_boundary["surface"]["kind"] == "milestone"
+    assert _next_cli(disabled_id, runs, timeout="0.15").get("surface") is None
+    _reply_cli(disabled_id, runs, {"completion": True, "reason": "verified disabled"})
+    _wait_report(runs / disabled_id / "orchestrator" / "report.json")
+    disabled_events = (runs / disabled_id / "events.jsonl").read_text(encoding="utf-8")
+    assert '"kind":"planner-surfaced"' not in disabled_events
 
     for target, message, timeout, diagnostic in (
         (run_id, "", "1", "non-empty"),
@@ -477,7 +523,17 @@ def test_live_channel_runs_real_nested_graph_and_round_trips_guidance(
         capture_output=True,
         check=True,
     )
+    expected_wait = "waiting for planner decision: blocker: plan departure needs a decision"
     assert f"* {run_id}" in listed.stdout
+    assert expected_wait in listed.stdout
+    status = subprocess.run(
+        ["just", "status", "--runs-dir", str(runs)],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    assert f"{run_id}: {expected_wait}" in status.stdout
     _convenience_cli("channel-continue", run_id, runs, "retry X")
     closeout = _next_cli(run_id, runs)
     assert closeout["surface"]["kind"] == "closeout"
