@@ -82,8 +82,12 @@ Missing onejudge linkage falls back
 to `labels.role` (then recognized legacy judge names), and missing timed fields
 fall back to journal wall time. Untimed `command_execution` events still identify
 the dominant command class, but do not invent a duration: model and tool time
-render as `?` and the unknown share appears in `UNATTR`. Records from a newer,
-unrecognized history schema are also read best-effort and marked degraded.
+render as `?` and the unknown share appears in `UNATTR`. History schemas `1.1`
+and `1.2` are recognized. Schema `1.2` timing marked `timing_source: observed`
+remains visible but makes timing quality `partial`; only
+`timing_source: provider` can contribute to `complete` provider-native timing.
+Records from a newer, unrecognized history schema are also read best-effort and
+marked degraded.
 Missing or null run timing and tool-event timing/status degrade only the affected
 session. In contrast, malformed present values and contradictory timing remain
 errors: finish cannot precede start, and model plus tool time cannot exceed the

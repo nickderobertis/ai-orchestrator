@@ -47,11 +47,13 @@ from .runs import (
 from .verify import GateAttestation
 
 TELEMETRY_SCHEMA_VERSION = 7
-SUPPORTED_HISTORY_SCHEMA_VERSIONS = ("0.2", "0.3", 1, 2, "1.0")
+SUPPORTED_HISTORY_SCHEMA_VERSIONS = ("0.2", "0.3", 1, 2, "1.0", "1.1", "1.2")
 #: History schema versions that may carry validated native timing (per-turn
 #: ``model_ms``/``tool_ms`` plus interval-bearing tool events). A version identifies
 #: the line format, not the completeness of timing supplied by a particular harness.
-NATIVE_TIMING_HISTORY_SCHEMAS: frozenset[str | int] = frozenset({"0.3", 2, "1.0"})
+NATIVE_TIMING_HISTORY_SCHEMAS: frozenset[str | int] = frozenset(
+    {"0.3", 2, "1.0", "1.1", "1.2"}
+)
 TelemetryQuality = Literal["complete", "partial", "legacy"]
 LinkageQuality = Literal["native", "labelled", "inferred"]
 TelemetrySource = Literal["onejudge", "oneharness", "history_legacy", "journal_legacy"]
@@ -567,11 +569,18 @@ def _summarize_session(session: HistorySession, records: list[HistoryRecord]) ->
     tool_intervals: list[_Interval] = []
     for record in records:
         schema_version = record.get("schema_version")
+        record_timing_source = record.get("timing_source")
         if (
             schema_version not in NATIVE_TIMING_HISTORY_SCHEMAS
             or schema_version not in SUPPORTED_HISTORY_SCHEMA_VERSIONS
+            or record_timing_source == "observed"
         ):
             validated_native_fields = False
+        if record_timing_source is not None and record_timing_source not in {
+            "provider",
+            "observed",
+        }:
+            raise HistoryError("oneharness history record has invalid timing_source")
         model = _non_negative_int(record.get("model_ms"))
         tool = _non_negative_int(record.get("tool_ms"))
         raw_duration = record.get("duration_ms")
@@ -629,6 +638,7 @@ def _summarize_session(session: HistorySession, records: list[HistoryRecord]) ->
             raw_duration = event.get("duration_ms")
             event_duration = _non_negative_int(event.get("duration_ms"))
             raw_status = event.get("status")
+            timing_source = event.get("timing_source", record_timing_source)
             if schema_version is not None and (
                 raw_tool_call_id is not None
                 and (not isinstance(raw_tool_call_id, str) or not raw_tool_call_id)
@@ -640,11 +650,15 @@ def _summarize_session(session: HistorySession, records: list[HistoryRecord]) ->
                 and event_duration is None
                 or raw_status is not None
                 and raw_status not in {"completed", "failed", "timeout", "interrupted"}
+                or timing_source is not None
+                and timing_source not in {"provider", "observed"}
                 or event_start is not None
                 and event_finish is not None
                 and event_finish < event_start
             ):
                 raise HistoryError("oneharness history record has invalid tool event")
+            if timing_source == "observed":
+                validated_native_fields = False
             if schema_version in NATIVE_TIMING_HISTORY_SCHEMAS and (
                 raw_tool_call_id is None
                 or event_start is None

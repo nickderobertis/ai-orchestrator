@@ -457,8 +457,8 @@ def test_session_normalization_degrades_each_field_independently(tmp_path: Path)
     assert _command_class("") == "unknown"
     zero = _timing(0, [summary])
     assert set(zero["fractions"].values()) == {0.0}
-    future = _summarize_session(session, [{"schema_version": "1.1", "duration_ms": 1}])
-    assert not future.validated_native_fields
+    current = _summarize_session(session, [{"schema_version": "1.1", "duration_ms": 1}])
+    assert not current.validated_native_fields
 
 
 def test_new_history_schema_rejects_invalid_intervals_roles_and_tool_events(tmp_path: Path) -> None:
@@ -546,6 +546,32 @@ def test_new_history_schema_degrades_absent_timing_and_null_tool_event(tmp_path:
     assert summary.model_ms == 0
     assert summary.tool_ms == 0
     assert summary.commands == {"just": 1}
+
+
+def test_history_schema_1_2_distinguishes_observed_tool_timing(tmp_path: Path) -> None:
+    session = HistorySession(
+        SessionId("observed"), "agent", tmp_path, "now", tmp_path / "history", {"role": "agent"}
+    )
+    base = {
+        "schema_version": "1.2",
+        "duration_ms": 5,
+        "model_ms": 3,
+        "tool_ms": 2,
+        "started_at": "2026-01-01T00:00:00Z",
+        "finished_at": "2026-01-01T00:00:00.005Z",
+        "usage": {},
+        "events": [],
+    }
+    provider = _summarize_session(session, [{**base, "timing_source": "provider"}])
+    observed = _summarize_session(session, [{**base, "timing_source": "observed"}])
+
+    assert provider.validated_native_fields
+    assert observed.tool_ms == 2
+    assert observed.has_tool_measurement
+    assert not observed.validated_native_fields
+
+    with pytest.raises(telemetry_module.HistoryError, match="timing_source"):
+        _summarize_session(session, [{**base, "timing_source": "invented"}])
 
 
 def test_report_telemetry_validates_linkage_usage_and_step_aggregation(tmp_path: Path) -> None:
