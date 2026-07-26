@@ -2,7 +2,7 @@
 
 `run_repo_task` is the unit of real work against an external repo:
 
-    clone/worktree → dispatch (bypass mode) → local gate → commit → push → PR
+    clone/worktree → dispatch (bypass mode) → commit → gated push → PR
     → merge once the repo's blocking (required) checks are green → clean up
 
 `run_repo_plan` layers the same DAG scheduler `run_plan` uses over that unit, so
@@ -29,18 +29,17 @@ import time
 import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
-from dataclasses import replace as dataclass_replace
 from pathlib import Path
 from typing import Any, Protocol, cast
 
 from . import BASE_CONFIG, PERSONA_DIR, gitops
 from .config import ConfigError, load_yaml
-from .coordination import LockTimeout, advisory_lock, atomic_json, atomic_text
+from .coordination import LockTimeout, advisory_lock, atomic_json
 from .dispatch import Report, dispatch
 from .github import CliGitHubBackend, GitHubBackend, GitHubError, PullRequest
 from .gitops import GitError
 from .ids import GraphId
-from .journal import DetailValue, NodeSink, NullNodeJournal
+from .journal import NodeSink, NullNodeJournal
 from .merge import (
     MERGE_CONFLICT_RETRY,
     GitHubMergeStrategy,
@@ -66,7 +65,7 @@ from .provenance import (
     incomplete_commits,
     unattested_incomplete,
 )
-from .registry import Registry, RegistryError, validate_identity_key
+from .registry import Registry, RegistryError, merge_gate_coverage, validate_identity_key
 from .runs import (
     RECORDED_RESULT_SCHEMA_VERSION,
     RESUME_MODES,
@@ -83,7 +82,7 @@ from .runs import (
     status_summary,
     write_result,
 )
-from .verify import NOOP_GATE, VerifyResult, resolve_gate_template, run_gate
+from .verify import NOOP_GATE, VerifyResult, resolve_gate_template
 from .workspace import (
     CACHE_ENV,
     IdentityKey,
@@ -960,47 +959,6 @@ MAX_AUTOMATIC_STEP_RESUMES = 2
 MAX_MERGE_CONFLICT_RESOLUTIONS = 2
 
 
-def _verify_gate(
-    journal: NodeSink,
-    worktree: Path,
-    cmd: list[str],
-    *,
-    timeout: float | None,
-    env: dict[str, str],
-) -> VerifyResult:
-    """Run the repo's own gate, bracketing the *actual* run with its transitions.
-
-    Journaling here rather than from the outcome is what makes a gate that never
-    returns visible: a started event with no matching finished event is a gate
-    still running (or one that took the process down with it), which an outcome
-    read after the fact can never report.
-    """
-    journal.append(
-        "verification-started",
-        detail={
-            "command": list(cmd),
-            "comparison_remote": env.get("ORCHESTRATOR_COMPARISON_REMOTE", ""),
-            "comparison_base": env.get("ORCHESTRATOR_COMPARISON_BASE", ""),
-        },
-    )
-    verify = run_gate(worktree, cmd, timeout=timeout, env=env)
-    if journal.artifact_dir is not None:
-        gate_path = (journal.artifact_dir / "gate.log").resolve()
-        atomic_text(gate_path, verify.output)
-        verify = dataclass_replace(verify, log_path=str(gate_path))
-    finished: dict[str, DetailValue] = {
-        "ok": verify.ok,
-        "command": list(verify.command),
-        "reused": verify.reused,
-    }
-    if not verify.ok:
-        finished["output_tail"] = verify.tail()
-    if verify.attestation is not None:
-        finished["gate_attestation"] = cast(DetailValue, verify.attestation.to_record())
-    journal.append("verification-finished", detail=finished)
-    return verify
-
-
 def persist_report_artifacts(journal: NodeSink, report: Report, *, session: str) -> None:
     """Persist a dispatch's raw report and stable oneharness correlation pointer."""
     directory = journal.artifact_dir
@@ -1260,6 +1218,21 @@ def _best_effort_cleanup(
         )
 
 
+def _push_failure(exc: GitError, *, branch: str) -> MergeOutcome:
+    """Turn a hook/transport rejection into a durable lifecycle outcome."""
+    detail = str(exc)
+    gate_rejected = "pre-push" in detail.casefold() or "gate" in detail.casefold()
+    outcome: LifecycleOutcome = "gate-failed" if gate_rejected else "error"
+    return MergeOutcome(
+        outcome,
+        (
+            f"repository pre-push gate rejected publication of {branch!r}: {detail}"
+            if gate_rejected
+            else f"push of {branch!r} failed before publication completed: {detail}"
+        ),
+    )
+
+
 def _pause_at_human_step(
     result: LifecycleResult,
     step_run: StepRun,
@@ -1320,31 +1293,14 @@ def _pause_at_human_step(
             "and no draft was published"
         )
         return result
-    if not skip_verify:
-        cmd = verify_cmd
-        if cmd is not None:
-            verify = _verify_gate(
-                journal,
-                worktree,
-                cmd,
-                timeout=gate_timeout,
-                env={
-                    **cache_env,
-                    "ORCHESTRATOR_COMPARISON_REMOTE": "origin",
-                    "ORCHESTRATOR_COMPARISON_BASE": pr_base,
-                },
-            )
-            result.verify = verify
-            if not verify.ok:
-                result.outcome = "gate-failed"
-                result.detail = (
-                    f"local gate failed at the human pause: {' '.join(cmd)}; "
-                    "no draft was published\n"
-                    f"{verify.tail()}"
-                )
-                return result
     checkpoint = gitops.head_sha(worktree)
-    gitops.push(worktree, branch)
+    try:
+        gitops.push(worktree, branch)
+    except GitError as exc:
+        failed = _push_failure(exc, branch=branch)
+        result.outcome = failed.outcome
+        result.detail = failed.detail
+        return result
     reused = _pr_from_url(recorded_pr, head=branch, base=pr_base) if recorded_pr else None
     if reused is not None:
         pr = reused
@@ -1518,6 +1474,22 @@ def run_repo_task(
                 "--verify-via-ci requires a remote GitHub/PR workflow with a GitHub origin; "
                 "register or migrate this repository to a remote workflow before dispatch"
             )
+        coverage = merge_gate_coverage(
+            selection.publication_identity,
+            selection.publication_checkout,
+            github=github,
+        )
+        if not coverage.meets_coverage_criteria:
+            github_gap = (
+                "required PR status checks are unknown"
+                if coverage.github_status == "unknown"
+                else "no required PR status checks exist"
+            )
+            raise RegistryError(
+                f"lifecycle dispatch refused for identity {coverage.identity}: no executable "
+                f"pre-push hook and {github_gap}; run 'just repos --audit-gate-coverage' "
+                "and repair the merge-path gate before dispatch"
+            )
         result.execution_checkout = str(selection.execution_checkout)
         result.publication_checkout = str(selection.publication_checkout)
         result.publication_identity = selection.publication_identity
@@ -1578,16 +1550,12 @@ def run_repo_task(
         gate_template = selection.gate
         if verify_cmd is not None:
             resolved_verify_cmd = verify_cmd
-            noop_gate = False
         elif gate_template == NOOP_GATE:
             resolved_verify_cmd = None
-            noop_gate = True
         elif gate_template is not None:
             resolved_verify_cmd = resolve_gate_template(gate_template, f"origin/{pr_base}")
-            noop_gate = False
         elif skip_verify or verify_via_ci:
             resolved_verify_cmd = None
-            noop_gate = False
         else:
             raise ConfigError(
                 "no verification gate is configured; register or migrate the identity gate"
@@ -1767,8 +1735,6 @@ def run_repo_task(
                 base_path=base_path,
                 persona_dir=persona_dir,
             )
-            if noop_gate and paused.pr is not None and not skip_verify:
-                paused.detail = f"{paused.detail}; gate: no-op -- pushed unproven"
             return paused
         if step_run.status != "done":
             result.outcome = "error"
@@ -1793,36 +1759,11 @@ def run_repo_task(
                 )
                 return result
 
-        if not local_publication and not skip_verify and not verify_via_ci:
-            cmd = resolved_verify_cmd
-            if cmd is not None:
-                verify = _verify_gate(
-                    log,
-                    worktree,
-                    cmd,
-                    timeout=gate_timeout,
-                    env={
-                        **cache_env,
-                        "ORCHESTRATOR_COMPARISON_REMOTE": "origin",
-                        "ORCHESTRATOR_COMPARISON_BASE": pr_base,
-                    },
-                )
-                result.verify = verify
-                if not verify.ok:
-                    result.outcome = "gate-failed"
-                    result.detail = f"local gate failed: {' '.join(cmd)}\n{verify.tail()}"
-                    return result
-            else:
-                result.detail = "no local gate configured; relying on required CI checks"
-
-        if preserve_cancelled("after verification"):
+        if preserve_cancelled("before publication"):
             return result
 
         if not local_publication and (
-            result.retry_lineage
-            and result.retry_lineage.disposition == "reused"
-            and result.verify is not None
-            and result.verify.ok
+            result.retry_lineage and result.retry_lineage.disposition == "reused"
         ):
             missing = sorted(unattested_incomplete(worktree, remote_base, "HEAD"))
             if missing:
@@ -1852,26 +1793,6 @@ def run_repo_task(
                 and gitops.head_sha(worktree) != workstream_start_head
                 and gitops.is_ancestor(worktree, "HEAD", remote_base)
             ):
-                if not skip_verify and resolved_verify_cmd is not None:
-                    verify = _verify_gate(
-                        log,
-                        worktree,
-                        resolved_verify_cmd,
-                        timeout=gate_timeout,
-                        env={
-                            **cache_env,
-                            "ORCHESTRATOR_COMPARISON_REMOTE": "origin",
-                            "ORCHESTRATOR_COMPARISON_BASE": pr_base,
-                        },
-                    )
-                    result.verify = verify
-                    if not verify.ok:
-                        result.outcome = "gate-failed"
-                        result.detail = (
-                            f"already-integrated change failed local gate: "
-                            f"{' '.join(resolved_verify_cmd)}\n{verify.tail()}"
-                        )
-                        return result
                 result.outcome = ALREADY_INTEGRATED_OUTCOME
                 result.detail = (
                     f"verified worktree HEAD was already present on {pr_base}; "
@@ -1910,7 +1831,7 @@ def run_repo_task(
             )
 
         # llmlint: ignore[changed_behavior_has_e2e] no blocking external operation exists between
-        # the tested post-verification checkpoint and this final race-closing check: only local
+        # the tested post-dispatch checkpoint and this final race-closing check: only local
         # result/metadata construction runs here. Cancellation during the reachable blocking
         # publication stage below is covered with a real delayed git receive hook.
         if preserve_cancelled("before publication"):
@@ -1963,8 +1884,12 @@ def run_repo_task(
                 result.detail = f"authoritative CI {qualifier}; {assessment.detail}"
                 return result
 
-        def synchronize_verify_and_push_local_publication() -> MergeOutcome | None:
-            """Synchronize, verify, and push while holding this local queue turn."""
+        def synchronize_and_push_local_publication() -> MergeOutcome | None:
+            """Synchronize and push while holding this local queue turn.
+
+            The executable pre-push hook required at dispatch runs the complete
+            repository gate on this exact branch tree.
+            """
             gitops.fetch(worktree)
             if not gitops.merge_base_into_branch(
                 worktree,
@@ -1976,31 +1901,9 @@ def run_repo_task(
                     MERGE_CONFLICT_RETRY,
                     f"current {remote_base} conflicts with {branch}",
                 )
-            if not skip_verify:
-                cmd = resolved_verify_cmd
-                if cmd is not None:
-                    verify = _verify_gate(
-                        log,
-                        worktree,
-                        cmd,
-                        timeout=gate_timeout,
-                        env={
-                            **cache_env,
-                            "ORCHESTRATOR_COMPARISON_REMOTE": "origin",
-                            "ORCHESTRATOR_COMPARISON_BASE": pr_base,
-                        },
-                    )
-                    result.verify = verify
-                    if not verify.ok:
-                        return MergeOutcome(
-                            "gate-failed",
-                            f"local gate failed: {' '.join(cmd)}\n{verify.tail()}",
-                        )
-                else:
-                    result.detail = "no local gate configured; relying on required CI checks"
-            if preserve_cancelled("after verification"):
+            if preserve_cancelled("before publication"):
                 return MergeOutcome(result.outcome, result.detail)
-            if result.retry_lineage and result.verify is not None and result.verify.ok:
+            if result.retry_lineage:
                 missing = sorted(unattested_incomplete(worktree, remote_base, "HEAD"))
                 if missing:
                     trailers = "\n".join(f"{RECOVERY_TRAILER} {sha}" for sha in missing)
@@ -2015,7 +1918,10 @@ def run_repo_task(
                     "preserved retry completed but cannot be recovered without a successful "
                     "complete gate; retry with the repository gate enabled",
                 )
-            gitops.push(worktree, branch)
+            try:
+                gitops.push(worktree, branch)
+            except GitError as exc:
+                return _push_failure(exc, branch=branch)
             return None
 
         ctx = MergeContext(
@@ -2042,9 +1948,7 @@ def run_repo_task(
             repository_type=effective_type,
             journal=log,
             preverified_pr=preverified_pr,
-            local_prepare=(
-                synchronize_verify_and_push_local_publication if local_publication else None
-            ),
+            local_prepare=(synchronize_and_push_local_publication if local_publication else None),
         )
         merge_resolutions = 0
         while True:
@@ -2121,8 +2025,6 @@ def run_repo_task(
         result.pr = merge_outcome.pr
         result.outcome = merge_outcome.outcome
         result.detail = merge_outcome.detail
-        if noop_gate and not skip_verify:
-            result.detail = f"{result.detail}; gate: no-op -- pushed unproven"
         return result
     except (GitError, GitHubError, ConfigError, RegistryError, WorkspaceError) as exc:
         result.outcome = "error"
@@ -2807,7 +2709,11 @@ def add_lifecycle_args(parser: argparse.ArgumentParser) -> None:
         help="approval/sandbox mode for the harness (default: bypass — the "
         "no-approval mode; the container is the sandbox)",
     )
-    parser.add_argument("--skip-verify", action="store_true", help="skip the local gate")
+    parser.add_argument(
+        "--skip-verify",
+        action="store_true",
+        help="legacy gate-command override; merge-path coverage remains mandatory",
+    )
     parser.add_argument(
         "--verify-via-ci",
         action="store_true",

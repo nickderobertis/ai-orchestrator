@@ -1,6 +1,6 @@
-"""How a verified branch gets into the base branch — two strategies, one seam.
+"""How a branch gets through its merge-path gate into base — two strategies, one seam.
 
-The lifecycle does the same work up to a pushed, locally-verified branch; only
+The lifecycle does the same work up to a branch push; only
 the last step differs by where the repo lives:
 
 - `GitHubMergeStrategy` opens a PR and lets GitHub merge it once the repo's
@@ -31,7 +31,6 @@ from .coordination import git_lock_identity
 from .github import AutoMergeUnavailable, Check, GitHubBackend, PRStatus, PullRequest
 from .merge_queue import merge_queue_turn
 from .outcomes import ALREADY_INTEGRATED_OUTCOME, LifecycleOutcome
-from .verify import run_gate
 from .workspace import RepositoryType
 
 if TYPE_CHECKING:
@@ -277,7 +276,7 @@ class GitHubMergeStrategy:
 
 
 class LocalMergeStrategy:
-    """Merge the verified branch straight into base with real git (the local path).
+    """Merge the branch straight into base through a gated push (the local path).
 
     The branch is already pushed to the local origin by the lifecycle. The merge is
     built in a detached scratch worktree and pushed to the base ref, leaving the
@@ -330,32 +329,9 @@ class LocalMergeStrategy:
                     gitops.worktree_remove(ctx.clone_dir, scratch)
                     raise
                 try:
-                    if ctx.verify_command is not None:
-                        _record(
-                            ctx,
-                            "verification-started",
-                            {"command": list(ctx.verify_command), "attempt": attempt},
-                        )
-                        verified = run_gate(
-                            scratch,
-                            ctx.verify_command,
-                            timeout=ctx.gate_timeout,
-                            env=ctx.verify_env,
-                        )
-                        _record(
-                            ctx,
-                            "verification-finished",
-                            {
-                                "ok": verified.ok,
-                                "command": list(verified.command),
-                                "attempt": attempt,
-                            },
-                        )
-                        if not verified.ok:
-                            return MergeOutcome(
-                                outcome="gate-failed",
-                                detail="rebuilt local publication failed verification",
-                            )
+                    # Dispatch refuses identities without merge-path gate coverage.
+                    # This detached tree is pushed directly below, so the repository's
+                    # executable pre-push hook verifies this identical tree and command.
                     gitops.fetch(ctx.clone_dir)
                     try:
                         if gitops.ref_sha(ctx.clone_dir, f"origin/{ctx.base}") != base_sha:
@@ -365,7 +341,20 @@ class LocalMergeStrategy:
                         gitops.push(scratch, f"HEAD:{ctx.base}", set_upstream=False)
                     except gitops.GitError as exc:
                         if not _is_push_race(exc):
-                            raise
+                            detail = str(exc)
+                            gate_rejected = (
+                                "pre-push" in detail.casefold() or "gate" in detail.casefold()
+                            )
+                            outcome: LifecycleOutcome = "gate-failed" if gate_rejected else "error"
+                            return MergeOutcome(
+                                outcome=outcome,
+                                detail=(
+                                    "repository pre-push gate rejected the rebuilt local "
+                                    f"publication: {detail}"
+                                    if gate_rejected
+                                    else "rebuilt local publication push failed: " + detail
+                                ),
+                            )
                         if attempt == ctx.publication_attempts:
                             return MergeOutcome(
                                 outcome="publication-retries-exhausted",

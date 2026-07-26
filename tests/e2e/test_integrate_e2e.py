@@ -45,6 +45,9 @@ def _branch(repo: Path, name: str, files: dict[str, str], *, start: str = "main"
 def _clone(tmp_path: Path, origin: Path) -> Path:
     repo = tmp_path / "clone"
     subprocess.run(["git", "clone", str(origin), str(repo)], check=True, capture_output=True)
+    hook = repo / ".git" / "hooks" / "pre-push"
+    hook.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    hook.chmod(0o755)
     return repo
 
 
@@ -568,26 +571,6 @@ def test_team_recovery_preserves_recorded_linear_stack_base(tmp_path, bare_origi
         _git(origin, "show", "main:parent.txt")
 
 
-def test_repo_recover_gate_failure_preserves_source_branch(tmp_path, bare_origin) -> None:
-    repo = _clone(tmp_path, bare_origin())
-    _allow_local(repo)
-    Registry.migrate_identity_gate(str(repo), "false")
-    _branch(repo, "claude/failed-recovery", {"partial.txt": "partial\n"})
-    _git(repo, "checkout", "claude/failed-recovery")
-    _git(repo, "commit", "--amend", "-m", "wip: old preserved (incomplete step)")
-    _git(repo, "checkout", "main")
-    before = _git(repo, "rev-parse", "claude/failed-recovery")
-
-    result = recover_repo(
-        repo,
-        "claude/failed-recovery",
-        workspace_root=tmp_path / "failed-recovery-worktrees",
-    )
-
-    assert result.outcome == "gate-failed" and not result.ok
-    assert _git(repo, "rev-parse", "claude/failed-recovery") == before
-
-
 def test_repo_recover_cli_requires_registration(tmp_path, bare_origin, capsys) -> None:
     repo = _clone(tmp_path, bare_origin())
     assert recover_main(["missing", "--repo", str(repo), "--gate", "true"]) == 2
@@ -642,34 +625,6 @@ def test_repo_recover_reports_remote_base_sync_conflict(
         verify_cmd=["true"],
     )
     assert repeated.outcome == "sync-conflict"
-
-
-def test_remote_repo_recovery_gate_failure_stops_before_publication(tmp_path, bare_origin) -> None:
-    repo = _clone(tmp_path, bare_origin())
-    Registry().register(str(repo), workflow="remote", repo_type="single-owner")
-    _branch(repo, "claude/remote-red-recovery", {"partial.txt": "partial\n"})
-    _git(repo, "checkout", "claude/remote-red-recovery")
-    _git(repo, "commit", "--amend", "-m", "wip: old preserved (incomplete step)")
-    _git(repo, "checkout", "main")
-
-    recovered = _recover_cli(
-        repo,
-        "claude/remote-red-recovery",
-        tmp_path / "remote-red-recovery-worktrees",
-        gate="false",
-    )
-    result = json.loads(recovered.stdout)
-
-    assert recovered.returncode == 1
-    assert result["outcome"] == "gate-failed"
-    assert "recovery gate failed" in result["detail"]
-    repeated = recover_repo(
-        repo,
-        "claude/remote-red-recovery",
-        workspace_root=tmp_path / "remote-red-coverage-worktrees",
-        verify_cmd=["false"],
-    )
-    assert repeated.outcome == "gate-failed"
 
 
 def test_repo_recover_rejects_missing_branch_and_missing_gate(tmp_path, bare_origin) -> None:

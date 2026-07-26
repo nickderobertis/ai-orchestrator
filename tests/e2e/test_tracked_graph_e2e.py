@@ -1303,6 +1303,17 @@ def test_real_cli_recovers_failed_lifecycle_result(
 ) -> None:
     origin = bare_origin()
     canonical = gitops.clone(origin, tmp_path / "failed-lifecycle-canonical")
+    hook = canonical / ".git" / "hooks" / "pre-push"
+    hook.write_text(
+        "#!/bin/sh\n"
+        'if test "$(git symbolic-ref --short HEAD 2>/dev/null || true)" = '
+        '"feature/gate-failed-lifecycle"; then\n'
+        "  printf 'pre-push gate: tracked gate tail failed\\n' >&2\n"
+        "  exit 1\n"
+        "fi\n",
+        encoding="utf-8",
+    )
+    hook.chmod(0o755)
     Registry().register(str(canonical), workflow="local")
     runs = tmp_path / "runs"
     plan = tmp_path / "failed-lifecycle-prefix.json"
@@ -1443,15 +1454,12 @@ def test_real_cli_recovers_failed_lifecycle_result(
     assert result["results"]["failed-lifecycle"]["outcome"] == "not-completed"
     assert result["results"]["gate-failed-lifecycle"]["outcome"] == "gate-failed"
     assert "tracked gate tail failed" in result["results"]["gate-failed-lifecycle"]["detail"]
-    gate_log = Path(result["results"]["gate-failed-lifecycle"]["artifacts"]["gate_log"])
-    assert gate_log.is_file()
-    assert gate_log.read_text().startswith("full-gate-start\n")
+    assert "gate_log" not in result["results"]["gate-failed-lifecycle"]["artifacts"]
     step_artifacts = result["results"]["gate-failed-lifecycle"]["steps"][0]["artifacts"]
     assert Path(step_artifacts["worker_report"]).is_file()
     assert Path(step_artifacts["oneharness_session"]).is_file()
     viewed = _just("results", "failed-lifecycle-prefix", "--runs-dir", str(runs))
     assert viewed.returncode == 0, viewed.stderr
-    assert str(gate_log) in viewed.stdout
     assert "gate-failed-lifecycle  failed  gate-failed" in viewed.stdout
     (runs / "failed-lifecycle-prefix" / "round-02").mkdir()
     while_in_progress = _just("results", "failed-lifecycle-prefix", "--runs-dir", str(runs))
@@ -1460,12 +1468,10 @@ def test_real_cli_recovers_failed_lifecycle_result(
     missing_results = _just("results", "missing-run", "--runs-dir", str(runs))
     assert missing_results.returncode == 2
     assert "no completed round" in missing_results.stderr
-    verification = next(
-        event
+    assert not any(
+        event["kind"] == "verification-finished" and event.get("node") == "gate-failed-lifecycle"
         for event in records
-        if event["kind"] == "verification-finished" and event.get("node") == "gate-failed-lifecycle"
     )
-    assert "tracked gate tail failed" in verification["detail"]["output_tail"]
     lock_waits = [
         event["detail"]["seconds"]
         for event in records
