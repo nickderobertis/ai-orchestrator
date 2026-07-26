@@ -58,10 +58,18 @@ for arg in "$@"; do
     fi
     case "$arg" in
         --config)
+            if [[ $caller_config == true ]]; then
+                echo "oneharness-agent: --config may be provided only once; remove duplicate config arguments and retry" >&2
+                exit 2
+            fi
             caller_config=true
             expect_config_value=true
             ;;
         --config=*)
+            if [[ $caller_config == true ]]; then
+                echo "oneharness-agent: --config may be provided only once; remove duplicate config arguments and retry" >&2
+                exit 2
+            fi
             if [[ -z ${arg#--config=} ]]; then
                 echo "oneharness-agent: --config requires a non-empty path; retry with '--config=/absolute/path/to/config.toml'" >&2
                 exit 2

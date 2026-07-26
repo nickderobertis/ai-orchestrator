@@ -172,6 +172,20 @@ def test_judge_side_rejects_unreadable_config_path(tmp_path: Path) -> None:
     assert argv == []
 
 
+def test_judge_side_rejects_duplicate_config_paths(tmp_path: Path) -> None:
+    first = tmp_path / "first.toml"
+    second = tmp_path / "second.toml"
+    first.write_text('harnesses = ["codex"]\n', encoding="utf-8")
+    second.write_text('harnesses = ["codex"]\n', encoding="utf-8")
+    proc, argv = _run_wrapper(
+        tmp_path,
+        ["run", "--config", str(first), f"--config={second}"],
+    )
+    assert proc.returncode == 2
+    assert "--config may be provided only once" in proc.stderr
+    assert argv == []
+
+
 def test_missing_home_is_rejected_before_invoking_oneharness(tmp_path: Path) -> None:
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
