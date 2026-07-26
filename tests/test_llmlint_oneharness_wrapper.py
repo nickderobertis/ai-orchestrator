@@ -128,6 +128,26 @@ def test_oneharness_failure_output_and_status_are_propagated(tmp_path: Path) -> 
     assert "run 'oneharness doctor', and retry" in proc.stderr
 
 
+def test_empty_arguments_are_rejected_before_invoking_oneharness(tmp_path: Path) -> None:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    marker = tmp_path / "invoked"
+    oneharness = bin_dir / "oneharness"
+    oneharness.write_text(f"#!/bin/sh\ntouch {marker}\n", encoding="utf-8")
+    oneharness.chmod(0o755)
+
+    proc = subprocess.run(
+        [WRAPPER],
+        text=True,
+        capture_output=True,
+        env={**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}"},
+    )
+
+    assert proc.returncode == 2
+    assert "expected oneharness arguments" in proc.stderr
+    assert not marker.exists()
+
+
 def test_missing_oneharness_reports_recovery_action(tmp_path: Path) -> None:
     proc = subprocess.run(
         ["/bin/bash", WRAPPER, "run", "--mode", "read-only"],

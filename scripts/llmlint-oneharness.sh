@@ -10,6 +10,11 @@ fi
 script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 repo_root=$(dirname -- "$script_dir")
 
+if (( $# == 0 )); then
+    echo "llmlint oneharness wrapper: expected oneharness arguments" >&2
+    exit 2
+fi
+
 args=()
 read_only=false
 while (( $# > 0 )); do
