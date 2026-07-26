@@ -1,13 +1,13 @@
 """Authoritative recorded outcome domain for graph and lifecycle execution."""
 
-from typing import Literal
+from typing import Literal, get_args
 
 INFRASTRUCTURE_FAILURE_OUTCOME: Literal["infrastructure-failure"] = "infrastructure-failure"
 ALREADY_INTEGRATED_OUTCOME: Literal["already-integrated"] = "already-integrated"
 WAITING_HUMAN_OUTCOME: Literal["waiting-human"] = "waiting-human"
 
 NodeOutcome = Literal["no-changes", "infrastructure-failure"]
-NODE_OUTCOMES = frozenset[NodeOutcome]({"no-changes", INFRASTRUCTURE_FAILURE_OUTCOME})
+NODE_OUTCOMES: frozenset[NodeOutcome] = frozenset(get_args(NodeOutcome))
 
 LifecycleOutcome = Literal[
     "merged",
@@ -27,26 +27,7 @@ LifecycleOutcome = Literal[
     "publication-retries-exhausted",
     "merge-conflict-retry",
 ]
-LIFECYCLE_OUTCOMES = frozenset[LifecycleOutcome](
-    {
-        "merged",
-        ALREADY_INTEGRATED_OUTCOME,
-        "pr-open",
-        "not-completed",
-        "gate-failed",
-        "no-changes",
-        "checks-failed",
-        "closed",
-        "timeout",
-        "error",
-        WAITING_HUMAN_OUTCOME,
-        "resume-failed",
-        "stack-conflict",
-        "sync-conflict",
-        "publication-retries-exhausted",
-        "merge-conflict-retry",
-    }
-)
+LIFECYCLE_OUTCOMES: frozenset[LifecycleOutcome] = frozenset(get_args(LifecycleOutcome))
 SUCCESSFUL_LIFECYCLE_OUTCOMES = frozenset[LifecycleOutcome](
     {"merged", ALREADY_INTEGRATED_OUTCOME, "pr-open"}
 )

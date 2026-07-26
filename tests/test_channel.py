@@ -613,6 +613,7 @@ def test_relay_replaces_stale_nonblocking_pending_surface(
     "surface",
     [
         {"kind": "proposal", "message": 1, "blocking": True},
+        {"kind": "unknown", "message": "blocked", "blocking": True},
         {
             "kind": "proposal",
             "message": "blocked",

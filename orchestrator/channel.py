@@ -24,7 +24,7 @@ import time
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager, suppress
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol, get_args
 
 from .config import ConfigError
 from .coordination import advisory_lock, atomic_json
@@ -46,6 +46,17 @@ CHANNEL_RUN_ID_ENV = f"{CHANNEL_ENV_PREFIX}RUN_ID"
 CHANNEL_ENDPOINTS = ("up.fifo", "down.fifo")
 HEARTBEAT_FILE = "heartbeat.json"
 DEFAULT_HEARTBEAT_INTERVAL = 1800.0
+
+PlannerSurfaceKind = Literal[
+    "supervisor",
+    "milestone",
+    "blocker",
+    "choice",
+    "proposal",
+    "heartbeat",
+    "closeout",
+]
+PLANNER_SURFACE_KINDS: frozenset[PlannerSurfaceKind] = frozenset(get_args(PlannerSurfaceKind))
 
 
 class ProposalSink(Protocol):
@@ -351,6 +362,8 @@ def _validated_persisted_surface(value: Mapping[str, Any]) -> dict[str, Any]:
     blocking = value.get("blocking")
     if not isinstance(kind, str) or not isinstance(message, str) or not isinstance(blocking, bool):
         raise ChannelError("persisted planner surface has invalid kind, message, or blocking")
+    if kind not in PLANNER_SURFACE_KINDS:
+        raise ChannelError(f"persisted planner surface has unsupported kind: {kind!r}")
     surface: dict[str, Any] = {"kind": kind, "message": message, "blocking": blocking}
     if "options" in value:
         options = value["options"]
