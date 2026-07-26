@@ -54,7 +54,7 @@ from .cli_contract import ROUND_BUDGET_OPTION
 from .config import ConfigError, build_effective_config, load_yaml
 from .coordination import atomic_json
 from .goals import Goal, graph_identities, register_run, update_run_owner
-from .labels import LABEL_ENV, LabelError, merge_labels
+from .labels import LABEL_ENV, LabelError, dispatched_agent_role, merge_labels
 from .personas import persona_path
 from .runs import ArtifactPaths, resolve_run_dir, slugify
 from .watchdog import (
@@ -635,9 +635,7 @@ def dispatch(
     _validate_environment(process_env)
     semantic_labels = dict(labels or {})
     semantic_labels.setdefault("persona", persona)
-    semantic_labels.setdefault(
-        "agent_role", persona if persona in {"check-in", "pr-author"} else "worker"
-    )
+    semantic_labels.setdefault("agent_role", dispatched_agent_role(persona))
     return run_onejudge(
         config,
         task,

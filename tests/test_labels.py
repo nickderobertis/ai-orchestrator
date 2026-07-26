@@ -10,6 +10,7 @@ import pytest
 from orchestrator.labels import (
     LABEL_ENV,
     LabelError,
+    dispatched_agent_role,
     format_labels,
     graph_labels,
     main,
@@ -18,6 +19,12 @@ from orchestrator.labels import (
     validate_key,
     validate_value,
 )
+
+
+def test_dispatched_personas_have_deterministic_semantic_roles() -> None:
+    assert dispatched_agent_role("engineer") == "worker"
+    assert dispatched_agent_role("check-in") == "check-in"
+    assert dispatched_agent_role("pr-author") == "pr-author"
 
 
 def test_label_env_name() -> None:

@@ -9,6 +9,9 @@ role-specific parts live here.
 
 ## Catalog
 
+`orchestrator-validate-personas` is the drift gate for this catalog: validation
+fails unless its rows exactly match recursive persona discovery.
+
 | Persona | Use it for |
 | --- | --- |
 | `engineer` | General implementation and realistic testing across server-side systems, UI, accessibility, and contract-aware libraries. |

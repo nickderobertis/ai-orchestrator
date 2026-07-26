@@ -21,7 +21,7 @@ import socket
 import sys
 import threading
 import time
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager, suppress
 from pathlib import Path
 from typing import Any, Protocol
@@ -58,6 +58,12 @@ class ProposalSink(Protocol):
     def drain_commands(self) -> tuple[EditCommand, ...]: ...
 
     def heartbeat_tick(self) -> None: ...
+
+
+class CheckInDispatcher(Protocol):
+    """Spawn one check-in actor for a claimed heartbeat."""
+
+    def __call__(self) -> None: ...
 
 
 def _heartbeat_path(channel_dir: Path) -> Path:
@@ -434,7 +440,7 @@ class ProposalPump:
         run_id: str,
         round_number: int,
         *,
-        dispatch_check_in: Callable[[], None] | None = None,
+        dispatch_check_in: CheckInDispatcher | None = None,
     ) -> None:
         self._channel_dir = channel_dir
         self._run_id = run_id
