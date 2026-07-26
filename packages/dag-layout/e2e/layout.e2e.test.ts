@@ -3,6 +3,23 @@ import { expect, test } from "bun:test";
 // eslint-disable-next-line @nx/enforce-module-boundaries -- This consumer journey intentionally resolves the workspace package export.
 import { layoutDag } from "@ai-orchestrator/dag-layout";
 
+test("equivalent reordered inputs produce the checked-in serialized golden", async () => {
+  const fixture = (await Bun.file(
+    new URL("./fixtures/layout-input.json", import.meta.url),
+  ).json()) as Parameters<typeof layoutDag>[0];
+  const golden = await Bun.file(
+    new URL("./fixtures/layout-output.json", import.meta.url),
+  ).text();
+  const first = `${JSON.stringify(layoutDag(fixture), null, 2)}\n`;
+  const reordered = {
+    nodes: [...fixture.nodes].reverse(),
+    edges: [...fixture.edges].reverse(),
+  };
+
+  expect(first).toBe(golden);
+  expect(`${JSON.stringify(layoutDag(reordered), null, 2)}\n`).toBe(golden);
+});
+
 test("a package consumer receives connected geometry and routed edges", () => {
   const layout = layoutDag({
     nodes: [

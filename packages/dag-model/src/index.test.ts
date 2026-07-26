@@ -1,6 +1,13 @@
 import { describe, expect, test } from "bun:test";
 
-import { parseRunList, runDetailSchema, sessionLinkSchema } from "./index.js";
+import {
+  graphPayloadSchema,
+  graphResultItemSchema,
+  parseRunList,
+  planTaskSchema,
+  runDetailSchema,
+  sessionLinkSchema,
+} from "./index.js";
 
 const timing = {
   agent_seconds: 1,
@@ -81,5 +88,27 @@ describe("boundary failures", () => {
       conversations: [],
     });
     expect(result.success).toBe(false);
+  });
+
+  test("rejects malformed nested plan and result payloads", () => {
+    expect(() =>
+      planTaskSchema.parse({
+        id: "release",
+        task: "Release",
+        steps: [{ id: "approve", kind: "human", task: 42 }],
+      }),
+    ).toThrow();
+    expect(() =>
+      graphResultItemSchema.parse({
+        status: "done",
+        steps: [{ id: "build", kind: "agent", persona: null }],
+      }),
+    ).toThrow();
+    expect(() =>
+      graphPayloadSchema.parse({
+        ok: true,
+        results: { build: { deferred_cleanup: "not-a-list" } },
+      }),
+    ).toThrow();
   });
 });

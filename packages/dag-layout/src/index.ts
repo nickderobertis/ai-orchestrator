@@ -77,14 +77,16 @@ const STATUS_STYLE: Readonly<Record<DagNodeState, StatusStyleToken>> = {
   failed: "danger",
   cancelled: "muted",
 };
+const compareOrdinal = (left: string, right: string): number =>
+  left < right ? -1 : left > right ? 1 : 0;
 
 /** Lay out an acyclic graph in stable left-to-right dependency ranks. */
 export function layoutDag(input: DagLayoutInput): DagLayout {
   const nodes = [...input.nodes].sort((left, right) =>
-    left.id.localeCompare(right.id),
+    compareOrdinal(left.id, right.id),
   );
   const edges = [...input.edges].sort((left, right) =>
-    left.id.localeCompare(right.id),
+    compareOrdinal(left.id, right.id),
   );
   const byId = new Map(nodes.map((node) => [node.id, node]));
   if (byId.size !== nodes.length) {
@@ -168,7 +170,7 @@ export function layoutDag(input: DagLayoutInput): DagLayout {
     column.sort((left, right) => {
       const leftY = graph.node(left)?.y ?? 0;
       const rightY = graph.node(right)?.y ?? 0;
-      return leftY - rightY || left.localeCompare(right);
+      return leftY - rightY || compareOrdinal(left, right);
     });
   }
   const positioned = nodes.map((node): PositionedNode => {

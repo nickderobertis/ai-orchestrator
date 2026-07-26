@@ -2,6 +2,8 @@ import {
   API_V1_PATHS,
   API_V1_QUERY,
   apiErrorSchema,
+  type DagConversation,
+  dagConversationSchema,
   type RunDetail,
   type RunList,
   runDetailSchema,
@@ -78,6 +80,18 @@ export class TelemetryClient {
     return this.#request(
       this.#url(API_V1_PATHS.run(runId)),
       runDetailSchema.parse,
+    );
+  }
+
+  async getConversation(
+    runId: string,
+    conversationId: string,
+  ): Promise<DagConversation> {
+    requireOpaqueId(runId, "run ID");
+    requireOpaqueId(conversationId, "conversation ID");
+    return this.#request(
+      this.#url(API_V1_PATHS.conversation(runId, conversationId)),
+      dagConversationSchema.parse,
     );
   }
 

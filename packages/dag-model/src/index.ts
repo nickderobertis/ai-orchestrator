@@ -20,6 +20,8 @@ const openObject = <T extends z.ZodRawShape>(shape: T) =>
 export const API_V1_PATHS = {
   runs: "/api/v1/runs",
   run: (runId: string) => `/api/v1/runs/${encodeURIComponent(runId)}`,
+  conversation: (runId: string, conversationId: string) =>
+    `/api/v1/runs/${encodeURIComponent(runId)}/conversations/${encodeURIComponent(conversationId)}`,
   events: "/api/v1/events",
 } as const;
 export const API_V1_QUERY = {
@@ -146,14 +148,99 @@ export const runListSchema = openObject({
   runs: z.array(runSummarySchema),
 });
 
-export const planTaskSchema = openObject({
+const planStepSchema = openObject({
   id: z.string().min(1),
-  kind: z.string().min(1).optional(),
+  kind: z.enum(["agent", "human"]).optional(),
   persona: z.string().min(1).optional(),
-  task: z.string(),
+  task: z.string().min(1),
   deps: z.array(z.string().min(1)).optional(),
+  done_when: z.string().min(1).optional(),
+  max_turns: counter.positive().optional(),
+  expects_no_diff: z.boolean().optional(),
 });
-export const graphResultItemSchema = arbitraryRecord;
+export const planTaskSchema = planStepSchema.extend({
+  repo: z.string().min(1).optional(),
+  steps: z.array(planStepSchema).min(1).optional(),
+  session: z.string().min(1).optional(),
+  project_dir: z.string().min(1).optional(),
+  base_branch: z.string().min(1).optional(),
+  branch: z.string().min(1).optional(),
+  title: z.string().min(1).optional(),
+  verify_cmd: z.string().min(1).optional(),
+  skip_verify: z.boolean().optional(),
+  verify_via_ci: z.boolean().optional(),
+  merge_policy: z.enum(["auto", "direct", "none"]).optional(),
+  workflow: z.enum(["local", "remote"]).optional(),
+  repo_type: z.enum(["single-owner", "team"]).optional(),
+  execution_checkout: z.string().min(1).optional(),
+  stack_bases: z.array(z.string().min(1)).optional(),
+  resume: z.boolean().optional(),
+});
+const artifactPathsSchema = openObject({
+  gate_log: z.string().optional(),
+  worker_report: z.string().optional(),
+  oneharness_session: z.string().optional(),
+});
+const stepResultSchema = openObject({
+  id: z.string().min(1),
+  kind: z.string().min(1),
+  persona: z.string().nullable(),
+  status: z.string().min(1),
+  telemetry: arbitraryRecord.optional(),
+  artifacts: artifactPathsSchema.optional(),
+});
+const humanActionSchema = openObject({
+  ref: z.string().min(1),
+  task: z.string(),
+  unblocks: z.array(z.string()),
+  unblocks_publication: z.boolean(),
+});
+const resumeSchema = openObject({
+  branch: z.string().min(1),
+  base_branch: z.string().min(1),
+  pr_base: z.string(),
+  checkpoint: z.string().min(1),
+  completed_steps: z.array(z.string()),
+  pr: z.string().nullable(),
+  mode: z.string().optional(),
+  source_round: counter.optional(),
+});
+export const graphResultItemSchema = openObject({
+  kind: z.string().optional(),
+  status: z.string().optional(),
+  task: z.string().optional(),
+  unblocks: z.array(z.string()).optional(),
+  blocked_by: z.array(z.string()).optional(),
+  human_actions: z.array(humanActionSchema).optional(),
+  completed: z.boolean().optional(),
+  exit_code: z.number().int().nullable().optional(),
+  verdicts: z.array(z.unknown()).optional(),
+  usage: arbitraryRecord.optional(),
+  telemetry: arbitraryRecord.optional(),
+  repo: z.string().optional(),
+  branch: z.string().optional(),
+  base_branch: z.string().optional(),
+  pr_base: z.string().optional(),
+  synthetic_stack_base: z.string().nullable().optional(),
+  stack_bases: z.array(arbitraryRecord).optional(),
+  repository_type: z.enum(["single-owner", "team"]).nullable().optional(),
+  repo_type: z.enum(["single-owner", "team"]).nullable().optional(),
+  publication_workflow: z.enum(["local", "remote"]).nullable().optional(),
+  workflow: z.enum(["local", "remote"]).nullable().optional(),
+  merge_policy: z.enum(["auto", "direct", "none"]).nullable().optional(),
+  outcome: z.string().optional(),
+  ok: z.boolean().optional(),
+  pr: z.string().nullable().optional(),
+  detail: z.string().optional(),
+  follow_ups: z.string().nullable().optional(),
+  steps: z.array(stepResultSchema).optional(),
+  waiting_steps: z.array(z.string()).optional(),
+  resume: resumeSchema.nullable().optional(),
+  error: z.string().nullable().optional(),
+  retry_lineage: arbitraryRecord.optional(),
+  deferred_cleanup: z.array(z.string()).optional(),
+  artifacts: artifactPathsSchema.optional(),
+});
 export const graphPayloadSchema = openObject({
   ok: z.boolean().optional(),
   state: z.string().optional(),
