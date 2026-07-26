@@ -285,6 +285,11 @@ def _apply_lifecycle_resume(
     item = results.get(nid)
     if not isinstance(item, dict):
         return
+    # An explicit branch is an intentional routing decision. It may pin a known
+    # branch or opt out of the preserved attempt by naming a fresh branch.
+    if "branch" in node:
+        node.pop("resume", None)
+        return
     resume = item.get("resume")
     waiting_steps = item.get("waiting_steps") or []
     prefix = f"{nid}/"
@@ -293,7 +298,10 @@ def _apply_lifecycle_resume(
     )
     status = item.get("status")
     retrying_preserved = retry_requested and status == "failed"
-    if not (status == "waiting" or retrying_preserved) or (resume is None and not waiting_steps):
+    continuing_preserved = status == "failed" and resume is not None
+    if not (status == "waiting" or retrying_preserved or continuing_preserved) or (
+        resume is None and not waiting_steps
+    ):
         return
     if not isinstance(resume, dict):
         from .plan import PlanError

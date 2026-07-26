@@ -8,7 +8,7 @@ from copy import deepcopy
 import pytest
 
 from orchestrator.plan import PlanError
-from orchestrator.replan import main, next_round
+from orchestrator.replan import _apply_lifecycle_resume, main, next_round
 
 
 def _plan(*tasks: dict) -> dict:
@@ -468,6 +468,80 @@ def test_failed_human_pause_can_be_retried_without_resume_metadata() -> None:
     }
 
     assert next_round(_plan(work), result)["tasks"] == [work]
+
+
+def test_failed_lifecycle_carries_preserved_resume_without_retry_edit() -> None:
+    work = {
+        "id": "work",
+        "repo": "o/r",
+        "persona": "engineer",
+        "task": "Continue",
+    }
+    resume = {
+        "branch": "feature/preserved",
+        "base_branch": "main",
+        "pr_base": "main",
+        "checkpoint": "abcdef1",
+        "completed_steps": [],
+        "mode": "retry",
+    }
+    result = {
+        "round": 3,
+        "results": {
+            "work": {
+                "status": "failed",
+                "outcome": "not-completed",
+                "resume": resume,
+            }
+        },
+    }
+
+    carried = next_round(_plan(work), result)
+
+    assert carried["tasks"][0]["resume"] == {**resume, "source_round": 3}
+
+
+def test_explicit_branch_overrides_inferred_preserved_resume() -> None:
+    work = {
+        "id": "work",
+        "repo": "o/r",
+        "persona": "engineer",
+        "task": "Restart",
+        "branch": "feature/fresh-start",
+    }
+    result = {
+        "round": 3,
+        "results": {
+            "work": {
+                "status": "failed",
+                "outcome": "not-completed",
+                "resume": {
+                    "branch": "feature/preserved",
+                    "base_branch": "main",
+                    "pr_base": "main",
+                    "checkpoint": "abcdef1",
+                    "completed_steps": [],
+                    "mode": "retry",
+                },
+            }
+        },
+    }
+
+    carried = next_round(_plan(work), result)
+
+    assert carried["tasks"][0]["branch"] == "feature/fresh-start"
+    assert "resume" not in carried["tasks"][0]
+
+
+def test_lifecycle_resume_ignores_unaddressable_result_entries() -> None:
+    missing_id: dict = {}
+    missing_result = {"id": "work"}
+
+    _apply_lifecycle_resume(missing_id, {}, set())
+    _apply_lifecycle_resume(missing_result, {"work": "invalid"}, set())
+
+    assert missing_id == {}
+    assert missing_result == {"id": "work"}
 
 
 def test_drop_removes_a_node() -> None:
