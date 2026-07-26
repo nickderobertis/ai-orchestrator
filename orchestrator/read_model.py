@@ -159,9 +159,7 @@ def run_summary(
     }
     if telemetry.last_progress_at is not None:
         summary["last_progress_at"] = telemetry.last_progress_at
-    launch = resolve_launch(
-        run_dir, expose_launcher_session_id=expose_launcher_session_id, now=now
-    )
+    launch = resolve_launch(run_dir, expose_launcher_session_id=expose_launcher_session_id, now=now)
     if launch is not None:
         summary["launch"] = launch
     return summary
@@ -266,9 +264,7 @@ def run_detail(
     }
     if logs := read_logs(run_dir):
         detail["logs"] = logs
-    launch = resolve_launch(
-        run_dir, expose_launcher_session_id=expose_launcher_session_id, now=now
-    )
+    launch = resolve_launch(run_dir, expose_launcher_session_id=expose_launcher_session_id, now=now)
     if launch is not None:
         detail["launch"] = launch
     return detail
