@@ -19,7 +19,7 @@ history = true
 # history_labels: the counterpart to the agent config's `role = "agent"` — this is
 # the side that supervises. Stamping it makes "show me the judge's view of this
 # node" a filter rather than a guess from the session name (`JUDGE_PREFIXES`).
-history_labels = { role = "judge" }
+history_labels = { role = "judge", agent_role = "judge" }
 
 # harnesses: the selection, in priority order (the first is preferred under
 # fallback). See `oneharness list` for every supported id.

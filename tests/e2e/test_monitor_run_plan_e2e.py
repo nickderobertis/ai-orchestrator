@@ -285,6 +285,7 @@ def test_history_labels_and_cursor_watch(oneharness_bin: str, tmp_path: Path) ->
     by_role = {record["labels"]["role"]: record for record in records if "role" in record["labels"]}
     assert set(by_role) == {"agent", "judge", "llmlint"}
     assert by_role["judge"]["name"] == "judge-invocation"
+    assert by_role["judge"]["labels"]["agent_role"] == "judge"
     for record in records:
         expected_labels = {
             "node": "history-turns",
@@ -294,6 +295,8 @@ def test_history_labels_and_cursor_watch(oneharness_bin: str, tmp_path: Path) ->
         }
         if "role" in record["labels"]:
             expected_labels["role"] = record["labels"]["role"]
+        if record["labels"].get("role") == "judge":
+            expected_labels["agent_role"] = "judge"
         assert record["labels"] == expected_labels
 
     recent = _just("history", environment=environment)

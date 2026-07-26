@@ -14,6 +14,7 @@ import json
 import math
 import os
 import re
+import shlex
 import sys
 import threading
 import time
@@ -1325,8 +1326,9 @@ def main(argv: list[str] | None = None) -> int:
                     "(dedicated-check-in complete-now). Read durable run state under "
                     f"{resolved_channel.parent}, synthesize one concise non-blocking "
                     "per-workstream status update, send it with "
-                    f"`just channel-surface {validated_run_id} MESSAGE --runs-dir "
-                    f"{resolved_channel.parent.parent}`, and exit. Do not wait for a reply."
+                    f"`just channel-surface {shlex.quote(validated_run_id)} MESSAGE "
+                    f"--runs-dir {shlex.quote(str(resolved_channel.parent.parent))}`, "
+                    "and exit. Do not wait for a reply."
                 ),
                 base_path=args.base_config,
                 persona_dir=args.persona_dir,
