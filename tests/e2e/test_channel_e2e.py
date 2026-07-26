@@ -333,6 +333,14 @@ def test_due_heartbeat_surfaces_during_active_step_and_disabled_run_stays_silent
             "infrastructure-v03-incomplete",
             "new history record lacks complete v0.3 telemetry",
         ),
+        (
+            "infrastructure-v10-write",
+            "harness codex cannot write v1.0 history telemetry",
+        ),
+        (
+            "infrastructure-v10-incomplete",
+            "new history run lacks complete v1.0 telemetry",
+        ),
         ("infrastructure-enospc", "[Errno 28] No space left on device"),
         ("infrastructure-oom", "worker was OOMKilled"),
         ("infrastructure-preflight", "scratch filesystem at /tmp has 1 bytes free"),
