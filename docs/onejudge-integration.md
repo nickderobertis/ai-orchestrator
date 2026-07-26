@@ -220,11 +220,20 @@ owning orchestrator still alive.
 Dispatch wraps the SDK-owned `onejudge` process with a stable pid and additionally
 wraps the agent-side oneharness process with its own pid, completion marker, and
 monotonic heartbeat. A vanished agent pid or heartbeat deadline settles as the
-distinct incomplete `worker-died` outcome within seconds, independent of CPU/I/O
+distinct incomplete `worker-died` outcome promptly, independent of CPU/I/O
 from leaked descendants or `.git` churn. The last observed process tree is reaped
 even after its root has vanished, so those descendants cannot pollute a retry.
 Set `ORCHESTRATOR_WORKER_HEARTBEAT_TIMEOUT` to a positive number of seconds; it
-defaults to `5`.
+defaults to `60`.
+
+The wrapper refreshes that heartbeat every 0.5s, so the deadline is not a latency
+budget — it is the margin by which a *live* worker may be starved of CPU before
+the harness declares it dead. This harness runs many agents at once, so a
+contended host routinely deschedules that loop for far longer than a few seconds;
+a threshold near the write cadence reaps healthy workers under exactly the load
+the harness creates. Detection of a genuinely dead worker does not depend on this
+margin: when the agent exits, its heartbeat stops permanently, so a generous
+deadline delays that settlement without weakening it.
 
 The older activity watchdog remains as a separate slow-stall backstop. Changes
 in descendant membership, cumulative CPU or I/O counters, or files under the

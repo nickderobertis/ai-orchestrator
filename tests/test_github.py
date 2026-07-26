@@ -47,7 +47,7 @@ def _queue_payload(entry: dict[str, str] | None = None) -> str:
 def test_default_branch() -> None:
     run = RecordingRun(["main\n"])
     assert CliGitHubBackend(run=run).default_branch("o/r") == "main"
-    assert run.calls[0][:2] == ["repo", "view"]
+    assert run.calls == [["api", "repos/o/r", "--jq", ".default_branch"]]
 
 
 def test_default_branch_rejects_empty_github_response() -> None:
@@ -66,11 +66,11 @@ def test_required_status_checks_reads_branch_protection_contexts() -> None:
             )
         ]
     )
-    assert CliGitHubBackend(run=run).required_status_checks("o/r", "master") == (
+    assert CliGitHubBackend(run=run).required_status_checks("o/r", "release/next") == (
         "gate",
         "lint",
     )
-    assert run.calls == [["api", "repos/o/r/branches/master"]]
+    assert run.calls == [["api", "repos/o/r/branches/release%2Fnext"]]
 
 
 def test_required_status_checks_reports_unprotected_branch_as_known_empty() -> None:

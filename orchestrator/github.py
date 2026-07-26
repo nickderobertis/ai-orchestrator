@@ -15,10 +15,6 @@ CI *decisioning* is. The real backend shells to ``gh`` through an injectable
 ``run`` seam, itself unit-tested without a network.
 """
 
-# llmlint: ignore-file[changed_behavior_has_e2e] GitHub is the explicitly external,
-# offline-fakeable boundary. The CLI argv and defensive response parsing are unit-tested;
-# the registry e2e exercises the backend protocol without requiring live GitHub.
-
 from __future__ import annotations
 
 import json
@@ -26,6 +22,7 @@ import subprocess
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Protocol
+from urllib.parse import quote
 
 __all__ = [
     "AutoMergeUnavailable",
@@ -184,9 +181,7 @@ class CliGitHubBackend:
         return not repo.startswith("local/")
 
     def default_branch(self, repo: str) -> str:
-        out = self._run(
-            ["repo", "view", repo, "--json", "defaultBranchRef", "-q", ".defaultBranchRef.name"]
-        )
+        out = self._run(["api", f"repos/{repo}", "--jq", ".default_branch"])
         branch = out.strip()
         if not branch:
             raise GitHubError(f"GitHub returned no default branch for {repo}")
@@ -194,7 +189,8 @@ class CliGitHubBackend:
 
     def required_status_checks(self, repo: str, branch: str) -> tuple[str, ...]:
         """Return branch-protection status contexts required before merge."""
-        out = self._run(["api", f"repos/{repo}/branches/{branch}"])
+        encoded_branch = quote(branch, safe="")
+        out = self._run(["api", f"repos/{repo}/branches/{encoded_branch}"])
         try:
             payload = json.loads(out)
             protected = payload["protected"]
