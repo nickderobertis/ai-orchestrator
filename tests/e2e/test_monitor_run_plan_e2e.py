@@ -284,6 +284,7 @@ def test_history_labels_and_cursor_watch(oneharness_bin: str, tmp_path: Path) ->
     assert isinstance(records, list) and len(records) == 4
     by_role = {record["labels"]["role"]: record for record in records if "role" in record["labels"]}
     assert set(by_role) == {"agent", "judge", "llmlint"}
+    assert by_role["judge"]["name"] == "judge-invocation"
     for record in records:
         expected_labels = {
             "node": "history-turns",
