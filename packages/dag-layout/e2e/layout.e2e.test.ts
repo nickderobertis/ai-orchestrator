@@ -3,6 +3,23 @@ import { expect, test } from "bun:test";
 // eslint-disable-next-line @nx/enforce-module-boundaries -- This consumer journey intentionally resolves the workspace package export.
 import { layoutDag } from "@ai-orchestrator/dag-layout";
 
+test("equivalent reordered inputs produce the checked-in serialized golden", async () => {
+  const fixture = (await Bun.file(
+    new URL("./fixtures/layout-input.json", import.meta.url),
+  ).json()) as Parameters<typeof layoutDag>[0];
+  const golden = await Bun.file(
+    new URL("./fixtures/layout-output.json", import.meta.url),
+  ).text();
+  const first = `${JSON.stringify(layoutDag(fixture), null, 2)}\n`;
+  const reordered = {
+    nodes: [...fixture.nodes].reverse(),
+    edges: [...fixture.edges].reverse(),
+  };
+
+  expect(first).toBe(golden);
+  expect(`${JSON.stringify(layoutDag(reordered), null, 2)}\n`).toBe(golden);
+});
+
 test("a package consumer receives connected geometry and routed edges", () => {
   const layout = layoutDag({
     nodes: [
@@ -20,6 +37,11 @@ test("a package consumer receives connected geometry and routed edges", () => {
     { id: "build", x: 0, y: 0 },
     { id: "publish", x: 560, y: 0 },
     { id: "test", x: 280, y: 0 },
+  ]);
+  expect(layout.nodes.map(({ id, style }) => ({ id, style }))).toEqual([
+    { id: "build", style: "success" },
+    { id: "publish", style: "blocked" },
+    { id: "test", style: "active" },
   ]);
   expect(layout.edges[0]?.points).toEqual([
     { x: 200, y: 36 },
@@ -88,6 +110,12 @@ test("a package consumer receives a vertically routed edge", () => {
     ],
   });
 
+  expect(layout.nodes.map(({ id, y }) => ({ id, y }))).toEqual([
+    { id: "build-a", y: 0 },
+    { id: "build-b", y: 104 },
+    { id: "test-a", y: 0 },
+    { id: "test-b", y: 104 },
+  ]);
   expect(
     layout.edges.find(({ id }) => id === "build-b-test-a")?.points,
   ).toEqual([
@@ -221,4 +249,24 @@ test("a package consumer can render an empty graph", () => {
     nodes: [],
     edges: [],
   });
+});
+
+test("a package consumer receives terminal failure style tokens", () => {
+  const layout = layoutDag({
+    nodes: [
+      {
+        id: "cancelled",
+        label: "Cancelled",
+        kind: "agent",
+        state: "cancelled",
+      },
+      { id: "failed", label: "Failed", kind: "agent", state: "failed" },
+    ],
+    edges: [],
+  });
+
+  expect(layout.nodes.map(({ id, style }) => ({ id, style }))).toEqual([
+    { id: "cancelled", style: "muted" },
+    { id: "failed", style: "danger" },
+  ]);
 });

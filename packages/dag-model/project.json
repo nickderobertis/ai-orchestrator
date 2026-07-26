@@ -1,0 +1,31 @@
+{
+  "name": "dag-model",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "library",
+  "sourceRoot": "packages/dag-model/src",
+  "tags": ["scope:shared", "type:model"],
+  "targets": {
+    "build": {
+      "command": "bunx tsc -p packages/dag-model/tsconfig.json --emitDeclarationOnly",
+      "outputs": ["{projectRoot}/dist"]
+    },
+    "lint": {
+      "command": "bunx biome check packages/dag-model && bunx eslint packages/dag-model"
+    },
+    "test": {
+      "command": "bun test packages/dag-model/src packages/dag-model/e2e"
+    },
+    "typecheck": {
+      "command": "bunx tsc -p packages/dag-model/tsconfig.json --noEmit"
+    },
+    "format": {
+      "command": "bunx biome format --write packages/dag-model"
+    },
+    "format-check": {
+      "command": "bunx biome check --formatter-enabled=true --linter-enabled=false --assist-enabled=false packages/dag-model"
+    },
+    "bootstrap": {
+      "command": "bun install --frozen-lockfile"
+    }
+  }
+}
