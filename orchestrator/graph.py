@@ -884,7 +884,6 @@ def _replay_node_run(node: GraphNode, item: GraphResultItem) -> NodeRun:
         if not isinstance(raw_deferred_cleanup, list) or not all(
             isinstance(detail, str) for detail in raw_deferred_cleanup
         ):
-            # llmlint: ignore[changed_behavior_has_e2e] unit test asserts this rejection.
             raise ConfigError("recorded lifecycle result has invalid deferred_cleanup")
         raw_outcome = item.get("outcome", "error")
         if not isinstance(raw_outcome, str) or raw_outcome not in LIFECYCLE_OUTCOMES:
