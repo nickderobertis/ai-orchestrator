@@ -122,12 +122,41 @@ def test_judge_side_keeps_its_own_config_and_adds_no_second(tmp_path: Path) -> N
     assert argv.count("--config") == 1
     assert argv[argv.index("--config") + 1] == judge_cfg
     assert f"{REPO_ROOT}/oneharness.toml" not in argv
+    assert not (tmp_path / "oneharness-env").read_text(encoding="utf-8").strip()
 
 
 def test_non_run_subcommand_is_rejected(tmp_path: Path) -> None:
     proc, _ = _run_wrapper(tmp_path, ["config"])
     assert proc.returncode == 2
     assert "expected the 'run' subcommand" in proc.stderr
+
+
+def test_missing_agent_config_is_rejected_before_invoking_oneharness(tmp_path: Path) -> None:
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    copied_wrapper = scripts / WRAPPER.name
+    copied_wrapper.write_bytes(WRAPPER.read_bytes())
+    copied_wrapper.chmod(0o755)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    marker = tmp_path / "invoked"
+    oneharness = bin_dir / "oneharness"
+    oneharness.write_text(f"#!/bin/sh\ntouch {marker}\n", encoding="utf-8")
+    oneharness.chmod(0o755)
+
+    proc = subprocess.run(
+        ["bash", str(copied_wrapper), "run", "--prompt", "must not run"],
+        text=True,
+        capture_output=True,
+        env={
+            "PATH": f"{bin_dir}:/usr/bin:/bin",
+            "HOME": str(tmp_path / "home"),
+        },
+    )
+
+    assert proc.returncode == 2
+    assert "required agent config is not a readable regular file" in proc.stderr
+    assert not marker.exists()
 
 
 def test_watchdog_path_forwards_the_task_on_stdin(tmp_path: Path) -> None:

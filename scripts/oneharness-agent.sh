@@ -15,7 +15,8 @@ repo_root=$(dirname -- "$script_dir")
 # The worker config maps this portable, non-secret parent value into
 # CLAUDE_CONFIG_DIR only for its alternate-subscription child.
 : "${HOME:?oneharness-agent: HOME is required to locate the alternate Claude config}"
-export ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR="${ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR:-$HOME/.claude-alt}"
+alternate_config_dir="${ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR:-$HOME/.claude-alt}"
+agent_config="$repo_root/oneharness.toml"
 
 if [ "${1-}" != "run" ]; then
     echo "oneharness-agent: expected the 'run' subcommand" >&2
@@ -32,20 +33,26 @@ for arg in "$@"; do
     esac
 done
 if [[ $caller_config == true ]]; then
+    unset ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR
     exec oneharness run "$@"
 fi
 
-case "$ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR" in
+if [ ! -f "$agent_config" ] || [ ! -r "$agent_config" ]; then
+    echo "oneharness-agent: required agent config is not a readable regular file: $agent_config; restore it from the repository or run 'just bootstrap', then retry" >&2
+    exit 2
+fi
+export ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR="$alternate_config_dir"
+case "$alternate_config_dir" in
     /*) ;;
     *)
         echo "oneharness-agent: alternate Claude config path must be absolute; set ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR to an absolute directory and retry" >&2
         exit 2
         ;;
 esac
-if [ -e "$ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR" ]; then
-    if [ ! -d "$ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR" ] ||
-        [ ! -r "$ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR" ] ||
-        [ ! -x "$ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR" ]; then
+if [ -e "$alternate_config_dir" ]; then
+    if [ ! -d "$alternate_config_dir" ] ||
+        [ ! -r "$alternate_config_dir" ] ||
+        [ ! -x "$alternate_config_dir" ]; then
         echo "oneharness-agent: alternate Claude config path is not an accessible directory; create it or fix its permissions, or unset the override to use the default path and retry" >&2
         exit 2
     fi
@@ -56,7 +63,7 @@ elif [ -z "${ONEHARNESS_HARNESSES-}" ]; then
 fi
 
 if [ -z "${ORCHESTRATOR_AGENT_STATUS_DIR-}" ]; then
-    exec oneharness run --config "$repo_root/oneharness.toml" "$@"
+    exec oneharness run --config "$agent_config" "$@"
 fi
 
 status_dir=$ORCHESTRATOR_AGENT_STATUS_DIR
@@ -100,7 +107,7 @@ write_status agent.heartbeat "$heartbeat_sequence"
 exec 3<&0
 # llmlint: ignore[tool_output_is_signal, boundary_inputs_validated] this wrapper is a transparent
 # conduit for that protocol in both directions, exactly as the `exec` pass-throughs above are.
-oneharness run --config "$repo_root/oneharness.toml" "$@" <&3 &
+oneharness run --config "$agent_config" "$@" <&3 &
 agent_pid=$!
 write_status agent.child.pid "$agent_pid"
 while agent_state=$(ps -o stat= -p "$agent_pid" 2>/dev/null) &&

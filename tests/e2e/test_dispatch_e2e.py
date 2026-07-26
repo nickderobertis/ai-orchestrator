@@ -234,6 +234,7 @@ def test_real_dispatch_delivers_exact_task_to_agent_history(
             "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
             "REAL_ONEHARNESS_BIN": oneharness_bin,
             "MOCK_STDOUT": mock_stdout,
+            "ONEHARNESS_HARNESSES": "codex",
             "ONEHARNESS_HISTORY": "true",
             "XDG_STATE_HOME": str(state_home),
         },
@@ -795,6 +796,7 @@ print(json.dumps({
         "EXPECTED_ALT_DIR": str(alternate),
         "ONEHARNESS_HISTORY": "false",
     }
+    environment.pop("ORCHESTRATOR_AGENT_STATUS_DIR", None)
 
     command = (
         [str(REPO_ROOT / "scripts" / "oneharness-agent.sh"), "run"]
@@ -926,6 +928,7 @@ def test_agent_wrapper_validates_alternate_identity_and_recovers_through_real_on
         "PATH": f"{Path(oneharness_bin).parent}:{os.environ['PATH']}",
         "ONEHARNESS_HISTORY": "false",
     }
+    environment.pop("ORCHESTRATOR_AGENT_STATUS_DIR", None)
 
     relative = subprocess.run(
         [str(wrapper), "run", "--prompt", "must not run"],
