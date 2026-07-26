@@ -1,5 +1,5 @@
 {
-  "version": 4,
+  "version": 5,
   "state_changing_kinds": [
     "node-added",
     "edge-added",

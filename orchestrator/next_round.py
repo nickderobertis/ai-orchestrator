@@ -173,6 +173,8 @@ def _validate_completions(run_dir: Path, result: dict[str, Any], refs: list[str]
 
 
 def main_runs(argv: list[str] | None = None) -> int:
+    from .channel import ChannelError, planner_wait_indicator
+
     parser = argparse.ArgumentParser(description="List recorded tracked-graph runs.")
     parser.add_argument("--runs-dir", type=Path, default=Path("runs"))
     args = parser.parse_args(argv)
@@ -191,10 +193,21 @@ def main_runs(argv: list[str] | None = None) -> int:
         return 0
     recorded = {row.run_id for row in rows}
     for run_id in sorted(active_launches - recorded):
-        print(f"* {run_id}  ACTIVE  (orchestrator running)")
+        try:
+            waiting = planner_wait_indicator(args.runs_dir / run_id / "channel")
+        except (ChannelError, ConfigError, OSError):
+            waiting = None
+        detail = waiting or "orchestrator running"
+        print(f"* {run_id}  ACTIVE  ({detail})")
     for run_id, number, summary in rows:
         marker = "* " if run_id in active_launches else "  "
-        print(f"{marker}{run_id}  round-{number:02d}  ({summary})")
+        waiting = None
+        if run_id in active_launches:
+            try:
+                waiting = planner_wait_indicator(args.runs_dir / run_id / "channel")
+            except (ChannelError, ConfigError, OSError):
+                waiting = None
+        print(f"{marker}{run_id}  round-{number:02d}  ({waiting or summary})")
         print(f"    Results: just results {run_id} --runs-dir {args.runs_dir}")
     return 0
 
