@@ -622,6 +622,27 @@ def test_nonblocking_surface_cli_queues_claimed_update_until_consumed(
     assert "timeout must be a positive" in capsys.readouterr().err
 
 
+def test_nonblocking_surface_cli_rejects_missing_round_and_pending_planner_surface(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    runs = tmp_path / "runs"
+    run_dir = runs / "orch"
+    channel = create_channel(run_dir, heartbeat_interval=1)
+    initial = heartbeat_state(channel)
+    assert initial is not None
+    mark_heartbeat_due(channel, now=float(initial["last_surface_at"]) + 2)
+    assert claim_heartbeat(channel)
+
+    assert main_surface(["orch", "status", "--runs-dir", str(runs)]) == 2
+    assert "requires an active round" in capsys.readouterr().err
+
+    (run_dir / "round-01").mkdir()
+    atomic_json(channel / "planner-pending.json", {"completion": False})
+    assert main_surface(["orch", "status", "--runs-dir", str(runs)]) == 2
+    assert "planner surface is already pending" in capsys.readouterr().err
+    assert not (channel / "heartbeat-surface.json").exists()
+
+
 def test_heartbeat_legacy_and_corrupt_state_boundaries(tmp_path: Path) -> None:
     channel = tmp_path / "legacy-channel"
     channel.mkdir()
