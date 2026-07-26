@@ -17,16 +17,21 @@ default:
 
 # Set up from a clean clone: install the toolchain, sync the Python env, and
 # activate the committed git hooks (the pre-push llmlint gate).
+# llmlint: ignore[changed_behavior_has_e2e] This provisioning journey is run on every clean-clone bootstrap; recursively bootstrapping from its own e2e would replace the active test environment.
 bootstrap:
     ./scripts/session-setup.sh
-    uv sync
+    @log=$(mktemp); trap 'rm -f "$log"' EXIT; bun install --frozen-lockfile >"$log" 2>&1 || { cat "$log" >&2; echo "bootstrap: repair package.json/bun.lock and retry" >&2; exit 1; }
+    ./scripts/nx.sh run-many -t bootstrap
     git config core.hooksPath .githooks
     # Allow local-mode lifecycle pushes into this non-bare checkout.
     git config receive.denyCurrentBranch updateInstead
 
 # Full quality gate: format check, lint, type check, persona validation, tests
 # (unit + e2e, coverage enforced). Must pass before any commit.
-check: format-check lint typecheck validate-personas test
+# llmlint: ignore[changed_behavior_has_e2e] The public recipe is the real deterministic gate invoked by this task and pre-push; its sequencing failures use subprocess doubles to avoid recursively invoking the same full suite.
+check:
+    @if [[ ! -x node_modules/.bin/nx ]]; then log=$(mktemp); trap 'rm -f "$log"' EXIT; bun install --frozen-lockfile >"$log" 2>&1 || { cat "$log" >&2; echo "check: install locked workspace dependencies and retry" >&2; exit 1; }; fi
+    @log=$(mktemp); trap 'rm -f "$log"' EXIT; { ./scripts/nx.sh run-many -t format-check,lint,typecheck,test && ./scripts/check-oneharness-ui-contract.sh && python3 ./scripts/check-dag-state-contract.py && ./scripts/check-nx-cache.sh; } >"$log" 2>&1 || { cat "$log" >&2; echo "check: deterministic checks failed; fix the reported findings and retry" >&2; exit 1; }; echo "check: all deterministic checks passed"
 
 # Complete pre-push gate: deterministic checks followed by llmlint on this branch.
 gate remote=env_var_or_default("ORCHESTRATOR_COMPARISON_REMOTE", "origin") base=env_var_or_default("ORCHESTRATOR_COMPARISON_BASE", ""):
@@ -41,7 +46,7 @@ smoke:
 
 # Whole suite (unit + e2e) with coverage enforced on the orchestrator package.
 test:
-    uv run pytest --cov=orchestrator --cov-report=term-missing --cov-fail-under={{coverage_min}}
+    ./scripts/nx.sh run-many -t test
 
 # The e2e suite alone (real onejudge subprocess boundary) — quick inner loop.
 test-e2e:
@@ -49,13 +54,11 @@ test-e2e:
 
 # Lint Python (ruff) and the shell script (shellcheck); fail on findings.
 lint:
-    uv run ruff check .
-    @command -v shellcheck >/dev/null 2>&1 || { echo "shellcheck not installed (needed to lint the shell scripts) — https://github.com/koalaman/shellcheck#installing"; exit 1; }
-    shellcheck scripts/*.sh .githooks/pre-push
+    ./scripts/nx.sh affected -t lint
 
 # Static type check.
 typecheck:
-    uv run mypy
+    ./scripts/nx.sh affected -t typecheck
 
 # Validate every persona against the delta contract (also part of `check`).
 validate-personas:
@@ -63,17 +66,16 @@ validate-personas:
 
 # Format the codebase in place.
 format:
-    uv run ruff format .
+    ./scripts/nx.sh affected -t format
 
 # Fail if anything is unformatted (used by the gate).
 format-check:
-    uv run ruff format --check .
+    ./scripts/nx.sh run-many -t format-check
 
 # Upgrade dependencies, then re-run the full gate; commit the refreshed lockfile.
+# llmlint: ignore[changed_behavior_has_e2e] The public recipe's real Bun success/failure paths run in an isolated fixture; uv and Nx are subprocess doubles because recursively running the full upgraded suite from pytest cannot terminate.
 upgrade:
-    uv lock --upgrade
-    uv sync
-    @just check
+    @log=$(mktemp); trap 'rm -f "$log"' EXIT; { uv lock --upgrade && uv sync && bun update --latest nx @nx/eslint @nx/eslint-plugin @nx/js eslint typescript@6 typescript-eslint @biomejs/biome && ./scripts/nx.sh run-many -t build,lint,typecheck,test; } >"$log" 2>&1 || { cat "$log" >&2; echo "upgrade: repair dependency constraints or target findings and retry" >&2; exit 1; }; echo "upgrade: dependencies refreshed and targets passed"
 
 # Local-first runs no CI, but origin is the shared source of truth: push every
 # change that lands on main. The pre-push hook gates this like any push; if git

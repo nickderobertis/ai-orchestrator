@@ -44,7 +44,13 @@ agent:
       subtask is done, run the complete pre-push gate and every lint tier exactly
       once at closeout, and clear any findings it reports. Do not rerun an
       expensive LLM lint tier after each mechanical fix; rerun the deterministic
-      checks that exercise the fix instead.
+      checks that exercise the fix instead. If the closeout gate fails at llmlint,
+      clear its findings by rerunning `just lint-llm-diff` alone. Rerun the
+      deterministic tier only when that fix touched code rather than prose,
+      comments, or an ignore directive; once the LLM tier is clean, run the
+      complete `just gate` once. Work is not done until that gate is green, and
+      `git push --no-verify` is not an acceptable response to a slow or failing
+      gate.
     - Keep the change tightly scoped to the subtask. Match the surrounding code's
       conventions.
     - When you add behavior, add a realistic test that exercises it the way a user

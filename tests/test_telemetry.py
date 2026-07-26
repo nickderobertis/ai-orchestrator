@@ -438,8 +438,8 @@ def test_session_normalization_degrades_each_field_independently(tmp_path: Path)
     assert _command_class("") == "unknown"
     zero = _timing(0, [summary])
     assert set(zero["fractions"].values()) == {0.0}
-    with pytest.raises(telemetry_module.HistoryError, match="unsupported.*schema"):
-        _summarize_session(session, [{"schema_version": 99}])
+    future = _summarize_session(session, [{"schema_version": "1.1", "duration_ms": 1}])
+    assert not future.validated_native_fields
 
 
 def test_new_history_schema_rejects_invalid_intervals_roles_and_tool_events(tmp_path: Path) -> None:
@@ -508,6 +508,38 @@ def test_new_history_schema_rejects_invalid_intervals_roles_and_tool_events(tmp_
     )
     with pytest.raises(telemetry_module.HistoryError, match="role"):
         _summarize_session(bad_role, [])
+
+
+def test_new_history_schema_degrades_absent_timing_and_null_tool_event(tmp_path: Path) -> None:
+    session = HistorySession(
+        SessionId("claude"), "agent", tmp_path, "now", tmp_path / "history", {"role": "agent"}
+    )
+    summary = _summarize_session(
+        session,
+        [
+            {
+                "schema_version": "1.0",
+                "duration_ms": None,
+                "finished_at": None,
+                "events": [
+                    {
+                        "kind": "tool_call",
+                        "name": "command_execution",
+                        "tool_call_id": "call-1",
+                        "started_at": None,
+                        "finished_at": None,
+                        "duration_ms": None,
+                        "status": None,
+                        "input": {"command": "just check"},
+                    }
+                ],
+            }
+        ],
+    )
+    assert not summary.validated_native_fields
+    assert summary.model_ms == 0
+    assert summary.tool_ms == 0
+    assert summary.commands == {"just": 1}
 
 
 def test_report_telemetry_validates_linkage_usage_and_step_aggregation(tmp_path: Path) -> None:

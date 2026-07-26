@@ -505,6 +505,13 @@ def test_empty_next_round_signals_nothing_to_iterate() -> None:
     assert next_round(_plan(A, B), _result(a="done", b="done"))["tasks"] == []
 
 
+def test_infrastructure_failure_is_terminal_across_rounds() -> None:
+    result = _result(a="failed")
+    result["results"]["a"]["outcome"] = "infrastructure-failure"
+
+    assert next_round(_plan(A), result)["tasks"] == []
+
+
 @pytest.mark.parametrize("value", [True, False, None])
 def test_verify_via_ci_optional_field_round_trips_only_when_present(value) -> None:
     task = deepcopy(A)

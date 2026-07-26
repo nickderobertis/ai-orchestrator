@@ -10,6 +10,7 @@ import sys
 import time
 from pathlib import Path
 
+import pytest
 import yaml
 from waits import deadline
 from waits import timeout as e2e_timeout
@@ -113,6 +114,7 @@ def _launch_cli(
     onejudge_bin: str,
     requested_run_id: str | None = None,
     heartbeat_interval: float | None = None,
+    env: dict[str, str] | None = None,
 ) -> str:
     run_id_args = ["--run-id", requested_run_id] if requested_run_id else []
     heartbeat_args = (
@@ -136,6 +138,7 @@ def _launch_cli(
             str(FAKE_BACKEND),
         ],
         cwd=REPO_ROOT,
+        env={**os.environ, **(env or {})},
         text=True,
         capture_output=True,
         check=True,
@@ -143,7 +146,7 @@ def _launch_cli(
     return str(json.loads(launched.stdout)["run_id"])
 
 
-def test_due_heartbeat_is_agent_synthesized_and_normal_surface_resets_clock(
+def test_due_heartbeat_surfaces_during_active_step_and_disabled_run_stays_silent(
     tmp_path: Path, onejudge_bin: str
 ) -> None:
     runs = tmp_path / "runs"
@@ -158,39 +161,112 @@ def test_due_heartbeat_is_agent_synthesized_and_normal_surface_resets_clock(
                     {
                         "id": "active-worker",
                         "persona": "engineer",
-                        "task": f"slow-branch {witness} complete-now heartbeat-channel",
+                        "task": (
+                            f"slow-branch {witness} pacemaker-slow complete-now heartbeat-channel"
+                        ),
                     }
                 ],
             }
         ),
         encoding="utf-8",
     )
-    run_id = _launch_cli(plan, runs, _base(tmp_path), onejudge_bin, heartbeat_interval=0.1)
-    heartbeat = _wait_surface(run_id, runs, wait_seconds=120)
-    assert heartbeat["surface"] == {
-        "kind": "heartbeat",
-        "message": "active worker: round complete; follow-ups: none",
-        "blocking": False,
-    }
+    failed_check_in = tmp_path / "failed-check-in"
+    run_id = _launch_cli(
+        plan,
+        runs,
+        _base(tmp_path),
+        onejudge_bin,
+        heartbeat_interval=0.2,
+        env={"FAKE_CHECK_IN_FAIL_ONCE": str(failed_check_in)},
+    )
+    # llmlint: ignore[tests_mirror_real_usage] Required durable clock audit has no CLI view.
     heartbeat_path = runs / run_id / "channel" / "heartbeat.json"
+    # llmlint: ignore[tests_mirror_real_usage] Required queue audit has no CLI view.
+    initial_state = json.loads(heartbeat_path.read_text())
+    queued_path = runs / run_id / "channel" / "heartbeat-surface.json"
+    queue_deadline = deadline(120)
+    while not queued_path.is_file() and time.monotonic() < queue_deadline:
+        time.sleep(0.01)
+    assert queued_path.is_file()
+    assert failed_check_in.read_text(encoding="utf-8") == "failed\n"
+    # llmlint: ignore[tests_mirror_real_usage] Required pre-consumption audit has no CLI view.
+    queued_state = json.loads(heartbeat_path.read_text(encoding="utf-8"))
+    # llmlint: ignore[tests_mirror_real_usage] Required journal audit has no CLI view.
+    queued_events = (runs / run_id / "events.jsonl").read_text(encoding="utf-8")
+    assert queued_state["last_surface_at"] == initial_state["last_surface_at"]
+    assert queued_state["due"] is True
+    assert '"kind":"planner-surfaced"' not in queued_events
+
+    expected_message = (
+        "active-worker: executing the slow agent step; "
+        "evidence: node-started is recorded and node-settled is absent; follow-ups: none"
+    )
+    heartbeats: list[dict[str, object]] = []
+    while len(heartbeats) < 3:
+        heartbeat = _wait_surface(run_id, runs, wait_seconds=120)
+        if heartbeat["surface"] == {
+            "kind": "heartbeat",
+            "message": expected_message,
+            "blocking": False,
+        }:
+            heartbeats.append(heartbeat)
+    assert len(heartbeats) == 3
+    state = json.loads(heartbeat_path.read_text())
+    assert state["last_surface_at"] > initial_state["last_surface_at"]
+
+    while True:
+        boundary = _wait_surface(run_id, runs, wait_seconds=120)
+        boundary_surface = boundary["surface"]
+        assert isinstance(boundary_surface, dict)
+        if boundary_surface["kind"] != "heartbeat":
+            break
+    assert boundary_surface["kind"] == "milestone"
     wait_deadline = deadline(5)
     while True:
-        state = json.loads(heartbeat_path.read_text())
-        if state["due"] is False or time.monotonic() >= wait_deadline:
+        reset = json.loads(heartbeat_path.read_text())
+        if reset["due"] is False or time.monotonic() >= wait_deadline:
             break
         time.sleep(0.01)
-    assert state["due"] is False
-
-    boundary = _wait_surface(run_id, runs, wait_seconds=120)
-    boundary_surface = boundary["surface"]
-    assert isinstance(boundary_surface, dict)
-    assert boundary_surface["kind"] == "milestone"
-    reset = json.loads(heartbeat_path.read_text())
     assert reset["due"] is False
     assert reset["last_surface_at"] >= state["last_surface_at"]
     assert _next_cli(run_id, runs, timeout="0.02").get("surface") is None
     _reply_cli(run_id, runs, {"completion": True, "reason": "verified heartbeat"})
     _wait_report(runs / run_id / "orchestrator" / "report.json")
+    events = [
+        json.loads(line)
+        for line in (runs / run_id / "events.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    surfaced = [event for event in events if event["kind"] == "planner-surfaced"]
+    assert len([event for event in surfaced if event["detail"]["kind"] == "heartbeat"]) >= 3
+
+    disabled_plan = json.loads(plan.read_text(encoding="utf-8"))
+    disabled_plan["tasks"][0]["task"] = f"slow-branch {witness} complete-now heartbeat-channel"
+    plan.write_text(json.dumps(disabled_plan), encoding="utf-8")
+    disabled_id = _launch_cli(
+        plan,
+        runs,
+        _base(tmp_path),
+        onejudge_bin,
+        heartbeat_interval=10,
+        requested_run_id="heartbeat-disabled",
+    )
+    _reply_cli(
+        disabled_id,
+        runs,
+        {
+            "completion": False,
+            "reason": "disable the pacemaker",
+            "message": "continue",
+            "heartbeat_interval": False,
+        },
+    )
+    disabled_boundary = _wait_surface(disabled_id, runs, wait_seconds=120)
+    assert disabled_boundary["surface"]["kind"] == "milestone"
+    assert _next_cli(disabled_id, runs, timeout="0.15").get("surface") is None
+    _reply_cli(disabled_id, runs, {"completion": True, "reason": "verified disabled"})
+    _wait_report(runs / disabled_id / "orchestrator" / "report.json")
+    disabled_events = (runs / disabled_id / "events.jsonl").read_text(encoding="utf-8")
+    assert '"kind":"planner-surfaced"' not in disabled_events
 
     for target, message, timeout, diagnostic in (
         (run_id, "", "1", "non-empty"),
@@ -241,6 +317,61 @@ def test_due_heartbeat_is_agent_synthesized_and_normal_surface_resets_clock(
         check=True,
     )
     assert "planner update due" not in corrupt_status.stdout
+
+
+@pytest.mark.parametrize(
+    ("sentinel", "underlying_error"),
+    [
+        ("provider-errors", "provider error"),
+        ("infrastructure-sigkill", "oneharness exited with signal: 9 (SIGKILL)"),
+        ("infrastructure-auth", "harness failed (auth): login required"),
+        (
+            "infrastructure-v03-write",
+            "harness claude-code cannot write v0.3 history telemetry",
+        ),
+        (
+            "infrastructure-v03-incomplete",
+            "new history record lacks complete v0.3 telemetry",
+        ),
+    ],
+)
+def test_infrastructure_failure_is_terminal_blocker_without_second_round(
+    tmp_path: Path, onejudge_bin: str, sentinel: str, underlying_error: str
+) -> None:
+    """A real failed provider dispatch stops iteration and names its cause."""
+    runs = tmp_path / f"{sentinel}-runs"
+    run_id = _launch_cli(_plan(tmp_path, sentinel), runs, _base(tmp_path), onejudge_bin)
+
+    blocker = _wait_surface(run_id, runs, wait_seconds=120)
+
+    surface = blocker["surface"]
+    assert isinstance(surface, dict)
+    assert surface["kind"] == "proposal" and surface["blocking"] is True
+    assert "terminal infrastructure failure; dispatch cannot run" in str(surface["message"])
+    assert underlying_error in str(surface["message"])
+    first_result = _wait_report(runs / run_id / "round-01" / "result.json")
+    failed = first_result["results"]["worker"]
+    assert failed["status"] == "failed"
+    assert failed["outcome"] == "infrastructure-failure"
+    assert underlying_error in failed["error"]
+    _reply_cli(
+        run_id,
+        runs,
+        {
+            "completion": False,
+            "message": "infrastructure failure acknowledged",
+            "reason": "the provider must be repaired outside this run",
+        },
+    )
+    boundary = _wait_surface(run_id, runs, wait_seconds=120)
+    assert boundary["surface"]["kind"] in {"milestone", "closeout"}
+    assert not (runs / run_id / "round-02").exists()
+    _reply_cli(
+        run_id,
+        runs,
+        {"completion": True, "reason": "terminal infrastructure blocker verified"},
+    )
+    _wait_report(runs / run_id / "orchestrator" / "report.json")
 
 
 def _next_cli(run_id: str, runs: Path, timeout: str | None = None) -> dict[str, object]:
@@ -477,7 +608,46 @@ def test_live_channel_runs_real_nested_graph_and_round_trips_guidance(
         capture_output=True,
         check=True,
     )
+    expected_wait = "waiting for planner decision: blocker: plan departure needs a decision"
     assert f"* {run_id}" in listed.stdout
+    assert expected_wait in listed.stdout
+    status = subprocess.run(
+        ["just", "status", "--runs-dir", str(runs)],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    assert f"{run_id}: {expected_wait}" in status.stdout
+    pending_path = run_dir / "channel" / "planner-pending.json"
+    pending = pending_path.read_text(encoding="utf-8")
+    # llmlint: ignore-block[tests_mirror_real_usage] No public producer can corrupt this
+    # durable file; a directory at the file path deterministically exercises the
+    # unreadable-state boundary even when the e2e process runs as root.
+    for damage in ("malformed", "unreadable"):
+        if damage == "malformed":
+            pending_path.write_text("{broken", encoding="utf-8")
+        else:
+            pending_path.unlink()
+            pending_path.mkdir()
+        for command in ("runs", "status"):
+            damaged = subprocess.run(
+                ["just", command, "--runs-dir", str(runs)],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            assert damaged.returncode == 0
+            assert "Traceback" not in damaged.stderr
+            assert expected_wait not in damaged.stdout
+            if command == "runs":
+                assert f"* {run_id}" in damaged.stdout
+                assert "(1 done)" in damaged.stdout
+        if pending_path.is_dir():
+            pending_path.rmdir()
+    # llmlint: ignore-end[tests_mirror_real_usage]
+    pending_path.write_text(pending, encoding="utf-8")
     _convenience_cli("channel-continue", run_id, runs, "retry X")
     closeout = _next_cli(run_id, runs)
     assert closeout["surface"]["kind"] == "closeout"
@@ -698,6 +868,26 @@ def test_reattached_planner_replies_to_mid_run_proposal_without_stopping_graph(
         check=False,
     )
     assert "REPLY REQUESTED" in monitored.stdout
+    expected_wait = (
+        "waiting for planner reply: proposal: "
+        "discoverer: - Add a regression test for the adjacent edge case."
+    )
+    listed = subprocess.run(
+        ["just", "runs", "--runs-dir", str(runs)],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    assert expected_wait in listed.stdout
+    status = subprocess.run(
+        ["just", "status", "--runs-dir", str(runs)],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    assert f"{run_id}: {expected_wait}" in status.stdout
     assert provider_ready.read_text(encoding="utf-8") == "ready\n"
     _reply_cli(
         run_id,
@@ -734,7 +924,10 @@ def test_reattached_planner_replies_to_mid_run_proposal_without_stopping_graph(
         time.sleep(0.02)
     assert witness.read_text(encoding="utf-8").count("tick") == 2
 
-    boundary = _next_cli(run_id, runs)
+    while True:
+        boundary = _next_cli(run_id, runs)
+        if boundary.get("surface", {}).get("kind") != "heartbeat":
+            break
     assert boundary["surface"]["kind"] in {"milestone", "closeout"}
     _reply_cli(
         run_id,

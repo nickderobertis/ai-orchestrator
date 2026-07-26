@@ -1,0 +1,18 @@
+{
+  "nodes": [
+    {
+      "id": "publish",
+      "label": "Publish",
+      "kind": "human",
+      "state": "waiting"
+    },
+    { "id": "alpha", "label": "Alpha", "kind": "agent", "state": "done" },
+    { "id": "beta", "label": "Beta", "kind": "agent", "state": "running" },
+    { "id": "verify", "label": "Verify", "kind": "agent", "state": "pending" }
+  ],
+  "edges": [
+    { "id": "verify-publish", "source": "verify", "target": "publish" },
+    { "id": "alpha-verify", "source": "alpha", "target": "verify" },
+    { "id": "beta-verify", "source": "beta", "target": "verify" }
+  ]
+}

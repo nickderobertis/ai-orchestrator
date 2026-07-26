@@ -38,8 +38,8 @@ from .runs import NodeId, RunId, StepId
 
 # Bump when a record's *shape* changes incompatibly. Readers skip records they do
 # not understand rather than failing a round that is only being observed.
-SCHEMA_VERSION = 4
-SUPPORTED_SCHEMA_VERSIONS = frozenset({1, 2, 3, SCHEMA_VERSION})
+SCHEMA_VERSION = 5
+SUPPORTED_SCHEMA_VERSIONS = frozenset({1, 2, 3, 4, SCHEMA_VERSION})
 
 JOURNAL_NAME = "events.jsonl"
 REQUIRED_EVENT_FIELDS = ("version", "seq", "at", "kind", "run_id", "round")
@@ -75,6 +75,7 @@ EventKind = Literal[
     "completion-requested",
     "round-started",
     "round-finished",
+    "planner-surfaced",
     "node-started",
     "node-settled",
     "step-started",
@@ -126,7 +127,13 @@ TERMINAL_NODE_RESULT_FIELD = "result"
 TERMINAL_NODE_RESULT_TYPE = "GraphResultItem"
 AUDIT_EVENT_KINDS: frozenset[EventKind] = EVENT_KINDS - frozenset(AUTHORITATIVE_EVENT_KINDS)
 ROUND_EVENT_KINDS: frozenset[EventKind] = frozenset(
-    {"round-started", "round-finished", "completion-requested", "concurrent-acknowledged"}
+    {
+        "round-started",
+        "round-finished",
+        "completion-requested",
+        "concurrent-acknowledged",
+        "planner-surfaced",
+    }
 )
 GRAPH_EVENT_KINDS: frozenset[EventKind] = frozenset(
     {
@@ -237,6 +244,14 @@ class Event:
         if self.detail:
             record["detail"] = dict(self.detail)
         return record
+
+
+@dataclass(frozen=True)
+class JournalOperation:
+    """One event kind and payload awaiting a batched durable append."""
+
+    kind: EventKind
+    detail: Detail
 
 
 class JournalSink(Protocol):
@@ -455,25 +470,55 @@ class Journal:
         The record is built before the sequence advances, so an event that fails its
         contract raises without burning a sequence number the file will never hold.
         """
-        if kind not in EVENT_KINDS:
-            raise JournalError(f"unknown journal event kind: {kind!r}")
+        return self.append_batch(
+            [JournalOperation(kind=kind, detail=detail or {})],
+            node=node,
+            step=step,
+        )[0]
+
+    def append_batch(
+        self,
+        operations: Sequence[JournalOperation],
+        *,
+        node: NodeId | None = None,
+        step: StepId | None = None,
+    ) -> list[Event]:
+        """Durably append individual events with one lock, open, flush, and fsync.
+
+        Each event remains its own newline-terminated replay record. A crash during
+        the write can therefore leave only a valid prefix and, at worst, one torn
+        trailing line for reconciliation to discard.
+        """
+        if not operations:
+            raise JournalError("a journal batch requires at least one operation")
         with advisory_lock(self.lock_identity):
-            event = Event(
-                kind=kind,
-                run_id=self.run_id,
-                round=self.round,
-                seq=self.seq + 1,
-                at=time.time(),
-                node=node,
-                step=step,
-                detail=dict(detail or {}),
-            )
+            # A planner delivery can append from ``channel-next`` while the graph
+            # executor retains its own Journal instance. Refresh under the shared
+            # lock so independent writers cannot reuse a stale sequence number.
+            self.seq = max(self.seq, reconcile(self.path, self.run_id).last_seq)
+            events: list[Event] = []
+            for offset, operation in enumerate(operations, start=1):
+                if operation.kind not in EVENT_KINDS:
+                    raise JournalError(f"unknown journal event kind: {operation.kind!r}")
+                events.append(
+                    Event(
+                        kind=operation.kind,
+                        run_id=self.run_id,
+                        round=self.round,
+                        seq=self.seq + offset,
+                        at=time.time(),
+                        node=node,
+                        step=step,
+                        detail=dict(operation.detail),
+                    )
+                )
             with self.path.open("a", encoding="utf-8") as handle:
-                handle.write(json.dumps(event.to_record(), sort_keys=True) + "\n")
+                for event in events:
+                    handle.write(json.dumps(event.to_record(), sort_keys=True) + "\n")
                 handle.flush()
                 os.fsync(handle.fileno())
-            self.seq = event.seq
-        return event
+            self.seq = events[-1].seq
+        return events
 
     def append_transaction(self, operations: Sequence[Mapping[str, DetailValue]]) -> Event:
         """Append a validated edit's events as one atomic replay record."""

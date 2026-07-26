@@ -21,11 +21,21 @@ ensure clone (once per repo)  →  fresh worktree on a new branch off base
 ```
 
 Everything up to "publish + merge" is identical for every repo; only the last
-step differs by where the repo lives (see *Merge strategies*). The result is a
-`LifecycleResult` whose `outcome` is one of: `merged`, `pr-open` (successful
-publication with policy `none`),
-`not-completed` (agent hit the turn cap), `gate-failed`, `no-changes`,
-`checks-failed`, `closed`, `timeout`, `stack-conflict`, `error`.
+step differs by where the repo lives (see *Merge strategies*). The authoritative
+closed `LifecycleResult.outcome` domain is `LifecycleOutcome` in
+`orchestrator/outcomes.py`; recorded values outside that type are rejected during
+recovery. In its common publication states, `merged` means publication created
+and landed a commit, `pr-open` means policy `none` left a successful publication
+open, and `already-integrated` means the verified content was already present in
+the publication base. Failure and recovery outcomes retain their specific
+gate, check, conflict, timeout, or retry diagnosis rather than collapsing to a
+generic task failure.
+
+Local publication builds its squash in an intentionally detached scratch
+worktree. If the squash produces no tree change, closeout treats that as
+`already-integrated`, records `publication-finished`, and fast-forwards the
+registered publication checkout. A no-change commit is never attempted, so this
+case cannot be misreported as `Not currently on any branch`.
 
 Lifecycle agent steps use a larger turn segment than the shared direct-dispatch
 budget: repository orientation, implementation, and the complete gate commonly
@@ -152,6 +162,23 @@ Lifecycle verification runs this stored command; registering only the subset can
 let gate-only findings escape until publication's pre-push hook. Correct an
 existing identity across every alias with `just migrate-repo-gate <repo> --gate
 '<complete-gate-command>'`.
+
+Registration also audits whether the merge path itself runs a gate. It reports an
+executable effective `pre-push` hook (respecting `core.hooksPath`) and required
+GitHub status checks on the repository's actual default branch. A configured
+hooks directory without an executable `pre-push` does not count. If neither is
+present, registration succeeds but prints an identity-specific warning; an
+unavailable GitHub response is reported as unknown, and local-only origins are
+reported as not applicable. Audit every existing identity without re-registering
+it with:
+
+```sh
+just repos --audit-gate-coverage
+```
+
+Run this audit and resolve every missing or unknown result before relying on the
+merge path to replace lifecycle-side verification. The command only reports
+coverage; it never installs hooks or changes branch protection.
 
 A contradictory `--workflow` is rejected. Change publication policy only through
 the identity-wide migration command. For the current ai-orchestrator aliases, the

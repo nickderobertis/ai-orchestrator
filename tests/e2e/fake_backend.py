@@ -195,9 +195,6 @@ def main() -> int:
         sys.stderr.write("fake_backend: messages must be a list of objects\n")
         return 1
     task = _task_text(messages)
-    if "provider-errors" in task:
-        sys.stderr.write("fake_backend: provider error\n")
-        return 1
     if "configuration-errors" in task:
         sys.stderr.write("fake_backend: bad config\n")
         return 1
@@ -220,6 +217,19 @@ def main() -> int:
     match op:
         case "respond":
             _wait_at_provider_barrier(task)
+            if "Output file: " in task and "agent-synthesized planner update" in task:
+                fail_once_value = os.environ.get("FAKE_CHECK_IN_FAIL_ONCE")
+                fail_once = Path(fail_once_value) if fail_once_value else None
+                if fail_once is not None and not fail_once.exists():
+                    fail_once.write_text("failed\n", encoding="utf-8")
+                else:
+                    output = Path(task.split("Output file: ", 1)[1].splitlines()[0])
+                    output.write_text(
+                        "active-worker: executing the slow agent step; "
+                        "evidence: node-started is recorded and node-settled is absent; "
+                        "follow-ups: none\n",
+                        encoding="utf-8",
+                    )
             guidance = _planner_guidance(messages)
             run_log = re.search(r"record-run=(\S+)", task)
             if run_log is not None:
@@ -241,10 +251,32 @@ def main() -> int:
                     while not release.exists():
                         time.sleep(0.02)
                 elif "live-edit-slow" not in task:
-                    time.sleep(0.8)
+                    time.sleep(30 if "pacemaker-slow" in task else 0.8)
                 with witness.open("a", encoding="utf-8") as stream:
                     stream.write("tick\n")
             orchestrator_plan = _orchestrator_command(task)
+            infrastructure_failures = {
+                "provider-errors": "fake_backend: provider error",
+                "infrastructure-sigkill": "oneharness exited with signal: 9 (SIGKILL)",
+                "infrastructure-auth": "harness failed (auth): login required",
+                "infrastructure-v03-write": (
+                    "harness claude-code cannot write v0.3 history telemetry"
+                ),
+                "infrastructure-v03-incomplete": (
+                    "new history record lacks complete v0.3 telemetry"
+                ),
+            }
+            infrastructure_error = next(
+                (
+                    detail
+                    for sentinel, detail in infrastructure_failures.items()
+                    if sentinel in task
+                ),
+                None,
+            )
+            if infrastructure_error is not None and orchestrator_plan is None:
+                sys.stderr.write(f"{infrastructure_error}\n")
+                return 1
             plan_text = ""
             if orchestrator_plan is not None:
                 plan_path = orchestrator_plan.plan
@@ -276,83 +308,14 @@ def main() -> int:
                                 "continuation-channel",
                                 '"name": "live-edit"',
                                 "lifecycle-worker-death-retry",
+                                "provider-errors",
+                                "infrastructure-",
                             )
                         ),
                         capture_output=True,
                         text=True,
                         env=run_env,
                     )
-                    if "heartbeat-channel" in plan_text:
-                        history_dir = orchestrator_plan.runs_dir / "heartbeat-history"
-                        history_dir.mkdir(exist_ok=True)
-                        poll_env = {**os.environ, "ONEHARNESS_HISTORY_DIR": str(history_dir)}
-                        run_id = orchestrator_plan.argv[orchestrator_plan.argv.index("--run") + 1]
-                        monitor = subprocess.run(
-                            [
-                                "just",
-                                "monitor",
-                                run_id,
-                                "--runs-dir",
-                                str(orchestrator_plan.runs_dir),
-                                "--once",
-                            ],
-                            check=True,
-                            capture_output=True,
-                            text=True,
-                            env=poll_env,
-                        )
-                        json_monitor = subprocess.run(
-                            [
-                                "just",
-                                "monitor",
-                                run_id,
-                                "--runs-dir",
-                                str(orchestrator_plan.runs_dir),
-                                "--once",
-                                "--format",
-                                "jsonl",
-                            ],
-                            check=True,
-                            capture_output=True,
-                            text=True,
-                            env=poll_env,
-                        )
-                        status = subprocess.run(
-                            [
-                                "just",
-                                "status",
-                                "--runs-dir",
-                                str(orchestrator_plan.runs_dir),
-                            ],
-                            check=True,
-                            capture_output=True,
-                            text=True,
-                            env=poll_env,
-                        )
-                        if "planner update due" not in monitor.stdout:
-                            raise AssertionError("monitor did not expose heartbeat")
-                        json_events = [
-                            json.loads(line) for line in json_monitor.stdout.splitlines() if line
-                        ]
-                        if not any(
-                            event.get("type") == "planner_update_due" for event in json_events
-                        ):
-                            raise AssertionError("JSON monitor did not expose heartbeat")
-                        if "planner update due" not in status.stdout:
-                            raise AssertionError("status did not expose heartbeat")
-                        subprocess.run(
-                            [
-                                "just",
-                                "channel-surface",
-                                run_id,
-                                "active worker: round complete; follow-ups: none",
-                                "--runs-dir",
-                                str(orchestrator_plan.runs_dir),
-                            ],
-                            check=True,
-                            capture_output=True,
-                            text=True,
-                        )
                 elif orchestrator_turn == 1 and "continuation-channel" in plan_text:
                     run_id = orchestrator_plan.argv[orchestrator_plan.argv.index("--run") + 1]
                     settled_run = orchestrator_plan.runs_dir / run_id
@@ -453,6 +416,18 @@ def main() -> int:
                 )
             if "write-change" in task:
                 (Path.cwd() / "CHANGE.txt").write_text("change from fake agent\n", encoding="utf-8")
+            if "publish-change-to-base" in task:
+                subprocess.run(["git", "add", "CHANGE.txt"], check=True, capture_output=True)
+                subprocess.run(
+                    ["git", "commit", "-m", "test: publish change early"],
+                    check=True,
+                    capture_output=True,
+                )
+                subprocess.run(
+                    ["git", "push", "origin", "HEAD:main"],
+                    check=True,
+                    capture_output=True,
+                )
             if "write-unique-change" in task:
                 identity = re.sub(r"[^A-Za-z0-9._-]+", "-", Path.cwd().name)
                 (Path.cwd() / f"CHANGE-{identity}.txt").write_text(
@@ -461,7 +436,9 @@ def main() -> int:
             # `complete-now` finishes on the first turn; otherwise the agent stays
             # "not done" and completion is decided by the unified supervisor
             # below, which only passes on the second turn — exercising the loop.
-            done = (not fail) and ("complete-now" in task)
+            done = (not fail) and (
+                "complete-now" in task or "agent-synthesized planner update" in task
+            )
             if orchestrator_plan is not None:
                 turn = _assistant_turns(messages)
                 if turn == 0 and "surface-blocker" in plan_text:
@@ -522,7 +499,8 @@ def main() -> int:
             supervisor = cast(SupervisorRequest, req)
             completion_turn = 13 if "complete-after-13" in task else 2
             complete = (not fail) and (
-                _assistant_turns(messages) >= completion_turn
+                "agent-synthesized planner update" in task
+                or _assistant_turns(messages) >= completion_turn
                 or "resume-after-cap" in task
                 and resume_segments >= 2
             )
@@ -543,7 +521,9 @@ def main() -> int:
             # The adopted version routes the completion decision through `supervisor` above.
             completion_turn = 13 if "complete-after-13" in task else 2
             value = (not fail) and (
-                "complete-now" in task or _assistant_turns(messages) >= completion_turn
+                "complete-now" in task
+                or "agent-synthesized planner update" in task
+                or _assistant_turns(messages) >= completion_turn
             )
             resp = {"value": value, "reason": "fake judge verdict"}
         case "judge":

@@ -361,6 +361,31 @@ def test_breakdown_aggregates_real_multirole_history_records(
     )
     assert "?" in unknown_breakdown.stdout
 
+    agent_record = json.loads((tmp_path / "agent.jsonl").read_text(encoding="utf-8"))
+    agent_record["schema_version"] = "1.1"
+    (tmp_path / "agent.jsonl").write_text(json.dumps(agent_record) + "\n", encoding="utf-8")
+    for field in ("model_ms", "tool_ms", "started_at"):
+        judge_record.pop(field)
+    judge_record["duration_ms"] = None
+    judge_record["finished_at"] = None
+    for field in ("started_at", "finished_at", "duration_ms", "status"):
+        judge_record["events"][0][field] = None
+    (tmp_path / "judge.jsonl").write_text(json.dumps(judge_record) + "\n", encoding="utf-8")
+    degraded = subprocess.run(
+        [*command.args, "--breakdown"],
+        cwd=REPO_ROOT,
+        env=environment,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(30),
+    )
+    assert degraded.returncode == 0, degraded.stderr
+    degraded_row = next(
+        line for line in degraded.stdout.splitlines() if line.startswith("telemetry-invalid")
+    )
+    assert "partial" in degraded_row
+    assert degraded_row.count("?") >= 4
+
     judge_record["events"][0]["tool_call_id"] = ""
     (tmp_path / "judge.jsonl").write_text(json.dumps(judge_record) + "\n", encoding="utf-8")
     malformed_tool = subprocess.run(
@@ -373,6 +398,15 @@ def test_breakdown_aggregates_real_multirole_history_records(
     )
     assert malformed_tool.returncode == 2
     judge_record["events"][0]["tool_call_id"] = "judge-tool-1"
+    judge_record = json.loads(
+        json.dumps(
+            {
+                **agent_record,
+                "schema_version": "0.3",
+                "events": [{**agent_record["events"][0], "tool_call_id": "judge-tool-1"}],
+            }
+        )
+    )
     (tmp_path / "judge.jsonl").write_text(json.dumps(judge_record) + "\n", encoding="utf-8")
     invalid_timing = dict(judge_record)
     invalid_timing["duration_ms"] = True
@@ -459,7 +493,7 @@ def test_breakdown_aggregates_real_multirole_history_records(
     invalid = json.loads((tmp_path / "agent.jsonl").read_text(encoding="utf-8"))
     invalid["schema_version"] = 99
     (tmp_path / "agent.jsonl").write_text(json.dumps(invalid) + "\n", encoding="utf-8")
-    rejected = subprocess.run(
+    future_schema = subprocess.run(
         command.args,
         cwd=REPO_ROOT,
         env=environment,
@@ -467,8 +501,7 @@ def test_breakdown_aggregates_real_multirole_history_records(
         capture_output=True,
         timeout=e2e_timeout(30),
     )
-    assert rejected.returncode == 2
-    assert "unsupported oneharness history schema" in rejected.stderr
+    assert future_schema.returncode == 0, future_schema.stderr
 
     (tmp_path / "agent.jsonl").write_text(
         '{"duration_ms":1200,"status":"running"}\n{"duration_ms":2500,"status":"completed"}\n',

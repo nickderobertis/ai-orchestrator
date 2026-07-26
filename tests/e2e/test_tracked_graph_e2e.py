@@ -126,7 +126,7 @@ def test_direct_human_pause_attestation_and_release_use_real_onejudge(
 
     assert paused.returncode == 1, paused.stderr
     first = json.loads(paused.stdout)
-    assert first["schema_version"] == 4 and first["round"] == 1
+    assert first["schema_version"] == 5 and first["round"] == 1
     assert first["ok"] is False and first["state"] == "waiting"
     assert first["started_order"] == ["prepare", "approve"]
     assert first["results"]["prepare"]["status"] == "done"
@@ -1623,6 +1623,29 @@ def test_real_cli_recovers_waiting_and_no_change_lifecycle_results(
     process.wait()
     provider_release.write_text("release\n", encoding="utf-8")
 
+    original_events = events_path.read_text()
+    invalid_results = (
+        ("outcome", ["waiting-human"], "invalid outcome ['waiting-human']"),
+        ("deferred_cleanup", "not-a-list", "invalid deferred_cleanup"),
+    )
+    for field, value, expected_error in invalid_results:
+        interrupted_records = [json.loads(line) for line in original_events.splitlines()]
+        for event in interrupted_records:
+            if event["kind"] == "node-settled" and event.get("node") == "waiting-lifecycle":
+                event["detail"]["result"][field] = value
+                break
+        # llmlint: ignore[tests_mirror_real_usage] corruption fixture for real CLI recovery
+        events_path.write_text(
+            "".join(f"{json.dumps(event)}\n" for event in interrupted_records),
+            encoding="utf-8",
+        )
+        invalid_recovery = subprocess.run(
+            [*command, "--recover"], cwd=REPO_ROOT, text=True, capture_output=True, check=False
+        )
+        assert invalid_recovery.returncode == 1
+        assert expected_error in invalid_recovery.stderr
+        events_path.write_text(original_events, encoding="utf-8")
+
     recovered = subprocess.run(
         [*command, "--recover"], cwd=REPO_ROOT, text=True, capture_output=True, check=False
     )
@@ -1656,7 +1679,11 @@ def test_real_cli_recovers_waiting_and_no_change_lifecycle_results(
 
 def test_recover_completes_a_partially_emitted_graph_without_duplicates(tmp_path: Path) -> None:
     runs = tmp_path / "runs"
-    node_count = 2000
+    # Graph definitions are durably emitted in bounded batches. Ten batches leave
+    # repeated observable recovery checkpoints without restoring the old 2,000-node
+    # runtime; the strict partial-prefix assertion below deliberately fails if that
+    # guarantee regresses and the writer completes before it can be interrupted.
+    node_count = 200
     plan = tmp_path / "large-static.json"
     plan.write_text(
         json.dumps(
@@ -1811,6 +1838,90 @@ def test_recover_completes_a_partially_emitted_graph_without_duplicates(tmp_path
     assert sum(event["kind"] == "round-started" for event in events) == 1
 
 
+def test_recover_completes_partially_emitted_edges_without_duplicates(tmp_path: Path) -> None:
+    runs = tmp_path / "runs"
+    node_count = 100
+    dependency_width = 10
+    tasks = [
+        {
+            "id": f"node-{index}",
+            "task": "No diff.",
+            "expects_no_diff": True,
+            **(
+                {
+                    "deps": [
+                        f"node-{dependency}"
+                        for dependency in range(max(0, index - dependency_width), index)
+                    ]
+                }
+                if index
+                else {}
+            ),
+        }
+        for index in range(node_count)
+    ]
+    expected_edges = [
+        {"from": dependency, "to": task["id"]}
+        for task in tasks
+        for dependency in task.get("deps", [])
+    ]
+    plan = tmp_path / "edge-heavy-static.json"
+    plan.write_text(json.dumps({"schema_version": 2, "tasks": tasks}))
+    command = [
+        "just",
+        "run-plan",
+        str(plan),
+        "--run",
+        "partial-edges",
+        "--runs-dir",
+        str(runs),
+        "--format",
+        "json",
+    ]
+    process = subprocess.Popen(
+        command,
+        cwd=REPO_ROOT,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    )
+    events_path = runs / "partial-edges" / "events.jsonl"
+    deadline = e2e_deadline(10)
+    durable_definitions = 0
+    durable_edges = 0
+    while time.monotonic() < deadline:
+        if events_path.exists():
+            events = events_path.read_text()
+            durable_definitions = events.count('"kind": "node-added"')
+            durable_edges = events.count('"kind": "edge-added"')
+            if durable_definitions == node_count and 0 < durable_edges < len(expected_edges):
+                break
+        time.sleep(0.001)
+    else:
+        process.kill()
+        pytest.fail(
+            "did not observe a partial graph-edge prefix "
+            f"(saw {durable_definitions} definitions and "
+            f"{durable_edges}/{len(expected_edges)} edges)"
+        )
+    os.killpg(process.pid, signal.SIGKILL)
+    process.wait()
+
+    recovered = subprocess.run(
+        [*command, "--recover"], cwd=REPO_ROOT, text=True, capture_output=True, check=False
+    )
+    assert recovered.returncode == 0, recovered.stderr
+    events = [json.loads(line) for line in events_path.read_text().splitlines()]
+    edges = [
+        {"from": event["detail"]["from"], "to": event["detail"]["to"]}
+        for event in events
+        if event["kind"] == "edge-added"
+    ]
+    assert edges == expected_edges
+    assert sum(event["kind"] == "round-started" for event in events) == 1
+
+
 def test_recover_discards_only_a_torn_final_journal_line(
     tmp_path: Path, command_base, onejudge_bin: str
 ) -> None:
@@ -1885,7 +1996,7 @@ def test_legacy_direct_plan_and_recorded_ledger_still_run(
     )
     assert direct.returncode == 0, direct.stderr
     direct_payload = json.loads(direct.stdout)
-    assert direct_payload["schema_version"] == 4 and "round" not in direct_payload
+    assert direct_payload["schema_version"] == 5 and "round" not in direct_payload
     assert direct_payload["state"] == "complete"
     assert direct_payload["results"]["legacy-agent"]["status"] == "done"
 

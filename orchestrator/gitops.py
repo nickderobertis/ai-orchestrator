@@ -20,6 +20,7 @@ from typing import NamedTuple
 __all__ = [
     "Commit",
     "GitError",
+    "NothingToCommit",
     "add_all",
     "checkout",
     "branch_exists",
@@ -32,6 +33,7 @@ __all__ = [
     "default_branch",
     "delete_branch",
     "fetch",
+    "hooks_dir",
     "has_commits_ahead",
     "head_sha",
     "is_bare",
@@ -61,6 +63,10 @@ class GitError(Exception):
     """A git command exited non-zero (carries git's own stderr)."""
 
 
+class NothingToCommit(GitError):
+    """A requested commit had no tree change to record."""
+
+
 def common_dir(cwd: str | Path) -> Path:
     """Return the canonical shared git common directory for any linked worktree."""
     proc = _git(["rev-parse", "--git-common-dir"], cwd=cwd)
@@ -82,6 +88,14 @@ def configure_repo_hooks(cwd: str | Path) -> Path | None:
         return None
     _git(["config", "core.hooksPath", str(hooks)], cwd=cwd)
     return hooks
+
+
+def hooks_dir(cwd: str | Path) -> Path:
+    """Return Git's effective hooks directory for this checkout."""
+    value = Path(_git(["rev-parse", "--git-path", "hooks"], cwd=cwd).stdout.strip())
+    if not value.is_absolute():
+        value = Path(cwd) / value
+    return value.resolve()
 
 
 def _git(
@@ -489,6 +503,10 @@ def merge(cwd: str | Path, ref: str, *, message: str, no_ff: bool = True) -> str
 def merge_squash(cwd: str | Path, ref: str, *, message: str) -> str:
     """Squash-merge ``ref``, commit ``message``, and return the new HEAD sha."""
     _git(["merge", "--squash", ref], cwd=cwd)
+    if not is_dirty(cwd):
+        raise NothingToCommit(
+            f"squash merge of {ref!r} produced no tree change; its content is already present"
+        )
     _git(["commit", "-m", message], cwd=cwd)
     return head_sha(cwd)
 

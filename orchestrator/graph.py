@@ -13,11 +13,13 @@ import inspect
 import json
 import math
 import os
+import re
 import sys
 import threading
 import time
 from collections import Counter
 from collections.abc import Iterable, Mapping
+from contextlib import suppress
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Literal, cast
@@ -33,7 +35,7 @@ from .channel import (
 from .cli_contract import ROUND_BUDGET_OPTION
 from .config import ConfigError, load_yaml
 from .coordination import advisory_lock, reset_harness_observer, set_harness_observer
-from .dispatch import Report
+from .dispatch import Report, dispatch
 from .edits import EditError, apply_edit
 from .goals import Goal, find_active_run, finish_run, graph_identities, parse_goal, register_run
 from .journal import (
@@ -41,6 +43,7 @@ from .journal import (
     TERMINAL_NODE_RESULT_FIELD,
     Event,
     EventKind,
+    JournalOperation,
     JournalSink,
     NodeJournal,
     NullJournal,
@@ -62,6 +65,11 @@ from .lifecycle import (
     persist_report_artifacts,
     result_payload,
     validate_repo_aliases,
+)
+from .outcomes import (
+    INFRASTRUCTURE_FAILURE_OUTCOME,
+    LIFECYCLE_OUTCOMES,
+    NODE_OUTCOMES,
 )
 from .plan import (
     NODE_KINDS,
@@ -95,6 +103,23 @@ from .workspace import Workspace
 NodeKind = Literal["agent", "human"]
 EXIT_BY_STATE = {"complete": 0, "waiting": 1, "failed": 1}
 DEFAULT_ROUND_BUDGET = 14_400.0
+
+_INFRASTRUCTURE_FAILURE_PATTERNS = (
+    re.compile(r"provider error.*\b(?:respond|supervisor)\b", re.IGNORECASE | re.DOTALL),
+    re.compile(r"oneharness exited with signal:\s*9\b", re.IGNORECASE),
+    re.compile(r"harness failed\s*\(\s*auth\s*\)", re.IGNORECASE),
+    re.compile(r"cannot write v0\.3 history telemetry", re.IGNORECASE),
+    re.compile(r"new history record lacks complete v0\.3 telemetry", re.IGNORECASE),
+)
+
+
+def infrastructure_failure_detail(exc: BaseException) -> str | None:
+    """Return the durable underlying error only for known no-dispatch failures."""
+    detail = str(exc).strip()
+    if any(pattern.search(detail) for pattern in _INFRASTRUCTURE_FAILURE_PATTERNS):
+        return detail
+    return None
+
 
 _AGENT_NODE_FIELDS = (
     "persona",
@@ -669,17 +694,28 @@ def run_graph(
             # ledger records it either way. Journal it here as well: a `node-started`
             # with nothing to close it is how this journal says "still running", and
             # a node that raised is the one thing it is not.
-            failed = NodeRun("failed", str(exc))
+            infrastructure_detail = infrastructure_failure_detail(exc)
+            outcome = INFRASTRUCTURE_FAILURE_OUTCOME if infrastructure_detail is not None else None
+            failed = NodeRun("failed", str(exc), outcome)
             node_log.append(
                 "node-failed",
                 detail={
                     "detail": str(exc),
                     "error": type(exc).__name__,
+                    **({"outcome": outcome} if outcome is not None else {}),
                     TERMINAL_NODE_RESULT_FIELD: cast(
                         Any, _run_payload(node, failed, dependents.get(nid, []))
                     ),
                 },
             )
+            if infrastructure_detail is not None:
+                if proposal_pump is not None:
+                    message = (
+                        "terminal infrastructure failure; dispatch cannot run: "
+                        + infrastructure_detail
+                    )
+                    proposal_pump.defer_blocking(nid, message)
+                return failed
             raise
         finally:
             reset_harness_observer(token)
@@ -814,7 +850,9 @@ def _run_payload(node: GraphNode, run: NodeRun, dependents: list[str]) -> GraphR
         error=run.error,
         unblocks=list(dependents) if run.status == "waiting" else [],
         human_actions=actions,
-        outcome=run.payload if run.payload == "no-changes" else None,
+        outcome=(
+            run.payload if isinstance(run.payload, str) and run.payload in NODE_OUTCOMES else None
+        ),
     )
     return _node_payload(result)
 
@@ -823,7 +861,12 @@ def _replay_node_run(node: GraphNode, item: GraphResultItem) -> NodeRun:
     """Restore scheduler actual state while retaining the exact serialized result."""
     status = item["status"]
     error = item.get("error")
-    payload: Any = "no-changes" if item.get("outcome") == "no-changes" else None
+    recorded_outcome = item.get("outcome")
+    payload: Any = (
+        recorded_outcome
+        if isinstance(recorded_outcome, str) and recorded_outcome in NODE_OUTCOMES
+        else None
+    )
     if node.lifecycle is not None:
         anchors = [
             StackBase(
@@ -842,15 +885,17 @@ def _replay_node_run(node: GraphNode, item: GraphResultItem) -> NodeRun:
         if not isinstance(raw_deferred_cleanup, list) or not all(
             isinstance(detail, str) for detail in raw_deferred_cleanup
         ):
-            # llmlint: ignore[changed_behavior_has_e2e] unit test asserts this rejection.
             raise ConfigError("recorded lifecycle result has invalid deferred_cleanup")
+        raw_outcome = item.get("outcome", "error")
+        if not isinstance(raw_outcome, str) or raw_outcome not in LIFECYCLE_OUTCOMES:
+            raise ConfigError(f"recorded lifecycle result has invalid outcome {raw_outcome!r}")
         payload = LifecycleResult(
             repo=item.get("repo", node.lifecycle.repo),
             task=node.task,
             persona=node.lifecycle.persona or "workstream",
             base_branch=item.get("base_branch", ""),
             branch=item.get("branch", ""),
-            outcome=item.get("outcome", "error"),
+            outcome=raw_outcome,
             publication_identity=cast(Any, item.get("publication_identity")),
             publication_workflow=cast(Any, item.get("publication_workflow")),
             repository_type=cast(Any, item.get("repository_type")),
@@ -911,7 +956,11 @@ def _collect(
             unblocks=list(dependents[nid]) if run.status == "waiting" else [],
             blocked_by=blocking(nid) if run.status == "blocked" else [],
             human_actions=actions.get(nid, []),
-            outcome=run.payload if run.payload == "no-changes" else None,
+            outcome=(
+                run.payload
+                if isinstance(run.payload, str) and run.payload in NODE_OUTCOMES
+                else None
+            ),
             recorded=cast(GraphResultItem, run.recorded) if run.recorded is not None else None,
         )
     return GraphResult(results=results, started_order=started_order)
@@ -1173,8 +1222,15 @@ def main(argv: list[str] | None = None) -> int:
                 file=sys.stderr,
             )
             return 2
-        for definition in expected_definitions[len(recorded_definitions) :]:
-            journal.append("node-added", detail={"definition": definition})
+        missing_definitions = expected_definitions[len(recorded_definitions) :]
+        journal_batch_size = 20
+        for start in range(0, len(missing_definitions), journal_batch_size):
+            journal.append_batch(
+                [
+                    JournalOperation("node-added", {"definition": definition})
+                    for definition in missing_definitions[start : start + journal_batch_size]
+                ]
+            )
         expected_edges = [
             {"from": dependency, "to": raw_node["id"]}
             for raw_node in plan_mapping["tasks"]
@@ -1188,8 +1244,14 @@ def main(argv: list[str] | None = None) -> int:
         if recorded_edges != expected_edges[: len(recorded_edges)]:
             print("run-plan: recorded graph edges do not match the recovery plan", file=sys.stderr)
             return 2
-        for edge in expected_edges[len(recorded_edges) :]:
-            journal.append("edge-added", detail=edge)
+        missing_edges = expected_edges[len(recorded_edges) :]
+        for start in range(0, len(missing_edges), journal_batch_size):
+            journal.append_batch(
+                [
+                    JournalOperation("edge-added", edge)
+                    for edge in missing_edges[start : start + journal_batch_size]
+                ]
+            )
         existing_kinds = {event.kind for event in round_events}
         if args.recover and "round-started" in existing_kinds:
             from .projection import project_run
@@ -1242,7 +1304,7 @@ def main(argv: list[str] | None = None) -> int:
         print("run-plan: incomplete proposal channel environment", file=sys.stderr)
         return 2
     if channel_path and channel_run_id and round_number is not None:
-        # llmlint: ignore-block[changed_behavior_has_e2e] internal env; malformed only in unit
+        assert run_dir is not None
         try:
             validated_run_id = str(validate_run_id(channel_run_id))
             resolved_channel = Path(channel_path).resolve(strict=True)
@@ -1253,8 +1315,52 @@ def main(argv: list[str] | None = None) -> int:
         except (OSError, ValueError) as exc:
             print(f"run-plan: invalid proposal channel: {exc}", file=sys.stderr)
             return 2
-        proposal_pump = ProposalPump(resolved_channel, validated_run_id, round_number)
-        # llmlint: ignore-end[changed_behavior_has_e2e]
+
+        def synthesize_heartbeat() -> str:
+            output = resolved_channel / "check-in-message.txt"
+            with suppress(FileNotFoundError):
+                output.unlink()
+            task = (
+                "Read the durable evidence for this run and write exactly one concise, "
+                "agent-synthesized planner update to the supplied output file. Cover every "
+                "active workstream with concrete current progress and include any non-blocking "
+                "follow-ups. Do not wait for or contact the planner.\n\n"
+                f"Run directory: {run_dir.resolve()}\n"
+                f"Journal: {(run_dir / JOURNAL_NAME).resolve()}\n"
+                f"Status: {(run_dir / 'orchestrator' / 'status.json').resolve()}\n"
+                f"Monitor details: {(run_dir / 'monitor' / 'details.json').resolve()}\n"
+                f"Output file: {output.resolve()}"
+            )
+            report = dispatch(
+                "check-in",
+                task,
+                base_path=args.base_config,
+                persona_dir=args.persona_dir,
+                cwd=args.cwd or REPO_ROOT,
+                onejudge_bin=args.onejudge_bin,
+                provider=args.provider,
+                oneharness_mode=args.oneharness_mode,
+                labels={
+                    "run_id": validated_run_id,
+                    "round": str(round_number),
+                    "agent_role": "check-in",
+                    "persona": "check-in",
+                },
+                session=f"check-in-{validated_run_id}-{round_number}",
+                max_turns=1,
+                timeout=dispatch_timeout,
+            )
+            if not report.completed or not output.is_file():
+                raise RuntimeError("check-in agent did not write a completed status update")
+            return output.read_text(encoding="utf-8")
+
+        proposal_pump = ProposalPump(
+            resolved_channel,
+            validated_run_id,
+            round_number,
+            journal=journal,
+            synthesize_heartbeat=synthesize_heartbeat,
+        )
     try:
         result = run_graph(
             graph,

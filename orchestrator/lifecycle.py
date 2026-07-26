@@ -51,6 +51,12 @@ from .merge import (
     MergeStrategy,
     assess_blocking_checks,
 )
+from .outcomes import (
+    ALREADY_INTEGRATED_OUTCOME,
+    SUCCESSFUL_LIFECYCLE_OUTCOMES,
+    WAITING_HUMAN_OUTCOME,
+    LifecycleOutcome,
+)
 from .plan import NODE_KINDS, NodeRun, schedule_dag
 from .provenance import (
     INCOMPLETE_TRAILER,
@@ -121,12 +127,9 @@ PR_OPTIONAL_SECTIONS = ("Additional info",)
 TASK_REQUIRED_SECTIONS = (*PR_REQUIRED_SECTIONS, "Acceptance criteria")
 TASK_OPTIONAL_SECTIONS = PR_OPTIONAL_SECTIONS
 
-# Outcomes that count as the subtask succeeding.
-_SUCCESS_OUTCOMES = frozenset({"merged", "pr-open"})
-
 # Workstream paused on a human step. This is neither success nor failure; the next
 # recorded round resumes after a human attestation.
-_WAITING_OUTCOME = "waiting-human"
+_WAITING_OUTCOME = WAITING_HUMAN_OUTCOME
 
 CI_ITERATION_INSTRUCTIONS = """CI verification mode:
 CI is the authoritative check for this task. Push your workstream branch to origin and find and
@@ -252,8 +255,7 @@ class LifecycleResult:
     persona: str
     base_branch: str
     branch: str
-    outcome: str  # merged | pr-open | not-completed | gate-failed | no-changes
-    #             | checks-failed | closed | timeout | error
+    outcome: LifecycleOutcome
     execution_checkout: str = ""
     publication_checkout: str = ""
     publication_identity: IdentityKey | None = None
@@ -275,7 +277,7 @@ class LifecycleResult:
 
     @property
     def ok(self) -> bool:
-        return self.outcome in _SUCCESS_OUTCOMES
+        return self.outcome in SUCCESSFUL_LIFECYCLE_OUTCOMES
 
     @property
     def waiting(self) -> bool:
@@ -1674,6 +1676,7 @@ def run_repo_task(
         completed_step_ids = set(resume.completed_steps) if resume else set()
         prior_step_results: dict[str, StepResult] = {}
         automatic_resumes = 0
+        workstream_start_head = gitops.head_sha(worktree)
         while True:
             step_run = _run_steps(
                 effective_steps,
@@ -1844,6 +1847,47 @@ def run_repo_task(
         # Each step commits its own work in _run_steps, so the worktree is clean
         # here; if no step produced a commit, there is nothing to open a PR for.
         if not gitops.has_commits_ahead(worktree, remote_base):
+            if (
+                local_publication
+                and gitops.head_sha(worktree) != workstream_start_head
+                and gitops.is_ancestor(worktree, "HEAD", remote_base)
+            ):
+                if not skip_verify and resolved_verify_cmd is not None:
+                    verify = _verify_gate(
+                        log,
+                        worktree,
+                        resolved_verify_cmd,
+                        timeout=gate_timeout,
+                        env={
+                            **cache_env,
+                            "ORCHESTRATOR_COMPARISON_REMOTE": "origin",
+                            "ORCHESTRATOR_COMPARISON_BASE": pr_base,
+                        },
+                    )
+                    result.verify = verify
+                    if not verify.ok:
+                        result.outcome = "gate-failed"
+                        result.detail = (
+                            f"already-integrated change failed local gate: "
+                            f"{' '.join(resolved_verify_cmd)}\n{verify.tail()}"
+                        )
+                        return result
+                result.outcome = ALREADY_INTEGRATED_OUTCOME
+                result.detail = (
+                    f"verified worktree HEAD was already present on {pr_base}; "
+                    "no publication commit was needed"
+                )
+                log.append(
+                    "publication-finished",
+                    detail={
+                        "branch": branch,
+                        "base": pr_base,
+                        "outcome": ALREADY_INTEGRATED_OUTCOME,
+                    },
+                )
+                if pr_base == root_base:
+                    workspace.fast_forward(ref, root_base)
+                return result
             result.outcome = "no-changes"
             result.detail = "agent completed but produced no commits to open a PR"
             return result
@@ -2072,7 +2116,7 @@ def run_repo_task(
                     f"{branch!r} requires manual recovery",
                 )
                 break
-        if merge_outcome.outcome == "merged" and pr_base == root_base:
+        if merge_outcome.outcome in {"merged", ALREADY_INTEGRATED_OUTCOME} and pr_base == root_base:
             workspace.fast_forward(ref, root_base)
         result.pr = merge_outcome.pr
         result.outcome = merge_outcome.outcome

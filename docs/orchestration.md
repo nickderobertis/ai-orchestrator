@@ -97,21 +97,32 @@ messages: transport state lives under `runs/<run-id>/channel/` as `up.fifo`,
 ### Planner-update pacemaker
 
 `just orchestrate` seeds a durable 1800-second planner-update interval; override
-it at launch with `--heartbeat-interval SECONDS`. Reconcile ticks persist a sticky
-due signal in `channel/heartbeat.json`, and `just monitor` and `just status` show
-`planner update due (Nm since last update)` until the orchestrator agent sends a
-non-blocking, synthesized per-workstream update with `just channel-surface`. The
-agent inspects current status and monitor evidence, includes active-workstream
-progress and non-blocking follow-ups, sends the update, and continues without a
-planner reply. The reconciler only sets the due signal; it never authors content.
+it at launch with `--heartbeat-interval SECONDS`. A channel-side pacemaker keeps
+checking that clock independently of graph reconciliation, including while a node
+is inside a long-running agent step. When due, it dispatches a dedicated check-in
+agent to synthesize a concise per-workstream update from the run journal, status,
+monitor, telemetry, and labeled history. The resulting non-blocking surface is
+queued without waiting for a planner reply. Only successful consumption through
+`channel-next` resets the clock and appends `planner-surfaced` to `events.jsonl`;
+an update queued while no planner is attached is neither reset nor audited as
+delivered.
 
-Every planner-visible update—round boundary, proposal, or heartbeat—clears the
-due signal and restarts the clock. A new round process reads the same durable
-timestamp rather than resetting it. To adjust the cadence, add
+Every planner-visible update—round boundary, proposal, or delivered heartbeat—
+clears the due signal and restarts the clock. The pacemaker compares wall time
+directly with the persisted `last_surface_at`, so a new round or restarted process
+continues the same durable countdown rather than starting a fresh interval. To
+adjust the cadence, add
 `"heartbeat_interval": SECONDS` to an otherwise normal `channel-reply`; use
 `"heartbeat_interval": false` to disable it. Values must be positive finite
 seconds. This pacemaker is independent of the reader-side `just monitor
 --heartbeat` silence display described below.
+
+While a consumed surface is persisted awaiting an answer, `just runs` and `just
+status` report `waiting for planner decision` for blocking surfaces and `waiting
+for planner reply` for informational ones, followed by the surface kind and
+message. A queued, unconsumed heartbeat remains non-blocking and is not reported
+as a reply wait. This distinguishes completed work held at a planner boundary
+from an orchestrator that is actively executing work.
 
 Every proposal includes `surface.blocking`: `true` means the worker or orchestrator
 is awaiting the decision, while `false` is an informational follow-up that does
@@ -306,6 +317,11 @@ Each node settles once per round:
 - `blocked`: execution is transitively gated by a waiting human. `blocked_by`
   contains the ready top-level or `NODE_ID/STEP_ID` human references.
 - `failed`: an executed agent or lifecycle failed.
+- `failed` with outcome `infrastructure-failure`: a recognized provider or
+  harness failure prevented dispatch from running. This is terminal across
+  rounds: the reconciler surfaces the underlying error as a blocking planner
+  proposal on first occurrence, and replanning does not dispatch the node again.
+  Unknown or ambiguous errors remain ordinary retryable task failures.
 - `skipped`: a failed dependency made execution unsafe. Failure takes precedence
   over a simultaneous waiting path, so such a descendant is skipped, not blocked.
 
@@ -313,7 +329,8 @@ The result's top-level `state` is `failed` if any node failed or skipped,
 otherwise `waiting` if any node waits or is blocked, otherwise `complete`. `ok` is
 true only for `complete`. Human and JSON output carry the same facts. Exit status
 is 0 for `complete`, 1 for `waiting` or `failed`, and 2 for invalid plan, ledger,
-or command input.
+configuration, or command input. Recorded result schema v5 adds the terminal
+`infrastructure-failure` and successful `already-integrated` outcome values.
 
 ## Recorded rounds
 

@@ -101,7 +101,9 @@ dispatch onejudge.
    with no node. See [Node shapes](docs/orchestration.md#node-shapes). Before a
    lifecycle run, use `just repos` to confirm its repository identity, type,
    workflow, and available checkout aliases; make durable routing changes with
-   the register/migration recipes rather than accidental run-only overrides. Treat
+   the register/migration recipes rather than accidental run-only overrides. Run
+   `just repos --audit-gate-coverage` before relying on hooks or required PR checks
+   as merge-path verification; keep missing and unknown coverage visible. Treat
    an unfamiliar project-sounding name as a lookup, not a question: search local
    paths such as `~/projects`, then `just repos`, then the current GitHub account
    with `gh search repos <name>` and `gh repo list <owner>`. A hit whose description
@@ -270,6 +272,13 @@ Human completion is never inferred and enters the graph only as an explicit live
 syntax and result contracts in
 `docs/orchestration.md` and lifecycle policy in `docs/repo-lifecycle.md` rather
 than duplicating command help here.
+The root quality recipes delegate project selection and caching to Nx:
+`check`/`test` use the full uniform target set through `run-many`, while
+`lint`/`typecheck`/`format` use affected selection. The language-native tools
+inside each project target remain authoritative, and `format-check` remains a
+format-only verification. Session provisioning and the initial locked Bun
+install precede Nx because they make Nx available; bootstrap then delegates
+project setup through uniform Nx `bootstrap` targets.
 Use `docs/telemetry.md` to inspect session timing, usage, and the agent/judge
 turn timeline with `just telemetry`.
 
@@ -314,24 +323,28 @@ self-dispatch result.
 
 ## Stack and composition
 
-How this repo was built up from the create-repo reference pieces:
+How this polyglot monorepo was built up from the create-repo reference pieces:
 
-- **Product shape:** config / orchestration repo — closest to `shapes/skills-repo.md`
-  (determinism-vs-judgment split, validate-in-gate, narrow allowlist), applied to
-  onejudge configs + personas rather than skills.
-- **Language(s):** Python (uv, ruff, mypy, pytest) for the orchestration package
+- **Product shape:** Nx monorepo containing a config/orchestration engine, shared
+  libraries, and React applications. Its orchestration core remains closest to
+  `shapes/skills-repo.md` (determinism-vs-judgment split, validate-in-gate,
+  narrow allowlist), applied to onejudge configs + personas rather than skills.
+- **Language(s):** Python (uv, ruff, mypy, pytest) for the Nx `orchestrator` project
   in `orchestrator/` — including the repo-lifecycle layer (`workspace`, `gitops`,
   `verify`, `github`, `merge`, `lifecycle`, `replan`) that shells to real
-  `git`/`gh`; Bash
-  for `scripts/session-setup.sh`; YAML/TOML for configs.
-- **Composed:** `base.md` (always) + `shapes/skills-repo.md`.
+  `git`/`gh`; TypeScript and React (Bun, Nx, Biome, ESLint) for `apps/` and
+  framework-independent `packages/`; Bash for provisioning and wrappers; YAML,
+  JSON, and TOML for configs.
+- **Composed:** `base.md` (always) + `shapes/skills-repo.md` +
+  `monorepo.md` + the React and TypeScript references. Nx provides the project
+  graph, affected execution, module boundaries, and computation caching; the
+  underlying language tools remain the source of each check.
 - **Excluded, and why:** **CI** — deliberately, per the repo's charter: this is a
   local, private proof-of-concept ("local config/scripts/docs at this point"). The
   full gate still runs locally as `just gate` and at pre-push; add
   `.github/workflows/` mirroring it when this graduates past PoC. `releasing.md` —
-  nothing versioned is
-  published. `monorepo.md` — single deliverable. asdf / direnv / `src` layout —
-  unneeded ceremony for a small Python package.
+  nothing versioned is published. asdf / direnv — the committed Bun and uv
+  lockfiles already make the workspace reproducible.
 - **Composed additionally:** the `llmlint` LLM-judge tier (`ci.md`'s companion) —
   `llmlint.yml` + the `lint-llm*` recipes, enforced at **pre-push**
   (`.githooks/pre-push`) since there is no CI.

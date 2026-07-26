@@ -1,9 +1,8 @@
 """One versioned machine-readable index over every recorded run source."""
 
-# llmlint: ignore-file[boundary_inputs_validated] Schema-v2 model/tool/interval fields are
-# required by docs/telemetry-model.md; rejecting a record that claims v2 while violating
-# those required fields is the documented trust-boundary behavior. Optional usage fields
-# degrade independently to null and optional command input/name fields are ignored.
+# llmlint: ignore-file[boundary_inputs_validated] History timing fields are validated when
+# present; absent fields and future schemas degrade telemetry quality, while contradictory
+# intervals and malformed present values remain trust-boundary errors.
 # llmlint: ignore-file[changed_behavior_has_e2e] The real CLI telemetry E2E exercises report-v5
 # ingestion and normalized oneharness timing, including role linkage, precedence, and clipping.
 # llmlint: ignore-file[contracts_have_one_source_or_a_drift_gate] docs/telemetry-model.md is
@@ -49,10 +48,9 @@ from .verify import GateAttestation
 
 TELEMETRY_SCHEMA_VERSION = 6
 SUPPORTED_HISTORY_SCHEMA_VERSIONS = ("0.2", "0.3", 1, 2, "1.0", "1.1")
-#: History schema versions that carry validated native timing (per-turn
-#: ``model_ms``/``tool_ms`` plus interval-bearing tool events). oneharness 0.5's
-#: event-sourced 1.0 records keep the same required fields and event shape as the
-#: earlier 0.3/v2 tier once `history.py` folds their event lines back onto the run.
+#: History schema versions that may carry validated native timing (per-turn
+#: ``model_ms``/``tool_ms`` plus interval-bearing tool events). A version identifies
+#: the line format, not the completeness of timing supplied by a particular harness.
 NATIVE_TIMING_HISTORY_SCHEMAS: frozenset[str | int] = frozenset({"0.3", 2, "1.0", "1.1"})
 TelemetryQuality = Literal["complete", "partial", "legacy"]
 TelemetrySource = Literal["onejudge", "oneharness", "history_legacy", "journal_legacy"]
@@ -545,37 +543,50 @@ def _summarize_session(session: HistorySession, records: list[HistoryRecord]) ->
     tool_intervals: list[_Interval] = []
     for record in records:
         schema_version = record.get("schema_version")
-        if schema_version is not None and schema_version not in SUPPORTED_HISTORY_SCHEMA_VERSIONS:
-            raise HistoryError(f"unsupported oneharness history schema version {schema_version!r}")
-        if schema_version not in NATIVE_TIMING_HISTORY_SCHEMAS:
+        if (
+            schema_version not in NATIVE_TIMING_HISTORY_SCHEMAS
+            or schema_version not in SUPPORTED_HISTORY_SCHEMA_VERSIONS
+        ):
             validated_native_fields = False
         model = _non_negative_int(record.get("model_ms"))
         tool = _non_negative_int(record.get("tool_ms"))
+        raw_duration = record.get("duration_ms")
+        duration = _non_negative_int(raw_duration)
         raw_start = record.get("started_at")
+        start_at = _utc_datetime(raw_start) if raw_start is not None else None
         raw_finish = record.get("finished_at")
-        has_native_timing = any(
-            value is not None
-            for value in (raw_start, raw_finish, record.get("model_ms"), record.get("tool_ms"))
-        )
-        if schema_version in NATIVE_TIMING_HISTORY_SCHEMAS and has_native_timing:
-            start_at = _utc_datetime(raw_start)
-            finish_at = _utc_datetime(raw_finish) if raw_finish is not None else None
-            duration = _non_negative_int(record.get("duration_ms"))
-            if (
-                start_at is None
-                or duration is None
-                or model is None
-                or tool is None
-                or (raw_finish is not None and finish_at is None)
-                or (finish_at is not None and finish_at < start_at)
-                or model + tool > duration
+        finish_at = _utc_datetime(raw_finish) if raw_finish is not None else None
+        if schema_version is not None:
+            for timing_field, raw_value, parsed in (
+                ("duration_ms", raw_duration, duration),
+                ("model_ms", record.get("model_ms"), model),
+                ("tool_ms", record.get("tool_ms"), tool),
+                ("started_at", raw_start, start_at),
+                ("finished_at", raw_finish, finish_at),
             ):
-                raise HistoryError("oneharness history schema v2 record has invalid interval")
-            if finish_at is None:
-                validated_native_fields = False
-        if model is None or tool is None:
+                if raw_value is not None and parsed is None:
+                    raise HistoryError(
+                        f"oneharness history record has invalid present field {timing_field}"
+                    )
+            if (
+                start_at is not None
+                and finish_at is not None
+                and finish_at < start_at
+                or duration is not None
+                and model is not None
+                and tool is not None
+                and model + tool > duration
+            ):
+                raise HistoryError("oneharness history record has invalid contradictory timing")
+        if (
+            duration is None
+            or model is None
+            or tool is None
+            or start_at is None
+            or finish_at is None
+        ):
             validated_native_fields = False
-        else:
+        if model is not None and tool is not None:
             model_ms += round(model)
             tool_ms += round(tool)
         events = record.get("events")
@@ -586,22 +597,38 @@ def _summarize_session(session: HistorySession, records: list[HistoryRecord]) ->
                 continue
             event_start: datetime | None = None
             event_finish: datetime | None = None
-            if schema_version in NATIVE_TIMING_HISTORY_SCHEMAS:
-                event_start = _utc_datetime(event.get("started_at"))
-                raw_finish = event.get("finished_at")
-                event_finish = _utc_datetime(raw_finish) if raw_finish is not None else None
-                raw_duration = event.get("duration_ms")
-                if (
-                    not isinstance(event.get("tool_call_id"), str)
-                    or not event["tool_call_id"]
-                    or event_start is None
-                    or (raw_finish is not None and event_finish is None)
-                    or (event_finish is not None and event_finish < event_start)
-                    or (raw_duration is not None and _non_negative_int(raw_duration) is None)
-                    or event.get("status") not in {"completed", "failed", "timeout", "interrupted"}
-                ):
-                    raise HistoryError("oneharness history schema v2 record has invalid tool event")
+            raw_tool_call_id = event.get("tool_call_id")
+            raw_start = event.get("started_at")
+            event_start = _utc_datetime(raw_start) if raw_start is not None else None
+            raw_finish = event.get("finished_at")
+            event_finish = _utc_datetime(raw_finish) if raw_finish is not None else None
+            raw_duration = event.get("duration_ms")
             event_duration = _non_negative_int(event.get("duration_ms"))
+            raw_status = event.get("status")
+            if schema_version is not None and (
+                raw_tool_call_id is not None
+                and (not isinstance(raw_tool_call_id, str) or not raw_tool_call_id)
+                or raw_start is not None
+                and event_start is None
+                or raw_finish is not None
+                and event_finish is None
+                or raw_duration is not None
+                and event_duration is None
+                or raw_status is not None
+                and raw_status not in {"completed", "failed", "timeout", "interrupted"}
+                or event_start is not None
+                and event_finish is not None
+                and event_finish < event_start
+            ):
+                raise HistoryError("oneharness history record has invalid tool event")
+            if schema_version in NATIVE_TIMING_HISTORY_SCHEMAS and (
+                raw_tool_call_id is None
+                or event_start is None
+                or event_finish is None
+                or event_duration is None
+                or raw_status is None
+            ):
+                validated_native_fields = False
             if event_start is not None and event_finish is not None:
                 tool_intervals.append(
                     _Interval(
@@ -1474,6 +1501,10 @@ def _value(value: int | float | None) -> str:
     return "?" if value is None else f"{value:g}"
 
 
+def _timing_value(value: int, fraction: float, quality: TelemetryQuality) -> str:
+    return f"{value:5} {fraction:5.1%}" if quality == "complete" else "    ?     ?"
+
+
 def _breakdown(runs: list[RunTelemetry], retry_metrics: LlmlintRetryMetrics | None = None) -> str:
     retry_metrics = retry_metrics or _empty_llmlint_retry_metrics()
     header = (
@@ -1501,10 +1532,16 @@ def _breakdown(runs: list[RunTelemetry], retry_metrics: LlmlintRetryMetrics | No
             columns = [
                 f"{name[:20]:20}",
                 f"{timing['wall_ms']:6}ms",
-                f"{timing['agent_model_ms']:5} {fractions['agent_model']:5.1%}",
-                f"{timing['judge_model_ms']:5} {fractions['judge_model']:5.1%}",
-                f"{timing['llmlint_model_ms']:5} {fractions['llmlint_model']:5.1%}",
-                f"{timing['tool_ms']:5} {fractions['tool']:5.1%}",
+                _timing_value(
+                    timing["agent_model_ms"], fractions["agent_model"], run.telemetry_quality
+                ),
+                _timing_value(
+                    timing["judge_model_ms"], fractions["judge_model"], run.telemetry_quality
+                ),
+                _timing_value(
+                    timing["llmlint_model_ms"], fractions["llmlint_model"], run.telemetry_quality
+                ),
+                _timing_value(timing["tool_ms"], fractions["tool"], run.telemetry_quality),
                 f"{round(timing['gate_seconds'] * 1000):4}",
                 f"{round(timing['publication_wait_seconds'] * 1000):4}",
                 f"{round(timing['lock_wait_seconds'] * 1000):4}",
