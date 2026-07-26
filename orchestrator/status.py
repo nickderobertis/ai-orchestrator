@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from . import gitops, history, runs
-from .channel import ChannelError, due_indicator
+from .channel import ChannelError, due_indicator, planner_wait_indicator
 from .config import ConfigError
 from .registry import Registry, RegistryError
 from .workspace import IdentityKey, RepositoryType, Workflow
@@ -233,9 +233,12 @@ def main(argv: list[str] | None = None) -> int:
         if args.runs_dir.is_dir():
             for run_dir in sorted(path for path in args.runs_dir.iterdir() if path.is_dir()):
                 try:
+                    waiting = planner_wait_indicator(run_dir / "channel")
                     indicator = due_indicator(run_dir / "channel")
                 except (ChannelError, ConfigError, OSError):
                     continue
+                if waiting is not None:
+                    indicators.append(f"{run_dir.name}: {waiting}")
                 if indicator is not None:
                     indicators.append(f"{run_dir.name}: {indicator}")
         print("\n".join([*indicators, _human(selected)]))
