@@ -1079,7 +1079,7 @@ def test_goal_validation_rejects_malformed_contract(goal: object, message: str) 
         )
 
 
-def test_recorded_result_schema_v4_field_golden_cannot_drift() -> None:
+def test_recorded_result_schema_v5_field_golden_cannot_drift() -> None:
     golden = json.loads(
         (Path(__file__).parent / "golden" / "recorded-result-v5-fields.json").read_text(
             encoding="utf-8"
