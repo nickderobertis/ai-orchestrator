@@ -233,6 +233,19 @@ def test_read_launcher_degrades_on_missing_and_malformed(tmp_path: Path) -> None
     assert read_launcher(run_dir) == {"kind": "unknown"}
 
 
+def test_launcher_kinds_match_dispatch() -> None:
+    """Drift gate: the read-side launcher enum must equal dispatch's write-side one.
+
+    ``read_model`` restates ``dispatch.LAUNCHER_KINDS`` locally to keep the heavy
+    dispatch/onejudge-SDK stack out of the viewing process; this asserts the two
+    cannot silently diverge and drop a launcher kind on read.
+    """
+    from orchestrator.dispatch import LAUNCHER_KINDS
+    from orchestrator.read_model import _LAUNCHER_KINDS
+
+    assert _LAUNCHER_KINDS == LAUNCHER_KINDS
+
+
 def test_run_signature_advances_with_journal_growth(tmp_path: Path) -> None:
     runs = tmp_path / "runs"
     run_dir = _build_run(runs, "demo", settle=False)

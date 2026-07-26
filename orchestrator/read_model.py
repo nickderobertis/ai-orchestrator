@@ -33,7 +33,9 @@ API_VERSION = 1
 
 #: The launcher harnesses a persisted ``launch.json`` may name. Kept local rather
 #: than imported from ``dispatch`` so the read path does not pull the whole dispatch
-#: /onejudge-SDK stack into a viewing process.
+#: /onejudge-SDK stack into a viewing process. ``dispatch.LAUNCHER_KINDS`` is the
+#: write-side source; ``test_read_model.test_launcher_kinds_match_dispatch`` is the
+#: drift gate that fails if the two ever diverge.
 _LAUNCHER_KINDS = frozenset({"claude-code", "codex", "unknown"})
 
 

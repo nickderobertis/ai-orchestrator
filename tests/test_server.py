@@ -68,6 +68,8 @@ def test_sse_and_error_helpers() -> None:
     ],
 )
 def test_status_for(exc: Exception, status: int, code: str) -> None:
+    # `exc` is annotated Exception for the parametrize table; every value is a
+    # ReadError subclass, which is what `_status_for` accepts.
     assert server._status_for(exc) == (status, code)  # type: ignore[arg-type]
 
 
