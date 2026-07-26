@@ -24,7 +24,7 @@ import time
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager, suppress
 from pathlib import Path
-from typing import Any, Literal, Protocol, TypedDict, get_args
+from typing import Any, Literal, Protocol, get_args
 
 from .config import ConfigError
 from .coordination import advisory_lock, atomic_json
@@ -61,21 +61,7 @@ PlannerSurfaceKind = Literal[
 PLANNER_SURFACE_KINDS: frozenset[PlannerSurfaceKind] = frozenset(get_args(PlannerSurfaceKind))
 
 
-class HeartbeatSurface(TypedDict):
-    kind: str
-    message: str
-    blocking: bool
-
-
-class HeartbeatFrame(TypedDict):
-    op: str
-    run_id: str
-    round: int
-    surface: HeartbeatSurface
-    messages: list[dict[str, Any]]
-
-
-def _heartbeat_frame(run_id: str, round_number: int, message: str) -> HeartbeatFrame:
+def _heartbeat_frame(run_id: str, round_number: int, message: str) -> dict[str, Any]:
     return {
         "op": "supervisor",
         "run_id": run_id,
@@ -240,14 +226,9 @@ def planner_wait_indicator(channel_dir: Path) -> str | None:
     pending = channel_dir / "planner-pending.json"
     if not pending.is_file():
         return None
-    surface = load_mapping(pending)
-    kind = surface.get("kind")
-    message = surface.get("message")
-    blocking = surface.get("blocking", True)
-    if not isinstance(kind, str) or not isinstance(message, str) or not isinstance(blocking, bool):
-        raise ChannelError("planner pending state is invalid")
-    action = "planner decision" if blocking else "planner reply"
-    return f"waiting for {action}: {kind}: {message}"
+    surface = _validated_persisted_surface(load_mapping(pending))
+    action = "planner decision" if surface["blocking"] else "planner reply"
+    return f"waiting for {action}: {surface['kind']}: {surface['message']}"
 
 
 def create_channel(
@@ -428,7 +409,7 @@ def _validated_persisted_surface(value: Mapping[str, Any]) -> dict[str, Any]:
     """Validate a persisted planner surface before forwarding it."""
     kind = value.get("kind")
     message = value.get("message")
-    blocking = value.get("blocking")
+    blocking = value.get("blocking", True)
     if not isinstance(kind, str) or not isinstance(message, str) or not isinstance(blocking, bool):
         raise ChannelError("persisted planner surface has invalid kind, message, or blocking")
     if kind not in PLANNER_SURFACE_KINDS:
@@ -461,16 +442,9 @@ def _validated_heartbeat_surface(value: Mapping[str, Any], run_id: str) -> dict[
         or surface["blocking"] is not False
     ):
         raise ChannelError("heartbeat surface values are invalid")
-    messages = value["messages"]
-    if not isinstance(messages, list) or not all(
-        isinstance(message, Mapping)
-        and set(message) == {"role", "content"}
-        and isinstance(message["role"], str)
-        and isinstance(message["content"], str)
-        for message in messages
-    ):
-        raise ChannelError("heartbeat surface messages are invalid")
-    return dict(value)
+    if value["messages"] != []:
+        raise ChannelError("heartbeat surface messages must be empty")
+    return _heartbeat_frame(run_id, round_number, surface["message"])
 
 
 def _reply(value: Mapping[str, Any]) -> dict[str, Any]:

@@ -169,6 +169,9 @@ def test_due_heartbeat_surfaces_during_active_step_and_disabled_run_stays_silent
         encoding="utf-8",
     )
     run_id = _launch_cli(plan, runs, _base(tmp_path), onejudge_bin, heartbeat_interval=0.2)
+    # llmlint: ignore[tests_mirror_real_usage] The public channel commands prove delivery
+    # below; these durable records are inspected additionally to prove the required
+    # pre-consumption clock semantics and completed-run audit trail.
     heartbeat_path = runs / run_id / "channel" / "heartbeat.json"
     initial_state = json.loads(heartbeat_path.read_text())
     queued_path = runs / run_id / "channel" / "heartbeat-surface.json"
@@ -606,8 +609,8 @@ def test_live_channel_runs_real_nested_graph_and_round_trips_guidance(
     assert f"{run_id}: {expected_wait}" in status.stdout
     pending_path = run_dir / "channel" / "planner-pending.json"
     pending = pending_path.read_text(encoding="utf-8")
-    # This durable file has no corrupting public producer; damage it directly to
-    # exercise the real read-side CLI trust boundary.
+    # llmlint: ignore[tests_mirror_real_usage] This durable file has no corrupting
+    # public producer; damage it directly to exercise the real read-side CLI trust boundary.
     pending_path.write_text("{broken", encoding="utf-8")
     for command in ("runs", "status"):
         malformed = subprocess.run(

@@ -56,7 +56,7 @@ def test_heartbeat_surface_protocol_validates_every_external_field() -> None:
             "message": "work continues",
             "blocking": False,
         },
-        "messages": [{"role": "assistant", "content": "status"}],
+        "messages": [],
     }
     assert _validated_heartbeat_surface(valid, "orch") == valid
 
@@ -65,7 +65,7 @@ def test_heartbeat_surface_protocol_validates_every_external_field() -> None:
         {**valid, "run_id": "other"},
         {**valid, "round": True},
         {**valid, "surface": {"kind": "heartbeat", "message": 1, "blocking": False}},
-        {**valid, "messages": [{"role": "assistant", "content": 1}]},
+        {**valid, "messages": [{"role": "assistant", "content": "status"}]},
         {**valid, "unexpected": True},
     ]
     for value in invalid:
