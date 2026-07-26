@@ -11,6 +11,7 @@ import pytest
 from conftest import git
 
 from orchestrator import gitops
+from orchestrator.github import GitHubError
 from orchestrator.registry import (
     _REGISTRY_VERSION,
     Registry,
@@ -21,6 +22,7 @@ from orchestrator.registry import (
     _coalesce,
     _default_search_roots,
     _parse_entry,
+    _print_merge_gate_coverage,
     _serialize,
     _url_identity,
     _validate_alias,
@@ -31,6 +33,7 @@ from orchestrator.registry import (
     main_migrate_workflow,
     main_register,
     main_repos,
+    merge_gate_coverage,
     validate_identity_key,
 )
 from orchestrator.verify import NOOP_GATE
@@ -1083,3 +1086,57 @@ def test_documented_registry_schema_version_tracks_contract() -> None:
         encoding="utf-8"
     )
     assert NOOP_GATE in (root / "docs" / "repo-lifecycle.md").read_text(encoding="utf-8")
+
+
+def test_merge_gate_coverage_reports_hook_checks_and_unknown(
+    tmp_path: Path,
+    bare_origin: Callable[..., Path],
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    checkout = _clone(bare_origin(), tmp_path / "checkout")
+    hook = checkout / ".git" / "hooks" / "pre-push"
+    hook.write_text("#!/bin/sh\n", encoding="utf-8")
+    hook.chmod(0o755)
+    identity = validate_identity_key("https://github.com/acme/widget")
+
+    github = SimpleNamespace(
+        default_branch=lambda repo: "master",
+        required_status_checks=lambda repo, branch: ("gate",),
+    )
+    covered = merge_gate_coverage(identity, checkout, github=github)
+    assert covered.meets_coverage_criteria
+    assert covered.default_branch == "master"
+    assert covered.required_checks == ("gate",)
+    _print_merge_gate_coverage(covered)
+    output = capsys.readouterr()
+    assert "executable pre-push hook" in output.out
+    assert "required PR status checks on master (gate)" in output.out
+    assert output.err == ""
+
+    hook.unlink()
+
+    def unavailable(repo: str) -> str:
+        raise GitHubError("forbidden")
+
+    unknown = merge_gate_coverage(
+        identity,
+        checkout,
+        github=SimpleNamespace(
+            default_branch=unavailable,
+            required_status_checks=lambda repo, branch: (),
+        ),
+    )
+    assert not unknown.meets_coverage_criteria
+    assert unknown.github_status == "unknown"
+    _print_merge_gate_coverage(unknown)
+    output = capsys.readouterr()
+    assert "required_pr_status_checks=unknown (forbidden)" in output.out
+    assert "required PR status checks are unknown" in output.err
+
+    local = merge_gate_coverage(
+        validate_identity_key(str(bare_origin()).removesuffix(".git")),
+        checkout,
+    )
+    assert local.github_status == "not-applicable"
+    _print_merge_gate_coverage(local)
+    assert "no GitHub origin" in capsys.readouterr().out
