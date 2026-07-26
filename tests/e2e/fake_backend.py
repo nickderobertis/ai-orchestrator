@@ -224,6 +224,17 @@ def main() -> int:
                 command_text = task.split("Send command: ", 1)[1].splitlines()[0]
                 command = shlex.split(command_text)
                 check_in_run = Path(task.split("Run directory: ", 1)[1].splitlines()[0])
+                if "heartbeat-retry-channel" in str(check_in_run):
+                    attempts_path = check_in_run / "check-in-attempts"
+                    attempts = (
+                        int(attempts_path.read_text(encoding="utf-8"))
+                        if attempts_path.is_file()
+                        else 0
+                    )
+                    attempts_path.write_text(str(attempts + 1), encoding="utf-8")
+                    if attempts == 0:
+                        sys.stderr.write("fake_backend: first check-in fails\n")
+                        return 1
                 (check_in_run / "check-in-labels.txt").write_text(
                     os.environ.get("ONEHARNESS_HISTORY_LABELS", ""),
                     encoding="utf-8",
@@ -252,7 +263,12 @@ def main() -> int:
                 witness = Path(task.split("slow-branch", 1)[1].strip().split()[0])
                 with witness.open("a", encoding="utf-8") as stream:
                     stream.write("tick\n")
-                if "live-edit-slow" in task and _assistant_turns(messages) > 0:
+                retry_release = re.search(r"check-in-retry-release=(\S+)", task)
+                if retry_release is not None:
+                    release = Path(retry_release.group(1))
+                    while not release.exists():
+                        time.sleep(0.02)
+                elif "live-edit-slow" in task and _assistant_turns(messages) > 0:
                     ready_match = re.search(r"live-edit-ready=(\S+)", task)
                     release_match = re.search(r"live-edit-release=(\S+)", task)
                     if ready_match is None or release_match is None:

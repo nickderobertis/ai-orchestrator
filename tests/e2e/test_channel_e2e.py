@@ -249,6 +249,73 @@ def test_due_heartbeat_is_agent_synthesized_and_normal_surface_resets_clock(
     assert "planner update due" not in corrupt_status.stdout
 
 
+def test_failed_check_in_clears_claim_and_retries_without_blocking_frontier(
+    tmp_path: Path, onejudge_bin: str
+) -> None:
+    runs = tmp_path / "runs"
+    witness = tmp_path / "retry-witness"
+    release = tmp_path / "retry-release"
+    plan = tmp_path / "heartbeat-retry-channel.json"
+    plan.write_text(
+        json.dumps(
+            {
+                "schema_version": 3,
+                "name": "heartbeat-retry-channel",
+                "tasks": [
+                    {
+                        "id": "active-worker",
+                        "persona": "engineer",
+                        "task": (
+                            f"slow-branch {witness} complete-now heartbeat-retry-channel "
+                            f"check-in-retry-release={release}"
+                        ),
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    run_id = _launch_cli(plan, runs, _base(tmp_path), onejudge_bin, heartbeat_interval=1)
+    run_dir = runs / run_id
+    heartbeat_path = run_dir / "channel" / "heartbeat.json"
+    failure_log = run_dir / "channel" / "check-in.log"
+    wait_deadline = deadline(30)
+    while time.monotonic() < wait_deadline:
+        if failure_log.is_file() and "check-in failed:" in failure_log.read_text(encoding="utf-8"):
+            break
+        time.sleep(0.02)
+    assert "check-in failed:" in failure_log.read_text(encoding="utf-8")
+    failed_state = json.loads(heartbeat_path.read_text(encoding="utf-8"))
+    assert failed_state["in_flight"] is False
+    assert failed_state["due"] is False
+    assert witness.read_text(encoding="utf-8") == "tick\n"
+    assert not release.exists()
+
+    retried = _wait_surface(run_id, runs, wait_seconds=30)
+    assert retried["surface"] == {
+        "kind": "heartbeat",
+        "message": "active-worker: in progress; follow-ups: none",
+        "blocking": False,
+    }
+    assert (run_dir / "check-in-attempts").read_text(encoding="utf-8") == "2"
+    wait_deadline = deadline(5)
+    while True:
+        successful_state = json.loads(heartbeat_path.read_text(encoding="utf-8"))
+        if successful_state["in_flight"] is False or time.monotonic() >= wait_deadline:
+            break
+        time.sleep(0.01)
+    assert successful_state["in_flight"] is False
+    release.write_text("release\n", encoding="utf-8")
+
+    boundary = _wait_surface(run_id, runs, wait_seconds=30)
+    assert boundary["surface"]["kind"] == "milestone"
+    assert _next_cli(run_id, runs, timeout="0.02").get("surface") is None
+    assert (run_dir / "check-in-attempts").read_text(encoding="utf-8") == "2"
+    assert witness.read_text(encoding="utf-8") == "tick\ntick\n"
+    _reply_cli(run_id, runs, {"completion": True, "reason": "verified check-in recovery"})
+    _wait_report(run_dir / "orchestrator" / "report.json")
+
+
 def _next_cli(run_id: str, runs: Path, timeout: str | None = None) -> dict[str, object]:
     wait_timeout = str(e2e_timeout(10)) if timeout is None else timeout
     result = subprocess.run(
