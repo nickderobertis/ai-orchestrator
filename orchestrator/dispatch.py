@@ -634,8 +634,8 @@ def dispatch(
     process_env = {**context_env, **(env or {})}
     _validate_environment(process_env)
     semantic_labels = {
-        **semantic_agent_labels(persona),
         **(labels or {}),
+        **semantic_agent_labels(persona),
     }
     return run_onejudge(
         config,
