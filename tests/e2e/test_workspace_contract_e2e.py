@@ -168,6 +168,50 @@ def test_contract_checker_rejects_unsupported_source_scheme(tmp_path: Path) -> N
     assert "source URL must use https:// or file://" in result.stderr
 
 
+def _dag_state_contract_checkout(tmp_path: Path) -> Path:
+    checkout = tmp_path / "dag-state-contract"
+    for relative in (
+        "scripts/check-dag-state-contract.py",
+        "orchestrator/projection.py",
+        "packages/dag-layout/src/index.ts",
+    ):
+        target = checkout / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        source = ROOT / relative
+        if source.exists():
+            shutil.copy2(source, target)
+    _run("git", "init", "-q", cwd=checkout)
+    return checkout
+
+
+def _dag_state_contract_run(checkout: Path) -> subprocess.CompletedProcess[str]:
+    return _run("python3", "scripts/check-dag-state-contract.py", cwd=checkout)
+
+
+def test_dag_state_contract_checker_accepts_matching_public_states(
+    tmp_path: Path,
+) -> None:
+    checkout = _dag_state_contract_checkout(tmp_path)
+
+    result = _dag_state_contract_run(checkout)
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "dag state contract: Python and TypeScript states agree\n"
+
+
+def test_dag_state_contract_checker_reports_typescript_drift(tmp_path: Path) -> None:
+    checkout = _dag_state_contract_checkout(tmp_path)
+    layout = checkout / "packages/dag-layout/src/index.ts"
+    layout.write_text(layout.read_text().replace('"cancelled",', '"paused",'))
+
+    result = _dag_state_contract_run(checkout)
+
+    assert result.returncode != 0
+    assert "packages/dag-layout/src/index.ts DAG_NODE_STATES" in result.stderr
+    assert "orchestrator/projection.py NodeState" in result.stderr
+    assert "reconcile the TypeScript list with the Python projection states" in result.stderr
+
+
 def _recipe_checkout(tmp_path: Path) -> tuple[Path, Path]:
     checkout = tmp_path / "recipes"
     scripts = checkout / "scripts"
@@ -194,6 +238,9 @@ fi
         path = scripts / name
         path.write_text(command)
         path.chmod(0o755)
+    python = binaries / "python3"
+    python.write_text(command)
+    python.chmod(0o755)
     return checkout, trace
 
 
@@ -272,6 +319,7 @@ def test_check_recipe_runs_the_combined_public_journey_with_concise_output(
     assert trace.read_text().splitlines() == [
         "nx.sh run-many -t format-check,lint,typecheck,test",
         "check-oneharness-ui-contract.sh ",
+        "python3 ./scripts/check-dag-state-contract.py",
         "check-nx-cache.sh ",
     ]
 
