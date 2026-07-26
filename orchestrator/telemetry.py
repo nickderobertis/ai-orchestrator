@@ -1501,6 +1501,10 @@ def _value(value: int | float | None) -> str:
     return "?" if value is None else f"{value:g}"
 
 
+def _timing_value(value: int, fraction: float, quality: TelemetryQuality) -> str:
+    return f"{value:5} {fraction:5.1%}" if quality == "complete" else "    ?     ?"
+
+
 def _breakdown(runs: list[RunTelemetry], retry_metrics: LlmlintRetryMetrics | None = None) -> str:
     retry_metrics = retry_metrics or _empty_llmlint_retry_metrics()
     header = (
@@ -1528,10 +1532,16 @@ def _breakdown(runs: list[RunTelemetry], retry_metrics: LlmlintRetryMetrics | No
             columns = [
                 f"{name[:20]:20}",
                 f"{timing['wall_ms']:6}ms",
-                f"{timing['agent_model_ms']:5} {fractions['agent_model']:5.1%}",
-                f"{timing['judge_model_ms']:5} {fractions['judge_model']:5.1%}",
-                f"{timing['llmlint_model_ms']:5} {fractions['llmlint_model']:5.1%}",
-                f"{timing['tool_ms']:5} {fractions['tool']:5.1%}",
+                _timing_value(
+                    timing["agent_model_ms"], fractions["agent_model"], run.telemetry_quality
+                ),
+                _timing_value(
+                    timing["judge_model_ms"], fractions["judge_model"], run.telemetry_quality
+                ),
+                _timing_value(
+                    timing["llmlint_model_ms"], fractions["llmlint_model"], run.telemetry_quality
+                ),
+                _timing_value(timing["tool_ms"], fractions["tool"], run.telemetry_quality),
                 f"{round(timing['gate_seconds'] * 1000):4}",
                 f"{round(timing['publication_wait_seconds'] * 1000):4}",
                 f"{round(timing['lock_wait_seconds'] * 1000):4}",

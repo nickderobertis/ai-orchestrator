@@ -380,8 +380,11 @@ def test_breakdown_aggregates_real_multirole_history_records(
         timeout=e2e_timeout(30),
     )
     assert degraded.returncode == 0, degraded.stderr
-    assert "partial" in degraded.stdout
-    assert "?" in degraded.stdout
+    degraded_row = next(
+        line for line in degraded.stdout.splitlines() if line.startswith("telemetry-invalid")
+    )
+    assert "partial" in degraded_row
+    assert degraded_row.count("?") >= 4
 
     judge_record["events"][0]["tool_call_id"] = ""
     (tmp_path / "judge.jsonl").write_text(json.dumps(judge_record) + "\n", encoding="utf-8")
