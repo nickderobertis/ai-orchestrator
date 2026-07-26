@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import fields, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -281,6 +282,17 @@ def test_schema_v7_field_golden_prevents_cross_layer_drift() -> None:
         encoding="utf-8"
     )
     assert "Index version 7" in contract
+    typescript_contract = (
+        Path(__file__).parents[1] / "packages" / "dag-model" / "src" / "index.ts"
+    ).read_text(encoding="utf-8")
+    typescript_schema_versions = [
+        int(version)
+        for version in re.findall(
+            r"telemetry_schema_version:\s*z\.literal\((\d+)\)",
+            typescript_contract,
+        )
+    ]
+    assert typescript_schema_versions == [TELEMETRY_SCHEMA_VERSION] * 2
     for value in (
         *golden["roles"],
         *golden["timing_qualities"],
