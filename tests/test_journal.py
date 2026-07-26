@@ -18,6 +18,7 @@ from orchestrator.journal import (
     Event,
     EventKind,
     JournalError,
+    JournalOperation,
     NodeJournal,
     NullJournal,
     NullNodeJournal,
@@ -61,6 +62,41 @@ def test_append_writes_one_durable_record_per_event(tmp_path: Path) -> None:
     assert first["node"] == "api"
     assert first["version"] == SCHEMA_VERSION
     assert json.loads(lines[1])["detail"] == {"status": "done"}
+
+
+def test_batch_append_keeps_individual_records_and_reconciles_a_torn_tail(
+    tmp_path: Path,
+) -> None:
+    run_dir = tmp_path / "batched"
+    journal = open_journal(run_dir, RunId("batched"), 1)
+    appended = journal.append_batch(
+        [
+            JournalOperation("node-added", {"definition": {"id": "a"}}),
+            JournalOperation("node-added", {"definition": {"id": "b"}}),
+            JournalOperation("edge-added", {"from": "a", "to": "b"}),
+        ]
+    )
+    path = run_dir / "events.jsonl"
+
+    assert [event.seq for event in appended] == [1, 2, 3]
+    assert [event.kind for event in read_events(path)] == [
+        "node-added",
+        "node-added",
+        "edge-added",
+    ]
+
+    with path.open("ab") as handle:
+        handle.write(b'{"version":4,"seq":4,"kind":"round-started"')
+
+    reopened = open_journal(run_dir, RunId("batched"), 1)
+    resumed = reopened.append("round-started")
+    assert resumed.seq == 4
+    assert [event.kind for event in read_events(path)] == [
+        "node-added",
+        "node-added",
+        "edge-added",
+        "round-started",
+    ]
 
 
 def test_sequence_numbers_are_monotonic_across_reopen(tmp_path: Path) -> None:

@@ -41,6 +41,7 @@ from .journal import (
     TERMINAL_NODE_RESULT_FIELD,
     Event,
     EventKind,
+    JournalOperation,
     JournalSink,
     NodeJournal,
     NullJournal,
@@ -1173,8 +1174,15 @@ def main(argv: list[str] | None = None) -> int:
                 file=sys.stderr,
             )
             return 2
-        for definition in expected_definitions[len(recorded_definitions) :]:
-            journal.append("node-added", detail={"definition": definition})
+        missing_definitions = expected_definitions[len(recorded_definitions) :]
+        journal_batch_size = 20
+        for start in range(0, len(missing_definitions), journal_batch_size):
+            journal.append_batch(
+                [
+                    JournalOperation("node-added", {"definition": definition})
+                    for definition in missing_definitions[start : start + journal_batch_size]
+                ]
+            )
         expected_edges = [
             {"from": dependency, "to": raw_node["id"]}
             for raw_node in plan_mapping["tasks"]
@@ -1188,8 +1196,14 @@ def main(argv: list[str] | None = None) -> int:
         if recorded_edges != expected_edges[: len(recorded_edges)]:
             print("run-plan: recorded graph edges do not match the recovery plan", file=sys.stderr)
             return 2
-        for edge in expected_edges[len(recorded_edges) :]:
-            journal.append("edge-added", detail=edge)
+        missing_edges = expected_edges[len(recorded_edges) :]
+        for start in range(0, len(missing_edges), journal_batch_size):
+            journal.append_batch(
+                [
+                    JournalOperation("edge-added", edge)
+                    for edge in missing_edges[start : start + journal_batch_size]
+                ]
+            )
         existing_kinds = {event.kind for event in round_events}
         if args.recover and "round-started" in existing_kinds:
             from .projection import project_run
