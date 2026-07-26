@@ -30,7 +30,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Literal, Protocol, TypedDict, cast
+from typing import Any, Literal, NotRequired, Protocol, TypedDict, cast
 
 import yaml
 from onejudge_sdk import (
@@ -85,6 +85,26 @@ class DispatchError(Exception):
     """onejudge could not be run, or rejected the config (a loud failure)."""
 
 
+#: The top-level agent harnesses that may run ``just orchestrate``. ``unknown`` is
+#: recorded when the launcher did not identify itself, so a run is never silently
+#: mis-attributed to a harness it did not come from.
+LAUNCHER_KINDS: frozenset[str] = frozenset({"claude-code", "codex", "unknown"})
+
+
+class Launcher(TypedDict):
+    """Which top-level Claude/Codex session ran ``just orchestrate``.
+
+    Captured so the read API can group runs by the originating session. The
+    ``session_id`` is omitted rather than emitted empty when the launcher did not
+    supply one, so an old consumer and a session-less launch are indistinguishable
+    from the absence of the field — the additive-optional contract the read model
+    relies on.
+    """
+
+    kind: str
+    session_id: NotRequired[str]
+
+
 class LaunchRecord(TypedDict):
     """Stable planner handoff persisted for one orchestrator launch."""
 
@@ -94,6 +114,25 @@ class LaunchRecord(TypedDict):
     plan_name: str
     commands: dict[str, str]
     goal: Goal | None
+    launcher: NotRequired[Launcher]
+
+
+def resolve_launcher(kind: str | None, session_id: str | None) -> Launcher:
+    """Validate launching-session provenance into a stored ``Launcher``.
+
+    ``kind`` falls back to ``unknown`` rather than raising: a missing launcher is a
+    normal state (a hand-run ``just orchestrate``), while a *wrong* value would
+    corrupt session grouping, so an unrecognised harness is rejected loudly.
+    """
+    resolved_kind = kind if kind else "unknown"
+    if resolved_kind not in LAUNCHER_KINDS:
+        raise DispatchError("launcher kind must be one of " + ", ".join(sorted(LAUNCHER_KINDS)))
+    launcher = Launcher(kind=resolved_kind)
+    if session_id:
+        if "\x00" in session_id or "\n" in session_id or len(session_id) > 256:
+            raise DispatchError("launcher session id must be a single line of at most 256 chars")
+        launcher["session_id"] = session_id
+    return launcher
 
 
 class _TelemetryResult(Protocol):
@@ -668,8 +707,11 @@ def launch_orchestrator(
     cwd: str | Path = REPO_ROOT,
     acknowledge_concurrent: bool = False,
     round_budget: float | None = None,
+    launcher: str | None = None,
+    launcher_session_id: str | None = None,
 ) -> str:
     """Launch a detached live-supervised orchestrator and return its run id."""
+    launcher_record = resolve_launcher(launcher, launcher_session_id)
     plan = Path(plan_path).resolve()
     if not plan.is_file():
         raise DispatchError(f"plan does not exist: {plan}")
@@ -807,7 +849,7 @@ def launch_orchestrator(
         raw_plan_name if isinstance(raw_plan_name, str) and raw_plan_name.strip() else plan.stem
     )
     launch: LaunchRecord = {
-        "schema_version": 1,
+        "schema_version": 2,
         "run_id": run_dir.name,
         "channel_id": run_dir.name,
         "plan_name": plan_name,
@@ -816,6 +858,7 @@ def launch_orchestrator(
             "channel_next": f"just channel-next {run_dir.name}",
             "monitor": f"just monitor {run_dir.name}",
         },
+        "launcher": launcher_record,
     }
     atomic_json(run_dir / "launch.json", launch)
     (run_dir / "planner.md").write_text(
@@ -850,6 +893,18 @@ def main_orchestrate(argv: list[str] | None = None) -> int:
         nargs="+",
         help="command-provider argv for the orchestrator agent (primarily for deterministic tests)",
     )
+    parser.add_argument(
+        "--launcher",
+        choices=sorted(LAUNCHER_KINDS),
+        default=os.environ.get("ORCHESTRATOR_LAUNCHER"),
+        help="top-level harness running orchestrate (default: $ORCHESTRATOR_LAUNCHER)",
+    )
+    parser.add_argument(
+        "--launcher-session",
+        default=os.environ.get("ORCHESTRATOR_LAUNCHER_SESSION"),
+        metavar="SESSION_ID",
+        help="launching session id to group runs by (default: $ORCHESTRATOR_LAUNCHER_SESSION)",
+    )
     args = parser.parse_args(argv)
     try:
         skill = {"kind": "command", "command": args.skill_command} if args.skill_command else None
@@ -863,6 +918,8 @@ def main_orchestrate(argv: list[str] | None = None) -> int:
             heartbeat_interval=args.heartbeat_interval,
             acknowledge_concurrent=args.acknowledge_concurrent,
             round_budget=args.round_budget,
+            launcher=args.launcher,
+            launcher_session_id=args.launcher_session,
         )
         print(
             (args.runs_dir.resolve() / launched / "launch.json").read_text(encoding="utf-8").strip()

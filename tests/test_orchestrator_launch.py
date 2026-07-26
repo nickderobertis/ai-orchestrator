@@ -9,7 +9,24 @@ import pytest
 
 from orchestrator import REPO_ROOT
 from orchestrator.cli_contract import ROUND_BUDGET_OPTION
-from orchestrator.dispatch import DispatchError, launch_orchestrator, main_orchestrate
+from orchestrator.dispatch import (
+    DispatchError,
+    launch_orchestrator,
+    main_orchestrate,
+    resolve_launcher,
+)
+
+
+def test_resolve_launcher_defaults_validates_and_omits_empty_session() -> None:
+    assert resolve_launcher(None, None) == {"kind": "unknown"}
+    assert resolve_launcher("claude-code", "s1") == {"kind": "claude-code", "session_id": "s1"}
+    assert resolve_launcher("codex", "") == {"kind": "codex"}  # empty session omitted
+    with pytest.raises(DispatchError, match="launcher kind"):
+        resolve_launcher("gpt", None)
+    with pytest.raises(DispatchError, match="launcher session"):
+        resolve_launcher("codex", "two\nlines")
+    with pytest.raises(DispatchError, match="launcher session"):
+        resolve_launcher("codex", "x" * 257)
 
 
 def test_launch_rejects_missing_plan_and_split_skill(tmp_path: Path) -> None:
@@ -203,6 +220,10 @@ def test_orchestrate_cli_prints_run_id(
                 "fake-provider",
                 "--round-budget",
                 "21600",
+                "--launcher",
+                "codex",
+                "--launcher-session",
+                "sess-2",
             ]
         )
         == 0
@@ -216,6 +237,8 @@ def test_orchestrate_cli_prints_run_id(
         "command": ["fake-provider"],
     }
     assert received["round_budget"] == 21600
+    assert received["launcher"] == "codex"
+    assert received["launcher_session_id"] == "sess-2"
 
 
 def test_orchestrate_cli_reports_launch_error(
