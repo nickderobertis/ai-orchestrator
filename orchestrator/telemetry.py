@@ -51,9 +51,7 @@ SUPPORTED_HISTORY_SCHEMA_VERSIONS = ("0.2", "0.3", 1, 2, "1.0", "1.1", "1.2")
 #: History schema versions that may carry validated native timing (per-turn
 #: ``model_ms``/``tool_ms`` plus interval-bearing tool events). A version identifies
 #: the line format, not the completeness of timing supplied by a particular harness.
-NATIVE_TIMING_HISTORY_SCHEMAS: frozenset[str | int] = frozenset(
-    {"0.3", 2, "1.0", "1.1", "1.2"}
-)
+NATIVE_TIMING_HISTORY_SCHEMAS: frozenset[str | int] = frozenset({"0.3", 2, "1.0", "1.1", "1.2"})
 TelemetryQuality = Literal["complete", "partial", "legacy"]
 LinkageQuality = Literal["native", "labelled", "inferred"]
 TelemetrySource = Literal["onejudge", "oneharness", "history_legacy", "journal_legacy"]
@@ -1621,9 +1619,7 @@ def _breakdown(runs: list[RunTelemetry], retry_metrics: LlmlintRetryMetrics | No
             presence = (
                 run.timing_presence
                 if name == str(run.run_id)
-                else next(
-                    node.timing_presence for node in run.nodes if name == f"  {node.node}"
-                )
+                else next(node.timing_presence for node in run.nodes if name == f"  {node.node}")
             )
             columns = [
                 f"{name[:20]:20}",

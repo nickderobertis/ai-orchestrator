@@ -86,7 +86,7 @@ test("validates SSE snapshots before notifying subscribers", () => {
   );
   listeners.get("snapshot")?.(
     new MessageEvent("snapshot", {
-      data: JSON.stringify({ ...emptyList, telemetry_schema_version: 7 }),
+      data: JSON.stringify({ ...emptyList, telemetry_schema_version: 8 }),
     }),
   );
   expect(events).toHaveLength(1);
