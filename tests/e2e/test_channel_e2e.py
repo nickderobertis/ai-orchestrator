@@ -610,18 +610,31 @@ def test_live_channel_runs_real_nested_graph_and_round_trips_guidance(
     assert f"{run_id}: {expected_wait}" in status.stdout
     pending_path = run_dir / "channel" / "planner-pending.json"
     pending = pending_path.read_text(encoding="utf-8")
-    # llmlint: ignore[tests_mirror_real_usage] No public producer can corrupt this durable file.
-    pending_path.write_text("{broken", encoding="utf-8")
-    for command in ("runs", "status"):
-        malformed = subprocess.run(
-            ["just", command, "--runs-dir", str(runs)],
-            cwd=REPO_ROOT,
-            text=True,
-            capture_output=True,
-            check=False,
-        )
-        assert malformed.returncode == 0
-        assert "Traceback" not in malformed.stderr
+    for damage in ("malformed", "unreadable"):
+        # llmlint: ignore[tests_mirror_real_usage] No public producer can corrupt this
+        # durable file; a directory at the file path deterministically exercises the
+        # unreadable-state boundary even when the e2e process runs as root.
+        if damage == "malformed":
+            pending_path.write_text("{broken", encoding="utf-8")
+        else:
+            pending_path.unlink()
+            pending_path.mkdir()
+        for command in ("runs", "status"):
+            damaged = subprocess.run(
+                ["just", command, "--runs-dir", str(runs)],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            assert damaged.returncode == 0
+            assert "Traceback" not in damaged.stderr
+            assert expected_wait not in damaged.stdout
+            if command == "runs":
+                assert f"* {run_id}" in damaged.stdout
+                assert "(1 done)" in damaged.stdout
+        if pending_path.is_dir():
+            pending_path.rmdir()
     pending_path.write_text(pending, encoding="utf-8")
     _convenience_cli("channel-continue", run_id, runs, "retry X")
     closeout = _next_cli(run_id, runs)
