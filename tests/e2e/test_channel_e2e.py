@@ -167,11 +167,9 @@ def test_due_heartbeat_surfaces_during_active_step_and_disabled_run_stays_silent
         ),
         encoding="utf-8",
     )
-    run_id = _launch_cli(plan, runs, _base(tmp_path), onejudge_bin, heartbeat_interval=1)
+    run_id = _launch_cli(plan, runs, _base(tmp_path), onejudge_bin, heartbeat_interval=0.2)
     heartbeat_path = runs / run_id / "channel" / "heartbeat.json"
     initial_state = json.loads(heartbeat_path.read_text())
-    initial_state["last_surface_at"] = time.time() - 0.9
-    heartbeat_path.write_text(json.dumps(initial_state), encoding="utf-8")
     queued_path = runs / run_id / "channel" / "heartbeat-surface.json"
     queue_deadline = deadline(120)
     while not queued_path.is_file() and time.monotonic() < queue_deadline:

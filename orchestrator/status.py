@@ -232,8 +232,8 @@ def main(argv: list[str] | None = None) -> int:
         indicators: list[str] = []
         if args.runs_dir.is_dir():
             for run_dir in sorted(path for path in args.runs_dir.iterdir() if path.is_dir()):
+                waiting = planner_wait_indicator(run_dir / "channel")
                 try:
-                    waiting = planner_wait_indicator(run_dir / "channel")
                     indicator = due_indicator(run_dir / "channel")
                 except (ChannelError, ConfigError, OSError):
                     continue

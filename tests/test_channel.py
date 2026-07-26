@@ -234,6 +234,24 @@ def test_proposal_pump_round_trips_and_persists_on_reconciler_drain(tmp_path: Pa
     pump.close()
 
 
+def test_new_proposal_pump_continues_persisted_heartbeat_countdown(tmp_path: Path) -> None:
+    channel = create_channel(tmp_path / "run", heartbeat_interval=0.1)
+    record_surface(channel, now=time.time() - 0.09)
+    pump = ProposalPump(
+        channel,
+        "continued",
+        2,
+        synthesize_heartbeat=lambda: "worker: still active; follow-ups: none",
+    )
+    queued = channel / "heartbeat-surface.json"
+    wait_until = time.monotonic() + 0.5
+    while not queued.is_file() and time.monotonic() < wait_until:
+        time.sleep(0.01)
+    pump.close()
+    assert queued.is_file()
+    assert json.loads(queued.read_text(encoding="utf-8"))["round"] == 2
+
+
 @pytest.mark.parametrize(
     ("entrypoint", "arguments", "expected"),
     [

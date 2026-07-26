@@ -24,7 +24,7 @@ import time
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager, suppress
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Protocol, TypedDict
 
 from .config import ConfigError
 from .coordination import advisory_lock, atomic_json
@@ -48,6 +48,30 @@ CHANNEL_ENDPOINTS = ("up.fifo", "down.fifo")
 HEARTBEAT_FILE = "heartbeat.json"
 HEARTBEAT_SURFACE_FILE = "heartbeat-surface.json"
 DEFAULT_HEARTBEAT_INTERVAL = 1800.0
+
+
+class HeartbeatSurface(TypedDict):
+    kind: str
+    message: str
+    blocking: bool
+
+
+class HeartbeatFrame(TypedDict):
+    op: str
+    run_id: str
+    round: int
+    surface: HeartbeatSurface
+    messages: list[dict[str, Any]]
+
+
+def _heartbeat_frame(run_id: str, round_number: int, message: str) -> HeartbeatFrame:
+    return {
+        "op": "supervisor",
+        "run_id": run_id,
+        "round": round_number,
+        "surface": {"kind": "heartbeat", "message": message, "blocking": False},
+        "messages": [],
+    }
 
 
 class ProposalSink(Protocol):
@@ -606,13 +630,7 @@ class ProposalPump:
             ):
                 fail_heartbeat_claim(self._channel_dir)
                 return
-            surface = {
-                "op": "supervisor",
-                "run_id": self._run_id,
-                "round": self._round,
-                "surface": {"kind": "heartbeat", "message": message, "blocking": False},
-                "messages": [],
-            }
+            surface = _heartbeat_frame(self._run_id, self._round, message)
             with advisory_lock(
                 f"channel-heartbeat-surface:"
                 f"{(self._channel_dir / HEARTBEAT_SURFACE_FILE).resolve()}"
