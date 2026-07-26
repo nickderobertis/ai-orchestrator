@@ -4,7 +4,7 @@ import { TelemetryClient, TelemetryClientError } from "./index.js";
 
 const emptyList = {
   api_version: 1,
-  telemetry_schema_version: 6,
+  telemetry_schema_version: 7,
   observed_at: "2026-07-26T12:00:00Z",
   runs: [],
 } as const;
