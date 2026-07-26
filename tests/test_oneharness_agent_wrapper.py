@@ -128,10 +128,11 @@ def test_judge_side_keeps_its_own_config_and_adds_no_second(tmp_path: Path) -> N
 
 
 def test_judge_side_rejects_config_without_a_path(tmp_path: Path) -> None:
-    proc, argv = _run_wrapper(tmp_path, ["run", "--compact", "--config"])
-    assert proc.returncode == 2
-    assert "--config requires a path" in proc.stderr
-    assert argv == []
+    for suffix in (["--config"], ["--config", ""], ["--config="]):
+        proc, argv = _run_wrapper(tmp_path, ["run", "--compact", *suffix])
+        assert proc.returncode == 2
+        assert "--config requires" in proc.stderr
+        assert argv == []
 
 
 def test_missing_home_is_rejected_before_invoking_oneharness(tmp_path: Path) -> None:
