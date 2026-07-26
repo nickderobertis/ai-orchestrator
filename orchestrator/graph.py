@@ -99,6 +99,7 @@ from .runs import (
     validate_run_id,
     write_result,
 )
+from .scratch import capacity_failure_detail, sweep_scratch
 from .workspace import Workspace
 
 NodeKind = Literal["agent", "human"]
@@ -106,17 +107,27 @@ EXIT_BY_STATE = {"complete": 0, "waiting": 1, "failed": 1}
 DEFAULT_ROUND_BUDGET = 14_400.0
 
 _INFRASTRUCTURE_FAILURE_PATTERNS = (
+    re.compile(r"(?:\[Errno 28\]|ENOSPC|No space left on device)", re.IGNORECASE),
+    re.compile(
+        r"(?:OOMKilled|OOM[- ]kill|out of memory|Cannot allocate memory)",
+        re.IGNORECASE,
+    ),
     re.compile(r"provider error.*\b(?:respond|supervisor)\b", re.IGNORECASE | re.DOTALL),
     re.compile(r"oneharness exited with signal:\s*9\b", re.IGNORECASE),
     re.compile(r"harness failed\s*\(\s*auth\s*\)", re.IGNORECASE),
-    re.compile(r"cannot write v0\.3 history telemetry", re.IGNORECASE),
-    re.compile(r"new history record lacks complete v0\.3 telemetry", re.IGNORECASE),
+    re.compile(r"cannot write v[0-9]+(?:\.[0-9]+)* history telemetry", re.IGNORECASE),
+    re.compile(
+        r"new history (?:record|run) lacks complete v[0-9]+(?:\.[0-9]+)* telemetry",
+        re.IGNORECASE,
+    ),
 )
 
 
 def infrastructure_failure_detail(exc: BaseException) -> str | None:
     """Return the durable underlying error only for known no-dispatch failures."""
     detail = str(exc).strip()
+    if capacity_detail := capacity_failure_detail(exc):
+        return capacity_detail
     if any(pattern.search(detail) for pattern in _INFRASTRUCTURE_FAILURE_PATTERNS):
         return detail
     return None
@@ -1172,6 +1183,14 @@ def main(argv: list[str] | None = None) -> int:
     round_record: tuple[int, Path] | None = None
     if run_dir is not None:
         try:
+            try:
+                sweep_scratch()
+            except OSError as exc:
+                raise ConfigError(
+                    "scratch sweep failed before claiming the round: "
+                    f"{exc}; inspect with `just sweep-scratch --dry-run`, "
+                    "check path permissions, and retry"
+                ) from exc
             round_record = prepare_round(run_dir, plan_mapping, recover=args.recover)
         except ConfigError as exc:
             print(f"run-plan: could not claim run: {exc}", file=sys.stderr)

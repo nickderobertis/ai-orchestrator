@@ -331,7 +331,8 @@ Each node settles once per round:
   contains the ready top-level or `NODE_ID/STEP_ID` human references.
 - `failed`: an executed agent or lifecycle failed.
 - `failed` with outcome `infrastructure-failure`: a recognized provider or
-  harness failure prevented dispatch from running. This is terminal across
+  harness failure, ENOSPC, OOM kill, or failed scratch-capacity preflight
+  prevented dispatch from running. This is terminal across
   rounds: the reconciler surfaces the underlying error as a blocking planner
   proposal on first occurrence, and replanning does not dispatch the node again.
   Unknown or ambiguous errors remain ordinary retryable task failures.
@@ -348,6 +349,18 @@ configuration, or command input. Recorded result schema v5 adds the terminal
 ## Recorded rounds
 
 Recording is on by default:
+
+Before each recorded round is claimed, the executor runs the same conservative
+scratch sweep exposed as `just sweep-scratch`. Dead `orchestrator-watchdog-*`
+directories are identified by their recorded PID. Known third-party scratch is
+eligible only after the conservative age threshold and only when no lifecycle
+dispatch holds the host scratch shared lock. A destructive sweep takes the
+exclusive lock without waiting; when a dispatch is active it skips third-party
+scratch, reports that decision, and still removes definite dead watchdog
+directories. Use
+`just sweep-scratch --dry-run` to inspect candidates;
+`orchestrator.scratch.THIRD_PARTY_PATTERNS` is the authoritative documented
+pattern list and extension point.
 
 ```text
 runs/<run-id>/round-01/plan.json
