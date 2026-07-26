@@ -30,6 +30,7 @@ from . import gitops
 from .coordination import git_lock_identity
 from .github import AutoMergeUnavailable, Check, GitHubBackend, PRStatus, PullRequest
 from .merge_queue import merge_queue_turn
+from .outcomes import ALREADY_INTEGRATED_OUTCOME, LifecycleOutcome
 from .verify import run_gate
 from .workspace import RepositoryType
 
@@ -92,7 +93,7 @@ class MergeContext:
 
 @dataclass
 class MergeOutcome:
-    outcome: str
+    outcome: LifecycleOutcome
     detail: str
     pr: PullRequest | None = None
 
@@ -138,7 +139,7 @@ def _record(ctx: MergeContext, kind: EventKind, detail: Detail) -> None:
 
 def _drive_github_merge(
     github: GitHubBackend, pr: PullRequest, ctx: MergeContext
-) -> tuple[str, str]:
+) -> tuple[LifecycleOutcome, str]:
     """Merge a PR per ``ctx.policy``, gating only on required checks."""
     if ctx.policy == "none":
         return "pr-open", f"PR #{pr.number} opened; auto-merge disabled by policy"
@@ -318,7 +319,7 @@ class LocalMergeStrategy:
                         },
                     )
                     return MergeOutcome(
-                        outcome="already-integrated",
+                        outcome=ALREADY_INTEGRATED_OUTCOME,
                         detail=(
                             f"verified content from {ctx.branch} was already present "
                             f"on {ctx.base}; no publication commit was needed"

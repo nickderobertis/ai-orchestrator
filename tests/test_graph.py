@@ -144,26 +144,6 @@ def test_run_graph_records_and_surfaces_terminal_infrastructure_failure() -> Non
         ("broken", f"terminal infrastructure failure; dispatch cannot run: {detail}")
     ]
 
-    class LegacyPump:
-        def __init__(self) -> None:
-            self.blockers: list[tuple[str, str]] = []
-
-        def propose_blocking(self, node: str, message: str) -> None:
-            self.blockers.append((node, message))
-
-        def persist_replies(self) -> None:
-            pass
-
-    legacy = LegacyPump()
-    legacy_result = run_graph(
-        graph,
-        agent_runner=fail,
-        lifecycle_runner=lambda node, **_: _lifecycle(),
-        proposal_pump=legacy,  # type: ignore[arg-type] - backward-compatible narrow double
-    )
-    assert legacy_result.state == "failed"
-    assert legacy.blockers == pump.blocking_proposals
-
 
 def test_round_budget_surfaces_and_cooperatively_cancels_wedged_dispatch() -> None:
     graph = parse_graph({"tasks": [{"id": "a", "persona": "engineer", "task": "wait"}]})
@@ -1175,6 +1155,25 @@ def test_replay_rejects_invalid_deferred_cleanup() -> None:
     item = cast(GraphResultItem, {"status": "done", "deferred_cleanup": "not-a-list"})
 
     with pytest.raises(ConfigError, match="invalid deferred_cleanup"):
+        _replay_node_run(node, item)
+
+
+def test_replay_rejects_unknown_lifecycle_outcome() -> None:
+    node = parse_graph(
+        {
+            "tasks": [
+                {
+                    "id": "work",
+                    "repo": "o/r",
+                    "persona": "engineer",
+                    "task": "Work",
+                }
+            ]
+        }
+    ).tasks[0]
+    item = cast(GraphResultItem, {"status": "done", "outcome": "unknown"})
+
+    with pytest.raises(ConfigError, match="invalid outcome 'unknown'"):
         _replay_node_run(node, item)
 
 

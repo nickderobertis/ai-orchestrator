@@ -65,6 +65,11 @@ from .lifecycle import (
     result_payload,
     validate_repo_aliases,
 )
+from .outcomes import (
+    INFRASTRUCTURE_FAILURE_OUTCOME,
+    LIFECYCLE_OUTCOMES,
+    NODE_OUTCOMES,
+)
 from .plan import (
     NODE_KINDS,
     PLAN_SCHEMA_VERSION,
@@ -97,7 +102,6 @@ from .workspace import Workspace
 NodeKind = Literal["agent", "human"]
 EXIT_BY_STATE = {"complete": 0, "waiting": 1, "failed": 1}
 DEFAULT_ROUND_BUDGET = 14_400.0
-INFRASTRUCTURE_FAILURE_OUTCOME = "infrastructure-failure"
 
 _INFRASTRUCTURE_FAILURE_PATTERNS = (
     re.compile(r"provider error.*\b(?:respond|supervisor)\b", re.IGNORECASE | re.DOTALL),
@@ -709,11 +713,7 @@ def run_graph(
                         "terminal infrastructure failure; dispatch cannot run: "
                         + infrastructure_detail
                     )
-                    defer = getattr(proposal_pump, "defer_blocking", None)
-                    if defer is not None:
-                        defer(nid, message)
-                    else:
-                        proposal_pump.propose_blocking(nid, message)
+                    proposal_pump.defer_blocking(nid, message)
                 return failed
             raise
         finally:
@@ -850,10 +850,7 @@ def _run_payload(node: GraphNode, run: NodeRun, dependents: list[str]) -> GraphR
         unblocks=list(dependents) if run.status == "waiting" else [],
         human_actions=actions,
         outcome=(
-            run.payload
-            if isinstance(run.payload, str)
-            and run.payload in {"no-changes", INFRASTRUCTURE_FAILURE_OUTCOME}
-            else None
+            run.payload if isinstance(run.payload, str) and run.payload in NODE_OUTCOMES else None
         ),
     )
     return _node_payload(result)
@@ -863,11 +860,7 @@ def _replay_node_run(node: GraphNode, item: GraphResultItem) -> NodeRun:
     """Restore scheduler actual state while retaining the exact serialized result."""
     status = item["status"]
     error = item.get("error")
-    payload: Any = (
-        item.get("outcome")
-        if item.get("outcome") in {"no-changes", INFRASTRUCTURE_FAILURE_OUTCOME}
-        else None
-    )
+    payload: Any = item.get("outcome") if item.get("outcome") in NODE_OUTCOMES else None
     if node.lifecycle is not None:
         anchors = [
             StackBase(
@@ -888,13 +881,16 @@ def _replay_node_run(node: GraphNode, item: GraphResultItem) -> NodeRun:
         ):
             # llmlint: ignore[changed_behavior_has_e2e] unit test asserts this rejection.
             raise ConfigError("recorded lifecycle result has invalid deferred_cleanup")
+        raw_outcome = item.get("outcome", "error")
+        if raw_outcome not in LIFECYCLE_OUTCOMES:
+            raise ConfigError(f"recorded lifecycle result has invalid outcome {raw_outcome!r}")
         payload = LifecycleResult(
             repo=item.get("repo", node.lifecycle.repo),
             task=node.task,
             persona=node.lifecycle.persona or "workstream",
             base_branch=item.get("base_branch", ""),
             branch=item.get("branch", ""),
-            outcome=item.get("outcome", "error"),
+            outcome=raw_outcome,
             publication_identity=cast(Any, item.get("publication_identity")),
             publication_workflow=cast(Any, item.get("publication_workflow")),
             repository_type=cast(Any, item.get("repository_type")),
@@ -957,8 +953,7 @@ def _collect(
             human_actions=actions.get(nid, []),
             outcome=(
                 run.payload
-                if isinstance(run.payload, str)
-                and run.payload in {"no-changes", INFRASTRUCTURE_FAILURE_OUTCOME}
+                if isinstance(run.payload, str) and run.payload in NODE_OUTCOMES
                 else None
             ),
             recorded=cast(GraphResultItem, run.recorded) if run.recorded is not None else None,

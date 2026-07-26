@@ -582,6 +582,62 @@ def test_relay_preserves_an_existing_terminal_blocker(
     assert json.loads(capsys.readouterr().out)["completion"] is True
 
 
+def test_relay_replaces_stale_nonblocking_pending_surface(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    channel = create_channel(tmp_path / "run-stale")
+    atomic_json(
+        channel / "planner-pending.json",
+        {"kind": "heartbeat", "message": "stale", "blocking": False},
+    )
+    sent: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        "orchestrator.channel.write_message",
+        lambda path, value, timeout: sent.append(dict(value)),
+    )
+    monkeypatch.setattr(
+        "orchestrator.channel.read_message",
+        lambda path, timeout: {"completion": True, "reason": "done"},
+    )
+    monkeypatch.setattr(
+        "sys.stdin",
+        io.StringIO(json.dumps({"op": "supervisor", "task": "fresh milestone", "messages": []})),
+    )
+
+    assert relay_supervisor(channel, "orch", 1, timeout=1) == 0
+    assert sent[0]["surface"]["message"] == "fresh milestone"
+    assert json.loads(capsys.readouterr().out)["completion"] is True
+
+
+@pytest.mark.parametrize(
+    "surface",
+    [
+        {"kind": "proposal", "message": 1, "blocking": True},
+        {
+            "kind": "proposal",
+            "message": "blocked",
+            "blocking": True,
+            "options": "invalid",
+        },
+    ],
+)
+def test_relay_rejects_invalid_persisted_blocker(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    surface: dict[str, object],
+) -> None:
+    channel = create_channel(tmp_path / "invalid-blocker")
+    atomic_json(channel / "deferred-blocker.json", surface)
+    monkeypatch.setattr(
+        "sys.stdin",
+        io.StringIO(json.dumps({"op": "supervisor", "task": "round complete", "messages": []})),
+    )
+
+    assert relay_supervisor(channel, "orch", 1, timeout=0.01) == 1
+    assert "persisted planner surface" in capsys.readouterr().err
+
+
 def test_bridge_mains_render_bounded_states_and_validate_reply(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

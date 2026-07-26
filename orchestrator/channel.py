@@ -53,6 +53,8 @@ class ProposalSink(Protocol):
 
     def propose_blocking(self, node: str, message: str) -> None: ...
 
+    def defer_blocking(self, node: str, message: str) -> None: ...
+
     def persist_replies(self) -> None: ...
 
     def drain_commands(self) -> tuple[EditCommand, ...]: ...
@@ -342,6 +344,22 @@ def _surface(request: Mapping[str, Any], run_id: str, round_number: int) -> dict
     }
 
 
+def _validated_persisted_surface(value: Mapping[str, Any]) -> dict[str, Any]:
+    """Validate a persisted planner surface before forwarding it."""
+    kind = value.get("kind")
+    message = value.get("message")
+    blocking = value.get("blocking")
+    if not isinstance(kind, str) or not isinstance(message, str) or not isinstance(blocking, bool):
+        raise ChannelError("persisted planner surface has invalid kind, message, or blocking")
+    surface: dict[str, Any] = {"kind": kind, "message": message, "blocking": blocking}
+    if "options" in value:
+        options = value["options"]
+        if not isinstance(options, list) or not all(isinstance(item, str) for item in options):
+            raise ChannelError("persisted planner surface options must be a list of strings")
+        surface["options"] = options
+    return surface
+
+
 def _reply(value: Mapping[str, Any]) -> dict[str, Any]:
     heartbeat = value.get("heartbeat_interval")
     if "heartbeat_interval" in value and heartbeat is not False:
@@ -588,11 +606,11 @@ def relay_supervisor(channel_dir: Path, run_id: str, round_number: int, *, timeo
         pending_path = channel_dir / "planner-pending.json"
         deferred_blocker = channel_dir / "deferred-blocker.json"
         if deferred_blocker.is_file():
-            surfaced["surface"] = load_mapping(deferred_blocker)
+            surfaced["surface"] = _validated_persisted_surface(load_mapping(deferred_blocker))
         elif pending_path.is_file():
             pending = load_mapping(pending_path)
             if pending.get("blocking") is True:
-                surfaced["surface"] = pending
+                surfaced["surface"] = _validated_persisted_surface(pending)
         atomic_json(pending_path, surfaced["surface"])
         write_message(channel_dir / "up.fifo", surfaced, timeout=timeout)
         record_surface(channel_dir)
