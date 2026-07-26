@@ -25,7 +25,8 @@ import re
 import sys
 import unicodedata
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Literal
+from enum import StrEnum
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     # Annotation-only: this module formats an env var and must stay importable
@@ -38,10 +39,21 @@ LABEL_ENV = "ONEHARNESS_HISTORY_LABELS"
 
 _KEY = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}\Z")
 MAX_VALUE_CODEPOINTS = 256
-AgentRole = Literal["orchestrator", "worker", "judge", "check-in", "pr-author"]
+
+
+class AgentRole(StrEnum):
+    """Recorded semantic roles from the DAG visualization contract."""
+
+    ORCHESTRATOR = "orchestrator"
+    WORKER = "worker"
+    JUDGE = "judge"
+    CHECK_IN = "check-in"
+    PR_AUTHOR = "pr-author"
+
+
 INFRASTRUCTURE_PERSONA_ROLES: dict[str, AgentRole] = {
-    "check-in": "check-in",
-    "pr-author": "pr-author",
+    "check-in": AgentRole.CHECK_IN,
+    "pr-author": AgentRole.PR_AUTHOR,
 }
 
 
@@ -51,7 +63,7 @@ class LabelError(ValueError):
 
 def dispatched_agent_role(persona: str) -> AgentRole:
     """Classify a persona dispatch using the recorded semantic-role taxonomy."""
-    return INFRASTRUCTURE_PERSONA_ROLES.get(persona, "worker")
+    return INFRASTRUCTURE_PERSONA_ROLES.get(persona, AgentRole.WORKER)
 
 
 def validate_key(key: str) -> str:

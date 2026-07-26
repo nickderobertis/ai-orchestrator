@@ -50,6 +50,7 @@ from .journal import (
     read_events,
     reconcile,
 )
+from .labels import AgentRole
 from .lifecycle import (
     LifecycleResult,
     LifecycleRunner,
@@ -1301,7 +1302,7 @@ def main(argv: list[str] | None = None) -> int:
                 labels={
                     "run_id": validated_run_id,
                     "round": str(round_number),
-                    "agent_role": "check-in",
+                    "agent_role": AgentRole.CHECK_IN,
                     "persona": "check-in",
                 },
                 session=f"check-in-{validated_run_id}-{round_number}",

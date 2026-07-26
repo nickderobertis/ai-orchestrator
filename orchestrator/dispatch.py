@@ -54,7 +54,7 @@ from .cli_contract import ROUND_BUDGET_OPTION
 from .config import ConfigError, build_effective_config, load_yaml
 from .coordination import atomic_json
 from .goals import Goal, graph_identities, register_run, update_run_owner
-from .labels import LABEL_ENV, LabelError, dispatched_agent_role, merge_labels
+from .labels import LABEL_ENV, AgentRole, LabelError, dispatched_agent_role, merge_labels
 from .personas import persona_path
 from .runs import ArtifactPaths, resolve_run_dir, slugify
 from .watchdog import (
@@ -780,7 +780,11 @@ def launch_orchestrator(
     process_env[CHANNEL_RUN_ID_ENV] = run_dir.name
     process_env[LABEL_ENV] = merge_labels(
         process_env.get(LABEL_ENV),
-        {"agent_role": "orchestrator", "persona": "orchestrator", "run_id": run_dir.name},
+        {
+            "agent_role": AgentRole.ORCHESTRATOR,
+            "persona": "orchestrator",
+            "run_id": run_dir.name,
+        },
     )
     _validate_oneharness_timeout(process_env["ONEHARNESS_TIMEOUT"])
     try:
