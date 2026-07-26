@@ -3,14 +3,46 @@ import { expect, test } from "bun:test";
 // eslint-disable-next-line @nx/enforce-module-boundaries -- This verifies the package export as a consumer uses it.
 import {
   conversationSchema,
+  dagConversationSchema,
   launchProvenanceSchema,
+  nodeTelemetrySchema,
   parseRunDetail,
   parseRunList,
   roundSchema,
   runDetailSchema,
+  runSummarySchema,
   sessionLinkSchema,
   sseEventNameSchema,
 } from "@ai-orchestrator/dag-model";
+
+const zeroTiming = {
+  agent_seconds: 0,
+  judge_seconds: 0,
+  llmlint_seconds: 0,
+  gate_seconds: 0,
+  publication_wait_seconds: 0,
+  lock_wait_seconds: 0,
+  setup_seconds: 0,
+  scheduling_seconds: 0,
+  wall_seconds: 0,
+  agent_model_ms: 0,
+  judge_model_ms: 0,
+  llmlint_model_ms: 0,
+  tool_ms: 0,
+  idle_orchestration_ms: 0,
+  unattributed_ms: 0,
+  wall_ms: 0,
+  fractions: {
+    agent_model: 0,
+    judge_model: 0,
+    llmlint_model: 0,
+    tool: 0,
+    idle_orchestration: 0,
+    lock_wait: 0,
+    setup: 0,
+    scheduling: 0,
+  },
+};
 
 test("a package consumer validates an API response through the public export", () => {
   expect(
@@ -167,4 +199,48 @@ test("a package consumer validates rounds and conversations", () => {
   expect(() =>
     conversationSchema.parse({ ...conversation, startedAt: "yesterday" }),
   ).toThrow();
+});
+
+test("a package consumer validates populated telemetry and attribution", () => {
+  expect(
+    runSummarySchema.parse({
+      run_id: "run-1",
+      state: "running",
+      phase: "agent",
+      last_event: "node-started",
+      telemetry_quality: "complete",
+      timing: zeroTiming,
+      node_counts: { running: 1 },
+    }).node_counts.running,
+  ).toBe(1);
+  expect(
+    nodeTelemetrySchema.parse({
+      node: "build",
+      status: "running",
+      sessions: [{ session_id: "worker", role: "agent" }],
+      turns: 1,
+      lint: 0,
+    }).sessions[0]?.session_id,
+  ).toBe("worker");
+  expect(
+    dagConversationSchema.parse({
+      conversation: {
+        canContinue: false,
+        harnesses: ["codex"],
+        id: "conversation-1",
+        name: "Worker",
+        project: "repo",
+        startedAt: "2026-07-26T12:00:00Z",
+        state: "completed",
+        turns: [],
+      },
+      attribution: {
+        runId: "run-1",
+        nodeId: "build",
+        launcher: "codex",
+        transportRole: "agent",
+        agentRole: "worker",
+      },
+    }).attribution.nodeId,
+  ).toBe("build");
 });
