@@ -19,7 +19,6 @@ import threading
 import time
 from collections import Counter
 from collections.abc import Iterable, Mapping
-from contextlib import suppress
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Literal, cast
@@ -29,6 +28,7 @@ from .channel import (
     CHANNEL_DIR_ENV,
     CHANNEL_ENDPOINTS,
     CHANNEL_RUN_ID_ENV,
+    HEARTBEAT_SURFACE_FILE,
     ProposalPump,
     ProposalSink,
 )
@@ -1316,20 +1316,20 @@ def main(argv: list[str] | None = None) -> int:
             print(f"run-plan: invalid proposal channel: {exc}", file=sys.stderr)
             return 2
 
-        def synthesize_heartbeat() -> str:
-            output = resolved_channel / "check-in-message.txt"
-            with suppress(FileNotFoundError):
-                output.unlink()
+        def dispatch_check_in() -> None:
             task = (
-                "Read the durable evidence for this run and write exactly one concise, "
-                "agent-synthesized planner update to the supplied output file. Cover every "
+                "Read the durable evidence for this run and send exactly one concise, "
+                "agent-synthesized planner update with the supplied command. Cover every "
                 "active workstream with concrete current progress and include any non-blocking "
-                "follow-ups. Do not wait for or contact the planner.\n\n"
+                "follow-ups. Do not wait for a planner reply. Replace MESSAGE with the update "
+                "as one shell argument and invoke the command exactly once.\n\n"
                 f"Run directory: {run_dir.resolve()}\n"
                 f"Journal: {(run_dir / JOURNAL_NAME).resolve()}\n"
                 f"Status: {(run_dir / 'orchestrator' / 'status.json').resolve()}\n"
                 f"Monitor details: {(run_dir / 'monitor' / 'details.json').resolve()}\n"
-                f"Output file: {output.resolve()}"
+                f"Channel directory: {resolved_channel}\n"
+                "Check-in command: just channel-surface "
+                f"{validated_run_id} MESSAGE --runs-dir {run_dir.parent.resolve()}"
             )
             report = dispatch(
                 "check-in",
@@ -1350,16 +1350,15 @@ def main(argv: list[str] | None = None) -> int:
                 max_turns=1,
                 timeout=dispatch_timeout,
             )
-            if not report.completed or not output.is_file():
-                raise RuntimeError("check-in agent did not write a completed status update")
-            return output.read_text(encoding="utf-8")
+            if not report.completed or not (resolved_channel / HEARTBEAT_SURFACE_FILE).is_file():
+                raise RuntimeError("check-in agent did not surface a completed status update")
 
         proposal_pump = ProposalPump(
             resolved_channel,
             validated_run_id,
             round_number,
             journal=journal,
-            synthesize_heartbeat=synthesize_heartbeat,
+            dispatch_check_in=dispatch_check_in,
         )
     try:
         result = run_graph(

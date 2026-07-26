@@ -217,9 +217,9 @@ def main() -> int:
     match op:
         case "respond":
             _wait_at_provider_barrier(task)
-            if "Output file: " in task and "agent-synthesized planner update" in task:
-                output = Path(task.split("Output file: ", 1)[1].splitlines()[0])
-                attempts = output.parent / "check-in-dispatches.txt"
+            if "Check-in command: " in task and "agent-synthesized planner update" in task:
+                channel_dir = Path(task.split("Channel directory: ", 1)[1].splitlines()[0])
+                attempts = channel_dir / "check-in-dispatches.txt"
                 fail_once_value = os.environ.get("FAKE_CHECK_IN_FAIL_ONCE")
                 fail_once = Path(fail_once_value) if fail_once_value else None
                 if fail_once is not None and not fail_once.exists():
@@ -231,16 +231,21 @@ def main() -> int:
                 else:
                     with attempts.open("a", encoding="utf-8") as stream:
                         stream.write("success\n")
-                    (output.parent / "check-in-labels.txt").write_text(
+                    (channel_dir / "check-in-labels.txt").write_text(
                         os.environ["ONEHARNESS_HISTORY_LABELS"],
                         encoding="utf-8",
                     )
-                    output.write_text(
+                    message = (
                         "active-worker: executing the slow agent step; "
                         "evidence: node-started is recorded and node-settled is absent; "
-                        "follow-ups: none\n",
-                        encoding="utf-8",
+                        "follow-ups: none"
                     )
+                    command = shlex.split(task.split("Check-in command: ", 1)[1].splitlines()[0])
+                    command[command.index("MESSAGE")] = message
+                    surfaced = subprocess.run(command, text=True, capture_output=True, check=False)
+                    if surfaced.returncode != 0:
+                        sys.stderr.write(surfaced.stderr)
+                        return 1
             guidance = _planner_guidance(messages)
             run_log = re.search(r"record-run=(\S+)", task)
             if run_log is not None:

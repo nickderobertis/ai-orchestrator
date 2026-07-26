@@ -99,13 +99,14 @@ messages: transport state lives under `runs/<run-id>/channel/` as `up.fifo`,
 `just orchestrate` seeds a durable 1800-second planner-update interval; override
 it at launch with `--heartbeat-interval SECONDS`. A channel-side pacemaker keeps
 checking that clock independently of graph reconciliation, including while a node
-is inside a long-running agent step. When due, it dispatches a dedicated check-in
-agent to synthesize a concise per-workstream update from the run journal, status,
-monitor, telemetry, and labeled history. The resulting non-blocking surface is
-queued without waiting for a planner reply. Only successful consumption through
-`channel-next` resets the clock and appends `planner-surfaced` to `events.jsonl`;
-an update queued while no planner is attached is neither reset nor audited as
-delivered.
+is inside a long-running agent step. When due, it claims and dispatches a dedicated
+check-in agent. That read-only actor synthesizes a concise per-workstream update
+from the run journal, status, monitor, telemetry, and labeled history, then sends
+it exactly once with `just channel-surface`. The command queues the non-blocking
+surface without waiting for a planner reply; the reconciler neither authors nor
+relays its content. Only successful consumption through `channel-next` resets the
+clock and appends `planner-surfaced` to `events.jsonl`; an update queued while no
+planner is attached is neither reset nor audited as delivered.
 
 The heartbeat record carries an atomic `in_flight` claim so concurrent pacemaker
 ticks cannot dispatch duplicate check-ins. A failed attempt is recorded in

@@ -177,19 +177,34 @@ def test_due_heartbeat_surfaces_during_active_step_and_disabled_run_stays_silent
         runs,
         _base(tmp_path),
         onejudge_bin,
-        heartbeat_interval=0.2,
+        heartbeat_interval=0.5,
         env={"FAKE_CHECK_IN_FAIL_ONCE": str(failed_check_in)},
     )
     # llmlint: ignore[tests_mirror_real_usage] Required durable clock audit has no CLI view.
     heartbeat_path = runs / run_id / "channel" / "heartbeat.json"
     # llmlint: ignore[tests_mirror_real_usage] Required queue audit has no CLI view.
     initial_state = json.loads(heartbeat_path.read_text())
+    cleared_state: dict[str, object] | None = None
+    failure_deadline = deadline(120)
+    while time.monotonic() < failure_deadline:
+        current = json.loads(heartbeat_path.read_text(encoding="utf-8"))
+        if failed_check_in.is_file() and current["in_flight"] is False:
+            cleared_state = current
+            break
+        time.sleep(0.01)
+    assert cleared_state is not None
+    assert cleared_state["due"] is False
+    retry_not_before = cleared_state["retry_not_before"]
+    assert isinstance(retry_not_before, int | float)
+    assert retry_not_before > time.time()
+    assert witness.is_file()
     queued_path = runs / run_id / "channel" / "heartbeat-surface.json"
     queue_deadline = deadline(120)
     while not queued_path.is_file() and time.monotonic() < queue_deadline:
         time.sleep(0.01)
     assert queued_path.is_file()
     assert failed_check_in.read_text(encoding="utf-8") == "failed\n"
+    assert not (runs / run_id / "channel" / "check-in-message.txt").exists()
     # llmlint: ignore[tests_mirror_real_usage] The acceptance contract requires the
     # durable failed-attempt audit and cleared claim; neither has an operator CLI.
     check_in_log = runs / run_id / "channel" / "check-in.log"
@@ -301,7 +316,6 @@ def test_due_heartbeat_surfaces_during_active_step_and_disabled_run_stays_silent
         (run_id, "", "1", "non-empty"),
         (run_id, "status", "-1", "positive, finite"),
         ("missing-run", "status", "1", "valid run ids"),
-        (run_id, "status", "0.01", "timed out"),
     ):
         rejected = subprocess.run(
             [

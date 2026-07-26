@@ -180,11 +180,28 @@ def test_writer_retries_partial_writes_and_backpressure(
 
 def test_proposal_pump_round_trips_and_persists_on_reconciler_drain(tmp_path: Path) -> None:
     channel = create_channel(tmp_path / "run")
+
+    def dispatch_check_in() -> None:
+        atomic_json(
+            channel / "heartbeat-surface.json",
+            {
+                "op": "supervisor",
+                "run_id": "live",
+                "round": 3,
+                "surface": {
+                    "kind": "heartbeat",
+                    "message": "worker: implementing transport; follow-ups: none",
+                    "blocking": False,
+                },
+                "messages": [],
+            },
+        )
+
     pump = ProposalPump(
         channel,
         "live",
         3,
-        synthesize_heartbeat=lambda: "worker: implementing transport; follow-ups: none",
+        dispatch_check_in=dispatch_check_in,
     )
     pump.propose_blocking("worker", "found adjacent work")
     assert read_message(channel / "up.fifo", timeout=1) == {
@@ -254,11 +271,24 @@ def test_proposal_pump_defers_terminal_blocker_until_supervisor_relay(tmp_path: 
 def test_new_proposal_pump_continues_persisted_heartbeat_countdown(tmp_path: Path) -> None:
     channel = create_channel(tmp_path / "run", heartbeat_interval=0.1)
     record_surface(channel, now=time.time() - 0.09)
+
+    def dispatch_check_in() -> None:
+        atomic_json(
+            channel / "heartbeat-surface.json",
+            {
+                "op": "supervisor",
+                "run_id": "continued",
+                "round": 2,
+                "surface": {"kind": "heartbeat", "message": "still active", "blocking": False},
+                "messages": [],
+            },
+        )
+
     pump = ProposalPump(
         channel,
         "continued",
         2,
-        synthesize_heartbeat=lambda: "worker: still active; follow-ups: none",
+        dispatch_check_in=dispatch_check_in,
     )
     queued = channel / "heartbeat-surface.json"
     # The full suite can leave the pacemaker thread briefly CPU-starved under
@@ -552,43 +582,40 @@ def test_heartbeat_reply_adjusts_or_disables_without_changing_verdict(tmp_path: 
         _reply({"completion": True, "reason": "bad", "heartbeat_interval": 0})
 
 
-def test_nonblocking_surface_cli_writes_real_fifo_and_resets_clock(
+def test_nonblocking_surface_cli_queues_claimed_update_until_consumed(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     runs = tmp_path / "runs"
     run_dir = runs / "orch"
     channel = create_channel(run_dir, heartbeat_interval=1)
+    (run_dir / "round-01").mkdir()
     initial = heartbeat_state(channel)
     assert initial is not None
     mark_heartbeat_due(channel, now=float(initial["last_surface_at"]) + 2)
-    received: list[dict[str, object]] = []
-
-    def receive() -> None:
-        received.append(read_message(channel / "up.fifo", timeout=1))
-
-    reader = threading.Thread(target=receive)
-    reader.start()
+    assert main_surface(["orch", "unclaimed", "--runs-dir", str(runs)]) == 2
+    assert "no active check-in claim" in capsys.readouterr().err
+    assert claim_heartbeat(channel)
     assert (
         main_surface(
             ["orch", "worker active; no follow-ups", "--runs-dir", str(runs), "--timeout", "1"]
         )
         == 0
     )
-    reader.join()
-    assert received == [
-        {
-            "op": "supervisor",
-            "run_id": "orch",
-            "round": 1,
-            "surface": {
-                "kind": "heartbeat",
-                "message": "worker active; no follow-ups",
-                "blocking": False,
-            },
-            "messages": [],
-        }
-    ]
-    assert _heartbeat(channel)["due"] is False
+    assert json.loads((channel / "heartbeat-surface.json").read_text()) == {
+        "op": "supervisor",
+        "run_id": "orch",
+        "round": 1,
+        "surface": {
+            "kind": "heartbeat",
+            "message": "worker active; no follow-ups",
+            "blocking": False,
+        },
+        "messages": [],
+    }
+    assert _heartbeat(channel)["due"] is True
+    assert _heartbeat(channel)["in_flight"] is True
+    assert main_surface(["orch", "duplicate", "--runs-dir", str(runs)]) == 2
+    assert "already queued" in capsys.readouterr().err
     assert main_surface(["orch", " ", "--runs-dir", str(runs)]) == 2
     assert "non-empty" in capsys.readouterr().err
     assert main_surface(["orch", "update", "--runs-dir", str(runs), "--timeout", "0"]) == 2
