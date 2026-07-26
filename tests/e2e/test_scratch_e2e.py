@@ -124,6 +124,9 @@ def test_third_party_sweep_skips_inflight_lifecycle_then_reclaims(
     scratch = tmp_path / "scratch"
     scratch.mkdir()
     candidate = scratch / "visual-inflight"
+    dead_watchdog = scratch / "orchestrator-watchdog-dead"
+    dead_watchdog.mkdir()
+    (dead_watchdog / "pid").write_text("999999999\n", encoding="utf-8")
     ready = tmp_path / "gate-ready"
     release = tmp_path / "gate-release"
     result_path = tmp_path / "lifecycle-result.json"
@@ -161,6 +164,7 @@ def test_third_party_sweep_skips_inflight_lifecycle_then_reclaims(
             check=True,
         )
         assert candidate.exists()
+        assert not dead_watchdog.exists()
         assert "third-party sweep skipped: lifecycle dispatch active" in during.stdout
     finally:
         release.write_text("release", encoding="utf-8")
