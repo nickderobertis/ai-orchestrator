@@ -195,9 +195,6 @@ def main() -> int:
         sys.stderr.write("fake_backend: messages must be a list of objects\n")
         return 1
     task = _task_text(messages)
-    if "provider-errors" in task:
-        sys.stderr.write("fake_backend: provider error\n")
-        return 1
     if "configuration-errors" in task:
         sys.stderr.write("fake_backend: bad config\n")
         return 1
@@ -275,6 +272,28 @@ def main() -> int:
                 with witness.open("a", encoding="utf-8") as stream:
                     stream.write("tick\n")
             orchestrator_plan = _orchestrator_command(task)
+            infrastructure_failures = {
+                "provider-errors": "fake_backend: provider error",
+                "infrastructure-sigkill": "oneharness exited with signal: 9 (SIGKILL)",
+                "infrastructure-auth": "harness failed (auth): login required",
+                "infrastructure-v03-write": (
+                    "harness claude-code cannot write v0.3 history telemetry"
+                ),
+                "infrastructure-v03-incomplete": (
+                    "new history record lacks complete v0.3 telemetry"
+                ),
+            }
+            infrastructure_error = next(
+                (
+                    detail
+                    for sentinel, detail in infrastructure_failures.items()
+                    if sentinel in task
+                ),
+                None,
+            )
+            if infrastructure_error is not None and orchestrator_plan is None:
+                sys.stderr.write(f"{infrastructure_error}\n")
+                return 1
             plan_text = ""
             if orchestrator_plan is not None:
                 plan_path = orchestrator_plan.plan
@@ -312,6 +331,8 @@ def main() -> int:
                                 "continuation-channel",
                                 '"name": "live-edit"',
                                 "lifecycle-worker-death-retry",
+                                "provider-errors",
+                                "infrastructure-",
                             )
                         ),
                         capture_output=True,
@@ -418,6 +439,18 @@ def main() -> int:
                 )
             if "write-change" in task:
                 (Path.cwd() / "CHANGE.txt").write_text("change from fake agent\n", encoding="utf-8")
+            if "publish-change-to-base" in task:
+                subprocess.run(["git", "add", "CHANGE.txt"], check=True, capture_output=True)
+                subprocess.run(
+                    ["git", "commit", "-m", "test: publish change early"],
+                    check=True,
+                    capture_output=True,
+                )
+                subprocess.run(
+                    ["git", "push", "origin", "HEAD:main"],
+                    check=True,
+                    capture_output=True,
+                )
             if "write-unique-change" in task:
                 identity = re.sub(r"[^A-Za-z0-9._-]+", "-", Path.cwd().name)
                 (Path.cwd() / f"CHANGE-{identity}.txt").write_text(

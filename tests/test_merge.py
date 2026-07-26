@@ -339,6 +339,30 @@ def test_local_merge_journals_verification_and_the_merge(tmp_path: Path, bare_or
     assert events[2].detail == {"pr": "local:o/r#feature", "branch": "feature", "base": "main"}
 
 
+def test_local_merge_records_branch_content_already_on_base(tmp_path: Path, bare_origin) -> None:
+    origin = bare_origin()
+    clone = gitops.clone(origin, tmp_path / "clone-already-integrated")
+    feature = gitops.worktree_add(
+        clone, tmp_path / "feature-already-integrated", "feature", base="origin/main"
+    )
+    (feature / "feature.txt").write_text("change\n", encoding="utf-8")
+    gitops.add_all(feature)
+    gitops.commit(feature, "feat: add feature")
+    gitops.push(feature, "feature")
+    gitops.push(feature, "HEAD:main", set_upstream=False)
+    journal, node = _scope(tmp_path, "run-already-integrated")
+
+    out = LocalMergeStrategy().publish_and_merge(
+        _ctx(clone_dir=clone, branch="feature", journal=node)
+    )
+
+    assert out.outcome == "already-integrated"
+    assert out.pr is not None
+    assert "already present on main" in out.detail
+    assert [event.kind for event in journal.events()] == ["publication-finished"]
+    assert journal.events()[0].detail["outcome"] == "already-integrated"
+
+
 def test_local_merge_rejects_zero_publication_attempts(tmp_path: Path, bare_origin) -> None:
     clone = gitops.clone(bare_origin(), tmp_path / "clone-zero-attempts")
 
@@ -368,6 +392,28 @@ def test_local_merge_cleans_scratch_worktree_after_content_conflict(
         LocalMergeStrategy().publish_and_merge(
             _ctx(clone_dir=clone, branch="feature", verify_command=["true"])
         )
+
+
+def test_local_merge_surfaces_non_race_push_failure(
+    tmp_path: Path, bare_origin, monkeypatch
+) -> None:
+    origin = bare_origin()
+    clone = gitops.clone(origin, tmp_path / "clone-push-failure")
+    feature = gitops.worktree_add(
+        clone, tmp_path / "feature-push-failure", "feature", base="origin/main"
+    )
+    (feature / "feature.txt").write_text("change\n", encoding="utf-8")
+    gitops.add_all(feature)
+    gitops.commit(feature, "feat: add feature")
+    gitops.push(feature, "feature")
+    monkeypatch.setattr(
+        gitops,
+        "push",
+        lambda *args, **kwargs: (_ for _ in ()).throw(GitError("remote: permission denied")),
+    )
+
+    with pytest.raises(GitError, match="permission denied"):
+        LocalMergeStrategy().publish_and_merge(_ctx(clone_dir=clone, branch="feature"))
 
 
 def test_local_merge_journals_a_gate_failure_without_claiming_a_merge(

@@ -13,6 +13,7 @@ import inspect
 import json
 import math
 import os
+import re
 import sys
 import threading
 import time
@@ -66,6 +67,11 @@ from .lifecycle import (
     result_payload,
     validate_repo_aliases,
 )
+from .outcomes import (
+    INFRASTRUCTURE_FAILURE_OUTCOME,
+    LIFECYCLE_OUTCOMES,
+    NODE_OUTCOMES,
+)
 from .plan import (
     NODE_KINDS,
     PLAN_SCHEMA_VERSION,
@@ -98,6 +104,23 @@ from .workspace import Workspace
 NodeKind = Literal["agent", "human"]
 EXIT_BY_STATE = {"complete": 0, "waiting": 1, "failed": 1}
 DEFAULT_ROUND_BUDGET = 14_400.0
+
+_INFRASTRUCTURE_FAILURE_PATTERNS = (
+    re.compile(r"provider error.*\b(?:respond|supervisor)\b", re.IGNORECASE | re.DOTALL),
+    re.compile(r"oneharness exited with signal:\s*9\b", re.IGNORECASE),
+    re.compile(r"harness failed\s*\(\s*auth\s*\)", re.IGNORECASE),
+    re.compile(r"cannot write v0\.3 history telemetry", re.IGNORECASE),
+    re.compile(r"new history record lacks complete v0\.3 telemetry", re.IGNORECASE),
+)
+
+
+def infrastructure_failure_detail(exc: BaseException) -> str | None:
+    """Return the durable underlying error only for known no-dispatch failures."""
+    detail = str(exc).strip()
+    if any(pattern.search(detail) for pattern in _INFRASTRUCTURE_FAILURE_PATTERNS):
+        return detail
+    return None
+
 
 _AGENT_NODE_FIELDS = (
     "persona",
@@ -672,17 +695,28 @@ def run_graph(
             # ledger records it either way. Journal it here as well: a `node-started`
             # with nothing to close it is how this journal says "still running", and
             # a node that raised is the one thing it is not.
-            failed = NodeRun("failed", str(exc))
+            infrastructure_detail = infrastructure_failure_detail(exc)
+            outcome = INFRASTRUCTURE_FAILURE_OUTCOME if infrastructure_detail is not None else None
+            failed = NodeRun("failed", str(exc), outcome)
             node_log.append(
                 "node-failed",
                 detail={
                     "detail": str(exc),
                     "error": type(exc).__name__,
+                    **({"outcome": outcome} if outcome is not None else {}),
                     TERMINAL_NODE_RESULT_FIELD: cast(
                         Any, _run_payload(node, failed, dependents.get(nid, []))
                     ),
                 },
             )
+            if infrastructure_detail is not None:
+                if proposal_pump is not None:
+                    message = (
+                        "terminal infrastructure failure; dispatch cannot run: "
+                        + infrastructure_detail
+                    )
+                    proposal_pump.defer_blocking(nid, message)
+                return failed
             raise
         finally:
             reset_harness_observer(token)
@@ -817,7 +851,9 @@ def _run_payload(node: GraphNode, run: NodeRun, dependents: list[str]) -> GraphR
         error=run.error,
         unblocks=list(dependents) if run.status == "waiting" else [],
         human_actions=actions,
-        outcome=run.payload if run.payload == "no-changes" else None,
+        outcome=(
+            run.payload if isinstance(run.payload, str) and run.payload in NODE_OUTCOMES else None
+        ),
     )
     return _node_payload(result)
 
@@ -826,7 +862,12 @@ def _replay_node_run(node: GraphNode, item: GraphResultItem) -> NodeRun:
     """Restore scheduler actual state while retaining the exact serialized result."""
     status = item["status"]
     error = item.get("error")
-    payload: Any = "no-changes" if item.get("outcome") == "no-changes" else None
+    recorded_outcome = item.get("outcome")
+    payload: Any = (
+        recorded_outcome
+        if isinstance(recorded_outcome, str) and recorded_outcome in NODE_OUTCOMES
+        else None
+    )
     if node.lifecycle is not None:
         anchors = [
             StackBase(
@@ -845,15 +886,17 @@ def _replay_node_run(node: GraphNode, item: GraphResultItem) -> NodeRun:
         if not isinstance(raw_deferred_cleanup, list) or not all(
             isinstance(detail, str) for detail in raw_deferred_cleanup
         ):
-            # llmlint: ignore[changed_behavior_has_e2e] unit test asserts this rejection.
             raise ConfigError("recorded lifecycle result has invalid deferred_cleanup")
+        raw_outcome = item.get("outcome", "error")
+        if not isinstance(raw_outcome, str) or raw_outcome not in LIFECYCLE_OUTCOMES:
+            raise ConfigError(f"recorded lifecycle result has invalid outcome {raw_outcome!r}")
         payload = LifecycleResult(
             repo=item.get("repo", node.lifecycle.repo),
             task=node.task,
             persona=node.lifecycle.persona or "workstream",
             base_branch=item.get("base_branch", ""),
             branch=item.get("branch", ""),
-            outcome=item.get("outcome", "error"),
+            outcome=raw_outcome,
             publication_identity=cast(Any, item.get("publication_identity")),
             publication_workflow=cast(Any, item.get("publication_workflow")),
             repository_type=cast(Any, item.get("repository_type")),
@@ -914,7 +957,11 @@ def _collect(
             unblocks=list(dependents[nid]) if run.status == "waiting" else [],
             blocked_by=blocking(nid) if run.status == "blocked" else [],
             human_actions=actions.get(nid, []),
-            outcome=run.payload if run.payload == "no-changes" else None,
+            outcome=(
+                run.payload
+                if isinstance(run.payload, str) and run.payload in NODE_OUTCOMES
+                else None
+            ),
             recorded=cast(GraphResultItem, run.recorded) if run.recorded is not None else None,
         )
     return GraphResult(results=results, started_order=started_order)

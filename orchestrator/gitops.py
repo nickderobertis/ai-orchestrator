@@ -20,6 +20,7 @@ from typing import NamedTuple
 __all__ = [
     "Commit",
     "GitError",
+    "NothingToCommit",
     "add_all",
     "checkout",
     "branch_exists",
@@ -59,6 +60,10 @@ __all__ = [
 
 class GitError(Exception):
     """A git command exited non-zero (carries git's own stderr)."""
+
+
+class NothingToCommit(GitError):
+    """A requested commit had no tree change to record."""
 
 
 def common_dir(cwd: str | Path) -> Path:
@@ -489,6 +494,10 @@ def merge(cwd: str | Path, ref: str, *, message: str, no_ff: bool = True) -> str
 def merge_squash(cwd: str | Path, ref: str, *, message: str) -> str:
     """Squash-merge ``ref``, commit ``message``, and return the new HEAD sha."""
     _git(["merge", "--squash", ref], cwd=cwd)
+    if not is_dirty(cwd):
+        raise NothingToCommit(
+            f"squash merge of {ref!r} produced no tree change; its content is already present"
+        )
     _git(["commit", "-m", message], cwd=cwd)
     return head_sha(cwd)
 

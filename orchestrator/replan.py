@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import ConfigError, load_yaml
+from .outcomes import INFRASTRUCTURE_FAILURE_OUTCOME
 from .runs import StackBasePayload
 
 __all__ = ["next_round"]
@@ -76,6 +77,11 @@ def next_round(
     done_ids = {
         nid for nid, r in results.items() if isinstance(r, dict) and r.get("status") == "done"
     }
+    done_ids.update(
+        nid
+        for nid, result in results.items()
+        if isinstance(result, dict) and result.get("outcome") == INFRASTRUCTURE_FAILURE_OUTCOME
+    )
     done_ids.update(ref for ref in completed_humans if "/" not in ref)
     removed = drop | set(split)  # split replaces a node → its id goes away
     prior_tasks: dict[str, Any] = {}
