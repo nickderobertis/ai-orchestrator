@@ -1,0 +1,6 @@
+{
+  "name": "cache-proof",
+  "projectType": "library",
+  "sourceRoot": "src",
+  "targets": { "typecheck": { "command": "bunx tsc --noEmit" } }
+}
