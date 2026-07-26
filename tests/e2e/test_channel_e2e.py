@@ -394,6 +394,8 @@ def test_completed_check_in_without_surface_is_logged_and_retried(
         env={"FAKE_CHECK_IN_SKIP_SURFACE_ONCE": str(skipped)},
     )
     channel = runs / run_id / "channel"
+    # llmlint: ignore[tests_mirror_real_usage] The acceptance contract requires
+    # the durable missing-surface failure diagnostic, which has no operator CLI.
     failure_log = channel / "check-in.log"
     failure_deadline = deadline(120)
     failure: dict[str, object] | None = None
@@ -418,6 +420,8 @@ def test_completed_check_in_without_surface_is_logged_and_retried(
     while not queued.is_file() and time.monotonic() < queue_deadline:
         time.sleep(0.01)
     assert queued.is_file()
+    # llmlint: ignore[tests_mirror_real_usage] Exact dispatch/retry dedup is
+    # observable only at the paid-provider seam; onejudge and orchestration stay real.
     assert (channel / "check-in-dispatches.txt").read_text().splitlines() == [
         "missing-surface",
         "success",
