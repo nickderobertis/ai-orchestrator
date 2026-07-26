@@ -168,6 +168,27 @@ def test_non_run_subcommand_is_rejected_before_invoking_oneharness(tmp_path: Pat
     assert not marker.exists()
 
 
+def test_version_probe_is_forwarded_to_oneharness(tmp_path: Path) -> None:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    oneharness = bin_dir / "oneharness"
+    oneharness.write_text(
+        '#!/bin/sh\n[ "$1" = --version ] && printf "oneharness test-version\\n"\n',
+        encoding="utf-8",
+    )
+    oneharness.chmod(0o755)
+
+    proc = subprocess.run(
+        [WRAPPER, "--version"],
+        text=True,
+        capture_output=True,
+        env={**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}"},
+    )
+
+    assert proc.returncode == 0
+    assert proc.stdout.strip() == "oneharness test-version"
+
+
 def test_missing_oneharness_reports_recovery_action(tmp_path: Path) -> None:
     proc = subprocess.run(
         ["/bin/bash", WRAPPER, "run", "--mode", "read-only"],
