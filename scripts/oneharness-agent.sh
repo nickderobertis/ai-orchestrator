@@ -26,6 +26,7 @@ fi
 shift
 
 caller_config=false
+caller_config_path=
 expect_config_value=false
 for arg in "$@"; do
     if [[ $expect_config_value == true ]]; then
@@ -33,6 +34,7 @@ for arg in "$@"; do
             echo "oneharness-agent: --config requires a non-empty path; retry with '--config /absolute/path/to/config.toml'" >&2
             exit 2
         fi
+        caller_config_path=$arg
         expect_config_value=false
         continue
     fi
@@ -47,6 +49,7 @@ for arg in "$@"; do
                 exit 2
             fi
             caller_config=true
+            caller_config_path=${arg#--config=}
             ;;
     esac
 done
@@ -55,6 +58,10 @@ if [[ $expect_config_value == true ]]; then
     exit 2
 fi
 if [[ $caller_config == true ]]; then
+    if [[ ! -f $caller_config_path || ! -r $caller_config_path ]]; then
+        echo "oneharness-agent: caller config is not a readable regular file: $caller_config_path; correct the path and retry" >&2
+        exit 2
+    fi
     # Keep the portable indirection available while oneharness resolves config.
     # The judge's explicit primary variant does not consume it and masks
     # CLAUDE_CONFIG_DIR, but oneharness may still discover and layer the project

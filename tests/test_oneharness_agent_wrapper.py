@@ -113,7 +113,9 @@ def test_agent_side_rejects_unsearchable_alternate_config_directory(tmp_path: Pa
 def test_judge_side_keeps_its_own_config_and_adds_no_second(tmp_path: Path) -> None:
     # The judge / simulated-user turn already selects --config; the wrapper must not
     # add a second one, which oneharness rejects as a duplicate.
-    judge_cfg = "/abs/oneharness.judge.toml"
+    judge_config = tmp_path / "oneharness.judge.toml"
+    judge_config.write_text('harnesses = ["codex"]\n', encoding="utf-8")
+    judge_cfg = str(judge_config)
     proc, argv = _run_wrapper(
         tmp_path,
         ["run", "--compact", "--prompt-file", "-", "--config", judge_cfg, "--session", "judge-1"],
@@ -133,6 +135,15 @@ def test_judge_side_rejects_config_without_a_path(tmp_path: Path) -> None:
         assert proc.returncode == 2
         assert "--config requires" in proc.stderr
         assert argv == []
+
+
+def test_judge_side_rejects_unreadable_config_path(tmp_path: Path) -> None:
+    missing = tmp_path / "missing.toml"
+    proc, argv = _run_wrapper(tmp_path, ["run", "--config", str(missing)])
+    assert proc.returncode == 2
+    assert f"caller config is not a readable regular file: {missing}" in proc.stderr
+    assert "correct the path and retry" in proc.stderr
+    assert argv == []
 
 
 def test_missing_home_is_rejected_before_invoking_oneharness(tmp_path: Path) -> None:
