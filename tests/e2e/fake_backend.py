@@ -241,7 +241,7 @@ def main() -> int:
                     while not release.exists():
                         time.sleep(0.02)
                 elif "live-edit-slow" not in task:
-                    time.sleep(12 if "pacemaker-slow" in task else 0.8)
+                    time.sleep(30 if "pacemaker-slow" in task else 0.8)
                 with witness.open("a", encoding="utf-8") as stream:
                     stream.write("tick\n")
             orchestrator_plan = _orchestrator_command(task)

@@ -30,8 +30,8 @@ from .config import ConfigError
 from .coordination import advisory_lock, atomic_json
 from .edits import EDIT_PROTOCOL_VERSION, EditCommand, EditError, parse_commands
 from .environment import CHANNEL_ENV_PREFIX
-from .journal import JournalSink, NullJournal, open_journal
-from .runs import RunId, latest_round, load_mapping, resolve_supervision_run, validate_run_id
+from .journal import JournalSink, NullJournal
+from .runs import latest_round, load_mapping, resolve_supervision_run, validate_run_id
 
 
 class ChannelError(Exception):
@@ -160,6 +160,9 @@ def apply_heartbeat_reply(channel_dir: Path, response: Mapping[str, Any]) -> Non
         if interval is not None:
             state["interval_s"] = interval
         atomic_json(_heartbeat_path(channel_dir), state)
+        if not enabled:
+            with suppress(FileNotFoundError):
+                (channel_dir / HEARTBEAT_SURFACE_FILE).unlink()
 
 
 def due_indicator(channel_dir: Path, *, now: float | None = None) -> str | None:
@@ -554,6 +557,14 @@ class ProposalPump:
                 }
                 atomic_json(self._channel_dir / HEARTBEAT_SURFACE_FILE, surface)
                 record_surface(self._channel_dir)
+                self._journal.append(
+                    "planner-surfaced",
+                    detail={
+                        "kind": "heartbeat",
+                        "message": "workstreams still in progress; follow-ups: none",
+                        "blocking": False,
+                    },
+                )
                 self._heartbeat_queued.clear()
 
     def _service(self) -> None:
@@ -738,7 +749,10 @@ def main_next(argv: list[str] | None = None) -> int:
         print(f"channel-next: {exc}", file=sys.stderr)
         return 2
     heartbeat_surface = run_dir / "channel" / HEARTBEAT_SURFACE_FILE
-    if (run_dir / "channel" / "planner-pending.json").is_file():
+    pending_reply = (run_dir / "channel" / "planner-pending.json").is_file()
+    latest = latest_round(run_dir)
+    round_finished = latest is not None and (latest[1] / "result.json").is_file()
+    if pending_reply or round_finished:
         with suppress(FileNotFoundError):
             heartbeat_surface.unlink()
     with advisory_lock(f"channel-heartbeat-surface:{heartbeat_surface.resolve()}"):
@@ -746,24 +760,12 @@ def main_next(argv: list[str] | None = None) -> int:
             try:
                 value = load_mapping(heartbeat_surface)
                 heartbeat_surface.unlink()
-                latest = latest_round(run_dir)
-                if latest is not None:
-                    surface = value.get("surface")
-                    if isinstance(surface, Mapping):
-                        open_journal(run_dir, RunId(run_dir.name), latest[0]).append(
-                            "planner-surfaced",
-                            detail={
-                                "kind": str(surface.get("kind", "heartbeat")),
-                                "message": str(surface.get("message", "")),
-                                "blocking": bool(surface.get("blocking", False)),
-                            },
-                        )
             except (ConfigError, OSError) as exc:
                 print(f"channel-next: {exc}", file=sys.stderr)
                 return 2
             print(json.dumps(value))
             return 0
-    if _finished(run_dir):
+    if not pending_reply and _finished(run_dir):
         print(json.dumps({"status": "finished"}))
         return 0
     try:

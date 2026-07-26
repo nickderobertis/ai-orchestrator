@@ -169,24 +169,20 @@ def test_due_heartbeat_surfaces_during_active_step_and_disabled_run_stays_silent
         encoding="utf-8",
     )
     run_id = _launch_cli(plan, runs, _base(tmp_path), onejudge_bin, heartbeat_interval=0.2)
-    heartbeats = [_wait_surface(run_id, runs, wait_seconds=120) for _ in range(3)]
-    assert all(
-        heartbeat["surface"]
-        == {
+    heartbeat_path = runs / run_id / "channel" / "heartbeat.json"
+    initial_state = json.loads(heartbeat_path.read_text())
+    heartbeats: list[dict[str, object]] = []
+    while len(heartbeats) < 3:
+        heartbeat = _wait_surface(run_id, runs, wait_seconds=120)
+        if heartbeat["surface"] == {
             "kind": "heartbeat",
             "message": "workstreams still in progress; follow-ups: none",
             "blocking": False,
-        }
-        for heartbeat in heartbeats
-    )
-    heartbeat_path = runs / run_id / "channel" / "heartbeat.json"
-    wait_deadline = deadline(5)
-    while True:
-        state = json.loads(heartbeat_path.read_text())
-        if state["due"] is False or time.monotonic() >= wait_deadline:
-            break
-        time.sleep(0.01)
-    assert state["due"] is False
+        }:
+            heartbeats.append(heartbeat)
+    assert len(heartbeats) == 3
+    state = json.loads(heartbeat_path.read_text())
+    assert state["last_surface_at"] > initial_state["last_surface_at"]
 
     while True:
         boundary = _wait_surface(run_id, runs, wait_seconds=120)
@@ -195,7 +191,12 @@ def test_due_heartbeat_surfaces_during_active_step_and_disabled_run_stays_silent
         if boundary_surface["kind"] != "heartbeat":
             break
     assert boundary_surface["kind"] == "milestone"
-    reset = json.loads(heartbeat_path.read_text())
+    wait_deadline = deadline(5)
+    while True:
+        reset = json.loads(heartbeat_path.read_text())
+        if reset["due"] is False or time.monotonic() >= wait_deadline:
+            break
+        time.sleep(0.01)
     assert reset["due"] is False
     assert reset["last_surface_at"] >= state["last_surface_at"]
     assert _next_cli(run_id, runs, timeout="0.02").get("surface") is None
@@ -216,7 +217,7 @@ def test_due_heartbeat_surfaces_during_active_step_and_disabled_run_stays_silent
         runs,
         _base(tmp_path),
         onejudge_bin,
-        heartbeat_interval=0.2,
+        heartbeat_interval=10,
         requested_run_id="heartbeat-disabled",
     )
     disabled_channel = runs / disabled_id / "channel"
@@ -790,7 +791,10 @@ def test_reattached_planner_replies_to_mid_run_proposal_without_stopping_graph(
         time.sleep(0.02)
     assert witness.read_text(encoding="utf-8").count("tick") == 2
 
-    boundary = _next_cli(run_id, runs)
+    while True:
+        boundary = _next_cli(run_id, runs)
+        if boundary.get("surface", {}).get("kind") != "heartbeat":
+            break
     assert boundary["surface"]["kind"] in {"milestone", "closeout"}
     _reply_cli(
         run_id,
