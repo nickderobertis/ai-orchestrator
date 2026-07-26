@@ -138,7 +138,7 @@ def test_launch_task_prose_preserves_default_and_passes_round_budget(
     monkeypatch.setattr("orchestrator.dispatch.subprocess.Popen", fake_popen)
     monkeypatch.setattr(
         "orchestrator.dispatch._resolve_onejudge",
-        lambda binary, _env: (str(Path(binary).resolve()), "0.3.4"),
+        lambda binary, _env: {"path": str(Path(binary).resolve()), "version": "0.3.4"},
     )
     skill = {"kind": "command", "command": ["fake-provider"]}
 

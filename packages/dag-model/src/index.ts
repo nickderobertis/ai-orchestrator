@@ -30,7 +30,7 @@ export const API_V1_QUERY = {
   after: "after",
 } as const;
 
-export const telemetryQualitySchema = z.enum(["complete", "partial", "legacy"]);
+export const timingQualitySchema = z.enum(["complete", "partial", "legacy"]);
 export const linkageQualitySchema = z.enum(["native", "labelled", "inferred"]);
 export const timingPresenceSchema = openObject({
   agent_model_ms: z.boolean(),
@@ -110,7 +110,7 @@ export const nodeTelemetrySchema = openObject({
   tool_commands: z.record(z.string(), counter).optional(),
   turns: counter,
   lint: counter,
-  timing_quality: telemetryQualitySchema,
+  timing_quality: timingQualitySchema,
   linkage_quality: linkageQualitySchema,
   timing_presence: timingPresenceSchema,
 });
@@ -127,7 +127,7 @@ export const runTelemetrySchema = openObject({
   failure: arbitraryRecord.optional(),
   check_rollup: arbitraryRecord.optional(),
   usage: usageSchema,
-  timing_quality: telemetryQualitySchema,
+  timing_quality: timingQualitySchema,
   linkage_quality: linkageQualitySchema,
   timing_presence: timingPresenceSchema,
   sources: z.array(z.string()),
@@ -148,7 +148,7 @@ export const runSummarySchema = openObject({
   phase: z.string().min(1),
   last_event: z.string().min(1),
   last_progress_at: nonnegative.optional(),
-  timing_quality: telemetryQualitySchema,
+  timing_quality: timingQualitySchema,
   linkage_quality: linkageQualitySchema,
   timing: timingSchema,
   node_counts: z.record(z.string(), counter),

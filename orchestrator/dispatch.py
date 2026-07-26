@@ -156,7 +156,17 @@ class WatchdogSignal:
     observed_pids: tuple[ProcessId, ...]
 
 
-def _resolve_onejudge(onejudge_bin: str, env: Mapping[str, str]) -> tuple[str, str]:
+class OneJudgeProvenance(TypedDict):
+    path: str
+    version: str
+
+
+class DispatchProvenance(TypedDict):
+    provider_kind: str
+    onejudge: OneJudgeProvenance
+
+
+def _resolve_onejudge(onejudge_bin: str, env: Mapping[str, str]) -> OneJudgeProvenance:
     """Resolve and verify the executable against the repository's adopted version."""
     resolved = shutil.which(onejudge_bin, path=env.get("PATH"))
     if resolved is None:
@@ -173,11 +183,11 @@ def _resolve_onejudge(onejudge_bin: str, env: Mapping[str, str]) -> tuple[str, s
         raise DispatchError(
             f"onejudge version mismatch: expected {expected!r}, got {observed!r} from {resolved}"
         )
-    return resolved, adopted
+    return OneJudgeProvenance(path=resolved, version=adopted)
 
 
 def _build_report(
-    persona: str, result: RunResult, *, provenance: dict[str, object] | None = None
+    persona: str, result: RunResult, *, provenance: DispatchProvenance | None = None
 ) -> Report:
     """Adapt the SDK's validated report without changing our public contract."""
     raw_assessment = result.raw.get("assessment")
@@ -329,16 +339,17 @@ def run_onejudge(
     _validate_oneharness_timeout(process_env["ONEHARNESS_TIMEOUT"])
     stall_timeout = _stall_timeout(process_env)
     heartbeat_timeout = _worker_heartbeat_timeout(process_env)
-    resolved_onejudge, adopted_version = _resolve_onejudge(onejudge_bin, process_env)
+    onejudge_provenance = _resolve_onejudge(onejudge_bin, process_env)
+    resolved_onejudge = onejudge_provenance["path"]
     configured_provider = config.get("provider")
     provider_kind = provider
     if provider_kind is None and isinstance(configured_provider, dict):
         configured_kind = configured_provider.get("kind")
         provider_kind = configured_kind if isinstance(configured_kind, str) else None
-    provenance: dict[str, object] = {
-        "provider_kind": provider_kind or "oneharness",
-        "onejudge": {"path": resolved_onejudge, "version": adopted_version},
-    }
+    provenance = DispatchProvenance(
+        provider_kind=provider_kind or "oneharness",
+        onejudge=onejudge_provenance,
+    )
     inherited_labels = process_env.get(LABEL_ENV)
     if labels or inherited_labels is not None:
         try:
@@ -816,7 +827,7 @@ def launch_orchestrator(
         "round, review its recorded "
         "result, and surface milestones, blockers, departures, and closeout to your supervisor."
     )
-    resolved_onejudge, _ = _resolve_onejudge(onejudge_bin, os.environ)
+    resolved_onejudge = _resolve_onejudge(onejudge_bin, os.environ)["path"]
     command = [resolved_onejudge, "run", str(effective), "--task", task, "--format", "json"]
     process_env = dict(os.environ)
     process_env["ONEHARNESS_TIMEOUT"] = str(turn_timeout)

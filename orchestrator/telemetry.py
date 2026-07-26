@@ -52,7 +52,7 @@ SUPPORTED_HISTORY_SCHEMA_VERSIONS = ("0.2", "0.3", 1, 2, "1.0", "1.1", "1.2")
 #: ``model_ms``/``tool_ms`` plus interval-bearing tool events). A version identifies
 #: the line format, not the completeness of timing supplied by a particular harness.
 NATIVE_TIMING_HISTORY_SCHEMAS: frozenset[str | int] = frozenset({"0.3", 2, "1.0", "1.1", "1.2"})
-TelemetryQuality = Literal["complete", "partial", "legacy"]
+TimingQuality = Literal["complete", "partial", "legacy"]
 LinkageQuality = Literal["native", "labelled", "inferred"]
 TelemetrySource = Literal["onejudge", "oneharness", "history_legacy", "journal_legacy"]
 FailureClass = Literal[
@@ -272,7 +272,7 @@ class NodeTelemetry:
     tool_commands: dict[str, int] = field(default_factory=dict)
     turns: int = 0
     lint: int = 0
-    timing_quality: TelemetryQuality = "legacy"
+    timing_quality: TimingQuality = "legacy"
     linkage_quality: LinkageQuality = "inferred"
     timing_presence: TimingPresenceRecord = field(
         default_factory=lambda: cast(TimingPresenceRecord, {})
@@ -323,7 +323,7 @@ class RunTelemetry:
     check_rollup: CheckRollup = field(default_factory=CheckRollup)
     green_to_publication_seconds: list[float] = field(default_factory=list)
     usage: UsageRecord = field(default_factory=lambda: cast(UsageRecord, {}))
-    timing_quality: TelemetryQuality = "legacy"
+    timing_quality: TimingQuality = "legacy"
     linkage_quality: LinkageQuality = "inferred"
     timing_presence: TimingPresenceRecord = field(
         default_factory=lambda: cast(TimingPresenceRecord, {})
@@ -1302,7 +1302,7 @@ def _node_record(
         tool_ms=(native is not None and native.tool_ms is not None)
         or any(summary.has_tool_measurement for summary in linked),
     )
-    timing_quality: TelemetryQuality = (
+    timing_quality: TimingQuality = (
         "complete"
         if linked and all(summary.validated_native_fields for summary in linked)
         else "partial"
@@ -1423,8 +1423,7 @@ def collect_run(
         llmlint_model_ms=any(node.timing_presence["llmlint_model_ms"] for node in nodes),
         tool_ms=any(node.timing_presence["tool_ms"] for node in nodes),
     )
-    # Complete requires authoritative linkage plus valid interval-complete history.
-    timing_quality: TelemetryQuality = (
+    timing_quality: TimingQuality = (
         "complete"
         if native and all(native)
         else "partial"
