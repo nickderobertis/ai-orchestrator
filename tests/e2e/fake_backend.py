@@ -229,6 +229,11 @@ def main() -> int:
                 command[3] = "active worker: running; follow-ups: none"
                 runs_dir = Path(command[command.index("--runs-dir") + 1])
                 run_id = command[2]
+                failure_marker = runs_dir / run_id / "channel" / "check-in-failure-injected"
+                if "heartbeat-recovery" in run_id and not failure_marker.exists():
+                    failure_marker.write_text("failed once\n", encoding="utf-8")
+                    sys.stderr.write("fake_backend: forced first check-in failure\n")
+                    return 1
                 (runs_dir / run_id / "channel" / "check-in-labels.txt").write_text(
                     os.environ["ONEHARNESS_HISTORY_LABELS"],
                     encoding="utf-8",
@@ -254,7 +259,13 @@ def main() -> int:
                     while not release.exists():
                         time.sleep(0.02)
                 elif "live-edit-slow" not in task:
-                    time.sleep(3 if "heartbeat-channel" in task else 0.8)
+                    time.sleep(
+                        5.5
+                        if "heartbeat-recovery" in task
+                        else 3
+                        if "heartbeat-channel" in task
+                        else 0.8
+                    )
                 with witness.open("a", encoding="utf-8") as stream:
                     stream.write("tick\n")
             orchestrator_plan = _orchestrator_command(task)

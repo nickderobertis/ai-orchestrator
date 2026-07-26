@@ -282,6 +282,72 @@ def _reply_cli(run_id: str, runs: Path, value: dict[str, object]) -> None:
     )
 
 
+def test_failed_check_in_clears_claim_and_recovers_without_blocking_frontier(
+    tmp_path: Path, onejudge_bin: str
+) -> None:
+    runs = tmp_path / "runs"
+    witness = tmp_path / "recovery-worker"
+    plan = tmp_path / "heartbeat-recovery.json"
+    plan.write_text(
+        json.dumps(
+            {
+                "schema_version": 3,
+                "name": "heartbeat-recovery",
+                "tasks": [
+                    {
+                        "id": "active-worker",
+                        "persona": "engineer",
+                        "task": f"slow-branch {witness} complete-now heartbeat-recovery",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    run_id = _launch_cli(plan, runs, _base(tmp_path), onejudge_bin, heartbeat_interval=2)
+    channel = runs / run_id / "channel"
+    log_path = channel / "check-in.log"
+    wait_deadline = deadline(30)
+    records: list[dict[str, object]] = []
+    while time.monotonic() < wait_deadline:
+        records = (
+            [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()]
+            if log_path.is_file()
+            else []
+        )
+        if records:
+            break
+        time.sleep(0.02)
+    assert len(records) == 1
+    assert records[0]["succeeded"] is False
+    assert "DispatchError" in str(records[0]["detail"])
+    failed_state = json.loads((channel / "heartbeat.json").read_text(encoding="utf-8"))
+    assert failed_state["in_flight"] is False
+    assert failed_state["due"] is False
+    assert witness.read_text(encoding="utf-8") == "tick\n"
+
+    recovered = _wait_surface(run_id, runs, wait_seconds=120)
+    assert recovered["surface"] == {
+        "kind": "heartbeat",
+        "message": "active worker: running; follow-ups: none",
+        "blocking": False,
+    }
+    wait_deadline = deadline(5)
+    while time.monotonic() < wait_deadline:
+        records = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()]
+        if len(records) == 2:
+            break
+        time.sleep(0.02)
+    assert [record["succeeded"] for record in records] == [False, True]
+    assert float(records[1]["at"]) >= float(failed_state["retry_not_before"])
+
+    boundary = _wait_surface(run_id, runs, wait_seconds=120)
+    assert boundary["surface"]["kind"] == "milestone"
+    assert _next_cli(run_id, runs, timeout="0.02").get("surface") is None
+    _reply_cli(run_id, runs, {"completion": True, "reason": "verified recovery"})
+    _wait_report(runs / run_id / "orchestrator" / "report.json")
+
+
 def _convenience_cli(recipe: str, run_id: str, runs: Path, message: str | None = None) -> None:
     command = ["just", recipe, run_id]
     if message is not None:
