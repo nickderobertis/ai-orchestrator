@@ -919,6 +919,73 @@ print(json.dumps({
     assert report["results"][1]["text"] == "fallback recovered"
 
 
+def test_agent_config_falls_back_to_codex_after_claude_auth_rejection(
+    tmp_path: Path, oneharness_bin: str
+) -> None:
+    fake_claude = tmp_path / "claude"
+    fake_claude.write_text(
+        "#!/bin/sh\nprintf '%s\\n' 'authentication failed: login required' >&2\nexit 1\n",
+        encoding="utf-8",
+    )
+    fake_claude.chmod(0o755)
+    fake_codex = tmp_path / "codex"
+    fake_codex.write_text(
+        """#!/usr/bin/env python3
+import json
+
+print(json.dumps({"type": "thread.started", "thread_id": "auth-fallback-codex"}))
+print(json.dumps({
+    "type": "item.completed",
+    "item": {"type": "agent_message", "text": "auth fallback recovered"},
+}))
+print(json.dumps({
+    "type": "turn.completed",
+    "usage": {"input_tokens": 1, "cached_input_tokens": 0, "output_tokens": 1},
+}))
+""",
+        encoding="utf-8",
+    )
+    fake_codex.chmod(0o755)
+
+    result = subprocess.run(
+        [
+            oneharness_bin,
+            "run",
+            "--config",
+            str(REPO_ROOT / "oneharness.toml"),
+            "--bin",
+            f"claude-code:alternate={fake_claude}",
+            "--bin",
+            f"codex={fake_codex}",
+            "--mode",
+            "default",
+            "--prompt",
+            "prove auth fallback recovery",
+            "--compact",
+        ],
+        cwd=REPO_ROOT,
+        env={
+            **os.environ,
+            "ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR": str(tmp_path / ".claude-alt"),
+            "ONEHARNESS_HISTORY": "false",
+        },
+        text=True,
+        capture_output=True,
+        timeout=60,
+    )
+
+    assert result.returncode == 0, result.stderr
+    report = json.loads(result.stdout)
+    assert [item["harness_id"] for item in report["results"]] == [
+        "claude-code:alternate",
+        "codex",
+    ]
+    assert report["results"][0]["status"] == "nonzero"
+    assert report["results"][0]["failure_kind"] == "auth"
+    assert report["results"][1]["status"] == "ok"
+    assert report["results"][1]["text"] == "auth fallback recovered"
+
+
 def test_agent_wrapper_validates_alternate_identity_and_recovers_through_real_oneharness(
     tmp_path: Path, oneharness_bin: str
 ) -> None:

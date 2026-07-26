@@ -127,6 +127,33 @@ def test_judge_side_keeps_its_own_config_and_adds_no_second(tmp_path: Path) -> N
     )
 
 
+def test_judge_side_rejects_config_without_a_path(tmp_path: Path) -> None:
+    proc, argv = _run_wrapper(tmp_path, ["run", "--compact", "--config"])
+    assert proc.returncode == 2
+    assert "--config requires a path" in proc.stderr
+    assert argv == []
+
+
+def test_missing_home_is_rejected_before_invoking_oneharness(tmp_path: Path) -> None:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    marker = tmp_path / "invoked"
+    oneharness = bin_dir / "oneharness"
+    oneharness.write_text(f"#!/bin/sh\ntouch {marker}\n", encoding="utf-8")
+    oneharness.chmod(0o755)
+
+    proc = subprocess.run(
+        ["bash", str(WRAPPER), "run", "--prompt", "must not run"],
+        text=True,
+        capture_output=True,
+        env={"PATH": f"{bin_dir}:/usr/bin:/bin"},
+    )
+
+    assert proc.returncode != 0
+    assert "HOME is required to locate the alternate Claude config" in proc.stderr
+    assert not marker.exists()
+
+
 def test_non_run_subcommand_is_rejected(tmp_path: Path) -> None:
     proc, _ = _run_wrapper(tmp_path, ["config"])
     assert proc.returncode == 2

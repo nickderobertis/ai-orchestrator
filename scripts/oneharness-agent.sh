@@ -26,13 +26,34 @@ fi
 shift
 
 caller_config=false
+expect_config_value=false
 for arg in "$@"; do
+    if [[ $expect_config_value == true ]]; then
+        if [[ -z $arg ]]; then
+            echo "oneharness-agent: --config requires a non-empty path" >&2
+            exit 2
+        fi
+        expect_config_value=false
+        continue
+    fi
     case "$arg" in
-        --config | --config=*)
+        --config)
+            caller_config=true
+            expect_config_value=true
+            ;;
+        --config=*)
+            if [[ -z ${arg#--config=} ]]; then
+                echo "oneharness-agent: --config requires a non-empty path" >&2
+                exit 2
+            fi
             caller_config=true
             ;;
     esac
 done
+if [[ $expect_config_value == true ]]; then
+    echo "oneharness-agent: --config requires a path" >&2
+    exit 2
+fi
 if [[ $caller_config == true ]]; then
     # Keep the portable indirection available while oneharness resolves config.
     # The judge's explicit primary variant does not consume it and masks
