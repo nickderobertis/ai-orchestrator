@@ -14,7 +14,7 @@ script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 repo_root=$(dirname -- "$script_dir")
 # The worker config maps this portable, non-secret parent value into
 # CLAUDE_CONFIG_DIR only for its alternate-subscription child.
-: "${HOME:?oneharness-agent: HOME is required to locate the alternate Claude config}"
+: "${HOME:?oneharness-agent: HOME is required to locate the alternate Claude config; export HOME or set ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR, then retry}"
 alternate_config_dir="${ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR:-$HOME/.claude-alt}"
 agent_config="$repo_root/oneharness.toml"
 export ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR="$alternate_config_dir"
