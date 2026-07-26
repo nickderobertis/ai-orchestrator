@@ -255,6 +255,12 @@ fi
 
 toolchain_failed=0
 install_project_dependencies || toolchain_failed=1
+if [ -f "$REPO_ROOT/justfile" ] && command -v just >/dev/null 2>&1; then
+  just --justfile "$REPO_ROOT/justfile" --working-directory "$REPO_ROOT" sweep-scratch >&2 \
+    || log "scratch sweep failed; continuing session setup"
+else
+  log "scratch sweep unavailable; continuing session setup"
+fi
 install_bun || toolchain_failed=1
 ensure_codex
 ensure_codex_gate

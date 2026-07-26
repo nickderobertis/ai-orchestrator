@@ -281,6 +281,11 @@ install precede Nx because they make Nx available; bootstrap then delegates
 project setup through uniform Nx `bootstrap` targets.
 Use `docs/telemetry.md` to inspect session timing, usage, and the agent/judge
 turn timeline with `just telemetry`.
+Use `just sweep-scratch --dry-run` to inspect definite dead watchdog scratch and
+conservatively stale known third-party scratch; omit `--dry-run` to reclaim it.
+Session setup and every recorded round transition run this sweep automatically.
+An active lifecycle makes third-party cleanup skip without waiting; PID-proven
+dead watchdog cleanup still proceeds.
 
 `just smoke` spends exactly one real agent-harness turn in a throwaway directory
 and verifies exact prompt delivery plus a complete native oneharness history

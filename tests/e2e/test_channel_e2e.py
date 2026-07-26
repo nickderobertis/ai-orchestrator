@@ -333,6 +333,17 @@ def test_due_heartbeat_surfaces_during_active_step_and_disabled_run_stays_silent
             "infrastructure-v03-incomplete",
             "new history record lacks complete v0.3 telemetry",
         ),
+        (
+            "infrastructure-v10-write",
+            "harness codex cannot write v1.0 history telemetry",
+        ),
+        (
+            "infrastructure-v10-incomplete",
+            "new history run lacks complete v1.0 telemetry",
+        ),
+        ("infrastructure-enospc", "[Errno 28] No space left on device"),
+        ("infrastructure-oom", "worker was OOMKilled"),
+        ("infrastructure-preflight", "scratch filesystem at /tmp has 1 bytes free"),
     ],
 )
 def test_infrastructure_failure_is_terminal_blocker_without_second_round(
@@ -433,7 +444,10 @@ def _kill_new_agent_worker(
         )
         if barrier.exists():
             for status_file in candidates:
-                worker_pid = ProcessId(int(status_file.read_text(encoding="utf-8")))
+                try:
+                    worker_pid = ProcessId(int(status_file.read_text(encoding="utf-8")))
+                except (OSError, ValueError):
+                    continue
                 if worker_pid in descendants:
                     os.kill(worker_pid, signal.SIGTERM)
                     return status_file
