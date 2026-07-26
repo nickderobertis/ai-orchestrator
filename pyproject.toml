@@ -43,6 +43,7 @@ orchestrator-channel-approve = "orchestrator.channel:main_approve"
 orchestrator-channel-reject = "orchestrator.channel:main_reject"
 orchestrator-channel-continue = "orchestrator.channel:main_continue"
 orchestrator-relay-supervisor = "orchestrator.channel:main_relay"
+orchestrator-sweep-scratch = "orchestrator.scratch:main"
 
 [dependency-groups]
 dev = [

@@ -130,6 +130,11 @@ repo-task *args:
 repo-task-auto *args:
     @./scripts/repo-task-auto.sh "$@"
 
+# Remove dead watchdog scratch and conservatively stale known third-party scratch.
+# Pass `--dry-run` to inspect candidates without removing them.
+sweep-scratch *args:
+    @uv run orchestrator-sweep-scratch "$@"
+
 # Verify and publish a lifecycle-preserved branch through its registered workflow.
 # `just repo-recover <branch> --repo <canonical-checkout>`.
 repo-recover *args:
