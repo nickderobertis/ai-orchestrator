@@ -721,7 +721,6 @@ def launch_orchestrator(
         raise DispatchError(f"plan does not exist: {plan}")
     if not isinstance(onejudge_bin, str) or not onejudge_bin or "\x00" in onejudge_bin:
         raise DispatchError("onejudge binary must be a non-empty, non-NUL string")
-    resolved_onejudge, _ = _resolve_onejudge(onejudge_bin, os.environ)
     if round_budget is not None and (not math.isfinite(round_budget) or round_budget <= 0):
         raise DispatchError(f"'{ROUND_BUDGET_OPTION}' must be a positive finite number")
     plan_mapping = load_yaml(plan)
@@ -817,6 +816,7 @@ def launch_orchestrator(
         "round, review its recorded "
         "result, and surface milestones, blockers, departures, and closeout to your supervisor."
     )
+    resolved_onejudge, _ = _resolve_onejudge(onejudge_bin, os.environ)
     command = [resolved_onejudge, "run", str(effective), "--task", task, "--format", "json"]
     process_env = dict(os.environ)
     process_env["ONEHARNESS_TIMEOUT"] = str(turn_timeout)

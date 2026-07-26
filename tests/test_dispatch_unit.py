@@ -307,7 +307,10 @@ def test_run_onejudge_rejects_invalid_stall_timeout(monkeypatch, bad_timeout: st
 
 def test_run_onejudge_surfaces_a_quiet_wedged_process_tree(tmp_path) -> None:
     onejudge = tmp_path / "onejudge"
-    onejudge.write_text("#!/bin/sh\nsleep 30\n", encoding="utf-8")
+    onejudge.write_text(
+        '#!/bin/sh\n[ "$1" = "--version" ] && { echo "onejudge 0.3.4"; exit; }\nsleep 30\n',
+        encoding="utf-8",
+    )
     onejudge.chmod(0o700)
 
     with pytest.raises(DispatchError, match="dispatch stalled for 0.3s.*terminated"):
@@ -443,7 +446,8 @@ def test_malformed_agent_identity_falls_back_to_stall_watchdog(tmp_path) -> None
     status = tmp_path / "agent-status"
     onejudge = tmp_path / "onejudge"
     onejudge.write_text(
-        '#!/bin/sh\nprintf "bad\\n" >"$ORCHESTRATOR_AGENT_STATUS_DIR/agent.pid"\nsleep 60\n',
+        '#!/bin/sh\n[ "$1" = "--version" ] && { echo "onejudge 0.3.4"; exit; }\n'
+        'printf "bad\\n" >"$ORCHESTRATOR_AGENT_STATUS_DIR/agent.pid"\nsleep 60\n',
         encoding="utf-8",
     )
     onejudge.chmod(0o700)
@@ -489,7 +493,8 @@ def test_malformed_agent_child_pid_does_not_mask_heartbeat_deadline(tmp_path) ->
 def test_agent_pid_outside_dispatch_tree_is_rejected(tmp_path) -> None:
     onejudge = tmp_path / "onejudge"
     onejudge.write_text(
-        '#!/bin/sh\nprintf "2147483647\\n" >"$ORCHESTRATOR_AGENT_STATUS_DIR/agent.pid"\nsleep 60\n',
+        '#!/bin/sh\n[ "$1" = "--version" ] && { echo "onejudge 0.3.4"; exit; }\n'
+        'printf "2147483647\\n" >"$ORCHESTRATOR_AGENT_STATUS_DIR/agent.pid"\nsleep 60\n',
         encoding="utf-8",
     )
     onejudge.chmod(0o700)

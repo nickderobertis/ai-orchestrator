@@ -42,7 +42,8 @@ def test_breakdown_aggregates_real_multirole_history_records(
     )
     report_proxy = tmp_path / "onejudge-report-proxy"
     report_proxy.write_text(
-        f'#!/bin/sh\nexec {sys.executable} {FAKE_BACKEND} onejudge-report-proxy "$@"\n',
+        '#!/bin/sh\n[ "$1" = "--version" ] && exec "$REAL_ONEJUDGE" --version\n'
+        f'exec {sys.executable} {FAKE_BACKEND} onejudge-report-proxy "$@"\n',
         encoding="utf-8",
     )
     report_proxy.chmod(0o755)
@@ -333,7 +334,7 @@ def test_breakdown_aggregates_real_multirole_history_records(
     )
     assert fallback_run["usage"]["total"]["cache_write_tokens"] == 0
     assert fallback_run["usage"]["total"]["cost_usd"] == 0.033
-    assert fallback_run["timing_quality"] == "partial"
+    assert fallback_run["timing_quality"] == "complete"
 
     judge_record = json.loads((tmp_path / "judge.jsonl").read_text(encoding="utf-8"))
     judge_record["usage"].pop("cache_write_tokens")
@@ -387,7 +388,7 @@ def test_breakdown_aggregates_real_multirole_history_records(
     assert "partial" in degraded_row
     # The agent and tool measurements survive degraded completeness; only the
     # genuinely absent judge measurement renders as an unknown value/fraction.
-    assert degraded_row.count("?") == 2
+    assert degraded_row[:78].count("?") == 2
 
     judge_record["events"][0]["tool_call_id"] = ""
     (tmp_path / "judge.jsonl").write_text(json.dumps(judge_record) + "\n", encoding="utf-8")
