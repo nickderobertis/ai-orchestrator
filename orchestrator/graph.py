@@ -14,6 +14,7 @@ import json
 import math
 import os
 import re
+import shlex
 import sys
 import threading
 import time
@@ -1329,7 +1330,8 @@ def main(argv: list[str] | None = None) -> int:
                 f"Monitor details: {(run_dir / 'monitor' / 'details.json').resolve()}\n"
                 f"Channel directory: {resolved_channel}\n"
                 "Check-in command: just channel-surface "
-                f"{validated_run_id} MESSAGE --runs-dir {run_dir.parent.resolve()}"
+                f"{validated_run_id} MESSAGE --runs-dir "
+                f"{shlex.quote(str(run_dir.parent.resolve()))}"
             )
             report = dispatch(
                 "check-in",

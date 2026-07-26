@@ -7,6 +7,7 @@ import ast
 import re
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 
 
@@ -168,6 +169,21 @@ def documented_agent_roles(path: Path) -> list[str]:
     return roles
 
 
+def judge_agent_role(path: Path) -> str:
+    try:
+        config = tomllib.loads(path.read_text(encoding="utf-8"))
+        history_labels = config["history_labels"]
+        role = history_labels["agent_role"]
+    except (OSError, KeyError, TypeError, tomllib.TOMLDecodeError) as exc:
+        fail(
+            "read oneharness.judge.toml history_labels.agent_role: "
+            f"{exc}; restore the judge history-label configuration and retry"
+        )
+    if not isinstance(role, str) or not role:
+        fail("oneharness.judge.toml history_labels.agent_role must be a non-empty string")
+    return role
+
+
 def main() -> None:
     try:
         root = Path(
@@ -194,6 +210,7 @@ def main() -> None:
     roles = literal_values(root / "orchestrator/labels.py", "AgentRole")
     typescript_roles = typescript_agent_roles(root / "packages/dag-model/src/index.ts")
     documented_roles = documented_agent_roles(root / "docs/dag-ui/design.md")
+    configured_judge_role = judge_agent_role(root / "oneharness.judge.toml")
     if not set(roles) == set(typescript_roles) == set(documented_roles):
         fail(
             "semantic agent roles disagree across orchestrator/labels.py, "
@@ -201,7 +218,14 @@ def main() -> None:
             "Python AgentRole Literal as authoritative, then update the TypeScript "
             "agentRoleSchema and documented AgentRole union to contain the same roles"
         )
-    print("dag state contract: Python, TypeScript, and documented contracts agree")
+    if configured_judge_role != "judge" or configured_judge_role not in roles:
+        fail(
+            "oneharness.judge.toml history_labels.agent_role "
+            f"{configured_judge_role!r} disagrees with the authoritative Python "
+            'AgentRole judge member; restore `agent_role = "judge"` and ensure '
+            "orchestrator/labels.py retains the `judge` role"
+        )
+    print("dag state contract: Python, TypeScript, docs, and judge config agree")
 
 
 if __name__ == "__main__":

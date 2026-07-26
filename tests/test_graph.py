@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import socket
 import threading
 from collections.abc import Mapping
@@ -402,11 +403,20 @@ def test_main_validates_and_services_inherited_proposal_channel(
 
     pumps: list[_RecordingProposalPump] = []
     dispatched: list[bool] = []
+    runs_dir = tmp_path / "runs space;still-one-argument"
 
     def fake_check_in(persona: str, task: str, **kwargs: object) -> Report:
         assert persona == "check-in"
         assert "Journal:" in task and "Monitor details:" in task
-        assert "Check-in command: just channel-surface outer MESSAGE" in task
+        command = task.split("Check-in command: ", 1)[1].splitlines()[0]
+        assert shlex.split(command) == [
+            "just",
+            "channel-surface",
+            "outer",
+            "MESSAGE",
+            "--runs-dir",
+            str(runs_dir.resolve()),
+        ]
         atomic_json(
             channel / "heartbeat-surface.json",
             {
@@ -443,10 +453,10 @@ def test_main_validates_and_services_inherited_proposal_channel(
     )
     assert main([str(plan), "--no-record"]) == 0
     assert not pumps
-    assert main([str(plan), "--run", "recorded", "--runs-dir", str(tmp_path / "runs")]) == 0
+    assert main([str(plan), "--run", "recorded", "--runs-dir", str(runs_dir)]) == 0
     assert len(pumps) == 1 and pumps[0].drains >= 2
     assert dispatched == [True]
-    assert (tmp_path / "runs" / "recorded" / "round-01" / "result.json").is_file()
+    assert (runs_dir / "recorded" / "round-01" / "result.json").is_file()
 
     for key in ("AI_ORCHESTRATOR_CHANNEL_DIR", "AI_ORCHESTRATOR_CHANNEL_RUN_ID"):
         monkeypatch.delenv(key)
