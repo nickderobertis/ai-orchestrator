@@ -20,8 +20,10 @@ from orchestrator.channel import (
     _reply,
     _surface,
     apply_heartbeat_reply,
+    claim_heartbeat,
     create_channel,
     due_indicator,
+    fail_heartbeat_claim,
     heartbeat_state,
     main_approve,
     main_continue,
@@ -415,6 +417,32 @@ def test_heartbeat_is_sticky_durable_and_reset_by_surface(tmp_path: Path) -> Non
     assert _heartbeat(channel)["interval_s"] == 10
     record_surface(channel, now=float(initial["last_surface_at"]) + 126)
     assert due_indicator(channel, now=float(initial["last_surface_at"]) + 200) is None
+
+
+def test_due_heartbeat_has_one_claim_and_failure_retries_next_interval(tmp_path: Path) -> None:
+    channel = create_channel(tmp_path / "run", heartbeat_interval=10)
+    initial = _heartbeat(channel)
+    due_at = float(initial["last_surface_at"]) + 11
+    mark_heartbeat_due(channel, now=due_at)
+
+    claims: list[bool] = []
+    threads = [
+        threading.Thread(target=lambda: claims.append(claim_heartbeat(channel))) for _ in range(8)
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert claims.count(True) == 1
+    assert _heartbeat(channel)["in_flight"] is True
+    fail_heartbeat_claim(channel, now=due_at + 1)
+    assert _heartbeat(channel)["in_flight"] is False
+    assert _heartbeat(channel)["due"] is False
+    mark_heartbeat_due(channel, now=due_at + 10)
+    assert _heartbeat(channel)["due"] is False
+    mark_heartbeat_due(channel, now=due_at + 12)
+    assert claim_heartbeat(channel) is True
 
 
 def test_heartbeat_reply_adjusts_or_disables_without_changing_verdict(tmp_path: Path) -> None:

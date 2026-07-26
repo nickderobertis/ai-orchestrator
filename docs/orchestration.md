@@ -98,12 +98,20 @@ messages: transport state lives under `runs/<run-id>/channel/` as `up.fifo`,
 
 `just orchestrate` seeds a durable 1800-second planner-update interval; override
 it at launch with `--heartbeat-interval SECONDS`. Reconcile ticks persist a sticky
-due signal in `channel/heartbeat.json`, and `just monitor` and `just status` show
-`planner update due (Nm since last update)` until the orchestrator agent sends a
-non-blocking, synthesized per-workstream update with `just channel-surface`. The
-agent inspects current status and monitor evidence, includes active-workstream
-progress and non-blocking follow-ups, sends the update, and continues without a
-planner reply. The reconciler only sets the due signal; it never authors content.
+due signal in `channel/heartbeat.json`. When that signal is due and unclaimed, the
+orchestrator process atomically marks it in flight and dispatches the dedicated
+`check-in` onejudge outside the graph concurrency budget. The reconciler authors
+no update content: the read-only check-in agent inspects durable status, monitor,
+telemetry, journal, and labeled-history evidence, synthesizes progress for every
+active workstream plus non-blocking follow-ups, sends one non-blocking
+`just channel-surface` update, and exits. The graph frontier continues without
+waiting for the dispatch or a planner reply.
+
+The in-flight marker prevents concurrent reconcile ticks from launching duplicate
+check-ins. A successful surface clears both due and in-flight state. Failure is
+logged, clears the claim, and schedules another attempt at the next interval; it
+never blocks graph work. `just monitor` and `just status` show `planner update due
+(Nm since last update)` while the durable signal remains due.
 
 Every planner-visible update—round boundary, proposal, or heartbeat—clears the
 due signal and restarts the clock. A new round process reads the same durable
@@ -112,6 +120,12 @@ timestamp rather than resetting it. To adjust the cadence, add
 `"heartbeat_interval": false` to disable it. Values must be positive finite
 seconds. This pacemaker is independent of the reader-side `just monitor
 --heartbeat` silence display described below.
+
+Recorded oneharness history keeps its transport-party `role` and additionally
+labels the semantic `agent_role`. The first-class agent roles are `worker`,
+`judge`, `orchestrator`, `check-in`, and `pr-author`; check-in and pr-author
+sessions remain node-external infrastructure activity rather than implementation
+workers.
 
 Every proposal includes `surface.blocking`: `true` means the worker or orchestrator
 is awaiting the decision, while `false` is an informational follow-up that does

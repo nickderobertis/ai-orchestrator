@@ -633,6 +633,11 @@ def dispatch(
     )
     process_env = {**context_env, **(env or {})}
     _validate_environment(process_env)
+    semantic_labels = dict(labels or {})
+    semantic_labels.setdefault("persona", persona)
+    semantic_labels.setdefault(
+        "agent_role", persona if persona in {"check-in", "pr-author"} else "worker"
+    )
     return run_onejudge(
         config,
         task,
@@ -642,7 +647,7 @@ def dispatch(
         provider=provider,
         env=process_env or None,
         unset_llmlint_wrapper=not use_llmlint_wrapper,
-        labels=labels,
+        labels=semantic_labels,
         timeout=timeout,
         cancel=cancel,
     )
@@ -775,6 +780,10 @@ def launch_orchestrator(
     process_env["ONEHARNESS_TIMEOUT"] = str(turn_timeout)
     process_env[CHANNEL_DIR_ENV] = str(channel_dir)
     process_env[CHANNEL_RUN_ID_ENV] = run_dir.name
+    process_env[LABEL_ENV] = merge_labels(
+        process_env.get(LABEL_ENV),
+        {"agent_role": "orchestrator", "persona": "orchestrator", "run_id": run_dir.name},
+    )
     _validate_oneharness_timeout(process_env["ONEHARNESS_TIMEOUT"])
     try:
         with (

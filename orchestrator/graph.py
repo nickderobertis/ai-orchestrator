@@ -33,7 +33,7 @@ from .channel import (
 from .cli_contract import ROUND_BUDGET_OPTION
 from .config import ConfigError, load_yaml
 from .coordination import advisory_lock, reset_harness_observer, set_harness_observer
-from .dispatch import Report
+from .dispatch import Report, dispatch
 from .edits import EditError, apply_edit
 from .goals import Goal, find_active_run, finish_run, graph_identities, parse_goal, register_run
 from .journal import (
@@ -1256,6 +1256,7 @@ def main(argv: list[str] | None = None) -> int:
         print("run-plan: incomplete proposal channel environment", file=sys.stderr)
         return 2
     if channel_path and channel_run_id and round_number is not None:
+        assert run_dir is not None
         # llmlint: ignore-block[changed_behavior_has_e2e] internal env; malformed only in unit
         try:
             validated_run_id = str(validate_run_id(channel_run_id))
@@ -1267,7 +1268,44 @@ def main(argv: list[str] | None = None) -> int:
         except (OSError, ValueError) as exc:
             print(f"run-plan: invalid proposal channel: {exc}", file=sys.stderr)
             return 2
-        proposal_pump = ProposalPump(resolved_channel, validated_run_id, round_number)
+
+        def dispatch_check_in() -> None:
+            task = (
+                "Read durable state for this run and send exactly one concise, non-blocking "
+                "per-workstream update. Do not wait for a reply.\n\n"
+                f"Run directory: {run_dir.resolve()}\n"
+                f"Journal: {(run_dir / 'events.jsonl').resolve()}\n"
+                f"Status: {(run_dir / 'orchestrator' / 'status.json').resolve()}\n"
+                f"Monitor details: {(run_dir / 'monitor' / 'details.json').resolve()}\n"
+                f"Send command: just channel-surface {validated_run_id} - "
+                f"--runs-dir {args.runs_dir.resolve()}"
+            )
+            dispatch(
+                "check-in",
+                task,
+                base_path=args.base_config,
+                persona_dir=args.persona_dir,
+                cwd=args.cwd or REPO_ROOT,
+                onejudge_bin=args.onejudge_bin,
+                provider=args.provider,
+                oneharness_mode=args.oneharness_mode,
+                labels={
+                    "run_id": validated_run_id,
+                    "round": str(round_number),
+                    "agent_role": "check-in",
+                    "persona": "check-in",
+                },
+                session=f"check-in-{validated_run_id}-{round_number}",
+                max_turns=1,
+                timeout=dispatch_timeout,
+            )
+
+        proposal_pump = ProposalPump(
+            resolved_channel,
+            validated_run_id,
+            round_number,
+            dispatch_check_in=dispatch_check_in,
+        )
         # llmlint: ignore-end[changed_behavior_has_e2e]
     try:
         result = run_graph(

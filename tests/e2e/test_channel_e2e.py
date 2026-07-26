@@ -165,13 +165,14 @@ def test_due_heartbeat_is_agent_synthesized_and_normal_surface_resets_clock(
         ),
         encoding="utf-8",
     )
-    run_id = _launch_cli(plan, runs, _base(tmp_path), onejudge_bin, heartbeat_interval=0.1)
+    run_id = _launch_cli(plan, runs, _base(tmp_path), onejudge_bin, heartbeat_interval=1.3)
     heartbeat = _wait_surface(run_id, runs, wait_seconds=120)
     assert heartbeat["surface"] == {
         "kind": "heartbeat",
-        "message": "active worker: round complete; follow-ups: none",
+        "message": "active-worker: in progress; follow-ups: none",
         "blocking": False,
     }
+    assert len(witness.read_text(encoding="utf-8").splitlines()) >= 1
     heartbeat_path = runs / run_id / "channel" / "heartbeat.json"
     wait_deadline = deadline(5)
     while True:
@@ -187,6 +188,7 @@ def test_due_heartbeat_is_agent_synthesized_and_normal_surface_resets_clock(
     assert boundary_surface["kind"] == "milestone"
     reset = json.loads(heartbeat_path.read_text())
     assert reset["due"] is False
+    assert reset["in_flight"] is False
     assert reset["last_surface_at"] >= state["last_surface_at"]
     assert _next_cli(run_id, runs, timeout="0.02").get("surface") is None
     _reply_cli(run_id, runs, {"completion": True, "reason": "verified heartbeat"})
@@ -735,6 +737,11 @@ def test_reattached_planner_replies_to_mid_run_proposal_without_stopping_graph(
     assert witness.read_text(encoding="utf-8").count("tick") == 2
 
     boundary = _next_cli(run_id, runs)
+    check_ins = 0
+    while boundary.get("surface", {}).get("kind") == "heartbeat":
+        check_ins += 1
+        boundary = _next_cli(run_id, runs)
+    assert check_ins <= 1
     assert boundary["surface"]["kind"] in {"milestone", "closeout"}
     _reply_cli(
         run_id,

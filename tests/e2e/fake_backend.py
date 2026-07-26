@@ -220,6 +220,22 @@ def main() -> int:
     match op:
         case "respond":
             _wait_at_provider_barrier(task)
+            if "Send command: just channel-surface " in task:
+                command_text = task.split("Send command: ", 1)[1].splitlines()[0]
+                command = shlex.split(command_text)
+                marker = Path(task.split("Run directory: ", 1)[1].splitlines()[0]) / "check-in-sent"
+                try:
+                    marker.touch(exist_ok=False)
+                except FileExistsError:
+                    pass
+                else:
+                    subprocess.run(
+                        command,
+                        input="active-worker: in progress; follow-ups: none\n",
+                        text=True,
+                        check=True,
+                        capture_output=True,
+                    )
             guidance = _planner_guidance(messages)
             run_log = re.search(r"record-run=(\S+)", task)
             if run_log is not None:
@@ -241,7 +257,7 @@ def main() -> int:
                     while not release.exists():
                         time.sleep(0.02)
                 elif "live-edit-slow" not in task:
-                    time.sleep(0.8)
+                    time.sleep(1.5 if "heartbeat-channel" in task else 0.8)
                 with witness.open("a", encoding="utf-8") as stream:
                     stream.write("tick\n")
             orchestrator_plan = _orchestrator_command(task)
@@ -282,77 +298,6 @@ def main() -> int:
                         text=True,
                         env=run_env,
                     )
-                    if "heartbeat-channel" in plan_text:
-                        history_dir = orchestrator_plan.runs_dir / "heartbeat-history"
-                        history_dir.mkdir(exist_ok=True)
-                        poll_env = {**os.environ, "ONEHARNESS_HISTORY_DIR": str(history_dir)}
-                        run_id = orchestrator_plan.argv[orchestrator_plan.argv.index("--run") + 1]
-                        monitor = subprocess.run(
-                            [
-                                "just",
-                                "monitor",
-                                run_id,
-                                "--runs-dir",
-                                str(orchestrator_plan.runs_dir),
-                                "--once",
-                            ],
-                            check=True,
-                            capture_output=True,
-                            text=True,
-                            env=poll_env,
-                        )
-                        json_monitor = subprocess.run(
-                            [
-                                "just",
-                                "monitor",
-                                run_id,
-                                "--runs-dir",
-                                str(orchestrator_plan.runs_dir),
-                                "--once",
-                                "--format",
-                                "jsonl",
-                            ],
-                            check=True,
-                            capture_output=True,
-                            text=True,
-                            env=poll_env,
-                        )
-                        status = subprocess.run(
-                            [
-                                "just",
-                                "status",
-                                "--runs-dir",
-                                str(orchestrator_plan.runs_dir),
-                            ],
-                            check=True,
-                            capture_output=True,
-                            text=True,
-                            env=poll_env,
-                        )
-                        if "planner update due" not in monitor.stdout:
-                            raise AssertionError("monitor did not expose heartbeat")
-                        json_events = [
-                            json.loads(line) for line in json_monitor.stdout.splitlines() if line
-                        ]
-                        if not any(
-                            event.get("type") == "planner_update_due" for event in json_events
-                        ):
-                            raise AssertionError("JSON monitor did not expose heartbeat")
-                        if "planner update due" not in status.stdout:
-                            raise AssertionError("status did not expose heartbeat")
-                        subprocess.run(
-                            [
-                                "just",
-                                "channel-surface",
-                                run_id,
-                                "active worker: round complete; follow-ups: none",
-                                "--runs-dir",
-                                str(orchestrator_plan.runs_dir),
-                            ],
-                            check=True,
-                            capture_output=True,
-                            text=True,
-                        )
                 elif orchestrator_turn == 1 and "continuation-channel" in plan_text:
                     run_id = orchestrator_plan.argv[orchestrator_plan.argv.index("--run") + 1]
                     settled_run = orchestrator_plan.runs_dir / run_id
@@ -461,7 +406,9 @@ def main() -> int:
             # `complete-now` finishes on the first turn; otherwise the agent stays
             # "not done" and completion is decided by the unified supervisor
             # below, which only passes on the second turn — exercising the loop.
-            done = (not fail) and ("complete-now" in task)
+            done = (not fail) and (
+                "complete-now" in task or "Send command: just channel-surface " in task
+            )
             if orchestrator_plan is not None:
                 turn = _assistant_turns(messages)
                 if turn == 0 and "surface-blocker" in plan_text:
