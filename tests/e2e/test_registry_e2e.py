@@ -10,11 +10,9 @@ from pathlib import Path
 
 import pytest
 from conftest import git
-from fakes import FakeGitHub
 
 from orchestrator import REPO_ROOT
-from orchestrator.github import GitHubError
-from orchestrator.registry import Registry, RegistryEntry, main_register, main_repos
+from orchestrator.registry import Registry, RegistryEntry
 from orchestrator.verify import NOOP_GATE
 
 
@@ -119,23 +117,33 @@ def test_merge_gate_coverage_onboarding_and_registry_audit_journeys(
     tmp_path: Path,
     bare_origin: Callable[..., Path],
     monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
 ) -> None:
     state = tmp_path / "state"
     monkeypatch.setenv("AI_ORCHESTRATOR_HOME", str(state))
-
-    class CoverageGitHub(FakeGitHub):
-        """Sanctioned GitHub-boundary fake; checkout and Git hook behavior stay real."""
-
-        def default_branch(self, repo: str) -> str:
-            if repo == "acme/inaccessible":
-                raise GitHubError("forbidden")
-            return "master" if repo == "acme/required" else "main"
-
-        def required_status_checks(self, repo: str, branch: str) -> tuple[str, ...]:
-            return ("complete-gate",) if repo == "acme/required" else ()
-
-    github = CoverageGitHub(bare_origin(), required=())
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    gh = bin_dir / "gh"
+    gh.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json\n"
+        "import sys\n"
+        "args = sys.argv[1:]\n"
+        "if args[:2] == ['repo', 'view']:\n"
+        "    repo = args[2]\n"
+        "    if repo == 'acme/inaccessible':\n"
+        "        print('forbidden', file=sys.stderr)\n"
+        "        raise SystemExit(1)\n"
+        "    print('master' if repo == 'acme/required' else 'main')\n"
+        "elif args[:1] == ['api']:\n"
+        "    required = args[1].startswith('repos/acme/required/branches/master/')\n"
+        "    print(json.dumps({'contexts': ['complete-gate'] if required else []}))\n"
+        "else:\n"
+        "    print(f'unexpected gh invocation: {args}', file=sys.stderr)\n"
+        "    raise SystemExit(2)\n",
+        encoding="utf-8",
+    )
+    gh.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
 
     def checkout(name: str) -> Path:
         path = tmp_path / name
@@ -147,61 +155,55 @@ def test_merge_gate_coverage_onboarding_and_registry_audit_journeys(
     hook = hooked / ".git" / "hooks" / "pre-push"
     hook.write_text("#!/bin/sh\nexec make check\n", encoding="utf-8")
     hook.chmod(0o755)
-    assert main_register([str(hooked), "--repo-type", "single-owner"], github=github) == 0
-    hook_result = capsys.readouterr()
-    assert "status=covered" in hook_result.out
-    assert "coverage=executable pre-push hook" in hook_result.out
+    hook_result = _cli("orchestrator-register-repo", str(hooked), "--repo-type", "single-owner")
+    assert "status=covered" in hook_result.stdout
+    assert "coverage=executable pre-push hook" in hook_result.stdout
 
     required = checkout("required")
-    assert main_register([str(required), "--repo-type", "single-owner"], github=github) == 0
-    required_result = capsys.readouterr()
-    assert "required PR status checks on master (complete-gate)" in required_result.out
+    required_result = _cli(
+        "orchestrator-register-repo", str(required), "--repo-type", "single-owner"
+    )
+    assert "required PR status checks on master (complete-gate)" in required_result.stdout
 
     empty_husky = checkout("empty-husky")
     (empty_husky / ".husky").mkdir()
     git("config", "core.hooksPath", ".husky", cwd=empty_husky)
-    assert main_register([str(empty_husky), "--repo-type", "single-owner"], github=github) == 0
-    empty_result = capsys.readouterr()
-    assert "status=not-covered" in empty_result.out
-    assert "executable_pre_push_hook=missing" in empty_result.out
+    empty_result = _cli(
+        "orchestrator-register-repo", str(empty_husky), "--repo-type", "single-owner"
+    )
+    assert "status=not-covered" in empty_result.stdout
+    assert "executable_pre_push_hook=missing" in empty_result.stdout
 
     neither = checkout("neither")
-    assert main_register([str(neither), "--repo-type", "single-owner"], github=github) == 0
-    neither_result = capsys.readouterr()
+    neither_result = _cli("orchestrator-register-repo", str(neither), "--repo-type", "single-owner")
     assert "identity https://github.com/acme/neither has no executable pre-push hook" in (
-        neither_result.err
+        neither_result.stderr
     )
-    assert "no required PR status checks exist" in neither_result.err
+    assert "no required PR status checks exist" in neither_result.stderr
     assert Registry().entries["local/neither"].path == str(neither.resolve())
 
     inaccessible = checkout("inaccessible")
-    assert main_register([str(inaccessible), "--repo-type", "single-owner"], github=github) == 0
-    inaccessible_result = capsys.readouterr()
-    assert "required_pr_status_checks=unknown" in inaccessible_result.out
-    assert "not known to run a gate" in inaccessible_result.err
+    inaccessible_result = _cli(
+        "orchestrator-register-repo", str(inaccessible), "--repo-type", "single-owner"
+    )
+    assert "required_pr_status_checks=unknown" in inaccessible_result.stdout
+    assert "not known to run a gate" in inaccessible_result.stderr
 
     local_only = tmp_path / "local-only"
     git("clone", str(bare_origin()), str(local_only))
-    assert (
-        main_register(
-            [
-                str(local_only),
-                "--workflow",
-                "local",
-                "--repo-type",
-                "single-owner",
-            ],
-            github=github,
-        )
-        == 0
+    local_result = _cli(
+        "orchestrator-register-repo",
+        str(local_only),
+        "--workflow",
+        "local",
+        "--repo-type",
+        "single-owner",
     )
-    local_result = capsys.readouterr()
-    assert "required_pr_status_checks=not-applicable (no GitHub origin)" in local_result.out
+    assert "required_pr_status_checks=not-applicable (no GitHub origin)" in local_result.stdout
 
-    assert main_repos(["--audit-gate-coverage"], github=github) == 0
-    audit = capsys.readouterr()
-    assert audit.out.count("merge_gate_coverage identity=") == 6
-    assert "identity=https://github.com/acme/required status=covered" in audit.out
+    audit = _cli("orchestrator-repos", "--audit-gate-coverage")
+    assert audit.stdout.count("merge_gate_coverage identity=") == 6
+    assert "identity=https://github.com/acme/required status=covered" in audit.stdout
 
 
 def test_lifecycle_clis_reject_unknown_local_aliases_before_dispatch(
