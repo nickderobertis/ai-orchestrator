@@ -21,6 +21,11 @@ test("a package consumer receives connected geometry and routed edges", () => {
     { id: "publish", x: 560, y: 0 },
     { id: "test", x: 280, y: 0 },
   ]);
+  expect(layout.nodes.map(({ id, style }) => ({ id, style }))).toEqual([
+    { id: "build", style: "success" },
+    { id: "publish", style: "blocked" },
+    { id: "test", style: "active" },
+  ]);
   expect(layout.edges[0]?.points).toEqual([
     { x: 200, y: 36 },
     { x: 240, y: 36 },

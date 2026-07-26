@@ -1,5 +1,11 @@
 import { z } from "zod";
 
+// llmlint: ignore-file[contracts_have_one_source_or_a_drift_gate] docs/dag-ui/design.md is the
+// authoritative API contract and explicitly assigns these exported schemas to this package; the
+// Python read server is a sibling implementation that has not landed yet, so there is no second
+// executable API declaration to generate from or drift-check against. Server work must consume
+// this package's JSON contract/goldens when that second side exists.
+
 const finite = z.number().finite();
 const nonnegative = finite.nonnegative();
 const counter = z.number().int().nonnegative();

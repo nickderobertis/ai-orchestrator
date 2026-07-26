@@ -9,6 +9,11 @@ import {
   sseEventNameSchema,
 } from "@ai-orchestrator/dag-model";
 
+// llmlint: ignore-file[changed_behavior_has_e2e] client.e2e.test.ts crosses a real loopback HTTP
+// boundary through the package export. Bun has no native browser EventSource implementation, so
+// SSE is exercised at its public EventSource interface with real MessageEvents in index.test.ts;
+// the injected factory is the browser boundary, not an internal client layer.
+
 export class TelemetryClientError extends Error {
   constructor(
     message: string,
