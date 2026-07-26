@@ -1,3 +1,5 @@
+import dagre from "@dagrejs/dagre";
+
 /** Stable input understood by every DAG renderer. */
 export interface DagLayoutInput {
   readonly nodes: readonly DagNode[];
@@ -25,6 +27,7 @@ export interface DagEdge {
   readonly id: string;
   readonly source: string;
   readonly target: string;
+  readonly kind?: string;
 }
 
 /** Renderer-neutral result; coordinates are integer CSS/SVG pixels. */
@@ -40,7 +43,17 @@ export interface PositionedNode extends DagNode {
   readonly y: number;
   readonly width: number;
   readonly height: number;
+  readonly style: StatusStyleToken;
 }
+
+/** Semantic styling shared by renderers without prescribing colors or CSS. */
+export type StatusStyleToken =
+  | "neutral"
+  | "active"
+  | "blocked"
+  | "success"
+  | "danger"
+  | "muted";
 
 export interface Point {
   readonly x: number;
@@ -56,6 +69,14 @@ const NODE_HEIGHT = 72;
 const COLUMN_GAP = 80;
 const ROW_GAP = 32;
 const NODE_STATES: ReadonlySet<string> = new Set(DAG_NODE_STATES);
+const STATUS_STYLE: Readonly<Record<DagNodeState, StatusStyleToken>> = {
+  pending: "neutral",
+  running: "active",
+  waiting: "blocked",
+  done: "success",
+  failed: "danger",
+  cancelled: "muted",
+};
 
 /** Lay out an acyclic graph in stable left-to-right dependency ranks. */
 export function layoutDag(input: DagLayoutInput): DagLayout {
@@ -119,17 +140,47 @@ export function layoutDag(input: DagLayoutInput): DagLayout {
     throw new Error("DAG contains a cycle");
   }
 
-  const rows = new Map<number, number>();
+  const graph = new dagre.graphlib.Graph({ multigraph: true });
+  graph.setGraph({
+    rankdir: "LR",
+    ranksep: COLUMN_GAP,
+    nodesep: ROW_GAP,
+    marginx: 0,
+    marginy: 0,
+  });
+  graph.setDefaultEdgeLabel(() => ({}));
+  for (const node of nodes) {
+    graph.setNode(node.id, { width: NODE_WIDTH, height: NODE_HEIGHT });
+  }
+  for (const edge of edges) {
+    graph.setEdge(edge.source, edge.target, {}, edge.id);
+  }
+  dagre.layout(graph);
+
+  const columnRows = new Map<number, string[]>();
+  for (const node of nodes) {
+    const rank = ranks.get(node.id) ?? 0;
+    const column = columnRows.get(rank) ?? [];
+    column.push(node.id);
+    columnRows.set(rank, column);
+  }
+  for (const column of columnRows.values()) {
+    column.sort((left, right) => {
+      const leftY = graph.node(left)?.y ?? 0;
+      const rightY = graph.node(right)?.y ?? 0;
+      return leftY - rightY || left.localeCompare(right);
+    });
+  }
   const positioned = nodes.map((node): PositionedNode => {
     const rank = ranks.get(node.id) ?? 0;
-    const row = rows.get(rank) ?? 0;
-    rows.set(rank, row + 1);
+    const row = columnRows.get(rank)?.indexOf(node.id) ?? 0;
     return {
       ...node,
       x: rank * (NODE_WIDTH + COLUMN_GAP),
       y: row * (NODE_HEIGHT + ROW_GAP),
       width: NODE_WIDTH,
       height: NODE_HEIGHT,
+      style: STATUS_STYLE[node.state],
     };
   });
   const positionedById = new Map(positioned.map((node) => [node.id, node]));
