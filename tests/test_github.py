@@ -50,8 +50,23 @@ def test_default_branch() -> None:
     assert run.calls[0][:2] == ["repo", "view"]
 
 
-def test_default_branch_falls_back_when_gh_returns_empty_output() -> None:
-    assert CliGitHubBackend(run=RecordingRun(["\n"])).default_branch("o/r") == "main"
+def test_default_branch_rejects_empty_github_response() -> None:
+    with pytest.raises(GitHubError, match="no default branch"):
+        CliGitHubBackend(run=RecordingRun(["\n"])).default_branch("o/r")
+
+
+def test_required_status_checks_reads_branch_protection_contexts() -> None:
+    run = RecordingRun([json.dumps({"contexts": ["gate", "lint"]})])
+    assert CliGitHubBackend(run=run).required_status_checks("o/r", "master") == (
+        "gate",
+        "lint",
+    )
+    assert run.calls == [["api", "repos/o/r/branches/master/protection/required_status_checks"]]
+
+
+def test_required_status_checks_rejects_malformed_response() -> None:
+    with pytest.raises(GitHubError, match="could not parse required status checks"):
+        CliGitHubBackend(run=RecordingRun(["{}"])).required_status_checks("o/r", "main")
 
 
 def test_create_pr_reuses_open_pr_for_head() -> None:
