@@ -3,14 +3,19 @@
 from __future__ import annotations
 
 import argparse
+import fcntl
+import functools
 import math
 import os
 import shutil
 import sys
 import tempfile
 import time
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
+from typing import ParamSpec, TypeVar
 
 WATCHDOG_PATTERN = "orchestrator-watchdog-*"
 THIRD_PARTY_PATTERNS = (
@@ -26,6 +31,10 @@ DEFAULT_MIN_FREE_BYTES = 5 * 1024**3
 MIN_FREE_BYTES_ENV = "ORCHESTRATOR_MIN_FREE_BYTES"
 MAX_INSPECTED_PATHS = 20
 CAPACITY_ERROR_MARKER = "scratch-capacity-preflight:"
+SCRATCH_LOCK_NAME = ".orchestrator-scratch.lock"
+
+P = ParamSpec("P")
+R = TypeVar("R")
 
 
 class ScratchCapacityError(RuntimeError):
@@ -44,6 +53,44 @@ class SweepResult:
     removed: tuple[Path, ...]
     reclaimed_bytes: int
     candidates: tuple[Path, ...]
+    third_party_skipped: bool = False
+
+
+@contextmanager
+def _scratch_lock(root: Path, *, exclusive: bool, nonblocking: bool = False) -> Iterator[bool]:
+    flags = os.O_CREAT | os.O_RDWR | os.O_CLOEXEC
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    fd = os.open(root / SCRATCH_LOCK_NAME, flags, 0o600)
+    acquired = False
+    try:
+        operation = fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH
+        if nonblocking:
+            operation |= fcntl.LOCK_NB
+        try:
+            fcntl.flock(fd, operation)
+            acquired = True
+        except BlockingIOError:
+            pass
+        yield acquired
+    finally:
+        if acquired:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+
+
+def scratch_dispatch_guarded(function: Callable[P, R]) -> Callable[P, R]:
+    """Hold the host scratch shared lock for one lifecycle's full duration."""
+
+    @functools.wraps(function)
+    def guarded(*args: P.args, **kwargs: P.kwargs) -> R:
+        scratch_root = Path(tempfile.gettempdir()).resolve()
+        with _scratch_lock(scratch_root, exclusive=False) as acquired:
+            if not acquired:  # pragma: no cover - blocking shared acquisition
+                raise RuntimeError("scratch dispatch lock was not acquired")
+            return function(*args, **kwargs)
+
+    return guarded
 
 
 def _pid_is_live(pid: int) -> bool:
@@ -95,36 +142,53 @@ def sweep_scratch(
     for path in scratch_root.glob(WATCHDOG_PATTERN):
         if path.is_dir() and not path.is_symlink() and _watchdog_is_orphaned(path):
             candidates.add(path)
-    for pattern in THIRD_PARTY_PATTERNS:
-        for path in scratch_root.glob(pattern):
-            try:
-                stale = path.is_dir() and not path.is_symlink() and path.stat().st_mtime < cutoff
-            except FileNotFoundError:
-                continue
-            if stale:
-                candidates.add(path)
 
     removed: list[Path] = []
     reclaimed = 0
-    ordered = tuple(sorted(candidates))
-    if not dry_run:
-        for path in ordered:
-            # Recheck immediately before deletion. A live watchdog is exact; a
-            # third-party directory touched since discovery belongs to an active run.
-            if path.match(WATCHDOG_PATTERN):
-                if not _watchdog_is_orphaned(path):
-                    continue
-            else:
-                try:
-                    if path.stat().st_mtime >= cutoff:
+    with _scratch_lock(scratch_root, exclusive=True, nonblocking=True) as can_sweep_third_party:
+        if can_sweep_third_party:
+            for pattern in THIRD_PARTY_PATTERNS:
+                for path in scratch_root.glob(pattern):
+                    try:
+                        stale = (
+                            path.is_dir()
+                            and not path.is_symlink()
+                            and path.stat().st_mtime < cutoff
+                        )
+                    except FileNotFoundError:
                         continue
+                    if stale:
+                        candidates.add(path)
+
+        ordered = tuple(sorted(candidates))
+        if not dry_run:
+            for path in ordered:
+                if path.match(WATCHDOG_PATTERN):
+                    if not _watchdog_is_orphaned(path):
+                        continue
+                else:
+                    # Discovery and removal occur under the exclusive lock, so
+                    # no lifecycle can start using third-party scratch in between.
+                    if not can_sweep_third_party:  # pragma: no cover - construction invariant
+                        continue
+                    try:
+                        if path.stat().st_mtime >= cutoff:
+                            continue
+                    except FileNotFoundError:
+                        continue
+                size = _tree_size(path)
+                try:
+                    shutil.rmtree(path)
                 except FileNotFoundError:
                     continue
-            size = _tree_size(path)
-            shutil.rmtree(path)
-            removed.append(path)
-            reclaimed += size
-    return SweepResult(tuple(removed), reclaimed, ordered)
+                removed.append(path)
+                reclaimed += size
+    return SweepResult(
+        tuple(removed),
+        reclaimed,
+        ordered,
+        third_party_skipped=not can_sweep_third_party,
+    )
 
 
 def configured_min_free_bytes(env: dict[str, str] | None = None) -> int:
@@ -192,6 +256,8 @@ def main(argv: list[str] | None = None) -> int:
         inspection = f"; candidates=[{shown}]"
         if omitted:
             inspection += f" ({omitted} more omitted)"
+    if result.third_party_skipped:
+        inspection += "; third-party sweep skipped: lifecycle dispatch active"
     print(
         f"sweep-scratch: {action} {len(paths)} directories; "
         f"reclaimed {result.reclaimed_bytes} bytes{inspection}"

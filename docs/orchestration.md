@@ -340,7 +340,11 @@ Recording is on by default:
 Before each recorded round is claimed, the executor runs the same conservative
 scratch sweep exposed as `just sweep-scratch`. Dead `orchestrator-watchdog-*`
 directories are identified by their recorded PID. Known third-party scratch is
-eligible only after the conservative age threshold. Use
+eligible only after the conservative age threshold and only when no lifecycle
+dispatch holds the host scratch shared lock. A destructive sweep takes the
+exclusive lock without waiting; when a dispatch is active it skips third-party
+scratch, reports that decision, and still removes definite dead watchdog
+directories. Use
 `just sweep-scratch --dry-run` to inspect candidates;
 `orchestrator.scratch.THIRD_PARTY_PATTERNS` is the authoritative documented
 pattern list and extension point.

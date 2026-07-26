@@ -66,6 +66,11 @@ Set `ORCHESTRATOR_MIN_FREE_BYTES` to a non-negative byte count when a host needs
 different threshold. This preflight is a terminal infrastructure failure in a
 tracked graph, so it does not consume another round.
 
+The lifecycle acquires the host scratch shared lock before this preflight and
+holds it through dispatch, verification, and publication. Destructive cleanup of
+aged third-party scratch requires the exclusive lock, so a concurrent sweep
+cannot remove scratch that an in-flight target gate owns or is about to use.
+
 ## Repository identity, checkout roles, and isolation
 
 `Workspace` (`orchestrator/workspace.py`) resolves two independent decisions through

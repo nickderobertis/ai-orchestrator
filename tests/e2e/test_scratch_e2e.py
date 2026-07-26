@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import json
+import multiprocessing
 import os
 import subprocess
+import sys
+import tempfile
 import time
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 
 import pytest
 
@@ -15,6 +18,65 @@ from orchestrator import REPO_ROOT
 from orchestrator.lifecycle import run_repo_task
 from orchestrator.scratch import MIN_FREE_BYTES_ENV
 from orchestrator.workspace import Workspace
+
+_BLOCKING_GATE = """
+import os
+import sys
+import time
+from pathlib import Path
+
+candidate, ready, release = map(Path, sys.argv[1:])
+candidate.mkdir(exist_ok=True)
+(candidate / "payload").write_text("in-flight", encoding="utf-8")
+old = time.time() - 48 * 60 * 60
+os.utime(candidate, (old, old))
+ready.write_text("ready", encoding="utf-8")
+while not release.exists():
+    time.sleep(0.02)
+"""
+
+
+def _run_lifecycle_with_blocking_gate(
+    origin: str,
+    canonical: str,
+    workspace_root: str,
+    base_path: str,
+    persona_dir: str,
+    scratch_root: str,
+    candidate: str,
+    ready: str,
+    release: str,
+    result_path: str,
+) -> None:
+    os.environ["TMPDIR"] = scratch_root
+    tempfile.tempdir = None
+    workspace = Workspace(
+        workspace_root,
+        resolver=lambda _spec: Path(canonical),
+        workflow="local",
+    )
+    result = run_repo_task(
+        origin,
+        "complete-now write-unique-change: synchronized scratch sweep",
+        "engineer",
+        workspace=workspace,
+        base_path=base_path,
+        persona_dir=persona_dir,
+        verify_cmd=[sys.executable, "-c", _BLOCKING_GATE, candidate, ready, release],
+        repo_type="single-owner",
+    )
+    Path(result_path).write_text(
+        json.dumps({"ok": result.ok, "outcome": result.outcome, "detail": result.detail}),
+        encoding="utf-8",
+    )
+
+
+def _wait_for_path(path: Path, timeout: float = 60.0) -> None:
+    deadline = time.monotonic() + timeout
+    while not path.exists():
+        if time.monotonic() >= deadline:
+            pytest.fail(f"timed out waiting for {path}")
+        time.sleep(0.02)
 
 
 def test_sweep_recipe_reclaims_orphans_and_preserves_live_scratch(tmp_path: Path) -> None:
@@ -51,6 +113,75 @@ def test_sweep_recipe_reclaims_orphans_and_preserves_live_scratch(tmp_path: Path
     assert recent.exists()
     assert "removed 2 directories" in result.stdout
     assert "reclaimed 46 bytes" in result.stdout
+
+
+def test_third_party_sweep_waits_for_inflight_lifecycle_then_reclaims(
+    tmp_path: Path,
+    bare_origin: Callable[..., Path],
+    command_base: Callable[..., Path],
+    personas_dir: Path,
+) -> None:
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    candidate = scratch / "visual-inflight"
+    ready = tmp_path / "gate-ready"
+    release = tmp_path / "gate-release"
+    result_path = tmp_path / "lifecycle-result.json"
+    origin = bare_origin()
+    canonical = tmp_path / "canonical"
+    subprocess.run(
+        ["git", "clone", str(origin), str(canonical)],
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    process = multiprocessing.Process(
+        target=_run_lifecycle_with_blocking_gate,
+        args=(
+            str(origin),
+            str(canonical),
+            str(tmp_path / "worktrees"),
+            str(command_base()),
+            str(personas_dir),
+            str(scratch),
+            str(candidate),
+            str(ready),
+            str(release),
+            str(result_path),
+        ),
+    )
+    process.start()
+    try:
+        _wait_for_path(ready)
+        during = subprocess.run(
+            ["just", "sweep-scratch", "--root", str(scratch)],
+            cwd=REPO_ROOT,
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+        assert candidate.exists()
+        assert "third-party sweep skipped: lifecycle dispatch active" in during.stdout
+    finally:
+        release.write_text("release", encoding="utf-8")
+        process.join(60)
+        if process.is_alive():
+            process.terminate()
+            process.join(10)
+
+    assert process.exitcode == 0
+    lifecycle_result = json.loads(result_path.read_text(encoding="utf-8"))
+    assert lifecycle_result["ok"] is True, lifecycle_result
+    assert lifecycle_result["outcome"] == "merged"
+    after = subprocess.run(
+        ["just", "sweep-scratch", "--root", str(scratch)],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    assert not candidate.exists()
+    assert "removed 1 directories" in after.stdout
 
 
 def test_dry_run_recipe_and_recorded_round_transition_sweep(tmp_path: Path) -> None:

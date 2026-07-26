@@ -83,7 +83,7 @@ from .runs import (
     status_summary,
     write_result,
 )
-from .scratch import require_scratch_capacity
+from .scratch import require_scratch_capacity, scratch_dispatch_guarded
 from .verify import NOOP_GATE, VerifyResult, resolve_gate_template, run_gate
 from .workspace import (
     CACHE_ENV,
@@ -1390,6 +1390,7 @@ def _pause_at_human_step(
     return pause(checkpoint, pr.url)
 
 
+@scratch_dispatch_guarded
 def run_repo_task(
     repo: str,
     task: str | None = None,

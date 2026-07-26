@@ -56,6 +56,45 @@ def test_known_patterns_are_extensible_and_unknown_old_scratch_is_preserved(
     assert unknown.exists()
 
 
+def test_active_dispatch_lock_skips_third_party_but_removes_dead_watchdog(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    stale = tmp_path / "visual-old"
+    stale.mkdir()
+    old = time.time() - 100
+    os.utime(stale, (old, old))
+    dead = tmp_path / "orchestrator-watchdog-dead"
+    dead.mkdir()
+    (dead / "pid").write_text("999999999", encoding="utf-8")
+
+    with scratch._scratch_lock(tmp_path, exclusive=False):
+        assert main(["--root", str(tmp_path), "--min-age-hours", "0"]) == 0
+
+    output = capsys.readouterr().out
+    assert "third-party sweep skipped: lifecycle dispatch active" in output
+    assert stale.exists()
+    assert not dead.exists()
+    assert sweep_scratch(tmp_path, min_age_seconds=0).removed == (stale,)
+
+
+def test_disappearing_candidate_is_ignored_during_removal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stale = tmp_path / "screencomp-gone"
+    stale.mkdir()
+    old = time.time() - 100
+    os.utime(stale, (old, old))
+    monkeypatch.setattr(
+        scratch.shutil,
+        "rmtree",
+        lambda path: (_ for _ in ()).throw(FileNotFoundError()),
+    )
+
+    result = sweep_scratch(tmp_path, min_age_seconds=0)
+
+    assert result.removed == ()
+
+
 def test_capacity_configuration_and_cli_validation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
