@@ -112,7 +112,7 @@ release binary needs a newer glibc than the host provides, and the crates.io bui
 lags behind the 0.3.x releases that added `init`. The **PyPI `oneharness-cli`
 wheel** (a manylinux build) is the one that both runs on the host's glibc and
 carries `init`, so `scripts/session-setup.sh` installs the exact
-`config/oneharness.version` release and rejects a stale binary. Version 0.5.8 is
+`config/oneharness.version` release and rejects a stale binary. Version 0.5.9 is
 the adopted release; it contains auth variants shipped in 0.5.6 and succeeds
 0.3.24, the first release to carry the
 process-tree timeout and partial telemetry fix from
