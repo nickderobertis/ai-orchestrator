@@ -171,7 +171,8 @@ def test_collect_run_joins_ledger_journal_history_and_attestation(
     assert record["timing"]["unattributed_ms"] > 0
     assert record["timing"]["lock_wait_seconds"] > 0
     assert record["timing"]["setup_seconds"] > 0
-    assert record["telemetry_quality"] == "legacy"
+    assert record["timing_quality"] == "legacy"
+    assert record["linkage_quality"] == "labelled"
     node = record["nodes"][0]
     assert node["checkpoint"] == "b" * 40
     assert node["comparison_remote"] == "origin"
@@ -256,15 +257,16 @@ def test_over_budget_buckets_are_clipped_to_exactly_wall_time() -> None:
     assert timing["publication_wait_seconds"] == 0
 
 
-def test_schema_v6_field_golden_prevents_cross_layer_drift() -> None:
+def test_schema_v7_field_golden_prevents_cross_layer_drift() -> None:
     golden = json.loads(
-        (Path(__file__).parent / "golden" / "telemetry-v6-fields.json").read_text(encoding="utf-8")
+        (Path(__file__).parent / "golden" / "telemetry-v7-fields.json").read_text(encoding="utf-8")
     )
     assert golden == {
         "schema_version": TELEMETRY_SCHEMA_VERSION,
         "history_schema_versions": list(SUPPORTED_HISTORY_SCHEMA_VERSIONS),
         "roles": list(get_args(SessionRole)),
-        "qualities": ["complete", "legacy", "partial"],
+        "timing_qualities": ["complete", "legacy", "partial"],
+        "linkage_qualities": ["inferred", "labelled", "native"],
         "sources": ["history_legacy", "journal_legacy", "oneharness", "onejudge"],
         "timing": sorted(TimingRecord.__required_keys__),
         "fractions": sorted(FractionsRecord.__required_keys__),
@@ -276,8 +278,13 @@ def test_schema_v6_field_golden_prevents_cross_layer_drift() -> None:
     contract = (Path(__file__).parents[1] / "docs" / "telemetry-model.md").read_text(
         encoding="utf-8"
     )
-    assert "Index version 6" in contract
-    for value in (*golden["roles"], *golden["qualities"], *golden["sources"]):
+    assert "Index version 7" in contract
+    for value in (
+        *golden["roles"],
+        *golden["timing_qualities"],
+        *golden["linkage_qualities"],
+        *golden["sources"],
+    ):
         assert f"`{value}`" in contract
     documented_fields = (
         *(f"timing.{field}" for field in golden["timing"] if field.endswith("_ms")),
@@ -312,7 +319,7 @@ def test_index_cli_defaults_to_active_and_all_includes_settled(
     completed.rename(tmp_path / "runs" / "complete")
     assert main(["--runs-dir", str(tmp_path / "runs"), "--oneharness-bin", "absent"]) == 0
     active = json.loads(capsys.readouterr().out)
-    assert active["schema_version"] == 6
+    assert active["schema_version"] == 7
     assert active["runs"] == []
     assert active["metrics"]["recovered_branches"] == 0
 
@@ -394,7 +401,8 @@ def test_native_timing_usage_tools_and_breakdown_are_role_and_node_scoped(
     assert record["nodes"][0]["tool_commands"] == {"gate": 4}
     assert record["turns"] == record["nodes"][0]["turns"] == 2
     assert record["lint"] == record["nodes"][0]["lint"] == 2
-    assert record["telemetry_quality"] == "legacy"
+    assert record["timing_quality"] == "partial"
+    assert record["linkage_quality"] == "inferred"
     assert main(["--runs-dir", str(tmp_path / "runs"), "--all", "--breakdown"]) == 0
     breakdown = capsys.readouterr().out
     assert "WORKER" in breakdown and "LLMLINT" in breakdown and "TURNS LINT" in breakdown

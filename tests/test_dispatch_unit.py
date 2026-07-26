@@ -255,7 +255,7 @@ def test_run_onejudge_sets_per_turn_timeout(
 ) -> None:
     onejudge = tmp_path / "onejudge"
     onejudge.write_text(
-        "#!/bin/sh\n"
+        '#!/bin/sh\nif [ "$1" = "--version" ]; then echo "onejudge 0.3.4"; exit 0; fi\n'
         "printf '"
         '{"schema_version":4,"transcript":{"messages":[]},"stopped_early":false,'
         '"usage":{"oneharness_timeout":"%s"}}'
@@ -271,6 +271,22 @@ def test_run_onejudge_sets_per_turn_timeout(
 
     assert report.raw is not None
     assert report.usage["oneharness_timeout"] == expected_timeout
+    assert report.raw["provenance"] == {
+        "provider_kind": "oneharness",
+        "onejudge": {"path": str(onejudge), "version": "0.3.4"},
+    }
+
+
+def test_run_onejudge_rejects_shadowed_version_before_dispatch(tmp_path: Path) -> None:
+    onejudge = tmp_path / "onejudge"
+    onejudge.write_text(
+        "#!/bin/sh\nprintf 'onejudge 0.3.0\\n'\n",
+        encoding="utf-8",
+    )
+    onejudge.chmod(0o700)
+
+    with pytest.raises(DispatchError, match=r"expected 'onejudge 0.3.4'.*onejudge"):
+        run_onejudge({}, "task", onejudge_bin=os.fspath(onejudge))
 
 
 @pytest.mark.parametrize("bad_timeout", ["", "abc", "12.5", "0", "-5"])
@@ -307,7 +323,7 @@ def test_run_onejudge_surfaces_a_quiet_wedged_process_tree(tmp_path) -> None:
 def test_run_onejudge_allows_slow_dispatch_with_real_io_progress(tmp_path) -> None:
     onejudge = tmp_path / "onejudge"
     onejudge.write_text(
-        "#!/bin/sh\n"
+        '#!/bin/sh\nif [ "$1" = "--version" ]; then echo "onejudge 0.3.4"; exit 0; fi\n'
         "i=0\n"
         "while [ $i -lt 8 ]; do printf progress >&2; sleep 0.08; i=$((i + 1)); done\n"
         'printf \'%s\\n\' \'{"schema_version":4,"transcript":{"messages":[]},'
@@ -332,7 +348,7 @@ def test_run_onejudge_retries_transient_empty_watchdog_pid(
 ) -> None:
     onejudge = tmp_path / "onejudge"
     onejudge.write_text(
-        "#!/bin/sh\n"
+        '#!/bin/sh\nif [ "$1" = "--version" ]; then echo "onejudge 0.3.4"; exit 0; fi\n'
         "sleep 0.2\n"
         'printf \'%s\\n\' \'{"schema_version":4,"transcript":{"messages":[]},'
         '"stopped_early":false}\'\n',
@@ -365,7 +381,7 @@ def test_worker_heartbeat_deadline_ignores_busy_descendant(tmp_path) -> None:
     status = tmp_path / "agent-status"
     onejudge = tmp_path / "onejudge"
     onejudge.write_text(
-        "#!/bin/sh\n"
+        '#!/bin/sh\nif [ "$1" = "--version" ]; then echo "onejudge 0.3.4"; exit 0; fi\n'
         'printf "%s\\n" "$$" >"$ORCHESTRATOR_AGENT_STATUS_DIR/agent.pid"\n'
         'touch "$ORCHESTRATOR_AGENT_STATUS_DIR/agent.heartbeat"\n'
         "while :; do :; done &\n"
@@ -398,7 +414,7 @@ def test_missing_agent_heartbeat_reaches_worker_death_deadline(tmp_path) -> None
     status = tmp_path / "agent-status"
     onejudge = tmp_path / "onejudge"
     onejudge.write_text(
-        "#!/bin/sh\n"
+        '#!/bin/sh\nif [ "$1" = "--version" ]; then echo "onejudge 0.3.4"; exit 0; fi\n'
         'printf "%s\\n" "$$" >"$ORCHESTRATOR_AGENT_STATUS_DIR/agent.pid"\n'
         "while :; do :; done &\n"
         "child=$!\n"
@@ -448,7 +464,7 @@ def test_malformed_agent_child_pid_does_not_mask_heartbeat_deadline(tmp_path) ->
     status = tmp_path / "agent-status"
     onejudge = tmp_path / "onejudge"
     onejudge.write_text(
-        "#!/bin/sh\n"
+        '#!/bin/sh\nif [ "$1" = "--version" ]; then echo "onejudge 0.3.4"; exit 0; fi\n'
         'printf "%s\\n" "$$" >"$ORCHESTRATOR_AGENT_STATUS_DIR/agent.pid"\n'
         'printf "bad\\n" >"$ORCHESTRATOR_AGENT_STATUS_DIR/agent.child.pid"\n'
         'touch "$ORCHESTRATOR_AGENT_STATUS_DIR/agent.heartbeat"\n'
@@ -610,7 +626,7 @@ def _label_echoing_onejudge(tmp_path) -> str:
     """A stand-in onejudge that reports the labels it was actually handed."""
     onejudge = tmp_path / "onejudge"
     onejudge.write_text(
-        "#!/bin/sh\n"
+        '#!/bin/sh\nif [ "$1" = "--version" ]; then echo "onejudge 0.3.4"; exit 0; fi\n'
         "printf '"
         '{"schema_version":4,"transcript":{"messages":[]},"stopped_early":false,'
         '"usage":{"labels":"%s"}}'

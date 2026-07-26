@@ -147,7 +147,8 @@ The timing model landed in index version 2. Index version 3 added optional
 onejudge-linked session timestamps used by the human timeline. Index version 4
 adds harness-overhead timing for lock waits, repository setup, and scheduling;
 Index version 5 adds the third `llmlint` session role and its separate counters.
-Index version 6 adds `metrics.llmlint_wrong_file_retries`: `initial_calls`,
+Index version 7 splits timing completeness from linkage authority and makes
+measurement presence explicit; version 6 added `metrics.llmlint_wrong_file_retries`: `initial_calls`,
 `wrong_file_corrections`, `wrong_file_correction_rate`, the broader
 `oneharness_retry_sessions` guardrail, observed `period_start` and
 `latest_session_start` boundaries, and `by_repository` / `by_node` cohorts.
@@ -170,7 +171,8 @@ Its checked-in golden moves in the same change. `RunTelemetry` includes:
 - `nodes[].timing` and `nodes[].usage` with the same shapes.
 - `nodes[].sessions`, containing the linked `session_id`, `history_id`, `role`,
   and `turn_index` for drill-down.
-- `telemetry_quality`: `complete`, `partial`, or `legacy`, plus `sources`, the
+- `timing_quality` (`complete`, `partial`, or `legacy`) and `linkage_quality`
+  (`native`, `labelled`, or `inferred`), plus `sources`, the
   ordered set of `onejudge`, `oneharness`, `history_legacy`, and `journal_legacy`
   actually used.
 - `node_work_ms`, with `agent_model_ms`, `judge_model_ms`, `llmlint_model_ms`,
@@ -287,7 +289,8 @@ as `?` in `--breakdown` and remain JSON `null` in the machine view.
 | Consumer field | Preferred source | Exact legacy fallback and emitted value |
 | --- | --- | --- |
 | `nodes[].sessions` | onejudge `telemetry.sessions` records linked to the node | Build entries from oneharness sessions matching `labels.run_id` and `labels.node`; use `labels.role`, then the legacy name-prefix classification. Preserve the native `session_id`; set `history_id` to the history record identity when present, otherwise `null`; set `turn_index` to `null` because record order is not a native turn identity. Emit `[]` when no session can be linked. |
-| `telemetry_quality` | Completeness of native onejudge linkage and interval-complete oneharness timing | Emit `complete` only when all linked sessions have native role linkage and complete timing; `legacy` when no new timing field contributes; `partial` for every mixture, invalid optional field, unknown usage field, or uncovered interval. |
+| `timing_quality` | Completeness of measured oneharness timing | `complete` means every linked history session has valid native timing fields; `partial` means at least one does; `legacy` means none does. Available measurements are never suppressed by this classification. |
+| `linkage_quality` | Authority of role and node association | `native` means valid onejudge session linkage supplies authoritative role, node/step association, and per-role `turn_index`; `labelled` means every association trusts history `labels.role`; `inferred` means at least one role uses a legacy name fallback or cannot be associated. |
 | `sources` | Record each preferred source actually consumed | Emit the ordered de-duplicated subset of `onejudge`, `oneharness`, `history_legacy`, and `journal_legacy`. `labels.run_id`/`labels.role`, `duration_ms`, `command_execution`, and legacy `usage` imply `history_legacy`; journal wall or node intervals imply `journal_legacy`. Emit `[]` only when the run has neither linked history nor journal timing. |
 | `node_work_ms.agent_model_ms` | Sum emitted `nodes[].timing.agent_model_ms` | Exact sum, including zero fallbacks; never infer from legacy `duration_ms`. |
 | `node_work_ms.judge_model_ms` | Sum emitted `nodes[].timing.judge_model_ms` | Exact sum, including zero fallbacks. |
@@ -297,13 +300,16 @@ as `?` in `--breakdown` and remain JSON `null` in the machine view.
 `node_work_ms` deliberately has no idle or unattributed field: those are
 wall-clock coverage qualifications, while this object reports parallelizable
 work totals. Consumers use each node's `unattributed_ms` and the run-level
-quality fields to judge the totals.
+timing and linkage quality fields to judge the totals.
 
 Fallback is per field, not per record or run: for example, native timing can
 coexist with legacy usage, and a provider-native token count can coexist with an
-unknown cost. `telemetry_quality` is `complete` only when every session has
-native role linkage, interval-complete timing, and populated timing categories;
-it is `legacy` when no new timing field contributed, and `partial` otherwise.
+unknown cost. Timing completeness and linkage authority are deliberately
+independent: labelled or inferred linkage does not suppress measured model or
+tool timing. Native linkage remains distinguishable because it uniquely carries
+onejudge-authoritative roles, exact per-role `turn_index`, direct node/step
+session identity (including per-step aggregation), and monotonic task-loop
+`wall_ms`/calculated `orchestration_ms`.
 
 ## Trust boundaries and invalid data
 

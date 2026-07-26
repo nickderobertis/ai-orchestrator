@@ -72,8 +72,10 @@ repeatable before/after cohorts.
 For records produced after the 0.5.5/0.3.4 upgrade, `AGENT`/`JUDGE` use <!-- llmlint: ignore[contracts_have_one_source_or_a_drift_gate] tests/test_onejudge_version.py::test_telemetry_upgrade_boundary_matches_authoritative_versions enforces this version boundary against the authoritative pins. -->
 onejudge's typed party summaries, `TOOL` uses oneharness' normalized `tool_ms`
 and per-tool-call `duration_ms`, and the timeline interleaves native
-agent and judge sessions by `turn_index`. `QUALITY complete` means authoritative
-role linkage and complete timing were available.
+agent and judge sessions by `turn_index`. `QUALITY` renders
+`<timing_quality>/<linkage_quality>`: timing is `complete`, `partial`, or
+`legacy` according to measured-field completeness, independently of linkage,
+which is `native`, `labelled`, or `inferred`.
 
 Pre-upgrade reports and history remain readable through a documented fallback.
 Missing onejudge linkage falls back
@@ -85,7 +87,9 @@ unrecognized history schema are also read best-effort and marked degraded.
 Missing or null run timing and tool-event timing/status degrade only the affected
 session. In contrast, malformed present values and contradictory timing remain
 errors: finish cannot precede start, and model plus tool time cannot exceed the
-record duration. The breakdown says
+record duration. Measured WORKER/JUDGE/LLMLINT/TOOL values remain visible for
+`complete` and `partial` timing; `?` means no measurement exists. `UNATTR` and
+the two quality dimensions qualify those values. The breakdown says
 `Timeline: unavailable (legacy session linkage)`, and quality is `legacy` or
 `partial`. Treat that as degraded evidence, not proof that judging or tools took
 no time.
@@ -101,7 +105,7 @@ no time.
    or evaluation overhead. Use the timeline to see repeated alternation or a
    long judge turn.
 4. Large `IDLE` with low `UNATTR` points to orchestration or handoff overhead.
-   Large `UNATTR`, a missing timeline, or `legacy` quality means collect richer
+   Large `UNATTR`, a missing timeline, or `legacy/inferred` quality means collect richer
    upstream telemetry before optimizing from the apparent split.
 5. Correlate long turns with token/cache/cost growth. A high turn-histogram bucket
    can expose stalled agents even when individual calls are not unusually slow.

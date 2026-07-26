@@ -265,7 +265,8 @@ def test_breakdown_aggregates_real_multirole_history_records(
         "tool_ms",
         "wall_ms",
     }
-    assert run["telemetry_quality"] == "complete"
+    assert run["timing_quality"] == "complete"
+    assert run["linkage_quality"] == "native"
     assert run["sources"] == ["onejudge", "oneharness", "history_legacy", "journal_legacy"]
 
     breakdown = subprocess.run(
@@ -332,7 +333,7 @@ def test_breakdown_aggregates_real_multirole_history_records(
     )
     assert fallback_run["usage"]["total"]["cache_write_tokens"] == 0
     assert fallback_run["usage"]["total"]["cost_usd"] == 0.033
-    assert fallback_run["telemetry_quality"] == "partial"
+    assert fallback_run["timing_quality"] == "partial"
 
     judge_record = json.loads((tmp_path / "judge.jsonl").read_text(encoding="utf-8"))
     judge_record["usage"].pop("cache_write_tokens")
@@ -478,7 +479,7 @@ def test_breakdown_aggregates_real_multirole_history_records(
     legacy_run = next(
         run for run in json.loads(legacy.stdout)["runs"] if run["run_id"] == "telemetry-legacy"
     )
-    assert legacy_run["telemetry_quality"] == "legacy"
+    assert legacy_run["timing_quality"] == "legacy"
     assert legacy_run["timing"]["unattributed_ms"] > 0
     legacy_breakdown = subprocess.run(
         [*command.args, "--breakdown"],

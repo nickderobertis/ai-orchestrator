@@ -46,13 +46,14 @@ from .runs import (
 )
 from .verify import GateAttestation
 
-TELEMETRY_SCHEMA_VERSION = 6
+TELEMETRY_SCHEMA_VERSION = 7
 SUPPORTED_HISTORY_SCHEMA_VERSIONS = ("0.2", "0.3", 1, 2, "1.0")
 #: History schema versions that may carry validated native timing (per-turn
 #: ``model_ms``/``tool_ms`` plus interval-bearing tool events). A version identifies
 #: the line format, not the completeness of timing supplied by a particular harness.
 NATIVE_TIMING_HISTORY_SCHEMAS: frozenset[str | int] = frozenset({"0.3", 2, "1.0"})
 TelemetryQuality = Literal["complete", "partial", "legacy"]
+LinkageQuality = Literal["native", "labelled", "inferred"]
 TelemetrySource = Literal["onejudge", "oneharness", "history_legacy", "journal_legacy"]
 FailureClass = Literal[
     "agent", "gate", "checks", "publication", "timeout", "provider", "configuration", "unknown"
@@ -264,6 +265,8 @@ class NodeTelemetry:
     tool_commands: dict[str, int] = field(default_factory=dict)
     turns: int = 0
     lint: int = 0
+    timing_quality: TelemetryQuality = "legacy"
+    linkage_quality: LinkageQuality = "inferred"
 
     def record(self) -> dict[str, object]:
         result: dict[str, object] = {"node": self.node, "status": self.status}
@@ -290,6 +293,8 @@ class NodeTelemetry:
             result["tool_commands"] = self.tool_commands
         result["turns"] = self.turns
         result["lint"] = self.lint
+        result["timing_quality"] = self.timing_quality
+        result["linkage_quality"] = self.linkage_quality
         return result
 
 
@@ -307,7 +312,8 @@ class RunTelemetry:
     check_rollup: CheckRollup = field(default_factory=CheckRollup)
     green_to_publication_seconds: list[float] = field(default_factory=list)
     usage: UsageRecord = field(default_factory=lambda: cast(UsageRecord, {}))
-    telemetry_quality: TelemetryQuality = "legacy"
+    timing_quality: TelemetryQuality = "legacy"
+    linkage_quality: LinkageQuality = "inferred"
     sources: list[TelemetrySource] = field(default_factory=list)
     node_work_ms: NodeWorkRecord = field(default_factory=lambda: cast(NodeWorkRecord, {}))
     turns: int = 0
@@ -323,7 +329,8 @@ class RunTelemetry:
             "timing": self.timing,
             "nodes": [node.record() for node in self.nodes],
             "usage": self.usage,
-            "telemetry_quality": self.telemetry_quality,
+            "timing_quality": self.timing_quality,
+            "linkage_quality": self.linkage_quality,
             "sources": self.sources,
             "node_work_ms": self.node_work_ms,
             "turns": self.turns,
@@ -450,6 +457,7 @@ class _SessionSummary:
     usage: UsageValues
     commands: dict[str, int]
     validated_native_fields: bool
+    has_timing_measurement: bool
     tool_intervals: list[_Interval]
 
 
@@ -664,6 +672,12 @@ def _summarize_session(session: HistorySession, records: list[HistoryRecord]) ->
         usage=usage,
         commands=commands,
         validated_native_fields=validated_native_fields,
+        has_timing_measurement=any(
+            _non_negative_int(record.get("model_ms")) is not None
+            or _non_negative_int(record.get("tool_ms")) is not None
+            for record in records
+        )
+        or bool(tool_intervals),
         tool_intervals=tool_intervals,
     )
 
@@ -1241,6 +1255,21 @@ def _node_record(
         else _node_wall_ms(node, events, active_at=active_at)
     )
     usage = _merge_usage(native.usage if native is not None else None, _usage(linked))
+    timing_quality: TelemetryQuality = (
+        "complete"
+        if linked and all(summary.validated_native_fields for summary in linked)
+        else "partial"
+        if any(summary.has_timing_measurement for summary in linked)
+        else "legacy"
+    )
+    linkage_quality: LinkageQuality = (
+        "native"
+        if native is not None and not native.invalid and bool(native.sessions)
+        else "labelled"
+        if linked
+        and all(summary.labels.get("role") in {"agent", "judge", "llmlint"} for summary in linked)
+        else "inferred"
+    )
     return NodeTelemetry(
         node=node,
         status=str(item.get("status", "unknown")),
@@ -1270,6 +1299,8 @@ def _node_record(
         tool_commands=_command_counts(linked),
         turns=sum(summary.turns for summary in linked if summary.role != "llmlint"),
         lint=sum(summary.turns for summary in linked if summary.role == "llmlint"),
+        timing_quality=timing_quality,
+        linkage_quality=linkage_quality,
     )
 
 
@@ -1339,15 +1370,22 @@ def collect_run(
     )
     native = [summary.validated_native_fields for summary in summaries]
     # Complete requires authoritative linkage plus valid interval-complete history.
-    quality: TelemetryQuality = (
+    timing_quality: TelemetryQuality = (
         "complete"
-        if native_parts
-        and all(not part.invalid and part.sessions for part in native_parts)
-        and native
-        and all(native)
+        if native and all(native)
         else "partial"
-        if native_parts or any(native)
+        if native_parts or any(summary.has_timing_measurement for summary in summaries)
         else "legacy"
+    )
+    linkage_quality: LinkageQuality = (
+        "native"
+        if native_parts and all(not part.invalid and part.sessions for part in native_parts)
+        else "labelled"
+        if summaries
+        and all(
+            summary.labels.get("role") in {"agent", "judge", "llmlint"} for summary in summaries
+        )
+        else "inferred"
     )
     sources: list[TelemetrySource] = []
     if native_parts:
@@ -1371,7 +1409,8 @@ def collect_run(
         check_rollup=snapshot.check_rollup,
         green_to_publication_seconds=publication_waits,
         usage=run_usage or _usage(summaries),
-        telemetry_quality=quality,
+        timing_quality=timing_quality,
+        linkage_quality=linkage_quality,
         sources=sources,
         node_work_ms=NodeWorkRecord(
             agent_model_ms=sum(cast(TimingRecord, node.timing)["agent_model_ms"] for node in nodes),
@@ -1502,7 +1541,7 @@ def _value(value: int | float | None) -> str:
 
 
 def _timing_value(value: int, fraction: float, quality: TelemetryQuality) -> str:
-    return f"{value:5} {fraction:5.1%}" if quality == "complete" else "    ?     ?"
+    return f"{value:5} {fraction:5.1%}" if quality != "legacy" else "    ?     ?"
 
 
 def _breakdown(runs: list[RunTelemetry], retry_metrics: LlmlintRetryMetrics | None = None) -> str:
@@ -1533,15 +1572,49 @@ def _breakdown(runs: list[RunTelemetry], retry_metrics: LlmlintRetryMetrics | No
                 f"{name[:20]:20}",
                 f"{timing['wall_ms']:6}ms",
                 _timing_value(
-                    timing["agent_model_ms"], fractions["agent_model"], run.telemetry_quality
+                    timing["agent_model_ms"],
+                    fractions["agent_model"],
+                    (
+                        run.timing_quality
+                        if name == str(run.run_id)
+                        else next(
+                            node.timing_quality for node in run.nodes if name == f"  {node.node}"
+                        )
+                    ),
                 ),
                 _timing_value(
-                    timing["judge_model_ms"], fractions["judge_model"], run.telemetry_quality
+                    timing["judge_model_ms"],
+                    fractions["judge_model"],
+                    (
+                        run.timing_quality
+                        if name == str(run.run_id)
+                        else next(
+                            node.timing_quality for node in run.nodes if name == f"  {node.node}"
+                        )
+                    ),
                 ),
                 _timing_value(
-                    timing["llmlint_model_ms"], fractions["llmlint_model"], run.telemetry_quality
+                    timing["llmlint_model_ms"],
+                    fractions["llmlint_model"],
+                    (
+                        run.timing_quality
+                        if name == str(run.run_id)
+                        else next(
+                            node.timing_quality for node in run.nodes if name == f"  {node.node}"
+                        )
+                    ),
                 ),
-                _timing_value(timing["tool_ms"], fractions["tool"], run.telemetry_quality),
+                _timing_value(
+                    timing["tool_ms"],
+                    fractions["tool"],
+                    (
+                        run.timing_quality
+                        if name == str(run.run_id)
+                        else next(
+                            node.timing_quality for node in run.nodes if name == f"  {node.node}"
+                        )
+                    ),
+                ),
                 f"{round(timing['gate_seconds'] * 1000):4}",
                 f"{round(timing['publication_wait_seconds'] * 1000):4}",
                 f"{round(timing['lock_wait_seconds'] * 1000):4}",
@@ -1559,7 +1632,7 @@ def _breakdown(runs: list[RunTelemetry], retry_metrics: LlmlintRetryMetrics | No
                 _value(usage["total"]["cost_usd"]),
                 str(turns),
                 str(lint),
-                run.telemetry_quality,
+                f"{run.timing_quality}/{run.linkage_quality}",
             ]
             lines.append(" ".join(columns))
         timeline = sorted(
