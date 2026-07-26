@@ -22,6 +22,7 @@ import subprocess
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Protocol
+from urllib.parse import quote
 
 __all__ = [
     "AutoMergeUnavailable",
@@ -180,9 +181,7 @@ class CliGitHubBackend:
         return not repo.startswith("local/")
 
     def default_branch(self, repo: str) -> str:
-        out = self._run(
-            ["repo", "view", repo, "--json", "defaultBranchRef", "-q", ".defaultBranchRef.name"]
-        )
+        out = self._run(["api", f"repos/{repo}", "--jq", ".default_branch"])
         branch = out.strip()
         if not branch:
             raise GitHubError(f"GitHub returned no default branch for {repo}")
@@ -190,9 +189,15 @@ class CliGitHubBackend:
 
     def required_status_checks(self, repo: str, branch: str) -> tuple[str, ...]:
         """Return branch-protection status contexts required before merge."""
-        out = self._run(
-            ["api", f"repos/{repo}/branches/{branch}/protection/required_status_checks"]
-        )
+        encoded_branch = quote(branch, safe="")
+        try:
+            out = self._run(
+                ["api", f"repos/{repo}/branches/{encoded_branch}/protection/required_status_checks"]
+            )
+        except GitHubError as exc:
+            if "(HTTP 404)" in str(exc):
+                return ()
+            raise
         try:
             payload = json.loads(out)
             contexts = payload["contexts"]

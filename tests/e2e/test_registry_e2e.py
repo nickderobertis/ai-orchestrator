@@ -3,9 +3,13 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import ssl
 import subprocess
 import sys
-from collections.abc import Callable
+import threading
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
@@ -19,6 +23,86 @@ from orchestrator.verify import NOOP_GATE
 def _cli(name: str, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
     executable = Path(sys.executable).parent / name
     return subprocess.run([str(executable), *args], text=True, capture_output=True, check=check)
+
+
+@contextmanager
+def _github_api_server(tmp_path: Path) -> Iterator[str]:
+    """Serve GitHub REST shapes through the real gh client's TLS boundary."""
+    cert = tmp_path / "github.crt"
+    key = tmp_path / "github.key"
+    subprocess.run(
+        [
+            "openssl",
+            "req",
+            "-x509",
+            "-newkey",
+            "rsa:2048",
+            "-nodes",
+            "-keyout",
+            str(key),
+            "-out",
+            str(cert),
+            "-days",
+            "1",
+            "-subj",
+            "/CN=127.0.0.1",
+            "-addext",
+            "subjectAltName=IP:127.0.0.1",
+        ],
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+
+    class GitHubHandler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            path = self.path.removeprefix("/api/v3/repos/acme/")
+            match path.split("/"):
+                case ["inaccessible"]:
+                    self._json({"message": "forbidden"}, status=403)
+                case ["empty-default"]:
+                    self._json({"default_branch": ""})
+                case [repo]:
+                    branches = {"required": "master", "slash": "release/next"}
+                    self._json({"default_branch": branches.get(repo, "main")})
+                case ["malformed", "branches", "main", "protection", "required_status_checks"]:
+                    self._json({})
+                case [repo, "branches", branch, "protection", "required_status_checks"]:
+                    checks = {
+                        ("required", "master"): ["complete-gate"],
+                        ("slash", "release%2Fnext"): ["slash-gate"],
+                    }
+                    contexts = checks.get((repo, branch))
+                    if contexts is None:
+                        self._json({"message": "Branch not protected"}, status=404)
+                    else:
+                        self._json({"contexts": contexts})
+                case _:
+                    self._json({"message": f"unexpected path {self.path}"}, status=404)
+
+        def _json(self, payload: object, *, status: int = 200) -> None:
+            body = json.dumps(payload).encode()
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, format: str, *args: object) -> None:
+            return
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), GitHubHandler)
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.load_cert_chain(cert, key)
+    server.socket = context.wrap_socket(server.socket, server_side=True)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"127.0.0.1:{server.server_port}"
+    finally:
+        server.shutdown()
+        thread.join()
+        server.server_close()
 
 
 def test_registry_register_discover_and_refresh_journey(
@@ -120,30 +204,6 @@ def test_merge_gate_coverage_onboarding_and_registry_audit_journeys(
 ) -> None:
     state = tmp_path / "state"
     monkeypatch.setenv("AI_ORCHESTRATOR_HOME", str(state))
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    gh = bin_dir / "gh"
-    gh.write_text(
-        "#!/usr/bin/env python3\n"
-        "import json\n"
-        "import sys\n"
-        "args = sys.argv[1:]\n"
-        "if args[:2] == ['repo', 'view']:\n"
-        "    repo = args[2]\n"
-        "    if repo == 'acme/inaccessible':\n"
-        "        print('forbidden', file=sys.stderr)\n"
-        "        raise SystemExit(1)\n"
-        "    print('master' if repo == 'acme/required' else 'main')\n"
-        "elif args[:1] == ['api']:\n"
-        "    required = args[1].startswith('repos/acme/required/branches/master/')\n"
-        "    print(json.dumps({'contexts': ['complete-gate'] if required else []}))\n"
-        "else:\n"
-        "    print(f'unexpected gh invocation: {args}', file=sys.stderr)\n"
-        "    raise SystemExit(2)\n",
-        encoding="utf-8",
-    )
-    gh.chmod(0o755)
-    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
 
     def checkout(name: str) -> Path:
         path = tmp_path / name
@@ -151,59 +211,74 @@ def test_merge_gate_coverage_onboarding_and_registry_audit_journeys(
         git("remote", "set-url", "origin", f"https://github.com/acme/{name}.git", cwd=path)
         return path
 
-    hooked = checkout("hooked")
-    hook = hooked / ".git" / "hooks" / "pre-push"
-    hook.write_text("#!/bin/sh\nexec make check\n", encoding="utf-8")
-    hook.chmod(0o755)
-    hook_result = _cli("orchestrator-register-repo", str(hooked), "--repo-type", "single-owner")
-    assert "status=covered" in hook_result.stdout
-    assert "coverage=executable pre-push hook" in hook_result.stdout
+    with _github_api_server(tmp_path) as github_host:
+        monkeypatch.setenv("GH_HOST", github_host)
+        monkeypatch.setenv("GH_ENTERPRISE_TOKEN", "test-token")
+        monkeypatch.setenv("SSL_CERT_FILE", str(tmp_path / "github.crt"))
+        monkeypatch.setenv("GH_CONFIG_DIR", str(tmp_path / "gh-config"))
 
-    required = checkout("required")
-    required_result = _cli(
-        "orchestrator-register-repo", str(required), "--repo-type", "single-owner"
-    )
-    assert "required PR status checks on master (complete-gate)" in required_result.stdout
+        hooked = checkout("hooked")
+        hook = hooked / ".git" / "hooks" / "pre-push"
+        hook.write_text("#!/bin/sh\nexec make check\n", encoding="utf-8")
+        hook.chmod(0o755)
+        hook_result = _cli("orchestrator-register-repo", str(hooked), "--repo-type", "single-owner")
+        assert "status=covered" in hook_result.stdout
+        assert "coverage=executable pre-push hook" in hook_result.stdout
 
-    empty_husky = checkout("empty-husky")
-    (empty_husky / ".husky").mkdir()
-    git("config", "core.hooksPath", ".husky", cwd=empty_husky)
-    empty_result = _cli(
-        "orchestrator-register-repo", str(empty_husky), "--repo-type", "single-owner"
-    )
-    assert "status=not-covered" in empty_result.stdout
-    assert "executable_pre_push_hook=missing" in empty_result.stdout
+        required = checkout("required")
+        required_result = _cli(
+            "orchestrator-register-repo", str(required), "--repo-type", "single-owner"
+        )
+        assert "required PR status checks on master (complete-gate)" in required_result.stdout
 
-    neither = checkout("neither")
-    neither_result = _cli("orchestrator-register-repo", str(neither), "--repo-type", "single-owner")
-    assert "identity https://github.com/acme/neither has no executable pre-push hook" in (
-        neither_result.stderr
-    )
-    assert "no required PR status checks exist" in neither_result.stderr
-    assert Registry().entries["local/neither"].path == str(neither.resolve())
+        slash = checkout("slash")
+        slash_result = _cli("orchestrator-register-repo", str(slash), "--repo-type", "single-owner")
+        assert "required PR status checks on release/next (slash-gate)" in slash_result.stdout
 
-    inaccessible = checkout("inaccessible")
-    inaccessible_result = _cli(
-        "orchestrator-register-repo", str(inaccessible), "--repo-type", "single-owner"
-    )
-    assert "required_pr_status_checks=unknown" in inaccessible_result.stdout
-    assert "not known to run a gate" in inaccessible_result.stderr
+        empty_husky = checkout("empty-husky")
+        (empty_husky / ".husky").mkdir()
+        git("config", "core.hooksPath", ".husky", cwd=empty_husky)
+        empty_result = _cli(
+            "orchestrator-register-repo", str(empty_husky), "--repo-type", "single-owner"
+        )
+        assert "status=not-covered" in empty_result.stdout
+        assert "executable_pre_push_hook=missing" in empty_result.stdout
 
-    local_only = tmp_path / "local-only"
-    git("clone", str(bare_origin()), str(local_only))
-    local_result = _cli(
-        "orchestrator-register-repo",
-        str(local_only),
-        "--workflow",
-        "local",
-        "--repo-type",
-        "single-owner",
-    )
-    assert "required_pr_status_checks=not-applicable (no GitHub origin)" in local_result.stdout
+        neither = checkout("neither")
+        neither_result = _cli(
+            "orchestrator-register-repo", str(neither), "--repo-type", "single-owner"
+        )
+        assert "identity https://github.com/acme/neither has no executable pre-push hook" in (
+            neither_result.stderr
+        )
+        assert "no required PR status checks exist" in neither_result.stderr
+        assert Registry().entries["local/neither"].path == str(neither.resolve())
 
-    audit = _cli("orchestrator-repos", "--audit-gate-coverage")
-    assert audit.stdout.count("merge_gate_coverage identity=") == 6
-    assert "identity=https://github.com/acme/required status=covered" in audit.stdout
+        for unavailable in ("inaccessible", "empty-default", "malformed"):
+            result = _cli(
+                "orchestrator-register-repo",
+                str(checkout(unavailable)),
+                "--repo-type",
+                "single-owner",
+            )
+            assert "required_pr_status_checks=unknown" in result.stdout
+            assert "not known to run a gate" in result.stderr
+
+        local_only = tmp_path / "local-only"
+        git("clone", str(bare_origin()), str(local_only))
+        local_result = _cli(
+            "orchestrator-register-repo",
+            str(local_only),
+            "--workflow",
+            "local",
+            "--repo-type",
+            "single-owner",
+        )
+        assert "required_pr_status_checks=not-applicable (no GitHub origin)" in local_result.stdout
+
+        audit = _cli("orchestrator-repos", "--audit-gate-coverage")
+        assert audit.stdout.count("merge_gate_coverage identity=") == 9
+        assert "identity=https://github.com/acme/required status=covered" in audit.stdout
 
 
 def test_lifecycle_clis_reject_unknown_local_aliases_before_dispatch(

@@ -47,7 +47,7 @@ def _queue_payload(entry: dict[str, str] | None = None) -> str:
 def test_default_branch() -> None:
     run = RecordingRun(["main\n"])
     assert CliGitHubBackend(run=run).default_branch("o/r") == "main"
-    assert run.calls[0][:2] == ["repo", "view"]
+    assert run.calls == [["api", "repos/o/r", "--jq", ".default_branch"]]
 
 
 def test_default_branch_rejects_empty_github_response() -> None:
@@ -57,16 +57,26 @@ def test_default_branch_rejects_empty_github_response() -> None:
 
 def test_required_status_checks_reads_branch_protection_contexts() -> None:
     run = RecordingRun([json.dumps({"contexts": ["gate", "lint"]})])
-    assert CliGitHubBackend(run=run).required_status_checks("o/r", "master") == (
+    assert CliGitHubBackend(run=run).required_status_checks("o/r", "release/next") == (
         "gate",
         "lint",
     )
-    assert run.calls == [["api", "repos/o/r/branches/master/protection/required_status_checks"]]
+    assert run.calls == [
+        ["api", "repos/o/r/branches/release%2Fnext/protection/required_status_checks"]
+    ]
 
 
 def test_required_status_checks_rejects_malformed_response() -> None:
     with pytest.raises(GitHubError, match="could not parse required status checks"):
         CliGitHubBackend(run=RecordingRun(["{}"])).required_status_checks("o/r", "main")
+
+
+def test_required_status_checks_treats_unprotected_branch_as_empty() -> None:
+    unavailable = GitHubError("gh api failed: Branch not protected (HTTP 404)")
+    assert (
+        CliGitHubBackend(run=RecordingRun([unavailable])).required_status_checks("o/r", "main")
+        == ()
+    )
 
 
 def test_create_pr_reuses_open_pr_for_head() -> None:
