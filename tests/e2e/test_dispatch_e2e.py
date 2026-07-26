@@ -823,6 +823,95 @@ print(json.dumps({
     assert report["results"][0]["text"] == "identity isolated"
 
 
+@pytest.mark.parametrize(
+    ("config_name", "missing_harness", "fallback_harness"),
+    [
+        ("oneharness.toml", "claude-code:alternate", "codex"),
+        ("oneharness.judge.toml", "codex", "claude-code:primary"),
+    ],
+)
+def test_configured_harness_fallbacks_recover_when_preferred_executable_is_unavailable(
+    tmp_path: Path,
+    oneharness_bin: str,
+    config_name: str,
+    missing_harness: str,
+    fallback_harness: str,
+) -> None:
+    fake_codex = tmp_path / "codex"
+    fake_codex.write_text(
+        """#!/usr/bin/env python3
+import json
+
+print(json.dumps({"type": "thread.started", "thread_id": "fallback-codex"}))
+print(json.dumps({
+    "type": "item.completed",
+    "item": {"type": "agent_message", "text": "fallback recovered"},
+}))
+print(json.dumps({
+    "type": "turn.completed",
+    "usage": {"input_tokens": 1, "cached_input_tokens": 0, "output_tokens": 1},
+}))
+""",
+        encoding="utf-8",
+    )
+    fake_codex.chmod(0o755)
+    fake_claude = tmp_path / "claude"
+    fake_claude.write_text(
+        """#!/usr/bin/env python3
+import json
+
+print(json.dumps({
+    "type": "result",
+    "subtype": "success",
+    "is_error": False,
+    "result": "fallback recovered",
+    "session_id": "fallback-claude",
+}))
+""",
+        encoding="utf-8",
+    )
+    fake_claude.chmod(0o755)
+    fallback_bin = fake_codex if fallback_harness == "codex" else fake_claude
+    environment = {
+        **os.environ,
+        "ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR": str(tmp_path / "absent-claude-alt"),
+        "ONEHARNESS_HISTORY": "false",
+    }
+
+    result = subprocess.run(
+        [
+            oneharness_bin,
+            "run",
+            "--config",
+            str(REPO_ROOT / config_name),
+            "--bin",
+            f"{missing_harness}={tmp_path / 'missing-executable'}",
+            "--bin",
+            f"{fallback_harness}={fallback_bin}",
+            "--mode",
+            "default",
+            "--prompt",
+            "prove fallback recovery",
+            "--compact",
+        ],
+        cwd=REPO_ROOT,
+        env=environment,
+        text=True,
+        capture_output=True,
+        timeout=60,
+    )
+
+    assert result.returncode == 0, result.stderr
+    report = json.loads(result.stdout)
+    assert [item["harness_id"] for item in report["results"]] == [
+        missing_harness,
+        fallback_harness,
+    ]
+    assert report["results"][0]["status"] == "skipped"
+    assert report["results"][1]["status"] == "ok"
+    assert report["results"][1]["text"] == "fallback recovered"
+
+
 def test_run_onejudge_config_error_raises(onejudge_bin) -> None:
     bad = {
         "provider": {"kind": "command", "command": [sys.executable, str(FAKE_BACKEND)]},
