@@ -390,6 +390,7 @@ def test_main_validates_and_services_inherited_proposal_channel(
     ) -> _RecordingProposalPump:
         assert (path, run_id, round_number) == (channel, "outer", 1)
         pump = _RecordingProposalPump()
+        # The recording double deliberately supplies the production pump's close method at runtime.
         pump.close = lambda: pump.persist_replies()  # type: ignore[attr-defined]
         pumps.append(pump)
         return pump
