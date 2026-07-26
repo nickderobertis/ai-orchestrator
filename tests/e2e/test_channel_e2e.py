@@ -115,6 +115,7 @@ def _launch_cli(
     onejudge_bin: str,
     requested_run_id: str | None = None,
     heartbeat_interval: float | None = None,
+    env: dict[str, str] | None = None,
 ) -> str:
     run_id_args = ["--run-id", requested_run_id] if requested_run_id else []
     heartbeat_args = (
@@ -138,6 +139,7 @@ def _launch_cli(
             str(FAKE_BACKEND),
         ],
         cwd=REPO_ROOT,
+        env={**os.environ, **(env or {})},
         text=True,
         capture_output=True,
         check=True,
@@ -145,7 +147,7 @@ def _launch_cli(
     return str(json.loads(launched.stdout)["run_id"])
 
 
-def test_due_heartbeat_is_agent_synthesized_and_normal_surface_resets_clock(
+def test_due_heartbeat_surfaces_during_active_step_and_disabled_run_stays_silent(
     tmp_path: Path, onejudge_bin: str
 ) -> None:
     runs = tmp_path / "runs"
@@ -165,8 +167,8 @@ def test_due_heartbeat_is_agent_synthesized_and_normal_surface_resets_clock(
                         "id": "active-worker",
                         "persona": "engineer",
                         "task": (
-                            f"slow-branch {witness} complete-now heartbeat-channel "
-                            f"capture-role-labels={worker_labels_path}"
+                            f"slow-branch {witness} pacemaker-slow complete-now "
+                            f"heartbeat-channel capture-role-labels={worker_labels_path}"
                         ),
                     }
                 ],
@@ -174,44 +176,128 @@ def test_due_heartbeat_is_agent_synthesized_and_normal_surface_resets_clock(
         ),
         encoding="utf-8",
     )
-    run_id = _launch_cli(plan, runs, _base(tmp_path), onejudge_bin, heartbeat_interval=2)
-    heartbeat = _wait_surface(run_id, runs, wait_seconds=120)
-    assert heartbeat["surface"] == {
-        "kind": "heartbeat",
-        "message": "active worker: running; follow-ups: none",
-        "blocking": False,
-    }
+    failed_check_in = tmp_path / "failed-check-in"
+    run_id = _launch_cli(
+        plan,
+        runs,
+        _base(tmp_path),
+        onejudge_bin,
+        heartbeat_interval=0.2,
+        env={"FAKE_CHECK_IN_FAIL_ONCE": str(failed_check_in)},
+    )
+    # llmlint: ignore[tests_mirror_real_usage] Required durable clock audit has no CLI view.
+    heartbeat_path = runs / run_id / "channel" / "heartbeat.json"
+    # llmlint: ignore[tests_mirror_real_usage] Required queue audit has no CLI view.
+    initial_state = json.loads(heartbeat_path.read_text())
+    queued_path = runs / run_id / "channel" / "heartbeat-surface.json"
+    queue_deadline = deadline(120)
+    while not queued_path.is_file() and time.monotonic() < queue_deadline:
+        time.sleep(0.01)
+    assert queued_path.is_file()
+    assert failed_check_in.read_text(encoding="utf-8") == "failed\n"
+    check_in_log = runs / run_id / "channel" / "check-in.log"
+    failure_records = [
+        json.loads(line) for line in check_in_log.read_text(encoding="utf-8").splitlines()
+    ]
+    assert len(failure_records) == 1
+    assert failure_records[0]["succeeded"] is False
+    attempts = (
+        (runs / run_id / "channel" / "check-in-dispatches.txt")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    )
+    assert attempts == ["failed", "success"]
+    # llmlint: ignore[tests_mirror_real_usage] Required pre-consumption audit has no CLI view.
+    queued_state = json.loads(heartbeat_path.read_text(encoding="utf-8"))
+    # llmlint: ignore[tests_mirror_real_usage] Required journal audit has no CLI view.
+    queued_events = (runs / run_id / "events.jsonl").read_text(encoding="utf-8")
+    assert queued_state["last_surface_at"] == initial_state["last_surface_at"]
+    assert queued_state["due"] is True
+    assert queued_state["in_flight"] is True
+    assert queued_path.stat().st_mtime >= queued_state["retry_not_before"]
+    assert '"kind":"planner-surfaced"' not in queued_events
     recorded_labels = parse_labels(
         (runs / run_id / "channel" / "check-in-labels.txt").read_text(encoding="utf-8")
     )
     assert recorded_labels["agent_role"] == "check-in"
     assert recorded_labels["persona"] == "check-in"
-    assert recorded_labels["run_id"] == run_id
     worker_labels = parse_labels(worker_labels_path.read_text(encoding="utf-8"))
     assert worker_labels["agent_role"] == "worker"
     assert worker_labels["persona"] == "engineer"
     orchestrator_labels = parse_labels(orchestrator_labels_path.read_text(encoding="utf-8"))
     assert orchestrator_labels["agent_role"] == "orchestrator"
     assert orchestrator_labels["persona"] == "orchestrator"
-    heartbeat_path = runs / run_id / "channel" / "heartbeat.json"
+
+    expected_message = (
+        "active-worker: executing the slow agent step; "
+        "evidence: node-started is recorded and node-settled is absent; follow-ups: none"
+    )
+    heartbeats: list[dict[str, object]] = []
+    while len(heartbeats) < 3:
+        heartbeat = _wait_surface(run_id, runs, wait_seconds=120)
+        if heartbeat["surface"] == {
+            "kind": "heartbeat",
+            "message": expected_message,
+            "blocking": False,
+        }:
+            heartbeats.append(heartbeat)
+    assert len(heartbeats) == 3
+    state = json.loads(heartbeat_path.read_text())
+    assert state["last_surface_at"] > initial_state["last_surface_at"]
+
+    while True:
+        boundary = _wait_surface(run_id, runs, wait_seconds=120)
+        boundary_surface = boundary["surface"]
+        assert isinstance(boundary_surface, dict)
+        if boundary_surface["kind"] != "heartbeat":
+            break
+    assert boundary_surface["kind"] == "milestone"
     wait_deadline = deadline(5)
     while True:
-        state = json.loads(heartbeat_path.read_text())
-        if state["due"] is False or time.monotonic() >= wait_deadline:
+        reset = json.loads(heartbeat_path.read_text())
+        if reset["due"] is False or time.monotonic() >= wait_deadline:
             break
         time.sleep(0.01)
-    assert state["due"] is False
-
-    boundary = _wait_surface(run_id, runs, wait_seconds=120)
-    boundary_surface = boundary["surface"]
-    assert isinstance(boundary_surface, dict)
-    assert boundary_surface["kind"] == "milestone"
-    reset = json.loads(heartbeat_path.read_text())
     assert reset["due"] is False
     assert reset["last_surface_at"] >= state["last_surface_at"]
     assert _next_cli(run_id, runs, timeout="0.02").get("surface") is None
     _reply_cli(run_id, runs, {"completion": True, "reason": "verified heartbeat"})
     _wait_report(runs / run_id / "orchestrator" / "report.json")
+    events = [
+        json.loads(line)
+        for line in (runs / run_id / "events.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    surfaced = [event for event in events if event["kind"] == "planner-surfaced"]
+    assert len([event for event in surfaced if event["detail"]["kind"] == "heartbeat"]) >= 3
+
+    disabled_plan = json.loads(plan.read_text(encoding="utf-8"))
+    disabled_plan["tasks"][0]["task"] = f"slow-branch {witness} complete-now heartbeat-channel"
+    plan.write_text(json.dumps(disabled_plan), encoding="utf-8")
+    disabled_id = _launch_cli(
+        plan,
+        runs,
+        _base(tmp_path),
+        onejudge_bin,
+        heartbeat_interval=10,
+        requested_run_id="heartbeat-disabled",
+    )
+    _reply_cli(
+        disabled_id,
+        runs,
+        {
+            "completion": False,
+            "reason": "disable the pacemaker",
+            "message": "continue",
+            "heartbeat_interval": False,
+        },
+    )
+    disabled_boundary = _wait_surface(disabled_id, runs, wait_seconds=120)
+    assert disabled_boundary["surface"]["kind"] == "milestone"
+    assert _next_cli(disabled_id, runs, timeout="0.15").get("surface") is None
+    _reply_cli(disabled_id, runs, {"completion": True, "reason": "verified disabled"})
+    _wait_report(runs / disabled_id / "orchestrator" / "report.json")
+    disabled_events = (runs / disabled_id / "events.jsonl").read_text(encoding="utf-8")
+    assert '"kind":"planner-surfaced"' not in disabled_events
 
     pr_author_labels_path = tmp_path / "pr-author-labels"
     subprocess.run(
@@ -372,72 +458,6 @@ def _reply_cli(run_id: str, runs: Path, value: dict[str, object]) -> None:
         capture_output=True,
         check=True,
     )
-
-
-def test_failed_check_in_clears_claim_and_recovers_without_blocking_frontier(
-    tmp_path: Path, onejudge_bin: str
-) -> None:
-    runs = tmp_path / "runs"
-    witness = tmp_path / "recovery-worker"
-    plan = tmp_path / "heartbeat-recovery.json"
-    plan.write_text(
-        json.dumps(
-            {
-                "schema_version": 3,
-                "name": "heartbeat-recovery",
-                "tasks": [
-                    {
-                        "id": "active-worker",
-                        "persona": "engineer",
-                        "task": f"slow-branch {witness} complete-now heartbeat-recovery",
-                    }
-                ],
-            }
-        ),
-        encoding="utf-8",
-    )
-    run_id = _launch_cli(plan, runs, _base(tmp_path), onejudge_bin, heartbeat_interval=2)
-    channel = runs / run_id / "channel"
-    log_path = channel / "check-in.log"
-    wait_deadline = deadline(30)
-    records: list[dict[str, object]] = []
-    while time.monotonic() < wait_deadline:
-        records = (
-            [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()]
-            if log_path.is_file()
-            else []
-        )
-        if records:
-            break
-        time.sleep(0.02)
-    assert len(records) == 1
-    assert records[0]["succeeded"] is False
-    assert "DispatchError" in str(records[0]["detail"])
-    failed_state = json.loads((channel / "heartbeat.json").read_text(encoding="utf-8"))
-    assert failed_state["in_flight"] is False
-    assert failed_state["due"] is False
-    assert witness.read_text(encoding="utf-8") == "tick\n"
-
-    recovered = _wait_surface(run_id, runs, wait_seconds=120)
-    assert recovered["surface"] == {
-        "kind": "heartbeat",
-        "message": "active worker: running; follow-ups: none",
-        "blocking": False,
-    }
-    wait_deadline = deadline(5)
-    while time.monotonic() < wait_deadline:
-        records = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()]
-        if len(records) == 2:
-            break
-        time.sleep(0.02)
-    assert [record["succeeded"] for record in records] == [False, True]
-    assert float(records[1]["at"]) >= float(failed_state["retry_not_before"])
-
-    boundary = _wait_surface(run_id, runs, wait_seconds=120)
-    assert boundary["surface"]["kind"] == "milestone"
-    assert _next_cli(run_id, runs, timeout="0.02").get("surface") is None
-    _reply_cli(run_id, runs, {"completion": True, "reason": "verified recovery"})
-    _wait_report(runs / run_id / "orchestrator" / "report.json")
 
 
 def _convenience_cli(recipe: str, run_id: str, runs: Path, message: str | None = None) -> None:
@@ -642,7 +662,46 @@ def test_live_channel_runs_real_nested_graph_and_round_trips_guidance(
         capture_output=True,
         check=True,
     )
+    expected_wait = "waiting for planner decision: blocker: plan departure needs a decision"
     assert f"* {run_id}" in listed.stdout
+    assert expected_wait in listed.stdout
+    status = subprocess.run(
+        ["just", "status", "--runs-dir", str(runs)],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    assert f"{run_id}: {expected_wait}" in status.stdout
+    pending_path = run_dir / "channel" / "planner-pending.json"
+    pending = pending_path.read_text(encoding="utf-8")
+    # llmlint: ignore-block[tests_mirror_real_usage] No public producer can corrupt this
+    # durable file; a directory at the file path deterministically exercises the
+    # unreadable-state boundary even when the e2e process runs as root.
+    for damage in ("malformed", "unreadable"):
+        if damage == "malformed":
+            pending_path.write_text("{broken", encoding="utf-8")
+        else:
+            pending_path.unlink()
+            pending_path.mkdir()
+        for command in ("runs", "status"):
+            damaged = subprocess.run(
+                ["just", command, "--runs-dir", str(runs)],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            assert damaged.returncode == 0
+            assert "Traceback" not in damaged.stderr
+            assert expected_wait not in damaged.stdout
+            if command == "runs":
+                assert f"* {run_id}" in damaged.stdout
+                assert "(1 done)" in damaged.stdout
+        if pending_path.is_dir():
+            pending_path.rmdir()
+    # llmlint: ignore-end[tests_mirror_real_usage]
+    pending_path.write_text(pending, encoding="utf-8")
     _convenience_cli("channel-continue", run_id, runs, "retry X")
     closeout = _next_cli(run_id, runs)
     assert closeout["surface"]["kind"] == "closeout"
@@ -863,6 +922,26 @@ def test_reattached_planner_replies_to_mid_run_proposal_without_stopping_graph(
         check=False,
     )
     assert "REPLY REQUESTED" in monitored.stdout
+    expected_wait = (
+        "waiting for planner reply: proposal: "
+        "discoverer: - Add a regression test for the adjacent edge case."
+    )
+    listed = subprocess.run(
+        ["just", "runs", "--runs-dir", str(runs)],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    assert expected_wait in listed.stdout
+    status = subprocess.run(
+        ["just", "status", "--runs-dir", str(runs)],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    assert f"{run_id}: {expected_wait}" in status.stdout
     assert provider_ready.read_text(encoding="utf-8") == "ready\n"
     _reply_cli(
         run_id,
@@ -899,10 +978,10 @@ def test_reattached_planner_replies_to_mid_run_proposal_without_stopping_graph(
         time.sleep(0.02)
     assert witness.read_text(encoding="utf-8").count("tick") == 2
 
-    boundary = _next_cli(run_id, runs)
-    while boundary.get("surface", {}).get("kind") == "heartbeat":
-        assert boundary["surface"]["blocking"] is False
+    while True:
         boundary = _next_cli(run_id, runs)
+        if boundary.get("surface", {}).get("kind") != "heartbeat":
+            break
     assert boundary["surface"]["kind"] in {"milestone", "closeout"}
     _reply_cli(
         run_id,

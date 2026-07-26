@@ -97,26 +97,28 @@ messages: transport state lives under `runs/<run-id>/channel/` as `up.fifo`,
 ### Planner-update pacemaker
 
 `just orchestrate` seeds a durable 1800-second planner-update interval; override
-it at launch with `--heartbeat-interval SECONDS`. Reconcile ticks persist a sticky
-due signal in `channel/heartbeat.json`, and `just monitor` and `just status` show
-`planner update due (Nm since last update)`. When that signal is due and
-unclaimed, the orchestrator process deterministically dispatches the dedicated
-`check-in` persona outside the graph concurrency budget. That read-only agent
-inspects status, monitor details, telemetry, the journal, and labeled oneharness
-history; synthesizes active-workstream progress and non-blocking follow-ups; sends
-one non-blocking update with `just channel-surface`; and exits without awaiting a
-planner reply. The reconciler only claims and spawns this actor; it never authors
-the update.
+it at launch with `--heartbeat-interval SECONDS`. A channel-side pacemaker keeps
+checking that clock independently of graph reconciliation, including while a node
+is inside a long-running agent step. When due, it dispatches a dedicated check-in
+agent to synthesize a concise per-workstream update from the run journal, status,
+monitor, telemetry, and labeled history. The resulting non-blocking surface is
+queued without waiting for a planner reply. Only successful consumption through
+`channel-next` resets the clock and appends `planner-surfaced` to `events.jsonl`;
+an update queued while no planner is attached is neither reset nor audited as
+delivered.
 
-The heartbeat record carries an `in_flight` claim, atomically preventing
-concurrent reconcile ticks from spawning duplicates. A planner-visible surface
-clears both the due signal and claim. Dispatch failure is logged, clears the
-claim, and schedules another attempt at the next interval without blocking or
-slowing the graph frontier.
+The heartbeat record carries an atomic `in_flight` claim so concurrent pacemaker
+ticks cannot dispatch duplicate check-ins. A failed attempt is recorded in
+`channel/check-in.log`, clears its claim, and becomes eligible again at the next
+configured interval without blocking the graph frontier. A successfully queued
+surface retains the claim until delivery, preventing another actor from
+duplicating the pending update.
 
-Every planner-visible update—round boundary, proposal, or heartbeat—clears the
-due signal and restarts the clock. A new round process reads the same durable
-timestamp rather than resetting it. To adjust the cadence, add
+Every planner-visible update—round boundary, proposal, or delivered heartbeat—
+clears the due signal and restarts the clock. The pacemaker compares wall time
+directly with the persisted `last_surface_at`, so a new round or restarted process
+continues the same durable countdown rather than starting a fresh interval. To
+adjust the cadence, add
 `"heartbeat_interval": SECONDS` to an otherwise normal `channel-reply`; use
 `"heartbeat_interval": false` to disable it. Values must be positive finite
 seconds. This pacemaker is independent of the reader-side `just monitor
@@ -124,8 +126,15 @@ seconds. This pacemaker is independent of the reader-side `just monitor
 
 Recorded oneharness sessions preserve transport `role` and add semantic
 `agent_role`: `worker`, `judge`, `orchestrator`, `check-in`, or `pr-author`.
-The check-in session is therefore visible independently in telemetry and DAG
-conversation views rather than being counted as a node's implementation worker.
+This keeps check-in and PR-author infrastructure visible without counting either
+as a node's implementation worker.
+
+While a consumed surface is persisted awaiting an answer, `just runs` and `just
+status` report `waiting for planner decision` for blocking surfaces and `waiting
+for planner reply` for informational ones, followed by the surface kind and
+message. A queued, unconsumed heartbeat remains non-blocking and is not reported
+as a reply wait. This distinguishes completed work held at a planner boundary
+from an orchestrator that is actively executing work.
 
 Every proposal includes `surface.blocking`: `true` means the worker or orchestrator
 is awaiting the decision, while `false` is an informational follow-up that does

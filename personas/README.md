@@ -14,7 +14,7 @@ role-specific parts live here.
 | `engineer` | General implementation and realistic testing across server-side systems, UI, accessibility, and contract-aware libraries. |
 | `planner` | Decomposing work into an actionable, dependency-ordered plan (no implementation). |
 | `orchestrator` | Executing a tracked graph round by round under a live planner's supervision. |
-| `check-in` | Synthesizing and sending one non-blocking planner pacemaker update from durable run state. |
+| `check-in` | Synthesizing a read-only, durable-state-derived planner status update. |
 | `docs-writer` | READMEs, reference docs, durable AGENTS.md notes. |
 | `researcher` | Answering questions with evidence cited from the actual source. |
 | `reviewer` | Reviewing and integrating several agents' independently produced work in a complex DAG. |

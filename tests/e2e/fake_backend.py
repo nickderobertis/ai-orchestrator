@@ -217,6 +217,30 @@ def main() -> int:
     match op:
         case "respond":
             _wait_at_provider_barrier(task)
+            if "Output file: " in task and "agent-synthesized planner update" in task:
+                output = Path(task.split("Output file: ", 1)[1].splitlines()[0])
+                attempts = output.parent / "check-in-dispatches.txt"
+                fail_once_value = os.environ.get("FAKE_CHECK_IN_FAIL_ONCE")
+                fail_once = Path(fail_once_value) if fail_once_value else None
+                if fail_once is not None and not fail_once.exists():
+                    fail_once.write_text("failed\n", encoding="utf-8")
+                    with attempts.open("a", encoding="utf-8") as stream:
+                        stream.write("failed\n")
+                    sys.stderr.write("fake_backend: forced first check-in failure\n")
+                    return 1
+                else:
+                    with attempts.open("a", encoding="utf-8") as stream:
+                        stream.write("success\n")
+                    (output.parent / "check-in-labels.txt").write_text(
+                        os.environ["ONEHARNESS_HISTORY_LABELS"],
+                        encoding="utf-8",
+                    )
+                    output.write_text(
+                        "active-worker: executing the slow agent step; "
+                        "evidence: node-started is recorded and node-settled is absent; "
+                        "follow-ups: none\n",
+                        encoding="utf-8",
+                    )
             guidance = _planner_guidance(messages)
             role_labels = re.search(r"capture-role-labels=(\S+)", task)
             if role_labels is not None and _assistant_turns(messages) == 0:
@@ -224,24 +248,6 @@ def main() -> int:
                     os.environ["ONEHARNESS_HISTORY_LABELS"],
                     encoding="utf-8",
                 )
-            if "dedicated-check-in" in task and _assistant_turns(messages) == 0:
-                command_match = re.search(r"`(just channel-surface .+? --runs-dir \S+)`", task)
-                if command_match is None:
-                    raise AssertionError("dedicated check-in task omitted channel-surface command")
-                command = shlex.split(command_match.group(1))
-                command[3] = "active worker: running; follow-ups: none"
-                runs_dir = Path(command[command.index("--runs-dir") + 1])
-                run_id = command[2]
-                failure_marker = runs_dir / run_id / "channel" / "check-in-failure-injected"
-                if "heartbeat-recovery" in run_id and not failure_marker.exists():
-                    failure_marker.write_text("failed once\n", encoding="utf-8")
-                    sys.stderr.write("fake_backend: forced first check-in failure\n")
-                    return 1
-                (runs_dir / run_id / "channel" / "check-in-labels.txt").write_text(
-                    os.environ["ONEHARNESS_HISTORY_LABELS"],
-                    encoding="utf-8",
-                )
-                subprocess.run(command, check=True, capture_output=True, text=True)
             run_log = re.search(r"record-run=(\S+)", task)
             if run_log is not None:
                 with Path(run_log.group(1)).open("a", encoding="utf-8") as stream:
@@ -262,13 +268,7 @@ def main() -> int:
                     while not release.exists():
                         time.sleep(0.02)
                 elif "live-edit-slow" not in task:
-                    time.sleep(
-                        5.5
-                        if "heartbeat-recovery" in task
-                        else 3
-                        if "heartbeat-channel" in task
-                        else 0.8
-                    )
+                    time.sleep(30 if "pacemaker-slow" in task else 0.8)
                 with witness.open("a", encoding="utf-8") as stream:
                     stream.write("tick\n")
             orchestrator_plan = _orchestrator_command(task)
@@ -459,7 +459,9 @@ def main() -> int:
             # `complete-now` finishes on the first turn; otherwise the agent stays
             # "not done" and completion is decided by the unified supervisor
             # below, which only passes on the second turn — exercising the loop.
-            done = (not fail) and ("complete-now" in task)
+            done = (not fail) and (
+                "complete-now" in task or "agent-synthesized planner update" in task
+            )
             if orchestrator_plan is not None:
                 turn = _assistant_turns(messages)
                 if turn == 0 and "surface-blocker" in plan_text:
@@ -520,7 +522,8 @@ def main() -> int:
             supervisor = cast(SupervisorRequest, req)
             completion_turn = 13 if "complete-after-13" in task else 2
             complete = (not fail) and (
-                _assistant_turns(messages) >= completion_turn
+                "agent-synthesized planner update" in task
+                or _assistant_turns(messages) >= completion_turn
                 or "resume-after-cap" in task
                 and resume_segments >= 2
             )
@@ -541,7 +544,9 @@ def main() -> int:
             # The adopted version routes the completion decision through `supervisor` above.
             completion_turn = 13 if "complete-after-13" in task else 2
             value = (not fail) and (
-                "complete-now" in task or _assistant_turns(messages) >= completion_turn
+                "complete-now" in task
+                or "agent-synthesized planner update" in task
+                or _assistant_turns(messages) >= completion_turn
             )
             resp = {"value": value, "reason": "fake judge verdict"}
         case "judge":

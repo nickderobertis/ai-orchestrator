@@ -30,7 +30,8 @@ from .config import ConfigError
 from .coordination import advisory_lock, atomic_json
 from .edits import EDIT_PROTOCOL_VERSION, EditCommand, EditError, parse_commands
 from .environment import CHANNEL_ENV_PREFIX
-from .runs import latest_round, load_mapping, resolve_supervision_run, validate_run_id
+from .journal import JournalSink, NullJournal, open_journal
+from .runs import RunId, latest_round, load_mapping, resolve_supervision_run, validate_run_id
 
 
 class ChannelError(Exception):
@@ -45,6 +46,7 @@ CHANNEL_DIR_ENV = f"{CHANNEL_ENV_PREFIX}DIR"
 CHANNEL_RUN_ID_ENV = f"{CHANNEL_ENV_PREFIX}RUN_ID"
 CHANNEL_ENDPOINTS = ("up.fifo", "down.fifo")
 HEARTBEAT_FILE = "heartbeat.json"
+HEARTBEAT_SURFACE_FILE = "heartbeat-surface.json"
 DEFAULT_HEARTBEAT_INTERVAL = 1800.0
 
 PlannerSurfaceKind = Literal[
@@ -57,6 +59,16 @@ PlannerSurfaceKind = Literal[
     "closeout",
 ]
 PLANNER_SURFACE_KINDS: frozenset[PlannerSurfaceKind] = frozenset(get_args(PlannerSurfaceKind))
+
+
+def _heartbeat_frame(run_id: str, round_number: int, message: str) -> dict[str, Any]:
+    return {
+        "op": "supervisor",
+        "run_id": run_id,
+        "round": round_number,
+        "surface": {"kind": "heartbeat", "message": message, "blocking": False},
+        "messages": [],
+    }
 
 
 class ProposalSink(Protocol):
@@ -73,10 +85,8 @@ class ProposalSink(Protocol):
     def heartbeat_tick(self) -> None: ...
 
 
-class CheckInDispatch(Protocol):
-    """One best-effort infrastructure dispatch that reports whether it surfaced."""
-
-    def __call__(self) -> bool: ...
+class HeartbeatSynthesizer(Protocol):
+    def __call__(self) -> str: ...
 
 
 def _heartbeat_path(channel_dir: Path) -> Path:
@@ -106,8 +116,8 @@ def initialize_heartbeat(channel_dir: Path, interval_s: float = DEFAULT_HEARTBEA
                     "last_surface_at": time.time(),
                     "interval_s": interval,
                     "due": False,
-                    "enabled": True,
                     "in_flight": False,
+                    "enabled": True,
                     "retry_not_before": 0.0,
                 },
             )
@@ -139,7 +149,11 @@ def _load_heartbeat(channel_dir: Path) -> dict[str, Any] | None:
     ):
         raise ChannelError("heartbeat state is invalid")
     _validated_interval(interval, field="heartbeat interval_s")
-    return dict(value)
+    return {
+        **value,
+        "in_flight": in_flight,
+        "retry_not_before": float(retry_not_before),
+    }
 
 
 def heartbeat_state(channel_dir: Path) -> dict[str, Any] | None:
@@ -152,7 +166,7 @@ def mark_heartbeat_due(channel_dir: Path, *, now: float | None = None) -> None:
     """Persist the sticky due bit once the configured interval has elapsed."""
     with advisory_lock(f"channel-heartbeat:{channel_dir.resolve()}"):
         state = _load_heartbeat(channel_dir)
-        if state is None or state["due"] or state["in_flight"] or not state["enabled"]:
+        if state is None or state["due"] or not state["enabled"]:
             return
         current = time.time() if now is None else now
         if current >= float(state["retry_not_before"]) and current - float(
@@ -160,33 +174,6 @@ def mark_heartbeat_due(channel_dir: Path, *, now: float | None = None) -> None:
         ) >= float(state["interval_s"]):
             state["due"] = True
             atomic_json(_heartbeat_path(channel_dir), state)
-
-
-def claim_heartbeat(channel_dir: Path) -> bool:
-    """Atomically claim one due check-in dispatch."""
-    with advisory_lock(f"channel-heartbeat:{channel_dir.resolve()}"):
-        state = _load_heartbeat(channel_dir)
-        if state is None or not state["enabled"] or not state["due"] or state["in_flight"]:
-            return False
-        state["in_flight"] = True
-        atomic_json(_heartbeat_path(channel_dir), state)
-        return True
-
-
-def finish_heartbeat_attempt(
-    channel_dir: Path, *, succeeded: bool, now: float | None = None
-) -> None:
-    """Clear a check-in claim and defer a failed attempt until the next interval."""
-    with advisory_lock(f"channel-heartbeat:{channel_dir.resolve()}"):
-        state = _load_heartbeat(channel_dir)
-        if state is None:
-            return
-        state["in_flight"] = False
-        if not succeeded and state["due"]:
-            current = time.time() if now is None else now
-            state["due"] = False
-            state["retry_not_before"] = current + float(state["interval_s"])
-        atomic_json(_heartbeat_path(channel_dir), state)
 
 
 def record_surface(channel_dir: Path, *, now: float | None = None) -> None:
@@ -200,6 +187,38 @@ def record_surface(channel_dir: Path, *, now: float | None = None) -> None:
         state["in_flight"] = False
         state["retry_not_before"] = 0.0
         atomic_json(_heartbeat_path(channel_dir), state)
+
+
+def claim_heartbeat(channel_dir: Path) -> bool:
+    """Atomically claim one due agent check-in."""
+    with advisory_lock(f"channel-heartbeat:{channel_dir.resolve()}"):
+        state = _load_heartbeat(channel_dir)
+        if state is None or not state["enabled"] or not state["due"] or state["in_flight"]:
+            return False
+        state["in_flight"] = True
+        atomic_json(_heartbeat_path(channel_dir), state)
+        return True
+
+
+def finish_heartbeat_attempt(
+    channel_dir: Path, *, succeeded: bool, now: float | None = None
+) -> None:
+    """Release a claim, deferring a failed attempt until the next interval."""
+    with advisory_lock(f"channel-heartbeat:{channel_dir.resolve()}"):
+        state = _load_heartbeat(channel_dir)
+        if state is None:
+            return
+        state["in_flight"] = False
+        if not succeeded:
+            current = time.time() if now is None else now
+            state["due"] = False
+            state["retry_not_before"] = current + float(state["interval_s"])
+        atomic_json(_heartbeat_path(channel_dir), state)
+
+
+def fail_heartbeat_claim(channel_dir: Path, *, now: float | None = None) -> None:
+    """Release a failed synthesis claim until its next retry interval."""
+    finish_heartbeat_attempt(channel_dir, succeeded=False, now=now)
 
 
 def apply_heartbeat_reply(channel_dir: Path, response: Mapping[str, Any]) -> None:
@@ -217,6 +236,9 @@ def apply_heartbeat_reply(channel_dir: Path, response: Mapping[str, Any]) -> Non
         if interval is not None:
             state["interval_s"] = interval
         atomic_json(_heartbeat_path(channel_dir), state)
+        if not enabled:
+            with suppress(FileNotFoundError):
+                (channel_dir / HEARTBEAT_SURFACE_FILE).unlink()
 
 
 def due_indicator(channel_dir: Path, *, now: float | None = None) -> str | None:
@@ -225,6 +247,16 @@ def due_indicator(channel_dir: Path, *, now: float | None = None) -> str | None:
         return None
     elapsed = max(0.0, (time.time() if now is None else now) - float(state["last_surface_at"]))
     return f"planner update due ({int(elapsed // 60)}m since last update)"
+
+
+def planner_wait_indicator(channel_dir: Path) -> str | None:
+    """Describe a surface whose delivery or reply is holding orchestration open."""
+    pending = channel_dir / "planner-pending.json"
+    if not pending.is_file():
+        return None
+    surface = _validated_persisted_surface(load_mapping(pending))
+    action = "planner decision" if surface["blocking"] else "planner reply"
+    return f"waiting for {action}: {surface['kind']}: {surface['message']}"
 
 
 def create_channel(
@@ -405,7 +437,7 @@ def _validated_persisted_surface(value: Mapping[str, Any]) -> dict[str, Any]:
     """Validate a persisted planner surface before forwarding it."""
     kind = value.get("kind")
     message = value.get("message")
-    blocking = value.get("blocking")
+    blocking = value.get("blocking", True)
     if not isinstance(kind, str) or not isinstance(message, str) or not isinstance(blocking, bool):
         raise ChannelError("persisted planner surface has invalid kind, message, or blocking")
     if kind not in PLANNER_SURFACE_KINDS:
@@ -417,6 +449,29 @@ def _validated_persisted_surface(value: Mapping[str, Any]) -> dict[str, Any]:
             raise ChannelError("persisted planner surface options must be a list of strings")
         surface["options"] = options
     return surface
+
+
+def _validated_heartbeat_surface(
+    value: Mapping[str, Any], run_id: str, expected_round: int
+) -> dict[str, Any]:
+    """Validate the durable, externally mutable heartbeat-surface frame."""
+    round_number = value.get("round")
+    if (
+        not isinstance(round_number, int)
+        or isinstance(round_number, bool)
+        or round_number != expected_round
+    ):
+        raise ChannelError("heartbeat surface round does not match the active round")
+    if value.get("run_id") != run_id:
+        raise ChannelError("heartbeat surface run id does not match the active run")
+    surface = value.get("surface")
+    message = surface.get("message") if isinstance(surface, Mapping) else None
+    if not isinstance(message, str) or not message.strip():
+        raise ChannelError("heartbeat surface values are invalid")
+    expected = _heartbeat_frame(run_id, expected_round, message)
+    if value != expected:
+        raise ChannelError("heartbeat surface frame is invalid")
+    return expected
 
 
 def _reply(value: Mapping[str, Any]) -> dict[str, Any]:
@@ -483,6 +538,9 @@ class ProposalPump:
         channel_dir: Path,
         run_id: str,
         round_number: int,
+        *,
+        journal: JournalSink | None = None,
+        synthesize_heartbeat: HeartbeatSynthesizer | None = None,
     ) -> None:
         self._channel_dir = channel_dir
         self._run_id = run_id
@@ -495,15 +553,14 @@ class ProposalPump:
         self._reply_received = threading.Event()
         self._answered: set[tuple[str, str]] = set()
         self._answer_lock = threading.Lock()
-        self._check_in: CheckInDispatch | None = None
+        self._journal = journal or NullJournal()
+        self._synthesize_heartbeat = synthesize_heartbeat
         self._thread = threading.Thread(target=self._service, daemon=True)
         self._receiver = threading.Thread(target=self._receive, daemon=True)
+        self._pacemaker = threading.Thread(target=self._pace, daemon=True)
         self._thread.start()
         self._receiver.start()
-
-    def configure_check_in(self, check_in: CheckInDispatch) -> None:
-        """Attach the infrastructure dispatch after channel validation."""
-        self._check_in = check_in
+        self._pacemaker.start()
 
     def propose(self, node: str, message: str) -> None:
         signature = (node, message)
@@ -578,39 +635,72 @@ class ProposalPump:
 
     def heartbeat_tick(self) -> None:
         mark_heartbeat_due(self._channel_dir)
-        if self._check_in is None or not claim_heartbeat(self._channel_dir):
-            return
-        threading.Thread(target=self._run_check_in, daemon=True).start()
-
-    def _run_check_in(self) -> None:
-        succeeded = False
-        detail = "dispatch did not complete"
-        try:
-            succeeded = self._check_in() if self._check_in is not None else False
-            if succeeded:
-                detail = "surface sent"
-        except Exception as exc:
-            detail = f"{type(exc).__name__}: {exc}"
-        finally:
-            finish_heartbeat_attempt(self._channel_dir, succeeded=succeeded)
-            with (
-                advisory_lock(f"channel-check-in-log:{self._channel_dir.resolve()}"),
-                (self._channel_dir / "check-in.log").open("a", encoding="utf-8") as stream,
-            ):
-                stream.write(
-                    json.dumps(
-                        {"at": time.time(), "succeeded": succeeded, "detail": detail},
-                        sort_keys=True,
-                    )
-                    + "\n"
-                )
 
     def close(self) -> None:
         self._stop.set()
         self._proposals.put(None)
         self._thread.join()
         self._receiver.join()
+        self._pacemaker.join()
         self.persist_replies()
+
+    def _pace(self) -> None:
+        """Keep checking the durable clock while the reconciler is inside a node."""
+        while not self._stop.wait(0.05):
+            try:
+                mark_heartbeat_due(self._channel_dir)
+                state = heartbeat_state(self._channel_dir)
+            except (ChannelError, ConfigError, OSError):
+                return
+            if (
+                state is not None
+                and state["enabled"]
+                and state["due"]
+                and not (self._channel_dir / HEARTBEAT_SURFACE_FILE).is_file()
+                and not (self._channel_dir / "planner-pending.json").is_file()
+                and self._synthesize_heartbeat is not None
+                and claim_heartbeat(self._channel_dir)
+            ):
+                threading.Thread(target=self._synthesize_and_queue, daemon=True).start()
+
+    def _synthesize_and_queue(self) -> None:
+        try:
+            assert self._synthesize_heartbeat is not None
+            message = self._synthesize_heartbeat().strip()
+            if not message:
+                raise ChannelError("check-in agent produced an empty planner update")
+            state = heartbeat_state(self._channel_dir)
+            if (
+                state is None
+                or not state["enabled"]
+                or not state["due"]
+                or (self._channel_dir / "planner-pending.json").is_file()
+            ):
+                fail_heartbeat_claim(self._channel_dir)
+                return
+            surface = _heartbeat_frame(self._run_id, self._round, message)
+            with advisory_lock(
+                f"channel-heartbeat-surface:"
+                f"{(self._channel_dir / HEARTBEAT_SURFACE_FILE).resolve()}"
+            ):
+                atomic_json(self._channel_dir / HEARTBEAT_SURFACE_FILE, surface)
+        except Exception as exc:
+            fail_heartbeat_claim(self._channel_dir)
+            with (
+                advisory_lock(f"channel-check-in-log:{self._channel_dir.resolve()}"),
+                (self._channel_dir / "check-in.log").open("a", encoding="utf-8") as stream,
+            ):
+                stream.write(
+                    json.dumps(
+                        {
+                            "at": time.time(),
+                            "succeeded": False,
+                            "detail": f"{type(exc).__name__}: {exc}",
+                        },
+                        sort_keys=True,
+                    )
+                    + "\n"
+                )
 
     def _service(self) -> None:
         while (proposal := self._proposals.get()) is not None:
@@ -630,6 +720,14 @@ class ProposalPump:
                 try:
                     write_message(self._channel_dir / "up.fifo", proposal, timeout=0.1)
                     record_surface(self._channel_dir)
+                    self._journal.append(
+                        "planner-surfaced",
+                        detail={
+                            "kind": str(surface["kind"]),
+                            "message": str(surface["message"]),
+                            "blocking": bool(surface["blocking"]),
+                        },
+                    )
                     break
                 except ChannelTimeout:
                     continue
@@ -796,7 +894,38 @@ def main_next(argv: list[str] | None = None) -> int:
     except ConfigError as exc:
         print(f"channel-next: {exc}", file=sys.stderr)
         return 2
-    if _finished(run_dir):
+    heartbeat_surface = run_dir / "channel" / HEARTBEAT_SURFACE_FILE
+    pending_reply = (run_dir / "channel" / "planner-pending.json").is_file()
+    latest = latest_round(run_dir)
+    round_finished = latest is not None and (latest[1] / "result.json").is_file()
+    if pending_reply or round_finished:
+        with suppress(FileNotFoundError):
+            heartbeat_surface.unlink()
+    with advisory_lock(f"channel-heartbeat-surface:{heartbeat_surface.resolve()}"):
+        if heartbeat_surface.is_file():
+            try:
+                if latest is None:
+                    raise ChannelError("heartbeat surface has no active round")
+                value = _validated_heartbeat_surface(
+                    load_mapping(heartbeat_surface), run_dir.name, latest[0]
+                )
+                heartbeat_surface.unlink()
+            except (ChannelError, ConfigError, OSError) as exc:
+                print(f"channel-next: {exc}", file=sys.stderr)
+                return 2
+            surface = value["surface"]
+            record_surface(run_dir / "channel")
+            open_journal(run_dir, RunId(run_dir.name), int(value["round"])).append(
+                "planner-surfaced",
+                detail={
+                    "kind": "heartbeat",
+                    "message": str(surface["message"]),
+                    "blocking": False,
+                },
+            )
+            print(json.dumps(value))
+            return 0
+    if not pending_reply and _finished(run_dir):
         print(json.dumps({"status": "finished"}))
         return 0
     try:
