@@ -2,6 +2,14 @@
 # Adapt llmlint's forced read-only judge to the container-sandboxed worker host.
 set -euo pipefail
 
+if ! command -v oneharness >/dev/null 2>&1; then
+    echo "llmlint oneharness wrapper: required 'oneharness' executable was not found; run 'just bootstrap' from the repository root to install it, then retry" >&2
+    exit 127
+fi
+
+script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+repo_root=$(dirname -- "$script_dir")
+
 args=()
 read_only=false
 while (( $# > 0 )); do
@@ -23,12 +31,7 @@ if [[ $read_only == true ]]; then
     args+=(-- -c 'sandbox_permissions=["disk-full-read-access","network-full-access"]')
 fi
 
-if ! command -v oneharness >/dev/null 2>&1; then
-    echo "llmlint oneharness wrapper: required 'oneharness' executable was not found; run 'just bootstrap' from the repository root to install it, then retry" >&2
-    exit 127
-fi
-
-if oneharness "${args[@]}"; then
+if oneharness "${args[@]:0:1}" --config "$repo_root/oneharness.llmlint.toml" "${args[@]:1}"; then
     exit 0
 else
     status=$?

@@ -12,6 +12,10 @@ set -euo pipefail
 
 script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 repo_root=$(dirname -- "$script_dir")
+# The worker config maps this portable, non-secret parent value into
+# CLAUDE_CONFIG_DIR only for its alternate-subscription child.
+: "${HOME:?oneharness-agent: HOME is required to locate the alternate Claude config}"
+export ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR="${ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR:-$HOME/.claude-alt}"
 
 if [ "${1-}" != "run" ]; then
     echo "oneharness-agent: expected the 'run' subcommand" >&2

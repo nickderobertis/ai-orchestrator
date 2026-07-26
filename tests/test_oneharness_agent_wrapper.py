@@ -20,7 +20,7 @@ WRAPPER = REPO_ROOT / "scripts" / "oneharness-agent.sh"
 
 
 def _run_wrapper(
-    tmp_path: Path, argv: list[str]
+    tmp_path: Path, argv: list[str], *, alternate_config_dir: Path | None = None
 ) -> tuple[subprocess.CompletedProcess[str], list[str]]:
     """Run the wrapper with a stub ``oneharness`` on PATH; return (proc, recorded argv)."""
     bin_dir = tmp_path / "bin"
@@ -28,7 +28,9 @@ def _run_wrapper(
     args_file = tmp_path / "oneharness-argv"
     stub = bin_dir / "oneharness"
     stub.write_text(
-        '#!/usr/bin/env bash\nprintf \'%s\\n\' "$@" > "$ONEHARNESS_ARGS_FILE"\n',
+        "#!/usr/bin/env bash\n"
+        'printf \'%s\\n\' "$@" > "$ONEHARNESS_ARGS_FILE"\n'
+        'printf \'%s\\n\' "$ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR" > "$ONEHARNESS_ENV_FILE"\n',
         encoding="utf-8",
     )
     stub.chmod(stub.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
@@ -39,6 +41,13 @@ def _run_wrapper(
         env={
             "PATH": f"{bin_dir}:/usr/bin:/bin",
             "ONEHARNESS_ARGS_FILE": str(args_file),
+            "ONEHARNESS_ENV_FILE": str(tmp_path / "oneharness-env"),
+            "HOME": str(tmp_path / "home"),
+            **(
+                {"ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR": str(alternate_config_dir)}
+                if alternate_config_dir is not None
+                else {}
+            ),
         },
     )
     recorded = args_file.read_text(encoding="utf-8").splitlines() if args_file.exists() else []
@@ -54,6 +63,20 @@ def test_agent_side_forces_the_orchestrator_config(tmp_path: Path) -> None:
     assert proc.returncode == 0, proc.stderr
     assert argv.count("--config") == 1
     assert argv[argv.index("--config") + 1] == f"{REPO_ROOT}/oneharness.toml"
+    assert (tmp_path / "oneharness-env").read_text(encoding="utf-8").strip() == str(
+        tmp_path / "home" / ".claude-alt"
+    )
+
+
+def test_agent_side_preserves_explicit_alternate_config_dir(tmp_path: Path) -> None:
+    explicit = tmp_path / "second-account"
+    proc, _ = _run_wrapper(
+        tmp_path,
+        ["run", "--compact", "--prompt", "probe"],
+        alternate_config_dir=explicit,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert (tmp_path / "oneharness-env").read_text(encoding="utf-8").strip() == str(explicit)
 
 
 def test_judge_side_keeps_its_own_config_and_adds_no_second(tmp_path: Path) -> None:
@@ -99,6 +122,7 @@ def test_watchdog_path_forwards_the_task_on_stdin(tmp_path: Path) -> None:
             "PATH": f"{bin_dir}:/usr/bin:/bin",
             "ONEHARNESS_STDIN_FILE": str(stdin_file),
             "ORCHESTRATOR_AGENT_STATUS_DIR": str(status_dir),
+            "HOME": str(tmp_path / "home"),
         },
     )
     assert proc.returncode == 0, proc.stderr

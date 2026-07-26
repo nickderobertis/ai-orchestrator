@@ -32,6 +32,8 @@ def _run(tmp_path: Path, *args: str) -> list[str]:
 def test_read_only_judge_keeps_filesystem_sandbox_and_grants_network(tmp_path: Path) -> None:
     assert _run(tmp_path, "run", "--mode", "read-only", "--compact") == [
         "run",
+        "--config",
+        str(REPO_ROOT / "oneharness.llmlint.toml"),
         "--mode",
         "read-only",
         "--compact",
@@ -44,6 +46,8 @@ def test_read_only_judge_keeps_filesystem_sandbox_and_grants_network(tmp_path: P
 def test_other_modes_and_arguments_are_unchanged(tmp_path: Path) -> None:
     assert _run(tmp_path, "run", "--mode", "auto", "--prompt", "read-only") == [
         "run",
+        "--config",
+        str(REPO_ROOT / "oneharness.llmlint.toml"),
         "--mode",
         "auto",
         "--prompt",
@@ -85,7 +89,6 @@ print(json.dumps({"type": "item.completed", "item": {"type": "agent_message", "t
             "codex",
             "--bin",
             f"codex={fake_codex}",
-            "--no-config",
             "--mode",
             "read-only",
             "--prompt",

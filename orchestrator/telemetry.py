@@ -48,12 +48,12 @@ from .runs import (
 from .verify import GateAttestation
 
 TELEMETRY_SCHEMA_VERSION = 6
-SUPPORTED_HISTORY_SCHEMA_VERSIONS = ("0.2", "0.3", 1, 2, "1.0")
+SUPPORTED_HISTORY_SCHEMA_VERSIONS = ("0.2", "0.3", 1, 2, "1.0", "1.1")
 #: History schema versions that carry validated native timing (per-turn
 #: ``model_ms``/``tool_ms`` plus interval-bearing tool events). oneharness 0.5's
 #: event-sourced 1.0 records keep the same required fields and event shape as the
 #: earlier 0.3/v2 tier once `history.py` folds their event lines back onto the run.
-NATIVE_TIMING_HISTORY_SCHEMAS: frozenset[str | int] = frozenset({"0.3", 2, "1.0"})
+NATIVE_TIMING_HISTORY_SCHEMAS: frozenset[str | int] = frozenset({"0.3", 2, "1.0", "1.1"})
 TelemetryQuality = Literal["complete", "partial", "legacy"]
 TelemetrySource = Literal["onejudge", "oneharness", "history_legacy", "journal_legacy"]
 FailureClass = Literal[
@@ -551,20 +551,24 @@ def _summarize_session(session: HistorySession, records: list[HistoryRecord]) ->
             validated_native_fields = False
         model = _non_negative_int(record.get("model_ms"))
         tool = _non_negative_int(record.get("tool_ms"))
-        if schema_version in NATIVE_TIMING_HISTORY_SCHEMAS and (
-            _non_negative_int(record.get("duration_ms")) is None or model is None or tool is None
-        ):
-            raise HistoryError("oneharness history schema v2 record has invalid required timing")
-        if schema_version in NATIVE_TIMING_HISTORY_SCHEMAS:
-            start_at = _utc_datetime(record.get("started_at"))
-            raw_finish = record.get("finished_at")
+        raw_start = record.get("started_at")
+        raw_finish = record.get("finished_at")
+        has_native_timing = any(
+            value is not None
+            for value in (raw_start, raw_finish, record.get("model_ms"), record.get("tool_ms"))
+        )
+        if schema_version in NATIVE_TIMING_HISTORY_SCHEMAS and has_native_timing:
+            start_at = _utc_datetime(raw_start)
             finish_at = _utc_datetime(raw_finish) if raw_finish is not None else None
-            duration = record["duration_ms"]
+            duration = _non_negative_int(record.get("duration_ms"))
             if (
                 start_at is None
+                or duration is None
+                or model is None
+                or tool is None
                 or (raw_finish is not None and finish_at is None)
                 or (finish_at is not None and finish_at < start_at)
-                or cast(int, model) + cast(int, tool) > duration
+                or model + tool > duration
             ):
                 raise HistoryError("oneharness history schema v2 record has invalid interval")
             if finish_at is None:

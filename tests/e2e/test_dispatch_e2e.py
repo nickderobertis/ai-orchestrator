@@ -729,9 +729,11 @@ def test_dispatch_cli_applies_ordered_models_to_real_oneharness(
     )
     effective_config = json.loads(effective.stdout)
     assert effective_config["run_mode"]["value"] == "fallback"
-    assert effective_config["harnesses"]["value"][0] == "codex"
-    if "claude-code" in effective_config["harnesses"]["value"]:
-        assert effective_config["harness"]["claude-code"]["model"]["value"] == "claude-opus-4-8"
+    assert effective_config["harnesses"]["value"][0] == "claude-code:alternate"
+    assert (
+        effective_config["harness"]["claude-code"]["variant"]["alternate"]["model"]["value"]
+        == "claude-opus-5"
+    )
 
 
 def test_run_onejudge_config_error_raises(onejudge_bin) -> None:

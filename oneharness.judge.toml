@@ -21,9 +21,9 @@ history = true
 # node" a filter rather than a guess from the session name (`JUDGE_PREFIXES`).
 history_labels = { role = "judge" }
 
-# harnesses: the selection, in priority order (the first is preferred under
-# fallback). See `oneharness list` for every supported id.
-harnesses = ["codex", "claude-code"]
+# The supervisor stays on codex. Its fallback names the primary Claude identity
+# explicitly, so it can never consume the worker's alternate subscription.
+harnesses = ["codex", "claude-code:primary"]
 
 # [harness.<id>]: per-harness overrides. Model names differ per provider, so
 # each harness names its own.
@@ -33,8 +33,19 @@ harnesses = ["codex", "claude-code"]
 model = "gpt-5.6-sol"
 
 [harness.claude-code]
-model = "claude-sonnet-5"                 # a cheaper supervisor keeps loop overhead down
 env = { IS_SANDBOX = "1" }
+
+[harness.claude-code.variant.primary]
+model = "claude-sonnet-5" # a cheaper supervisor keeps loop overhead down
+# Claude's default config directory is the primary subscription. Mask every
+# higher-precedence credential selector and any inherited alternate directory.
+unset_env = [
+    "CLAUDE_CONFIG_DIR",
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
+]
 
 # Inspect the effective, fully layered config (and where each value came from)
 # with `oneharness config`.

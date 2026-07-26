@@ -94,9 +94,10 @@ onejudge init --force    # writes the two oneharness configs + a starter onejudg
 onejudge schema          # the annotated, authoritative config reference
 ```
 
-The committed `oneharness.toml` / `oneharness.judge.toml` are **that init output**
-with two deliberate edits: the judge side runs a cheaper model than the agent, and
-both add an `IS_SANDBOX` env so claude-code runs under root. init's starter
+The committed configs are **that init output** with deliberate routing edits:
+the worker prefers an alternate Claude subscription, the judge prefers Codex and
+can fall back only to the primary Claude subscription, and both add an
+`IS_SANDBOX` env so claude-code runs under root. init's starter
 `onejudge.yaml` is not kept — `config/onejudge.base.yaml` supersedes it as the base
 this repo merges personas onto.
 
@@ -111,8 +112,9 @@ release binary needs a newer glibc than the host provides, and the crates.io bui
 lags behind the 0.3.x releases that added `init`. The **PyPI `oneharness-cli`
 wheel** (a manylinux build) is the one that both runs on the host's glibc and
 carries `init`, so `scripts/session-setup.sh` installs the exact
-`config/oneharness.version` release and rejects a stale binary. Version 0.4.0 is
-the adopted release; it succeeds 0.3.24, the first release to carry the
+`config/oneharness.version` release and rejects a stale binary. Version 0.5.7 is
+the adopted release; it contains auth variants shipped in 0.5.6 and succeeds
+0.3.24, the first release to carry the
 process-tree timeout and partial telemetry fix from
 [oneharness PR #1147](https://github.com/nickderobertis/oneharness/pull/1147),
 so that fix stays in effect.
@@ -127,12 +129,39 @@ the wheel is installed; keep `~/.local/bin` ahead of `~/.cargo/bin` regardless.
 ## Harnesses and the live path
 
 Live dispatch drives a real harness, chosen by `oneharness.toml`'s fallback chain
-(`codex` primary, `claude-code` secondary). The offline gate needs neither; the
+(`claude-code:alternate` primary, `codex` secondary). A variant is a named
+per-harness preset selected as `<harness>:<variant>`; it composes the base harness
+settings with child-only model, environment, and credential routing.
+`scripts/oneharness-agent.sh` derives
+`ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR` as `$HOME/.claude-alt` unless the caller
+overrides it. The variant maps that portable path to `CLAUDE_CONFIG_DIR` only
+inside the alternate worker process and masks ambient Anthropic API/OAuth
+credentials so they cannot outrank subscription auth. If that directory is absent,
+unauthenticated, or quota-limited, fallback proceeds to Codex; a host with only its
+primary Claude identity therefore still dispatches through an authenticated Codex.
+
+The judge's Codex primary is independent. Its `claude-code:primary` fallback
+removes `CLAUDE_CONFIG_DIR` and higher-precedence Anthropic credentials, selecting
+Claude's default `$HOME/.claude` identity and never the alternate worker account.
+llmlint uses `oneharness.llmlint.toml` through
+`scripts/llmlint-oneharness.sh`, which selects Codex only.
+
+To address an identity explicitly in a diagnostic run, use the composed id:
+
+```sh
+ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR="$HOME/.claude-alt" \
+  oneharness run --config oneharness.toml \
+  --harness claude-code:alternate --prompt "Reply with OK"
+oneharness run --config oneharness.judge.toml \
+  --harness claude-code:primary --prompt "Reply with OK"
+```
+
+The offline gate needs neither identity; the
 timeout e2e gate drives the adopted oneharness with a local fixture, and each live
 harness has an **environment requirement** for its tools to actually execute:
 
-- **codex** runs as its own process and executes tools directly, so it is the
-  preferred nested harness (the fallback primary). It sandboxes via **bubblewrap**,
+- **codex** runs as its own process and executes tools directly, so it remains the
+  worker fallback and judge primary. It sandboxes via **bubblewrap**,
   which needs **unprivileged user namespaces**; where the host disallows them (e.g.
   Ubuntu's AppArmor `restrict_unprivileged_userns`), codex can't create its sandbox
   and falls back to read-only. **The fix is `--oneharness-mode bypass`** (codex's
@@ -209,17 +238,18 @@ blocking proposal over the planner channel.
 
 ## Dispatching playbook
 
-- **Prepare the harness environment.** codex is oneharness's preferred agent
-  harness, but its executable installs in `~/.local/node/bin`. Keep that
-  directory on `PATH` or oneharness silently falls back to claude-code;
+- **Prepare the harness environment.** claude-code on the alternate subscription
+  is the preferred worker; Codex is its fallback and the preferred judge.
+  Codex installs in `~/.local/node/bin`. Keep that
+  directory on `PATH` so worker fallback, supervision, and llmlint remain available;
   `scripts/session-setup.sh` persists the path. The dispatch code also sets
   `ONEHARNESS_TIMEOUT` to 10,800 seconds (three hours), a temporary hard per-turn
   ceiling so legitimate build-heavy agents can finish. Set the variable
   explicitly to override it; onejudge's `max_turns` and the lifecycle `--timeout`
   still bound the whole run independently. Finer phase budgets remain tracked
   in issue #6. Project dispatch also pins the agent-side
-  oneharness `--config` to this repo's config, which forces codex to
-  `gpt-5.6-sol` while retaining claude-code's Claude fallback model. A global
+  oneharness `--config` to this repo's config, which selects alternate-subscription
+  Claude Code on `claude-opus-5` before Codex `gpt-5.6-sol`. A global
   `ONEHARNESS_MODELS` chain cannot be used here: onejudge supplies `--session`,
   and oneharness rejects multi-model runs combined with a named session.
 - **Use the tracked graph for coordinated work.** `just run-plan` accepts direct

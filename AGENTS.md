@@ -225,20 +225,26 @@ real CLI. onejudge drives a
 two-party conversation, and harness/model selection for each
 side lives in oneharness config, not onejudge:
 
-- **Agent side** (does the work) — `oneharness.toml`, discovered from the repo root.
+- **Agent side** (does the work) — `oneharness.toml`, discovered from the repo root;
+  it prefers `claude-code:alternate` on the alternate subscription and falls back
+  to codex.
 - **Judge / simulated-user side** (supervises) — `oneharness.judge.toml`, passed
-  as the base config's `provider.judge_config`.
+  as the base config's `provider.judge_config`; codex is primary and
+  `claude-code:primary` uses only the primary subscription.
+- **LLM lint side** — `oneharness.llmlint.toml`, forced by
+  `scripts/llmlint-oneharness.sh`; it is codex-only.
 
 `onejudge init` scaffolds both files plus a starter `onejudge.yaml`. The adopted
 exact oneharness release is declared in `config/oneharness.version`, installed as
 the `oneharness-cli` PyPI wheel, and verified by `scripts/session-setup.sh`. Session
 setup also installs and verifies Bun for oneharness's SDK gate. The
-committed configs are that output with two
-customizations — a cheaper judge model and the `IS_SANDBOX` env — and
+committed configs are that output with auth-variant routing, a cheaper Claude
+judge fallback, and the `IS_SANDBOX` env, and
 `config/onejudge.base.yaml` supersedes init's starter `onejudge.yaml`. Regenerate
 with `onejudge init --force`.
 
-**Live dispatch** picks a harness via `oneharness.toml`'s fallback (codex primary).
+**Live dispatch** picks a harness via `oneharness.toml`'s fallback (alternate
+Claude subscription primary, codex secondary).
 The lifecycle dispatches in **`bypass`** mode by default — the no-approval mode —
 which is correct here because the **whole environment is a sandbox** (a container):
 codex's own `workspace-write` sandbox (`auto` mode) needs unprivileged user
