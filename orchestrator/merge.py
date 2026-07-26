@@ -315,7 +315,7 @@ class LocalMergeStrategy:
                             "pr": pr.url,
                             "branch": ctx.branch,
                             "base": ctx.base,
-                            "outcome": "already-integrated",
+                            "outcome": ALREADY_INTEGRATED_OUTCOME,
                         },
                     )
                     return MergeOutcome(

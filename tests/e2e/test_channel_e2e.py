@@ -260,7 +260,7 @@ def test_due_heartbeat_is_agent_synthesized_and_normal_surface_resets_clock(
         ),
     ],
 )
-def test_provider_failure_is_terminal_blocker_without_second_round(
+def test_infrastructure_failure_is_terminal_blocker_without_second_round(
     tmp_path: Path, onejudge_bin: str, sentinel: str, underlying_error: str
 ) -> None:
     """A real failed provider dispatch stops iteration and names its cause."""

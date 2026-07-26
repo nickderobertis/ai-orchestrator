@@ -1634,8 +1634,7 @@ def test_real_cli_recovers_waiting_and_no_change_lifecycle_results(
             if event["kind"] == "node-settled" and event.get("node") == "waiting-lifecycle":
                 event["detail"]["result"][field] = value
                 break
-        # llmlint: ignore[tests_mirror_real_usage] Corrupt persisted input has no supported
-        # producer; this fixture setup is followed by recovery through the real CLI boundary.
+        # llmlint: ignore[tests_mirror_real_usage] corruption fixture for real CLI recovery
         events_path.write_text(
             "".join(f"{json.dumps(event)}\n" for event in interrupted_records),
             encoding="utf-8",

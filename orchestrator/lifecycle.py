@@ -255,8 +255,7 @@ class LifecycleResult:
     persona: str
     base_branch: str
     branch: str
-    outcome: LifecycleOutcome  # merged | already-integrated | pr-open | not-completed
-    #             | gate-failed | no-changes | checks-failed | closed | timeout | error
+    outcome: LifecycleOutcome
     execution_checkout: str = ""
     publication_checkout: str = ""
     publication_identity: IdentityKey | None = None
@@ -1883,7 +1882,7 @@ def run_repo_task(
                     detail={
                         "branch": branch,
                         "base": pr_base,
-                        "outcome": "already-integrated",
+                        "outcome": ALREADY_INTEGRATED_OUTCOME,
                     },
                 )
                 if pr_base == root_base:
