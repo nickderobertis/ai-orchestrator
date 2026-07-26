@@ -228,6 +228,17 @@ def test_dag_state_contract_checker_reports_agent_role_drift(tmp_path: Path) -> 
     assert "semantic agent roles disagree" in result.stderr
 
 
+def test_dag_state_contract_checker_rejects_duplicate_agent_roles(tmp_path: Path) -> None:
+    checkout = _dag_state_contract_checkout(tmp_path)
+    model = checkout / "packages/dag-model/src/index.ts"
+    model.write_text(model.read_text().replace('  "check-in",\n', '  "check-in",\n  "check-in",\n'))
+
+    result = _dag_state_contract_run(checkout)
+
+    assert result.returncode != 0
+    assert "agentRoleSchema must contain unique string roles" in result.stderr
+
+
 def _recipe_checkout(tmp_path: Path) -> tuple[Path, Path]:
     checkout = tmp_path / "recipes"
     scripts = checkout / "scripts"

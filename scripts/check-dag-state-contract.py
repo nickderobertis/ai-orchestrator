@@ -132,7 +132,15 @@ def typescript_agent_roles(path: Path) -> list[str]:
             "packages/dag-model/src/index.ts must declare exactly one agentRoleSchema; "
             "restore one exported `z.enum([...])` declaration and remove duplicates"
         )
-    return re.findall(r'"([^"]+)"', matches[0])
+    body = matches[0]
+    roles = re.findall(r'"([^"]+)"', body)
+    remainder = re.sub(r'"[^"]+"\s*,?', "", body)
+    if remainder.strip() or not roles or len(roles) != len(set(roles)):
+        fail(
+            "packages/dag-model/src/index.ts agentRoleSchema must contain unique string "
+            "roles; remove duplicates or non-string entries and restore any missing roles"
+        )
+    return roles
 
 
 def documented_agent_roles(path: Path) -> list[str]:
@@ -149,7 +157,15 @@ def documented_agent_roles(path: Path) -> list[str]:
             "docs/dag-ui/design.md must declare exactly one AgentRole union; restore "
             "one `type AgentRole = ...;` block and remove duplicates"
         )
-    return re.findall(r'"([^"]+)"', matches[0])
+    body = matches[0]
+    roles = re.findall(r'"([^"]+)"', body)
+    remainder = re.sub(r'\s*\|\s*"[^"]+"', "", body)
+    if remainder.strip() or not roles or len(roles) != len(set(roles)):
+        fail(
+            "docs/dag-ui/design.md AgentRole must contain unique string union members; "
+            "remove duplicates or malformed members and restore any missing roles"
+        )
+    return roles
 
 
 def main() -> None:
