@@ -22,7 +22,7 @@
       "command": "bunx biome format --write packages/dag-layout"
     },
     "format-check": {
-      "command": "bunx biome format packages/dag-layout"
+      "command": "bunx biome check --formatter-enabled=true --linter-enabled=false --assist-enabled=false packages/dag-layout"
     },
     "bootstrap": {
       "command": "bun install --frozen-lockfile"
