@@ -28,11 +28,26 @@ import pytest
 import yaml
 from leak_guard import ResourceLeakGuard
 
-from orchestrator import BASE_CONFIG, PERSONA_DIR, REPO_ROOT
+from orchestrator import BASE_CONFIG, PERSONA_DIR, REPO_ROOT, gitops
 from orchestrator.config import load_yaml
 from orchestrator.environment import CHANNEL_ENV_PREFIX
 
 FAKE_BACKEND = REPO_ROOT / "tests" / "e2e" / "fake_backend.py"
+
+
+@pytest.fixture(autouse=True)
+def _cover_real_git_clone_merge_paths(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make general lifecycle fixtures satisfy the production dispatch guard."""
+    clone = gitops.clone
+
+    def covered_clone(*args: object, **kwargs: object) -> Path:
+        checkout = clone(*args, **kwargs)
+        hook = checkout / ".git" / "hooks" / "pre-push"
+        hook.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        hook.chmod(0o755)
+        return checkout
+
+    monkeypatch.setattr(gitops, "clone", covered_clone)
 
 
 @pytest.fixture(autouse=True)

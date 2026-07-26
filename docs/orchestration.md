@@ -247,7 +247,7 @@ than inventing it.
 | Shape | Required fields | Meaning |
 | --- | --- | --- |
 | Direct agent | `persona`, `task`; no `repo` | Dispatch one real onejudge process in the selected project directory. |
-| Lifecycle agent | `repo`, plus `persona` + `task` or `steps` | Work on an isolated branch/worktree, verify, and publish through the repository's registered policy. |
+| Lifecycle agent | `repo`, plus `persona` + `task` or `steps` | Work on an isolated branch/worktree and publish through the repository's merge-path gate and registered policy. Dispatch refuses identities without an executable pre-push hook or required PR checks. |
 | Human | `kind: human`, `task`; no persona or execution fields | Record an action only an external person or outside system can perform. Planner review, acceptance, validation, and integration happen through live channel edits, not a human node. |
 
 An agent node or lifecycle agent step may instead set `expects_no_diff: true`
@@ -353,7 +353,6 @@ pattern list and extension point.
 runs/<run-id>/round-01/plan.json
 runs/<run-id>/round-01/status.json
 runs/<run-id>/round-01/result.json
-runs/<run-id>/round-01/<node>/gate.log
 runs/<run-id>/round-01/<node>[/<step>]/worker-report.json
 runs/<run-id>/round-01/<node>[/<step>]/oneharness-session.json
 runs/<run-id>/humans.json
@@ -373,9 +372,12 @@ round.
 
 Each recorded schema-v4 node result carries its own `artifacts` paths. Lifecycle
 step payloads carry their step-specific raw onejudge report and stable
-oneharness-session pointer; complete gate stdout and stderr are atomically stored
-as `gate.log` before the terminal result is journaled. Because those paths are in
-the terminal `GraphResultItem`, crash projection retains them byte-for-byte.
+oneharness-session pointer. Local gate failures surface from `git push`; the
+lifecycle records `gate-failed` when hook output identifies the gate and otherwise
+records a self-describing `error` outcome with Git's diagnostic.
+Remote-first failures remain named required-check outcomes. Because artifact
+paths are in the terminal `GraphResultItem`, crash projection retains them
+byte-for-byte.
 
 Execution is a long-lived reconcile loop: it compares the round's live desired
 graph with actual node state projected from `events.jsonl`, starts the reachable

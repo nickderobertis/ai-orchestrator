@@ -36,9 +36,9 @@ from waits import timeout as e2e_timeout
 import orchestrator.graph as graph_module
 import orchestrator.lifecycle as lifecycle_module
 from orchestrator import gitops
-from orchestrator.coordination import LockTimeout, advisory_lock, git_lock_identity
+from orchestrator.coordination import LockTimeout, git_lock_identity
 from orchestrator.dispatch import Report
-from orchestrator.github import PullRequest
+from orchestrator.github import GitHubError, PullRequest
 from orchestrator.graph import graph_payload, parse_graph, run_graph
 from orchestrator.journal import NodeJournal, NodeSink, open_journal
 from orchestrator.lifecycle import (
@@ -74,12 +74,37 @@ from orchestrator.workspace import IdentityKey, Workspace, normalize_repo
 _T = TypeVar("_T")
 
 
+def _install_pre_push_hook(checkout: Path, body: str = "exit 0") -> Path:
+    """Install the real merge-path boundary used by lifecycle fixtures."""
+    hooks = gitops.hooks_dir(checkout)
+    hooks.mkdir(parents=True, exist_ok=True)
+    hook = hooks / "pre-push"
+    hook.write_text(f"#!/bin/sh\nset -eu\n{body}\n", encoding="utf-8")
+    hook.chmod(0o755)
+    return hook
+
+
+@pytest.fixture(autouse=True)
+def _cover_lifecycle_clone_merge_paths(monkeypatch):
+    """Give lifecycle fixtures the merge-path coverage production requires."""
+    clone = gitops.clone
+
+    def covered_clone(*args: object, **kwargs: object) -> Path:
+        checkout = clone(*args, **kwargs)
+        _install_pre_push_hook(checkout)
+        return checkout
+
+    monkeypatch.setattr(gitops, "clone", covered_clone)
+
+
 def _workspace(tmp_path: Path, *origins: Path, workflow: str = "local") -> Workspace:
     """Build a registry-like resolver over real canonical test checkouts."""
     checkouts = {
         str(origin.resolve()): gitops.clone(origin, tmp_path / f"canonical-{index}")
         for index, origin in enumerate(origins)
     }
+    for checkout in checkouts.values():
+        _install_pre_push_hook(checkout)
     return Workspace(
         tmp_path / "worktrees",
         resolver=lambda spec: checkouts[str(Path(spec).resolve())],
@@ -419,6 +444,9 @@ def test_identity_cache_and_repo_post_checkout_hook_are_wired_across_dispatches(
     hook_marker = tmp_path / "post-checkout-runs"
     hooks = hook_author / ".githooks"
     hooks.mkdir()
+    repo_pre_push = hooks / "pre-push"
+    repo_pre_push.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    repo_pre_push.chmod(0o755)
     hook = hooks / "post-checkout"
     hook.write_text(
         f"#!/bin/sh\nprintf '%s\\n' \"$PWD\" >> {shlex.quote(str(hook_marker))}\n",
@@ -913,8 +941,7 @@ def test_repo_plan_ledger_and_guided_next_round(
     assert second_result["results"]["change"]["status"] == "done"
     assert second_result["results"]["change"]["follow_ups"] == follow_up
     publication = second_result["results"]["change"]
-    successful_gate_log = Path(publication["artifacts"]["gate_log"])
-    assert successful_gate_log.is_file()
+    assert "gate_log" not in publication["artifacts"]
     assert publication["branch"] == preserved_branch
     assert publication["retry_lineage"] == {
         "supersedes_branch": preserved_branch,
@@ -939,7 +966,7 @@ def test_repo_plan_ledger_and_guided_next_round(
     telemetry = json.loads(indexed.stdout)
     assert telemetry["metrics"]["recovered_branches"] == 1
 
-    assert telemetry["metrics"]["green_to_publication_seconds"]
+    assert telemetry["metrics"]["green_to_publication_seconds"] == []
     listed = subprocess.run(
         ["just", "runs", "--runs-dir", str(runs_dir)],
         cwd=Path(__file__).parents[2],
@@ -1030,10 +1057,10 @@ def test_lifecycle_records_verified_change_already_integrated_on_base(
     assert recorded["results"]["change"]["outcome"] == "already-integrated"
 
 
-def test_lifecycle_records_gate_failure_for_change_already_integrated_on_base(
+def test_lifecycle_accepts_merge_path_gated_change_already_integrated_on_base(
     tmp_path, bare_origin, command_base, personas_dir, capsys
 ) -> None:
-    """An early landing remains a gate failure when its real closeout gate fails."""
+    """An early landing is not subjected to a duplicate lifecycle-side gate."""
     origin = bare_origin()
     canonical = gitops.clone(origin, tmp_path / "canonical-integrated-gate-failure")
     Registry().register(str(canonical), workflow="local")
@@ -1081,22 +1108,21 @@ def test_lifecycle_records_gate_failure_for_change_already_integrated_on_base(
 
     payload = json.loads(capsys.readouterr().out)
     result = payload["results"]["change"]
-    assert rc == 1
-    assert payload["ok"] is False
-    assert result["status"] == "failed" and result["outcome"] == "gate-failed"
-    assert "already-integrated change failed local gate: false" in result["detail"]
-    assert not (canonical / "CHANGE.txt").exists()
+    assert rc == 0
+    assert payload["ok"] is True
+    assert result["status"] == "done" and result["outcome"] == "already-integrated"
+    assert (canonical / "CHANGE.txt").exists()
     assert _has_file(origin, "main", "CHANGE.txt")
     recorded = json.loads(
         (runs_dir / "integrated-gate-failure" / "round-01" / "result.json").read_text()
     )
-    assert recorded["results"]["change"]["outcome"] == "gate-failed"
+    assert recorded["results"]["change"]["outcome"] == "already-integrated"
 
 
-def test_lifecycle_fast_forwards_checkout_after_publication_race_is_already_integrated(
+def test_lifecycle_ignores_legacy_verify_override_during_local_publication(
     tmp_path, bare_origin, command_base, personas_dir, capsys
 ) -> None:
-    """The real local publisher reconciles a base advance during its gate."""
+    """The removed lifecycle gate cannot mutate publication as a side effect."""
     origin = bare_origin()
     canonical = gitops.clone(origin, tmp_path / "canonical-publication-race")
     Registry().register(str(canonical), workflow="local")
@@ -1148,12 +1174,12 @@ def test_lifecycle_fast_forwards_checkout_after_publication_race_is_already_inte
     result = payload["results"]["change"]
     assert rc == 0, json.dumps(result, indent=2)
     assert payload["ok"] is True
-    assert result["status"] == "done" and result["outcome"] == "already-integrated"
-    assert "no publication commit was needed" in result["detail"]
+    assert result["status"] == "done" and result["outcome"] == "merged"
+    assert "local direct-merge" in result["detail"]
     assert (canonical / "CHANGE.txt").read_text(encoding="utf-8") == "change from fake agent\n"
     assert gitops.head_sha(canonical) == _tip(origin, "main")
     recorded = json.loads((runs_dir / "publication-race" / "round-01" / "result.json").read_text())
-    assert recorded["results"]["change"]["outcome"] == "already-integrated"
+    assert recorded["results"]["change"]["outcome"] == "merged"
 
 
 # --- local repo: direct merge into main after checks -----------------------
@@ -1963,45 +1989,163 @@ def test_local_repo_direct_merge(tmp_path, bare_origin) -> None:
     assert branch_commits.isdisjoint(base_commits)
 
 
-def test_local_merge_gate_does_not_hold_the_shared_git_lock(tmp_path, bare_origin) -> None:
+def test_covered_lifecycle_uses_push_gate_without_orchestrator_gate_run(
+    tmp_path, bare_origin
+) -> None:
     origin = bare_origin()
-    ws = _workspace(tmp_path, origin)
-    verification_started = tmp_path / "verification-started"
-    verification_release = tmp_path / "verification-release"
-    gate = [
-        "sh",
-        "-c",
-        "if git symbolic-ref -q HEAD >/dev/null; then exit 0; fi; "
-        f"touch {shlex.quote(str(verification_started))}; "
-        f"while test ! -f {shlex.quote(str(verification_release))}; do sleep 0.01; done",
-    ]
+    workspace = _workspace(tmp_path, origin)
+    canonical = workspace.clone_dir(normalize_repo(str(origin)))
+    hook_log = tmp_path / "pre-push-gates.log"
+    _install_pre_push_hook(canonical, f"printf 'gate\\n' >> {shlex.quote(str(hook_log))}")
 
-    with ThreadPoolExecutor(max_workers=1) as pool:
-        future = pool.submit(
-            run_repo_task,
-            str(origin),
-            "Add a change while publication verification pauses.",
-            "engineer",
-            workspace=ws,
-            dispatch_fn=make_writing_dispatch(filename="feature.txt"),
-            verify_cmd=gate,
-        )
-        deadline = e2e_deadline(10)
-        while not verification_started.exists() and time.monotonic() < deadline:
-            time.sleep(0.01)
-        assert verification_started.exists(), "publication verification did not start"
-
-        clone = ws.clone_dir(normalize_repo(str(origin)))
-        identity = git_lock_identity(gitops.common_dir(clone))
-        try:
-            with advisory_lock(identity, timeout=0.5):
-                gitops.fetch(clone)
-        finally:
-            verification_release.touch()
-        result = future.result(timeout=e2e_timeout(10))
+    result = run_repo_task(
+        str(origin),
+        "Publish through the repository merge-path gate.",
+        "engineer",
+        workspace=workspace,
+        dispatch_fn=make_writing_dispatch(filename="covered.txt"),
+        # This legacy override would fail if lifecycle still invoked run_gate.
+        verify_cmd=["false"],
+    )
 
     assert result.ok and result.outcome == "merged", result.detail
-    assert _has_file(origin, "main", "feature.txt")
+    assert result.verify is None
+    assert hook_log.read_text(encoding="utf-8").splitlines() == ["gate", "gate"]
+    assert _has_file(origin, "main", "covered.txt")
+
+
+def test_pre_push_gate_failure_is_recorded_as_gate_failure(tmp_path, bare_origin) -> None:
+    origin = bare_origin()
+    workspace = _workspace(tmp_path, origin)
+    canonical = workspace.clone_dir(normalize_repo(str(origin)))
+    _install_pre_push_hook(
+        canonical,
+        "printf 'pre-push: complete gate failed\\n' >&2\nexit 1",
+    )
+    before = _tip(origin, "main")
+
+    result = run_repo_task(
+        str(origin),
+        "Publish work rejected by the merge-path gate.",
+        "engineer",
+        workspace=workspace,
+        dispatch_fn=make_writing_dispatch(filename="rejected.txt"),
+        verify_cmd=["true"],
+    )
+
+    assert result.outcome == "gate-failed"
+    assert "repository pre-push gate rejected publication" in result.detail
+    assert "complete gate failed" in result.detail
+    assert _tip(origin, "main") == before
+
+
+def test_lifecycle_refuses_uncovered_identity_before_dispatch(tmp_path, bare_origin) -> None:
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "uncovered")
+    gitops.hooks_dir(canonical).joinpath("pre-push").unlink()
+    dispatched = False
+
+    def unexpected_dispatch(*_args: object, **_kwargs: object) -> Report:
+        nonlocal dispatched
+        dispatched = True
+        raise AssertionError("uncovered lifecycle must not dispatch")
+
+    result = run_repo_task(
+        str(canonical),
+        "This work must not start without merge-path coverage.",
+        "engineer",
+        workspace=Workspace(
+            tmp_path / "uncovered-worktrees",
+            resolver=lambda _spec: canonical,
+            workflow="local",
+        ),
+        dispatch_fn=unexpected_dispatch,
+        verify_cmd=["true"],
+    )
+
+    assert result.outcome == "error"
+    assert "lifecycle dispatch refused" in result.detail
+    assert "no executable pre-push hook" in result.detail
+    assert "just repos --audit-gate-coverage" in result.detail
+    assert not dispatched
+
+
+@pytest.mark.parametrize(
+    ("status", "expected"),
+    [
+        ("absent", "no required PR status checks exist"),
+        ("unknown", "required PR status checks are unknown"),
+    ],
+)
+def test_lifecycle_refuses_remote_identity_without_known_required_checks(
+    tmp_path, bare_origin, status: str, expected: str
+) -> None:
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / f"remote-uncovered-{status}")
+    gitops.hooks_dir(canonical).joinpath("pre-push").unlink()
+    workspace = Workspace(
+        tmp_path / f"remote-uncovered-{status}-worktrees",
+        resolver=lambda _spec: canonical,
+        workflow="remote",
+        repo_type="team",
+    )
+
+    class CoverageGitHub(FakeGitHub):
+        def required_status_checks(self, repo: str, branch: str) -> tuple[str, ...]:
+            if status == "unknown":
+                raise GitHubError("branch protection unavailable")
+            return ()
+
+    result = run_repo_task(
+        "acme/widget",
+        "Do not dispatch without known remote merge-path coverage.",
+        "engineer",
+        workspace=workspace,
+        github=CoverageGitHub(origin),
+        dispatch_fn=lambda *_args, **_kwargs: pytest.fail("must not dispatch"),
+    )
+
+    assert result.outcome == "error"
+    assert expected in result.detail
+
+
+@pytest.mark.parametrize(
+    ("rejection", "expected_outcome"),
+    [("gate", "gate-failed"), ("transport", "error")],
+)
+def test_remote_human_checkpoint_records_push_failure(
+    tmp_path, bare_origin, rejection: str, expected_outcome: str
+) -> None:
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / f"human-checkpoint-{rejection}")
+    workspace = Workspace(
+        tmp_path / f"human-checkpoint-{rejection}-worktrees",
+        resolver=lambda _spec: canonical,
+        workflow="remote",
+        repo_type="team",
+    )
+    if rejection == "gate":
+        _install_pre_push_hook(canonical, "printf 'pre-push gate failed\\n' >&2\nexit 1")
+    else:
+        receive = origin / "hooks" / "pre-receive"
+        receive.write_text("#!/bin/sh\nprintf 'remote denied\\n' >&2\nexit 1\n", encoding="utf-8")
+        receive.chmod(0o755)
+
+    result = run_repo_task(
+        "acme/widget",
+        workspace=workspace,
+        github=FakeGitHub(origin),
+        steps=[
+            Step("prepare", "engineer", "Prepare work for external approval."),
+            Step("approve", task="Approve the work.", kind="human", deps=["prepare"]),
+        ],
+        dispatch_fn=_per_step_dispatch(),
+        verify_cmd=["true"],
+    )
+
+    assert result.outcome == expected_outcome
+    assert "push" in result.detail
+    assert result.pr is None
 
 
 def test_local_repo_non_main_default_and_gate_context(tmp_path, bare_origin) -> None:
@@ -2024,65 +2168,19 @@ def test_local_repo_non_main_default_and_gate_context(tmp_path, bare_origin) -> 
     assert _has_file(origin, "master", "portable.txt")
 
 
-def test_base_advance_during_verification_rebuilds_and_reverifies_local_merge(
-    tmp_path, bare_origin
-) -> None:
-    origin = bare_origin()
-    initial = _tip(origin, "main")
-    ready = tmp_path / "publisher-b-ready"
-    verification_log = tmp_path / "publication-gates.log"
-    quoted_ready = shlex.quote(str(ready))
-    quoted_log = shlex.quote(str(verification_log))
-    quoted_origin = shlex.quote(str(origin))
-    gate = [
-        "sh",
-        "-c",
-        "if git symbolic-ref -q HEAD >/dev/null; then exit 0; fi; "
-        f"if test -f machine-b.txt && test ! -f machine-a.txt; then "
-        f"touch {quoted_ready}; "
-        f'while test "$(git ls-remote {quoted_origin} refs/heads/main | cut -f1)" = {initial}; '
-        "do sleep 0.01; done; "
-        f"echo b-stale >> {quoted_log}; "
-        f"elif test -f machine-b.txt; then echo b-rebuilt >> {quoted_log}; "
-        f"else while test ! -f {quoted_ready}; do sleep 0.01; done; "
-        f"echo a >> {quoted_log}; fi",
-    ]
-
-    def publish(machine: str):
-        workspace_root = tmp_path / machine
-        ws = _workspace(workspace_root, origin)
-        return run_repo_task(
-            str(origin),
-            f"Publish from {machine}.",
-            "engineer",
-            workspace=ws,
-            branch=f"feature/{machine}",
-            dispatch_fn=make_writing_dispatch(filename=f"{machine}.txt"),
-            verify_cmd=gate,
-            publication_attempts=3,
-        )
-
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        results = list(pool.map(publish, ("machine-a", "machine-b")))
-
-    assert all(result.ok and result.outcome == "merged" for result in results)
-    assert _has_file(origin, "main", "machine-a.txt")
-    assert _has_file(origin, "main", "machine-b.txt")
-    publication_gates = verification_log.read_text(encoding="utf-8").splitlines()
-    # Publisher B verifies once against the initial base, observes A's base advance,
-    # then rebuilds and verifies a second time before its merge may be pushed.
-    assert publication_gates.count("b-stale") == 1
-    assert publication_gates.count("b-rebuilt") == 1
-
-
 def test_local_repo_gate_failure_blocks_merge(tmp_path, bare_origin) -> None:
     origin = bare_origin()
     before = _tip(origin, "main")
+    workspace = _workspace(tmp_path, origin)
+    _install_pre_push_hook(
+        workspace.clone_dir(normalize_repo(str(origin))),
+        "printf 'pre-push gate: lint tier: bad import\\n' >&2\nexit 1",
+    )
     result = run_repo_task(
         str(origin),
         "Add a change that fails the gate.",
         "engineer",
-        workspace=_workspace(tmp_path, origin),
+        workspace=workspace,
         dispatch_fn=make_writing_dispatch(filename="feature.txt"),
         verify_cmd=["sh", "-c", "printf 'lint tier: bad import\\n'; exit 1"],
     )
@@ -2121,7 +2219,7 @@ def test_local_repo_syncs_advanced_base_before_gate(tmp_path, bare_origin) -> No
     )
 
     assert result.ok and result.outcome == "merged"
-    assert result.verify is not None and result.verify.ok
+    assert result.verify is None
     assert _has_file(origin, "main", "base.txt")
     assert _has_file(origin, "main", "feature.txt")
     assert (
@@ -2350,6 +2448,10 @@ def test_local_repo_registry_gate_verifies_real_worktree(tmp_path, bare_origin) 
     origin = bare_origin()
     canonical = gitops.clone(origin, tmp_path / "registered")
     marker = tmp_path / "gate-ran"
+    _install_pre_push_hook(
+        canonical,
+        f"test -f feature.txt && touch {shlex.quote(str(marker))}",
+    )
     Registry().register(
         str(canonical),
         workflow="local",
@@ -2367,7 +2469,7 @@ def test_local_repo_registry_gate_verifies_real_worktree(tmp_path, bare_origin) 
         dispatch_fn=make_writing_dispatch(filename="feature.txt"),
     )
     assert result.ok and result.outcome == "merged"
-    assert result.verify is not None and result.verify.ok
+    assert result.verify is None
     assert marker.exists()
     assert _has_file(origin, "main", "feature.txt")
 
@@ -2375,6 +2477,7 @@ def test_local_repo_registry_gate_verifies_real_worktree(tmp_path, bare_origin) 
 def test_local_repo_registry_gate_failure_stops_publication(tmp_path, bare_origin) -> None:
     origin = bare_origin()
     canonical = gitops.clone(origin, tmp_path / "registered")
+    _install_pre_push_hook(canonical, "printf 'pre-push gate failed\\n' >&2\nexit 1")
     Registry().register(str(canonical), workflow="local", repo_type="single-owner", gate="false")
     result = run_repo_task(
         str(canonical),
@@ -2384,7 +2487,7 @@ def test_local_repo_registry_gate_failure_stops_publication(tmp_path, bare_origi
         dispatch_fn=make_writing_dispatch(filename="feature.txt"),
     )
     assert result.outcome == "gate-failed"
-    assert result.verify is not None and not result.verify.ok
+    assert result.verify is None
     assert not _has_file(origin, "main", "feature.txt")
 
 
@@ -2408,6 +2511,10 @@ def test_registered_complete_gate_catches_strict_tier_before_publish_then_allows
     )
     base_before_failure = _tip(origin, "main")
     canonical = gitops.clone(origin, tmp_path / "registered-complete-gate")
+    _install_pre_push_hook(
+        canonical,
+        "make gate || { printf 'pre-push gate failed\\n' >&2; exit 1; }",
+    )
     Registry().register(
         str(canonical), workflow="local", repo_type="single-owner", gate="make gate"
     )
@@ -2423,7 +2530,7 @@ def test_registered_complete_gate_catches_strict_tier_before_publish_then_allows
     )
 
     assert rejected.outcome == "gate-failed"
-    assert rejected.verify is not None and not rejected.verify.ok
+    assert rejected.verify is None
     assert gate_log.read_text(encoding="utf-8").splitlines() == ["check", "strict-tier"]
     assert _tip(origin, "main") == base_before_failure
     assert not _has_file(origin, "main", "feature.txt")
@@ -2438,7 +2545,7 @@ def test_registered_complete_gate_catches_strict_tier_before_publish_then_allows
     )
 
     assert published.ok and published.outcome == "merged", published.detail
-    assert published.verify is not None and published.verify.ok
+    assert published.verify is None
     assert gate_log.read_text(encoding="utf-8").splitlines() == [
         "check",
         "strict-tier",
@@ -2480,10 +2587,10 @@ def test_bazel_affected_candidate_runs_in_lifecycle_worktree(
         workspace=Workspace(tmp_path / "worktrees"),
         dispatch_fn=make_writing_dispatch(filename="feature.txt"),
     )
-    assert result.ok and result.verify is not None and result.verify.ok
+    assert result.ok and result.verify is None
 
 
-def test_local_repo_noop_registry_gate_surfaces_unproven_warning(tmp_path, bare_origin) -> None:
+def test_local_repo_noop_registry_gate_relies_on_covered_merge_path(tmp_path, bare_origin) -> None:
     origin = bare_origin()
     canonical = gitops.clone(origin, tmp_path / "registered")
     Registry().register(str(canonical), workflow="local", repo_type="single-owner")
@@ -2497,12 +2604,12 @@ def test_local_repo_noop_registry_gate_surfaces_unproven_warning(tmp_path, bare_
     )
 
     assert result.ok and result.outcome == "merged"
-    assert "gate: no-op -- pushed unproven" in result.detail
+    assert "pushed unproven" not in result.detail
     assert result.verify is None
 
 
 # llmlint: ignore[e2e_not_mocked] GitHub decisioning is the suite's documented external seam.
-def test_remote_human_checkpoint_noop_gate_surfaces_unproven_warning(tmp_path, bare_origin) -> None:
+def test_remote_human_checkpoint_noop_gate_relies_on_required_checks(tmp_path, bare_origin) -> None:
     origin = bare_origin()
     canonical = gitops.clone(origin, tmp_path / "registered")
     Registry().register(str(canonical), workflow="remote", repo_type="single-owner")
@@ -2518,7 +2625,7 @@ def test_remote_human_checkpoint_noop_gate_surfaces_unproven_warning(tmp_path, b
         dispatch_fn=_per_step_dispatch(),
     )
     assert result.outcome == "waiting-human" and result.pr is not None
-    assert "gate: no-op -- pushed unproven" in result.detail
+    assert "pushed unproven" not in result.detail
 
 
 # llmlint: ignore[e2e_not_mocked] GitHub decisioning is the suite's documented external seam.
@@ -2543,9 +2650,8 @@ def test_remote_human_checkpoint_registry_gate_blocks_draft(tmp_path, bare_origi
         body="## What\nPrepare a checkpoint.\n\n## Why\nAwait approval.\n",
         dispatch_fn=_per_step_dispatch(),
     )
-    assert result.outcome == "gate-failed" and result.pr is None
-    assert result.verify is not None and not result.verify.ok
-    assert "human-pause-gate-failed" in result.detail
+    assert result.outcome == "waiting-human" and result.pr is not None
+    assert result.verify is None
 
 
 def test_lifecycle_without_explicit_or_registry_gate_errors(tmp_path, bare_origin) -> None:
@@ -2648,7 +2754,9 @@ def test_retry_with_invalid_incomplete_provenance_records_fresh_branch_fallback(
     )
 
 
-def test_preserved_retry_without_complete_gate_remains_unpublished(tmp_path, bare_origin) -> None:
+def test_preserved_retry_uses_merge_path_gate_when_local_override_is_skipped(
+    tmp_path, bare_origin
+) -> None:
     origin = bare_origin()
     workspace = _workspace(tmp_path, origin)
     first = run_repo_task(
@@ -2671,9 +2779,8 @@ def test_preserved_retry_without_complete_gate_remains_unpublished(tmp_path, bar
         resume=first.resume,
     )
 
-    assert retried.outcome == "not-completed" and not retried.ok
-    assert "cannot be recovered without a successful complete gate" in retried.detail
-    assert not _has_file(origin, "main", "complete.txt")
+    assert retried.outcome == "merged" and retried.ok
+    assert _has_file(origin, "main", "complete.txt")
 
 
 def test_preserved_retry_with_failing_complete_gate_remains_unpublished(
@@ -2701,9 +2808,9 @@ def test_preserved_retry_with_failing_complete_gate_remains_unpublished(
         resume=first.resume,
     )
 
-    assert retried.outcome == "gate-failed" and not retried.ok
-    assert retried.verify is not None and not retried.verify.ok
-    assert not _has_file(origin, "main", "complete.txt")
+    assert retried.outcome == "merged" and retried.ok
+    assert retried.verify is None
+    assert _has_file(origin, "main", "complete.txt")
 
 
 def test_clean_committed_partial_work_is_marked_and_recoverable(tmp_path, bare_origin) -> None:
@@ -2767,7 +2874,7 @@ def test_clean_committed_partial_work_is_marked_and_recoverable(tmp_path, bare_o
     assert recovered.ok and recovered.outcome == "merged"
     assert recovered.workflow == "local" and recovered.pr_base == "main"
     assert result.branch not in gitops.worktrees(canonical)
-    assert gate_log.read_text(encoding="utf-8").splitlines() == ["gate", "gate"]
+    assert not gate_log.exists()
     attestation = gitops.log_messages(canonical, marker_sha, result.branch)
     assert len(attestation) == 1
     assert f"Orchestrator-Recovered-Incomplete: {marker_sha}" in attestation[0].message
@@ -2776,8 +2883,56 @@ def test_clean_committed_partial_work_is_marked_and_recoverable(tmp_path, bare_o
 
 
 @pytest.mark.parametrize(
+    ("rejection", "expected_outcome", "expected_detail"),
+    [
+        ("gate", "gate-failed", "repository pre-push gate rejected recovery"),
+        ("transport", "error", "recovery push"),
+    ],
+)
+def test_recovery_push_failure_is_recorded_and_preserves_branch(
+    tmp_path, bare_origin, rejection: str, expected_outcome: str, expected_detail: str
+) -> None:
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-recovery-gate-failure")
+    Registry().register(str(canonical), workflow="local", repo_type="single-owner")
+
+    preserved = run_repo_task(
+        str(canonical),
+        "Preserve work for a recovery rejected by the merge-path gate.",
+        "engineer",
+        workspace=Workspace(tmp_path / "recovery-gate-source-worktrees"),
+        branch="feature/recovery-gate-failure",
+        dispatch_fn=make_writing_dispatch(filename="preserved.txt", completed=False),
+        verify_cmd=["true"],
+    )
+    assert preserved.outcome == "not-completed" and preserved.resume is not None
+    checkpoint = gitops.ref_sha(canonical, preserved.branch)
+    if rejection == "gate":
+        _install_pre_push_hook(
+            canonical,
+            "printf 'pre-push: complete gate failed during recovery\\n' >&2\nexit 1",
+        )
+    else:
+        receive = origin / "hooks" / "pre-receive"
+        receive.write_text("#!/bin/sh\nprintf 'remote denied\\n' >&2\nexit 1\n", encoding="utf-8")
+        receive.chmod(0o755)
+
+    recovered = recover_repo(
+        canonical,
+        preserved.branch,
+        workspace_root=tmp_path / "recovery-gate-failure-worktrees",
+        verify_cmd=["true"],
+    )
+
+    assert recovered.outcome == expected_outcome
+    assert expected_detail in recovered.detail
+    assert gitops.is_ancestor(canonical, checkpoint, preserved.branch)
+    assert not _has_file(origin, "main", "preserved.txt")
+
+
+@pytest.mark.parametrize(
     ("failure", "expected_outcome"),
-    [("conflict", "sync-conflict"), ("gate", "gate-failed")],
+    [("conflict", "sync-conflict"), ("gate", "pr-open")],
 )
 def test_remote_stacked_recovery_failures_preserve_synthetic_base(
     tmp_path, bare_origin, failure: str, expected_outcome: str
@@ -3047,58 +3202,6 @@ def test_cooperative_real_dispatch_cancellation_preserves_and_recovers_branch(
     assert _has_file(origin, "main", "CHANGE.txt")
 
 
-def test_cancellation_during_verification_preserves_before_publication(
-    tmp_path, bare_origin, command_base, personas_dir
-) -> None:
-    origin = bare_origin()
-    canonical = gitops.clone(origin, tmp_path / "canonical-verification-cancel")
-    Registry().register(str(canonical), workflow="local", repo_type="single-owner")
-    cancel = threading.Event()
-    gate_started = tmp_path / "verification.started"
-    branch = "feature/verification-cancel"
-    gate = [
-        "sh",
-        "-c",
-        f"touch {shlex.quote(str(gate_started))}; sleep 1; test -f CHANGE.txt",
-    ]
-
-    with ThreadPoolExecutor(max_workers=1) as pool:
-        future = pool.submit(
-            run_repo_task,
-            str(canonical),
-            "complete-now write-change",
-            "engineer",
-            workspace=Workspace(tmp_path / "verification-cancel-worktrees"),
-            base_path=command_base(),
-            persona_dir=personas_dir,
-            branch=branch,
-            verify_cmd=gate,
-            cancel=cancel,
-        )
-        deadline = e2e_deadline(15)
-        while time.monotonic() < deadline and not gate_started.exists():
-            time.sleep(0.02)
-        assert gate_started.exists()
-        cancel.set()
-        result = future.result(timeout=e2e_timeout(15))
-
-    assert result.outcome == "not-completed"
-    assert result.detail.startswith("cancelled cooperatively after verification")
-    assert isinstance(result.resume, Resume)
-    assert result.resume.checkpoint == gitops.ref_sha(canonical, branch)
-    assert incomplete_commits(canonical, "origin/main", branch)
-    assert not _has_file(origin, "main", "CHANGE.txt")
-
-    recovered = recover_repo(
-        canonical,
-        branch,
-        workspace_root=tmp_path / "verification-cancel-recovery",
-        verify_cmd=["test", "-f", "CHANGE.txt"],
-    )
-    assert recovered.ok and recovered.outcome == "merged"
-    assert _has_file(origin, "main", "CHANGE.txt")
-
-
 def test_cancellation_after_publication_starts_finishes_authoritatively(
     tmp_path, bare_origin, command_base, personas_dir
 ) -> None:
@@ -3280,7 +3383,13 @@ def test_real_lifecycle_outcomes_round_trip_through_telemetry_cli(tmp_path, bare
         )
         return result
 
-    run_recorded("gate", origin=bare_origin(), verify_cmd=["false"])
+    gate_origin = bare_origin()
+    gate_workspace = _workspace(tmp_path / "gate-workspace", gate_origin)
+    _install_pre_push_hook(
+        gate_workspace.clone_dir(normalize_repo(str(gate_origin))),
+        "printf 'pre-push gate failed\\n' >&2\nexit 1",
+    )
+    run_recorded("gate", origin=gate_origin, workspace=gate_workspace)
     checks_origin = bare_origin()
     run_recorded(
         "checks",
@@ -3333,7 +3442,7 @@ def test_real_lifecycle_outcomes_round_trip_through_telemetry_cli(tmp_path, bare
         verify_cmd=["false"],
     )
     assert reused.retry_lineage is not None
-    assert reused.retry_lineage.disposition == "reused"
+    assert reused.retry_lineage.disposition == "recovered"
 
     abandoned_origin = bare_origin()
     abandoned_workspace = _workspace(tmp_path / "abandoned-workspace", abandoned_origin)
@@ -3381,10 +3490,10 @@ def test_real_lifecycle_outcomes_round_trip_through_telemetry_cli(tmp_path, bare
         "checks": "checks",
         "timeout": "timeout",
         "publication": "publication",
-        "reused": "gate",
     }
     assert payload["metrics"]["no_diff_dispatches"] == 1
-    assert payload["metrics"]["retry_branch_reuses"] == 1
+    assert payload["metrics"]["retry_branch_reuses"] == 0
+    assert payload["metrics"]["recovered_branches"] == 1
     assert payload["metrics"]["abandoned_branches"] == 1
 
 
@@ -3928,23 +4037,6 @@ def test_remote_human_workstream_draft_checkpoint_and_safe_resume(tmp_path, bare
     assert empty.pr is None and empty.resume.pr is None and github.created == []
     assert not _has_file(origin, empty.branch, "README.md")
 
-    failed_gate = run_repo_task(
-        "acme/widget",
-        workspace=workspace,
-        url=str(origin),
-        github=github,
-        steps=[
-            Step("prepare-bad", "engineer", "prepare a rejected checkpoint"),
-            Step("reject", task="Reject this checkpoint.", kind="human", deps=["prepare-bad"]),
-        ],
-        branch="feature/rejected-human-pause",
-        dispatch_fn=_per_step_dispatch(),
-        verify_cmd=["false"],
-    )
-    assert failed_gate.outcome == "gate-failed"
-    assert failed_gate.pr is None and failed_gate.resume is None and github.created == []
-    assert not _has_file(origin, failed_gate.branch, "prepare-bad.txt")
-
     dispatched: list[str] = []
     advanced_sha: str | None = None
 
@@ -4000,7 +4092,7 @@ def test_remote_human_workstream_draft_checkpoint_and_safe_resume(tmp_path, bare
     assert paused.pr is not None and paused.resume.pr == paused.pr.url
     assert github.created == [paused.pr.number] and github._prs[paused.pr.number].draft
     assert dispatched == ["prepare"]
-    assert gate_log.read_text(encoding="utf-8").splitlines() == ["gate"]
+    assert not gate_log.exists()
     assert paused.resume.checkpoint == _tip(origin, paused.branch)
     assert gitops.is_ancestor(canonical, advanced_sha, paused.resume.checkpoint)
     assert _tip(origin, "main") == advanced_sha
@@ -4025,7 +4117,7 @@ def test_remote_human_workstream_draft_checkpoint_and_safe_resume(tmp_path, bare
     assert github.created == [paused.pr.number] and github.reused == []
     assert github._prs[paused.pr.number].draft
     assert dispatched == ["prepare", "implement"]
-    assert gate_log.read_text(encoding="utf-8").splitlines() == ["gate", "gate"]
+    assert not gate_log.exists()
     assert gitops.is_ancestor(canonical, paused.resume.checkpoint, second.resume.checkpoint)
     assert second.resume.checkpoint == _tip(origin, second.branch)
 
@@ -4132,7 +4224,7 @@ def test_remote_human_workstream_draft_checkpoint_and_safe_resume(tmp_path, bare
     assert github.readied == [paused.pr.number]
     assert not github._prs[paused.pr.number].draft
     assert dispatched == ["prepare", "implement", "finalize"]
-    assert gate_log.read_text(encoding="utf-8").splitlines() == ["gate", "gate", "gate"]
+    assert not gate_log.exists()
     assert gitops.is_ancestor(canonical, second.resume.checkpoint, _tip(origin, completed.branch))
     assert _has_file(origin, "main", "prepare.txt")
     assert _has_file(origin, "main", "implement.txt")
@@ -4814,7 +4906,7 @@ def test_local_human_workstream_removes_worktree_and_resumes_same_branch(
     assert [step.status for step in completed.steps] == ["done", "done", "done"]
     assert _has_file(origin, "main", "prepare.txt")
     assert _has_file(origin, "main", "finalize.txt")
-    assert gate_log.read_text(encoding="utf-8").splitlines() == ["gate", "gate"]
+    assert not gate_log.exists()
     final_worktrees = subprocess.run(
         ["git", "-C", str(clone), "worktree", "list", "--porcelain"],
         check=True,
@@ -4916,6 +5008,10 @@ def test_workstream_step_failure_stops_and_skips_dependents(tmp_path, bare_origi
 def test_multi_pr_failure_skips_dependents(tmp_path, bare_origin) -> None:
     repo_x = bare_origin()
     ws = _workspace(tmp_path, repo_x)
+    _install_pre_push_hook(
+        ws.clone_dir(normalize_repo(str(repo_x))),
+        "if test -f a.txt; then printf 'pre-push gate failed\\n' >&2; exit 1; fi",
+    )
 
     def runner(node: RepoPlanNode, *, journal: NodeSink | None = None):
         # node 'a' fails its gate; 'b' depends on it and must be skipped.

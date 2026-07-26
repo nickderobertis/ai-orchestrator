@@ -188,11 +188,10 @@ def _integrate_locked(
             if refresh:
                 results.append(BranchResult(branch, "updated"))
                 continue
-            if not run_gate(
-                worktree,
-                gate_command,
-                env=comparison_env,
-            ).ok:
+            # A pushed train is verified once as the aggregate final tree by the
+            # repository's pre-push hook. Keep the explicit gate for local-only
+            # integration, where no push hook or required PR check will run.
+            if not push and not run_gate(worktree, gate_command, env=comparison_env).ok:
                 results.append(BranchResult(branch, "skipped", "gate-failed"))
                 continue
             try:
