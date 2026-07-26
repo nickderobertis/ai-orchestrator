@@ -11,12 +11,12 @@ script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 repo_root=$(dirname -- "$script_dir")
 llmlint_config="$repo_root/oneharness.llmlint.toml"
 if [ ! -f "$llmlint_config" ] || [ ! -r "$llmlint_config" ]; then
-    echo "llmlint oneharness wrapper: required config is not a readable regular file: $llmlint_config" >&2
+    echo "llmlint oneharness wrapper: required config is not a readable regular file: $llmlint_config; restore it from the repository or run 'just bootstrap', then retry" >&2
     exit 2
 fi
 
 if (( $# == 0 )); then
-    echo "llmlint oneharness wrapper: expected oneharness arguments" >&2
+    echo "llmlint oneharness wrapper: expected oneharness arguments; invoke through 'just lint-llm' or pass 'run ...'" >&2
     exit 2
 fi
 if (( $# == 1 )) && [[ $1 == --version ]]; then
