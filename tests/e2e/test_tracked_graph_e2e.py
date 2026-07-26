@@ -126,7 +126,7 @@ def test_direct_human_pause_attestation_and_release_use_real_onejudge(
 
     assert paused.returncode == 1, paused.stderr
     first = json.loads(paused.stdout)
-    assert first["schema_version"] == 4 and first["round"] == 1
+    assert first["schema_version"] == 5 and first["round"] == 1
     assert first["ok"] is False and first["state"] == "waiting"
     assert first["started_order"] == ["prepare", "approve"]
     assert first["results"]["prepare"]["status"] == "done"
@@ -1623,6 +1623,29 @@ def test_real_cli_recovers_waiting_and_no_change_lifecycle_results(
     process.wait()
     provider_release.write_text("release\n", encoding="utf-8")
 
+    original_events = events_path.read_text()
+    invalid_results = (
+        ("outcome", ["waiting-human"], "invalid outcome ['waiting-human']"),
+        ("deferred_cleanup", "not-a-list", "invalid deferred_cleanup"),
+    )
+    for field, value, expected_error in invalid_results:
+        interrupted_records = [json.loads(line) for line in original_events.splitlines()]
+        for event in interrupted_records:
+            if event["kind"] == "node-settled" and event.get("node") == "waiting-lifecycle":
+                event["detail"]["result"][field] = value
+                break
+        # llmlint: ignore[tests_mirror_real_usage] corruption fixture for real CLI recovery
+        events_path.write_text(
+            "".join(f"{json.dumps(event)}\n" for event in interrupted_records),
+            encoding="utf-8",
+        )
+        invalid_recovery = subprocess.run(
+            [*command, "--recover"], cwd=REPO_ROOT, text=True, capture_output=True, check=False
+        )
+        assert invalid_recovery.returncode == 1
+        assert expected_error in invalid_recovery.stderr
+        events_path.write_text(original_events, encoding="utf-8")
+
     recovered = subprocess.run(
         [*command, "--recover"], cwd=REPO_ROOT, text=True, capture_output=True, check=False
     )
@@ -1973,7 +1996,7 @@ def test_legacy_direct_plan_and_recorded_ledger_still_run(
     )
     assert direct.returncode == 0, direct.stderr
     direct_payload = json.loads(direct.stdout)
-    assert direct_payload["schema_version"] == 4 and "round" not in direct_payload
+    assert direct_payload["schema_version"] == 5 and "round" not in direct_payload
     assert direct_payload["state"] == "complete"
     assert direct_payload["results"]["legacy-agent"]["status"] == "done"
 
