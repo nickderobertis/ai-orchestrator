@@ -20,7 +20,11 @@ WRAPPER = REPO_ROOT / "scripts" / "oneharness-agent.sh"
 
 
 def _run_wrapper(
-    tmp_path: Path, argv: list[str], *, alternate_config_dir: Path | None = None
+    tmp_path: Path,
+    argv: list[str],
+    *,
+    alternate_config_dir: Path | None = None,
+    include_home: bool = True,
 ) -> tuple[subprocess.CompletedProcess[str], list[str]]:
     """Run the wrapper with a stub ``oneharness`` on PATH; return (proc, recorded argv)."""
     bin_dir = tmp_path / "bin"
@@ -44,7 +48,7 @@ def _run_wrapper(
             "ONEHARNESS_ARGS_FILE": str(args_file),
             "ONEHARNESS_ENV_FILE": str(tmp_path / "oneharness-env"),
             "ONEHARNESS_SELECTION_FILE": str(tmp_path / "oneharness-selection"),
-            "HOME": str(tmp_path / "home"),
+            **({"HOME": str(tmp_path / "home")} if include_home else {}),
             **(
                 {"ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR": str(alternate_config_dir)}
                 if alternate_config_dir is not None
@@ -82,6 +86,19 @@ def test_agent_side_preserves_explicit_alternate_config_dir(tmp_path: Path) -> N
     assert proc.returncode == 0, proc.stderr
     assert (tmp_path / "oneharness-env").read_text(encoding="utf-8").strip() == str(explicit)
     assert not (tmp_path / "oneharness-selection").read_text(encoding="utf-8").strip()
+
+
+def test_explicit_alternate_config_dir_does_not_require_home(tmp_path: Path) -> None:
+    explicit = tmp_path / "second-account"
+    explicit.mkdir()
+    proc, _ = _run_wrapper(
+        tmp_path,
+        ["run", "--compact", "--prompt", "probe"],
+        alternate_config_dir=explicit,
+        include_home=False,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert (tmp_path / "oneharness-env").read_text(encoding="utf-8").strip() == str(explicit)
 
 
 def test_agent_side_rejects_existing_non_directory_alternate_config(tmp_path: Path) -> None:
