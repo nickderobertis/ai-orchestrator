@@ -86,14 +86,20 @@ def literal_values(path: Path, name: str) -> list[str]:
         and node.targets[0].id == name
     ]
     if len(declarations) != 1:
-        fail(f"{path.name} must declare exactly one {name}")
+        fail(
+            f"{path.name} must declare exactly one {name}; restore one authoritative "
+            f"`{name} = Literal[...]` assignment and remove duplicates"
+        )
     annotation = declarations[0]
     if not (
         isinstance(annotation, ast.Subscript)
         and isinstance(annotation.value, ast.Name)
         and annotation.value.id == "Literal"
     ):
-        fail(f"{path.name} {name} must remain a string Literal")
+        fail(
+            f"{path.name} {name} must remain a string Literal; replace its value "
+            f'with `{name} = Literal["role", ...]`'
+        )
     elements = annotation.slice.elts if isinstance(annotation.slice, ast.Tuple) else []
     values = [
         item.value
@@ -101,7 +107,10 @@ def literal_values(path: Path, name: str) -> list[str]:
         if isinstance(item, ast.Constant) and isinstance(item.value, str)
     ]
     if len(values) != len(elements) or not values or len(values) != len(set(values)):
-        fail(f"{path.name} {name} must contain unique string values")
+        fail(
+            f"{path.name} {name} must contain unique string values; remove duplicates "
+            "and replace non-string entries before retrying"
+        )
     return values
 
 
@@ -119,7 +128,10 @@ def typescript_agent_roles(path: Path) -> list[str]:
         flags=re.DOTALL,
     )
     if len(matches) != 1:
-        fail("packages/dag-model/src/index.ts must declare exactly one agentRoleSchema")
+        fail(
+            "packages/dag-model/src/index.ts must declare exactly one agentRoleSchema; "
+            "restore one exported `z.enum([...])` declaration and remove duplicates"
+        )
     return re.findall(r'"([^"]+)"', matches[0])
 
 
@@ -133,7 +145,10 @@ def documented_agent_roles(path: Path) -> list[str]:
         )
     matches = re.findall(r"type AgentRole =\n(.*?);", source, flags=re.DOTALL)
     if len(matches) != 1:
-        fail("docs/dag-ui/design.md must declare exactly one AgentRole union")
+        fail(
+            "docs/dag-ui/design.md must declare exactly one AgentRole union; restore "
+            "one `type AgentRole = ...;` block and remove duplicates"
+        )
     return re.findall(r'"([^"]+)"', matches[0])
 
 
