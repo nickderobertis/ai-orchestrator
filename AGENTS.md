@@ -288,11 +288,12 @@ An active lifecycle makes third-party cleanup skip without waiting; PID-proven
 dead watchdog cleanup still proceeds.
 
 `just smoke` spends exactly one real agent-harness turn in a throwaway directory
-and verifies exact prompt delivery plus a complete native oneharness history
-record. It is deliberately outside `just gate`. The pre-push hook runs it only
-when the pushed diff touches `scripts/`, `config/oneharness.version`,
-`config/onejudge.base.yaml`, `oneharness.toml`, or `oneharness.judge.toml`;
-ordinary pushes consume no harness quota.
+and verifies exact prompt delivery plus a successful, fully accounted oneharness
+history record. Native per-phase timing is provider-optional, so its absence is a
+telemetry-quality signal rather than a launch failure. It is deliberately outside
+`just gate`. The pre-push hook runs it only when the pushed diff touches `scripts/`,
+`config/oneharness.version`, `config/onejudge.base.yaml`, `oneharness.toml`, or
+`oneharness.judge.toml`; ordinary pushes consume no harness quota.
 
 A dispatched change is not done until `just gate` is green. Its agent clears its
 own llmlint findings—by fixing them, adding a justified `ignore-file`, or disabling

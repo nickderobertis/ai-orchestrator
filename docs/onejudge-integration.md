@@ -184,9 +184,22 @@ prompt through the real `scripts/oneharness-agent.sh` heartbeat branch to the
 fallback-selected real harness, using a temporary target and history store. The
 command requires exactly one agent turn, then checks that the stored prompt is
 non-empty and byte-for-byte equal to the dispatched task and that the selected
-harness wrote a successful record with complete native telemetry. Its quota cost
-is therefore one real harness invocation; the provider may leave dollar cost
-unreported (Codex did so in the observed smoke). It is not part of `just gate`.
+harness wrote a record satisfying the launch contract: a supported schema, a named
+harness, a successful status and exit, a measured duration, and well-formed input
+and output token counts.
+
+Native per-phase telemetry is deliberately *not* required. oneharness normalizes
+whatever each harness reports and leaves the rest unset, and neither shipped
+harness reports all of it: codex records `started_at`/`model_ms`/`tool_ms` but
+prices nothing and reports no cache-write count, while claude-code prices its turn
+but records only a measured duration, with `started_at` absent and `finished_at`
+null. Requiring `validated_native_fields` here failed every healthy claude-code
+dispatch, so native-timing completeness stays a telemetry-*quality* signal and the
+launch guard checks only what a launch must produce.
+Counters and timings that *are* present are still validated, so a malformed or
+contradictory record still fails. Its quota cost is one real harness invocation;
+the provider may leave dollar cost unreported (Codex does). It is not part of
+`just gate`.
 Pre-push runs it only when the pushed endpoint diff touches `scripts/`,
 `config/oneharness.version`, `config/onejudge.base.yaml`, `oneharness.toml`, or
 `oneharness.judge.toml`; every other pushed diff skips it.
