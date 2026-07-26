@@ -793,12 +793,14 @@ print(json.dumps({
         "ONEHARNESS_HISTORY": "false",
     }
 
+    command = (
+        [str(REPO_ROOT / "scripts" / "oneharness-agent.sh"), "run"]
+        if config_name == "oneharness.toml"
+        else [oneharness_bin, "run", "--config", str(REPO_ROOT / config_name)]
+    )
     result = subprocess.run(
         [
-            oneharness_bin,
-            "run",
-            "--config",
-            str(REPO_ROOT / config_name),
+            *command,
             "--harness",
             harness_id,
             "--bin",
@@ -993,6 +995,60 @@ print(json.dumps({
     assert [item["harness_id"] for item in report["results"]] == ["codex"]
     assert report["results"][0]["status"] == "ok"
     assert report["results"][0]["text"] == "wrapper fallback recovered"
+
+
+@pytest.mark.parametrize(
+    ("recipe_args", "expected_args"),
+    [
+        (["lint-llm", "AGENTS.md"], ["AGENTS.md"]),
+        (
+            ["lint-llm-diff", "comparison-base"],
+            ["--diff", "--diff-base", "comparison-base"],
+        ),
+    ],
+)
+def test_just_llmlint_recipes_pin_the_dedicated_harness_boundary(
+    tmp_path: Path, recipe_args: list[str], expected_args: list[str]
+) -> None:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    record = tmp_path / "llmlint-record.json"
+    fake_llmlint = bin_dir / "llmlint"
+    fake_llmlint.write_text(
+        """#!/usr/bin/env python3
+import json
+import os
+import sys
+
+with open(os.environ["LLMLINT_RECORD"], "w", encoding="utf-8") as stream:
+    json.dump({
+        "argv": sys.argv[1:],
+        "bin": os.environ.get("LLMLINT_ONEHARNESS_BIN"),
+        "labels": os.environ["ONEHARNESS_HISTORY_LABELS"],
+    }, stream)
+""",
+        encoding="utf-8",
+    )
+    fake_llmlint.chmod(0o755)
+
+    result = subprocess.run(
+        ["just", *recipe_args],
+        cwd=REPO_ROOT,
+        env={
+            **os.environ,
+            "PATH": f"{bin_dir}:{os.environ['PATH']}",
+            "LLMLINT_RECORD": str(record),
+        },
+        text=True,
+        capture_output=True,
+        timeout=60,
+    )
+
+    assert result.returncode == 0, result.stderr
+    observed = json.loads(record.read_text(encoding="utf-8"))
+    assert observed["argv"] == expected_args
+    assert observed["bin"] == str(REPO_ROOT / "scripts" / "llmlint-oneharness.sh")
+    assert "role=llmlint" in observed["labels"].split(",")
 
 
 def test_run_onejudge_config_error_raises(onejudge_bin) -> None:

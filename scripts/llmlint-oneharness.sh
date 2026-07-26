@@ -9,6 +9,11 @@ fi
 
 script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 repo_root=$(dirname -- "$script_dir")
+llmlint_config="$repo_root/oneharness.llmlint.toml"
+if [ ! -f "$llmlint_config" ] || [ ! -r "$llmlint_config" ]; then
+    echo "llmlint oneharness wrapper: required config is not a readable regular file: $llmlint_config" >&2
+    exit 2
+fi
 
 if (( $# == 0 )); then
     echo "llmlint oneharness wrapper: expected oneharness arguments" >&2
@@ -43,7 +48,7 @@ if [[ $read_only == true ]]; then
     args+=(-- -c 'sandbox_permissions=["disk-full-read-access","network-full-access"]')
 fi
 
-if oneharness "${args[@]:0:1}" --config "$repo_root/oneharness.llmlint.toml" "${args[@]:1}"; then
+if oneharness "${args[@]:0:1}" --config "$llmlint_config" "${args[@]:1}"; then
     exit 0
 else
     status=$?

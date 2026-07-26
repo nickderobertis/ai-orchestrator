@@ -200,3 +200,30 @@ def test_missing_oneharness_reports_recovery_action(tmp_path: Path) -> None:
     assert proc.returncode == 127
     assert "required 'oneharness' executable was not found" in proc.stderr
     assert "run 'just bootstrap'" in proc.stderr
+
+
+def test_missing_dedicated_config_is_rejected_before_invoking_oneharness(
+    tmp_path: Path,
+) -> None:
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    copied_wrapper = scripts / WRAPPER.name
+    copied_wrapper.write_bytes(WRAPPER.read_bytes())
+    copied_wrapper.chmod(0o755)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    marker = tmp_path / "invoked"
+    oneharness = bin_dir / "oneharness"
+    oneharness.write_text(f"#!/bin/sh\ntouch {marker}\n", encoding="utf-8")
+    oneharness.chmod(0o755)
+
+    proc = subprocess.run(
+        [copied_wrapper, "run", "--mode", "read-only"],
+        text=True,
+        capture_output=True,
+        env={**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}"},
+    )
+
+    assert proc.returncode == 2
+    assert "required config is not a readable regular file" in proc.stderr
+    assert not marker.exists()
