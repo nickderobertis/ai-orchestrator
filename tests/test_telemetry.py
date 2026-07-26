@@ -415,7 +415,8 @@ def test_native_timing_usage_tools_and_breakdown_are_role_and_node_scoped(
     breakdown = capsys.readouterr().out
     assert "WORKER" in breakdown and "LLMLINT" in breakdown and "TURNS LINT" in breakdown
     run_row = next(line for line in breakdown.splitlines() if line.startswith("observed"))
-    assert "   12" in run_row and "    8" in run_row and "    9" in run_row and "    5" in run_row
+    for field in ("agent_model_ms", "judge_model_ms", "llmlint_model_ms", "tool_ms"):
+        assert f"{record['timing'][field]:5}" in run_row
     assert "?" not in run_row
     assert "Turn histogram: 2=1" in breakdown
 
@@ -562,16 +563,39 @@ def test_history_schema_1_2_distinguishes_observed_tool_timing(tmp_path: Path) -
         "usage": {},
         "events": [],
     }
-    provider = _summarize_session(session, [{**base, "timing_source": "provider"}])
-    observed = _summarize_session(session, [{**base, "timing_source": "observed"}])
+    provider = _summarize_session(session, [base])
+    observed = _summarize_session(
+        session,
+        [
+            {
+                **base,
+                "model_ms": None,
+                "tool_ms": None,
+                "observed_tool_ms": 2,
+                "started_at": None,
+                "finished_at": None,
+                "events": [
+                    {
+                        "kind": "tool_call",
+                        "tool_call_id": "call-1",
+                        "started_at": "2026-01-01T00:00:00Z",
+                        "finished_at": "2026-01-01T00:00:00.002Z",
+                        "duration_ms": 2,
+                        "status": "completed",
+                        "timing_source": "stdout_observed",
+                    }
+                ],
+            }
+        ],
+    )
 
     assert provider.validated_native_fields
     assert observed.tool_ms == 2
     assert observed.has_tool_measurement
     assert not observed.validated_native_fields
 
-    with pytest.raises(telemetry_module.HistoryError, match="timing_source"):
-        _summarize_session(session, [{**base, "timing_source": "invented"}])
+    with pytest.raises(telemetry_module.HistoryError, match="observed timing"):
+        _summarize_session(session, [{**base, "observed_tool_ms": 2}])
 
 
 def test_report_telemetry_validates_linkage_usage_and_step_aggregation(tmp_path: Path) -> None:

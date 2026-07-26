@@ -567,20 +567,15 @@ def _summarize_session(session: HistorySession, records: list[HistoryRecord]) ->
     tool_intervals: list[_Interval] = []
     for record in records:
         schema_version = record.get("schema_version")
-        record_timing_source = record.get("timing_source")
         if (
             schema_version not in NATIVE_TIMING_HISTORY_SCHEMAS
             or schema_version not in SUPPORTED_HISTORY_SCHEMA_VERSIONS
-            or record_timing_source == "observed"
         ):
             validated_native_fields = False
-        if record_timing_source is not None and record_timing_source not in {
-            "provider",
-            "observed",
-        }:
-            raise HistoryError("oneharness history record has invalid timing_source")
         model = _non_negative_int(record.get("model_ms"))
         tool = _non_negative_int(record.get("tool_ms"))
+        raw_observed_tool = record.get("observed_tool_ms")
+        observed_tool = _non_negative_int(raw_observed_tool)
         raw_duration = record.get("duration_ms")
         duration = _non_negative_int(raw_duration)
         raw_start = record.get("started_at")
@@ -592,6 +587,7 @@ def _summarize_session(session: HistorySession, records: list[HistoryRecord]) ->
                 ("duration_ms", raw_duration, duration),
                 ("model_ms", record.get("model_ms"), model),
                 ("tool_ms", record.get("tool_ms"), tool),
+                ("observed_tool_ms", raw_observed_tool, observed_tool),
                 ("started_at", raw_start, start_at),
                 ("finished_at", raw_finish, finish_at),
             ):
@@ -599,6 +595,10 @@ def _summarize_session(session: HistorySession, records: list[HistoryRecord]) ->
                     raise HistoryError(
                         f"oneharness history record has invalid present field {timing_field}"
                     )
+            if observed_tool is not None and (
+                schema_version != "1.2" or model is not None or tool is not None
+            ):
+                raise HistoryError("oneharness history record has invalid observed timing")
             if (
                 start_at is not None
                 and finish_at is not None
@@ -617,9 +617,14 @@ def _summarize_session(session: HistorySession, records: list[HistoryRecord]) ->
             or finish_at is None
         ):
             validated_native_fields = False
-        if model is not None and tool is not None:
+        if observed_tool is not None:
+            validated_native_fields = False
+        if model is not None:
             model_ms += round(model)
+        if tool is not None:
             tool_ms += round(tool)
+        elif observed_tool is not None:
+            tool_ms += round(observed_tool)
         events = record.get("events")
         if not isinstance(events, list):
             continue
@@ -636,7 +641,7 @@ def _summarize_session(session: HistorySession, records: list[HistoryRecord]) ->
             raw_duration = event.get("duration_ms")
             event_duration = _non_negative_int(event.get("duration_ms"))
             raw_status = event.get("status")
-            timing_source = event.get("timing_source", record_timing_source)
+            timing_source = event.get("timing_source")
             if schema_version is not None and (
                 raw_tool_call_id is not None
                 and (not isinstance(raw_tool_call_id, str) or not raw_tool_call_id)
@@ -649,13 +654,13 @@ def _summarize_session(session: HistorySession, records: list[HistoryRecord]) ->
                 or raw_status is not None
                 and raw_status not in {"completed", "failed", "timeout", "interrupted"}
                 or timing_source is not None
-                and timing_source not in {"provider", "observed"}
+                and timing_source not in {"provider_measured", "stdout_observed"}
                 or event_start is not None
                 and event_finish is not None
                 and event_finish < event_start
             ):
                 raise HistoryError("oneharness history record has invalid tool event")
-            if timing_source == "observed":
+            if timing_source == "stdout_observed":
                 validated_native_fields = False
             if schema_version in NATIVE_TIMING_HISTORY_SCHEMAS and (
                 raw_tool_call_id is None
@@ -672,7 +677,7 @@ def _summarize_session(session: HistorySession, records: list[HistoryRecord]) ->
                         round(event_finish.timestamp() * 1000),
                     )
                 )
-            if tool is None and event_duration is not None:
+            if tool is None and observed_tool is None and event_duration is not None:
                 tool_ms += event_duration
             if event.get("name") not in {"command_execution", "bash"}:
                 continue
@@ -704,7 +709,9 @@ def _summarize_session(session: HistorySession, records: list[HistoryRecord]) ->
             _non_negative_int(record.get("model_ms")) is not None for record in records
         ),
         has_tool_measurement=any(
-            _non_negative_int(record.get("tool_ms")) is not None for record in records
+            _non_negative_int(record.get("tool_ms")) is not None
+            or _non_negative_int(record.get("observed_tool_ms")) is not None
+            for record in records
         )
         or bool(tool_intervals),
         tool_intervals=tool_intervals,

@@ -83,9 +83,9 @@ to `labels.role` (then recognized legacy judge names), and missing timed fields
 fall back to journal wall time. Untimed `command_execution` events still identify
 the dominant command class, but do not invent a duration: model and tool time
 render as `?` and the unknown share appears in `UNATTR`. History schemas `1.1`
-and `1.2` are recognized. Schema `1.2` timing marked `timing_source: observed`
-remains visible but makes timing quality `partial`; only
-`timing_source: provider` can contribute to `complete` provider-native timing.
+and `1.2` are recognized. Schema `1.2` `observed_tool_ms` and tool events marked
+`timing_source: stdout_observed` remain visible but make timing quality `partial`;
+only provider-measured timing can contribute to `complete`.
 Records from a newer, unrecognized history schema are also read best-effort and
 marked degraded.
 Missing or null run timing and tool-event timing/status degrade only the affected
