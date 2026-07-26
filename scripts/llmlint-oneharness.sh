@@ -23,7 +23,7 @@ if (( $# == 1 )) && [[ $1 == --version ]]; then
     exec oneharness --version
 fi
 if [[ $1 != run ]]; then
-    echo "llmlint oneharness wrapper: expected the 'run' subcommand" >&2
+    echo "llmlint oneharness wrapper: expected the 'run' subcommand; invoke through 'just lint-llm' or retry with 'run ...'" >&2
     exit 2
 fi
 

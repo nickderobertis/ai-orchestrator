@@ -20,7 +20,7 @@ agent_config="$repo_root/oneharness.toml"
 export ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR="$alternate_config_dir"
 
 if [ "${1-}" != "run" ]; then
-    echo "oneharness-agent: expected the 'run' subcommand" >&2
+    echo "oneharness-agent: expected the 'run' subcommand; invoke through onejudge dispatch or retry as 'scripts/oneharness-agent.sh run ...'" >&2
     exit 2
 fi
 shift
@@ -30,7 +30,7 @@ expect_config_value=false
 for arg in "$@"; do
     if [[ $expect_config_value == true ]]; then
         if [[ -z $arg ]]; then
-            echo "oneharness-agent: --config requires a non-empty path" >&2
+            echo "oneharness-agent: --config requires a non-empty path; retry with '--config /absolute/path/to/config.toml'" >&2
             exit 2
         fi
         expect_config_value=false
@@ -43,7 +43,7 @@ for arg in "$@"; do
             ;;
         --config=*)
             if [[ -z ${arg#--config=} ]]; then
-                echo "oneharness-agent: --config requires a non-empty path" >&2
+                echo "oneharness-agent: --config requires a non-empty path; retry with '--config=/absolute/path/to/config.toml'" >&2
                 exit 2
             fi
             caller_config=true
@@ -51,7 +51,7 @@ for arg in "$@"; do
     esac
 done
 if [[ $expect_config_value == true ]]; then
-    echo "oneharness-agent: --config requires a path" >&2
+    echo "oneharness-agent: --config requires a path; retry with '--config /absolute/path/to/config.toml'" >&2
     exit 2
 fi
 if [[ $caller_config == true ]]; then
