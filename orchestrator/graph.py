@@ -41,6 +41,7 @@ from .journal import (
     TERMINAL_NODE_RESULT_FIELD,
     Event,
     EventKind,
+    JournalOperation,
     JournalSink,
     NodeJournal,
     NullJournal,
@@ -1178,7 +1179,7 @@ def main(argv: list[str] | None = None) -> int:
         for start in range(0, len(missing_definitions), journal_batch_size):
             journal.append_batch(
                 [
-                    ("node-added", {"definition": definition})
+                    JournalOperation("node-added", {"definition": definition})
                     for definition in missing_definitions[start : start + journal_batch_size]
                 ]
             )
@@ -1198,7 +1199,10 @@ def main(argv: list[str] | None = None) -> int:
         missing_edges = expected_edges[len(recorded_edges) :]
         for start in range(0, len(missing_edges), journal_batch_size):
             journal.append_batch(
-                [("edge-added", edge) for edge in missing_edges[start : start + journal_batch_size]]
+                [
+                    JournalOperation("edge-added", edge)
+                    for edge in missing_edges[start : start + journal_batch_size]
+                ]
             )
         existing_kinds = {event.kind for event in round_events}
         if args.recover and "round-started" in existing_kinds:

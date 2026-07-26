@@ -18,6 +18,7 @@ from orchestrator.journal import (
     Event,
     EventKind,
     JournalError,
+    JournalOperation,
     NodeJournal,
     NullJournal,
     NullNodeJournal,
@@ -70,9 +71,9 @@ def test_batch_append_keeps_individual_records_and_reconciles_a_torn_tail(
     journal = open_journal(run_dir, RunId("batched"), 1)
     appended = journal.append_batch(
         [
-            ("node-added", {"definition": {"id": "a"}}),
-            ("node-added", {"definition": {"id": "b"}}),
-            ("edge-added", {"from": "a", "to": "b"}),
+            JournalOperation("node-added", {"definition": {"id": "a"}}),
+            JournalOperation("node-added", {"definition": {"id": "b"}}),
+            JournalOperation("edge-added", {"from": "a", "to": "b"}),
         ]
     )
     path = run_dir / "events.jsonl"

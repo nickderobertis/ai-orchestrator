@@ -239,6 +239,14 @@ class Event:
         return record
 
 
+@dataclass(frozen=True)
+class JournalOperation:
+    """One event kind and payload awaiting a batched durable append."""
+
+    kind: EventKind
+    detail: Detail
+
+
 class JournalSink(Protocol):
     """The append seam a journalled caller depends on.
 
@@ -455,11 +463,15 @@ class Journal:
         The record is built before the sequence advances, so an event that fails its
         contract raises without burning a sequence number the file will never hold.
         """
-        return self.append_batch([(kind, detail or {})], node=node, step=step)[0]
+        return self.append_batch(
+            [JournalOperation(kind=kind, detail=detail or {})],
+            node=node,
+            step=step,
+        )[0]
 
     def append_batch(
         self,
-        operations: Sequence[tuple[EventKind, Detail]],
+        operations: Sequence[JournalOperation],
         *,
         node: NodeId | None = None,
         step: StepId | None = None,
@@ -474,19 +486,19 @@ class Journal:
             raise JournalError("a journal batch requires at least one operation")
         with advisory_lock(self.lock_identity):
             events: list[Event] = []
-            for offset, (kind, detail) in enumerate(operations, start=1):
-                if kind not in EVENT_KINDS:
-                    raise JournalError(f"unknown journal event kind: {kind!r}")
+            for offset, operation in enumerate(operations, start=1):
+                if operation.kind not in EVENT_KINDS:
+                    raise JournalError(f"unknown journal event kind: {operation.kind!r}")
                 events.append(
                     Event(
-                        kind=kind,
+                        kind=operation.kind,
                         run_id=self.run_id,
                         round=self.round,
                         seq=self.seq + offset,
                         at=time.time(),
                         node=node,
                         step=step,
-                        detail=dict(detail),
+                        detail=dict(operation.detail),
                     )
                 )
             with self.path.open("a", encoding="utf-8") as handle:
