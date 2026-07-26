@@ -58,6 +58,14 @@ For self-dispatch safety, `--execution-checkout` likewise accepts a path or alia
 and cuts the task worktree from that exact clone while keeping `<repo>`'s publication
 workflow and post-merge fast-forward.
 
+Before resolving or cloning the target, lifecycle dispatch checks free space on
+the filesystem backing Python's temporary directory. It refuses to start below
+the conservative default in `orchestrator.scratch.DEFAULT_MIN_FREE_BYTES` and
+reports the scratch path, available bytes, and `just sweep-scratch`.
+Set `ORCHESTRATOR_MIN_FREE_BYTES` to a non-negative byte count when a host needs a
+different threshold. This preflight is a terminal infrastructure failure in a
+tracked graph, so it does not consume another round.
+
 ## Repository identity, checkout roles, and isolation
 
 `Workspace` (`orchestrator/workspace.py`) resolves two independent decisions through

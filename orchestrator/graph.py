@@ -98,6 +98,7 @@ from .runs import (
     validate_run_id,
     write_result,
 )
+from .scratch import sweep_scratch
 from .workspace import Workspace
 
 NodeKind = Literal["agent", "human"]
@@ -105,6 +106,12 @@ EXIT_BY_STATE = {"complete": 0, "waiting": 1, "failed": 1}
 DEFAULT_ROUND_BUDGET = 14_400.0
 
 _INFRASTRUCTURE_FAILURE_PATTERNS = (
+    re.compile(r"(?:\[Errno 28\]|ENOSPC|No space left on device)", re.IGNORECASE),
+    re.compile(
+        r"(?:OOMKilled|OOM[- ]kill|out of memory|Cannot allocate memory)",
+        re.IGNORECASE,
+    ),
+    re.compile(r"scratch filesystem .* below the .* dispatch threshold", re.IGNORECASE),
     re.compile(r"provider error.*\b(?:respond|supervisor)\b", re.IGNORECASE | re.DOTALL),
     re.compile(r"oneharness exited with signal:\s*9\b", re.IGNORECASE),
     re.compile(r"harness failed\s*\(\s*auth\s*\)", re.IGNORECASE),
@@ -1171,6 +1178,14 @@ def main(argv: list[str] | None = None) -> int:
     round_record: tuple[int, Path] | None = None
     if run_dir is not None:
         try:
+            try:
+                sweep_scratch()
+            except OSError as exc:
+                raise ConfigError(
+                    "scratch sweep failed before claiming the round: "
+                    f"{exc}; inspect with `just sweep-scratch --dry-run`, "
+                    "check path permissions, and retry"
+                ) from exc
             round_record = prepare_round(run_dir, plan_mapping, recover=args.recover)
         except ConfigError as exc:
             print(f"run-plan: could not claim run: {exc}", file=sys.stderr)

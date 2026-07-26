@@ -1700,6 +1700,9 @@ def test_repo_plan_alias_warns(monkeypatch, capsys) -> None:
         "harness failed (auth): login required",
         "harness claude-code cannot write v0.3 history telemetry",
         "could not write history: new history record lacks complete v0.3 telemetry",
+        "[Errno 28] No space left on device",
+        "worker was OOMKilled",
+        "scratch filesystem at /tmp has 1 bytes free, below the 5368709120-byte dispatch threshold",
     ],
 )
 def test_infrastructure_failure_classifier_recognizes_no_dispatch_errors(detail: str) -> None:
@@ -1718,3 +1721,34 @@ def test_infrastructure_failure_classifier_keeps_ambiguous_errors_retryable(
     detail: str,
 ) -> None:
     assert infrastructure_failure_detail(RuntimeError(detail)) is None
+
+
+def test_recorded_round_translates_scratch_sweep_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    plan = tmp_path / "plan.json"
+    plan.write_text(
+        json.dumps(
+            {
+                "schema_version": PLAN_SCHEMA_VERSION,
+                "name": "sweep-failure",
+                "tasks": [
+                    {
+                        "id": "no-diff",
+                        "task": "No dispatch.",
+                        "expects_no_diff": True,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "orchestrator.graph.sweep_scratch",
+        lambda: (_ for _ in ()).throw(PermissionError("denied")),
+    )
+
+    assert main([str(plan), "--run", "demo", "--runs-dir", str(tmp_path / "runs")]) == 2
+    error = capsys.readouterr().err
+    assert "scratch sweep failed before claiming the round" in error
+    assert "just sweep-scratch --dry-run" in error

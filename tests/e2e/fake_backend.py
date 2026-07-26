@@ -265,6 +265,12 @@ def main() -> int:
                 "infrastructure-v03-incomplete": (
                     "new history record lacks complete v0.3 telemetry"
                 ),
+                "infrastructure-enospc": "[Errno 28] No space left on device",
+                "infrastructure-oom": "worker was OOMKilled",
+                "infrastructure-preflight": (
+                    "scratch filesystem at /tmp has 1 bytes free, below the "
+                    "5368709120-byte dispatch threshold"
+                ),
             }
             infrastructure_error = next(
                 (

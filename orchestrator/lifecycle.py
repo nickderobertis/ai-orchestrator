@@ -83,6 +83,7 @@ from .runs import (
     status_summary,
     write_result,
 )
+from .scratch import require_scratch_capacity
 from .verify import NOOP_GATE, VerifyResult, resolve_gate_template, run_gate
 from .workspace import (
     CACHE_ENV,
@@ -1453,6 +1454,7 @@ def run_repo_task(
     belongs to no graph — and because observation must never decide an outcome.
     """
     log: NodeSink = journal if journal is not None else NullNodeJournal()
+    require_scratch_capacity()
     effective_steps = steps or (
         [Step("main", persona, task, max_turns=max_turns, done_when=done_when)]
         if persona and task
