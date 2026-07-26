@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, Query, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from .config import ConfigError
@@ -78,6 +79,11 @@ def create_app(
     """Build the read-only API bound to one runs root."""
     app = FastAPI(title="ai-orchestrator DAG read API", version="1")
     root = Path(runs_dir)
+
+    @app.exception_handler(RequestValidationError)
+    async def _on_invalid_query(_request: Request, _exc: RequestValidationError) -> JSONResponse:
+        """Return the contract error envelope for a malformed query/path parameter."""
+        return _error(422, "invalid_request", "invalid request parameters")
 
     @app.get("/healthz")
     async def healthz() -> dict[str, str]:

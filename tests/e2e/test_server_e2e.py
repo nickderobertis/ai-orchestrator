@@ -232,6 +232,11 @@ def test_read_api_serves_projection_telemetry_and_role_tagged_conversations(
         assert missing.status_code == 404
         assert missing.json()["error"]["code"] == "run_not_found"
 
+        # A malformed query parameter uses the same error envelope, not FastAPI's.
+        bad_query = client.get("/api/v1/runs", params={"include_settled": "maybe"})
+        assert bad_query.status_code == 422
+        assert bad_query.json()["error"]["code"] == "invalid_request"
+
 
 def test_events_stream_snapshots_then_invalidates_on_a_live_append(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
