@@ -49,6 +49,7 @@ from .merge import (
     MergePolicy,
     MergeStrategy,
     assess_blocking_checks,
+    classify_push_failure,
 )
 from .outcomes import (
     ALREADY_INTEGRATED_OUTCOME,
@@ -1221,13 +1222,12 @@ def _best_effort_cleanup(
 def _push_failure(exc: GitError, *, branch: str) -> MergeOutcome:
     """Turn a hook/transport rejection into a durable lifecycle outcome."""
     detail = str(exc)
-    gate_rejected = "pre-push" in detail.casefold() or "gate" in detail.casefold()
-    outcome: LifecycleOutcome = "gate-failed" if gate_rejected else "error"
+    outcome = classify_push_failure(exc)
     return MergeOutcome(
         outcome,
         (
             f"repository pre-push gate rejected publication of {branch!r}: {detail}"
-            if gate_rejected
+            if outcome == "gate-failed"
             else f"push of {branch!r} failed before publication completed: {detail}"
         ),
     )

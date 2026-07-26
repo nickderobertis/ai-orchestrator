@@ -2804,6 +2804,41 @@ def test_clean_committed_partial_work_is_marked_and_recoverable(tmp_path, bare_o
     assert _has_file(origin, "main", "partial.txt")
 
 
+def test_recovery_push_gate_failure_is_recorded_and_preserves_branch(tmp_path, bare_origin) -> None:
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-recovery-gate-failure")
+    Registry().register(str(canonical), workflow="local", repo_type="single-owner")
+
+    preserved = run_repo_task(
+        str(canonical),
+        "Preserve work for a recovery rejected by the merge-path gate.",
+        "engineer",
+        workspace=Workspace(tmp_path / "recovery-gate-source-worktrees"),
+        branch="feature/recovery-gate-failure",
+        dispatch_fn=make_writing_dispatch(filename="preserved.txt", completed=False),
+        verify_cmd=["true"],
+    )
+    assert preserved.outcome == "not-completed" and preserved.resume is not None
+    checkpoint = gitops.ref_sha(canonical, preserved.branch)
+    _install_pre_push_hook(
+        canonical,
+        "printf 'pre-push: complete gate failed during recovery\\n' >&2\nexit 1",
+    )
+
+    recovered = recover_repo(
+        canonical,
+        preserved.branch,
+        workspace_root=tmp_path / "recovery-gate-failure-worktrees",
+        verify_cmd=["true"],
+    )
+
+    assert recovered.outcome == "gate-failed"
+    assert "repository pre-push gate rejected recovery" in recovered.detail
+    assert "complete gate failed during recovery" in recovered.detail
+    assert gitops.is_ancestor(canonical, checkpoint, preserved.branch)
+    assert not _has_file(origin, "main", "preserved.txt")
+
+
 @pytest.mark.parametrize(
     ("failure", "expected_outcome"),
     [("conflict", "sync-conflict"), ("gate", "pr-open")],

@@ -49,10 +49,17 @@ __all__ = [
     "MergePolicy",
     "MergeStrategy",
     "assess_blocking_checks",
+    "classify_push_failure",
 ]
 
 MergePolicy = Literal["auto", "direct", "none"]
 MERGE_CONFLICT_RETRY: Literal["merge-conflict-retry"] = "merge-conflict-retry"
+
+
+def classify_push_failure(exc: gitops.GitError) -> LifecycleOutcome:
+    """Classify a push rejection using the diagnostics emitted by Git hooks."""
+    detail = str(exc).casefold()
+    return "gate-failed" if "pre-push" in detail or "gate" in detail else "error"
 
 
 @dataclass
@@ -342,16 +349,13 @@ class LocalMergeStrategy:
                     except gitops.GitError as exc:
                         if not _is_push_race(exc):
                             detail = str(exc)
-                            gate_rejected = (
-                                "pre-push" in detail.casefold() or "gate" in detail.casefold()
-                            )
-                            outcome: LifecycleOutcome = "gate-failed" if gate_rejected else "error"
+                            outcome = classify_push_failure(exc)
                             return MergeOutcome(
                                 outcome=outcome,
                                 detail=(
                                     "repository pre-push gate rejected the rebuilt local "
                                     f"publication: {detail}"
-                                    if gate_rejected
+                                    if outcome == "gate-failed"
                                     else "rebuilt local publication push failed: " + detail
                                 ),
                             )

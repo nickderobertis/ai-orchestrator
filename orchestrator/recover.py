@@ -30,6 +30,7 @@ from .merge import (
     MergeContext,
     MergeOutcome,
     MergePolicy,
+    classify_push_failure,
 )
 from .personas import persona_path
 from .provenance import (
@@ -167,7 +168,19 @@ def recover_repo(
                     worktree,
                     "chore: attest verified recovery of preserved work\n\n" + trailers,
                 )
-            gitops.push(worktree, branch)
+            try:
+                gitops.push(worktree, branch)
+            except gitops.GitError as exc:
+                outcome = classify_push_failure(exc)
+                detail = str(exc)
+                return MergeOutcome(
+                    outcome,
+                    (
+                        f"repository pre-push gate rejected recovery of {branch!r}: {detail}"
+                        if outcome == "gate-failed"
+                        else f"recovery push of {branch!r} failed: {detail}"
+                    ),
+                )
             return None
 
         def synchronize_attest_and_push_local_recovery() -> MergeOutcome | None:
