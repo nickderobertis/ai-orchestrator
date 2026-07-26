@@ -97,6 +97,19 @@ def test_agent_side_rejects_existing_non_directory_alternate_config(tmp_path: Pa
     assert argv == []
 
 
+def test_agent_side_rejects_unsearchable_alternate_config_directory(tmp_path: Path) -> None:
+    inaccessible = tmp_path / "inaccessible"
+    inaccessible.mkdir(mode=0o600)
+    proc, argv = _run_wrapper(
+        tmp_path,
+        ["run", "--compact", "--prompt", "probe"],
+        alternate_config_dir=inaccessible,
+    )
+    assert proc.returncode == 2
+    assert "not an accessible directory" in proc.stderr
+    assert argv == []
+
+
 def test_judge_side_keeps_its_own_config_and_adds_no_second(tmp_path: Path) -> None:
     # The judge / simulated-user turn already selects --config; the wrapper must not
     # add a second one, which oneharness rejects as a duplicate.

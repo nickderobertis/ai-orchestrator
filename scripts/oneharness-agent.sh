@@ -44,7 +44,8 @@ case "$ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR" in
 esac
 if [ -e "$ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR" ]; then
     if [ ! -d "$ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR" ] ||
-        [ ! -r "$ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR" ]; then
+        [ ! -r "$ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR" ] ||
+        [ ! -x "$ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR" ]; then
         echo "oneharness-agent: alternate Claude config path is not an accessible directory; create it or fix its permissions, or unset the override to use the default path and retry" >&2
         exit 2
     fi
