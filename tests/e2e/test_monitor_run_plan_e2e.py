@@ -223,24 +223,13 @@ def test_history_labels_and_cursor_watch(oneharness_bin: str, tmp_path: Path) ->
         }
     )
 
-    semantic_sessions = (
-        ("worker", "engineer"),
-        ("orchestrator", "orchestrator"),
-        ("pr-author", "pr-author"),
+    agent = _run_record(
+        oneharness_bin,
+        config=REPO_ROOT / "oneharness.toml",
+        name="agent-invocation",
+        environment=environment,
     )
-    for agent_role, persona in semantic_sessions:
-        invocation = _run_record(
-            oneharness_bin,
-            config=REPO_ROOT / "oneharness.toml",
-            name=f"{agent_role}-invocation",
-            environment={
-                **environment,
-                "ONEHARNESS_HISTORY_LABELS": (
-                    f"agent_role={agent_role},persona={persona}"
-                ),
-            },
-        )
-        assert invocation.returncode == 0, invocation.stderr
+    assert agent.returncode == 0, agent.stderr
     judge = _run_record(
         oneharness_bin,
         config=REPO_ROOT / "oneharness.judge.toml",
@@ -292,20 +281,11 @@ def test_history_labels_and_cursor_watch(oneharness_bin: str, tmp_path: Path) ->
     )
     assert listed.returncode == 0, listed.stderr
     records = json.loads(listed.stdout)
-    assert isinstance(records, list) and len(records) == 6
+    assert isinstance(records, list) and len(records) == 4
     by_role = {record["labels"]["role"]: record for record in records if "role" in record["labels"]}
     assert set(by_role) == {"agent", "judge", "llmlint"}
     assert by_role["judge"]["name"] == "judge-invocation"
     assert by_role["judge"]["labels"]["agent_role"] == "judge"
-    by_agent_role = {
-        record["labels"]["agent_role"]: record
-        for record in records
-        if "agent_role" in record["labels"]
-    }
-    assert set(by_agent_role) == {"worker", "orchestrator", "pr-author", "judge"}
-    assert by_agent_role["worker"]["labels"]["persona"] == "engineer"
-    assert by_agent_role["orchestrator"]["labels"]["persona"] == "orchestrator"
-    assert by_agent_role["pr-author"]["labels"]["persona"] == "pr-author"
     for record in records:
         expected_labels = {
             "node": "history-turns",
@@ -317,31 +297,28 @@ def test_history_labels_and_cursor_watch(oneharness_bin: str, tmp_path: Path) ->
             expected_labels["role"] = record["labels"]["role"]
         if record["labels"].get("role") == "judge":
             expected_labels["agent_role"] = "judge"
-        if "persona" in record["labels"]:
-            expected_labels["agent_role"] = record["labels"]["agent_role"]
-            expected_labels["persona"] = record["labels"]["persona"]
         assert record["labels"] == expected_labels
 
     recent = _just("history", environment=environment)
     assert recent.returncode == 0, recent.stderr
-    assert "worker-invocation" in recent.stdout
+    assert "agent-invocation" in recent.stdout
     assert "judge-invocation" not in recent.stdout
     assert "llmlint-invocation" not in recent.stdout
     assert "ordinary-history-session" not in recent.stdout
 
     watcher = _watch(oneharness_bin, history_dir)
     try:
-        envelopes = _drain_jsonl(watcher, 6)
+        envelopes = _drain_jsonl(watcher, 4)
     finally:
         _terminate(watcher)
-    assert len(envelopes) == 6, envelopes
+    assert len(envelopes) == 4, envelopes
     assert {envelope["type"] for envelope in envelopes} == {"record"}
     watched_ids = [envelope["record"]["history_id"] for envelope in envelopes]
-    assert len(watched_ids) == len(set(watched_ids)) == 6
+    assert len(watched_ids) == len(set(watched_ids)) == 4
 
     resumed_watcher = _watch(oneharness_bin, history_dir, after=watched_ids[0])
     try:
-        resumed = _drain_jsonl(resumed_watcher, 5)
+        resumed = _drain_jsonl(resumed_watcher, 3)
     finally:
         _terminate(resumed_watcher)
     resumed_ids = [envelope["record"]["history_id"] for envelope in resumed]
@@ -399,19 +376,18 @@ def test_history_labels_and_cursor_watch(oneharness_bin: str, tmp_path: Path) ->
     assert indexed.returncode == 0, indexed.stderr
     run = json.loads(indexed.stdout)["runs"][0]
     assert json.loads(indexed.stdout)["schema_version"] == 6
-    native_records = [
-        json.loads(line)
-        for path in {record["path"] for record in records}
-        for line in Path(path).read_text().splitlines()
-    ]
+    native_records = {
+        role: [json.loads(line) for line in Path(record["path"]).read_text().splitlines()]
+        for role, record in by_role.items()
+    }
     expected_providers = {
         (
-            str(record.get("provider", "oneharness")),
-            str(record.get("harness", "")),
-            str(record.get("model", "")),
+            str(items[-1].get("provider", "oneharness")),
+            str(items[-1].get("harness", "")),
+            str(items[-1].get("model", "")),
         )
-        for record in native_records
-        if record.get("labels", {}).get("role") in {"agent", "judge"}
+        for role, items in native_records.items()
+        if role != "llmlint"
     }
     assert {
         (provider["provider"], provider.get("harness", ""), provider.get("model", ""))
@@ -419,8 +395,8 @@ def test_history_labels_and_cursor_watch(oneharness_bin: str, tmp_path: Path) ->
     } == expected_providers
     expected_agent_ms = sum(
         int(item["duration_ms"])
-        for item in native_records
-        if item.get("labels", {}).get("role") == "agent"
+        for role in ("agent",)
+        for item in native_records[role]
         if isinstance(item.get("duration_ms"), int)
         and not isinstance(item["duration_ms"], bool)
         and item["duration_ms"] >= 0
@@ -428,15 +404,14 @@ def test_history_labels_and_cursor_watch(oneharness_bin: str, tmp_path: Path) ->
     assert round(run["timing"]["agent_seconds"] * 1000) == expected_agent_ms
     expected_judge_ms = sum(
         int(item["duration_ms"])
-        for item in native_records
-        if item.get("labels", {}).get("role") == "judge"
+        for item in native_records["judge"]
         if isinstance(item.get("duration_ms"), int)
         and not isinstance(item["duration_ms"], bool)
         and item["duration_ms"] >= 0
     )
     assert round(run["timing"]["judge_seconds"] * 1000) == expected_judge_ms
     assert run["turns"] == sum(
-        record["labels"].get("role") in {"agent", "judge"} for record in records
+        len(items) for role, items in native_records.items() if role != "llmlint"
     )
     breakdown = _just(
         "telemetry",

@@ -213,7 +213,11 @@ def test_due_heartbeat_surfaces_during_active_step_and_disabled_run_stays_silent
     queued_events = (runs / run_id / "events.jsonl").read_text(encoding="utf-8")
     assert queued_state["last_surface_at"] == initial_state["last_surface_at"]
     assert queued_state["due"] is True
+    # llmlint: ignore[tests_mirror_real_usage] Acceptance requires proving the
+    # failed attempt's durable in-flight claim clears before its retry succeeds.
     assert queued_state["in_flight"] is True
+    # llmlint: ignore[tests_mirror_real_usage] Acceptance requires proving retry
+    # waits for the next durable heartbeat interval rather than the next tick.
     assert queued_path.stat().st_mtime >= queued_state["retry_not_before"]
     assert '"kind":"planner-surfaced"' not in queued_events
     # llmlint: ignore[tests_mirror_real_usage] The deterministic command provider
