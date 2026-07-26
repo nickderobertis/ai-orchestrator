@@ -1815,6 +1815,90 @@ def test_recover_completes_a_partially_emitted_graph_without_duplicates(tmp_path
     assert sum(event["kind"] == "round-started" for event in events) == 1
 
 
+def test_recover_completes_partially_emitted_edges_without_duplicates(tmp_path: Path) -> None:
+    runs = tmp_path / "runs"
+    node_count = 100
+    dependency_width = 10
+    tasks = [
+        {
+            "id": f"node-{index}",
+            "task": "No diff.",
+            "expects_no_diff": True,
+            **(
+                {
+                    "deps": [
+                        f"node-{dependency}"
+                        for dependency in range(max(0, index - dependency_width), index)
+                    ]
+                }
+                if index
+                else {}
+            ),
+        }
+        for index in range(node_count)
+    ]
+    expected_edges = [
+        {"from": dependency, "to": task["id"]}
+        for task in tasks
+        for dependency in task.get("deps", [])
+    ]
+    plan = tmp_path / "edge-heavy-static.json"
+    plan.write_text(json.dumps({"schema_version": 2, "tasks": tasks}))
+    command = [
+        "just",
+        "run-plan",
+        str(plan),
+        "--run",
+        "partial-edges",
+        "--runs-dir",
+        str(runs),
+        "--format",
+        "json",
+    ]
+    process = subprocess.Popen(
+        command,
+        cwd=REPO_ROOT,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    )
+    events_path = runs / "partial-edges" / "events.jsonl"
+    deadline = e2e_deadline(10)
+    durable_definitions = 0
+    durable_edges = 0
+    while time.monotonic() < deadline:
+        if events_path.exists():
+            events = events_path.read_text()
+            durable_definitions = events.count('"kind": "node-added"')
+            durable_edges = events.count('"kind": "edge-added"')
+            if durable_definitions == node_count and 0 < durable_edges < len(expected_edges):
+                break
+        time.sleep(0.001)
+    else:
+        process.kill()
+        pytest.fail(
+            "did not observe a partial graph-edge prefix "
+            f"(saw {durable_definitions} definitions and "
+            f"{durable_edges}/{len(expected_edges)} edges)"
+        )
+    os.killpg(process.pid, signal.SIGKILL)
+    process.wait()
+
+    recovered = subprocess.run(
+        [*command, "--recover"], cwd=REPO_ROOT, text=True, capture_output=True, check=False
+    )
+    assert recovered.returncode == 0, recovered.stderr
+    events = [json.loads(line) for line in events_path.read_text().splitlines()]
+    edges = [
+        {"from": event["detail"]["from"], "to": event["detail"]["to"]}
+        for event in events
+        if event["kind"] == "edge-added"
+    ]
+    assert edges == expected_edges
+    assert sum(event["kind"] == "round-started" for event in events) == 1
+
+
 def test_recover_discards_only_a_torn_final_journal_line(
     tmp_path: Path, command_base, onejudge_bin: str
 ) -> None:
