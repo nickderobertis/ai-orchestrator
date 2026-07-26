@@ -1305,7 +1305,6 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     if channel_path and channel_run_id and round_number is not None:
         assert run_dir is not None
-        # llmlint: ignore-block[changed_behavior_has_e2e] internal env; malformed only in unit
         try:
             validated_run_id = str(validate_run_id(channel_run_id))
             resolved_channel = Path(channel_path).resolve(strict=True)
@@ -1362,7 +1361,6 @@ def main(argv: list[str] | None = None) -> int:
             journal=journal,
             synthesize_heartbeat=synthesize_heartbeat,
         )
-        # llmlint: ignore-end[changed_behavior_has_e2e]
     try:
         result = run_graph(
             graph,
