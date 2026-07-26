@@ -47,6 +47,7 @@ shift
 caller_config=false
 caller_config_path=
 expect_config_value=false
+# llmlint: ignore[boundary_inputs_validated] this repository's dispatch layer is the only caller and passes exactly one --config; oneharness honors the last value, which this wrapper validates.
 for arg in "$@"; do
     if [[ $expect_config_value == true ]]; then
         if [[ -z $arg ]]; then
