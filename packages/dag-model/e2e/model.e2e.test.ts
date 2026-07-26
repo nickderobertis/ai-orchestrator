@@ -2,9 +2,11 @@ import { expect, test } from "bun:test";
 
 // eslint-disable-next-line @nx/enforce-module-boundaries -- This verifies the package export as a consumer uses it.
 import {
+  conversationSchema,
   launchProvenanceSchema,
   parseRunDetail,
   parseRunList,
+  roundSchema,
   runDetailSchema,
   sessionLinkSchema,
   sseEventNameSchema,
@@ -132,5 +134,37 @@ test("a package consumer validates provenance, SSE names, and counters", () => {
       role: "agent",
       turn_index: -1,
     }),
+  ).toThrow();
+});
+
+test("a package consumer validates rounds and conversations", () => {
+  expect(
+    roundSchema.parse({
+      run_id: "run-1",
+      round: 1,
+      plan: {
+        tasks: [{ id: "build", task: "Build it" }],
+        schema_version: 5,
+      },
+      node_states: { build: "done" },
+      node_results: { build: { status: "done" } },
+      attestations: [],
+      result: null,
+      last_seq: 3,
+    }).node_states.build,
+  ).toBe("done");
+  const conversation = {
+    canContinue: false,
+    harnesses: ["codex"],
+    id: "conversation-1",
+    name: "Worker",
+    project: "repo",
+    startedAt: "2026-07-26T12:00:00Z",
+    state: "completed",
+    turns: [],
+  };
+  expect(conversationSchema.parse(conversation).id).toBe("conversation-1");
+  expect(() =>
+    conversationSchema.parse({ ...conversation, startedAt: "yesterday" }),
   ).toThrow();
 });

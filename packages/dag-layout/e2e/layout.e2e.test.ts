@@ -93,6 +93,12 @@ test("a package consumer receives a vertically routed edge", () => {
     ],
   });
 
+  expect(layout.nodes.map(({ id, y }) => ({ id, y }))).toEqual([
+    { id: "build-a", y: 0 },
+    { id: "build-b", y: 104 },
+    { id: "test-a", y: 0 },
+    { id: "test-b", y: 104 },
+  ]);
   expect(
     layout.edges.find(({ id }) => id === "build-b-test-a")?.points,
   ).toEqual([
