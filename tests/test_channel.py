@@ -178,7 +178,12 @@ def test_writer_retries_partial_writes_and_backpressure(
 
 def test_proposal_pump_round_trips_and_persists_on_reconciler_drain(tmp_path: Path) -> None:
     channel = create_channel(tmp_path / "run")
-    pump = ProposalPump(channel, "live", 3)
+    pump = ProposalPump(
+        channel,
+        "live",
+        3,
+        synthesize_heartbeat=lambda: "worker: implementing transport; follow-ups: none",
+    )
     pump.propose_blocking("worker", "found adjacent work")
     assert read_message(channel / "up.fifo", timeout=1) == {
         "op": "supervisor",
@@ -220,9 +225,10 @@ def test_proposal_pump_round_trips_and_persists_on_reconciler_drain(tmp_path: Pa
         time.sleep(0.01)
     assert json.loads(heartbeat_surface.read_text(encoding="utf-8"))["surface"] == {
         "kind": "heartbeat",
-        "message": "workstreams still in progress; follow-ups: none",
+        "message": "worker: implementing transport; follow-ups: none",
         "blocking": False,
     }
+    assert _heartbeat(channel)["last_surface_at"] == 0
     with pytest.raises(ChannelTimeout):
         read_message(channel / "up.fifo", timeout=0.1)
     pump.close()

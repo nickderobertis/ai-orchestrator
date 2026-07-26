@@ -369,16 +369,28 @@ def test_main_validates_and_services_inherited_proposal_channel(
     monkeypatch.setenv("AI_ORCHESTRATOR_CHANNEL_RUN_ID", "outer")
 
     pumps: list[_RecordingProposalPump] = []
+    synthesized: list[str] = []
+
+    def fake_check_in(persona: str, task: str, **kwargs: object) -> Report:
+        assert persona == "check-in"
+        assert "Journal:" in task and "Monitor details:" in task
+        output = Path(task.split("Output file: ", 1)[1])
+        output.write_text("worker: running; follow-ups: none\n", encoding="utf-8")
+        return _report(persona)
 
     def make_pump(
         path: Path, run_id: str, round_number: int, **kwargs: object
     ) -> _RecordingProposalPump:
         assert (path, run_id, round_number) == (channel, "outer", 1)
+        synthesize = kwargs.get("synthesize_heartbeat")
+        assert callable(synthesize)
+        synthesized.append(synthesize())
         pump = _RecordingProposalPump()
         pumps.append(pump)
         return pump
 
     monkeypatch.setattr("orchestrator.graph.ProposalPump", make_pump)
+    monkeypatch.setattr("orchestrator.graph.dispatch", fake_check_in)
     monkeypatch.setattr(
         "orchestrator.graph.make_dispatch_runner",
         lambda **kwargs: lambda node, **labels: _report(node.persona),
@@ -387,6 +399,7 @@ def test_main_validates_and_services_inherited_proposal_channel(
     assert not pumps
     assert main([str(plan), "--run", "recorded", "--runs-dir", str(tmp_path / "runs")]) == 0
     assert len(pumps) == 1 and pumps[0].drains >= 2
+    assert synthesized == ["worker: running; follow-ups: none\n"]
     assert (tmp_path / "runs" / "recorded" / "round-01" / "result.json").is_file()
 
     for key in ("AI_ORCHESTRATOR_CHANNEL_DIR", "AI_ORCHESTRATOR_CHANNEL_RUN_ID"):

@@ -492,6 +492,10 @@ class Journal:
         if not operations:
             raise JournalError("a journal batch requires at least one operation")
         with advisory_lock(self.lock_identity):
+            # A planner delivery can append from ``channel-next`` while the graph
+            # executor retains its own Journal instance. Refresh under the shared
+            # lock so independent writers cannot reuse a stale sequence number.
+            self.seq = max(self.seq, reconcile(self.path, self.run_id).last_seq)
             events: list[Event] = []
             for offset, operation in enumerate(operations, start=1):
                 if operation.kind not in EVENT_KINDS:

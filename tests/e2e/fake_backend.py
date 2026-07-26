@@ -220,6 +220,14 @@ def main() -> int:
     match op:
         case "respond":
             _wait_at_provider_barrier(task)
+            if "Output file: " in task and "agent-synthesized planner update" in task:
+                output = Path(task.split("Output file: ", 1)[1].splitlines()[0])
+                output.write_text(
+                    "active-worker: executing the slow agent step; "
+                    "evidence: node-started is recorded and node-settled is absent; "
+                    "follow-ups: none\n",
+                    encoding="utf-8",
+                )
             guidance = _planner_guidance(messages)
             run_log = re.search(r"record-run=(\S+)", task)
             if run_log is not None:
@@ -390,7 +398,9 @@ def main() -> int:
             # `complete-now` finishes on the first turn; otherwise the agent stays
             # "not done" and completion is decided by the unified supervisor
             # below, which only passes on the second turn — exercising the loop.
-            done = (not fail) and ("complete-now" in task)
+            done = (not fail) and (
+                "complete-now" in task or "agent-synthesized planner update" in task
+            )
             if orchestrator_plan is not None:
                 turn = _assistant_turns(messages)
                 if turn == 0 and "surface-blocker" in plan_text:
@@ -451,7 +461,8 @@ def main() -> int:
             supervisor = cast(SupervisorRequest, req)
             completion_turn = 13 if "complete-after-13" in task else 2
             complete = (not fail) and (
-                _assistant_turns(messages) >= completion_turn
+                "agent-synthesized planner update" in task
+                or _assistant_turns(messages) >= completion_turn
                 or "resume-after-cap" in task
                 and resume_segments >= 2
             )
@@ -472,7 +483,9 @@ def main() -> int:
             # The adopted version routes the completion decision through `supervisor` above.
             completion_turn = 13 if "complete-after-13" in task else 2
             value = (not fail) and (
-                "complete-now" in task or _assistant_turns(messages) >= completion_turn
+                "complete-now" in task
+                or "agent-synthesized planner update" in task
+                or _assistant_turns(messages) >= completion_turn
             )
             resp = {"value": value, "reason": "fake judge verdict"}
         case "judge":
