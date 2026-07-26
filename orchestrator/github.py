@@ -194,12 +194,23 @@ class CliGitHubBackend:
 
     def required_status_checks(self, repo: str, branch: str) -> tuple[str, ...]:
         """Return branch-protection status contexts required before merge."""
-        out = self._run(
-            ["api", f"repos/{repo}/branches/{branch}/protection/required_status_checks"]
-        )
+        out = self._run(["api", f"repos/{repo}/branches/{branch}"])
         try:
             payload = json.loads(out)
-            contexts = payload["contexts"]
+            protected = payload["protected"]
+            if not isinstance(protected, bool):
+                raise TypeError
+            if not protected:
+                return ()
+            protection = payload["protection"]
+            if not isinstance(protection, dict):
+                raise TypeError
+            required = protection.get("required_status_checks")
+            if required is None:
+                return ()
+            if not isinstance(required, dict):
+                raise TypeError
+            contexts = required["contexts"]
             if not isinstance(contexts, list) or not all(
                 isinstance(context, str) for context in contexts
             ):
