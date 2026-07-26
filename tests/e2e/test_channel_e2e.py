@@ -114,6 +114,7 @@ def _launch_cli(
     onejudge_bin: str,
     requested_run_id: str | None = None,
     heartbeat_interval: float | None = None,
+    env: dict[str, str] | None = None,
 ) -> str:
     run_id_args = ["--run-id", requested_run_id] if requested_run_id else []
     heartbeat_args = (
@@ -137,6 +138,7 @@ def _launch_cli(
             str(FAKE_BACKEND),
         ],
         cwd=REPO_ROOT,
+        env={**os.environ, **(env or {})},
         text=True,
         capture_output=True,
         check=True,
@@ -168,7 +170,15 @@ def test_due_heartbeat_surfaces_during_active_step_and_disabled_run_stays_silent
         ),
         encoding="utf-8",
     )
-    run_id = _launch_cli(plan, runs, _base(tmp_path), onejudge_bin, heartbeat_interval=0.2)
+    failed_check_in = tmp_path / "failed-check-in"
+    run_id = _launch_cli(
+        plan,
+        runs,
+        _base(tmp_path),
+        onejudge_bin,
+        heartbeat_interval=0.2,
+        env={"FAKE_CHECK_IN_FAIL_ONCE": str(failed_check_in)},
+    )
     # llmlint: ignore[tests_mirror_real_usage] Required durable clock audit has no CLI view.
     heartbeat_path = runs / run_id / "channel" / "heartbeat.json"
     # llmlint: ignore[tests_mirror_real_usage] Required queue audit has no CLI view.
@@ -178,6 +188,7 @@ def test_due_heartbeat_surfaces_during_active_step_and_disabled_run_stays_silent
     while not queued_path.is_file() and time.monotonic() < queue_deadline:
         time.sleep(0.01)
     assert queued_path.is_file()
+    assert failed_check_in.read_text(encoding="utf-8") == "failed\n"
     # llmlint: ignore[tests_mirror_real_usage] Required pre-consumption audit has no CLI view.
     queued_state = json.loads(heartbeat_path.read_text(encoding="utf-8"))
     # llmlint: ignore[tests_mirror_real_usage] Required journal audit has no CLI view.
