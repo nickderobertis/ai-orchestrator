@@ -222,6 +222,8 @@ def main() -> int:
                 attempts = channel_dir / "check-in-dispatches.txt"
                 fail_once_value = os.environ.get("FAKE_CHECK_IN_FAIL_ONCE")
                 fail_once = Path(fail_once_value) if fail_once_value else None
+                skip_surface_value = os.environ.get("FAKE_CHECK_IN_SKIP_SURFACE_ONCE")
+                skip_surface = Path(skip_surface_value) if skip_surface_value else None
                 if fail_once is not None and not fail_once.exists():
                     fail_once.write_text("failed\n", encoding="utf-8")
                     with attempts.open("a", encoding="utf-8") as stream:
@@ -230,7 +232,11 @@ def main() -> int:
                     return 1
                 else:
                     with attempts.open("a", encoding="utf-8") as stream:
-                        stream.write("success\n")
+                        stream.write(
+                            "missing-surface\n"
+                            if skip_surface is not None and not skip_surface.exists()
+                            else "success\n"
+                        )
                     (channel_dir / "check-in-labels.txt").write_text(
                         os.environ["ONEHARNESS_HISTORY_LABELS"],
                         encoding="utf-8",
@@ -240,12 +246,19 @@ def main() -> int:
                         "evidence: node-started is recorded and node-settled is absent; "
                         "follow-ups: none"
                     )
-                    command = shlex.split(task.split("Check-in command: ", 1)[1].splitlines()[0])
-                    command[command.index("MESSAGE")] = message
-                    surfaced = subprocess.run(command, text=True, capture_output=True, check=False)
-                    if surfaced.returncode != 0:
-                        sys.stderr.write(surfaced.stderr)
-                        return 1
+                    if skip_surface is not None and not skip_surface.exists():
+                        skip_surface.write_text("skipped\n", encoding="utf-8")
+                    else:
+                        command = shlex.split(
+                            task.split("Check-in command: ", 1)[1].splitlines()[0]
+                        )
+                        command[command.index("MESSAGE")] = message
+                        surfaced = subprocess.run(
+                            command, text=True, capture_output=True, check=False
+                        )
+                        if surfaced.returncode != 0:
+                            sys.stderr.write(surfaced.stderr)
+                            return 1
             guidance = _planner_guidance(messages)
             run_log = re.search(r"record-run=(\S+)", task)
             if run_log is not None:

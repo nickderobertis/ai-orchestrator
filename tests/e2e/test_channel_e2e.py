@@ -362,6 +362,87 @@ def test_due_heartbeat_surfaces_during_active_step_and_disabled_run_stays_silent
     assert "planner update due" not in corrupt_status.stdout
 
 
+def test_completed_check_in_without_surface_is_logged_and_retried(
+    tmp_path: Path, onejudge_bin: str
+) -> None:
+    runs = tmp_path / "runs"
+    witness = tmp_path / "slow-witness"
+    plan = tmp_path / "missing-check-in-surface.json"
+    plan.write_text(
+        json.dumps(
+            {
+                "schema_version": 3,
+                "name": "missing-check-in-surface",
+                "tasks": [
+                    {
+                        "id": "active-worker",
+                        "persona": "engineer",
+                        "task": f"slow-branch {witness} pacemaker-slow complete-now",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    skipped = tmp_path / "skipped-check-in-surface"
+    run_id = _launch_cli(
+        plan,
+        runs,
+        _base(tmp_path),
+        onejudge_bin,
+        heartbeat_interval=0.5,
+        env={"FAKE_CHECK_IN_SKIP_SURFACE_ONCE": str(skipped)},
+    )
+    channel = runs / run_id / "channel"
+    failure_log = channel / "check-in.log"
+    failure_deadline = deadline(120)
+    failure: dict[str, object] | None = None
+    while time.monotonic() < failure_deadline:
+        if failure_log.is_file():
+            records = [
+                json.loads(line) for line in failure_log.read_text(encoding="utf-8").splitlines()
+            ]
+            if records:
+                failure = records[0]
+                break
+        time.sleep(0.01)
+    assert skipped.read_text(encoding="utf-8") == "skipped\n"
+    assert failure is not None
+    assert failure["succeeded"] is False
+    assert failure["detail"] == (
+        "RuntimeError: check-in agent did not surface a completed status update"
+    )
+
+    queued = channel / "heartbeat-surface.json"
+    queue_deadline = deadline(120)
+    while not queued.is_file() and time.monotonic() < queue_deadline:
+        time.sleep(0.01)
+    assert queued.is_file()
+    assert (channel / "check-in-dispatches.txt").read_text().splitlines() == [
+        "missing-surface",
+        "success",
+    ]
+    heartbeat = _wait_surface(run_id, runs, wait_seconds=120)
+    assert heartbeat["surface"] == {
+        "kind": "heartbeat",
+        "message": (
+            "active-worker: executing the slow agent step; "
+            "evidence: node-started is recorded and node-settled is absent; "
+            "follow-ups: none"
+        ),
+        "blocking": False,
+    }
+    assert witness.is_file()
+
+    while True:
+        boundary = _wait_surface(run_id, runs, wait_seconds=120)
+        if boundary["surface"]["kind"] != "heartbeat":
+            break
+    assert boundary["surface"]["kind"] == "milestone"
+    _reply_cli(run_id, runs, {"completion": True, "reason": "verified missing surface"})
+    _wait_report(runs / run_id / "orchestrator" / "report.json")
+
+
 @pytest.mark.parametrize(
     ("sentinel", "underlying_error"),
     [
