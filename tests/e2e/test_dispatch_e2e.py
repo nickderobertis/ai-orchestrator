@@ -736,6 +736,93 @@ def test_dispatch_cli_applies_ordered_models_to_real_oneharness(
     )
 
 
+@pytest.mark.parametrize(
+    ("config_name", "harness_id", "expected_config"),
+    [
+        ("oneharness.toml", "claude-code:alternate", "alternate"),
+        ("oneharness.judge.toml", "claude-code:primary", "default"),
+    ],
+)
+def test_claude_variants_isolate_subscription_environment_at_real_oneharness_boundary(
+    tmp_path: Path,
+    oneharness_bin: str,
+    config_name: str,
+    harness_id: str,
+    expected_config: str,
+) -> None:
+    fake_claude = tmp_path / "claude"
+    fake_claude.write_text(
+        """#!/usr/bin/env python3
+import json
+import os
+
+expected = os.environ["EXPECTED_CONFIG"]
+if expected == "alternate":
+    assert os.environ["CLAUDE_CONFIG_DIR"] == os.environ["EXPECTED_ALT_DIR"]
+else:
+    assert "CLAUDE_CONFIG_DIR" not in os.environ
+for name in (
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
+):
+    assert name not in os.environ
+print(json.dumps({
+    "type": "result",
+    "subtype": "success",
+    "is_error": False,
+    "result": "identity isolated",
+    "session_id": "variant-boundary",
+}))
+""",
+        encoding="utf-8",
+    )
+    fake_claude.chmod(0o755)
+    alternate = tmp_path / ".claude-alt"
+    environment = {
+        **os.environ,
+        "ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR": str(alternate),
+        "CLAUDE_CONFIG_DIR": str(alternate),
+        "ANTHROPIC_API_KEY": "ambient-api-key",
+        "ANTHROPIC_AUTH_TOKEN": "ambient-auth-token",
+        "CLAUDE_CODE_OAUTH_TOKEN": "ambient-oauth-token",
+        "CLAUDE_CODE_OAUTH_REFRESH_TOKEN": "ambient-refresh-token",
+        "EXPECTED_CONFIG": expected_config,
+        "EXPECTED_ALT_DIR": str(alternate),
+        "ONEHARNESS_HISTORY": "false",
+    }
+
+    result = subprocess.run(
+        [
+            oneharness_bin,
+            "run",
+            "--config",
+            str(REPO_ROOT / config_name),
+            "--harness",
+            harness_id,
+            "--bin",
+            f"{harness_id}={fake_claude}",
+            "--mode",
+            "default",
+            "--prompt",
+            "prove child environment",
+            "--compact",
+        ],
+        cwd=REPO_ROOT,
+        env=environment,
+        text=True,
+        capture_output=True,
+        timeout=60,
+    )
+
+    assert result.returncode == 0, result.stderr
+    report = json.loads(result.stdout)
+    assert report["results"][0]["harness_id"] == harness_id
+    assert report["results"][0]["status"] == "ok"
+    assert report["results"][0]["text"] == "identity isolated"
+
+
 def test_run_onejudge_config_error_raises(onejudge_bin) -> None:
     bad = {
         "provider": {"kind": "command", "command": [sys.executable, str(FAKE_BACKEND)]},
