@@ -14,6 +14,10 @@ if (( $# == 0 )); then
     echo "llmlint oneharness wrapper: expected oneharness arguments" >&2
     exit 2
 fi
+if [[ $1 != run ]]; then
+    echo "llmlint oneharness wrapper: expected the 'run' subcommand" >&2
+    exit 2
+fi
 
 args=()
 read_only=false
