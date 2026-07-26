@@ -89,7 +89,9 @@ session. In contrast, malformed present values and contradictory timing remain
 errors: finish cannot precede start, and model plus tool time cannot exceed the
 record duration. Measured WORKER/JUDGE/LLMLINT/TOOL values remain visible for
 `complete` and `partial` timing; `?` means no measurement exists. `UNATTR` and
-the two quality dimensions qualify those values. The breakdown says
+the two quality dimensions qualify those values. JSON consumers use
+`timing_presence` to distinguish a measured zero from an unavailable category.
+The breakdown says
 `Timeline: unavailable (legacy session linkage)`, and quality is `legacy` or
 `partial`. Treat that as degraded evidence, not proof that judging or tools took
 no time.

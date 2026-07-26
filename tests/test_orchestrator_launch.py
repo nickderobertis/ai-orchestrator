@@ -172,6 +172,7 @@ def test_launch_task_prose_preserves_default_and_passes_round_budget(
     )
     assert commands[0][commands[0].index("--task") + 1] == expected_default
     assert commands[1][commands[1].index("--task") + 1] == expected_budget
+    assert Path(commands[0][0]).is_absolute()
 
 
 def test_orchestrate_cli_prints_run_id(

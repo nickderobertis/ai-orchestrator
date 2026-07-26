@@ -58,6 +58,12 @@
     "wall_ms",
     "wall_seconds"
   ],
+  "timing_presence": [
+    "agent_model_ms",
+    "judge_model_ms",
+    "llmlint_model_ms",
+    "tool_ms"
+  ],
   "usage": [
     "cache_read_tokens",
     "cache_write_tokens",

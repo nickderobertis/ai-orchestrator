@@ -175,6 +175,9 @@ Its checked-in golden moves in the same change. `RunTelemetry` includes:
   (`native`, `labelled`, or `inferred`), plus `sources`, the
   ordered set of `onejudge`, `oneharness`, `history_legacy`, and `journal_legacy`
   actually used.
+- `timing_presence`, whose four booleans state whether WORKER, JUDGE, LLMLINT,
+  and TOOL have a measurement. A measured zero is `true`; an unavailable value
+  is `false`.
 - `node_work_ms`, with `agent_model_ms`, `judge_model_ms`, `llmlint_model_ms`,
   `tool_ms`, and `wall_ms` summed across nodes without overlap removal.
 - `turns`, counting only worker/judge conversation invocations, and `lint`,
@@ -291,6 +294,7 @@ as `?` in `--breakdown` and remain JSON `null` in the machine view.
 | `nodes[].sessions` | onejudge `telemetry.sessions` records linked to the node | Build entries from oneharness sessions matching `labels.run_id` and `labels.node`; use `labels.role`, then the legacy name-prefix classification. Preserve the native `session_id`; set `history_id` to the history record identity when present, otherwise `null`; set `turn_index` to `null` because record order is not a native turn identity. Emit `[]` when no session can be linked. |
 | `timing_quality` | Completeness of measured oneharness timing | `complete` means every linked history session has valid native timing fields; `partial` means at least one does; `legacy` means none does. Available measurements are never suppressed by this classification. |
 | `linkage_quality` | Authority of role and node association | `native` means valid onejudge session linkage supplies authoritative role, node/step association, and per-role `turn_index`; `labelled` means every association trusts history `labels.role`; `inferred` means at least one role uses a legacy name fallback or cannot be associated. |
+| `timing_presence` | Presence of each measured timing category | Emit one boolean for each of `agent_model_ms`, `judge_model_ms`, `llmlint_model_ms`, and `tool_ms`. `false` means the corresponding numeric zero is only an internal aggregation identity and renders `?`; `true` preserves measured zero as `0`. |
 | `sources` | Record each preferred source actually consumed | Emit the ordered de-duplicated subset of `onejudge`, `oneharness`, `history_legacy`, and `journal_legacy`. `labels.run_id`/`labels.role`, `duration_ms`, `command_execution`, and legacy `usage` imply `history_legacy`; journal wall or node intervals imply `journal_legacy`. Emit `[]` only when the run has neither linked history nor journal timing. |
 | `node_work_ms.agent_model_ms` | Sum emitted `nodes[].timing.agent_model_ms` | Exact sum, including zero fallbacks; never infer from legacy `duration_ms`. |
 | `node_work_ms.judge_model_ms` | Sum emitted `nodes[].timing.judge_model_ms` | Exact sum, including zero fallbacks. |

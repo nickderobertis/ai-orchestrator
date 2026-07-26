@@ -25,6 +25,7 @@ from orchestrator.telemetry import (
     Provider,
     RunTelemetry,
     SessionLink,
+    TimingPresenceRecord,
     TimingRecord,
     UsageRecord,
     UsageValues,
@@ -268,6 +269,7 @@ def test_schema_v7_field_golden_prevents_cross_layer_drift() -> None:
         "timing_qualities": ["complete", "legacy", "partial"],
         "linkage_qualities": ["inferred", "labelled", "native"],
         "sources": ["history_legacy", "journal_legacy", "oneharness", "onejudge"],
+        "timing_presence": sorted(TimingPresenceRecord.__required_keys__),
         "timing": sorted(TimingRecord.__required_keys__),
         "fractions": sorted(FractionsRecord.__required_keys__),
         "usage": sorted(UsageValues.__required_keys__),
@@ -403,9 +405,18 @@ def test_native_timing_usage_tools_and_breakdown_are_role_and_node_scoped(
     assert record["lint"] == record["nodes"][0]["lint"] == 2
     assert record["timing_quality"] == "partial"
     assert record["linkage_quality"] == "inferred"
+    assert record["timing_presence"] == {
+        "agent_model_ms": True,
+        "judge_model_ms": True,
+        "llmlint_model_ms": True,
+        "tool_ms": True,
+    }
     assert main(["--runs-dir", str(tmp_path / "runs"), "--all", "--breakdown"]) == 0
     breakdown = capsys.readouterr().out
     assert "WORKER" in breakdown and "LLMLINT" in breakdown and "TURNS LINT" in breakdown
+    run_row = next(line for line in breakdown.splitlines() if line.startswith("observed"))
+    assert "   12" in run_row and "    8" in run_row and "    9" in run_row and "    5" in run_row
+    assert "?" not in run_row
     assert "Turn histogram: 2=1" in breakdown
 
 

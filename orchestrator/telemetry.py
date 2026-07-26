@@ -186,6 +186,13 @@ class NodeWorkRecord(TypedDict):
     wall_ms: int
 
 
+class TimingPresenceRecord(TypedDict):
+    agent_model_ms: bool
+    judge_model_ms: bool
+    llmlint_model_ms: bool
+    tool_ms: bool
+
+
 @dataclass(frozen=True)
 class Failure:
     classification: FailureClass
@@ -267,6 +274,9 @@ class NodeTelemetry:
     lint: int = 0
     timing_quality: TelemetryQuality = "legacy"
     linkage_quality: LinkageQuality = "inferred"
+    timing_presence: TimingPresenceRecord = field(
+        default_factory=lambda: cast(TimingPresenceRecord, {})
+    )
 
     def record(self) -> dict[str, object]:
         result: dict[str, object] = {"node": self.node, "status": self.status}
@@ -295,6 +305,7 @@ class NodeTelemetry:
         result["lint"] = self.lint
         result["timing_quality"] = self.timing_quality
         result["linkage_quality"] = self.linkage_quality
+        result["timing_presence"] = self.timing_presence
         return result
 
 
@@ -314,6 +325,9 @@ class RunTelemetry:
     usage: UsageRecord = field(default_factory=lambda: cast(UsageRecord, {}))
     timing_quality: TelemetryQuality = "legacy"
     linkage_quality: LinkageQuality = "inferred"
+    timing_presence: TimingPresenceRecord = field(
+        default_factory=lambda: cast(TimingPresenceRecord, {})
+    )
     sources: list[TelemetrySource] = field(default_factory=list)
     node_work_ms: NodeWorkRecord = field(default_factory=lambda: cast(NodeWorkRecord, {}))
     turns: int = 0
@@ -331,6 +345,7 @@ class RunTelemetry:
             "usage": self.usage,
             "timing_quality": self.timing_quality,
             "linkage_quality": self.linkage_quality,
+            "timing_presence": self.timing_presence,
             "sources": self.sources,
             "node_work_ms": self.node_work_ms,
             "turns": self.turns,
@@ -457,7 +472,8 @@ class _SessionSummary:
     usage: UsageValues
     commands: dict[str, int]
     validated_native_fields: bool
-    has_timing_measurement: bool
+    has_model_measurement: bool
+    has_tool_measurement: bool
     tool_intervals: list[_Interval]
 
 
@@ -672,10 +688,11 @@ def _summarize_session(session: HistorySession, records: list[HistoryRecord]) ->
         usage=usage,
         commands=commands,
         validated_native_fields=validated_native_fields,
-        has_timing_measurement=any(
-            _non_negative_int(record.get("model_ms")) is not None
-            or _non_negative_int(record.get("tool_ms")) is not None
-            for record in records
+        has_model_measurement=any(
+            _non_negative_int(record.get("model_ms")) is not None for record in records
+        ),
+        has_tool_measurement=any(
+            _non_negative_int(record.get("tool_ms")) is not None for record in records
         )
         or bool(tool_intervals),
         tool_intervals=tool_intervals,
@@ -1255,11 +1272,22 @@ def _node_record(
         else _node_wall_ms(node, events, active_at=active_at)
     )
     usage = _merge_usage(native.usage if native is not None else None, _usage(linked))
+    timing_presence = TimingPresenceRecord(
+        agent_model_ms=(native is not None and native.agent_model_ms is not None)
+        or any(summary.role == "agent" and summary.has_model_measurement for summary in linked),
+        judge_model_ms=(native is not None and native.judge_model_ms is not None)
+        or any(summary.role == "judge" and summary.has_model_measurement for summary in linked),
+        llmlint_model_ms=any(
+            summary.role == "llmlint" and summary.has_model_measurement for summary in linked
+        ),
+        tool_ms=(native is not None and native.tool_ms is not None)
+        or any(summary.has_tool_measurement for summary in linked),
+    )
     timing_quality: TelemetryQuality = (
         "complete"
         if linked and all(summary.validated_native_fields for summary in linked)
         else "partial"
-        if any(summary.has_timing_measurement for summary in linked)
+        if any(timing_presence.values())
         else "legacy"
     )
     linkage_quality: LinkageQuality = (
@@ -1301,6 +1329,7 @@ def _node_record(
         lint=sum(summary.turns for summary in linked if summary.role == "llmlint"),
         timing_quality=timing_quality,
         linkage_quality=linkage_quality,
+        timing_presence=timing_presence,
     )
 
 
@@ -1369,12 +1398,18 @@ def collect_run(
         [node.usage for node in contributing_nodes if node.usage is not None]
     )
     native = [summary.validated_native_fields for summary in summaries]
+    timing_presence = TimingPresenceRecord(
+        agent_model_ms=any(node.timing_presence["agent_model_ms"] for node in nodes),
+        judge_model_ms=any(node.timing_presence["judge_model_ms"] for node in nodes),
+        llmlint_model_ms=any(node.timing_presence["llmlint_model_ms"] for node in nodes),
+        tool_ms=any(node.timing_presence["tool_ms"] for node in nodes),
+    )
     # Complete requires authoritative linkage plus valid interval-complete history.
     timing_quality: TelemetryQuality = (
         "complete"
         if native and all(native)
         else "partial"
-        if native_parts or any(summary.has_timing_measurement for summary in summaries)
+        if native_parts or any(timing_presence.values())
         else "legacy"
     )
     linkage_quality: LinkageQuality = (
@@ -1411,6 +1446,7 @@ def collect_run(
         usage=run_usage or _usage(summaries),
         timing_quality=timing_quality,
         linkage_quality=linkage_quality,
+        timing_presence=timing_presence,
         sources=sources,
         node_work_ms=NodeWorkRecord(
             agent_model_ms=sum(cast(TimingRecord, node.timing)["agent_model_ms"] for node in nodes),
@@ -1540,8 +1576,8 @@ def _value(value: int | float | None) -> str:
     return "?" if value is None else f"{value:g}"
 
 
-def _timing_value(value: int, fraction: float, quality: TelemetryQuality) -> str:
-    return f"{value:5} {fraction:5.1%}" if quality != "legacy" else "    ?     ?"
+def _timing_value(value: int, fraction: float, measured: bool) -> str:
+    return f"{value:5} {fraction:5.1%}" if measured else "    ?     ?"
 
 
 def _breakdown(runs: list[RunTelemetry], retry_metrics: LlmlintRetryMetrics | None = None) -> str:
@@ -1568,52 +1604,35 @@ def _breakdown(runs: list[RunTelemetry], retry_metrics: LlmlintRetryMetrics | No
         )
         for name, timing, usage, turns, lint in rows:
             fractions = timing["fractions"]
+            presence = (
+                run.timing_presence
+                if name == str(run.run_id)
+                else next(
+                    node.timing_presence for node in run.nodes if name == f"  {node.node}"
+                )
+            )
             columns = [
                 f"{name[:20]:20}",
                 f"{timing['wall_ms']:6}ms",
                 _timing_value(
                     timing["agent_model_ms"],
                     fractions["agent_model"],
-                    (
-                        run.timing_quality
-                        if name == str(run.run_id)
-                        else next(
-                            node.timing_quality for node in run.nodes if name == f"  {node.node}"
-                        )
-                    ),
+                    presence["agent_model_ms"],
                 ),
                 _timing_value(
                     timing["judge_model_ms"],
                     fractions["judge_model"],
-                    (
-                        run.timing_quality
-                        if name == str(run.run_id)
-                        else next(
-                            node.timing_quality for node in run.nodes if name == f"  {node.node}"
-                        )
-                    ),
+                    presence["judge_model_ms"],
                 ),
                 _timing_value(
                     timing["llmlint_model_ms"],
                     fractions["llmlint_model"],
-                    (
-                        run.timing_quality
-                        if name == str(run.run_id)
-                        else next(
-                            node.timing_quality for node in run.nodes if name == f"  {node.node}"
-                        )
-                    ),
+                    presence["llmlint_model_ms"],
                 ),
                 _timing_value(
                     timing["tool_ms"],
                     fractions["tool"],
-                    (
-                        run.timing_quality
-                        if name == str(run.run_id)
-                        else next(
-                            node.timing_quality for node in run.nodes if name == f"  {node.node}"
-                        )
-                    ),
+                    presence["tool_ms"],
                 ),
                 f"{round(timing['gate_seconds'] * 1000):4}",
                 f"{round(timing['publication_wait_seconds'] * 1000):4}",

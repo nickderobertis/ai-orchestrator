@@ -156,6 +156,26 @@ class WatchdogSignal:
     observed_pids: tuple[ProcessId, ...]
 
 
+def _resolve_onejudge(onejudge_bin: str, env: Mapping[str, str]) -> tuple[str, str]:
+    """Resolve and verify the executable against the repository's adopted version."""
+    resolved = shutil.which(onejudge_bin, path=env.get("PATH"))
+    if resolved is None:
+        raise DispatchError(f"onejudge binary not found: {onejudge_bin!r} — run 'just bootstrap'")
+    resolved = os.path.abspath(resolved)
+    adopted = ONEJUDGE_VERSION_FILE.read_text(encoding="utf-8").strip()
+    version_result = subprocess.run(
+        [resolved, "--version"], text=True, capture_output=True, env=env, check=False
+    )
+    expected = f"onejudge {adopted}"
+    actual = version_result.stdout.strip()
+    if version_result.returncode != 0 or actual != expected:
+        observed = actual or version_result.stderr.strip() or "<no version output>"
+        raise DispatchError(
+            f"onejudge version mismatch: expected {expected!r}, got {observed!r} from {resolved}"
+        )
+    return resolved, adopted
+
+
 def _build_report(
     persona: str, result: RunResult, *, provenance: dict[str, object] | None = None
 ) -> Report:
@@ -309,26 +329,7 @@ def run_onejudge(
     _validate_oneharness_timeout(process_env["ONEHARNESS_TIMEOUT"])
     stall_timeout = _stall_timeout(process_env)
     heartbeat_timeout = _worker_heartbeat_timeout(process_env)
-    resolved_onejudge = shutil.which(onejudge_bin, path=process_env.get("PATH"))
-    if resolved_onejudge is None:
-        raise DispatchError(f"onejudge binary not found: {onejudge_bin!r} — run 'just bootstrap'")
-    resolved_onejudge = os.path.abspath(resolved_onejudge)
-    adopted_version = ONEJUDGE_VERSION_FILE.read_text(encoding="utf-8").strip()
-    version_result = subprocess.run(
-        [resolved_onejudge, "--version"],
-        text=True,
-        capture_output=True,
-        env=process_env,
-        check=False,
-    )
-    expected_version = f"onejudge {adopted_version}"
-    actual_version = version_result.stdout.strip()
-    if version_result.returncode != 0 or actual_version != expected_version:
-        actual = actual_version or version_result.stderr.strip() or "<no version output>"
-        raise DispatchError(
-            f"onejudge version mismatch: expected {expected_version!r}, got {actual!r} "
-            f"from {resolved_onejudge}"
-        )
+    resolved_onejudge, adopted_version = _resolve_onejudge(onejudge_bin, process_env)
     configured_provider = config.get("provider")
     provider_kind = provider
     if provider_kind is None and isinstance(configured_provider, dict):
@@ -564,11 +565,21 @@ def run_onejudge(
             f"onejudge failed (exit 2 — bad config or provider/runtime error): {exc}"
         ) from exc
     if isinstance(result, Report):
-        if result.raw is not None:
-            result.raw["provenance"] = provenance
+        result.raw = dict(result.raw or {})
+        result.raw["provenance"] = provenance
         return result
     if result is None:
-        return Report(persona, 1, False, True, 0, [], {}, None, "cancelled cooperatively")
+        return Report(
+            persona,
+            1,
+            False,
+            True,
+            0,
+            [],
+            {},
+            {"provenance": provenance},
+            "cancelled cooperatively",
+        )
     return _build_report(persona, result, provenance=provenance)
 
 
@@ -710,6 +721,7 @@ def launch_orchestrator(
         raise DispatchError(f"plan does not exist: {plan}")
     if not isinstance(onejudge_bin, str) or not onejudge_bin or "\x00" in onejudge_bin:
         raise DispatchError("onejudge binary must be a non-empty, non-NUL string")
+    resolved_onejudge, _ = _resolve_onejudge(onejudge_bin, os.environ)
     if round_budget is not None and (not math.isfinite(round_budget) or round_budget <= 0):
         raise DispatchError(f"'{ROUND_BUDGET_OPTION}' must be a positive finite number")
     plan_mapping = load_yaml(plan)
@@ -805,7 +817,7 @@ def launch_orchestrator(
         "round, review its recorded "
         "result, and surface milestones, blockers, departures, and closeout to your supervisor."
     )
-    command = [onejudge_bin, "run", str(effective), "--task", task, "--format", "json"]
+    command = [resolved_onejudge, "run", str(effective), "--task", task, "--format", "json"]
     process_env = dict(os.environ)
     process_env["ONEHARNESS_TIMEOUT"] = str(turn_timeout)
     process_env[CHANNEL_DIR_ENV] = str(channel_dir)
