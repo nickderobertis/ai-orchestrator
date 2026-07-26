@@ -98,7 +98,7 @@ from .runs import (
     validate_run_id,
     write_result,
 )
-from .scratch import sweep_scratch
+from .scratch import capacity_failure_detail, sweep_scratch
 from .workspace import Workspace
 
 NodeKind = Literal["agent", "human"]
@@ -111,7 +111,6 @@ _INFRASTRUCTURE_FAILURE_PATTERNS = (
         r"(?:OOMKilled|OOM[- ]kill|out of memory|Cannot allocate memory)",
         re.IGNORECASE,
     ),
-    re.compile(r"scratch filesystem .* below the .* dispatch threshold", re.IGNORECASE),
     re.compile(r"provider error.*\b(?:respond|supervisor)\b", re.IGNORECASE | re.DOTALL),
     re.compile(r"oneharness exited with signal:\s*9\b", re.IGNORECASE),
     re.compile(r"harness failed\s*\(\s*auth\s*\)", re.IGNORECASE),
@@ -123,6 +122,8 @@ _INFRASTRUCTURE_FAILURE_PATTERNS = (
 def infrastructure_failure_detail(exc: BaseException) -> str | None:
     """Return the durable underlying error only for known no-dispatch failures."""
     detail = str(exc).strip()
+    if capacity_detail := capacity_failure_detail(exc):
+        return capacity_detail
     if any(pattern.search(detail) for pattern in _INFRASTRUCTURE_FAILURE_PATTERNS):
         return detail
     return None

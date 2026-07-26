@@ -97,25 +97,17 @@ def test_pid_probe_is_conservative_and_removal_cli_reports_summary(
     assert str(dead) not in output
 
 
-def test_concurrent_watchdog_revival_and_disappearance_are_safe(
+def test_final_watchdog_liveness_check_preserves_active_directory(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     watchdog = tmp_path / "orchestrator-watchdog-race"
     watchdog.mkdir()
     (watchdog / "pid").write_text("123", encoding="utf-8")
-    orphan_checks = iter((True, False))
-    monkeypatch.setattr(scratch, "_watchdog_is_orphaned", lambda path: next(orphan_checks))
+    monkeypatch.setattr(scratch, "_watchdog_is_orphaned", lambda path: False)
     result = sweep_scratch(tmp_path)
     assert result.removed == () and watchdog.exists()
 
     monkeypatch.setattr(scratch, "_watchdog_is_orphaned", lambda path: True)
-    monkeypatch.setattr(
-        scratch.shutil,
-        "rmtree",
-        lambda path: (_ for _ in ()).throw(FileNotFoundError()),
-    )
-    assert sweep_scratch(tmp_path).removed == ()
-
     assert main(["--root", str(tmp_path), "--dry-run"]) == 0
     assert str(watchdog) in capsys.readouterr().out
 

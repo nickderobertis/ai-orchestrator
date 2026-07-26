@@ -22,6 +22,9 @@ def test_sweep_recipe_reclaims_orphans_and_preserves_live_scratch(tmp_path: Path
     live = tmp_path / "orchestrator-watchdog-live"
     live.mkdir()
     (live / "pid").write_text(f"{os.getpid()}\n", encoding="utf-8")
+    malformed = tmp_path / "orchestrator-watchdog-malformed"
+    malformed.mkdir()
+    (malformed / "pid").write_text("bad\n", encoding="utf-8")
     old_third_party = tmp_path / "oneharness-sdk-old"
     old_third_party.mkdir()
     (old_third_party / "payload").write_bytes(b"y" * 19)
@@ -41,6 +44,7 @@ def test_sweep_recipe_reclaims_orphans_and_preserves_live_scratch(tmp_path: Path
     assert not dead.exists()
     assert not old_third_party.exists()
     assert live.exists()
+    assert malformed.exists()
     assert recent.exists()
     assert "removed 2 directories" in result.stdout
     assert "reclaimed 46 bytes" in result.stdout

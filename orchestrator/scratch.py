@@ -25,10 +25,18 @@ DEFAULT_MIN_AGE_SECONDS = 24 * 60 * 60
 DEFAULT_MIN_FREE_BYTES = 5 * 1024**3
 MIN_FREE_BYTES_ENV = "ORCHESTRATOR_MIN_FREE_BYTES"
 MAX_INSPECTED_PATHS = 20
+CAPACITY_ERROR_MARKER = "scratch-capacity-preflight:"
 
 
 class ScratchCapacityError(RuntimeError):
     """The scratch filesystem cannot safely support a lifecycle dispatch."""
+
+
+def capacity_failure_detail(exc: BaseException) -> str | None:
+    detail = str(exc).strip()
+    if isinstance(exc, ScratchCapacityError) or CAPACITY_ERROR_MARKER in detail:
+        return detail
+    return None
 
 
 @dataclass(frozen=True)
@@ -85,7 +93,7 @@ def sweep_scratch(
     cutoff = (time.time() if now is None else now) - min_age_seconds
     candidates: set[Path] = set()
     for path in scratch_root.glob(WATCHDOG_PATTERN):
-        if path.is_dir() and not path.is_symlink() and _watchdog_is_orphaned(path):
+        if path.is_dir() and not path.is_symlink() and (not dry_run or _watchdog_is_orphaned(path)):
             candidates.add(path)
     for pattern in THIRD_PARTY_PATTERNS:
         for path in scratch_root.glob(pattern):
@@ -113,10 +121,7 @@ def sweep_scratch(
                 except FileNotFoundError:
                     continue
             size = _tree_size(path)
-            try:
-                shutil.rmtree(path)
-            except FileNotFoundError:
-                continue
+            shutil.rmtree(path)
             removed.append(path)
             reclaimed += size
     return SweepResult(tuple(removed), reclaimed, ordered)
@@ -143,7 +148,8 @@ def require_scratch_capacity(
     available = shutil.disk_usage(scratch_path).free
     if available < threshold:
         raise ScratchCapacityError(
-            f"scratch filesystem at {scratch_path} has {available} bytes free, below the "
+            f"{CAPACITY_ERROR_MARKER} scratch filesystem at {scratch_path} has "
+            f"{available} bytes free, below the "
             f"{threshold}-byte dispatch threshold; run `just sweep-scratch` and retry "
             f"(configure with {MIN_FREE_BYTES_ENV})"
         )

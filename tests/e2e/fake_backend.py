@@ -268,7 +268,8 @@ def main() -> int:
                 "infrastructure-enospc": "[Errno 28] No space left on device",
                 "infrastructure-oom": "worker was OOMKilled",
                 "infrastructure-preflight": (
-                    "scratch filesystem at /tmp has 1 bytes free, below the "
+                    "scratch-capacity-preflight: scratch filesystem at /tmp has "
+                    "1 bytes free, below the "
                     "5368709120-byte dispatch threshold"
                 ),
             }

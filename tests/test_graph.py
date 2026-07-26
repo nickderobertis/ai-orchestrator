@@ -1702,7 +1702,6 @@ def test_repo_plan_alias_warns(monkeypatch, capsys) -> None:
         "could not write history: new history record lacks complete v0.3 telemetry",
         "[Errno 28] No space left on device",
         "worker was OOMKilled",
-        "scratch filesystem at /tmp has 1 bytes free, below the 5368709120-byte dispatch threshold",
     ],
 )
 def test_infrastructure_failure_classifier_recognizes_no_dispatch_errors(detail: str) -> None:
@@ -1721,6 +1720,15 @@ def test_infrastructure_failure_classifier_keeps_ambiguous_errors_retryable(
     detail: str,
 ) -> None:
     assert infrastructure_failure_detail(RuntimeError(detail)) is None
+
+
+def test_infrastructure_failure_classifier_uses_capacity_exception_contract() -> None:
+    from orchestrator.scratch import CAPACITY_ERROR_MARKER, ScratchCapacityError
+
+    detail = "capacity threshold reached"
+    assert infrastructure_failure_detail(ScratchCapacityError(detail)) == detail
+    marked = f"{CAPACITY_ERROR_MARKER} {detail}"
+    assert infrastructure_failure_detail(RuntimeError(marked)) == marked
 
 
 def test_recorded_round_translates_scratch_sweep_failure(
