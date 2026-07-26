@@ -58,7 +58,7 @@ if [[ $expect_config_value == true ]]; then
     exit 2
 fi
 if [[ $caller_config == true ]]; then
-    if [[ ! -f $caller_config_path || ! -r $caller_config_path ]]; then
+    if [[ ! -f "$caller_config_path" || ! -r "$caller_config_path" ]]; then
         echo "oneharness-agent: caller config is not a readable regular file: $caller_config_path; correct the path and retry" >&2
         exit 2
     fi

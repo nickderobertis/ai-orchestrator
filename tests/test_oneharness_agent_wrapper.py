@@ -129,6 +129,15 @@ def test_judge_side_keeps_its_own_config_and_adds_no_second(tmp_path: Path) -> N
     )
 
 
+def test_judge_side_accepts_inline_config_path(tmp_path: Path) -> None:
+    judge_config = tmp_path / "oneharness.judge.toml"
+    judge_config.write_text('harnesses = ["codex"]\n', encoding="utf-8")
+    proc, argv = _run_wrapper(tmp_path, ["run", f"--config={judge_config}"])
+    assert proc.returncode == 0, proc.stderr
+    assert f"--config={judge_config}" in argv
+    assert f"{REPO_ROOT}/oneharness.toml" not in argv
+
+
 def test_judge_side_rejects_config_without_a_path(tmp_path: Path) -> None:
     for suffix in (["--config"], ["--config", ""], ["--config="]):
         proc, argv = _run_wrapper(tmp_path, ["run", "--compact", *suffix])
