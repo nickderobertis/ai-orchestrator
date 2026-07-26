@@ -1,4 +1,6 @@
 import {
+  API_V1_PATHS,
+  API_V1_QUERY,
   apiErrorSchema,
   type RunDetail,
   type RunList,
@@ -66,15 +68,15 @@ export class TelemetryClient {
   }
 
   async listRuns(includeSettled = false): Promise<RunList> {
-    const url = this.#url("/api/v1/runs");
-    url.searchParams.set("include_settled", String(includeSettled));
+    const url = this.#url(API_V1_PATHS.runs);
+    url.searchParams.set(API_V1_QUERY.includeSettled, String(includeSettled));
     return this.#request(url, runListSchema.parse);
   }
 
   async getRun(runId: string): Promise<RunDetail> {
     requireOpaqueId(runId, "run ID");
     return this.#request(
-      this.#url(`/api/v1/runs/${encodeURIComponent(runId)}`),
+      this.#url(API_V1_PATHS.run(runId)),
       runDetailSchema.parse,
     );
   }
@@ -82,11 +84,11 @@ export class TelemetryClient {
   subscribe(options: SubscribeOptions): TelemetrySubscription {
     if (options.runId !== undefined) requireOpaqueId(options.runId, "run ID");
     if (options.after !== undefined) requireOpaqueId(options.after, "cursor");
-    const url = this.#url("/api/v1/events");
+    const url = this.#url(API_V1_PATHS.events);
     if (options.runId !== undefined)
-      url.searchParams.set("run_id", options.runId);
+      url.searchParams.set(API_V1_QUERY.runId, options.runId);
     if (options.after !== undefined)
-      url.searchParams.set("after", options.after);
+      url.searchParams.set(API_V1_QUERY.after, options.after);
     const create =
       this.#eventSource ??
       ((sourceUrl: string) => {

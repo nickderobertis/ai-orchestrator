@@ -13,6 +13,17 @@ const timestamp = z.iso.datetime({ offset: true });
 const openObject = <T extends z.ZodRawShape>(shape: T) =>
   z.object(shape).catchall(z.unknown());
 
+export const API_V1_PATHS = {
+  runs: "/api/v1/runs",
+  run: (runId: string) => `/api/v1/runs/${encodeURIComponent(runId)}`,
+  events: "/api/v1/events",
+} as const;
+export const API_V1_QUERY = {
+  includeSettled: "include_settled",
+  runId: "run_id",
+  after: "after",
+} as const;
+
 export const telemetryQualitySchema = z.enum(["complete", "partial", "legacy"]);
 
 export const timingSchema = openObject({
