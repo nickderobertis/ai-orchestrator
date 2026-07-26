@@ -912,6 +912,89 @@ print(json.dumps({
     assert report["results"][1]["text"] == "fallback recovered"
 
 
+def test_agent_wrapper_validates_alternate_identity_and_recovers_through_real_oneharness(
+    tmp_path: Path, oneharness_bin: str
+) -> None:
+    wrapper = REPO_ROOT / "scripts" / "oneharness-agent.sh"
+    environment = {
+        **os.environ,
+        "PATH": f"{Path(oneharness_bin).parent}:{os.environ['PATH']}",
+        "ONEHARNESS_HISTORY": "false",
+    }
+
+    relative = subprocess.run(
+        [str(wrapper), "run", "--prompt", "must not run"],
+        cwd=REPO_ROOT,
+        env={**environment, "ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR": "relative"},
+        text=True,
+        capture_output=True,
+        timeout=60,
+    )
+    assert relative.returncode == 2
+    assert "alternate Claude config path must be absolute" in relative.stderr
+
+    inaccessible = tmp_path / "inaccessible"
+    inaccessible.mkdir(mode=0o600)
+    blocked = subprocess.run(
+        [str(wrapper), "run", "--prompt", "must not run"],
+        cwd=REPO_ROOT,
+        env={
+            **environment,
+            "ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR": str(inaccessible),
+        },
+        text=True,
+        capture_output=True,
+        timeout=60,
+    )
+    assert blocked.returncode == 2
+    assert "not an accessible directory" in blocked.stderr
+
+    fake_codex = tmp_path / "codex"
+    fake_codex.write_text(
+        """#!/usr/bin/env python3
+import json
+
+print(json.dumps({"type": "thread.started", "thread_id": "wrapper-fallback"}))
+print(json.dumps({
+    "type": "item.completed",
+    "item": {"type": "agent_message", "text": "wrapper fallback recovered"},
+}))
+print(json.dumps({
+    "type": "turn.completed",
+    "usage": {"input_tokens": 1, "cached_input_tokens": 0, "output_tokens": 1},
+}))
+""",
+        encoding="utf-8",
+    )
+    fake_codex.chmod(0o755)
+    recovered = subprocess.run(
+        [
+            str(wrapper),
+            "run",
+            "--bin",
+            f"codex={fake_codex}",
+            "--mode",
+            "default",
+            "--prompt",
+            "prove wrapper fallback",
+            "--compact",
+        ],
+        cwd=REPO_ROOT,
+        env={
+            **environment,
+            "ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR": str(tmp_path / "absent"),
+        },
+        text=True,
+        capture_output=True,
+        timeout=60,
+    )
+    assert recovered.returncode == 0, recovered.stderr
+    report = json.loads(recovered.stdout)
+    assert [item["harness_id"] for item in report["results"]] == ["codex"]
+    assert report["results"][0]["status"] == "ok"
+    assert report["results"][0]["text"] == "wrapper fallback recovered"
+
+
 def test_run_onejudge_config_error_raises(onejudge_bin) -> None:
     bad = {
         "provider": {"kind": "command", "command": [sys.executable, str(FAKE_BACKEND)]},
