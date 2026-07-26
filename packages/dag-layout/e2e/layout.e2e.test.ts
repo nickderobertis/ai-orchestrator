@@ -250,3 +250,23 @@ test("a package consumer can render an empty graph", () => {
     edges: [],
   });
 });
+
+test("a package consumer receives terminal failure style tokens", () => {
+  const layout = layoutDag({
+    nodes: [
+      {
+        id: "cancelled",
+        label: "Cancelled",
+        kind: "agent",
+        state: "cancelled",
+      },
+      { id: "failed", label: "Failed", kind: "agent", state: "failed" },
+    ],
+    edges: [],
+  });
+
+  expect(layout.nodes.map(({ id, style }) => ({ id, style }))).toEqual([
+    { id: "cancelled", style: "muted" },
+    { id: "failed", style: "danger" },
+  ]);
+});
