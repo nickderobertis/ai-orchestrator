@@ -1623,6 +1623,26 @@ def test_real_cli_recovers_waiting_and_no_change_lifecycle_results(
     process.wait()
     provider_release.write_text("release\n", encoding="utf-8")
 
+    interrupted_records = [json.loads(line) for line in events_path.read_text().splitlines()]
+    for event in interrupted_records:
+        if event["kind"] == "node-settled" and event.get("node") == "waiting-lifecycle":
+            event["detail"]["result"]["outcome"] = "unknown-lifecycle-outcome"
+            break
+    original_events = events_path.read_text()
+    events_path.write_text(
+        "".join(f"{json.dumps(event)}\n" for event in interrupted_records),
+        encoding="utf-8",
+    )
+    invalid_recovery = subprocess.run(
+        [*command, "--recover"], cwd=REPO_ROOT, text=True, capture_output=True, check=False
+    )
+    assert invalid_recovery.returncode == 1
+    assert (
+        "recorded lifecycle result has invalid outcome 'unknown-lifecycle-outcome'"
+        in invalid_recovery.stderr
+    )
+    events_path.write_text(original_events, encoding="utf-8")
+
     recovered = subprocess.run(
         [*command, "--recover"], cwd=REPO_ROOT, text=True, capture_output=True, check=False
     )

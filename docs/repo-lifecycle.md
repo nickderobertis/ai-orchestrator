@@ -21,13 +21,15 @@ ensure clone (once per repo)  →  fresh worktree on a new branch off base
 ```
 
 Everything up to "publish + merge" is identical for every repo; only the last
-step differs by where the repo lives (see *Merge strategies*). The result is a
-`LifecycleResult` whose `outcome` is one of: `merged`, `pr-open` (successful
-publication with policy `none`), `already-integrated` (the verified branch
-content was already present in the publication base, so local closeout recorded
-the landing without creating an empty squash commit),
-`not-completed` (agent hit the turn cap), `gate-failed`, `no-changes`,
-`checks-failed`, `closed`, `timeout`, `stack-conflict`, `error`.
+step differs by where the repo lives (see *Merge strategies*). The authoritative
+closed `LifecycleResult.outcome` domain is `LifecycleOutcome` in
+`orchestrator/outcomes.py`; recorded values outside that type are rejected during
+recovery. In its common publication states, `merged` means publication created
+and landed a commit, `pr-open` means policy `none` left a successful publication
+open, and `already-integrated` means the verified content was already present in
+the publication base. Failure and recovery outcomes retain their specific
+gate, check, conflict, timeout, or retry diagnosis rather than collapsing to a
+generic task failure.
 
 Local publication builds its squash in an intentionally detached scratch
 worktree. If the squash produces no tree change, closeout treats that as
