@@ -93,7 +93,7 @@ def sweep_scratch(
     cutoff = (time.time() if now is None else now) - min_age_seconds
     candidates: set[Path] = set()
     for path in scratch_root.glob(WATCHDOG_PATTERN):
-        if path.is_dir() and not path.is_symlink() and (not dry_run or _watchdog_is_orphaned(path)):
+        if path.is_dir() and not path.is_symlink() and _watchdog_is_orphaned(path):
             candidates.add(path)
     for pattern in THIRD_PARTY_PATTERNS:
         for path in scratch_root.glob(pattern):

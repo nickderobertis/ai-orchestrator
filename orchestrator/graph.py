@@ -114,8 +114,11 @@ _INFRASTRUCTURE_FAILURE_PATTERNS = (
     re.compile(r"provider error.*\b(?:respond|supervisor)\b", re.IGNORECASE | re.DOTALL),
     re.compile(r"oneharness exited with signal:\s*9\b", re.IGNORECASE),
     re.compile(r"harness failed\s*\(\s*auth\s*\)", re.IGNORECASE),
-    re.compile(r"cannot write v0\.3 history telemetry", re.IGNORECASE),
-    re.compile(r"new history record lacks complete v0\.3 telemetry", re.IGNORECASE),
+    re.compile(r"cannot write v[0-9]+(?:\.[0-9]+)* history telemetry", re.IGNORECASE),
+    re.compile(
+        r"new history (?:record|run) lacks complete v[0-9]+(?:\.[0-9]+)* telemetry",
+        re.IGNORECASE,
+    ),
 )
 
 

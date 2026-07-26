@@ -28,12 +28,15 @@ def test_dry_run_is_inspectable_and_invalid_pid_is_left_alone(tmp_path: Path) ->
     invalid = tmp_path / "orchestrator-watchdog-invalid"
     invalid.mkdir()
     (invalid / "pid").write_text("bad", encoding="utf-8")
+    live = tmp_path / "orchestrator-watchdog-live"
+    live.mkdir()
+    (live / "pid").write_text(f"{os.getpid()}\n", encoding="utf-8")
 
     result = sweep_scratch(tmp_path, dry_run=True)
 
     assert result.candidates == (dead,)
     assert result.removed == ()
-    assert dead.exists() and invalid.exists()
+    assert dead.exists() and invalid.exists() and live.exists()
 
 
 def test_known_patterns_are_extensible_and_unknown_old_scratch_is_preserved(
