@@ -117,11 +117,12 @@ adjust the cadence, add
 seconds. This pacemaker is independent of the reader-side `just monitor
 --heartbeat` silence display described below.
 
-While a surface is waiting to be consumed or answered, `just runs` and `just
+While a consumed surface is persisted awaiting an answer, `just runs` and `just
 status` report `waiting for planner decision` for blocking surfaces and `waiting
 for planner reply` for informational ones, followed by the surface kind and
-message. This distinguishes completed work held at a planner boundary from an
-orchestrator that is actively executing work.
+message. A queued, unconsumed heartbeat remains non-blocking and is not reported
+as a reply wait. This distinguishes completed work held at a planner boundary
+from an orchestrator that is actively executing work.
 
 Every proposal includes `surface.blocking`: `true` means the worker or orchestrator
 is awaiting the decision, while `false` is an informational follow-up that does
