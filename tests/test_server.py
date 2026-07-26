@@ -73,6 +73,15 @@ def test_status_for(exc: Exception, status: int, code: str) -> None:
     assert server._status_for(exc) == (status, code)  # type: ignore[arg-type]
 
 
+def test_parse_cursor_tolerates_malformed_headers() -> None:
+    assert server._parse_cursor("5") == 5
+    assert server._parse_cursor("-5") == -5
+    assert server._parse_cursor(None) is None
+    # A crafted header that the old lstrip("-").isdigit() guard admitted must not crash.
+    for crafted in ("--5", "5-", "abc", "", "0x5", " "):
+        assert server._parse_cursor(crafted) is None
+
+
 def test_signatures_missing_dir_and_watch_filter(tmp_path: Path) -> None:
     assert server._signatures(tmp_path / "missing", None) == {}
     runs = tmp_path / "runs"

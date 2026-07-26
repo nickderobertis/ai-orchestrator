@@ -62,6 +62,20 @@ def _status_for(exc: ReadError) -> tuple[int, str]:
             return 500, "read_error"
 
 
+def _parse_cursor(value: str | None) -> int | None:
+    """Parse an SSE resume cursor, tolerating any malformed ``Last-Event-ID``.
+
+    A crafted header must never crash the stream; an unparseable value falls back to
+    ``None`` so the connection opens with a fresh snapshot instead.
+    """
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except ValueError:
+        return None
+
+
 def _sse(cursor: int, event: str, data: dict[str, Any]) -> str:
     if event not in _SSE_EVENTS:  # pragma: no cover - guarded by callers
         raise ValueError(f"unknown SSE event {event!r}")
@@ -142,10 +156,9 @@ def create_app(
                 watched = validate_run_id(run_id)
             except ConfigError as exc:
                 return _error(422, "invalid_run_id", str(exc))
-        header = request.headers.get("last-event-id")
-        resume_from = after
-        if resume_from is None and header is not None and header.lstrip("-").isdigit():
-            resume_from = int(header)
+        resume_from = (
+            after if after is not None else _parse_cursor(request.headers.get("last-event-id"))
+        )
         return StreamingResponse(
             _event_stream(
                 request,
