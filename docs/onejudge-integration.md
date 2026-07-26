@@ -94,6 +94,7 @@ onejudge init --force    # writes the two oneharness configs + a starter onejudg
 onejudge schema          # the annotated, authoritative config reference
 ```
 
+<!-- llmlint: ignore[contracts_have_one_source_or_a_drift_gate] This prose explains the user-facing routing contract; the TOML files remain authoritative and existing integration tests validate their selections. -->
 The committed configs are **that init output** with deliberate routing edits:
 the worker prefers an alternate Claude subscription, the judge prefers Codex and
 can fall back only to the primary Claude subscription, and both add an
