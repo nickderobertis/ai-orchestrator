@@ -54,7 +54,7 @@ from .cli_contract import ROUND_BUDGET_OPTION
 from .config import ConfigError, build_effective_config, load_yaml
 from .coordination import atomic_json
 from .goals import Goal, graph_identities, register_run, update_run_owner
-from .labels import LABEL_ENV, LabelError, merge_labels
+from .labels import LABEL_ENV, LabelError, merge_labels, semantic_agent_labels
 from .personas import persona_path
 from .runs import ArtifactPaths, resolve_run_dir, slugify
 from .watchdog import (
@@ -633,10 +633,8 @@ def dispatch(
     )
     process_env = {**context_env, **(env or {})}
     _validate_environment(process_env)
-    semantic_role = persona if persona in {"check-in", "pr-author", "orchestrator"} else "worker"
     semantic_labels = {
-        "agent_role": semantic_role,
-        "persona": persona,
+        **semantic_agent_labels(persona),
         **(labels or {}),
     }
     return run_onejudge(
@@ -783,7 +781,7 @@ def launch_orchestrator(
     process_env[CHANNEL_RUN_ID_ENV] = run_dir.name
     process_env[LABEL_ENV] = merge_labels(
         process_env.get(LABEL_ENV),
-        {"run_id": run_dir.name, "agent_role": "orchestrator", "persona": "orchestrator"},
+        {"run_id": run_dir.name, **semantic_agent_labels("orchestrator")},
     )
     _validate_oneharness_timeout(process_env["ONEHARNESS_TIMEOUT"])
     try:

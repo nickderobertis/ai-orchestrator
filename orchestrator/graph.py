@@ -1294,8 +1294,6 @@ def main(argv: list[str] | None = None) -> int:
                         run_id=cast(RunId, validated_run_id),
                         round_number=round_number,
                     ),
-                    "agent_role": "check-in",
-                    "persona": "check-in",
                 },
                 timeout=dispatch_timeout,
             )

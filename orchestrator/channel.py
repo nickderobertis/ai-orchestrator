@@ -21,7 +21,7 @@ import socket
 import sys
 import threading
 import time
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager, suppress
 from pathlib import Path
 from typing import Any, Protocol
@@ -58,6 +58,12 @@ class ProposalSink(Protocol):
     def drain_commands(self) -> tuple[EditCommand, ...]: ...
 
     def heartbeat_tick(self) -> None: ...
+
+
+class CheckInDispatch(Protocol):
+    """One best-effort infrastructure dispatch that reports whether it surfaced."""
+
+    def __call__(self) -> bool: ...
 
 
 def _heartbeat_path(channel_dir: Path) -> Path:
@@ -458,13 +464,13 @@ class ProposalPump:
         self._reply_received = threading.Event()
         self._answered: set[tuple[str, str]] = set()
         self._answer_lock = threading.Lock()
-        self._check_in: Callable[[], bool] | None = None
+        self._check_in: CheckInDispatch | None = None
         self._thread = threading.Thread(target=self._service, daemon=True)
         self._receiver = threading.Thread(target=self._receive, daemon=True)
         self._thread.start()
         self._receiver.start()
 
-    def configure_check_in(self, check_in: Callable[[], bool]) -> None:
+    def configure_check_in(self, check_in: CheckInDispatch) -> None:
         """Attach the infrastructure dispatch after channel validation."""
         self._check_in = check_in
 
