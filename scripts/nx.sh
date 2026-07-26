@@ -18,6 +18,7 @@ export NX_CACHE_DIRECTORY="$cache_root"
 log="$(mktemp)" || { echo "nx: cannot create a temporary log; make temporary storage available and retry" >&2; exit 1; }
 trap 'rm -f "$log"' EXIT
 if bunx nx "$@" >"$log" 2>&1; then
+  # llmlint: ignore[tool_output_is_signal] Explicit debug output lets the cache-contract check inspect Nx's success evidence; default successful invocations still emit one line.
   if [[ "${AI_ORCHESTRATOR_NX_SHOW_OUTPUT:-}" == "1" ]]; then cat "$log"; fi
   printf 'nx: requested targets succeeded\n'
   exit 0
