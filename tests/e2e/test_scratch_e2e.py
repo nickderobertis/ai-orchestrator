@@ -115,7 +115,7 @@ def test_sweep_recipe_reclaims_orphans_and_preserves_live_scratch(tmp_path: Path
     assert "reclaimed 46 bytes" in result.stdout
 
 
-def test_third_party_sweep_waits_for_inflight_lifecycle_then_reclaims(
+def test_third_party_sweep_skips_inflight_lifecycle_then_reclaims(
     tmp_path: Path,
     bare_origin: Callable[..., Path],
     command_base: Callable[..., Path],
