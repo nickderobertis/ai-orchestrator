@@ -30,6 +30,8 @@ def _setup_repo(
     (package / "__init__.py").write_text("", encoding="utf-8")
     for name in ("pyproject.toml", "uv.lock"):
         shutil.copy2(REPO_ROOT / name, repo / name)
+    shutil.copy2(REPO_ROOT / "justfile", repo / "justfile")
+    shutil.copy2(REPO_ROOT / "orchestrator" / "scratch.py", package / "scratch.py")
     if dependency_oneharness != ONEHARNESS_VERSION:
         pyproject = repo / "pyproject.toml"
         pyproject.write_text(
@@ -86,6 +88,7 @@ def test_session_setup_syncs_real_pinned_clis_and_then_needs_no_uv(tmp_path: Pat
     installed = _run_setup(repo, tmp_path)
 
     assert installed.returncode == 0, installed.stderr
+    assert "sweep-scratch: removed" in installed.stderr
     assert (
         subprocess.run(
             [repo / ".venv" / "bin" / "oneharness", "--version"],
@@ -110,6 +113,33 @@ def test_session_setup_fails_when_synced_cli_misses_adopted_version(tmp_path: Pa
     assert result.returncode == 1
     assert "oneharness verification failed" in result.stderr
     assert "required pinned onejudge and oneharness dependencies are unavailable" in result.stderr
+
+
+def test_session_setup_continues_when_scratch_sweep_fails(tmp_path: Path) -> None:
+    repo = _setup_repo(tmp_path)
+    justfile = repo / "justfile"
+    justfile.write_text(
+        justfile.read_text(encoding="utf-8").replace(
+            '@uv run orchestrator-sweep-scratch "$@"',
+            "@false",
+        ),
+        encoding="utf-8",
+    )
+
+    result = _run_setup(repo, tmp_path)
+
+    assert result.returncode == 0, result.stderr
+    assert "scratch sweep failed; continuing session setup" in result.stderr
+
+
+def test_session_setup_continues_when_scratch_sweep_is_unavailable(tmp_path: Path) -> None:
+    repo = _setup_repo(tmp_path)
+    (repo / "justfile").unlink()
+
+    result = _run_setup(repo, tmp_path)
+
+    assert result.returncode == 0, result.stderr
+    assert "scratch sweep unavailable; continuing session setup" in result.stderr
 
 
 def test_session_setup_fails_when_synced_onejudge_misses_adopted_version(
