@@ -74,7 +74,7 @@ EXIT_CONFIG_ERROR = 2
 # inactivity is bounded separately below; issue #6 tracks finer phase budgets.
 DEFAULT_ONEHARNESS_TIMEOUT = "10800"
 DEFAULT_DISPATCH_STALL_TIMEOUT = "600"
-DEFAULT_WORKER_HEARTBEAT_TIMEOUT = "5"
+DEFAULT_WORKER_HEARTBEAT_TIMEOUT = "60"
 ORCHESTRATOR_ONEHARNESS_TIMEOUT = "86400"
 AGENT_ONEHARNESS_BIN = REPO_ROOT / "scripts" / "oneharness-agent.sh"
 DispatchOutcome = Literal["worker-died"]
