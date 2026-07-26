@@ -17,6 +17,7 @@ repo_root=$(dirname -- "$script_dir")
 : "${HOME:?oneharness-agent: HOME is required to locate the alternate Claude config}"
 alternate_config_dir="${ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR:-$HOME/.claude-alt}"
 agent_config="$repo_root/oneharness.toml"
+export ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR="$alternate_config_dir"
 
 if [ "${1-}" != "run" ]; then
     echo "oneharness-agent: expected the 'run' subcommand" >&2
@@ -33,7 +34,10 @@ for arg in "$@"; do
     esac
 done
 if [[ $caller_config == true ]]; then
-    unset ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR
+    # Keep the portable indirection available while oneharness resolves config.
+    # The judge's explicit primary variant does not consume it and masks
+    # CLAUDE_CONFIG_DIR, but oneharness may still discover and layer the project
+    # config before applying the caller's --config.
     exec oneharness run "$@"
 fi
 
@@ -41,7 +45,6 @@ if [ ! -f "$agent_config" ] || [ ! -r "$agent_config" ]; then
     echo "oneharness-agent: required agent config is not a readable regular file: $agent_config; restore it from the repository or run 'just bootstrap', then retry" >&2
     exit 2
 fi
-export ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR="$alternate_config_dir"
 case "$alternate_config_dir" in
     /*) ;;
     *)

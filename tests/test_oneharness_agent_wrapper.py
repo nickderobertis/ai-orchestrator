@@ -122,7 +122,9 @@ def test_judge_side_keeps_its_own_config_and_adds_no_second(tmp_path: Path) -> N
     assert argv.count("--config") == 1
     assert argv[argv.index("--config") + 1] == judge_cfg
     assert f"{REPO_ROOT}/oneharness.toml" not in argv
-    assert not (tmp_path / "oneharness-env").read_text(encoding="utf-8").strip()
+    assert (tmp_path / "oneharness-env").read_text(encoding="utf-8").strip() == str(
+        tmp_path / "home" / ".claude-alt"
+    )
 
 
 def test_non_run_subcommand_is_rejected(tmp_path: Path) -> None:
