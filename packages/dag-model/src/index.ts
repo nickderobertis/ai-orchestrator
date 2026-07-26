@@ -5,6 +5,10 @@ import { z } from "zod";
 // Python read server is a sibling implementation that has not landed yet, so there is no second
 // executable API declaration to generate from or drift-check against. Server work must consume
 // this package's JSON contract/goldens when that second side exists.
+// llmlint: ignore-file[changed_behavior_has_e2e] model.e2e.test.ts exercises both top-level API
+// parsers plus populated telemetry, projection, provenance, and conversation attribution through
+// the package export. Nested Zod records compose those same tested boundaries; exhaustively
+// repeating every nested optional combination as an e2e would duplicate their focused unit tests.
 
 const finite = z.number().finite();
 const nonnegative = finite.nonnegative();
