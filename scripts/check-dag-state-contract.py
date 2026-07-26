@@ -151,7 +151,9 @@ def main() -> None:
     if not set(roles) == set(typescript_roles) == set(documented_roles):
         fail(
             "semantic agent roles disagree across orchestrator/labels.py, "
-            "packages/dag-model/src/index.ts, and docs/dag-ui/design.md"
+            "packages/dag-model/src/index.ts, and docs/dag-ui/design.md; treat the "
+            "Python AgentRole Literal as authoritative, then update the TypeScript "
+            "agentRoleSchema and documented AgentRole union to contain the same roles"
         )
     print("dag state contract: Python, TypeScript, and documented contracts agree")
 
