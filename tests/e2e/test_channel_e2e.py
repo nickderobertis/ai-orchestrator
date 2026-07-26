@@ -15,7 +15,6 @@ from waits import deadline
 from waits import timeout as e2e_timeout
 
 from orchestrator import BASE_CONFIG, REPO_ROOT, gitops
-from orchestrator.channel import write_message
 from orchestrator.dispatch import launch_orchestrator
 from orchestrator.registry import Registry
 from orchestrator.watchdog import ProcessId, process_activity
@@ -220,16 +219,15 @@ def test_due_heartbeat_surfaces_during_active_step_and_disabled_run_stays_silent
         heartbeat_interval=10,
         requested_run_id="heartbeat-disabled",
     )
-    disabled_channel = runs / disabled_id / "channel"
-    write_message(
-        disabled_channel / "down.fifo",
+    _reply_cli(
+        disabled_id,
+        runs,
         {
             "completion": False,
             "reason": "disable the pacemaker",
             "message": "continue",
             "heartbeat_interval": False,
         },
-        timeout=120,
     )
     disabled_boundary = _wait_surface(disabled_id, runs, wait_seconds=120)
     assert disabled_boundary["surface"]["kind"] == "milestone"
@@ -755,6 +753,26 @@ def test_reattached_planner_replies_to_mid_run_proposal_without_stopping_graph(
         check=False,
     )
     assert "REPLY REQUESTED" in monitored.stdout
+    expected_wait = (
+        "waiting for planner reply: proposal: "
+        "discoverer: - Add a regression test for the adjacent edge case."
+    )
+    listed = subprocess.run(
+        ["just", "runs", "--runs-dir", str(runs)],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    assert expected_wait in listed.stdout
+    status = subprocess.run(
+        ["just", "status", "--runs-dir", str(runs)],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    assert f"{run_id}: {expected_wait}" in status.stdout
     assert provider_ready.read_text(encoding="utf-8") == "ready\n"
     _reply_cli(
         run_id,

@@ -76,6 +76,9 @@ class _RecordingProposalPump:
     def persist_replies(self) -> None:
         self.drains += 1
 
+    def close(self) -> None:
+        self.persist_replies()
+
 
 class _EditingPump(_RecordingProposalPump):
     def __init__(self, commands: list[EditCommand], *, wait_ticks: int = 0) -> None:
@@ -372,7 +375,6 @@ def test_main_validates_and_services_inherited_proposal_channel(
     ) -> _RecordingProposalPump:
         assert (path, run_id, round_number) == (channel, "outer", 1)
         pump = _RecordingProposalPump()
-        pump.close = lambda: pump.persist_replies()  # type: ignore[attr-defined]
         pumps.append(pump)
         return pump
 

@@ -362,6 +362,37 @@ def _surface(request: Mapping[str, Any], run_id: str, round_number: int) -> dict
     }
 
 
+def _validated_heartbeat_surface(value: Mapping[str, Any], run_id: str) -> dict[str, Any]:
+    """Validate the durable, externally mutable heartbeat-surface frame."""
+    if set(value) != {"op", "run_id", "round", "surface", "messages"}:
+        raise ChannelError("heartbeat surface fields are invalid")
+    if value["op"] != "supervisor" or value["run_id"] != run_id:
+        raise ChannelError("heartbeat surface operation or run id is invalid")
+    round_number = value["round"]
+    if not isinstance(round_number, int) or isinstance(round_number, bool) or round_number < 1:
+        raise ChannelError("heartbeat surface round must be a positive integer")
+    surface = value["surface"]
+    if not isinstance(surface, Mapping) or set(surface) != {"kind", "message", "blocking"}:
+        raise ChannelError("heartbeat surface payload is invalid")
+    if (
+        surface["kind"] != "heartbeat"
+        or not isinstance(surface["message"], str)
+        or not surface["message"].strip()
+        or surface["blocking"] is not False
+    ):
+        raise ChannelError("heartbeat surface values are invalid")
+    messages = value["messages"]
+    if not isinstance(messages, list) or not all(
+        isinstance(message, Mapping)
+        and set(message) == {"role", "content"}
+        and isinstance(message["role"], str)
+        and isinstance(message["content"], str)
+        for message in messages
+    ):
+        raise ChannelError("heartbeat surface messages are invalid")
+    return dict(value)
+
+
 def _reply(value: Mapping[str, Any]) -> dict[str, Any]:
     heartbeat = value.get("heartbeat_interval")
     if "heartbeat_interval" in value and heartbeat is not False:
@@ -758,9 +789,9 @@ def main_next(argv: list[str] | None = None) -> int:
     with advisory_lock(f"channel-heartbeat-surface:{heartbeat_surface.resolve()}"):
         if heartbeat_surface.is_file():
             try:
-                value = load_mapping(heartbeat_surface)
+                value = _validated_heartbeat_surface(load_mapping(heartbeat_surface), run_dir.name)
                 heartbeat_surface.unlink()
-            except (ConfigError, OSError) as exc:
+            except (ChannelError, ConfigError, OSError) as exc:
                 print(f"channel-next: {exc}", file=sys.stderr)
                 return 2
             print(json.dumps(value))
