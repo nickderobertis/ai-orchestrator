@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import os
 import subprocess
+from pathlib import Path
 
 import pytest
 
 from orchestrator.labels import (
     LABEL_ENV,
+    AgentRole,
     LabelError,
     dispatched_agent_role,
     format_labels,
@@ -25,6 +27,13 @@ def test_dispatched_personas_have_deterministic_semantic_roles() -> None:
     assert dispatched_agent_role("engineer") == "worker"
     assert dispatched_agent_role("check-in") == "check-in"
     assert dispatched_agent_role("pr-author") == "pr-author"
+
+
+def test_operator_docs_agent_role_taxonomy_matches_code() -> None:
+    docs = " ".join(Path("docs/orchestration.md").read_text(encoding="utf-8").split())
+    rendered = ", ".join(f"`{role.value}`" for role in AgentRole)
+    head, tail = rendered.rsplit(", ", 1)
+    assert f"The first-class agent roles are {head}, and {tail};" in docs
 
 
 def test_label_env_name() -> None:

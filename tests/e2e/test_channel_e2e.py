@@ -172,6 +172,10 @@ def test_due_heartbeat_is_agent_synthesized_and_normal_surface_resets_clock(
         "message": "active-worker: in progress; follow-ups: none",
         "blocking": False,
     }
+    check_in_labels = (runs / run_id / "check-in-labels.txt").read_text(encoding="utf-8")
+    assert "agent_role=check-in" in check_in_labels
+    assert "persona=check-in" in check_in_labels
+    assert f"run_id={run_id}" in check_in_labels
     assert len(witness.read_text(encoding="utf-8").splitlines()) >= 1
     heartbeat_path = runs / run_id / "channel" / "heartbeat.json"
     wait_deadline = deadline(5)

@@ -122,8 +122,8 @@ seconds. This pacemaker is independent of the reader-side `just monitor
 --heartbeat` silence display described below.
 
 Recorded oneharness history keeps its transport-party `role` and additionally
-labels the semantic `agent_role`. The first-class agent roles are `worker`,
-`judge`, `orchestrator`, `check-in`, and `pr-author`; check-in and pr-author
+labels the semantic `agent_role`. The first-class agent roles are `orchestrator`,
+`worker`, `judge`, `check-in`, and `pr-author`; check-in and pr-author
 sessions remain node-external infrastructure activity rather than implementation
 workers.
 

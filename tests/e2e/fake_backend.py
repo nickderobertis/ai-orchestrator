@@ -223,7 +223,12 @@ def main() -> int:
             if "Send command: just channel-surface " in task:
                 command_text = task.split("Send command: ", 1)[1].splitlines()[0]
                 command = shlex.split(command_text)
-                marker = Path(task.split("Run directory: ", 1)[1].splitlines()[0]) / "check-in-sent"
+                check_in_run = Path(task.split("Run directory: ", 1)[1].splitlines()[0])
+                (check_in_run / "check-in-labels.txt").write_text(
+                    os.environ.get("ONEHARNESS_HISTORY_LABELS", ""),
+                    encoding="utf-8",
+                )
+                marker = check_in_run / "check-in-sent"
                 try:
                     marker.touch(exist_ok=False)
                 except FileExistsError:
