@@ -17,6 +17,20 @@ repo_root=$(dirname -- "$script_dir")
 : "${HOME:?oneharness-agent: HOME is required to locate the alternate Claude config; export HOME or set ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR, then retry}"
 alternate_config_dir="${ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR:-$HOME/.claude-alt}"
 agent_config="$repo_root/oneharness.toml"
+case "$alternate_config_dir" in
+    /*) ;;
+    *)
+        echo "oneharness-agent: alternate Claude config path must be absolute; set ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR to an absolute directory and retry" >&2
+        exit 2
+        ;;
+esac
+if [ -e "$alternate_config_dir" ] &&
+    { [ ! -d "$alternate_config_dir" ] ||
+        [ ! -r "$alternate_config_dir" ] ||
+        [ ! -x "$alternate_config_dir" ]; }; then
+    echo "oneharness-agent: alternate Claude config path is not an accessible directory; create it or fix its permissions, or unset the override to use the default path and retry" >&2
+    exit 2
+fi
 export ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR="$alternate_config_dir"
 
 if [ "${1-}" != "run" ]; then
@@ -73,21 +87,7 @@ if [ ! -f "$agent_config" ] || [ ! -r "$agent_config" ]; then
     echo "oneharness-agent: required agent config is not a readable regular file: $agent_config; restore it from the repository or run 'just bootstrap', then retry" >&2
     exit 2
 fi
-case "$alternate_config_dir" in
-    /*) ;;
-    *)
-        echo "oneharness-agent: alternate Claude config path must be absolute; set ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR to an absolute directory and retry" >&2
-        exit 2
-        ;;
-esac
-if [ -e "$alternate_config_dir" ]; then
-    if [ ! -d "$alternate_config_dir" ] ||
-        [ ! -r "$alternate_config_dir" ] ||
-        [ ! -x "$alternate_config_dir" ]; then
-        echo "oneharness-agent: alternate Claude config path is not an accessible directory; create it or fix its permissions, or unset the override to use the default path and retry" >&2
-        exit 2
-    fi
-elif [ -z "${ONEHARNESS_HARNESSES-}" ]; then
+if [ ! -e "$alternate_config_dir" ] && [ -z "${ONEHARNESS_HARNESSES-}" ]; then
     # A host with only its primary Claude identity must not fail before fallback:
     # skip the absent alternate candidate and dispatch directly through Codex.
     export ONEHARNESS_HARNESSES=codex
