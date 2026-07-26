@@ -1158,7 +1158,8 @@ def test_replay_rejects_invalid_deferred_cleanup() -> None:
         _replay_node_run(node, item)
 
 
-def test_replay_rejects_unknown_lifecycle_outcome() -> None:
+@pytest.mark.parametrize("invalid_outcome", ["unknown", ["merged"]])
+def test_replay_rejects_invalid_lifecycle_outcome(invalid_outcome: object) -> None:
     node = parse_graph(
         {
             "tasks": [
@@ -1171,9 +1172,9 @@ def test_replay_rejects_unknown_lifecycle_outcome() -> None:
             ]
         }
     ).tasks[0]
-    item = cast(GraphResultItem, {"status": "done", "outcome": "unknown"})
+    item = cast(GraphResultItem, {"status": "done", "outcome": invalid_outcome})
 
-    with pytest.raises(ConfigError, match="invalid outcome 'unknown'"):
+    with pytest.raises(ConfigError, match="invalid outcome"):
         _replay_node_run(node, item)
 
 

@@ -1626,9 +1626,11 @@ def test_real_cli_recovers_waiting_and_no_change_lifecycle_results(
     interrupted_records = [json.loads(line) for line in events_path.read_text().splitlines()]
     for event in interrupted_records:
         if event["kind"] == "node-settled" and event.get("node") == "waiting-lifecycle":
-            event["detail"]["result"]["outcome"] = "unknown-lifecycle-outcome"
+            event["detail"]["result"]["outcome"] = ["waiting-human"]
             break
     original_events = events_path.read_text()
+    # llmlint: ignore[tests_mirror_real_usage] Corrupt persisted input has no supported
+    # producer; this fixture setup is followed by recovery through the real CLI boundary.
     events_path.write_text(
         "".join(f"{json.dumps(event)}\n" for event in interrupted_records),
         encoding="utf-8",
@@ -1637,9 +1639,8 @@ def test_real_cli_recovers_waiting_and_no_change_lifecycle_results(
         [*command, "--recover"], cwd=REPO_ROOT, text=True, capture_output=True, check=False
     )
     assert invalid_recovery.returncode == 1
-    assert (
-        "recorded lifecycle result has invalid outcome 'unknown-lifecycle-outcome'"
-        in invalid_recovery.stderr
+    assert "recorded lifecycle result has invalid outcome ['waiting-human']" in (
+        invalid_recovery.stderr
     )
     events_path.write_text(original_events, encoding="utf-8")
 

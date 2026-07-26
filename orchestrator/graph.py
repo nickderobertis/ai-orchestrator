@@ -860,7 +860,12 @@ def _replay_node_run(node: GraphNode, item: GraphResultItem) -> NodeRun:
     """Restore scheduler actual state while retaining the exact serialized result."""
     status = item["status"]
     error = item.get("error")
-    payload: Any = item.get("outcome") if item.get("outcome") in NODE_OUTCOMES else None
+    recorded_outcome = item.get("outcome")
+    payload: Any = (
+        recorded_outcome
+        if isinstance(recorded_outcome, str) and recorded_outcome in NODE_OUTCOMES
+        else None
+    )
     if node.lifecycle is not None:
         anchors = [
             StackBase(
@@ -882,7 +887,7 @@ def _replay_node_run(node: GraphNode, item: GraphResultItem) -> NodeRun:
             # llmlint: ignore[changed_behavior_has_e2e] unit test asserts this rejection.
             raise ConfigError("recorded lifecycle result has invalid deferred_cleanup")
         raw_outcome = item.get("outcome", "error")
-        if raw_outcome not in LIFECYCLE_OUTCOMES:
+        if not isinstance(raw_outcome, str) or raw_outcome not in LIFECYCLE_OUTCOMES:
             raise ConfigError(f"recorded lifecycle result has invalid outcome {raw_outcome!r}")
         payload = LifecycleResult(
             repo=item.get("repo", node.lifecycle.repo),
