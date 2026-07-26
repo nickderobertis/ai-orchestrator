@@ -242,8 +242,27 @@ def main() -> int:
                 with witness.open("a", encoding="utf-8") as stream:
                     stream.write("tick\n")
             orchestrator_plan = _orchestrator_command(task)
-            if "provider-errors" in task and orchestrator_plan is None:
-                sys.stderr.write("fake_backend: provider error\n")
+            infrastructure_failures = {
+                "provider-errors": "fake_backend: provider error",
+                "infrastructure-sigkill": "oneharness exited with signal: 9 (SIGKILL)",
+                "infrastructure-auth": "harness failed (auth): login required",
+                "infrastructure-v03-write": (
+                    "harness claude-code cannot write v0.3 history telemetry"
+                ),
+                "infrastructure-v03-incomplete": (
+                    "new history record lacks complete v0.3 telemetry"
+                ),
+            }
+            infrastructure_error = next(
+                (
+                    detail
+                    for sentinel, detail in infrastructure_failures.items()
+                    if sentinel in task
+                ),
+                None,
+            )
+            if infrastructure_error is not None and orchestrator_plan is None:
+                sys.stderr.write(f"{infrastructure_error}\n")
                 return 1
             plan_text = ""
             if orchestrator_plan is not None:
@@ -277,6 +296,7 @@ def main() -> int:
                                 '"name": "live-edit"',
                                 "lifecycle-worker-death-retry",
                                 "provider-errors",
+                                "infrastructure-",
                             )
                         ),
                         capture_output=True,
