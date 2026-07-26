@@ -47,11 +47,11 @@ from .runs import (
 from .verify import GateAttestation
 
 TELEMETRY_SCHEMA_VERSION = 6
-SUPPORTED_HISTORY_SCHEMA_VERSIONS = ("0.2", "0.3", 1, 2, "1.0")
+SUPPORTED_HISTORY_SCHEMA_VERSIONS = ("0.2", "0.3", 1, 2, "1.0", "1.1")
 #: History schema versions that may carry validated native timing (per-turn
 #: ``model_ms``/``tool_ms`` plus interval-bearing tool events). A version identifies
 #: the line format, not the completeness of timing supplied by a particular harness.
-NATIVE_TIMING_HISTORY_SCHEMAS: frozenset[str | int] = frozenset({"0.3", 2, "1.0"})
+NATIVE_TIMING_HISTORY_SCHEMAS: frozenset[str | int] = frozenset({"0.3", 2, "1.0", "1.1"})
 TelemetryQuality = Literal["complete", "partial", "legacy"]
 TelemetrySource = Literal["onejudge", "oneharness", "history_legacy", "journal_legacy"]
 FailureClass = Literal[

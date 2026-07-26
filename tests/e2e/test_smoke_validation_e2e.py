@@ -87,6 +87,7 @@ def test_smoke_command_surfaces_real_wrapper_failure_without_a_paid_turn() -> No
         cwd=REPO_ROOT,
         env={
             **os.environ,
+            "ONEHARNESS_HARNESSES": "codex",
             "ONEHARNESS_BIN_CODEX": "/does/not/exist/codex",
             "ONEHARNESS_BIN_CLAUDE_CODE": "/does/not/exist/claude",
         },
