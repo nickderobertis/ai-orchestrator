@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fail when renderer node states drift from the projection contract."""
+"""Fail when renderer states or semantic agent roles drift from Python contracts."""
 
 from __future__ import annotations
 
@@ -68,6 +68,60 @@ def layout_states(path: Path) -> list[str]:
     return states
 
 
+def literal_values(path: Path, name: str) -> list[str]:
+    """Read one authoritative unique string Literal assignment."""
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+    except (OSError, SyntaxError) as exc:
+        fail(f"read authoritative {path.name} {name}: {exc}")
+    declarations = [
+        node.value
+        for node in tree.body
+        if isinstance(node, ast.Assign)
+        and len(node.targets) == 1
+        and isinstance(node.targets[0], ast.Name)
+        and node.targets[0].id == name
+    ]
+    if len(declarations) != 1:
+        fail(f"{path.name} must declare exactly one {name}")
+    annotation = declarations[0]
+    if not (
+        isinstance(annotation, ast.Subscript)
+        and isinstance(annotation.value, ast.Name)
+        and annotation.value.id == "Literal"
+    ):
+        fail(f"{path.name} {name} must remain a string Literal")
+    elements = annotation.slice.elts if isinstance(annotation.slice, ast.Tuple) else []
+    values = [
+        item.value
+        for item in elements
+        if isinstance(item, ast.Constant) and isinstance(item.value, str)
+    ]
+    if len(values) != len(elements) or not values or len(values) != len(set(values)):
+        fail(f"{path.name} {name} must contain unique string values")
+    return values
+
+
+def typescript_agent_roles(path: Path) -> list[str]:
+    source = path.read_text(encoding="utf-8")
+    matches = re.findall(
+        r"export\s+const\s+agentRoleSchema\s*=\s*z\.enum\(\[(.*?)\]\);",
+        source,
+        flags=re.DOTALL,
+    )
+    if len(matches) != 1:
+        fail("packages/dag-model/src/index.ts must declare exactly one agentRoleSchema")
+    return re.findall(r'"([^"]+)"', matches[0])
+
+
+def documented_agent_roles(path: Path) -> list[str]:
+    source = path.read_text(encoding="utf-8")
+    matches = re.findall(r"type AgentRole =\n(.*?);", source, flags=re.DOTALL)
+    if len(matches) != 1:
+        fail("docs/dag-ui/design.md must declare exactly one AgentRole union")
+    return re.findall(r'"([^"]+)"', matches[0])
+
+
 def main() -> None:
     try:
         root = Path(
@@ -91,7 +145,15 @@ def main() -> None:
             f"NodeState plus pending {sorted(expected)!r}; reconcile the TypeScript "
             "list with the Python projection states while retaining pending"
         )
-    print("dag state contract: Python and TypeScript states agree")
+    roles = literal_values(root / "orchestrator/labels.py", "AgentRole")
+    typescript_roles = typescript_agent_roles(root / "packages/dag-model/src/index.ts")
+    documented_roles = documented_agent_roles(root / "docs/dag-ui/design.md")
+    if not set(roles) == set(typescript_roles) == set(documented_roles):
+        fail(
+            "semantic agent roles disagree across orchestrator/labels.py, "
+            "packages/dag-model/src/index.ts, and docs/dag-ui/design.md"
+        )
+    print("dag state contract: Python, TypeScript, and documented contracts agree")
 
 
 if __name__ == "__main__":

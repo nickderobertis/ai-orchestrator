@@ -16,6 +16,7 @@ from waits import timeout as e2e_timeout
 
 from orchestrator import BASE_CONFIG, REPO_ROOT, gitops
 from orchestrator.dispatch import launch_orchestrator
+from orchestrator.labels import parse_labels
 from orchestrator.registry import Registry
 from orchestrator.watchdog import ProcessId, process_activity
 
@@ -172,6 +173,12 @@ def test_due_heartbeat_is_agent_synthesized_and_normal_surface_resets_clock(
         "message": "active worker: running; follow-ups: none",
         "blocking": False,
     }
+    recorded_labels = parse_labels(
+        (runs / run_id / "channel" / "check-in-labels.txt").read_text(encoding="utf-8")
+    )
+    assert recorded_labels["agent_role"] == "check-in"
+    assert recorded_labels["persona"] == "check-in"
+    assert recorded_labels["run_id"] == run_id
     heartbeat_path = runs / run_id / "channel" / "heartbeat.json"
     wait_deadline = deadline(5)
     while True:

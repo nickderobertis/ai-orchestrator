@@ -227,6 +227,12 @@ def main() -> int:
                     raise AssertionError("dedicated check-in task omitted channel-surface command")
                 command = shlex.split(command_match.group(1))
                 command[3] = "active worker: running; follow-ups: none"
+                runs_dir = Path(command[command.index("--runs-dir") + 1])
+                run_id = command[2]
+                (runs_dir / run_id / "channel" / "check-in-labels.txt").write_text(
+                    os.environ["ONEHARNESS_HISTORY_LABELS"],
+                    encoding="utf-8",
+                )
                 subprocess.run(command, check=True, capture_output=True, text=True)
             run_log = re.search(r"record-run=(\S+)", task)
             if run_log is not None:
