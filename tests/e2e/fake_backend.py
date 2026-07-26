@@ -221,6 +221,12 @@ def main() -> int:
         case "respond":
             _wait_at_provider_barrier(task)
             guidance = _planner_guidance(messages)
+            role_labels = re.search(r"capture-role-labels=(\S+)", task)
+            if role_labels is not None and _assistant_turns(messages) == 0:
+                Path(role_labels.group(1)).write_text(
+                    os.environ["ONEHARNESS_HISTORY_LABELS"],
+                    encoding="utf-8",
+                )
             if "dedicated-check-in" in task and _assistant_turns(messages) == 0:
                 command_match = re.search(r"`(just channel-surface .+? --runs-dir \S+)`", task)
                 if command_match is None:
@@ -273,11 +279,17 @@ def main() -> int:
             if orchestrator_plan is not None:
                 plan_path = orchestrator_plan.plan
                 plan_text = plan_path.read_text(encoding="utf-8")
+                orchestrator_turn = _assistant_turns(messages)
+                orchestrator_labels = re.search(r'capture-orchestrator-labels=([^"\s]+)', plan_text)
+                if orchestrator_labels is not None and orchestrator_turn == 0:
+                    Path(orchestrator_labels.group(1)).write_text(
+                        os.environ["ONEHARNESS_HISTORY_LABELS"],
+                        encoding="utf-8",
+                    )
                 if "pre-round-pause " in plan_text:
                     release = Path(plan_text.split("pre-round-pause ", 1)[1].split()[0])
                     while not release.exists():
                         time.sleep(0.02)
-                orchestrator_turn = _assistant_turns(messages)
                 if orchestrator_turn == 0:
                     run_argv = list(orchestrator_plan.argv)
                     run_env = None

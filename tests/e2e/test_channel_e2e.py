@@ -149,17 +149,24 @@ def test_due_heartbeat_is_agent_synthesized_and_normal_surface_resets_clock(
 ) -> None:
     runs = tmp_path / "runs"
     witness = tmp_path / "slow-witness"
+    worker_labels_path = tmp_path / "worker-labels"
+    orchestrator_labels_path = tmp_path / "orchestrator-labels"
     plan = tmp_path / "heartbeat-channel.json"
     plan.write_text(
         json.dumps(
             {
                 "schema_version": 3,
-                "name": "heartbeat-channel",
+                "name": (
+                    f"heartbeat-channel capture-orchestrator-labels={orchestrator_labels_path}"
+                ),
                 "tasks": [
                     {
                         "id": "active-worker",
                         "persona": "engineer",
-                        "task": f"slow-branch {witness} complete-now heartbeat-channel",
+                        "task": (
+                            f"slow-branch {witness} complete-now heartbeat-channel "
+                            f"capture-role-labels={worker_labels_path}"
+                        ),
                     }
                 ],
             }
@@ -179,6 +186,12 @@ def test_due_heartbeat_is_agent_synthesized_and_normal_surface_resets_clock(
     assert recorded_labels["agent_role"] == "check-in"
     assert recorded_labels["persona"] == "check-in"
     assert recorded_labels["run_id"] == run_id
+    worker_labels = parse_labels(worker_labels_path.read_text(encoding="utf-8"))
+    assert worker_labels["agent_role"] == "worker"
+    assert worker_labels["persona"] == "engineer"
+    orchestrator_labels = parse_labels(orchestrator_labels_path.read_text(encoding="utf-8"))
+    assert orchestrator_labels["agent_role"] == "orchestrator"
+    assert orchestrator_labels["persona"] == "orchestrator"
     heartbeat_path = runs / run_id / "channel" / "heartbeat.json"
     wait_deadline = deadline(5)
     while True:
@@ -198,6 +211,29 @@ def test_due_heartbeat_is_agent_synthesized_and_normal_surface_resets_clock(
     assert _next_cli(run_id, runs, timeout="0.02").get("surface") is None
     _reply_cli(run_id, runs, {"completion": True, "reason": "verified heartbeat"})
     _wait_report(runs / run_id / "orchestrator" / "report.json")
+
+    pr_author_labels_path = tmp_path / "pr-author-labels"
+    subprocess.run(
+        [
+            "just",
+            "dispatch",
+            "pr-author",
+            f"complete-now capture-role-labels={pr_author_labels_path}",
+            "--base",
+            str(_base(tmp_path)),
+            "--onejudge-bin",
+            onejudge_bin,
+            "--provider",
+            "command",
+        ],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    pr_author_labels = parse_labels(pr_author_labels_path.read_text(encoding="utf-8"))
+    assert pr_author_labels["agent_role"] == "pr-author"
+    assert pr_author_labels["persona"] == "pr-author"
 
     for target, message, timeout, diagnostic in (
         (run_id, "", "1", "non-empty"),
