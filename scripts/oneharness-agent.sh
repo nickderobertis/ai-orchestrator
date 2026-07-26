@@ -23,13 +23,36 @@ if [ "${1-}" != "run" ]; then
 fi
 shift
 
+caller_config=false
 for arg in "$@"; do
     case "$arg" in
         --config | --config=*)
-            exec oneharness run "$@"
+            caller_config=true
             ;;
     esac
 done
+if [[ $caller_config == true ]]; then
+    exec oneharness run "$@"
+fi
+
+case "$ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR" in
+    /*) ;;
+    *)
+        echo "oneharness-agent: alternate Claude config path must be absolute" >&2
+        exit 2
+        ;;
+esac
+if [ -e "$ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR" ]; then
+    if [ ! -d "$ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR" ] ||
+        [ ! -r "$ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR" ]; then
+        echo "oneharness-agent: alternate Claude config path is not an accessible directory" >&2
+        exit 2
+    fi
+elif [ -z "${ONEHARNESS_HARNESSES-}" ]; then
+    # A host with only its primary Claude identity must not fail before fallback:
+    # skip the absent alternate candidate and dispatch directly through Codex.
+    export ONEHARNESS_HARNESSES=codex
+fi
 
 if [ -z "${ORCHESTRATOR_AGENT_STATUS_DIR-}" ]; then
     exec oneharness run --config "$repo_root/oneharness.toml" "$@"

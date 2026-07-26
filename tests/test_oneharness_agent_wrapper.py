@@ -30,7 +30,8 @@ def _run_wrapper(
     stub.write_text(
         "#!/usr/bin/env bash\n"
         'printf \'%s\\n\' "$@" > "$ONEHARNESS_ARGS_FILE"\n'
-        'printf \'%s\\n\' "$ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR" > "$ONEHARNESS_ENV_FILE"\n',
+        'printf \'%s\\n\' "$ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR" > "$ONEHARNESS_ENV_FILE"\n'
+        'printf \'%s\\n\' "${ONEHARNESS_HARNESSES-}" > "$ONEHARNESS_SELECTION_FILE"\n',
         encoding="utf-8",
     )
     stub.chmod(stub.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
@@ -42,6 +43,7 @@ def _run_wrapper(
             "PATH": f"{bin_dir}:/usr/bin:/bin",
             "ONEHARNESS_ARGS_FILE": str(args_file),
             "ONEHARNESS_ENV_FILE": str(tmp_path / "oneharness-env"),
+            "ONEHARNESS_SELECTION_FILE": str(tmp_path / "oneharness-selection"),
             "HOME": str(tmp_path / "home"),
             **(
                 {"ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR": str(alternate_config_dir)}
@@ -66,10 +68,12 @@ def test_agent_side_forces_the_orchestrator_config(tmp_path: Path) -> None:
     assert (tmp_path / "oneharness-env").read_text(encoding="utf-8").strip() == str(
         tmp_path / "home" / ".claude-alt"
     )
+    assert (tmp_path / "oneharness-selection").read_text(encoding="utf-8").strip() == "codex"
 
 
 def test_agent_side_preserves_explicit_alternate_config_dir(tmp_path: Path) -> None:
     explicit = tmp_path / "second-account"
+    explicit.mkdir()
     proc, _ = _run_wrapper(
         tmp_path,
         ["run", "--compact", "--prompt", "probe"],
@@ -77,6 +81,20 @@ def test_agent_side_preserves_explicit_alternate_config_dir(tmp_path: Path) -> N
     )
     assert proc.returncode == 0, proc.stderr
     assert (tmp_path / "oneharness-env").read_text(encoding="utf-8").strip() == str(explicit)
+    assert not (tmp_path / "oneharness-selection").read_text(encoding="utf-8").strip()
+
+
+def test_agent_side_rejects_existing_non_directory_alternate_config(tmp_path: Path) -> None:
+    invalid = tmp_path / "not-a-directory"
+    invalid.write_text("invalid\n", encoding="utf-8")
+    proc, argv = _run_wrapper(
+        tmp_path,
+        ["run", "--compact", "--prompt", "probe"],
+        alternate_config_dir=invalid,
+    )
+    assert proc.returncode == 2
+    assert "not an accessible directory" in proc.stderr
+    assert argv == []
 
 
 def test_judge_side_keeps_its_own_config_and_adds_no_second(tmp_path: Path) -> None:

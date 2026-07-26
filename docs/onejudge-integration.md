@@ -248,8 +248,8 @@ blocking proposal over the planner channel.
   explicitly to override it; onejudge's `max_turns` and the lifecycle `--timeout`
   still bound the whole run independently. Finer phase budgets remain tracked
   in issue #6. Project dispatch also pins the agent-side
-  oneharness `--config` to this repo's config, which selects alternate-subscription
-  Claude Code on `claude-opus-5` before Codex `gpt-5.6-sol`. A global
+  oneharness `--config` to this repo's config, which selects the configured
+  alternate-subscription Claude model before the configured Codex fallback. A global
   `ONEHARNESS_MODELS` chain cannot be used here: onejudge supplies `--session`,
   and oneharness rejects multi-model runs combined with a named session.
 - **Use the tracked graph for coordinated work.** `just run-plan` accepts direct
