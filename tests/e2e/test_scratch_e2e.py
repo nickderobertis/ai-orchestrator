@@ -7,11 +7,14 @@ import os
 import subprocess
 import time
 from pathlib import Path
+from typing import Callable
 
 import pytest
 
 from orchestrator import REPO_ROOT
+from orchestrator.lifecycle import run_repo_task
 from orchestrator.scratch import MIN_FREE_BYTES_ENV
+from orchestrator.workspace import Workspace
 
 
 def test_sweep_recipe_reclaims_orphans_and_preserves_live_scratch(tmp_path: Path) -> None:
@@ -125,6 +128,42 @@ def test_lifecycle_cli_refuses_dispatch_when_scratch_capacity_is_insufficient(
     assert "bytes free" in result.stderr
     assert "just sweep-scratch" in result.stderr
     assert MIN_FREE_BYTES_ENV in result.stderr
+
+
+def test_lifecycle_dispatch_honors_valid_scratch_capacity_override(
+    tmp_path: Path,
+    bare_origin: Callable[..., Path],
+    command_base: Callable[..., Path],
+    personas_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    origin = bare_origin()
+    canonical = tmp_path / "canonical"
+    subprocess.run(
+        ["git", "clone", str(origin), str(canonical)],
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    monkeypatch.setenv(MIN_FREE_BYTES_ENV, "0")
+    workspace = Workspace(
+        tmp_path / "worktrees",
+        resolver=lambda _spec: canonical,
+        workflow="local",
+    )
+    result = run_repo_task(
+        str(origin),
+        "complete-now write-unique-change: capacity override",
+        "engineer",
+        workspace=workspace,
+        base_path=command_base(),
+        persona_dir=personas_dir,
+        verify_cmd=["true"],
+        repo_type="single-owner",
+    )
+
+    assert result.ok is True
+    assert result.outcome == "merged"
 
 
 @pytest.mark.parametrize(
