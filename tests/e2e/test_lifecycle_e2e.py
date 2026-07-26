@@ -38,7 +38,7 @@ import orchestrator.lifecycle as lifecycle_module
 from orchestrator import gitops
 from orchestrator.coordination import LockTimeout, git_lock_identity
 from orchestrator.dispatch import Report
-from orchestrator.github import PullRequest
+from orchestrator.github import GitHubError, PullRequest
 from orchestrator.graph import graph_payload, parse_graph, run_graph
 from orchestrator.journal import NodeJournal, NodeSink, open_journal
 from orchestrator.lifecycle import (
@@ -2070,6 +2070,84 @@ def test_lifecycle_refuses_uncovered_identity_before_dispatch(tmp_path, bare_ori
     assert not dispatched
 
 
+@pytest.mark.parametrize(
+    ("status", "expected"),
+    [
+        ("absent", "no required PR status checks exist"),
+        ("unknown", "required PR status checks are unknown"),
+    ],
+)
+def test_lifecycle_refuses_remote_identity_without_known_required_checks(
+    tmp_path, bare_origin, status: str, expected: str
+) -> None:
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / f"remote-uncovered-{status}")
+    gitops.hooks_dir(canonical).joinpath("pre-push").unlink()
+    workspace = Workspace(
+        tmp_path / f"remote-uncovered-{status}-worktrees",
+        resolver=lambda _spec: canonical,
+        workflow="remote",
+        repo_type="team",
+    )
+
+    class CoverageGitHub(FakeGitHub):
+        def required_status_checks(self, repo: str, branch: str) -> tuple[str, ...]:
+            if status == "unknown":
+                raise GitHubError("branch protection unavailable")
+            return ()
+
+    result = run_repo_task(
+        "acme/widget",
+        "Do not dispatch without known remote merge-path coverage.",
+        "engineer",
+        workspace=workspace,
+        github=CoverageGitHub(origin),
+        dispatch_fn=lambda *_args, **_kwargs: pytest.fail("must not dispatch"),
+    )
+
+    assert result.outcome == "error"
+    assert expected in result.detail
+
+
+@pytest.mark.parametrize(
+    ("rejection", "expected_outcome"),
+    [("gate", "gate-failed"), ("transport", "error")],
+)
+def test_remote_human_checkpoint_records_push_failure(
+    tmp_path, bare_origin, rejection: str, expected_outcome: str
+) -> None:
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / f"human-checkpoint-{rejection}")
+    workspace = Workspace(
+        tmp_path / f"human-checkpoint-{rejection}-worktrees",
+        resolver=lambda _spec: canonical,
+        workflow="remote",
+        repo_type="team",
+    )
+    if rejection == "gate":
+        _install_pre_push_hook(canonical, "printf 'pre-push gate failed\\n' >&2\nexit 1")
+    else:
+        receive = origin / "hooks" / "pre-receive"
+        receive.write_text("#!/bin/sh\nprintf 'remote denied\\n' >&2\nexit 1\n", encoding="utf-8")
+        receive.chmod(0o755)
+
+    result = run_repo_task(
+        "acme/widget",
+        workspace=workspace,
+        github=FakeGitHub(origin),
+        steps=[
+            Step("prepare", "engineer", "Prepare work for external approval."),
+            Step("approve", task="Approve the work.", kind="human", deps=["prepare"]),
+        ],
+        dispatch_fn=_per_step_dispatch(),
+        verify_cmd=["true"],
+    )
+
+    assert result.outcome == expected_outcome
+    assert "push" in result.detail
+    assert result.pr is None
+
+
 def test_local_repo_non_main_default_and_gate_context(tmp_path, bare_origin) -> None:
     origin = bare_origin(branch="master")
     ws = _workspace(tmp_path, origin)
@@ -2804,7 +2882,16 @@ def test_clean_committed_partial_work_is_marked_and_recoverable(tmp_path, bare_o
     assert _has_file(origin, "main", "partial.txt")
 
 
-def test_recovery_push_gate_failure_is_recorded_and_preserves_branch(tmp_path, bare_origin) -> None:
+@pytest.mark.parametrize(
+    ("rejection", "expected_outcome", "expected_detail"),
+    [
+        ("gate", "gate-failed", "repository pre-push gate rejected recovery"),
+        ("transport", "error", "recovery push"),
+    ],
+)
+def test_recovery_push_failure_is_recorded_and_preserves_branch(
+    tmp_path, bare_origin, rejection: str, expected_outcome: str, expected_detail: str
+) -> None:
     origin = bare_origin()
     canonical = gitops.clone(origin, tmp_path / "canonical-recovery-gate-failure")
     Registry().register(str(canonical), workflow="local", repo_type="single-owner")
@@ -2820,10 +2907,15 @@ def test_recovery_push_gate_failure_is_recorded_and_preserves_branch(tmp_path, b
     )
     assert preserved.outcome == "not-completed" and preserved.resume is not None
     checkpoint = gitops.ref_sha(canonical, preserved.branch)
-    _install_pre_push_hook(
-        canonical,
-        "printf 'pre-push: complete gate failed during recovery\\n' >&2\nexit 1",
-    )
+    if rejection == "gate":
+        _install_pre_push_hook(
+            canonical,
+            "printf 'pre-push: complete gate failed during recovery\\n' >&2\nexit 1",
+        )
+    else:
+        receive = origin / "hooks" / "pre-receive"
+        receive.write_text("#!/bin/sh\nprintf 'remote denied\\n' >&2\nexit 1\n", encoding="utf-8")
+        receive.chmod(0o755)
 
     recovered = recover_repo(
         canonical,
@@ -2832,9 +2924,8 @@ def test_recovery_push_gate_failure_is_recorded_and_preserves_branch(tmp_path, b
         verify_cmd=["true"],
     )
 
-    assert recovered.outcome == "gate-failed"
-    assert "repository pre-push gate rejected recovery" in recovered.detail
-    assert "complete gate failed during recovery" in recovered.detail
+    assert recovered.outcome == expected_outcome
+    assert expected_detail in recovered.detail
     assert gitops.is_ancestor(canonical, checkpoint, preserved.branch)
     assert not _has_file(origin, "main", "preserved.txt")
 

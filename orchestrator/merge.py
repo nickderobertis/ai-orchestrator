@@ -59,7 +59,8 @@ MERGE_CONFLICT_RETRY: Literal["merge-conflict-retry"] = "merge-conflict-retry"
 def classify_push_failure(exc: gitops.GitError) -> LifecycleOutcome:
     """Classify a push rejection using the diagnostics emitted by Git hooks."""
     detail = str(exc).casefold()
-    return "gate-failed" if "pre-push" in detail or "gate" in detail else "error"
+    gate_markers = ("pre-push", "gate:", "gate failed", "gate rejected")
+    return "gate-failed" if any(marker in detail for marker in gate_markers) else "error"
 
 
 @dataclass
@@ -338,7 +339,7 @@ class LocalMergeStrategy:
                 try:
                     # Dispatch refuses identities without merge-path gate coverage.
                     # This detached tree is pushed directly below, so the repository's
-                    # executable pre-push hook verifies this identical tree and command.
+                    # executable pre-push hook verifies this identical tree.
                     gitops.fetch(ctx.clone_dir)
                     try:
                         if gitops.ref_sha(ctx.clone_dir, f"origin/{ctx.base}") != base_sha:
