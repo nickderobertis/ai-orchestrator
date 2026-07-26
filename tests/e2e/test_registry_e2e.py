@@ -3,7 +3,6 @@ from __future__ import annotations
 # llmlint: ignore-file[e2e_not_mocked,tests_mirror_real_usage] GitHub is the repository's
 # sanctioned external fake seam. These journeys drive real git checkouts, effective hook
 # resolution, CLI argument parsing/output, and registry persistence through that backend.
-
 import json
 import os
 import shutil
