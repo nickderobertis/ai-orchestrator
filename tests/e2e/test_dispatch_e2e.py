@@ -9,6 +9,9 @@ in our layer (merge, SDK dispatch, report validation) is mocked.
 # preserves SDK/CLI equality while accepting only the explicitly bounded 0.3.3->0.3.4
 # bootstrap pair; upgrading the shared supervisor binary during this lifecycle would
 # terminate the run.
+# llmlint: ignore-file[e2e_not_mocked] These tests execute the real onejudge and oneharness
+# CLIs; only paid Claude/Codex model subprocesses are deterministic protocol doubles, the
+# same explicit external-boundary exception documented in AGENTS.md for this e2e suite.
 
 from __future__ import annotations
 
