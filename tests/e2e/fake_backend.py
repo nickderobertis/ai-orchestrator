@@ -30,6 +30,8 @@ import time
 from pathlib import Path
 from typing import Literal, NamedTuple, TypedDict, cast
 
+from orchestrator.scratch import DEFAULT_MIN_FREE_BYTES
+
 
 class SupervisorRequest(TypedDict):
     """Validated fields consumed from onejudge's protocol-v4 supervisor request."""
@@ -270,7 +272,7 @@ def main() -> int:
                 "infrastructure-preflight": (
                     "scratch-capacity-preflight: scratch filesystem at /tmp has "
                     "1 bytes free, below the "
-                    "5368709120-byte dispatch threshold"
+                    f"{DEFAULT_MIN_FREE_BYTES}-byte dispatch threshold"
                 ),
             }
             infrastructure_error = next(
