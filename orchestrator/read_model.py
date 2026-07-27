@@ -52,7 +52,14 @@ from .runs import (
     result_state_is_terminal,
     validate_run_id,
 )
-from .telemetry import TELEMETRY_SCHEMA_VERSION, RunTelemetry, TimingRecord, collect_run
+from .telemetry import (
+    TELEMETRY_SCHEMA_VERSION,
+    LinkageQuality,
+    RunTelemetry,
+    TimingQuality,
+    TimingRecord,
+    collect_run,
+)
 
 API_VERSION = 1
 
@@ -120,7 +127,8 @@ class RunSummary(TypedDict):
     state: str
     phase: str
     last_event: str
-    telemetry_quality: str
+    timing_quality: TimingQuality
+    linkage_quality: LinkageQuality
     timing: TimingRecord
     node_counts: dict[str, int]
     last_progress_at: NotRequired[float]
@@ -288,7 +296,8 @@ def run_summary(
         "state": telemetry.state,
         "phase": telemetry.phase,
         "last_event": telemetry.last_event,
-        "telemetry_quality": telemetry.telemetry_quality,
+        "timing_quality": telemetry.timing_quality,
+        "linkage_quality": telemetry.linkage_quality,
         "timing": telemetry.timing,
         "node_counts": _node_counts(telemetry),
     }

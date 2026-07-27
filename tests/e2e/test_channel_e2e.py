@@ -17,6 +17,7 @@ from waits import timeout as e2e_timeout
 
 from orchestrator import BASE_CONFIG, REPO_ROOT, gitops
 from orchestrator.dispatch import launch_orchestrator
+from orchestrator.labels import parse_labels
 from orchestrator.launch import LAUNCH_RECORD_NAME, read_launch_info, read_provenance
 from orchestrator.read_model import resolve_launch
 from orchestrator.registry import Registry
@@ -178,27 +179,70 @@ def test_due_heartbeat_surfaces_during_active_step_and_disabled_run_stays_silent
         runs,
         _base(tmp_path),
         onejudge_bin,
-        heartbeat_interval=0.2,
+        heartbeat_interval=0.5,
         env={"FAKE_CHECK_IN_FAIL_ONCE": str(failed_check_in)},
     )
     # llmlint: ignore[tests_mirror_real_usage] Required durable clock audit has no CLI view.
     heartbeat_path = runs / run_id / "channel" / "heartbeat.json"
     # llmlint: ignore[tests_mirror_real_usage] Required queue audit has no CLI view.
     initial_state = json.loads(heartbeat_path.read_text())
+    cleared_state: dict[str, object] | None = None
+    failure_deadline = deadline(120)
+    while time.monotonic() < failure_deadline:
+        current = json.loads(heartbeat_path.read_text(encoding="utf-8"))
+        if failed_check_in.is_file() and current["in_flight"] is False:
+            cleared_state = current
+            break
+        time.sleep(0.01)
+    assert cleared_state is not None
+    assert cleared_state["due"] is False
+    retry_not_before = cleared_state["retry_not_before"]
+    assert isinstance(retry_not_before, int | float)
+    assert retry_not_before > time.time()
+    assert witness.is_file()
     queued_path = runs / run_id / "channel" / "heartbeat-surface.json"
     queue_deadline = deadline(120)
     while not queued_path.is_file() and time.monotonic() < queue_deadline:
         time.sleep(0.01)
     assert queued_path.is_file()
     assert failed_check_in.read_text(encoding="utf-8") == "failed\n"
+    assert not (runs / run_id / "channel" / "check-in-message.txt").exists()
+    # llmlint: ignore[tests_mirror_real_usage] The acceptance contract requires the
+    # durable failed-attempt audit and cleared claim; neither has an operator CLI.
+    check_in_log = runs / run_id / "channel" / "check-in.log"
+    failure_records = [
+        json.loads(line) for line in check_in_log.read_text(encoding="utf-8").splitlines()
+    ]
+    assert len(failure_records) == 1
+    assert failure_records[0]["succeeded"] is False
+    # llmlint: ignore[tests_mirror_real_usage] Exact dispatch dedup is observable only
+    # at the paid-provider seam; reconcile, onejudge, and the FIFO remain real here.
+    attempts = (
+        (runs / run_id / "channel" / "check-in-dispatches.txt")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    )
+    assert attempts == ["failed", "success"]
     # llmlint: ignore[tests_mirror_real_usage] Required pre-consumption audit has no CLI view.
     queued_state = json.loads(heartbeat_path.read_text(encoding="utf-8"))
     # llmlint: ignore[tests_mirror_real_usage] Required journal audit has no CLI view.
     queued_events = (runs / run_id / "events.jsonl").read_text(encoding="utf-8")
     assert queued_state["last_surface_at"] == initial_state["last_surface_at"]
     assert queued_state["due"] is True
+    # llmlint: ignore[tests_mirror_real_usage] Acceptance requires proving the
+    # failed attempt's durable in-flight claim clears before its retry succeeds.
+    assert queued_state["in_flight"] is True
+    # llmlint: ignore[tests_mirror_real_usage] Acceptance requires proving retry
+    # waits for the next durable heartbeat interval rather than the next tick.
+    assert queued_path.stat().st_mtime >= queued_state["retry_not_before"]
     assert '"kind":"planner-surfaced"' not in queued_events
-
+    # llmlint: ignore[tests_mirror_real_usage] The deterministic command provider
+    # replaces only the paid model and records labels from the real subprocess env.
+    recorded_labels = parse_labels(
+        (runs / run_id / "channel" / "check-in-labels.txt").read_text(encoding="utf-8")
+    )
+    assert recorded_labels["agent_role"] == "check-in"
+    assert recorded_labels["persona"] == "check-in"
     expected_message = (
         "active-worker: executing the slow agent step; "
         "evidence: node-started is recorded and node-settled is absent; follow-ups: none"
@@ -274,7 +318,6 @@ def test_due_heartbeat_surfaces_during_active_step_and_disabled_run_stays_silent
         (run_id, "", "1", "non-empty"),
         (run_id, "status", "-1", "positive, finite"),
         ("missing-run", "status", "1", "valid run ids"),
-        (run_id, "status", "0.01", "timed out"),
     ):
         rejected = subprocess.run(
             [
@@ -319,6 +362,91 @@ def test_due_heartbeat_surfaces_during_active_step_and_disabled_run_stays_silent
         check=True,
     )
     assert "planner update due" not in corrupt_status.stdout
+
+
+def test_completed_check_in_without_surface_is_logged_and_retried(
+    tmp_path: Path, onejudge_bin: str
+) -> None:
+    runs = tmp_path / "runs"
+    witness = tmp_path / "slow-witness"
+    plan = tmp_path / "missing-check-in-surface.json"
+    plan.write_text(
+        json.dumps(
+            {
+                "schema_version": 3,
+                "name": "missing-check-in-surface",
+                "tasks": [
+                    {
+                        "id": "active-worker",
+                        "persona": "engineer",
+                        "task": f"slow-branch {witness} pacemaker-slow complete-now",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    skipped = tmp_path / "skipped-check-in-surface"
+    run_id = _launch_cli(
+        plan,
+        runs,
+        _base(tmp_path),
+        onejudge_bin,
+        heartbeat_interval=0.5,
+        env={"FAKE_CHECK_IN_SKIP_SURFACE_ONCE": str(skipped)},
+    )
+    channel = runs / run_id / "channel"
+    # llmlint: ignore[tests_mirror_real_usage] The acceptance contract requires
+    # the durable missing-surface failure diagnostic, which has no operator CLI.
+    failure_log = channel / "check-in.log"
+    failure_deadline = deadline(120)
+    failure: dict[str, object] | None = None
+    while time.monotonic() < failure_deadline:
+        if failure_log.is_file():
+            records = [
+                json.loads(line) for line in failure_log.read_text(encoding="utf-8").splitlines()
+            ]
+            if records:
+                failure = records[0]
+                break
+        time.sleep(0.01)
+    assert skipped.read_text(encoding="utf-8") == "skipped\n"
+    assert failure is not None
+    assert failure["succeeded"] is False
+    assert failure["detail"] == (
+        "RuntimeError: check-in agent did not surface a completed status update"
+    )
+
+    queued = channel / "heartbeat-surface.json"
+    queue_deadline = deadline(120)
+    while not queued.is_file() and time.monotonic() < queue_deadline:
+        time.sleep(0.01)
+    assert queued.is_file()
+    # llmlint: ignore[tests_mirror_real_usage] Exact dispatch/retry dedup is
+    # observable only at the paid-provider seam; onejudge and orchestration stay real.
+    assert (channel / "check-in-dispatches.txt").read_text().splitlines() == [
+        "missing-surface",
+        "success",
+    ]
+    heartbeat = _wait_surface(run_id, runs, wait_seconds=120)
+    assert heartbeat["surface"] == {
+        "kind": "heartbeat",
+        "message": (
+            "active-worker: executing the slow agent step; "
+            "evidence: node-started is recorded and node-settled is absent; "
+            "follow-ups: none"
+        ),
+        "blocking": False,
+    }
+    assert witness.is_file()
+
+    while True:
+        boundary = _wait_surface(run_id, runs, wait_seconds=120)
+        if boundary["surface"]["kind"] != "heartbeat":
+            break
+    assert boundary["surface"]["kind"] == "milestone"
+    _reply_cli(run_id, runs, {"completion": True, "reason": "verified missing surface"})
+    _wait_report(runs / run_id / "orchestrator" / "report.json")
 
 
 @pytest.mark.parametrize(

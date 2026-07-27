@@ -174,12 +174,16 @@ def _dag_state_contract_checkout(tmp_path: Path) -> Path:
         "scripts/check-dag-state-contract.py",
         "orchestrator/projection.py",
         "orchestrator/conversations.py",
+        "orchestrator/labels.py",
         "orchestrator/launch.py",
         "orchestrator/read_model.py",
+        "orchestrator/telemetry.py",
         "orchestrator/server.py",
         "packages/dag-layout/src/index.ts",
+        "packages/dag-model/src/index.ts",
         "docs/dag-ui/design.md",
         "docs/dag-ui/oneharness-ui-contract.d.ts",
+        "oneharness.judge.toml",
     ):
         target = checkout / relative
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -203,7 +207,7 @@ def test_dag_state_contract_checker_accepts_matching_public_states(
 
     assert result.returncode == 0, result.stderr
     assert result.stdout == (
-        "dag state contract: Python, TypeScript, and the design contract agree\n"
+        "dag state contract: Python, TypeScript, docs, and judge config agree\n"
     )
 
 
@@ -472,4 +476,58 @@ def test_dag_state_contract_checker_reports_heartbeat_drift(tmp_path: Path) -> N
 
     assert result.returncode != 0
     assert "SSE heartbeat interval" in result.stderr
+    assert "reconcile them in one change" in result.stderr
+
+
+def test_dag_state_contract_checker_reports_agent_role_drift(tmp_path: Path) -> None:
+    checkout = _dag_state_contract_checkout(tmp_path)
+    model = checkout / "packages/dag-model/src/index.ts"
+    model.write_text(model.read_text().replace('  "check-in",\n', ""))
+
+    result = _dag_state_contract_run(checkout)
+
+    assert result.returncode != 0
+    assert "semantic agent roles disagree" in result.stderr
+
+
+def test_dag_state_contract_checker_reports_judge_config_role_drift(tmp_path: Path) -> None:
+    checkout = _dag_state_contract_checkout(tmp_path)
+    judge_config = checkout / "oneharness.judge.toml"
+    judge_config.write_text(
+        judge_config.read_text().replace('agent_role = "judge"', 'agent_role = "worker"')
+    )
+
+    result = _dag_state_contract_run(checkout)
+
+    assert result.returncode != 0
+    assert "oneharness.judge.toml history_labels.agent_role 'worker' disagrees" in result.stderr
+    assert 'restore `agent_role = "judge"`' in result.stderr
+
+
+def test_dag_state_contract_checker_rejects_duplicate_agent_roles(tmp_path: Path) -> None:
+    checkout = _dag_state_contract_checkout(tmp_path)
+    model = checkout / "packages/dag-model/src/index.ts"
+    model.write_text(model.read_text().replace('  "check-in",\n', '  "check-in",\n  "check-in",\n'))
+
+    result = _dag_state_contract_run(checkout)
+
+    assert result.returncode != 0
+    assert "agentRoleSchema must contain unique string roles" in result.stderr
+
+
+def test_dag_state_contract_checker_reports_telemetry_schema_drift(tmp_path: Path) -> None:
+    """The base bumped this 6 -> 7 while the contract still said 6; gate it."""
+    checkout = _dag_state_contract_checkout(tmp_path)
+    telemetry = checkout / "orchestrator/telemetry.py"
+    telemetry.write_text(
+        telemetry.read_text().replace(
+            "TELEMETRY_SCHEMA_VERSION = 7", "TELEMETRY_SCHEMA_VERSION = 8"
+        )
+    )
+
+    result = _dag_state_contract_run(checkout)
+
+    assert result.returncode != 0
+    assert "telemetry schema version" in result.stderr
+    assert "is 8 but" in result.stderr
     assert "reconcile them in one change" in result.stderr

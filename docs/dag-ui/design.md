@@ -31,8 +31,10 @@ Invalid enums, negative durations/counters, non-finite numbers, and bad
 references are rejected at the Python boundary.
 
 The initial API base is `/api/v1`. Its telemetry payload embeds the existing
-telemetry index `schema_version: 6`; this API version does not replace or
-renumber that contract.
+telemetry index at `telemetry_schema_version: 7`, mirroring that index's own
+`schema_version`; this API version does not replace or renumber that contract.
+`scripts/check-dag-state-contract.py` reconciles every copy of that number here
+against `orchestrator.telemetry.TELEMETRY_SCHEMA_VERSION`.
 
 ## Read model
 
@@ -43,7 +45,7 @@ renumber that contract.
 ```ts
 interface RunList {
   api_version: 1;
-  telemetry_schema_version: 6;
+  telemetry_schema_version: 7;
   observed_at: string;
   runs: RunSummary[];
 }
@@ -54,7 +56,8 @@ interface RunSummary {
   phase: string;
   last_event: string;
   last_progress_at?: number; // existing epoch-seconds value
-  telemetry_quality: "complete" | "partial" | "legacy";
+  timing_quality: "complete" | "partial" | "legacy";
+  linkage_quality: "native" | "labelled" | "inferred";
   timing: Timing;
   node_counts: Record<string, number>;
   launch?: RunLaunch; // omitted when the run recorded no launch_id
@@ -79,7 +82,7 @@ Runs are ordered by most recent progress descending, then `run_id` ascending.
 ```ts
 interface RunDetail {
   api_version: 1;
-  telemetry_schema_version: 6;
+  telemetry_schema_version: 7;
   observed_at: string;
   run: RunTelemetry;
   rounds: Round[];
@@ -105,7 +108,8 @@ prs:{}}`); `logs` and `launch` are omitted when the run wrote no logs or recorde
 
 `RunTelemetry` is exactly `RunTelemetry.record()` from
 `orchestrator/telemetry.py`: required `run_id`, `state`, `phase`, `last_event`,
-`timing`, `nodes`, `usage`, `telemetry_quality`, `sources`, `node_work_ms`,
+`timing`, `nodes`, `usage`, `timing_quality`, `linkage_quality`, `sources`,
+`node_work_ms`,
 `turns`, and `lint`; optional `last_progress_at`, `providers`, `failure`, and
 `check_rollup`. A `NodeTelemetry` is exactly `NodeTelemetry.record()`: required
 `node`, `status`, `sessions`, `turns`, and `lint`; optional `outcome`, `branch`,

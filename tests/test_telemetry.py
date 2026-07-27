@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import fields, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -25,6 +26,7 @@ from orchestrator.telemetry import (
     Provider,
     RunTelemetry,
     SessionLink,
+    TimingPresenceRecord,
     TimingRecord,
     UsageRecord,
     UsageValues,
@@ -171,7 +173,8 @@ def test_collect_run_joins_ledger_journal_history_and_attestation(
     assert record["timing"]["unattributed_ms"] > 0
     assert record["timing"]["lock_wait_seconds"] > 0
     assert record["timing"]["setup_seconds"] > 0
-    assert record["telemetry_quality"] == "legacy"
+    assert record["timing_quality"] == "legacy"
+    assert record["linkage_quality"] == "labelled"
     node = record["nodes"][0]
     assert node["checkpoint"] == "b" * 40
     assert node["comparison_remote"] == "origin"
@@ -256,16 +259,18 @@ def test_over_budget_buckets_are_clipped_to_exactly_wall_time() -> None:
     assert timing["publication_wait_seconds"] == 0
 
 
-def test_schema_v6_field_golden_prevents_cross_layer_drift() -> None:
+def test_schema_v7_field_golden_prevents_cross_layer_drift() -> None:
     golden = json.loads(
-        (Path(__file__).parent / "golden" / "telemetry-v6-fields.json").read_text(encoding="utf-8")
+        (Path(__file__).parent / "golden" / "telemetry-v7-fields.json").read_text(encoding="utf-8")
     )
     assert golden == {
         "schema_version": TELEMETRY_SCHEMA_VERSION,
         "history_schema_versions": list(SUPPORTED_HISTORY_SCHEMA_VERSIONS),
         "roles": list(get_args(SessionRole)),
-        "qualities": ["complete", "legacy", "partial"],
+        "timing_qualities": ["complete", "legacy", "partial"],
+        "linkage_qualities": ["inferred", "labelled", "native"],
         "sources": ["history_legacy", "journal_legacy", "oneharness", "onejudge"],
+        "timing_presence": sorted(TimingPresenceRecord.__required_keys__),
         "timing": sorted(TimingRecord.__required_keys__),
         "fractions": sorted(FractionsRecord.__required_keys__),
         "usage": sorted(UsageValues.__required_keys__),
@@ -276,8 +281,24 @@ def test_schema_v6_field_golden_prevents_cross_layer_drift() -> None:
     contract = (Path(__file__).parents[1] / "docs" / "telemetry-model.md").read_text(
         encoding="utf-8"
     )
-    assert "Index version 6" in contract
-    for value in (*golden["roles"], *golden["qualities"], *golden["sources"]):
+    assert "Index version 7" in contract
+    typescript_contract = (
+        Path(__file__).parents[1] / "packages" / "dag-model" / "src" / "index.ts"
+    ).read_text(encoding="utf-8")
+    typescript_schema_versions = [
+        int(version)
+        for version in re.findall(
+            r"telemetry_schema_version:\s*z\.literal\((\d+)\)",
+            typescript_contract,
+        )
+    ]
+    assert typescript_schema_versions == [TELEMETRY_SCHEMA_VERSION] * 2
+    for value in (
+        *golden["roles"],
+        *golden["timing_qualities"],
+        *golden["linkage_qualities"],
+        *golden["sources"],
+    ):
         assert f"`{value}`" in contract
     documented_fields = (
         *(f"timing.{field}" for field in golden["timing"] if field.endswith("_ms")),
@@ -312,7 +333,7 @@ def test_index_cli_defaults_to_active_and_all_includes_settled(
     completed.rename(tmp_path / "runs" / "complete")
     assert main(["--runs-dir", str(tmp_path / "runs"), "--oneharness-bin", "absent"]) == 0
     active = json.loads(capsys.readouterr().out)
-    assert active["schema_version"] == 6
+    assert active["schema_version"] == 7
     assert active["runs"] == []
     assert active["metrics"]["recovered_branches"] == 0
 
@@ -394,11 +415,120 @@ def test_native_timing_usage_tools_and_breakdown_are_role_and_node_scoped(
     assert record["nodes"][0]["tool_commands"] == {"gate": 4}
     assert record["turns"] == record["nodes"][0]["turns"] == 2
     assert record["lint"] == record["nodes"][0]["lint"] == 2
-    assert record["telemetry_quality"] == "legacy"
+    assert record["timing_quality"] == "partial"
+    assert record["linkage_quality"] == "inferred"
+    assert record["timing_presence"] == {
+        "agent_model_ms": True,
+        "judge_model_ms": True,
+        "llmlint_model_ms": True,
+        "tool_ms": True,
+    }
     assert main(["--runs-dir", str(tmp_path / "runs"), "--all", "--breakdown"]) == 0
     breakdown = capsys.readouterr().out
     assert "WORKER" in breakdown and "LLMLINT" in breakdown and "TURNS LINT" in breakdown
+    run_row = next(line for line in breakdown.splitlines() if line.startswith("observed"))
+    for field in ("agent_model_ms", "judge_model_ms", "llmlint_model_ms", "tool_ms"):
+        assert f"{record['timing'][field]:5}" in run_row
+    assert "?" not in run_row
     assert "Turn histogram: 2=1" in breakdown
+
+
+def test_breakdown_timeline_orders_turns_and_marks_unfinished_sessions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    run_dir = tmp_path / "runs" / "observed"
+    _, round_dir = prepare_round(run_dir, {"tasks": [{"id": "api", "task": "ship"}]})
+    journal = open_journal(run_dir, RunId("observed"), 1)
+    node = NodeJournal(journal, NodeId("api"), RunId("observed"), 1)
+    journal.append("round-started", detail={"nodes": 1})
+    node.append("node-started", detail={"persona": "engineer"})
+    node.append("node-settled", detail={"status": "done"})
+    journal.append("round-finished", detail={"state": "complete", "ok": True})
+    write_result(
+        round_dir,
+        {
+            "ok": True,
+            "state": "complete",
+            "started_order": ["api"],
+            "results": {
+                "api": {
+                    "status": "done",
+                    "telemetry": {
+                        "wall_ms": 30,
+                        "orchestration_ms": 1,
+                        "agent": {"model_ms": 8, "tool_ms": 2},
+                        "judge": {"model_ms": 4, "tool_ms": 0},
+                        # Deliberately out of turn order: the timeline sorts them.
+                        "sessions": [
+                            {
+                                "session_id": "judge-turn",
+                                "role": "judge",
+                                "turn_index": 1,
+                                "started_at": "2026-07-19T00:00:02Z",
+                                "finished_at": "2026-07-19T00:00:03Z",
+                            },
+                            {
+                                "session_id": "agent-turn",
+                                "role": "agent",
+                                "turn_index": 0,
+                                "started_at": "2026-07-19T00:00:00Z",
+                                # No finished_at: the run was interrupted mid-turn.
+                            },
+                        ],
+                    },
+                }
+            },
+        },
+    )
+    monkeypatch.setattr(telemetry_module, "all_sessions", lambda **_kwargs: [])
+
+    assert main(["--runs-dir", str(tmp_path / "runs"), "--all", "--breakdown"]) == 0
+    breakdown = capsys.readouterr().out
+    timeline = [line for line in breakdown.splitlines() if line.startswith("    turn ")]
+    assert timeline == [
+        "    turn 0 agent: 2026-07-19T00:00:00Z -> active/interrupted [agent-turn]",
+        "    turn 1 judge: 2026-07-19T00:00:02Z -> 2026-07-19T00:00:03Z [judge-turn]",
+    ]
+
+
+def test_index_cli_rejects_malformed_and_inverted_history_boundaries(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    runs = str(tmp_path / "runs")
+    assert main(["--runs-dir", runs, "--since", "2026-07-19"]) == 2
+    assert "--since must be an ISO-8601 UTC timestamp" in capsys.readouterr().err
+
+    assert main(["--runs-dir", runs, "--until", "not-a-timestamp"]) == 2
+    assert "--until must be an ISO-8601 UTC timestamp" in capsys.readouterr().err
+
+    with pytest.raises(SystemExit) as inverted:
+        main(
+            [
+                "--runs-dir",
+                runs,
+                "--since",
+                "2026-07-19T00:00:01Z",
+                "--until",
+                "2026-07-19T00:00:00Z",
+            ]
+        )
+    assert inverted.value.code == 2
+    assert "--since must be earlier than --until" in capsys.readouterr().err
+
+    # Equal boundaries select nothing, so they are rejected rather than silently empty.
+    with pytest.raises(SystemExit) as degenerate:
+        main(
+            [
+                "--runs-dir",
+                runs,
+                "--since",
+                "2026-07-19T00:00:00Z",
+                "--until",
+                "2026-07-19T00:00:00Z",
+            ]
+        )
+    assert degenerate.value.code == 2
+    assert "--since must be earlier than --until" in capsys.readouterr().err
 
 
 def test_session_normalization_degrades_each_field_independently(tmp_path: Path) -> None:
@@ -438,8 +568,8 @@ def test_session_normalization_degrades_each_field_independently(tmp_path: Path)
     assert _command_class("") == "unknown"
     zero = _timing(0, [summary])
     assert set(zero["fractions"].values()) == {0.0}
-    future = _summarize_session(session, [{"schema_version": "1.1", "duration_ms": 1}])
-    assert not future.validated_native_fields
+    current = _summarize_session(session, [{"schema_version": "1.1", "duration_ms": 1}])
+    assert not current.validated_native_fields
 
 
 def test_new_history_schema_rejects_invalid_intervals_roles_and_tool_events(tmp_path: Path) -> None:
@@ -540,6 +670,55 @@ def test_new_history_schema_degrades_absent_timing_and_null_tool_event(tmp_path:
     assert summary.model_ms == 0
     assert summary.tool_ms == 0
     assert summary.commands == {"just": 1}
+
+
+def test_history_schema_1_2_distinguishes_observed_tool_timing(tmp_path: Path) -> None:
+    session = HistorySession(
+        SessionId("observed"), "agent", tmp_path, "now", tmp_path / "history", {"role": "agent"}
+    )
+    base = {
+        "schema_version": "1.2",
+        "duration_ms": 5,
+        "model_ms": 3,
+        "tool_ms": 2,
+        "started_at": "2026-01-01T00:00:00Z",
+        "finished_at": "2026-01-01T00:00:00.005Z",
+        "usage": {},
+        "events": [],
+    }
+    provider = _summarize_session(session, [base])
+    observed = _summarize_session(
+        session,
+        [
+            {
+                **base,
+                "model_ms": None,
+                "tool_ms": None,
+                "observed_tool_ms": 2,
+                "started_at": None,
+                "finished_at": None,
+                "events": [
+                    {
+                        "kind": "tool_call",
+                        "tool_call_id": "call-1",
+                        "started_at": "2026-01-01T00:00:00Z",
+                        "finished_at": "2026-01-01T00:00:00.002Z",
+                        "duration_ms": 2,
+                        "status": "completed",
+                        "timing_source": "stdout_observed",
+                    }
+                ],
+            }
+        ],
+    )
+
+    assert provider.validated_native_fields
+    assert observed.tool_ms == 2
+    assert observed.has_tool_measurement
+    assert not observed.validated_native_fields
+
+    with pytest.raises(telemetry_module.HistoryError, match="observed timing"):
+        _summarize_session(session, [{**base, "observed_tool_ms": 2}])
 
 
 def test_report_telemetry_validates_linkage_usage_and_step_aggregation(tmp_path: Path) -> None:

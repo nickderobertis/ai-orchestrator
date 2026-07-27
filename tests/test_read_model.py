@@ -27,6 +27,7 @@ from orchestrator.read_model import (
     run_signature,
 )
 from orchestrator.runs import prepare_round, write_result
+from orchestrator.telemetry import TELEMETRY_SCHEMA_VERSION
 
 ABSENT = "definitely-not-a-real-oneharness-binary"
 
@@ -94,7 +95,7 @@ def test_list_runs_orders_by_progress_and_hides_settled(tmp_path: Path) -> None:
 
     active_only = list_runs(runs, oneharness_bin=ABSENT)
     assert active_only["api_version"] == API_VERSION
-    assert active_only["telemetry_schema_version"] == 6
+    assert active_only["telemetry_schema_version"] == TELEMETRY_SCHEMA_VERSION
     assert [row["run_id"] for row in active_only["runs"]] == ["active"]
     assert active_only["runs"][0]["node_counts"] == {"running": 1}
 

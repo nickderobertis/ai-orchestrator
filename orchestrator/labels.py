@@ -25,7 +25,7 @@ import re
 import sys
 import unicodedata
 from collections.abc import Mapping
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
     # Annotation-only: this module formats an env var and must stay importable
@@ -38,10 +38,24 @@ LABEL_ENV = "ONEHARNESS_HISTORY_LABELS"
 
 _KEY = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}\Z")
 MAX_VALUE_CODEPOINTS = 256
+AgentRole = Literal["orchestrator", "worker", "judge", "check-in", "pr-author"]
+PERSONA_AGENT_ROLES: Mapping[str, AgentRole] = {
+    "orchestrator": "orchestrator",
+    "check-in": "check-in",
+    "pr-author": "pr-author",
+}
 
 
 class LabelError(ValueError):
     """A label key or value violates the oneharness history-label contract."""
+
+
+def semantic_agent_labels(persona: str) -> dict[str, str]:
+    """Return the authoritative semantic role labels for an agent dispatch."""
+    return {
+        "agent_role": PERSONA_AGENT_ROLES.get(persona, "worker"),
+        "persona": persona,
+    }
 
 
 def validate_key(key: str) -> str:

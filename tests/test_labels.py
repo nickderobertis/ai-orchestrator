@@ -145,6 +145,15 @@ def test_history_labels_main_reports_invalid_cli_input(capsys: pytest.CaptureFix
     assert "expected KEY=VALUE" in capsys.readouterr().err
 
 
+def test_history_labels_main_prints_merged_labels(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv(LABEL_ENV, "outer=keep")
+
+    assert main(["role=agent"]) == 0
+    assert capsys.readouterr().out == "outer=keep,role=agent\n"
+
+
 def test_history_labels_main_reports_invalid_inherited_value(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

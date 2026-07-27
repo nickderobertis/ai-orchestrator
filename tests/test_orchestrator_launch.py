@@ -39,6 +39,12 @@ def _capture_launch_env(
         return Process()
 
     monkeypatch.setattr("orchestrator.dispatch.subprocess.Popen", fake_popen)
+    # `_resolve_onejudge` shells out through `subprocess.run`, which would otherwise
+    # pick up the fake Popen above; resolve it directly, as the sibling test does.
+    monkeypatch.setattr(
+        "orchestrator.dispatch._resolve_onejudge",
+        lambda binary, _env: {"path": str(Path(binary).resolve()), "version": "0.3.4"},
+    )
     runs = tmp_path / "runs"
     run_id = launch_orchestrator(
         plan,
@@ -230,6 +236,10 @@ def test_launch_task_prose_preserves_default_and_passes_round_budget(
         return Process()
 
     monkeypatch.setattr("orchestrator.dispatch.subprocess.Popen", fake_popen)
+    monkeypatch.setattr(
+        "orchestrator.dispatch._resolve_onejudge",
+        lambda binary, _env: {"path": str(Path(binary).resolve()), "version": "0.3.4"},
+    )
     skill = {"kind": "command", "command": ["fake-provider"]}
 
     default_run = launch_orchestrator(
@@ -266,6 +276,7 @@ def test_launch_task_prose_preserves_default_and_passes_round_budget(
     )
     assert commands[0][commands[0].index("--task") + 1] == expected_default
     assert commands[1][commands[1].index("--task") + 1] == expected_budget
+    assert Path(commands[0][0]).is_absolute()
 
 
 def test_orchestrate_cli_prints_run_id(

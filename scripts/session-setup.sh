@@ -270,7 +270,8 @@ persist_session_env
 bash "$SCRIPT_DIR/setup-llmlint.sh" || log "setup-llmlint failed (continuing)"
 
 if verify_onejudge; then
-  log "ready (onejudge: $(onejudge --version))"
+  onejudge_binary="$(command -v onejudge)"
+  log "ready (onejudge: $("$onejudge_binary" --version) at $onejudge_binary)"
 else
   log "onejudge $ADOPTED_ONEJUDGE_VERSION is required — 'just check' will fail until setup succeeds"
   toolchain_failed=1

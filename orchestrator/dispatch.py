@@ -54,7 +54,7 @@ from .cli_contract import ROUND_BUDGET_OPTION
 from .config import ConfigError, build_effective_config, load_yaml
 from .coordination import atomic_json
 from .goals import Goal, graph_identities, register_run, update_run_owner
-from .labels import LABEL_ENV, LabelError, merge_labels
+from .labels import LABEL_ENV, LabelError, merge_labels, semantic_agent_labels
 from .launch import (
     KNOWN_LAUNCHERS,
     LAUNCH_RECORD_NAME,
@@ -79,6 +79,7 @@ from .watchdog import (
 # onejudge's own exit codes (see docs/cli.md): 0 completed + boolean evals passed,
 # 1 hit the turn cap / a boolean eval failed, 2 bad config or usage.
 EXIT_COMPLETED = 0
+ONEJUDGE_VERSION_FILE = REPO_ROOT / "config" / "onejudge.version"
 EXIT_INCOMPLETE = 1
 EXIT_CONFIG_ERROR = 2
 # Temporary hard per-turn ceiling for legitimate long-running agents. Dispatch
@@ -201,7 +202,39 @@ class WatchdogSignal:
     observed_pids: tuple[ProcessId, ...]
 
 
-def _build_report(persona: str, result: RunResult) -> Report:
+class OneJudgeProvenance(TypedDict):
+    path: str
+    version: str
+
+
+class DispatchProvenance(TypedDict):
+    provider_kind: str
+    onejudge: OneJudgeProvenance
+
+
+def _resolve_onejudge(onejudge_bin: str, env: Mapping[str, str]) -> OneJudgeProvenance:
+    """Resolve and verify the executable against the repository's adopted version."""
+    resolved = shutil.which(onejudge_bin, path=env.get("PATH"))
+    if resolved is None:
+        raise DispatchError(f"onejudge binary not found: {onejudge_bin!r} — run 'just bootstrap'")
+    resolved = os.path.abspath(resolved)
+    adopted = ONEJUDGE_VERSION_FILE.read_text(encoding="utf-8").strip()
+    version_result = subprocess.run(
+        [resolved, "--version"], text=True, capture_output=True, env=env, check=False
+    )
+    expected = f"onejudge {adopted}"
+    actual = version_result.stdout.strip()
+    if version_result.returncode != 0 or actual != expected:
+        observed = actual or version_result.stderr.strip() or "<no version output>"
+        raise DispatchError(
+            f"onejudge version mismatch: expected {expected!r}, got {observed!r} from {resolved}"
+        )
+    return OneJudgeProvenance(path=resolved, version=adopted)
+
+
+def _build_report(
+    persona: str, result: RunResult, *, provenance: DispatchProvenance | None = None
+) -> Report:
     """Adapt the SDK's validated report without changing our public contract."""
     raw_assessment = result.raw.get("assessment")
     assessment = (
@@ -215,6 +248,9 @@ def _build_report(persona: str, result: RunResult) -> Report:
     raw_telemetry = (
         typed_result.telemetry if hasattr(result, "telemetry") else result.raw.get("telemetry")
     )
+    raw = dict(result.raw)
+    if provenance is not None:
+        raw["provenance"] = provenance
     return Report(
         persona=persona,
         exit_code=result.exit_code,
@@ -223,7 +259,7 @@ def _build_report(persona: str, result: RunResult) -> Report:
         assistant_turns=result.assistant_turns,
         verdicts=cast(list[dict[str, Any]], list(result.verdicts)),
         usage=dict(result.usage),
-        raw=dict(result.raw),
+        raw=raw,
         stderr=result.stderr,
         assessment=assessment,
         telemetry_data=dict(raw_telemetry) if isinstance(raw_telemetry, dict) else None,
@@ -349,8 +385,17 @@ def run_onejudge(
     _validate_oneharness_timeout(process_env["ONEHARNESS_TIMEOUT"])
     stall_timeout = _stall_timeout(process_env)
     heartbeat_timeout = _worker_heartbeat_timeout(process_env)
-    if shutil.which(onejudge_bin, path=process_env.get("PATH")) is None:
-        raise DispatchError(f"onejudge binary not found: {onejudge_bin!r} — run 'just bootstrap'")
+    onejudge_provenance = _resolve_onejudge(onejudge_bin, process_env)
+    resolved_onejudge = onejudge_provenance["path"]
+    configured_provider = config.get("provider")
+    provider_kind = provider
+    if provider_kind is None and isinstance(configured_provider, dict):
+        configured_kind = configured_provider.get("kind")
+        provider_kind = configured_kind if isinstance(configured_kind, str) else None
+    provenance = DispatchProvenance(
+        provider_kind=provider_kind or "oneharness",
+        onejudge=onejudge_provenance,
+    )
     inherited_labels = process_env.get(LABEL_ENV)
     if labels or inherited_labels is not None:
         try:
@@ -374,7 +419,7 @@ def run_onejudge(
                     "-m",
                     "orchestrator.watchdog",
                     os.fspath(pid_file),
-                    onejudge_bin,
+                    resolved_onejudge,
                 ),
             )
             run = asyncio.create_task(
@@ -577,10 +622,22 @@ def run_onejudge(
             f"onejudge failed (exit 2 — bad config or provider/runtime error): {exc}"
         ) from exc
     if isinstance(result, Report):
+        result.raw = dict(result.raw or {})
+        result.raw["provenance"] = provenance
         return result
     if result is None:
-        return Report(persona, 1, False, True, 0, [], {}, None, "cancelled cooperatively")
-    return _build_report(persona, result)
+        return Report(
+            persona,
+            1,
+            False,
+            True,
+            0,
+            [],
+            {},
+            {"provenance": provenance},
+            "cancelled cooperatively",
+        )
+    return _build_report(persona, result, provenance=provenance)
 
 
 def _agent_run_context(
@@ -679,6 +736,10 @@ def dispatch(
     )
     process_env = {**context_env, **(env or {})}
     _validate_environment(process_env)
+    semantic_labels = {
+        **(labels or {}),
+        **semantic_agent_labels(persona),
+    }
     return run_onejudge(
         config,
         task,
@@ -688,7 +749,7 @@ def dispatch(
         provider=provider,
         env=process_env or None,
         unset_llmlint_wrapper=not use_llmlint_wrapper,
-        labels=labels,
+        labels=semantic_labels,
         timeout=timeout,
         cancel=cancel,
     )
@@ -824,7 +885,8 @@ def launch_orchestrator(
         "round, review its recorded "
         "result, and surface milestones, blockers, departures, and closeout to your supervisor."
     )
-    command = [onejudge_bin, "run", str(effective), "--task", task, "--format", "json"]
+    resolved_onejudge = _resolve_onejudge(onejudge_bin, os.environ)["path"]
+    command = [resolved_onejudge, "run", str(effective), "--task", task, "--format", "json"]
     # Stamped once, here: nested dispatches inherit ONEHARNESS_HISTORY_LABELS and layer
     # their node labels over it (run_onejudge -> merge_labels), so every worker, judge,
     # and check-in conversation carries the launch join without stamping each one.
@@ -840,7 +902,12 @@ def launch_orchestrator(
     process_env[CHANNEL_RUN_ID_ENV] = run_dir.name
     try:
         process_env[LABEL_ENV] = merge_labels(
-            process_env.get(LABEL_ENV), {**launch_labels, "run_id": run_dir.name}
+            process_env.get(LABEL_ENV),
+            {
+                **launch_labels,
+                "run_id": run_dir.name,
+                **semantic_agent_labels("orchestrator"),
+            },
         )
     except LabelError as exc:
         raise DispatchError(f"invalid launch label: {exc}") from exc
