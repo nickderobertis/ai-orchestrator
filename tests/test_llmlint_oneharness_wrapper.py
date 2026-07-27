@@ -32,6 +32,8 @@ def _run(tmp_path: Path, *args: str) -> list[str]:
 def test_read_only_judge_keeps_filesystem_sandbox_and_grants_network(tmp_path: Path) -> None:
     assert _run(tmp_path, "run", "--mode", "read-only", "--compact") == [
         "run",
+        "--config",
+        str(REPO_ROOT / "oneharness.llmlint.toml"),
         "--mode",
         "read-only",
         "--compact",
@@ -44,6 +46,8 @@ def test_read_only_judge_keeps_filesystem_sandbox_and_grants_network(tmp_path: P
 def test_other_modes_and_arguments_are_unchanged(tmp_path: Path) -> None:
     assert _run(tmp_path, "run", "--mode", "auto", "--prompt", "read-only") == [
         "run",
+        "--config",
+        str(REPO_ROOT / "oneharness.llmlint.toml"),
         "--mode",
         "auto",
         "--prompt",
@@ -85,7 +89,6 @@ print(json.dumps({"type": "item.completed", "item": {"type": "agent_message", "t
             "codex",
             "--bin",
             f"codex={fake_codex}",
-            "--no-config",
             "--mode",
             "read-only",
             "--prompt",
@@ -125,6 +128,67 @@ def test_oneharness_failure_output_and_status_are_propagated(tmp_path: Path) -> 
     assert "run 'oneharness doctor', and retry" in proc.stderr
 
 
+def test_empty_arguments_are_rejected_before_invoking_oneharness(tmp_path: Path) -> None:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    marker = tmp_path / "invoked"
+    oneharness = bin_dir / "oneharness"
+    oneharness.write_text(f"#!/bin/sh\ntouch {marker}\n", encoding="utf-8")
+    oneharness.chmod(0o755)
+
+    proc = subprocess.run(
+        [WRAPPER],
+        text=True,
+        capture_output=True,
+        env={**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}"},
+    )
+
+    assert proc.returncode == 2
+    assert "expected oneharness arguments" in proc.stderr
+    assert not marker.exists()
+
+
+def test_non_run_subcommand_is_rejected_before_invoking_oneharness(tmp_path: Path) -> None:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    marker = tmp_path / "invoked"
+    oneharness = bin_dir / "oneharness"
+    oneharness.write_text(f"#!/bin/sh\ntouch {marker}\n", encoding="utf-8")
+    oneharness.chmod(0o755)
+
+    proc = subprocess.run(
+        [WRAPPER, "config"],
+        text=True,
+        capture_output=True,
+        env={**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}"},
+    )
+
+    assert proc.returncode == 2
+    assert "expected the 'run' subcommand" in proc.stderr
+    assert not marker.exists()
+
+
+def test_version_probe_is_forwarded_to_oneharness(tmp_path: Path) -> None:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    oneharness = bin_dir / "oneharness"
+    oneharness.write_text(
+        '#!/bin/sh\n[ "$1" = --version ] && printf "oneharness test-version\\n"\n',
+        encoding="utf-8",
+    )
+    oneharness.chmod(0o755)
+
+    proc = subprocess.run(
+        [WRAPPER, "--version"],
+        text=True,
+        capture_output=True,
+        env={**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}"},
+    )
+
+    assert proc.returncode == 0
+    assert proc.stdout.strip() == "oneharness test-version"
+
+
 def test_missing_oneharness_reports_recovery_action(tmp_path: Path) -> None:
     proc = subprocess.run(
         ["/bin/bash", WRAPPER, "run", "--mode", "read-only"],
@@ -136,3 +200,30 @@ def test_missing_oneharness_reports_recovery_action(tmp_path: Path) -> None:
     assert proc.returncode == 127
     assert "required 'oneharness' executable was not found" in proc.stderr
     assert "run 'just bootstrap'" in proc.stderr
+
+
+def test_missing_dedicated_config_is_rejected_before_invoking_oneharness(
+    tmp_path: Path,
+) -> None:
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    copied_wrapper = scripts / WRAPPER.name
+    copied_wrapper.write_bytes(WRAPPER.read_bytes())
+    copied_wrapper.chmod(0o755)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    marker = tmp_path / "invoked"
+    oneharness = bin_dir / "oneharness"
+    oneharness.write_text(f"#!/bin/sh\ntouch {marker}\n", encoding="utf-8")
+    oneharness.chmod(0o755)
+
+    proc = subprocess.run(
+        [copied_wrapper, "run", "--mode", "read-only"],
+        text=True,
+        capture_output=True,
+        env={**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}"},
+    )
+
+    assert proc.returncode == 2
+    assert "required config is not a readable regular file" in proc.stderr
+    assert not marker.exists()

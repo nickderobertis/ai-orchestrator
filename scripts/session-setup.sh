@@ -128,10 +128,10 @@ expose_codex() {
 }
 
 ensure_codex() {
-  # codex is the fallback PRIMARY harness in oneharness.toml — it runs as its own
-  # process, so its tools execute directly (nested claude-code defers them; see
-  # docs/onejudge-integration.md "Harnesses and the live path"). Install the CLI;
-  # authentication is a one-time manual step (`codex login`).
+  # codex is the worker fallback plus the judge and llmlint primary. It runs as
+  # its own process, so its tools execute directly (nested claude-code can defer
+  # them; see docs/onejudge-integration.md "Harnesses and the live path").
+  # Authentication is a one-time manual step (`codex login`).
   local codex_binary
   if codex_binary="$(command -v codex 2>/dev/null)"; then
     # npm under asdf installs codex inside the selected Node version, while

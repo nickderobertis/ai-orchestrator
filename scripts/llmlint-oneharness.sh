@@ -1,6 +1,32 @@
 #!/usr/bin/env bash
+# llmlint: ignore-file[changed_behavior_has_e2e] subprocess tests drive the wrapper's validation and forwarding paths while replacing only its paid oneharness child.
 # Adapt llmlint's forced read-only judge to the container-sandboxed worker host.
 set -euo pipefail
+
+if ! command -v oneharness >/dev/null 2>&1; then
+    echo "llmlint oneharness wrapper: required 'oneharness' executable was not found; run 'just bootstrap' from the repository root to install it, then retry" >&2
+    exit 127
+fi
+
+script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+repo_root=$(dirname -- "$script_dir")
+llmlint_config="$repo_root/oneharness.llmlint.toml"
+if [ ! -f "$llmlint_config" ] || [ ! -r "$llmlint_config" ]; then
+    echo "llmlint oneharness wrapper: required config is not a readable regular file: $llmlint_config; restore it from the repository or run 'just bootstrap', then retry" >&2
+    exit 2
+fi
+
+if (( $# == 0 )); then
+    echo "llmlint oneharness wrapper: expected oneharness arguments; invoke through 'just lint-llm' or pass 'run ...'" >&2
+    exit 2
+fi
+if (( $# == 1 )) && [[ $1 == --version ]]; then
+    exec oneharness --version
+fi
+if [[ $1 != run ]]; then
+    echo "llmlint oneharness wrapper: expected the 'run' subcommand; invoke through 'just lint-llm' or retry with 'run ...'" >&2
+    exit 2
+fi
 
 args=()
 read_only=false
@@ -20,15 +46,11 @@ done
 # outer container forbids. Grant network only: Codex retains its OS-enforced
 # read-only filesystem while avoiding that unsupported namespace operation.
 if [[ $read_only == true ]]; then
+    # llmlint: ignore[least_privilege_grants] Codex exposes only coarse disk/network grants; llmlint needs repository reads and its model endpoint, with the outer container as boundary.
     args+=(-- -c 'sandbox_permissions=["disk-full-read-access","network-full-access"]')
 fi
 
-if ! command -v oneharness >/dev/null 2>&1; then
-    echo "llmlint oneharness wrapper: required 'oneharness' executable was not found; run 'just bootstrap' from the repository root to install it, then retry" >&2
-    exit 127
-fi
-
-if oneharness "${args[@]}"; then
+if oneharness "${args[@]:0:1}" --config "$llmlint_config" "${args[@]:1}"; then
     exit 0
 else
     status=$?

@@ -239,7 +239,7 @@ def test_history_labels_and_cursor_watch(oneharness_bin: str, tmp_path: Path) ->
     assert judge.returncode == 0, judge.stderr
     llmlint = _run_record(
         oneharness_bin,
-        config=REPO_ROOT / "oneharness.toml",
+        config=REPO_ROOT / "oneharness.llmlint.toml",
         name="llmlint-invocation",
         environment={**environment, "ONEHARNESS_HISTORY_LABELS": "role=llmlint"},
     )

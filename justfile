@@ -9,6 +9,7 @@ set shell := ["bash", "-euo", "pipefail", "-c"]
 set positional-arguments
 
 coverage_min := "95"
+repo_root := justfile_directory()
 
 # List available recipes.
 default:
@@ -249,7 +250,7 @@ setup-llmlint:
 # finding stays attributable to the run/round/node that provoked it.
 lint-llm *paths:
     @command -v llmlint >/dev/null 2>&1 || { echo "llmlint not installed — run 'just setup-llmlint'"; exit 1; }
-    @ONEHARNESS_HISTORY_LABELS="$(uv run orchestrator-history-labels role=llmlint)" llmlint "$@"
+    @PATH="{{repo_root}}/.venv/bin:$PATH" LLMLINT_ONEHARNESS_BIN="{{repo_root}}/scripts/llmlint-oneharness.sh" ONEHARNESS_HISTORY_LABELS="$(uv run orchestrator-history-labels role=llmlint)" llmlint "$@"
 
 # Deterministic, model-free llmlint gate: config structure, ignore directives name
 # real rules, edited fragments bumped their version. The fast pre-flight.
@@ -261,4 +262,4 @@ lint-llm-validate *args:
 # changed. This is the blocking pre-push check.
 lint-llm-diff base="origin/main":
     @command -v llmlint >/dev/null 2>&1 || { echo "llmlint not installed — run 'just setup-llmlint'"; exit 1; }
-    ONEHARNESS_HISTORY_LABELS="$(uv run orchestrator-history-labels role=llmlint)" llmlint --diff --diff-base "{{base}}"
+    @PATH="{{repo_root}}/.venv/bin:$PATH" LLMLINT_ONEHARNESS_BIN="{{repo_root}}/scripts/llmlint-oneharness.sh" ONEHARNESS_HISTORY_LABELS="$(uv run orchestrator-history-labels role=llmlint)" llmlint --diff --diff-base "{{base}}"

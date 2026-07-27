@@ -9,6 +9,9 @@ in our layer (merge, SDK dispatch, report validation) is mocked.
 # preserves SDK/CLI equality while accepting only the explicitly bounded 0.3.3->0.3.4
 # bootstrap pair; upgrading the shared supervisor binary during this lifecycle would
 # terminate the run.
+# llmlint: ignore-file[e2e_not_mocked] These tests execute the real onejudge and oneharness
+# CLIs; only paid Claude/Codex model subprocesses are deterministic protocol doubles, the
+# same explicit external-boundary exception documented in AGENTS.md for this e2e suite.
 
 from __future__ import annotations
 
@@ -231,6 +234,7 @@ def test_real_dispatch_delivers_exact_task_to_agent_history(
             "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
             "REAL_ONEHARNESS_BIN": oneharness_bin,
             "MOCK_STDOUT": mock_stdout,
+            "ONEHARNESS_HARNESSES": "codex",
             "ONEHARNESS_HISTORY": "true",
             "XDG_STATE_HOME": str(state_home),
         },
@@ -729,9 +733,395 @@ def test_dispatch_cli_applies_ordered_models_to_real_oneharness(
     )
     effective_config = json.loads(effective.stdout)
     assert effective_config["run_mode"]["value"] == "fallback"
-    assert effective_config["harnesses"]["value"][0] == "codex"
-    if "claude-code" in effective_config["harnesses"]["value"]:
-        assert effective_config["harness"]["claude-code"]["model"]["value"] == "claude-opus-4-8"
+    assert effective_config["harnesses"]["value"][0] == "claude-code:alternate"
+    assert (
+        effective_config["harness"]["claude-code"]["variant"]["alternate"]["model"]["value"]
+        == "claude-opus-5"
+    )
+
+
+@pytest.mark.parametrize(
+    ("config_name", "harness_id", "expected_config"),
+    [
+        ("oneharness.toml", "claude-code:alternate", "alternate"),
+        ("oneharness.judge.toml", "claude-code:primary", "default"),
+    ],
+)
+def test_claude_variants_isolate_subscription_environment_at_real_oneharness_boundary(
+    tmp_path: Path,
+    oneharness_bin: str,
+    config_name: str,
+    harness_id: str,
+    expected_config: str,
+) -> None:
+    fake_claude = tmp_path / "claude"
+    fake_claude.write_text(
+        """#!/usr/bin/env python3
+import json
+import os
+
+expected = os.environ["EXPECTED_CONFIG"]
+if expected == "alternate":
+    assert os.environ["CLAUDE_CONFIG_DIR"] == os.environ["EXPECTED_ALT_DIR"]
+else:
+    assert "CLAUDE_CONFIG_DIR" not in os.environ
+for name in (
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
+):
+    assert name not in os.environ
+print(json.dumps({
+    "type": "result",
+    "subtype": "success",
+    "is_error": False,
+    "result": "identity isolated",
+    "session_id": "variant-boundary",
+}))
+""",
+        encoding="utf-8",
+    )
+    fake_claude.chmod(0o755)
+    alternate = tmp_path / ".claude-alt"
+    environment = {
+        **os.environ,
+        "ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR": str(alternate),
+        "CLAUDE_CONFIG_DIR": str(alternate),
+        "ANTHROPIC_API_KEY": "ambient-api-key",
+        "ANTHROPIC_AUTH_TOKEN": "ambient-auth-token",
+        "CLAUDE_CODE_OAUTH_TOKEN": "ambient-oauth-token",
+        "CLAUDE_CODE_OAUTH_REFRESH_TOKEN": "ambient-refresh-token",
+        "EXPECTED_CONFIG": expected_config,
+        "EXPECTED_ALT_DIR": str(alternate),
+        "ONEHARNESS_HISTORY": "false",
+    }
+    environment.pop("ORCHESTRATOR_AGENT_STATUS_DIR", None)
+
+    command = (
+        [str(REPO_ROOT / "scripts" / "oneharness-agent.sh"), "run"]
+        if config_name == "oneharness.toml"
+        else [oneharness_bin, "run", "--config", str(REPO_ROOT / config_name)]
+    )
+    result = subprocess.run(
+        [
+            *command,
+            "--harness",
+            harness_id,
+            "--bin",
+            f"{harness_id}={fake_claude}",
+            "--mode",
+            "default",
+            "--prompt",
+            "prove child environment",
+            "--compact",
+        ],
+        cwd=REPO_ROOT,
+        env=environment,
+        text=True,
+        capture_output=True,
+        timeout=60,
+    )
+
+    assert result.returncode == 0, result.stderr
+    report = json.loads(result.stdout)
+    assert report["results"][0]["harness_id"] == harness_id
+    assert report["results"][0]["status"] == "ok"
+    assert report["results"][0]["text"] == "identity isolated"
+
+
+@pytest.mark.parametrize(
+    ("config_name", "missing_harness", "fallback_harness"),
+    [
+        ("oneharness.toml", "claude-code:alternate", "codex"),
+        ("oneharness.judge.toml", "codex", "claude-code:primary"),
+    ],
+)
+def test_configured_harness_fallbacks_recover_when_preferred_executable_is_unavailable(
+    tmp_path: Path,
+    oneharness_bin: str,
+    config_name: str,
+    missing_harness: str,
+    fallback_harness: str,
+) -> None:
+    fake_codex = tmp_path / "codex"
+    fake_codex.write_text(
+        """#!/usr/bin/env python3
+import json
+
+print(json.dumps({"type": "thread.started", "thread_id": "fallback-codex"}))
+print(json.dumps({
+    "type": "item.completed",
+    "item": {"type": "agent_message", "text": "fallback recovered"},
+}))
+print(json.dumps({
+    "type": "turn.completed",
+    "usage": {"input_tokens": 1, "cached_input_tokens": 0, "output_tokens": 1},
+}))
+""",
+        encoding="utf-8",
+    )
+    fake_codex.chmod(0o755)
+    fake_claude = tmp_path / "claude"
+    fake_claude.write_text(
+        """#!/usr/bin/env python3
+import json
+
+print(json.dumps({
+    "type": "result",
+    "subtype": "success",
+    "is_error": False,
+    "result": "fallback recovered",
+    "session_id": "fallback-claude",
+}))
+""",
+        encoding="utf-8",
+    )
+    fake_claude.chmod(0o755)
+    fallback_bin = fake_codex if fallback_harness == "codex" else fake_claude
+    environment = {
+        **os.environ,
+        "ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR": str(tmp_path / "absent-claude-alt"),
+        "ONEHARNESS_HISTORY": "false",
+    }
+
+    result = subprocess.run(
+        [
+            oneharness_bin,
+            "run",
+            "--config",
+            str(REPO_ROOT / config_name),
+            "--bin",
+            f"{missing_harness}={tmp_path / 'missing-executable'}",
+            "--bin",
+            f"{fallback_harness}={fallback_bin}",
+            "--mode",
+            "default",
+            "--prompt",
+            "prove fallback recovery",
+            "--compact",
+        ],
+        cwd=REPO_ROOT,
+        env=environment,
+        text=True,
+        capture_output=True,
+        timeout=60,
+    )
+
+    assert result.returncode == 0, result.stderr
+    report = json.loads(result.stdout)
+    assert [item["harness_id"] for item in report["results"]] == [
+        missing_harness,
+        fallback_harness,
+    ]
+    assert report["results"][0]["status"] == "skipped"
+    assert report["results"][1]["status"] == "ok"
+    assert report["results"][1]["text"] == "fallback recovered"
+
+
+def test_agent_config_falls_back_to_codex_after_claude_auth_rejection(
+    tmp_path: Path, oneharness_bin: str
+) -> None:
+    fake_claude = tmp_path / "claude"
+    fake_claude.write_text(
+        "#!/bin/sh\nprintf '%s\\n' 'authentication failed: login required' >&2\nexit 1\n",
+        encoding="utf-8",
+    )
+    fake_claude.chmod(0o755)
+    fake_codex = tmp_path / "codex"
+    fake_codex.write_text(
+        """#!/usr/bin/env python3
+import json
+
+print(json.dumps({"type": "thread.started", "thread_id": "auth-fallback-codex"}))
+print(json.dumps({
+    "type": "item.completed",
+    "item": {"type": "agent_message", "text": "auth fallback recovered"},
+}))
+print(json.dumps({
+    "type": "turn.completed",
+    "usage": {"input_tokens": 1, "cached_input_tokens": 0, "output_tokens": 1},
+}))
+""",
+        encoding="utf-8",
+    )
+    fake_codex.chmod(0o755)
+
+    result = subprocess.run(
+        [
+            oneharness_bin,
+            "run",
+            "--config",
+            str(REPO_ROOT / "oneharness.toml"),
+            "--bin",
+            f"claude-code:alternate={fake_claude}",
+            "--bin",
+            f"codex={fake_codex}",
+            "--mode",
+            "default",
+            "--prompt",
+            "prove auth fallback recovery",
+            "--compact",
+        ],
+        cwd=REPO_ROOT,
+        env={
+            **os.environ,
+            "ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR": str(tmp_path / ".claude-alt"),
+            "ONEHARNESS_HISTORY": "false",
+        },
+        text=True,
+        capture_output=True,
+        timeout=60,
+    )
+
+    assert result.returncode == 0, result.stderr
+    report = json.loads(result.stdout)
+    assert [item["harness_id"] for item in report["results"]] == [
+        "claude-code:alternate",
+        "codex",
+    ]
+    assert report["results"][0]["status"] == "nonzero"
+    assert report["results"][0]["failure_kind"] == "auth"
+    assert report["results"][1]["status"] == "ok"
+    assert report["results"][1]["text"] == "auth fallback recovered"
+
+
+def test_agent_wrapper_validates_alternate_identity_and_recovers_through_real_oneharness(
+    tmp_path: Path, oneharness_bin: str
+) -> None:
+    wrapper = REPO_ROOT / "scripts" / "oneharness-agent.sh"
+    environment = {
+        **os.environ,
+        "PATH": f"{Path(oneharness_bin).parent}:{os.environ['PATH']}",
+        "ONEHARNESS_HISTORY": "false",
+    }
+    environment.pop("ORCHESTRATOR_AGENT_STATUS_DIR", None)
+
+    relative = subprocess.run(
+        [str(wrapper), "run", "--prompt", "must not run"],
+        cwd=REPO_ROOT,
+        env={**environment, "ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR": "relative"},
+        text=True,
+        capture_output=True,
+        timeout=60,
+    )
+    assert relative.returncode == 2
+    assert "alternate Claude config path must be absolute" in relative.stderr
+
+    inaccessible = tmp_path / "inaccessible"
+    inaccessible.mkdir(mode=0o600)
+    blocked = subprocess.run(
+        [str(wrapper), "run", "--prompt", "must not run"],
+        cwd=REPO_ROOT,
+        env={
+            **environment,
+            "ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR": str(inaccessible),
+        },
+        text=True,
+        capture_output=True,
+        timeout=60,
+    )
+    assert blocked.returncode == 2
+    assert "not an accessible directory" in blocked.stderr
+
+    fake_codex = tmp_path / "codex"
+    fake_codex.write_text(
+        """#!/usr/bin/env python3
+import json
+
+print(json.dumps({"type": "thread.started", "thread_id": "wrapper-fallback"}))
+print(json.dumps({
+    "type": "item.completed",
+    "item": {"type": "agent_message", "text": "wrapper fallback recovered"},
+}))
+print(json.dumps({
+    "type": "turn.completed",
+    "usage": {"input_tokens": 1, "cached_input_tokens": 0, "output_tokens": 1},
+}))
+""",
+        encoding="utf-8",
+    )
+    fake_codex.chmod(0o755)
+    recovered = subprocess.run(
+        [
+            str(wrapper),
+            "run",
+            "--bin",
+            f"codex={fake_codex}",
+            "--mode",
+            "default",
+            "--prompt",
+            "prove wrapper fallback",
+            "--compact",
+        ],
+        cwd=REPO_ROOT,
+        env={
+            **environment,
+            "ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR": str(tmp_path / "absent"),
+        },
+        text=True,
+        capture_output=True,
+        timeout=60,
+    )
+    assert recovered.returncode == 0, recovered.stderr
+    report = json.loads(recovered.stdout)
+    assert [item["harness_id"] for item in report["results"]] == ["codex"]
+    assert report["results"][0]["status"] == "ok"
+    assert report["results"][0]["text"] == "wrapper fallback recovered"
+
+
+@pytest.mark.parametrize(
+    ("recipe_args", "expected_args"),
+    [
+        (["lint-llm", "AGENTS.md"], ["AGENTS.md"]),
+        (
+            ["lint-llm-diff", "comparison-base"],
+            ["--diff", "--diff-base", "comparison-base"],
+        ),
+    ],
+)
+def test_just_llmlint_recipes_pin_the_dedicated_harness_boundary(
+    tmp_path: Path, recipe_args: list[str], expected_args: list[str]
+) -> None:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    record = tmp_path / "llmlint-record.json"
+    fake_llmlint = bin_dir / "llmlint"
+    fake_llmlint.write_text(
+        """#!/usr/bin/env python3
+import json
+import os
+import sys
+
+with open(os.environ["LLMLINT_RECORD"], "w", encoding="utf-8") as stream:
+    json.dump({
+        "argv": sys.argv[1:],
+        "bin": os.environ.get("LLMLINT_ONEHARNESS_BIN"),
+        "labels": os.environ["ONEHARNESS_HISTORY_LABELS"],
+    }, stream)
+""",
+        encoding="utf-8",
+    )
+    fake_llmlint.chmod(0o755)
+
+    result = subprocess.run(
+        ["just", *recipe_args],
+        cwd=REPO_ROOT,
+        env={
+            **os.environ,
+            "PATH": f"{bin_dir}:{os.environ['PATH']}",
+            "LLMLINT_RECORD": str(record),
+        },
+        text=True,
+        capture_output=True,
+        timeout=60,
+    )
+
+    assert result.returncode == 0, result.stderr
+    observed = json.loads(record.read_text(encoding="utf-8"))
+    assert observed["argv"] == expected_args
+    assert observed["bin"] == str(REPO_ROOT / "scripts" / "llmlint-oneharness.sh")
+    assert "role=llmlint" in observed["labels"].split(",")
 
 
 def test_run_onejudge_config_error_raises(onejudge_bin) -> None:
