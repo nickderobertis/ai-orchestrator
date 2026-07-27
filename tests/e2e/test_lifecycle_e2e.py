@@ -2157,7 +2157,6 @@ def test_lifecycle_refuses_remote_identity_without_known_required_checks(
     assert expected in result.detail
 
 
-# llmlint: ignore[e2e_not_mocked] GitHub decisioning is the suite's documented external seam.
 def test_local_workflow_cannot_qualify_on_required_checks_alone(tmp_path, bare_origin) -> None:
     """Branch protection cannot cover a workflow that never opens a PR.
 
@@ -2174,27 +2173,28 @@ def test_local_workflow_cannot_qualify_on_required_checks_alone(tmp_path, bare_o
         workflow="local",
         repo_type="single-owner",
     )
-
-    class ProtectedGitHub(FakeGitHub):
-        def required_status_checks(self, repo: str, branch: str) -> tuple[str, ...]:
-            return ("complete-gate",)
+    before = _tip(origin, "main")
 
     result = run_repo_task(
         "acme/widget",
         "This local publication must not start on remote checks alone.",
         "engineer",
         workspace=workspace,
-        github=ProtectedGitHub(origin),
-        dispatch_fn=lambda *_args, **_kwargs: pytest.fail("must not dispatch"),
+        github=FakeGitHub(origin, required=("complete-gate",)),
+        dispatch_fn=make_writing_dispatch(filename="never-dispatched.txt"),
         recorded_gate=["true"],
     )
 
     assert result.outcome == "error"
     assert "lifecycle dispatch refused" in result.detail
     assert "publishes without a PR for required status checks to gate" in result.detail
+    # The refusal precedes the agent, so its change exists nowhere: no branch was
+    # cut in the execution checkout and the base never moved.
+    assert not gitops.branch_exists(canonical, result.branch)
+    assert _tip(origin, "main") == before
+    assert not _has_file(origin, "main", "never-dispatched.txt")
 
 
-# llmlint: ignore[e2e_not_mocked] GitHub decisioning is the suite's documented external seam.
 def test_local_workflow_recovery_cannot_qualify_on_required_checks_alone(
     tmp_path, bare_origin
 ) -> None:
@@ -2208,16 +2208,12 @@ def test_local_workflow_recovery_cannot_qualify_on_required_checks_alone(
     )
     Registry().register(str(canonical), workflow="local", repo_type="single-owner")
 
-    class ProtectedGitHub(FakeGitHub):
-        def required_status_checks(self, repo: str, branch: str) -> tuple[str, ...]:
-            return ("complete-gate",)
-
     with pytest.raises(RegistryError, match="publishes without a PR"):
         recover_repo(
             canonical,
             "feature/never-recovered",
             workspace_root=tmp_path / "local-recovery-required-only-worktrees",
-            github=ProtectedGitHub(origin),
+            github=FakeGitHub(origin, required=("complete-gate",)),
             recorded_gate=["true"],
         )
 
@@ -2261,7 +2257,6 @@ def test_remote_human_checkpoint_records_push_failure(
     assert result.pr is None
 
 
-# llmlint: ignore[e2e_not_mocked] GitHub decisioning is the suite's documented external seam.
 @pytest.mark.parametrize(
     ("rejection", "expected_outcome"),
     [("gate", "gate-failed"), ("transport", "error")],
@@ -2302,7 +2297,10 @@ def test_remote_lifecycle_branch_push_failure_opens_no_pr(
     )
 
     assert result.outcome == expected_outcome
-    assert result.pr is None and not github._prs
+    # No PR was opened, and the branch that would have carried one never reached
+    # the remote, so the rejection really did land before publication.
+    assert result.pr is None
+    assert not gitops.branch_exists(origin, result.branch)
     assert not _has_file(origin, "main", "remote.txt")
 
 
