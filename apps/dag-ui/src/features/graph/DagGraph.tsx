@@ -24,6 +24,7 @@ export function DagGraph({
   readonly onSelectNode: (nodeId: string) => void;
 }) {
   const { nodes, edges } = useMemo(() => {
+    const drawn = new Set(nodeViews.map((node) => node.id));
     const layout = layoutDag({
       nodes: nodeViews.map((node) => ({
         id: node.id,
@@ -32,11 +33,16 @@ export function DagGraph({
         state: node.state,
       })),
       edges: nodeViews.flatMap((node) =>
-        (node.task.deps ?? []).map((dependency) => ({
-          id: `${dependency}->${node.id}`,
-          source: dependency,
-          target: node.id,
-        })),
+        (node.task.deps ?? [])
+          // A cross-DAG dependency (`run:<run_id>#<node_id>`) names a node in
+          // another run, which this graph cannot draw an edge to. The node detail
+          // still lists it, so the prerequisite stays visible.
+          .filter((dependency) => drawn.has(dependency))
+          .map((dependency) => ({
+            id: `${dependency}->${node.id}`,
+            source: dependency,
+            target: node.id,
+          })),
       ),
     });
     return {

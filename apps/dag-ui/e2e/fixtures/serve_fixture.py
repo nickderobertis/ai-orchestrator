@@ -56,7 +56,9 @@ _LIVE_TASKS: list[dict[str, Any]] = [
     {
         "id": "dashboard",
         "persona": "engineer",
-        "deps": ["foundation"],
+        # The second dependency is a cross-DAG reference: a prerequisite in another
+        # run, which the projection accepts and this graph has no node to draw to.
+        "deps": ["foundation", f"run:{HISTORY_RUN}#archive"],
         "task": "Build the live dashboard",
         "done_when": "Users can inspect transcripts",
     },
@@ -130,12 +132,14 @@ def _write_live_run(runs_dir: Path) -> None:
     from orchestrator.runs import prepare_round
 
     run_dir = runs_dir / LIVE_RUN
-    prepare_round(run_dir, {"tasks": _LIVE_TASKS})
+    # Schema 5 is the first that admits the cross-DAG dependency this plan declares.
+    plan = {"schema_version": 5, "concurrency": 3}
+    prepare_round(run_dir, {**plan, "tasks": _LIVE_TASKS})
     journal = open_journal(run_dir, RunId(LIVE_RUN), 1)
     for task in _LIVE_TASKS:
         # A definition's own `deps` are the edges; adding them again would duplicate.
         journal.append("node-added", detail={"definition": task})
-    journal.append("round-started", detail={"plan": {"schema_version": 3, "concurrency": 3}})
+    journal.append("round-started", detail={"plan": plan})
 
     journal.append("node-started", node=NodeId("foundation"), detail={"persona": "engineer"})
     journal.append(

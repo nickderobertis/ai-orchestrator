@@ -118,6 +118,25 @@ test("tracks every node state, node detail, and role transcript of a live run", 
   ).toBeVisible();
 });
 
+test("renders a graph whose node depends on another run", async ({ page }) => {
+  await openObservatory(page);
+  // The served plan gives `dashboard` a `run:<run_id>#<node_id>` prerequisite. It
+  // names a node this graph does not hold, so it cannot be an edge — and it must not
+  // take the whole view down with it either.
+  await expect(page.locator(".dag-node.state-running")).toContainText(
+    "dashboard",
+  );
+  await expect(
+    page.getByText("The DAG view could not be displayed."),
+  ).toHaveCount(0);
+
+  // The prerequisite itself stays visible where the node's dependencies are listed.
+  await page.locator(".dag-node.state-running").click();
+  await expect(page.locator(".facts")).toContainText(
+    `run:${runs().history}#archive`,
+  );
+});
+
 test("navigates historical DAGs grouped by their launching session", async ({
   page,
 }) => {
