@@ -71,10 +71,21 @@ test("tracks every node state, node detail, and role transcript of a live run", 
   await expect(page.getByText("Build the live dashboard")).toHaveCount(0);
 
   await page.locator(".dag-node.state-done").click();
+  const section = (name: string) =>
+    page
+      .locator(".detail-section")
+      .filter({ has: page.getByRole("heading", { name }) });
   await expect(
-    page.getByRole("link", { name: /github\.com\/example\/repo\/pull\/12/ }),
+    section("Pull request").getByRole("link", {
+      name: /github\.com\/example\/repo\/pull\/12/,
+    }),
   ).toBeVisible();
-  await expect(page.getByText("Gate completed successfully")).toBeVisible();
+  // The node result records no PR checks, and the view says so rather than
+  // rendering an empty block that reads as "all clear".
+  await expect(section("Pull request")).toContainText("Not recorded");
+  await expect(section("Logs")).toContainText("Gate completed successfully");
+  // The gate result is the attestation the verification recorded for this node.
+  await expect(page.locator(".facts")).toContainText("comparison_base");
   await expect(
     page.getByText("No conversations recorded for this node."),
   ).toBeVisible();
@@ -101,6 +112,12 @@ test("restores a bookmarked view and refreshes through the read API", async ({
   page,
 }) => {
   await openObservatory(page, `/?run=${LIVE_RUN}&view=overall`);
+  const metric = (label: string) =>
+    page.locator(".metric").filter({ hasText: label });
+  await expect(metric("Status")).toContainText("running");
+  await expect(metric("Nodes")).toContainText(/[1-9]\d*/);
+  await expect(metric("Wall time")).toContainText(/\d+\.\ds/);
+  await expect(metric("Turns")).toContainText(/\d+/);
   await expect(page.getByText("Planner session")).toBeVisible();
   await expect(
     page.getByText("Coordinating the execution frontier"),
