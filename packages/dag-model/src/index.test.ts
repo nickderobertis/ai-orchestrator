@@ -41,7 +41,7 @@ const timing = {
 test("validates and preserves additive run-list fields", () => {
   const parsed = parseRunList({
     api_version: 1,
-    telemetry_schema_version: 6,
+    telemetry_schema_version: 7,
     observed_at: "2026-07-26T12:00:00Z",
     extension: true,
     runs: [
@@ -50,7 +50,8 @@ test("validates and preserves additive run-list fields", () => {
         state: "running",
         phase: "agent",
         last_event: "node-started",
-        telemetry_quality: "complete",
+        timing_quality: "complete",
+        linkage_quality: "native",
         timing,
         node_counts: { running: 1 },
       },
@@ -64,7 +65,7 @@ describe("boundary failures", () => {
     expect(() =>
       parseRunList({
         api_version: 2,
-        telemetry_schema_version: 6,
+        telemetry_schema_version: 7,
         observed_at: "2026-07-26T12:00:00Z",
         runs: [],
       }),
@@ -81,7 +82,7 @@ describe("boundary failures", () => {
   test("rejects a detail with an unsupported projected state", () => {
     const result = runDetailSchema.safeParse({
       api_version: 1,
-      telemetry_schema_version: 6,
+      telemetry_schema_version: 7,
       observed_at: "2026-07-26T12:00:00Z",
       run: {},
       rounds: [{ node_states: { build: "paused" } }],

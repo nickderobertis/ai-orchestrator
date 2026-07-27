@@ -48,7 +48,7 @@ test("a package consumer validates an API response through the public export", (
   expect(
     parseRunList({
       api_version: 1,
-      telemetry_schema_version: 6,
+      telemetry_schema_version: 7,
       observed_at: "2026-07-26T12:00:00Z",
       runs: [],
     }).runs,
@@ -59,7 +59,7 @@ test("a package consumer rejects incompatible list and detail payloads", () => {
   expect(() =>
     parseRunList({
       api_version: 2,
-      telemetry_schema_version: 6,
+      telemetry_schema_version: 7,
       observed_at: "2026-07-26T12:00:00Z",
       runs: [],
     }),
@@ -67,7 +67,7 @@ test("a package consumer rejects incompatible list and detail payloads", () => {
   expect(
     runDetailSchema.safeParse({
       api_version: 1,
-      telemetry_schema_version: 6,
+      telemetry_schema_version: 7,
       observed_at: "2026-07-26T12:00:00Z",
       run: {},
       rounds: [{ node_states: { build: "paused" } }],
@@ -114,7 +114,7 @@ test("a package consumer accepts a complete run detail", () => {
   };
   const parsed = parseRunDetail({
     api_version: 1,
-    telemetry_schema_version: 6,
+    telemetry_schema_version: 7,
     observed_at: "2026-07-26T12:00:00Z",
     run: {
       run_id: "run-1",
@@ -129,7 +129,14 @@ test("a package consumer accepts a complete run detail", () => {
         llmlint: usageParty,
         total: usageParty,
       },
-      telemetry_quality: "complete",
+      timing_quality: "complete",
+      linkage_quality: "native",
+      timing_presence: {
+        agent_model_ms: false,
+        judge_model_ms: false,
+        llmlint_model_ms: false,
+        tool_ms: false,
+      },
       sources: [],
       node_work_ms: {
         agent_model_ms: 0,
@@ -208,7 +215,8 @@ test("a package consumer validates populated telemetry and attribution", () => {
       state: "running",
       phase: "agent",
       last_event: "node-started",
-      telemetry_quality: "complete",
+      timing_quality: "complete",
+      linkage_quality: "native",
       timing: zeroTiming,
       node_counts: { running: 1 },
     }).node_counts.running,
@@ -220,6 +228,14 @@ test("a package consumer validates populated telemetry and attribution", () => {
       sessions: [{ session_id: "worker", role: "agent" }],
       turns: 1,
       lint: 0,
+      timing_quality: "complete",
+      linkage_quality: "native",
+      timing_presence: {
+        agent_model_ms: true,
+        judge_model_ms: false,
+        llmlint_model_ms: false,
+        tool_ms: true,
+      },
     }).sessions[0]?.session_id,
   ).toBe("worker");
   expect(

@@ -136,6 +136,10 @@ def test_launch_task_prose_preserves_default_and_passes_round_budget(
         return Process()
 
     monkeypatch.setattr("orchestrator.dispatch.subprocess.Popen", fake_popen)
+    monkeypatch.setattr(
+        "orchestrator.dispatch._resolve_onejudge",
+        lambda binary, _env: {"path": str(Path(binary).resolve()), "version": "0.3.4"},
+    )
     skill = {"kind": "command", "command": ["fake-provider"]}
 
     default_run = launch_orchestrator(
@@ -172,6 +176,7 @@ def test_launch_task_prose_preserves_default_and_passes_round_budget(
     )
     assert commands[0][commands[0].index("--task") + 1] == expected_default
     assert commands[1][commands[1].index("--task") + 1] == expected_budget
+    assert Path(commands[0][0]).is_absolute()
 
 
 def test_orchestrate_cli_prints_run_id(
