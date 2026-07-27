@@ -12,9 +12,6 @@ __pycache__/
 htmlcov/
 test-results/
 playwright-report/
-# Fixture trees a test server rebuilds on every start; the suite that owns one
-# decides where it lives, and every tool skips it by this name.
-.fixture/
 .mypy_cache/
 .ruff_cache/
 

@@ -3,12 +3,7 @@ import tseslint from "typescript-eslint";
 
 export default tseslint.config(
   {
-    ignores: [
-      "**/dist/**",
-      "**/.nx/**",
-      "**/node_modules/**",
-      "**/.fixture/**",
-    ],
+    ignores: ["**/dist/**", "**/.nx/**", "**/node_modules/**"],
   },
   ...tseslint.configs.recommended,
   {

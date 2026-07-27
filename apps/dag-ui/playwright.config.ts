@@ -1,3 +1,5 @@
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { defineConfig } from "@playwright/test";
 
 /**
@@ -25,11 +27,12 @@ const STALLED_UI_PORT = 4176;
 const STALLED_API_PORT = 8790;
 export const STALLED_UI_URL = `http://127.0.0.1:${STALLED_UI_PORT}`;
 /**
- * Where the fixture server writes the run directory it serves. It is rebuilt on every
- * start and named here rather than hidden in a temporary directory so a journey can
- * change what the server is serving the way an executor would.
+ * Where the fixture server writes the run directory it serves, rebuilt on every start.
+ * A journey needs to name it to change what the server is serving, so it is a fixed
+ * path rather than a random one — and it sits outside the checkout, so no tool has to
+ * be told to ignore it.
  */
-export const FIXTURE_WORKSPACE = "e2e/.fixture";
+export const FIXTURE_WORKSPACE = join(tmpdir(), "dag-ui-e2e-fixture");
 
 export default defineConfig({
   testDir: "./e2e",
