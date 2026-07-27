@@ -4,9 +4,9 @@
 Several shapes and vocabularies are mirrored across languages and would otherwise
 drift silently: renderer node states against ``orchestrator/projection.py``, the
 transcript payloads against the pinned ``@oneharness/ui`` declaration, and this
-repository's own envelope, HTTP payloads, and SSE event names against
-``docs/dag-ui/design.md``. Each side is parsed from its own file so a change to one
-without the other fails ``just check``.
+repository's own envelope, HTTP payloads, SSE event names, and documented network
+defaults against ``docs/dag-ui/design.md``. Each side is parsed from its own file so
+a change to one without the other fails ``just check``.
 
 Payload reconciliation is asymmetric on purpose — see ``reconcile_shape``.
 """
@@ -254,6 +254,57 @@ def union_members(path: Path, interface: str, prop: str) -> list[str]:
     return members
 
 
+def module_number(path: Path, name: str) -> float:
+    """The value of one module-level numeric constant."""
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+    except (OSError, SyntaxError) as exc:
+        fail(f"read {path.name} {name}: {exc}")
+    values = [
+        node.value.value
+        for node in tree.body
+        if isinstance(node, ast.Assign)
+        and len(node.targets) == 1
+        and isinstance(node.targets[0], ast.Name)
+        and node.targets[0].id == name
+        and isinstance(node.value, ast.Constant)
+        and isinstance(node.value.value, int | float)
+        and not isinstance(node.value.value, bool)
+    ]
+    if len(values) != 1:
+        fail(f"{path.name} must declare exactly one numeric {name}")
+    return float(values[0])
+
+
+def documented_number(path: Path, what: str, pattern: str) -> float:
+    """The single number the contract states for ``what``, via a capturing ``pattern``.
+
+    Every occurrence must agree: a document that states one default in prose and a
+    different one in its example has already drifted from itself.
+    """
+    try:
+        source = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        fail(f"read {path.name} {what}: {exc}")
+    found = {float(match) for match in re.findall(pattern, source, flags=re.DOTALL)}
+    if len(found) != 1:
+        fail(
+            f"{path.name} must state exactly one {what}; found {sorted(found)!r}. "
+            "Reconcile the prose and the example with each other first."
+        )
+    return found.pop()
+
+
+def reconcile_number(what: str, python: tuple[str, float], other: tuple[str, float]) -> None:
+    """Fail unless a Python default and its documented value are the same number."""
+    (python_where, python_value), (other_where, other_value) = python, other
+    if python_value != other_value:
+        fail(
+            f"{what}: {python_where} is {python_value:g} but "
+            f"{other_where} says {other_value:g}; reconcile them in one change"
+        )
+
+
 def frozenset_members(path: Path, name: str) -> list[str]:
     """The string members of a module-level ``name: frozenset[str] = frozenset({...})``."""
     try:
@@ -424,6 +475,32 @@ def main() -> None:
             union_members(design, "RunLaunch", "launcher"),
         ),
     )
+    # Network defaults the contract states in prose and the server states in code.
+    server = root / "orchestrator/server.py"
+    reconcile_number(
+        "default port",
+        ("orchestrator/server.py DEFAULT_PORT", module_number(server, "DEFAULT_PORT")),
+        (
+            "docs/dag-ui/design.md",
+            documented_number(design, "default port", r"127\.0\.0\.1:(\d+)"),
+        ),
+    )
+    reconcile_number(
+        "SSE heartbeat interval",
+        (
+            "orchestrator/server.py DEFAULT_HEARTBEAT_INTERVAL",
+            module_number(server, "DEFAULT_HEARTBEAT_INTERVAL"),
+        ),
+        (
+            "docs/dag-ui/design.md",
+            documented_number(
+                design,
+                "SSE heartbeat interval",
+                r"heartbeat comments\s+at least every (\d+) second",
+            ),
+        ),
+    )
+
     reconcile(
         "SSE event vocabulary",
         (

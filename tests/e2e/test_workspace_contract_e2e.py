@@ -442,3 +442,34 @@ def test_dag_state_contract_checker_reports_a_dropped_required_field(tmp_path: P
     assert result.returncode != 0
     assert "omits required" in result.stderr
     assert "canContinue" in result.stderr
+
+
+def test_dag_state_contract_checker_reports_network_default_drift(tmp_path: Path) -> None:
+    """A default changed in the server alone leaves the documented one wrong."""
+    checkout = _dag_state_contract_checkout(tmp_path)
+    server = checkout / "orchestrator/server.py"
+    server.write_text(server.read_text().replace("DEFAULT_PORT = 8787", "DEFAULT_PORT = 9999"))
+
+    result = _dag_state_contract_run(checkout)
+
+    assert result.returncode != 0
+    assert "default port" in result.stderr
+    assert "is 9999 but" in result.stderr
+    assert "design.md says 8787" in result.stderr
+
+
+def test_dag_state_contract_checker_reports_heartbeat_drift(tmp_path: Path) -> None:
+    """The documented 15-second SSE heartbeat and the server constant stay together."""
+    checkout = _dag_state_contract_checkout(tmp_path)
+    server = checkout / "orchestrator/server.py"
+    server.write_text(
+        server.read_text().replace(
+            "DEFAULT_HEARTBEAT_INTERVAL = 15.0", "DEFAULT_HEARTBEAT_INTERVAL = 30.0"
+        )
+    )
+
+    result = _dag_state_contract_run(checkout)
+
+    assert result.returncode != 0
+    assert "SSE heartbeat interval" in result.stderr
+    assert "reconcile them in one change" in result.stderr
