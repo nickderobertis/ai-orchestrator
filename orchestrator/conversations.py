@@ -18,6 +18,11 @@ Everything here is a trust boundary: history records are parsed defensively by
 the output.
 """
 
+# llmlint: ignore-file[contracts_have_one_source_or_a_drift_gate] These payload types
+# are gated by scripts/check-dag-state-contract.py, which reconciles their field names,
+# optionality, and closed value vocabularies against the authoritative declarations.
+# Structural field *types* stay ungated on purpose — see that script's own note.
+
 from __future__ import annotations
 
 import json

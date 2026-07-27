@@ -140,6 +140,17 @@ def create_app(
         """Return the contract error envelope for a malformed query/path parameter."""
         return _error(422, "invalid_request", "invalid request parameters")
 
+    @app.exception_handler(Exception)
+    async def _on_unexpected(_request: Request, _exc: Exception) -> JSONResponse:
+        """Return the contract error envelope for an unanticipated read failure.
+
+        Without this the framework's own 500 body would break the envelope every
+        other response honors. The exception is deliberately not rendered: it can
+        carry a filesystem path or record contents, which the contract forbids
+        leaking. It still reaches the server log for the operator.
+        """
+        return _error(500, "read_error", "unexpected read failure")
+
     @app.get("/healthz")
     async def healthz() -> dict[str, str]:
         """Liveness that never touches run storage."""

@@ -788,3 +788,52 @@ def test_detail_maps_transcript_edge_cases_to_the_ui_shape(
         "nodeId": "api",
         "inferred": True,
     }
+
+
+def test_a_symlinked_log_cannot_stream_a_file_outside_the_run(tmp_path: Path) -> None:
+    """A log path is fixed, but the file at it can point anywhere."""
+    runs = tmp_path / "runs"
+    run_dir = _active_run(runs, "demo")
+    secret = tmp_path / "outside-secret.txt"
+    secret.write_text("credentials that are not this run's log\n", encoding="utf-8")
+    (run_dir / "orchestrator").mkdir(parents=True, exist_ok=True)
+    (run_dir / "orchestrator" / "gate.log").symlink_to(secret)
+    # A real log beside it still serves, so this is containment, not a blanket refusal.
+    (run_dir / "orchestrator" / "stderr.log").write_text("real tail\n", encoding="utf-8")
+
+    app = create_app(runs, oneharness_bin=str(tmp_path / "definitely-not-installed"))
+
+    with _serve(app) as base:
+        detail = httpx.Client(base_url=base, timeout=30).get("/api/v1/runs/demo").json()
+
+    assert detail["logs"] == {"orchestrator_stderr": "real tail\n"}
+    assert "credentials" not in json.dumps(detail)
+
+
+def test_an_unexpected_read_failure_keeps_the_error_envelope(tmp_path: Path) -> None:
+    """An unanticipated failure must not break the envelope or leak the path."""
+    runs = tmp_path / "runs"
+    run_dir = _active_run(runs, "demo")
+    # An unreadable authoritative journal is a real filesystem condition the read
+    # model does not anticipate: it handles a *corrupt* journal, not an unopenable one.
+    journal = run_dir / "events.jsonl"
+    journal.chmod(0o000)
+    try:
+        journal.read_bytes()
+    except OSError:
+        pass
+    else:  # pragma: no cover - running as root
+        journal.chmod(0o644)
+        pytest.skip("this process bypasses file permissions")
+
+    app = create_app(runs, oneharness_bin=str(tmp_path / "definitely-not-installed"))
+    try:
+        with _serve(app) as base:
+            response = httpx.Client(base_url=base, timeout=30).get("/api/v1/runs/demo")
+    finally:
+        journal.chmod(0o644)
+
+    assert response.status_code == 500
+    body = response.json()
+    assert body == {"error": {"code": "read_error", "message": "unexpected read failure"}}
+    assert str(tmp_path) not in json.dumps(body)  # no filesystem path leaked

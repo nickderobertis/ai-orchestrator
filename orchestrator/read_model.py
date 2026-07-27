@@ -12,6 +12,11 @@ authoritative journal is `ProjectionFailed`; a malformed launch record degrades 
 "no launcher" rather than failing the read.
 """
 
+# llmlint: ignore-file[contracts_have_one_source_or_a_drift_gate] These payload types
+# are gated by scripts/check-dag-state-contract.py, which reconciles their field names,
+# optionality, and closed value vocabularies against the authoritative declarations.
+# Structural field *types* stay ungated on purpose — see that script's own note.
+
 from __future__ import annotations
 
 from collections import Counter
@@ -239,8 +244,20 @@ _RUN_LOGS = {
 }
 
 
-def _tail(path: Path, max_bytes: int) -> str | None:
-    """The last ``max_bytes`` of a log, UTF-8 decoded, or ``None`` when unreadable."""
+def _tail(run_dir: Path, parts: tuple[str, ...], max_bytes: int) -> str | None:
+    """The last ``max_bytes`` of a log beneath ``run_dir``, or ``None`` when unusable.
+
+    Containment is rechecked per file for the same reason it is checked per run: the
+    log path is fixed, but the file at it can be a symlink to anywhere, and serving
+    64kB of whatever it points at is exactly what the comment above forbids.
+    """
+    try:
+        root = run_dir.resolve(strict=True)
+        path = run_dir.joinpath(*parts).resolve(strict=True)
+    except OSError:
+        return None
+    if not path.is_file() or not path.is_relative_to(root):
+        return None
     try:
         data = path.read_bytes()
     except OSError:
@@ -252,7 +269,7 @@ def read_logs(run_dir: Path) -> dict[str, str]:
     """Bounded tails of the run's own logs, keyed by name and free of paths."""
     logs: dict[str, str] = {}
     for name, parts in _RUN_LOGS.items():
-        tail = _tail(run_dir.joinpath(*parts), _LOG_TAIL_BYTES)
+        tail = _tail(run_dir, parts, _LOG_TAIL_BYTES)
         if tail:
             logs[name] = tail
     return logs
