@@ -1472,6 +1472,20 @@ def test_real_cli_recovers_failed_lifecycle_result(
         event["kind"] == "verification-finished" and event.get("node") == "gate-failed-lifecycle"
         for event in records
     )
+    # The rejection above arrives as `git push` output. What makes it readable is
+    # the record each node writes of the merge path it expected to be verified by.
+    coverage = {
+        event["node"]: event["detail"]
+        for event in records
+        if event["kind"] == "merge-gate-coverage"
+    }
+    assert set(coverage) == {"failed-lifecycle", "gate-failed-lifecycle"}
+    for node_id, detail in coverage.items():
+        assert detail["pre_push_hook"] == str(hook.resolve()), node_id
+        assert detail["required_checks"] == []
+        assert detail["required_checks_status"] == "not-applicable"
+        assert detail["checkout"] == str(canonical)
+    assert coverage["gate-failed-lifecycle"]["expected_gate"][:2] == ["sh", "-c"]
     lock_waits = [
         event["detail"]["seconds"]
         for event in records

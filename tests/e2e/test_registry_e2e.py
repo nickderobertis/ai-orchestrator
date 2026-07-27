@@ -286,6 +286,55 @@ def test_merge_gate_coverage_onboarding_and_registry_audit_journeys(
         assert "identity=https://github.com/acme/required status=covered" in audit.stdout
 
 
+@pytest.mark.parametrize(
+    ("name", "expected"),
+    [
+        ("neither", "no required PR status checks exist"),
+        ("inaccessible", "required PR status checks are unknown"),
+    ],
+)
+def test_remote_identity_without_required_checks_refuses_recovery(
+    tmp_path: Path,
+    bare_origin: Callable[..., Path],
+    monkeypatch: pytest.MonkeyPatch,
+    name: str,
+    expected: str,
+) -> None:
+    """Recovery stops against a remote identity no required check will verify.
+
+    The repository's merge path is the only gate now, so an identity whose branch
+    protection is absent or unreadable has to be refused before recovery attests
+    and pushes preserved work that nothing would ever verify.
+    """
+    state = tmp_path / "state"
+    monkeypatch.setenv("AI_ORCHESTRATOR_HOME", str(state))
+    checkout = tmp_path / name
+    git("clone", str(bare_origin()), str(checkout))
+    git("remote", "set-url", "origin", f"https://github.com/acme/{name}.git", cwd=checkout)
+
+    with _github_api_server(tmp_path) as github_host:
+        monkeypatch.setenv("GH_HOST", github_host)
+        monkeypatch.setenv("GH_ENTERPRISE_TOKEN", "test-token")
+        monkeypatch.setenv("SSL_CERT_FILE", str(tmp_path / "github.crt"))
+        monkeypatch.setenv("GH_CONFIG_DIR", str(tmp_path / "gh-config"))
+        _cli("orchestrator-register-repo", str(checkout), "--repo-type", "single-owner")
+
+        recovered = _cli(
+            "orchestrator-repo-recover",
+            "claude/preserved",
+            "--repo",
+            str(checkout),
+            "--gate",
+            "true",
+            check=False,
+        )
+
+    assert recovered.returncode == 2
+    assert "recovery refused for identity" in recovered.stderr
+    assert expected in recovered.stderr
+    assert "just repos --audit-gate-coverage" in recovered.stderr
+
+
 def test_lifecycle_clis_reject_unknown_local_aliases_before_dispatch(
     tmp_path: Path,
     bare_origin: Callable[..., Path],
