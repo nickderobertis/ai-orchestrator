@@ -81,17 +81,19 @@ def resolve_supervision_run(runs_dir: Path, identifier: str) -> RunId:
     raise ConfigError(f"no recorded run {identifier!r} under {runs_dir}{suffix}")
 
 
-def process_is_live(pid: int, host: object) -> bool:
-    """Whether a recorded owner process still exists, conservatively.
+def process_may_be_live(pid: int, host: object) -> bool:
+    """Whether a recorded owner process cannot be shown to be gone.
 
     The one place this repository decides that question. Every caller keeps its own
     policy for *unreadable* owner metadata — those policies genuinely differ — but
     the OS answer has a single spelling here, so a view cannot drift from the
-    recovery gate that refuses to reclaim a round while its owner is alive.
+    recovery gate that refuses to reclaim a round it cannot prove is unowned.
 
-    Conservative in the direction of "still working": an owner recorded on another
-    host cannot be probed, and one this user may not signal is present but foreign,
-    so both count as live. Reporting a healthy round as abandoned is the worse error.
+    Only `False` is a certainty: this host answered that the pid is gone. `True`
+    means "not proven dead" — the owner is alive here, or sits on another host, or
+    belongs to a user this one may not signal, so it cannot be probed at all. The
+    name says *may* because that asymmetry is the point: reporting a healthy round
+    as abandoned is the worse error, so every unknown resolves toward "still working".
     """
     if host != socket.gethostname():
         return True
@@ -120,16 +122,18 @@ def launch_is_active(run_dir: Path) -> bool:
     pid = value.get("pid")
     if not isinstance(pid, int) or isinstance(pid, bool) or pid < 1:
         return False
-    return process_is_live(pid, value.get("host"))
+    return process_may_be_live(pid, value.get("host"))
 
 
-def round_owner_is_live(round_dir: Path) -> bool:
-    """Whether the round's recorded owner still looks alive on this host.
+def round_owner_may_be_live(round_dir: Path) -> bool:
+    """Whether the round's recorded owner cannot be shown to have stopped.
 
-    Conservative in the direction that keeps a run reported as working: an unreadable
-    record or an owner whose pid cannot be trusted counts as live, because a viewer
-    wrongly announcing "this round died" is worse than one that keeps reporting it.
-    A round with no recorded owner at all is not live — nothing claimed it.
+    Answers "possibly live", never "certainly live", and leans that way on purpose:
+    an unreadable record or an owner whose pid cannot be trusted counts as possibly
+    live, because a viewer wrongly announcing "this round died" is worse than one
+    that keeps reporting it. Only a round that is finished, or one whose owner this
+    host proved gone, comes back `False`. A round with no recorded owner at all is
+    `False` too — nothing claimed it, so nothing can still be working on it.
     """
     path = round_dir / "status.json"
     if not path.exists():
@@ -143,7 +147,7 @@ def round_owner_is_live(round_dir: Path) -> bool:
     pid = state.get("pid")
     if not isinstance(pid, int) or isinstance(pid, bool) or pid < 1:
         return True
-    return process_is_live(pid, state.get("host"))
+    return process_may_be_live(pid, state.get("host"))
 
 
 @dataclass(frozen=True)
@@ -175,7 +179,7 @@ def abandoned_round(run_dir: Path) -> AbandonedRound | None:
     except (ConfigError, OSError):
         return None
     status = state.get("status")
-    if status not in {"running", ABANDONED} or round_owner_is_live(round_dir):
+    if status not in {"running", ABANDONED} or round_owner_may_be_live(round_dir):
         return None
     pid = state.get("pid")
     reason = state.get("reason")
@@ -452,10 +456,10 @@ def prepare_round(run_dir: Path, plan: dict[str, Any], *, recover: bool = False)
                 state_path = round_dir / "status.json"
                 if state_path.exists():
                     state = load_mapping(state_path)
-                    if not recover or _owner_is_live(state):
+                    if not recover or _owner_may_be_live(state):
                         abandoned = state.get("status") == ABANDONED
                         if recover:
-                            action = "the recorded owner is still alive; recovery refused"
+                            action = "the recorded owner may still be alive; recovery refused"
                         elif abandoned:
                             action = "its owner recorded the abandonment; reclaim it with --recover"
                         else:
@@ -474,8 +478,8 @@ def prepare_round(run_dir: Path, plan: dict[str, Any], *, recover: bool = False)
         return ClaimedRound(number, round_dir)
 
 
-def _owner_is_live(state: Mapping[str, Any]) -> bool:
-    """Conservatively identify a recorded owner on this host."""
+def _owner_may_be_live(state: Mapping[str, Any]) -> bool:
+    """Whether recovery must leave this claim alone because its owner may still run."""
     if state.get("status") == ABANDONED:
         return False
     pid = state.get("pid")
@@ -487,7 +491,7 @@ def _owner_is_live(state: Mapping[str, Any]) -> bool:
         or pid < 1
     ):
         raise ConfigError("running round has invalid owner metadata; recovery refused")
-    return process_is_live(pid, host)
+    return process_may_be_live(pid, host)
 
 
 def _abandon_if_running(round_dir: Path, reason: str) -> None:

@@ -24,7 +24,7 @@ from orchestrator.runs import (
     resolve_run_dir,
     result_state,
     round_abandonment_guard,
-    round_owner_is_live,
+    round_owner_may_be_live,
     status_summary,
     validate_run_id,
     write_next_plan,
@@ -123,7 +123,7 @@ def test_write_result_rejects_duplicate_result(tmp_path) -> None:
 def test_recovery_refuses_live_owner_and_claims_abandoned_round(tmp_path) -> None:
     run_dir = tmp_path / "run"
     _, round_dir = prepare_round(run_dir, PLAN)
-    with pytest.raises(ConfigError, match="owner is still alive; recovery refused"):
+    with pytest.raises(ConfigError, match="owner may still be alive; recovery refused"):
         prepare_round(run_dir, PLAN, recover=True)
 
     status = round_dir / "status.json"
@@ -184,7 +184,7 @@ def test_a_signalled_round_records_its_abandonment_and_stops_being_live(tmp_path
     assert recorded["status"] == "abandoned"
     assert recorded["reason"] == f"owner pid {os.getpid()} took SIGTERM"
     assert recorded["pid"] == os.getpid()
-    assert round_owner_is_live(round_dir) is False
+    assert round_owner_may_be_live(round_dir) is False
     assert abandoned_round(run_dir) == AbandonedRound(1, os.getpid(), recorded["reason"])
     assert signal.getsignal(signal.SIGTERM) is signal.SIG_DFL
 
@@ -245,18 +245,18 @@ def test_round_liveness_is_conservative_about_an_owner_it_cannot_probe(
     run_dir = tmp_path / "run"
     _, round_dir = prepare_round(run_dir, PLAN)
     _own(round_dir, **owner)
-    assert round_owner_is_live(round_dir) is live
+    assert round_owner_may_be_live(round_dir) is live
 
 
 def test_a_round_with_no_readable_owner_is_never_called_abandoned(tmp_path) -> None:
     run_dir = tmp_path / "run"
     _, round_dir = prepare_round(run_dir, PLAN)
     (round_dir / "status.json").unlink()
-    assert round_owner_is_live(round_dir) is False
+    assert round_owner_may_be_live(round_dir) is False
     assert abandoned_round(run_dir) is None
 
     (round_dir / "status.json").write_text("{ not json", encoding="utf-8")
-    assert round_owner_is_live(round_dir) is True
+    assert round_owner_may_be_live(round_dir) is True
     assert abandoned_round(run_dir) is None
 
     _own(round_dir, status="completed")
