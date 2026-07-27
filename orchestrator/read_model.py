@@ -16,6 +16,12 @@ authoritative journal is `ProjectionFailed`; a malformed launch record degrades 
 # are gated by scripts/check-dag-state-contract.py, which reconciles their field names,
 # optionality, and closed value vocabularies against the authoritative declarations.
 # Structural field *types* stay ungated on purpose — see that script's own note.
+#
+# llmlint: ignore-file[modern_domain_modeling] `RunDetail.run` and `.details` are
+# pass-throughs of `RunTelemetry.record()` and `DetailSnapshot.to_record()`. Those
+# modules own those shapes; restating them here would create the second source this
+# file exists to avoid, and the design contract references the owning types by name
+# for exactly that reason.
 
 from __future__ import annotations
 

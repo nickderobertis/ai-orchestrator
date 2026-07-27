@@ -118,11 +118,20 @@ def _identity_ok(value: object) -> TypeGuard[str]:
 
 
 def provenance_dir() -> Path:
-    """The out-of-repo directory holding provenance records for this user."""
-    base = os.environ.get("XDG_STATE_HOME") or os.path.join(
-        os.path.expanduser("~"), ".local", "state"
+    """The out-of-repo directory holding provenance records for this user.
+
+    A relative ``XDG_STATE_HOME`` is ignored in favour of the default, as the XDG
+    base-directory spec requires: honouring one would resolve the record against
+    whatever directory the process happens to be in, so the same launch would write
+    and read different files.
+    """
+    configured = os.environ.get("XDG_STATE_HOME") or ""
+    base = (
+        Path(configured)
+        if configured and Path(configured).is_absolute()
+        else Path(os.path.expanduser("~")) / ".local" / "state"
     )
-    return Path(base) / "ai-orchestrator" / "launches"
+    return base / "ai-orchestrator" / "launches"
 
 
 def provenance_path(launch_id: LaunchId) -> Path:

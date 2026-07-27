@@ -540,10 +540,14 @@ def test_after_cursor_details_logs_and_projection_failure_over_http(
         assert corrupt.json()["error"]["code"] == "projection_error"
 
 
-def test_cli_refuses_a_nonloopback_bind_and_otherwise_serves(tmp_path: Path) -> None:
+def test_cli_refuses_a_nonloopback_bind_and_otherwise_serves(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """`just telemetry-server` runs this console script; drive it as a real process."""
     runs = tmp_path / "runs"
     _active_run(runs, "demo")
+    monkeypatch.setenv("FAKE_ONEHARNESS_STORE", str(_history_store(tmp_path, "demo")))
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
     assert SERVER_CLI.is_file(), f"install the project console scripts: {SERVER_CLI}"
 
     refused = subprocess.run(
@@ -564,10 +568,29 @@ def test_cli_refuses_a_nonloopback_bind_and_otherwise_serves(tmp_path: Path) -> 
     assert rejected.returncode != 0
     assert "port must be between 1 and 65535" in rejected.stderr
 
-    # The loopback default serves.
-    with _serve_cli("--runs-dir", str(runs)) as base:
+    # The loopback default serves, and --oneharness-bin / --expose-launcher-session-id
+    # reach the app the process builds, not just create_app's keyword arguments.
+    write_provenance(
+        launch_id=LAUNCH_ID,
+        launcher="codex",
+        launcher_session_id="cli-session",
+        repository_identity="local/app",
+    )
+    with _serve_cli(
+        "--runs-dir",
+        str(runs),
+        "--oneharness-bin",
+        str(_oneharness_bin(tmp_path)),
+        "--expose-launcher-session-id",
+    ) as base:
         listed = httpx.get(f"{base}/api/v1/runs", timeout=30).json()
         assert [row["run_id"] for row in listed["runs"]] == ["demo"]
+        detail = httpx.get(f"{base}/api/v1/runs/demo", timeout=30).json()
+        assert detail["launch"]["launcher_session_id"] == "cli-session"
+        assert {c["attribution"]["agentRole"] for c in detail["conversations"]} == {
+            "worker",
+            "judge",
+        }
 
     # And the acknowledged non-loopback bind serves too, reachable over loopback
     # because 0.0.0.0 covers it.
@@ -837,3 +860,37 @@ def test_an_unexpected_read_failure_keeps_the_error_envelope(tmp_path: Path) -> 
     body = response.json()
     assert body == {"error": {"code": "read_error", "message": "unexpected read failure"}}
     assert str(tmp_path) not in json.dumps(body)  # no filesystem path leaked
+
+
+def test_conversation_polling_survives_a_failing_history_subprocess(tmp_path: Path) -> None:
+    """A history binary that errors on every call must not end a watching stream.
+
+    The runs root is a separate source; a viewer should keep receiving run
+    invalidations even when transcripts are temporarily unreadable.
+    """
+    runs = tmp_path / "runs"
+    run_dir = _active_run(runs, "demo")
+    broken = tmp_path / "oneharness"
+    broken.write_text("#!/bin/sh\necho 'history backend exploded' >&2\nexit 3\n", encoding="utf-8")
+    broken.chmod(0o755)
+
+    app = create_app(
+        runs,
+        oneharness_bin=str(broken),
+        poll_interval=0.05,
+        heartbeat_interval=30.0,
+        conversation_interval=0.05,
+    )
+
+    with _serve(app) as base:
+        client = httpx.Client(base_url=base, timeout=15)
+        with client.stream("GET", "/api/v1/events?run_id=demo") as response:
+            assert response.status_code == 200
+            lines = response.iter_lines()
+            assert _read_frames(lines, until="snapshot")[-1]["event"] == "snapshot"
+
+            # Conversation polls are failing throughout; run invalidation still works.
+            _settle(run_dir, "demo")
+            changed = _read_frames(lines, until="run.changed")
+            assert json.loads(changed[-1]["data"])["run_id"] == "demo"
+            assert all(frame.get("event") != "conversation.changed" for frame in changed)

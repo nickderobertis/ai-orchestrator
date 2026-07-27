@@ -256,3 +256,19 @@ def test_read_provenance_rejects_a_replaced_record_with_an_unusable_identity() -
     provenance_path(launch_id).write_text(json.dumps(record), encoding="utf-8")
 
     assert read_provenance(launch_id) is None
+
+
+def test_provenance_dir_ignores_a_relative_xdg_state_home(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A relative XDG_STATE_HOME would resolve against the working directory.
+
+    The same launch would then write and read different files depending on where the
+    process happened to start, so the spec's default wins instead.
+    """
+    monkeypatch.setenv("XDG_STATE_HOME", "relative/state")
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+
+    assert (
+        provenance_dir() == tmp_path / "home" / ".local" / "state" / "ai-orchestrator" / "launches"
+    )
