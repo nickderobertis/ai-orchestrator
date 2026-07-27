@@ -5,7 +5,7 @@ import {
   ScrollText,
 } from "lucide-react";
 import type { NodeView } from "../runs/run-model";
-import { readString, readUnknown } from "../runs/run-model";
+import { readUnknown } from "../runs/run-model";
 import { TranscriptPanel } from "./TranscriptPanel";
 
 export function NodeDetail({
@@ -15,9 +15,11 @@ export function NodeDetail({
   readonly node: NodeView;
   readonly onClose: () => void;
 }) {
-  const task = readString(node.task, "task") ?? "No task text recorded.";
-  const doneWhen =
-    readString(node.task, "done_when") ?? "No completion criteria recorded.";
+  // `task` is required by the read contract, so it always has text; completion
+  // criteria are optional — a human action names work for a person, not a bar the
+  // harness can check — and the panel says so rather than showing an empty block.
+  const task = node.task.task;
+  const doneWhen = node.task.done_when ?? "No completion criteria recorded.";
   const result = node.result as Record<string, unknown> | undefined;
   const pr = readUnknown(result, "pr_url", "pull_request_url", "pr");
   const checks = readUnknown(result, "checks", "check_rollup");

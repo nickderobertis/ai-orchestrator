@@ -17,6 +17,14 @@ const OFFLINE_UI_PORT = 4175;
 const OFFLINE_API_PORT = 8789;
 export const OFFLINE_UI_URL = `http://127.0.0.1:${OFFLINE_UI_PORT}`;
 /**
+ * A third UI origin whose proxy points at a listener that accepts and never answers,
+ * so the app's first read stays in flight and its loading view stays on screen long
+ * enough for a real browser to observe it.
+ */
+const STALLED_UI_PORT = 4176;
+const STALLED_API_PORT = 8790;
+export const STALLED_UI_URL = `http://127.0.0.1:${STALLED_UI_PORT}`;
+/**
  * Where the fixture server writes the run directory it serves. It is rebuilt on every
  * start and named here rather than hidden in a temporary directory so a journey can
  * change what the server is serving the way an executor would.
@@ -48,6 +56,20 @@ export default defineConfig({
       command: `bunx vite --config vite.config.ts --port ${OFFLINE_UI_PORT} --strictPort`,
       url: OFFLINE_UI_URL,
       env: { DAG_UI_API_URL: `http://127.0.0.1:${OFFLINE_API_PORT}` },
+      reuseExistingServer: false,
+      timeout: 120_000,
+    },
+    {
+      command: `uv run python e2e/fixtures/serve_fixture.py --stall --port ${STALLED_API_PORT}`,
+      // Readiness is the accepted connection: this listener answers nothing, by design.
+      port: STALLED_API_PORT,
+      reuseExistingServer: false,
+      timeout: 120_000,
+    },
+    {
+      command: `bunx vite --config vite.config.ts --port ${STALLED_UI_PORT} --strictPort`,
+      url: STALLED_UI_URL,
+      env: { DAG_UI_API_URL: `http://127.0.0.1:${STALLED_API_PORT}` },
       reuseExistingServer: false,
       timeout: 120_000,
     },

@@ -20,6 +20,8 @@ import argparse
 import json
 import os
 import shutil
+import socket
+import sys
 import tempfile
 from pathlib import Path
 from typing import Any, NamedTuple
@@ -451,9 +453,46 @@ def remove_run(workspace: Path, run_id: str) -> int:
     Runs are directories, and a removed run is a removed directory; the server
     notices on its next poll and invalidates it. Nothing else about a run's storage
     is public, so this stays beside the code that wrote it.
+
+    The identifier reaches a recursive delete, so it is validated exactly as the read
+    API validates one and the resolved target must still sit beneath the runs root —
+    a command line is an untrusted boundary even in a fixture.
     """
-    shutil.rmtree(workspace / "runs" / run_id, ignore_errors=True)
+    from orchestrator.config import ConfigError
+    from orchestrator.runs import validate_run_id
+
+    runs_dir = workspace / "runs"
+    try:
+        validated = validate_run_id(run_id)
+    except ConfigError as exc:
+        print(f"serve-fixture: {exc}", file=sys.stderr)
+        return 2
+    target = (runs_dir / validated).resolve()
+    if not target.is_dir() or target.parent != runs_dir.resolve():
+        print(f"serve-fixture: no run {validated!r} beneath {runs_dir}", file=sys.stderr)
+        return 2
+    shutil.rmtree(target)
     return 0
+
+
+def stall(port: int) -> int:
+    """Accept connections on ``port`` and never answer them.
+
+    A read that is in flight is the only way to observe a loading view, and a browser
+    reaches that state only while a real request is outstanding. This is a network
+    condition, not a stand-in for the API: it serves nothing and answers nothing, so
+    the app's own request stays pending exactly as it would against a wedged server.
+    """
+    listener = socket.socket()
+    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    listener.bind(("127.0.0.1", port))
+    listener.listen(16)
+    held = []
+    while True:
+        connection, _ = listener.accept()
+        # Held open, never written to and never closed: closing would let the client
+        # fail fast, which is the opposite of what this proves.
+        held.append(connection)
 
 
 def serve(workspace: Path, port: int) -> int:
@@ -493,7 +532,15 @@ def main(argv: list[str] | None = None) -> int:
         "--remove-run",
         help="take one run out of an already-served fixture instead of serving",
     )
+    parser.add_argument(
+        "--stall",
+        action="store_true",
+        help="accept connections and never answer, so a read stays in flight",
+    )
     args = parser.parse_args(argv)
+
+    if args.stall:
+        return stall(args.port)
 
     workspace = args.workspace or Path(tempfile.mkdtemp(prefix="dag-ui-e2e-"))
     # The provenance records this fixture writes are throwaway too, so they must not
