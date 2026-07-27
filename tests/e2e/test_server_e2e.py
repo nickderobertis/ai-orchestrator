@@ -377,6 +377,15 @@ def test_events_stream_snapshots_then_invalidates_on_a_live_append(
             from_log = _read_frames(lines, until="run.changed")
             assert json.loads(from_log[-1]["data"])["run_id"] == "demo"
 
+            # And a rewritten launch record, which changes the launcher the detail
+            # view joins to without touching the journal.
+            (run_dir / "launch.json").write_text(
+                json.dumps({"schema_version": 2, "run_id": "demo", "launch": {}}),
+                encoding="utf-8",
+            )
+            from_launch = _read_frames(lines, until="run.changed")
+            assert json.loads(from_launch[-1]["data"])["run_id"] == "demo"
+
         # A reconnect gets a snapshot too — nothing replays what it missed — but its
         # cursor continues from the one it supplied.
         with client.stream("GET", "/api/v1/events", headers={"Last-Event-ID": "5"}) as response:
