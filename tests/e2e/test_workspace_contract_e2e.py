@@ -173,7 +173,11 @@ def _dag_state_contract_checkout(tmp_path: Path) -> Path:
     for relative in (
         "scripts/check-dag-state-contract.py",
         "orchestrator/projection.py",
+        "orchestrator/conversations.py",
+        "orchestrator/server.py",
         "packages/dag-layout/src/index.ts",
+        "docs/dag-ui/design.md",
+        "docs/dag-ui/oneharness-ui-contract.d.ts",
     ):
         target = checkout / relative
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -196,7 +200,9 @@ def test_dag_state_contract_checker_accepts_matching_public_states(
     result = _dag_state_contract_run(checkout)
 
     assert result.returncode == 0, result.stderr
-    assert result.stdout == "dag state contract: Python and TypeScript states agree\n"
+    assert result.stdout == (
+        "dag state contract: Python, TypeScript, and the design contract agree\n"
+    )
 
 
 def test_dag_state_contract_checker_reports_typescript_drift(tmp_path: Path) -> None:
@@ -210,6 +216,38 @@ def test_dag_state_contract_checker_reports_typescript_drift(tmp_path: Path) -> 
     assert "packages/dag-layout/src/index.ts DAG_NODE_STATES" in result.stderr
     assert "orchestrator/projection.py NodeState" in result.stderr
     assert "reconcile the TypeScript list with the Python projection states" in result.stderr
+
+
+def test_dag_state_contract_checker_reports_usage_field_drift(tmp_path: Path) -> None:
+    """Renaming a usage field in Python alone must fail, not silently break the UI."""
+    checkout = _dag_state_contract_checkout(tmp_path)
+    conversations = checkout / "orchestrator/conversations.py"
+    conversations.write_text(
+        conversations.read_text().replace('"cost_usd": "costUsd"', '"cost_usd": "costUSD"')
+    )
+
+    result = _dag_state_contract_run(checkout)
+
+    assert result.returncode != 0
+    assert "ConversationUsage rename targets" in result.stderr
+    assert "costUSD" in result.stderr
+    assert "reconcile them in one change" in result.stderr
+
+
+def test_dag_state_contract_checker_reports_sse_event_drift(tmp_path: Path) -> None:
+    """An SSE event renamed in the server alone must fail against the design contract."""
+    checkout = _dag_state_contract_checkout(tmp_path)
+    server = checkout / "orchestrator/server.py"
+    server.write_text(
+        server.read_text().replace('RUN_REMOVED = "run.removed"', 'RUN_REMOVED = "run.deleted"')
+    )
+
+    result = _dag_state_contract_run(checkout)
+
+    assert result.returncode != 0
+    assert "SSE event vocabulary" in result.stderr
+    assert "run.deleted" in result.stderr
+    assert "docs/dag-ui/design.md" in result.stderr
 
 
 def _recipe_checkout(tmp_path: Path) -> tuple[Path, Path]:

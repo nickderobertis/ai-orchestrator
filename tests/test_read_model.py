@@ -9,6 +9,7 @@ import pytest
 
 from orchestrator.journal import NodeId, RunId, open_journal
 from orchestrator.launch import write_provenance
+from orchestrator.monitor import snapshot_path
 from orchestrator.projection import read_strict_events
 from orchestrator.read_model import (
     API_VERSION,
@@ -288,5 +289,27 @@ def test_run_signature_advances_with_journal_growth(tmp_path: Path) -> None:
         "node-settled", node=NodeId("api"), detail={"status": "done", "result": {"status": "done"}}
     )
     after = run_signature(run_dir)
-    assert after[1] > before[1]
-    assert run_signature(tmp_path / "nope") == (0, 0)
+    assert after != before
+    assert set(run_signature(tmp_path / "nope")) == {0}
+
+
+def test_run_signature_advances_on_writes_outside_the_journal(tmp_path: Path) -> None:
+    """The monitor's PR snapshot and the run logs must invalidate too.
+
+    They are written outside the authoritative event stream, so a journal-only token
+    would leave a UI showing a stale PR status with nothing to correct it.
+    """
+    runs = tmp_path / "runs"
+    run_dir = _build_run(runs, "demo", settle=False)
+    journal_only = run_signature(run_dir)
+
+    snapshot = snapshot_path(run_dir)
+    snapshot.parent.mkdir(parents=True, exist_ok=True)
+    snapshot.write_text(json.dumps({"version": 1, "commits": {}, "prs": {}}), encoding="utf-8")
+    after_snapshot = run_signature(run_dir)
+    assert after_snapshot != journal_only
+
+    log = run_dir / "orchestrator" / "gate.log"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    log.write_text("gate: all deterministic checks passed\n", encoding="utf-8")
+    assert run_signature(run_dir) != after_snapshot

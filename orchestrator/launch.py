@@ -1,17 +1,11 @@
 """Launching-session provenance for ``just orchestrate``.
 
-Implements the ``LaunchProvenance`` scheme fixed by
-``docs/dag-ui/design.md``: a random 128-bit ``launch_id`` created at launch time, a
-short-lived provenance record written **outside the repository** (it holds the
-possibly-sensitive ``launcher_session_id``), and the ``launch_id`` + ``launcher``
-history labels that let the read API join any worker/judge/orchestrator conversation
-back to its launching session.
+Implements the ``LaunchProvenance`` scheme fixed by ``docs/dag-ui/design.md``.
 
-The split is deliberate: ``launch_id`` and ``launcher`` are non-sensitive and travel
-on history labels and in the run directory, while ``launcher_session_id`` lives only
-in the protected out-of-repo record and is surfaced by the server solely when its
-redaction policy permits. Missing or expired provenance degrades a run's launcher to
-``"unknown"`` without disturbing the graph attribution carried by the labels.
+Why the record lives outside the repository: ``launcher_session_id`` may be
+sensitive, so a checkout only ever holds the non-sensitive ``launch_id`` that joins
+to it. Missing or expired provenance degrades a run's launcher to ``"unknown"``
+rather than failing the read.
 """
 
 from __future__ import annotations
@@ -119,18 +113,22 @@ def write_provenance(
 ) -> Path:
     """Persist the protected provenance record outside the repository.
 
-    Only called for a known launcher with a session id — the sensitive join target
-    the server later resolves under its redaction policy.
+    Every argument is re-validated here rather than trusted from the caller: this is
+    the only writer of the sensitive join target the server later resolves, so an
+    unbounded or multiline session id must not reach the record at all.
     """
     if validate_launch_id(launch_id) is None:
         raise LaunchError("launch id must be 32 lowercase hex characters")
     if launcher not in KNOWN_LAUNCHERS:
         raise LaunchError("provenance is written only for a known launcher")
+    session_id = validate_session_id(launcher_session_id)
+    if session_id is None:
+        raise LaunchError("provenance requires a non-empty launcher session id")
     record: LaunchProvenance = {
         "schema_version": PROVENANCE_SCHEMA_VERSION,
         "launch_id": launch_id,
         "launcher": launcher,
-        "launcher_session_id": launcher_session_id,
+        "launcher_session_id": session_id,
         "started_at": started_at or datetime.now(UTC).isoformat(),
         "repository_identity": repository_identity,
     }

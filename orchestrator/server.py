@@ -16,7 +16,8 @@ import argparse
 import asyncio
 import json
 import sys
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
@@ -26,6 +27,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 from .config import ConfigError
 from .read_model import (
+    InvalidConversationId,
     InvalidRunId,
     ProjectionFailed,
     ReadError,
@@ -42,7 +44,18 @@ DEFAULT_HEARTBEAT_INTERVAL = 15.0
 DEFAULT_PORT = 8787
 _LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
 
-_SSE_EVENTS = frozenset({"snapshot", "run.changed", "conversation.changed", "run.removed"})
+
+class SseEvent(StrEnum):
+    """The closed SSE ``event`` vocabulary fixed by ``docs/dag-ui/design.md``.
+
+    ``check-dag-state-contract`` reconciles these members against that contract, so a
+    name added on one side without the other fails the gate.
+    """
+
+    SNAPSHOT = "snapshot"
+    RUN_CHANGED = "run.changed"
+    CONVERSATION_CHANGED = "conversation.changed"
+    RUN_REMOVED = "run.removed"
 
 
 def _error(status: int, code: str, message: str) -> JSONResponse:
@@ -54,6 +67,8 @@ def _status_for(exc: ReadError) -> tuple[int, str]:
     match exc:
         case InvalidRunId():
             return 422, "invalid_run_id"
+        case InvalidConversationId():
+            return 422, "invalid_conversation_id"
         case RunNotFound():
             return 404, "run_not_found"
         case ProjectionFailed():
@@ -65,22 +80,22 @@ def _status_for(exc: ReadError) -> tuple[int, str]:
 def _parse_cursor(value: str | None) -> int | None:
     """Parse an SSE resume cursor, tolerating any malformed ``Last-Event-ID``.
 
-    A crafted header must never crash the stream; an unparseable value falls back to
-    ``None`` so the connection opens with a fresh snapshot instead.
+    A crafted header must never crash the stream, so anything this process could not
+    have issued — unparseable, or negative like the ``after`` query's ``ge=0`` bound
+    rejects — falls back to ``None`` and the connection opens with a fresh snapshot.
     """
     if value is None:
         return None
     try:
-        return int(value)
+        cursor = int(value)
     except ValueError:
         return None
+    return cursor if cursor >= 0 else None
 
 
-def _sse(cursor: int, event: str, data: dict[str, Any]) -> str:
-    if event not in _SSE_EVENTS:  # pragma: no cover - guarded by callers
-        raise ValueError(f"unknown SSE event {event!r}")
+def _sse(cursor: int, event: SseEvent, data: Mapping[str, Any]) -> str:
     payload = json.dumps(data, separators=(",", ":"), sort_keys=True)
-    return f"id: {cursor}\nevent: {event}\ndata: {payload}\n\n"
+    return f"id: {cursor}\nevent: {event.value}\ndata: {payload}\n\n"
 
 
 def create_app(
@@ -148,7 +163,9 @@ def create_app(
     async def events(
         request: Request,
         run_id: str | None = Query(default=None),
-        after: int | None = Query(default=None),
+        # Cursors are server-issued and monotonically increasing from zero; a negative
+        # resume point cannot name a frame this process ever emitted.
+        after: int | None = Query(default=None, ge=0),
     ) -> Any:
         watched: str | None = None
         if run_id is not None:
@@ -176,11 +193,11 @@ def create_app(
     return app
 
 
-def _signatures(runs_dir: Path, watched: str | None) -> dict[str, tuple[int, int]]:
+def _signatures(runs_dir: Path, watched: str | None) -> dict[str, tuple[int, ...]]:
     """Change tokens for every run (or the single watched run) under the root."""
     if not runs_dir.is_dir():
         return {}
-    signatures: dict[str, tuple[int, int]] = {}
+    signatures: dict[str, tuple[int, ...]] = {}
     for entry in sorted(runs_dir.iterdir()):
         if not entry.is_dir() or (watched is not None and entry.name != watched):
             continue
@@ -212,7 +229,7 @@ async def _event_stream(
         cursor += 1
         yield _sse(
             cursor,
-            "snapshot",
+            SseEvent.SNAPSHOT,
             list_runs(runs_dir, include_settled=True, oneharness_bin=oneharness_bin),
         )
         last_emit = loop.time()
@@ -224,11 +241,12 @@ async def _event_stream(
         for name in sorted(current):
             if current[name] != baseline.get(name):
                 cursor += 1
-                yield _sse(cursor, "run.changed", {"run_id": name, "round": current[name][0]})
+                changed = {"run_id": name, "round": current[name][0]}
+                yield _sse(cursor, SseEvent.RUN_CHANGED, changed)
                 last_emit = loop.time()
         for name in sorted(set(baseline) - set(current)):
             cursor += 1
-            yield _sse(cursor, "run.removed", {"run_id": name})
+            yield _sse(cursor, SseEvent.RUN_REMOVED, {"run_id": name})
             last_emit = loop.time()
         baseline = current
         now = loop.time()

@@ -23,7 +23,7 @@ from __future__ import annotations
 import json
 import math
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, NotRequired, TypedDict
 
 from .history import (
     HistoryError,
@@ -72,6 +72,83 @@ _USAGE_KEYS = {
 _NOT_CONTINUABLE = frozenset({"planned", "skipped", "spawn-error"})
 
 
+class ConversationUsage(TypedDict, total=False):
+    """``@oneharness/ui`` ``ConversationUsage`` — every counter optional and nullable."""
+
+    inputTokens: float | None
+    outputTokens: float | None
+    cacheReadTokens: float | None
+    cacheWriteTokens: float | None
+    costUsd: float | None
+
+
+class ConversationToolEvent(TypedDict):
+    """``@oneharness/ui`` ``ConversationToolEvent``."""
+
+    index: int
+    kind: str
+    input: NotRequired[Any]
+    name: NotRequired[str | None]
+    output: NotRequired[str | None]
+
+
+class ConversationTurn(TypedDict):
+    """``@oneharness/ui`` ``ConversationTurn``."""
+
+    id: str
+    user: str
+    assistant: str | None
+    reasoning: str | None
+    harness: str
+    model: str | None
+    timestamp: str
+    status: str
+    failureKind: str | None
+    usage: ConversationUsage
+    tools: list[ConversationToolEvent]
+    unknown: dict[str, Any]
+
+
+class Conversation(TypedDict):
+    """``@oneharness/ui`` ``Conversation`` — the transcript the UI package renders."""
+
+    id: str
+    name: str
+    project: str
+    startedAt: str
+    harnesses: list[str]
+    state: str
+    canContinue: bool
+    turns: list[ConversationTurn]
+
+
+class Attribution(TypedDict):
+    """Graph locators and roles for one conversation, per ``docs/dag-ui/design.md``.
+
+    The transcript type deliberately has no graph fields, so this envelope carries
+    them. Locator keys are omitted rather than nulled when their label is absent.
+    """
+
+    transportRole: str
+    agentRole: str
+    launcher: str
+    runId: NotRequired[str]
+    nodeId: NotRequired[str]
+    stepId: NotRequired[str]
+    launchId: NotRequired[str]
+    persona: NotRequired[str]
+    round: NotRequired[int]
+    finishedAt: NotRequired[str | None]
+    inferred: NotRequired[bool]
+
+
+class DagConversation(TypedDict):
+    """One transcript plus its graph attribution."""
+
+    conversation: Conversation
+    attribution: Attribution
+
+
 def _status_state(status: str) -> str:
     """Fold a record status onto the UI transcript's coarse state vocabulary."""
     match status:
@@ -94,19 +171,21 @@ def _first_str(record: Mapping[str, Any], key: str, fallback: str) -> str:
     return value if isinstance(value, str) and value else fallback
 
 
-def _usage(value: object) -> dict[str, float | int | None]:
+def _usage(value: object) -> ConversationUsage:
     """Rename known usage counters, preserving ``null`` and omitting absent ones."""
-    usage: dict[str, float | int | None] = {}
+    usage: ConversationUsage = {}
     if not isinstance(value, dict):
         return usage
     for snake, camel in _USAGE_KEYS.items():
         if snake not in value:
             continue
         raw = value[snake]
-        if raw is None:
-            usage[camel] = None
-        elif isinstance(raw, (int, float)) and not isinstance(raw, bool) and math.isfinite(raw):
-            usage[camel] = raw
+        if raw is None or (
+            isinstance(raw, (int, float)) and not isinstance(raw, bool) and math.isfinite(raw)
+        ):
+            # `camel` is reconciled against ConversationUsage's fields by
+            # check-dag-state-contract, which mypy cannot see through a dict lookup.
+            usage[camel] = raw  # type: ignore[literal-required]
     return usage
 
 
@@ -121,17 +200,17 @@ def _reasoning(record: Mapping[str, Any]) -> str | None:
     return None
 
 
-def _tools(record: Mapping[str, Any]) -> list[dict[str, Any]]:
+def _tools(record: Mapping[str, Any]) -> list[ConversationToolEvent]:
     """Every recorded event as a generic, always-visible tool event."""
     events = record.get("events")
     if not isinstance(events, list):
         return []
-    tools: list[dict[str, Any]] = []
+    tools: list[ConversationToolEvent] = []
     for index, event in enumerate(events):
         if not isinstance(event, dict):
             continue
         kind = event.get("kind")
-        tool: dict[str, Any] = {
+        tool: ConversationToolEvent = {
             "index": index,
             "kind": kind if isinstance(kind, str) else "unknown",
         }
@@ -153,7 +232,7 @@ def _unknown(record: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def _turn(session_key: str, index: int, record: Mapping[str, Any]) -> dict[str, Any]:
+def _turn(session_key: str, index: int, record: Mapping[str, Any]) -> ConversationTurn:
     status = record.get("status")
     status_text = status if isinstance(status, str) else "unknown"
     return {
@@ -186,7 +265,7 @@ def _can_continue(records: list[dict[str, Any]]) -> bool:
     return bool(last.get("session_id")) and _str_or_none(last.get("status")) not in _NOT_CONTINUABLE
 
 
-def conversation(session: HistorySession, records: list[dict[str, Any]]) -> dict[str, Any]:
+def conversation(session: HistorySession, records: list[dict[str, Any]]) -> Conversation:
     """Fold a session's normalized records into one ``@oneharness/ui`` Conversation."""
     first = records[0] if records else {}
     last = records[-1] if records else {}
@@ -233,27 +312,33 @@ def _agent_role(session: HistorySession, transport_role: SessionRole) -> tuple[s
     return "worker", True
 
 
-def attribution(session: HistorySession, records: list[dict[str, Any]]) -> dict[str, Any]:
-    """Graph locators and semantic role for one conversation."""
+def attribution(session: HistorySession, records: list[dict[str, Any]]) -> Attribution:
+    """Graph locators and semantic role for one conversation.
+
+    Each locator is assigned by its literal key rather than through a label->field
+    table so ``Attribution`` type-checks; the pairing is the whole mapping contract
+    and is short enough to read directly.
+    """
     transport_role = session_role(session, records)
     agent_role, inferred = _agent_role(session, transport_role)
-    result: dict[str, Any] = {
+    launcher = _label(session, "launcher")
+    result: Attribution = {
         "transportRole": transport_role,
         "agentRole": agent_role,
+        "launcher": launcher if launcher in KNOWN_LAUNCHERS else "unknown",
     }
-    for source, target in (
-        ("run_id", "runId"),
-        ("node", "nodeId"),
-        ("step", "stepId"),
-        ("launch_id", "launchId"),
-        ("persona", "persona"),
-    ):
-        if (value := _label(session, source)) is not None:
-            result[target] = value
+    if (value := _label(session, "run_id")) is not None:
+        result["runId"] = value
+    if (value := _label(session, "node")) is not None:
+        result["nodeId"] = value
+    if (value := _label(session, "step")) is not None:
+        result["stepId"] = value
+    if (value := _label(session, "launch_id")) is not None:
+        result["launchId"] = value
+    if (value := _label(session, "persona")) is not None:
+        result["persona"] = value
     if (round_label := _label(session, "round")) is not None and round_label.isdigit():
         result["round"] = int(round_label)
-    launcher = _label(session, "launcher")
-    result["launcher"] = launcher if launcher in KNOWN_LAUNCHERS else "unknown"
     if records and "finished_at" in records[-1]:
         finished = records[-1]["finished_at"]
         result["finishedAt"] = finished if isinstance(finished, str) else None
@@ -262,7 +347,7 @@ def attribution(session: HistorySession, records: list[dict[str, Any]]) -> dict[
     return result
 
 
-def dag_conversation(session: HistorySession, records: list[dict[str, Any]]) -> dict[str, Any]:
+def dag_conversation(session: HistorySession, records: list[dict[str, Any]]) -> DagConversation:
     """One ``DagConversation``: the transcript plus its graph attribution."""
     return {
         "conversation": conversation(session, records),
@@ -270,7 +355,9 @@ def dag_conversation(session: HistorySession, records: list[dict[str, Any]]) -> 
     }
 
 
-def run_conversations(run_id: RunId, *, oneharness_bin: str = "oneharness") -> list[dict[str, Any]]:
+def run_conversations(
+    run_id: RunId, *, oneharness_bin: str = "oneharness"
+) -> list[DagConversation]:
     """Every labelled conversation that acted on ``run_id``, oldest session first.
 
     A run is joined by the ``run_id`` history label the dispatch stamped, plus the
@@ -289,7 +376,7 @@ def run_conversations(run_id: RunId, *, oneharness_bin: str = "oneharness") -> l
         for session in sessions
         if session.labels.get("run_id") == run_id or session.name == f"orchestrator-{run_id}"
     ]
-    conversations: list[dict[str, Any]] = []
+    conversations: list[DagConversation] = []
     for session in sorted(selected, key=lambda item: (item.started, str(item.session_id))):
         try:
             records = session_records(session)

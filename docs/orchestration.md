@@ -482,6 +482,14 @@ Use `just telemetry --breakdown [--all]` for the operator view. The practical
 field guide and diagnostic workflow are in [`telemetry.md`](telemetry.md); the
 versioned cross-layer contract is in [`telemetry-model.md`](telemetry-model.md).
 
+`just telemetry-server` serves the same read model continuously instead of once:
+a loopback-bound HTTP API plus an SSE invalidation stream over a runs directory,
+for the DAG UI and any other live viewer. It is read-only in the same sense the
+monitor is — no route mutates a run, executes a command, or accepts a path — so
+it is safe to leave running beside an active orchestration. Its flags, response
+shapes, and event vocabulary are fixed by
+[`dag-ui/design.md`](dag-ui/design.md#running-it).
+
 ## Human completion attestations
 
 After doing a reported action, attest it explicitly:

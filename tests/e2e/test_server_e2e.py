@@ -16,11 +16,15 @@ surface are all real.
 from __future__ import annotations
 
 import json
+import os
 import socket
+import subprocess
+import sys
 import threading
 import time
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import httpx
@@ -28,13 +32,17 @@ import pytest
 import uvicorn
 
 from orchestrator import REPO_ROOT
+from orchestrator.detail_snapshot import PrDetail
 from orchestrator.journal import NodeId, RunId, open_journal
-from orchestrator.launch import write_provenance
+from orchestrator.launch import DEFAULT_MAX_AGE_SECONDS, write_provenance
+from orchestrator.monitor import DetailSnapshot, save_snapshot
 from orchestrator.runs import prepare_round, write_result
 from orchestrator.server import create_app
 
 FAKE_ONEHARNESS = REPO_ROOT / "tests" / "e2e" / "fake_oneharness.py"
 LAUNCH_ID = "a" * 32
+#: The console script `just telemetry-server` runs, as installed by this project.
+SERVER_CLI = Path(sys.executable).parent / "orchestrator-telemetry-server"
 
 
 @contextmanager
@@ -162,6 +170,13 @@ def _oneharness_bin(tmp_path: Path) -> Path:
     )
     binary.chmod(0o755)
     return binary
+
+
+def _free_port() -> int:
+    """A loopback port the OS just handed back, for a subprocess that cannot report one."""
+    with closing(socket.socket()) as probe:
+        probe.bind(("127.0.0.1", 0))
+        return int(probe.getsockname()[1])
 
 
 def _tree(root: Path) -> dict[str, bytes]:
@@ -357,3 +372,127 @@ def test_events_stream_survives_a_malformed_last_event_id(
                 # Cursor restarts at 1: the unusable header was discarded, not resumed.
                 assert snapshot["id"] == "1", crafted
                 assert json.loads(snapshot["data"])["runs"][0]["run_id"] == "demo"
+
+
+def test_after_cursor_details_logs_and_projection_failure_over_http(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The remaining served fields and failure statuses, driven over the real socket.
+
+    ``details`` and ``logs`` are the fields the contract added alongside the rounds,
+    ``after`` is the documented resume alternative to ``Last-Event-ID``, and a corrupt
+    journal must surface as 409 rather than a plausible graph.
+    """
+    runs = tmp_path / "runs"
+    run_dir = _active_run(runs, "demo")
+    _settle(run_dir, "demo")
+    monkeypatch.setenv("FAKE_ONEHARNESS_STORE", str(_history_store(tmp_path, "demo")))
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+
+    # An expired provenance record must degrade the join, not resurface a stale session.
+    write_provenance(
+        launch_id=LAUNCH_ID,
+        launcher="codex",
+        launcher_session_id="stale-session",
+        repository_identity="local/app",
+        started_at=(
+            datetime.now(UTC) - timedelta(seconds=DEFAULT_MAX_AGE_SECONDS + 60)
+        ).isoformat(),
+    )
+    # Written through the monitor's own writer so the served snapshot is the real one.
+    save_snapshot(
+        run_dir,
+        DetailSnapshot(
+            prs={"api": PrDetail(number=7, state="OPEN", url="https://x/pull/7").to_record()}
+        ),
+    )
+    (run_dir / "orchestrator").mkdir(parents=True, exist_ok=True)
+    (run_dir / "orchestrator" / "gate.log").write_text("gate: passed\n", encoding="utf-8")
+
+    app = create_app(
+        runs,
+        oneharness_bin=str(_oneharness_bin(tmp_path)),
+        expose_launcher_session_id=True,
+        poll_interval=0.05,
+        heartbeat_interval=0.2,
+    )
+
+    with _serve(app) as base:
+        client = httpx.Client(base_url=base, timeout=10)
+
+        detail = client.get("/api/v1/runs/demo").json()
+        assert detail["details"]["prs"]["api"]["number"] == 7
+        assert detail["logs"]["gate_log"] == "gate: passed\n"
+        # Expired: the launcher falls back and the session id is withheld even though
+        # this deployment opted into exposing it.
+        assert detail["launch"] == {"launch_id": LAUNCH_ID, "launcher": "unknown"}
+
+        # `after` resumes without a snapshot, exactly like a valid Last-Event-ID.
+        with client.stream("GET", "/api/v1/events?after=3") as response:
+            assert response.status_code == 200
+            frames = _read_frames(response.iter_lines(), until="comment")
+            assert all(frame.get("event") != "snapshot" for frame in frames)
+
+        # A negative cursor is not one this process could have issued.
+        rejected = client.get("/api/v1/events?after=-1")
+        assert rejected.status_code == 422
+        assert rejected.json()["error"]["code"] == "invalid_request"
+
+        # An unusable conversation id is refused at the boundary, not scanned for.
+        bad_conversation = client.get(f"/api/v1/runs/demo/conversations/{'x' * 300}")
+        assert bad_conversation.status_code == 422
+        assert bad_conversation.json()["error"]["code"] == "invalid_conversation_id"
+
+        # A corrupt authoritative journal is a 409, never a rendered graph.
+        journal = run_dir / "events.jsonl"
+        journal.write_text(
+            journal.read_text(encoding="utf-8") + '{"kind":"bogus"}\n', encoding="utf-8"
+        )
+        corrupt = client.get("/api/v1/runs/demo")
+        assert corrupt.status_code == 409
+        assert corrupt.json()["error"]["code"] == "projection_error"
+
+
+def test_cli_refuses_a_nonloopback_bind_and_otherwise_serves(tmp_path: Path) -> None:
+    """`just telemetry-server` runs this console script; drive it as a real process."""
+    runs = tmp_path / "runs"
+    _active_run(runs, "demo")
+    assert SERVER_CLI.is_file(), f"install the project console scripts: {SERVER_CLI}"
+
+    refused = subprocess.run(
+        [str(SERVER_CLI), "--runs-dir", str(runs), "--host", "0.0.0.0"],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert refused.returncode == 2, refused.stderr
+    assert "--allow-nonloopback" in refused.stderr
+
+    port = _free_port()
+    env = dict(os.environ, PATH=f"{tmp_path}:{os.environ.get('PATH', '')}")
+    process = subprocess.Popen(
+        [str(SERVER_CLI), "--runs-dir", str(runs), "--port", str(port)],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        env=env,
+    )
+    try:
+        base = f"http://127.0.0.1:{port}"
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline:
+            if process.poll() is not None:  # pragma: no cover - startup failure
+                raise AssertionError(f"server exited early: {process.communicate()[0]}")
+            try:
+                if httpx.get(f"{base}/healthz", timeout=2).json() == {"status": "ok"}:
+                    break
+            except httpx.HTTPError:
+                time.sleep(0.1)
+        else:  # pragma: no cover - startup timeout
+            raise AssertionError("server never became reachable")
+
+        listed = httpx.get(f"{base}/api/v1/runs", timeout=30).json()
+        assert [row["run_id"] for row in listed["runs"]] == ["demo"]
+    finally:
+        process.terminate()
+        process.wait(timeout=30)

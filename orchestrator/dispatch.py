@@ -824,11 +824,9 @@ def launch_orchestrator(
         "result, and surface milestones, blockers, departures, and closeout to your supervisor."
     )
     command = [onejudge_bin, "run", str(effective), "--task", task, "--format", "json"]
-    # Mint the launch id, write the out-of-repo provenance record, and stamp the
-    # launch_id + launcher (plus run_id) history labels onto the orchestrator's own
-    # environment. Every nested dispatch inherits ONEHARNESS_HISTORY_LABELS and layers
-    # its node labels over them (run_onejudge -> merge_labels), so each worker, judge,
-    # and check-in conversation carries the launch labels the read API joins on.
+    # Stamped once, here: nested dispatches inherit ONEHARNESS_HISTORY_LABELS and layer
+    # their node labels over it (run_onejudge -> merge_labels), so every worker, judge,
+    # and check-in conversation carries the launch join without stamping each one.
     repository_identity = next(iter(sorted(str(item) for item in graph_identities(graph))), "")
     launch_id, launch_labels = _launch_provenance(
         launcher=launcher,

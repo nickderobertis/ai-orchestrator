@@ -18,17 +18,31 @@ from collections import Counter
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, NotRequired, TypedDict
 
 from .config import ConfigError
-from .conversations import run_conversations
+from .conversations import DagConversation, run_conversations
 from .history import HistoryError
 from .journal import JOURNAL_NAME
 from .launch import read_provenance, validate_launch_id
-from .monitor import load_snapshot
-from .projection import ProjectionError, project_round, read_strict_events
-from .runs import RunId, latest_round, load_mapping, result_state_is_terminal, validate_run_id
-from .telemetry import TELEMETRY_SCHEMA_VERSION, RunTelemetry, collect_run
+from .monitor import load_snapshot, snapshot_path
+from .projection import (
+    NodeState,
+    ProjectedPlan,
+    ProjectionError,
+    project_round,
+    read_strict_events,
+)
+from .runs import (
+    GraphPayload,
+    GraphResultItem,
+    RunId,
+    latest_round,
+    load_mapping,
+    result_state_is_terminal,
+    validate_run_id,
+)
+from .telemetry import TELEMETRY_SCHEMA_VERSION, RunTelemetry, TimingRecord, collect_run
 
 API_VERSION = 1
 
@@ -45,8 +59,89 @@ class RunNotFound(ReadError):
     """No recorded run matches the identifier (404)."""
 
 
+class InvalidConversationId(ReadError):
+    """A conversation identifier failed validation at the trust boundary (422)."""
+
+
 class ProjectionFailed(ReadError):
     """The authoritative journal cannot be folded into a consistent graph (409)."""
+
+
+#: Bound on the opaque conversation id accepted from a request path. History session
+#: ids are short native identifiers; anything longer, empty, or carrying control
+#: characters is rejected here rather than scanned against every discovered session.
+_MAX_CONVERSATION_ID = 256
+
+
+def validate_conversation_id(value: str) -> str:
+    """Return a well-formed opaque conversation id, else raise ``InvalidConversationId``."""
+    if not value or len(value) > _MAX_CONVERSATION_ID or not value.isprintable():
+        raise InvalidConversationId(
+            "conversation id must be 1-256 printable characters on a single line"
+        )
+    return value
+
+
+class RunLaunch(TypedDict):
+    """A run's join to its launching session, per ``docs/dag-ui/design.md``.
+
+    ``launcher_session_id`` is present only when the server's redaction policy is
+    configured to expose it, so it is omitted rather than nulled by default.
+    """
+
+    launch_id: str
+    launcher: str
+    launcher_session_id: NotRequired[str]
+
+
+class RunSummary(TypedDict):
+    """One ``RunSummary`` row of the run-list view."""
+
+    run_id: str
+    state: str
+    phase: str
+    last_event: str
+    telemetry_quality: str
+    timing: TimingRecord
+    node_counts: dict[str, int]
+    last_progress_at: NotRequired[float]
+    launch: NotRequired[RunLaunch]
+
+
+class RunList(TypedDict):
+    """The ``RunList`` envelope served by ``GET /api/v1/runs`` and the SSE snapshot."""
+
+    api_version: int
+    telemetry_schema_version: int
+    observed_at: str
+    runs: list[RunSummary]
+
+
+class Round(TypedDict):
+    """One strict ``RoundProjection`` serialized as the contract's ``Round``."""
+
+    run_id: str
+    round: int
+    plan: ProjectedPlan
+    node_states: dict[str, NodeState]
+    node_results: dict[str, GraphResultItem]
+    attestations: list[str]
+    result: GraphPayload | None
+    last_seq: int
+
+
+class RunDetail(TypedDict):
+    """The full ``RunDetail`` served by ``GET /api/v1/runs/{run_id}``."""
+
+    api_version: int
+    telemetry_schema_version: int
+    observed_at: str
+    run: dict[str, Any]
+    rounds: list[Round]
+    conversations: list[DagConversation]
+    details: dict[str, Any]
+    logs: NotRequired[dict[str, str]]
+    launch: NotRequired[RunLaunch]
 
 
 def _now(now: datetime | None) -> str:
@@ -83,7 +178,7 @@ def resolve_launch(
     *,
     expose_launcher_session_id: bool = False,
     now: datetime | None = None,
-) -> dict[str, Any] | None:
+) -> RunLaunch | None:
     """Join a run to its launching session via ``launch_id``.
 
     Returns the ``launch_id`` and the ``launcher`` resolved from the out-of-repo
@@ -95,7 +190,7 @@ def resolve_launch(
     if launch_id is None:
         return None
     provenance = read_provenance(launch_id, now=now)
-    result: dict[str, Any] = {
+    result: RunLaunch = {
         "launch_id": launch_id,
         "launcher": provenance["launcher"] if provenance is not None else "unknown",
     }
@@ -146,9 +241,9 @@ def run_summary(
     *,
     expose_launcher_session_id: bool = False,
     now: datetime | None = None,
-) -> dict[str, Any]:
+) -> RunSummary:
     """One ``RunSummary`` row for the run-list view."""
-    summary: dict[str, Any] = {
+    summary: RunSummary = {
         "run_id": telemetry.run_id,
         "state": telemetry.state,
         "phase": telemetry.phase,
@@ -172,14 +267,14 @@ def list_runs(
     oneharness_bin: str = "oneharness",
     expose_launcher_session_id: bool = False,
     now: datetime | None = None,
-) -> dict[str, Any]:
+) -> RunList:
     """The ``RunList``: every watchable run, most recent progress first.
 
     A run whose telemetry cannot be collected — a corrupt persisted result — is
     skipped rather than failing the whole list, so one bad run never blinds the UI
     to every healthy one.
     """
-    summaries: list[dict[str, Any]] = []
+    summaries: list[RunSummary] = []
     for run_dir in _run_dirs(runs_dir):
         try:
             telemetry = collect_run(run_dir, oneharness_bin=oneharness_bin)
@@ -206,7 +301,7 @@ def list_runs(
     }
 
 
-def round_record(events: list[Any], run_id: RunId, round_number: int) -> dict[str, Any]:
+def round_record(events: list[Any], run_id: RunId, round_number: int) -> Round:
     """Serialize one strict ``RoundProjection`` as the contract's ``Round``."""
     projection = project_round(events, run_id, round_number)
     return {
@@ -221,7 +316,7 @@ def round_record(events: list[Any], run_id: RunId, round_number: int) -> dict[st
     }
 
 
-def _rounds(run_dir: Path, run_id: RunId) -> list[dict[str, Any]]:
+def _rounds(run_dir: Path, run_id: RunId) -> list[Round]:
     """Project every started round, or fail the whole detail on a corrupt stream."""
     try:
         events = read_strict_events(run_dir / JOURNAL_NAME, run_id)
@@ -238,7 +333,7 @@ def run_detail(
     oneharness_bin: str = "oneharness",
     expose_launcher_session_id: bool = False,
     now: datetime | None = None,
-) -> dict[str, Any]:
+) -> RunDetail:
     """The full ``RunDetail`` for one run: telemetry, rounds, and conversations."""
     try:
         validated = validate_run_id(run_id)
@@ -253,7 +348,7 @@ def run_detail(
         raise ProjectionFailed(str(exc)) from exc
     if telemetry is None:  # pragma: no cover - latest_round already proved a round exists
         raise RunNotFound(f"no recorded run {validated!r}")
-    detail: dict[str, Any] = {
+    detail: RunDetail = {
         "api_version": API_VERSION,
         "telemetry_schema_version": TELEMETRY_SCHEMA_VERSION,
         "observed_at": _now(now),
@@ -276,33 +371,54 @@ def run_conversation(
     conversation_id: str,
     *,
     oneharness_bin: str = "oneharness",
-) -> dict[str, Any]:
+) -> DagConversation:
     """One complete ``DagConversation`` addressed by its session id."""
     try:
         validated = validate_run_id(run_id)
     except ConfigError as exc:
         raise InvalidRunId(str(exc)) from exc
+    wanted = validate_conversation_id(conversation_id)
     run_dir = runs_dir / validated
     if not run_dir.is_dir():
         raise RunNotFound(f"no recorded run {validated!r}")
     for conversation in run_conversations(validated, oneharness_bin=oneharness_bin):
-        if conversation["conversation"]["id"] == conversation_id:
+        if conversation["conversation"]["id"] == wanted:
             return conversation
-    raise RunNotFound(f"no conversation {conversation_id!r} in run {validated!r}")
+    raise RunNotFound(f"no conversation {wanted!r} in run {validated!r}")
 
 
-def run_signature(run_dir: Path) -> tuple[int, int]:
-    """A cheap change token for one run: latest round number and journal size.
+def _file_token(path: Path) -> tuple[int, int]:
+    """Size and modification time of one served file; ``(0, 0)`` when it is absent."""
+    try:
+        stat = path.stat()
+    except OSError:
+        return 0, 0
+    return stat.st_size, stat.st_mtime_ns
+
+
+def run_signature(run_dir: Path) -> tuple[int, ...]:
+    """A cheap change token over every run-directory input ``run_detail`` serves.
 
     The SSE layer polls this to decide whether a run changed without re-projecting
-    it. Journal byte length advances on every appended authoritative event, and the
-    round number advances when a new round directory lands.
+    it. Journal byte length advances on every appended authoritative event and the
+    round number advances when a new round lands, but the monitor's PR/check snapshot
+    and the run's logs are written *outside* that event stream — watching only the
+    journal would leave the UI showing a stale PR status with no invalidation to
+    correct it.
+
+    Conversations are deliberately out of scope: they live in oneharness history
+    rather than under this root, and the contract invalidates them with
+    ``conversation.changed`` rather than a run signature.
     """
     latest = latest_round(run_dir)
     round_number = latest[0] if latest is not None else 0
-    journal = run_dir / JOURNAL_NAME
-    try:
-        size = journal.stat().st_size
-    except OSError:
-        size = 0
-    return round_number, size
+    watched = (
+        run_dir / JOURNAL_NAME,
+        snapshot_path(run_dir),
+        run_dir / "launch.json",
+        *(run_dir.joinpath(*parts) for parts in _RUN_LOGS.values()),
+    )
+    tokens: tuple[int, ...] = ()
+    for path in watched:
+        tokens += _file_token(path)
+    return (round_number, *tokens)

@@ -49,7 +49,7 @@ def _active_run(runs_dir: Path, run_id: str) -> Path:
 
 
 def test_sse_and_error_helpers() -> None:
-    framed = server._sse(7, "run.changed", {"run_id": "demo"})
+    framed = server._sse(7, server.SseEvent.RUN_CHANGED, {"run_id": "demo"})
     assert framed == 'id: 7\nevent: run.changed\ndata: {"run_id":"demo"}\n\n'
 
     response = server._error(404, "run_not_found", "gone")
@@ -75,10 +75,12 @@ def test_status_for(exc: Exception, status: int, code: str) -> None:
 
 def test_parse_cursor_tolerates_malformed_headers() -> None:
     assert server._parse_cursor("5") == 5
-    assert server._parse_cursor("-5") == -5
+    assert server._parse_cursor("0") == 0
     assert server._parse_cursor(None) is None
-    # A crafted header that the old lstrip("-").isdigit() guard admitted must not crash.
-    for crafted in ("--5", "5-", "abc", "", "0x5", " "):
+    # A crafted header that the old lstrip("-").isdigit() guard admitted must not crash,
+    # and a negative cursor this process could never have issued is discarded like the
+    # `after` query's ge=0 bound discards it.
+    for crafted in ("--5", "5-", "abc", "", "0x5", " ", "-5"):
         assert server._parse_cursor(crafted) is None
 
 
