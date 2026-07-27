@@ -145,8 +145,10 @@ _AGENT_NODE_FIELDS = (
     "branch",
     "title",
     "verify_cmd",
+    # Accepted and ignored: the repository merge path verifies every publication,
+    # so neither spelling of the old gate-skipping switch can change anything.
     "no_identity_gate",
-    "skip_verify",  # pre-merge-path spelling of no_identity_gate
+    "skip_verify",
     "verify_via_ci",
     "merge_policy",
     "workflow",
@@ -1407,7 +1409,6 @@ def main(argv: list[str] | None = None) -> int:
                 merge_policy=args.merge_policy,
                 merge_method=args.merge_method,
                 oneharness_mode=args.oneharness_mode,
-                no_identity_gate=args.no_identity_gate,
                 verify_via_ci=args.verify_via_ci,
                 poll_interval=args.poll_interval,
                 timeout=args.timeout,

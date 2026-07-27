@@ -227,12 +227,12 @@ because Git cannot distinguish an arbitrary hook rejection from a transport
 rejection.
 
 For a remote-first workflow, required status checks are authoritative at PR merge
-time. `verify_cmd` and `no_identity_gate` now only choose which gate command the
-run *records*; neither bypasses or replaces merge-path coverage, and a
-`no_identity_gate` dispatch still cannot publish past a red pre-push hook. The
-former spellings — the `skip_verify` plan key and the `--skip-verify` flag —
-remain accepted as aliases of `no_identity_gate`, renamed because they never
-skipped merge-path verification.
+time. A node's `verify_cmd` no longer runs anything: it overrides which gate
+command the run *records* as the identity's complete bar, and cannot bypass or
+replace merge-path coverage. The gate-skipping switch is gone — the
+`--skip-verify` flag was removed, and the `skip_verify` and `no_identity_gate`
+plan keys are accepted and ignored so existing plans and in-flight ledgers keep
+loading. Neither ever skipped merge-path verification, and nothing can.
 
 Because the gate's verdict now arrives late — as `git push` output — each
 lifecycle node records one `merge-gate-coverage` event before it dispatches,
@@ -347,7 +347,7 @@ from both the release and `CHANGELOG`.
 
 A lifecycle node is an `agent` node in `just run-plan` with a `repo` and either a
 `persona`+`task` or a `steps` workstream. It may also carry `deps`, `base_branch`,
-`branch`, `title`, `verify_cmd`, `no_identity_gate`, `verify_via_ci`, `merge_policy`, `workflow`,
+`branch`, `title`, `verify_cmd`, `verify_via_ci`, `merge_policy`, `workflow`,
 `repo_type`, validated `stack_bases`, `execution_checkout`, or validated `resume`
 metadata. Independent top-level nodes run concurrently, and a node whose
 dependency failed is skipped. Cross-repository dependencies only schedule. A

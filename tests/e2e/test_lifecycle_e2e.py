@@ -2780,7 +2780,7 @@ def test_lifecycle_without_explicit_or_registry_gate_errors(tmp_path, bare_origi
     assert "no verification gate is configured" in result.detail
 
 
-def test_no_identity_gate_cannot_bypass_the_merge_path_gate(tmp_path, bare_origin) -> None:
+def test_verify_cmd_override_cannot_bypass_the_merge_path_gate(tmp_path, bare_origin) -> None:
     origin = bare_origin()
     workspace = _workspace(tmp_path, origin)
     canonical = workspace.clone_dir(normalize_repo(str(origin)))
@@ -2789,11 +2789,12 @@ def test_no_identity_gate_cannot_bypass_the_merge_path_gate(tmp_path, bare_origi
 
     result = run_repo_task(
         str(origin),
-        "Add a change with the legacy gate override skipped.",
+        "Add a change whose recorded gate command would have passed.",
         "engineer",
         workspace=workspace,
         dispatch_fn=make_writing_dispatch(filename="feature.txt"),
-        no_identity_gate=True,  # legacy override: it no longer controls verification
+        # The recorded identity-gate override says the change is fine; only the
+        # repository's own merge path decides, and it rejects.
         verify_cmd=["true"],
     )
 
@@ -2874,9 +2875,7 @@ def test_retry_with_invalid_incomplete_provenance_records_fresh_branch_fallback(
     )
 
 
-def test_preserved_retry_uses_merge_path_gate_when_local_override_is_skipped(
-    tmp_path, bare_origin
-) -> None:
+def test_preserved_retry_is_recovered_through_the_merge_path_gate(tmp_path, bare_origin) -> None:
     origin = bare_origin()
     workspace = _workspace(tmp_path, origin)
     first = run_repo_task(
@@ -2891,11 +2890,11 @@ def test_preserved_retry_uses_merge_path_gate_when_local_override_is_skipped(
 
     retried = run_repo_task(
         str(origin),
-        "Finish without a gate.",
+        "Finish the preserved workstream.",
         "engineer",
         workspace=workspace,
         dispatch_fn=make_writing_dispatch(filename="complete.txt"),
-        no_identity_gate=True,
+        verify_cmd=["true"],
         resume=first.resume,
     )
 

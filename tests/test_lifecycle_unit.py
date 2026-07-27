@@ -569,7 +569,6 @@ def test_load_valid_repo_plan(tmp_path) -> None:
                                 "pr": "https://github.com/o/r/pull/1",
                             }
                         ],
-                        "no_identity_gate": True,
                         "verify_via_ci": False,
                     },
                 ],
@@ -578,18 +577,19 @@ def test_load_valid_repo_plan(tmp_path) -> None:
     )
     assert plan.concurrency == 2
     assert [t.id for t in plan.tasks] == ["a", "b"]
-    assert plan.tasks[1].merge_policy == "direct" and plan.tasks[1].no_identity_gate
+    assert plan.tasks[1].merge_policy == "direct"
     assert plan.tasks[1].verify_via_ci is False
     assert plan.tasks[1].workflow == "local"
     assert plan.tasks[1].repo_type == "single-owner"
     assert plan.tasks[1].stack_bases[0].branch == "feature/parent"
 
 
-def test_legacy_skip_verify_plan_key_still_loads_as_no_identity_gate(tmp_path) -> None:
+@pytest.mark.parametrize("key", ["skip_verify", "no_identity_gate"])
+def test_retired_gate_skipping_plan_keys_still_load_and_do_nothing(tmp_path, key: str) -> None:
     """Plans written before the merge path became authoritative keep loading.
 
-    `skip_verify` never skipped merge-path verification, so it survives only as
-    the old spelling of "there is no identity gate command to record".
+    Neither key ever skipped merge-path verification, and neither can now, so
+    both are accepted and carry no field into the lifecycle.
     """
     plan = load_repo_plan(
         _write(
@@ -597,20 +597,13 @@ def test_legacy_skip_verify_plan_key_still_loads_as_no_identity_gate(tmp_path) -
             {
                 "schema_version": 3,
                 "tasks": [
-                    {"id": "a", "repo": "o/r", "persona": "engineer", "task": "t"},
-                    {
-                        "id": "b",
-                        "repo": "o/r",
-                        "persona": "engineer",
-                        "task": "t",
-                        "skip_verify": True,
-                    },
+                    {"id": "a", "repo": "o/r", "persona": "engineer", "task": "t", key: True},
                 ],
             },
         )
     )
-    assert plan.tasks[0].no_identity_gate is False
-    assert plan.tasks[1].no_identity_gate is True
+    assert [t.id for t in plan.tasks] == ["a"]
+    assert not any(field.name == key for field in fields(RepoPlanNode))
 
 
 @pytest.mark.parametrize(
@@ -1706,7 +1699,6 @@ def test_make_repo_runner_threads_node_fields(monkeypatch) -> None:
         merge_policy="auto",
         merge_method="squash",
         oneharness_mode="bypass",
-        no_identity_gate=False,
         verify_via_ci=True,
         poll_interval=1.0,
         timeout=9.0,
@@ -1718,7 +1710,6 @@ def test_make_repo_runner_threads_node_fields(monkeypatch) -> None:
         "reviewer",
         "task",
         merge_policy="direct",
-        no_identity_gate=True,
         verify_via_ci=False,
         repo_type="single-owner",
     )
@@ -1727,7 +1718,6 @@ def test_make_repo_runner_threads_node_fields(monkeypatch) -> None:
     assert captured["repo"] == "o/r" and captured["persona"] == "reviewer"
     assert captured["merge_policy"] == "direct"  # node override wins
     assert captured["repo_type"] == "single-owner"
-    assert captured["no_identity_gate"] is True
     assert captured["verify_via_ci"] is False
     assert captured["oneharness_mode"] == "bypass"
 

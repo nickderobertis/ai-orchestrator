@@ -1208,7 +1208,6 @@ def test_real_cli_recovers_settled_lifecycle_stack_anchor(
                         "branch": "feature/parent",
                         "workflow": "local",
                         "repo_type": "single-owner",
-                        "no_identity_gate": True,
                         "stack_bases": [
                             {
                                 "branch": "feature/anchor",
@@ -1330,7 +1329,6 @@ def test_real_cli_recovers_failed_lifecycle_result(
                         "branch": "feature/failed-lifecycle",
                         "workflow": "local",
                         "repo_type": "single-owner",
-                        "no_identity_gate": True,
                         "max_turns": 1,
                     },
                     {
@@ -1549,7 +1547,6 @@ def test_real_cli_recovers_waiting_and_no_change_lifecycle_results(
                         "branch": "feature/waiting-lifecycle",
                         "workflow": "local",
                         "repo_type": "single-owner",
-                        "no_identity_gate": True,
                         "steps": [
                             {
                                 "id": "prepare",
@@ -1571,7 +1568,6 @@ def test_real_cli_recovers_waiting_and_no_change_lifecycle_results(
                         "branch": "feature/no-change-lifecycle",
                         "workflow": "local",
                         "repo_type": "single-owner",
-                        "no_identity_gate": True,
                         "steps": [
                             {
                                 "id": "certify",
@@ -2109,7 +2105,6 @@ def test_expects_no_diff_skips_onejudge_while_sibling_uses_real_boundary(
                     {
                         "id": "step-no-op",
                         "repo": str(canonical),
-                        "no_identity_gate": True,
                         "steps": [
                             {
                                 "id": "certify",
@@ -2308,7 +2303,6 @@ def test_legacy_repo_plan_runs_through_canonical_and_deprecated_alias(
                             "repo": str(canonical),
                             "persona": "engineer",
                             "task": task,
-                            "no_identity_gate": True,
                             "workflow": "local",
                             "repo_type": "single-owner",
                         }

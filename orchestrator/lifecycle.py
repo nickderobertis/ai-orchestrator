@@ -1362,7 +1362,6 @@ def run_repo_task(
     body: str | None = None,
     url: str | None = None,
     verify_cmd: list[str] | None = None,
-    no_identity_gate: bool = False,
     verify_via_ci: bool = False,
     merge_policy: MergePolicy | None = None,
     merge_method: str = "squash",
@@ -1556,7 +1555,7 @@ def run_repo_task(
             resolved_verify_cmd = None
         elif gate_template is not None:
             resolved_verify_cmd = resolve_gate_template(gate_template, f"origin/{pr_base}")
-        elif no_identity_gate or verify_via_ci:
+        elif verify_via_ci:
             resolved_verify_cmd = None
         else:
             raise ConfigError(
@@ -2073,7 +2072,6 @@ class RepoPlanNode:
     branch: str | None = None
     title: str | None = None
     verify_cmd: list[str] | None = None
-    no_identity_gate: bool = False
     verify_via_ci: bool | None = None
     merge_policy: MergePolicy | None = None
     workflow: Workflow | None = None
@@ -2300,9 +2298,6 @@ def parse_repo_node(nid: str, t: dict[str, Any]) -> RepoPlanNode:
         branch=t.get("branch"),
         title=raw_title,
         verify_cmd=t.get("verify_cmd"),
-        # `skip_verify` is the pre-merge-path spelling: it never skipped merge-path
-        # verification, so it is accepted here and nowhere else.
-        no_identity_gate=bool(t.get("no_identity_gate", t.get("skip_verify", False))),
         verify_via_ci=raw_verify_via_ci,
         merge_policy=merge_policy,
         workflow=workflow,
@@ -2632,7 +2627,6 @@ def make_repo_runner(
     merge_policy: MergePolicy | None,
     merge_method: str,
     oneharness_mode: str | None,
-    no_identity_gate: bool,
     verify_via_ci: bool = False,
     poll_interval: float,
     timeout: float,
@@ -2661,7 +2655,6 @@ def make_repo_runner(
             branch=node.branch,
             title=node.title,
             verify_cmd=node.verify_cmd,
-            no_identity_gate=node.no_identity_gate or no_identity_gate,
             verify_via_ci=(node.verify_via_ci if node.verify_via_ci is not None else verify_via_ci),
             merge_policy=(node.merge_policy if node.merge_policy is not None else merge_policy),
             merge_method=merge_method,
@@ -2717,15 +2710,6 @@ def add_lifecycle_args(parser: argparse.ArgumentParser) -> None:
         choices=["read-only", "plan", "default", "edit", "auto", "bypass"],
         help="approval/sandbox mode for the harness (default: bypass — the "
         "no-approval mode; the container is the sandbox)",
-    )
-    parser.add_argument(
-        "--no-identity-gate",
-        "--skip-verify",
-        dest="no_identity_gate",
-        action="store_true",
-        help="dispatch without a registered identity gate command to record; the "
-        "repository's merge path still verifies publication (--skip-verify is a "
-        "deprecated alias, kept because it no longer skips any verification)",
     )
     parser.add_argument(
         "--verify-via-ci",
@@ -2904,7 +2888,6 @@ def main_task(argv: list[str] | None = None) -> int:
         execution_checkout=args.execution_checkout,
         repo_type=args.repo_type,
         verify_cmd=None,
-        no_identity_gate=args.no_identity_gate,
         verify_via_ci=args.verify_via_ci,
         merge_policy=args.merge_policy,
         merge_method=args.merge_method,
@@ -2969,7 +2952,6 @@ def main_plan(argv: list[str] | None = None) -> int:
         merge_policy=args.merge_policy,
         merge_method=args.merge_method,
         oneharness_mode=args.oneharness_mode,
-        no_identity_gate=args.no_identity_gate,
         verify_via_ci=args.verify_via_ci,
         poll_interval=args.poll_interval,
         timeout=args.timeout,
