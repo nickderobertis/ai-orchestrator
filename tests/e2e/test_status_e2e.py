@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 import subprocess
 import uuid
 from pathlib import Path
@@ -208,3 +209,31 @@ def test_status_recent_handles_gone_worktree_and_no_ledger(
     assert "worktree/branch is gone" in capsys.readouterr().out
     assert status_main(["--runs-dir", str(tmp_path / "no-runs")]) == 0
     assert "No running tasks" in capsys.readouterr().out
+
+
+def test_status_reports_a_run_whose_round_owner_is_gone(tmp_path, monkeypatch, capsys) -> None:
+    """An abandoned round must be visible here, not only in `just runs`.
+
+    The real journey — a killed executor surfacing in both views — is
+    `tests/e2e/test_round_ownership_e2e.py::test_killed_executor_surfaces_as_abandoned_in_runs_and_status`.
+    This direct call exists so the in-process rendering counts toward the coverage
+    gate, which a subprocess CLI invocation cannot contribute.
+    """
+    history_dir = tmp_path / "history"
+    history_dir.mkdir()
+    runs_dir = tmp_path / "runs"
+    round_dir = runs_dir / "abandoned-run" / "round-01"
+    round_dir.mkdir(parents=True)
+    (round_dir / "plan.json").write_text("{}\n", encoding="utf-8")
+    (round_dir / "status.json").write_text(
+        json.dumps(
+            {"status": "running", "pid": os.getpid() + 10_000_000, "host": socket.gethostname()}
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("ONEHARNESS_HISTORY_DIR", str(history_dir))
+    assert status_main(["--runs-dir", str(runs_dir)]) == 0
+    shown = capsys.readouterr().out
+    assert "abandoned-run: round-01 ABANDONED" in shown
+    assert "--recover" in shown

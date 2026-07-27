@@ -13,11 +13,11 @@ dependencies = [
 
 [project.scripts]
 orchestrator-dispatch = "orchestrator.dispatch:main"
-orchestrator-run-plan = "orchestrator.graph:main"
+orchestrator-run-plan = "orchestrator.graph:main_cli"
 orchestrator-repo-task = "orchestrator.lifecycle:main_task"
-orchestrator-repo-plan = "orchestrator.graph:main_repo_plan"
+orchestrator-repo-plan = "orchestrator.graph:main_repo_plan_cli"
 orchestrator-replan = "orchestrator.replan:main"
-orchestrator-next-round = "orchestrator.next_round:main"
+orchestrator-next-round = "orchestrator.next_round:main_cli"
 orchestrator-runs = "orchestrator.next_round:main_runs"
 orchestrator-goals = "orchestrator.goals:main"
 orchestrator-results = "orchestrator.results:main"

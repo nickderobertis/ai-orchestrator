@@ -36,9 +36,18 @@ from .channel import (
 from .cli_contract import ROUND_BUDGET_OPTION
 from .config import ConfigError, load_yaml
 from .coordination import advisory_lock, reset_harness_observer, set_harness_observer
+from .detach import run_detached
 from .dispatch import Report, dispatch
 from .edits import EditError, apply_edit
-from .goals import Goal, find_active_run, finish_run, graph_identities, parse_goal, register_run
+from .goals import (
+    ConcurrentAcknowledgement,
+    Goal,
+    find_active_run,
+    finish_run,
+    graph_identities,
+    parse_goal,
+    register_run,
+)
 from .journal import (
     JOURNAL_NAME,
     TERMINAL_NODE_RESULT_FIELD,
@@ -95,6 +104,7 @@ from .runs import (
     RunId,
     prepare_round,
     resolve_run_dir,
+    round_abandonment_guard,
     status_summary,
     validate_run_id,
     write_result,
@@ -1196,6 +1206,24 @@ def main(argv: list[str] | None = None) -> int:
             print(f"run-plan: could not claim run: {exc}", file=sys.stderr)
             return 2
 
+    if round_record is None:
+        return _run_round(args, plan_mapping, graph, run_dir, None, acknowledgements)
+    # Everything past the claim runs under the guard, so no path out of this process
+    # — an early `return 2`, a raised exception, or a teardown signal — can leave the
+    # claimed round recorded as `running` with nothing owning it.
+    with round_abandonment_guard(round_record[1]):
+        return _run_round(args, plan_mapping, graph, run_dir, round_record, acknowledgements)
+
+
+def _run_round(
+    args: argparse.Namespace,
+    plan_mapping: dict[str, Any],
+    graph: Graph,
+    run_dir: Path | None,
+    round_record: tuple[int, Path] | None,
+    acknowledgements: list[ConcurrentAcknowledgement],
+) -> int:
+    """Execute one already-claimed round and record its result."""
     journal: JournalSink = NullJournal()
     run_id: RunId | None = None
     round_number: int | None = None
@@ -1487,5 +1515,15 @@ def main_repo_plan(argv: list[str] | None = None) -> int:
     return main(argv)
 
 
+def main_cli(argv: list[str] | None = None) -> int:
+    """`just run-plan` process entry point: detach from the launching turn first."""
+    return run_detached(main, argv, "run-plan")
+
+
+def main_repo_plan_cli(argv: list[str] | None = None) -> int:
+    """`just repo-plan` process entry point: detach from the launching turn first."""
+    return run_detached(main_repo_plan, argv, "repo-plan")
+
+
 if __name__ == "__main__":  # pragma: no cover
-    raise SystemExit(main())
+    raise SystemExit(main_cli())

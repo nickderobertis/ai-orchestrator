@@ -21,6 +21,7 @@ from typing import Any
 import pytest
 
 import orchestrator.monitor as monitor_module
+import orchestrator.runs as runs_module
 from orchestrator.detail_snapshot import SNAPSHOT_VERSION, CommitDetail, PrDetail
 from orchestrator.ids import GraphId
 from orchestrator.journal import JOURNAL_NAME, open_journal
@@ -527,7 +528,9 @@ def test_executor_status_corruption_is_interpreted_conservatively(
     def permission_denied(_pid: int, _signal: int) -> None:
         raise PermissionError
 
-    monkeypatch.setattr(monitor_module.os, "kill", permission_denied)
+    # The OS liveness probe itself lives in `runs`: the monitor, the run views, and
+    # the recovery gate all ask that one function whether an owner still exists.
+    monkeypatch.setattr(runs_module.os, "kill", permission_denied)
     assert run_state(run_dir, RUN).state == "running"
 
 
