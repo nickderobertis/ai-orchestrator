@@ -11,8 +11,6 @@ export function OverallView({ detail }: { readonly detail: RunDetail }) {
       <section className="overall-hero">
         <p className="eyebrow">Whole DAG</p>
         <h2>{detail.run.run_id}</h2>
-        {/* A run that has recorded no event carries a null last_event; naming the
-            absence beats printing a blank after "last event". */}
         <p>
           {detail.run.phase} ·{" "}
           {detail.run.last_event
