@@ -2553,7 +2553,7 @@ def test_failed_lifecycle_without_commits_retries_fresh(tmp_path, bare_origin) -
     assert _has_file(origin, "main", "fresh.txt")
 
 
-def test_local_repo_registry_gate_verifies_real_worktree(tmp_path, bare_origin) -> None:
+def test_local_repo_pre_push_hook_verifies_the_real_worktree(tmp_path, bare_origin) -> None:
     origin = bare_origin()
     canonical = gitops.clone(origin, tmp_path / "registered")
     marker = tmp_path / "gate-ran"
@@ -2572,7 +2572,7 @@ def test_local_repo_registry_gate_verifies_real_worktree(tmp_path, bare_origin) 
     )
     result = run_repo_task(
         str(canonical),
-        "Add a change verified by the identity gate.",
+        "Add a change verified by the merge-path hook.",
         "engineer",
         workspace=Workspace(tmp_path / "worktrees"),
         dispatch_fn=make_writing_dispatch(filename="feature.txt"),
@@ -2583,14 +2583,14 @@ def test_local_repo_registry_gate_verifies_real_worktree(tmp_path, bare_origin) 
     assert _has_file(origin, "main", "feature.txt")
 
 
-def test_local_repo_registry_gate_failure_stops_publication(tmp_path, bare_origin) -> None:
+def test_local_repo_pre_push_hook_failure_stops_publication(tmp_path, bare_origin) -> None:
     origin = bare_origin()
     canonical = gitops.clone(origin, tmp_path / "registered")
     install_pre_push_hook(canonical, "printf 'pre-push gate failed\\n' >&2\nexit 1")
     Registry().register(str(canonical), workflow="local", repo_type="single-owner", gate="false")
     result = run_repo_task(
         str(canonical),
-        "Add a change rejected by the identity gate.",
+        "Add a change rejected by the merge-path hook.",
         "engineer",
         workspace=Workspace(tmp_path / "worktrees"),
         dispatch_fn=make_writing_dispatch(filename="feature.txt"),
@@ -2600,7 +2600,7 @@ def test_local_repo_registry_gate_failure_stops_publication(tmp_path, bare_origi
     assert not _has_file(origin, "main", "feature.txt")
 
 
-def test_registered_complete_gate_catches_strict_tier_before_publish_then_allows_clean_work(
+def test_pre_push_complete_gate_catches_a_strict_tier_then_allows_clean_work(
     tmp_path, bare_origin
 ) -> None:
     gate_log = tmp_path / "complete-gate.log"
@@ -2738,7 +2738,8 @@ def test_remote_human_checkpoint_noop_gate_relies_on_required_checks(tmp_path, b
 
 
 # llmlint: ignore[e2e_not_mocked] GitHub decisioning is the suite's documented external seam.
-def test_remote_human_checkpoint_registry_gate_blocks_draft(tmp_path, bare_origin) -> None:
+def test_remote_human_checkpoint_drafts_without_a_lifecycle_gate_run(tmp_path, bare_origin) -> None:
+    """A red *recorded* identity gate cannot block a draft: nothing runs it."""
     origin = bare_origin()
     canonical = gitops.clone(origin, tmp_path / "registered")
     Registry().register(
@@ -2753,7 +2754,7 @@ def test_remote_human_checkpoint_registry_gate_blocks_draft(tmp_path, bare_origi
         workspace=Workspace(tmp_path / "worktrees"),
         github=github,
         steps=[
-            Step("prepare", "engineer", "prepare a rejected draft checkpoint"),
+            Step("prepare", "engineer", "prepare a draft checkpoint"),
             Step("approve", task="Approve the checkpoint.", kind="human", deps=["prepare"]),
         ],
         body="## What\nPrepare a checkpoint.\n\n## Why\nAwait approval.\n",
