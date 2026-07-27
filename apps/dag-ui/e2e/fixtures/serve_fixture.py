@@ -445,6 +445,17 @@ def settle_dashboard(workspace: Path) -> int:
     return 0
 
 
+def remove_run(workspace: Path, run_id: str) -> int:
+    """Take one recorded run out of the served root, as a sweep or an operator does.
+
+    Runs are directories, and a removed run is a removed directory; the server
+    notices on its next poll and invalidates it. Nothing else about a run's storage
+    is public, so this stays beside the code that wrote it.
+    """
+    shutil.rmtree(workspace / "runs" / run_id, ignore_errors=True)
+    return 0
+
+
 def serve(workspace: Path, port: int) -> int:
     """Rebuild the fixture in ``workspace`` and serve it on a loopback port."""
     shutil.rmtree(workspace, ignore_errors=True)
@@ -478,6 +489,10 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="append real progress to an already-served fixture instead of serving",
     )
+    parser.add_argument(
+        "--remove-run",
+        help="take one run out of an already-served fixture instead of serving",
+    )
     args = parser.parse_args(argv)
 
     workspace = args.workspace or Path(tempfile.mkdtemp(prefix="dag-ui-e2e-"))
@@ -486,6 +501,8 @@ def main(argv: list[str] | None = None) -> int:
     os.environ["XDG_STATE_HOME"] = str(workspace / "state")
     if args.settle_dashboard:
         return settle_dashboard(workspace)
+    if args.remove_run is not None:
+        return remove_run(workspace, args.remove_run)
     try:
         return serve(workspace, args.port)
     finally:

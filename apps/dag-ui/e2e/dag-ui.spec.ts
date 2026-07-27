@@ -1,6 +1,4 @@
 import { execFileSync } from "node:child_process";
-import { rmSync } from "node:fs";
-import { join } from "node:path";
 import { expect, type Page, test } from "@playwright/test";
 import { FIXTURE_WORKSPACE, OFFLINE_UI_URL } from "../playwright.config";
 
@@ -201,10 +199,7 @@ test("drops a run the server stops serving", async ({ page }) => {
     page.getByRole("button", { name: RegExp(HISTORY_RUN) }),
   ).toBeVisible();
 
-  rmSync(join(FIXTURE_WORKSPACE, "runs", HISTORY_RUN), {
-    recursive: true,
-    force: true,
-  });
+  advanceFixture(["--remove-run", HISTORY_RUN]);
 
   await expect(
     page.getByRole("button", { name: RegExp(HISTORY_RUN) }),
@@ -217,10 +212,7 @@ test("drops a run the server stops serving", async ({ page }) => {
 test("falls back to the empty state once no run is left", async ({ page }) => {
   await openObservatory(page);
 
-  rmSync(join(FIXTURE_WORKSPACE, "runs", LIVE_RUN), {
-    recursive: true,
-    force: true,
-  });
+  advanceFixture(["--remove-run", LIVE_RUN]);
 
   await expect(page.getByText("No DAG runs found")).toBeVisible();
   await expect(page.getByRole("alert")).toHaveCount(0);

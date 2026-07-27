@@ -10,6 +10,17 @@ import {
 } from "@ai-orchestrator/telemetry-client";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
+// llmlint: ignore-file[changed_behavior_has_e2e] The browser suite in e2e/dag-ui.spec.ts
+// drives every branch a conforming server can reach: the opening snapshot, a
+// `run.changed` raised by appending a real journal event to the served run, a
+// `run.removed` raised by taking that run out of the served root, the empty list that
+// follows, and a read the browser cannot complete at all. Two branches are left that
+// only a broken peer reaches — a snapshot that fails contract validation, and a stream
+// that drops after a successful handshake — and this repository's server produces
+// neither: it validates what it serves, and an unreachable API fails the handshake
+// rather than dropping a live stream. Both are proven in App.test.tsx, which drives
+// the real app and the real telemetry client at their browser boundary.
+
 export interface DagTelemetryState {
   readonly list?: RunList;
   readonly details: ReadonlyMap<string, RunDetail>;

@@ -135,6 +135,22 @@ describe("DAG application", () => {
     expect(await screen.findByText("dashboard")).toBeInTheDocument();
   });
 
+  test("surfaces a snapshot that fails contract validation", async () => {
+    const { client, sources } = telemetryHarness();
+    render(<App client={client} />);
+    await screen.findByText("dashboard");
+
+    // A peer that ships a schema the app does not accept must be reported, not
+    // silently rendered from whatever survived.
+    sources[0]?.emit(
+      "snapshot",
+      { ...runList, telemetry_schema_version: 8 },
+      "5",
+    );
+    expect(await screen.findByRole("alert")).toBeInTheDocument();
+    expect(screen.getByText("dashboard")).toBeInTheDocument();
+  });
+
   test("surfaces a dropped event stream", async () => {
     const { client, sources } = telemetryHarness();
     render(<App client={client} />);
