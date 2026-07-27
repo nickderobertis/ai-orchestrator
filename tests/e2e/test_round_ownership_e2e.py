@@ -191,9 +191,9 @@ class Rounds:
         self.launched.append(launch)
         return launch
 
-    def run_plan(self, run_id: str) -> Launch:
+    def run_plan(self, run_id: str, recipe: str = "run-plan") -> Launch:
         plan = self.plan(run_id)
-        return self.spawn(run_id, 1, "run-plan", str(plan), "--run", run_id, *self.common)
+        return self.spawn(run_id, 1, recipe, str(plan), "--run", run_id, *self.common)
 
     def waiting_round(self, run_id: str) -> subprocess.CompletedProcess[str]:
         """Settle a first round on a human action, so `next-round` has work to do."""
@@ -244,16 +244,19 @@ def _assert_settled(launch: Launch) -> None:
     assert _read(launch.round_dir / "status.json")["status"] == "completed"
 
 
-def test_run_plan_round_survives_the_teardown_of_its_launching_turn(rounds: Rounds) -> None:
+# `repo-plan` is the deprecated alias for the same executor. It owns rounds through the
+# same detaching entry point, so it gets the same protection and the same proof.
+@pytest.mark.parametrize("recipe", ["run-plan", "repo-plan"])
+def test_a_round_survives_the_teardown_of_its_launching_turn(rounds: Rounds, recipe: str) -> None:
     """Ending the launching turn must leave a dispatching round running."""
-    launch = rounds.run_plan("survives-teardown")
+    launch = rounds.run_plan(f"survives-{recipe}", recipe=recipe)
 
     _assert_survived_teardown(launch, launch.teardown_launching_turn())
     _assert_settled(launch)
 
     listed = _just("runs", "--runs-dir", str(rounds.runs))
     assert listed.returncode == 0, listed.stderr
-    assert "survives-teardown  round-01  (1 done)" in listed.stdout
+    assert f"survives-{recipe}  round-01  (1 done)" in listed.stdout
     assert "ABANDONED" not in listed.stdout
 
 
@@ -274,32 +277,36 @@ def test_next_round_continuation_survives_the_teardown_of_its_launching_turn(
     assert "survives-continuation  round-02  (1 done)" in listed.stdout
 
 
-def test_signalled_executor_records_its_own_abandonment(rounds: Rounds) -> None:
+# Every signal that means "the group you were launched in is going away" — a turn
+# teardown, a closed terminal, an interrupt — records which one it was.
+@pytest.mark.parametrize("teardown", [signal.SIGTERM, signal.SIGHUP, signal.SIGINT])
+def test_signalled_executor_records_its_own_abandonment(
+    rounds: Rounds, teardown: signal.Signals
+) -> None:
     """A catchable signal must never leave `running` behind a dead owner."""
-    launch = rounds.run_plan("signalled-owner")
+    name = teardown.name
+    run_id = f"signalled-{name}"
+    launch = rounds.run_plan(run_id)
 
-    os.kill(launch.owner, signal.SIGTERM)
+    os.kill(launch.owner, teardown)
     _await_exit(launch.owner)
     # The launcher waits on the round only to report how it ended, so a signalled
     # round still reaches the caller as the familiar 128+N rather than as a success.
-    assert launch.process.wait(timeout=e2e_timeout(15)) == 128 + int(signal.SIGTERM)
+    assert launch.process.wait(timeout=e2e_timeout(15)) == 128 + int(teardown)
 
     status = _read(launch.round_dir / "status.json")
     assert status["status"] == "abandoned"
     assert status["pid"] == launch.owner
-    assert "SIGTERM" in str(status["reason"])
+    assert status["reason"] == f"owner pid {launch.owner} took {name}"
     assert not (launch.round_dir / "result.json").exists()
 
     listed = _just("runs", "--runs-dir", str(rounds.runs))
     assert listed.returncode == 0, listed.stderr
-    assert (
-        f"! signalled-owner  round-01 ABANDONED (owner pid {launch.owner} took SIGTERM)"
-        in listed.stdout
-    )
+    assert f"! {run_id}  round-01 ABANDONED (owner pid {launch.owner} took {name})" in listed.stdout
     assert "--recover" in listed.stdout
 
     refused = _just(
-        "run-plan", str(launch.round_dir / "plan.json"), "--run", "signalled-owner", *launch.common
+        "run-plan", str(launch.round_dir / "plan.json"), "--run", run_id, *launch.common
     )
     assert refused.returncode == 2, refused.stderr
     assert "was abandoned" in refused.stderr
