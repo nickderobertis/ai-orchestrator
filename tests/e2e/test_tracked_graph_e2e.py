@@ -1346,11 +1346,11 @@ def test_real_cli_recovers_failed_lifecycle_result(
                         "id": "in-flight",
                         "persona": "engineer",
                         # Park this node inside a turn instead of letting it race to
-                        # its own failure. The kill below must land while the round
-                        # is genuinely unfinished: if all three nodes settle first,
-                        # run-plan finalizes round-01 and `--recover` legitimately
-                        # opens round-02 and re-attempts the still-failed nodes,
-                        # emitting a second node-failed for each and failing the
+                        # its own failure, so the round is provably still running when
+                        # it is killed. If all three nodes settle first, run-plan
+                        # finalizes round-01 and `--recover` legitimately opens
+                        # round-02 and re-attempts the still-failed nodes, emitting a
+                        # second node-failed for each and failing the
                         # single-terminal-event assertion for the wrong reason.
                         "task": (
                             f"should-fail slow-branch {tmp_path / 'in-flight.ticks'} "
@@ -1423,10 +1423,11 @@ def test_real_cli_recovers_failed_lifecycle_result(
         }
         # Parked, not merely started: the ready file proves in-flight is still inside
         # its turn, so the round cannot finalize between this check and the kill.
-        if {
-            "failed-lifecycle",
-            "gate-failed-lifecycle",
-        } <= failed_lifecycles and in_flight_ready.exists():
+        in_flight = in_flight_ready.exists() and any(
+            event["kind"] == "node-started" and event.get("node") == "in-flight"
+            for event in records
+        )
+        if {"failed-lifecycle", "gate-failed-lifecycle"} <= failed_lifecycles and in_flight:
             break
         time.sleep(0.01)
     else:

@@ -1,12 +1,24 @@
 {
   "$schema": "https://biomejs.dev/schemas/2.5.5/schema.json",
   "files": {
-    "includes": ["**", "!**/node_modules", "!**/.nx", "!**/dist"]
+    "includes": [
+      "**",
+      "!**/node_modules",
+      "!**/.nx",
+      "!**/dist",
+      "!**/test-results",
+      "!**/playwright-report"
+    ]
   },
   "formatter": {
     "enabled": true,
     "indentStyle": "space",
     "indentWidth": 2
+  },
+  "css": {
+    "parser": {
+      "tailwindDirectives": true
+    }
   },
   "linter": {
     "enabled": true,

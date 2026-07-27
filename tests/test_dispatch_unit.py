@@ -504,6 +504,40 @@ def test_agent_pid_outside_dispatch_tree_is_rejected(tmp_path) -> None:
     assert report.outcome == "worker-died"
 
 
+def test_agent_turns_shorter_than_the_poll_interval_are_not_mistaken_for_death(tmp_path) -> None:
+    """A healthy worker rotates agent turns faster than the supervisor samples.
+
+    The process tree is sampled before the recorded agent pid is read, so a turn
+    that starts or finishes inside that gap is absent from the sample while the
+    worker is perfectly alive.
+    """
+    onejudge = tmp_path / "onejudge"
+    onejudge.write_text(
+        '#!/bin/sh\n[ "$1" = "--version" ] && { echo "onejudge 0.3.4"; exit; }\n'
+        'd="$ORCHESTRATOR_AGENT_STATUS_DIR"\ni=0\n'
+        "while [ $i -lt 40 ]; do\n"
+        "  sh -c 'sleep 0.12' &\n"
+        "  child=$!\n"
+        '  printf "%s\\n" "$child" >"$d/agent.pid.tmp"; mv "$d/agent.pid.tmp" "$d/agent.pid"\n'
+        '  rm -f "$d/agent.done"\n'
+        '  printf "%s\\n" "$i" >"$d/agent.heartbeat.tmp";'
+        ' mv "$d/agent.heartbeat.tmp" "$d/agent.heartbeat"\n'
+        "  wait $child\n"
+        '  printf "%s\\n" "$child" >"$d/agent.done.tmp"; mv "$d/agent.done.tmp" "$d/agent.done"\n'
+        "  i=$((i + 1))\n"
+        "done\n"
+        'printf \'%s\\n\' \'{"schema_version":4,"transcript":{"messages":[]},'
+        '"stopped_early":false}\'\n',
+        encoding="utf-8",
+    )
+    onejudge.chmod(0o700)
+
+    report = run_onejudge({}, "task", onejudge_bin=os.fspath(onejudge))
+
+    assert report.outcome is None
+    assert report.completed is True
+
+
 @pytest.mark.parametrize("value", ["bad", "0", "-1", "nan", "inf"])
 def test_worker_heartbeat_timeout_rejects_invalid_values(tmp_path, value: str) -> None:
     onejudge = tmp_path / "onejudge"

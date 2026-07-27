@@ -217,6 +217,11 @@ monitor *args:
 telemetry *args:
     @uv run orchestrator-telemetry {{args}}
 
+# Serve the read-only DAG Observatory against a running telemetry server.
+# llmlint: ignore[tool_output_is_signal] Vite startup and request logs are the foreground development server's operator-facing product.
+dag-ui:
+    ./scripts/nx.sh run dag-ui:serve
+
 # Serve the read-only DAG telemetry API (FastAPI + SSE), loopback-bound by default.
 # llmlint: ignore[tool_output_is_signal] the requested long-running read API is this command's product.
 telemetry-server *args:

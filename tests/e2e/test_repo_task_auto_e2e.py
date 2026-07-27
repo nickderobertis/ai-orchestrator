@@ -28,14 +28,20 @@ def test_repo_task_auto_prepends_uv_tool_bin_to_dispatch_path(tmp_path: Path) ->
     node = shutil.which("node")
     if node is not None:
         (tools / "node").symlink_to(node)
-    assert shutil.which("uv", path=f"{tools}:/usr/bin:/bin") is None
+    # `just` may also be a launcher that reaches for a sibling of its own real
+    # path rather than for a bare interpreter name, so keep its directory
+    # reachable too. Neither directory carries uv, so the recipe still has to
+    # derive the tool bin from HOME — the premise under test.
+    launcher_dir = str(Path(just).parent)
+    inherited_path = f"{tools}:{launcher_dir}:/usr/bin:/bin"
+    assert shutil.which("uv", path=inherited_path) is None
 
     proc = subprocess.run(
         [str(tools / "just"), "repo-task-auto", "--help"],
         cwd=REPO_ROOT,
         text=True,
         capture_output=True,
-        env={**os.environ, "HOME": str(home), "PATH": f"{tools}:/usr/bin:/bin"},
+        env={**os.environ, "HOME": str(home), "PATH": inherited_path},
     )
 
     assert proc.returncode == 0, proc.stderr

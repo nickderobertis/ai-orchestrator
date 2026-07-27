@@ -20,6 +20,10 @@ export default tseslint.config(
               sourceTag: "scope:shared",
               onlyDependOnLibsWithTags: ["scope:shared"],
             },
+            {
+              sourceTag: "scope:app",
+              onlyDependOnLibsWithTags: ["scope:shared"],
+            },
           ],
         },
       ],
