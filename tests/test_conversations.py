@@ -69,13 +69,15 @@ def test_conversation_maps_records_to_the_ui_shape() -> None:
         ),
     ]
     result = conversation(_session(), records)
-    assert result["id"] == "native-1"
+    # The session's own id, not the records' `session` field ("native-1"), which two
+    # distinct sessions can share.
+    assert result["id"] == "sess-1"
     assert result["harnesses"] == ["codex", "claude"]  # ordered, de-duplicated
     assert result["state"] == "completed"  # ok -> completed
     assert result["canContinue"] is True  # last has session_id and is not planned/skipped
     assert len(result["turns"]) == 2
     first, second = result["turns"]
-    assert first["id"] == "native-1-0"
+    assert first["id"] == "sess-1-0"
     assert first["reasoning"] == "because"
     assert first["usage"] == {"inputTokens": 10, "outputTokens": 2, "costUsd": 0.01}
     assert second["usage"] == {"inputTokens": None, "outputTokens": 3}  # bool dropped, null kept
@@ -94,7 +96,7 @@ def test_conversation_maps_records_to_the_ui_shape() -> None:
 
 def test_conversation_handles_empty_records_and_structured_reasoning() -> None:
     empty = conversation(_session(name="fallback-name"), [])
-    assert empty["id"] == "sess-1"  # falls back to the session id
+    assert empty["id"] == "sess-1"  # the session id, with no records to read
     assert empty["name"] == "fallback-name"
     assert empty["state"] == "unknown"  # no records -> status passes through unchanged
     assert empty["turns"] == []
@@ -239,7 +241,9 @@ def test_run_conversations_selects_sorts_and_degrades(monkeypatch: pytest.Monkey
     result = run_conversations(RunId("demo"), oneharness_bin="x")
     # orchestrator (t=00) then worker (t=02); "other" run excluded, broken skipped.
     ids = [c["conversation"]["id"] for c in result]
-    assert ids == ["native-1", "native-1"]
+    # Both sessions' records carry the same `session` field; the ids stay distinct
+    # because they come from the session, so `run_conversation` can address either.
+    assert ids == ["o", "w"]
     assert [c["attribution"].get("agentRole") for c in result] == ["orchestrator", "worker"]
 
 

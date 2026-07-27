@@ -41,7 +41,7 @@ import uvicorn
 from orchestrator import REPO_ROOT
 from orchestrator.detail_snapshot import PrDetail
 from orchestrator.journal import NodeId, RunId, open_journal
-from orchestrator.launch import DEFAULT_MAX_AGE_SECONDS, write_provenance
+from orchestrator.launch import DEFAULT_MAX_AGE_SECONDS, provenance_path, write_provenance
 from orchestrator.monitor import DetailSnapshot, save_snapshot
 from orchestrator.runs import prepare_round, write_result
 from orchestrator.server import create_app
@@ -477,6 +477,16 @@ def test_after_cursor_details_logs_and_projection_failure_over_http(
         # this deployment opted into exposing it.
         assert detail["launch"] == {"launch_id": LAUNCH_ID, "launcher": "unknown"}
 
+        # A record replaced out from under us — the file lives outside the repo — is
+        # refused on read too, rather than serving a smuggled session id.
+        record = provenance_path(LAUNCH_ID)
+        tampered = json.loads(record.read_text(encoding="utf-8"))
+        tampered["launcher_session_id"] = "smuggled\nsecond-line"
+        tampered["started_at"] = datetime.now(UTC).isoformat()
+        record.write_text(json.dumps(tampered), encoding="utf-8")
+        replaced = client.get("/api/v1/runs/demo").json()
+        assert replaced["launch"] == {"launch_id": LAUNCH_ID, "launcher": "unknown"}
+
         # `after` resumes without a snapshot, exactly like a valid Last-Event-ID.
         with client.stream("GET", "/api/v1/events?after=3") as response:
             assert response.status_code == 200
@@ -612,3 +622,32 @@ def test_detail_degrades_to_no_conversations_when_history_is_absent(tmp_path: Pa
         missing = client.get("/api/v1/runs/demo/conversations/agent-native")
         assert missing.status_code == 404
         assert missing.json()["error"]["code"] == "run_not_found"
+
+
+def test_detail_skips_an_unreadable_session_and_serves_the_rest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One corrupt transcript must not blind the view to every healthy one."""
+    runs = tmp_path / "runs"
+    _active_run(runs, "demo")
+    store_path = _history_store(tmp_path, "demo")
+    store = json.loads(store_path.read_text(encoding="utf-8"))
+    store["sessions"].append(
+        {
+            "id": "broken-native",
+            "name": "engineer-broken",
+            "project": str(tmp_path),
+            "started": "2026-07-19T00:00:09Z",
+            "path": str(tmp_path / "never-written.jsonl"),
+            "labels": {"run_id": "demo", "node": "api", "role": "agent"},
+        }
+    )
+    store_path.write_text(json.dumps(store), encoding="utf-8")
+    monkeypatch.setenv("FAKE_ONEHARNESS_STORE", str(store_path))
+    app = create_app(runs, oneharness_bin=str(_oneharness_bin(tmp_path)))
+
+    with _serve(app) as base:
+        detail = httpx.Client(base_url=base, timeout=30).get("/api/v1/runs/demo").json()
+
+    ids = {item["conversation"]["id"] for item in detail["conversations"]}
+    assert ids == {"agent-native", "judge-native"}  # the unreadable session is skipped

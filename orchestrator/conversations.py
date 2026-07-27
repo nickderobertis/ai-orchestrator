@@ -192,11 +192,13 @@ def _usage(value: object) -> ConversationUsage:
 def _reasoning(record: Mapping[str, Any]) -> str | None:
     """The first non-empty reasoning/thinking, JSON-encoding a structured value."""
     for key in ("reasoning", "thinking"):
-        raw = record.get(key)
-        if isinstance(raw, str) and raw:
-            return raw
-        if isinstance(raw, (dict, list)) and raw:
-            return json.dumps(raw, indent=2, sort_keys=True)
+        match record.get(key):
+            case str() as text if text:
+                return text
+            case dict() | list() as structured if structured:
+                return json.dumps(structured, indent=2, sort_keys=True)
+            case _:
+                continue
     return None
 
 
@@ -266,10 +268,15 @@ def _can_continue(records: list[dict[str, Any]]) -> bool:
 
 
 def conversation(session: HistorySession, records: list[dict[str, Any]]) -> Conversation:
-    """Fold a session's normalized records into one ``@oneharness/ui`` Conversation."""
+    """Fold a session's normalized records into one ``@oneharness/ui`` Conversation.
+
+    The id is the session's own ``session_id``, never a record's ``session`` field:
+    that field is per-record data two distinct sessions can share, and a colliding id
+    would make ``run_conversation`` return whichever one it scanned first.
+    """
     first = records[0] if records else {}
     last = records[-1] if records else {}
-    session_key = _first_str(first, "session", str(session.session_id))
+    session_key = str(session.session_id)
     last_status = last.get("status")
     return {
         "id": session_key,

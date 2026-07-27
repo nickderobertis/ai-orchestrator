@@ -212,3 +212,31 @@ def test_read_provenance_rejects_a_record_dated_far_in_the_future() -> None:
         started_at=(datetime.now(UTC) + timedelta(seconds=30)).isoformat(),
     )
     assert read_provenance(skewed) is not None
+
+
+def test_write_provenance_rejects_fields_the_reader_would_refuse() -> None:
+    """The writer must not persist a record its own reader treats as invalid."""
+    with pytest.raises(LaunchError, match="repository identity"):
+        write_provenance(
+            launch_id=generate_launch_id(),
+            launcher="codex",
+            launcher_session_id="s",
+            repository_identity="local/app\nsecond-line",
+        )
+    with pytest.raises(LaunchError, match="RFC 3339 UTC"):
+        write_provenance(
+            launch_id=generate_launch_id(),
+            launcher="codex",
+            launcher_session_id="s",
+            repository_identity="",
+            started_at="yesterday",
+        )
+    # A local-time stamp has no UTC offset, so the reader could never parse it back.
+    with pytest.raises(LaunchError, match="RFC 3339 UTC"):
+        write_provenance(
+            launch_id=generate_launch_id(),
+            launcher="codex",
+            launcher_session_id="s",
+            repository_identity="",
+            started_at="2026-07-19T00:00:00",
+        )

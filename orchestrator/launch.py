@@ -15,7 +15,7 @@ import re
 import secrets
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import TypedDict
+from typing import NewType, TypedDict
 
 from .config import ConfigError
 from .coordination import atomic_json
@@ -34,6 +34,10 @@ PROVENANCE_SCHEMA_VERSION = 1
 #: A launch record is short-lived: past this age the server treats it as expired and
 #: reports ``launcher: "unknown"`` rather than resurfacing a stale session id.
 DEFAULT_MAX_AGE_SECONDS = 7 * 24 * 3600
+
+#: A launch id is a security-sensitive join token, not incidental text: distinguishing
+#: it from an arbitrary string keeps an unvalidated one from reaching a lookup.
+LaunchId = NewType("LaunchId", str)
 
 _LAUNCH_ID = re.compile(r"[0-9a-f]{32}\Z")
 _MAX_SESSION_ID = 256
@@ -64,14 +68,14 @@ class LaunchProvenance(TypedDict):
     repository_identity: str
 
 
-def generate_launch_id() -> str:
+def generate_launch_id() -> LaunchId:
     """A fresh random 128-bit launch id, lowercase hex."""
-    return secrets.token_hex(16)
+    return LaunchId(secrets.token_hex(16))
 
 
-def validate_launch_id(value: object) -> str | None:
+def validate_launch_id(value: object) -> LaunchId | None:
     """Return ``value`` when it is a well-formed launch id, else ``None``."""
-    return value if isinstance(value, str) and _LAUNCH_ID.match(value) else None
+    return LaunchId(value) if isinstance(value, str) and _LAUNCH_ID.match(value) else None
 
 
 def resolve_launcher_kind(kind: str | None) -> str:
@@ -111,7 +115,7 @@ def provenance_dir() -> Path:
     return Path(base) / "ai-orchestrator" / "launches"
 
 
-def provenance_path(launch_id: str) -> Path:
+def provenance_path(launch_id: LaunchId) -> Path:
     return provenance_dir() / f"{launch_id}.json"
 
 
@@ -125,26 +129,36 @@ def write_provenance(
 ) -> Path:
     """Persist the protected provenance record outside the repository.
 
-    Every argument is re-validated here rather than trusted from the caller: this is
-    the only writer of the sensitive join target the server later resolves, so an
-    unbounded or multiline session id must not reach the record at all.
+    Every field is validated here rather than trusted from the caller: this is the
+    only writer of the sensitive join target the server later resolves, so a record
+    this writer accepts must be one the reader will accept back. Writing a value only
+    the read side rejects would produce a record that silently never joins.
     """
-    if validate_launch_id(launch_id) is None:
+    valid_id = validate_launch_id(launch_id)
+    if valid_id is None:
         raise LaunchError("launch id must be 32 lowercase hex characters")
     if launcher not in KNOWN_LAUNCHERS:
         raise LaunchError("provenance is written only for a known launcher")
     session_id = validate_session_id(launcher_session_id)
     if session_id is None:
         raise LaunchError("provenance requires a non-empty launcher session id")
+    if not repository_identity.isprintable() or len(repository_identity) > _MAX_SESSION_ID:
+        raise LaunchError(
+            f"repository identity must be a single printable line of at most "
+            f"{_MAX_SESSION_ID} chars"
+        )
+    stamped = started_at or datetime.now(UTC).isoformat()
+    if _utc(stamped) is None:
+        raise LaunchError("started_at must be an RFC 3339 UTC timestamp")
     record: LaunchProvenance = {
         "schema_version": PROVENANCE_SCHEMA_VERSION,
-        "launch_id": launch_id,
+        "launch_id": valid_id,
         "launcher": launcher,
         "launcher_session_id": session_id,
-        "started_at": started_at or datetime.now(UTC).isoformat(),
+        "started_at": stamped,
         "repository_identity": repository_identity,
     }
-    path = provenance_path(launch_id)
+    path = provenance_path(valid_id)
     path.parent.mkdir(parents=True, exist_ok=True)
     atomic_json(path, record)
     return path

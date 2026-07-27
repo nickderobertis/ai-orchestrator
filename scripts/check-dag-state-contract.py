@@ -102,17 +102,19 @@ def typed_dict_fields(path: Path, name: str) -> dict[str, bool]:
     )
     fields: dict[str, bool] = {}
     for statement in declaration.body:
-        if not (isinstance(statement, ast.AnnAssign) and isinstance(statement.target, ast.Name)):
-            continue
-        annotation = statement.annotation
-        not_required = (
-            isinstance(annotation, ast.Subscript)
-            and isinstance(annotation.value, ast.Name)
-            and annotation.value.id == "NotRequired"
-        )
-        if statement.target.id in fields:
+        match statement:
+            case ast.AnnAssign(
+                target=ast.Name(id=field),
+                annotation=ast.Subscript(value=ast.Name(id="NotRequired")),
+            ):
+                required = False
+            case ast.AnnAssign(target=ast.Name(id=field)):
+                required = total
+            case _:
+                continue
+        if field in fields:
             fail(f"{path.name} {name} must declare unique annotated fields")
-        fields[statement.target.id] = total and not not_required
+        fields[field] = required
     if not fields:
         fail(f"{path.name} {name} must declare annotated fields")
     return fields
