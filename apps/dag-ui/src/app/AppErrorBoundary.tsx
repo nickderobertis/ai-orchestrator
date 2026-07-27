@@ -1,5 +1,12 @@
 import { Component, type ErrorInfo, type ReactNode } from "react";
 
+// llmlint: ignore-file[changed_behavior_has_e2e] Reaching this boundary needs a graph
+// the renderer refuses, and the read API cannot serve one: the executor's journal
+// writers reject a cycle, a duplicate id, and a dangling edge before they are ever
+// recorded, so the browser suite's real server has no way to produce the input. The
+// closest honest test is the one in App.test.tsx, which drives the whole real app and
+// its real telemetry client into this boundary with a cyclic detail payload.
+
 export class AppErrorBoundary extends Component<
   { readonly children: ReactNode; readonly onReload?: () => void },
   { readonly error?: Error }

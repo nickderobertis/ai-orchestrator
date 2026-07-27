@@ -130,12 +130,11 @@ test("restores a bookmarked view and refreshes through the read API", async ({
   await expect(page.getByText("Build the live dashboard")).toBeVisible();
 });
 
-test("reports a live update from the server's own event stream", async ({
-  page,
-}) => {
+test("connects to the server's event stream on load", async ({ page }) => {
   await openObservatory(page);
   // The server opens every connection with a snapshot, so the header flips to
-  // "Updates received" only once the browser's EventSource really connected.
+  // "Updates received" only once the browser's EventSource really connected. The
+  // journeys below then change the served run and assert what the stream carries.
   await expect(page.getByText("Updates received")).toBeVisible();
 });
 
