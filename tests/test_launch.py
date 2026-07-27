@@ -49,10 +49,10 @@ def test_validate_session_id() -> None:
     assert validate_session_id(None) is None
     assert validate_session_id("") is None
     assert validate_session_id("sess-1") == "sess-1"
-    with pytest.raises(LaunchError, match="session id"):
-        validate_session_id("two\nlines")
-    with pytest.raises(LaunchError, match="session id"):
-        validate_session_id("x" * 257)
+    # Every control character is a potential second line in a log or history label.
+    for crafted in ("two\nlines", "carriage\rreturn", "nul\x00byte", "tab\tsep", "x" * 257):
+        with pytest.raises(LaunchError, match="session id"):
+            validate_session_id(crafted)
 
 
 def test_provenance_dir_honours_xdg_state_home(tmp_path: Path) -> None:
@@ -153,3 +153,62 @@ def test_read_provenance_treats_stale_record_as_expired() -> None:
     # A generous max age (or an as-of clock) still reads it.
     fresh = read_provenance(launch_id, max_age_seconds=60 * 24 * 3600)
     assert fresh is not None and fresh["launcher_session_id"] == "sess-old"
+
+
+def test_write_provenance_rejects_an_unusable_session_id() -> None:
+    """The sole writer of the sensitive record re-checks it rather than trusting a caller."""
+    for crafted in ("multi\nline", "x" * 257):
+        with pytest.raises(LaunchError, match="session id"):
+            write_provenance(
+                launch_id=generate_launch_id(),
+                launcher="codex",
+                launcher_session_id=crafted,
+                repository_identity="",
+            )
+    with pytest.raises(LaunchError, match="non-empty launcher session id"):
+        write_provenance(
+            launch_id=generate_launch_id(),
+            launcher="codex",
+            launcher_session_id="",
+            repository_identity="",
+        )
+
+
+def test_read_provenance_rejects_a_replaced_record_with_an_unusable_session_id() -> None:
+    """The record is an out-of-repo file; another writer can have replaced it since."""
+    launch_id = generate_launch_id()
+    write_provenance(
+        launch_id=launch_id,
+        launcher="codex",
+        launcher_session_id="sess-ok",
+        repository_identity="",
+    )
+    record = json.loads(provenance_path(launch_id).read_text(encoding="utf-8"))
+    record["launcher_session_id"] = "smuggled\nsecond-line"
+    provenance_path(launch_id).write_text(json.dumps(record), encoding="utf-8")
+
+    assert read_provenance(launch_id) is None
+
+
+def test_read_provenance_rejects_a_record_dated_far_in_the_future() -> None:
+    """A far-future timestamp is not skew; it would outlive every expiry check."""
+    launch_id = generate_launch_id()
+    write_provenance(
+        launch_id=launch_id,
+        launcher="codex",
+        launcher_session_id="sess-future",
+        repository_identity="",
+        started_at=(datetime.now(UTC) + timedelta(days=365)).isoformat(),
+    )
+    assert read_provenance(launch_id) is None
+
+    # Modest skew from a host running slightly ahead stays readable.
+    skewed = generate_launch_id()
+    write_provenance(
+        launch_id=skewed,
+        launcher="codex",
+        launcher_session_id="sess-skew",
+        repository_identity="",
+        started_at=(datetime.now(UTC) + timedelta(seconds=30)).isoformat(),
+    )
+    assert read_provenance(skewed) is not None

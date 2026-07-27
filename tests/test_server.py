@@ -8,6 +8,7 @@ real poll clock.
 
 from __future__ import annotations
 
+import argparse
 import json
 import shutil
 from pathlib import Path
@@ -136,3 +137,40 @@ def test_event_stream_resume_still_snapshots_but_continues_the_cursor(tmp_path: 
         assert await gen.__anext__() == ": keep-alive\n\n"  # idle heartbeat
 
     anyio.run(body)
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"poll_interval": 0.0},
+        {"poll_interval": -1.0},
+        {"heartbeat_interval": 0.0},
+        {"conversation_interval": -0.5},
+    ],
+)
+def test_create_app_rejects_a_nonpositive_interval(
+    tmp_path: Path, kwargs: dict[str, float]
+) -> None:
+    """A zero poll would busy-loop the stream instead of sleeping between ticks."""
+    with pytest.raises(ValueError, match="positive number of seconds"):
+        server.create_app(tmp_path, **kwargs)
+
+
+def test_signatures_skips_a_directory_that_is_not_a_valid_run_id(tmp_path: Path) -> None:
+    """A stray directory must not become a run_id the API would reject on the way back."""
+    runs = tmp_path / "runs"
+    _active_run(runs, "demo")
+    (runs / "not a run id!").mkdir()
+
+    assert set(server._signatures(runs, None)) == {"demo"}
+
+
+@pytest.mark.parametrize("value", ["0", "65536", "-1", "http"])
+def test_port_option_rejects_out_of_range_values(value: str) -> None:
+    with pytest.raises(argparse.ArgumentTypeError):
+        server._port(value)
+
+
+def test_port_option_accepts_the_valid_range() -> None:
+    assert server._port("1") == 1
+    assert server._port("65535") == 65535

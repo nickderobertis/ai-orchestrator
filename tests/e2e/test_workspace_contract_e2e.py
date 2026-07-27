@@ -174,6 +174,7 @@ def _dag_state_contract_checkout(tmp_path: Path) -> Path:
         "scripts/check-dag-state-contract.py",
         "orchestrator/projection.py",
         "orchestrator/conversations.py",
+        "orchestrator/read_model.py",
         "orchestrator/server.py",
         "packages/dag-layout/src/index.ts",
         "docs/dag-ui/design.md",
@@ -410,3 +411,33 @@ def test_real_cache_check_drives_both_linked_worktrees() -> None:
 
     assert result.returncode == 0, result.stderr
     assert result.stdout == ("nx cache check: cross-worktree hit and broken-input miss verified\n")
+
+
+def test_dag_state_contract_checker_reports_an_invented_payload_field(tmp_path: Path) -> None:
+    """A Python field no contract declares would be served to a client expecting none."""
+    checkout = _dag_state_contract_checkout(tmp_path)
+    read_model = checkout / "orchestrator/read_model.py"
+    read_model.write_text(
+        read_model.read_text().replace(
+            "    attestations: list[str]", "    attestations: list[str]\n    invented: str"
+        )
+    )
+
+    result = _dag_state_contract_run(checkout)
+
+    assert result.returncode != 0
+    assert "read_model.py Round declares ['invented']" in result.stderr
+    assert "add it to the contract or drop it" in result.stderr
+
+
+def test_dag_state_contract_checker_reports_a_dropped_required_field(tmp_path: Path) -> None:
+    """A required contract field the server stops serving leaves a documented gap."""
+    checkout = _dag_state_contract_checkout(tmp_path)
+    conversations = checkout / "orchestrator/conversations.py"
+    conversations.write_text(conversations.read_text().replace("    canContinue: bool\n", "", 1))
+
+    result = _dag_state_contract_run(checkout)
+
+    assert result.returncode != 0
+    assert "omits required" in result.stderr
+    assert "canContinue" in result.stderr

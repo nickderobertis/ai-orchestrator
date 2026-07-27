@@ -37,6 +37,10 @@ DEFAULT_MAX_AGE_SECONDS = 7 * 24 * 3600
 
 _LAUNCH_ID = re.compile(r"[0-9a-f]{32}\Z")
 _MAX_SESSION_ID = 256
+#: Tolerance for a record written by a host whose clock runs slightly ahead of ours.
+#: Beyond it the timestamp is not skew but a forged or corrupt record that would
+#: otherwise outlive every expiry check, so it is treated as invalid.
+_MAX_CLOCK_SKEW_SECONDS = 300
 
 
 class LaunchError(ValueError):
@@ -83,11 +87,19 @@ def resolve_launcher_kind(kind: str | None) -> str:
 
 
 def validate_session_id(value: str | None) -> str | None:
-    """Return a single-line, bounded session id, or ``None`` when absent."""
+    """Return a single-line, bounded session id, or ``None`` when absent.
+
+    ``isprintable`` is the single-line test: it rejects NUL, newline, carriage return,
+    and every other control character in one check, so no separator can smuggle a
+    second line into a log or history label.
+    """
     if not value:
         return None
-    if "\x00" in value or "\n" in value or len(value) > _MAX_SESSION_ID:
-        raise LaunchError("launcher session id must be a single line of at most 256 chars")
+    if not value.isprintable() or len(value) > _MAX_SESSION_ID:
+        raise LaunchError(
+            f"launcher session id must be a single printable line of at most "
+            f"{_MAX_SESSION_ID} chars"
+        )
     return value
 
 
@@ -188,7 +200,10 @@ def read_provenance(
         and started is not None
     ):
         return None
-    if (now or datetime.now(UTC)) - started > timedelta(seconds=max_age_seconds):
+    age = (now or datetime.now(UTC)) - started
+    if age > timedelta(seconds=max_age_seconds) or -age > timedelta(
+        seconds=_MAX_CLOCK_SKEW_SECONDS
+    ):
         return None
     return LaunchProvenance(
         schema_version=PROVENANCE_SCHEMA_VERSION,

@@ -16,7 +16,6 @@ surface are all real.
 from __future__ import annotations
 
 import json
-import os
 import shutil
 import socket
 import subprocess
@@ -178,6 +177,35 @@ def _free_port() -> int:
     with closing(socket.socket()) as probe:
         probe.bind(("127.0.0.1", 0))
         return int(probe.getsockname()[1])
+
+
+@contextmanager
+def _serve_cli(*args: str) -> Iterator[str]:
+    """Run the installed console script on a free port; yield its loopback base URL."""
+    port = _free_port()
+    process = subprocess.Popen(
+        [str(SERVER_CLI), *args, "--port", str(port)],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    base = f"http://127.0.0.1:{port}"
+    try:
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline:
+            if process.poll() is not None:  # pragma: no cover - startup failure
+                raise AssertionError(f"server exited early: {process.communicate()[0]}")
+            try:
+                if httpx.get(f"{base}/healthz", timeout=2).json() == {"status": "ok"}:
+                    break
+            except httpx.HTTPError:
+                time.sleep(0.1)
+        else:  # pragma: no cover - startup timeout
+            raise AssertionError("server never became reachable")
+        yield base
+    finally:
+        process.terminate()
+        process.wait(timeout=30)
 
 
 def _tree(root: Path) -> dict[str, bytes]:
@@ -471,34 +499,24 @@ def test_cli_refuses_a_nonloopback_bind_and_otherwise_serves(tmp_path: Path) -> 
     assert refused.returncode == 2, refused.stderr
     assert "--allow-nonloopback" in refused.stderr
 
-    port = _free_port()
-    env = dict(os.environ, PATH=f"{tmp_path}:{os.environ.get('PATH', '')}")
-    process = subprocess.Popen(
-        [str(SERVER_CLI), "--runs-dir", str(runs), "--port", str(port)],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
+    rejected = subprocess.run(
+        [str(SERVER_CLI), "--runs-dir", str(runs), "--port", "70000"],
+        capture_output=True,
         text=True,
-        env=env,
+        timeout=60,
     )
-    try:
-        base = f"http://127.0.0.1:{port}"
-        deadline = time.monotonic() + 60
-        while time.monotonic() < deadline:
-            if process.poll() is not None:  # pragma: no cover - startup failure
-                raise AssertionError(f"server exited early: {process.communicate()[0]}")
-            try:
-                if httpx.get(f"{base}/healthz", timeout=2).json() == {"status": "ok"}:
-                    break
-            except httpx.HTTPError:
-                time.sleep(0.1)
-        else:  # pragma: no cover - startup timeout
-            raise AssertionError("server never became reachable")
+    assert rejected.returncode != 0
+    assert "port must be between 1 and 65535" in rejected.stderr
 
+    # The loopback default serves.
+    with _serve_cli("--runs-dir", str(runs)) as base:
         listed = httpx.get(f"{base}/api/v1/runs", timeout=30).json()
         assert [row["run_id"] for row in listed["runs"]] == ["demo"]
-    finally:
-        process.terminate()
-        process.wait(timeout=30)
+
+    # And the acknowledged non-loopback bind serves too, reachable over loopback
+    # because 0.0.0.0 covers it.
+    with _serve_cli("--runs-dir", str(runs), "--host", "0.0.0.0", "--allow-nonloopback") as base:
+        assert httpx.get(f"{base}/healthz", timeout=30).json() == {"status": "ok"}
 
 
 def test_events_stream_invalidates_conversations_for_a_watched_run(

@@ -117,7 +117,17 @@ def create_app(
     ``expose_launcher_session_id`` is the redaction switch: the launching session id
     may be sensitive, so it is withheld by default and surfaced only when a deployment
     explicitly opts in.
+
+    Raises ``ValueError`` for a non-positive interval: a zero or negative poll would
+    turn the stream's ``await sleep`` into a busy loop that starves the event loop.
     """
+    for label, interval in (
+        ("poll_interval", poll_interval),
+        ("heartbeat_interval", heartbeat_interval),
+        ("conversation_interval", conversation_interval),
+    ):
+        if not interval > 0:
+            raise ValueError(f"{label} must be a positive number of seconds, got {interval!r}")
     app = FastAPI(title="ai-orchestrator DAG read API", version="1")
     root = Path(runs_dir)
 
@@ -219,12 +229,21 @@ def _conversation_signature(
 
 
 def _signatures(runs_dir: Path, watched: str | None) -> dict[str, tuple[int, ...]]:
-    """Change tokens for every run (or the single watched run) under the root."""
+    """Change tokens for every run (or the single watched run) under the root.
+
+    A directory name becomes a ``run_id`` in an emitted event, so it is validated like
+    any other identifier: whatever else the root contains, this stream never hands a
+    client an id the API would reject on the way back in.
+    """
     if not runs_dir.is_dir():
         return {}
     signatures: dict[str, tuple[int, ...]] = {}
     for entry in sorted(runs_dir.iterdir()):
         if not entry.is_dir() or (watched is not None and entry.name != watched):
+            continue
+        try:
+            validate_run_id(entry.name)
+        except ConfigError:
             continue
         signatures[entry.name] = run_signature(entry)
     return signatures
@@ -297,6 +316,17 @@ async def _event_stream(
             last_emit = now
 
 
+def _port(value: str) -> int:
+    """An in-range TCP port, rejected by argparse rather than deep inside uvicorn."""
+    try:
+        port = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"port must be an integer, got {value!r}") from None
+    if not 1 <= port <= 65535:
+        raise argparse.ArgumentTypeError(f"port must be between 1 and 65535, got {port}")
+    return port
+
+
 def main(argv: list[str] | None = None) -> int:  # pragma: no cover - process entrypoint
     """Serve the read API, loopback-bound by default."""
     import uvicorn
@@ -304,7 +334,7 @@ def main(argv: list[str] | None = None) -> int:  # pragma: no cover - process en
     parser = argparse.ArgumentParser(description="Serve the read-only DAG telemetry API.")
     parser.add_argument("--runs-dir", type=Path, default=Path("runs"))
     parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=DEFAULT_PORT)
+    parser.add_argument("--port", type=_port, default=DEFAULT_PORT)
     parser.add_argument("--oneharness-bin", default="oneharness")
     parser.add_argument(
         "--allow-nonloopback",
