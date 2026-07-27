@@ -1,3 +1,4 @@
+import { API_V1_PATHS } from "@ai-orchestrator/dag-model";
 import { TelemetryClient } from "@ai-orchestrator/telemetry-client";
 import { vi } from "vitest";
 import { HISTORY_RUN, LIVE_RUN, runDetail, runList } from "./fixtures";
@@ -41,9 +42,17 @@ export interface TelemetryHarness {
 
 type Responder = (url: URL) => Response | Promise<Response>;
 
+/** True for the run-list path the packages publish, whatever it is. */
+export const isRunList = (url: URL): boolean =>
+  url.pathname === API_V1_PATHS.runs;
+
+/** True for a single run's detail path, whatever run it names. */
+export const isRunDetail = (url: URL): boolean =>
+  url.pathname.startsWith(`${API_V1_PATHS.runs}/`);
+
 /** The read API a browser would see: list, detail, and the SSE stream. */
 export function defaultResponder(url: URL): Response {
-  if (url.pathname === "/api/v1/runs") return Response.json(runList);
+  if (isRunList(url)) return Response.json(runList);
   const runId = url.pathname.split("/").at(-1);
   return Response.json(
     runDetail(runId === HISTORY_RUN ? HISTORY_RUN : LIVE_RUN),

@@ -7,7 +7,12 @@ import {
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { HISTORY_RUN, LIVE_RUN, runDetail, runList } from "../test/fixtures";
-import { defaultResponder, telemetryHarness } from "../test/telemetry-harness";
+import {
+  defaultResponder,
+  isRunDetail,
+  isRunList,
+  telemetryHarness,
+} from "../test/telemetry-harness";
 import { App } from "./App";
 import { AppErrorBoundary } from "./AppErrorBoundary";
 
@@ -99,7 +104,7 @@ describe("DAG application", () => {
   test("shows the loading state, then an empty history", async () => {
     let release: (response: Response) => void = () => {};
     const { client } = telemetryHarness((url) => {
-      if (url.pathname === "/api/v1/runs")
+      if (isRunList(url))
         return new Promise<Response>((resolve) => {
           release = resolve;
         });
@@ -115,7 +120,7 @@ describe("DAG application", () => {
   test("surfaces a read failure and clears it when the stream reconnects", async () => {
     let offline = true;
     const { client, sources } = telemetryHarness((url) => {
-      if (url.pathname === "/api/v1/runs" && offline)
+      if (isRunList(url) && offline)
         return Response.json(
           { error: { code: "offline", message: "Telemetry offline" } },
           { status: 503 },
@@ -165,7 +170,7 @@ describe("DAG application", () => {
   test("surfaces a detail failure triggered by a live update", async () => {
     let details = 0;
     const { client, sources } = telemetryHarness((url) => {
-      if (url.pathname.startsWith("/api/v1/runs/")) {
+      if (isRunDetail(url)) {
         details += 1;
         if (details > runList.runs.length)
           return Response.json(
@@ -187,7 +192,7 @@ describe("DAG application", () => {
   test("stays quiet when an invalidated run has already been removed", async () => {
     let removed = false;
     const { client, sources } = telemetryHarness((url) => {
-      if (url.pathname === "/api/v1/runs")
+      if (isRunList(url))
         return Response.json(
           removed ? { ...runList, runs: runList.runs.slice(1) } : runList,
         );
@@ -214,7 +219,7 @@ describe("DAG application", () => {
       .spyOn(console, "error")
       .mockImplementation(() => {});
     const { client } = telemetryHarness((url) => {
-      if (url.pathname === "/api/v1/runs") return Response.json(runList);
+      if (isRunList(url)) return Response.json(runList);
       const detail = runDetail(LIVE_RUN);
       // A dependency cycle: the layout rejects it, and no partial graph may be
       // shown in its place.
@@ -237,7 +242,7 @@ describe("DAG application", () => {
   test("drops a removed run and falls back to the remaining one", async () => {
     let removed = false;
     const { client, sources } = telemetryHarness((url) => {
-      if (url.pathname === "/api/v1/runs")
+      if (isRunList(url))
         return Response.json(
           removed ? { ...runList, runs: runList.runs.slice(1) } : runList,
         );
