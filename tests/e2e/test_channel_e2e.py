@@ -17,6 +17,8 @@ from waits import timeout as e2e_timeout
 
 from orchestrator import BASE_CONFIG, REPO_ROOT, gitops
 from orchestrator.dispatch import launch_orchestrator
+from orchestrator.launch import LAUNCH_RECORD_NAME, read_launch_info, read_provenance
+from orchestrator.read_model import resolve_launch
 from orchestrator.registry import Registry
 from orchestrator.watchdog import ProcessId, process_activity
 
@@ -746,10 +748,11 @@ def test_live_channel_surfaces_large_round_summary(tmp_path: Path, onejudge_bin:
 
 
 def test_launch_api_records_detached_owner_and_real_report(
-    tmp_path: Path, onejudge_bin: str
+    tmp_path: Path, onejudge_bin: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Cover the Python launch boundary while still driving the real onejudge process."""
     runs = tmp_path / "api-runs"
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
     run_id = launch_orchestrator(
         _plan(tmp_path, "surface-milestone"),
         runs_dir=runs,
@@ -757,11 +760,26 @@ def test_launch_api_records_detached_owner_and_real_report(
         onejudge_bin=onejudge_bin,
         skill_provider={"kind": "command", "command": [sys.executable, str(FAKE_BACKEND)]},
         turn_timeout=int(e2e_timeout(10)),
+        launcher="claude-code",
+        launcher_session_id="planner-session",
     )
     run_dir = runs / run_id
     status = json.loads((run_dir / "orchestrator" / "status.json").read_text(encoding="utf-8"))
     assert status["status"] == "running"
     assert isinstance(status["pid"], int) and status["host"]
+
+    # A real launch splits its provenance: the run directory gets only the join key,
+    # and the sensitive session id lands in the out-of-repo record the read API
+    # resolves. This is the production write path, not a manufactured fixture.
+    launch_id = read_launch_info(run_dir)
+    assert launch_id is not None
+    assert "planner-session" not in (run_dir / LAUNCH_RECORD_NAME).read_text(encoding="utf-8")
+    provenance = read_provenance(launch_id)
+    assert provenance is not None
+    assert provenance["launcher"] == "claude-code"
+    assert provenance["launcher_session_id"] == "planner-session"
+    # And the read API's own join reports that launcher back.
+    assert resolve_launch(run_dir) == {"launch_id": launch_id, "launcher": "claude-code"}
     surface = _next_cli(run_id, runs)
     assert surface["surface"]["kind"] == "milestone"
     _reply_cli(run_id, runs, {"completion": True, "reason": "verified"})
