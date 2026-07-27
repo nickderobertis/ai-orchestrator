@@ -159,6 +159,24 @@ test("opens a node from the keyboard-accessible node list", async ({
   await expect(page.getByText("Build the live dashboard")).toHaveCount(0);
 });
 
+test("zooms and reframes the graph through its canvas controls", async ({
+  page,
+}) => {
+  await openObservatory(page);
+  const viewport = page.locator(".react-flow__viewport");
+  const transform = async (): Promise<string> =>
+    viewport.evaluate((element) => getComputedStyle(element).transform);
+
+  await expect(page.locator(".react-flow__minimap")).toBeVisible();
+  const framed = await transform();
+  await page.getByRole("button", { name: "zoom in" }).click();
+  await expect.poll(transform).not.toBe(framed);
+  // Fit view returns the whole graph to frame, which is how an operator recovers
+  // from a zoom that lost the nodes.
+  await page.getByRole("button", { name: "fit view" }).click();
+  await expect.poll(transform).toBe(framed);
+});
+
 test("renders a graph whose node depends on another run", async ({ page }) => {
   await openObservatory(page);
   // The served plan gives `dashboard` a `run:<run_id>#<node_id>` prerequisite. It
