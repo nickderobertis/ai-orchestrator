@@ -224,23 +224,29 @@ def test_real_dispatch_delivers_exact_task_to_agent_history(
         )
     )
 
-    report = dispatch(
-        "engineer",
-        task,
-        base_path=base_path,
-        project_dir=str(target),
-        onejudge_bin=onejudge_bin,
-        env={
-            "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
-            "REAL_ONEHARNESS_BIN": oneharness_bin,
-            "MOCK_STDOUT": mock_stdout,
-            "ONEHARNESS_HARNESSES": "codex",
-            "ONEHARNESS_HISTORY": "true",
-            "XDG_STATE_HOME": str(state_home),
-        },
+    dispatch_env = {
+        "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+        "REAL_ONEHARNESS_BIN": oneharness_bin,
+        "MOCK_STDOUT": mock_stdout,
+        "ONEHARNESS_HARNESSES": "codex",
+        "ONEHARNESS_HISTORY": "true",
+        "XDG_STATE_HOME": str(state_home),
+    }
+    dispatched = (
+        ("engineer", task, "worker"),
+        ("orchestrator", "complete-now: coordinate this run.", "orchestrator"),
+        ("pr-author", "complete-now: draft this pull request.", "pr-author"),
     )
-
-    assert report.completed
+    for persona, persona_task, _agent_role in dispatched:
+        report = dispatch(
+            persona,
+            persona_task,
+            base_path=base_path,
+            project_dir=str(target),
+            onejudge_bin=onejudge_bin,
+            env=dispatch_env,
+        )
+        assert report.completed
     records = [
         json.loads(line)
         for history_file in (state_home / "oneharness" / "history").glob("*/*.jsonl")
@@ -251,9 +257,19 @@ def test_real_dispatch_delivers_exact_task_to_agent_history(
         for record in records
         if record.get("type") == "run" and record.get("labels", {}).get("role") == "agent"
     ]
-    assert len(agent_runs) == 1
-    assert agent_runs[0]["prompt"]
-    assert agent_runs[0]["prompt"] == task
+    assert {record["labels"]["agent_role"] for record in agent_runs} == {
+        "worker",
+        "orchestrator",
+        "pr-author",
+    }
+    for persona, persona_task, agent_role in dispatched:
+        matching = [
+            record
+            for record in agent_runs
+            if record["labels"]["agent_role"] == agent_role and record["prompt"] == persona_task
+        ]
+        assert len(matching) == 1
+        assert matching[0]["labels"]["persona"] == persona
 
 
 def test_real_dispatch_detects_killed_agent_and_reaps_orphans(
