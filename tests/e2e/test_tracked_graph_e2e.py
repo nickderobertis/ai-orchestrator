@@ -10,6 +10,7 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import re
 import signal
 import socket
 import subprocess
@@ -2346,6 +2347,10 @@ def test_legacy_repo_plan_runs_through_canonical_and_deprecated_alias(
     )
     assert alias_run.returncode == 0, alias_run.stderr
     assert "deprecated" in alias_run.stderr
+    # The deprecated alias owns rounds through the same detaching entry point, and
+    # relays their exit status the same way; what detaching buys is proven by
+    # tests/e2e/test_round_ownership_e2e.py.
+    assert re.search(r"repo-plan: round owner pid \d+ leads its own session", alias_run.stderr)
     alias_payload = json.loads(alias_run.stdout)
     assert alias_payload["state"] == "complete"
     assert alias_payload["results"]["legacy-alias"]["outcome"] == "merged"
