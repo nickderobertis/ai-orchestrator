@@ -26,6 +26,7 @@ import {
 const runIdsSchema = z.object({
   live: z.string().min(1),
   history: z.string().min(1),
+  sibling: z.string().min(1),
   unattributed: z.string().min(1),
 });
 let cachedRunIds: z.infer<typeof runIdsSchema> | undefined;
@@ -222,6 +223,29 @@ test("restores a bookmarked view and refreshes through the read API", async ({
   await expect(page.getByText("Build the live dashboard")).toBeVisible();
 });
 
+test("gathers every run of one launching session under it", async ({
+  page,
+}) => {
+  await openObservatory(page);
+  // Two of the served runs record the same launch id, as one planner session driving
+  // two graphs does. They belong to one group, not one group each.
+  const codex = page
+    .locator("section")
+    .filter({ has: page.getByRole("heading", { name: /Codex session/ }) });
+  await expect(
+    page.getByRole("heading", { name: /Codex session/ }),
+  ).toHaveCount(1);
+  await expect(codex.getByRole("button")).toHaveCount(2);
+  await expect(codex).toContainText(runs().live);
+  await expect(codex).toContainText(runs().sibling);
+
+  // Both are reachable from that one group.
+  await codex.getByRole("button", { name: RegExp(runs().sibling) }).click();
+  await expect(page.locator(".dag-node.state-running")).toContainText(
+    "sibling",
+  );
+});
+
 test("groups a run with no recorded launch under an unknown session", async ({
   page,
 }) => {
@@ -274,12 +298,42 @@ test("recovers the selection when a bookmarked run is not being served", async (
     .toContain(`run=${runs().live}`);
 });
 
-test("keeps navigation usable at a narrow viewport", async ({ page }) => {
-  await page.setViewportSize({ width: 800, height: 700 });
-  await openObservatory(page);
+test("reflows navigation, detail, and metrics at a narrow viewport", async ({
+  page,
+}) => {
+  const width = async (locator: Locator): Promise<number | undefined> =>
+    (await locator.boundingBox())?.width;
   const navigation = page.getByRole("navigation", { name: "DAG runs" });
+  const panel = page.locator(".detail-panel");
+  const metrics = page.locator(".metric");
+
+  await page.setViewportSize({ width: 1400, height: 900 });
+  await openObservatory(page, `/?run=${runs().live}&node=dashboard`);
   await expect(navigation).toBeVisible();
-  expect((await navigation.boundingBox())?.width).toBe(220);
+  expect(await width(navigation)).toBe(280);
+  expect(await width(panel)).toBe(440);
+  // Four metrics across one row while there is room for them.
+  await page.getByRole("tab", { name: "Overall" }).click();
+  await expect(metrics).toHaveCount(4);
+  const wideRows = await metrics.evaluateAll((tiles) =>
+    tiles.map((tile) => tile.getBoundingClientRect().top),
+  );
+  expect(new Set(wideRows).size).toBe(1);
+
+  await page.setViewportSize({ width: 800, height: 700 });
+  await openObservatory(page, `/?run=${runs().live}&node=dashboard`);
+  // Everything stays on screen: the navigation and the detail panel each give up
+  // width, and the metrics wrap onto a second row instead of being squeezed.
+  await expect(navigation).toBeVisible();
+  expect(await width(navigation)).toBe(220);
+  await expect(panel).toBeVisible();
+  expect(await width(panel)).toBe(360);
+  await page.getByRole("tab", { name: "Overall" }).click();
+  await expect(metrics).toHaveCount(4);
+  const narrowRows = await metrics.evaluateAll((tiles) =>
+    tiles.map((tile) => tile.getBoundingClientRect().top),
+  );
+  expect(new Set(narrowRows).size).toBe(2);
 });
 
 test("shows the loading view while its first read is still in flight", async ({
@@ -342,8 +396,12 @@ test("drops a run the server stops serving", async ({ page }) => {
 test("falls back to the empty state once no run is left", async ({ page }) => {
   await openObservatory(page);
 
+  // Every remaining run: the empty state means the server serves none, so it must
+  // not appear while any run is still there to show.
   changeServedRuns(["--remove-run", runs().live]);
   changeServedRuns(["--remove-run", runs().unattributed]);
+  await expect(page.getByText("No DAG runs found")).toHaveCount(0);
+  changeServedRuns(["--remove-run", runs().sibling]);
 
   await expect(page.getByText("No DAG runs found")).toBeVisible();
   await expect(page.getByRole("alert")).toHaveCount(0);

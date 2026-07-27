@@ -114,7 +114,10 @@ export function App({
             <Route size={15} /> Overall
           </button>
         </div>
-        {telemetry.loading && !detail ? (
+        {/* A run is selected but its detail has not arrived yet — still loading. The
+            empty state means the server serves no run at all, so it is reached only
+            once the list is known and holds none. */}
+        {!detail && (telemetry.loading || selectedRunId !== undefined) ? (
           <div className="loading-state" aria-live="polite">
             <span className="loader" /> Loading execution history…
           </div>

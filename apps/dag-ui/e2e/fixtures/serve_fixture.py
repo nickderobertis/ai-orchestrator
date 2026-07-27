@@ -43,6 +43,9 @@ CLAUDE_LAUNCH = "c1a0" * 8
 
 LIVE_RUN = "dag-ui-live"
 HISTORY_RUN = "dag-ui-history"
+#: A second run of the *same* launch as `LIVE_RUN`: one planner session often drives
+#: several graphs, and the navigation has to gather them under that one session.
+SIBLING_RUN = "dag-ui-sibling"
 UNATTRIBUTED_RUN = "dag-ui-unattributed"
 
 _LIVE_TASKS: list[dict[str, Any]] = [
@@ -96,6 +99,15 @@ _HISTORY_TASKS: list[dict[str, Any]] = [
         "persona": "engineer",
         "task": "Archive the release",
         "done_when": "Archive exists",
+    }
+]
+
+_SIBLING_TASKS: list[dict[str, Any]] = [
+    {
+        "id": "sibling",
+        "persona": "engineer",
+        "task": "Run beside the dashboard work",
+        "done_when": "The sibling settles",
     }
 ]
 
@@ -238,6 +250,20 @@ def _write_history_run(runs_dir: Path) -> None:
     journal.append("round-finished", detail={"result": result})
     write_result(round_dir, result)
     _record_launch(run_dir, HISTORY_RUN, CLAUDE_LAUNCH)
+
+
+def _write_sibling_run(runs_dir: Path) -> None:
+    """A second run recorded under the same launch id as the live run."""
+    from orchestrator.journal import NodeId, RunId, open_journal
+    from orchestrator.runs import prepare_round
+
+    run_dir = runs_dir / SIBLING_RUN
+    prepare_round(run_dir, {"tasks": _SIBLING_TASKS})
+    journal = open_journal(run_dir, RunId(SIBLING_RUN), 1)
+    journal.append("node-added", detail={"definition": _SIBLING_TASKS[0]})
+    journal.append("round-started", detail={"plan": {"schema_version": 3, "concurrency": 1}})
+    journal.append("node-started", node=NodeId("sibling"), detail={"persona": "engineer"})
+    _record_launch(run_dir, SIBLING_RUN, CODEX_LAUNCH)
 
 
 def _write_unattributed_run(runs_dir: Path) -> None:
@@ -410,6 +436,23 @@ def _history_store(workspace: Path) -> Path:
     sessions.append(
         _session(
             workspace,
+            session_id="sibling-session",
+            name="engineer-sibling",
+            run_id=SIBLING_RUN,
+            node="sibling",
+            role="agent",
+            agent_role="worker",
+            # Same launch id as the live run's sessions: one planner session, two runs.
+            launcher="codex",
+            launch_id=CODEX_LAUNCH,
+            prompt="Act as worker",
+            text="Working beside the dashboard run",
+            started="2026-07-26T09:30:00Z",
+        )
+    )
+    sessions.append(
+        _session(
+            workspace,
             session_id="archive-session",
             name="engineer-archive",
             run_id=HISTORY_RUN,
@@ -447,6 +490,7 @@ def build_fixture(workspace: Path) -> tuple[Path, Path]:
     # run ends up at the top and is what an operator sees on arrival.
     _write_unattributed_run(runs_dir)
     _write_history_run(runs_dir)
+    _write_sibling_run(runs_dir)
     _write_live_run(runs_dir)
     os.environ["FAKE_ONEHARNESS_STORE"] = str(_history_store(workspace))
     for launch_id, launcher in ((CODEX_LAUNCH, "codex"), (CLAUDE_LAUNCH, "claude-code")):
@@ -539,7 +583,14 @@ def serve(workspace: Path, port: int) -> int:
     workspace.mkdir(parents=True)
     runs_dir, oneharness_bin = build_fixture(workspace)
     (workspace / RUN_IDS_NAME).write_text(
-        json.dumps({"live": LIVE_RUN, "history": HISTORY_RUN, "unattributed": UNATTRIBUTED_RUN}),
+        json.dumps(
+            {
+                "live": LIVE_RUN,
+                "history": HISTORY_RUN,
+                "sibling": SIBLING_RUN,
+                "unattributed": UNATTRIBUTED_RUN,
+            }
+        ),
         encoding="utf-8",
     )
     from orchestrator.server import main as serve_api

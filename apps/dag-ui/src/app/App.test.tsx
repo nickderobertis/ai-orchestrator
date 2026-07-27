@@ -117,6 +117,27 @@ describe("DAG application", () => {
     expect(await screen.findByText("No DAG runs found")).toBeInTheDocument();
   });
 
+  test("keeps loading while a listed run's detail is still on its way", async () => {
+    let release: (response: Response) => void = () => {};
+    const { client } = telemetryHarness((url) => {
+      // Only the selected run's detail is held back; the other resolves normally.
+      if (url.pathname.endsWith(LIVE_RUN))
+        return new Promise<Response>((resolve) => {
+          release = resolve;
+        });
+      return defaultResponder(url);
+    });
+    render(<App client={client} />);
+    // Runs exist, so "no runs found" would be a lie; the view waits instead.
+    expect(
+      await screen.findByText("Loading execution history…"),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("No DAG runs found")).toBeNull();
+
+    release(Response.json(runDetail(LIVE_RUN)));
+    expect(await screen.findByText("dashboard")).toBeInTheDocument();
+  });
+
   test("surfaces a read failure and clears it when the stream reconnects", async () => {
     let offline = true;
     const { client, sources } = telemetryHarness((url) => {
