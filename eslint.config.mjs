@@ -7,7 +7,7 @@ export default tseslint.config(
       "**/dist/**",
       "**/.nx/**",
       "**/node_modules/**",
-      "apps/dag-ui/e2e/.fixture/**",
+      "**/.fixture/**",
     ],
   },
   ...tseslint.configs.recommended,

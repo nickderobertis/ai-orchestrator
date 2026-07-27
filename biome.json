@@ -8,7 +8,7 @@
       "!**/dist",
       "!**/test-results",
       "!**/playwright-report",
-      "!apps/dag-ui/e2e/.fixture"
+      "!**/.fixture"
     ]
   },
   "formatter": {

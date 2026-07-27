@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { expect, type Page, test } from "@playwright/test";
+import { expect, type Locator, type Page, test } from "@playwright/test";
 import {
   FIXTURE_WORKSPACE,
   OFFLINE_UI_URL,
@@ -33,6 +33,23 @@ const runs = (): RunIds =>
 async function openObservatory(page: Page, path = "/"): Promise<void> {
   await page.goto(path);
   await expect(page.getByText("DAG Observatory")).toBeVisible();
+}
+
+/** Whether repeated Tab presses ever land on `target`, i.e. it is in the tab order. */
+async function tabTo(
+  page: Page,
+  target: Locator,
+  presses = 40,
+): Promise<boolean> {
+  for (let index = 0; index < presses; index += 1) {
+    await page.keyboard.press("Tab");
+    if (
+      await target.evaluate((element) => element === document.activeElement)
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /**
@@ -116,6 +133,24 @@ test("tracks every node state, node detail, and role transcript of a live run", 
   await expect(
     page.getByText("No completion criteria recorded."),
   ).toBeVisible();
+});
+
+test("opens a node from the keyboard-accessible node list", async ({
+  page,
+}) => {
+  await openObservatory(page);
+  // The canvas is a pointer surface, so the list beside it is the keyboard path to
+  // every node; it has to reach the same detail panel a click does.
+  const node = page
+    .getByRole("list", { name: "DAG nodes" })
+    .getByRole("button", { name: "dashboard: running" });
+  expect(await tabTo(page, node)).toBe(true);
+  await page.keyboard.press("Enter");
+  await expect(page.getByText("Build the live dashboard")).toBeVisible();
+
+  await page.getByRole("button", { name: /Close/ }).focus();
+  await page.keyboard.press("Enter");
+  await expect(page.getByText("Build the live dashboard")).toHaveCount(0);
 });
 
 test("renders a graph whose node depends on another run", async ({ page }) => {
