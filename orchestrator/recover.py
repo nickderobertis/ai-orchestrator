@@ -108,17 +108,20 @@ def recover_repo(
     identity = registry.identity_for_checkout(clone, repo_type=repo_type)
     if identity is None:
         raise RegistryError(f"registered checkout {clone} has no repository identity")
+    decision = _effective_publication(identity.repo_type, identity.workflow, None, merge_policy)
     # Recovery no longer runs the gate itself, so refuse the same way dispatch does
     # rather than publishing preserved work that nothing will verify. Recovery
-    # worktrees are cut from `clone`, so its hooks are the ones Git will run.
-    coverage = merge_gate_coverage(identity.identity, clone, github=github)
+    # worktrees are cut from `clone`, so its hooks are the ones Git will run, and
+    # the effective workflow decides whether required PR checks can stand in.
+    coverage = merge_gate_coverage(
+        identity.identity, clone, workflow=decision.workflow, github=github
+    )
     if not coverage.meets_coverage_criteria:
         raise RegistryError(
             f"recovery refused for identity {coverage.identity}: {coverage.coverage_gap}; "
             "run 'just repos --audit-gate-coverage' and repair the merge-path gate "
             "before recovering preserved work"
         )
-    decision = _effective_publication(identity.repo_type, identity.workflow, None, merge_policy)
     owner, name = str(slug).split("/", 1)
     ref = RepoRef(owner, name, entry.origin)
     workspace = Workspace(

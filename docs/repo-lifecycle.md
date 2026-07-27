@@ -177,7 +177,12 @@ every alias with `just migrate-repo-gate <repo> --gate '<complete-gate-command>'
 Registration also audits whether the merge path itself runs a gate. It reports an
 executable effective `pre-push` hook (respecting `core.hooksPath`) and required
 GitHub status checks on the repository's actual default branch. A configured
-hooks directory without an executable `pre-push` does not count. If neither is
+hooks directory without an executable `pre-push` does not count. Which evidence
+counts depends on the identity's workflow: a **local** workflow pushes straight
+to its base branch and never opens a PR, so branch protection has nothing to run
+against and only the hook can cover it. A remote workflow is covered by either —
+the hook gates the branch push that feeds the PR, and required checks gate the
+merge. If nothing applicable is
 present, registration succeeds but prints an identity-specific warning; an
 unavailable GitHub response is reported as unknown, and local-only origins are
 reported as not applicable. Audit every existing identity without re-registering
@@ -192,7 +197,9 @@ starting any work when coverage is missing or unknown, because neither runs the
 gate itself any more. They inspect the **execution** checkout rather than an
 arbitrary alias: every publishing push originates in one of its worktrees, and
 Git resolves hooks through the shared common directory, so its `pre-push` is the
-hook that will actually run. The command only reports coverage; it never installs
+hook that will actually run. Both judge against the run's *effective* workflow, so
+a run that publishes locally cannot qualify on required checks a local push never
+triggers. The command only reports coverage; it never installs
 hooks or changes branch protection.
 
 A contradictory `--workflow` is rejected. Change publication policy only through

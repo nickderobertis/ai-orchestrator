@@ -2085,6 +2085,71 @@ def test_lifecycle_refuses_remote_identity_without_known_required_checks(
     assert expected in result.detail
 
 
+# llmlint: ignore[e2e_not_mocked] GitHub decisioning is the suite's documented external seam.
+def test_local_workflow_cannot_qualify_on_required_checks_alone(tmp_path, bare_origin) -> None:
+    """Branch protection cannot cover a workflow that never opens a PR.
+
+    A local publication pushes straight to base, so however many required status
+    checks the GitHub identity declares, none of them ever run against the change.
+    Only the pre-push hook stands on that path, and it is absent here.
+    """
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "local-required-only")
+    gitops.hooks_dir(canonical).joinpath("pre-push").unlink()
+    workspace = Workspace(
+        tmp_path / "local-required-only-worktrees",
+        resolver=lambda _spec: canonical,
+        workflow="local",
+        repo_type="single-owner",
+    )
+
+    class ProtectedGitHub(FakeGitHub):
+        def required_status_checks(self, repo: str, branch: str) -> tuple[str, ...]:
+            return ("complete-gate",)
+
+    result = run_repo_task(
+        "acme/widget",
+        "This local publication must not start on remote checks alone.",
+        "engineer",
+        workspace=workspace,
+        github=ProtectedGitHub(origin),
+        dispatch_fn=lambda *_args, **_kwargs: pytest.fail("must not dispatch"),
+        verify_cmd=["true"],
+    )
+
+    assert result.outcome == "error"
+    assert "lifecycle dispatch refused" in result.detail
+    assert "publishes without a PR for required status checks to gate" in result.detail
+
+
+# llmlint: ignore[e2e_not_mocked] GitHub decisioning is the suite's documented external seam.
+def test_local_workflow_recovery_cannot_qualify_on_required_checks_alone(
+    tmp_path, bare_origin
+) -> None:
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "local-recovery-required-only")
+    gitops.hooks_dir(canonical).joinpath("pre-push").unlink()
+    subprocess.run(
+        ["git", "remote", "set-url", "origin", "https://github.com/acme/widget.git"],
+        cwd=canonical,
+        check=True,
+    )
+    Registry().register(str(canonical), workflow="local", repo_type="single-owner")
+
+    class ProtectedGitHub(FakeGitHub):
+        def required_status_checks(self, repo: str, branch: str) -> tuple[str, ...]:
+            return ("complete-gate",)
+
+    with pytest.raises(RegistryError, match="publishes without a PR"):
+        recover_repo(
+            canonical,
+            "feature/never-recovered",
+            workspace_root=tmp_path / "local-recovery-required-only-worktrees",
+            github=ProtectedGitHub(origin),
+            verify_cmd=["true"],
+        )
+
+
 @pytest.mark.parametrize(
     ("rejection", "expected_outcome"),
     [("gate", "gate-failed"), ("transport", "error")],

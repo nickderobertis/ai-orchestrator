@@ -1483,6 +1483,7 @@ def run_repo_task(
         coverage = merge_gate_coverage(
             selection.publication_identity,
             selection.execution_checkout,
+            workflow=decision.workflow,
             github=github,
         )
         if not coverage.meets_coverage_criteria:
