@@ -159,6 +159,28 @@ class AbandonedRound:
     reason: str | None
 
 
+_MAX_REASON = 200
+
+
+def _reportable_reason(value: object) -> str | None:
+    """One recorded abandonment reason, or ``None`` if it is unfit to print.
+
+    `status.json` is an ordinary file that anything with write access may rewrite,
+    and this string is rendered straight into `just runs` and `just status` output on
+    an operator's terminal. A reason carrying an escape sequence would be *acted on*
+    by that terminal rather than read, and an unbounded one would bury the reclaiming
+    command it sits beside. Anything that is not one bounded printable line is
+    therefore dropped, which costs nothing: the caller already derives a reason from
+    the recorded owner when none is recorded.
+    """
+    if not isinstance(value, str):
+        return None
+    reason = value.strip()
+    if not reason or not reason.isprintable() or len(reason) > _MAX_REASON:
+        return None
+    return reason
+
+
 def abandoned_round(run_dir: Path) -> AbandonedRound | None:
     """The run's newest round that a reader must treat as dead, not in flight.
 
@@ -182,11 +204,10 @@ def abandoned_round(run_dir: Path) -> AbandonedRound | None:
     if status not in {"running", ABANDONED} or round_owner_may_be_live(round_dir):
         return None
     pid = state.get("pid")
-    reason = state.get("reason")
     return AbandonedRound(
         number,
         pid if isinstance(pid, int) and not isinstance(pid, bool) else None,
-        reason if isinstance(reason, str) and reason.strip() else None,
+        _reportable_reason(state.get("reason")),
     )
 
 

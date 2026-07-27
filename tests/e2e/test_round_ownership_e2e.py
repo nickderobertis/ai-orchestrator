@@ -1,12 +1,11 @@
 """A recorded round outliving — or visibly failing to outlive — its launching turn.
 
-The failure these journeys pin down destroyed two real runs. The orchestrator agent
-started a round from inside one harness turn, surfaced an update, and ending that turn
-tore down the turn's child process group: the executor took SIGTERM about a minute
-after dispatching a worker onto a branch, and left `round-NN/status.json` saying
-`"status": "running"` under a pid that no longer existed. Every progress surface kept
-reporting the dead run as healthy and waiting on the planner, for hours. It happened
-once under `just run-plan` and once under `just next-round`, so both are driven here.
+The orchestrator agent starts a round from inside one harness turn and then surfaces an
+update, and ending that turn tears down the turn's child process group. Unprotected,
+the executor dies there and leaves `round-NN/status.json` saying `"status": "running"`
+under a pid that no longer exists, so every progress surface goes on reporting a dead
+run as healthy and waiting on the planner. Both `just run-plan` and `just next-round`
+claim rounds that way, so both are driven here.
 
 All the layers run through the real `just` recipes, against real processes and real
 signals, with nothing about process liveness faked:
@@ -21,10 +20,10 @@ signals, with nothing about process liveness faked:
 * an uncatchable SIGKILL — the one death nothing can record — still surfaces as
   abandoned in `just runs` and `just status`, because both derive it from the recorded
   owner's pid rather than from the status string it left behind; and it reaches those
-  views in the two shapes the real failure had — a run whose earlier round already
-  settled, so the ledger has a healthy-looking summary row to correct, and a run whose
-  queued planner surface outlived it, so the view would otherwise say a dead run is
-  waiting on the planner.
+  views in the two shapes that hide it — a run whose earlier round already settled, so
+  the ledger has a healthy-looking summary row to correct, and a run whose queued
+  planner surface outlived it, so the view would otherwise say a dead run is waiting on
+  the planner.
 
 The entry point detaches *every* `run-plan` invocation, not only the recorded ones, so
 `--no-record` is driven here too. That path claims no round and writes no ledger, which
@@ -52,6 +51,7 @@ from waits import timeout as e2e_timeout
 
 from orchestrator import REPO_ROOT
 from orchestrator.channel import create_channel
+from orchestrator.coordination import advisory_lock
 from orchestrator.detach import CRASHED
 from orchestrator.runs import TEARDOWN_SIGNALS
 
@@ -112,6 +112,22 @@ def _await_exit(pid: int) -> None:
 ANNOUNCED_OWNER = re.compile(r"round owner pid (\d+) leads its own session")
 
 
+def _await_announced_owner(err: Path) -> int:
+    """The pid the detaching entry point announced as a round's own.
+
+    A round that has claimed nothing yet — or that never will — has this announcement
+    as the only place its pid is written down, which is why the entry point prints it
+    and why an operator has nothing else to signal it by.
+    """
+    deadline = e2e_deadline(30)
+    while time.monotonic() < deadline:
+        announced = ANNOUNCED_OWNER.search(err.read_text(encoding="utf-8", errors="replace"))
+        if announced is not None:
+            return int(announced[1])
+        time.sleep(0.01)
+    pytest.fail(f"no round owner was announced in {err}")
+
+
 class Launch:
     """One launched round: its launcher process, its owner, and its two streams."""
 
@@ -129,21 +145,7 @@ class Launch:
         self.owner = self._owner()
 
     def _owner(self) -> int:
-        """The pid the detaching entry point announced as this round's own.
-
-        An unrecorded round claims nothing, so this announcement is the only place its
-        pid is ever written down — which is why the entry point prints it, and why an
-        operator has nothing else to signal it by.
-        """
-        deadline = e2e_deadline(30)
-        while time.monotonic() < deadline:
-            announced = ANNOUNCED_OWNER.search(
-                self.err.read_text(encoding="utf-8", errors="replace")
-            )
-            if announced is not None:
-                return int(announced[1])
-            time.sleep(0.01)
-        pytest.fail(f"no round owner was announced in {self.err}")
+        return _await_announced_owner(self.err)
 
     def teardown_launching_turn(self, teardown: signal.Signals = signal.SIGTERM) -> int:
         """Kill the launcher's whole process group, as ending a turn does."""
@@ -427,10 +429,71 @@ def test_a_rejected_command_line_reaches_the_caller_as_the_status_it_chose(
     assert "Traceback" not in rejected.stderr, rejected.stderr
 
 
+def test_an_interrupt_before_the_round_claims_anything_reaches_the_caller_as_130(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """SIGINT ahead of the round's own handler still owes its caller 128+SIGINT.
+
+    The handler that records an abandonment is installed only once the round has
+    claimed the ledger, so everything up to that claim runs under the interpreter's
+    default SIGINT handler and arrives at the fork as a `KeyboardInterrupt`. Reporting
+    it as a crash would tell an operator that their own Ctrl-C was an internal failure,
+    and letting it unwind past the fork would run the launching program a second time
+    in the child.
+
+    Held in that window by the contention that produces it: another process owning the
+    run's ledger lock parks this round short of the claim, which is where an operator
+    watching a stuck launch gives up and interrupts it.
+    """
+    monkeypatch.setenv("AI_ORCHESTRATOR_HOME", str(tmp_path / "state"))
+    run_dir = tmp_path / "runs" / "interrupted"
+    run_dir.mkdir(parents=True)
+    err = tmp_path / "interrupted.err"
+    owner: int | None = None
+
+    with advisory_lock(f"ledger:{run_dir.resolve()}"), err.open("wb") as stream:
+        launcher = subprocess.Popen(
+            [
+                "just",
+                "run-plan",
+                str(_trivial_plan(tmp_path)),
+                "--run",
+                run_dir.name,
+                "--runs-dir",
+                str(run_dir.parent),
+            ],
+            cwd=REPO_ROOT,
+            text=True,
+            stdout=subprocess.DEVNULL,
+            stderr=stream,
+            start_new_session=True,
+        )
+        try:
+            owner = _await_announced_owner(err)
+            os.kill(owner, signal.SIGINT)
+            interrupted = launcher.wait(timeout=e2e_timeout(30))
+        finally:
+            for pid in (owner, launcher.pid):
+                if pid is not None:
+                    with contextlib.suppress(PermissionError, ProcessLookupError):
+                        os.kill(pid, signal.SIGKILL)
+            with contextlib.suppress(subprocess.TimeoutExpired):
+                launcher.wait(timeout=e2e_timeout(15))
+
+    assert interrupted == 128 + int(signal.SIGINT)
+    reported = err.read_text(encoding="utf-8", errors="replace")
+    assert "Traceback" not in reported, reported
+    # One announcement: a second would be the launching program running again in the child.
+    assert len(ANNOUNCED_OWNER.findall(reported)) == 1, reported
+    # That the interrupt really landed in the pre-handler window: the round never got
+    # past the lock to claim anything, so there is no status for a guard to abandon.
+    assert not (run_dir / "round-01").exists()
+
+
 def test_next_round_continuation_survives_the_teardown_of_its_launching_turn(
     rounds: Rounds,
 ) -> None:
-    """The second observed failure was a `next-round` continuation, so prove that too."""
+    """A continuation claims a round through a second entry point, so prove that too."""
     waiting = rounds.waiting_round("survives-continuation")
     assert waiting.returncode == 1, waiting.stderr
     assert json.loads(waiting.stdout)["state"] == "waiting"
@@ -503,21 +566,33 @@ def test_signalled_executor_records_its_own_abandonment(
 def test_killed_executor_surfaces_as_abandoned_in_runs_and_status(
     tmp_path: Path, rounds: Rounds
 ) -> None:
-    """SIGKILL records nothing, so both views must derive it from the owner's pid."""
+    """SIGKILL records nothing, so both views must derive it from the owner's pid.
+
+    The status file the dead owner left is also the untrusted input both views read, so
+    it is rewritten here the way anything with write access to the ledger could rewrite
+    it: a reason no round would ever record, carrying the escape sequences a terminal
+    acts on. Neither view may pass that through to the operator reading it.
+    """
     launch = rounds.run_plan("killed-owner")
 
     os.kill(launch.owner, signal.SIGKILL)
     _await_exit(launch.owner)
-    assert _read(launch.round_dir / "status.json")["status"] == "running"
+    left = _read(launch.round_dir / "status.json")
+    assert left["status"] == "running"
+    (launch.round_dir / "status.json").write_text(
+        json.dumps({**left, "reason": "\x1b[2J\x1b]0;owned\x07"}), encoding="utf-8"
+    )
 
     listed = _just("runs", "--runs-dir", str(rounds.runs))
     assert listed.returncode == 0, listed.stderr
     assert f"! killed-owner  round-01 ABANDONED (owner pid {launch.owner} is gone)" in listed.stdout
     assert f"--run killed-owner --runs-dir {rounds.runs} --recover" in listed.stdout
+    assert "\x1b" not in listed.stdout
 
     reported = _status(rounds.runs, tmp_path / "empty-history")
     assert reported.returncode == 0, reported.stderr
     assert f"killed-owner: round-01 ABANDONED (owner pid {launch.owner} is gone)" in reported.stdout
+    assert "\x1b" not in reported.stdout
 
     launch.release.write_text("go\n", encoding="utf-8")
     recovered = _just(
@@ -538,11 +613,11 @@ def test_runs_reports_a_dead_round_under_the_summary_of_the_last_settled_one(
 ) -> None:
     """A run with settled history keeps its ledger row, so the death must join it.
 
-    The observed failure had already completed a round before the one that died —
-    `just runs` therefore has a summary to print, and the abandonment has to reach
-    that existing row rather than only the no-history line the earlier journeys
-    take. Getting this wrong is the whole symptom: the run reads as `round-01
-    (1 done)`, exactly like a healthy one, while nothing is working on round-02.
+    A run that completed a round before the one that died gives `just runs` a summary
+    to print, so the abandonment has to reach that existing row rather than only the
+    no-history line the earlier journeys take. Getting this wrong is the whole symptom:
+    the run reads as `round-01 (1 done)`, exactly like a healthy one, while nothing is
+    working on round-02.
     """
     run_id = "abandoned-continuation"
     waiting = rounds.waiting_round(run_id)
@@ -576,9 +651,9 @@ def test_status_reports_a_dead_round_beside_the_surface_it_left_pending(
 ) -> None:
     """The stale surface is the misreading, so both lines must appear together.
 
-    The surface a run last queued outlives the round that queued it: the planner's
-    view kept saying "waiting for planner decision" for hours after the executor was
-    gone, so the run looked like it was waiting on a person rather than dead. Driven
+    The surface a run last queued outlives the round that queued it, so a view that
+    reports only the surface says "waiting for planner decision" long after the
+    executor is gone and the run reads as waiting on a person rather than dead. Driven
     through the real relay the orchestrator's supervisor side runs — it queues the
     surface and then blocks for a reply that never comes, which is the production
     state exactly.

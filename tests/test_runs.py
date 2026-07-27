@@ -279,6 +279,35 @@ def test_an_abandoned_round_names_its_owner_and_how_to_reclaim_it(tmp_path) -> N
     assert abandoned_round_indicator(tmp_path / "never-run") is None
 
 
+@pytest.mark.parametrize(
+    "reason",
+    [
+        "\x1b[2J\x1b]0;owned\x07",
+        "took SIGTERM\nrun round-01 completed successfully",
+        "x" * 201,
+        42,
+    ],
+    ids=["escape-sequence", "smuggled-line", "unbounded", "not-a-string"],
+)
+def test_a_recorded_reason_unfit_for_a_terminal_never_reaches_one(tmp_path, reason) -> None:
+    """`status.json` is externally writable, so its reason is an untrusted input.
+
+    It is printed verbatim beside the command that reclaims the round, so a reason the
+    terminal would act on rather than show — or one long enough to bury that command —
+    has to be dropped for the reason derived from the recorded owner.
+    """
+    run_dir = tmp_path / "run"
+    _, round_dir = prepare_round(run_dir, PLAN)
+    dead = os.getpid() + 10_000_000
+    _own(round_dir, status="abandoned", pid=dead, reason=reason)
+
+    assert abandoned_round(run_dir) == AbandonedRound(1, dead, None)
+    assert abandoned_round_indicator(run_dir) == (
+        f"round-01 ABANDONED (owner pid {dead} is gone); reclaim with: "
+        f"just run-plan {round_dir / 'plan.json'} --run run --runs-dir {tmp_path} --recover"
+    )
+
+
 def test_runs_cli_reports_an_abandoned_round_beside_a_recorded_one(tmp_path, capsys) -> None:
     """Both listing shapes at once; the real journey is the e2e this mirrors.
 

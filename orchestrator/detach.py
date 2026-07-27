@@ -2,10 +2,9 @@
 
 A tracked round is long-lived, but the orchestrator agent starts it from inside one
 harness turn and then blocks on the planner channel or surfaces an update. Ending
-that turn tears down the turn's child process group, and that destroyed two real
-runs: the executor took SIGTERM about a minute after dispatching a worker onto a
-branch, leaving a claimed round whose `status.json` still said `"status": "running"`
-under a pid that no longer existed.
+that turn tears down the turn's child process group, which would take the round with
+it and leave a claimed round whose `status.json` still says `"status": "running"`
+under a pid that no longer exists.
 
 Leaving the process group is necessary but *not sufficient*, which is why this is a
 fork and not a bare `setsid`. Two separate things kill a launched round:
