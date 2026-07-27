@@ -32,8 +32,13 @@ lives in an oneharness config, not in onejudge:
 | **Agent** | does the work | `oneharness.toml` (discovered from the repo root) |
 | **Judge / simulated user** | supervises + scores | `oneharness.judge.toml` (via the base config's `provider.judge_config`) |
 
-Edit those two files (or use oneharness's `ONEHARNESS_*` env overrides) to change
-the harness or model on either side. `config/onejudge.base.yaml` carries only the
+A third role sits above both: the **orchestrator** process `just orchestrate`
+launches drives a tracked graph rather than doing the work, so it has its own
+config, `oneharness.orchestrator.toml`, forced by
+`scripts/oneharness-orchestrator.sh`.
+
+Edit those files (or use oneharness's `ONEHARNESS_*` env overrides) to change
+the harness or model on a side. `config/onejudge.base.yaml` carries only the
 loop's own concerns (persona defaults, session), never harness/model selection.
 
 ## Provider wiring
@@ -45,7 +50,9 @@ This repository uses three onejudge provider arrangements:
 - `command` is the deterministic test path. A local JSON-lines process stands in
   for the paid harness boundary.
 - The live orchestrator uses a `split` provider: its `skill` side is either the
-  configured oneharness provider or a command provider, while its `judge` side is
+  configured oneharness provider — with its `bin` pinned to
+  `scripts/oneharness-orchestrator.sh`, since a launch has no `--project-dir` to
+  pin it through — or a command provider, while its `judge` side is
   a command invoking `orchestrator.channel.relay_supervisor`. The relay forwards
   supervisor requests over the run's FIFOs to the live planner and returns the
   planner's completion or continuation reply to onejudge. Final boolean/score
@@ -135,11 +142,27 @@ per-harness preset selected as `<harness>:<variant>`; it composes the base harne
 settings with child-only model, environment, and credential routing.
 `scripts/oneharness-agent.sh` derives
 `ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR` as `$HOME/.claude-alt` unless the caller
-overrides it. The variant maps that portable path to `CLAUDE_CONFIG_DIR` only
+overrides it — through `scripts/claude-alt-config-dir.sh`, the one source both
+alternate-subscription wrappers share. The variant maps that portable path to
+`CLAUDE_CONFIG_DIR` only
 inside the alternate worker process and masks ambient Anthropic API/OAuth
 credentials so they cannot outrank subscription auth. If that directory is absent,
 unauthenticated, or quota-limited, fallback proceeds to Codex; a host with only its
 primary Claude identity therefore still dispatches through an authenticated Codex.
+
+The **orchestrator** reverses that order. It is a long-lived supervisory process,
+not a worker, so `oneharness.orchestrator.toml` selects `codex` first and keeps
+`claude-code:alternate` as its fallback: it never stands in front of the workers
+for the alternate subscription they depend on.
+`launch_orchestrator` pins `scripts/oneharness-orchestrator.sh` as the launched
+process's oneharness binary, which forces that config (upward discovery from the
+repo root would find the worker chain) and exports the same shared
+`ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR` default — so `just orchestrate` launches on a
+fresh shell with nothing exported by hand. That launch also forwards
+`--oneharness-mode` (default `bypass`) as `ONEHARNESS_MODE`, like every other
+dispatch entry point; without it the orchestrator runs at claude-code's
+non-interactive default, which denies outright every command outside
+`.claude/settings.json` — including the `just monitor` its own persona mandates.
 
 The judge's Codex primary is independent. Its `claude-code:primary` fallback
 removes `CLAUDE_CONFIG_DIR` and higher-precedence Anthropic credentials, selecting
@@ -201,8 +224,9 @@ contradictory record still fails. Its quota cost is one real harness invocation;
 the provider may leave dollar cost unreported (Codex does). It is not part of
 `just gate`.
 Pre-push runs it only when the pushed endpoint diff touches `scripts/`,
-`config/oneharness.version`, `config/onejudge.base.yaml`, `oneharness.toml`, or
-`oneharness.judge.toml`; every other pushed diff skips it.
+`config/oneharness.version`, `config/onejudge.base.yaml`, `oneharness.toml`,
+`oneharness.judge.toml`, or `oneharness.orchestrator.toml`; every other pushed diff
+skips it.
 
 Net: the orchestration setup is harness-agnostic and correct. On a
 no-unprivileged-userns host, dispatch codex with

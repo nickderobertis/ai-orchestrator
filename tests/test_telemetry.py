@@ -370,6 +370,8 @@ def test_native_timing_usage_tools_and_breakdown_are_role_and_node_scoped(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     run_dir = _recorded_run(tmp_path, state="complete")
+    # The attribution asserted below is per-role, not wall-clamped; give the run the
+    # kind of span a real one has.
     _stretch_recorded_span(run_dir)
 
     def session(role: str, duration: int, model: int, tool: int) -> HistorySession:

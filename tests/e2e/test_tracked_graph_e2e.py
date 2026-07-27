@@ -1305,6 +1305,10 @@ def test_real_cli_recovers_failed_lifecycle_result(
     canonical = gitops.clone(origin, tmp_path / "failed-lifecycle-canonical")
     Registry().register(str(canonical), workflow="local")
     runs = tmp_path / "runs"
+    # The in-flight node's rendezvous: it announces it is parked mid-turn, and waits
+    # for the release this test writes only after the first run-plan is dead.
+    in_flight_ready = tmp_path / "in-flight.ready"
+    in_flight_release = tmp_path / "in-flight.release"
     plan = tmp_path / "failed-lifecycle-prefix.json"
     plan.write_text(
         json.dumps(
@@ -1341,13 +1345,17 @@ def test_real_cli_recovers_failed_lifecycle_result(
                     {
                         "id": "in-flight",
                         "persona": "engineer",
-                        # Park this node so the round is provably still running when
-                        # it is killed. With nothing held, the whole round can finish
-                        # before the kill lands and recovery replays nothing.
+                        # Park this node inside a turn instead of letting it race to
+                        # its own failure, so the round is provably still running when
+                        # it is killed. If all three nodes settle first, run-plan
+                        # finalizes round-01 and `--recover` legitimately opens
+                        # round-02 and re-attempts the still-failed nodes, emitting a
+                        # second node-failed for each and failing the
+                        # single-terminal-event assertion for the wrong reason.
                         "task": (
-                            f"should-fail slow-branch {tmp_path / 'in-flight-witness'} "
-                            f"live-edit-slow live-edit-ready={tmp_path / 'in-flight-ready'} "
-                            f"live-edit-release={tmp_path / 'in-flight-release'}"
+                            f"should-fail slow-branch {tmp_path / 'in-flight.ticks'} "
+                            f"live-edit-slow live-edit-ready={in_flight_ready} "
+                            f"live-edit-release={in_flight_release}"
                         ),
                         "max_turns": 5,
                     },
@@ -1413,7 +1421,9 @@ def test_real_cli_recovers_failed_lifecycle_result(
         failed_lifecycles = {
             event.get("node") for event in records if event["kind"] == "node-failed"
         }
-        in_flight = (tmp_path / "in-flight-ready").exists() and any(
+        # Parked, not merely started: the ready file proves in-flight is still inside
+        # its turn, so the round cannot finalize between this check and the kill.
+        in_flight = in_flight_ready.exists() and any(
             event["kind"] == "node-started" and event.get("node") == "in-flight"
             for event in records
         )
@@ -1425,7 +1435,8 @@ def test_real_cli_recovers_failed_lifecycle_result(
         pytest.fail("run-plan did not reach the failed lifecycle recovery boundary")
     os.killpg(process.pid, signal.SIGKILL)
     process.wait()
-    (tmp_path / "in-flight-release").write_text("release\n", encoding="utf-8")
+    # Only now let in-flight run to completion, so the recovery run below terminates.
+    in_flight_release.write_text("release\n", encoding="utf-8")
 
     recovered = subprocess.run(
         [*command, "--recover"], cwd=REPO_ROOT, text=True, capture_output=True, check=False

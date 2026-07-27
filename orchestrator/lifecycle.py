@@ -34,6 +34,7 @@ from pathlib import Path
 from typing import Any, Protocol, cast
 
 from . import BASE_CONFIG, PERSONA_DIR, gitops
+from .cli_contract import DEFAULT_ONEHARNESS_MODE, ONEHARNESS_MODES
 from .config import ConfigError, load_yaml
 from .coordination import LockTimeout, advisory_lock, atomic_json, atomic_text
 from .dispatch import Report, dispatch
@@ -2805,8 +2806,8 @@ def add_lifecycle_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--merge-method", choices=MERGE_METHODS, default="squash")
     parser.add_argument(
         "--oneharness-mode",
-        default="bypass",
-        choices=["read-only", "plan", "default", "edit", "auto", "bypass"],
+        default=DEFAULT_ONEHARNESS_MODE,
+        choices=list(ONEHARNESS_MODES),
         help="approval/sandbox mode for the harness (default: bypass — the "
         "no-approval mode; the container is the sandbox)",
     )
