@@ -228,8 +228,9 @@ validated opaque identifiers and resolved beneath configured roots.
 SSE uses `text/event-stream`, `Cache-Control: no-cache`, and heartbeat comments
 at least every 15 seconds. Each event has journal sequence or server cursor in
 `id`, one of `snapshot`, `run.changed`, `conversation.changed`, or `run.removed`
-in `event`, and one compact JSON object in `data`. On connection or an expired
-`Last-Event-ID`, the server sends `snapshot` with the current `RunList`. A valid
+in `event`, and one compact JSON object in `data`. On connection, or on a
+`Last-Event-ID` that is expired or unparseable as an integer, the server sends
+`snapshot` with the current `RunList` and restarts its cursor. A valid
 `Last-Event-ID` resumes strictly after that cursor. Cursors are ordered only
 within one server process; clients must accept a snapshot after restart.
 Backpressure coalesces repeated changes to the same run, never unboundedly
@@ -239,6 +240,24 @@ invalidation, not a second state model.
 The default bind is loopback. Non-loopback binding requires explicit operator
 configuration and an authentication middleware supplied by the deployment.
 CORS is off unless explicit origins are configured.
+
+### Running it
+
+`just telemetry-server` serves this API over uvicorn against a real runs
+directory and stays in the foreground until interrupted:
+
+```sh
+just telemetry-server                              # runs/ on http://127.0.0.1:8787
+just telemetry-server --runs-dir runs --port 8791
+```
+
+`--runs-dir` (default `runs`) is the one configured root every run and
+conversation id resolves beneath; the server never writes to it. `--host` and
+`--port` default to `127.0.0.1:8787`, and a non-loopback `--host` exits 2 unless
+`--allow-nonloopback` is passed to acknowledge that the deployment supplies its
+own authentication. `--oneharness-bin` names the history binary the conversation
+reads shell out to. `--expose-launcher-session-id` lifts the default redaction
+described under "Launch and session provenance".
 
 ## Launch and session provenance
 

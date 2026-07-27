@@ -164,6 +164,15 @@ def _oneharness_bin(tmp_path: Path) -> Path:
     return binary
 
 
+def _tree(root: Path) -> dict[str, bytes]:
+    """Every file beneath ``root`` keyed by relative path — a read must leave it identical."""
+    return {
+        str(path.relative_to(root)): path.read_bytes()
+        for path in sorted(root.rglob("*"))
+        if path.is_file()
+    }
+
+
 def _read_frames(lines: Iterator[str], *, until: str, limit: int = 40) -> list[dict[str, str]]:
     """Collect SSE frames from a single line iterator until ``event == until``."""
     frames: list[dict[str, str]] = []
@@ -207,6 +216,7 @@ def test_read_api_serves_projection_telemetry_and_role_tagged_conversations(
     )
     # Default redaction: the join resolves the launcher but withholds the session id.
     app = create_app(runs, oneharness_bin=str(_oneharness_bin(tmp_path)))
+    before = _tree(runs)
 
     with _serve(app) as base:
         client = httpx.Client(base_url=base, timeout=10)
@@ -247,6 +257,10 @@ def test_read_api_serves_projection_telemetry_and_role_tagged_conversations(
         bad_query = client.get("/api/v1/runs", params={"include_settled": "maybe"})
         assert bad_query.status_code == 422
         assert bad_query.json()["error"]["code"] == "invalid_request"
+
+    # The API is read-only: none of that journey — including the rejected requests —
+    # touched a byte of the run directory it served.
+    assert _tree(runs) == before
 
     # A deployment that opts into exposing the session id sees it surfaced.
     exposed_app = create_app(
@@ -307,3 +321,39 @@ def test_events_stream_snapshots_then_invalidates_on_a_live_append(
             assert all(frame.get("event") != "snapshot" for frame in removed)
 
         assert client.get("/api/v1/events?run_id=bad!id").status_code == 422
+
+
+def test_events_stream_survives_a_malformed_last_event_id(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A crafted resume header opens a fresh snapshot instead of failing the connection.
+
+    ``--5`` is the shape that passed the original ``lstrip("-").isdigit()`` guard and
+    then blew up in ``int()``; over a real socket that surfaced as a failed request
+    rather than a stream, so the reconnect path is asserted here and not only against
+    the parser.
+    """
+    runs = tmp_path / "runs"
+    _active_run(runs, "demo")
+    monkeypatch.setenv("FAKE_ONEHARNESS_STORE", str(_history_store(tmp_path, "demo")))
+    app = create_app(
+        runs,
+        oneharness_bin=str(_oneharness_bin(tmp_path)),
+        poll_interval=0.05,
+        heartbeat_interval=0.2,
+    )
+
+    with _serve(app) as base:
+        client = httpx.Client(base_url=base, timeout=10)
+
+        for crafted in ("--5", "5-", "abc", ""):
+            with client.stream(
+                "GET", "/api/v1/events", headers={"Last-Event-ID": crafted}
+            ) as response:
+                assert response.status_code == 200, crafted
+                frames = _read_frames(response.iter_lines(), until="snapshot")
+                snapshot = frames[-1]
+                assert snapshot["event"] == "snapshot", crafted
+                # Cursor restarts at 1: the unusable header was discarded, not resumed.
+                assert snapshot["id"] == "1", crafted
+                assert json.loads(snapshot["data"])["runs"][0]["run_id"] == "demo"
