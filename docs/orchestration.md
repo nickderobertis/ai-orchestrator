@@ -375,7 +375,10 @@ step payloads carry their step-specific raw onejudge report and stable
 oneharness-session pointer. Local gate failures surface from `git push`; the
 lifecycle records `gate-failed` when hook output identifies the gate and otherwise
 records a self-describing `error` outcome with Git's diagnostic.
-Remote-first failures remain named required-check outcomes. Because artifact
+Remote-first failures remain named required-check outcomes. Each lifecycle node
+also records one `merge-gate-coverage` event before it dispatches, naming the
+`pre-push` hook and required checks that will verify it, so a late rejection can
+be read against what was expected to run. Because artifact
 paths are in the terminal `GraphResultItem`, crash projection retains them
 byte-for-byte.
 

@@ -136,6 +136,16 @@ class MergeGateCoverage:
         """Whether the operator-defined hook-or-required-check criterion is met."""
         return self.hook is not None or bool(self.required_checks)
 
+    @property
+    def coverage_gap(self) -> str:
+        """Describe why this identity's merge path is not known to run a gate."""
+        github_gap = (
+            "required PR status checks are unknown"
+            if self.github_status == "unknown"
+            else "no required PR status checks exist"
+        )
+        return f"no executable pre-push hook and {github_gap}"
+
 
 def merge_gate_coverage(
     identity: IdentityKey,
@@ -184,14 +194,9 @@ def _print_merge_gate_coverage(coverage: MergeGateCoverage) -> None:
     if coverage.hook is None:
         print("  executable_pre_push_hook=missing")
     if not coverage.meets_coverage_criteria:
-        github_gap = (
-            "required PR status checks are unknown"
-            if coverage.github_status == "unknown"
-            else "no required PR status checks exist"
-        )
         print(
-            f"WARNING: identity {coverage.identity} has no executable pre-push hook and "
-            f"{github_gap}; its merge path is not known to run a gate.",
+            f"WARNING: identity {coverage.identity} has {coverage.coverage_gap}; "
+            "its merge path is not known to run a gate.",
             file=sys.stderr,
         )
 

@@ -81,6 +81,9 @@ EventKind = Literal[
     "step-started",
     "step-settled",
     "branch-discovered",
+    "merge-gate-coverage",
+    # Retained for reading journals written before the repository's own merge path
+    # became the authoritative verifier; nothing emits them now.
     "verification-started",
     "verification-finished",
     "pr-drafting-started",

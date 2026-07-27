@@ -13,6 +13,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from conftest import install_pre_push_hook
 from fakes import FakeGitHub, make_writing_dispatch
 
 from orchestrator.integrate import IntegrateError, integrate, main
@@ -45,9 +46,7 @@ def _branch(repo: Path, name: str, files: dict[str, str], *, start: str = "main"
 def _clone(tmp_path: Path, origin: Path) -> Path:
     repo = tmp_path / "clone"
     subprocess.run(["git", "clone", str(origin), str(repo)], check=True, capture_output=True)
-    hook = repo / ".git" / "hooks" / "pre-push"
-    hook.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
-    hook.chmod(0o755)
+    install_pre_push_hook(repo)
     return repo
 
 

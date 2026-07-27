@@ -1248,9 +1248,6 @@ def _pause_at_human_step(
     title: str | None,
     body: str | None,
     applicable_stack: list[StackBase],
-    verify_cmd: list[str] | None,
-    skip_verify: bool,
-    gate_timeout: float | None,
     recorded_pr: str | None,
     journal: NodeSink,
     cache_env: dict[str, str],
@@ -1375,7 +1372,6 @@ def run_repo_task(
     persona_dir: str | Path = PERSONA_DIR,
     max_turns: int | None = None,
     done_when: str | None = None,
-    gate_timeout: float | None = None,
     publication_attempts: int = 3,
     poll_interval: float = 15.0,
     timeout: float = 3600.0,
@@ -1397,12 +1393,14 @@ def run_repo_task(
 
     ``oneharness_mode`` defaults to ``"bypass"`` (no approvals, no inner sandbox):
     the container is the sandbox, so this is the "complete tasks without approvals"
-    mode. The agent runs in an isolated worktree; the change is verified with the
-    repo's own gate before it is pushed, and never merges off a non-required check.
+    mode. The agent runs in an isolated worktree; the change is verified by the
+    repository's own merge path — its ``pre-push`` hook, or its required PR status
+    checks — which dispatch refuses to start without. It never merges off a
+    non-required check.
 
     Pass ``steps`` (a sub-DAG of `Step`s) to run **several onejudge on one PR**: they
     share the branch/worktree, run in dependency order committing in turn, and the
-    result is verified and merged **once**. A single ``(persona, task)`` is the
+    result is published and merged **once**. A single ``(persona, task)`` is the
     one-step case.
 
     ``journal`` is this node's scope in a tracked round: transitions are recorded
@@ -1477,20 +1475,20 @@ def run_repo_task(
                 "--verify-via-ci requires a remote GitHub/PR workflow with a GitHub origin; "
                 "register or migrate this repository to a remote workflow before dispatch"
             )
+        # The lifecycle no longer runs the repo's gate itself, so the merge path must.
+        # Inspect the *execution* checkout: every publishing push (the branch push and
+        # the local strategy's detached publication push) originates in a worktree of
+        # it, and Git resolves hooks through the shared common dir, so its `pre-push`
+        # is the hook that will actually run.
         coverage = merge_gate_coverage(
             selection.publication_identity,
-            selection.publication_checkout,
+            selection.execution_checkout,
             github=github,
         )
         if not coverage.meets_coverage_criteria:
-            github_gap = (
-                "required PR status checks are unknown"
-                if coverage.github_status == "unknown"
-                else "no required PR status checks exist"
-            )
             raise RegistryError(
-                f"lifecycle dispatch refused for identity {coverage.identity}: no executable "
-                f"pre-push hook and {github_gap}; run 'just repos --audit-gate-coverage' "
+                f"lifecycle dispatch refused for identity {coverage.identity}: "
+                f"{coverage.coverage_gap}; run 'just repos --audit-gate-coverage' "
                 "and repair the merge-path gate before dispatch"
             )
         result.execution_checkout = str(selection.execution_checkout)
@@ -1563,6 +1561,21 @@ def run_repo_task(
             raise ConfigError(
                 "no verification gate is configured; register or migrate the identity gate"
             )
+        # The merge path is the only verifier now, so record what dispatch saw of it.
+        # A hook rejection arrives late, as `git push` output; this record is what lets
+        # a reader tell "the gate ran and failed" from "nothing was ever going to run",
+        # without re-deriving the identity's coverage after the fact.
+        log.append(
+            "merge-gate-coverage",
+            detail={
+                "identity": str(coverage.identity),
+                "checkout": str(selection.execution_checkout),
+                "pre_push_hook": coverage.hook or "",
+                "required_checks": list(coverage.required_checks),
+                "required_checks_status": coverage.github_status,
+                "expected_gate": list(resolved_verify_cmd or []),
+            },
+        )
         branch = result.branch
         worktree_base = f"origin/{pr_base}"
         prepared: ResumePrep | None = None
@@ -1726,9 +1739,6 @@ def run_repo_task(
                 title=title,
                 body=body,
                 applicable_stack=applicable_stack,
-                verify_cmd=resolved_verify_cmd,
-                skip_verify=skip_verify,
-                gate_timeout=gate_timeout,
                 recorded_pr=resume.pr if resume else None,
                 journal=log,
                 cache_env=cache_env,
@@ -1940,13 +1950,6 @@ def run_repo_task(
             timeout=timeout,
             sleep=sleep,
             clock=clock,
-            verify_command=None if skip_verify else resolved_verify_cmd,
-            gate_timeout=gate_timeout,
-            verify_env={
-                **cache_env,
-                "ORCHESTRATOR_COMPARISON_REMOTE": "origin",
-                "ORCHESTRATOR_COMPARISON_BASE": pr_base,
-            },
             publication_attempts=publication_attempts,
             repository_type=effective_type,
             journal=log,

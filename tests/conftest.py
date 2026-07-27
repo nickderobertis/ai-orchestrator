@@ -35,16 +35,35 @@ from orchestrator.environment import CHANNEL_ENV_PREFIX
 FAKE_BACKEND = REPO_ROOT / "tests" / "e2e" / "fake_backend.py"
 
 
+def install_pre_push_hook(checkout: Path, body: str = "exit 0") -> Path:
+    """Install a real `pre-push` hook: the merge-path gate production requires.
+
+    Nothing here is faked — Git runs this hook for real on every push out of the
+    checkout and its worktrees, which is exactly the boundary the lifecycle now
+    relies on instead of running the gate itself.
+    """
+    hooks = gitops.hooks_dir(checkout)
+    hooks.mkdir(parents=True, exist_ok=True)
+    hook = hooks / "pre-push"
+    hook.write_text(f"#!/bin/sh\nset -eu\n{body}\n", encoding="utf-8")
+    hook.chmod(0o755)
+    return hook
+
+
 @pytest.fixture(autouse=True)
 def _cover_real_git_clone_merge_paths(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Make general lifecycle fixtures satisfy the production dispatch guard."""
+    """Give every checkout the suite clones the coverage dispatch demands.
+
+    Real checkouts carry hooks their operator installed; test fixtures clone bare
+    origins that carry none. Rather than repeat the installation in every fixture,
+    hang it off the real `gitops.clone` so the default checkout is a covered one.
+    Tests that need the uncovered or failing case override the hook themselves.
+    """
     clone = gitops.clone
 
     def covered_clone(*args: object, **kwargs: object) -> Path:
         checkout = clone(*args, **kwargs)
-        hook = checkout / ".git" / "hooks" / "pre-push"
-        hook.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
-        hook.chmod(0o755)
+        install_pre_push_hook(checkout)
         return checkout
 
     monkeypatch.setattr(gitops, "clone", covered_clone)

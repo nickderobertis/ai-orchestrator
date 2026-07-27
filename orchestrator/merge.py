@@ -65,7 +65,7 @@ def classify_push_failure(exc: gitops.GitError) -> LifecycleOutcome:
 
 @dataclass
 class MergeContext:
-    """Everything a strategy needs once the branch is pushed and verified."""
+    """Everything a strategy needs once the branch is pushed through its merge path."""
 
     repo_slug: str
     clone_dir: Path
@@ -80,9 +80,6 @@ class MergeContext:
     timeout: float = 3600.0
     sleep: Callable[[float], None] = time.sleep
     clock: Callable[[], float] = time.monotonic
-    verify_command: list[str] | None = None
-    verify_env: dict[str, str] | None = None
-    gate_timeout: float | None = None
     publication_attempts: int = 3
     repository_type: RepositoryType = "single-owner"
     #: Where publication transitions are recorded, already scoped to the node the

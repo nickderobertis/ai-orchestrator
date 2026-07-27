@@ -326,7 +326,7 @@ def test_local_merge_relies_on_push_hook_and_journals_the_merge(
     journal, node = _scope(tmp_path, "run-local")
 
     out = LocalMergeStrategy().publish_and_merge(
-        _ctx(clone_dir=clone, branch="feature", verify_command=["true"], journal=node)
+        _ctx(clone_dir=clone, branch="feature", journal=node)
     )
 
     assert out.outcome == "merged"
@@ -385,9 +385,7 @@ def test_local_merge_cleans_scratch_worktree_after_content_conflict(
     gitops.push(updater, "main")
 
     with pytest.raises(GitError):
-        LocalMergeStrategy().publish_and_merge(
-            _ctx(clone_dir=clone, branch="feature", verify_command=["true"])
-        )
+        LocalMergeStrategy().publish_and_merge(_ctx(clone_dir=clone, branch="feature"))
 
 
 def test_local_merge_surfaces_non_race_push_failure(
@@ -469,7 +467,6 @@ def test_local_publication_classifies_retry_exhaustion(tmp_path, bare_origin, mo
             clone_dir=clone,
             branch="feature",
             publication_attempts=2,
-            verify_command=["true"],
         )
     )
 

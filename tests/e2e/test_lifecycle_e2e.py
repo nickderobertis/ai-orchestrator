@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import TypeVar, cast
 
 import pytest
+from conftest import install_pre_push_hook
 from fakes import FakeGitHub, make_writing_dispatch
 from waits import deadline as e2e_deadline
 from waits import timeout as e2e_timeout
@@ -66,35 +67,12 @@ from orchestrator.provenance import (
     incomplete_commits,
 )
 from orchestrator.recover import recover_repo
-from orchestrator.registry import Registry, RegistryEntry, Slug
+from orchestrator.registry import Registry, RegistryEntry, RegistryError, Slug
 from orchestrator.replan import next_round
 from orchestrator.runs import NodeId, RunId, prepare_round, write_result
 from orchestrator.workspace import IdentityKey, Workspace, normalize_repo
 
 _T = TypeVar("_T")
-
-
-def _install_pre_push_hook(checkout: Path, body: str = "exit 0") -> Path:
-    """Install the real merge-path boundary used by lifecycle fixtures."""
-    hooks = gitops.hooks_dir(checkout)
-    hooks.mkdir(parents=True, exist_ok=True)
-    hook = hooks / "pre-push"
-    hook.write_text(f"#!/bin/sh\nset -eu\n{body}\n", encoding="utf-8")
-    hook.chmod(0o755)
-    return hook
-
-
-@pytest.fixture(autouse=True)
-def _cover_lifecycle_clone_merge_paths(monkeypatch):
-    """Give lifecycle fixtures the merge-path coverage production requires."""
-    clone = gitops.clone
-
-    def covered_clone(*args: object, **kwargs: object) -> Path:
-        checkout = clone(*args, **kwargs)
-        _install_pre_push_hook(checkout)
-        return checkout
-
-    monkeypatch.setattr(gitops, "clone", covered_clone)
 
 
 def _workspace(tmp_path: Path, *origins: Path, workflow: str = "local") -> Workspace:
@@ -103,8 +81,6 @@ def _workspace(tmp_path: Path, *origins: Path, workflow: str = "local") -> Works
         str(origin.resolve()): gitops.clone(origin, tmp_path / f"canonical-{index}")
         for index, origin in enumerate(origins)
     }
-    for checkout in checkouts.values():
-        _install_pre_push_hook(checkout)
     return Workspace(
         tmp_path / "worktrees",
         resolver=lambda spec: checkouts[str(Path(spec).resolve())],
@@ -1996,7 +1972,7 @@ def test_covered_lifecycle_uses_push_gate_without_orchestrator_gate_run(
     workspace = _workspace(tmp_path, origin)
     canonical = workspace.clone_dir(normalize_repo(str(origin)))
     hook_log = tmp_path / "pre-push-gates.log"
-    _install_pre_push_hook(canonical, f"printf 'gate\\n' >> {shlex.quote(str(hook_log))}")
+    install_pre_push_hook(canonical, f"printf 'gate\\n' >> {shlex.quote(str(hook_log))}")
 
     result = run_repo_task(
         str(origin),
@@ -2018,7 +1994,7 @@ def test_pre_push_gate_failure_is_recorded_as_gate_failure(tmp_path, bare_origin
     origin = bare_origin()
     workspace = _workspace(tmp_path, origin)
     canonical = workspace.clone_dir(normalize_repo(str(origin)))
-    _install_pre_push_hook(
+    install_pre_push_hook(
         canonical,
         "printf 'pre-push: complete gate failed\\n' >&2\nexit 1",
     )
@@ -2125,7 +2101,7 @@ def test_remote_human_checkpoint_records_push_failure(
         repo_type="team",
     )
     if rejection == "gate":
-        _install_pre_push_hook(canonical, "printf 'pre-push gate failed\\n' >&2\nexit 1")
+        install_pre_push_hook(canonical, "printf 'pre-push gate failed\\n' >&2\nexit 1")
     else:
         receive = origin / "hooks" / "pre-receive"
         receive.write_text("#!/bin/sh\nprintf 'remote denied\\n' >&2\nexit 1\n", encoding="utf-8")
@@ -2172,7 +2148,7 @@ def test_local_repo_gate_failure_blocks_merge(tmp_path, bare_origin) -> None:
     origin = bare_origin()
     before = _tip(origin, "main")
     workspace = _workspace(tmp_path, origin)
-    _install_pre_push_hook(
+    install_pre_push_hook(
         workspace.clone_dir(normalize_repo(str(origin))),
         "printf 'pre-push gate: lint tier: bad import\\n' >&2\nexit 1",
     )
@@ -2448,7 +2424,7 @@ def test_local_repo_registry_gate_verifies_real_worktree(tmp_path, bare_origin) 
     origin = bare_origin()
     canonical = gitops.clone(origin, tmp_path / "registered")
     marker = tmp_path / "gate-ran"
-    _install_pre_push_hook(
+    install_pre_push_hook(
         canonical,
         f"test -f feature.txt && touch {shlex.quote(str(marker))}",
     )
@@ -2477,7 +2453,7 @@ def test_local_repo_registry_gate_verifies_real_worktree(tmp_path, bare_origin) 
 def test_local_repo_registry_gate_failure_stops_publication(tmp_path, bare_origin) -> None:
     origin = bare_origin()
     canonical = gitops.clone(origin, tmp_path / "registered")
-    _install_pre_push_hook(canonical, "printf 'pre-push gate failed\\n' >&2\nexit 1")
+    install_pre_push_hook(canonical, "printf 'pre-push gate failed\\n' >&2\nexit 1")
     Registry().register(str(canonical), workflow="local", repo_type="single-owner", gate="false")
     result = run_repo_task(
         str(canonical),
@@ -2511,7 +2487,7 @@ def test_registered_complete_gate_catches_strict_tier_before_publish_then_allows
     )
     base_before_failure = _tip(origin, "main")
     canonical = gitops.clone(origin, tmp_path / "registered-complete-gate")
-    _install_pre_push_hook(
+    install_pre_push_hook(
         canonical,
         "make gate || { printf 'pre-push gate failed\\n' >&2; exit 1; }",
     )
@@ -2667,20 +2643,27 @@ def test_lifecycle_without_explicit_or_registry_gate_errors(tmp_path, bare_origi
     assert "no verification gate is configured" in result.detail
 
 
-def test_skip_verify_bypasses_the_gate(tmp_path, bare_origin) -> None:
+def test_skip_verify_cannot_bypass_the_merge_path_gate(tmp_path, bare_origin) -> None:
     origin = bare_origin()
+    workspace = _workspace(tmp_path, origin)
+    canonical = workspace.clone_dir(normalize_repo(str(origin)))
+    install_pre_push_hook(canonical, "printf 'pre-push gate failed\\n' >&2\nexit 1")
+    before = _tip(origin, "main")
+
     result = run_repo_task(
         str(origin),
-        "Add a change with the gate skipped.",
+        "Add a change with the legacy gate override skipped.",
         "engineer",
-        workspace=_workspace(tmp_path, origin),
+        workspace=workspace,
         dispatch_fn=make_writing_dispatch(filename="feature.txt"),
-        skip_verify=True,  # no local gate runs at all
-        verify_cmd=["false"],  # would fail if it ran — proving it is skipped
+        skip_verify=True,  # legacy override: it no longer controls verification
+        verify_cmd=["true"],
     )
-    assert result.ok and result.outcome == "merged"
-    assert result.verify is None
-    assert _has_file(origin, "main", "feature.txt")
+
+    assert result.outcome == "gate-failed"
+    assert "repository pre-push gate rejected publication" in result.detail
+    assert _tip(origin, "main") == before
+    assert not _has_file(origin, "main", "feature.txt")
 
 
 def test_agent_not_completed_stops_early(tmp_path, bare_origin) -> None:
@@ -2908,7 +2891,7 @@ def test_recovery_push_failure_is_recorded_and_preserves_branch(
     assert preserved.outcome == "not-completed" and preserved.resume is not None
     checkpoint = gitops.ref_sha(canonical, preserved.branch)
     if rejection == "gate":
-        _install_pre_push_hook(
+        install_pre_push_hook(
             canonical,
             "printf 'pre-push: complete gate failed during recovery\\n' >&2\nexit 1",
         )
@@ -2927,6 +2910,36 @@ def test_recovery_push_failure_is_recorded_and_preserves_branch(
     assert recovered.outcome == expected_outcome
     assert expected_detail in recovered.detail
     assert gitops.is_ancestor(canonical, checkpoint, preserved.branch)
+    assert not _has_file(origin, "main", "preserved.txt")
+
+
+def test_recovery_refuses_uncovered_identity_and_preserves_branch(tmp_path, bare_origin) -> None:
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-uncovered-recovery")
+    Registry().register(str(canonical), workflow="local", repo_type="single-owner")
+
+    preserved = run_repo_task(
+        str(canonical),
+        "Preserve work whose identity later loses merge-path coverage.",
+        "engineer",
+        workspace=Workspace(tmp_path / "uncovered-recovery-source-worktrees"),
+        branch="feature/uncovered-recovery",
+        dispatch_fn=make_writing_dispatch(filename="preserved.txt", completed=False),
+        verify_cmd=["true"],
+    )
+    assert preserved.outcome == "not-completed"
+    checkpoint = gitops.ref_sha(canonical, preserved.branch)
+    gitops.hooks_dir(canonical).joinpath("pre-push").unlink()
+
+    with pytest.raises(RegistryError, match="recovery refused for identity"):
+        recover_repo(
+            canonical,
+            preserved.branch,
+            workspace_root=tmp_path / "uncovered-recovery-worktrees",
+            verify_cmd=["true"],
+        )
+
+    assert gitops.ref_sha(canonical, preserved.branch) == checkpoint
     assert not _has_file(origin, "main", "preserved.txt")
 
 
@@ -3385,7 +3398,7 @@ def test_real_lifecycle_outcomes_round_trip_through_telemetry_cli(tmp_path, bare
 
     gate_origin = bare_origin()
     gate_workspace = _workspace(tmp_path / "gate-workspace", gate_origin)
-    _install_pre_push_hook(
+    install_pre_push_hook(
         gate_workspace.clone_dir(normalize_repo(str(gate_origin))),
         "printf 'pre-push gate failed\\n' >&2\nexit 1",
     )
@@ -5008,7 +5021,7 @@ def test_workstream_step_failure_stops_and_skips_dependents(tmp_path, bare_origi
 def test_multi_pr_failure_skips_dependents(tmp_path, bare_origin) -> None:
     repo_x = bare_origin()
     ws = _workspace(tmp_path, repo_x)
-    _install_pre_push_hook(
+    install_pre_push_hook(
         ws.clone_dir(normalize_repo(str(repo_x))),
         "if test -f a.txt; then printf 'pre-push gate failed\\n' >&2; exit 1; fi",
     )

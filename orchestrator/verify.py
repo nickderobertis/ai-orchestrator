@@ -1,9 +1,13 @@
-"""Local verification: run a target repo's *own* quality gate before pushing.
+"""Local verification: run a target repo's *own* quality gate.
 
-The lifecycle normally proves changes locally with the registered identity gate.
-During onboarding, `detect_gate_candidates` ranks native commands and `run_gate`
-runs the selected command in a worktree. The gate's own exit code is the verdict —
-0 passes, anything else fails, with captured output kept for the report.
+The lifecycle no longer calls `run_gate`: a change is proven by the repository's
+merge path — its `pre-push` hook, or its required PR status checks — which
+dispatch refuses to start without. What remains here is onboarding
+(`detect_gate_candidates` ranks native commands so an identity can record its
+complete bar) and `just integrate`, whose per-candidate run has no later verifier
+because each candidate fast-forwards the local base before the single push. The
+gate's own exit code is the verdict — 0 passes, anything else fails, with captured
+output kept for the report.
 """
 
 # llmlint: ignore-file[changed_behavior_has_e2e] Bazel proves affected execution e2e;

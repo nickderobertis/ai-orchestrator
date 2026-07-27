@@ -40,7 +40,7 @@ from .provenance import (
     recorded_pr_base,
     unattested_incomplete,
 )
-from .registry import Registry, RegistryEntry, RegistryError, Slug
+from .registry import Registry, RegistryEntry, RegistryError, Slug, merge_gate_coverage
 from .verify import NOOP_GATE, resolve_gate_template
 from .workspace import RepoRef, RepositoryType, Workspace, WorkspaceError
 
@@ -108,6 +108,16 @@ def recover_repo(
     identity = registry.identity_for_checkout(clone, repo_type=repo_type)
     if identity is None:
         raise RegistryError(f"registered checkout {clone} has no repository identity")
+    # Recovery no longer runs the gate itself, so refuse the same way dispatch does
+    # rather than publishing preserved work that nothing will verify. Recovery
+    # worktrees are cut from `clone`, so its hooks are the ones Git will run.
+    coverage = merge_gate_coverage(identity.identity, clone, github=github)
+    if not coverage.meets_coverage_criteria:
+        raise RegistryError(
+            f"recovery refused for identity {coverage.identity}: {coverage.coverage_gap}; "
+            "run 'just repos --audit-gate-coverage' and repair the merge-path gate "
+            "before recovering preserved work"
+        )
     decision = _effective_publication(identity.repo_type, identity.workflow, None, merge_policy)
     owner, name = str(slug).split("/", 1)
     ref = RepoRef(owner, name, entry.origin)
@@ -144,16 +154,15 @@ def recover_repo(
             raise RegistryError(
                 f"branch {branch!r} has no lifecycle-preserved incomplete provenance"
             )
-        command = verify_cmd or (
+        # The merge path verifies the recovery, but an identity that cannot even name
+        # its complete bar has nothing to hand a resolver worker or a reader of the
+        # recovery attestation, so recovery still refuses a no-op gate.
+        documented_gate = verify_cmd or (
             resolve_gate_template(identity.gate, remote_base)
             if identity.gate != NOOP_GATE
             else None
         )
-        env = {
-            "ORCHESTRATOR_COMPARISON_REMOTE": "origin",
-            "ORCHESTRATOR_COMPARISON_BASE": publication_base,
-        }
-        if command is None:
+        if documented_gate is None:
             raise RegistryError(
                 "repository identity has a no-op gate; migrate it or pass --gate for recovery"
             )
@@ -247,8 +256,6 @@ def recover_repo(
             method=merge_method,
             policy=decision.merge_policy,
             repository_type=identity.repo_type,
-            verify_command=command,
-            verify_env=env,
             local_prepare=(
                 synchronize_attest_and_push_local_recovery if decision.workflow == "local" else None
             ),

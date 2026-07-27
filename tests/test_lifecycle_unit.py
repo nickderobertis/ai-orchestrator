@@ -8,6 +8,7 @@ from dataclasses import fields
 from pathlib import Path
 
 import pytest
+from conftest import install_pre_push_hook
 
 import orchestrator.lifecycle as lc
 from orchestrator.config import ConfigError
@@ -88,12 +89,6 @@ def test_preserved_step_metadata_contract_round_trips() -> None:
 
 
 # --- helpers ---------------------------------------------------------------
-
-
-def _cover_merge_path(checkout: Path) -> None:
-    hook = checkout / ".git" / "hooks" / "pre-push"
-    hook.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
-    hook.chmod(0o755)
 
 
 def test_branch_name_is_deterministic() -> None:
@@ -1191,7 +1186,7 @@ def test_run_repo_task_journals_the_workstream_and_labels_each_dispatch(
 
     origin = bare_origin()
     publication = gitops.clone(origin, tmp_path / "publication")
-    _cover_merge_path(publication)
+    install_pre_push_hook(publication)
     labelled: dict[str, dict[str, str]] = {}
     wrapper_modes: list[bool] = []
 
@@ -1234,6 +1229,12 @@ def test_run_repo_task_journals_the_workstream_and_labels_each_dispatch(
     assert ("verification-started", None) not in located
     assert ("verification-finished", None) not in located
     assert ("publication-finished", None) in located
+    # The gate now runs behind `git push`, so the round records what dispatch saw
+    # of the merge path: which hook will run, and the bar it stands for.
+    (coverage,) = [e for e in events if e.kind == "merge-gate-coverage"]
+    assert coverage.detail["pre_push_hook"] == str(gitops.hooks_dir(publication) / "pre-push")
+    assert coverage.detail["expected_gate"] == ["true"]
+    assert coverage.detail["required_checks_status"] == "not-applicable"
     # Every transition is attributed to the node the lifecycle was scoped to,
     # though nothing inside the lifecycle ever names it.
     assert {(e.node, e.run_id, e.round) for e in events} == {("api", "run-lc", 4)}
@@ -1253,7 +1254,7 @@ def test_run_repo_task_journals_a_step_that_hit_the_turn_cap(tmp_path, bare_orig
 
     origin = bare_origin()
     publication = gitops.clone(origin, tmp_path / "publication")
-    _cover_merge_path(publication)
+    install_pre_push_hook(publication)
     turn_budgets = []
 
     def fake_dispatch(persona, task, *, project_dir, labels=None, **kw):
@@ -1307,7 +1308,7 @@ def test_run_repo_task_expects_no_diff_step_does_not_dispatch(tmp_path, bare_ori
 
     origin = bare_origin()
     publication = gitops.clone(origin, tmp_path / "publication")
-    _cover_merge_path(publication)
+    install_pre_push_hook(publication)
     workspace = Workspace(
         tmp_path / "ws",
         resolver=lambda _url: publication,
@@ -1337,7 +1338,7 @@ def test_run_repo_task_pauses_and_resumes_local_human_step(tmp_path, bare_origin
 
     origin = bare_origin()
     publication = gitops.clone(origin, tmp_path / "publication")
-    _cover_merge_path(publication)
+    install_pre_push_hook(publication)
     calls: list[str] = []
 
     def fake_dispatch(persona, task, *, project_dir, **kw):
@@ -1400,7 +1401,7 @@ def test_run_repo_task_remote_pause_creates_non_empty_draft(tmp_path, bare_origi
 
     origin = bare_origin()
     publication = gitops.clone(origin, tmp_path / "publication")
-    _cover_merge_path(publication)
+    install_pre_push_hook(publication)
     created: list[dict[str, object]] = []
 
     class DraftGitHub:
@@ -1457,7 +1458,7 @@ def test_run_repo_task_remote_pause_does_not_create_empty_draft(tmp_path, bare_o
 
     origin = bare_origin()
     publication = gitops.clone(origin, tmp_path / "publication")
-    _cover_merge_path(publication)
+    install_pre_push_hook(publication)
 
     class NoDraftGitHub:
         def create_pr(self, *args, **kwargs):
@@ -1485,7 +1486,7 @@ def test_run_repo_task_resume_fails_when_branch_is_missing(tmp_path, bare_origin
 
     origin = bare_origin()
     publication = gitops.clone(origin, tmp_path / "publication")
-    _cover_merge_path(publication)
+    install_pre_push_hook(publication)
     result = run_repo_task(
         str(origin),
         workspace=Workspace(
@@ -1510,7 +1511,7 @@ def test_run_repo_task_resume_fails_when_checkpoint_is_missing(tmp_path, bare_or
 
     origin = bare_origin()
     publication = gitops.clone(origin, tmp_path / "publication")
-    _cover_merge_path(publication)
+    install_pre_push_hook(publication)
     worktree = gitops.worktree_add(
         publication, tmp_path / "branch", "feature/resume", base="origin/main"
     )
@@ -1538,7 +1539,7 @@ def test_run_repo_task_resume_fails_when_recorded_draft_is_closed(tmp_path, bare
 
     origin = bare_origin()
     publication = gitops.clone(origin, tmp_path / "publication")
-    _cover_merge_path(publication)
+    install_pre_push_hook(publication)
     worktree = gitops.worktree_add(
         publication, tmp_path / "branch", "feature/resume", base="origin/main"
     )
