@@ -18,6 +18,8 @@ from waits import timeout as e2e_timeout
 from orchestrator import BASE_CONFIG, REPO_ROOT, gitops
 from orchestrator.dispatch import launch_orchestrator
 from orchestrator.labels import parse_labels
+from orchestrator.launch import LAUNCH_RECORD_NAME, read_launch_info, read_provenance
+from orchestrator.read_model import resolve_launch
 from orchestrator.registry import Registry
 from orchestrator.watchdog import ProcessId, process_activity
 
@@ -874,10 +876,11 @@ def test_live_channel_surfaces_large_round_summary(tmp_path: Path, onejudge_bin:
 
 
 def test_launch_api_records_detached_owner_and_real_report(
-    tmp_path: Path, onejudge_bin: str
+    tmp_path: Path, onejudge_bin: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Cover the Python launch boundary while still driving the real onejudge process."""
     runs = tmp_path / "api-runs"
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
     run_id = launch_orchestrator(
         _plan(tmp_path, "surface-milestone"),
         runs_dir=runs,
@@ -885,11 +888,26 @@ def test_launch_api_records_detached_owner_and_real_report(
         onejudge_bin=onejudge_bin,
         skill_provider={"kind": "command", "command": [sys.executable, str(FAKE_BACKEND)]},
         turn_timeout=int(e2e_timeout(10)),
+        launcher="claude-code",
+        launcher_session_id="planner-session",
     )
     run_dir = runs / run_id
     status = json.loads((run_dir / "orchestrator" / "status.json").read_text(encoding="utf-8"))
     assert status["status"] == "running"
     assert isinstance(status["pid"], int) and status["host"]
+
+    # A real launch splits its provenance: the run directory gets only the join key,
+    # and the sensitive session id lands in the out-of-repo record the read API
+    # resolves. This is the production write path, not a manufactured fixture.
+    launch_id = read_launch_info(run_dir)
+    assert launch_id is not None
+    assert "planner-session" not in (run_dir / LAUNCH_RECORD_NAME).read_text(encoding="utf-8")
+    provenance = read_provenance(launch_id)
+    assert provenance is not None
+    assert provenance["launcher"] == "claude-code"
+    assert provenance["launcher_session_id"] == "planner-session"
+    # And the read API's own join reports that launcher back.
+    assert resolve_launch(run_dir) == {"launch_id": launch_id, "launcher": "claude-code"}
     surface = _next_cli(run_id, runs)
     assert surface["surface"]["kind"] == "milestone"
     _reply_cli(run_id, runs, {"completion": True, "reason": "verified"})
@@ -1224,3 +1242,50 @@ def test_orchestrate_cli_reports_launch_boundary_failures(tmp_path: Path) -> Non
     )
     assert missing_binary.returncode == 2
     assert "binary not found" in missing_binary.stderr
+
+
+def test_orchestrate_cli_refuses_unusable_launch_provenance(tmp_path: Path) -> None:
+    """Provenance is validated at the launch boundary, before anything is spawned.
+
+    A record that cannot be written correctly must stop the launch rather than
+    produce a run whose session join silently never resolves.
+    """
+    plan = _plan(tmp_path, "surface-milestone")
+    base = _base(tmp_path)
+
+    def orchestrate(
+        *extra: str, env: dict[str, str] | None = None
+    ) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [
+                "orchestrator-orchestrate",
+                str(plan),
+                "--runs-dir",
+                str(tmp_path / f"runs-{len(extra)}-{bool(env)}"),
+                "--base",
+                str(base),
+                *extra,
+            ],
+            text=True,
+            capture_output=True,
+            env=env,
+        )
+
+    # A multiline session id would smuggle a second line into a history label.
+    multiline = orchestrate("--launcher", "codex", "--launcher-session", "one\ntwo")
+    assert multiline.returncode == 2
+    assert "session id" in multiline.stderr
+
+    # A launcher outside the closed vocabulary is refused by the CLI itself.
+    unknown = orchestrate("--launcher", "not-a-harness")
+    assert unknown.returncode == 2
+    assert "--launcher" in unknown.stderr
+
+    # No absolute state directory: the protected record has nowhere correct to go.
+    broken_state = dict(os.environ, HOME="relative/home")
+    broken_state.pop("XDG_STATE_HOME", None)
+    relative_home = orchestrate(
+        "--launcher", "codex", "--launcher-session", "planner", env=broken_state
+    )
+    assert relative_home.returncode == 2
+    assert "absolute state directory" in relative_home.stderr

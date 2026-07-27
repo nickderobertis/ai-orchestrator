@@ -31,8 +31,10 @@ Invalid enums, negative durations/counters, non-finite numbers, and bad
 references are rejected at the Python boundary.
 
 The initial API base is `/api/v1`. Its telemetry payload embeds the existing
-telemetry index `schema_version: 6`; this API version does not replace or
-renumber that contract.
+telemetry index at `telemetry_schema_version: 7`, mirroring that index's own
+`schema_version`; this API version does not replace or renumber that contract.
+`scripts/check-dag-state-contract.py` reconciles every copy of that number here
+against `orchestrator.telemetry.TELEMETRY_SCHEMA_VERSION`.
 
 ## Read model
 
@@ -43,7 +45,7 @@ renumber that contract.
 ```ts
 interface RunList {
   api_version: 1;
-  telemetry_schema_version: 6;
+  telemetry_schema_version: 7;
   observed_at: string;
   runs: RunSummary[];
 }
@@ -54,9 +56,20 @@ interface RunSummary {
   phase: string;
   last_event: string;
   last_progress_at?: number; // existing epoch-seconds value
-  telemetry_quality: "complete" | "partial" | "legacy";
+  timing_quality: "complete" | "partial" | "legacy";
+  linkage_quality: "native" | "labelled" | "inferred";
   timing: Timing;
   node_counts: Record<string, number>;
+  launch?: RunLaunch; // omitted when the run recorded no launch_id
+}
+
+// The run-level join of the recorded launch_id to its provenance record. See
+// "Launch and session provenance"; launcher_session_id appears only when the
+// server's redaction policy is configured to expose it.
+interface RunLaunch {
+  launch_id: string;
+  launcher: "claude-code" | "codex" | "unknown";
+  launcher_session_id?: string;
 }
 ```
 
@@ -69,17 +82,34 @@ Runs are ordered by most recent progress descending, then `run_id` ascending.
 ```ts
 interface RunDetail {
   api_version: 1;
-  telemetry_schema_version: 6;
+  telemetry_schema_version: 7;
   observed_at: string;
   run: RunTelemetry;
   rounds: Round[];
-  conversations: NodeConversations[];
+  conversations: DagConversation[];
+  details: DetailSnapshot; // persisted PR/commit/check detail from monitor/details.json
+  logs?: Record<string, string>; // bounded, path-free tails of the run's own logs
+  launch?: RunLaunch; // same run-level launch join as RunSummary
+}
+
+// The persisted PR/commit/check observations, exactly as
+// orchestrator.monitor.DetailSnapshot.record() serializes them.
+interface DetailSnapshot {
+  version: number;
+  commits: Record<string, unknown>;
+  prs: Record<string, unknown>;
+  check_rollup?: unknown;
 }
 ```
 
+`details` always appears (an empty snapshot serializes as `{version, commits:{},
+prs:{}}`); `logs` and `launch` are omitted when the run wrote no logs or recorded no
+`launch_id`.
+
 `RunTelemetry` is exactly `RunTelemetry.record()` from
 `orchestrator/telemetry.py`: required `run_id`, `state`, `phase`, `last_event`,
-`timing`, `nodes`, `usage`, `telemetry_quality`, `sources`, `node_work_ms`,
+`timing`, `nodes`, `usage`, `timing_quality`, `linkage_quality`, `sources`,
+`node_work_ms`,
 `turns`, and `lint`; optional `last_progress_at`, `providers`, `failure`, and
 `check_rollup`. A `NodeTelemetry` is exactly `NodeTelemetry.record()`: required
 `node`, `status`, `sessions`, `turns`, and `lint`; optional `outcome`, `branch`,
@@ -180,9 +210,14 @@ authoritative stream fails the detail request with `409 projection_error`; it is
 never rendered as a plausible graph. Pending nodes are plan tasks absent from
 `node_states`.
 
-Errors use `{"error":{"code":string,"message":string}}`. A missing run is 404,
-invalid query/path input is 422, corrupt persisted input is 409, and an
-unexpected read failure is 500 without filesystem paths or record contents.
+Errors use `{"error":{"code":string,"message":string}}`. A missing run is 404
+`run_not_found`; a present run with no such transcript is 404
+`conversation_not_found`, which a viewer can treat as "still being written" rather
+than "stop polling". Invalid query/path input is 422 (`invalid_run_id`,
+`invalid_conversation_id`, or `invalid_request`), corrupt persisted input is 409
+`projection_error`, and an unexpected read failure is 500 — none of them carrying
+filesystem paths or record contents. Codes are open strings: a client must handle an
+unrecognized one by status.
 
 ## Read-only FastAPI and SSE surface
 
@@ -202,17 +237,44 @@ validated opaque identifiers and resolved beneath configured roots.
 SSE uses `text/event-stream`, `Cache-Control: no-cache`, and heartbeat comments
 at least every 15 seconds. Each event has journal sequence or server cursor in
 `id`, one of `snapshot`, `run.changed`, `conversation.changed`, or `run.removed`
-in `event`, and one compact JSON object in `data`. On connection or an expired
-`Last-Event-ID`, the server sends `snapshot` with the current `RunList`. A valid
-`Last-Event-ID` resumes strictly after that cursor. Cursors are ordered only
-within one server process; clients must accept a snapshot after restart.
-Backpressure coalesces repeated changes to the same run, never unboundedly
-queues them. Clients refetch run detail after a change event; SSE is
-invalidation, not a second state model.
+in `event`, and one compact JSON object in `data`.
+
+Every connection opens with `snapshot` carrying the current `RunList`, including a
+reconnect that supplies `Last-Event-ID` or `after`. The server retains no event
+history, so it cannot replay what a disconnected client missed; a snapshot is the
+only way that client cannot silently keep serving stale state. A supplied cursor
+therefore only continues the id sequence — ids stay monotonic across a reconnect
+within one process — and an unparseable or negative one is discarded rather than
+refused. Cursors are ordered only within one server process.
+
+`run.changed` and `run.removed` are polled from the runs root. `conversation.changed`
+is polled from oneharness history on its own slower interval and only when the
+request names a single `run_id`, because each poll spawns a real history subprocess.
+Backpressure coalesces repeated changes to the same run, never unboundedly queues
+them. Clients refetch run detail after a change event; SSE is invalidation, not a
+second state model.
 
 The default bind is loopback. Non-loopback binding requires explicit operator
 configuration and an authentication middleware supplied by the deployment.
 CORS is off unless explicit origins are configured.
+
+### Running it
+
+`just telemetry-server` serves this API over uvicorn against a real runs
+directory and stays in the foreground until interrupted:
+
+```sh
+just telemetry-server                              # runs/ on http://127.0.0.1:8787
+just telemetry-server --runs-dir runs --port 8791
+```
+
+`--runs-dir` (default `runs`) is the one configured root every run and
+conversation id resolves beneath; the server never writes to it. `--host` and
+`--port` default to `127.0.0.1:8787`, and a non-loopback `--host` exits 2 unless
+`--allow-nonloopback` is passed to acknowledge that the deployment supplies its
+own authentication. `--oneharness-bin` names the history binary the conversation
+reads shell out to. `--expose-launcher-session-id` lifts the default redaction
+described under "Launch and session provenance".
 
 ## Launch and session provenance
 
@@ -242,6 +304,21 @@ redaction policy permits it. Missing/expired provenance yields
 `launcher: "unknown"` without changing graph attribution. Nested processes
 inherit labels through `orchestrator.labels.merge_labels`; the more-specific
 dispatch owns graph locator and semantic-role values.
+
+As landed here, `just orchestrate` (`orchestrator.launch` +
+`dispatch.launch_orchestrator`) mints the `launch_id`, writes the
+`LaunchProvenance` record to `$XDG_STATE_HOME/ai-orchestrator/launches/<launch_id>.json`
+(only for a known launcher with a session id), and stamps `launch_id` + `launcher`
+(plus `run_id`) onto the orchestrator's `ONEHARNESS_HISTORY_LABELS`. Every nested
+`run_onejudge` dispatch merges those inherited labels under its own graph locators,
+so each worker/judge/orchestrator conversation carries the join labels. The run
+directory records only the non-sensitive `launch_id` (in `launch.json` under a
+`launch: {launch_id}` object); the sensitive session id never enters the repository.
+The server resolves a run's `RunLaunch` by reading that `launch_id` and joining it to
+the provenance record — reporting `launcher: "unknown"` when the record is missing,
+malformed, or older than its short-lived max age — and includes
+`launcher_session_id` only when started with `--expose-launcher-session-id`
+(`create_app(expose_launcher_session_id=True)`), which is off by default.
 
 `role` in current oneharness history is a transport-party role:
 `agent`, `judge`, or `llmlint`. It remains untouched for telemetry

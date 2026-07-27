@@ -1274,7 +1274,13 @@ def _history_telemetry(
     for session in sessions:
         if session.labels.get("run_id") != run_id:
             continue
-        records = session_records(session)
+        try:
+            records = session_records(session)
+        except HistoryError:
+            # One unreadable transcript degrades that session, not the whole run: a
+            # deleted or truncated record must not blind telemetry to every healthy
+            # session beside it.
+            continue
         summaries.append(_summarize_session(session, cast(list[HistoryRecord], records)))
         latest = records[-1] if records else {}
         raw_provider = latest.get("provider", "oneharness")

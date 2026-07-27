@@ -173,10 +173,16 @@ def _dag_state_contract_checkout(tmp_path: Path) -> Path:
     for relative in (
         "scripts/check-dag-state-contract.py",
         "orchestrator/projection.py",
+        "orchestrator/conversations.py",
         "orchestrator/labels.py",
+        "orchestrator/launch.py",
+        "orchestrator/read_model.py",
+        "orchestrator/telemetry.py",
+        "orchestrator/server.py",
         "packages/dag-layout/src/index.ts",
         "packages/dag-model/src/index.ts",
         "docs/dag-ui/design.md",
+        "docs/dag-ui/oneharness-ui-contract.d.ts",
         "oneharness.judge.toml",
     ):
         target = checkout / relative
@@ -218,40 +224,36 @@ def test_dag_state_contract_checker_reports_typescript_drift(tmp_path: Path) -> 
     assert "reconcile the TypeScript list with the Python projection states" in result.stderr
 
 
-def test_dag_state_contract_checker_reports_agent_role_drift(tmp_path: Path) -> None:
+def test_dag_state_contract_checker_reports_usage_field_drift(tmp_path: Path) -> None:
+    """Renaming a usage field in Python alone must fail, not silently break the UI."""
     checkout = _dag_state_contract_checkout(tmp_path)
-    model = checkout / "packages/dag-model/src/index.ts"
-    model.write_text(model.read_text().replace('  "check-in",\n', ""))
-
-    result = _dag_state_contract_run(checkout)
-
-    assert result.returncode != 0
-    assert "semantic agent roles disagree" in result.stderr
-
-
-def test_dag_state_contract_checker_reports_judge_config_role_drift(tmp_path: Path) -> None:
-    checkout = _dag_state_contract_checkout(tmp_path)
-    judge_config = checkout / "oneharness.judge.toml"
-    judge_config.write_text(
-        judge_config.read_text().replace('agent_role = "judge"', 'agent_role = "worker"')
+    conversations = checkout / "orchestrator/conversations.py"
+    conversations.write_text(
+        conversations.read_text().replace('"cost_usd": "costUsd"', '"cost_usd": "costUSD"')
     )
 
     result = _dag_state_contract_run(checkout)
 
     assert result.returncode != 0
-    assert "oneharness.judge.toml history_labels.agent_role 'worker' disagrees" in result.stderr
-    assert 'restore `agent_role = "judge"`' in result.stderr
+    assert "ConversationUsage rename targets" in result.stderr
+    assert "costUSD" in result.stderr
+    assert "reconcile them in one change" in result.stderr
 
 
-def test_dag_state_contract_checker_rejects_duplicate_agent_roles(tmp_path: Path) -> None:
+def test_dag_state_contract_checker_reports_sse_event_drift(tmp_path: Path) -> None:
+    """An SSE event renamed in the server alone must fail against the design contract."""
     checkout = _dag_state_contract_checkout(tmp_path)
-    model = checkout / "packages/dag-model/src/index.ts"
-    model.write_text(model.read_text().replace('  "check-in",\n', '  "check-in",\n  "check-in",\n'))
+    server = checkout / "orchestrator/server.py"
+    server.write_text(
+        server.read_text().replace('RUN_REMOVED = "run.removed"', 'RUN_REMOVED = "run.deleted"')
+    )
 
     result = _dag_state_contract_run(checkout)
 
     assert result.returncode != 0
-    assert "agentRoleSchema must contain unique string roles" in result.stderr
+    assert "SSE event vocabulary" in result.stderr
+    assert "run.deleted" in result.stderr
+    assert "docs/dag-ui/design.md" in result.stderr
 
 
 def _recipe_checkout(tmp_path: Path) -> tuple[Path, Path]:
@@ -414,3 +416,149 @@ def test_real_cache_check_drives_both_linked_worktrees() -> None:
 
     assert result.returncode == 0, result.stderr
     assert result.stdout == ("nx cache check: cross-worktree hit and broken-input miss verified\n")
+
+
+def test_dag_state_contract_checker_reports_an_invented_payload_field(tmp_path: Path) -> None:
+    """A Python field no contract declares would be served to a client expecting none."""
+    checkout = _dag_state_contract_checkout(tmp_path)
+    read_model = checkout / "orchestrator/read_model.py"
+    read_model.write_text(
+        read_model.read_text().replace(
+            "    attestations: list[str]", "    attestations: list[str]\n    invented: str"
+        )
+    )
+
+    result = _dag_state_contract_run(checkout)
+
+    assert result.returncode != 0
+    assert "read_model.py Round declares ['invented']" in result.stderr
+    assert "add it to the contract or drop it" in result.stderr
+
+
+def test_dag_state_contract_checker_reports_a_dropped_required_field(tmp_path: Path) -> None:
+    """A required contract field the server stops serving leaves a documented gap."""
+    checkout = _dag_state_contract_checkout(tmp_path)
+    conversations = checkout / "orchestrator/conversations.py"
+    conversations.write_text(conversations.read_text().replace("    canContinue: bool\n", "", 1))
+
+    result = _dag_state_contract_run(checkout)
+
+    assert result.returncode != 0
+    assert "omits required" in result.stderr
+    assert "canContinue" in result.stderr
+
+
+def test_dag_state_contract_checker_reports_network_default_drift(tmp_path: Path) -> None:
+    """A default changed in the server alone leaves the documented one wrong."""
+    checkout = _dag_state_contract_checkout(tmp_path)
+    server = checkout / "orchestrator/server.py"
+    server.write_text(server.read_text().replace("DEFAULT_PORT = 8787", "DEFAULT_PORT = 9999"))
+
+    result = _dag_state_contract_run(checkout)
+
+    assert result.returncode != 0
+    assert "default port" in result.stderr
+    assert "is 9999 but" in result.stderr
+    assert "design.md says 8787" in result.stderr
+
+
+def test_dag_state_contract_checker_reports_heartbeat_drift(tmp_path: Path) -> None:
+    """The documented 15-second SSE heartbeat and the server constant stay together."""
+    checkout = _dag_state_contract_checkout(tmp_path)
+    server = checkout / "orchestrator/server.py"
+    server.write_text(
+        server.read_text().replace(
+            "DEFAULT_HEARTBEAT_INTERVAL = 15.0", "DEFAULT_HEARTBEAT_INTERVAL = 30.0"
+        )
+    )
+
+    result = _dag_state_contract_run(checkout)
+
+    assert result.returncode != 0
+    assert "SSE heartbeat interval" in result.stderr
+    assert "reconcile them in one change" in result.stderr
+
+
+def test_dag_state_contract_checker_reports_agent_role_drift(tmp_path: Path) -> None:
+    checkout = _dag_state_contract_checkout(tmp_path)
+    model = checkout / "packages/dag-model/src/index.ts"
+    model.write_text(model.read_text().replace('  "check-in",\n', ""))
+
+    result = _dag_state_contract_run(checkout)
+
+    assert result.returncode != 0
+    assert "semantic agent roles disagree" in result.stderr
+
+
+def test_dag_state_contract_checker_reports_judge_config_role_drift(tmp_path: Path) -> None:
+    checkout = _dag_state_contract_checkout(tmp_path)
+    judge_config = checkout / "oneharness.judge.toml"
+    judge_config.write_text(
+        judge_config.read_text().replace('agent_role = "judge"', 'agent_role = "worker"')
+    )
+
+    result = _dag_state_contract_run(checkout)
+
+    assert result.returncode != 0
+    assert "oneharness.judge.toml history_labels.agent_role 'worker' disagrees" in result.stderr
+    assert 'restore `agent_role = "judge"`' in result.stderr
+
+
+def test_dag_state_contract_checker_rejects_duplicate_agent_roles(tmp_path: Path) -> None:
+    checkout = _dag_state_contract_checkout(tmp_path)
+    model = checkout / "packages/dag-model/src/index.ts"
+    model.write_text(model.read_text().replace('  "check-in",\n', '  "check-in",\n  "check-in",\n'))
+
+    result = _dag_state_contract_run(checkout)
+
+    assert result.returncode != 0
+    assert "agentRoleSchema must contain unique string roles" in result.stderr
+
+
+def test_dag_state_contract_checker_reports_telemetry_schema_drift(tmp_path: Path) -> None:
+    """The base bumped this 6 -> 7 while the contract still said 6; gate it."""
+    checkout = _dag_state_contract_checkout(tmp_path)
+    telemetry = checkout / "orchestrator/telemetry.py"
+    telemetry.write_text(
+        telemetry.read_text().replace(
+            "TELEMETRY_SCHEMA_VERSION = 7", "TELEMETRY_SCHEMA_VERSION = 8"
+        )
+    )
+
+    result = _dag_state_contract_run(checkout)
+
+    assert result.returncode != 0
+    assert "telemetry schema version" in result.stderr
+    assert "is 8 but" in result.stderr
+    assert "reconcile them in one change" in result.stderr
+
+
+def test_dag_state_contract_checker_reports_provenance_record_drift(tmp_path: Path) -> None:
+    """The out-of-repo record's shape is documented; renaming a field alone must fail."""
+    checkout = _dag_state_contract_checkout(tmp_path)
+    launch = checkout / "orchestrator/launch.py"
+    launch.write_text(
+        launch.read_text().replace("    launcher_session_id: str", "    renamed_session: str", 1)
+    )
+
+    result = _dag_state_contract_run(checkout)
+
+    assert result.returncode != 0
+    assert "LaunchProvenance declares ['renamed_session']" in result.stderr
+
+
+def test_dag_state_contract_checker_reports_provenance_version_drift(tmp_path: Path) -> None:
+    """Bumping the record's schema version without the contract must fail."""
+    checkout = _dag_state_contract_checkout(tmp_path)
+    launch = checkout / "orchestrator/launch.py"
+    launch.write_text(
+        launch.read_text().replace(
+            "PROVENANCE_SCHEMA_VERSION = 1", "PROVENANCE_SCHEMA_VERSION = 2", 1
+        )
+    )
+
+    result = _dag_state_contract_run(checkout)
+
+    assert result.returncode != 0
+    assert "provenance schema version" in result.stderr
+    assert "reconcile them in one change" in result.stderr

@@ -10,6 +10,106 @@ import pytest
 from orchestrator import REPO_ROOT
 from orchestrator.cli_contract import ROUND_BUDGET_OPTION
 from orchestrator.dispatch import DispatchError, launch_orchestrator, main_orchestrate
+from orchestrator.labels import LABEL_ENV, parse_labels
+from orchestrator.launch import (
+    LAUNCH_RECORD_NAME,
+    provenance_path,
+    read_launch_info,
+    read_provenance,
+)
+
+
+def _capture_launch_env(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, **launch_kwargs: Any
+) -> tuple[str, dict[str, str], Path]:
+    """Run launch_orchestrator with a fake process; return run id, env, run dir."""
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    plan = tmp_path / "plan.json"
+    plan.write_text(
+        '{"schema_version":3,"tasks":[{"id":"approval","kind":"human","task":"approve"}]}',
+        encoding="utf-8",
+    )
+    captured: dict[str, dict[str, str]] = {}
+
+    class Process:
+        pid = 4321
+
+    def fake_popen(_command: list[str], **kwargs: Any) -> Process:
+        captured["env"] = dict(kwargs["env"])
+        return Process()
+
+    monkeypatch.setattr("orchestrator.dispatch.subprocess.Popen", fake_popen)
+    # `_resolve_onejudge` shells out through `subprocess.run`, which would otherwise
+    # pick up the fake Popen above; resolve it directly, as the sibling test does.
+    monkeypatch.setattr(
+        "orchestrator.dispatch._resolve_onejudge",
+        lambda binary, _env: {"path": str(Path(binary).resolve()), "version": "0.3.4"},
+    )
+    runs = tmp_path / "runs"
+    run_id = launch_orchestrator(
+        plan,
+        runs_dir=runs,
+        run_id="demo",
+        skill_provider={"kind": "command", "command": ["fake-provider"]},
+        **launch_kwargs,
+    )
+    return run_id, captured["env"], runs / run_id
+
+
+def test_launch_writes_provenance_and_stamps_join_labels(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, env, run_dir = _capture_launch_env(
+        monkeypatch, tmp_path, launcher="codex", launcher_session_id="top-session"
+    )
+
+    # The run directory records only the non-sensitive launch_id.
+    launch = json.loads((run_dir / LAUNCH_RECORD_NAME).read_text(encoding="utf-8"))["launch"]
+    launch_id = launch["launch_id"]
+    assert set(launch) == {"launch_id"}
+
+    # The reader the read API uses parses exactly what this writer persisted. This
+    # round trip is the reconciliation for the on-disk launch contract: the writer
+    # types the key through LaunchRecord while the reader names it, and a change to
+    # either half that broke the other would fail right here.
+    assert read_launch_info(run_dir) == launch_id
+
+    # The launch_id + launcher (+ run_id) are stamped as history labels on the
+    # orchestrator env, so every nested dispatch inherits and joins on them.
+    labels = parse_labels(env[LABEL_ENV])
+    assert labels["launch_id"] == launch_id
+    assert labels["launcher"] == "codex"
+    assert labels["run_id"] == "demo"
+
+    # The sensitive session id lives only in the out-of-repo provenance record.
+    assert provenance_path(launch_id).is_file()
+    provenance = read_provenance(launch_id)
+    assert provenance is not None
+    assert provenance["launcher_session_id"] == "top-session"
+
+
+def test_launch_without_known_launcher_writes_no_provenance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, env, run_dir = _capture_launch_env(monkeypatch, tmp_path)  # no launcher supplied
+
+    launch_id = json.loads((run_dir / "launch.json").read_text(encoding="utf-8"))["launch"][
+        "launch_id"
+    ]
+    labels = parse_labels(env[LABEL_ENV])
+    assert labels["launcher"] == "unknown"
+    assert labels["launch_id"] == launch_id
+    assert not provenance_path(launch_id).exists()  # no session -> no protected record
+
+
+def test_launch_rejects_bad_launcher(tmp_path: Path) -> None:
+    plan = tmp_path / "plan.json"
+    plan.write_text(
+        '{"schema_version":3,"tasks":[{"id":"approval","kind":"human","task":"approve"}]}',
+        encoding="utf-8",
+    )
+    with pytest.raises(DispatchError, match="launcher kind"):
+        launch_orchestrator(plan, runs_dir=tmp_path / "runs", launcher="gpt")
 
 
 def test_launch_rejects_missing_plan_and_split_skill(tmp_path: Path) -> None:
@@ -208,6 +308,10 @@ def test_orchestrate_cli_prints_run_id(
                 "fake-provider",
                 "--round-budget",
                 "21600",
+                "--launcher",
+                "codex",
+                "--launcher-session",
+                "sess-2",
             ]
         )
         == 0
@@ -221,6 +325,8 @@ def test_orchestrate_cli_prints_run_id(
         "command": ["fake-provider"],
     }
     assert received["round_budget"] == 21600
+    assert received["launcher"] == "codex"
+    assert received["launcher_session_id"] == "sess-2"
 
 
 def test_orchestrate_cli_reports_launch_error(
