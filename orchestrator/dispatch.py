@@ -955,7 +955,10 @@ def main_orchestrate(argv: list[str] | None = None) -> int:
             .read_text(encoding="utf-8")
             .strip()
         )
-    except (DispatchError, ConfigError) as exc:
+    except (DispatchError, ConfigError, LaunchError) as exc:
+        # LaunchError reaches here from provenance validation that happens before
+        # anything is spawned; it is a launch-boundary refusal like the others, not
+        # a crash, so it exits 2 with a message rather than a traceback.
         print(f"orchestrate: {exc}", file=sys.stderr)
         return EXIT_CONFIG_ERROR
     return 0

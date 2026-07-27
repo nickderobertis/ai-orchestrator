@@ -1114,3 +1114,50 @@ def test_orchestrate_cli_reports_launch_boundary_failures(tmp_path: Path) -> Non
     )
     assert missing_binary.returncode == 2
     assert "binary not found" in missing_binary.stderr
+
+
+def test_orchestrate_cli_refuses_unusable_launch_provenance(tmp_path: Path) -> None:
+    """Provenance is validated at the launch boundary, before anything is spawned.
+
+    A record that cannot be written correctly must stop the launch rather than
+    produce a run whose session join silently never resolves.
+    """
+    plan = _plan(tmp_path, "surface-milestone")
+    base = _base(tmp_path)
+
+    def orchestrate(
+        *extra: str, env: dict[str, str] | None = None
+    ) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [
+                "orchestrator-orchestrate",
+                str(plan),
+                "--runs-dir",
+                str(tmp_path / f"runs-{len(extra)}-{bool(env)}"),
+                "--base",
+                str(base),
+                *extra,
+            ],
+            text=True,
+            capture_output=True,
+            env=env,
+        )
+
+    # A multiline session id would smuggle a second line into a history label.
+    multiline = orchestrate("--launcher", "codex", "--launcher-session", "one\ntwo")
+    assert multiline.returncode == 2
+    assert "session id" in multiline.stderr
+
+    # A launcher outside the closed vocabulary is refused by the CLI itself.
+    unknown = orchestrate("--launcher", "not-a-harness")
+    assert unknown.returncode == 2
+    assert "--launcher" in unknown.stderr
+
+    # No absolute state directory: the protected record has nowhere correct to go.
+    broken_state = dict(os.environ, HOME="relative/home")
+    broken_state.pop("XDG_STATE_HOME", None)
+    relative_home = orchestrate(
+        "--launcher", "codex", "--launcher-session", "planner", env=broken_state
+    )
+    assert relative_home.returncode == 2
+    assert "absolute state directory" in relative_home.stderr
