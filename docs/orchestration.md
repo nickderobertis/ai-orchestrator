@@ -378,8 +378,8 @@ runs/<run-id>/humans.json
 Without `--run`, the id is derived from the plan's `name` or filename and made
 unique. `--runs-dir` moves the ledger, `--no-record` opts out, and `--recover`
 claims a `running` or `abandoned` round only after its recorded owner is proven
-gone. Plan and
-result writes are atomic; a live round cannot be claimed by another process.
+gone. Plan and result writes are atomic; a live round cannot be claimed by
+another process.
 `just runs` summarizes the latest completed round, including waiting action prose
 and what each action unblocks, then points to `just results <run>`. The results
 view lists every node's status and outcome, links its typed-id detail view, and

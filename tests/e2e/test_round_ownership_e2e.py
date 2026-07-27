@@ -22,6 +22,13 @@ signals, with nothing about process liveness faked:
   settled, so the ledger has a healthy-looking summary row to correct, and a run whose
   queued planner surface outlived it, so the view would otherwise say a dead run is
   waiting on the planner.
+
+The entry point detaches *every* `run-plan` invocation, not only the recorded ones, so
+`--no-record` is driven here too. That path claims no round and writes no ledger, which
+removes every surface the journeys above assert against: its owner is knowable only
+from the pid the entry point announces, its result reaches the caller only as stdout,
+and a death reaches the caller only as an exit status. Those three are what detaching
+changed for it, so those three are what it is held to.
 """
 
 from __future__ import annotations
@@ -29,6 +36,7 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import re
 import signal
 import subprocess
 import time
@@ -97,21 +105,63 @@ def _await_exit(pid: int) -> None:
     assert not _alive(pid), f"round owner {pid} never exited"
 
 
+ANNOUNCED_OWNER = re.compile(r"round owner pid (\d+) leads its own session")
+
+
 class Launch:
-    """One launched round: its launcher process, its ledger, and its owner."""
+    """One launched round: its launcher process, its owner, and its two streams."""
 
     def __init__(
         self,
         process: subprocess.Popen[str],
-        round_dir: Path,
+        streams: tuple[Path, Path],
         release: Path,
         common: list[str],
     ) -> None:
         self.process = process
-        self.round_dir = round_dir
+        self.out, self.err = streams
         self.release = release
         self.common = common
         self.owner = self._owner()
+
+    def _owner(self) -> int:
+        """The pid the detaching entry point announced as this round's own.
+
+        An unrecorded round claims nothing, so this announcement is the only place its
+        pid is ever written down — which is why the entry point prints it, and why an
+        operator has nothing else to signal it by.
+        """
+        deadline = e2e_deadline(30)
+        while time.monotonic() < deadline:
+            announced = ANNOUNCED_OWNER.search(
+                self.err.read_text(encoding="utf-8", errors="replace")
+            )
+            if announced is not None:
+                return int(announced[1])
+            time.sleep(0.01)
+        pytest.fail(f"no round owner was announced in {self.err}")
+
+    def teardown_launching_turn(self) -> int:
+        """Kill the launcher's whole process group, as ending a turn does."""
+        group = os.getpgid(self.process.pid)
+        os.killpg(group, signal.SIGTERM)
+        self.process.wait(timeout=e2e_timeout(15))
+        return group
+
+
+class RecordedLaunch(Launch):
+    """A launched round that also claimed a round directory in a ledger."""
+
+    def __init__(
+        self,
+        process: subprocess.Popen[str],
+        streams: tuple[Path, Path],
+        round_dir: Path,
+        release: Path,
+        common: list[str],
+    ) -> None:
+        self.round_dir = round_dir
+        super().__init__(process, streams, release, common)
 
     @property
     def runs(self) -> Path:
@@ -127,13 +177,6 @@ class Launch:
                     return int(str(recorded["pid"]))
             time.sleep(0.01)
         pytest.fail(f"no running round owner was recorded under {self.round_dir}")
-
-    def teardown_launching_turn(self) -> int:
-        """Kill the launcher's whole process group, as ending a turn does."""
-        group = os.getpgid(self.process.pid)
-        os.killpg(group, signal.SIGTERM)
-        self.process.wait(timeout=e2e_timeout(15))
-        return group
 
 
 class Rounds:
@@ -186,24 +229,37 @@ class Rounds:
     def release(self, run_id: str) -> Path:
         return self.tmp_path / f"{run_id}.release"
 
-    def spawn(self, run_id: str, number: int, *args: str) -> Launch:
+    def _start(
+        self, run_id: str, number: int, args: tuple[str, ...]
+    ) -> tuple[subprocess.Popen[str], tuple[Path, Path]]:
         """Start a round inside its own process group, the way a harness turn does.
 
-        The output goes to a file for the same reason the real orchestrator redirects
-        it: once the launching turn is gone, nothing is left draining a pipe.
+        The output goes to files for the same reason the real orchestrator redirects
+        it: once the launching turn is gone, nothing is left draining a pipe. They are
+        kept apart because the unrecorded journeys read both — the round's result is
+        the whole of stdout, and the owner announcement is on stderr.
         """
-        log = (self.tmp_path / f"{run_id}-round-{number:02d}.log").open("wb")
-        process = subprocess.Popen(
-            ["just", *args],
-            cwd=REPO_ROOT,
-            text=True,
-            stdout=log,
-            stderr=log,
-            start_new_session=True,
+        streams = (
+            self.tmp_path / f"{run_id}-round-{number:02d}.out",
+            self.tmp_path / f"{run_id}-round-{number:02d}.err",
         )
+        with streams[0].open("wb") as out, streams[1].open("wb") as err:
+            process = subprocess.Popen(
+                ["just", *args],
+                cwd=REPO_ROOT,
+                text=True,
+                stdout=out,
+                stderr=err,
+                start_new_session=True,
+            )
         _await(self.ready(run_id), "the dispatched worker")
-        launch = Launch(
+        return process, streams
+
+    def spawn(self, run_id: str, number: int, *args: str) -> RecordedLaunch:
+        process, streams = self._start(run_id, number, args)
+        launch = RecordedLaunch(
             process,
+            streams,
             self.runs / run_id / f"round-{number:02d}",
             self.release(run_id),
             self.common,
@@ -211,9 +267,17 @@ class Rounds:
         self.launched.append(launch)
         return launch
 
-    def run_plan(self, run_id: str, recipe: str = "run-plan") -> Launch:
+    def run_plan(self, run_id: str, recipe: str = "run-plan") -> RecordedLaunch:
         plan = self.plan(run_id)
         return self.spawn(run_id, 1, recipe, str(plan), "--run", run_id, *self.common)
+
+    def unrecorded(self, run_id: str) -> Launch:
+        """Launch the `--no-record` path, which claims no round and writes no ledger."""
+        args = ("run-plan", str(self.plan(run_id)), "--no-record", *self.common)
+        process, streams = self._start(run_id, 1, args)
+        launch = Launch(process, streams, self.release(run_id), self.common)
+        self.launched.append(launch)
+        return launch
 
     def waiting_round(self, run_id: str) -> subprocess.CompletedProcess[str]:
         """Settle a first round on a human action, so `next-round` has work to do."""
@@ -221,7 +285,7 @@ class Rounds:
             "run-plan", str(self.plan(run_id, human_gate=True)), "--run", run_id, *self.common
         )
 
-    def next_round(self, run_id: str) -> Launch:
+    def next_round(self, run_id: str) -> RecordedLaunch:
         return self.spawn(run_id, 2, "next-round", run_id, "--complete-human", "gate", *self.common)
 
     def reap(self) -> None:
@@ -243,20 +307,24 @@ def rounds(
     launcher.reap()
 
 
-def _assert_survived_teardown(launch: Launch, group: int) -> None:
+def _assert_outlived_the_turn(launch: Launch, group: int) -> None:
     # An explicit settle window, because what is under test is the *absence* of a
     # death: the teardown escalates, with `uv run` forwarding SIGTERM to its own direct
     # child and following it with SIGKILL about two seconds later.
     time.sleep(e2e_timeout(2.0))
     assert _alive(launch.owner), "the executor died with the turn that launched it"
-    assert _read(launch.round_dir / "status.json")["status"] == "running"
     # Why it survived, asserted rather than assumed: neither the group teardown nor
     # `uv run`'s forwarding to its own direct child can reach a round that is neither.
     assert os.getsid(launch.owner) == launch.owner, "the executor did not lead its own session"
     assert os.getpgid(launch.owner) != group, "the executor stayed in the launching group"
 
 
-def _assert_settled(launch: Launch) -> None:
+def _assert_survived_teardown(launch: RecordedLaunch, group: int) -> None:
+    _assert_outlived_the_turn(launch, group)
+    assert _read(launch.round_dir / "status.json")["status"] == "running"
+
+
+def _assert_settled(launch: RecordedLaunch) -> None:
     launch.release.write_text("go\n", encoding="utf-8")
     _await(launch.round_dir / "result.json", "the round result")
     _await_exit(launch.owner)
@@ -504,3 +572,56 @@ def test_a_recovery_that_refuses_the_journal_abandons_the_round_it_claimed(
         "refused-recovery  round-01 ABANDONED"
         in _just("runs", "--runs-dir", str(rounds.runs)).stdout
     )
+
+
+def test_an_unrecorded_round_outlives_its_launching_turn_and_still_reports(
+    rounds: Rounds,
+) -> None:
+    """`--no-record` detaches too, so its result must still find the caller.
+
+    Detaching moved this round two processes away from the caller: it is no longer the
+    launcher, and it no longer even shares the launcher's session. With no ledger to
+    fall back on, everything the caller learns about it now has to survive that trip —
+    here the pid to signal it by and the result it prints, and in the next journey the
+    status it exits with.
+    """
+    launch = rounds.unrecorded("unrecorded-survives")
+
+    _assert_outlived_the_turn(launch, launch.teardown_launching_turn())
+    # The launcher is already gone; the round finishes with nothing left waiting on it,
+    # which is the whole point of detaching it.
+    launch.release.write_text("go\n", encoding="utf-8")
+    _await_exit(launch.owner)
+
+    # `--format json` makes stdout the round's entire result, so it parses only if it
+    # arrived exactly once: forking a process with a buffered stream is how a payload
+    # gets written twice, and two concatenated objects are not JSON.
+    payload = json.loads(launch.out.read_text(encoding="utf-8"))
+    assert payload["state"] == "complete"
+    assert payload["results"]["held"]["status"] == "done"
+    # Announced by the round itself and only there: the relaying parent must not print
+    # a second, misleading pid for an operator to signal.
+    assert len(ANNOUNCED_OWNER.findall(launch.err.read_text(encoding="utf-8"))) == 1
+    assert launch.owner != launch.process.pid
+    # Unrecorded means unrecorded, detached or not: no ledger appeared to be abandoned.
+    assert not rounds.runs.exists(), "the unrecorded round wrote a ledger"
+
+
+def test_a_signalled_unrecorded_round_reaches_its_caller_as_the_signal_it_took(
+    rounds: Rounds,
+) -> None:
+    """With no round to abandon, the relayed exit status is the only surface left.
+
+    The recorded path answers a killed executor with an ABANDONED ledger row. This one
+    has nowhere to write that, so if the relay swallowed the death — reporting the
+    launcher's own clean exit instead — the caller would read a signalled round as a
+    successful one and never learn otherwise.
+    """
+    launch = rounds.unrecorded("unrecorded-signalled")
+
+    os.kill(launch.owner, signal.SIGTERM)
+    _await_exit(launch.owner)
+
+    assert launch.process.wait(timeout=e2e_timeout(15)) == 128 + int(signal.SIGTERM)
+    assert launch.out.read_text(encoding="utf-8") == "", "a killed round reported a result"
+    assert not rounds.runs.exists(), "the unrecorded round wrote a ledger"
