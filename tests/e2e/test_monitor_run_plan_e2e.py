@@ -833,7 +833,7 @@ def test_real_lifecycle_commit_and_pr_survive_live_state(
             branch=branch,
             repo_type="single-owner",
             dispatch_fn=make_writing_dispatch(filename="monitored.txt"),
-            verify_cmd=["sh", "-c", "test -f monitored.txt"],
+            recorded_gate=["sh", "-c", "test -f monitored.txt"],
             sleep=lambda _seconds: None,
             journal=second_node,
         )

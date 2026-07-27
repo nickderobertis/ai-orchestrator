@@ -90,7 +90,7 @@ def recover_repo(
     workspace_root: str | Path | None = None,
     base: str | None = None,
     pr_base: str | None = None,
-    gate_cmd: list[str] | None = None,
+    recorded_gate: list[str] | None = None,
     github: GitHubBackend | None = None,
     merge_policy: MergePolicy | None = None,
     repo_type: RepositoryType | None = None,
@@ -160,12 +160,12 @@ def recover_repo(
         # The merge path verifies the recovery, but an identity that cannot even name
         # its complete bar has nothing to hand a resolver worker or a reader of the
         # recovery attestation, so recovery still refuses a no-op gate.
-        documented_gate = gate_cmd or (
+        resolved_recorded_gate = recorded_gate or (
             resolve_gate_template(identity.gate, remote_base)
             if identity.gate != NOOP_GATE
             else None
         )
-        if documented_gate is None:
+        if resolved_recorded_gate is None:
             raise RegistryError(
                 "repository identity has a no-op gate; migrate it or pass --gate for recovery"
             )
@@ -394,7 +394,10 @@ def main(argv: list[str] | None = None) -> int:
         help="recorded PR/stack base for a preserved stacked branch (default: --base)",
     )
     parser.add_argument(
-        "--gate", help="gate command, parsed like a shell line (default: auto-detect)"
+        "--gate",
+        help="the repository's complete gate command, parsed like a shell line, recorded "
+        "as the bar this recovery is held to; the merge path is what runs it "
+        "(default: the registered identity gate)",
     )
     parser.add_argument("--workspace", type=Path)
     parser.add_argument("--merge-policy", choices=("auto", "direct", "none"), default=None)
@@ -409,7 +412,7 @@ def main(argv: list[str] | None = None) -> int:
             workspace_root=args.workspace,
             base=args.base,
             pr_base=args.pr_base,
-            gate_cmd=shlex.split(args.gate) if args.gate else None,
+            recorded_gate=shlex.split(args.gate) if args.gate else None,
             merge_policy=args.merge_policy,
             repo_type=args.repo_type,
             merge_method=args.merge_method,

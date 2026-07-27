@@ -83,7 +83,7 @@ def _run_lifecycle_with_blocking_gate(
         workspace=workspace,
         base_path=base_path,
         persona_dir=persona_dir,
-        verify_cmd=["true"],
+        recorded_gate=["true"],
         repo_type="single-owner",
     )
     Path(result_path).write_text(
@@ -313,7 +313,7 @@ def test_lifecycle_dispatch_honors_valid_scratch_capacity_override(
         workspace=workspace,
         base_path=command_base(),
         persona_dir=personas_dir,
-        verify_cmd=["true"],
+        recorded_gate=["true"],
         repo_type="single-owner",
     )
 

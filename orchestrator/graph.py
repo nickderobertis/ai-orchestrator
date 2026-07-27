@@ -144,7 +144,8 @@ _AGENT_NODE_FIELDS = (
     "base_branch",
     "branch",
     "title",
-    "verify_cmd",
+    "recorded_gate",
+    "verify_cmd",  # pre-merge-path spelling of recorded_gate
     # Accepted and ignored: the repository merge path verifies every publication,
     # so neither spelling of the old gate-skipping switch can change anything.
     "no_identity_gate",

@@ -335,6 +335,27 @@ def test_remote_identity_without_required_checks_refuses_recovery(
     assert "just repos --audit-gate-coverage" in recovered.stderr
 
 
+@pytest.mark.parametrize(
+    ("command", "positionals"),
+    [
+        ("orchestrator-repo-task", ("o/r", "engineer", "never dispatched")),
+        ("orchestrator-run-plan", ("plan.json",)),
+    ],
+)
+def test_lifecycle_clis_reject_the_retired_skip_verify_flag(
+    command: str, positionals: tuple[str, ...]
+) -> None:
+    """The flag is gone from every surface that used to accept it.
+
+    It never skipped merge-path verification, and now cannot skip anything, so a
+    script still passing it must fail loudly rather than appear to take effect.
+    """
+    rejected = _cli(command, *positionals, "--skip-verify", check=False)
+
+    assert rejected.returncode == 2
+    assert "unrecognized arguments: --skip-verify" in rejected.stderr
+
+
 def test_lifecycle_clis_reject_unknown_local_aliases_before_dispatch(
     tmp_path: Path,
     bare_origin: Callable[..., Path],

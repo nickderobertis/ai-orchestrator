@@ -1233,7 +1233,7 @@ def test_run_repo_task_journals_the_workstream_and_labels_each_dispatch(
             Step("impl", "engineer", "impl"),
             Step("check", "engineer", "check", deps=["impl"]),
         ],
-        verify_cmd=["true"],
+        recorded_gate=["true"],
         dispatch_fn=fake_dispatch,
         journal=scope,
     )
@@ -1307,7 +1307,7 @@ def test_run_repo_task_journals_a_step_that_hit_the_turn_cap(tmp_path, bare_orig
         str(origin),
         workspace=workspace,
         steps=[Step("impl", "engineer", "impl")],
-        verify_cmd=["true"],
+        recorded_gate=["true"],
         dispatch_fn=fake_dispatch,
         journal=scope,
     )
@@ -1344,7 +1344,7 @@ def test_run_repo_task_expects_no_diff_step_does_not_dispatch(tmp_path, bare_ori
         str(origin),
         workspace=workspace,
         steps=[Step("ready", task="certify unchanged", expects_no_diff=True)],
-        verify_cmd=["true"],
+        recorded_gate=["true"],
         dispatch_fn=unexpected_dispatch,
     )
 
@@ -1383,7 +1383,7 @@ def test_run_repo_task_pauses_and_resumes_local_human_step(tmp_path, bare_origin
         str(origin),
         workspace=workspace,
         steps=steps,
-        verify_cmd=["true"],
+        recorded_gate=["true"],
         dispatch_fn=fake_dispatch,
     )
 
@@ -1405,7 +1405,7 @@ def test_run_repo_task_pauses_and_resumes_local_human_step(tmp_path, bare_origin
         str(origin),
         workspace=workspace,
         steps=steps,
-        verify_cmd=["true"],
+        recorded_gate=["true"],
         dispatch_fn=fake_dispatch,
         resume=resume,
     )
@@ -1463,7 +1463,7 @@ def test_run_repo_task_remote_pause_creates_non_empty_draft(tmp_path, bare_origi
             Step("prepare", "engineer", "prepare"),
             Step("approve", task="approve", kind="human", deps=["prepare"]),
         ],
-        verify_cmd=["true"],
+        recorded_gate=["true"],
         dispatch_fn=fake_dispatch,
         github=DraftGitHub(),
     )
@@ -1494,7 +1494,7 @@ def test_run_repo_task_remote_pause_does_not_create_empty_draft(tmp_path, bare_o
             repo_type="single-owner",
         ),
         steps=[Step("approve", task="approve", kind="human")],
-        verify_cmd=["true"],
+        recorded_gate=["true"],
         github=NoDraftGitHub(),
     )
 
@@ -1517,7 +1517,7 @@ def test_run_repo_task_resume_fails_when_branch_is_missing(tmp_path, bare_origin
             repo_type="single-owner",
         ),
         steps=[Step("approve", task="approve", kind="human")],
-        verify_cmd=["true"],
+        recorded_gate=["true"],
         resume=Resume(
             "feature/missing", "main", "main", gitops.head_sha(publication), ("approve",)
         ),
@@ -1547,7 +1547,7 @@ def test_run_repo_task_resume_fails_when_checkpoint_is_missing(tmp_path, bare_or
             repo_type="single-owner",
         ),
         steps=[Step("approve", task="approve", kind="human")],
-        verify_cmd=["true"],
+        recorded_gate=["true"],
         resume=Resume("feature/resume", "main", "main", "abcdef1", ("approve",)),
     )
 
@@ -1580,7 +1580,7 @@ def test_run_repo_task_resume_fails_when_recorded_draft_is_closed(tmp_path, bare
             repo_type="single-owner",
         ),
         steps=[Step("approve", task="approve", kind="human")],
-        verify_cmd=["true"],
+        recorded_gate=["true"],
         github=ClosedDraftGitHub(),
         resume=Resume(
             "feature/resume",
@@ -1756,7 +1756,7 @@ def test_run_repo_task_git_error_is_reported(tmp_path) -> None:
         "engineer",
         workspace=Workspace(tmp_path / "ws"),
         url=str(tmp_path / "does-not-exist.git"),  # clone fails → GitError
-        verify_cmd=["true"],
+        recorded_gate=["true"],
     )
     assert result.outcome == "error" and not result.ok and result.detail
 

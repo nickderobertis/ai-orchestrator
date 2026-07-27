@@ -172,7 +172,7 @@ def test_published_dispatch_survives_deferred_teardown_and_redispatch_reclaims_i
         branch="teardown-retry",
         base_path=command_base(),
         persona_dir=personas_dir,
-        verify_cmd=["true"],
+        recorded_gate=["true"],
         journal=scope,
     )
 
@@ -197,7 +197,7 @@ def test_published_dispatch_survives_deferred_teardown_and_redispatch_reclaims_i
         branch="teardown-retry",
         base_path=command_base(),
         persona_dir=personas_dir,
-        verify_cmd=["true"],
+        recorded_gate=["true"],
     )
     assert second.outcome == "merged", second.detail
 
@@ -226,7 +226,7 @@ def test_lifecycle_failure_survives_simultaneous_deferred_teardown(
         branch="failed-teardown",
         base_path=command_base(),
         persona_dir=personas_dir,
-        verify_cmd=["true"],
+        recorded_gate=["true"],
     )
 
     assert result.outcome == "not-completed"
@@ -272,7 +272,7 @@ def test_turn_cap_auto_resumes_preserved_branch_without_rerunning_completed_step
         branch="feature/automatic-turn-cap-resume",
         base_path=command_base(),
         persona_dir=personas_dir,
-        verify_cmd=["true"],
+        recorded_gate=["true"],
     )
 
     assert result.outcome == "merged", result.detail
@@ -306,7 +306,7 @@ def test_real_git_teardown_refusal_is_deferred_after_publication(tmp_path, bare_
         workspace=workspace,
         branch="locked-cleanup",
         dispatch_fn=locking_dispatch,
-        verify_cmd=["true"],
+        recorded_gate=["true"],
     )
 
     assert result.outcome == "merged", result.detail
@@ -447,7 +447,7 @@ def test_identity_cache_and_repo_post_checkout_hook_are_wired_across_dispatches(
             repo_type="single-owner",
             workflow="local",
             branch=f"cache-hook-{number}",
-            verify_cmd=[
+            recorded_gate=[
                 "sh",
                 "-c",
                 'test -d "$ORCHESTRATOR_CACHE_DIR" && '
@@ -501,7 +501,7 @@ def test_real_lifecycle_dispatch_drafts_pr_bodies_and_preserves_fallbacks(
         branch="draft-single",
         base_path=base,
         persona_dir=personas_dir,
-        verify_cmd=["true"],
+        recorded_gate=["true"],
     )
     assert single.pr is not None, (single.outcome, single.detail)
     single_body = github._prs[single.pr.number].body
@@ -532,7 +532,7 @@ def test_real_lifecycle_dispatch_drafts_pr_bodies_and_preserves_fallbacks(
         ],
         base_path=base,
         persona_dir=personas_dir,
-        verify_cmd=["true"],
+        recorded_gate=["true"],
     )
     workstream_body = github._prs[workstream.pr.number].body
     assert workstream.outcome == "pr-open"
@@ -574,7 +574,7 @@ def test_real_lifecycle_dispatch_drafts_pr_bodies_and_preserves_fallbacks(
         ],
         base_path=base,
         persona_dir=personas_dir,
-        verify_cmd=["true"],
+        recorded_gate=["true"],
     )
     assert structured_draft.outcome == "pr-open"
     assert structured_draft.pr is not None
@@ -602,7 +602,7 @@ def test_real_lifecycle_dispatch_drafts_pr_bodies_and_preserves_fallbacks(
         branch="draft-fallback",
         base_path=base,
         persona_dir=personas_dir,
-        verify_cmd=["true"],
+        recorded_gate=["true"],
     )
     assert fallback.outcome == "pr-open"
     assert github._prs[fallback.pr.number].body == (
@@ -644,7 +644,7 @@ def test_real_lifecycle_dispatch_drafts_pr_bodies_and_preserves_fallbacks(
         ],
         base_path=base,
         persona_dir=personas_dir,
-        verify_cmd=["true"],
+        recorded_gate=["true"],
     )
     assert structured_workstream.outcome == "pr-open"
     assert github._prs[structured_workstream.pr.number].body == (
@@ -675,7 +675,7 @@ def test_real_lifecycle_dispatch_drafts_pr_bodies_and_preserves_fallbacks(
         branch="draft-empty",
         base_path=base,
         persona_dir=personas_dir,
-        verify_cmd=["true"],
+        recorded_gate=["true"],
     )
     assert empty.outcome == "pr-open"
     assert github._prs[empty.pr.number].body == (
@@ -697,7 +697,7 @@ def test_real_lifecycle_dispatch_drafts_pr_bodies_and_preserves_fallbacks(
         branch="draft-invalid",
         base_path=base,
         persona_dir=personas_dir,
-        verify_cmd=["true"],
+        recorded_gate=["true"],
     )
     assert invalid.outcome == "pr-open"
     assert invalid_task in github._prs[invalid.pr.number].body
@@ -722,7 +722,7 @@ def test_real_lifecycle_dispatch_drafts_pr_bodies_and_preserves_fallbacks(
         branch="draft-structured-invalid",
         base_path=base,
         persona_dir=personas_dir,
-        verify_cmd=["true"],
+        recorded_gate=["true"],
     )
     assert structured_invalid.outcome == "pr-open"
     assert github._prs[structured_invalid.pr.number].body == (
@@ -744,7 +744,7 @@ def test_real_lifecycle_dispatch_drafts_pr_bodies_and_preserves_fallbacks(
         branch="draft-error",
         base_path=base,
         persona_dir=personas_dir,
-        verify_cmd=["true"],
+        recorded_gate=["true"],
     )
     assert error.outcome == "pr-open"
     assert error_task in github._prs[error.pr.number].body
@@ -768,7 +768,7 @@ def test_real_lifecycle_dispatch_drafts_pr_bodies_and_preserves_fallbacks(
         branch="draft-structured-error",
         base_path=base,
         persona_dir=personas_dir,
-        verify_cmd=["true"],
+        recorded_gate=["true"],
     )
     assert structured_error.outcome == "pr-open"
     assert github._prs[structured_error.pr.number].body == (
@@ -790,7 +790,7 @@ def test_real_lifecycle_dispatch_drafts_pr_bodies_and_preserves_fallbacks(
         body="## What\nSupplied body.\n\n## Why\nSupplied reason.\n",
         base_path=base,
         persona_dir=personas_dir,
-        verify_cmd=["true"],
+        recorded_gate=["true"],
     )
     assert explicit.outcome == "pr-open"
     assert github._prs[explicit.pr.number].body == (
@@ -812,7 +812,7 @@ def test_real_lifecycle_dispatch_drafts_pr_bodies_and_preserves_fallbacks(
         title="feat: use supplied title",
         base_path=base,
         persona_dir=personas_dir,
-        verify_cmd=["true"],
+        recorded_gate=["true"],
     )
     assert titled.outcome == "pr-open"
     assert github._prs[titled.pr.number].title == "feat: use supplied title"
@@ -869,7 +869,7 @@ def test_repo_plan_ledger_and_guided_next_round(
                 "repo": str(canonical),
                 "persona": "engineer",
                 "task": "should-fail write-change: preserve this partial attempt",
-                "verify_cmd": ["true"],
+                "recorded_gate": ["true"],
                 "workflow": "local",
                 "repo_type": "single-owner",
             }
@@ -990,7 +990,7 @@ def test_lifecycle_records_verified_change_already_integrated_on_base(
                             "complete-now write-change publish-change-to-base: "
                             "land before lifecycle closeout"
                         ),
-                        "verify_cmd": ["true"],
+                        "recorded_gate": ["true"],
                         "workflow": "local",
                         "repo_type": "single-owner",
                     }
@@ -1053,7 +1053,7 @@ def test_lifecycle_accepts_merge_path_gated_change_already_integrated_on_base(
                             "complete-now write-change publish-change-to-base: "
                             "land invalid work before lifecycle closeout"
                         ),
-                        "verify_cmd": ["false"],
+                        "recorded_gate": ["false"],
                         "workflow": "local",
                         "repo_type": "single-owner",
                     }
@@ -1112,7 +1112,7 @@ def test_lifecycle_ignores_legacy_verify_override_during_local_publication(
                         "repo": str(canonical),
                         "persona": "engineer",
                         "task": "complete-now write-change: race local publication",
-                        "verify_cmd": [
+                        "recorded_gate": [
                             "sh",
                             "-c",
                             "git symbolic-ref -q HEAD >/dev/null && "
@@ -1220,7 +1220,7 @@ def test_lifecycle_scopes_llmlint_wrapper_from_resolved_repository_identity(
             if human_pause
             else None
         ),
-        verify_cmd=["true"],
+        recorded_gate=["true"],
         dispatch_fn=writing_dispatch,
     )
 
@@ -1247,7 +1247,7 @@ def test_registered_aliases_drive_real_lifecycle_without_a_stray_clone(
         execution_checkout="local/safety",
         base_path=command_base(),
         persona_dir=personas_dir,
-        verify_cmd=["true"],
+        recorded_gate=["true"],
     )
 
     assert result.ok and result.outcome == "merged", result.detail
@@ -1267,7 +1267,7 @@ def test_registered_aliases_drive_real_lifecycle_without_a_stray_clone(
                         "persona": "engineer",
                         "task": "complete-now write-unique-change alias plan lifecycle",
                         "execution_checkout": "local/safety",
-                        "verify_cmd": ["true"],
+                        "recorded_gate": ["true"],
                     }
                 ],
             }
@@ -1319,7 +1319,7 @@ def test_registered_aliases_drive_real_lifecycle_without_a_stray_clone(
                         "repo": "nickderobertis/crozier",
                         "persona": "engineer",
                         "task": "complete-now write-change registered remote alias",
-                        "verify_cmd": ["true"],
+                        "recorded_gate": ["true"],
                         "merge_policy": "none",
                     }
                 ],
@@ -1369,7 +1369,7 @@ def test_local_identity_executes_in_safety_clone_and_publishes_without_pr(
         execution_checkout=safety,
         github=github,
         dispatch_fn=make_writing_dispatch(filename="git-subsystem-change.txt"),
-        verify_cmd=["true"],
+        recorded_gate=["true"],
     )
 
     assert result.ok and result.outcome == "merged", result.detail
@@ -1410,7 +1410,7 @@ def test_safety_clone_refuses_publication_checkout_on_nonroot_branch(tmp_path, b
         workspace=Workspace(tmp_path / "nonroot-worktrees"),
         execution_checkout=safety,
         dispatch_fn=dispatch_fn,
-        verify_cmd=["true"],
+        recorded_gate=["true"],
     )
 
     assert result.outcome == "error"
@@ -1433,7 +1433,7 @@ def test_registered_remote_identity_keeps_pr_flow(tmp_path, bare_origin) -> None
         workspace=Workspace(tmp_path / "remote-worktrees"),
         github=github,
         dispatch_fn=make_writing_dispatch(filename="reviewed.txt"),
-        verify_cmd=["true"],
+        recorded_gate=["true"],
         sleep=lambda _: None,
     )
 
@@ -1593,7 +1593,7 @@ def test_verify_via_ci_real_cli_rejects_local_and_tracked_node_can_opt_out(
                         "repo": str(remote_checkout),
                         "persona": "engineer",
                         "task": "complete-now write-change",
-                        "verify_cmd": ["false"],
+                        "recorded_gate": ["false"],
                         "merge_policy": "none",
                     }
                 ],
@@ -1632,7 +1632,7 @@ def test_verify_via_ci_real_cli_rejects_local_and_tracked_node_can_opt_out(
                         "persona": "engineer",
                         "task": "complete-now write-unique-change node CI opt-in",
                         "verify_via_ci": True,
-                        "verify_cmd": ["false"],
+                        "recorded_gate": ["false"],
                         "merge_policy": "none",
                     }
                 ],
@@ -1701,7 +1701,7 @@ def test_team_default_opens_ready_for_review_pr_without_polling(tmp_path, bare_o
         workspace=Workspace(tmp_path / "team-worktrees"),
         github=github,
         dispatch_fn=make_writing_dispatch(filename="team.txt"),
-        verify_cmd=["true"],
+        recorded_gate=["true"],
     )
 
     assert result.ok and result.outcome == "pr-open", result.detail
@@ -1724,7 +1724,7 @@ def test_team_explicit_auto_merges_remote_pr(tmp_path, bare_origin) -> None:
         workspace=Workspace(tmp_path / "team-auto-worktrees"),
         github=FakeGitHub(origin),
         dispatch_fn=make_writing_dispatch(filename="team-auto.txt"),
-        verify_cmd=["true"],
+        recorded_gate=["true"],
         merge_policy="auto",
         sleep=lambda _: None,
     )
@@ -1751,7 +1751,7 @@ def test_remote_lifecycle_routes_only_single_owner_auto_merge_through_queue(
             workspace=Workspace(tmp_path / f"routing-{repo_type}-worktrees"),
             github=FakeGitHub(origin),
             dispatch_fn=make_writing_dispatch(filename=f"routing-{repo_type}.txt"),
-            verify_cmd=["true"],
+            recorded_gate=["true"],
             merge_policy="auto",
             sleep=lambda _: None,
         ),
@@ -1780,7 +1780,7 @@ def test_remote_recovery_routes_only_single_owner_auto_merge_through_queue(
         dispatch_fn=make_writing_dispatch(
             filename=f"recovery-routing-{repo_type}.txt", completed=False
         ),
-        verify_cmd=["true"],
+        recorded_gate=["true"],
     )
     assert preserved.outcome == "not-completed" and preserved.resume is not None
 
@@ -1791,7 +1791,7 @@ def test_remote_recovery_routes_only_single_owner_auto_merge_through_queue(
             branch,
             workspace_root=tmp_path / f"recovery-routing-{repo_type}-worktrees",
             github=FakeGitHub(origin),
-            gate_cmd=["true"],
+            recorded_gate=["true"],
             merge_policy="auto",
         ),
         should_wait=should_wait,
@@ -1817,7 +1817,7 @@ def test_local_single_owner_none_opens_pr_without_mutating_stored_workflow(
         workspace=Workspace(tmp_path / "local-none-worktrees"),
         github=FakeGitHub(origin),
         dispatch_fn=make_writing_dispatch(filename="local-none.txt"),
-        verify_cmd=["true"],
+        recorded_gate=["true"],
         merge_policy="none",
     )
 
@@ -1883,7 +1883,7 @@ def test_public_lifecycle_type_workflow_policy_matrix(
         repo_type=repo_type,
         merge_policy=merge_policy,
         dispatch_fn=make_writing_dispatch(filename="matrix.txt"),
-        verify_cmd=["true"],
+        recorded_gate=["true"],
         sleep=lambda _: None,
     )
 
@@ -1913,7 +1913,7 @@ def test_local_repo_direct_merge(tmp_path, bare_origin) -> None:
         "engineer",
         workspace=ws,
         dispatch_fn=make_writing_dispatch(filename="feature.txt"),
-        verify_cmd=["true"],  # explicit gate so the test never depends on make/just
+        recorded_gate=["true"],  # explicit gate so the test never depends on make/just
     )
     assert result.ok, result.detail
     assert result.outcome == "merged"
@@ -1981,7 +1981,7 @@ def test_covered_lifecycle_uses_push_gate_without_orchestrator_gate_run(
         workspace=workspace,
         dispatch_fn=make_writing_dispatch(filename="covered.txt"),
         # This legacy override would fail if lifecycle still invoked run_gate.
-        verify_cmd=["false"],
+        recorded_gate=["false"],
     )
 
     assert result.ok and result.outcome == "merged", result.detail
@@ -2006,7 +2006,7 @@ def test_pre_push_gate_failure_is_recorded_as_gate_failure(tmp_path, bare_origin
         "engineer",
         workspace=workspace,
         dispatch_fn=make_writing_dispatch(filename="rejected.txt"),
-        verify_cmd=["true"],
+        recorded_gate=["true"],
     )
 
     assert result.outcome == "gate-failed"
@@ -2044,7 +2044,7 @@ def test_publication_push_gate_failure_leaves_the_branch_and_base_intact(
         workspace=workspace,
         branch="feature/publication-gate-failure",
         dispatch_fn=make_writing_dispatch(filename="publication.txt"),
-        verify_cmd=["true"],
+        recorded_gate=["true"],
     )
 
     assert result.outcome == "gate-failed"
@@ -2067,7 +2067,7 @@ def test_recovery_publication_push_gate_failure_preserves_the_branch(tmp_path, b
         workspace=Workspace(tmp_path / "recovery-publication-source-worktrees"),
         branch="feature/recovery-publication-gate",
         dispatch_fn=make_writing_dispatch(filename="preserved.txt", completed=False),
-        verify_cmd=["true"],
+        recorded_gate=["true"],
     )
     assert preserved.outcome == "not-completed"
     before = _tip(origin, "main")
@@ -2077,7 +2077,7 @@ def test_recovery_publication_push_gate_failure_preserves_the_branch(tmp_path, b
         canonical,
         preserved.branch,
         workspace_root=tmp_path / "recovery-publication-gate-worktrees",
-        gate_cmd=["true"],
+        recorded_gate=["true"],
     )
 
     assert recovered.outcome == "gate-failed"
@@ -2108,7 +2108,7 @@ def test_lifecycle_refuses_uncovered_identity_before_dispatch(tmp_path, bare_ori
             workflow="local",
         ),
         dispatch_fn=unexpected_dispatch,
-        verify_cmd=["true"],
+        recorded_gate=["true"],
     )
 
     assert result.outcome == "error"
@@ -2186,7 +2186,7 @@ def test_local_workflow_cannot_qualify_on_required_checks_alone(tmp_path, bare_o
         workspace=workspace,
         github=ProtectedGitHub(origin),
         dispatch_fn=lambda *_args, **_kwargs: pytest.fail("must not dispatch"),
-        verify_cmd=["true"],
+        recorded_gate=["true"],
     )
 
     assert result.outcome == "error"
@@ -2218,7 +2218,7 @@ def test_local_workflow_recovery_cannot_qualify_on_required_checks_alone(
             "feature/never-recovered",
             workspace_root=tmp_path / "local-recovery-required-only-worktrees",
             github=ProtectedGitHub(origin),
-            gate_cmd=["true"],
+            recorded_gate=["true"],
         )
 
 
@@ -2253,7 +2253,7 @@ def test_remote_human_checkpoint_records_push_failure(
             Step("approve", task="Approve the work.", kind="human", deps=["prepare"]),
         ],
         dispatch_fn=_per_step_dispatch(),
-        verify_cmd=["true"],
+        recorded_gate=["true"],
     )
 
     assert result.outcome == expected_outcome
@@ -2270,7 +2270,7 @@ def test_local_repo_non_main_default_and_gate_context(tmp_path, bare_origin) -> 
         "engineer",
         workspace=ws,
         dispatch_fn=make_writing_dispatch(filename="portable.txt"),
-        verify_cmd=[
+        recorded_gate=[
             "sh",
             "-c",
             'test "$ORCHESTRATOR_COMPARISON_REMOTE/$ORCHESTRATOR_COMPARISON_BASE" = origin/master',
@@ -2295,7 +2295,7 @@ def test_local_repo_gate_failure_blocks_merge(tmp_path, bare_origin) -> None:
         "engineer",
         workspace=workspace,
         dispatch_fn=make_writing_dispatch(filename="feature.txt"),
-        verify_cmd=["sh", "-c", "printf 'lint tier: bad import\\n'; exit 1"],
+        recorded_gate=["sh", "-c", "printf 'lint tier: bad import\\n'; exit 1"],
     )
     assert not result.ok
     assert result.outcome == "gate-failed"
@@ -2324,7 +2324,7 @@ def test_local_repo_syncs_advanced_base_before_gate(tmp_path, bare_origin) -> No
         "engineer",
         workspace=ws,
         dispatch_fn=dispatch_after_base_advances,
-        verify_cmd=[
+        recorded_gate=[
             "sh",
             "-c",
             "test -f base.txt && git merge-base --is-ancestor origin/main HEAD",
@@ -2374,7 +2374,7 @@ def test_local_conflict_resolves_outside_queue_then_requeues_and_merges(
             branch=f"feature/{name}-local-conflict",
             workspace=workspace,
             dispatch_fn=concurrent_dispatch,
-            verify_cmd=["git", "diff", "--check", "origin/main...HEAD"],
+            recorded_gate=["git", "diff", "--check", "origin/main...HEAD"],
         )
 
     with ThreadPoolExecutor(max_workers=2) as pool:
@@ -2421,7 +2421,7 @@ def test_local_conflict_incomplete_resolver_preserves_branch(
         "engineer",
         workspace=_workspace(tmp_path, origin),
         dispatch_fn=dispatch_fn,
-        verify_cmd=["true"],
+        recorded_gate=["true"],
     )
 
     assert result.outcome == "sync-conflict"
@@ -2456,7 +2456,7 @@ def test_local_conflict_retry_resumes_committed_branch(tmp_path, bare_origin) ->
         "engineer",
         workspace=workspace,
         dispatch_fn=dispatch_fn,
-        verify_cmd=["true"],
+        recorded_gate=["true"],
     )
 
     assert result.outcome == "sync-conflict"
@@ -2472,7 +2472,7 @@ def test_local_conflict_retry_resumes_committed_branch(tmp_path, bare_origin) ->
                 "repo": str(origin),
                 "persona": "engineer",
                 "task": "Create a persistently conflicting local edit.",
-                "verify_cmd": ["true"],
+                "recorded_gate": ["true"],
             }
         ]
     }
@@ -2495,7 +2495,7 @@ def test_local_conflict_retry_resumes_committed_branch(tmp_path, bare_origin) ->
         "engineer",
         workspace=workspace,
         dispatch_fn=dispatch_fn,
-        verify_cmd=["true"],
+        recorded_gate=["true"],
         resume=parsed_retry.resume,
     )
 
@@ -2521,7 +2521,7 @@ def test_failed_lifecycle_without_commits_retries_fresh(tmp_path, bare_origin) -
         "engineer",
         workspace=workspace,
         dispatch_fn=no_work,
-        verify_cmd=["true"],
+        recorded_gate=["true"],
     )
 
     assert failed.outcome == "not-completed"
@@ -2534,7 +2534,7 @@ def test_failed_lifecycle_without_commits_retries_fresh(tmp_path, bare_origin) -
                     "repo": str(origin),
                     "persona": "engineer",
                     "task": "Fail before producing work.",
-                    "verify_cmd": ["true"],
+                    "recorded_gate": ["true"],
                 }
             ]
         },
@@ -2549,7 +2549,7 @@ def test_failed_lifecycle_without_commits_retries_fresh(tmp_path, bare_origin) -
         "engineer",
         workspace=workspace,
         dispatch_fn=make_writing_dispatch(filename="fresh.txt", content="fresh"),
-        verify_cmd=["true"],
+        recorded_gate=["true"],
     )
 
     assert retried.outcome == "merged", retried.detail
@@ -2780,7 +2780,7 @@ def test_lifecycle_without_explicit_or_registry_gate_errors(tmp_path, bare_origi
     assert "no verification gate is configured" in result.detail
 
 
-def test_verify_cmd_override_cannot_bypass_the_merge_path_gate(tmp_path, bare_origin) -> None:
+def test_recorded_gate_override_cannot_bypass_the_merge_path_gate(tmp_path, bare_origin) -> None:
     origin = bare_origin()
     workspace = _workspace(tmp_path, origin)
     canonical = workspace.clone_dir(normalize_repo(str(origin)))
@@ -2795,7 +2795,7 @@ def test_verify_cmd_override_cannot_bypass_the_merge_path_gate(tmp_path, bare_or
         dispatch_fn=make_writing_dispatch(filename="feature.txt"),
         # The recorded identity-gate override says the change is fine; only the
         # repository's own merge path decides, and it rejects.
-        verify_cmd=["true"],
+        recorded_gate=["true"],
     )
 
     assert result.outcome == "gate-failed"
@@ -2813,7 +2813,7 @@ def test_agent_not_completed_stops_early(tmp_path, bare_origin) -> None:
         "engineer",
         workspace=ws,
         dispatch_fn=make_writing_dispatch(filename="partial.txt", completed=False),
-        verify_cmd=["true"],
+        recorded_gate=["true"],
     )
     assert result.outcome == "not-completed"
     assert not result.ok
@@ -2844,7 +2844,7 @@ def test_retry_with_invalid_incomplete_provenance_records_fresh_branch_fallback(
         "engineer",
         workspace=workspace,
         dispatch_fn=make_writing_dispatch(filename="partial.txt", completed=False),
-        verify_cmd=["true"],
+        recorded_gate=["true"],
     )
     assert first.resume is not None and first.resume.mode == "retry"
     recovery_worktree = workspace.worktree(
@@ -2863,7 +2863,7 @@ def test_retry_with_invalid_incomplete_provenance_records_fresh_branch_fallback(
         "engineer",
         workspace=workspace,
         dispatch_fn=make_writing_dispatch(filename="complete.txt"),
-        verify_cmd=["true"],
+        recorded_gate=["true"],
         resume=first.resume,
     )
 
@@ -2884,7 +2884,7 @@ def test_preserved_retry_is_recovered_through_the_merge_path_gate(tmp_path, bare
         "engineer",
         workspace=workspace,
         dispatch_fn=make_writing_dispatch(filename="partial.txt", completed=False),
-        verify_cmd=["true"],
+        recorded_gate=["true"],
     )
     assert isinstance(first.resume, Resume)
 
@@ -2894,7 +2894,7 @@ def test_preserved_retry_is_recovered_through_the_merge_path_gate(tmp_path, bare
         "engineer",
         workspace=workspace,
         dispatch_fn=make_writing_dispatch(filename="complete.txt"),
-        verify_cmd=["true"],
+        recorded_gate=["true"],
         resume=first.resume,
     )
 
@@ -2913,7 +2913,7 @@ def test_preserved_retry_with_failing_complete_gate_remains_unpublished(
         "engineer",
         workspace=workspace,
         dispatch_fn=make_writing_dispatch(filename="partial.txt", completed=False),
-        verify_cmd=["true"],
+        recorded_gate=["true"],
     )
     assert isinstance(first.resume, Resume)
 
@@ -2923,7 +2923,7 @@ def test_preserved_retry_with_failing_complete_gate_remains_unpublished(
         "engineer",
         workspace=workspace,
         dispatch_fn=make_writing_dispatch(filename="complete.txt"),
-        verify_cmd=["false"],
+        recorded_gate=["false"],
         resume=first.resume,
     )
 
@@ -2956,7 +2956,7 @@ def test_clean_committed_partial_work_is_marked_and_recoverable(tmp_path, bare_o
         workspace=workspace,
         branch="feature/clean-committed-partial",
         dispatch_fn=committing_dispatch,
-        verify_cmd=["true"],
+        recorded_gate=["true"],
     )
 
     assert result.outcome == "not-completed" and not result.ok
@@ -2987,7 +2987,7 @@ def test_clean_committed_partial_work_is_marked_and_recoverable(tmp_path, bare_o
         canonical,
         result.branch,
         workspace_root=tmp_path / "clean-partial-recovery-worktrees",
-        gate_cmd=gate,
+        recorded_gate=gate,
     )
 
     assert recovered.ok and recovered.outcome == "merged"
@@ -3022,7 +3022,7 @@ def test_recovery_push_failure_is_recorded_and_preserves_branch(
         workspace=Workspace(tmp_path / "recovery-gate-source-worktrees"),
         branch="feature/recovery-gate-failure",
         dispatch_fn=make_writing_dispatch(filename="preserved.txt", completed=False),
-        verify_cmd=["true"],
+        recorded_gate=["true"],
     )
     assert preserved.outcome == "not-completed" and preserved.resume is not None
     checkpoint = gitops.ref_sha(canonical, preserved.branch)
@@ -3040,7 +3040,7 @@ def test_recovery_push_failure_is_recorded_and_preserves_branch(
         canonical,
         preserved.branch,
         workspace_root=tmp_path / "recovery-gate-failure-worktrees",
-        gate_cmd=["true"],
+        recorded_gate=["true"],
     )
 
     assert recovered.outcome == expected_outcome
@@ -3061,7 +3061,7 @@ def test_recovery_refuses_uncovered_identity_and_preserves_branch(tmp_path, bare
         workspace=Workspace(tmp_path / "uncovered-recovery-source-worktrees"),
         branch="feature/uncovered-recovery",
         dispatch_fn=make_writing_dispatch(filename="preserved.txt", completed=False),
-        verify_cmd=["true"],
+        recorded_gate=["true"],
     )
     assert preserved.outcome == "not-completed"
     checkpoint = gitops.ref_sha(canonical, preserved.branch)
@@ -3072,7 +3072,7 @@ def test_recovery_refuses_uncovered_identity_and_preserves_branch(tmp_path, bare
             canonical,
             preserved.branch,
             workspace_root=tmp_path / "uncovered-recovery-worktrees",
-            gate_cmd=["true"],
+            recorded_gate=["true"],
         )
 
     assert gitops.ref_sha(canonical, preserved.branch) == checkpoint
@@ -3117,7 +3117,7 @@ def test_remote_stacked_recovery_failures_preserve_synthetic_base(
         branch,
         workspace_root=tmp_path / f"stacked-recovery-{failure}-worktrees",
         github=FakeGitHub(origin),
-        gate_cmd=["false" if failure == "gate" else "true"],
+        recorded_gate=["false" if failure == "gate" else "true"],
     )
 
     assert recovered.outcome == expected_outcome
@@ -3138,7 +3138,7 @@ def test_local_recovery_conflict_resumes_worker_then_requeues(tmp_path, bare_ori
         dispatch_fn=make_writing_dispatch(
             filename="shared.txt", content="preserved branch", completed=False
         ),
-        verify_cmd=["true"],
+        recorded_gate=["true"],
     )
     assert partial.outcome == "not-completed"
     _advance_origin(tmp_path, origin, "shared.txt", "advanced base\n")
@@ -3159,7 +3159,7 @@ def test_local_recovery_conflict_resumes_worker_then_requeues(tmp_path, bare_ori
         canonical,
         partial.branch,
         workspace_root=tmp_path / "recovery-conflict-worktrees",
-        gate_cmd=["git", "diff", "--check", "origin/main...HEAD"],
+        recorded_gate=["git", "diff", "--check", "origin/main...HEAD"],
         dispatch_fn=resolving_dispatch,
     )
 
@@ -3191,7 +3191,7 @@ def test_local_recovery_incomplete_resolver_preserves_branch(
         dispatch_fn=make_writing_dispatch(
             filename="shared.txt", content="preserved", completed=False
         ),
-        verify_cmd=["true"],
+        recorded_gate=["true"],
     )
     _advance_origin(tmp_path, origin, "shared.txt", "advanced\n")
 
@@ -3206,7 +3206,7 @@ def test_local_recovery_incomplete_resolver_preserves_branch(
         canonical,
         partial.branch,
         workspace_root=tmp_path / "incomplete-recovery-worktrees",
-        gate_cmd=["true"],
+        recorded_gate=["true"],
         dispatch_fn=incomplete_dispatch,
     )
 
@@ -3227,7 +3227,7 @@ def test_local_recovery_conflict_resolution_exhaustion_is_bounded(tmp_path, bare
         dispatch_fn=make_writing_dispatch(
             filename="shared.txt", content="preserved", completed=False
         ),
-        verify_cmd=["true"],
+        recorded_gate=["true"],
     )
     _advance_origin(tmp_path, origin, "shared.txt", "advanced\n")
     resolutions = 0
@@ -3241,7 +3241,7 @@ def test_local_recovery_conflict_resolution_exhaustion_is_bounded(tmp_path, bare
         canonical,
         partial.branch,
         workspace_root=tmp_path / "exhausted-recovery-worktrees",
-        gate_cmd=["true"],
+        recorded_gate=["true"],
         dispatch_fn=unresolved_dispatch,
     )
 
@@ -3269,7 +3269,7 @@ def test_local_recovery_rejects_invalid_worker_metadata(
         dispatch_fn=make_writing_dispatch(
             filename="shared.txt", content="preserved", completed=False
         ),
-        verify_cmd=["true"],
+        recorded_gate=["true"],
     )
     subprocess.run(["git", "checkout", partial.branch], cwd=canonical, check=True)
     subprocess.run(
@@ -3293,7 +3293,7 @@ def test_local_recovery_rejects_invalid_worker_metadata(
         canonical,
         partial.branch,
         workspace_root=tmp_path / f"invalid-{label}-recovery",
-        gate_cmd=["true"],
+        recorded_gate=["true"],
     )
 
     assert recovered.outcome == "sync-conflict"
@@ -3320,7 +3320,7 @@ def test_cooperative_real_dispatch_cancellation_preserves_and_recovers_branch(
             base_path=command_base(),
             persona_dir=personas_dir,
             branch="feature/cooperative-cancel",
-            verify_cmd=["test", "-f", "CHANGE.txt"],
+            recorded_gate=["test", "-f", "CHANGE.txt"],
             cancel=cancel,
         )
         deadline = e2e_deadline(15)
@@ -3345,7 +3345,7 @@ def test_cooperative_real_dispatch_cancellation_preserves_and_recovers_branch(
         canonical,
         result.branch,
         workspace_root=tmp_path / "cancelled-recovery-worktrees",
-        gate_cmd=["test", "-f", "CHANGE.txt"],
+        recorded_gate=["test", "-f", "CHANGE.txt"],
     )
     assert recovered.ok and recovered.outcome == "merged"
     assert _has_file(origin, "main", "CHANGE.txt")
@@ -3376,7 +3376,7 @@ def test_cancellation_after_publication_starts_finishes_authoritatively(
             base_path=command_base(),
             persona_dir=personas_dir,
             branch="feature/publication-cancel",
-            verify_cmd=["test", "-f", "CHANGE.txt"],
+            recorded_gate=["test", "-f", "CHANGE.txt"],
             cancel=cancel,
         )
         deadline = e2e_deadline(15)
@@ -3400,7 +3400,7 @@ def test_no_changes_produces_no_pr(tmp_path, bare_origin) -> None:
         "reviewer",
         workspace=_workspace(tmp_path, origin),
         dispatch_fn=make_writing_dispatch(filename=None),
-        verify_cmd=["true"],
+        recorded_gate=["true"],
     )
     assert result.outcome == "no-changes"
     assert not result.ok
@@ -3416,7 +3416,7 @@ def test_resumed_branch_setup_round_trips_through_telemetry_cli(tmp_path, bare_o
         "engineer",
         workspace=workspace,
         dispatch_fn=make_writing_dispatch(filename="partial.txt", completed=False),
-        verify_cmd=["true"],
+        recorded_gate=["true"],
     )
     assert isinstance(partial.resume, Resume)
 
@@ -3435,7 +3435,7 @@ def test_resumed_branch_setup_round_trips_through_telemetry_cli(tmp_path, bare_o
             node.persona,
             workspace=workspace,
             dispatch_fn=make_writing_dispatch(filename="completed.txt"),
-            verify_cmd=["true"],
+            recorded_gate=["true"],
             resume=partial.resume,
             journal=journal,
         )
@@ -3489,7 +3489,7 @@ def test_real_lifecycle_outcomes_round_trip_through_telemetry_cli(tmp_path, bare
         origin: Path,
         github: FakeGitHub | None = None,
         dispatch_fn=None,
-        verify_cmd: list[str] | None = None,
+        recorded_gate: list[str] | None = None,
         timeout: float = 3600.0,
         clock=None,
         resume: Resume | None = None,
@@ -3507,7 +3507,7 @@ def test_real_lifecycle_outcomes_round_trip_through_telemetry_cli(tmp_path, bare
             merge=GitHubMergeStrategy(github) if github is not None else None,
             url=str(origin),
             dispatch_fn=dispatch_fn or make_writing_dispatch(filename="change.txt"),
-            verify_cmd=verify_cmd or ["true"],
+            recorded_gate=recorded_gate or ["true"],
             timeout=timeout,
             clock=clock or __import__("time").monotonic,
             sleep=lambda _seconds: None,
@@ -3580,7 +3580,7 @@ def test_real_lifecycle_outcomes_round_trip_through_telemetry_cli(tmp_path, bare
         "engineer",
         workspace=reused_workspace,
         dispatch_fn=make_writing_dispatch(filename="partial.txt", completed=False),
-        verify_cmd=["true"],
+        recorded_gate=["true"],
     )
     assert isinstance(partial.resume, Resume)
     reused = run_recorded(
@@ -3588,7 +3588,7 @@ def test_real_lifecycle_outcomes_round_trip_through_telemetry_cli(tmp_path, bare
         origin=reused_origin,
         workspace=reused_workspace,
         resume=partial.resume,
-        verify_cmd=["false"],
+        recorded_gate=["false"],
     )
     assert reused.retry_lineage is not None
     assert reused.retry_lineage.disposition == "recovered"
@@ -3601,7 +3601,7 @@ def test_real_lifecycle_outcomes_round_trip_through_telemetry_cli(tmp_path, bare
         "engineer",
         workspace=abandoned_workspace,
         dispatch_fn=make_writing_dispatch(filename="partial.txt", completed=False),
-        verify_cmd=["true"],
+        recorded_gate=["true"],
     )
     assert isinstance(abandoned_partial.resume, Resume)
     recovery_worktree = abandoned_workspace.worktree(
@@ -3661,7 +3661,7 @@ def test_github_auto_merge_on_required_checks(tmp_path, bare_origin) -> None:
         merge=GitHubMergeStrategy(github),
         url=str(origin),  # but clone/push the real bare repo
         dispatch_fn=make_writing_dispatch(filename="feature.txt"),
-        verify_cmd=["true"],
+        recorded_gate=["true"],
         sleep=lambda _: None,
     )
     assert result.ok
@@ -3692,7 +3692,7 @@ def test_github_pr_title_comes_from_agent_commit_subject(tmp_path, bare_origin) 
         merge=GitHubMergeStrategy(github),
         url=str(origin),
         dispatch_fn=committing_dispatch,
-        verify_cmd=["true"],
+        recorded_gate=["true"],
         sleep=lambda _: None,
     )
 
@@ -3738,7 +3738,7 @@ def test_github_second_run_reuses_open_pr_and_merges(tmp_path, bare_origin) -> N
         url=str(origin),
         branch=branch,
         dispatch_fn=make_writing_dispatch(filename="first.txt"),
-        verify_cmd=["true"],
+        recorded_gate=["true"],
         merge_policy="none",
     )
     assert first.outcome == "pr-open"
@@ -3766,7 +3766,7 @@ def test_github_second_run_reuses_open_pr_and_merges(tmp_path, bare_origin) -> N
         url=str(origin),
         branch=branch,
         dispatch_fn=resume_open_pr,
-        verify_cmd=["true"],
+        recorded_gate=["true"],
         sleep=lambda _: None,
     )
     assert second.ok and second.outcome == "merged"
@@ -3787,7 +3787,7 @@ def test_github_auto_merge_unavailable_falls_back_to_direct(tmp_path, bare_origi
         merge=GitHubMergeStrategy(github),
         url=str(origin),
         dispatch_fn=make_writing_dispatch(filename="feature.txt"),
-        verify_cmd=["true"],
+        recorded_gate=["true"],
         sleep=lambda _: None,
     )
     assert result.ok and result.outcome == "merged"
@@ -3810,7 +3810,7 @@ def test_github_direct_fallback_fails_fast_when_merge_returns_unmerged(
         merge=GitHubMergeStrategy(github),
         url=str(origin),
         dispatch_fn=make_writing_dispatch(filename="feature.txt"),
-        verify_cmd=["true"],
+        recorded_gate=["true"],
         repo_type="single-owner",
         merge_policy="auto",
         sleep=sleeps.append,
@@ -3844,7 +3844,7 @@ def test_github_direct_fallback_polls_only_while_merge_is_in_progress(
         merge=GitHubMergeStrategy(github),
         url=str(origin),
         dispatch_fn=make_writing_dispatch(filename="feature.txt"),
-        verify_cmd=["true"],
+        recorded_gate=["true"],
         repo_type="single-owner",
         merge_policy="auto",
         sleep=sleeps.append,
@@ -3877,7 +3877,7 @@ def test_github_direct_policy_polls_an_in_progress_merge_until_completion(
         merge=GitHubMergeStrategy(github),
         url=str(origin),
         dispatch_fn=make_writing_dispatch(filename="feature.txt"),
-        verify_cmd=["true"],
+        recorded_gate=["true"],
         merge_policy="direct",
         sleep=sleeps.append,
         timeout=10_000.0,
@@ -3901,7 +3901,7 @@ def test_github_required_check_failure_blocks_merge(tmp_path, bare_origin) -> No
         merge=GitHubMergeStrategy(github),
         url=str(origin),
         dispatch_fn=make_writing_dispatch(filename="feature.txt"),
-        verify_cmd=["true"],
+        recorded_gate=["true"],
         merge_policy="auto",
         sleep=sleeps.append,
         timeout=10_000.0,
@@ -3926,7 +3926,7 @@ def test_github_pending_required_check_keeps_polling_then_merges(tmp_path, bare_
         merge=GitHubMergeStrategy(github),
         url=str(origin),
         dispatch_fn=make_writing_dispatch(filename="feature.txt"),
-        verify_cmd=["true"],
+        recorded_gate=["true"],
         sleep=sleeps.append,
         timeout=60.0,
     )
@@ -3951,7 +3951,7 @@ def test_github_settled_checks_fail_when_native_auto_merge_stalls(tmp_path, bare
         merge=GitHubMergeStrategy(github),
         url=str(origin),
         dispatch_fn=make_writing_dispatch(filename="feature.txt"),
-        verify_cmd=["true"],
+        recorded_gate=["true"],
         repo_type="single-owner",
         merge_policy="auto",
         sleep=sleeps.append,
@@ -3983,7 +3983,7 @@ def test_github_waits_for_required_checks_to_be_reported_then_merges(tmp_path, b
         merge=GitHubMergeStrategy(github),
         url=str(origin),
         dispatch_fn=make_writing_dispatch(filename="feature.txt"),
-        verify_cmd=["true"],
+        recorded_gate=["true"],
         repo_type="single-owner",
         merge_policy="auto",
         sleep=sleeps.append,
@@ -4011,7 +4011,7 @@ def test_github_unreported_required_checks_wait_until_timeout(tmp_path, bare_ori
         merge=GitHubMergeStrategy(github),
         url=str(origin),
         dispatch_fn=make_writing_dispatch(filename="feature.txt"),
-        verify_cmd=["true"],
+        recorded_gate=["true"],
         repo_type="single-owner",
         merge_policy="auto",
         sleep=sleeps.append,
@@ -4044,7 +4044,7 @@ def test_github_direct_merge_waits_when_post_merge_checks_disappear(tmp_path, ba
         merge=GitHubMergeStrategy(github),
         url=str(origin),
         dispatch_fn=make_writing_dispatch(filename="feature.txt"),
-        verify_cmd=["true"],
+        recorded_gate=["true"],
         repo_type="single-owner",
         merge_policy="auto",
         sleep=sleeps.append,
@@ -4077,7 +4077,7 @@ def test_github_auto_policy_polls_an_in_progress_merge_until_completion(
         merge=GitHubMergeStrategy(github),
         url=str(origin),
         dispatch_fn=make_writing_dispatch(filename="feature.txt"),
-        verify_cmd=["true"],
+        recorded_gate=["true"],
         repo_type="single-owner",
         merge_policy="auto",
         sleep=sleeps.append,
@@ -4104,7 +4104,7 @@ def test_github_in_progress_merge_uses_timeout_as_backstop(tmp_path, bare_origin
         merge=GitHubMergeStrategy(github),
         url=str(origin),
         dispatch_fn=make_writing_dispatch(filename="feature.txt"),
-        verify_cmd=["true"],
+        recorded_gate=["true"],
         merge_policy="direct",
         sleep=sleeps.append,
         clock=lambda: next(ticks),
@@ -4180,7 +4180,7 @@ def test_remote_human_workstream_draft_checkpoint_and_safe_resume(tmp_path, bare
         github=github,
         steps=[Step("approve", task="Approve before work starts.", kind="human")],
         branch="feature/empty-human-pause",
-        verify_cmd=["true"],
+        recorded_gate=["true"],
     )
     assert empty.outcome == "waiting-human" and empty.resume is not None
     assert empty.pr is None and empty.resume.pr is None and github.created == []
@@ -4232,7 +4232,7 @@ def test_remote_human_workstream_draft_checkpoint_and_safe_resume(tmp_path, bare
         steps=steps,
         branch="feature/remote-human-resume",
         dispatch_fn=writing_step,
-        verify_cmd=gate,
+        recorded_gate=gate,
         sleep=lambda _: None,
     )
 
@@ -4253,7 +4253,7 @@ def test_remote_human_workstream_draft_checkpoint_and_safe_resume(tmp_path, bare
         github=github,
         steps=steps,
         dispatch_fn=writing_step,
-        verify_cmd=gate,
+        recorded_gate=gate,
         sleep=lambda _: None,
         resume=replace(
             paused.resume,
@@ -4282,7 +4282,7 @@ def test_remote_human_workstream_draft_checkpoint_and_safe_resume(tmp_path, bare
         github=github,
         steps=steps,
         dispatch_fn=writing_step,
-        verify_cmd=gate,
+        recorded_gate=gate,
         resume=final_resume,
     )
     assert closed.outcome == "resume-failed" and "closed without merging" in closed.detail
@@ -4297,7 +4297,7 @@ def test_remote_human_workstream_draft_checkpoint_and_safe_resume(tmp_path, bare
         github=github,
         steps=steps,
         dispatch_fn=writing_step,
-        verify_cmd=gate,
+        recorded_gate=gate,
         resume=final_resume,
     )
     assert prematurely_ready.outcome == "resume-failed" and "ready for review" in (
@@ -4318,7 +4318,7 @@ def test_remote_human_workstream_draft_checkpoint_and_safe_resume(tmp_path, bare
         github=github,
         steps=steps,
         dispatch_fn=writing_step,
-        verify_cmd=gate,
+        recorded_gate=gate,
         resume=final_resume,
     )
     assert rewritten.outcome == "resume-failed" and "rewritten" in rewritten.detail
@@ -4342,7 +4342,7 @@ def test_remote_human_workstream_draft_checkpoint_and_safe_resume(tmp_path, bare
         github=github,
         steps=steps,
         dispatch_fn=writing_step,
-        verify_cmd=gate,
+        recorded_gate=gate,
         resume=final_resume,
     )
     assert local_ahead.outcome == "resume-failed" and "unpublished or divergent" in (
@@ -4361,7 +4361,7 @@ def test_remote_human_workstream_draft_checkpoint_and_safe_resume(tmp_path, bare
         github=github,
         steps=steps,
         dispatch_fn=writing_step,
-        verify_cmd=gate,
+        recorded_gate=gate,
         sleep=lambda _: None,
         resume=final_resume,
     )
@@ -4395,7 +4395,7 @@ def test_multi_pr_dag_across_repos(tmp_path, bare_origin) -> None:
             node.persona,
             workspace=ws,
             dispatch_fn=make_writing_dispatch(filename=f"{node.id}.txt"),
-            verify_cmd=["true"],
+            recorded_gate=["true"],
             journal=journal,
         )
 
@@ -4437,7 +4437,7 @@ def test_linear_team_stack_targets_open_dependency_and_includes_pr_link(
             github=github,
             branch=node.branch,
             dispatch_fn=make_writing_dispatch(filename=f"{node.id}.txt"),
-            verify_cmd=["true"],
+            recorded_gate=["true"],
             stack_bases=node.stack_bases,
             journal=journal,
         )
@@ -4517,7 +4517,7 @@ def test_cross_round_human_gate_preserves_open_same_repo_stack(tmp_path, bare_or
             github=github,
             branch=node.branch,
             dispatch_fn=make_writing_dispatch(filename=f"{node.id}.txt"),
-            verify_cmd=["true"],
+            recorded_gate=["true"],
             stack_bases=node.stack_bases,
             journal=journal,
         )
@@ -4574,7 +4574,7 @@ def test_cross_round_root_merged_pr_anchor_is_dropped_after_squash(tmp_path, bar
         github=github,
         branch="feature/squashed-parent",
         dispatch_fn=make_writing_dispatch(filename="parent.txt"),
-        verify_cmd=["true"],
+        recorded_gate=["true"],
     )
     assert parent.outcome == "pr-open" and parent.pr is not None
 
@@ -4598,7 +4598,7 @@ def test_cross_round_root_merged_pr_anchor_is_dropped_after_squash(tmp_path, bar
         github=github,
         branch="feature/post-squash-child",
         dispatch_fn=make_writing_dispatch(filename="child.txt"),
-        verify_cmd=["true"],
+        recorded_gate=["true"],
         stack_bases=[
             StackBase(
                 parent.branch,
@@ -4633,7 +4633,7 @@ def test_legacy_untyped_anchor_from_other_repo_is_scheduling_only(tmp_path, bare
         github=FakeGitHub(left_origin),
         branch="feature/legacy-left",
         dispatch_fn=make_writing_dispatch(filename="left.txt"),
-        verify_cmd=["true"],
+        recorded_gate=["true"],
     )
     assert left_result.outcome == "pr-open"
 
@@ -4645,7 +4645,7 @@ def test_legacy_untyped_anchor_from_other_repo_is_scheduling_only(tmp_path, bare
         github=FakeGitHub(right_origin),
         branch="feature/legacy-right",
         dispatch_fn=make_writing_dispatch(filename="right.txt"),
-        verify_cmd=["true"],
+        recorded_gate=["true"],
         stack_bases=[StackBase(left_result.branch, repo=left_result.repo)],
     )
 
@@ -4668,7 +4668,7 @@ def test_stack_anchor_for_different_root_fails_before_dispatch(tmp_path, bare_or
         github=github,
         branch="feature/root-mismatch-parent",
         dispatch_fn=make_writing_dispatch(filename="parent.txt"),
-        verify_cmd=["true"],
+        recorded_gate=["true"],
     )
     dispatched: list[str] = []
 
@@ -4684,7 +4684,7 @@ def test_stack_anchor_for_different_root_fails_before_dispatch(tmp_path, bare_or
         github=github,
         branch="feature/root-mismatch-child",
         dispatch_fn=dispatch_fn,
-        verify_cmd=["true"],
+        recorded_gate=["true"],
         stack_bases=[
             StackBase(
                 parent.branch,
@@ -4714,7 +4714,7 @@ def test_closed_and_missing_stack_anchors_fail_before_dispatch(tmp_path, bare_or
         github=github,
         branch="feature/closed-parent",
         dispatch_fn=make_writing_dispatch(filename="parent.txt"),
-        verify_cmd=["true"],
+        recorded_gate=["true"],
     )
     assert parent.pr is not None
     github._prs[parent.pr.number].closed = True
@@ -4735,7 +4735,7 @@ def test_closed_and_missing_stack_anchors_fail_before_dispatch(tmp_path, bare_or
         github=github,
         branch="feature/closed-child",
         dispatch_fn=make_writing_dispatch(filename="closed.txt"),
-        verify_cmd=["true"],
+        recorded_gate=["true"],
         stack_bases=[anchor],
     )
     missing = run_repo_task(
@@ -4746,7 +4746,7 @@ def test_closed_and_missing_stack_anchors_fail_before_dispatch(tmp_path, bare_or
         github=github,
         branch="feature/missing-child",
         dispatch_fn=make_writing_dispatch(filename="missing.txt"),
-        verify_cmd=["true"],
+        recorded_gate=["true"],
         stack_bases=[
             StackBase(
                 "feature/deleted-parent",
@@ -4777,7 +4777,7 @@ def test_multi_parent_stack_uses_synthetic_base_and_child_only_diff(tmp_path, ba
             github=github,
             branch=node.branch,
             dispatch_fn=make_writing_dispatch(filename=f"{node.id}.txt"),
-            verify_cmd=["true"],
+            recorded_gate=["true"],
             stack_bases=node.stack_bases,
             journal=journal,
         )
@@ -4835,7 +4835,7 @@ def test_multi_parent_stack_deduplicates_ancestor_prerequisites(tmp_path, bare_o
             github=github,
             branch=node.branch,
             dispatch_fn=make_writing_dispatch(filename=f"{node.id}.txt"),
-            verify_cmd=["true"],
+            recorded_gate=["true"],
             stack_bases=node.stack_bases,
             journal=journal,
         )
@@ -4907,7 +4907,7 @@ def test_stack_conflict_aborts_before_child_dispatch_and_skips_descendant(
             github=github,
             branch=node.branch,
             dispatch_fn=writing_dispatch,
-            verify_cmd=["true"],
+            recorded_gate=["true"],
             stack_bases=node.stack_bases,
             journal=journal,
         )
@@ -5012,7 +5012,7 @@ def test_local_human_workstream_removes_worktree_and_resumes_same_branch(
         steps=steps,
         branch="feature/local-human-resume",
         dispatch_fn=writing_step,
-        verify_cmd=gate,
+        recorded_gate=gate,
     )
 
     assert paused.outcome == "waiting-human" and paused.resume is not None
@@ -5045,7 +5045,7 @@ def test_local_human_workstream_removes_worktree_and_resumes_same_branch(
         workspace=workspace,
         steps=steps,
         dispatch_fn=writing_step,
-        verify_cmd=gate,
+        recorded_gate=gate,
         resume=resume,
     )
 
@@ -5078,7 +5078,7 @@ def test_workstream_multiple_onejudge_one_pr(tmp_path, bare_origin) -> None:
         workspace=_workspace(tmp_path, origin),
         steps=steps,
         dispatch_fn=_per_step_dispatch(),
-        verify_cmd=["true"],
+        recorded_gate=["true"],
     )
     assert result.ok and result.outcome == "merged"
     assert len(result.steps) == 3 and all(s.status == "done" for s in result.steps)
@@ -5116,7 +5116,7 @@ def test_step_commit_subject_comes_from_agent_commits(tmp_path, bare_origin) -> 
         "engineer",
         workspace=_workspace(tmp_path, origin),
         dispatch_fn=partly_committing_dispatch,
-        verify_cmd=["true"],
+        recorded_gate=["true"],
     )
 
     assert result.ok
@@ -5143,7 +5143,7 @@ def test_workstream_step_failure_stops_and_skips_dependents(tmp_path, bare_origi
         workspace=workspace,
         steps=steps,
         dispatch_fn=_per_step_dispatch(fail_step="impl"),  # first step hits the turn cap
-        verify_cmd=["true"],
+        recorded_gate=["true"],
     )
     assert not result.ok and result.outcome == "not-completed"
     by_id = {s.id: s.status for s in result.steps}
@@ -5170,7 +5170,7 @@ def test_multi_pr_failure_skips_dependents(tmp_path, bare_origin) -> None:
             node.persona,
             workspace=ws,
             dispatch_fn=make_writing_dispatch(filename=f"{node.id}.txt"),
-            verify_cmd=["false"] if node.id == "a" else ["true"],
+            recorded_gate=["false"] if node.id == "a" else ["true"],
             journal=journal,
         )
 

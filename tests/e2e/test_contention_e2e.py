@@ -115,7 +115,7 @@ def _lifecycle_process(
         workspace=workspace,
         base_path=base_config,
         persona_dir=persona_dir,
-        verify_cmd=["true"],
+        recorded_gate=["true"],
     )
     results.put(
         {

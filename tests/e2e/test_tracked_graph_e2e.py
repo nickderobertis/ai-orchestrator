@@ -1329,6 +1329,11 @@ def test_real_cli_recovers_failed_lifecycle_result(
                         "branch": "feature/failed-lifecycle",
                         "workflow": "local",
                         "repo_type": "single-owner",
+                        # Retired gate-skipping keys: a plan written before the
+                        # merge path became authoritative must still load and run,
+                        # and neither key may weaken the hook below.
+                        "skip_verify": True,
+                        "no_identity_gate": True,
                         "max_turns": 1,
                     },
                     {
@@ -1339,7 +1344,7 @@ def test_real_cli_recovers_failed_lifecycle_result(
                         "branch": "feature/gate-failed-lifecycle",
                         "workflow": "local",
                         "repo_type": "single-owner",
-                        "verify_cmd": [
+                        "recorded_gate": [
                             "sh",
                             "-c",
                             "printf 'full-gate-start\\n'; i=0; while [ $i -lt 2200 ]; do "

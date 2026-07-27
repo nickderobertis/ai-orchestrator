@@ -1361,7 +1361,7 @@ def run_repo_task(
     title: str | None = None,
     body: str | None = None,
     url: str | None = None,
-    verify_cmd: list[str] | None = None,
+    recorded_gate: list[str] | None = None,
     verify_via_ci: bool = False,
     merge_policy: MergePolicy | None = None,
     merge_method: str = "squash",
@@ -1549,14 +1549,14 @@ def run_repo_task(
             pr_base = root_base
         result.pr_base = pr_base
         gate_template = selection.gate
-        if verify_cmd is not None:
-            resolved_verify_cmd = verify_cmd
+        if recorded_gate is not None:
+            resolved_recorded_gate = recorded_gate
         elif gate_template == NOOP_GATE:
-            resolved_verify_cmd = None
+            resolved_recorded_gate = None
         elif gate_template is not None:
-            resolved_verify_cmd = resolve_gate_template(gate_template, f"origin/{pr_base}")
+            resolved_recorded_gate = resolve_gate_template(gate_template, f"origin/{pr_base}")
         elif verify_via_ci:
-            resolved_verify_cmd = None
+            resolved_recorded_gate = None
         else:
             raise ConfigError(
                 "no verification gate is configured; register or migrate the identity gate"
@@ -1573,7 +1573,7 @@ def run_repo_task(
                 "pre_push_hook": coverage.hook or "",
                 "required_checks": list(coverage.required_checks),
                 "required_checks_status": coverage.github_status,
-                "expected_gate": list(resolved_verify_cmd or []),
+                "expected_gate": list(resolved_recorded_gate or []),
             },
         )
         branch = result.branch
@@ -2071,7 +2071,7 @@ class RepoPlanNode:
     base_branch: str | None = None
     branch: str | None = None
     title: str | None = None
-    verify_cmd: list[str] | None = None
+    recorded_gate: list[str] | None = None
     verify_via_ci: bool | None = None
     merge_policy: MergePolicy | None = None
     workflow: Workflow | None = None
@@ -2297,7 +2297,9 @@ def parse_repo_node(nid: str, t: dict[str, Any]) -> RepoPlanNode:
         base_branch=t.get("base_branch"),
         branch=t.get("branch"),
         title=raw_title,
-        verify_cmd=t.get("verify_cmd"),
+        # `verify_cmd` is the pre-merge-path spelling: it named the command the
+        # lifecycle ran, and now names the one the round records.
+        recorded_gate=t.get("recorded_gate", t.get("verify_cmd")),
         verify_via_ci=raw_verify_via_ci,
         merge_policy=merge_policy,
         workflow=workflow,
@@ -2654,7 +2656,7 @@ def make_repo_runner(
             base_branch=node.base_branch,
             branch=node.branch,
             title=node.title,
-            verify_cmd=node.verify_cmd,
+            recorded_gate=node.recorded_gate,
             verify_via_ci=(node.verify_via_ci if node.verify_via_ci is not None else verify_via_ci),
             merge_policy=(node.merge_policy if node.merge_policy is not None else merge_policy),
             merge_method=merge_method,
@@ -2887,7 +2889,7 @@ def main_task(argv: list[str] | None = None) -> int:
         title=args.title,
         execution_checkout=args.execution_checkout,
         repo_type=args.repo_type,
-        verify_cmd=None,
+        recorded_gate=None,
         verify_via_ci=args.verify_via_ci,
         merge_policy=args.merge_policy,
         merge_method=args.merge_method,
