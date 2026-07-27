@@ -30,6 +30,8 @@ import time
 from pathlib import Path
 from typing import Literal, NamedTuple, TypedDict, cast
 
+from orchestrator.scratch import CAPACITY_ERROR_MARKER, DEFAULT_MIN_FREE_BYTES
+
 
 class SupervisorRequest(TypedDict):
     """Validated fields consumed from onejudge's protocol-v4 supervisor request."""
@@ -264,6 +266,15 @@ def main() -> int:
                 ),
                 "infrastructure-v03-incomplete": (
                     "new history record lacks complete v0.3 telemetry"
+                ),
+                "infrastructure-v10-write": ("harness codex cannot write v1.0 history telemetry"),
+                "infrastructure-v10-incomplete": ("new history run lacks complete v1.0 telemetry"),
+                "infrastructure-enospc": "[Errno 28] No space left on device",
+                "infrastructure-oom": "worker was OOMKilled",
+                "infrastructure-preflight": (
+                    f"{CAPACITY_ERROR_MARKER} scratch filesystem at /tmp has "
+                    "1 bytes free, below the "
+                    f"{DEFAULT_MIN_FREE_BYTES}-byte dispatch threshold"
                 ),
             }
             infrastructure_error = next(

@@ -227,20 +227,26 @@ real CLI. onejudge drives a
 two-party conversation, and harness/model selection for each
 side lives in oneharness config, not onejudge:
 
-- **Agent side** (does the work) — `oneharness.toml`, discovered from the repo root.
+- **Agent side** (does the work) — `oneharness.toml`, discovered from the repo root;
+  it prefers `claude-code:alternate` on the alternate subscription and falls back
+  to codex.
 - **Judge / simulated-user side** (supervises) — `oneharness.judge.toml`, passed
-  as the base config's `provider.judge_config`.
+  as the base config's `provider.judge_config`; codex is primary and
+  `claude-code:primary` uses only the primary subscription.
+- **LLM lint side** — `oneharness.llmlint.toml`, forced by
+  `scripts/llmlint-oneharness.sh`; it is codex-only.
 
 `onejudge init` scaffolds both files plus a starter `onejudge.yaml`. The adopted
 exact oneharness release is declared in `config/oneharness.version`, installed as
 the `oneharness-cli` PyPI wheel, and verified by `scripts/session-setup.sh`. Session
 setup also installs and verifies Bun for oneharness's SDK gate. The
-committed configs are that output with two
-customizations — a cheaper judge model and the `IS_SANDBOX` env — and
+committed configs are that output with auth-variant routing, a cheaper Claude
+judge fallback, and the `IS_SANDBOX` env, and
 `config/onejudge.base.yaml` supersedes init's starter `onejudge.yaml`. Regenerate
 with `onejudge init --force`.
 
-**Live dispatch** picks a harness via `oneharness.toml`'s fallback (codex primary).
+**Live dispatch** picks a harness via `oneharness.toml`'s fallback (alternate
+Claude subscription primary, codex secondary).
 The lifecycle dispatches in **`bypass`** mode by default — the no-approval mode —
 which is correct here because the **whole environment is a sandbox** (a container):
 codex's own `workspace-write` sandbox (`auto` mode) needs unprivileged user
@@ -275,13 +281,19 @@ install precede Nx because they make Nx available; bootstrap then delegates
 project setup through uniform Nx `bootstrap` targets.
 Use `docs/telemetry.md` to inspect session timing, usage, and the agent/judge
 turn timeline with `just telemetry`.
+Use `just sweep-scratch --dry-run` to inspect definite dead watchdog scratch and
+conservatively stale known third-party scratch; omit `--dry-run` to reclaim it.
+Session setup and every recorded round transition run this sweep automatically.
+An active lifecycle makes third-party cleanup skip without waiting; PID-proven
+dead watchdog cleanup still proceeds.
 
 `just smoke` spends exactly one real agent-harness turn in a throwaway directory
-and verifies exact prompt delivery plus a complete native oneharness history
-record. It is deliberately outside `just gate`. The pre-push hook runs it only
-when the pushed diff touches `scripts/`, `config/oneharness.version`,
-`config/onejudge.base.yaml`, `oneharness.toml`, or `oneharness.judge.toml`;
-ordinary pushes consume no harness quota.
+and verifies exact prompt delivery plus a successful, fully accounted oneharness
+history record. Native per-phase timing is provider-optional, so its absence is a
+telemetry-quality signal rather than a launch failure. It is deliberately outside
+`just gate`. The pre-push hook runs it only when the pushed diff touches `scripts/`,
+`config/oneharness.version`, `config/onejudge.base.yaml`, `oneharness.toml`, or
+`oneharness.judge.toml`; ordinary pushes consume no harness quota.
 
 A dispatched change is not done until `just gate` is green. Its agent clears its
 own llmlint findings—by fixing them, adding a justified `ignore-file`, or disabling
@@ -348,7 +360,11 @@ How this polyglot monorepo was built up from the create-repo reference pieces:
 - The gate is strict: format check, lint, type check, and tests all fail on
   issues — no warnings-only mode.
 - **Coverage is enforced at 95% line coverage** on the `orchestrator/` package
-  (`just test`); the gate fails below it.
+  (`just test`); the gate fails below it. `[tool.coverage.report]` in
+  `pyproject.toml` is the floor's one source — `fail_under` sets it and
+  `precision` decides it, because pytest-cov compares the total *after* rounding
+  at that precision. `tests/test_coverage_gate.py` holds that combination to one
+  that can actually fail the build.
 - **Tests are realistic, not mocked.** The e2e suite drives the *real* `onejudge`
   CLI as a subprocess through the same `dispatch`/`run-plan` code the orchestrator
   uses. Only the paid model/harness is faked — via onejudge's own `command`

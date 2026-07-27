@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Local orchestration harness: drive many onejudge processes to complete a task DAG in parallel."
 requires-python = ">=3.11"
 dependencies = [
-    "oneharness-cli==0.5.5",
+    "oneharness-cli==0.5.9",
     "onejudge==0.3.4",
     "pyyaml>=6.0",
     "fastapi>=0.115",
@@ -46,6 +46,7 @@ orchestrator-channel-approve = "orchestrator.channel:main_approve"
 orchestrator-channel-reject = "orchestrator.channel:main_reject"
 orchestrator-channel-continue = "orchestrator.channel:main_continue"
 orchestrator-relay-supervisor = "orchestrator.channel:main_relay"
+orchestrator-sweep-scratch = "orchestrator.scratch:main"
 
 [dependency-groups]
 dev = [
@@ -87,6 +88,12 @@ branch = true
 
 [tool.coverage.report]
 show_missing = true
+# The single source of the enforced floor: pytest-cov adopts `fail_under` when no
+# `--cov-fail-under` overrides it. `precision` is load-bearing, not cosmetic — the
+# fail decision compares `round(total, precision)`, so at the default precision 0 a
+# 94.93% total rounded up to 95 and exited 0 while printing "FAIL ... not reached".
+fail_under = 95
+precision = 2
 exclude_lines = [
     "pragma: no cover",
     "if __name__ == .__main__.:",

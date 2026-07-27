@@ -47,11 +47,11 @@ from .runs import (
 from .verify import GateAttestation
 
 TELEMETRY_SCHEMA_VERSION = 6
-SUPPORTED_HISTORY_SCHEMA_VERSIONS = ("0.2", "0.3", 1, 2, "1.0")
+SUPPORTED_HISTORY_SCHEMA_VERSIONS = ("0.2", "0.3", 1, 2, "1.0", "1.1")
 #: History schema versions that may carry validated native timing (per-turn
 #: ``model_ms``/``tool_ms`` plus interval-bearing tool events). A version identifies
 #: the line format, not the completeness of timing supplied by a particular harness.
-NATIVE_TIMING_HISTORY_SCHEMAS: frozenset[str | int] = frozenset({"0.3", 2, "1.0"})
+NATIVE_TIMING_HISTORY_SCHEMAS: frozenset[str | int] = frozenset({"0.3", 2, "1.0", "1.1"})
 TelemetryQuality = Literal["complete", "partial", "legacy"]
 TelemetrySource = Literal["onejudge", "oneharness", "history_legacy", "journal_legacy"]
 FailureClass = Literal[
@@ -668,15 +668,77 @@ def _summarize_session(session: HistorySession, records: list[HistoryRecord]) ->
     )
 
 
-def history_session_is_successful_with_complete_telemetry(session: HistorySession) -> bool:
-    """Whether oneharness persisted successful execution and complete native telemetry."""
+#: Usage counters every harness must report for a launch to be accounted for.
+LAUNCH_REQUIRED_USAGE_FIELDS: tuple[UsageKey, ...] = ("input_tokens", "output_tokens")
+
+
+def _launch_usage_failure(value: object) -> str | None:
+    """Reject absent or malformed token accounting; tolerate unreported counters.
+
+    Only the input/output counters are required. ``cache_read_tokens`` and
+    ``cache_write_tokens`` are provider-optional — codex reports a cache read but
+    no cache write — so a null counter is a harness that does not report it, not a
+    broken launch. A counter that IS reported must still be a valid count.
+    ``cost_usd`` is validated by the caller that renders it, not here: no harness
+    is obliged to price its own turn, and codex reports none at all.
+    """
+    if not isinstance(value, dict):
+        return "reports no token accounting"
+    for key in USAGE_FIELDS:
+        if key == "cost_usd":
+            continue
+        raw = value.get(key)
+        if raw is None:
+            if key in LAUNCH_REQUIRED_USAGE_FIELDS:
+                return f"reports no {key}"
+            continue
+        if _non_negative_int(raw) is None:
+            return f"reports malformed {key} {raw!r}"
+    return None
+
+
+def history_session_launch_failure(session: HistorySession) -> str | None:
+    """Why a session fails the real-harness launch contract, or ``None`` if it holds.
+
+    This is the launch guard, deliberately weaker than ``validated_native_fields``.
+    Native per-phase timing (``model_ms`` / ``tool_ms`` / ``started_at`` /
+    ``finished_at``) and interval-bearing tool events are *provider-optional*:
+    oneharness normalizes whatever a harness reports and leaves the rest unset. On
+    the pinned release, codex reports the phase split while claude-code records
+    only a measured duration — no ``started_at``, no phase split, and a null
+    ``finished_at``. Requiring them here failed every healthy claude-code dispatch,
+    so completeness of native timing stays a telemetry-*quality* signal
+    (``validated_native_fields``) and is not a launch failure.
+
+    What a launch must still prove is that the task reached a named harness and the
+    turn was actually accounted for: a supported schema, a non-empty harness, a
+    successful status and exit, a measured duration (oneharness times the child
+    itself, so it never depends on what the provider reports), and well-formed
+    token accounting. Optional values that ARE present are still validated —
+    ``_summarize_session`` rejects malformed or contradictory timing.
+    """
     records = cast(list[HistoryRecord], session_records(session))
-    summary = _summarize_session(session, records)
-    return (
-        bool(records)
-        and summary.validated_native_fields
-        and all(record.get("status") == "ok" and record.get("exit_code") == 0 for record in records)
-    )
+    # Raises on a malformed or self-contradictory value the harness did report.
+    _summarize_session(session, records)
+    if not records:
+        return "recorded no harness run"
+    for record in records:
+        schema_version = record.get("schema_version")
+        if schema_version not in SUPPORTED_HISTORY_SCHEMA_VERSIONS:
+            return f"records unsupported history schema {schema_version!r}"
+        harness = record.get("harness")
+        if not isinstance(harness, str) or not harness:
+            return "does not identify the selected harness"
+        status = record.get("status")
+        exit_code = record.get("exit_code")
+        if status != "ok" or _non_negative_int(exit_code) != 0:
+            return f"records status {status!r} with exit code {exit_code!r}"
+        if _non_negative_int(record.get("duration_ms")) is None:
+            return f"records no measured duration for harness {harness}"
+        usage_failure = _launch_usage_failure(record.get("usage"))
+        if usage_failure is not None:
+            return usage_failure
+    return None
 
 
 def _native_party(value: object) -> _NativeParty:

@@ -292,6 +292,79 @@ def test_runs_cli_no_recorded_runs(tmp_path, capsys) -> None:
     assert "No recorded runs" in capsys.readouterr().out
 
 
+def _launch(runs_dir, run_id: str, *, pending: object = None):
+    """Record a live orchestrator launch the way `just orchestrate` leaves one."""
+    run = runs_dir / run_id
+    channel = run / "channel"
+    channel.mkdir(parents=True)
+    (run / "launch.json").write_text(json.dumps({"run_id": run_id}), encoding="utf-8")
+    (run / "orchestrator").mkdir()
+    (run / "orchestrator" / "status.json").write_text(
+        json.dumps({"status": "running", "pid": os.getpid(), "host": socket.gethostname()}),
+        encoding="utf-8",
+    )
+    if pending is not None:
+        (channel / "planner-pending.json").write_text(
+            pending if isinstance(pending, str) else json.dumps(pending), encoding="utf-8"
+        )
+    return run
+
+
+def test_runs_cli_marks_active_launches_and_what_they_wait_on(tmp_path, capsys) -> None:
+    """`just runs` must show a live orchestrator, including one with no round yet."""
+    _launch(
+        tmp_path,
+        "unrecorded",
+        pending={"kind": "blocker", "message": "gate is red", "blocking": True},
+    )
+    recorded = _launch(
+        tmp_path,
+        "recorded",
+        pending={"kind": "milestone", "message": "round 1 settled", "blocking": False},
+    )
+    _, round_dir = write_next_plan(recorded, PLAN)
+    write_result(round_dir, _result("done"))
+    quiet = _launch(tmp_path, "quiet")
+    _, quiet_round = write_next_plan(quiet, PLAN)
+    write_result(quiet_round, _result("done"))
+
+    assert main_runs(["--runs-dir", str(tmp_path)]) == 0
+
+    out = capsys.readouterr().out
+    assert "* unrecorded  ACTIVE  (waiting for planner decision: blocker: gate is red)" in out
+    assert "* recorded  round-01  (waiting for planner reply: milestone: round 1 settled)" in out
+    assert "* quiet  round-01  (1 done)" in out
+    assert "No recorded runs" not in out
+
+
+def test_runs_cli_falls_back_when_a_live_channel_cannot_be_read(tmp_path, capsys) -> None:
+    """An unreadable planner surface must not hide the run from the ledger view."""
+    _launch(tmp_path, "unrecorded", pending="{ not json")
+    recorded = _launch(tmp_path, "recorded", pending={"kind": "nonsense", "message": "x"})
+    _, round_dir = write_next_plan(recorded, PLAN)
+    write_result(round_dir, _result("done"))
+
+    assert main_runs(["--runs-dir", str(tmp_path)]) == 0
+
+    out = capsys.readouterr().out
+    assert "* unrecorded  ACTIVE  (orchestrator running)" in out
+    assert "* recorded  round-01  (1 done)" in out
+
+
+def test_runs_cli_ignores_a_launch_whose_orchestrator_exited(tmp_path, capsys) -> None:
+    """A finished launch loses its active marker even before its rounds are pruned."""
+    finished = _launch(tmp_path, "finished", pending={"kind": "closeout", "message": "done"})
+    (finished / "orchestrator" / "report.json").write_text("{}", encoding="utf-8")
+    _, round_dir = write_next_plan(finished, PLAN)
+    write_result(round_dir, _result("done"))
+
+    assert main_runs(["--runs-dir", str(tmp_path)]) == 0
+
+    out = capsys.readouterr().out
+    assert "  finished  round-01  (1 done)" in out
+    assert "ACTIVE" not in out
+
+
 def test_next_round_complete_human_records_attestation_and_releases_dep(tmp_path, capsys) -> None:
     run = tmp_path / "demo"
     plan = {

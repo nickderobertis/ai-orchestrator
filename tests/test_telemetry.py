@@ -447,7 +447,7 @@ def test_new_history_schema_rejects_invalid_intervals_roles_and_tool_events(tmp_
         SessionId("new"), "agent", tmp_path, "now", tmp_path / "history", {"role": "agent"}
     )
     base = {
-        "schema_version": "0.3",
+        "schema_version": "1.1",
         "duration_ms": 5,
         "model_ms": 3,
         "tool_ms": 2,
@@ -459,6 +459,19 @@ def test_new_history_schema_rejects_invalid_intervals_roles_and_tool_events(tmp_
     assert _utc_datetime("2026-01-01") is None
     assert _utc_datetime("not-a-dateZ") is None
     assert _utc_datetime(1) is None
+    unavailable = _summarize_session(
+        session,
+        [
+            {
+                "schema_version": "1.1",
+                "status": "spawn-error",
+                "duration_ms": 0,
+                "usage": {},
+            }
+        ],
+    )
+    assert unavailable.duration_ms == 0
+    assert not unavailable.validated_native_fields
     for changed in (
         {"duration_ms": 4},
         {"started_at": "2026-01-01"},
