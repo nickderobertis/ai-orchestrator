@@ -410,9 +410,7 @@ def write_next_plan(run_dir: Path, plan: dict[str, Any]) -> tuple[int, Path]:
         return number, round_dir
 
 
-def prepare_round(
-    run_dir: Path, plan: dict[str, Any], *, recover: bool = False
-) -> ClaimedRound:
+def prepare_round(run_dir: Path, plan: dict[str, Any], *, recover: bool = False) -> ClaimedRound:
     """Use a pending plan-only round when identical, otherwise create the next round."""
     with advisory_lock(f"ledger:{run_dir.resolve()}"):
         latest = latest_round(run_dir)
