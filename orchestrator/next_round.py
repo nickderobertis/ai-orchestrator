@@ -204,15 +204,17 @@ def main_runs(argv: list[str] | None = None) -> int:
         return 0
     recorded = {row.run_id for row in rows}
     for run_id in sorted((active_launches | abandoned.keys()) - recorded):
+        # An abandoned round replaces the planner indicator rather than joining it: the
+        # surface that run last queued outlives it, so reporting what it is waiting for
+        # is exactly the misreading that let a dead run look like live work.
+        if run_id in abandoned:
+            print(f"! {run_id}  {abandoned[run_id]}")
+            continue
         try:
             waiting = planner_wait_indicator(args.runs_dir / run_id / "channel")
         except (ChannelError, ConfigError, OSError):
             waiting = None
-        if run_id in abandoned:
-            print(f"! {run_id}  {abandoned[run_id]}")
-            continue
-        detail = waiting or "orchestrator running"
-        print(f"* {run_id}  ACTIVE  ({detail})")
+        print(f"* {run_id}  ACTIVE  ({waiting or 'orchestrator running'})")
     for run_id, number, summary in rows:
         marker = "! " if run_id in abandoned else "* " if run_id in active_launches else "  "
         waiting = None

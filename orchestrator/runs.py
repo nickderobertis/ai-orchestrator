@@ -39,6 +39,13 @@ NodeId = NewType("NodeId", str)
 StepId = NewType("StepId", str)
 
 
+class ClaimedRound(NamedTuple):
+    """The round a process now owns: which one it is, and where it records itself."""
+
+    number: int
+    directory: Path
+
+
 class RunLedgerRow(NamedTuple):
     """Summary of the latest completed round for one recorded run."""
 
@@ -405,7 +412,7 @@ def write_next_plan(run_dir: Path, plan: dict[str, Any]) -> tuple[int, Path]:
 
 def prepare_round(
     run_dir: Path, plan: dict[str, Any], *, recover: bool = False
-) -> tuple[int, Path]:
+) -> ClaimedRound:
     """Use a pending plan-only round when identical, otherwise create the next round."""
     with advisory_lock(f"ledger:{run_dir.resolve()}"):
         latest = latest_round(run_dir)
@@ -440,7 +447,7 @@ def prepare_round(
                     round_dir.mkdir(parents=True, exist_ok=False)
                     _write_json(round_dir / "plan.json", plan)
                     atomic_json(round_dir / "status.json", _round_status("running"))
-                    return number, round_dir
+                    return ClaimedRound(number, round_dir)
                 existing = load_mapping(plan_path)
                 if existing != plan:
                     raise ConfigError(f"{round_dir} has a pending different plan")
@@ -460,13 +467,13 @@ def prepare_round(
                         subject = "was abandoned" if abandoned else "is already running"
                         raise ConfigError(f"{round_dir} {subject} ({state}); {action}")
                 atomic_json(state_path, _round_status("running"))
-                return number, round_dir
+                return ClaimedRound(number, round_dir)
         number = 1 if latest is None else latest[0] + 1
         round_dir = run_dir / f"round-{number:02d}"
         round_dir.mkdir(parents=True, exist_ok=False)
         _write_json(round_dir / "plan.json", plan)
         atomic_json(round_dir / "status.json", _round_status("running"))
-        return number, round_dir
+        return ClaimedRound(number, round_dir)
 
 
 def _owner_is_live(state: Mapping[str, Any]) -> bool:

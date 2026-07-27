@@ -97,6 +97,7 @@ from .plan import (
 from .registry import Registry
 from .runs import (
     RECORDED_RESULT_SCHEMA_VERSION,
+    ClaimedRound,
     GraphPayload,
     GraphResultItem,
     HumanActionPayload,
@@ -1190,7 +1191,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"run-plan: {exc}", file=sys.stderr)
         return 2
 
-    round_record: tuple[int, Path] | None = None
+    round_record: ClaimedRound | None = None
     if run_dir is not None:
         try:
             try:
@@ -1211,7 +1212,7 @@ def main(argv: list[str] | None = None) -> int:
     # Everything past the claim runs under the guard, so no path out of this process
     # — an early `return 2`, a raised exception, or a teardown signal — can leave the
     # claimed round recorded as `running` with nothing owning it.
-    with round_abandonment_guard(round_record[1]):
+    with round_abandonment_guard(round_record.directory):
         return _run_round(args, plan_mapping, graph, run_dir, round_record, acknowledgements)
 
 
@@ -1220,7 +1221,7 @@ def _run_round(
     plan_mapping: dict[str, Any],
     graph: Graph,
     run_dir: Path | None,
-    round_record: tuple[int, Path] | None,
+    round_record: ClaimedRound | None,
     acknowledgements: list[ConcurrentAcknowledgement],
 ) -> int:
     """Execute one already-claimed round and record its result."""
@@ -1232,7 +1233,7 @@ def _run_round(
     replayed_order: list[str] = []
     if run_dir is not None and round_record is not None:
         run_id = RunId(run_dir.name)
-        round_number = round_record[0]
+        round_number = round_record.number
         journal = open_journal(run_dir, run_id, round_number)
         for acknowledgement in acknowledgements:
             journal.append(

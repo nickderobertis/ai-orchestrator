@@ -280,6 +280,9 @@ def test_signalled_executor_records_its_own_abandonment(rounds: Rounds) -> None:
 
     os.kill(launch.owner, signal.SIGTERM)
     _await_exit(launch.owner)
+    # The launcher waits on the round only to report how it ended, so a signalled
+    # round still reaches the caller as the familiar 128+N rather than as a success.
+    assert launch.process.wait(timeout=e2e_timeout(15)) == 128 + int(signal.SIGTERM)
 
     status = _read(launch.round_dir / "status.json")
     assert status["status"] == "abandoned"
@@ -308,6 +311,15 @@ def test_killed_executor_surfaces_as_abandoned_in_runs_and_status(
 ) -> None:
     """SIGKILL records nothing, so both views must derive it from the owner's pid."""
     launch = rounds.run_plan("killed-owner")
+    # The reported failure's worst symptom: a planner surface outlives the round that
+    # queued it, so a run that died hours ago keeps reading as "waiting on me". The
+    # abandonment has to be reported beside that stale surface, not instead of it.
+    pending = launch.runs / "killed-owner" / "channel" / "planner-pending.json"
+    pending.parent.mkdir(parents=True, exist_ok=True)
+    pending.write_text(
+        json.dumps({"kind": "blocker", "message": "round 1 dispatched", "blocking": True}),
+        encoding="utf-8",
+    )
 
     os.kill(launch.owner, signal.SIGKILL)
     _await_exit(launch.owner)
@@ -331,7 +343,9 @@ def test_killed_executor_surfaces_as_abandoned_in_runs_and_status(
     )
     assert reported.returncode == 0, reported.stderr
     assert f"killed-owner: round-01 ABANDONED (owner pid {launch.owner} is gone)" in reported.stdout
+    assert "waiting for planner decision: blocker: round 1 dispatched" in reported.stdout
 
+    pending.unlink()
     launch.release.write_text("go\n", encoding="utf-8")
     recovered = _just(
         "run-plan",
