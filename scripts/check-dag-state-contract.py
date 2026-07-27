@@ -105,7 +105,10 @@ def typed_dict_fields(path: Path, name: str) -> dict[str, bool]:
         node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == name
     ]
     if len(declarations) != 1:
-        fail(f"{path.name} must declare exactly one {name}")
+        fail(
+            f"{path.name} must declare exactly one {name} TypedDict; add it, or remove "
+            "the duplicate declarations so one is authoritative"
+        )
     declaration = declarations[0]
     total = not any(
         keyword.arg == "total"
@@ -126,10 +129,13 @@ def typed_dict_fields(path: Path, name: str) -> dict[str, bool]:
             case _:
                 continue
         if field in fields:
-            fail(f"{path.name} {name} must declare unique annotated fields")
+            fail(f"{path.name} {name} declares {field!r} twice; remove the duplicate annotation")
         fields[field] = required
     if not fields:
-        fail(f"{path.name} {name} must declare annotated fields")
+        fail(
+            f"{path.name} {name} declares no annotated fields; restore its "
+            "`field: type` lines so the contract has something to reconcile"
+        )
     return fields
 
 
@@ -149,12 +155,18 @@ def dict_values(path: Path, name: str) -> list[str]:
         and isinstance(node.value, ast.Dict)
     ]
     if len(declarations) != 1:
-        fail(f"{path.name} must declare exactly one {name} dict")
+        fail(
+            f"{path.name} must declare exactly one `{name} = {{...}}` mapping; add it, "
+            "or remove the duplicates so one is authoritative"
+        )
     mapping = declarations[0]
     assert isinstance(mapping, ast.Dict)
     values = [item.value for item in mapping.values if isinstance(item, ast.Constant)]
     if len(values) != len(mapping.values) or not all(isinstance(item, str) for item in values):
-        fail(f"{path.name} {name} must map to string constants")
+        fail(
+            f"{path.name} {name} must map to plain string literals; replace any computed "
+            "or non-string value so the contract can be read statically"
+        )
     return values
 
 
@@ -168,7 +180,10 @@ def enum_values(path: Path, name: str) -> list[str]:
         node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == name
     ]
     if len(declarations) != 1:
-        fail(f"{path.name} must declare exactly one {name}")
+        fail(
+            f"{path.name} must declare exactly one {name} StrEnum; add it, or remove "
+            "the duplicate declarations so one is authoritative"
+        )
     values = [
         statement.value.value
         for statement in declarations[0].body
@@ -177,7 +192,9 @@ def enum_values(path: Path, name: str) -> list[str]:
         and isinstance(statement.value.value, str)
     ]
     if not values or len(values) != len(set(values)):
-        fail(f"{path.name} {name} must declare unique string members")
+        fail(
+            f"{path.name} {name} repeats a member; remove the duplicate so each value appears once"
+        )
     return values
 
 
@@ -192,11 +209,14 @@ def _properties(path: Path, name: str, body: str) -> dict[str, bool]:
     for line in body.splitlines():
         if depth == 0 and (match := re.match(r"\s*([A-Za-z_][A-Za-z0-9_]*)(\??)\s*:", line)):
             if match.group(1) in fields:
-                fail(f"{path.name} {name} must declare unique properties")
+                fail(f"{path.name} {name} declares a property twice; remove the duplicate")
             fields[match.group(1)] = match.group(2) != "?"
         depth += line.count("{") - line.count("}")
     if not fields:
-        fail(f"{path.name} {name} must declare properties")
+        fail(
+            f"{path.name} {name} declares no properties; restore its `field: type` "
+            "members so the contract has something to reconcile"
+        )
     return fields
 
 
@@ -216,7 +236,10 @@ def interface_fields(path: Path, name: str) -> dict[str, bool]:
         flags=re.DOTALL | re.MULTILINE,
     )
     if len(matches) != 1:
-        fail(f"{path.name} must declare exactly one {name} interface")
+        fail(
+            f"{path.name} must declare exactly one `interface {name}` block; add it, or "
+            "remove the duplicates so one is authoritative"
+        )
     return _properties(path, name, matches[0])
 
 
@@ -233,7 +256,10 @@ def nested_object_fields(path: Path, interface: str, prop: str) -> dict[str, boo
         flags=re.DOTALL | re.MULTILINE,
     )
     if len(matches) != 1:
-        fail(f"{path.name} must declare exactly one {interface}.{prop} object literal")
+        fail(
+            f"{path.name} must declare exactly one inline object literal at "
+            f"{interface}.{prop}; restore it as `{prop}: {{ ... }};` and remove duplicates"
+        )
     return _properties(path, f"{interface}.{prop}", matches[0])
 
 
@@ -250,10 +276,13 @@ def union_members(path: Path, interface: str, prop: str) -> list[str]:
         flags=re.DOTALL | re.MULTILINE,
     )
     if len(matches) != 1:
-        fail(f"{path.name} must declare exactly one {interface}.{prop} string union")
+        fail(
+            f"{path.name} must declare exactly one string union at {interface}.{prop}; "
+            "restore it as `" + prop + ': "a" | "b";` and remove duplicates'
+        )
     members = re.findall(r'"([^"]+)"', matches[0])
     if not members or len(members) != len(set(members)):
-        fail(f"{path.name} {interface}.{prop} union must list unique members")
+        fail(f"{path.name} {interface}.{prop} repeats a union member; remove the duplicate")
     return members
 
 
@@ -275,7 +304,10 @@ def module_number(path: Path, name: str) -> float:
         and not isinstance(node.value.value, bool)
     ]
     if len(values) != 1:
-        fail(f"{path.name} must declare exactly one numeric {name}")
+        fail(
+            f"{path.name} must declare exactly one numeric `{name} = <number>`; add it, "
+            "or remove the duplicates so one is authoritative"
+        )
     return float(values[0])
 
 
@@ -326,17 +358,26 @@ def frozenset_members(path: Path, name: str) -> list[str]:
         }
     ]
     if len(calls) != 1 or not isinstance(calls[0], ast.Call) or not calls[0].args:
-        fail(f"{path.name} must declare exactly one {name} frozenset")
+        fail(
+            f"{path.name} must declare exactly one `{name} = frozenset({{...}})`; add it, "
+            "or remove the duplicates so one is authoritative"
+        )
     argument = calls[0].args[0]
     if not isinstance(argument, ast.Set):
-        fail(f"{path.name} {name} must be built from a set literal")
+        fail(
+            f"{path.name} {name} must be built from a set literal; replace any computed "
+            'argument with `frozenset({{"a", "b"}})` so it can be read statically'
+        )
     members = [
         item.value
         for item in argument.elts
         if isinstance(item, ast.Constant) and isinstance(item.value, str)
     ]
     if len(members) != len(argument.elts) or len(members) != len(set(members)):
-        fail(f"{path.name} {name} must contain unique string members")
+        fail(
+            f"{path.name} {name} repeats a member or holds a non-string; remove the "
+            "duplicate and replace non-string entries"
+        )
     return members
 
 
@@ -350,10 +391,14 @@ def design_sse_events(path: Path) -> list[str]:
         r"one of ((?:`[a-z.]+`(?:,\s*|,?\s*or\s*)?)+)\s*\n?in `event`", source, flags=re.DOTALL
     )
     if len(matches) != 1:
-        fail(f"{path.name} must fix the SSE event vocabulary in exactly one 'in `event`' sentence")
+        fail(
+            f"{path.name} must fix the SSE event vocabulary in exactly one sentence of the "
+            'form "one of `a`, `b`, or `c` in `event`"; restore that sentence and remove '
+            "any duplicate"
+        )
     events = re.findall(r"`([a-z.]+)`", matches[0])
     if not events or len(events) != len(set(events)):
-        fail(f"{path.name} SSE event vocabulary must list unique names")
+        fail(f"{path.name} SSE event vocabulary repeats a name; remove the duplicate")
     return events
 
 
@@ -624,8 +669,7 @@ def main() -> None:
         ),
     )
     # The embedded telemetry schema version: Python owns it, the contract restates it,
-    # and the dag-model schema pins it as a literal. Main bumped 6 -> 7 while this
-    # contract still said 6, which is exactly the drift this reconciles.
+    # and the dag-model schema pins it as a literal, so a bump has three places to land.
     reconcile_number(
         "telemetry schema version",
         (

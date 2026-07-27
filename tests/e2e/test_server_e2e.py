@@ -513,6 +513,16 @@ def test_after_cursor_details_logs_and_projection_failure_over_http(
         replaced = client.get("/api/v1/runs/demo").json()
         assert replaced["launch"] == {"launch_id": LAUNCH_ID, "launcher": "unknown"}
 
+        # So is a far-future record, which no expiry check could ever retire. It is a
+        # forged or corrupt stamp rather than clock skew, so the join degrades too.
+        future = json.loads(record.read_text(encoding="utf-8"))
+        future["launcher_session_id"] = "future-session"
+        future["started_at"] = (datetime.now(UTC) + timedelta(days=365)).isoformat()
+        record.write_text(json.dumps(future), encoding="utf-8")
+        dated = client.get("/api/v1/runs/demo").json()
+        assert dated["launch"] == {"launch_id": LAUNCH_ID, "launcher": "unknown"}
+        assert "future-session" not in json.dumps(dated)
+
         # `after` is the query-parameter form of a resume cursor: like a valid
         # Last-Event-ID it continues the numbering, and still gets a snapshot.
         with client.stream("GET", "/api/v1/events?after=3") as response:
