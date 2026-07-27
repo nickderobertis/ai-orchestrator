@@ -360,7 +360,11 @@ How this polyglot monorepo was built up from the create-repo reference pieces:
 - The gate is strict: format check, lint, type check, and tests all fail on
   issues — no warnings-only mode.
 - **Coverage is enforced at 95% line coverage** on the `orchestrator/` package
-  (`just test`); the gate fails below it.
+  (`just test`); the gate fails below it. `[tool.coverage.report]` in
+  `pyproject.toml` is the floor's one source — `fail_under` sets it and
+  `precision` decides it, because pytest-cov compares the total *after* rounding
+  at that precision. `tests/test_coverage_gate.py` holds that combination to one
+  that can actually fail the build.
 - **Tests are realistic, not mocked.** The e2e suite drives the *real* `onejudge`
   CLI as a subprocess through the same `dispatch`/`run-plan` code the orchestrator
   uses. Only the paid model/harness is faked — via onejudge's own `command`

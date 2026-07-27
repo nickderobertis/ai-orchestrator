@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +20,7 @@ from orchestrator.history import (
     _session_labels,
     all_sessions,
     digest,
+    main_list,
     main_show,
     recent_runs,
     session_duration_ms,
@@ -361,6 +363,87 @@ def test_an_oh_uuid_uses_oneharness_exact_history_lookup(tmp_path: Path) -> None
     output = show_run(f"oh:{history_id}", oneharness_bin=str(binary))
     assert "Session: worker-session" in output
     assert f"oneharness history show {history_id} --format text" in output
+
+
+def _oneharness_script(directory: Path, body: str) -> Path:
+    """A stand-in oneharness whose whole behavior is ``body``."""
+    directory.mkdir(parents=True)
+    script = directory / "oneharness"
+    script.write_text(f"#!/usr/bin/env python3\n{body}\n", encoding="utf-8")
+    script.chmod(0o755)
+    return script
+
+
+def _oneharness_answering(directory: Path, payload: str) -> Path:
+    """A oneharness with no recorded sessions whose `history show` answers ``payload``."""
+    return _oneharness_script(
+        directory,
+        f"import sys\nprint('[]' if sys.argv[2] == 'list' else {payload!r})",
+    )
+
+
+@pytest.mark.parametrize(
+    ("body", "expected"),
+    [
+        ("import sys; sys.exit(3)", "oneharness history failed: unknown error"),
+        (
+            "import sys; print('history db locked', file=sys.stderr); sys.exit(1)",
+            "oneharness history failed: history db locked",
+        ),
+        ("print('not json at all')", "returned invalid JSON"),
+        ("print('{}')", "oneharness history list returned an unexpected response"),
+    ],
+)
+def test_the_oneharness_history_boundary_is_parsed_defensively(
+    tmp_path: Path, body: str, expected: str
+) -> None:
+    """oneharness is an external process, so every reply shape it can produce is checked."""
+    binary = _oneharness_script(tmp_path / "stub", body)
+    with pytest.raises(HistoryError, match=expected):
+        recent_runs(5, oneharness_bin=str(binary))
+
+
+def test_a_missing_oneharness_points_at_bootstrap(tmp_path: Path) -> None:
+    with pytest.raises(HistoryError, match="run 'just bootstrap'"):
+        recent_runs(5, oneharness_bin=str(tmp_path / "absent-oneharness"))
+
+
+@pytest.mark.parametrize(
+    ("payload", "expected"),
+    [
+        ('{"session": "worker-session"}', "unexpected response"),
+        ("[]", "no worker history session matches"),
+        ('["not a record"]', "no worker history session matches"),
+    ],
+)
+def test_a_uuid_lookup_reports_a_response_it_cannot_read(
+    tmp_path: Path, payload: str, expected: str
+) -> None:
+    """The exact-id path talks to oneharness directly, so it validates that reply itself."""
+    binary = _oneharness_answering(tmp_path / "stub", payload)
+    with pytest.raises(HistoryError, match=expected):
+        show_run("019f6f83-c0f3-7d51-a995-d05011ae2b28", oneharness_bin=str(binary))
+
+
+def test_the_public_history_entrypoints_print_and_report_errors_in_process(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Exercise the installed commands' Python boundary without losing coverage to
+    the subprocess used by the e2e acceptance test."""
+    binary = _fake_oneharness(tmp_path)
+    monkeypatch.setenv("PATH", str(binary.parent), prepend=os.pathsep)
+
+    assert main_list(["5"]) == 0
+    assert "build-history-command" in capsys.readouterr().out
+
+    assert main_list(["0"]) == 2
+    listing_error = capsys.readouterr()
+    assert "history: " in listing_error.err
+    assert "positive integer" in listing_error.err
+    assert "Traceback" not in listing_error.err
+
+    assert main_show(["nothing-matches", "--oneharness-bin", str(binary)]) == 2
+    assert "no worker history session" in capsys.readouterr().err
 
 
 def test_an_empty_query_names_nothing_at_all(tmp_path: Path) -> None:
