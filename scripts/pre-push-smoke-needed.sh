@@ -11,6 +11,7 @@ launch_paths=(
   "oneharness.orchestrator.toml"
 )
 if [[ ${1:-} == --print-paths ]]; then
+  # llmlint: ignore[tool_output_is_signal] the declared launch-path list is this query mode's product: tests/test_smoke_selector.py reads it line by line as the authoritative contract instead of duplicating the array, so one line would have to re-encode it. The selector mode below stays silent and speaks only through its exit status.
   printf '%s\n' "${launch_paths[@]}"
   exit 0
 fi
