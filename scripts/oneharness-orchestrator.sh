@@ -15,8 +15,13 @@ set -euo pipefail
 
 script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 repo_root=$(dirname -- "$script_dir")
+alt_config_helper="$script_dir/claude-alt-config-dir.sh"
+if [ ! -f "$alt_config_helper" ] || [ ! -r "$alt_config_helper" ]; then
+    echo "oneharness-orchestrator: required helper is not a readable regular file: $alt_config_helper; restore it from the repository or run 'just bootstrap', then retry" >&2
+    exit 2
+fi
 # shellcheck source=scripts/claude-alt-config-dir.sh
-. "$script_dir/claude-alt-config-dir.sh"
+. "$alt_config_helper"
 resolve_claude_alt_config_dir oneharness-orchestrator || exit $?
 orchestrator_config="$repo_root/oneharness.orchestrator.toml"
 

@@ -129,6 +129,30 @@ def test_missing_orchestrator_config_is_rejected_before_invoking_oneharness(
     assert argv == []
 
 
+def test_missing_alternate_config_helper_is_rejected_before_invoking_oneharness(
+    tmp_path: Path,
+) -> None:
+    """A wrapper without its shared helper must name the file and the way back.
+
+    The helper is a separate file on disk, so a partial checkout can leave the
+    wrapper without it. Sourcing it unguarded would fail through the shell's own
+    "No such file" line, which names neither the contract nor the recovery.
+    """
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    copied = scripts / WRAPPER.name
+    copied.write_bytes(WRAPPER.read_bytes())
+    copied.chmod(0o755)
+    # Deliberately no claude-alt-config-dir.sh beside it, unlike the sibling test.
+
+    proc, argv, _ = _run_wrapper(tmp_path, ["run", "--prompt", "must not run"], wrapper=copied)
+
+    assert proc.returncode == 2
+    assert "required helper is not a readable regular file" in proc.stderr
+    assert "just bootstrap" in proc.stderr  # the concrete way back
+    assert argv == []
+
+
 def test_both_wrappers_derive_one_shared_alternate_config_default(tmp_path: Path) -> None:
     """The $HOME rule has one source; a second copy would show up as a mismatch."""
     home = tmp_path / "shared-home"

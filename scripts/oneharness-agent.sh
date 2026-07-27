@@ -16,8 +16,13 @@ repo_root=$(dirname -- "$script_dir")
 # The worker config maps this portable, non-secret parent value into
 # CLAUDE_CONFIG_DIR only for its alternate-subscription child; the derivation is
 # shared with the orchestrator wrapper so the two roles cannot drift apart.
+alt_config_helper="$script_dir/claude-alt-config-dir.sh"
+if [ ! -f "$alt_config_helper" ] || [ ! -r "$alt_config_helper" ]; then
+    echo "oneharness-agent: required helper is not a readable regular file: $alt_config_helper; restore it from the repository or run 'just bootstrap', then retry" >&2
+    exit 2
+fi
 # shellcheck source=scripts/claude-alt-config-dir.sh
-. "$script_dir/claude-alt-config-dir.sh"
+. "$alt_config_helper"
 resolve_claude_alt_config_dir oneharness-agent || exit $?
 alternate_config_dir=$ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR
 agent_config="$repo_root/oneharness.toml"
