@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { rmSync } from "node:fs";
 import { join } from "node:path";
 import { expect, type Page, test } from "@playwright/test";
-import { FIXTURE_WORKSPACE } from "../playwright.config";
+import { FIXTURE_WORKSPACE, OFFLINE_UI_URL } from "../playwright.config";
 
 /**
  * The DAG Observatory driven end to end against a real `orchestrator/server.py`
@@ -144,6 +144,15 @@ test("keeps navigation usable at a narrow viewport", async ({ page }) => {
   expect((await navigation.boundingBox())?.width).toBe(220);
 });
 
+test("surfaces a telemetry read it cannot complete", async ({ page }) => {
+  // A UI origin whose proxy target is not listening: the browser's own fetch and
+  // EventSource both fail for real, and the operator must be told rather than shown
+  // an empty graph that looks like "no runs yet".
+  await page.goto(OFFLINE_UI_URL);
+  await expect(page.getByRole("alert")).toContainText("Live telemetry issue");
+  await expect(page.getByText("Awaiting updates")).toBeVisible();
+});
+
 // The remaining journeys change what the server is serving, so they run last and in
 // order: each one leaves the fixture advanced for the ones after it.
 
@@ -181,4 +190,16 @@ test("drops a run the server stops serving", async ({ page }) => {
   await expect(
     page.getByRole("button", { name: RegExp(LIVE_RUN) }),
   ).toBeVisible();
+});
+
+test("falls back to the empty state once no run is left", async ({ page }) => {
+  await openObservatory(page);
+
+  rmSync(join(FIXTURE_WORKSPACE, "runs", LIVE_RUN), {
+    recursive: true,
+    force: true,
+  });
+
+  await expect(page.getByText("No DAG runs found")).toBeVisible();
+  await expect(page.getByRole("alert")).toHaveCount(0);
 });

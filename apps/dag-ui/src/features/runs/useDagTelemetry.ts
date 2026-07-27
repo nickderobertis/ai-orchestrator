@@ -3,9 +3,10 @@ import {
   type RunDetail,
   type RunList,
 } from "@ai-orchestrator/dag-model";
-import type {
-  TelemetryClient,
-  TelemetryEvent,
+import {
+  type TelemetryClient,
+  TelemetryClientError,
+  type TelemetryEvent,
 } from "@ai-orchestrator/telemetry-client";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
@@ -41,9 +42,9 @@ export function useDagTelemetry(client: TelemetryClient): DagTelemetryState {
 
   const loadDetailFromEvent = useCallback(
     (runId: string) => {
-      void loadDetail(runId).catch((caught: unknown) =>
-        setError(asError(caught)),
-      );
+      void loadDetail(runId)
+        .catch(ignoreRemovedRun)
+        .catch((caught: unknown) => setError(asError(caught)));
     },
     [loadDetail],
   );
@@ -52,7 +53,11 @@ export function useDagTelemetry(client: TelemetryClient): DagTelemetryState {
     try {
       const next = await client.listRuns(true);
       setList(next);
-      await Promise.all(next.runs.map(({ run_id }) => loadDetail(run_id)));
+      await Promise.all(
+        next.runs.map(({ run_id }) =>
+          loadDetail(run_id).catch(ignoreRemovedRun),
+        ),
+      );
       setError(undefined);
     } catch (caught) {
       setError(asError(caught));
@@ -105,6 +110,16 @@ export function useDagTelemetry(client: TelemetryClient): DagTelemetryState {
     () => ({ list, details, loading, hasUpdates, error, refresh }),
     [list, details, loading, hasUpdates, error, refresh],
   );
+}
+
+/**
+ * Swallow the one detail failure that is not a failure: a run removed between the
+ * read that listed it and the read that fetched it. The next list already drops it,
+ * so reporting "no recorded run" would only describe the race, not a problem.
+ */
+function ignoreRemovedRun(caught: unknown): void {
+  if (caught instanceof TelemetryClientError && caught.status === 404) return;
+  throw caught;
 }
 
 /** The run an invalidation event names, or `undefined` when it names none. */

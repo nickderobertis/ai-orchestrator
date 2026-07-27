@@ -168,6 +168,31 @@ describe("DAG application", () => {
     );
   });
 
+  test("stays quiet when an invalidated run has already been removed", async () => {
+    let removed = false;
+    const { client, sources } = telemetryHarness((url) => {
+      if (url.pathname === "/api/v1/runs")
+        return Response.json(
+          removed ? { ...runList, runs: runList.runs.slice(1) } : runList,
+        );
+      if (removed && url.pathname.endsWith(LIVE_RUN))
+        return Response.json(
+          { error: { code: "run_not_found", message: "no recorded run" } },
+          { status: 404 },
+        );
+      return defaultResponder(url);
+    });
+    render(<App client={client} />);
+    await screen.findByText("dashboard");
+
+    // The invalidation names a run the sweep has already taken away; the view
+    // follows the list instead of reporting a telemetry failure.
+    removed = true;
+    sources[0]?.emit("run.changed", { run_id: LIVE_RUN, round: 1 }, "4");
+    expect(await screen.findByText("archive")).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
   test("hands an unrenderable graph to the error boundary", async () => {
     const consoleError = vi
       .spyOn(console, "error")

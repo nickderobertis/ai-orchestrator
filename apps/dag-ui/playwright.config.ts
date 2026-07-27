@@ -9,6 +9,14 @@ import { defineConfig } from "@playwright/test";
 const API_PORT = 8788;
 const UI_PORT = 4174;
 /**
+ * A second UI origin whose proxy points at a port nothing listens on. It is how the
+ * unreachable-API journey reaches the real failure — a real browser making real
+ * requests that really fail — without mocking anything.
+ */
+const OFFLINE_UI_PORT = 4175;
+const OFFLINE_API_PORT = 8789;
+export const OFFLINE_UI_URL = `http://127.0.0.1:${OFFLINE_UI_PORT}`;
+/**
  * Where the fixture server writes the run directory it serves. It is rebuilt on every
  * start and named here rather than hidden in a temporary directory so a journey can
  * change what the server is serving the way an executor would.
@@ -33,6 +41,13 @@ export default defineConfig({
       command: `bunx vite --config vite.config.ts --port ${UI_PORT} --strictPort`,
       url: `http://127.0.0.1:${UI_PORT}`,
       env: { DAG_UI_API_URL: `http://127.0.0.1:${API_PORT}` },
+      reuseExistingServer: false,
+      timeout: 120_000,
+    },
+    {
+      command: `bunx vite --config vite.config.ts --port ${OFFLINE_UI_PORT} --strictPort`,
+      url: OFFLINE_UI_URL,
+      env: { DAG_UI_API_URL: `http://127.0.0.1:${OFFLINE_API_PORT}` },
       reuseExistingServer: false,
       timeout: 120_000,
     },

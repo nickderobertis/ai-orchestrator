@@ -52,7 +52,7 @@ just migrate-repo-type local/ai-orchestrator --repo-type single-owner
 | `personas/` | Per-persona onejudge deltas (roles). See [`personas/README.md`](personas/README.md). |
 | `oneharness.toml` / `oneharness.judge.toml` | The two conversation sides (agent / judge) — harness + model selection. |
 | `orchestrator/` | The mechanics: base⊕persona merge, tracked mixed-graph scheduling, lifecycle publication, and run ledger. |
-| `docs/` | [Tracked graph model](docs/orchestration.md) · [repository lifecycle](docs/repo-lifecycle.md) · [onejudge integration](docs/onejudge-integration.md) |
+| `docs/` | [Tracked graph model](docs/orchestration.md) · [repository lifecycle](docs/repo-lifecycle.md) · [onejudge integration](docs/onejudge-integration.md) · [DAG Observatory](docs/dag-ui.md) |
 
 ## DAG Observatory
 
@@ -69,8 +69,7 @@ just bootstrap
 just dag-ui
 ```
 
-Then open the address Vite prints. See [`docs/dag-ui.md`](docs/dag-ui.md) for
-addresses, usage, production build, and verification details.
+Then open the address Vite prints.
 
 ## One tracked graph
 
