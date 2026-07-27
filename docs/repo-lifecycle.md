@@ -227,7 +227,10 @@ because Git cannot distinguish an arbitrary hook rejection from a transport
 rejection.
 
 For a remote-first workflow, required status checks are authoritative at PR merge
-time. A node's `recorded_gate` runs nothing: it overrides which gate command the
+time. A remote identity may also carry a pre-push hook, and then the branch push
+is gated too: a rejection there settles the node the same way, before any PR
+exists, rather than surfacing as a raw Git error.
+A node's `recorded_gate` runs nothing: it overrides which gate command the
 round *records* as the identity's complete bar, and cannot bypass or replace
 merge-path coverage. `verify_cmd` is its pre-merge-path spelling and remains
 accepted. The gate-skipping switch is gone — the `--skip-verify` flag was

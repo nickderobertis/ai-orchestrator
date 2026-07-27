@@ -2261,6 +2261,51 @@ def test_remote_human_checkpoint_records_push_failure(
     assert result.pr is None
 
 
+# llmlint: ignore[e2e_not_mocked] GitHub decisioning is the suite's documented external seam.
+@pytest.mark.parametrize(
+    ("rejection", "expected_outcome"),
+    [("gate", "gate-failed"), ("transport", "error")],
+)
+def test_remote_lifecycle_branch_push_failure_opens_no_pr(
+    tmp_path, bare_origin, rejection: str, expected_outcome: str
+) -> None:
+    """The ordinary remote path stops at its own push, before any PR exists.
+
+    A remote identity is normally covered by required checks, but a qualifying
+    pre-push hook covers it too — and then it, not GitHub, is what rejects the
+    branch that would have carried the PR.
+    """
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / f"remote-branch-push-{rejection}")
+    workspace = Workspace(
+        tmp_path / f"remote-branch-push-{rejection}-worktrees",
+        resolver=lambda _spec: canonical,
+        workflow="remote",
+        repo_type="single-owner",
+    )
+    if rejection == "gate":
+        install_pre_push_hook(canonical, "printf 'pre-push gate failed\\n' >&2\nexit 1")
+    else:
+        receive = origin / "hooks" / "pre-receive"
+        receive.write_text("#!/bin/sh\nprintf 'remote denied\\n' >&2\nexit 1\n", encoding="utf-8")
+        receive.chmod(0o755)
+    github = FakeGitHub(origin)
+
+    result = run_repo_task(
+        "acme/widget",
+        "Publish an ordinary remote change the push rejects.",
+        "engineer",
+        workspace=workspace,
+        github=github,
+        dispatch_fn=make_writing_dispatch(filename="remote.txt"),
+        recorded_gate=["true"],
+    )
+
+    assert result.outcome == expected_outcome
+    assert result.pr is None and not github._prs
+    assert not _has_file(origin, "main", "remote.txt")
+
+
 def test_local_repo_publishes_to_a_non_main_default_branch(tmp_path, bare_origin) -> None:
     origin = bare_origin(branch="master")
     ws = _workspace(tmp_path, origin)

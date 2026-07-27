@@ -1854,7 +1854,16 @@ def run_repo_task(
         # authoritative outcome so a late request cannot strand a pushed branch or
         # report already-merged work as discarded.
         if not local_publication:
-            gitops.push(worktree, branch)
+            # The remote path's gate rejection also arrives here, from the hook that
+            # qualified this identity for dispatch, and it must read as a gate
+            # failure rather than a raw Git error before any PR exists.
+            try:
+                gitops.push(worktree, branch)
+            except GitError as exc:
+                failed = _push_failure(exc, branch=branch)
+                result.outcome = failed.outcome
+                result.detail = failed.detail
+                return result
         preverified_pr: PullRequest | None = None
         if verify_via_ci:
             backend = cast(GitHubBackend, ci_backend)
