@@ -36,6 +36,7 @@ from waits import deadline as e2e_deadline
 from waits import timeout as e2e_timeout
 
 from orchestrator import REPO_ROOT
+from orchestrator.runs import TEARDOWN_SIGNALS
 
 
 def _just(*args: str) -> subprocess.CompletedProcess[str]:
@@ -277,9 +278,10 @@ def test_next_round_continuation_survives_the_teardown_of_its_launching_turn(
     assert "survives-continuation  round-02  (1 done)" in listed.stdout
 
 
-# Every signal that means "the group you were launched in is going away" — a turn
-# teardown, a closed terminal, an interrupt — records which one it was.
-@pytest.mark.parametrize("teardown", [signal.SIGTERM, signal.SIGHUP, signal.SIGINT])
+# Driven from the production list rather than a second copy of it: every signal that
+# means "the group you were launched in is going away" records which one it was, so a
+# signal added there is a journey here.
+@pytest.mark.parametrize("teardown", TEARDOWN_SIGNALS)
 def test_signalled_executor_records_its_own_abandonment(
     rounds: Rounds, teardown: signal.Signals
 ) -> None:
@@ -318,15 +320,6 @@ def test_killed_executor_surfaces_as_abandoned_in_runs_and_status(
 ) -> None:
     """SIGKILL records nothing, so both views must derive it from the owner's pid."""
     launch = rounds.run_plan("killed-owner")
-    # The reported failure's worst symptom: a planner surface outlives the round that
-    # queued it, so a run that died hours ago keeps reading as "waiting on me". The
-    # abandonment has to be reported beside that stale surface, not instead of it.
-    pending = launch.runs / "killed-owner" / "channel" / "planner-pending.json"
-    pending.parent.mkdir(parents=True, exist_ok=True)
-    pending.write_text(
-        json.dumps({"kind": "blocker", "message": "round 1 dispatched", "blocking": True}),
-        encoding="utf-8",
-    )
 
     os.kill(launch.owner, signal.SIGKILL)
     _await_exit(launch.owner)
@@ -350,9 +343,7 @@ def test_killed_executor_surfaces_as_abandoned_in_runs_and_status(
     )
     assert reported.returncode == 0, reported.stderr
     assert f"killed-owner: round-01 ABANDONED (owner pid {launch.owner} is gone)" in reported.stdout
-    assert "waiting for planner decision: blocker: round 1 dispatched" in reported.stdout
 
-    pending.unlink()
     launch.release.write_text("go\n", encoding="utf-8")
     recovered = _just(
         "run-plan",

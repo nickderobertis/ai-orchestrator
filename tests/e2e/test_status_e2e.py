@@ -232,8 +232,19 @@ def test_status_reports_a_run_whose_round_owner_is_gone(tmp_path, monkeypatch, c
         encoding="utf-8",
     )
 
+    # The reported failure's worst symptom: the surface a run last queued outlives the
+    # round, so a run that died hours ago keeps reading as "waiting on me". The
+    # abandonment is reported beside that stale surface, not instead of it.
+    pending = runs_dir / "abandoned-run" / "channel" / "planner-pending.json"
+    pending.parent.mkdir(parents=True)
+    pending.write_text(
+        json.dumps({"kind": "blocker", "message": "round 1 dispatched", "blocking": True}),
+        encoding="utf-8",
+    )
+
     monkeypatch.setenv("ONEHARNESS_HISTORY_DIR", str(history_dir))
     assert status_main(["--runs-dir", str(runs_dir)]) == 0
     shown = capsys.readouterr().out
     assert "abandoned-run: round-01 ABANDONED" in shown
     assert "--recover" in shown
+    assert "abandoned-run: waiting for planner decision: blocker: round 1 dispatched" in shown
