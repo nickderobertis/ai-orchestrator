@@ -1224,7 +1224,14 @@ def _run_round(
     round_record: ClaimedRound | None,
     acknowledgements: list[ConcurrentAcknowledgement],
 ) -> int:
-    """Execute one already-claimed round and record its result."""
+    """Execute one already-claimed round and record its result.
+
+    ``plan_mapping`` is the deserialized plan file itself, not the validated ``graph``
+    built from it. It stays ``Any``-valued because it is journaled and compared
+    verbatim — a recovery matches recorded node definitions against these raw entries
+    — and narrowing it to the parsed shape would drop the very keys that comparison
+    exists to notice.
+    """
     journal: JournalSink = NullJournal()
     run_id: RunId | None = None
     round_number: int | None = None

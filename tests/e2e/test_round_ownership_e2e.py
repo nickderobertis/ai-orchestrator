@@ -480,6 +480,25 @@ def test_signalled_executor_records_its_own_abandonment(
     assert "was abandoned" in refused.stderr
     assert "reclaim it with --recover" in refused.stderr
 
+    # And then the reclaim that refusal points at. A round whose owner *recorded* its
+    # own abandonment is the other half of `--recover`: the SIGKILL journey reclaims a
+    # round still saying `running` behind a dead pid, and this one reclaims the
+    # `abandoned` status the handler wrote. An operator following the printed advice
+    # has to land on a finished round, not a second refusal.
+    launch.release.write_text("go\n", encoding="utf-8")
+    recovered = _just(
+        "run-plan",
+        str(launch.round_dir / "plan.json"),
+        "--run",
+        run_id,
+        *launch.common,
+        "--recover",
+    )
+    assert recovered.returncode == 0, recovered.stderr
+    assert _read(launch.round_dir / "result.json")["state"] == "complete"
+    assert _read(launch.round_dir / "status.json")["status"] == "completed"
+    assert "ABANDONED" not in _just("runs", "--runs-dir", str(rounds.runs)).stdout
+
 
 def test_killed_executor_surfaces_as_abandoned_in_runs_and_status(
     tmp_path: Path, rounds: Rounds
@@ -566,6 +585,12 @@ def test_status_reports_a_dead_round_beside_the_surface_it_left_pending(
     """
     run_id = "abandoned-with-surface"
     launch = rounds.run_plan(run_id)
+    # llmlint: ignore[tests_mirror_real_usage] What is untested here is only how the
+    # channel directory comes into being: `just orchestrate` makes it with this exact
+    # call and then launches an orchestrator agent, which would spend real harness
+    # turns on every run of this suite. Everything the journey actually asserts —
+    # queuing a surface, the round dying under it, and what `just status` then prints —
+    # runs through the real `orchestrator-relay-supervisor` and `just status` below.
     channel_dir = create_channel(launch.runs / run_id)
     relay = subprocess.Popen(
         [
