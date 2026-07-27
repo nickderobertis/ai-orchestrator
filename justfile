@@ -8,7 +8,8 @@
 set shell := ["bash", "-euo", "pipefail", "-c"]
 set positional-arguments
 
-coverage_min := "95"
+# The coverage floor is not restated here: `[tool.coverage.report] fail_under` in
+# pyproject.toml is its one source, enforced by the Nx `test` target this recipe runs.
 repo_root := justfile_directory()
 
 # List available recipes.
