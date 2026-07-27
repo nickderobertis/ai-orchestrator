@@ -524,11 +524,20 @@ def stall(port: int) -> int:
         held.append(connection)
 
 
+#: Published beside the runs root so the browser spec names the runs this module
+#: wrote rather than keeping its own copy of them.
+RUN_IDS_NAME = "run-ids.json"
+
+
 def serve(workspace: Path, port: int) -> int:
     """Rebuild the fixture in ``workspace`` and serve it on a loopback port."""
     shutil.rmtree(workspace, ignore_errors=True)
     workspace.mkdir(parents=True)
     runs_dir, oneharness_bin = build_fixture(workspace)
+    (workspace / RUN_IDS_NAME).write_text(
+        json.dumps({"live": LIVE_RUN, "history": HISTORY_RUN, "unattributed": UNATTRIBUTED_RUN}),
+        encoding="utf-8",
+    )
     from orchestrator.server import main as serve_api
 
     return serve_api(

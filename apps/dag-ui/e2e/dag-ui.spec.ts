@@ -1,4 +1,6 @@
 import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { expect, type Page, test } from "@playwright/test";
 import {
   FIXTURE_WORKSPACE,
@@ -15,9 +17,17 @@ import {
  * updates are provoked by changing that run directory, never by faking an event.
  */
 
-const LIVE_RUN = "dag-ui-live";
-const HISTORY_RUN = "dag-ui-history";
-const UNATTRIBUTED_RUN = "dag-ui-unattributed";
+/**
+ * The runs the fixture wrote, read from the file it publishes beside them. The
+ * Python module that records them is their one source; naming them again here would
+ * be a second one that drifts the moment the fixture changes.
+ */
+type RunIds = Record<"live" | "history" | "unattributed", string>;
+let cachedRunIds: RunIds | undefined;
+const runs = (): RunIds =>
+  (cachedRunIds ??= JSON.parse(
+    readFileSync(join(FIXTURE_WORKSPACE, "run-ids.json"), "utf8"),
+  ) as RunIds);
 
 /** Open the app and wait for it to have mounted; each journey then asserts its own state. */
 async function openObservatory(page: Page, path = "/"): Promise<void> {
@@ -115,9 +125,9 @@ test("navigates historical DAGs grouped by their launching session", async ({
   await expect(page.getByText(/Codex session/)).toBeVisible();
   await expect(page.getByText(/Claude session/)).toBeVisible();
 
-  await page.getByRole("button", { name: RegExp(HISTORY_RUN) }).click();
+  await page.getByRole("button", { name: RegExp(runs().history) }).click();
   await expect(page.locator(".dag-node.state-done")).toContainText("archive");
-  await page.getByRole("button", { name: RegExp(LIVE_RUN) }).click();
+  await page.getByRole("button", { name: RegExp(runs().live) }).click();
   await expect(page.locator(".dag-node.state-running")).toContainText(
     "dashboard",
   );
@@ -128,7 +138,7 @@ test("navigates historical DAGs grouped by their launching session", async ({
 test("restores a bookmarked view and refreshes through the read API", async ({
   page,
 }) => {
-  await openObservatory(page, `/?run=${LIVE_RUN}&view=overall`);
+  await openObservatory(page, `/?run=${runs().live}&view=overall`);
   const metric = (label: string) =>
     page.locator(".metric").filter({ hasText: label });
   await expect(metric("Status")).toContainText("running");
@@ -149,7 +159,7 @@ test("restores a bookmarked view and refreshes through the read API", async ({
   );
   await expect(page.getByText("Planner session")).toHaveCount(0);
 
-  await openObservatory(page, `/?run=${LIVE_RUN}&node=dashboard`);
+  await openObservatory(page, `/?run=${runs().live}&node=dashboard`);
   await expect(page.getByText("Build the live dashboard")).toBeVisible();
 });
 
@@ -166,7 +176,7 @@ test("groups a run with no recorded launch under an unknown session", async ({
   await expect(
     page.getByRole("heading", { name: /Unknown session/ }),
   ).toBeVisible();
-  await page.getByRole("button", { name: RegExp(UNATTRIBUTED_RUN) }).click();
+  await page.getByRole("button", { name: RegExp(runs().unattributed) }).click();
   await expect(page.locator(".dag-node.state-running")).toContainText("orphan");
   await expect(page.getByText("Continue unattributed work")).toHaveCount(0);
 });
@@ -176,7 +186,7 @@ test("says so when a run recorded no planner conversation", async ({
 }) => {
   // The settled run's history holds a worker session and no orchestrator one, so
   // its overall view has no planner transcript to show.
-  await openObservatory(page, `/?run=${HISTORY_RUN}&view=overall`);
+  await openObservatory(page, `/?run=${runs().history}&view=overall`);
   await expect(page.getByText("Planner session")).toBeVisible();
   await expect(
     page.getByText("No planner conversation is available."),
@@ -202,7 +212,7 @@ test("recovers the selection when a bookmarked run is not being served", async (
   );
   await expect
     .poll(() => new URL(page.url()).search)
-    .toContain(`run=${LIVE_RUN}`);
+    .toContain(`run=${runs().live}`);
 });
 
 test("keeps navigation usable at a narrow viewport", async ({ page }) => {
@@ -257,24 +267,24 @@ test("streams real progress the server observes on disk", async ({ page }) => {
 test("drops a run the server stops serving", async ({ page }) => {
   await openObservatory(page);
   await expect(
-    page.getByRole("button", { name: RegExp(HISTORY_RUN) }),
+    page.getByRole("button", { name: RegExp(runs().history) }),
   ).toBeVisible();
 
-  changeServedRuns(["--remove-run", HISTORY_RUN]);
+  changeServedRuns(["--remove-run", runs().history]);
 
   await expect(
-    page.getByRole("button", { name: RegExp(HISTORY_RUN) }),
+    page.getByRole("button", { name: RegExp(runs().history) }),
   ).toHaveCount(0);
   await expect(
-    page.getByRole("button", { name: RegExp(LIVE_RUN) }),
+    page.getByRole("button", { name: RegExp(runs().live) }),
   ).toBeVisible();
 });
 
 test("falls back to the empty state once no run is left", async ({ page }) => {
   await openObservatory(page);
 
-  changeServedRuns(["--remove-run", LIVE_RUN]);
-  changeServedRuns(["--remove-run", UNATTRIBUTED_RUN]);
+  changeServedRuns(["--remove-run", runs().live]);
+  changeServedRuns(["--remove-run", runs().unattributed]);
 
   await expect(page.getByText("No DAG runs found")).toBeVisible();
   await expect(page.getByRole("alert")).toHaveCount(0);
