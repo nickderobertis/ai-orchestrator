@@ -41,6 +41,27 @@ from orchestrator.telemetry import (
 )
 
 
+def _span_journal(run_dir: Path, seconds: float) -> None:
+    """Spread a recorded run's journal over a realistic wall clock.
+
+    A fixture writes its whole journal in a few milliseconds, but model and tool time
+    is attributed only up to the run's wall clock (`telemetry._timing`). Without a
+    realistic span the attribution a test asserts is clamped by how fast the host
+    wrote those lines, which is not what the test is about.
+    """
+    path = run_dir / "events.jsonl"
+    records = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line]
+    start = records[0]["at"]
+    step = seconds / max(1, len(records) - 1)
+    path.write_text(
+        "".join(
+            json.dumps({**record, "at": start + index * step}) + "\n"
+            for index, record in enumerate(records)
+        ),
+        encoding="utf-8",
+    )
+
+
 def _recorded_run(tmp_path: Path, *, state: str = "failed") -> Path:
     run_dir = tmp_path / "runs" / "observed"
     _, round_dir = prepare_round(run_dir, {"tasks": [{"id": "api", "task": "ship"}]})
@@ -349,6 +370,9 @@ def test_native_timing_usage_tools_and_breakdown_are_role_and_node_scoped(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     run_dir = _recorded_run(tmp_path, state="complete")
+    # The attribution asserted below is per-role, not wall-clamped; give the run the
+    # kind of span a real one has.
+    _span_journal(run_dir, seconds=60)
 
     def session(role: str, duration: int, model: int, tool: int) -> HistorySession:
         path = tmp_path / f"{role}.jsonl"
