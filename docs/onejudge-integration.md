@@ -259,6 +259,31 @@ process activity. `run-plan --round-budget SECONDS` adds an outer round liveness
 budget (default `14400`); exceeding it cooperatively cancels workers and sends a
 blocking proposal over the planner channel.
 
+### Dispatch scratch ownership
+
+Each dispatch works in an `orchestrator-watchdog-*` scratch directory, and the
+unattended sweep (`just sweep-scratch`, session setup, every recorded round
+transition) may delete it concurrently. The pid recorded in `<dir>/pid` cannot
+decide that: it is the *worker's*, and the wrapper `execvpe`s onejudge in place,
+so it dies the moment the worker exits — while the dispatcher is still reaping
+the reparented process tree and parsing the report out of the same directory. A
+sweep that trusted it destroyed healthy in-flight dispatches and their evidence.
+Recorded pids are also not identities: the kernel recycles them, so an unrelated
+live process inheriting the number pinned dead scratch forever, and an
+unreadable-signal pid was treated as live outright.
+
+The dispatcher therefore holds an exclusive `flock` on `<dir>/owner.lock` for its
+whole `TemporaryDirectory` scope, and that file records its own pid plus the
+kernel's start token for it. The sweeper reclaims a watchdog directory only when
+a non-blocking exclusive acquisition succeeds — the kernel's own answer to "can
+anything still be using this tree?", released only when the owner releases the
+directory or dies — *and* the recorded pid-with-start-token no longer identifies
+a live process, so a filesystem that does not honor `flock` still cannot strand a
+live dispatch. Directories predating the lock keep the pid-only judgment, now
+made through the same start-token identity, and a lock that cannot be opened on
+its own terms — symlinked, unreadable — never authorizes removal. Everything the
+proof does not clear is reported as retained rather than silently kept.
+
 ## Dispatching playbook
 
 - **Prepare the harness environment.** claude-code on the alternate subscription

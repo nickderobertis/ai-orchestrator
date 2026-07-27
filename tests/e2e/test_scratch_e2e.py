@@ -16,7 +16,12 @@ import pytest
 
 from orchestrator import REPO_ROOT
 from orchestrator.lifecycle import run_repo_task
-from orchestrator.scratch import MIN_FREE_BYTES_ENV
+from orchestrator.scratch import (
+    MIN_FREE_BYTES_ENV,
+    OWNER_LOCK_NAME,
+    WATCHDOG_PATTERN,
+    sweep_scratch,
+)
 from orchestrator.workspace import Workspace
 
 _BLOCKING_GATE = """
@@ -71,6 +76,21 @@ def _run_lifecycle_with_blocking_gate(
     )
 
 
+def _kernel_start_token(pid: int) -> str:
+    """Read a process's start time (procfs field 22) without the code under test."""
+    fields = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8").rsplit(")", 1)[1].split()
+    return fields[19]
+
+
+def _worker_pid_is_gone(directory: Path) -> bool:
+    """Report whether the pid this dispatch recorded for its worker has exited."""
+    try:
+        pid = int((directory / "pid").read_text(encoding="utf-8").split()[0])
+    except (OSError, IndexError, ValueError):
+        return False
+    return not Path(f"/proc/{pid}").exists()
+
+
 def _wait_for_path(path: Path, timeout: float = 60.0) -> None:
     deadline = time.monotonic() + timeout
     while not path.exists():
@@ -90,6 +110,33 @@ def test_sweep_recipe_reclaims_orphans_and_preserves_live_scratch(tmp_path: Path
     malformed = tmp_path / "orchestrator-watchdog-malformed"
     malformed.mkdir()
     (malformed / "pid").write_text("bad\n", encoding="utf-8")
+    crashed = tmp_path / "orchestrator-watchdog-crashed"
+    crashed.mkdir()
+    (crashed / OWNER_LOCK_NAME).write_text("999999999 1", encoding="utf-8")
+    recycled = tmp_path / "orchestrator-watchdog-recycled"
+    recycled.mkdir()
+    recycled_record = f"{os.getpid()} 1"
+    (recycled / OWNER_LOCK_NAME).write_text(recycled_record, encoding="utf-8")
+    owned = tmp_path / "orchestrator-watchdog-owned"
+    owned.mkdir()
+    (owned / OWNER_LOCK_NAME).write_text(
+        f"{os.getpid()} {_kernel_start_token(os.getpid())}", encoding="utf-8"
+    )
+    # pid 1 belongs to another user, so the sweep cannot signal it and must decide
+    # on its procfs identity alone — the case that once pinned any recycled pid.
+    foreign = tmp_path / "orchestrator-watchdog-foreign"
+    foreign.mkdir()
+    (foreign / OWNER_LOCK_NAME).write_text(f"1 {_kernel_start_token(1)}", encoding="utf-8")
+    foreign_recycled = tmp_path / "orchestrator-watchdog-foreign-recycled"
+    foreign_recycled.mkdir()
+    foreign_record = "1 1"
+    (foreign_recycled / OWNER_LOCK_NAME).write_text(foreign_record, encoding="utf-8")
+    garbled = tmp_path / "orchestrator-watchdog-garbled"
+    garbled.mkdir()
+    (garbled / OWNER_LOCK_NAME).write_text("not-an-owner-record", encoding="utf-8")
+    symlinked = tmp_path / "orchestrator-watchdog-symlinked"
+    symlinked.mkdir()
+    (symlinked / OWNER_LOCK_NAME).symlink_to(owned / OWNER_LOCK_NAME)
     old_third_party = tmp_path / "oneharness-sdk-old"
     old_third_party.mkdir()
     (old_third_party / "payload").write_bytes(b"y" * 19)
@@ -107,12 +154,28 @@ def test_sweep_recipe_reclaims_orphans_and_preserves_live_scratch(tmp_path: Path
     )
 
     assert not dead.exists()
+    assert not crashed.exists()
+    assert not recycled.exists()
+    assert not garbled.exists()
+    assert not foreign_recycled.exists()
     assert not old_third_party.exists()
     assert live.exists()
     assert malformed.exists()
+    assert owned.exists()
+    assert foreign.exists()
+    # A lock reachable only through a symlink is never trusted to name its owner.
+    assert symlinked.exists()
     assert recent.exists()
-    assert "removed 2 directories" in result.stdout
-    assert "reclaimed 46 bytes" in result.stdout
+    assert "removed 6 directories" in result.stdout
+    reclaimed = (
+        46
+        + len("999999999 1")
+        + len(recycled_record)
+        + len(foreign_record)
+        + len("not-an-owner-record")
+    )
+    assert f"reclaimed {reclaimed} bytes" in result.stdout
+    assert "retained 5 watchdog directories not proven reclaimable" in result.stdout
 
 
 def test_third_party_sweep_skips_inflight_lifecycle_then_reclaims(
@@ -186,6 +249,83 @@ def test_third_party_sweep_skips_inflight_lifecycle_then_reclaims(
     )
     assert not candidate.exists()
     assert "removed 1 directories" in after.stdout
+
+
+@pytest.mark.parametrize("identifiable", [True, False], ids=["identified", "unidentifiable"])
+def test_concurrent_sweep_preserves_a_dispatch_past_its_worker_exit(
+    tmp_path: Path, command_base: Callable[..., Path], onejudge_bin: str, identifiable: bool
+) -> None:
+    """A real dispatch keeps its scratch while a real sweep runs beside it.
+
+    The recorded pid is the onejudge worker, which dies while the dispatcher is
+    still reaping its process tree and parsing the report out of the directory.
+    Sweeping continuously across the whole dispatch guarantees the sweeper meets
+    that window rather than waiting for a lucky interleaving. A dispatcher that
+    cannot read its own procfs identity records no token at all, so the lock has
+    to hold the tree on its own.
+    """
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    dispatch_env = {**os.environ, "TMPDIR": str(scratch)}
+    if not identifiable:
+        blind = tmp_path / "empty-proc"
+        blind.mkdir()
+        dispatch_env["AI_ORCHESTRATOR_PROC_ROOT"] = str(blind)
+    process = subprocess.Popen(
+        [
+            "just",
+            "dispatch",
+            "engineer",
+            "complete-now: survive a concurrent scratch sweep",
+            "--base",
+            str(command_base()),
+            "--project-dir",
+            str(project_dir),
+            "--onejudge-bin",
+            onejudge_bin,
+            "--format",
+            "json",
+        ],
+        cwd=REPO_ROOT,
+        env=dispatch_env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    swept_past_worker_exit: list[Path] = []
+    try:
+        while process.poll() is None:
+            past_exit = [
+                directory
+                for directory in scratch.glob(WATCHDOG_PATTERN)
+                if _worker_pid_is_gone(directory)
+            ]
+            # The unattended sweep this test races is the in-process
+            # `sweep_scratch()` call every recorded round transition makes
+            # (orchestrator/graph.py). A `just sweep-scratch` subprocess takes
+            # longer to start than the post-exit window it must land inside, and
+            # the recipe surface is covered by the recipe tests above.
+            # llmlint: ignore[tests_mirror_real_usage] this is the round-transition caller
+            result = sweep_scratch(scratch)
+            assert result.removed == (), result.removed
+            swept_past_worker_exit.extend(
+                directory for directory in past_exit if directory in result.watchdog_retained
+            )
+            time.sleep(0.001)
+    finally:
+        stdout, stderr = process.communicate(timeout=120)
+
+    assert process.returncode == 0, stderr
+    assert swept_past_worker_exit, "the sweep never observed the post-worker-exit window"
+    # The report is parsed out of the swept-past directory, so its survival is the
+    # dispatch's own evidence that nothing removed the tree underneath it.
+    report = json.loads(stdout)
+    assert report["schema_version"] == 5
+    assert report["stopped_early"] is False
+    assert report["transcript"]["messages"]
+    assert list(scratch.glob(WATCHDOG_PATTERN)) == []
 
 
 def test_dry_run_recipe_and_recorded_round_transition_sweep(tmp_path: Path) -> None:

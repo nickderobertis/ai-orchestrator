@@ -1341,7 +1341,14 @@ def test_real_cli_recovers_failed_lifecycle_result(
                     {
                         "id": "in-flight",
                         "persona": "engineer",
-                        "task": "should-fail",
+                        # Park this node so the round is provably still running when
+                        # it is killed. With nothing held, the whole round can finish
+                        # before the kill lands and recovery replays nothing.
+                        "task": (
+                            f"should-fail slow-branch {tmp_path / 'in-flight-witness'} "
+                            f"live-edit-slow live-edit-ready={tmp_path / 'in-flight-ready'} "
+                            f"live-edit-release={tmp_path / 'in-flight-release'}"
+                        ),
                         "max_turns": 5,
                     },
                 ],
@@ -1406,7 +1413,7 @@ def test_real_cli_recovers_failed_lifecycle_result(
         failed_lifecycles = {
             event.get("node") for event in records if event["kind"] == "node-failed"
         }
-        in_flight = any(
+        in_flight = (tmp_path / "in-flight-ready").exists() and any(
             event["kind"] == "node-started" and event.get("node") == "in-flight"
             for event in records
         )
@@ -1418,6 +1425,7 @@ def test_real_cli_recovers_failed_lifecycle_result(
         pytest.fail("run-plan did not reach the failed lifecycle recovery boundary")
     os.killpg(process.pid, signal.SIGKILL)
     process.wait()
+    (tmp_path / "in-flight-release").write_text("release\n", encoding="utf-8")
 
     recovered = subprocess.run(
         [*command, "--recover"], cwd=REPO_ROOT, text=True, capture_output=True, check=False

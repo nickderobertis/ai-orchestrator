@@ -111,6 +111,27 @@ def _recorded_run(tmp_path: Path, *, state: str = "failed") -> Path:
     return run_dir
 
 
+def _stretch_recorded_span(run_dir: Path, step_seconds: float = 1.0) -> None:
+    """Space a recorded run's events a second apart, as a real run's are.
+
+    The fixture writes its whole journal in a few milliseconds. Attribution is
+    capped by elapsed wall time, so synthetic sessions reporting tens of
+    milliseconds of model and tool work inside a 3ms run get clamped — which
+    makes such assertions depend on how fast the host wrote the file rather than
+    on the aggregation under test.
+    """
+    path = run_dir / "events.jsonl"
+    events = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+    start = events[0]["at"]
+    path.write_text(
+        "".join(
+            json.dumps({**event, "at": start + index * step_seconds}) + "\n"
+            for index, event in enumerate(events)
+        ),
+        encoding="utf-8",
+    )
+
+
 def test_collect_run_joins_ledger_journal_history_and_attestation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -349,6 +370,7 @@ def test_native_timing_usage_tools_and_breakdown_are_role_and_node_scoped(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     run_dir = _recorded_run(tmp_path, state="complete")
+    _stretch_recorded_span(run_dir)
 
     def session(role: str, duration: int, model: int, tool: int) -> HistorySession:
         path = tmp_path / f"{role}.jsonl"

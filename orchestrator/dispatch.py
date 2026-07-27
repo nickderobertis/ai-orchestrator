@@ -23,7 +23,6 @@ import shutil
 import socket
 import subprocess
 import sys
-import tempfile
 import threading
 import time
 from collections.abc import Mapping
@@ -68,6 +67,7 @@ from .launch import (
 )
 from .personas import persona_path
 from .runs import ArtifactPaths, resolve_run_dir, slugify
+from .scratch import owned_scratch_directory
 from .watchdog import (
     ProcessId,
     process_activity,
@@ -343,6 +343,14 @@ def _read_watchdog_pid(pid_file: Path) -> ProcessId:
     return ProcessId(pid)
 
 
+def _agent_status(status_dir: Path, name: str) -> str | None:
+    """Read one agent status marker, treating an unreadable marker as absent."""
+    try:
+        return (status_dir / name).read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+
+
 def _validate_environment(env: Mapping[str, str]) -> None:
     """Validate caller-provided values before they reach the process boundary."""
     for key, value in env.items():
@@ -408,9 +416,9 @@ def run_onejudge(
             process_env.pop(LABEL_ENV, None)
 
     async def execute() -> RunResult | Report | None:
-        with tempfile.TemporaryDirectory(prefix="orchestrator-watchdog-") as directory:
-            pid_file = Path(directory) / "pid"
-            agent_status_dir = Path(directory) / "agent"
+        with owned_scratch_directory() as directory:
+            pid_file = directory / "pid"
+            agent_status_dir = directory / "agent"
             agent_status_dir.mkdir()
             process_env["ORCHESTRATOR_AGENT_STATUS_DIR"] = os.fspath(agent_status_dir)
             runner = OneJudge(
@@ -483,25 +491,29 @@ def run_onejudge(
                         except (OSError, ValueError):
                             current_agent = ""
                             agent_pid = ProcessId(0)
-                        done_file = agent_status_dir / "agent.done"
-                        done_agent = (
-                            done_file.read_text(encoding="utf-8").strip()
-                            if done_file.exists()
-                            else None
-                        )
-                        failed_file = agent_status_dir / "agent.failed"
-                        failed_agent = (
-                            failed_file.read_text(encoding="utf-8").strip()
-                            if failed_file.exists()
-                            else None
-                        )
+                        done_agent = _agent_status(agent_status_dir, "agent.done")
+                        failed_agent = _agent_status(agent_status_dir, "agent.failed")
                         if (  # pragma: no cover - real killed-agent e2e
                             current_agent and failed_agent == current_agent
                         ):
                             return WatchdogSignal("worker-died", pid, observed)
                         if current_agent and done_agent != current_agent:
                             if agent_pid not in activity.pids:
-                                return WatchdogSignal("worker-died", pid, observed)
+                                # This tree was sampled before the pid was read, and an
+                                # agent turn can both start and finish inside that gap.
+                                # Re-sample, then re-read the marker the wrapper writes
+                                # before it exits: only a pid missing from the newer
+                                # tree and still unmarked has actually died.
+                                activity = process_activity(pid)
+                                if activity.pids:
+                                    observed = tuple(dict.fromkeys((*observed, *activity.pids)))
+                                    observed_tree = observed
+                                if (
+                                    agent_pid not in activity.pids
+                                    and _agent_status(agent_status_dir, "agent.done")
+                                    != current_agent
+                                ):
+                                    return WatchdogSignal("worker-died", pid, observed)
                             child_pid_file = agent_status_dir / "agent.child.pid"
                             if child_pid_file.exists():
                                 try:
