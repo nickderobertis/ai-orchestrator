@@ -1344,7 +1344,11 @@ def test_real_cli_recovers_failed_lifecycle_result(
                         "branch": "feature/gate-failed-lifecycle",
                         "workflow": "local",
                         "repo_type": "single-owner",
-                        "recorded_gate": [
+                        # Deliberately the legacy `verify_cmd` spelling: a plan
+                        # written before the merge path became authoritative must
+                        # still load, and its command must reach the recorded
+                        # `expected_gate` below without the lifecycle running it.
+                        "verify_cmd": [
                             "sh",
                             "-c",
                             "printf 'full-gate-start\\n'; i=0; while [ $i -lt 2200 ]; do "
@@ -1488,7 +1492,11 @@ def test_real_cli_recovers_failed_lifecycle_result(
         assert detail["required_checks"] == []
         assert detail["required_checks_status"] == "not-applicable"
         assert detail["checkout"] == str(canonical)
-    assert coverage["gate-failed-lifecycle"]["expected_gate"][:2] == ["sh", "-c"]
+    # The legacy `verify_cmd` key reached `recorded_gate`, and the node still failed
+    # at the hook rather than at that command — which never ran.
+    recorded = coverage["gate-failed-lifecycle"]["expected_gate"]
+    assert recorded[:2] == ["sh", "-c"] and "tracked gate tail failed" in recorded[2]
+    assert coverage["failed-lifecycle"]["expected_gate"] == []
     lock_waits = [
         event["detail"]["seconds"]
         for event in records

@@ -1913,7 +1913,7 @@ def test_local_repo_direct_merge(tmp_path, bare_origin) -> None:
         "engineer",
         workspace=ws,
         dispatch_fn=make_writing_dispatch(filename="feature.txt"),
-        recorded_gate=["true"],  # explicit gate so the test never depends on make/just
+        recorded_gate=["true"],  # the bar this run records; the pre-push hook is what runs
     )
     assert result.ok, result.detail
     assert result.outcome == "merged"
@@ -2261,7 +2261,7 @@ def test_remote_human_checkpoint_records_push_failure(
     assert result.pr is None
 
 
-def test_local_repo_non_main_default_and_gate_context(tmp_path, bare_origin) -> None:
+def test_local_repo_publishes_to_a_non_main_default_branch(tmp_path, bare_origin) -> None:
     origin = bare_origin(branch="master")
     ws = _workspace(tmp_path, origin)
     result = run_repo_task(
@@ -2270,11 +2270,7 @@ def test_local_repo_non_main_default_and_gate_context(tmp_path, bare_origin) -> 
         "engineer",
         workspace=ws,
         dispatch_fn=make_writing_dispatch(filename="portable.txt"),
-        recorded_gate=[
-            "sh",
-            "-c",
-            'test "$ORCHESTRATOR_COMPARISON_REMOTE/$ORCHESTRATOR_COMPARISON_BASE" = origin/master',
-        ],
+        recorded_gate=["true"],
     )
     assert result.ok, result.detail
     assert result.base_branch == "master"
@@ -2902,9 +2898,8 @@ def test_preserved_retry_is_recovered_through_the_merge_path_gate(tmp_path, bare
     assert _has_file(origin, "main", "complete.txt")
 
 
-def test_preserved_retry_with_failing_complete_gate_remains_unpublished(
-    tmp_path, bare_origin
-) -> None:
+def test_preserved_retry_publishes_despite_a_red_recorded_gate(tmp_path, bare_origin) -> None:
+    """The recorded gate is metadata: only the merge path can stop a retry."""
     origin = bare_origin()
     workspace = _workspace(tmp_path, origin)
     first = run_repo_task(
@@ -2919,7 +2914,7 @@ def test_preserved_retry_with_failing_complete_gate_remains_unpublished(
 
     retried = run_repo_task(
         str(origin),
-        "Finish with a red gate.",
+        "Finish with a red recorded gate.",
         "engineer",
         workspace=workspace,
         dispatch_fn=make_writing_dispatch(filename="complete.txt"),
