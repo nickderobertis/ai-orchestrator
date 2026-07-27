@@ -43,6 +43,7 @@ CLAUDE_LAUNCH = "c1a0" * 8
 
 LIVE_RUN = "dag-ui-live"
 HISTORY_RUN = "dag-ui-history"
+UNATTRIBUTED_RUN = "dag-ui-unattributed"
 
 _LIVE_TASKS: list[dict[str, Any]] = [
     {
@@ -93,6 +94,15 @@ _HISTORY_TASKS: list[dict[str, Any]] = [
         "persona": "engineer",
         "task": "Archive the release",
         "done_when": "Archive exists",
+    }
+]
+
+_UNATTRIBUTED_TASKS: list[dict[str, Any]] = [
+    {
+        "id": "orphan",
+        "persona": "engineer",
+        "task": "Continue unattributed work",
+        "done_when": "The work continues",
     }
 ]
 
@@ -224,6 +234,24 @@ def _write_history_run(runs_dir: Path) -> None:
     journal.append("round-finished", detail={"result": result})
     write_result(round_dir, result)
     _record_launch(run_dir, HISTORY_RUN, CLAUDE_LAUNCH)
+
+
+def _write_unattributed_run(runs_dir: Path) -> None:
+    """One run with no launch record and no recorded transcripts.
+
+    Runs predating launch provenance, and runs whose history store has been swept,
+    both read this way: the read API serves them with no launch join at all, and the
+    navigation has to group them under an unknown session rather than hide them.
+    """
+    from orchestrator.journal import NodeId, RunId, open_journal
+    from orchestrator.runs import prepare_round
+
+    run_dir = runs_dir / UNATTRIBUTED_RUN
+    prepare_round(run_dir, {"tasks": _UNATTRIBUTED_TASKS})
+    journal = open_journal(run_dir, RunId(UNATTRIBUTED_RUN), 1)
+    journal.append("node-added", detail={"definition": _UNATTRIBUTED_TASKS[0]})
+    journal.append("round-started", detail={"plan": {"schema_version": 3, "concurrency": 1}})
+    journal.append("node-started", node=NodeId("orphan"), detail={"persona": "engineer"})
 
 
 def _session(
@@ -411,8 +439,9 @@ def build_fixture(workspace: Path) -> tuple[Path, Path]:
 
     runs_dir = workspace / "runs"
     runs_dir.mkdir(parents=True)
-    # The settled run is written first so the live run sorts to the top of the list
-    # view, which orders by most recent progress.
+    # Written oldest first: the list view orders by most recent progress, so the live
+    # run ends up at the top and is what an operator sees on arrival.
+    _write_unattributed_run(runs_dir)
     _write_history_run(runs_dir)
     _write_live_run(runs_dir)
     os.environ["FAKE_ONEHARNESS_STORE"] = str(_history_store(workspace))

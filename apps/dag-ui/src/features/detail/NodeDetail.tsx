@@ -5,7 +5,6 @@ import {
   ScrollText,
 } from "lucide-react";
 import type { NodeView } from "../runs/run-model";
-import { readUnknown } from "../runs/run-model";
 import { TranscriptPanel } from "./TranscriptPanel";
 
 export function NodeDetail({
@@ -20,13 +19,12 @@ export function NodeDetail({
   // harness can check — and the panel says so rather than showing an empty block.
   const task = node.task.task;
   const doneWhen = node.task.done_when ?? "No completion criteria recorded.";
-  const result = node.result as Record<string, unknown> | undefined;
-  const pr = readUnknown(result, "pr_url", "pull_request_url", "pr");
-  const checks = readUnknown(result, "checks", "check_rollup");
-  const gate =
-    readUnknown(result, "gate", "gate_result", "gate_attestation") ??
-    node.telemetry?.gate_attestation;
-  const logs = readUnknown(result, "logs", "log", "output", "detail");
+  // Each field is the one the read contract defines for it: the node result carries
+  // the published PR and the outcome detail a run writes as its log line, and the
+  // gate verdict is the attestation the node's verification recorded.
+  const pr = node.result?.pr;
+  const gate = node.telemetry?.gate_attestation;
+  const logs = node.result?.detail;
 
   return (
     <aside className="detail-panel" aria-label={`Details for ${node.label}`}>
@@ -78,8 +76,6 @@ export function NodeDetail({
         ) : (
           <p>{formatValue(pr)}</p>
         )}
-        <h4>Checks</h4>
-        <pre>{formatValue(checks)}</pre>
       </DetailSection>
 
       <DetailSection icon={<ScrollText size={16} />} title="Logs">

@@ -1,6 +1,9 @@
 import type { DagConversation } from "@ai-orchestrator/dag-model";
 import { type Conversation, TurnCard } from "@oneharness/ui";
 
+type Attribution = DagConversation["attribution"];
+type AgentRole = Attribution["agentRole"];
+
 export function TranscriptPanel({
   conversations,
 }: {
@@ -37,14 +40,19 @@ export function TranscriptPanel({
   );
 }
 
-function roleLabel(agentRole: string, transportRole: string): string {
-  if (transportRole === "llmlint") return "Lint";
-  const labels: Record<string, string> = {
-    worker: "Worker",
-    judge: "Judge",
-    "check-in": "Check-in",
-    "pr-author": "PR author",
-    orchestrator: "Orchestrator",
-  };
-  return labels[agentRole] ?? agentRole;
+/** Every semantic role the contract's closed `agentRoleSchema` enum admits. */
+const ROLE_LABELS: Readonly<Record<AgentRole, string>> = {
+  worker: "Worker",
+  judge: "Judge",
+  "check-in": "Check-in",
+  "pr-author": "PR author",
+  orchestrator: "Orchestrator",
+};
+
+function roleLabel(
+  agentRole: AgentRole,
+  transportRole: Attribution["transportRole"],
+): string {
+  // Nested lint work is grouped under its worker, so its transport is what names it.
+  return transportRole === "llmlint" ? "Lint" : ROLE_LABELS[agentRole];
 }

@@ -17,6 +17,7 @@ import {
 
 const LIVE_RUN = "dag-ui-live";
 const HISTORY_RUN = "dag-ui-history";
+const UNATTRIBUTED_RUN = "dag-ui-unattributed";
 
 /** Open the app and wait for it to have mounted; each journey then asserts its own state. */
 async function openObservatory(page: Page, path = "/"): Promise<void> {
@@ -24,8 +25,11 @@ async function openObservatory(page: Page, path = "/"): Promise<void> {
   await expect(page.getByText("DAG Observatory")).toBeVisible();
 }
 
-/** Change the run directory the server is serving, through the executor's writers. */
-function advanceFixture(args: string[]): void {
+/**
+ * Change what the server is serving — record progress, or take a run away — through
+ * the fixture module that wrote the run directory in the first place.
+ */
+function changeServedRuns(args: string[]): void {
   execFileSync(
     "uv",
     [
@@ -82,15 +86,18 @@ test("tracks every node state, node detail, and role transcript of a live run", 
       name: /github\.com\/example\/repo\/pull\/12/,
     }),
   ).toBeVisible();
-  // The node result records no PR checks, and the view says so rather than
-  // rendering an empty block that reads as "all clear".
-  await expect(section("Pull request")).toContainText("Not recorded");
   await expect(section("Logs")).toContainText("Gate completed successfully");
   // The gate result is the attestation the verification recorded for this node.
   await expect(page.locator(".facts")).toContainText("comparison_base");
   await expect(
     page.getByText("No conversations recorded for this node."),
   ).toBeVisible();
+
+  // The failed node published nothing, and the panel says so rather than leaving an
+  // empty block that reads as "all clear".
+  await page.locator(".dag-node.state-failed").click();
+  await expect(section("Pull request")).toContainText("Not recorded");
+  await expect(section("Logs")).toContainText("Deploy failed");
 
   // A human action names work for a person, so the contract forbids it a completion
   // bar; the panel has to say that rather than render an empty criteria block.
@@ -144,6 +151,24 @@ test("restores a bookmarked view and refreshes through the read API", async ({
 
   await openObservatory(page, `/?run=${LIVE_RUN}&node=dashboard`);
   await expect(page.getByText("Build the live dashboard")).toBeVisible();
+});
+
+test("groups a run with no recorded launch under an unknown session", async ({
+  page,
+}) => {
+  await openObservatory(page);
+  // Wait for the attributed groups first: until a run's detail arrives it has no
+  // transcript to attribute, so every group reads as unknown for that moment.
+  await expect(page.getByText(/Codex session/)).toBeVisible();
+  await expect(page.getByText(/Claude session/)).toBeVisible();
+  // The server serves this run with no launch join and no transcripts at all; it
+  // still has to be reachable rather than dropped from the navigation.
+  await expect(
+    page.getByRole("heading", { name: /Unknown session/ }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: RegExp(UNATTRIBUTED_RUN) }).click();
+  await expect(page.locator(".dag-node.state-running")).toContainText("orphan");
+  await expect(page.getByText("Continue unattributed work")).toHaveCount(0);
 });
 
 test("says so when a run recorded no planner conversation", async ({
@@ -220,7 +245,7 @@ test("streams real progress the server observes on disk", async ({ page }) => {
 
   // Record progress the way the executor does: one appended authoritative event.
   // The server's own poll notices it and invalidates the run over SSE.
-  advanceFixture(["--settle-dashboard"]);
+  changeServedRuns(["--settle-dashboard"]);
 
   await expect(
     page.locator(".dag-node.state-done", { hasText: "dashboard" }),
@@ -235,7 +260,7 @@ test("drops a run the server stops serving", async ({ page }) => {
     page.getByRole("button", { name: RegExp(HISTORY_RUN) }),
   ).toBeVisible();
 
-  advanceFixture(["--remove-run", HISTORY_RUN]);
+  changeServedRuns(["--remove-run", HISTORY_RUN]);
 
   await expect(
     page.getByRole("button", { name: RegExp(HISTORY_RUN) }),
@@ -248,7 +273,8 @@ test("drops a run the server stops serving", async ({ page }) => {
 test("falls back to the empty state once no run is left", async ({ page }) => {
   await openObservatory(page);
 
-  advanceFixture(["--remove-run", LIVE_RUN]);
+  changeServedRuns(["--remove-run", LIVE_RUN]);
+  changeServedRuns(["--remove-run", UNATTRIBUTED_RUN]);
 
   await expect(page.getByText("No DAG runs found")).toBeVisible();
   await expect(page.getByRole("alert")).toHaveCount(0);

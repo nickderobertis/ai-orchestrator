@@ -110,17 +110,6 @@ export function readString(
   return typeof result === "string" && result.length > 0 ? result : undefined;
 }
 
-export function readUnknown(
-  value: Record<string, unknown> | undefined,
-  ...keys: string[]
-): unknown {
-  if (!value) return undefined;
-  for (const key of keys) {
-    if (value[key] !== undefined) return value[key];
-  }
-  return undefined;
-}
-
 function hasLifecycleShape(task: PlanTask): boolean {
   return "repo" in task || "steps" in task;
 }
