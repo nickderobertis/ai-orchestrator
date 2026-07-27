@@ -1325,10 +1325,16 @@ def _run_round(
                 )
                 return 2
             nodes_by_id = {node.id: node for node in graph.tasks}
-            replayed_runs = {
-                node: _replay_node_run(nodes_by_id[node], replayed.node_results[node])
-                for node in settled
-            }
+            try:
+                replayed_runs = {
+                    node: _replay_node_run(nodes_by_id[node], replayed.node_results[node])
+                    for node in settled
+                }
+            except ConfigError as exc:
+                # A recorded result this cannot read is the same rejected input every
+                # other check in this replay reports, and owes the caller the same 2.
+                print(f"run-plan: cannot replay authoritative event log: {exc}", file=sys.stderr)
+                return 2
             replayed_order = list(replayed.node_states)
             already_started = frozenset(
                 node for node, state in replayed.node_states.items() if state == "running"

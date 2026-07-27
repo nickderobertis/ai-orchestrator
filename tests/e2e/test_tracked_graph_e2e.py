@@ -1689,7 +1689,9 @@ def test_real_cli_recovers_waiting_and_no_change_lifecycle_results(
         invalid_recovery = subprocess.run(
             [*command, "--recover"], cwd=REPO_ROOT, text=True, capture_output=True, check=False
         )
-        assert invalid_recovery.returncode == 1
+        # 2, the rejected-input status every other replay check reports: a recorded
+        # result this cannot read is refused, not a round that ran and did not finish.
+        assert invalid_recovery.returncode == 2, invalid_recovery.stderr
         assert expected_error in invalid_recovery.stderr
         events_path.write_text(original_events, encoding="utf-8")
 
