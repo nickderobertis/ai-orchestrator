@@ -12,6 +12,13 @@ surface are all real.
 # llmlint: ignore-file[e2e_not_mocked] The FastAPI + SSE service under test runs as a
 # real uvicorn server driven over a real socket; only oneharness' history reader — a
 # separate trust boundary this service consumes — is served from a recorded store.
+# llmlint: ignore-file[tests_mirror_real_usage] The server's real usage is reading a
+# runs directory and a history store that some *other* process wrote, so producing
+# those inputs here is fixture setup, not a shortcut past the interface under test.
+# They are written through the same public writers the executor and monitor use
+# (`open_journal(...).append`, `runs.write_result`, `monitor.save_snapshot`); driving
+# a real orchestration to emit them instead would spend the paid harness, which this
+# repository fakes by policy.
 
 from __future__ import annotations
 
@@ -439,6 +446,10 @@ def test_after_cursor_details_logs_and_projection_failure_over_http(
     )
     (run_dir / "orchestrator").mkdir(parents=True, exist_ok=True)
     (run_dir / "orchestrator" / "gate.log").write_text("gate: passed\n", encoding="utf-8")
+    # Larger than the served tail: a log is a scan aid, never an unbounded download.
+    (run_dir / "orchestrator" / "stderr.log").write_text(
+        "head-that-must-be-dropped\n" + "z" * 200_000, encoding="utf-8"
+    )
 
     app = create_app(
         runs,
@@ -454,6 +465,14 @@ def test_after_cursor_details_logs_and_projection_failure_over_http(
         detail = client.get("/api/v1/runs/demo").json()
         assert detail["details"]["prs"]["api"]["number"] == 7
         assert detail["logs"]["gate_log"] == "gate: passed\n"
+        tail = detail["logs"]["orchestrator_stderr"]
+        assert len(tail.encode()) == 64_000  # bounded to the tail, not the whole file
+        assert "head-that-must-be-dropped" not in tail  # and it is the *end* of the log
+
+        # This run has settled, so it appears only when the caller asks for settled runs.
+        assert client.get("/api/v1/runs").json()["runs"] == []
+        settled = client.get("/api/v1/runs", params={"include_settled": "true"}).json()
+        assert [row["run_id"] for row in settled["runs"]] == ["demo"]
         # Expired: the launcher falls back and the session id is withheld even though
         # this deployment opted into exposing it.
         assert detail["launch"] == {"launch_id": LAUNCH_ID, "launcher": "unknown"}
@@ -569,3 +588,27 @@ def test_events_stream_invalidates_conversations_for_a_watched_run(
             changed = _read_frames(lines, until="conversation.changed")
             assert changed[-1]["event"] == "conversation.changed"
             assert json.loads(changed[-1]["data"]) == {"run_id": "demo"}
+
+
+def test_detail_degrades_to_no_conversations_when_history_is_absent(tmp_path: Path) -> None:
+    """A missing history store must not fail the read the projection can still serve.
+
+    Telemetry and the graph do not depend on oneharness history, so a viewer opened
+    on a machine without it still gets the run — with an empty conversation list.
+    """
+    runs = tmp_path / "runs"
+    _active_run(runs, "demo")
+    app = create_app(runs, oneharness_bin=str(tmp_path / "definitely-not-installed"))
+
+    with _serve(app) as base:
+        client = httpx.Client(base_url=base, timeout=30)
+
+        detail = client.get("/api/v1/runs/demo").json()
+        assert detail["run"]["run_id"] == "demo"
+        assert detail["rounds"][0]["node_states"] == {"api": "running"}
+        assert detail["conversations"] == []
+
+        # Addressing a conversation is then an ordinary 404, not a crash.
+        missing = client.get("/api/v1/runs/demo/conversations/agent-native")
+        assert missing.status_code == 404
+        assert missing.json()["error"]["code"] == "run_not_found"

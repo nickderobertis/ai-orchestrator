@@ -78,8 +78,12 @@ def layout_states(path: Path) -> list[str]:
     return states
 
 
-def typed_dict_fields(path: Path, name: str) -> list[str]:
-    """The annotated field names of one Python ``TypedDict`` declaration."""
+def typed_dict_fields(path: Path, name: str) -> dict[str, bool]:
+    """Field name -> required for one Python ``TypedDict`` declaration.
+
+    A field is optional when annotated ``NotRequired[...]`` or when the class opts
+    out wholesale with ``total=False``.
+    """
     try:
         tree = ast.parse(path.read_text(encoding="utf-8"))
     except (OSError, SyntaxError) as exc:
@@ -89,13 +93,28 @@ def typed_dict_fields(path: Path, name: str) -> list[str]:
     ]
     if len(declarations) != 1:
         fail(f"{path.name} must declare exactly one {name}")
-    fields = [
-        statement.target.id
-        for statement in declarations[0].body
-        if isinstance(statement, ast.AnnAssign) and isinstance(statement.target, ast.Name)
-    ]
-    if not fields or len(fields) != len(set(fields)):
-        fail(f"{path.name} {name} must declare unique annotated fields")
+    declaration = declarations[0]
+    total = not any(
+        keyword.arg == "total"
+        and isinstance(keyword.value, ast.Constant)
+        and keyword.value.value is False
+        for keyword in declaration.keywords
+    )
+    fields: dict[str, bool] = {}
+    for statement in declaration.body:
+        if not (isinstance(statement, ast.AnnAssign) and isinstance(statement.target, ast.Name)):
+            continue
+        annotation = statement.annotation
+        not_required = (
+            isinstance(annotation, ast.Subscript)
+            and isinstance(annotation.value, ast.Name)
+            and annotation.value.id == "NotRequired"
+        )
+        if statement.target.id in fields:
+            fail(f"{path.name} {name} must declare unique annotated fields")
+        fields[statement.target.id] = total and not not_required
+    if not fields:
+        fail(f"{path.name} {name} must declare annotated fields")
     return fields
 
 
@@ -239,19 +258,31 @@ def reconcile_shape(
     never declared it, while an *optional* contract field the server does not populate
     is legal — omitted-when-unavailable is the contract's own rule. A **required**
     contract field must exist in Python or a documented response would be incomplete.
+
+    Optionality is compared in the same direction: a Python field the server may omit
+    cannot satisfy a contract field the client is entitled to find. The reverse —
+    always populating an optional field — is fine. Field *types* are not compared;
+    ``list[RunSummary]`` and ``RunSummary[]`` have no mechanical equivalence without a
+    shared IDL, so this gate reconciles the names and optionality that it can check
+    exactly rather than approximating the rest.
     """
-    fields = set(typed_dict_fields(python_module, python_name))
+    declared = typed_dict_fields(python_module, python_name)
     where = f"{python_module.parent.name}/{python_module.name} {python_name}"
-    if invented := fields - set(contract_fields):
+    if invented := set(declared) - set(contract_fields):
         fail(
             f"{where} declares {sorted(invented)!r}, which "
             f"{contract.name} does not; add it to the contract or drop it"
         )
     required = {name for name, is_required in contract_fields.items() if is_required}
-    if missing := required - fields:
+    if missing := required - set(declared):
         fail(
             f"{where} omits required {contract.name} field(s) {sorted(missing)!r}; "
             "serve them or make them optional in the contract"
+        )
+    if optional := {name for name in required if not declared[name]}:
+        fail(
+            f"{where} makes {sorted(optional)!r} optional, but {contract.name} "
+            "requires them; always populate them or relax the contract"
         )
 
 
