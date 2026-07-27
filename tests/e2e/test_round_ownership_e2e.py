@@ -344,3 +344,41 @@ def test_killed_executor_surfaces_as_abandoned_in_runs_and_status(
     assert recovered.returncode == 0, recovered.stderr
     assert _read(launch.round_dir / "result.json")["state"] == "complete"
     assert "ABANDONED" not in _just("runs", "--runs-dir", str(rounds.runs)).stdout
+
+
+def test_a_recovery_that_refuses_the_journal_abandons_the_round_it_claimed(
+    rounds: Rounds,
+) -> None:
+    """An early exit after claiming a round must not leave it reported as running.
+
+    Not every death is a signal. A recovery attempt that claims the round and then
+    refuses its corrupted journal returns before dispatching anything, and that exit
+    has to leave the same self-evidently-dead record a signalled one does.
+    """
+    launch = rounds.run_plan("refused-recovery")
+    os.kill(launch.owner, signal.SIGKILL)
+    _await_exit(launch.owner)
+
+    events = launch.runs / "refused-recovery" / "events.jsonl"
+    with events.open("ab") as stream:
+        stream.write(b"{broken}\n")
+
+    refused = _just(
+        "run-plan",
+        str(launch.round_dir / "plan.json"),
+        "--run",
+        "refused-recovery",
+        *launch.common,
+        "--recover",
+    )
+    assert refused.returncode == 2
+    assert "malformed authoritative event" in refused.stderr
+
+    status = _read(launch.round_dir / "status.json")
+    assert status["status"] == "abandoned"
+    assert status["reason"] == f"owner pid {status['pid']} stopped without recording a result"
+    assert status["pid"] != launch.owner, "the refusing recovery did not claim the round"
+    assert (
+        "refused-recovery  round-01 ABANDONED"
+        in _just("runs", "--runs-dir", str(rounds.runs)).stdout
+    )

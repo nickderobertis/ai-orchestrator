@@ -36,10 +36,13 @@ from __future__ import annotations
 
 import os
 import sys
-from collections.abc import Callable
-from typing import NoReturn
+from typing import NoReturn, Protocol
 
-Entry = Callable[[list[str] | None], int]
+
+class Entry(Protocol):
+    """One round-owning CLI entry point: parse argv, return a process exit code."""
+
+    def __call__(self, argv: list[str] | None = None, /) -> int: ...
 
 
 def run_detached(entry: Entry, argv: list[str] | None, label: str) -> int:
