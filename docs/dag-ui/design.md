@@ -228,14 +228,22 @@ validated opaque identifiers and resolved beneath configured roots.
 SSE uses `text/event-stream`, `Cache-Control: no-cache`, and heartbeat comments
 at least every 15 seconds. Each event has journal sequence or server cursor in
 `id`, one of `snapshot`, `run.changed`, `conversation.changed`, or `run.removed`
-in `event`, and one compact JSON object in `data`. On connection, or on a
-`Last-Event-ID` that is expired or unparseable as an integer, the server sends
-`snapshot` with the current `RunList` and restarts its cursor. A valid
-`Last-Event-ID` resumes strictly after that cursor. Cursors are ordered only
-within one server process; clients must accept a snapshot after restart.
-Backpressure coalesces repeated changes to the same run, never unboundedly
-queues them. Clients refetch run detail after a change event; SSE is
-invalidation, not a second state model.
+in `event`, and one compact JSON object in `data`.
+
+Every connection opens with `snapshot` carrying the current `RunList`, including a
+reconnect that supplies `Last-Event-ID` or `after`. The server retains no event
+history, so it cannot replay what a disconnected client missed; a snapshot is the
+only way that client cannot silently keep serving stale state. A supplied cursor
+therefore only continues the id sequence — ids stay monotonic across a reconnect
+within one process — and an unparseable or negative one is discarded rather than
+refused. Cursors are ordered only within one server process.
+
+`run.changed` and `run.removed` are polled from the runs root. `conversation.changed`
+is polled from oneharness history on its own slower interval and only when the
+request names a single `run_id`, because each poll spawns a real history subprocess.
+Backpressure coalesces repeated changes to the same run, never unboundedly queues
+them. Clients refetch run detail after a change event; SSE is invalidation, not a
+second state model.
 
 The default bind is loopback. Non-loopback binding requires explicit operator
 configuration and an authentication middleware supplied by the deployment.

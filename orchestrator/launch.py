@@ -168,15 +168,22 @@ def read_provenance(
     except (ConfigError, OSError):
         return None
     launcher = raw.get("launcher")
-    session_id = raw.get("launcher_session_id")
+    raw_session_id = raw.get("launcher_session_id")
     identity = raw.get("repository_identity")
     started = _utc(raw.get("started_at"))
+    # Re-applied on read, not just on write: the record is an out-of-repo file another
+    # process (or a hand edit) can have replaced since we wrote it.
+    try:
+        session_id = (
+            validate_session_id(raw_session_id) if isinstance(raw_session_id, str) else None
+        )
+    except LaunchError:
+        return None
     if not (
         raw.get("schema_version") == PROVENANCE_SCHEMA_VERSION
         and raw.get("launch_id") == valid_id
         and launcher in KNOWN_LAUNCHERS
-        and isinstance(session_id, str)
-        and session_id
+        and session_id is not None
         and isinstance(identity, str)
         and started is not None
     ):

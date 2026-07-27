@@ -123,13 +123,16 @@ def test_event_stream_snapshot_change_removal_then_disconnect(tmp_path: Path) ->
     anyio.run(body)
 
 
-def test_event_stream_resume_skips_snapshot_and_heartbeats(tmp_path: Path) -> None:
+def test_event_stream_resume_still_snapshots_but_continues_the_cursor(tmp_path: Path) -> None:
+    """A reconnect cannot be replayed, so it gets a snapshot numbered after its cursor."""
     runs = tmp_path / "runs"
     _active_run(runs, "demo")
 
     async def body() -> None:
         gen = server._event_stream(_Request(5), runs, None, 5, ABSENT, 0.0, 0.0)
         first = await gen.__anext__()
-        assert first == ": keep-alive\n\n"  # resume mode: no snapshot, idle heartbeat
+        assert "event: snapshot" in first
+        assert first.startswith("id: 6\n")  # continues the client's cursor, does not reset
+        assert await gen.__anext__() == ": keep-alive\n\n"  # idle heartbeat
 
     anyio.run(body)

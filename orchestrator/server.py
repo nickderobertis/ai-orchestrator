@@ -26,6 +26,8 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from .config import ConfigError
+from .conversations import run_conversations
+from .history import HistoryError
 from .read_model import (
     InvalidConversationId,
     InvalidRunId,
@@ -37,10 +39,13 @@ from .read_model import (
     run_detail,
     run_signature,
 )
-from .runs import validate_run_id
+from .runs import RunId, validate_run_id
 
 DEFAULT_POLL_INTERVAL = 0.5
 DEFAULT_HEARTBEAT_INTERVAL = 15.0
+#: Conversations are polled slower than the runs root: each tick spawns a real
+#: `oneharness history` subprocess, which is affordable per detail view, not per poll.
+DEFAULT_CONVERSATION_INTERVAL = 5.0
 DEFAULT_PORT = 8787
 _LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
 
@@ -105,6 +110,7 @@ def create_app(
     expose_launcher_session_id: bool = False,
     poll_interval: float = DEFAULT_POLL_INTERVAL,
     heartbeat_interval: float = DEFAULT_HEARTBEAT_INTERVAL,
+    conversation_interval: float = DEFAULT_CONVERSATION_INTERVAL,
 ) -> FastAPI:
     """Build the read-only API bound to one runs root.
 
@@ -185,12 +191,31 @@ def create_app(
                 oneharness_bin,
                 poll_interval,
                 heartbeat_interval,
+                conversation_interval,
             ),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
 
     return app
+
+
+def _conversation_signature(
+    watched: str | None, oneharness_bin: str
+) -> tuple[tuple[str, int], ...]:
+    """Session id and turn count per conversation of the watched run, or ``()``.
+
+    History is a separate, slower source than the runs root, so this is the only part
+    of a poll that spawns a subprocess. A missing or unreadable store degrades to an
+    empty signature rather than ending the stream.
+    """
+    if watched is None:
+        return ()
+    try:
+        found = run_conversations(RunId(watched), oneharness_bin=oneharness_bin)
+    except (HistoryError, ConfigError):
+        return ()
+    return tuple((item["conversation"]["id"], len(item["conversation"]["turns"])) for item in found)
 
 
 def _signatures(runs_dir: Path, watched: str | None) -> dict[str, tuple[int, ...]]:
@@ -213,26 +238,34 @@ async def _event_stream(
     oneharness_bin: str,
     poll_interval: float,
     heartbeat_interval: float,
+    conversation_interval: float = DEFAULT_CONVERSATION_INTERVAL,
 ) -> AsyncIterator[str]:
     """Emit a snapshot then invalidation events until the client disconnects.
 
-    A fresh connection (no resume cursor) opens with a ``snapshot`` carrying the full
-    run list; a reconnect with a cursor resumes strictly after it, accepting that our
-    per-process cursors reset. Repeated changes to one run between two polls coalesce
-    into a single ``run.changed``, so a busy run cannot flood the stream.
+    *Every* connection opens with a ``snapshot``, including a reconnect carrying a
+    cursor. This process retains no event history, so it cannot replay what a
+    disconnected client missed; issuing a snapshot is the only way the client cannot
+    silently sit on stale state. A resume cursor therefore only continues the id
+    sequence, keeping ids monotonic across a reconnect within one process.
+
+    Repeated changes to one run between two polls coalesce into a single
+    ``run.changed``, so a busy run cannot flood the stream. Conversations live in
+    oneharness history rather than under the runs root, so they are polled on their
+    own slower interval and only for a single watched run — one subprocess per tick
+    is affordable for a detail view, one per run is not.
     """
     cursor = resume_from if resume_from is not None else 0
     baseline = _signatures(runs_dir, watched)
+    conversations = _conversation_signature(watched, oneharness_bin)
     loop = asyncio.get_event_loop()
+    cursor += 1
+    yield _sse(
+        cursor,
+        SseEvent.SNAPSHOT,
+        list_runs(runs_dir, include_settled=True, oneharness_bin=oneharness_bin),
+    )
     last_emit = loop.time()
-    if resume_from is None:
-        cursor += 1
-        yield _sse(
-            cursor,
-            SseEvent.SNAPSHOT,
-            list_runs(runs_dir, include_settled=True, oneharness_bin=oneharness_bin),
-        )
-        last_emit = loop.time()
+    last_conversation_poll = loop.time()
     while True:
         if await request.is_disconnected():
             return
@@ -250,6 +283,15 @@ async def _event_stream(
             last_emit = loop.time()
         baseline = current
         now = loop.time()
+        if watched is not None and now - last_conversation_poll >= conversation_interval:
+            last_conversation_poll = now
+            latest = _conversation_signature(watched, oneharness_bin)
+            if latest != conversations:
+                conversations = latest
+                cursor += 1
+                yield _sse(cursor, SseEvent.CONVERSATION_CHANGED, {"run_id": watched})
+                last_emit = loop.time()
+                now = loop.time()
         if now - last_emit >= heartbeat_interval:
             yield ": keep-alive\n\n"
             last_emit = now

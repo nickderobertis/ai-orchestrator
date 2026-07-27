@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import socket
 import subprocess
 import sys
@@ -324,16 +325,18 @@ def test_events_stream_snapshots_then_invalidates_on_a_live_append(
             assert json.loads(changed["data"])["run_id"] == "demo"
             assert int(changed["id"]) > int(snapshot["id"])
 
-        # A reconnect that resumes from a cursor gets no snapshot, only new changes.
-        import shutil
-
+        # A reconnect gets a snapshot too — nothing replays what it missed — but its
+        # cursor continues from the one it supplied.
         with client.stream("GET", "/api/v1/events", headers={"Last-Event-ID": "5"}) as response:
             lines = response.iter_lines()
+            resumed = _read_frames(lines, until="snapshot")
+            assert resumed[-1]["event"] == "snapshot"
+            assert resumed[-1]["id"] == "6"
+
             shutil.rmtree(run_dir)
             removed = _read_frames(lines, until="run.removed")
             assert removed[-1]["event"] == "run.removed"
             assert json.loads(removed[-1]["data"]) == {"run_id": "demo"}
-            assert all(frame.get("event") != "snapshot" for frame in removed)
 
         assert client.get("/api/v1/events?run_id=bad!id").status_code == 422
 
@@ -430,8 +433,8 @@ def test_after_cursor_details_logs_and_projection_failure_over_http(
         # `after` resumes without a snapshot, exactly like a valid Last-Event-ID.
         with client.stream("GET", "/api/v1/events?after=3") as response:
             assert response.status_code == 200
-            frames = _read_frames(response.iter_lines(), until="comment")
-            assert all(frame.get("event") != "snapshot" for frame in frames)
+            frames = _read_frames(response.iter_lines(), until="snapshot")
+            assert frames[-1]["id"] == "4"  # numbering continues from the supplied cursor
 
         # A negative cursor is not one this process could have issued.
         rejected = client.get("/api/v1/events?after=-1")
@@ -496,3 +499,55 @@ def test_cli_refuses_a_nonloopback_bind_and_otherwise_serves(tmp_path: Path) -> 
     finally:
         process.terminate()
         process.wait(timeout=30)
+
+
+def test_events_stream_invalidates_conversations_for_a_watched_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A new agent turn in history must reach a watching detail view.
+
+    Conversations live outside the runs root, so nothing under it changes when an
+    agent speaks; only the history poll can surface it.
+    """
+    runs = tmp_path / "runs"
+    _active_run(runs, "demo")
+    store = _history_store(tmp_path, "demo")
+    monkeypatch.setenv("FAKE_ONEHARNESS_STORE", str(store))
+    app = create_app(
+        runs,
+        oneharness_bin=str(_oneharness_bin(tmp_path)),
+        poll_interval=0.05,
+        heartbeat_interval=30.0,
+        conversation_interval=0.05,
+    )
+
+    with _serve(app) as base:
+        client = httpx.Client(base_url=base, timeout=15)
+        with client.stream("GET", "/api/v1/events?run_id=demo") as response:
+            lines = response.iter_lines()
+            assert _read_frames(lines, until="snapshot")[-1]["event"] == "snapshot"
+
+            # Append a second turn to the worker's recorded session.
+            record = tmp_path / "agent.jsonl"
+            record.write_text(
+                record.read_text(encoding="utf-8")
+                + json.dumps(
+                    {
+                        "session": "agent-native",
+                        "name": "engineer-ship",
+                        "harness": "codex",
+                        "model": "gpt",
+                        "timestamp": "2026-07-19T00:05:00Z",
+                        "prompt": "keep going",
+                        "text": "second turn",
+                        "status": "ok",
+                        "session_id": "agent-native",
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            changed = _read_frames(lines, until="conversation.changed")
+            assert changed[-1]["event"] == "conversation.changed"
+            assert json.loads(changed[-1]["data"]) == {"run_id": "demo"}
