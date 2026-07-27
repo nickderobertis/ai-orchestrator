@@ -1329,11 +1329,6 @@ def test_real_cli_recovers_failed_lifecycle_result(
                         "branch": "feature/failed-lifecycle",
                         "workflow": "local",
                         "repo_type": "single-owner",
-                        # Retired gate-skipping keys: a plan written before the
-                        # merge path became authoritative must still load and run,
-                        # and neither key may weaken the hook below.
-                        "skip_verify": True,
-                        "no_identity_gate": True,
                         "max_turns": 1,
                     },
                     {
@@ -1344,6 +1339,12 @@ def test_real_cli_recovers_failed_lifecycle_result(
                         "branch": "feature/gate-failed-lifecycle",
                         "workflow": "local",
                         "repo_type": "single-owner",
+                        # Retired gate-skipping keys, on the node that reaches
+                        # publication: a plan written before the merge path became
+                        # authoritative must still load, and neither key may let it
+                        # past the rejecting hook below.
+                        "skip_verify": True,
+                        "no_identity_gate": True,
                         # Deliberately the legacy `verify_cmd` spelling: a plan
                         # written before the merge path became authoritative must
                         # still load, and its command must reach the recorded
@@ -1492,10 +1493,16 @@ def test_real_cli_recovers_failed_lifecycle_result(
         assert detail["required_checks"] == []
         assert detail["required_checks_status"] == "not-applicable"
         assert detail["checkout"] == str(canonical)
-    # The legacy `verify_cmd` key reached `recorded_gate`, and the node still failed
-    # at the hook rather than at that command — which never ran.
+    # That node also carried the retired `skip_verify` / `no_identity_gate` keys and
+    # still reached publication only to be rejected by the hook, so the legacy plan
+    # spelling loads without weakening verification. Its legacy `verify_cmd` reached
+    # the recorded gate, which the pre-push detail proves was never the thing run.
     recorded = coverage["gate-failed-lifecycle"]["expected_gate"]
     assert recorded[:2] == ["sh", "-c"] and "tracked gate tail failed" in recorded[2]
+    assert (
+        "pre-push gate: tracked gate tail failed"
+        in (result["results"]["gate-failed-lifecycle"]["detail"])
+    )
     assert coverage["failed-lifecycle"]["expected_gate"] == []
     lock_waits = [
         event["detail"]["seconds"]
