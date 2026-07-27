@@ -150,14 +150,23 @@ def provenance_dir() -> Path:
     A relative ``XDG_STATE_HOME`` is ignored in favour of the default, as the XDG
     base-directory spec requires: honouring one would resolve the record against
     whatever directory the process happens to be in, so the same launch would write
-    and read different files.
+    and read different files. The ``HOME``-derived fallback gets the same treatment
+    for the same reason — but there is nowhere further to fall back to, so a relative
+    one raises rather than silently anchoring a protected record to the working
+    directory. Reads degrade on that (`read_provenance` reports no launcher); only
+    the write is loud.
     """
     configured = os.environ.get("XDG_STATE_HOME") or ""
-    base = (
-        Path(configured)
-        if configured and Path(configured).is_absolute()
-        else Path(os.path.expanduser("~")) / ".local" / "state"
-    )
+    if configured and Path(configured).is_absolute():
+        base = Path(configured)
+    else:
+        home = Path(os.path.expanduser("~"))
+        if not home.is_absolute():
+            raise LaunchError(
+                "provenance needs an absolute state directory: set XDG_STATE_HOME or "
+                f"HOME to an absolute path (HOME is {str(home)!r})"
+            )
+        base = home / ".local" / "state"
     return base / "ai-orchestrator" / "launches"
 
 
@@ -237,7 +246,9 @@ def read_provenance(
         return None
     try:
         raw = load_mapping(provenance_path(valid_id))
-    except (ConfigError, OSError):
+    except (ConfigError, OSError, LaunchError):
+        # LaunchError here means the state directory itself is unusable. A viewer
+        # should still render the graph, reporting no launcher.
         return None
     launcher = raw.get("launcher")
     raw_session_id = raw.get("launcher_session_id")

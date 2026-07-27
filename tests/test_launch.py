@@ -272,3 +272,22 @@ def test_provenance_dir_ignores_a_relative_xdg_state_home(
     assert (
         provenance_dir() == tmp_path / "home" / ".local" / "state" / "ai-orchestrator" / "launches"
     )
+
+
+def test_provenance_dir_refuses_a_relative_home(monkeypatch: pytest.MonkeyPatch) -> None:
+    """With no absolute XDG_STATE_HOME there is nowhere left to fall back to."""
+    monkeypatch.delenv("XDG_STATE_HOME", raising=False)
+    monkeypatch.setenv("HOME", "relative/home")
+
+    with pytest.raises(LaunchError, match="absolute state directory"):
+        provenance_dir()
+
+
+def test_read_provenance_degrades_when_the_state_directory_is_unusable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A broken state environment must not fail a read; the launcher is just unknown."""
+    monkeypatch.delenv("XDG_STATE_HOME", raising=False)
+    monkeypatch.setenv("HOME", "relative/home")
+
+    assert read_provenance(generate_launch_id()) is None

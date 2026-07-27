@@ -168,12 +168,15 @@ def _now(now: datetime | None) -> str:
 
 
 def contained_run_dir(runs_dir: Path, run_id: str) -> Path | None:
-    """The run directory beneath the configured root, or ``None`` when it escapes it.
+    """A *recorded run's* directory beneath the configured root, else ``None``.
 
-    Validating the identifier only proves it is a well-formed *name*; a directory or
-    symlink under the root can still point outside it. Containment is therefore
-    checked after resolution, so no id can make the server read a tree the operator
-    did not point it at.
+    Two separate things are established, and the name promises both. Containment:
+    validating the identifier only proves it is a well-formed *name*, while a
+    directory or symlink under the root can still point outside it, so containment is
+    checked after resolution and no id can make the server read a tree the operator
+    did not point it at. Existence: a directory that has recorded no round is not a
+    run — an empty or unrelated directory under the root must read as absent rather
+    than as a run with nothing in it.
     """
     try:
         root = runs_dir.resolve(strict=True)
@@ -182,7 +185,7 @@ def contained_run_dir(runs_dir: Path, run_id: str) -> Path | None:
         return None
     if not candidate.is_dir() or not candidate.is_relative_to(root):
         return None
-    return candidate
+    return candidate if latest_round(candidate) is not None else None
 
 
 def _run_dirs(runs_dir: Path) -> Iterator[Path]:
@@ -377,7 +380,7 @@ def run_detail(
     except ConfigError as exc:
         raise InvalidRunId(str(exc)) from exc
     run_dir = contained_run_dir(runs_dir, validated)
-    if run_dir is None or latest_round(run_dir) is None:
+    if run_dir is None:
         raise RunNotFound(f"no recorded run {validated!r}")
     try:
         telemetry = collect_run(run_dir, oneharness_bin=oneharness_bin)

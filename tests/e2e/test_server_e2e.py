@@ -905,3 +905,24 @@ def test_conversation_polling_survives_a_failing_history_subprocess(tmp_path: Pa
             changed = _read_frames(lines, until="run.changed")
             assert json.loads(changed[-1]["data"])["run_id"] == "demo"
             assert all(frame.get("event") != "conversation.changed" for frame in changed)
+
+
+def test_a_directory_with_no_recorded_round_is_not_a_run(tmp_path: Path) -> None:
+    """An empty or unrelated directory under the root reads as absent, not as a run."""
+    runs = tmp_path / "runs"
+    _active_run(runs, "demo")
+    (runs / "scratch").mkdir()  # a bare directory that never recorded a round
+
+    app = create_app(runs, oneharness_bin=str(tmp_path / "definitely-not-installed"))
+
+    with _serve(app) as base:
+        client = httpx.Client(base_url=base, timeout=30)
+
+        for path in ("/api/v1/runs/scratch", "/api/v1/runs/scratch/conversations/any"):
+            response = client.get(path)
+            assert response.status_code == 404, path
+            # Not conversation_not_found: there is no run to have conversations in.
+            assert response.json()["error"]["code"] == "run_not_found", path
+
+        listed = client.get("/api/v1/runs", params={"include_settled": "true"}).json()
+        assert [row["run_id"] for row in listed["runs"]] == ["demo"]
