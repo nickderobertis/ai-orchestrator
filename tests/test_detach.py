@@ -2,7 +2,7 @@
 
 The real journey — a `just run-plan` round surviving the teardown of the turn that
 launched it — is
-`tests/e2e/test_round_ownership_e2e.py::test_round_survives_the_teardown_of_its_launching_turn`.
+`tests/e2e/test_round_ownership_e2e.py::test_a_round_survives_the_teardown_of_its_launching_turn`.
 These cover what that journey cannot see from outside the process: that the round runs
 in a session of its own, and that the relaying parent reports the round's own outcome
 whether it returned an exit code or died under a signal.
