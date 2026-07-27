@@ -126,6 +126,12 @@ test("restores a bookmarked view and refreshes through the read API", async ({
   await page.getByRole("button", { name: "Refresh" }).click();
   await expect(page.getByText("Planner session")).toBeVisible();
 
+  await page.getByRole("tab", { name: "Graph" }).click();
+  await expect(page.locator(".dag-node.state-running")).toContainText(
+    "dashboard",
+  );
+  await expect(page.getByText("Planner session")).toHaveCount(0);
+
   await openObservatory(page, `/?run=${LIVE_RUN}&node=dashboard`);
   await expect(page.getByText("Build the live dashboard")).toBeVisible();
 });
