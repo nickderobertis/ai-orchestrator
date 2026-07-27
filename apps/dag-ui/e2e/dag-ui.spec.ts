@@ -16,7 +16,7 @@ import { FIXTURE_WORKSPACE, OFFLINE_UI_URL } from "../playwright.config";
 const LIVE_RUN = "dag-ui-live";
 const HISTORY_RUN = "dag-ui-history";
 
-/** Wait for the first projected graph so a journey never races the initial read. */
+/** Open the app and wait for it to have mounted; each journey then asserts its own state. */
 async function openObservatory(page: Page, path = "/"): Promise<void> {
   await page.goto(path);
   await expect(page.getByText("DAG Observatory")).toBeVisible();
