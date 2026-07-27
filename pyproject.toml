@@ -84,6 +84,12 @@ branch = true
 
 [tool.coverage.report]
 show_missing = true
+# The single source of the enforced floor: pytest-cov adopts `fail_under` when no
+# `--cov-fail-under` overrides it. `precision` is load-bearing, not cosmetic — the
+# fail decision compares `round(total, precision)`, so at the default precision 0 a
+# 94.93% total rounded up to 95 and exited 0 while printing "FAIL ... not reached".
+fail_under = 95
+precision = 2
 exclude_lines = [
     "pragma: no cover",
     "if __name__ == .__main__.:",
