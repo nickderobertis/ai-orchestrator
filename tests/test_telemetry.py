@@ -225,6 +225,23 @@ def test_optional_record_fields_are_omitted() -> None:
     assert Provider("oneharness").record() == {"provider": "oneharness"}
 
 
+def test_a_run_with_no_events_records_a_null_last_event(tmp_path: Path) -> None:
+    """A prepared round that has journalled nothing has no last event, so it is null.
+
+    This is the state every run passes through between `prepare_round` and its first
+    append. `last_event` is required, so absence has to be representable in the value
+    rather than encoded as an empty string a reader must recognise as "none".
+    """
+    run_dir = tmp_path / "runs" / "eventless"
+    prepare_round(run_dir, {"tasks": [{"id": "api", "task": "ship"}]})
+
+    telemetry = collect_run(run_dir, oneharness_bin="definitely-not-installed")
+
+    assert telemetry is not None
+    assert telemetry.last_event is None
+    assert telemetry.record()["last_event"] is None
+
+
 def test_harness_buckets_decompose_wall_time() -> None:
     timing = _timing(
         1000,
@@ -280,9 +297,9 @@ def test_over_budget_buckets_are_clipped_to_exactly_wall_time() -> None:
     assert timing["publication_wait_seconds"] == 0
 
 
-def test_schema_v7_field_golden_prevents_cross_layer_drift() -> None:
+def test_schema_v8_field_golden_prevents_cross_layer_drift() -> None:
     golden = json.loads(
-        (Path(__file__).parent / "golden" / "telemetry-v7-fields.json").read_text(encoding="utf-8")
+        (Path(__file__).parent / "golden" / "telemetry-v8-fields.json").read_text(encoding="utf-8")
     )
     assert golden == {
         "schema_version": TELEMETRY_SCHEMA_VERSION,
@@ -302,7 +319,7 @@ def test_schema_v7_field_golden_prevents_cross_layer_drift() -> None:
     contract = (Path(__file__).parents[1] / "docs" / "telemetry-model.md").read_text(
         encoding="utf-8"
     )
-    assert "Index version 7" in contract
+    assert "Index version 8" in contract
     typescript_contract = (
         Path(__file__).parents[1] / "packages" / "dag-model" / "src" / "index.ts"
     ).read_text(encoding="utf-8")
@@ -354,7 +371,7 @@ def test_index_cli_defaults_to_active_and_all_includes_settled(
     completed.rename(tmp_path / "runs" / "complete")
     assert main(["--runs-dir", str(tmp_path / "runs"), "--oneharness-bin", "absent"]) == 0
     active = json.loads(capsys.readouterr().out)
-    assert active["schema_version"] == 7
+    assert active["schema_version"] == 8
     assert active["runs"] == []
     assert active["metrics"]["recovered_branches"] == 0
 

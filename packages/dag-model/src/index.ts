@@ -14,6 +14,12 @@ const finite = z.number().finite();
 const nonnegative = finite.nonnegative();
 const counter = z.number().int().nonnegative();
 const timestamp = z.iso.datetime({ offset: true });
+/**
+ * The kind of a run's most recent journal event, shared by the list row and the run
+ * telemetry that both carry it. Null — never an empty string — for a run that has
+ * recorded no event yet, which is how a just-launched run reads on disk.
+ */
+const lastEvent = z.string().min(1).nullable();
 const openObject = <T extends z.ZodRawShape>(shape: T) =>
   z.object(shape).catchall(z.unknown());
 
@@ -119,7 +125,7 @@ export const runTelemetrySchema = openObject({
   run_id: z.string().min(1),
   state: z.string().min(1),
   phase: z.string().min(1),
-  last_event: z.string().min(1),
+  last_event: lastEvent,
   last_progress_at: nonnegative.optional(),
   timing: timingSchema,
   nodes: z.array(nodeTelemetrySchema),
@@ -146,7 +152,7 @@ export const runSummarySchema = openObject({
   run_id: z.string().min(1),
   state: z.string().min(1),
   phase: z.string().min(1),
-  last_event: z.string().min(1),
+  last_event: lastEvent,
   last_progress_at: nonnegative.optional(),
   timing_quality: timingQualitySchema,
   linkage_quality: linkageQualitySchema,
@@ -156,7 +162,7 @@ export const runSummarySchema = openObject({
 
 export const runListSchema = openObject({
   api_version: z.literal(1),
-  telemetry_schema_version: z.literal(7),
+  telemetry_schema_version: z.literal(8),
   observed_at: timestamp,
   runs: z.array(runSummarySchema),
 });
@@ -372,7 +378,7 @@ export const runConversationsSchema = z.union([
 
 export const runDetailSchema = openObject({
   api_version: z.literal(1),
-  telemetry_schema_version: z.literal(7),
+  telemetry_schema_version: z.literal(8),
   observed_at: timestamp,
   run: runTelemetrySchema,
   rounds: z.array(roundSchema),

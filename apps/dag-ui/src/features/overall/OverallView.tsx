@@ -12,7 +12,10 @@ export function OverallView({ detail }: { readonly detail: RunDetail }) {
         <p className="eyebrow">Whole DAG</p>
         <h2>{detail.run.run_id}</h2>
         <p>
-          {detail.run.phase} · last event {detail.run.last_event}
+          {detail.run.phase} ·{" "}
+          {detail.run.last_event
+            ? `last event ${detail.run.last_event}`
+            : "no events recorded yet"}
         </p>
       </section>
       <div className="metric-grid">

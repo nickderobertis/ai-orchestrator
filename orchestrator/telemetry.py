@@ -46,7 +46,7 @@ from .runs import (
 )
 from .verify import GateAttestation
 
-TELEMETRY_SCHEMA_VERSION = 7
+TELEMETRY_SCHEMA_VERSION = 8
 SUPPORTED_HISTORY_SCHEMA_VERSIONS = ("0.2", "0.3", 1, 2, "1.0", "1.1", "1.2")
 #: History schema versions that may carry validated native timing (per-turn
 #: ``model_ms``/``tool_ms`` plus interval-bearing tool events). A version identifies
@@ -315,7 +315,10 @@ class RunTelemetry:
     state: str
     phase: str
     last_progress_at: float | None
-    last_event: str
+    #: The kind of the run's most recent journal event, or ``None`` when it has
+    #: recorded none yet. Absence is null: a just-launched run has no last event,
+    #: and an empty string would be a degenerate value every reader must special-case.
+    last_event: str | None
     timing: TimingRecord
     nodes: list[NodeTelemetry] = field(default_factory=list)
     providers: list[Provider] = field(default_factory=list)
@@ -1535,7 +1538,7 @@ def collect_run(
         state=state,
         phase=_phase(last, state),
         last_progress_at=last.at if last else None,
-        last_event=last.kind if last else "",
+        last_event=last.kind if last else None,
         timing=timing,
         nodes=nodes,
         providers=providers,

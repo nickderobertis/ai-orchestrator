@@ -56,7 +56,7 @@ const timingPresence = {
 
 export const runList = {
   api_version: 1,
-  telemetry_schema_version: 7,
+  telemetry_schema_version: 8,
   observed_at: "2026-07-26T12:00:00Z",
   runs: [
     summary(LIVE_RUN, "running", { running: 1, done: 1, failed: 1 }),
@@ -125,7 +125,7 @@ export function runDetail(runId: string = LIVE_RUN) {
   const node = historical ? "archive" : "dashboard";
   return {
     api_version: 1,
-    telemetry_schema_version: 7,
+    telemetry_schema_version: 8,
     observed_at: "2026-07-26T12:00:00Z",
     run: {
       run_id: runId,

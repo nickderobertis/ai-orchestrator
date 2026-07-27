@@ -126,7 +126,8 @@ class RunSummary(TypedDict):
     run_id: str
     state: str
     phase: str
-    last_event: str
+    #: Null for a run that has recorded no journal event yet; see ``RunTelemetry``.
+    last_event: str | None
     timing_quality: TimingQuality
     linkage_quality: LinkageQuality
     timing: TimingRecord

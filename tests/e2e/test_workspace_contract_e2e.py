@@ -546,12 +546,12 @@ def test_dag_state_contract_checker_rejects_duplicate_agent_roles(tmp_path: Path
 
 
 def test_dag_state_contract_checker_reports_telemetry_schema_drift(tmp_path: Path) -> None:
-    """The base bumped this 6 -> 7 while the contract still said 6; gate it."""
+    """The base bumped this 7 -> 8 while the contract still said 7; gate it."""
     checkout = _dag_state_contract_checkout(tmp_path)
     telemetry = checkout / "orchestrator/telemetry.py"
     telemetry.write_text(
         telemetry.read_text().replace(
-            "TELEMETRY_SCHEMA_VERSION = 7", "TELEMETRY_SCHEMA_VERSION = 8"
+            "TELEMETRY_SCHEMA_VERSION = 8", "TELEMETRY_SCHEMA_VERSION = 9"
         )
     )
 
@@ -559,7 +559,7 @@ def test_dag_state_contract_checker_reports_telemetry_schema_drift(tmp_path: Pat
 
     assert result.returncode != 0
     assert "telemetry schema version" in result.stderr
-    assert "is 8 but" in result.stderr
+    assert "is 9 but" in result.stderr
     assert "reconcile them in one change" in result.stderr
 
 
