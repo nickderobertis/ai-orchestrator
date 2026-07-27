@@ -148,12 +148,30 @@ def _now(now: datetime | None) -> str:
     return (now or datetime.now(UTC)).isoformat()
 
 
+def contained_run_dir(runs_dir: Path, run_id: str) -> Path | None:
+    """The run directory beneath the configured root, or ``None`` when it escapes it.
+
+    Validating the identifier only proves it is a well-formed *name*; a directory or
+    symlink under the root can still point outside it. Containment is therefore
+    checked after resolution, so no id can make the server read a tree the operator
+    did not point it at.
+    """
+    try:
+        root = runs_dir.resolve(strict=True)
+        candidate = (runs_dir / run_id).resolve(strict=True)
+    except OSError:
+        return None
+    if not candidate.is_dir() or not candidate.is_relative_to(root):
+        return None
+    return candidate
+
+
 def _run_dirs(runs_dir: Path) -> Iterator[Path]:
     if not runs_dir.is_dir():
         return
     for entry in sorted(runs_dir.iterdir()):
-        if entry.is_dir():
-            yield entry
+        if (contained := contained_run_dir(runs_dir, entry.name)) is not None:
+            yield contained
 
 
 def read_launch_id(run_dir: Path) -> str | None:
@@ -339,8 +357,8 @@ def run_detail(
         validated = validate_run_id(run_id)
     except ConfigError as exc:
         raise InvalidRunId(str(exc)) from exc
-    run_dir = runs_dir / validated
-    if not run_dir.is_dir() or latest_round(run_dir) is None:
+    run_dir = contained_run_dir(runs_dir, validated)
+    if run_dir is None or latest_round(run_dir) is None:
         raise RunNotFound(f"no recorded run {validated!r}")
     try:
         telemetry = collect_run(run_dir, oneharness_bin=oneharness_bin)
@@ -378,8 +396,7 @@ def run_conversation(
     except ConfigError as exc:
         raise InvalidRunId(str(exc)) from exc
     wanted = validate_conversation_id(conversation_id)
-    run_dir = runs_dir / validated
-    if not run_dir.is_dir():
+    if contained_run_dir(runs_dir, validated) is None:
         raise RunNotFound(f"no recorded run {validated!r}")
     for conversation in run_conversations(validated, oneharness_bin=oneharness_bin):
         if conversation["conversation"]["id"] == wanted:

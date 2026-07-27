@@ -360,6 +360,21 @@ def test_events_stream_snapshots_then_invalidates_on_a_live_append(
             assert json.loads(changed["data"])["run_id"] == "demo"
             assert int(changed["id"]) > int(snapshot["id"])
 
+            # So does a monitor PR observation, which never touches the journal —
+            # without this the UI would sit on a stale PR status forever.
+            save_snapshot(
+                run_dir,
+                DetailSnapshot(prs={"api": PrDetail(number=11, state="MERGED").to_record()}),
+            )
+            from_snapshot = _read_frames(lines, until="run.changed")
+            assert json.loads(from_snapshot[-1]["data"])["run_id"] == "demo"
+
+            # And so does a log the run appends outside the event stream.
+            (run_dir / "orchestrator").mkdir(parents=True, exist_ok=True)
+            (run_dir / "orchestrator" / "gate.log").write_text("gate: passed\n", encoding="utf-8")
+            from_log = _read_frames(lines, until="run.changed")
+            assert json.loads(from_log[-1]["data"])["run_id"] == "demo"
+
         # A reconnect gets a snapshot too — nothing replays what it missed — but its
         # cursor continues from the one it supplied.
         with client.stream("GET", "/api/v1/events", headers={"Last-Event-ID": "5"}) as response:
@@ -487,7 +502,8 @@ def test_after_cursor_details_logs_and_projection_failure_over_http(
         replaced = client.get("/api/v1/runs/demo").json()
         assert replaced["launch"] == {"launch_id": LAUNCH_ID, "launcher": "unknown"}
 
-        # `after` resumes without a snapshot, exactly like a valid Last-Event-ID.
+        # `after` is the query-parameter form of a resume cursor: like a valid
+        # Last-Event-ID it continues the numbering, and still gets a snapshot.
         with client.stream("GET", "/api/v1/events?after=3") as response:
             assert response.status_code == 200
             frames = _read_frames(response.iter_lines(), until="snapshot")
@@ -651,3 +667,113 @@ def test_detail_skips_an_unreadable_session_and_serves_the_rest(
 
     ids = {item["conversation"]["id"] for item in detail["conversations"]}
     assert ids == {"agent-native", "judge-native"}  # the unreadable session is skipped
+
+
+def test_a_symlinked_run_id_cannot_read_outside_the_configured_root(tmp_path: Path) -> None:
+    """A valid opaque id may still name a symlink; containment is what stops it."""
+    runs = tmp_path / "runs"
+    _active_run(runs, "demo")
+    outside = tmp_path / "outside"
+    _active_run(outside, "secret")
+    (runs / "escape").symlink_to(outside / "secret", target_is_directory=True)
+
+    app = create_app(runs, oneharness_bin=str(tmp_path / "definitely-not-installed"))
+
+    with _serve(app) as base:
+        client = httpx.Client(base_url=base, timeout=30)
+
+        assert client.get("/api/v1/runs/escape").status_code == 404
+        assert client.get("/api/v1/runs/escape/conversations/any").status_code == 404
+        # And it is absent from the list the UI enumerates.
+        listed = client.get("/api/v1/runs", params={"include_settled": "true"}).json()
+        assert [row["run_id"] for row in listed["runs"]] == ["demo"]
+
+
+def test_run_list_serves_healthy_runs_beside_a_corrupt_one(tmp_path: Path) -> None:
+    """One unreadable run must not blind the UI to every other run in the root."""
+    runs = tmp_path / "runs"
+    _active_run(runs, "healthy")
+    prepare_round(runs / "broken", {"tasks": [{"id": "api", "task": "x"}]})
+    (runs / "broken" / "round-01" / "result.json").write_text("{ not json", encoding="utf-8")
+
+    app = create_app(runs, oneharness_bin=str(tmp_path / "definitely-not-installed"))
+
+    with _serve(app) as base:
+        listed = (
+            httpx.Client(base_url=base, timeout=30)
+            .get("/api/v1/runs", params={"include_settled": "true"})
+            .json()
+        )
+
+    assert [row["run_id"] for row in listed["runs"]] == ["healthy"]
+
+
+def test_detail_maps_transcript_edge_cases_to_the_ui_shape(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The mapping a client actually receives, over HTTP, for awkward history records."""
+    runs = tmp_path / "runs"
+    _active_run(runs, "demo")
+    record = tmp_path / "edge.jsonl"
+    record.write_text(
+        json.dumps(
+            {
+                "session": "edge-native",
+                "name": "engineer-edge",
+                "harness": "codex",
+                "timestamp": "2026-07-19T00:00:00Z",
+                "prompt": "go",
+                "text": "stopped early",
+                "status": "timeout",
+                "thinking": {"b": 1, "a": 2},
+                # Bools and non-finite numbers are not counters; nulls are meaningful.
+                "usage": {"input_tokens": True, "output_tokens": None, "cost_usd": 0.5},
+                "events": ["not-a-dict", {"kind": "tool_call", "name": "just", "output": 7}],
+                "unrecognized_field": {"kept": True},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    store = tmp_path / "store.json"
+    store.write_text(
+        json.dumps(
+            {
+                "sessions": [
+                    {
+                        "id": "edge-native",
+                        "name": "engineer-edge",
+                        "project": str(tmp_path),
+                        "started": "2026-07-19T00:00:00Z",
+                        "path": str(record),
+                        "labels": {"run_id": "demo", "node": "api", "role": "agent"},
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("FAKE_ONEHARNESS_STORE", str(store))
+    app = create_app(runs, oneharness_bin=str(_oneharness_bin(tmp_path)))
+
+    with _serve(app) as base:
+        detail = httpx.Client(base_url=base, timeout=30).get("/api/v1/runs/demo").json()
+
+    served = detail["conversations"][0]
+    turn = served["conversation"]["turns"][0]
+    assert served["conversation"]["state"] == "stopped"  # timeout -> stopped
+    assert served["conversation"]["canContinue"] is False  # no session_id to resume
+    assert turn["reasoning"] == '{\n  "a": 2,\n  "b": 1\n}'  # structured thinking, JSON-encoded
+    assert turn["usage"] == {"outputTokens": None, "costUsd": 0.5}  # bool dropped, null kept
+    assert turn["tools"] == [{"index": 1, "kind": "tool_call", "name": "just", "output": None}]
+    assert turn["unknown"] == {"unrecognized_field": {"kept": True}}  # nothing silently dropped
+    assert turn["model"] is None
+    # The role was not labelled, so it is inferred and marked as such.
+    assert served["attribution"] == {
+        "transportRole": "agent",
+        "agentRole": "worker",
+        "launcher": "unknown",
+        "runId": "demo",
+        "nodeId": "api",
+        "inferred": True,
+    }

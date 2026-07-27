@@ -34,6 +34,7 @@ from .read_model import (
     ProjectionFailed,
     ReadError,
     RunNotFound,
+    contained_run_dir,
     list_runs,
     run_conversation,
     run_detail,
@@ -239,13 +240,17 @@ def _signatures(runs_dir: Path, watched: str | None) -> dict[str, tuple[int, ...
         return {}
     signatures: dict[str, tuple[int, ...]] = {}
     for entry in sorted(runs_dir.iterdir()):
-        if not entry.is_dir() or (watched is not None and entry.name != watched):
+        if watched is not None and entry.name != watched:
             continue
         try:
             validate_run_id(entry.name)
         except ConfigError:
             continue
-        signatures[entry.name] = run_signature(entry)
+        # Containment, not just a valid name: a symlinked entry must not make the
+        # stream watch — or name in an event — a tree outside the configured root.
+        if (run_dir := contained_run_dir(runs_dir, entry.name)) is None:
+            continue
+        signatures[entry.name] = run_signature(run_dir)
     return signatures
 
 

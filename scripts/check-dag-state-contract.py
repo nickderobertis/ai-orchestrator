@@ -224,6 +224,58 @@ def nested_object_fields(path: Path, interface: str, prop: str) -> dict[str, boo
     return _properties(path, f"{interface}.{prop}", matches[0])
 
 
+def union_members(path: Path, interface: str, prop: str) -> list[str]:
+    """The string members of a TypeScript ``a | b | c`` union on one interface property."""
+    try:
+        source = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        fail(f"read {path.name} {interface}.{prop}: {exc}")
+    matches = re.findall(
+        rf"^(?:export\s+)?interface\s+{re.escape(interface)}\s*\{{.*?"
+        rf"^\s+{re.escape(prop)}\??\s*:\s*((?:\"[^\"]+\"\s*\|?\s*)+);",
+        source,
+        flags=re.DOTALL | re.MULTILINE,
+    )
+    if len(matches) != 1:
+        fail(f"{path.name} must declare exactly one {interface}.{prop} string union")
+    members = re.findall(r'"([^"]+)"', matches[0])
+    if not members or len(members) != len(set(members)):
+        fail(f"{path.name} {interface}.{prop} union must list unique members")
+    return members
+
+
+def frozenset_members(path: Path, name: str) -> list[str]:
+    """The string members of a module-level ``name: frozenset[str] = frozenset({...})``."""
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+    except (OSError, SyntaxError) as exc:
+        fail(f"read {path.name} {name}: {exc}")
+    calls = [
+        node.value
+        for node in tree.body
+        if isinstance(node, ast.AnnAssign | ast.Assign)
+        and name
+        in {
+            target.id
+            for target in ([node.target] if isinstance(node, ast.AnnAssign) else node.targets)
+            if isinstance(target, ast.Name)
+        }
+    ]
+    if len(calls) != 1 or not isinstance(calls[0], ast.Call) or not calls[0].args:
+        fail(f"{path.name} must declare exactly one {name} frozenset")
+    argument = calls[0].args[0]
+    if not isinstance(argument, ast.Set):
+        fail(f"{path.name} {name} must be built from a set literal")
+    members = [
+        item.value
+        for item in argument.elts
+        if isinstance(item, ast.Constant) and isinstance(item.value, str)
+    ]
+    if len(members) != len(argument.elts) or len(members) != len(set(members)):
+        fail(f"{path.name} {name} must contain unique string members")
+    return members
+
+
 def design_sse_events(path: Path) -> list[str]:
     """The SSE ``event`` names the design contract fixes, read from its prose list."""
     try:
@@ -351,6 +403,17 @@ def main() -> None:
     for name in ("RunLaunch", "RunSummary", "RunList", "Round", "RunDetail"):
         reconcile_shape(read_model, name, design, interface_fields(design, name))
 
+    reconcile(
+        "launcher vocabulary",
+        (
+            "orchestrator/launch.py LAUNCHER_KINDS",
+            frozenset_members(root / "orchestrator/launch.py", "LAUNCHER_KINDS"),
+        ),
+        (
+            "docs/dag-ui/design.md RunLaunch.launcher",
+            union_members(design, "RunLaunch", "launcher"),
+        ),
+    )
     reconcile(
         "SSE event vocabulary",
         (

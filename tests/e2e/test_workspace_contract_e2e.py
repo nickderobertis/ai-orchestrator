@@ -174,6 +174,7 @@ def _dag_state_contract_checkout(tmp_path: Path) -> Path:
         "scripts/check-dag-state-contract.py",
         "orchestrator/projection.py",
         "orchestrator/conversations.py",
+        "orchestrator/launch.py",
         "orchestrator/read_model.py",
         "orchestrator/server.py",
         "packages/dag-layout/src/index.ts",
