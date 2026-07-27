@@ -30,6 +30,11 @@ def _capture_launch_env(
 ) -> tuple[str, dict[str, str], Path]:
     """Run launch_orchestrator with a fake process; return run id, env, run dir."""
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    # The launch env starts from os.environ, and this suite itself runs under a
+    # dispatch that exports ONEHARNESS_MODE — so without scrubbing it, a launch that
+    # forwarded nothing would still show the ambient 'bypass' and the default
+    # assertion below would pass for the wrong reason.
+    monkeypatch.delenv("ONEHARNESS_MODE", raising=False)
     tmp_path.mkdir(parents=True, exist_ok=True)
     plan = tmp_path / "plan.json"
     plan.write_text(
