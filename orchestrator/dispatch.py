@@ -57,6 +57,7 @@ from .goals import Goal, graph_identities, register_run, update_run_owner
 from .labels import LABEL_ENV, LabelError, merge_labels
 from .launch import (
     KNOWN_LAUNCHERS,
+    LAUNCH_RECORD_NAME,
     LAUNCHER_KINDS,
     LaunchError,
     LaunchInfo,
@@ -884,9 +885,11 @@ def launch_orchestrator(
             "channel_next": f"just channel-next {run_dir.name}",
             "monitor": f"just monitor {run_dir.name}",
         },
+        # The key is a literal because `LaunchRecord` types it; `launch.read_launch_info`
+        # is the only reader, and tests/test_orchestrator_launch.py round-trips the two.
         "launch": {"launch_id": launch_id},
     }
-    atomic_json(run_dir / "launch.json", launch)
+    atomic_json(run_dir / LAUNCH_RECORD_NAME, launch)
     (run_dir / "planner.md").write_text(
         "# Planner launch\n\n"
         f"- Run id: `{run_dir.name}`\n"
@@ -948,7 +951,9 @@ def main_orchestrate(argv: list[str] | None = None) -> int:
             launcher_session_id=args.launcher_session,
         )
         print(
-            (args.runs_dir.resolve() / launched / "launch.json").read_text(encoding="utf-8").strip()
+            (args.runs_dir.resolve() / launched / LAUNCH_RECORD_NAME)
+            .read_text(encoding="utf-8")
+            .strip()
         )
     except (DispatchError, ConfigError) as exc:
         print(f"orchestrate: {exc}", file=sys.stderr)

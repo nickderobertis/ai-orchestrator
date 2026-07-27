@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import json
 import sys
 from collections.abc import AsyncIterator, Mapping
@@ -227,12 +228,17 @@ def create_app(
 
 def _conversation_signature(
     watched: str | None, oneharness_bin: str
-) -> tuple[tuple[str, int], ...]:
-    """Session id and turn count per conversation of the watched run, or ``()``.
+) -> tuple[tuple[str, str], ...]:
+    """Session id and content digest per conversation of the watched run, or ``()``.
+
+    Digesting the whole served conversation rather than counting its turns is what
+    makes an *edited* turn visible: the turn a live agent is still writing keeps its
+    position while its text, status, usage, and tool events all change, so a count
+    would report nothing until the next turn began.
 
     History is a separate, slower source than the runs root, so this is the only part
-    of a poll that spawns a subprocess. A missing or unreadable store degrades to an
-    empty signature rather than ending the stream.
+    of a poll that spawns a subprocess; the digest is negligible beside it. A missing
+    or unreadable store degrades to an empty signature rather than ending the stream.
     """
     if watched is None:
         return ()
@@ -240,7 +246,15 @@ def _conversation_signature(
         found = run_conversations(RunId(watched), oneharness_bin=oneharness_bin)
     except (HistoryError, ConfigError):
         return ()
-    return tuple((item["conversation"]["id"], len(item["conversation"]["turns"])) for item in found)
+    return tuple(
+        (
+            item["conversation"]["id"],
+            hashlib.sha256(
+                json.dumps(item, separators=(",", ":"), sort_keys=True).encode()
+            ).hexdigest(),
+        )
+        for item in found
+    )
 
 
 def _signatures(runs_dir: Path, watched: str | None) -> dict[str, tuple[int, ...]]:

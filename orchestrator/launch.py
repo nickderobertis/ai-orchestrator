@@ -51,10 +51,37 @@ class LaunchError(ValueError):
     """A launcher kind or session id violates the provenance contract."""
 
 
+#: The run-directory file carrying the planner's launch record. Named here, beside
+#: the type and the reader below, so the writer (`dispatch`) and the read API cannot
+#: drift on where the link lives or what it is called.
+LAUNCH_RECORD_NAME = "launch.json"
+#: The key under which `LaunchInfo` sits inside that record.
+LAUNCH_INFO_KEY = "launch"
+
+
 class LaunchInfo(TypedDict):
     """The non-sensitive run->launch link persisted in the run directory."""
 
     launch_id: str
+
+
+def read_launch_info(run_dir: Path) -> LaunchId | None:
+    """The ``launch_id`` a run recorded, or ``None`` when absent or malformed.
+
+    The reader lives beside the ``LaunchInfo`` type the writer persists so the two
+    halves of this on-disk contract are one source. A run directory holds only this
+    join key; the launcher and the sensitive session id live in the out-of-repo
+    provenance record it resolves.
+    """
+    path = run_dir / LAUNCH_RECORD_NAME
+    if not path.is_file():
+        return None
+    try:
+        raw = load_mapping(path)
+    except (ConfigError, OSError):
+        return None
+    info = raw.get(LAUNCH_INFO_KEY)
+    return validate_launch_id(info.get("launch_id")) if isinstance(info, dict) else None
 
 
 class LaunchProvenance(TypedDict):

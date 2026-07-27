@@ -649,6 +649,17 @@ def test_events_stream_invalidates_conversations_for_a_watched_run(
             assert changed[-1]["event"] == "conversation.changed"
             assert json.loads(changed[-1]["data"]) == {"run_id": "demo"}
 
+            # Rewriting an existing turn in place must invalidate too: the turn a
+            # live agent is still writing keeps its position while its text grows,
+            # so a turn *count* would report nothing until the next turn began.
+            record.write_text(
+                record.read_text(encoding="utf-8").replace("second turn", "second turn, revised"),
+                encoding="utf-8",
+            )
+            edited = _read_frames(lines, until="conversation.changed")
+            assert edited[-1]["event"] == "conversation.changed"
+            assert json.loads(edited[-1]["data"]) == {"run_id": "demo"}
+
 
 def test_detail_degrades_to_no_conversations_when_history_is_absent(tmp_path: Path) -> None:
     """A missing history store must not fail the read the projection can still serve.

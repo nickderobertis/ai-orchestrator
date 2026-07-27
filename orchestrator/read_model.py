@@ -35,7 +35,7 @@ from .config import ConfigError
 from .conversations import DagConversation, run_conversations
 from .history import HistoryError
 from .journal import JOURNAL_NAME
-from .launch import read_provenance, validate_launch_id
+from .launch import LAUNCH_RECORD_NAME, read_launch_info, read_provenance
 from .monitor import load_snapshot, snapshot_path
 from .projection import (
     NodeState,
@@ -49,7 +49,6 @@ from .runs import (
     GraphResultItem,
     RunId,
     latest_round,
-    load_mapping,
     result_state_is_terminal,
     validate_run_id,
 )
@@ -195,20 +194,8 @@ def _run_dirs(runs_dir: Path) -> Iterator[Path]:
 
 
 def read_launch_id(run_dir: Path) -> str | None:
-    """The non-sensitive ``launch_id`` the run recorded, or ``None`` when absent.
-
-    The run directory stores only this join key; the launcher and the sensitive
-    session id live in the out-of-repo provenance record that ``launch_id`` resolves.
-    """
-    path = run_dir / "launch.json"
-    if not path.is_file():
-        return None
-    try:
-        raw = load_mapping(path)
-    except (ConfigError, OSError):
-        return None
-    launch = raw.get("launch")
-    return validate_launch_id(launch.get("launch_id")) if isinstance(launch, dict) else None
+    """The non-sensitive ``launch_id`` the run recorded, or ``None`` when absent."""
+    return read_launch_info(run_dir)
 
 
 def resolve_launch(
@@ -464,7 +451,7 @@ def run_signature(run_dir: Path) -> tuple[int, ...]:
     watched = (
         run_dir / JOURNAL_NAME,
         snapshot_path(run_dir),
-        run_dir / "launch.json",
+        run_dir / LAUNCH_RECORD_NAME,
         *(run_dir.joinpath(*parts) for parts in _RUN_LOGS.values()),
     )
     tokens: tuple[int, ...] = ()

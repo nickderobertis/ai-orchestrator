@@ -11,7 +11,12 @@ from orchestrator import REPO_ROOT
 from orchestrator.cli_contract import ROUND_BUDGET_OPTION
 from orchestrator.dispatch import DispatchError, launch_orchestrator, main_orchestrate
 from orchestrator.labels import LABEL_ENV, parse_labels
-from orchestrator.launch import provenance_path, read_provenance
+from orchestrator.launch import (
+    LAUNCH_RECORD_NAME,
+    provenance_path,
+    read_launch_info,
+    read_provenance,
+)
 
 
 def _capture_launch_env(
@@ -53,9 +58,15 @@ def test_launch_writes_provenance_and_stamps_join_labels(
     )
 
     # The run directory records only the non-sensitive launch_id.
-    launch = json.loads((run_dir / "launch.json").read_text(encoding="utf-8"))["launch"]
+    launch = json.loads((run_dir / LAUNCH_RECORD_NAME).read_text(encoding="utf-8"))["launch"]
     launch_id = launch["launch_id"]
     assert set(launch) == {"launch_id"}
+
+    # The reader the read API uses parses exactly what this writer persisted. This
+    # round trip is the reconciliation for the on-disk launch contract: the writer
+    # types the key through LaunchRecord while the reader names it, and a change to
+    # either half that broke the other would fail right here.
+    assert read_launch_info(run_dir) == launch_id
 
     # The launch_id + launcher (+ run_id) are stamped as history labels on the
     # orchestrator env, so every nested dispatch inherits and joins on them.
