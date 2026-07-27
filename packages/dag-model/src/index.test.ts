@@ -6,6 +6,8 @@ import {
   parseRunList,
   planTaskSchema,
   runDetailSchema,
+  runSummarySchema,
+  runTelemetrySchema,
   sessionLinkSchema,
 } from "./index.js";
 
@@ -38,10 +40,18 @@ const timing = {
   },
 };
 
+const usageParty = {
+  input_tokens: null,
+  output_tokens: null,
+  cache_read_tokens: null,
+  cache_write_tokens: null,
+  cost_usd: null,
+};
+
 test("validates and preserves additive run-list fields", () => {
   const parsed = parseRunList({
     api_version: 1,
-    telemetry_schema_version: 7,
+    telemetry_schema_version: 8,
     observed_at: "2026-07-26T12:00:00Z",
     extension: true,
     runs: [
@@ -60,12 +70,71 @@ test("validates and preserves additive run-list fields", () => {
   expect(parsed.extension).toBe(true);
 });
 
+test("accepts a run that has recorded no last event, and still rejects a blank one", () => {
+  const eventless = {
+    run_id: "run-2",
+    state: "running",
+    phase: "running",
+    last_event: null,
+    timing_quality: "legacy",
+    linkage_quality: "inferred",
+    timing,
+    node_counts: {},
+  };
+  const parsed = parseRunList({
+    api_version: 1,
+    telemetry_schema_version: 8,
+    observed_at: "2026-07-26T12:00:00Z",
+    runs: [eventless],
+  });
+  expect(parsed.runs[0]?.last_event).toBeNull();
+  // The whole point of the null is that it is the only representation of absence;
+  // the degenerate empty string it replaced must stay invalid.
+  expect(
+    runSummarySchema.safeParse({ ...eventless, last_event: "" }).success,
+  ).toBe(false);
+
+  const telemetryResult = runTelemetrySchema.safeParse({
+    run_id: "run-2",
+    state: "running",
+    phase: "running",
+    last_event: null,
+    timing,
+    nodes: [],
+    usage: {
+      agent: usageParty,
+      judge: usageParty,
+      llmlint: usageParty,
+      total: usageParty,
+    },
+    timing_quality: "legacy",
+    linkage_quality: "inferred",
+    timing_presence: {
+      agent_model_ms: false,
+      judge_model_ms: false,
+      llmlint_model_ms: false,
+      tool_ms: false,
+    },
+    sources: [],
+    node_work_ms: {
+      agent_model_ms: 0,
+      judge_model_ms: 0,
+      llmlint_model_ms: 0,
+      tool_ms: 0,
+      wall_ms: 0,
+    },
+    turns: 0,
+    lint: 0,
+  });
+  expect(telemetryResult.success).toBe(true);
+});
+
 describe("boundary failures", () => {
   test("rejects incompatible API versions and negative counters", () => {
     expect(() =>
       parseRunList({
         api_version: 2,
-        telemetry_schema_version: 7,
+        telemetry_schema_version: 8,
         observed_at: "2026-07-26T12:00:00Z",
         runs: [],
       }),
@@ -82,7 +151,7 @@ describe("boundary failures", () => {
   test("rejects a detail with an unsupported projected state", () => {
     const result = runDetailSchema.safeParse({
       api_version: 1,
-      telemetry_schema_version: 7,
+      telemetry_schema_version: 8,
       observed_at: "2026-07-26T12:00:00Z",
       run: {},
       rounds: [{ node_states: { build: "paused" } }],

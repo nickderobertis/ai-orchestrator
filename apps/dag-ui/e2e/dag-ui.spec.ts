@@ -28,6 +28,7 @@ const runIdsSchema = z.object({
   history: z.string().min(1),
   sibling: z.string().min(1),
   unattributed: z.string().min(1),
+  eventless: z.string().min(1),
 });
 let cachedRunIds: z.infer<typeof runIdsSchema> | undefined;
 const runs = (): z.infer<typeof runIdsSchema> =>
@@ -39,6 +40,13 @@ const runs = (): z.infer<typeof runIdsSchema> =>
 async function openObservatory(page: Page, path = "/"): Promise<void> {
   await page.goto(path);
   await expect(page.getByText("DAG Observatory")).toBeVisible();
+}
+
+/** The navigation group holding `runId`, whichever launching session it belongs to. */
+function sessionGroup(page: Page, runId: string): Locator {
+  return page
+    .locator("section")
+    .filter({ has: page.getByRole("button", { name: RegExp(runId) }) });
 }
 
 /** Whether repeated Tab presses ever land on `target`, i.e. it is in the tab order. */
@@ -273,13 +281,44 @@ test("groups a run with no recorded launch under an unknown session", async ({
   await expect(page.getByText(/Codex session/)).toBeVisible();
   await expect(page.getByText(/Claude session/)).toBeVisible();
   // The server serves this run with no launch join and no transcripts at all; it
-  // still has to be reachable rather than dropped from the navigation.
+  // still has to be reachable rather than dropped from the navigation. Every
+  // unattributed run gets its own unknown group, so name this run's group rather
+  // than the only one.
   await expect(
-    page.getByRole("heading", { name: /Unknown session/ }),
+    sessionGroup(page, runs().unattributed).getByRole("heading", {
+      name: /Unknown session/,
+    }),
   ).toBeVisible();
   await page.getByRole("button", { name: RegExp(runs().unattributed) }).click();
   await expect(page.locator(".dag-node.state-running")).toContainText("orphan");
   await expect(page.getByText("Continue unattributed work")).toHaveCount(0);
+});
+
+test("lists a run that has recorded no event beside the runs that have", async ({
+  page,
+}) => {
+  await openObservatory(page);
+  // The served root mixes both shapes: four runs with journalled events and one that
+  // has journalled none. The client parses the run list as a whole, so a run whose
+  // `last_event` it rejected would take every other run down with it and leave the
+  // operator looking at "No DAG runs found" — the state this fixture would have
+  // reproduced before `last_event` became nullable.
+  const navigation = page.getByRole("navigation", { name: "DAG runs" });
+  for (const runId of Object.values(runs())) {
+    await expect(
+      navigation.getByRole("button", { name: RegExp(runId) }),
+    ).toBeVisible();
+  }
+  await expect(page.getByText("No DAG runs found")).toHaveCount(0);
+  await expect(page.getByRole("alert")).toHaveCount(0);
+
+  // Its overall view names the absence instead of trailing off after "last event".
+  await openObservatory(page, `/?run=${runs().eventless}&view=overall`);
+  const hero = page.locator(".overall-hero");
+  await expect(hero).toContainText("no events recorded yet");
+  await expect(hero).not.toContainText("null");
+  await expect(hero).not.toContainText("last event");
+  await expect(page.getByRole("alert")).toHaveCount(0);
 });
 
 test("says so when a run recorded no planner conversation", async ({
@@ -414,11 +453,13 @@ test("drops a run the server stops serving", async ({ page }) => {
 test("falls back to the empty state once no run is left", async ({ page }) => {
   await openObservatory(page);
 
-  // Every remaining run: the empty state means the server serves none, so it must
-  // not appear while any run is still there to show.
-  changeServedRuns(["--remove-run", runs().live]);
-  changeServedRuns(["--remove-run", runs().unattributed]);
-  await expect(page.getByText("No DAG runs found")).toHaveCount(0);
+  // Every remaining run except one — the journey before this removed the historical
+  // one. The empty state means the server serves none, so it must not appear while
+  // any run is still there to show, whatever shape that run is.
+  for (const runId of [runs().live, runs().unattributed, runs().eventless]) {
+    changeServedRuns(["--remove-run", runId]);
+    await expect(page.getByText("No DAG runs found")).toHaveCount(0);
+  }
   changeServedRuns(["--remove-run", runs().sibling]);
 
   await expect(page.getByText("No DAG runs found")).toBeVisible();

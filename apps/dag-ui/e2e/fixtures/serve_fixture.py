@@ -47,6 +47,10 @@ HISTORY_RUN = "dag-ui-history"
 #: several graphs, and the navigation has to gather them under that one session.
 SIBLING_RUN = "dag-ui-sibling"
 UNATTRIBUTED_RUN = "dag-ui-unattributed"
+#: A run whose round is prepared but which has journalled nothing yet — what every
+#: run looks like for its first moments, and what the served `repo-plan*` runs on an
+#: operator's machine look like permanently. Its `last_event` is null.
+EVENTLESS_RUN = "dag-ui-eventless"
 
 _LIVE_TASKS: list[dict[str, Any]] = [
     {
@@ -117,6 +121,17 @@ _UNATTRIBUTED_TASKS: list[dict[str, Any]] = [
         "persona": "engineer",
         "task": "Continue unattributed work",
         "done_when": "The work continues",
+    }
+]
+
+#: Typed like the task lists above: `Any` here is plan-file JSON whose shape
+#: `orchestrator` owns and validates, per this module's `modern_domain_modeling` note.
+_EVENTLESS_TASKS: list[dict[str, Any]] = [
+    {
+        "id": "unstarted",
+        "persona": "engineer",
+        "task": "Wait for the round to begin",
+        "done_when": "The round starts",
     }
 ]
 
@@ -282,6 +297,19 @@ def _write_unattributed_run(runs_dir: Path) -> None:
     journal.append("node-added", detail={"definition": _UNATTRIBUTED_TASKS[0]})
     journal.append("round-started", detail={"plan": {"schema_version": 3, "concurrency": 1}})
     journal.append("node-started", node=NodeId("orphan"), detail={"persona": "engineer"})
+
+
+def _write_eventless_run(runs_dir: Path) -> None:
+    """One run whose round is prepared and whose journal is still empty.
+
+    The read API serves it with a null ``last_event`` and no rounds at all. It has to
+    stay in the navigation beside the runs that do have events: the client validates
+    the run list in one parse, so a run this shape either renders with the rest or
+    takes every one of them down with it.
+    """
+    from orchestrator.runs import prepare_round
+
+    prepare_round(runs_dir / EVENTLESS_RUN, {"tasks": _EVENTLESS_TASKS})
 
 
 def _session(
@@ -488,6 +516,7 @@ def build_fixture(workspace: Path) -> tuple[Path, Path]:
     runs_dir.mkdir(parents=True)
     # Written oldest first: the list view orders by most recent progress, so the live
     # run ends up at the top and is what an operator sees on arrival.
+    _write_eventless_run(runs_dir)
     _write_unattributed_run(runs_dir)
     _write_history_run(runs_dir)
     _write_sibling_run(runs_dir)
@@ -589,6 +618,7 @@ def serve(workspace: Path, port: int) -> int:
                 "history": HISTORY_RUN,
                 "sibling": SIBLING_RUN,
                 "unattributed": UNATTRIBUTED_RUN,
+                "eventless": EVENTLESS_RUN,
             }
         ),
         encoding="utf-8",

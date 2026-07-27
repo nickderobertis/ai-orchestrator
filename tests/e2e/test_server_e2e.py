@@ -763,6 +763,37 @@ def test_run_list_serves_healthy_runs_beside_a_corrupt_one(tmp_path: Path) -> No
     assert [row["run_id"] for row in listed["runs"]] == ["healthy"]
 
 
+def test_run_that_recorded_no_event_serves_a_null_last_event(tmp_path: Path) -> None:
+    """A just-launched run has no last event; the API says null, never an empty string.
+
+    A prepared round with no journal is exactly what a `repo-plan` run looks like the
+    moment it launches. The empty string this used to serve failed the published
+    contract's non-empty-string rule, and because the client validates the whole list
+    in one parse, those runs took every healthy run in the response down with them.
+    """
+    runs = tmp_path / "runs"
+    _active_run(runs, "with-events")
+    prepare_round(runs / "eventless", {"tasks": [{"id": "api", "task": "ship"}]})
+    assert not (runs / "eventless" / "events.jsonl").exists()
+
+    app = create_app(runs, oneharness_bin=str(tmp_path / "definitely-not-installed"))
+
+    with _serve(app) as base:
+        client = httpx.Client(base_url=base, timeout=30)
+        listed = client.get("/api/v1/runs", params={"include_settled": "true"}).json()
+        detail = client.get("/api/v1/runs/eventless").json()
+
+    rows = {row["run_id"]: row for row in listed["runs"]}
+    # The mixed set is served whole: the eventless run is listed beside the one that
+    # has events, and neither displaces the other.
+    assert sorted(rows) == ["eventless", "with-events"]
+    assert rows["eventless"]["last_event"] is None
+    assert rows["with-events"]["last_event"] == "node-started"
+    assert "last_progress_at" not in rows["eventless"]
+    assert detail["run"]["last_event"] is None
+    assert detail["rounds"] == []
+
+
 def test_detail_maps_transcript_edge_cases_to_the_ui_shape(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

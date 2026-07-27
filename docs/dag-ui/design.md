@@ -31,7 +31,7 @@ Invalid enums, negative durations/counters, non-finite numbers, and bad
 references are rejected at the Python boundary.
 
 The initial API base is `/api/v1`. Its telemetry payload embeds the existing
-telemetry index at `telemetry_schema_version: 7`, mirroring that index's own
+telemetry index at `telemetry_schema_version: 8`, mirroring that index's own
 `schema_version`; this API version does not replace or renumber that contract.
 `scripts/check-dag-state-contract.py` reconciles every copy of that number here
 against `orchestrator.telemetry.TELEMETRY_SCHEMA_VERSION`.
@@ -45,7 +45,7 @@ against `orchestrator.telemetry.TELEMETRY_SCHEMA_VERSION`.
 ```ts
 interface RunList {
   api_version: 1;
-  telemetry_schema_version: 7;
+  telemetry_schema_version: 8;
   observed_at: string;
   runs: RunSummary[];
 }
@@ -54,7 +54,7 @@ interface RunSummary {
   run_id: string;
   state: string;
   phase: string;
-  last_event: string;
+  last_event: string | null; // null when the run has recorded no event yet
   last_progress_at?: number; // existing epoch-seconds value
   timing_quality: "complete" | "partial" | "legacy";
   linkage_quality: "native" | "labelled" | "inferred";
@@ -82,7 +82,7 @@ Runs are ordered by most recent progress descending, then `run_id` ascending.
 ```ts
 interface RunDetail {
   api_version: 1;
-  telemetry_schema_version: 7;
+  telemetry_schema_version: 8;
   observed_at: string;
   run: RunTelemetry;
   rounds: Round[];
@@ -115,6 +115,9 @@ prs:{}}`); `logs` and `launch` are omitted when the run wrote no logs or recorde
 `node`, `status`, `sessions`, `turns`, and `lint`; optional `outcome`, `branch`,
 `comparison_remote`, `comparison_base`, `checkpoint`, `commit`,
 `retry_lineage`, `gate_attestation`, `timing`, `usage`, and `tool_commands`.
+`last_event` is required but nullable in both payloads: a run that has recorded no
+journal event yet — a run that has only just launched — serves it as `null` rather
+than as an empty string, so its absence is representable instead of degenerate.
 
 The following aliases spell out the nested shapes without changing the Python
 contract:
