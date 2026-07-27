@@ -46,13 +46,14 @@ from .runs import (
 )
 from .verify import GateAttestation
 
-TELEMETRY_SCHEMA_VERSION = 6
-SUPPORTED_HISTORY_SCHEMA_VERSIONS = ("0.2", "0.3", 1, 2, "1.0", "1.1")
+TELEMETRY_SCHEMA_VERSION = 7
+SUPPORTED_HISTORY_SCHEMA_VERSIONS = ("0.2", "0.3", 1, 2, "1.0", "1.1", "1.2")
 #: History schema versions that may carry validated native timing (per-turn
 #: ``model_ms``/``tool_ms`` plus interval-bearing tool events). A version identifies
 #: the line format, not the completeness of timing supplied by a particular harness.
-NATIVE_TIMING_HISTORY_SCHEMAS: frozenset[str | int] = frozenset({"0.3", 2, "1.0", "1.1"})
-TelemetryQuality = Literal["complete", "partial", "legacy"]
+NATIVE_TIMING_HISTORY_SCHEMAS: frozenset[str | int] = frozenset({"0.3", 2, "1.0", "1.1", "1.2"})
+TimingQuality = Literal["complete", "partial", "legacy"]
+LinkageQuality = Literal["native", "labelled", "inferred"]
 TelemetrySource = Literal["onejudge", "oneharness", "history_legacy", "journal_legacy"]
 FailureClass = Literal[
     "agent", "gate", "checks", "publication", "timeout", "provider", "configuration", "unknown"
@@ -185,6 +186,13 @@ class NodeWorkRecord(TypedDict):
     wall_ms: int
 
 
+class TimingPresenceRecord(TypedDict):
+    agent_model_ms: bool
+    judge_model_ms: bool
+    llmlint_model_ms: bool
+    tool_ms: bool
+
+
 @dataclass(frozen=True)
 class Failure:
     classification: FailureClass
@@ -264,6 +272,11 @@ class NodeTelemetry:
     tool_commands: dict[str, int] = field(default_factory=dict)
     turns: int = 0
     lint: int = 0
+    timing_quality: TimingQuality = "legacy"
+    linkage_quality: LinkageQuality = "inferred"
+    timing_presence: TimingPresenceRecord = field(
+        default_factory=lambda: cast(TimingPresenceRecord, {})
+    )
 
     def record(self) -> dict[str, object]:
         result: dict[str, object] = {"node": self.node, "status": self.status}
@@ -290,6 +303,9 @@ class NodeTelemetry:
             result["tool_commands"] = self.tool_commands
         result["turns"] = self.turns
         result["lint"] = self.lint
+        result["timing_quality"] = self.timing_quality
+        result["linkage_quality"] = self.linkage_quality
+        result["timing_presence"] = self.timing_presence
         return result
 
 
@@ -307,7 +323,11 @@ class RunTelemetry:
     check_rollup: CheckRollup = field(default_factory=CheckRollup)
     green_to_publication_seconds: list[float] = field(default_factory=list)
     usage: UsageRecord = field(default_factory=lambda: cast(UsageRecord, {}))
-    telemetry_quality: TelemetryQuality = "legacy"
+    timing_quality: TimingQuality = "legacy"
+    linkage_quality: LinkageQuality = "inferred"
+    timing_presence: TimingPresenceRecord = field(
+        default_factory=lambda: cast(TimingPresenceRecord, {})
+    )
     sources: list[TelemetrySource] = field(default_factory=list)
     node_work_ms: NodeWorkRecord = field(default_factory=lambda: cast(NodeWorkRecord, {}))
     turns: int = 0
@@ -323,7 +343,9 @@ class RunTelemetry:
             "timing": self.timing,
             "nodes": [node.record() for node in self.nodes],
             "usage": self.usage,
-            "telemetry_quality": self.telemetry_quality,
+            "timing_quality": self.timing_quality,
+            "linkage_quality": self.linkage_quality,
+            "timing_presence": self.timing_presence,
             "sources": self.sources,
             "node_work_ms": self.node_work_ms,
             "turns": self.turns,
@@ -450,6 +472,8 @@ class _SessionSummary:
     usage: UsageValues
     commands: dict[str, int]
     validated_native_fields: bool
+    has_model_measurement: bool
+    has_tool_measurement: bool
     tool_intervals: list[_Interval]
 
 
@@ -550,6 +574,8 @@ def _summarize_session(session: HistorySession, records: list[HistoryRecord]) ->
             validated_native_fields = False
         model = _non_negative_int(record.get("model_ms"))
         tool = _non_negative_int(record.get("tool_ms"))
+        raw_observed_tool = record.get("observed_tool_ms")
+        observed_tool = _non_negative_int(raw_observed_tool)
         raw_duration = record.get("duration_ms")
         duration = _non_negative_int(raw_duration)
         raw_start = record.get("started_at")
@@ -561,6 +587,7 @@ def _summarize_session(session: HistorySession, records: list[HistoryRecord]) ->
                 ("duration_ms", raw_duration, duration),
                 ("model_ms", record.get("model_ms"), model),
                 ("tool_ms", record.get("tool_ms"), tool),
+                ("observed_tool_ms", raw_observed_tool, observed_tool),
                 ("started_at", raw_start, start_at),
                 ("finished_at", raw_finish, finish_at),
             ):
@@ -568,6 +595,10 @@ def _summarize_session(session: HistorySession, records: list[HistoryRecord]) ->
                     raise HistoryError(
                         f"oneharness history record has invalid present field {timing_field}"
                     )
+            if observed_tool is not None and (
+                schema_version != "1.2" or model is not None or tool is not None
+            ):
+                raise HistoryError("oneharness history record has invalid observed timing")
             if (
                 start_at is not None
                 and finish_at is not None
@@ -586,9 +617,14 @@ def _summarize_session(session: HistorySession, records: list[HistoryRecord]) ->
             or finish_at is None
         ):
             validated_native_fields = False
-        if model is not None and tool is not None:
+        if observed_tool is not None:
+            validated_native_fields = False
+        if model is not None:
             model_ms += round(model)
+        if tool is not None:
             tool_ms += round(tool)
+        elif observed_tool is not None:
+            tool_ms += round(observed_tool)
         events = record.get("events")
         if not isinstance(events, list):
             continue
@@ -605,6 +641,7 @@ def _summarize_session(session: HistorySession, records: list[HistoryRecord]) ->
             raw_duration = event.get("duration_ms")
             event_duration = _non_negative_int(event.get("duration_ms"))
             raw_status = event.get("status")
+            timing_source = event.get("timing_source")
             if schema_version is not None and (
                 raw_tool_call_id is not None
                 and (not isinstance(raw_tool_call_id, str) or not raw_tool_call_id)
@@ -616,11 +653,15 @@ def _summarize_session(session: HistorySession, records: list[HistoryRecord]) ->
                 and event_duration is None
                 or raw_status is not None
                 and raw_status not in {"completed", "failed", "timeout", "interrupted"}
+                or timing_source is not None
+                and timing_source not in {"provider_measured", "stdout_observed"}
                 or event_start is not None
                 and event_finish is not None
                 and event_finish < event_start
             ):
                 raise HistoryError("oneharness history record has invalid tool event")
+            if timing_source == "stdout_observed":
+                validated_native_fields = False
             if schema_version in NATIVE_TIMING_HISTORY_SCHEMAS and (
                 raw_tool_call_id is None
                 or event_start is None
@@ -636,7 +677,7 @@ def _summarize_session(session: HistorySession, records: list[HistoryRecord]) ->
                         round(event_finish.timestamp() * 1000),
                     )
                 )
-            if tool is None and event_duration is not None:
+            if tool is None and observed_tool is None and event_duration is not None:
                 tool_ms += event_duration
             if event.get("name") not in {"command_execution", "bash"}:
                 continue
@@ -664,19 +705,90 @@ def _summarize_session(session: HistorySession, records: list[HistoryRecord]) ->
         usage=usage,
         commands=commands,
         validated_native_fields=validated_native_fields,
+        has_model_measurement=any(
+            _non_negative_int(record.get("model_ms")) is not None for record in records
+        ),
+        has_tool_measurement=any(
+            _non_negative_int(record.get("tool_ms")) is not None
+            or _non_negative_int(record.get("observed_tool_ms")) is not None
+            for record in records
+        )
+        or bool(tool_intervals),
         tool_intervals=tool_intervals,
     )
 
 
-def history_session_is_successful_with_complete_telemetry(session: HistorySession) -> bool:
-    """Whether oneharness persisted successful execution and complete native telemetry."""
+#: Usage counters every harness must report for a launch to be accounted for.
+LAUNCH_REQUIRED_USAGE_FIELDS: tuple[UsageKey, ...] = ("input_tokens", "output_tokens")
+
+
+def _launch_usage_failure(value: object) -> str | None:
+    """Reject absent or malformed token accounting; tolerate unreported counters.
+
+    Only the input/output counters are required. ``cache_read_tokens`` and
+    ``cache_write_tokens`` are provider-optional — codex reports a cache read but
+    no cache write — so a null counter is a harness that does not report it, not a
+    broken launch. A counter that IS reported must still be a valid count.
+    ``cost_usd`` is validated by the caller that renders it, not here: no harness
+    is obliged to price its own turn, and codex reports none at all.
+    """
+    if not isinstance(value, dict):
+        return "reports no token accounting"
+    for key in USAGE_FIELDS:
+        if key == "cost_usd":
+            continue
+        raw = value.get(key)
+        if raw is None:
+            if key in LAUNCH_REQUIRED_USAGE_FIELDS:
+                return f"reports no {key}"
+            continue
+        if _non_negative_int(raw) is None:
+            return f"reports malformed {key} {raw!r}"
+    return None
+
+
+def history_session_launch_failure(session: HistorySession) -> str | None:
+    """Why a session fails the real-harness launch contract, or ``None`` if it holds.
+
+    This is the launch guard, deliberately weaker than ``validated_native_fields``.
+    Native per-phase timing (``model_ms`` / ``tool_ms`` / ``started_at`` /
+    ``finished_at``) and interval-bearing tool events are *provider-optional*:
+    oneharness normalizes whatever a harness reports and leaves the rest unset. On
+    the pinned release, codex reports the phase split while claude-code records
+    only a measured duration — no ``started_at``, no phase split, and a null
+    ``finished_at``. Requiring them here failed every healthy claude-code dispatch,
+    so completeness of native timing stays a telemetry-*quality* signal
+    (``validated_native_fields``) and is not a launch failure.
+
+    What a launch must still prove is that the task reached a named harness and the
+    turn was actually accounted for: a supported schema, a non-empty harness, a
+    successful status and exit, a measured duration (oneharness times the child
+    itself, so it never depends on what the provider reports), and well-formed
+    token accounting. Optional values that ARE present are still validated —
+    ``_summarize_session`` rejects malformed or contradictory timing.
+    """
     records = cast(list[HistoryRecord], session_records(session))
-    summary = _summarize_session(session, records)
-    return (
-        bool(records)
-        and summary.validated_native_fields
-        and all(record.get("status") == "ok" and record.get("exit_code") == 0 for record in records)
-    )
+    # Raises on a malformed or self-contradictory value the harness did report.
+    _summarize_session(session, records)
+    if not records:
+        return "recorded no harness run"
+    for record in records:
+        schema_version = record.get("schema_version")
+        if schema_version not in SUPPORTED_HISTORY_SCHEMA_VERSIONS:
+            return f"records unsupported history schema {schema_version!r}"
+        harness = record.get("harness")
+        if not isinstance(harness, str) or not harness:
+            return "does not identify the selected harness"
+        status = record.get("status")
+        exit_code = record.get("exit_code")
+        if status != "ok" or _non_negative_int(exit_code) != 0:
+            return f"records status {status!r} with exit code {exit_code!r}"
+        if _non_negative_int(record.get("duration_ms")) is None:
+            return f"records no measured duration for harness {harness}"
+        usage_failure = _launch_usage_failure(record.get("usage"))
+        if usage_failure is not None:
+            return usage_failure
+    return None
 
 
 def _native_party(value: object) -> _NativeParty:
@@ -809,6 +921,15 @@ def _link_native_roles(
         else summary
         for summary in summaries
     ]
+
+
+def _native_covers_summaries(
+    native: _NativeTelemetry | None, summaries: list[_SessionSummary]
+) -> bool:
+    if native is None or native.invalid or not native.sessions:
+        return False
+    native_session_ids = {link["session_id"] for link in native.sessions}
+    return all(summary.link["session_id"] in native_session_ids for summary in summaries)
 
 
 def _item_native(item: GraphResultItem) -> _NativeTelemetry | None:
@@ -1241,6 +1362,32 @@ def _node_record(
         else _node_wall_ms(node, events, active_at=active_at)
     )
     usage = _merge_usage(native.usage if native is not None else None, _usage(linked))
+    timing_presence = TimingPresenceRecord(
+        agent_model_ms=(native is not None and native.agent_model_ms is not None)
+        or any(summary.role == "agent" and summary.has_model_measurement for summary in linked),
+        judge_model_ms=(native is not None and native.judge_model_ms is not None)
+        or any(summary.role == "judge" and summary.has_model_measurement for summary in linked),
+        llmlint_model_ms=any(
+            summary.role == "llmlint" and summary.has_model_measurement for summary in linked
+        ),
+        tool_ms=(native is not None and native.tool_ms is not None)
+        or any(summary.has_tool_measurement for summary in linked),
+    )
+    timing_quality: TimingQuality = (
+        "complete"
+        if linked and all(summary.validated_native_fields for summary in linked)
+        else "partial"
+        if any(timing_presence.values())
+        else "legacy"
+    )
+    linkage_quality: LinkageQuality = (
+        "native"
+        if _native_covers_summaries(native, linked)
+        else "labelled"
+        if linked
+        and all(summary.labels.get("role") in {"agent", "judge", "llmlint"} for summary in linked)
+        else "inferred"
+    )
     return NodeTelemetry(
         node=node,
         status=str(item.get("status", "unknown")),
@@ -1270,6 +1417,9 @@ def _node_record(
         tool_commands=_command_counts(linked),
         turns=sum(summary.turns for summary in linked if summary.role != "llmlint"),
         lint=sum(summary.turns for summary in linked if summary.role == "llmlint"),
+        timing_quality=timing_quality,
+        linkage_quality=linkage_quality,
+        timing_presence=timing_presence,
     )
 
 
@@ -1338,16 +1488,32 @@ def collect_run(
         [node.usage for node in contributing_nodes if node.usage is not None]
     )
     native = [summary.validated_native_fields for summary in summaries]
-    # Complete requires authoritative linkage plus valid interval-complete history.
-    quality: TelemetryQuality = (
+    timing_presence = TimingPresenceRecord(
+        agent_model_ms=any(node.timing_presence["agent_model_ms"] for node in nodes),
+        judge_model_ms=any(node.timing_presence["judge_model_ms"] for node in nodes),
+        llmlint_model_ms=any(node.timing_presence["llmlint_model_ms"] for node in nodes),
+        tool_ms=any(node.timing_presence["tool_ms"] for node in nodes),
+    )
+    timing_quality: TimingQuality = (
         "complete"
+        if native and all(native)
+        else "partial"
+        if native_parts or any(timing_presence.values())
+        else "legacy"
+    )
+    linkage_quality: LinkageQuality = (
+        "native"
         if native_parts
         and all(not part.invalid and part.sessions for part in native_parts)
-        and native
-        and all(native)
-        else "partial"
-        if native_parts or any(native)
-        else "legacy"
+        and {summary.link["session_id"] for summary in summaries}.issubset(
+            {link["session_id"] for link in native_links}
+        )
+        else "labelled"
+        if summaries
+        and all(
+            summary.labels.get("role") in {"agent", "judge", "llmlint"} for summary in summaries
+        )
+        else "inferred"
     )
     sources: list[TelemetrySource] = []
     if native_parts:
@@ -1371,7 +1537,9 @@ def collect_run(
         check_rollup=snapshot.check_rollup,
         green_to_publication_seconds=publication_waits,
         usage=run_usage or _usage(summaries),
-        telemetry_quality=quality,
+        timing_quality=timing_quality,
+        linkage_quality=linkage_quality,
+        timing_presence=timing_presence,
         sources=sources,
         node_work_ms=NodeWorkRecord(
             agent_model_ms=sum(cast(TimingRecord, node.timing)["agent_model_ms"] for node in nodes),
@@ -1501,8 +1669,8 @@ def _value(value: int | float | None) -> str:
     return "?" if value is None else f"{value:g}"
 
 
-def _timing_value(value: int, fraction: float, quality: TelemetryQuality) -> str:
-    return f"{value:5} {fraction:5.1%}" if quality == "complete" else "    ?     ?"
+def _timing_value(value: int, fraction: float, measured: bool) -> str:
+    return f"{value:5} {fraction:5.1%}" if measured else "    ?     ?"
 
 
 def _breakdown(runs: list[RunTelemetry], retry_metrics: LlmlintRetryMetrics | None = None) -> str:
@@ -1529,19 +1697,34 @@ def _breakdown(runs: list[RunTelemetry], retry_metrics: LlmlintRetryMetrics | No
         )
         for name, timing, usage, turns, lint in rows:
             fractions = timing["fractions"]
+            presence = (
+                run.timing_presence
+                if name == str(run.run_id)
+                else next(node.timing_presence for node in run.nodes if name == f"  {node.node}")
+            )
             columns = [
                 f"{name[:20]:20}",
                 f"{timing['wall_ms']:6}ms",
                 _timing_value(
-                    timing["agent_model_ms"], fractions["agent_model"], run.telemetry_quality
+                    timing["agent_model_ms"],
+                    fractions["agent_model"],
+                    presence["agent_model_ms"],
                 ),
                 _timing_value(
-                    timing["judge_model_ms"], fractions["judge_model"], run.telemetry_quality
+                    timing["judge_model_ms"],
+                    fractions["judge_model"],
+                    presence["judge_model_ms"],
                 ),
                 _timing_value(
-                    timing["llmlint_model_ms"], fractions["llmlint_model"], run.telemetry_quality
+                    timing["llmlint_model_ms"],
+                    fractions["llmlint_model"],
+                    presence["llmlint_model_ms"],
                 ),
-                _timing_value(timing["tool_ms"], fractions["tool"], run.telemetry_quality),
+                _timing_value(
+                    timing["tool_ms"],
+                    fractions["tool"],
+                    presence["tool_ms"],
+                ),
                 f"{round(timing['gate_seconds'] * 1000):4}",
                 f"{round(timing['publication_wait_seconds'] * 1000):4}",
                 f"{round(timing['lock_wait_seconds'] * 1000):4}",
@@ -1559,7 +1742,7 @@ def _breakdown(runs: list[RunTelemetry], retry_metrics: LlmlintRetryMetrics | No
                 _value(usage["total"]["cost_usd"]),
                 str(turns),
                 str(lint),
-                run.telemetry_quality,
+                f"{run.timing_quality}/{run.linkage_quality}",
             ]
             lines.append(" ".join(columns))
         timeline = sorted(
