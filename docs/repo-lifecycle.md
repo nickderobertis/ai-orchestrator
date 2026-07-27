@@ -446,10 +446,16 @@ runs/<run-id>/round-01/result.json
 
 The plan mapping is preserved exactly and the result is the command's JSON
 payload. The round directory and `running` status are committed before dispatch;
-the result and `completed` status are atomic updates. A second process cannot claim
+the result and `completed` status are atomic updates, and an owner that stops without
+recording a result leaves `abandoned` instead of `running`. A second process cannot
+claim
 the same explicit run/round. If a process died, inspect its recorded worktrees and
 then use `just run-plan ... --run <id> --recover`; recovery is explicit and never
-silently overwrites a result. Pass `--run <id>` to name a run; without it, a fresh unique run id comes
+silently overwrites a result. `just runs` and `just status` report a round whose
+recorded owner no longer exists as `ABANDONED` rather than as in flight, so a
+lifecycle round that lost its executor is visibly waiting for that recovery rather
+than looking like work in progress.
+Pass `--run <id>` to name a run; without it, a fresh unique run id comes
 from the plan's top-level `name` or filename. The continuation trailer is written
 to stderr, so `--format json` stdout remains machine-readable. Use `--no-record`
 to opt out or `--runs-dir` to move the ledger.
