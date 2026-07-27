@@ -149,9 +149,31 @@ test("a package consumer accepts a complete run detail", () => {
       lint: 0,
     },
     rounds: [],
-    conversations: [],
+    // The read API serves one flat list of transcripts, each carrying its own node
+    // locator, exactly as `docs/dag-ui/design.md` fixes `RunDetail.conversations`.
+    conversations: [
+      {
+        conversation: {
+          canContinue: false,
+          harnesses: ["codex"],
+          id: "worker-session",
+          name: "engineer-build",
+          project: "repo",
+          startedAt: "2026-07-26T12:00:00Z",
+          state: "completed",
+          turns: [],
+        },
+        attribution: {
+          runId: "run-1",
+          nodeId: "build",
+          transportRole: "agent",
+          agentRole: "worker",
+        },
+      },
+    ],
   });
   expect(parsed.run.run_id).toBe("run-1");
+  expect(parsed.conversations[0]?.attribution.nodeId).toBe("build");
 });
 
 test("a package consumer validates provenance, SSE names, and counters", () => {

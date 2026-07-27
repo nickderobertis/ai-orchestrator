@@ -348,18 +348,16 @@ export const dagConversationSchema = openObject({
     timing: timingSchema.optional(),
   }),
 });
-export const nodeConversationsSchema = openObject({
-  node: z.string().optional(),
-  conversations: z.array(dagConversationSchema),
-});
-
 export const runDetailSchema = openObject({
   api_version: z.literal(1),
   telemetry_schema_version: z.literal(7),
   observed_at: timestamp,
   run: runTelemetrySchema,
   rounds: z.array(roundSchema),
-  conversations: z.array(nodeConversationsSchema),
+  // Flat, not grouped by node: `docs/dag-ui/design.md` fixes `DagConversation[]` and
+  // the server serves `run_conversations(...)` unchanged. A consumer groups by
+  // `attribution.nodeId` itself, which is also the only locator a session carries.
+  conversations: z.array(dagConversationSchema),
 });
 
 export const apiErrorSchema = openObject({
@@ -396,7 +394,6 @@ export type GraphResultItem = z.infer<typeof graphResultItemSchema>;
 export type GraphPayload = z.infer<typeof graphPayloadSchema>;
 export type Round = z.infer<typeof roundSchema>;
 export type DagConversation = z.infer<typeof dagConversationSchema>;
-export type NodeConversations = z.infer<typeof nodeConversationsSchema>;
 export type RunDetail = z.infer<typeof runDetailSchema>;
 export type ApiError = z.infer<typeof apiErrorSchema>;
 export type LaunchProvenance = z.infer<typeof launchProvenanceSchema>;

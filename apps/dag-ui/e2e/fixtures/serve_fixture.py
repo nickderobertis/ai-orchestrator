@@ -1,0 +1,430 @@
+"""Serve the real read-only telemetry API over a recorded run fixture.
+
+The browser journeys in ``apps/dag-ui/e2e`` drive the shipped UI against the actual
+``orchestrator/server.py`` process, so the app's fetch/SSE paths, the telemetry
+client, and the read model are all exercised for real. What this script fabricates
+is only what a browser test cannot afford to earn: the recorded run directory an
+orchestration would have written, and the paid harness' history store, which is
+served through the same ``tests/e2e/fake_oneharness.py`` subprocess the Python e2e
+suite uses. The run directory is written with the executor's own public writers
+(``prepare_round``, ``open_journal(...).append``, ``write_result``,
+``save_snapshot``), so the projection the UI renders is the real one.
+
+Everything lands in a fresh temporary workspace that is discarded when the server
+exits, so a browser run never reads or writes the operator's own ``runs/``.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import shutil
+import tempfile
+from pathlib import Path
+from typing import Any
+
+from orchestrator import REPO_ROOT
+
+FAKE_ONEHARNESS = REPO_ROOT / "tests" / "e2e" / "fake_oneharness.py"
+
+#: Launch ids are 32 lowercase hex characters; these join each run to its launcher.
+CODEX_LAUNCH = "c0de" * 8
+CLAUDE_LAUNCH = "c1a0" * 8
+
+LIVE_RUN = "dag-ui-live"
+HISTORY_RUN = "dag-ui-history"
+
+_LIVE_TASKS: list[dict[str, Any]] = [
+    {
+        "id": "foundation",
+        "persona": "engineer",
+        "task": "Prepare shared contracts",
+        "done_when": "Contract tests pass",
+        "repo": "local/example",
+    },
+    {
+        "id": "dashboard",
+        "persona": "engineer",
+        "deps": ["foundation"],
+        "task": "Build the live dashboard",
+        "done_when": "Users can inspect transcripts",
+    },
+    {
+        "id": "publish",
+        "persona": "engineer",
+        "deps": ["dashboard"],
+        "task": "Publish the dashboard",
+        "done_when": "The release is reachable",
+    },
+    {
+        "id": "approval",
+        "kind": "human",
+        "deps": ["publish"],
+        "task": "Wait for release approval",
+    },
+    {
+        "id": "queued",
+        "persona": "engineer",
+        "deps": ["approval"],
+        "task": "Start queued follow-up",
+        "done_when": "Follow-up starts",
+    },
+    {
+        "id": "obsolete",
+        "persona": "engineer",
+        "task": "Retire obsolete work",
+        "done_when": "Work is cancelled",
+    },
+]
+
+_HISTORY_TASKS: list[dict[str, Any]] = [
+    {
+        "id": "archive",
+        "persona": "engineer",
+        "task": "Archive the release",
+        "done_when": "Archive exists",
+    }
+]
+
+
+def _record_launch(run_dir: Path, run_id: str, launch_id: str) -> None:
+    """Persist the run->launch join exactly as the executor's launch record does."""
+    (run_dir / "launch.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "run_id": run_id,
+                "channel_id": run_id,
+                "plan_name": run_id,
+                "commands": {},
+                "launch": {"launch_id": launch_id},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def _write_live_run(runs_dir: Path) -> None:
+    """One in-flight run covering every renderable node state."""
+    from orchestrator.journal import NodeId, RunId, open_journal
+    from orchestrator.runs import prepare_round
+
+    run_dir = runs_dir / LIVE_RUN
+    prepare_round(run_dir, {"tasks": _LIVE_TASKS})
+    journal = open_journal(run_dir, RunId(LIVE_RUN), 1)
+    for task in _LIVE_TASKS:
+        # A definition's own `deps` are the edges; adding them again would duplicate.
+        journal.append("node-added", detail={"definition": task})
+    journal.append("round-started", detail={"plan": {"schema_version": 3, "concurrency": 3}})
+
+    journal.append("node-started", node=NodeId("foundation"), detail={"persona": "engineer"})
+    journal.append(
+        "verification-finished",
+        node=NodeId("foundation"),
+        detail={
+            "ok": True,
+            "command": ["just", "gate"],
+            "reused": False,
+            "gate_attestation": {
+                "commit": "1" * 40,
+                "comparison_remote": "origin",
+                "comparison_base": "origin/main",
+                "comparison_commit": "2" * 40,
+                "command": ["just", "gate"],
+                "environment_sha256": "3" * 64,
+            },
+        },
+    )
+    journal.append(
+        "node-settled",
+        node=NodeId("foundation"),
+        detail={
+            "status": "done",
+            "result": {
+                "status": "done",
+                "ok": True,
+                "task": "Prepare shared contracts",
+                "repo": "local/example",
+                "branch": "ai-orchestrator/engineer/foundation",
+                "pr": "https://github.com/example/repo/pull/12",
+                "detail": "Gate completed successfully",
+                "telemetry": {"checks": {"unit": "passed"}},
+                "artifacts": {"gate_log": "round-01/foundation/gate.log"},
+            },
+        },
+    )
+    journal.append("node-started", node=NodeId("dashboard"), detail={"persona": "engineer"})
+    journal.append("node-started", node=NodeId("publish"), detail={"persona": "engineer"})
+    journal.append(
+        "node-failed",
+        node=NodeId("publish"),
+        detail={
+            "status": "failed",
+            "result": {
+                "status": "failed",
+                "ok": False,
+                "error": "Deploy failed",
+                "detail": "Deploy failed",
+            },
+        },
+    )
+    journal.append(
+        "human-waiting",
+        node=NodeId("approval"),
+        detail={
+            "status": "waiting",
+            "result": {
+                "status": "waiting",
+                "kind": "human",
+                "task": "Wait for release approval",
+                "unblocks": ["queued"],
+            },
+        },
+    )
+    journal.append("node-started", node=NodeId("obsolete"), detail={"persona": "engineer"})
+    journal.append(
+        "node-settled",
+        node=NodeId("obsolete"),
+        detail={"status": "cancelled", "result": {"status": "cancelled", "ok": False}},
+    )
+    _record_launch(run_dir, LIVE_RUN, CODEX_LAUNCH)
+
+
+def _write_history_run(runs_dir: Path) -> None:
+    """One settled run, so the navigation has a second launching session to group."""
+    from orchestrator.journal import NodeId, RunId, open_journal
+    from orchestrator.runs import prepare_round, write_result
+
+    run_dir = runs_dir / HISTORY_RUN
+    _, round_dir = prepare_round(run_dir, {"tasks": _HISTORY_TASKS})
+    journal = open_journal(run_dir, RunId(HISTORY_RUN), 1)
+    journal.append("node-added", detail={"definition": _HISTORY_TASKS[0]})
+    journal.append("round-started", detail={"plan": {"schema_version": 3, "concurrency": 1}})
+    journal.append("node-started", node=NodeId("archive"), detail={"persona": "engineer"})
+    settled = {"status": "done", "ok": True, "task": "Archive the release"}
+    journal.append(
+        "node-settled", node=NodeId("archive"), detail={"status": "done", "result": settled}
+    )
+    result = {
+        "ok": True,
+        "state": "complete",
+        "started_order": ["archive"],
+        "results": {"archive": settled},
+    }
+    journal.append("round-finished", detail={"result": result})
+    write_result(round_dir, result)
+    _record_launch(run_dir, HISTORY_RUN, CLAUDE_LAUNCH)
+
+
+def _session(
+    workspace: Path,
+    *,
+    session_id: str,
+    name: str,
+    run_id: str,
+    node: str | None,
+    role: str,
+    agent_role: str,
+    launcher: str,
+    launch_id: str,
+    prompt: str,
+    text: str,
+    started: str,
+) -> dict[str, Any]:
+    """One recorded harness session plus the JSONL record `oneharness history` serves."""
+    record = workspace / f"{session_id}.jsonl"
+    record.write_text(
+        json.dumps(
+            {
+                "session": session_id,
+                "name": name,
+                "harness": "codex",
+                "model": "gpt-5",
+                "timestamp": started,
+                "prompt": prompt,
+                "text": text,
+                "status": "ok",
+                "session_id": session_id,
+                "usage": {"input_tokens": 1200, "output_tokens": 340},
+                "events": [
+                    {
+                        "kind": "tool_call",
+                        "name": "command_execution",
+                        "input": {"command": "just gate"},
+                    }
+                ],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    labels = {
+        "run_id": run_id,
+        "role": role,
+        "agent_role": agent_role,
+        "persona": "engineer",
+        "launcher": launcher,
+        "launch_id": launch_id,
+        "round": "1",
+    }
+    # The orchestrator's own session acts on the whole graph, so it carries no node.
+    if node is not None:
+        labels["node"] = node
+    return {
+        "id": session_id,
+        "name": name,
+        "project": str(workspace),
+        "started": started,
+        "path": str(record),
+        "labels": labels,
+    }
+
+
+def _history_store(workspace: Path) -> Path:
+    """A recorded oneharness store covering every attributed role of both runs."""
+    live = [
+        (
+            "worker-session",
+            "engineer-dashboard",
+            "agent",
+            "worker",
+            "Implementing the dashboard now",
+        ),
+        (
+            "judge-session",
+            "you-are-a-strict-careful-evaluator",
+            "judge",
+            "judge",
+            "The transcript is accessible",
+        ),
+        ("check-in-session", "check-in-dashboard", "agent", "check-in", "Progress update sent"),
+        (
+            "pr-author-session",
+            "pr-author-dashboard",
+            "agent",
+            "pr-author",
+            "Drafted the pull request",
+        ),
+        (
+            "llmlint-session",
+            "llmlint-dashboard",
+            "llmlint",
+            "worker",
+            "Reviewed the changed behavior",
+        ),
+    ]
+    sessions = [
+        _session(
+            workspace,
+            session_id=session_id,
+            name=name,
+            run_id=LIVE_RUN,
+            node="dashboard",
+            role=role,
+            agent_role=agent_role,
+            launcher="codex",
+            launch_id=CODEX_LAUNCH,
+            prompt=f"Act as {agent_role}",
+            text=text,
+            started=f"2026-07-26T11:0{index}:00Z",
+        )
+        for index, (session_id, name, role, agent_role, text) in enumerate(live)
+    ]
+    sessions.append(
+        _session(
+            workspace,
+            session_id="orchestrator-session",
+            name=f"orchestrator-{LIVE_RUN}",
+            run_id=LIVE_RUN,
+            node=None,
+            role="agent",
+            agent_role="orchestrator",
+            launcher="codex",
+            launch_id=CODEX_LAUNCH,
+            prompt="Drive the graph",
+            text="Coordinating the execution frontier",
+            started="2026-07-26T10:00:00Z",
+        )
+    )
+    sessions.append(
+        _session(
+            workspace,
+            session_id="archive-session",
+            name="engineer-archive",
+            run_id=HISTORY_RUN,
+            node="archive",
+            role="agent",
+            agent_role="worker",
+            launcher="claude-code",
+            launch_id=CLAUDE_LAUNCH,
+            prompt="Act as worker",
+            text="Archived the release",
+            started="2026-07-25T09:00:00Z",
+        )
+    )
+    store = workspace / "history-store.json"
+    store.write_text(json.dumps({"sessions": sessions}), encoding="utf-8")
+    return store
+
+
+def _oneharness_bin(workspace: Path) -> Path:
+    binary = workspace / "oneharness"
+    binary.write_text(
+        "#!/usr/bin/env python3\n" + FAKE_ONEHARNESS.read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    binary.chmod(0o755)
+    return binary
+
+
+def build_fixture(workspace: Path) -> tuple[Path, Path]:
+    """Write the runs root and history store; return ``(runs_dir, oneharness_bin)``."""
+    from orchestrator.launch import write_provenance
+
+    runs_dir = workspace / "runs"
+    runs_dir.mkdir(parents=True)
+    # The settled run is written first so the live run sorts to the top of the list
+    # view, which orders by most recent progress.
+    _write_history_run(runs_dir)
+    _write_live_run(runs_dir)
+    os.environ["FAKE_ONEHARNESS_STORE"] = str(_history_store(workspace))
+    for launch_id, launcher in ((CODEX_LAUNCH, "codex"), (CLAUDE_LAUNCH, "claude-code")):
+        write_provenance(
+            launch_id=launch_id,
+            launcher=launcher,
+            launcher_session_id=f"{launcher}-top-session",
+            repository_identity="local/ai-orchestrator",
+        )
+    return runs_dir, _oneharness_bin(workspace)
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Build the fixture in a throwaway workspace and serve it on a loopback port."""
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--port", type=int, default=8787)
+    args = parser.parse_args(argv)
+
+    workspace = Path(tempfile.mkdtemp(prefix="dag-ui-e2e-"))
+    # The provenance records this fixture writes are throwaway too, so they must not
+    # land in the operator's own state directory.
+    os.environ["XDG_STATE_HOME"] = str(workspace / "state")
+    try:
+        runs_dir, oneharness_bin = build_fixture(workspace)
+        from orchestrator.server import main as serve
+
+        return serve(
+            [
+                "--runs-dir",
+                str(runs_dir),
+                "--port",
+                str(args.port),
+                "--oneharness-bin",
+                str(oneharness_bin),
+            ]
+        )
+    finally:
+        shutil.rmtree(workspace, ignore_errors=True)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

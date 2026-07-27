@@ -54,6 +54,25 @@ just migrate-repo-type local/ai-orchestrator --repo-type single-owner
 | `orchestrator/` | The mechanics: base⊕persona merge, tracked mixed-graph scheduling, lifecycle publication, and run ledger. |
 | `docs/` | [Tracked graph model](docs/orchestration.md) · [repository lifecycle](docs/repo-lifecycle.md) · [onejudge integration](docs/onejudge-integration.md) |
 
+## DAG Observatory
+
+The web UI in `apps/dag-ui` shows current and historical DAGs grouped by their
+launching Claude or Codex session. It provides a live React Flow graph, node
+tasks and results, PR/check/gate/log detail, per-role oneharness transcripts,
+and a whole-run planner view.
+
+With the read-only telemetry server listening on its default
+`http://127.0.0.1:8787` address, run:
+
+```sh
+just bootstrap
+just dag-ui
+```
+
+Then open `http://127.0.0.1:4173`. See
+[`docs/dag-ui.md`](docs/dag-ui.md) for usage, production build, and verification
+details.
+
 ## One tracked graph
 
 `just run-plan` is the canonical executor. Omitted `kind` means `agent`: without
