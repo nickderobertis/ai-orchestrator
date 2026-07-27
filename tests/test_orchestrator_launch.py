@@ -6,10 +6,16 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+import yaml
 
 from orchestrator import REPO_ROOT
 from orchestrator.cli_contract import ROUND_BUDGET_OPTION
-from orchestrator.dispatch import DispatchError, launch_orchestrator, main_orchestrate
+from orchestrator.dispatch import (
+    ORCHESTRATOR_ONEHARNESS_BIN,
+    DispatchError,
+    launch_orchestrator,
+    main_orchestrate,
+)
 from orchestrator.labels import LABEL_ENV, parse_labels
 from orchestrator.launch import (
     LAUNCH_RECORD_NAME,
@@ -24,6 +30,7 @@ def _capture_launch_env(
 ) -> tuple[str, dict[str, str], Path]:
     """Run launch_orchestrator with a fake process; return run id, env, run dir."""
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    tmp_path.mkdir(parents=True, exist_ok=True)
     plan = tmp_path / "plan.json"
     plan.write_text(
         '{"schema_version":3,"tasks":[{"id":"approval","kind":"human","task":"approve"}]}',
@@ -50,8 +57,7 @@ def _capture_launch_env(
         plan,
         runs_dir=runs,
         run_id="demo",
-        skill_provider={"kind": "command", "command": ["fake-provider"]},
-        **launch_kwargs,
+        **{"skill_provider": {"kind": "command", "command": ["fake-provider"]}, **launch_kwargs},
     )
     return run_id, captured["env"], runs / run_id
 
@@ -100,6 +106,46 @@ def test_launch_without_known_launcher_writes_no_provenance(
     assert labels["launcher"] == "unknown"
     assert labels["launch_id"] == launch_id
     assert not provenance_path(launch_id).exists()  # no session -> no protected record
+
+
+def test_launch_forwards_the_default_and_an_explicit_oneharness_mode(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Without a mode the orchestrator would run at claude-code's non-interactive
+    # default, which denies every command outside .claude/settings.json without
+    # prompting — including the `just monitor` its own persona mandates.
+    _, default_env, _ = _capture_launch_env(monkeypatch, tmp_path)
+    assert default_env["ONEHARNESS_MODE"] == "bypass"
+
+    _, chosen_env, _ = _capture_launch_env(
+        monkeypatch, tmp_path / "explicit", oneharness_mode="read-only"
+    )
+    assert chosen_env["ONEHARNESS_MODE"] == "read-only"
+
+
+def test_launch_rejects_an_unknown_oneharness_mode(tmp_path: Path) -> None:
+    plan = tmp_path / "plan.json"
+    plan.write_text(
+        '{"schema_version":3,"tasks":[{"id":"approval","kind":"human","task":"approve"}]}',
+        encoding="utf-8",
+    )
+    with pytest.raises(DispatchError, match="oneharness mode must be one of"):
+        launch_orchestrator(plan, runs_dir=tmp_path / "runs", oneharness_mode="bypasss")
+
+
+def test_launch_pins_the_orchestrator_harness_wrapper(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The launched process has no project dir, so nothing else would replace the raw
+    # `oneharness` binary — leaving it to discover the worker chain and to die on the
+    # alternate-Claude environment indirection nothing exported.
+    _, _, run_dir = _capture_launch_env(
+        monkeypatch, tmp_path, skill_provider={"kind": "oneharness", "bin": "oneharness"}
+    )
+    effective = yaml.safe_load(
+        (run_dir / "orchestrator" / "effective.onejudge.yaml").read_text(encoding="utf-8")
+    )
+    assert effective["provider"]["skill"]["bin"] == str(ORCHESTRATOR_ONEHARNESS_BIN)
 
 
 def test_launch_rejects_bad_launcher(tmp_path: Path) -> None:
@@ -289,7 +335,7 @@ def test_orchestrate_cli_prints_run_id(
     def fake_launch(path: Path, **kwargs: object) -> str:
         received.update({"path": path, **kwargs})
         run = tmp_path / "runs" / "live-run"
-        run.mkdir(parents=True)
+        run.mkdir(parents=True, exist_ok=True)
         (run / "launch.json").write_text(
             '{"run_id":"live-run","channel_id":"live-run"}', encoding="utf-8"
         )
@@ -327,6 +373,11 @@ def test_orchestrate_cli_prints_run_id(
     assert received["round_budget"] == 21600
     assert received["launcher"] == "codex"
     assert received["launcher_session_id"] == "sess-2"
+    # `just orchestrate` offers the same option as dispatch/run-plan/repo-task and,
+    # like repo-task, defaults it to the container-appropriate no-approval mode.
+    assert received["oneharness_mode"] == "bypass"
+    main_orchestrate([str(plan), "--runs-dir", str(tmp_path / "runs"), "--oneharness-mode", "auto"])
+    assert received["oneharness_mode"] == "auto"
 
 
 def test_orchestrate_cli_reports_launch_error(

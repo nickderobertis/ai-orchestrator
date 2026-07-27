@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# Force the orchestrator's own agent config, and make its process self-sufficient.
+#
+# `launch_orchestrator` pins this wrapper as the launched onejudge process's
+# oneharness binary. Without it that process resolves `oneharness.toml` by upward
+# discovery from the repo root — the worker chain, which puts this supervisory
+# role in front of workers for the alternate Claude subscription — and dies before
+# its first turn because nothing exported the alternate config directory that the
+# claude-code variant's `env_from` indirection names.
+#
+# The orchestrator's judge side is the planner channel (a command provider), so
+# only agent turns reach here; a caller that already chose a `--config` is still
+# passed through untouched, because oneharness rejects a duplicate `--config`.
+set -euo pipefail
+
+script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+repo_root=$(dirname -- "$script_dir")
+# shellcheck source=scripts/claude-alt-config-dir.sh
+. "$script_dir/claude-alt-config-dir.sh"
+resolve_claude_alt_config_dir oneharness-orchestrator || exit $?
+orchestrator_config="$repo_root/oneharness.orchestrator.toml"
+
+if [ "${1-}" != "run" ]; then
+    echo "oneharness-orchestrator: expected the 'run' subcommand; invoke through 'just orchestrate' or retry as 'scripts/oneharness-orchestrator.sh run ...'" >&2
+    exit 2
+fi
+shift
+
+# llmlint: ignore[boundary_inputs_validated] onejudge is the only caller; this
+# scan just detects whether it already selected a config, which oneharness itself
+# then validates.
+for arg in "$@"; do
+    case "$arg" in
+        --config | --config=*)
+            exec oneharness run "$@"
+            ;;
+    esac
+done
+
+if [ ! -f "$orchestrator_config" ] || [ ! -r "$orchestrator_config" ]; then
+    echo "oneharness-orchestrator: required orchestrator config is not a readable regular file: $orchestrator_config; restore it from the repository or run 'just bootstrap', then retry" >&2
+    exit 2
+fi
+
+exec oneharness run --config "$orchestrator_config" "$@"

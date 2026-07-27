@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from . import BASE_CONFIG, PERSONA_DIR, REPO_ROOT
+from .cli_contract import ONEHARNESS_MODES
 from .config import ConfigError, load_yaml
 from .dispatch import Report, dispatch
 
@@ -474,7 +475,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--oneharness-mode",
         default=None,
-        choices=["read-only", "plan", "default", "edit", "auto", "bypass"],
+        choices=list(ONEHARNESS_MODES),
         help="approval/sandbox mode for the harness (via ONEHARNESS_MODE); "
         "use 'bypass' where codex's OS sandbox can't run",
     )

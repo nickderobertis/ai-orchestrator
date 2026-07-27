@@ -233,8 +233,18 @@ side lives in oneharness config, not onejudge:
 - **Judge / simulated-user side** (supervises) — `oneharness.judge.toml`, passed
   as the base config's `provider.judge_config`; codex is primary and
   `claude-code:primary` uses only the primary subscription.
+- **Orchestrator side** (drives a tracked graph) — `oneharness.orchestrator.toml`,
+  forced by `scripts/oneharness-orchestrator.sh`, which `just orchestrate` pins as
+  the launched process's oneharness binary. Deliberately the reverse of the worker
+  order: codex is primary and `claude-code:alternate` is its fallback, so this
+  long-lived supervisory process never queues ahead of the workers for the
+  subscription they depend on.
 - **LLM lint side** — `oneharness.llmlint.toml`, forced by
   `scripts/llmlint-oneharness.sh`; it is codex-only.
+
+Both alternate-subscription wrappers derive `ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR`
+from one source, `scripts/claude-alt-config-dir.sh`, so no role needs it exported
+by hand and the two cannot drift apart.
 
 `onejudge init` scaffolds both files plus a starter `onejudge.yaml`. The adopted
 exact oneharness release is declared in `config/oneharness.version`, installed as
@@ -247,8 +257,10 @@ with `onejudge init --force`.
 
 **Live dispatch** picks a harness via `oneharness.toml`'s fallback (alternate
 Claude subscription primary, codex secondary).
-The lifecycle dispatches in **`bypass`** mode by default — the no-approval mode —
-which is correct here because the **whole environment is a sandbox** (a container):
+The lifecycle *and the orchestrator process itself* dispatch in **`bypass`** mode by
+default — the no-approval mode; `just dispatch`, `just run-plan`, `just repo-task`,
+and `just orchestrate` all take the same `--oneharness-mode`. It is
+correct here because the **whole environment is a sandbox** (a container):
 codex's own `workspace-write` sandbox (`auto` mode) needs unprivileged user
 namespaces this host disables, so `bypass` (no approvals, no inner sandbox) is the
 working no-approval mode and the container is the boundary. The **allowlister**
@@ -292,8 +304,9 @@ and verifies exact prompt delivery plus a successful, fully accounted oneharness
 history record. Native per-phase timing is provider-optional, so its absence is a
 telemetry-quality signal rather than a launch failure. It is deliberately outside
 `just gate`. The pre-push hook runs it only when the pushed diff touches `scripts/`,
-`config/oneharness.version`, `config/onejudge.base.yaml`, `oneharness.toml`, or
-`oneharness.judge.toml`; ordinary pushes consume no harness quota.
+`config/oneharness.version`, `config/onejudge.base.yaml`, `oneharness.toml`,
+`oneharness.judge.toml`, or `oneharness.orchestrator.toml`; ordinary pushes consume
+no harness quota.
 
 A dispatched change is not done until `just gate` is green. Its agent clears its
 own llmlint findings—by fixing them, adding a justified `ignore-file`, or disabling

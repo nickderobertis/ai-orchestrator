@@ -50,7 +50,7 @@ from .channel import (
     ChannelError,
     create_channel,
 )
-from .cli_contract import ROUND_BUDGET_OPTION
+from .cli_contract import DEFAULT_ONEHARNESS_MODE, ONEHARNESS_MODES, ROUND_BUDGET_OPTION
 from .config import ConfigError, build_effective_config, load_yaml
 from .coordination import atomic_json
 from .goals import Goal, graph_identities, register_run, update_run_owner
@@ -89,6 +89,10 @@ DEFAULT_DISPATCH_STALL_TIMEOUT = "600"
 DEFAULT_WORKER_HEARTBEAT_TIMEOUT = "60"
 ORCHESTRATOR_ONEHARNESS_TIMEOUT = "86400"
 AGENT_ONEHARNESS_BIN = REPO_ROOT / "scripts" / "oneharness-agent.sh"
+# The orchestrator role has its own harness order (codex first) and, like the
+# worker wrapper, exports the alternate-Claude config indirection its fallback
+# variant needs; a raw `oneharness` would discover the worker chain instead.
+ORCHESTRATOR_ONEHARNESS_BIN = REPO_ROOT / "scripts" / "oneharness-orchestrator.sh"
 DispatchOutcome = Literal["worker-died"]
 WatchdogReason = Literal["worker-died", "stalled"]
 
@@ -775,10 +779,18 @@ def launch_orchestrator(
     cwd: str | Path = REPO_ROOT,
     acknowledge_concurrent: bool = False,
     round_budget: float | None = None,
+    oneharness_mode: str = DEFAULT_ONEHARNESS_MODE,
     launcher: str | None = None,
     launcher_session_id: str | None = None,
 ) -> str:
-    """Launch a detached live-supervised orchestrator and return its run id."""
+    """Launch a detached live-supervised orchestrator and return its run id.
+
+    ``oneharness_mode`` is forwarded to the launched process as ``ONEHARNESS_MODE``
+    and defaults to ``bypass`` for the same reason `just repo-task` does: the
+    container is the sandbox, and claude-code's non-interactive default denies —
+    without prompting — every command outside `.claude/settings.json`, which would
+    leave the orchestrator unable to run the very commands its persona mandates.
+    """
     # Validate launcher provenance up front so a bad value fails before any side effect.
     try:
         resolve_launcher_kind(launcher)
@@ -792,6 +804,10 @@ def launch_orchestrator(
         raise DispatchError("onejudge binary must be a non-empty, non-NUL string")
     if round_budget is not None and (not math.isfinite(round_budget) or round_budget <= 0):
         raise DispatchError(f"'{ROUND_BUDGET_OPTION}' must be a positive finite number")
+    if oneharness_mode not in ONEHARNESS_MODES:
+        raise DispatchError(
+            f"oneharness mode must be one of {', '.join(ONEHARNESS_MODES)}, got {oneharness_mode!r}"
+        )
     plan_mapping = load_yaml(plan)
     # Import locally because graph's direct-agent runner imports this module.
     from .graph import parse_graph, validate_graph_repo_aliases
@@ -846,6 +862,10 @@ def launch_orchestrator(
         provider_bin = skill.get("bin", "oneharness")
         if not isinstance(provider_bin, str) or not provider_bin or "\x00" in provider_bin:
             raise DispatchError("orchestrator oneharness provider bin must be a non-empty string")
+        # Pin the role's own wrapper, exactly as project dispatch pins the worker's
+        # (`_agent_run_context`): it forces oneharness.orchestrator.toml and exports
+        # the alternate-Claude config indirection that config's fallback names.
+        skill["bin"] = str(ORCHESTRATOR_ONEHARNESS_BIN)
     config["provider"] = {
         "kind": "split",
         "skill": skill,
@@ -898,6 +918,7 @@ def launch_orchestrator(
     )
     process_env = dict(os.environ)
     process_env["ONEHARNESS_TIMEOUT"] = str(turn_timeout)
+    process_env["ONEHARNESS_MODE"] = oneharness_mode
     process_env[CHANNEL_DIR_ENV] = str(channel_dir)
     process_env[CHANNEL_RUN_ID_ENV] = run_dir.name
     try:
@@ -985,6 +1006,14 @@ def main_orchestrate(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(ROUND_BUDGET_OPTION, type=float, metavar="SECONDS")
     parser.add_argument(
+        "--oneharness-mode",
+        default=DEFAULT_ONEHARNESS_MODE,
+        choices=list(ONEHARNESS_MODES),
+        help="approval/sandbox mode for the orchestrator's harness (via ONEHARNESS_MODE; "
+        f"default: {DEFAULT_ONEHARNESS_MODE} — the no-approval mode; the container is "
+        "the sandbox)",
+    )
+    parser.add_argument(
         "--skill-command",
         nargs="+",
         help="command-provider argv for the orchestrator agent (primarily for deterministic tests)",
@@ -1014,6 +1043,7 @@ def main_orchestrate(argv: list[str] | None = None) -> int:
             heartbeat_interval=args.heartbeat_interval,
             acknowledge_concurrent=args.acknowledge_concurrent,
             round_budget=args.round_budget,
+            oneharness_mode=args.oneharness_mode,
             launcher=args.launcher,
             launcher_session_id=args.launcher_session,
         )
@@ -1058,7 +1088,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--oneharness-mode",
         default=None,
-        choices=["read-only", "plan", "default", "edit", "auto", "bypass"],
+        choices=list(ONEHARNESS_MODES),
         help="approval/sandbox mode for the harness (via ONEHARNESS_MODE); "
         "use 'bypass' where codex's OS sandbox can't run",
     )

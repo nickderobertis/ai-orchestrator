@@ -8,6 +8,7 @@ launch_paths=(
   "config/onejudge.base.yaml"
   "oneharness.toml"
   "oneharness.judge.toml"
+  "oneharness.orchestrator.toml"
 )
 if [[ ${1:-} == --print-paths ]]; then
   printf '%s\n' "${launch_paths[@]}"

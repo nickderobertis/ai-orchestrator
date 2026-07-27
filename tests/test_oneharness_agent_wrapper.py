@@ -17,6 +17,7 @@ from pathlib import Path
 from orchestrator import REPO_ROOT
 
 WRAPPER = REPO_ROOT / "scripts" / "oneharness-agent.sh"
+ALT_CONFIG_LIBRARY = REPO_ROOT / "scripts" / "claude-alt-config-dir.sh"
 
 
 def _run_wrapper(
@@ -218,6 +219,9 @@ def test_missing_agent_config_is_rejected_before_invoking_oneharness(tmp_path: P
     copied_wrapper = scripts / WRAPPER.name
     copied_wrapper.write_bytes(WRAPPER.read_bytes())
     copied_wrapper.chmod(0o755)
+    # The wrapper sources its alternate-config derivation from a sibling; copy it so
+    # the missing *agent config* guard below is what fails, not the helper lookup.
+    (scripts / ALT_CONFIG_LIBRARY.name).write_bytes(ALT_CONFIG_LIBRARY.read_bytes())
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     marker = tmp_path / "invoked"

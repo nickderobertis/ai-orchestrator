@@ -1,0 +1,56 @@
+# Orchestrator side of the onejudge conversation: WHICH harness + model drives a
+# tracked graph. Forced by `scripts/oneharness-orchestrator.sh`, which
+# `orchestrator.dispatch.launch_orchestrator` pins as the launched process's
+# oneharness binary; discovery from the repo root would otherwise hand this role
+# the worker's `oneharness.toml`. See docs/onejudge-integration.md.
+
+# run_mode: how the selected harnesses are run. "fallback" tries them in priority
+# order and stops at the first that can actually run, falling through only
+# harnesses that cannot run at all — see the note in oneharness.toml.
+run_mode = "fallback"
+
+# Record this side's runs to disk too; onejudge's pinned `--config` skips the
+# user-level config.toml, so history must be enabled here.
+history = true
+
+# `role` names the SIDE of the conversation, not the persona: the orchestrator is
+# an agent-side session whose `agent_role=orchestrator` label is stamped by
+# `launch_orchestrator` (see docs/dag-ui/design.md). Keeping `role = "agent"` here
+# is what lets telemetry and `just history` treat it as one.
+history_labels = { role = "agent" }
+
+# The orchestrator is a long-lived supervisory process, not a worker: it must not
+# stand in front of workers for the alternate Claude subscription they depend on.
+# Codex carries the role and the alternate Claude subscription is its backup —
+# deliberately the reverse of oneharness.toml's worker order.
+# llmlint: ignore[changed_behavior_has_e2e] tests/e2e/test_dispatch_e2e.py drives real oneharness fallback selection for this file; paid-provider quota rejection cannot be deterministic.
+harnesses = ["codex", "claude-code:alternate"]
+
+# [harness.<id>]: per-harness overrides. Model names differ per provider, so
+# each harness names its own.
+# Sol is the flagship tier of the GPT-5.6 family; name it explicitly so the tier
+# cannot drift under us.
+[harness.codex]
+model = "gpt-5.6-sol"
+
+[harness.claude-code]
+# IS_SANDBOX lets claude-code run under root without --dangerously-skip-permissions
+# refusing; harmless on other harnesses.
+env = { IS_SANDBOX = "1" }
+
+# The fallback identity is the same alternate subscription the worker uses, with
+# the same portable indirection and credential masking;
+# tests/test_harness_routing.py holds this variant identical to oneharness.toml's.
+[harness.claude-code.variant.alternate]
+model = "claude-opus-5"
+env_from = { CLAUDE_CONFIG_DIR = "ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR" }
+# Subscription auth must not be shadowed by ambient API or OAuth credentials.
+unset_env = [
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
+]
+
+# Inspect the effective, fully layered config (and where each value came from)
+# with `oneharness config`.
