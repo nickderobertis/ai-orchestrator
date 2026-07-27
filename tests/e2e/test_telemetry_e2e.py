@@ -267,7 +267,10 @@ def test_breakdown_aggregates_real_multirole_history_records(
         "wall_ms",
     }
     assert run["timing_quality"] == "complete"
-    assert run["linkage_quality"] == "native"
+    # onejudge authoritatively links the agent and judge sessions, but the
+    # additional llmlint histories include legacy name-inferred roles.
+    assert run["nodes"][0]["linkage_quality"] == "inferred"
+    assert run["linkage_quality"] == "inferred"
     assert run["sources"] == ["onejudge", "oneharness", "history_legacy", "journal_legacy"]
 
     breakdown = subprocess.run(

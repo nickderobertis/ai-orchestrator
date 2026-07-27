@@ -76,6 +76,9 @@ agent and judge sessions by `turn_index`. `QUALITY` renders
 `<timing_quality>/<linkage_quality>`: timing is `complete`, `partial`, or
 `legacy` according to measured-field completeness, independently of linkage,
 which is `native`, `labelled`, or `inferred`.
+`native` requires onejudge session linkage to cover every history summary
+contributing to the row; mixed native and label-linked summaries are `labelled`
+when every role label is valid.
 
 Pre-upgrade reports and history remain readable through a documented fallback.
 Missing onejudge linkage falls back

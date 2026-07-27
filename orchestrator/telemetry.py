@@ -923,6 +923,15 @@ def _link_native_roles(
     ]
 
 
+def _native_covers_summaries(
+    native: _NativeTelemetry | None, summaries: list[_SessionSummary]
+) -> bool:
+    if native is None or native.invalid or not native.sessions:
+        return False
+    native_session_ids = {link["session_id"] for link in native.sessions}
+    return all(summary.link["session_id"] in native_session_ids for summary in summaries)
+
+
 def _item_native(item: GraphResultItem) -> _NativeTelemetry | None:
     direct = _native_telemetry(item.get("telemetry"))
     if direct is not None:
@@ -1373,7 +1382,7 @@ def _node_record(
     )
     linkage_quality: LinkageQuality = (
         "native"
-        if native is not None and not native.invalid and bool(native.sessions)
+        if _native_covers_summaries(native, linked)
         else "labelled"
         if linked
         and all(summary.labels.get("role") in {"agent", "judge", "llmlint"} for summary in linked)
@@ -1494,7 +1503,11 @@ def collect_run(
     )
     linkage_quality: LinkageQuality = (
         "native"
-        if native_parts and all(not part.invalid and part.sessions for part in native_parts)
+        if native_parts
+        and all(not part.invalid and part.sessions for part in native_parts)
+        and {summary.link["session_id"] for summary in summaries}.issubset(
+            {link["session_id"] for link in native_links}
+        )
         else "labelled"
         if summaries
         and all(
