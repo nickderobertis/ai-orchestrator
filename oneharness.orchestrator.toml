@@ -11,6 +11,7 @@ run_mode = "fallback"
 
 # Record this side's runs to disk too; onejudge's pinned `--config` skips the
 # user-level config.toml, so history must be enabled here.
+# llmlint: ignore[changed_behavior_has_e2e] oneharness writes a history record only for a real harness session; a run driven by the suite's codex stand-in leaves the store empty (verified), so this pair cannot be asserted at the launch boundary the rest of this file's e2e uses.
 history = true
 
 # `role` names the SIDE of the conversation, not the persona: the orchestrator is

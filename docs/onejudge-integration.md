@@ -35,8 +35,7 @@ lives in an oneharness config, not in onejudge:
 A third role sits above both: the **orchestrator** process `just orchestrate`
 launches drives a tracked graph rather than doing the work, so it has its own
 config, `oneharness.orchestrator.toml`, forced by
-`scripts/oneharness-orchestrator.sh` (see
-[Harnesses and the live path](#harnesses-and-the-live-path)).
+`scripts/oneharness-orchestrator.sh`.
 
 Edit those files (or use oneharness's `ONEHARNESS_*` env overrides) to change
 the harness or model on a side. `config/onejudge.base.yaml` carries only the

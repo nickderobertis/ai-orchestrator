@@ -25,6 +25,9 @@ ORCHESTRATOR_CONFIG = REPO_ROOT / "oneharness.orchestrator.toml"
 
 
 def _config(path: Path) -> dict[str, Any]:
+    # `Any` is what tomllib returns: these configs are arbitrarily nested harness and
+    # variant tables, and the assertions below compare whole subtrees rather than
+    # reading through a fixed shape, so a narrower type would only be a cast.
     return tomllib.loads(path.read_text(encoding="utf-8"))
 
 

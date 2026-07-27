@@ -9,6 +9,11 @@
 # its own copy of the $HOME rule; sourced by scripts/oneharness-agent.sh and
 # scripts/oneharness-orchestrator.sh.
 
+# Both wrappers already set these before sourcing, so this changes nothing today.
+# It is here so the `${HOME:?}` guard below still aborts rather than deriving
+# "/.claude-alt" if some later caller sources this module without them.
+set -euo pipefail
+
 # Derive, validate, and export ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR. $1 names the
 # calling wrapper so its diagnostics stay attributable.
 resolve_claude_alt_config_dir() {
