@@ -31,6 +31,15 @@ import subprocess
 import sys
 import tomllib
 from pathlib import Path
+from typing import NamedTuple
+
+
+class Restatement(NamedTuple):
+    """One file that repeats a number another file owns, and how to read it back."""
+
+    where: str
+    path: Path
+    pattern: str
 
 
 def fail(message: str) -> None:
@@ -330,13 +339,23 @@ def documented_number(path: Path, what: str, pattern: str) -> float:
     return found.pop()
 
 
-def reconcile_number(what: str, python: tuple[str, float], other: tuple[str, float]) -> None:
-    """Fail unless a Python default and its documented value are the same number."""
+def reconcile_number(
+    what: str,
+    python: tuple[str, float],
+    other: tuple[str, float],
+    *,
+    remedy: str = "reconcile them in one change",
+) -> None:
+    """Fail unless a Python default and its documented value are the same number.
+
+    ``remedy`` names the concrete next action for checks where "reconcile them" is
+    not obviously actionable — which side is authoritative, and what to rerun.
+    """
     (python_where, python_value), (other_where, other_value) = python, other
     if python_value != other_value:
         fail(
             f"{what}: {python_where} is {python_value:g} but "
-            f"{other_where} says {other_value:g}; reconcile them in one change"
+            f"{other_where} says {other_value:g}; {remedy}"
         )
 
 
@@ -714,13 +733,13 @@ def main() -> None:
     # `just dag-ui` proxying to nothing, so all four copies are reconciled here.
     vite_config = root / "apps/dag-ui/vite.config.ts"
     dag_ui_doc = root / "docs/dag-ui.md"
-    for where, path, pattern in (
-        (
+    for restatement in (
+        Restatement(
             "apps/dag-ui/vite.config.ts proxy default",
             vite_config,
             r'DAG_UI_API_URL \?\? "http://127\.0\.0\.1:(\d+)"',
         ),
-        (
+        Restatement(
             "docs/dag-ui.md proxy target",
             dag_ui_doc,
             r"proxies `/api` and `/healthz` to\n`http://127\.0\.0\.1:(\d+)`",
@@ -729,7 +748,14 @@ def main() -> None:
         reconcile_number(
             "default port",
             ("orchestrator/server.py DEFAULT_PORT", module_number(server, "DEFAULT_PORT")),
-            (where, documented_number(path, "default port", pattern)),
+            (
+                restatement.where,
+                documented_number(restatement.path, "default port", restatement.pattern),
+            ),
+            remedy=(
+                f"the server owns this port, so change {restatement.where} to the "
+                "DEFAULT_PORT value, then rerun 'just check'"
+            ),
         )
     reconcile_number(
         "DAG UI development port",
@@ -740,6 +766,10 @@ def main() -> None:
         (
             "docs/dag-ui.md",
             documented_number(dag_ui_doc, "development port", r"Open `http://127\.0\.0\.1:(\d+)`"),
+        ),
+        remedy=(
+            "the Vite config owns this port, so change the address docs/dag-ui.md "
+            "tells the operator to open, then rerun 'just check'"
         ),
     )
     reconcile_number(

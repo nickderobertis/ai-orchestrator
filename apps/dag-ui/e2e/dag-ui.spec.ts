@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, type Locator, type Page, test } from "@playwright/test";
+import { z } from "zod";
 import {
   FIXTURE_WORKSPACE,
   OFFLINE_UI_URL,
@@ -22,12 +23,16 @@ import {
  * Python module that records them is their one source; naming them again here would
  * be a second one that drifts the moment the fixture changes.
  */
-type RunIds = Record<"live" | "history" | "unattributed", string>;
-let cachedRunIds: RunIds | undefined;
-const runs = (): RunIds =>
-  (cachedRunIds ??= JSON.parse(
-    readFileSync(join(FIXTURE_WORKSPACE, "run-ids.json"), "utf8"),
-  ) as RunIds);
+const runIdsSchema = z.object({
+  live: z.string().min(1),
+  history: z.string().min(1),
+  unattributed: z.string().min(1),
+});
+let cachedRunIds: z.infer<typeof runIdsSchema> | undefined;
+const runs = (): z.infer<typeof runIdsSchema> =>
+  (cachedRunIds ??= runIdsSchema.parse(
+    JSON.parse(readFileSync(join(FIXTURE_WORKSPACE, "run-ids.json"), "utf8")),
+  ));
 
 /** Open the app and wait for it to have mounted; each journey then asserts its own state. */
 async function openObservatory(page: Page, path = "/"): Promise<void> {
