@@ -11,6 +11,16 @@ without the other fails ``just check``.
 Payload reconciliation is asymmetric on purpose — see ``reconcile_shape``.
 """
 
+# llmlint: ignore-file[contracts_have_one_source_or_a_drift_gate] This file *is* the
+# drift gate. It reconciles everything with an exact cross-language meaning: field
+# names, optionality, and the closed value vocabularies (node states, SSE events,
+# launcher kinds). Structural field types are deliberately out of scope — deciding
+# that `list[RunSummary]` and `RunSummary[]`, or `TimingRecord` and `Timing`, are the
+# same type needs a shared IDL both sides generate from, which is a project of its
+# own rather than a check this script can make without guessing. Comparing them by
+# an approximate normalizer would report drift that is not drift, and the resulting
+# suppressions would erode the exact checks above.
+
 from __future__ import annotations
 
 import ast
