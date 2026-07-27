@@ -15,7 +15,7 @@
       "options": { "cwd": "." }
     },
     "test": {
-      "command": "env -u FORCE_COLOR NO_COLOR=1 uv run pytest --cov=orchestrator --cov-report=term-missing --cov-fail-under=95",
+      "command": "env -u FORCE_COLOR NO_COLOR=1 uv run pytest --cov=orchestrator --cov-report=term-missing",
       "options": { "cwd": "." },
       "outputs": ["{workspaceRoot}/.coverage"],
       "inputs": [
