@@ -5,10 +5,11 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { HISTORY_RUN, LIVE_RUN, runDetail, runList } from "../test/fixtures";
 import { defaultResponder, telemetryHarness } from "../test/telemetry-harness";
 import { App } from "./App";
+import { AppErrorBoundary } from "./AppErrorBoundary";
 
 describe("DAG application", () => {
   beforeEach(() => {
@@ -165,6 +166,31 @@ describe("DAG application", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "Detail unavailable",
     );
+  });
+
+  test("hands an unrenderable graph to the error boundary", async () => {
+    const consoleError = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => {});
+    const { client } = telemetryHarness((url) => {
+      if (url.pathname === "/api/v1/runs") return Response.json(runList);
+      const detail = runDetail(LIVE_RUN);
+      // A dependency cycle: the layout rejects it, and no partial graph may be
+      // shown in its place.
+      const tasks: { deps?: string[] }[] = detail.rounds[0]?.plan.tasks ?? [];
+      if (tasks[0]) tasks[0].deps = ["dashboard"];
+      return Response.json(detail);
+    });
+    render(
+      <AppErrorBoundary>
+        <App client={client} />
+      </AppErrorBoundary>,
+    );
+    expect(
+      await screen.findByText("The DAG view could not be displayed."),
+    ).toBeInTheDocument();
+    expect(screen.getByText("DAG contains a cycle")).toBeInTheDocument();
+    consoleError.mockRestore();
   });
 
   test("drops a removed run and falls back to the remaining one", async () => {

@@ -22,9 +22,16 @@ import os
 import shutil
 import tempfile
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 from orchestrator import REPO_ROOT
+
+# llmlint: ignore-file[modern_domain_modeling] The plain mappings here are not a domain
+# model: they are the exact on-disk JSON a plan file, a journal event detail, and an
+# `oneharness history list` record already are. `orchestrator` owns those shapes and
+# validates them at the boundaries this fixture feeds; restating them as local types
+# would create a second declaration that drifts from the one under test. The one shape
+# this file does own — its recorded session list — is a typed `DashboardSession`.
 
 FAKE_ONEHARNESS = REPO_ROOT / "tests" / "e2e" / "fake_oneharness.py"
 
@@ -281,55 +288,74 @@ def _session(
     }
 
 
+class DashboardSession(NamedTuple):
+    """One recorded transcript of the live run's dashboard node."""
+
+    session_id: str
+    name: str
+    transport_role: str
+    agent_role: str
+    text: str
+
+
+#: One session per attributed role the detail view labels separately.
+_DASHBOARD_SESSIONS = (
+    DashboardSession(
+        "worker-session",
+        "engineer-dashboard",
+        "agent",
+        "worker",
+        "Implementing the dashboard now",
+    ),
+    DashboardSession(
+        "judge-session",
+        "you-are-a-strict-careful-evaluator",
+        "judge",
+        "judge",
+        "The transcript is accessible",
+    ),
+    DashboardSession(
+        "check-in-session",
+        "check-in-dashboard",
+        "agent",
+        "check-in",
+        "Progress update sent",
+    ),
+    DashboardSession(
+        "pr-author-session",
+        "pr-author-dashboard",
+        "agent",
+        "pr-author",
+        "Drafted the pull request",
+    ),
+    DashboardSession(
+        "llmlint-session",
+        "llmlint-dashboard",
+        "llmlint",
+        "worker",
+        "Reviewed the changed behavior",
+    ),
+)
+
+
 def _history_store(workspace: Path) -> Path:
     """A recorded oneharness store covering every attributed role of both runs."""
-    live = [
-        (
-            "worker-session",
-            "engineer-dashboard",
-            "agent",
-            "worker",
-            "Implementing the dashboard now",
-        ),
-        (
-            "judge-session",
-            "you-are-a-strict-careful-evaluator",
-            "judge",
-            "judge",
-            "The transcript is accessible",
-        ),
-        ("check-in-session", "check-in-dashboard", "agent", "check-in", "Progress update sent"),
-        (
-            "pr-author-session",
-            "pr-author-dashboard",
-            "agent",
-            "pr-author",
-            "Drafted the pull request",
-        ),
-        (
-            "llmlint-session",
-            "llmlint-dashboard",
-            "llmlint",
-            "worker",
-            "Reviewed the changed behavior",
-        ),
-    ]
     sessions = [
         _session(
             workspace,
-            session_id=session_id,
-            name=name,
+            session_id=recorded.session_id,
+            name=recorded.name,
             run_id=LIVE_RUN,
             node="dashboard",
-            role=role,
-            agent_role=agent_role,
+            role=recorded.transport_role,
+            agent_role=recorded.agent_role,
             launcher="codex",
             launch_id=CODEX_LAUNCH,
-            prompt=f"Act as {agent_role}",
-            text=text,
+            prompt=f"Act as {recorded.agent_role}",
+            text=recorded.text,
             started=f"2026-07-26T11:0{index}:00Z",
         )
-        for index, (session_id, name, role, agent_role, text) in enumerate(live)
+        for index, recorded in enumerate(_DASHBOARD_SESSIONS)
     ]
     sessions.append(
         _session(
@@ -398,32 +424,73 @@ def build_fixture(workspace: Path) -> tuple[Path, Path]:
     return runs_dir, _oneharness_bin(workspace)
 
 
+def settle_dashboard(workspace: Path) -> int:
+    """Record real progress on the served live run, so the stream invalidates it.
+
+    A browser journey calls this to change the state the server projects, exactly as
+    a running executor would: one appended authoritative event, no reaching into the
+    server or the client.
+    """
+    from orchestrator.journal import NodeId, RunId, open_journal
+
+    journal = open_journal(workspace / "runs" / LIVE_RUN, RunId(LIVE_RUN), 1)
+    journal.append(
+        "node-settled",
+        node=NodeId("dashboard"),
+        detail={
+            "status": "done",
+            "result": {"status": "done", "ok": True, "detail": "Dashboard shipped"},
+        },
+    )
+    return 0
+
+
+def serve(workspace: Path, port: int) -> int:
+    """Rebuild the fixture in ``workspace`` and serve it on a loopback port."""
+    shutil.rmtree(workspace, ignore_errors=True)
+    workspace.mkdir(parents=True)
+    runs_dir, oneharness_bin = build_fixture(workspace)
+    from orchestrator.server import main as serve_api
+
+    return serve_api(
+        [
+            "--runs-dir",
+            str(runs_dir),
+            "--port",
+            str(port),
+            "--oneharness-bin",
+            str(oneharness_bin),
+        ]
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
-    """Build the fixture in a throwaway workspace and serve it on a loopback port."""
+    """Serve the fixture, or mutate the one a running server is already serving."""
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--workspace",
+        type=Path,
+        help="fixture directory to build and serve; a throwaway temporary one by default",
+    )
     parser.add_argument("--port", type=int, default=8787)
+    parser.add_argument(
+        "--settle-dashboard",
+        action="store_true",
+        help="append real progress to an already-served fixture instead of serving",
+    )
     args = parser.parse_args(argv)
 
-    workspace = Path(tempfile.mkdtemp(prefix="dag-ui-e2e-"))
+    workspace = args.workspace or Path(tempfile.mkdtemp(prefix="dag-ui-e2e-"))
     # The provenance records this fixture writes are throwaway too, so they must not
     # land in the operator's own state directory.
     os.environ["XDG_STATE_HOME"] = str(workspace / "state")
+    if args.settle_dashboard:
+        return settle_dashboard(workspace)
     try:
-        runs_dir, oneharness_bin = build_fixture(workspace)
-        from orchestrator.server import main as serve
-
-        return serve(
-            [
-                "--runs-dir",
-                str(runs_dir),
-                "--port",
-                str(args.port),
-                "--oneharness-bin",
-                str(oneharness_bin),
-            ]
-        )
+        return serve(workspace, args.port)
     finally:
-        shutil.rmtree(workspace, ignore_errors=True)
+        if args.workspace is None:
+            shutil.rmtree(workspace, ignore_errors=True)
 
 
 if __name__ == "__main__":

@@ -12,6 +12,8 @@ __pycache__/
 htmlcov/
 test-results/
 playwright-report/
+# The run directory the DAG UI browser fixture server rebuilds on every start.
+/apps/dag-ui/e2e/.fixture/
 .mypy_cache/
 .ruff_cache/
 

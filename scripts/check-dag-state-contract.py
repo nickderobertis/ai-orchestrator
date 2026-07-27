@@ -709,6 +709,39 @@ def main() -> None:
             documented_number(design, "default port", r"127\.0\.0\.1:(\d+)"),
         ),
     )
+    # The browser app reaches that same port through its dev proxy, and its operator
+    # documentation restates both addresses. A silent disagreement would leave
+    # `just dag-ui` proxying to nothing, so all four copies are reconciled here.
+    vite_config = root / "apps/dag-ui/vite.config.ts"
+    dag_ui_doc = root / "docs/dag-ui.md"
+    for where, path, pattern in (
+        (
+            "apps/dag-ui/vite.config.ts proxy default",
+            vite_config,
+            r'DAG_UI_API_URL \?\? "http://127\.0\.0\.1:(\d+)"',
+        ),
+        (
+            "docs/dag-ui.md proxy target",
+            dag_ui_doc,
+            r"proxies `/api` and `/healthz` to\n`http://127\.0\.0\.1:(\d+)`",
+        ),
+    ):
+        reconcile_number(
+            "default port",
+            ("orchestrator/server.py DEFAULT_PORT", module_number(server, "DEFAULT_PORT")),
+            (where, documented_number(path, "default port", pattern)),
+        )
+    reconcile_number(
+        "DAG UI development port",
+        (
+            "apps/dag-ui/vite.config.ts server.port",
+            documented_number(vite_config, "development port", r"\n    port: (\d+),"),
+        ),
+        (
+            "docs/dag-ui.md",
+            documented_number(dag_ui_doc, "development port", r"Open `http://127\.0\.0\.1:(\d+)`"),
+        ),
+    )
     reconcile_number(
         "SSE heartbeat interval",
         (

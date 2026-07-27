@@ -8,13 +8,23 @@ import { defineConfig } from "@playwright/test";
  */
 const API_PORT = 8788;
 const UI_PORT = 4174;
+/**
+ * Where the fixture server writes the run directory it serves. It is rebuilt on every
+ * start and named here rather than hidden in a temporary directory so a journey can
+ * change what the server is serving the way an executor would.
+ */
+export const FIXTURE_WORKSPACE = "e2e/.fixture";
 
 export default defineConfig({
   testDir: "./e2e",
+  // One server serves one run directory, and the live-update journeys change what it
+  // is serving, so the journeys share that state and must not run against each other.
+  workers: 1,
+  fullyParallel: false,
   use: { baseURL: `http://127.0.0.1:${UI_PORT}` },
   webServer: [
     {
-      command: `uv run python e2e/fixtures/serve_fixture.py --port ${API_PORT}`,
+      command: `uv run python e2e/fixtures/serve_fixture.py --workspace ${FIXTURE_WORKSPACE} --port ${API_PORT}`,
       url: `http://127.0.0.1:${API_PORT}/healthz`,
       reuseExistingServer: false,
       timeout: 120_000,

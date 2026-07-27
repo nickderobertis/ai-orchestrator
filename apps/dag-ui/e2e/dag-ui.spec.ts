@@ -1,16 +1,16 @@
+import { execFileSync } from "node:child_process";
+import { rmSync } from "node:fs";
+import { join } from "node:path";
 import { expect, type Page, test } from "@playwright/test";
+import { FIXTURE_WORKSPACE } from "../playwright.config";
 
 /**
  * The DAG Observatory driven end to end against a real `orchestrator/server.py`
  * serving a real recorded run directory (see `e2e/fixtures/serve_fixture.py`, started
  * by `playwright.config.ts`). Nothing between the browser and the read model is
  * doubled: the app's own telemetry client makes the HTTP and SSE requests, and the
- * server projects them from journal files the executor's own writers produced.
- *
- * llmlint: ignore-file[e2e_not_mocked] Every journey but the last drives the real
- * loopback read API. The last one rewrites that server's own response in flight
- * because a cyclic graph is the one condition the executor's writers reject outright,
- * so it cannot be recorded into the fixture the server serves.
+ * server projects them from journal files the executor's own writers produced. Live
+ * updates are provoked by changing that run directory, never by faking an event.
  */
 
 const LIVE_RUN = "dag-ui-live";
@@ -20,6 +20,22 @@ const HISTORY_RUN = "dag-ui-history";
 async function openObservatory(page: Page, path = "/"): Promise<void> {
   await page.goto(path);
   await expect(page.getByText("DAG Observatory")).toBeVisible();
+}
+
+/** Change the run directory the server is serving, through the executor's writers. */
+function advanceFixture(args: string[]): void {
+  execFileSync(
+    "uv",
+    [
+      "run",
+      "python",
+      "e2e/fixtures/serve_fixture.py",
+      "--workspace",
+      FIXTURE_WORKSPACE,
+      ...args,
+    ],
+    { stdio: "inherit" },
+  );
 }
 
 test("tracks every node state, node detail, and role transcript of a live run", async ({
@@ -128,27 +144,41 @@ test("keeps navigation usable at a narrow viewport", async ({ page }) => {
   expect((await navigation.boundingBox())?.width).toBe(220);
 });
 
-test("catches an unrenderable graph and offers reload recovery", async ({
-  page,
-}) => {
-  // The one place a route is intercepted: a cyclic graph cannot be recorded through
-  // the executor's writers at all, so the failure has to be injected at the network.
-  await page.route(`**/api/v1/runs/${LIVE_RUN}`, async (route) => {
-    const response = await route.fetch();
-    const detail = (await response.json()) as {
-      rounds: { plan: { tasks: { id: string; deps?: string[] }[] } }[];
-    };
-    for (const task of detail.rounds[0]?.plan.tasks ?? []) {
-      if (task.id === "foundation") task.deps = ["dashboard"];
-    }
-    await route.fulfill({ json: detail });
-  });
-  await page.goto("/");
+// The remaining journeys change what the server is serving, so they run last and in
+// order: each one leaves the fixture advanced for the ones after it.
+
+test("streams real progress the server observes on disk", async ({ page }) => {
+  await openObservatory(page);
+  await expect(page.locator(".dag-node.state-running")).toContainText(
+    "dashboard",
+  );
+
+  // Record progress the way the executor does: one appended authoritative event.
+  // The server's own poll notices it and invalidates the run over SSE.
+  advanceFixture(["--settle-dashboard"]);
+
   await expect(
-    page.getByText("The DAG view could not be displayed."),
+    page.locator(".dag-node.state-done", { hasText: "dashboard" }),
   ).toBeVisible();
-  await page.getByRole("button", { name: "Reload" }).click();
+  await expect(page.locator(".dag-node.state-running")).toHaveCount(0);
+  await expect(page.getByText("Updates received")).toBeVisible();
+});
+
+test("drops a run the server stops serving", async ({ page }) => {
+  await openObservatory(page);
   await expect(
-    page.getByText("The DAG view could not be displayed."),
+    page.getByRole("button", { name: RegExp(HISTORY_RUN) }),
+  ).toBeVisible();
+
+  rmSync(join(FIXTURE_WORKSPACE, "runs", HISTORY_RUN), {
+    recursive: true,
+    force: true,
+  });
+
+  await expect(
+    page.getByRole("button", { name: RegExp(HISTORY_RUN) }),
+  ).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: RegExp(LIVE_RUN) }),
   ).toBeVisible();
 });

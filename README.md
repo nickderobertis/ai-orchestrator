@@ -61,17 +61,16 @@ launching Claude or Codex session. It provides a live React Flow graph, node
 tasks and results, PR/check/gate/log detail, per-role oneharness transcripts,
 and a whole-run planner view.
 
-With the read-only telemetry server listening on its default
-`http://127.0.0.1:8787` address, run:
+With the read-only telemetry server listening on its default loopback address,
+run:
 
 ```sh
 just bootstrap
 just dag-ui
 ```
 
-Then open `http://127.0.0.1:4173`. See
-[`docs/dag-ui.md`](docs/dag-ui.md) for usage, production build, and verification
-details.
+Then open the address Vite prints. See [`docs/dag-ui.md`](docs/dag-ui.md) for
+addresses, usage, production build, and verification details.
 
 ## One tracked graph
 

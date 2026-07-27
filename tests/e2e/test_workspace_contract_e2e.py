@@ -181,6 +181,8 @@ def _dag_state_contract_checkout(tmp_path: Path) -> Path:
         "orchestrator/server.py",
         "packages/dag-layout/src/index.ts",
         "packages/dag-model/src/index.ts",
+        "apps/dag-ui/vite.config.ts",
+        "docs/dag-ui.md",
         "docs/dag-ui/design.md",
         "docs/dag-ui/oneharness-ui-contract.d.ts",
         "oneharness.judge.toml",
@@ -254,6 +256,34 @@ def test_dag_state_contract_checker_reports_sse_event_drift(tmp_path: Path) -> N
     assert "SSE event vocabulary" in result.stderr
     assert "run.deleted" in result.stderr
     assert "docs/dag-ui/design.md" in result.stderr
+
+
+def test_dag_state_contract_checker_reports_dag_ui_proxy_drift(tmp_path: Path) -> None:
+    """A UI proxying somewhere the server does not bind must fail before it ships."""
+    checkout = _dag_state_contract_checkout(tmp_path)
+    config = checkout / "apps/dag-ui/vite.config.ts"
+    config.write_text(config.read_text().replace("127.0.0.1:8787", "127.0.0.1:9999"))
+
+    result = _dag_state_contract_run(checkout)
+
+    assert result.returncode != 0
+    assert "default port" in result.stderr
+    assert "apps/dag-ui/vite.config.ts proxy default says 9999" in result.stderr
+
+
+def test_dag_state_contract_checker_reports_dag_ui_documented_port_drift(
+    tmp_path: Path,
+) -> None:
+    """Operator documentation that names a port the app does not serve must fail."""
+    checkout = _dag_state_contract_checkout(tmp_path)
+    doc = checkout / "docs/dag-ui.md"
+    doc.write_text(doc.read_text().replace("`http://127.0.0.1:4173`", "`http://127.0.0.1:4999`"))
+
+    result = _dag_state_contract_run(checkout)
+
+    assert result.returncode != 0
+    assert "DAG UI development port" in result.stderr
+    assert "docs/dag-ui.md says 4999" in result.stderr
 
 
 def _recipe_checkout(tmp_path: Path) -> tuple[Path, Path]:
