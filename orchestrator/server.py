@@ -29,6 +29,7 @@ from .config import ConfigError
 from .conversations import run_conversations
 from .history import HistoryError
 from .read_model import (
+    ConversationNotFound,
     InvalidConversationId,
     InvalidRunId,
     ProjectionFailed,
@@ -77,6 +78,8 @@ def _status_for(exc: ReadError) -> tuple[int, str]:
             return 422, "invalid_conversation_id"
         case RunNotFound():
             return 404, "run_not_found"
+        case ConversationNotFound():
+            return 404, "conversation_not_found"
         case ProjectionFailed():
             return 409, "projection_error"
         case _:  # pragma: no cover - exhaustive over ReadError subclasses

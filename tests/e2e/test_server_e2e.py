@@ -300,9 +300,11 @@ def test_read_api_serves_projection_telemetry_and_role_tagged_conversations(
 
         assert client.get("/api/v1/runs/bad!id").status_code == 422
         assert client.get("/api/v1/runs/absent").status_code == 404
+        # A present run with no such transcript is distinct from a missing run, so a
+        # viewer can tell "still being written" from "stop polling".
         missing = client.get("/api/v1/runs/demo/conversations/nope")
         assert missing.status_code == 404
-        assert missing.json()["error"]["code"] == "run_not_found"
+        assert missing.json()["error"]["code"] == "conversation_not_found"
 
         # A malformed query parameter uses the same error envelope, not FastAPI's.
         bad_query = client.get("/api/v1/runs", params={"include_settled": "maybe"})
@@ -637,7 +639,7 @@ def test_detail_degrades_to_no_conversations_when_history_is_absent(tmp_path: Pa
         # Addressing a conversation is then an ordinary 404, not a crash.
         missing = client.get("/api/v1/runs/demo/conversations/agent-native")
         assert missing.status_code == 404
-        assert missing.json()["error"]["code"] == "run_not_found"
+        assert missing.json()["error"]["code"] == "conversation_not_found"
 
 
 def test_detail_skips_an_unreadable_session_and_serves_the_rest(

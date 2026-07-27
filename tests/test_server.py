@@ -18,7 +18,13 @@ import pytest
 
 import orchestrator.server as server
 from orchestrator.journal import NodeId, RunId, open_journal
-from orchestrator.read_model import InvalidRunId, ProjectionFailed, RunNotFound
+from orchestrator.read_model import (
+    ConversationNotFound,
+    InvalidConversationId,
+    InvalidRunId,
+    ProjectionFailed,
+    RunNotFound,
+)
 from orchestrator.runs import prepare_round
 
 ABSENT = "definitely-not-a-real-oneharness-binary"
@@ -64,7 +70,9 @@ def test_sse_and_error_helpers() -> None:
     "exc,status,code",
     [
         (InvalidRunId("x"), 422, "invalid_run_id"),
+        (InvalidConversationId("x"), 422, "invalid_conversation_id"),
         (RunNotFound("x"), 404, "run_not_found"),
+        (ConversationNotFound("x"), 404, "conversation_not_found"),
         (ProjectionFailed("x"), 409, "projection_error"),
     ],
 )

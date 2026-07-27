@@ -240,3 +240,19 @@ def test_write_provenance_rejects_fields_the_reader_would_refuse() -> None:
             repository_identity="",
             started_at="2026-07-19T00:00:00",
         )
+
+
+def test_read_provenance_rejects_a_replaced_record_with_an_unusable_identity() -> None:
+    """The identity bound is reapplied on read; the writer's check guards only writes."""
+    launch_id = generate_launch_id()
+    write_provenance(
+        launch_id=launch_id,
+        launcher="codex",
+        launcher_session_id="sess-ok",
+        repository_identity="local/app",
+    )
+    record = json.loads(provenance_path(launch_id).read_text(encoding="utf-8"))
+    record["repository_identity"] = "local/app\nsecond-line"
+    provenance_path(launch_id).write_text(json.dumps(record), encoding="utf-8")
+
+    assert read_provenance(launch_id) is None

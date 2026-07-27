@@ -206,9 +206,14 @@ authoritative stream fails the detail request with `409 projection_error`; it is
 never rendered as a plausible graph. Pending nodes are plan tasks absent from
 `node_states`.
 
-Errors use `{"error":{"code":string,"message":string}}`. A missing run is 404,
-invalid query/path input is 422, corrupt persisted input is 409, and an
-unexpected read failure is 500 without filesystem paths or record contents.
+Errors use `{"error":{"code":string,"message":string}}`. A missing run is 404
+`run_not_found`; a present run with no such transcript is 404
+`conversation_not_found`, which a viewer can treat as "still being written" rather
+than "stop polling". Invalid query/path input is 422 (`invalid_run_id`,
+`invalid_conversation_id`, or `invalid_request`), corrupt persisted input is 409
+`projection_error`, and an unexpected read failure is 500 — none of them carrying
+filesystem paths or record contents. Codes are open strings: a client must handle an
+unrecognized one by status.
 
 ## Read-only FastAPI and SSE surface
 

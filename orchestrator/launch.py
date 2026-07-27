@@ -15,7 +15,7 @@ import re
 import secrets
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import NewType, TypedDict
+from typing import NewType, TypedDict, TypeGuard
 
 from .config import ConfigError
 from .coordination import atomic_json
@@ -107,6 +107,16 @@ def validate_session_id(value: str | None) -> str | None:
     return value
 
 
+def _identity_ok(value: object) -> TypeGuard[str]:
+    """Whether a repository identity is a bounded, single printable line.
+
+    Applied by both the writer and the reader: the record is an out-of-repo file, so
+    a value this reader would refuse must never be written, and a value another
+    process wrote must never be trusted.
+    """
+    return isinstance(value, str) and value.isprintable() and len(value) <= _MAX_SESSION_ID
+
+
 def provenance_dir() -> Path:
     """The out-of-repo directory holding provenance records for this user."""
     base = os.environ.get("XDG_STATE_HOME") or os.path.join(
@@ -142,7 +152,7 @@ def write_provenance(
     session_id = validate_session_id(launcher_session_id)
     if session_id is None:
         raise LaunchError("provenance requires a non-empty launcher session id")
-    if not repository_identity.isprintable() or len(repository_identity) > _MAX_SESSION_ID:
+    if not _identity_ok(repository_identity):
         raise LaunchError(
             f"repository identity must be a single printable line of at most "
             f"{_MAX_SESSION_ID} chars"
@@ -210,7 +220,7 @@ def read_provenance(
         and raw.get("launch_id") == valid_id
         and launcher in KNOWN_LAUNCHERS
         and session_id is not None
-        and isinstance(identity, str)
+        and _identity_ok(identity)
         and started is not None
     ):
         return None

@@ -13,6 +13,7 @@ from orchestrator.monitor import snapshot_path
 from orchestrator.projection import read_strict_events
 from orchestrator.read_model import (
     API_VERSION,
+    ConversationNotFound,
     InvalidRunId,
     ProjectionFailed,
     RunNotFound,
@@ -252,7 +253,8 @@ def test_run_conversation_missing_run_and_conversation(tmp_path: Path) -> None:
         run_conversation(runs, "..", "c", oneharness_bin=ABSENT)
     with pytest.raises(RunNotFound):
         run_conversation(runs, "absent", "c", oneharness_bin=ABSENT)
-    with pytest.raises(RunNotFound):
+    # A present run with an absent transcript is its own condition, not a missing run.
+    with pytest.raises(ConversationNotFound):
         run_conversation(runs, "demo", "no-such-conversation", oneharness_bin=ABSENT)
 
 

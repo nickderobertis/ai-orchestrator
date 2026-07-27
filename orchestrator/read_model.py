@@ -63,6 +63,15 @@ class InvalidConversationId(ReadError):
     """A conversation identifier failed validation at the trust boundary (422)."""
 
 
+class ConversationNotFound(ReadError):
+    """The run exists but records no such conversation (404).
+
+    Distinct from `RunNotFound` so a client can tell "this run is gone" from "this
+    run has no transcript by that id" — the second is routine while a session is
+    still being written, the first means the view should stop polling.
+    """
+
+
 class ProjectionFailed(ReadError):
     """The authoritative journal cannot be folded into a consistent graph (409)."""
 
@@ -401,7 +410,7 @@ def run_conversation(
     for conversation in run_conversations(validated, oneharness_bin=oneharness_bin):
         if conversation["conversation"]["id"] == wanted:
             return conversation
-    raise RunNotFound(f"no conversation {wanted!r} in run {validated!r}")
+    raise ConversationNotFound(f"no conversation {wanted!r} in run {validated!r}")
 
 
 def _file_token(path: Path) -> tuple[int, int]:
