@@ -13,7 +13,7 @@ Start the read-only telemetry API, then start Vite in a second shell:
 
 ```sh
 just bootstrap
-just telemetry-server --runs-dir runs
+just telemetry-server   # reads ./runs; pass --runs-dir to point elsewhere
 just dag-ui
 ```
 
