@@ -280,6 +280,14 @@ def test_an_abandoned_round_names_its_owner_and_how_to_reclaim_it(tmp_path) -> N
 
 
 def test_runs_cli_reports_an_abandoned_round_beside_a_recorded_one(tmp_path, capsys) -> None:
+    """Both listing shapes at once; the real journey is the e2e this mirrors.
+
+    ``tests/e2e/test_round_ownership_e2e.py`` kills real executors for each shape —
+    ``test_signalled_executor_records_its_own_abandonment`` for a run with no settled
+    history and ``test_runs_reports_a_dead_round_under_the_summary_of_the_last_settled_one``
+    for one that already has a ledger row. This direct call exists so the rendering
+    counts toward the coverage gate, which a subprocess CLI invocation cannot.
+    """
     dead = tmp_path / "dead"
     _, first = write_next_plan(dead, PLAN)
     write_result(first, _result("done"))

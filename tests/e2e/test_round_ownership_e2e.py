@@ -17,7 +17,11 @@ signals, with nothing about process liveness faked:
   the process dies, and the round refuses to be re-claimed without `--recover`;
 * an uncatchable SIGKILL — the one death nothing can record — still surfaces as
   abandoned in `just runs` and `just status`, because both derive it from the recorded
-  owner's pid rather than from the status string it left behind.
+  owner's pid rather than from the status string it left behind; and it reaches those
+  views in the two shapes the real failure had — a run whose earlier round already
+  settled, so the ledger has a healthy-looking summary row to correct, and a run whose
+  queued planner surface outlived it, so the view would otherwise say a dead run is
+  waiting on the planner.
 """
 
 from __future__ import annotations
@@ -36,6 +40,7 @@ from waits import deadline as e2e_deadline
 from waits import timeout as e2e_timeout
 
 from orchestrator import REPO_ROOT
+from orchestrator.channel import create_channel
 from orchestrator.runs import TEARDOWN_SIGNALS
 
 
@@ -52,6 +57,20 @@ def _just(*args: str) -> subprocess.CompletedProcess[str]:
 
 def _read(path: Path) -> dict[str, object]:
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _status(runs: Path, history: Path) -> subprocess.CompletedProcess[str]:
+    """`just status` against one ledger, with no dispatch history to report."""
+    history.mkdir(exist_ok=True)
+    return subprocess.run(
+        ["just", "status", "--runs-dir", str(runs)],
+        cwd=REPO_ROOT,
+        env={**os.environ, "ONEHARNESS_HISTORY_DIR": str(history)},
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=e2e_timeout(180),
+    )
 
 
 def _await(path: Path, what: str) -> None:
@@ -330,17 +349,7 @@ def test_killed_executor_surfaces_as_abandoned_in_runs_and_status(
     assert f"! killed-owner  round-01 ABANDONED (owner pid {launch.owner} is gone)" in listed.stdout
     assert f"--run killed-owner --runs-dir {rounds.runs} --recover" in listed.stdout
 
-    history = tmp_path / "empty-history"
-    history.mkdir()
-    reported = subprocess.run(
-        ["just", "status", "--runs-dir", str(rounds.runs)],
-        cwd=REPO_ROOT,
-        env={**os.environ, "ONEHARNESS_HISTORY_DIR": str(history)},
-        text=True,
-        capture_output=True,
-        check=False,
-        timeout=e2e_timeout(180),
-    )
+    reported = _status(rounds.runs, tmp_path / "empty-history")
     assert reported.returncode == 0, reported.stderr
     assert f"killed-owner: round-01 ABANDONED (owner pid {launch.owner} is gone)" in reported.stdout
 
@@ -356,6 +365,107 @@ def test_killed_executor_surfaces_as_abandoned_in_runs_and_status(
     assert recovered.returncode == 0, recovered.stderr
     assert _read(launch.round_dir / "result.json")["state"] == "complete"
     assert "ABANDONED" not in _just("runs", "--runs-dir", str(rounds.runs)).stdout
+
+
+def test_runs_reports_a_dead_round_under_the_summary_of_the_last_settled_one(
+    rounds: Rounds,
+) -> None:
+    """A run with settled history keeps its ledger row, so the death must join it.
+
+    The observed failure had already completed a round before the one that died —
+    `just runs` therefore has a summary to print, and the abandonment has to reach
+    that existing row rather than only the no-history line the earlier journeys
+    take. Getting this wrong is the whole symptom: the run reads as `round-01
+    (1 done)`, exactly like a healthy one, while nothing is working on round-02.
+    """
+    run_id = "abandoned-continuation"
+    waiting = rounds.waiting_round(run_id)
+    assert waiting.returncode == 1, waiting.stderr
+    assert json.loads(waiting.stdout)["state"] == "waiting"
+
+    launch = rounds.next_round(run_id)
+    os.kill(launch.owner, signal.SIGKILL)
+    _await_exit(launch.owner)
+
+    listed = _just("runs", "--runs-dir", str(rounds.runs))
+    assert listed.returncode == 0, listed.stderr
+    lines = listed.stdout.splitlines()
+    # The summary still names round-01, the newest round that actually settled; the
+    # dead round-02 is reported as the line under it, against that row's `!` marker.
+    row = next(index for index, line in enumerate(lines) if line.startswith(f"! {run_id}  "))
+    assert lines[row].startswith(f"! {run_id}  round-01  (")
+    assert lines[row + 1] == (
+        f"    round-02 ABANDONED (owner pid {launch.owner} is gone); reclaim with: "
+        f"just run-plan {launch.round_dir / 'plan.json'} --run {run_id} "
+        f"--runs-dir {rounds.runs} --recover"
+    )
+    # Once, and attached to the run's own row: a second standalone line would be the
+    # same dead round reported twice, which is how a reader loses track of which is
+    # the live one.
+    assert listed.stdout.count("ABANDONED") == 1
+
+
+def test_status_reports_a_dead_round_beside_the_surface_it_left_pending(
+    tmp_path: Path, rounds: Rounds
+) -> None:
+    """The stale surface is the misreading, so both lines must appear together.
+
+    The surface a run last queued outlives the round that queued it: the planner's
+    view kept saying "waiting for planner decision" for hours after the executor was
+    gone, so the run looked like it was waiting on a person rather than dead. Driven
+    through the real relay the orchestrator's supervisor side runs — it queues the
+    surface and then blocks for a reply that never comes, which is the production
+    state exactly.
+    """
+    run_id = "abandoned-with-surface"
+    launch = rounds.run_plan(run_id)
+    channel_dir = create_channel(launch.runs / run_id)
+    relay = subprocess.Popen(
+        [
+            "uv",
+            "run",
+            "orchestrator-relay-supervisor",
+            str(channel_dir),
+            run_id,
+            "1",
+            "--timeout",
+            str(e2e_timeout(600)),
+        ],
+        cwd=REPO_ROOT,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        text=True,
+        start_new_session=True,
+    )
+    try:
+        assert relay.stdin is not None
+        relay.stdin.write(json.dumps({"op": "supervisor", "kind": "blocker", "message": "held"}))
+        relay.stdin.close()
+        _await(channel_dir / "planner-pending.json", "the queued planner surface")
+
+        os.kill(launch.owner, signal.SIGKILL)
+        _await_exit(launch.owner)
+
+        reported = _status(rounds.runs, tmp_path / "empty-history")
+    finally:
+        with contextlib.suppress(PermissionError, ProcessLookupError):
+            os.killpg(os.getpgid(relay.pid), signal.SIGKILL)
+        relay.wait(timeout=e2e_timeout(15))
+    assert reported.returncode == 0, reported.stderr
+    lines = reported.stdout.splitlines()
+    dead = (
+        f"{run_id}: round-01 ABANDONED (owner pid {launch.owner} is gone); reclaim with: "
+        f"just run-plan {launch.round_dir / 'plan.json'} --run {run_id} "
+        f"--runs-dir {rounds.runs} --recover"
+    )
+    stale = f"{run_id}: waiting for planner decision: blocker: held"
+    # Both, and the death first: the surface is still genuinely queued, so hiding it
+    # would lose the reason this run is stuck, but reading it before the abandonment
+    # is what made a dead run look like live work waiting on the planner.
+    assert dead in lines, reported.stdout
+    assert stale in lines, reported.stdout
+    assert lines.index(dead) + 1 == lines.index(stale), reported.stdout
 
 
 def test_a_recovery_that_refuses_the_journal_abandons_the_round_it_claimed(

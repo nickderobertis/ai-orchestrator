@@ -214,8 +214,11 @@ def test_status_recent_handles_gone_worktree_and_no_ledger(
 def test_status_reports_a_run_whose_round_owner_is_gone(tmp_path, monkeypatch, capsys) -> None:
     """An abandoned round must be visible here, not only in `just runs`.
 
-    The real journey — a killed executor surfacing in both views — is
-    `tests/e2e/test_round_ownership_e2e.py::test_killed_executor_surfaces_as_abandoned_in_runs_and_status`.
+    The real journeys are in `tests/e2e/test_round_ownership_e2e.py`: a killed
+    executor surfacing in both views
+    (`test_killed_executor_surfaces_as_abandoned_in_runs_and_status`), and this
+    combination — the abandonment reported beside the planner surface the dead round
+    left queued (`test_status_reports_a_dead_round_beside_the_surface_it_left_pending`).
     This direct call exists so the in-process rendering counts toward the coverage
     gate, which a subprocess CLI invocation cannot contribute.
     """
