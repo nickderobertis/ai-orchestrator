@@ -582,6 +582,36 @@ def main() -> None:
     for name in ("RunLaunch", "RunSummary", "RunList", "Round", "RunDetail"):
         reconcile_shape(read_model, name, design, interface_fields(design, name))
 
+    # The out-of-repo provenance record: its shape, its own schema version, and the
+    # narrower launcher set that actually gets a record written.
+    launch = root / "orchestrator/launch.py"
+    reconcile_shape(
+        launch, "LaunchProvenance", design, interface_fields(design, "LaunchProvenance")
+    )
+    reconcile_number(
+        "provenance schema version",
+        (
+            "orchestrator/launch.py PROVENANCE_SCHEMA_VERSION",
+            module_number(launch, "PROVENANCE_SCHEMA_VERSION"),
+        ),
+        (
+            "docs/dag-ui/design.md LaunchProvenance",
+            documented_number(
+                design,
+                "provenance schema version",
+                r"interface LaunchProvenance \{\n  schema_version: (\d+)",
+            ),
+        ),
+    )
+    reconcile(
+        "recorded launcher vocabulary",
+        ("orchestrator/launch.py KNOWN_LAUNCHERS", frozenset_members(launch, "KNOWN_LAUNCHERS")),
+        (
+            "docs/dag-ui/design.md LaunchProvenance.launcher",
+            union_members(design, "LaunchProvenance", "launcher"),
+        ),
+    )
+
     reconcile(
         "launcher vocabulary",
         (

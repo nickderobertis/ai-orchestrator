@@ -531,3 +531,34 @@ def test_dag_state_contract_checker_reports_telemetry_schema_drift(tmp_path: Pat
     assert "telemetry schema version" in result.stderr
     assert "is 8 but" in result.stderr
     assert "reconcile them in one change" in result.stderr
+
+
+def test_dag_state_contract_checker_reports_provenance_record_drift(tmp_path: Path) -> None:
+    """The out-of-repo record's shape is documented; renaming a field alone must fail."""
+    checkout = _dag_state_contract_checkout(tmp_path)
+    launch = checkout / "orchestrator/launch.py"
+    launch.write_text(
+        launch.read_text().replace("    launcher_session_id: str", "    renamed_session: str", 1)
+    )
+
+    result = _dag_state_contract_run(checkout)
+
+    assert result.returncode != 0
+    assert "LaunchProvenance declares ['renamed_session']" in result.stderr
+
+
+def test_dag_state_contract_checker_reports_provenance_version_drift(tmp_path: Path) -> None:
+    """Bumping the record's schema version without the contract must fail."""
+    checkout = _dag_state_contract_checkout(tmp_path)
+    launch = checkout / "orchestrator/launch.py"
+    launch.write_text(
+        launch.read_text().replace(
+            "PROVENANCE_SCHEMA_VERSION = 1", "PROVENANCE_SCHEMA_VERSION = 2", 1
+        )
+    )
+
+    result = _dag_state_contract_run(checkout)
+
+    assert result.returncode != 0
+    assert "provenance schema version" in result.stderr
+    assert "reconcile them in one change" in result.stderr
