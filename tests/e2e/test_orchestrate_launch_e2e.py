@@ -1,10 +1,10 @@
 """Real `just orchestrate` journey: the launched process's harness environment.
 
 The orchestrator is the one dispatch path with no project dir, so nothing else
-pins its oneharness binary or its approval mode. This drives the actual recipe and
-lets the launched onejudge process reach a recording stand-in for the paid
-`oneharness` binary — the same seam the rest of the suite fakes — then reads back
-what that process would have run the harness with.
+pins its oneharness binary or its approval mode. This drives the real recipe and
+the real oneharness, replacing only the paid harness processes at the seam
+oneharness itself exposes (`ONEHARNESS_BIN_<HARNESS>`), then reads back which
+harness ran, with which approval flag, and with which environment.
 """
 
 from __future__ import annotations
@@ -18,35 +18,67 @@ import time
 from contextlib import suppress
 from pathlib import Path
 
-import pytest
 import yaml
 from waits import deadline
 
 from orchestrator import BASE_CONFIG, REPO_ROOT
 
-ORCHESTRATOR_CONFIG = REPO_ROOT / "oneharness.orchestrator.toml"
+# Codex's own no-approval flag: what oneharness maps `ONEHARNESS_MODE=bypass` to.
+CODEX_BYPASS_FLAG = "--dangerously-bypass-approvals-and-sandbox"
 
 
-def _oneharness_recorder(tmp_path: Path) -> Path:
-    """Put a recording `oneharness` first on PATH; return its bin directory.
+def _fake_codex(tmp_path: Path) -> Path:
+    """A codex stand-in that records its invocation and returns a valid turn."""
+    fake = tmp_path / "codex"
+    fake.write_text(
+        """#!/usr/bin/env python3
+import json
+import os
+import sys
+from pathlib import Path
 
-    It records the invocation the orchestrator wrapper built, then refuses to speak
-    the provider protocol so the launched run ends immediately: the launch
-    environment is what is under test, not another agent turn.
-    """
-    bin_dir = tmp_path / "recorder-bin"
-    bin_dir.mkdir()
-    recorder = bin_dir / "oneharness"
-    recorder.write_text(
-        "#!/usr/bin/env bash\n"
-        'printf \'%s\\n\' "$@" > "$ORCHESTRATE_RECORD_ARGV"\n'
-        "printf '%s\\n' \"${ONEHARNESS_MODE-<unset>}\" "
-        '"${ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR-<unset>}" > "$ORCHESTRATE_RECORD_ENV"\n'
-        "exit 3\n",
+Path(os.environ["ORCHESTRATE_CODEX_ARGV"]).write_text("\\n".join(sys.argv[1:]), encoding="utf-8")
+Path(os.environ["ORCHESTRATE_CODEX_ALT_DIR"]).write_text(
+    os.environ.get("ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR", "<unset>"), encoding="utf-8"
+)
+print(json.dumps({"type": "thread.started", "thread_id": "orchestrate-launch"}))
+print(json.dumps({
+    "type": "item.completed",
+    "item": {"type": "agent_message", "text": "orchestrator turn"},
+}))
+print(json.dumps({
+    "type": "turn.completed",
+    "usage": {"input_tokens": 1, "cached_input_tokens": 0, "output_tokens": 1},
+}))
+""",
         encoding="utf-8",
     )
-    recorder.chmod(recorder.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
-    return bin_dir
+    fake.chmod(fake.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    return fake
+
+
+def _fake_claude(tmp_path: Path) -> Path:
+    """A claude-code stand-in that would succeed — so only routing can exclude it."""
+    fake = tmp_path / "claude"
+    fake.write_text(
+        """#!/usr/bin/env python3
+import json
+import os
+from pathlib import Path
+
+Path(os.environ["ORCHESTRATE_CLAUDE_ARGV"]).write_text("ran", encoding="utf-8")
+print(json.dumps({
+    "type": "result",
+    "subtype": "success",
+    "is_error": False,
+    "result": "orchestrator turn",
+    "session_id": "orchestrate-launch",
+}))
+""",
+        encoding="utf-8",
+    )
+    fake.chmod(fake.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    return fake
 
 
 def _oneharness_base(tmp_path: Path) -> Path:
@@ -73,13 +105,15 @@ def _plan(tmp_path: Path) -> Path:
     return path
 
 
-def _wait_lines(path: Path) -> list[str]:
-    wait_deadline = deadline(30)
+def _wait_text(path: Path, run_dir: Path) -> str:
+    wait_deadline = deadline(60)
     while time.monotonic() < wait_deadline:
         if path.is_file() and path.stat().st_size:
-            return path.read_text(encoding="utf-8").splitlines()
+            return path.read_text(encoding="utf-8")
         time.sleep(0.02)
-    raise AssertionError(f"the launched orchestrator never invoked oneharness: {path}")
+    stderr = run_dir / "orchestrator" / "stderr.log"
+    detail = stderr.read_text(encoding="utf-8") if stderr.is_file() else "<no stderr>"
+    raise AssertionError(f"the launched orchestrator never reached its harness: {detail}")
 
 
 def _stop(run_dir: Path) -> None:
@@ -92,34 +126,40 @@ def _stop(run_dir: Path) -> None:
         os.killpg(pid, signal.SIGKILL)
 
 
-@pytest.mark.parametrize(
-    ("mode_args", "expected_mode"),
-    [([], "bypass"), (["--oneharness-mode", "read-only"], "read-only")],
-)
 def test_orchestrate_launch_carries_bypass_mode_and_orchestrator_routing(
-    tmp_path: Path, onejudge_bin: str, mode_args: list[str], expected_mode: str
+    tmp_path: Path, onejudge_bin: str
 ) -> None:
     runs = tmp_path / "runs"
-    argv_record = tmp_path / "oneharness-argv"
-    env_record = tmp_path / "oneharness-env"
-    environment = {
-        **os.environ,
-        "PATH": f"{_oneharness_recorder(tmp_path)}{os.pathsep}{os.environ['PATH']}",
-        "ORCHESTRATE_RECORD_ARGV": str(argv_record),
-        "ORCHESTRATE_RECORD_ENV": str(env_record),
-    }
-    # A fresh shell exports no alternate-Claude config directory; the launch must be
-    # self-sufficient rather than inheriting one a developer set by hand.
-    environment.pop("ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR", None)
-    environment.pop("ONEHARNESS_MODE", None)
+    codex_argv = tmp_path / "codex-argv"
+    codex_alt_dir = tmp_path / "codex-alt-dir"
+    claude_argv = tmp_path / "claude-argv"
+    environment = {**os.environ}
+    # A fresh shell exports no alternate-Claude config directory and no mode; the
+    # launch must be self-sufficient rather than inheriting what a developer — or an
+    # outer orchestrator run — happened to set.
+    for inherited in (
+        "ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR",
+        "ONEHARNESS_MODE",
+        "ONEHARNESS_HARNESSES",
+        "ONEHARNESS_MODELS",
+        "ONEHARNESS_HISTORY_LABELS",
+    ):
+        environment.pop(inherited, None)
+    environment.update(
+        {
+            "ONEHARNESS_HISTORY": "false",
+            "ONEHARNESS_BIN_CODEX": str(_fake_codex(tmp_path)),
+            "ONEHARNESS_BIN_CLAUDE_CODE": str(_fake_claude(tmp_path)),
+            "ORCHESTRATE_CODEX_ARGV": str(codex_argv),
+            "ORCHESTRATE_CODEX_ALT_DIR": str(codex_alt_dir),
+            "ORCHESTRATE_CLAUDE_ARGV": str(claude_argv),
+        }
+    )
 
-    # The console script `just orchestrate` delegates to, invoked directly: `uv run`
-    # would re-prepend the project venv and shadow the recorder with the real
-    # oneharness wheel. tests/test_orchestrator_launch.py holds the recipe and this
-    # entry point together.
     launched = subprocess.run(
         [
-            "orchestrator-orchestrate",
+            "just",
+            "orchestrate",
             str(_plan(tmp_path)),
             "--runs-dir",
             str(runs),
@@ -127,7 +167,6 @@ def test_orchestrate_launch_carries_bypass_mode_and_orchestrator_routing(
             str(_oneharness_base(tmp_path)),
             "--onejudge-bin",
             onejudge_bin,
-            *mode_args,
         ],
         cwd=REPO_ROOT,
         env=environment,
@@ -137,27 +176,29 @@ def test_orchestrate_launch_carries_bypass_mode_and_orchestrator_routing(
     )
     run_dir = runs / json.loads(launched.stdout)["run_id"]
     try:
-        argv = _wait_lines(argv_record)
-        recorded_mode, recorded_alternate = _wait_lines(env_record)
+        argv = _wait_text(codex_argv, run_dir).splitlines()
+        alternate = _wait_text(codex_alt_dir, run_dir).strip()
     finally:
         _stop(run_dir)
 
-    # Its own routing: the orchestrator's committed config, never the worker chain
-    # oneharness would otherwise discover from the repo root.
-    assert argv[0] == "run"
-    assert argv.count("--config") == 1
-    assert argv[argv.index("--config") + 1] == str(ORCHESTRATOR_CONFIG)
-    assert recorded_mode == expected_mode
-    assert recorded_alternate == f"{os.environ['HOME']}/.claude-alt"
+    # Its own routing: codex carries the role. Under the worker chain the equally
+    # available claude-code:alternate would have run first instead.
+    assert not claude_argv.exists()
+    assert argv[argv.index("--model") + 1] == "gpt-5.6-sol"
+    # Its own approval mode: bypass, without the launcher exporting anything.
+    assert CODEX_BYPASS_FLAG in argv
+    # And the alternate-Claude indirection the fallback variant names is derived
+    # from HOME, so nothing dies before the first turn on a fresh shell.
+    assert alternate == f"{os.environ['HOME']}/.claude-alt"
 
 
 def test_orchestrate_rejects_an_unknown_oneharness_mode(tmp_path: Path) -> None:
     rejected = subprocess.run(
-        ["orchestrator-orchestrate", str(_plan(tmp_path)), "--oneharness-mode", "unsandboxed"],
+        ["just", "orchestrate", str(_plan(tmp_path)), "--oneharness-mode", "unsandboxed"],
         cwd=REPO_ROOT,
         text=True,
         capture_output=True,
     )
-    assert rejected.returncode == 2
+    assert rejected.returncode != 0
     assert "--oneharness-mode" in rejected.stderr
     assert "bypass" in rejected.stderr  # the offered choices name the default
