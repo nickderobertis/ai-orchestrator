@@ -433,6 +433,104 @@ def test_native_timing_usage_tools_and_breakdown_are_role_and_node_scoped(
     assert "Turn histogram: 2=1" in breakdown
 
 
+def test_breakdown_timeline_orders_turns_and_marks_unfinished_sessions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    run_dir = tmp_path / "runs" / "observed"
+    _, round_dir = prepare_round(run_dir, {"tasks": [{"id": "api", "task": "ship"}]})
+    journal = open_journal(run_dir, RunId("observed"), 1)
+    node = NodeJournal(journal, NodeId("api"), RunId("observed"), 1)
+    journal.append("round-started", detail={"nodes": 1})
+    node.append("node-started", detail={"persona": "engineer"})
+    node.append("node-settled", detail={"status": "done"})
+    journal.append("round-finished", detail={"state": "complete", "ok": True})
+    write_result(
+        round_dir,
+        {
+            "ok": True,
+            "state": "complete",
+            "started_order": ["api"],
+            "results": {
+                "api": {
+                    "status": "done",
+                    "telemetry": {
+                        "wall_ms": 30,
+                        "orchestration_ms": 1,
+                        "agent": {"model_ms": 8, "tool_ms": 2},
+                        "judge": {"model_ms": 4, "tool_ms": 0},
+                        # Deliberately out of turn order: the timeline sorts them.
+                        "sessions": [
+                            {
+                                "session_id": "judge-turn",
+                                "role": "judge",
+                                "turn_index": 1,
+                                "started_at": "2026-07-19T00:00:02Z",
+                                "finished_at": "2026-07-19T00:00:03Z",
+                            },
+                            {
+                                "session_id": "agent-turn",
+                                "role": "agent",
+                                "turn_index": 0,
+                                "started_at": "2026-07-19T00:00:00Z",
+                                # No finished_at: the run was interrupted mid-turn.
+                            },
+                        ],
+                    },
+                }
+            },
+        },
+    )
+    monkeypatch.setattr(telemetry_module, "all_sessions", lambda **_kwargs: [])
+
+    assert main(["--runs-dir", str(tmp_path / "runs"), "--all", "--breakdown"]) == 0
+    breakdown = capsys.readouterr().out
+    timeline = [line for line in breakdown.splitlines() if line.startswith("    turn ")]
+    assert timeline == [
+        "    turn 0 agent: 2026-07-19T00:00:00Z -> active/interrupted [agent-turn]",
+        "    turn 1 judge: 2026-07-19T00:00:02Z -> 2026-07-19T00:00:03Z [judge-turn]",
+    ]
+
+
+def test_index_cli_rejects_malformed_and_inverted_history_boundaries(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    runs = str(tmp_path / "runs")
+    assert main(["--runs-dir", runs, "--since", "2026-07-19"]) == 2
+    assert "--since must be an ISO-8601 UTC timestamp" in capsys.readouterr().err
+
+    assert main(["--runs-dir", runs, "--until", "not-a-timestamp"]) == 2
+    assert "--until must be an ISO-8601 UTC timestamp" in capsys.readouterr().err
+
+    with pytest.raises(SystemExit) as inverted:
+        main(
+            [
+                "--runs-dir",
+                runs,
+                "--since",
+                "2026-07-19T00:00:01Z",
+                "--until",
+                "2026-07-19T00:00:00Z",
+            ]
+        )
+    assert inverted.value.code == 2
+    assert "--since must be earlier than --until" in capsys.readouterr().err
+
+    # Equal boundaries select nothing, so they are rejected rather than silently empty.
+    with pytest.raises(SystemExit) as degenerate:
+        main(
+            [
+                "--runs-dir",
+                runs,
+                "--since",
+                "2026-07-19T00:00:00Z",
+                "--until",
+                "2026-07-19T00:00:00Z",
+            ]
+        )
+    assert degenerate.value.code == 2
+    assert "--since must be earlier than --until" in capsys.readouterr().err
+
+
 def test_session_normalization_degrades_each_field_independently(tmp_path: Path) -> None:
     session = HistorySession(
         SessionId("legacy"),
