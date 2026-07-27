@@ -90,7 +90,7 @@ def recover_repo(
     workspace_root: str | Path | None = None,
     base: str | None = None,
     pr_base: str | None = None,
-    verify_cmd: list[str] | None = None,
+    gate_cmd: list[str] | None = None,
     github: GitHubBackend | None = None,
     merge_policy: MergePolicy | None = None,
     repo_type: RepositoryType | None = None,
@@ -160,7 +160,7 @@ def recover_repo(
         # The merge path verifies the recovery, but an identity that cannot even name
         # its complete bar has nothing to hand a resolver worker or a reader of the
         # recovery attestation, so recovery still refuses a no-op gate.
-        documented_gate = verify_cmd or (
+        documented_gate = gate_cmd or (
             resolve_gate_template(identity.gate, remote_base)
             if identity.gate != NOOP_GATE
             else None
@@ -409,7 +409,7 @@ def main(argv: list[str] | None = None) -> int:
             workspace_root=args.workspace,
             base=args.base,
             pr_base=args.pr_base,
-            verify_cmd=shlex.split(args.gate) if args.gate else None,
+            gate_cmd=shlex.split(args.gate) if args.gate else None,
             merge_policy=args.merge_policy,
             repo_type=args.repo_type,
             merge_method=args.merge_method,

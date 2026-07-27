@@ -339,7 +339,7 @@ def test_remote_incomplete_integration_is_immutable_then_recovers_via_pr(
         str(canonical),
         incomplete.branch,
         workspace_root=tmp_path / "recovery-worktrees",
-        verify_cmd=["true"],
+        gate_cmd=["true"],
         github=FakeGitHub(origin),
     )
     assert recovered.ok and recovered.outcome == "merged"
@@ -491,7 +491,7 @@ def test_team_recovery_default_opens_pr_without_polling(tmp_path, bare_origin) -
         repo,
         "feature/team-recovery",
         workspace_root=tmp_path / "team-recovery-worktrees",
-        verify_cmd=["true"],
+        gate_cmd=["true"],
         github=FakeGitHub(origin, fail_checks=True),
     )
 
@@ -549,7 +549,7 @@ def test_team_recovery_preserves_recorded_linear_stack_base(tmp_path, bare_origi
             workspace_root=tmp_path / "wrong-stacked-recovery-worktrees",
             base=child.base_branch,
             pr_base=child.base_branch,
-            verify_cmd=["true"],
+            gate_cmd=["true"],
             github=github,
         )
 
@@ -558,7 +558,7 @@ def test_team_recovery_preserves_recorded_linear_stack_base(tmp_path, bare_origi
         child.branch,
         workspace_root=tmp_path / "stacked-recovery-worktrees",
         base=child.base_branch,
-        verify_cmd=["true"],
+        gate_cmd=["true"],
         github=github,
     )
 
@@ -585,7 +585,7 @@ def test_repo_recover_rejects_branch_without_incomplete_provenance(tmp_path, bar
             repo,
             "claude/ordinary",
             workspace_root=tmp_path / "ordinary-recovery-worktrees",
-            verify_cmd=["true"],
+            gate_cmd=["true"],
         )
 
 
@@ -621,7 +621,7 @@ def test_repo_recover_reports_remote_base_sync_conflict(
         repo,
         "claude/conflicted-recovery",
         workspace_root=tmp_path / f"conflicted-{workflow}-coverage-worktrees",
-        verify_cmd=["true"],
+        gate_cmd=["true"],
     )
     assert repeated.outcome == "sync-conflict"
 
@@ -634,7 +634,7 @@ def test_repo_recover_rejects_missing_branch_and_missing_gate(tmp_path, bare_ori
             repo,
             "bad..branch",
             workspace_root=tmp_path / "invalid-recovery-worktrees",
-            verify_cmd=["true"],
+            gate_cmd=["true"],
         )
     _branch(repo, "claude/conflicting-base", {"partial.txt": "partial\n"})
     invalid_base = _recover_cli(
@@ -651,7 +651,7 @@ def test_repo_recover_rejects_missing_branch_and_missing_gate(tmp_path, bare_ori
             "claude/conflicting-base",
             pr_base="bad..base",
             workspace_root=tmp_path / "invalid-pr-base-coverage-worktrees",
-            verify_cmd=["true"],
+            gate_cmd=["true"],
         )
     _git(repo, "checkout", "claude/conflicting-base")
     _git(
@@ -670,7 +670,7 @@ def test_repo_recover_rejects_missing_branch_and_missing_gate(tmp_path, bare_ori
             repo,
             "claude/conflicting-base",
             workspace_root=tmp_path / "conflicting-base-worktrees",
-            verify_cmd=["true"],
+            gate_cmd=["true"],
         )
 
     _branch(repo, "claude/empty-base", {"partial.txt": "partial\n"})
@@ -688,7 +688,7 @@ def test_repo_recover_rejects_missing_branch_and_missing_gate(tmp_path, bare_ori
             repo,
             "claude/empty-base",
             workspace_root=tmp_path / "empty-base-worktrees",
-            verify_cmd=["true"],
+            gate_cmd=["true"],
         )
 
     with pytest.raises(ValueError, match="does not exist"):
@@ -696,7 +696,7 @@ def test_repo_recover_rejects_missing_branch_and_missing_gate(tmp_path, bare_ori
             repo,
             "claude/missing",
             workspace_root=tmp_path / "missing-recovery-worktrees",
-            verify_cmd=["true"],
+            gate_cmd=["true"],
         )
 
     _branch(repo, "claude/no-gate", {"partial.txt": "partial\n"})

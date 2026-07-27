@@ -1791,7 +1791,7 @@ def test_remote_recovery_routes_only_single_owner_auto_merge_through_queue(
             branch,
             workspace_root=tmp_path / f"recovery-routing-{repo_type}-worktrees",
             github=FakeGitHub(origin),
-            verify_cmd=["true"],
+            gate_cmd=["true"],
             merge_policy="auto",
         ),
         should_wait=should_wait,
@@ -2015,6 +2015,78 @@ def test_pre_push_gate_failure_is_recorded_as_gate_failure(tmp_path, bare_origin
     assert _tip(origin, "main") == before
 
 
+# A hook that lets the feature branch through and rejects the direct base push, so
+# the *second* gated push — the rebuilt squash publication tree — is the one that
+# fails. Git feeds `<local-ref> <local-sha> <remote-ref> <remote-sha>` on stdin.
+_REJECT_BASE_PUSH = """while read -r _local _lsha remote _rsha; do
+  case "$remote" in
+    refs/heads/main)
+      printf 'pre-push gate: publication tree rejected\\n' >&2
+      exit 1
+      ;;
+  esac
+done"""
+
+
+def test_publication_push_gate_failure_leaves_the_branch_and_base_intact(
+    tmp_path, bare_origin
+) -> None:
+    origin = bare_origin()
+    workspace = _workspace(tmp_path, origin)
+    canonical = workspace.clone_dir(normalize_repo(str(origin)))
+    install_pre_push_hook(canonical, _REJECT_BASE_PUSH)
+    before = _tip(origin, "main")
+
+    result = run_repo_task(
+        str(origin),
+        "Publish a tree the base push rejects.",
+        "engineer",
+        workspace=workspace,
+        branch="feature/publication-gate-failure",
+        dispatch_fn=make_writing_dispatch(filename="publication.txt"),
+        verify_cmd=["true"],
+    )
+
+    assert result.outcome == "gate-failed"
+    assert "rebuilt local publication" in result.detail
+    assert "publication tree rejected" in result.detail
+    # The branch push passed the same hook, so the agent's work survives for recovery.
+    assert _has_file(origin, "feature/publication-gate-failure", "publication.txt")
+    assert _tip(origin, "main") == before
+
+
+def test_recovery_publication_push_gate_failure_preserves_the_branch(tmp_path, bare_origin) -> None:
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-recovery-publication-gate")
+    Registry().register(str(canonical), workflow="local", repo_type="single-owner")
+
+    preserved = run_repo_task(
+        str(canonical),
+        "Preserve work whose recovery publication push is rejected.",
+        "engineer",
+        workspace=Workspace(tmp_path / "recovery-publication-source-worktrees"),
+        branch="feature/recovery-publication-gate",
+        dispatch_fn=make_writing_dispatch(filename="preserved.txt", completed=False),
+        verify_cmd=["true"],
+    )
+    assert preserved.outcome == "not-completed"
+    before = _tip(origin, "main")
+    install_pre_push_hook(canonical, _REJECT_BASE_PUSH)
+
+    recovered = recover_repo(
+        canonical,
+        preserved.branch,
+        workspace_root=tmp_path / "recovery-publication-gate-worktrees",
+        gate_cmd=["true"],
+    )
+
+    assert recovered.outcome == "gate-failed"
+    assert "rebuilt local publication" in recovered.detail
+    assert gitops.branch_exists(canonical, preserved.branch)
+    assert _tip(origin, "main") == before
+    assert not _has_file(origin, "main", "preserved.txt")
+
+
 def test_lifecycle_refuses_uncovered_identity_before_dispatch(tmp_path, bare_origin) -> None:
     origin = bare_origin()
     canonical = gitops.clone(origin, tmp_path / "uncovered")
@@ -2146,7 +2218,7 @@ def test_local_workflow_recovery_cannot_qualify_on_required_checks_alone(
             "feature/never-recovered",
             workspace_root=tmp_path / "local-recovery-required-only-worktrees",
             github=ProtectedGitHub(origin),
-            verify_cmd=["true"],
+            gate_cmd=["true"],
         )
 
 
@@ -2708,7 +2780,7 @@ def test_lifecycle_without_explicit_or_registry_gate_errors(tmp_path, bare_origi
     assert "no verification gate is configured" in result.detail
 
 
-def test_skip_verify_cannot_bypass_the_merge_path_gate(tmp_path, bare_origin) -> None:
+def test_no_identity_gate_cannot_bypass_the_merge_path_gate(tmp_path, bare_origin) -> None:
     origin = bare_origin()
     workspace = _workspace(tmp_path, origin)
     canonical = workspace.clone_dir(normalize_repo(str(origin)))
@@ -2721,7 +2793,7 @@ def test_skip_verify_cannot_bypass_the_merge_path_gate(tmp_path, bare_origin) ->
         "engineer",
         workspace=workspace,
         dispatch_fn=make_writing_dispatch(filename="feature.txt"),
-        skip_verify=True,  # legacy override: it no longer controls verification
+        no_identity_gate=True,  # legacy override: it no longer controls verification
         verify_cmd=["true"],
     )
 
@@ -2823,7 +2895,7 @@ def test_preserved_retry_uses_merge_path_gate_when_local_override_is_skipped(
         "engineer",
         workspace=workspace,
         dispatch_fn=make_writing_dispatch(filename="complete.txt"),
-        skip_verify=True,
+        no_identity_gate=True,
         resume=first.resume,
     )
 
@@ -2916,7 +2988,7 @@ def test_clean_committed_partial_work_is_marked_and_recoverable(tmp_path, bare_o
         canonical,
         result.branch,
         workspace_root=tmp_path / "clean-partial-recovery-worktrees",
-        verify_cmd=gate,
+        gate_cmd=gate,
     )
 
     assert recovered.ok and recovered.outcome == "merged"
@@ -2969,7 +3041,7 @@ def test_recovery_push_failure_is_recorded_and_preserves_branch(
         canonical,
         preserved.branch,
         workspace_root=tmp_path / "recovery-gate-failure-worktrees",
-        verify_cmd=["true"],
+        gate_cmd=["true"],
     )
 
     assert recovered.outcome == expected_outcome
@@ -3001,7 +3073,7 @@ def test_recovery_refuses_uncovered_identity_and_preserves_branch(tmp_path, bare
             canonical,
             preserved.branch,
             workspace_root=tmp_path / "uncovered-recovery-worktrees",
-            verify_cmd=["true"],
+            gate_cmd=["true"],
         )
 
     assert gitops.ref_sha(canonical, preserved.branch) == checkpoint
@@ -3046,7 +3118,7 @@ def test_remote_stacked_recovery_failures_preserve_synthetic_base(
         branch,
         workspace_root=tmp_path / f"stacked-recovery-{failure}-worktrees",
         github=FakeGitHub(origin),
-        verify_cmd=["false" if failure == "gate" else "true"],
+        gate_cmd=["false" if failure == "gate" else "true"],
     )
 
     assert recovered.outcome == expected_outcome
@@ -3088,7 +3160,7 @@ def test_local_recovery_conflict_resumes_worker_then_requeues(tmp_path, bare_ori
         canonical,
         partial.branch,
         workspace_root=tmp_path / "recovery-conflict-worktrees",
-        verify_cmd=["git", "diff", "--check", "origin/main...HEAD"],
+        gate_cmd=["git", "diff", "--check", "origin/main...HEAD"],
         dispatch_fn=resolving_dispatch,
     )
 
@@ -3135,7 +3207,7 @@ def test_local_recovery_incomplete_resolver_preserves_branch(
         canonical,
         partial.branch,
         workspace_root=tmp_path / "incomplete-recovery-worktrees",
-        verify_cmd=["true"],
+        gate_cmd=["true"],
         dispatch_fn=incomplete_dispatch,
     )
 
@@ -3170,7 +3242,7 @@ def test_local_recovery_conflict_resolution_exhaustion_is_bounded(tmp_path, bare
         canonical,
         partial.branch,
         workspace_root=tmp_path / "exhausted-recovery-worktrees",
-        verify_cmd=["true"],
+        gate_cmd=["true"],
         dispatch_fn=unresolved_dispatch,
     )
 
@@ -3222,7 +3294,7 @@ def test_local_recovery_rejects_invalid_worker_metadata(
         canonical,
         partial.branch,
         workspace_root=tmp_path / f"invalid-{label}-recovery",
-        verify_cmd=["true"],
+        gate_cmd=["true"],
     )
 
     assert recovered.outcome == "sync-conflict"
@@ -3274,7 +3346,7 @@ def test_cooperative_real_dispatch_cancellation_preserves_and_recovers_branch(
         canonical,
         result.branch,
         workspace_root=tmp_path / "cancelled-recovery-worktrees",
-        verify_cmd=["test", "-f", "CHANGE.txt"],
+        gate_cmd=["test", "-f", "CHANGE.txt"],
     )
     assert recovered.ok and recovered.outcome == "merged"
     assert _has_file(origin, "main", "CHANGE.txt")
