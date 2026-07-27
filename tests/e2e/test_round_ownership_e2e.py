@@ -11,8 +11,11 @@ once under `just run-plan` and once under `just next-round`, so both are driven 
 All the layers run through the real `just` recipes, against real processes and real
 signals, with nothing about process liveness faked:
 
-* tearing down the launching turn's whole process group leaves the round running, and
-  it settles normally afterwards;
+* tearing down the launching turn's whole process group — under every signal that
+  teardown sends — leaves the round running, and it settles normally afterwards;
+* an exception escaping the round ends it where it is, with its own exit status and its
+  traceback, rather than climbing back out of the fork and running the rest of the
+  launching process's program a second time in the child;
 * a catchable signal delivered to the executor itself records the abandonment before
   the process dies, and the round refuses to be re-claimed without `--recover`;
 * an uncatchable SIGKILL — the one death nothing can record — still surfaces as
@@ -49,6 +52,7 @@ from waits import timeout as e2e_timeout
 
 from orchestrator import REPO_ROOT
 from orchestrator.channel import create_channel
+from orchestrator.detach import CRASHED
 from orchestrator.runs import TEARDOWN_SIGNALS
 
 
@@ -141,10 +145,10 @@ class Launch:
             time.sleep(0.01)
         pytest.fail(f"no round owner was announced in {self.err}")
 
-    def teardown_launching_turn(self) -> int:
+    def teardown_launching_turn(self, teardown: signal.Signals = signal.SIGTERM) -> int:
         """Kill the launcher's whole process group, as ending a turn does."""
         group = os.getpgid(self.process.pid)
-        os.killpg(group, signal.SIGTERM)
+        os.killpg(group, teardown)
         self.process.wait(timeout=e2e_timeout(15))
         return group
 
@@ -332,20 +336,95 @@ def _assert_settled(launch: RecordedLaunch) -> None:
     assert _read(launch.round_dir / "status.json")["status"] == "completed"
 
 
-# `repo-plan` is the deprecated alias for the same executor. It owns rounds through the
-# same detaching entry point, so it gets the same protection and the same proof.
-@pytest.mark.parametrize("recipe", ["run-plan", "repo-plan"])
-def test_a_round_survives_the_teardown_of_its_launching_turn(rounds: Rounds, recipe: str) -> None:
+# Two independent axes of the same journey, deliberately not crossed. The recipe
+# decides which entry point detaches — `repo-plan` is the deprecated alias for the same
+# executor, so it gets the same protection and the same proof. The signal decides what
+# ending a turn actually sends: a harness turn tears its group down with SIGTERM, a
+# Ctrl-C sends SIGINT, and a lost terminal sends SIGHUP, all three documented in
+# `TEARDOWN_SIGNALS` and none of which may reach a round that left the group.
+@pytest.mark.parametrize(
+    ("recipe", "teardown"),
+    [("run-plan", teardown) for teardown in TEARDOWN_SIGNALS] + [("repo-plan", signal.SIGTERM)],
+    ids=lambda value: value if isinstance(value, str) else value.name,
+)
+def test_a_round_survives_the_teardown_of_its_launching_turn(
+    rounds: Rounds, recipe: str, teardown: signal.Signals
+) -> None:
     """Ending the launching turn must leave a dispatching round running."""
-    launch = rounds.run_plan(f"survives-{recipe}", recipe=recipe)
+    run_id = f"survives-{recipe}-{teardown.name}"
+    launch = rounds.run_plan(run_id, recipe=recipe)
 
-    _assert_survived_teardown(launch, launch.teardown_launching_turn())
+    _assert_survived_teardown(launch, launch.teardown_launching_turn(teardown))
     _assert_settled(launch)
 
     listed = _just("runs", "--runs-dir", str(rounds.runs))
     assert listed.returncode == 0, listed.stderr
-    assert f"survives-{recipe}  round-01  (1 done)" in listed.stdout
+    assert f"{run_id}  round-01  (1 done)" in listed.stdout
     assert "ABANDONED" not in listed.stdout
+
+
+def _trivial_plan(tmp_path: Path) -> Path:
+    """A plan that parses, for the journeys that never get as far as running it."""
+    plan = tmp_path / "plan.json"
+    plan.write_text(
+        json.dumps({"tasks": [{"id": "held", "persona": "engineer", "task": "complete-now"}]}),
+        encoding="utf-8",
+    )
+    return plan
+
+
+def test_a_crashing_round_ends_in_the_fork_rather_than_climbing_back_out_of_it(
+    tmp_path: Path,
+) -> None:
+    """An escaping exception must end the round, not resume the launching program.
+
+    The forked round owns exactly one frame's worth of the stack; everything above it
+    belongs to the launching process, which is already running that program in the
+    parent. An exception unwinding past the fork runs the rest of it a second time in
+    the child — and ends the round as a plain `1`, which is what an unfinished round
+    returns, so the caller reads a crash as a round still waiting on a decision.
+
+    Provoked the way an operator provokes it: `--runs-dir` naming something that is not
+    a directory. Nothing validates that before `mkdir` reaches it, so the error comes
+    straight back out through the round.
+    """
+    occupied = tmp_path / "runs"
+    occupied.write_text("not a directory\n", encoding="utf-8")
+
+    crashed = _just(
+        "run-plan", str(_trivial_plan(tmp_path)), "--runs-dir", str(occupied), "--run", "crashing"
+    )
+
+    # Not 1: a crash and an unfinished round have to be tellable apart by exit status.
+    assert crashed.returncode == CRASHED, crashed.stderr
+    # Still diagnosable — the round died, but it said what killed it, exactly once.
+    assert "FileExistsError" in crashed.stderr, crashed.stderr
+    assert str(occupied) in crashed.stderr, crashed.stderr
+    assert crashed.stderr.count("Traceback (most recent call last):") == 1, crashed.stderr
+    # The proof that the launching program did not run a second time: the traceback
+    # stops inside the round. A frame naming the entry point above the fork would be
+    # the child reporting itself from the middle of the launcher's own program.
+    assert "in _own_round" in crashed.stderr, crashed.stderr
+    assert "in main_cli" not in crashed.stderr, crashed.stderr
+    # And one round announced one owner; a second pass would have announced another.
+    assert len(ANNOUNCED_OWNER.findall(crashed.stderr)) == 1, crashed.stderr
+
+
+def test_a_rejected_command_line_reaches_the_caller_as_the_status_it_chose(
+    tmp_path: Path,
+) -> None:
+    """A status the round chose must cross the fork unchanged, not become a crash.
+
+    `argparse` ends a rejected command line by raising, inside the forked round, so it
+    arrives where a crash does. Reading the two as one would report every mistyped flag
+    as an internal failure — and the usage message that says how to fix it would be the
+    thing a reader stopped trusting.
+    """
+    rejected = _just("run-plan", str(_trivial_plan(tmp_path)), "--bogus-flag")
+
+    assert rejected.returncode == 2, rejected.stderr
+    assert "unrecognized arguments: --bogus-flag" in rejected.stderr, rejected.stderr
+    assert "Traceback" not in rejected.stderr, rejected.stderr
 
 
 def test_next_round_continuation_survives_the_teardown_of_its_launching_turn(

@@ -35,8 +35,20 @@ SIGKILL surfaces as abandoned rather than as running.
 from __future__ import annotations
 
 import os
+import signal
 import sys
+import traceback
 from typing import NoReturn, Protocol
+
+CRASHED = 70
+"""The status a round exits with when an exception escaped it.
+
+Deliberately none of the statuses the round itself returns — 0 complete, 1 unfinished,
+2 rejected input — because those all describe a round that reached a conclusion. A
+crash reported as 1 reads as an ordinary unfinished round, which is the misreading this
+whole module exists to prevent: the caller goes on waiting for a planner decision that
+nothing is left alive to ask for. 70 is sysexits' ``EX_SOFTWARE``.
+"""
 
 
 class Entry(Protocol):
@@ -73,6 +85,17 @@ def _own_round(  # pragma: no cover - see run_detached
     process, so returning would run the rest of *its* program a second time. The
     interpreter's own flushing is skipped along with everything else, so the streams
     are flushed here.
+
+    An escaping exception is the one way control could still leave here, so it is
+    caught rather than allowed to unwind: nothing above this frame belongs to the
+    round, and a traceback that climbs past the fork is the launching process's
+    program running a second time in the child. It is reported and turned into
+    ``CRASHED`` instead, so the failure stays diagnosable and the exit status says
+    what happened. Two exceptions are not crashes and keep statuses of their own: a
+    ``SystemExit`` is a status the round *chose* — `argparse` ends a rejected command
+    line that way — and a ``KeyboardInterrupt`` is SIGINT reaching a round before it
+    installed a handler for it, which still owes its caller the 128+N every other
+    signalled death reports.
     """
     os.setsid()
     print(
@@ -81,10 +104,32 @@ def _own_round(  # pragma: no cover - see run_detached
         file=sys.stderr,
         flush=True,
     )
-    code = entry(argv)
+    try:
+        code = entry(argv)
+    except SystemExit as chosen:
+        code = _chosen_status(chosen.code)
+    except KeyboardInterrupt:
+        code = 128 + int(signal.SIGINT)
+    except BaseException:
+        traceback.print_exc()
+        code = CRASHED
     sys.stdout.flush()
     sys.stderr.flush()
     os._exit(code)
+
+
+def _chosen_status(  # pragma: no cover - see run_detached
+    code: int | str | None,
+) -> int:
+    """Turn a ``SystemExit``'s payload into the status the interpreter would have used."""
+    match code:
+        case None:
+            return 0
+        case int():
+            return code
+        case _:
+            print(code, file=sys.stderr)
+            return 1
 
 
 def _relay_exit(child: int) -> int:

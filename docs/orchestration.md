@@ -414,6 +414,11 @@ only that parent. `orchestrator/detach.py` holds the full reasoning; the practic
 consequence is that Ctrl-C reaches the relaying parent rather than the round, so the
 round announces the pid to signal when you do want it stopped.
 
+The round's own exit statuses cross that fork unchanged — 0 complete, 1 unfinished, 2
+rejected input, 128+N signalled. An exception escaping the round is the exception: it
+ends the round there, prints its traceback, and exits **70**, so a crash is never read
+as the unfinished round that also exits 1.
+
 A round that stops without recording a result never stays `running`. Its owner writes
 `{"status": "abandoned", "reason": ...}` on any catchable teardown signal and on any
 other exit that recorded no result, and `--recover` reclaims an `abandoned` round the
