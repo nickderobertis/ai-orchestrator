@@ -1,8 +1,9 @@
 {
-  "history_schema_versions": ["0.2", "0.3", 1, 2, "1.0", "1.1"],
-  "qualities": ["complete", "legacy", "partial"],
+  "history_schema_versions": ["0.2", "0.3", 1, 2, "1.0", "1.1", "1.2"],
+  "linkage_qualities": ["inferred", "labelled", "native"],
+  "timing_qualities": ["complete", "legacy", "partial"],
   "roles": ["agent", "judge", "llmlint"],
-  "schema_version": 6,
+  "schema_version": 7,
   "sources": ["history_legacy", "journal_legacy", "oneharness", "onejudge"],
   "fractions": [
     "agent_model",
@@ -56,6 +57,12 @@
     "unattributed_ms",
     "wall_ms",
     "wall_seconds"
+  ],
+  "timing_presence": [
+    "agent_model_ms",
+    "judge_model_ms",
+    "llmlint_model_ms",
+    "tool_ms"
   ],
   "usage": [
     "cache_read_tokens",

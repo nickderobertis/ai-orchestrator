@@ -88,6 +88,7 @@ def test_session_setup_syncs_real_pinned_clis_and_then_needs_no_uv(tmp_path: Pat
     installed = _run_setup(repo, tmp_path)
 
     assert installed.returncode == 0, installed.stderr
+    assert f"at {repo / '.venv' / 'bin' / 'onejudge'}" in installed.stderr
     assert "sweep-scratch: removed" in installed.stderr
     assert (
         subprocess.run(

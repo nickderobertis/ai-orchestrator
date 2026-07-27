@@ -30,7 +30,14 @@ export const API_V1_QUERY = {
   after: "after",
 } as const;
 
-export const telemetryQualitySchema = z.enum(["complete", "partial", "legacy"]);
+export const timingQualitySchema = z.enum(["complete", "partial", "legacy"]);
+export const linkageQualitySchema = z.enum(["native", "labelled", "inferred"]);
+export const timingPresenceSchema = openObject({
+  agent_model_ms: z.boolean(),
+  judge_model_ms: z.boolean(),
+  llmlint_model_ms: z.boolean(),
+  tool_ms: z.boolean(),
+});
 
 export const timingSchema = openObject({
   agent_seconds: nonnegative,
@@ -103,6 +110,9 @@ export const nodeTelemetrySchema = openObject({
   tool_commands: z.record(z.string(), counter).optional(),
   turns: counter,
   lint: counter,
+  timing_quality: timingQualitySchema,
+  linkage_quality: linkageQualitySchema,
+  timing_presence: timingPresenceSchema,
 });
 
 export const runTelemetrySchema = openObject({
@@ -117,7 +127,9 @@ export const runTelemetrySchema = openObject({
   failure: arbitraryRecord.optional(),
   check_rollup: arbitraryRecord.optional(),
   usage: usageSchema,
-  telemetry_quality: telemetryQualitySchema,
+  timing_quality: timingQualitySchema,
+  linkage_quality: linkageQualitySchema,
+  timing_presence: timingPresenceSchema,
   sources: z.array(z.string()),
   node_work_ms: openObject({
     agent_model_ms: counter,
@@ -136,14 +148,15 @@ export const runSummarySchema = openObject({
   phase: z.string().min(1),
   last_event: z.string().min(1),
   last_progress_at: nonnegative.optional(),
-  telemetry_quality: telemetryQualitySchema,
+  timing_quality: timingQualitySchema,
+  linkage_quality: linkageQualitySchema,
   timing: timingSchema,
   node_counts: z.record(z.string(), counter),
 });
 
 export const runListSchema = openObject({
   api_version: z.literal(1),
-  telemetry_schema_version: z.literal(6),
+  telemetry_schema_version: z.literal(7),
   observed_at: timestamp,
   runs: z.array(runSummarySchema),
 });
@@ -342,7 +355,7 @@ export const nodeConversationsSchema = openObject({
 
 export const runDetailSchema = openObject({
   api_version: z.literal(1),
-  telemetry_schema_version: z.literal(6),
+  telemetry_schema_version: z.literal(7),
   observed_at: timestamp,
   run: runTelemetrySchema,
   rounds: z.array(roundSchema),
