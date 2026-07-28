@@ -238,9 +238,12 @@ def _abandoned_run_is_reclaimable(run_root: Path) -> bool:
     """Whether an unoccupied run root provably holds nothing anyone could still want.
 
     Deleting a sibling run's tree is the exact failure this layout exists to
-    prevent, so removal needs more than "its lease is free": its recorded owner must
-    also be gone, and the run must hold no commit that has not reached its origin.
-    Anything this cannot read, it keeps.
+    prevent, so removal needs more than "its lease is free": no recorded owner may
+    still be running, and the run's own clone must hold no commit that has not
+    reached origin. Only the *work* side of that is conservative when unreadable —
+    a clone this cannot inspect is kept. An unreadable owner record is not, because
+    it names nobody to be alive; the caller's failed exclusive probe of the shared
+    occupancy lease is what already proved the tree empty.
     """
     owner = RunOwner.read(run_root)
     if owner is not None and owner.is_live():
