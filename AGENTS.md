@@ -311,9 +311,15 @@ telemetry-quality signal rather than a launch failure. It is deliberately outsid
 `oneharness.judge.toml`, or `oneharness.orchestrator.toml`; ordinary pushes consume
 no harness quota.
 
-A dispatched change is not done until `just gate` is green. Its agent clears its
-own llmlint findings—by fixing them, adding a justified `ignore-file`, or disabling
-an inapplicable rule in `llmlint.yml`—rather than leaving closeout to integration.
+A dispatched change is not done until `just gate` is green, and its agent clears
+its own llmlint findings rather than leaving closeout to integration: iterate on
+them with `just lint-llm-diff <base>` alone, then run `just gate` once to confirm.
+`llmlint.yml` is a legitimate deliverable when a task names it; otherwise a worker
+fixes the code or adds a justified site-scoped `ignore` directive, and reports a
+rule that looks wrong or misapplied instead of editing it. Deciding when a marginal
+finding stops being worth another gate cycle—landing with a justified line-scoped
+suppression plus a tracked follow-up—is the planner's call from that surfaced
+report, never the worker's by suppressing.
 
 Every remote lifecycle PR without explicit title/body metadata gets one
 post-verification `pr-author` dispatch. It drafts the template-shaped body from
