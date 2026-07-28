@@ -279,7 +279,17 @@ lint-llm-validate *args:
 # base misses rather than replaying a verdict computed against a different base.
 # Pass extra Nx flags to override that — `just lint-llm-diff origin/main
 # --skip-nx-cache` forces a fresh judge run.
-# llmlint: ignore[tool_output_is_signal] the judge's per-rule report is this tier's product, and showing Nx's task output is what lets a cache hit replay the same verdict.
+#
+# The target records the verdict and exits 0 so Nx will cache a failing one too;
+# the last line is what enforces it, replaying the findings and the judged status.
+# A failure therefore fails identically whether it was just judged or replayed.
+# The recorded verdict and its judged marker are cleared first because Nx leaves
+# pre-existing outputs alone rather than comparing them: without this, a stale or
+# edited record would be replayed in place of the cached one. Nx's own success line
+# is dropped so a run says exactly two things: where the verdict came from, and
+# what it was. Its failures still reach stderr.
+# llmlint: ignore[tool_output_is_signal] the judge's per-rule report and its one-line provenance are this tier's product; see scripts/llmlint-verdict.sh.
 lint-llm-diff base="origin/main" *nx_args:
     @command -v llmlint >/dev/null 2>&1 || { echo "llmlint not installed — run 'just setup-llmlint'"; exit 1; }
-    @base_sha=$(git rev-parse --verify --quiet "{{base}}^{commit}") || { echo "lint-llm-diff: '{{base}}' does not resolve to a commit; fetch it or pass an existing base" >&2; exit 1; }; LLMLINT_DIFF_BASE_SHA="$base_sha" AI_ORCHESTRATOR_NX_SHOW_OUTPUT=1 ./scripts/nx.sh run workspace:lint-llm-diff {{nx_args}}
+    @base_sha=$(git rev-parse --verify --quiet "{{base}}^{commit}") || { echo "lint-llm-diff: '{{base}}' does not resolve to a commit; fetch it or pass an existing base" >&2; exit 1; }; rm -rf "{{repo_root}}/.nx/llmlint-diff" "{{repo_root}}/.nx/llmlint-diff.judged"; LLMLINT_DIFF_BASE_SHA="$base_sha" ./scripts/nx.sh run workspace:lint-llm-diff {{nx_args}} >/dev/null
+    @./scripts/llmlint-verdict.sh

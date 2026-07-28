@@ -17,15 +17,36 @@
 # direct run; the tier stays safe either way, because an llmlint that cannot report
 # its version or resolve its config also cannot judge the diff, and Nx never caches
 # that failure.
+#
+# llmlint: ignore-file[changed_behavior_has_e2e] What this script decides — that a
+# changed plugin rule source or a changed installed llmlint version invalidates a
+# recorded verdict, and that an llmlint which cannot report its version or resolve
+# its config is named rather than hashed — runs end to end in
+# tests/e2e/test_llmlint_cache_e2e.py. What remains are host-failure guards on the
+# checkout layout and sha256sum; simulating those is the guard's job, not a journey's.
 set -euo pipefail
 
-root="$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)"
+root="$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)" || {
+  echo "llmlint fingerprint: could not locate the repository from this script; reinstall the checkout and retry" >&2
+  exit 1
+}
 version="$(llmlint --version)" || {
   echo "llmlint fingerprint: 'llmlint --version' failed; run 'just setup-llmlint' and retry" >&2
   exit 1
 }
-config="$(cd "$root" && llmlint config)" || {
+cd "$root" || {
+  echo "llmlint fingerprint: could not enter '$root'; repair its permissions and retry" >&2
+  exit 1
+}
+config="$(llmlint config)" || {
   echo "llmlint fingerprint: 'llmlint config' failed; repair llmlint.yml or its plugin pins and retry" >&2
   exit 1
 }
-printf '%s\n%s\n' "$version" "${config//"$root"/\{root\}}" | sha256sum | cut -d' ' -f1
+digest="$(printf '%s\n%s\n' "$version" "${config//"$root"/\{root\}}" | sha256sum)" || {
+  echo "llmlint fingerprint: could not hash the judge configuration; verify sha256sum is available and retry" >&2
+  exit 1
+}
+printf '%s\n' "${digest%% *}" || {
+  echo "llmlint fingerprint: could not write the fingerprint; check the receiving stream and retry" >&2
+  exit 1
+}

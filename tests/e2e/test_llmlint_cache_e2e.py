@@ -13,9 +13,9 @@ llmlint: ignore-file[e2e_not_mocked] The judge run is this repository's paid mod
 boundary, faked here exactly as tests/e2e/fake_backend.py fakes the agent harness.
 It is also the one thing these journeys cannot use for real: the claim under test
 is that an unchanged tree yields the same verdict twice, which a non-deterministic
-judge cannot demonstrate. Counting `--diff` invocations is what makes a cache hit
-observable at all; every other boundary — the recipe, Nx, git, and llmlint's own
-config resolution — is real.
+judge cannot demonstrate. Counting `--diff` invocations is what proves a verdict
+was replayed rather than re-rolled; every other boundary — the recipe, Nx, git, and
+llmlint's own config resolution — is real.
 """
 
 from __future__ import annotations
@@ -32,7 +32,8 @@ ROOT = Path(__file__).resolve().parents[2]
 PASS_VERDICT = "fake-judge: 16 passed, 0 failed"
 FAIL_VERDICT = "fake-judge: 15 passed, 1 failed"
 FAIL_FINDING = "fake-judge finding: robust_shell in scripts/llmlint-diff.sh"
-CACHE_HIT_MARKER = "Nx read the output from the cache"
+CACHE_HIT = "replayed the recorded verdict (Nx cache hit)"
+CACHE_MISS = "judged this diff (Nx cache miss)"
 
 pytestmark = pytest.mark.skipif(
     shutil.which("llmlint") is None,
@@ -186,7 +187,7 @@ def test_unchanged_tree_and_base_replays_the_recorded_verdict(workspace: Workspa
     assert workspace.judge_runs() == 1
     assert PASS_VERDICT in first.stdout
     assert PASS_VERDICT in second.stdout
-    assert CACHE_HIT_MARKER in second.stdout
+    assert CACHE_HIT in second.stderr
 
 
 def test_changed_source_reruns_the_judge(workspace: Workspace) -> None:
@@ -199,7 +200,7 @@ def test_changed_source_reruns_the_judge(workspace: Workspace) -> None:
 
     assert second.returncode == 0, second.stdout + second.stderr
     assert workspace.judge_runs() == 2
-    assert CACHE_HIT_MARKER not in second.stdout
+    assert CACHE_MISS in second.stderr
 
 
 def test_advanced_base_reruns_the_judge_and_then_caches_per_base(workspace: Workspace) -> None:
@@ -214,8 +215,8 @@ def test_advanced_base_reruns_the_judge_and_then_caches_per_base(workspace: Work
     repeated = workspace.lint(advanced)
 
     assert workspace.judge_runs() == 2
-    assert CACHE_HIT_MARKER not in moved.stdout
-    assert CACHE_HIT_MARKER in repeated.stdout
+    assert CACHE_MISS in moved.stderr
+    assert CACHE_HIT in repeated.stderr
 
 
 def test_changed_rule_configuration_reruns_the_judge(workspace: Workspace) -> None:
@@ -230,7 +231,7 @@ def test_changed_rule_configuration_reruns_the_judge(workspace: Workspace) -> No
     second = workspace.lint(base)
 
     assert workspace.judge_runs() == 2
-    assert CACHE_HIT_MARKER not in second.stdout
+    assert CACHE_MISS in second.stderr
 
 
 def test_changed_plugin_rule_source_reruns_the_judge(workspace: Workspace) -> None:
@@ -245,7 +246,7 @@ def test_changed_plugin_rule_source_reruns_the_judge(workspace: Workspace) -> No
     second = workspace.lint(base)
 
     assert workspace.judge_runs() == 2
-    assert CACHE_HIT_MARKER not in second.stdout
+    assert CACHE_MISS in second.stderr
 
 
 def test_changed_llmlint_version_reruns_the_judge(workspace: Workspace) -> None:
@@ -255,22 +256,55 @@ def test_changed_llmlint_version_reruns_the_judge(workspace: Workspace) -> None:
     second = workspace.lint(base, FAKE_LLMLINT_VERSION="0.4.0")
 
     assert workspace.judge_runs() == 2
-    assert CACHE_HIT_MARKER not in second.stdout
+    assert CACHE_MISS in second.stderr
 
 
-def test_failing_verdict_is_never_replayed_as_a_pass(workspace: Workspace) -> None:
+def test_a_failing_verdict_is_replayed_with_its_findings_and_its_exit(
+    workspace: Workspace,
+) -> None:
     base = workspace.head()
 
     first = workspace.lint(base, FAKE_LLMLINT_EXIT="1")
     second = workspace.lint(base, FAKE_LLMLINT_EXIT="1")
 
-    assert first.returncode != 0
-    assert second.returncode != 0
+    assert workspace.judge_runs() == 1
+    assert CACHE_HIT in second.stderr
+    for result in (first, second):
+        report = result.stdout + result.stderr
+        assert result.returncode != 0, report
+        assert FAIL_FINDING in report
+        assert FAIL_VERDICT in report
+
+
+# llmlint: ignore[tests_mirror_real_usage] Rewriting the record is the premise, not the exercise.
+def test_an_edited_verdict_loses_to_the_cached_one(workspace: Workspace) -> None:
+    base = workspace.head()
+    workspace.lint(base, FAKE_LLMLINT_EXIT="1")
+    # Nx leaves pre-existing outputs alone, so the recorded failure would survive
+    # as a pass here if the recipe did not clear it before asking for the cache.
+    (workspace.root / ".nx/llmlint-diff/report").write_text("all clear\n", encoding="utf-8")
+    (workspace.root / ".nx/llmlint-diff/status").write_text("0\n", encoding="utf-8")
+
+    replayed = workspace.lint(base, FAKE_LLMLINT_EXIT="1")
+
+    assert workspace.judge_runs() == 1
+    assert replayed.returncode != 0
+    assert FAIL_FINDING in replayed.stdout + replayed.stderr
+    assert "all clear" not in replayed.stdout
+
+
+def test_a_judge_that_never_reached_a_verdict_is_not_recorded(workspace: Workspace) -> None:
+    base = workspace.head()
+
+    first = workspace.lint(base, FAKE_LLMLINT_EXIT="2")
+    second = workspace.lint(base, FAKE_LLMLINT_EXIT="2")
+
+    # A broken toolchain is not a verdict, so it must re-run rather than stick.
     assert workspace.judge_runs() == 2
     for result in (first, second):
         report = result.stdout + result.stderr
-        assert FAIL_FINDING in report
-        assert FAIL_VERDICT in report
+        assert result.returncode != 0, report
+        assert "exited 2 without reaching a verdict" in report
 
 
 def test_skip_nx_cache_forces_a_fresh_judge_run(workspace: Workspace) -> None:
@@ -281,7 +315,7 @@ def test_skip_nx_cache_forces_a_fresh_judge_run(workspace: Workspace) -> None:
 
     assert forced.returncode == 0, forced.stdout + forced.stderr
     assert workspace.judge_runs() == 2
-    assert CACHE_HIT_MARKER not in forced.stdout
+    assert CACHE_MISS in forced.stderr
 
 
 def _stub(directory: Path, name: str, body: str) -> Path:
@@ -324,7 +358,10 @@ def _run_fingerprint(workspace: Workspace, **overrides: str) -> subprocess.Compl
         ("0" * 40, "missing from this checkout"),
     ],
 )
-# llmlint: ignore[tests_mirror_real_usage] The recipe resolves the base itself, so these states exist only when someone drives the cached target directly — the misuse this guard names and the only way to reach it.
+# The recipe resolves the base itself, so these states arise only when someone
+# drives the cached target directly — the misuse this guard names, and the only
+# way to reach it.
+# llmlint: ignore[tests_mirror_real_usage] Only a direct target run reaches this state.
 def test_the_target_refuses_a_base_it_cannot_judge(
     workspace: Workspace, base_sha: str, expected: str
 ) -> None:
@@ -333,6 +370,37 @@ def test_the_target_refuses_a_base_it_cannot_judge(
     assert result.returncode != 0
     assert expected in result.stderr
     assert workspace.judge_runs() == 0
+
+
+@pytest.mark.parametrize(
+    ("record", "expected"),
+    [
+        ({}, "no recorded verdict"),
+        ({"report": "findings\n"}, "no recorded verdict"),
+        ({"report": "findings\n", "status": "2\n"}, "is not a judged 0 or 1"),
+    ],
+)
+# Nx restoring a partial record is the state this refuses; no recipe run produces it.
+# llmlint: ignore[tests_mirror_real_usage] Only a broken cache restore reaches this state.
+def test_an_incomplete_record_is_never_read_as_a_clean_run(
+    workspace: Workspace, record: dict[str, str], expected: str
+) -> None:
+    verdict = workspace.root / ".nx/llmlint-diff"
+    verdict.mkdir(parents=True)
+    for name, content in record.items():
+        (verdict / name).write_text(content, encoding="utf-8")
+
+    result = subprocess.run(
+        [str(workspace.root / "scripts" / "llmlint-verdict.sh")],
+        cwd=workspace.root,
+        env=workspace.env,
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+
+    assert result.returncode != 0
+    assert expected in result.stderr
 
 
 @pytest.mark.parametrize(

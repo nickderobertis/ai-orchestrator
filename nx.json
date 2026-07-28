@@ -46,7 +46,7 @@
         { "env": "LLMLINT_DIFF_BASE_SHA" },
         { "runtime": "./scripts/llmlint-fingerprint.sh" }
       ],
-      "outputs": []
+      "outputs": ["{workspaceRoot}/.nx/llmlint-diff"]
     },
     "bootstrap": {
       "cache": false

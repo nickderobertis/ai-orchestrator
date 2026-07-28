@@ -324,8 +324,12 @@ rolling the judge again, which is what stops one branch from being blocked by
 opposite verdicts on an identical diff. The key covers the whole workspace, the
 resolved base commit, and `scripts/llmlint-fingerprint.sh` — the installed llmlint
 version plus the effective merged config, so a rule change in a plugin fetched from
-outside this repository still invalidates. Nx never caches a failure, so findings
-always re-run and can never be replayed as a pass. A wrong verdict does stick:
+outside this repository still invalidates. Because Nx caches successful tasks only,
+the target records its verdict — findings and judged status — into its declared
+output and exits 0; `scripts/llmlint-verdict.sh` replays both, so a failure blocks
+`gate` and pre-push identically whether it was just judged or restored from cache.
+Only llmlint's own 0/1 verdicts are recorded: a tool that failed without judging
+propagates and stays uncached. A wrong verdict does stick:
 force a fresh judge run with `just lint-llm-diff <base> --skip-nx-cache`. When a
 miss is unexplained, run `scripts/llmlint-fingerprint.sh` — a changed fingerprint
 on an unchanged tree is a changed judge, not a changed diff.
