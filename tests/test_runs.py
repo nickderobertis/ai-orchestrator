@@ -215,7 +215,8 @@ def test_a_recorded_result_leaves_the_guard_with_nothing_to_abandon(tmp_path) ->
 def test_an_abandoned_round_is_reclaimed_only_with_recover(tmp_path) -> None:
     run_dir = tmp_path / "run"
     _, round_dir = prepare_round(run_dir, PLAN)
-    _own(round_dir, status="abandoned", reason="owner pid 4321 took SIGTERM")
+    gone = os.getpid() + 10_000_000
+    _own(round_dir, status="abandoned", pid=gone, reason=f"owner pid {gone} took SIGTERM")
 
     with pytest.raises(ConfigError, match="was abandoned.*reclaim it with --recover"):
         prepare_round(run_dir, PLAN)
@@ -225,6 +226,20 @@ def test_an_abandoned_round_is_reclaimed_only_with_recover(tmp_path) -> None:
         "status": "running",
         "pid": os.getpid(),
     }
+
+
+def test_an_abandoned_round_naming_no_usable_owner_is_still_reclaimable(tmp_path) -> None:
+    """`--recover` must still reach the one round it exists for.
+
+    A `running` record naming no usable owner is a contradiction and is refused, but an
+    abandoned round is already over. Refusing it for an owner there is nothing left to
+    probe would leave the operator no way to finish the run.
+    """
+    run_dir = tmp_path / "run"
+    _, round_dir = prepare_round(run_dir, PLAN)
+    _own(round_dir, status="abandoned", pid="unreadable")
+
+    assert prepare_round(run_dir, PLAN, recover=True) == (1, round_dir)
 
 
 @pytest.mark.parametrize(

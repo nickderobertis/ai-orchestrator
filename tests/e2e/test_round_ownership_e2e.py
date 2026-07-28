@@ -17,7 +17,8 @@ signals, with nothing about process liveness faked:
   launching process's program a second time in the child — and once a round has been
   claimed, that same exception leaves it recorded and reported as abandoned;
 * a catchable signal delivered to the executor itself records the abandonment before
-  the process dies, and the round refuses to be re-claimed without `--recover`;
+  the process dies, and the round refuses to be re-claimed without `--recover` — which
+  in turn refuses a round whose recorded owner is still there to be found;
 * an uncatchable SIGKILL — the one death nothing can record — still surfaces as
   abandoned in `just runs` and `just status`, because both derive it from the recorded
   owner's pid rather than from the status string it left behind; and it reaches those
@@ -795,6 +796,42 @@ def test_a_recovery_that_refuses_the_journal_abandons_the_round_it_claimed(
         "refused-recovery  round-01 ABANDONED"
         in _just("runs", "--runs-dir", str(rounds.runs)).stdout
     )
+
+
+def test_a_recovery_refuses_an_abandoned_label_over_a_still_live_owner(rounds: Rounds) -> None:
+    """An `abandoned` label must not hand a working round to a second executor.
+
+    That label is the owner's own report that it stopped, and it is what `--recover`
+    acts on — but it is a string in an ordinary file, written a moment before the owner
+    dies rather than after. Believed on its own, a reclaim landing in that moment, or
+    anything else that can rewrite the file, puts a second executor on a round the
+    first is still running: two processes dispatching the same nodes into the same
+    ledger. The recorded pid is the part of the record a relabelling cannot fake.
+    """
+    run_id = "live-owner-relabelled"
+    launch = rounds.run_plan(run_id)
+    status = launch.round_dir / "status.json"
+    claimed = _read(status)
+    assert claimed["status"] == "running" and claimed["pid"] == launch.owner
+    status.write_text(
+        json.dumps({**claimed, "status": "abandoned", "reason": "relabelled"}), encoding="utf-8"
+    )
+
+    refused = _just(
+        "run-plan",
+        str(launch.round_dir / "plan.json"),
+        "--run",
+        run_id,
+        *launch.common,
+        "--recover",
+    )
+
+    assert refused.returncode == 2, refused.stderr
+    assert "the recorded owner may still be alive; recovery refused" in refused.stderr
+    assert _alive(launch.owner), "the refused recovery took the round out from under its owner"
+    # And it left the claim alone rather than stamping itself in as the new owner.
+    assert _read(status)["pid"] == launch.owner
+    assert not (launch.round_dir / "result.json").exists()
 
 
 def test_an_unrecorded_round_outlives_its_launching_turn_and_still_reports(

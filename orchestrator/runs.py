@@ -131,9 +131,17 @@ def round_owner_may_be_live(round_dir: Path) -> bool:
     Answers "possibly live", never "certainly live", and leans that way on purpose:
     an unreadable record or an owner whose pid cannot be trusted counts as possibly
     live, because a viewer wrongly announcing "this round died" is worse than one
-    that keeps reporting it. Only a round that is finished, or one whose owner this
-    host proved gone, comes back `False`. A round with no recorded owner at all is
-    `False` too — nothing claimed it, so nothing can still be working on it.
+    that keeps reporting it. `False` needs one of three things instead: a round that
+    is finished, an owner this host proved gone, or the owner's own recorded report
+    that it stopped. A round with no recorded owner at all is `False` too — nothing
+    claimed it, so nothing can still be working on it.
+
+    That third case is why reporting reads the recorded status where `_owner_may_be_live`
+    probes past it. A view answers "is this still in flight", and a self-recorded
+    abandonment settles that for good; recovery answers "may I take this round", so it
+    owes the recorded pid a look before it writes. Probing here would trade a permanent
+    answer for a pid that another process may since have been given, and a round whose
+    owner's number came back around would quietly stop being reported dead.
     """
     path = round_dir / "status.json"
     if not path.exists():
@@ -506,18 +514,27 @@ def prepare_round(run_dir: Path, plan: dict[str, Any], *, recover: bool = False)
 
 
 def _owner_may_be_live(state: Mapping[str, Any]) -> bool:
-    """Whether recovery must leave this claim alone because its owner may still run."""
-    if state.get("status") == ABANDONED:
-        return False
+    """Whether recovery must leave this claim alone because its owner may still run.
+
+    A recorded `abandoned` is the owner's own report that it stopped, and it is what
+    lets `--recover` reclaim the round at all. It is still only a string in a file
+    anything reaching the ledger may rewrite, so it does not stand in for the check:
+    the recorded owner is probed either way, and an owner this host can still see keeps
+    its claim. What the label changes is what a *missing* owner means. A `running`
+    record that names no usable one is a contradiction and is refused, but an abandoned
+    round is already over — refusing it for an owner there is nothing left to probe
+    would strand the one round `--recover` exists for.
+    """
+    refused = "running round has invalid owner metadata; recovery refused"
+    status = state.get("status")
+    if status not in {"running", ABANDONED}:
+        raise ConfigError(refused)
     pid = state.get("pid")
     host = state.get("host")
-    if (
-        state.get("status") != "running"
-        or not isinstance(host, str)
-        or not isinstance(pid, int)
-        or pid < 1
-    ):
-        raise ConfigError("running round has invalid owner metadata; recovery refused")
+    if not isinstance(pid, int) or isinstance(pid, bool) or pid < 1 or not isinstance(host, str):
+        if status == ABANDONED:
+            return False
+        raise ConfigError(refused)
     return process_may_be_live(pid, host)
 
 
