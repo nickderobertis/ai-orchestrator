@@ -426,7 +426,7 @@ def test_explicit_run_owner_blocks_contention_and_only_dead_owner_can_be_recover
 
     with pytest.raises(ConfigError, match="already running"):
         prepare_round(run_dir, PLAN)
-    with pytest.raises(ConfigError, match="owner is still alive; recovery refused"):
+    with pytest.raises(ConfigError, match="owner may still be alive; recovery refused"):
         prepare_round(run_dir, PLAN, recover=True)
 
     release.set()

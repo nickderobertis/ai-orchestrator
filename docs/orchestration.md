@@ -377,8 +377,9 @@ runs/<run-id>/humans.json
 
 Without `--run`, the id is derived from the plan's `name` or filename and made
 unique. `--runs-dir` moves the ledger, `--no-record` opts out, and `--recover`
-claims a `running` round only after its recorded owner is proven gone. Plan and
-result writes are atomic; a live round cannot be claimed by another process.
+claims a `running` or `abandoned` round only after its recorded owner is proven
+gone. Plan and result writes are atomic; a live round cannot be claimed by
+another process.
 `just runs` summarizes the latest completed round, including waiting action prose
 and what each action unblocks, then points to `just results <run>`. The results
 view lists every node's status and outcome, links its typed-id detail view, and
@@ -401,6 +402,30 @@ schema 2 terminal node events carry the complete serialized node result, so
 resume nodes that were running without another start transition, and converge the
 remaining frontier. Schema 1 journals remain readable, but a schema 1 prefix with
 settled nodes cannot be recovered because it predates durable node results.
+
+### A round outlives the turn that launched it
+
+A round must not die because the orchestrator surfaced an update and ended its turn.
+`just run-plan` and `just next-round` therefore fork before doing anything: the child
+leads a session of its own and owns the round, while the parent exists only to relay
+its exit status. The launching turn's teardown — and `uv run`, which forwards the
+signal it receives to its own direct child and then escalates to SIGKILL — reaches
+only that parent. `orchestrator/detach.py` holds the full reasoning; the practical
+consequence is that Ctrl-C reaches the relaying parent rather than the round, so the
+round announces the pid to signal when you do want it stopped.
+
+The round's own exit statuses cross that fork unchanged — 0 complete, 1 unfinished, 2
+rejected input, 128+N signalled. An exception escaping the round is the exception: it
+ends the round there, prints its traceback, and exits **70**, so a crash is never read
+as the unfinished round that also exits 1.
+
+A round that stops without recording a result never stays `running`. Its owner writes
+`{"status": "abandoned", "reason": ...}` on any catchable teardown signal and on any
+other exit that recorded no result, and `--recover` reclaims an `abandoned` round the
+same way it reclaims a dead `running` one. SIGKILL is the one death nothing can
+record, so `just runs` and `just status` derive abandonment from the recorded owner's
+pid: a dead owner is reported as `round-NN ABANDONED (...)` with the reclaiming
+command, never as work in flight.
 
 ## Monitoring a live run
 

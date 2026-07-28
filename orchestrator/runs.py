@@ -4,11 +4,16 @@ from __future__ import annotations
 
 import os
 import re
+import signal
 import socket
+import sys
 from collections import Counter
-from collections.abc import Mapping
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager, suppress
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from types import FrameType
 from typing import Any, Literal, NamedTuple, NewType, NotRequired, TypedDict, cast, get_args
 
 from .config import ConfigError, load_yaml
@@ -32,6 +37,13 @@ RETRY_DISPOSITIONS = frozenset(get_args(RetryDisposition))
 RunId = NewType("RunId", str)
 NodeId = NewType("NodeId", str)
 StepId = NewType("StepId", str)
+
+
+class ClaimedRound(NamedTuple):
+    """The round a process now owns: which one it is, and where it records itself."""
+
+    number: int
+    directory: Path
 
 
 class RunLedgerRow(NamedTuple):
@@ -69,6 +81,31 @@ def resolve_supervision_run(runs_dir: Path, identifier: str) -> RunId:
     raise ConfigError(f"no recorded run {identifier!r} under {runs_dir}{suffix}")
 
 
+def process_may_be_live(pid: int, host: object) -> bool:
+    """Whether a recorded owner process cannot be shown to be gone.
+
+    The one place this repository decides that question. Every caller keeps its own
+    policy for *unreadable* owner metadata — those policies genuinely differ — but
+    the OS answer has a single spelling here, so a view cannot drift from the
+    recovery gate that refuses to reclaim a round it cannot prove is unowned.
+
+    Only `False` is a certainty: this host answered that the pid is gone. `True`
+    means "not proven dead" — the owner is alive here, or sits on another host, or
+    belongs to a user this one may not signal, so it cannot be probed at all. The
+    name says *may* because that asymmetry is the point: reporting a healthy round
+    as abandoned is the worse error, so every unknown resolves toward "still working".
+    """
+    if host != socket.gethostname():
+        return True
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
 # llmlint: ignore[changed_behavior_has_e2e] real orchestrate/listing/name-resolution journeys run
 # e2e; host/PID outcomes are deterministic OS-liveness boundary branches.
 def launch_is_active(run_dir: Path) -> bool:
@@ -85,15 +122,121 @@ def launch_is_active(run_dir: Path) -> bool:
     pid = value.get("pid")
     if not isinstance(pid, int) or isinstance(pid, bool) or pid < 1:
         return False
-    if value.get("host") != socket.gethostname():
-        return True
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
+    return process_may_be_live(pid, value.get("host"))
+
+
+def round_appears_in_flight(round_dir: Path) -> bool:
+    """Whether a view must still report this round as work in progress.
+
+    Answers "possibly", never "certainly", and leans that way on purpose: an
+    unreadable record or an owner whose pid cannot be trusted still reads as in
+    flight, because a viewer wrongly announcing "this round died" is worse than one
+    that keeps reporting it. `False` needs one of three things instead: a round that
+    is finished, an owner this host proved gone, or the owner's own recorded report
+    that it stopped. A round with no recorded owner at all is `False` too — nothing
+    claimed it, so nothing can still be working on it.
+
+    That third case is where this parts ways with `_owner_may_be_live`, which probes
+    the recorded pid past the recorded status. A self-recorded abandonment settles the
+    reporting question for good, so reporting reads that status and stops; recovery
+    instead answers "may I take this round", so it owes the pid a look before it
+    writes. Probing here would trade a permanent answer for a pid that another process
+    may since have been given, and a round whose owner's number came back around would
+    quietly stop being reported dead.
+    """
+    path = round_dir / "status.json"
+    if not path.exists():
         return False
-    except PermissionError:
+    try:
+        state = load_mapping(path)
+    except (ConfigError, OSError):
         return True
-    return True
+    if state.get("status") != "running":
+        return False
+    pid = state.get("pid")
+    if not isinstance(pid, int) or isinstance(pid, bool) or pid < 1:
+        return True
+    return process_may_be_live(pid, state.get("host"))
+
+
+@dataclass(frozen=True)
+class AbandonedRound:
+    """A claimed round that no live process owns and no result closed out."""
+
+    round: int
+    pid: int | None
+    reason: str | None
+
+
+_MAX_REASON = 200
+
+
+# llmlint: ignore[changed_behavior_has_e2e] untested end to end: the non-string, blank,
+# overlength, and multiline branches. Only the escape-sequence branch has a consequence a
+# reader cannot undo — a terminal acting on the string rather than showing it — and it runs
+# e2e in tests/e2e/test_round_ownership_e2e.py. The rest bound the same already-rejected
+# field to one readable line beside the reclaiming command, and tests/test_runs.py drives
+# each; a real launch per branch would re-prove one `if` and nothing about the journey.
+def _reportable_reason(value: object) -> str | None:
+    """One recorded abandonment reason, or ``None`` if it is unfit to print.
+
+    `status.json` is an ordinary file that anything with write access may rewrite,
+    and this string is rendered straight into `just runs` and `just status` output on
+    an operator's terminal. A reason carrying an escape sequence would be *acted on*
+    by that terminal rather than read, and an unbounded one would bury the reclaiming
+    command it sits beside. Anything that is not one bounded printable line is
+    therefore dropped, which costs nothing: the caller already derives a reason from
+    the recorded owner when none is recorded.
+    """
+    if not isinstance(value, str):
+        return None
+    reason = value.strip()
+    if not reason or not reason.isprintable() or len(reason) > _MAX_REASON:
+        return None
+    return reason
+
+
+def abandoned_round(run_dir: Path) -> AbandonedRound | None:
+    """The run's newest round that a reader must treat as dead, not in flight.
+
+    A round is abandoned once it claimed the ledger, never recorded a result, and
+    either wrote its own abandonment or left a `running` status behind a pid that no
+    longer exists. Deriving it from the owner's liveness — rather than the last
+    status string — is what keeps `just runs` and `just status` from reporting a
+    round that died hours ago as healthy work in progress.
+    """
+    latest = latest_round(run_dir)
+    if latest is None:
+        return None
+    number, round_dir = latest
+    if (round_dir / "result.json").exists() or not (round_dir / "status.json").exists():
+        return None
+    try:
+        state = load_mapping(round_dir / "status.json")
+    except (ConfigError, OSError):
+        return None
+    status = state.get("status")
+    if status not in {"running", ABANDONED} or round_appears_in_flight(round_dir):
+        return None
+    pid = state.get("pid")
+    return AbandonedRound(
+        number,
+        pid if isinstance(pid, int) and not isinstance(pid, bool) else None,
+        _reportable_reason(state.get("reason")),
+    )
+
+
+def abandoned_round_indicator(run_dir: Path) -> str | None:
+    """One line naming a run's abandoned round and the command that reclaims it."""
+    found = abandoned_round(run_dir)
+    if found is None:
+        return None
+    owner = f"owner pid {found.pid}" if found.pid is not None else "recorded owner"
+    plan = run_dir / f"round-{found.round:02d}" / "plan.json"
+    return (
+        f"round-{found.round:02d} ABANDONED ({found.reason or f'{owner} is gone'}); reclaim with: "
+        f"just run-plan {plan} --run {run_dir.name} --runs-dir {run_dir.parent} --recover"
+    )
 
 
 class StackBasePayload(TypedDict):
@@ -220,18 +363,34 @@ class HumanCompletion(TypedDict):
     completed_at: str
 
 
+#: The recorded phases of one round's ownership. `abandoned` is written by the owner
+#: itself when a catchable teardown signal — or any other exit that never records a
+#: result — ends it, so a reader finds a dead round said so rather than having to
+#: infer it. It is additive: `status.json` carries no schema version, and every
+#: reader here treats an unrecognised status as "not running".
+RoundState = Literal["running", "completed", "abandoned"]
+ABANDONED: RoundState = "abandoned"
+
+#: Signals that mean "the process group you were launched in is going away". Each one
+#: is recorded as an abandonment before the round's owner dies under it.
+TEARDOWN_SIGNALS = (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)
+
+
 class RoundStatus(TypedDict, total=False):
-    status: Literal["running", "completed"]
+    status: RoundState
     pid: int
     host: str
     started: str
     finished: str
+    reason: str
 
 
-def _round_status(status: Literal["running", "completed"]) -> RoundStatus:
+def _round_status(status: RoundState, *, reason: str | None = None) -> RoundStatus:
     timestamp = datetime.now(UTC).isoformat()
     record = RoundStatus(status=status, pid=os.getpid(), host=socket.gethostname())
     record["started" if status == "running" else "finished"] = timestamp
+    if reason is not None:
+        record["reason"] = reason
     return record
 
 
@@ -291,9 +450,7 @@ def write_next_plan(run_dir: Path, plan: dict[str, Any]) -> tuple[int, Path]:
         return number, round_dir
 
 
-def prepare_round(
-    run_dir: Path, plan: dict[str, Any], *, recover: bool = False
-) -> tuple[int, Path]:
+def prepare_round(run_dir: Path, plan: dict[str, Any], *, recover: bool = False) -> ClaimedRound:
     """Use a pending plan-only round when identical, otherwise create the next round."""
     with advisory_lock(f"ledger:{run_dir.resolve()}"):
         latest = latest_round(run_dir)
@@ -328,50 +485,126 @@ def prepare_round(
                     round_dir.mkdir(parents=True, exist_ok=False)
                     _write_json(round_dir / "plan.json", plan)
                     atomic_json(round_dir / "status.json", _round_status("running"))
-                    return number, round_dir
+                    return ClaimedRound(number, round_dir)
                 existing = load_mapping(plan_path)
                 if existing != plan:
                     raise ConfigError(f"{round_dir} has a pending different plan")
                 state_path = round_dir / "status.json"
                 if state_path.exists():
                     state = load_mapping(state_path)
-                    if not recover or _owner_is_live(state):
-                        action = (
-                            "the recorded owner is still alive; recovery refused"
-                            if recover
-                            else "inspect its worktrees, then use --recover if its owner is gone"
-                        )
-                        raise ConfigError(f"{round_dir} is already running ({state}); {action}")
+                    if not recover or _owner_may_be_live(state):
+                        abandoned = state.get("status") == ABANDONED
+                        if recover:
+                            action = "the recorded owner may still be alive; recovery refused"
+                        elif abandoned:
+                            action = "its owner recorded the abandonment; reclaim it with --recover"
+                        else:
+                            action = (
+                                "inspect its worktrees, then use --recover if its owner is gone"
+                            )
+                        subject = "was abandoned" if abandoned else "is already running"
+                        raise ConfigError(f"{round_dir} {subject} ({state}); {action}")
                 atomic_json(state_path, _round_status("running"))
-                return number, round_dir
+                return ClaimedRound(number, round_dir)
         number = 1 if latest is None else latest[0] + 1
         round_dir = run_dir / f"round-{number:02d}"
         round_dir.mkdir(parents=True, exist_ok=False)
         _write_json(round_dir / "plan.json", plan)
         atomic_json(round_dir / "status.json", _round_status("running"))
-        return number, round_dir
+        return ClaimedRound(number, round_dir)
 
 
-def _owner_is_live(state: Mapping[str, Any]) -> bool:
-    """Conservatively identify a recorded owner on this host."""
+# llmlint: ignore[changed_behavior_has_e2e] untested end to end: an abandoned record whose
+# pid or host is unusable. The journeys either side of it do run e2e in
+# tests/e2e/test_round_ownership_e2e.py — reclaiming a self-recorded abandonment, and the
+# refusal that leaves a live owner its claim — and this branch only decides that a round
+# already reported over stays reclaimable when there is no owner left to probe. A real launch
+# cannot reach it without hand-writing the same malformed status.json tests/test_runs.py
+# writes, so it would re-prove one `if` and nothing about the journey.
+def _owner_may_be_live(state: Mapping[str, Any]) -> bool:
+    """Whether recovery must leave this claim alone because its owner may still run.
+
+    A recorded `abandoned` is the owner's own report that it stopped, and it is what
+    lets `--recover` reclaim the round at all. It is still only a string in a file
+    anything reaching the ledger may rewrite, so it does not stand in for the check:
+    the recorded owner is probed either way, and an owner this host can still see keeps
+    its claim. What the label changes is what a *missing* owner means. A `running`
+    record that names no usable one is a contradiction and is refused, but an abandoned
+    round is already over — refusing it for an owner there is nothing left to probe
+    would strand the one round `--recover` exists for.
+    """
+    refused = "running round has invalid owner metadata; recovery refused"
+    status = state.get("status")
+    if status not in {"running", ABANDONED}:
+        raise ConfigError(refused)
     pid = state.get("pid")
     host = state.get("host")
-    if (
-        state.get("status") != "running"
-        or not isinstance(host, str)
-        or not isinstance(pid, int)
-        or pid < 1
-    ):
-        raise ConfigError("running round has invalid owner metadata; recovery refused")
-    if host != socket.gethostname():
-        return True
+    if not isinstance(pid, int) or isinstance(pid, bool) or pid < 1 or not isinstance(host, str):
+        if status == ABANDONED:
+            return False
+        raise ConfigError(refused)
+    return process_may_be_live(pid, host)
+
+
+def _abandon_if_running(round_dir: Path, reason: str) -> None:
+    """Downgrade a still-`running` status to `abandoned`; leave any other alone.
+
+    Errors are swallowed on purpose: this runs from a signal handler and from the
+    unwind of an already-failing round, and neither may raise a second failure over
+    the first. A status this cannot rewrite is still reported as abandoned by
+    `abandoned_round`, which derives liveness from the recorded pid.
+    """
+    path = round_dir / "status.json"
+    with suppress(ConfigError, OSError):
+        if load_mapping(path).get("status") != "running":
+            return
+        atomic_json(path, _round_status(ABANDONED, reason=reason))
+
+
+def _teardown_handler(round_dir: Path) -> Callable[[int, FrameType | None], None]:
+    """Build the handler that records an abandonment, then dies under the signal."""
+
+    def handle(number: int, _frame: FrameType | None) -> None:
+        name = signal.Signals(number).name
+        _abandon_if_running(round_dir, f"owner pid {os.getpid()} took {name}")
+        with suppress(OSError):
+            print(
+                f"run-plan: {round_dir} abandoned after {name}; nothing owns it now. "
+                "Reclaim it with `just run-plan <plan> --run <id> --recover`.",
+                file=sys.stderr,
+                flush=True,
+            )
+        # Die exactly as an unhandled signal would, so the exit status stays the
+        # honest 128+N. Unwinding instead would block in the executor's shutdown
+        # until every in-flight worker finished, and the round is already recorded
+        # abandoned, so there is nothing left worth waiting for.
+        signal.signal(number, signal.SIG_DFL)
+        os.kill(os.getpid(), number)
+
+    return handle
+
+
+@contextmanager
+def round_abandonment_guard(round_dir: Path) -> Iterator[None]:
+    """Keep a claimed round from ever staying `running` once nothing owns it.
+
+    Covers every exit this process can take with its own cooperation: a catchable
+    teardown signal records the abandonment inside the handler, and any other way of
+    leaving the block — an early return, an unhandled exception, `sys.exit` — records
+    it on the way out. Only SIGKILL escapes both, which is why the run views still
+    derive liveness from the recorded owner's pid rather than trusting this file.
+    """
+    installed = [
+        (number, signal.signal(number, _teardown_handler(round_dir))) for number in TEARDOWN_SIGNALS
+    ]
     try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    return True
+        yield
+    finally:
+        for number, previous in installed:
+            signal.signal(number, previous)
+        _abandon_if_running(
+            round_dir, f"owner pid {os.getpid()} stopped without recording a result"
+        )
 
 
 def write_result(round_dir: Path, result: Mapping[str, Any]) -> None:

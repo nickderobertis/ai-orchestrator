@@ -71,6 +71,7 @@ from .registry import Registry, RegistryError, validate_identity_key
 from .runs import (
     RECORDED_RESULT_SCHEMA_VERSION,
     RESUME_MODES,
+    ClaimedRound,
     RepoPlanPayload,
     RepoPlanResultItem,
     ResumeMode,
@@ -3039,7 +3040,7 @@ def main_plan(argv: list[str] | None = None) -> int:
         print(f"repo-plan: {exc}", file=sys.stderr)
         return 2
 
-    round_record: tuple[int, Path] | None = None
+    round_record: ClaimedRound | None = None
     if run_dir is not None:
         try:
             round_record = prepare_round(run_dir, plan_mapping, recover=args.recover)
@@ -3065,7 +3066,7 @@ def main_plan(argv: list[str] | None = None) -> int:
 
     payload: RepoPlanPayload = {
         "schema_version": RECORDED_RESULT_SCHEMA_VERSION,
-        **({"round": round_record[0]} if round_record is not None else {}),
+        **({"round": round_record.number} if round_record is not None else {}),
         "ok": result.ok,
         "started_order": result.started_order,
         "results": {

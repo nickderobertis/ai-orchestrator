@@ -7,8 +7,10 @@ provider is replaced by the command-provider protocol double from ``conftest``.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
+import re
 import signal
 import socket
 import subprocess
@@ -32,6 +34,40 @@ def _just(*args: str) -> subprocess.CompletedProcess[str]:
         capture_output=True,
         check=False,
     )
+
+
+def _kill_round_owner(process: subprocess.Popen[str]) -> None:
+    """SIGKILL every executor this launch claimed a round with, and the launcher.
+
+    A recovery journey needs an executor that died with no chance to record anything.
+    Signalling the launcher's process group no longer does that: `run-plan` runs the
+    round in a forked session of its own, reparented away from the launching turn,
+    precisely so ending that turn cannot destroy live work (`orchestrator/detach.py`).
+    The ledger names the owner, and SIGKILL is the one death it can never record — the
+    only way left to leave `running` behind under a pid that no longer exists.
+    """
+    argv = [str(item) for item in process.args]
+    runs = Path(argv[argv.index("--runs-dir") + 1]) if "--runs-dir" in argv else None
+    for owner in _recorded_owners(runs) if runs is not None else []:
+        with contextlib.suppress(PermissionError, ProcessLookupError):
+            os.killpg(os.getpgid(owner), signal.SIGKILL)
+    with contextlib.suppress(PermissionError, ProcessLookupError):
+        os.killpg(process.pid, signal.SIGKILL)
+    process.wait()
+
+
+def _recorded_owners(runs: Path) -> list[int]:
+    """Every pid recorded as still owning a round under this ledger root."""
+    owners: list[int] = []
+    for status in sorted(runs.glob("*/round-*/status.json")):
+        try:
+            recorded = json.loads(status.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        pid = recorded.get("pid")
+        if recorded.get("status") == "running" and isinstance(pid, int):
+            owners.append(pid)
+    return owners
 
 
 @pytest.mark.parametrize(
@@ -288,10 +324,9 @@ def test_recover_interrupted_real_cli_does_not_duplicate_node_start(
             break
         time.sleep(0.01)
     else:
-        process.kill()
+        _kill_round_owner(process)
         pytest.fail("run-plan did not durably start its node")
-    os.killpg(process.pid, signal.SIGKILL)
-    process.wait()
+    _kill_round_owner(process)
     round_dir = runs / "interrupted" / "round-01"
     (round_dir / "plan.json").unlink()
 
@@ -786,10 +821,9 @@ def test_recover_interrupted_real_cli_does_not_duplicate_node_start(
             break
         time.sleep(0.01)
     else:
-        settled_process.kill()
+        _kill_round_owner(settled_process)
         pytest.fail("run-plan did not reach the settled-prefix recovery boundary")
-    os.killpg(settled_process.pid, signal.SIGKILL)
-    settled_process.wait()
+    _kill_round_owner(settled_process)
     converged = subprocess.run(
         [*settled_command, "--recover"], cwd=REPO_ROOT, text=True, capture_output=True, check=False
     )
@@ -932,10 +966,9 @@ def test_real_cli_replays_failed_and_waiting_terminal_prefixes(
                 break
             time.sleep(0.005)
         else:
-            process.kill()
+            _kill_round_owner(process)
             pytest.fail(f"run-plan did not emit {terminal_kind}")
-        os.killpg(process.pid, signal.SIGKILL)
-        process.wait()
+        _kill_round_owner(process)
         recovered = subprocess.run(
             [*command, "--recover"],
             cwd=REPO_ROOT,
@@ -1044,10 +1077,9 @@ def test_real_cli_recovers_exception_terminal_result_without_duplicates(
             break
         time.sleep(0.005)
     else:
-        process.kill()
+        _kill_round_owner(process)
         pytest.fail("run-plan did not emit the exception terminal prefix")
-    os.killpg(process.pid, signal.SIGKILL)
-    process.wait()
+    _kill_round_owner(process)
 
     recovered = subprocess.run(
         [*command, "--recover"], cwd=REPO_ROOT, text=True, capture_output=True, check=False
@@ -1139,10 +1171,9 @@ def test_real_cli_recovers_successful_report_and_no_change_results(
             break
         time.sleep(0.005)
     else:
-        process.kill()
+        _kill_round_owner(process)
         pytest.fail("run-plan did not emit successful Report and no-change prefix")
-    os.killpg(process.pid, signal.SIGKILL)
-    process.wait()
+    _kill_round_owner(process)
 
     recovered = subprocess.run(
         [*command, "--recover"], cwd=REPO_ROOT, text=True, capture_output=True, check=False
@@ -1271,10 +1302,9 @@ def test_real_cli_recovers_settled_lifecycle_stack_anchor(
             break
         time.sleep(0.01)
     else:
-        process.kill()
+        _kill_round_owner(process)
         pytest.fail("run-plan did not reach the lifecycle stack recovery boundary")
-    os.killpg(process.pid, signal.SIGKILL)
-    process.wait()
+    _kill_round_owner(process)
     child_release.write_text("release\n", encoding="utf-8")
 
     recovered = subprocess.run(
@@ -1407,7 +1437,7 @@ def test_real_cli_recovers_failed_lifecycle_result(
                 break
             time.sleep(0.01)
         else:
-            process.kill()
+            _kill_round_owner(process)
             pytest.fail("lifecycle node did not reach the contended git lock")
     finally:
         held.__exit__(None, None, None)
@@ -1431,10 +1461,9 @@ def test_real_cli_recovers_failed_lifecycle_result(
             break
         time.sleep(0.01)
     else:
-        process.kill()
+        _kill_round_owner(process)
         pytest.fail("run-plan did not reach the failed lifecycle recovery boundary")
-    os.killpg(process.pid, signal.SIGKILL)
-    process.wait()
+    _kill_round_owner(process)
     # Only now let in-flight run to completion, so the recovery run below terminates.
     in_flight_release.write_text("release\n", encoding="utf-8")
 
@@ -1636,10 +1665,9 @@ def test_real_cli_recovers_waiting_and_no_change_lifecycle_results(
             break
         time.sleep(0.01)
     else:
-        process.kill()
+        _kill_round_owner(process)
         pytest.fail("run-plan did not reach the waiting lifecycle recovery boundary")
-    os.killpg(process.pid, signal.SIGKILL)
-    process.wait()
+    _kill_round_owner(process)
     provider_release.write_text("release\n", encoding="utf-8")
 
     original_events = events_path.read_text()
@@ -1661,7 +1689,9 @@ def test_real_cli_recovers_waiting_and_no_change_lifecycle_results(
         invalid_recovery = subprocess.run(
             [*command, "--recover"], cwd=REPO_ROOT, text=True, capture_output=True, check=False
         )
-        assert invalid_recovery.returncode == 1
+        # 2, the rejected-input status every other replay check reports: a recorded
+        # result this cannot read is refused, not a round that ran and did not finish.
+        assert invalid_recovery.returncode == 2, invalid_recovery.stderr
         assert expected_error in invalid_recovery.stderr
         events_path.write_text(original_events, encoding="utf-8")
 
@@ -1749,10 +1779,9 @@ def test_recover_completes_a_partially_emitted_graph_without_duplicates(tmp_path
                 break
         time.sleep(0.001)
     else:
-        process.kill()
+        _kill_round_owner(process)
         pytest.fail(f"did not observe a partial graph-definition prefix (saw {durable})")
-    os.killpg(process.pid, signal.SIGKILL)
-    process.wait()
+    _kill_round_owner(process)
 
     prefix = events_path.read_bytes()
     prefix_records = [json.loads(line) for line in prefix.splitlines()]
@@ -1918,14 +1947,13 @@ def test_recover_completes_partially_emitted_edges_without_duplicates(tmp_path: 
                 break
         time.sleep(0.001)
     else:
-        process.kill()
+        _kill_round_owner(process)
         pytest.fail(
             "did not observe a partial graph-edge prefix "
             f"(saw {durable_definitions} definitions and "
             f"{durable_edges}/{len(expected_edges)} edges)"
         )
-    os.killpg(process.pid, signal.SIGKILL)
-    process.wait()
+    _kill_round_owner(process)
 
     recovered = subprocess.run(
         [*command, "--recover"], cwd=REPO_ROOT, text=True, capture_output=True, check=False
@@ -2340,6 +2368,10 @@ def test_legacy_repo_plan_runs_through_canonical_and_deprecated_alias(
     )
     assert alias_run.returncode == 0, alias_run.stderr
     assert "deprecated" in alias_run.stderr
+    # The deprecated alias owns rounds through the same detaching entry point, and
+    # relays their exit status the same way; what detaching buys is proven by
+    # tests/e2e/test_round_ownership_e2e.py.
+    assert re.search(r"repo-plan: round owner pid \d+ leads its own session", alias_run.stderr)
     alias_payload = json.loads(alias_run.stdout)
     assert alias_payload["state"] == "complete"
     assert alias_payload["results"]["legacy-alias"]["outcome"] == "merged"
