@@ -568,7 +568,9 @@ retry edit. The opt-out belongs on `branch` because it is already the plan's
 authoritative branch-routing field; a separate reset flag could conflict with it
 and create two sources of truth. The next `branch-discovered` event records
 `resumed: true` only for resume metadata, and `false` for an explicit fresh
-branch.
+branch. That precedence covers preserved attempts only. A waiting workstream is
+not choosing a branch, so an explicit `branch` never discards its pause resume
+and the human steps it already recorded as completed.
 
 To continue authoring after a lifecycle node hits its turn cap, do not relaunch
 the original plan. While supervising its existing `orchestrate` run, send a

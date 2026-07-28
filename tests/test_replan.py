@@ -292,6 +292,49 @@ def test_complete_nested_human_step_updates_resume() -> None:
     assert plan["tasks"][0]["resume"]["completed_steps"] == ["prepare", "approve"]
 
 
+def test_pinned_branch_keeps_a_waiting_workstream_resuming_its_human_steps() -> None:
+    work = {
+        "id": "work",
+        "repo": "o/r",
+        "branch": "feature/work",
+        "steps": [
+            {"id": "prepare", "persona": "engineer", "task": "Prepare"},
+            {"id": "approve", "kind": "human", "task": "Approve", "deps": ["prepare"]},
+            {"id": "finish", "persona": "engineer", "task": "Finish", "deps": ["approve"]},
+        ],
+    }
+    result = {
+        "results": {
+            "work": {
+                "status": "waiting",
+                "outcome": "waiting-human",
+                "waiting_steps": ["approve"],
+                "human_actions": [
+                    {
+                        "ref": "work/approve",
+                        "task": "Approve",
+                        "unblocks": ["work/finish"],
+                        "unblocks_publication": False,
+                    }
+                ],
+                "resume": {
+                    "branch": "feature/work",
+                    "base_branch": "main",
+                    "pr_base": "main",
+                    "checkpoint": "abcdef1",
+                    "completed_steps": ["prepare"],
+                    "pr": None,
+                },
+            }
+        }
+    }
+
+    plan = next_round(_plan(work), result, {"complete_human": ["work/approve"]})
+
+    assert plan["tasks"][0]["branch"] == "feature/work"
+    assert plan["tasks"][0]["resume"]["completed_steps"] == ["prepare", "approve"]
+
+
 def test_nested_completion_handles_legacy_lifecycle_node_id_with_slash() -> None:
     work = {
         "id": "release/work",

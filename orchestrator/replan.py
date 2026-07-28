@@ -285,9 +285,12 @@ def _apply_lifecycle_resume(
     item = results.get(nid)
     if not isinstance(item, dict):
         return
-    # An explicit branch is an intentional routing decision. It may pin a known
-    # branch or opt out of the preserved attempt by naming a fresh branch.
-    if "branch" in node:
+    status = item.get("status")
+    # An explicit branch is an intentional routing decision for a preserved
+    # attempt. It may pin a known branch or opt out by naming a fresh branch. A
+    # waiting workstream is not choosing a branch, so it keeps the pause
+    # metadata that carries its already completed steps.
+    if "branch" in node and status != "waiting":
         node.pop("resume", None)
         return
     resume = item.get("resume")
@@ -296,7 +299,6 @@ def _apply_lifecycle_resume(
     completed_steps = sorted(
         ref.removeprefix(prefix) for ref in completed_humans if ref.startswith(prefix)
     )
-    status = item.get("status")
     retrying_preserved = retry_requested and status == "failed"
     continuing_preserved = status == "failed" and resume is not None
     if not (status == "waiting" or retrying_preserved or continuing_preserved) or (
