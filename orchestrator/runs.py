@@ -162,6 +162,12 @@ class AbandonedRound:
 _MAX_REASON = 200
 
 
+# llmlint: ignore[changed_behavior_has_e2e] untested end to end: the non-string, blank,
+# overlength, and multiline branches. Only the escape-sequence branch has a consequence a
+# reader cannot undo — a terminal acting on the string rather than showing it — and it runs
+# e2e in tests/e2e/test_round_ownership_e2e.py. The rest bound the same already-rejected
+# field to one readable line beside the reclaiming command, and tests/test_runs.py drives
+# each; a real launch per branch would re-prove one `if` and nothing about the journey.
 def _reportable_reason(value: object) -> str | None:
     """One recorded abandonment reason, or ``None`` if it is unfit to print.
 

@@ -14,7 +14,8 @@ signals, with nothing about process liveness faked:
   teardown sends — leaves the round running, and it settles normally afterwards;
 * an exception escaping the round ends it where it is, with its own exit status and its
   traceback, rather than climbing back out of the fork and running the rest of the
-  launching process's program a second time in the child;
+  launching process's program a second time in the child — and once a round has been
+  claimed, that same exception leaves it recorded and reported as abandoned;
 * a catchable signal delivered to the executor itself records the abandonment before
   the process dies, and the round refuses to be re-claimed without `--recover`;
 * an uncatchable SIGKILL — the one death nothing can record — still surfaces as
@@ -410,6 +411,49 @@ def test_a_crashing_round_ends_in_the_fork_rather_than_climbing_back_out_of_it(
     assert "in main_cli" not in crashed.stderr, crashed.stderr
     # And one round announced one owner; a second pass would have announced another.
     assert len(ANNOUNCED_OWNER.findall(crashed.stderr)) == 1, crashed.stderr
+
+
+def test_a_crash_past_the_claim_abandons_the_round_rather_than_leaving_it_running(
+    tmp_path: Path,
+) -> None:
+    """An exception after the claim must leave the round self-evidently dead.
+
+    The guard covers this exit the way it covers a signal, and it is the exit with the
+    least warning: no handler runs, no result is written, and the owner is gone before
+    anything asks it about the round it took. Unguarded, `round-01/status.json` keeps
+    saying `running` under a pid that no longer exists, and `just runs` goes on
+    reporting the run as work in flight.
+
+    Provoked from outside the process, like the pre-claim crash above: the run's journal
+    path occupied by a directory, which nothing opens until the round is already claimed.
+    """
+    runs = tmp_path / "runs"
+    run_id = "crashing-past-the-claim"
+    (runs / run_id / "events.jsonl").mkdir(parents=True)
+
+    crashed = _just(
+        "run-plan", str(_trivial_plan(tmp_path)), "--runs-dir", str(runs), "--run", run_id
+    )
+
+    assert crashed.returncode == CRASHED, crashed.stderr
+    assert "IsADirectoryError" in crashed.stderr, crashed.stderr
+
+    round_dir = runs / run_id / "round-01"
+    recorded = _read(round_dir / "status.json")
+    assert recorded["status"] == "abandoned"
+    assert not (round_dir / "result.json").exists(), "a crashed round recorded a result"
+    # Recorded by the process that owned the round, not by the relaying parent that
+    # outlived it: the reason names the same pid the round announced as its own.
+    assert ANNOUNCED_OWNER.findall(crashed.stderr) == [str(recorded["pid"])], crashed.stderr
+    assert recorded["reason"] == f"owner pid {recorded['pid']} stopped without recording a result"
+
+    listed = _just("runs", "--runs-dir", str(runs))
+    assert listed.returncode == 0, listed.stderr
+    assert (
+        f"{run_id}  round-01 ABANDONED (owner pid {recorded['pid']} stopped without "
+        f"recording a result); reclaim with: just run-plan {round_dir / 'plan.json'} "
+        f"--run {run_id} --runs-dir {runs} --recover"
+    ) in listed.stdout, listed.stdout
 
 
 def test_a_rejected_command_line_reaches_the_caller_as_the_status_it_chose(
