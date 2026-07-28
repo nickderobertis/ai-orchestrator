@@ -182,11 +182,15 @@ def test_published_dispatch_survives_deferred_teardown_and_redispatch_reclaims_i
     assert serialized["deferred_cleanup"] == first.deferred_cleanup
     deferred = [event for event in journal.events() if event.kind == "cleanup-deferred"]
     assert deferred and deferred[0].detail["operation"] == "remove-worktree"
-    orphan = gitops.worktrees(canonical)["teardown-retry"]
+    orphan = gitops.worktrees(contended.clone_dir(normalize_repo(str(origin))))["teardown-retry"]
     assert orphan.exists()
 
     recovered = Workspace(
-        root, resolver=lambda _spec: canonical, workflow="local", repo_type="single-owner"
+        root,
+        resolver=lambda _spec: canonical,
+        workflow="local",
+        repo_type="single-owner",
+        run_token=contended.run_token,
     )
     second = run_repo_task(
         str(origin),
@@ -212,16 +216,17 @@ def test_lifecycle_failure_survives_simultaneous_deferred_teardown(
             self._release_worktree_lease(path)
             raise LockTimeout("shared .git remains busy")
 
+    workspace = ContendedTeardownWorkspace(
+        tmp_path / "failed-worktrees",
+        resolver=lambda _spec: canonical,
+        workflow="local",
+        repo_type="single-owner",
+    )
     result = run_repo_task(
         str(origin),
         "should-fail write-change preserve original failure",
         "engineer",
-        workspace=ContendedTeardownWorkspace(
-            tmp_path / "failed-worktrees",
-            resolver=lambda _spec: canonical,
-            workflow="local",
-            repo_type="single-owner",
-        ),
+        workspace=workspace,
         branch="failed-teardown",
         base_path=command_base(),
         persona_dir=personas_dir,
@@ -231,10 +236,14 @@ def test_lifecycle_failure_survives_simultaneous_deferred_teardown(
     assert result.outcome == "not-completed"
     assert "step 'main' hit the turn cap" in result.detail
     assert result.deferred_cleanup and "remove-worktree deferred" in result.deferred_cleanup[0]
-    cleanup = Workspace(tmp_path / "failed-worktrees", resolver=lambda _spec: canonical)
-    cleanup.remove_worktree(
-        normalize_repo(str(origin)), gitops.worktrees(canonical)["failed-teardown"]
+    ref = normalize_repo(str(origin))
+    cleanup = Workspace(
+        tmp_path / "failed-worktrees",
+        resolver=lambda _spec: canonical,
+        run_token=workspace.run_token,
     )
+    cleanup.ensure_clone(ref)
+    cleanup.remove_worktree(ref, gitops.worktrees(cleanup.clone_dir(ref))["failed-teardown"])
 
 
 def test_turn_cap_auto_resumes_preserved_branch_without_rerunning_completed_steps(
@@ -295,7 +304,8 @@ def test_real_git_teardown_refusal_is_deferred_after_publication(tmp_path, bare_
     def locking_dispatch(persona, task, *, project_dir, **kwargs):
         worktree = Path(project_dir)
         (worktree / "locked-cleanup.txt").write_text("published\n", encoding="utf-8")
-        subprocess.run(["git", "-C", str(canonical), "worktree", "lock", str(worktree)], check=True)
+        run_clone = workspace.clone_dir(normalize_repo(str(origin)))
+        subprocess.run(["git", "-C", str(run_clone), "worktree", "lock", str(worktree)], check=True)
         return Report(persona, 0, True, False, 1, [], {}, {}, "")
 
     result = run_repo_task(
@@ -310,8 +320,9 @@ def test_real_git_teardown_refusal_is_deferred_after_publication(tmp_path, bare_
 
     assert result.outcome == "merged", result.detail
     assert result.deferred_cleanup and "locked working tree" in result.deferred_cleanup[0]
-    orphan = gitops.worktrees(canonical)["locked-cleanup"]
-    subprocess.run(["git", "-C", str(canonical), "worktree", "unlock", str(orphan)], check=True)
+    run_clone = workspace.clone_dir(normalize_repo(str(origin)))
+    orphan = gitops.worktrees(run_clone)["locked-cleanup"]
+    subprocess.run(["git", "-C", str(run_clone), "worktree", "unlock", str(orphan)], check=True)
     workspace.remove_worktree(normalize_repo(str(origin)), orphan)
 
 
@@ -350,8 +361,13 @@ def test_synthetic_stack_teardown_contention_is_deferred_with_real_git(
     assert isinstance(built, lifecycle_module.SyntheticStackBase)
     assert _tip(origin, f"refs/heads/{built.branch}")
     assert result.deferred_cleanup and "remove-worktree deferred" in result.deferred_cleanup[0]
-    cleanup = Workspace(tmp_path / "stack-worktrees", resolver=lambda _spec: canonical)
-    cleanup.remove_worktree(ref, gitops.worktrees(canonical)[built.branch])
+    cleanup = Workspace(
+        tmp_path / "stack-worktrees",
+        resolver=lambda _spec: canonical,
+        run_token=workspace.run_token,
+    )
+    cleanup.ensure_clone(ref)
+    cleanup.remove_worktree(ref, gitops.worktrees(cleanup.clone_dir(ref))[built.branch])
 
 
 def test_failed_synthetic_stack_defers_worktree_and_branch_cleanup_with_real_git(
@@ -400,13 +416,19 @@ def test_failed_synthetic_stack_defers_worktree_and_branch_cleanup_with_real_git
         "remove-worktree",
         "delete-branch",
     ]
+    run_clone = workspace.clone_dir(ref)
     synthetic = next(
         branch
-        for branch in gitops.worktrees(canonical)
+        for branch in gitops.worktrees(run_clone)
         if branch.startswith("ai-orchestrator/stack-base/")
     )
-    cleanup = Workspace(tmp_path / "conflict-worktrees", resolver=lambda _spec: canonical)
-    cleanup.remove_worktree(ref, gitops.worktrees(canonical)[synthetic])
+    cleanup = Workspace(
+        tmp_path / "conflict-worktrees",
+        resolver=lambda _spec: canonical,
+        run_token=workspace.run_token,
+    )
+    cleanup.ensure_clone(ref)
+    cleanup.remove_worktree(ref, gitops.worktrees(run_clone)[synthetic])
     cleanup.delete_branch(ref, synthetic)
 
 
@@ -1917,7 +1939,7 @@ def test_local_repo_direct_merge(tmp_path, bare_origin) -> None:
     assert result.outcome == "merged"
     assert result.base_branch == "main"
     assert _has_file(origin, "main", "feature.txt")  # the change really landed on origin main
-    canonical = ws.clone_dir(normalize_repo(str(origin)))
+    canonical = ws.execution_checkout(normalize_repo(str(origin)))
     assert gitops.current_branch(canonical) == "main"
     assert gitops.head_sha(canonical) == _tip(origin, "main")
     landed = _tip(origin, "main")
@@ -3410,7 +3432,7 @@ def test_github_auto_merge_on_required_checks(tmp_path, bare_origin) -> None:
     assert result.outcome == "merged"
     assert result.pr is not None and result.pr.number == 1
     assert _has_file(origin, "main", "feature.txt")
-    canonical = workspace.clone_dir(normalize_repo("acme/widget"))
+    canonical = workspace.execution_checkout(normalize_repo("acme/widget"))
     assert gitops.head_sha(canonical) == _tip(origin, "main")
 
 
@@ -4109,7 +4131,14 @@ def test_remote_human_workstream_draft_checkpoint_and_safe_resume(tmp_path, bare
     )
     assert dispatched == ["prepare", "implement"]
     subprocess.run(
-        ["git", "-C", str(canonical), "update-ref", f"refs/heads/{second.branch}", saved_tip],
+        [
+            "git",
+            "-C",
+            str(workspace.clone_dir(normalize_repo("acme/widget"))),
+            "update-ref",
+            f"refs/heads/{second.branch}",
+            saved_tip,
+        ],
         check=True,
     )
 

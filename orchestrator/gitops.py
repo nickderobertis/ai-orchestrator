@@ -5,9 +5,10 @@ lifecycle is exercised against genuine git — in tests a local *bare* repo stan
 in for the remote, so clone/branch/commit/push/merge all run for real without a
 network or GitHub. A non-zero git exit raises `GitError` carrying git's stderr.
 
-The lifecycle isolates parallel subtasks with **worktrees**: one clone per repo,
+The lifecycle isolates parallel subtasks with **worktrees**: one clone per run,
 a fresh worktree (its own working directory, shared object store) per branch, so
-concurrent agents never collide in a single tree. See `workspace.py`.
+concurrent agents never collide in a single tree — and concurrent runs never
+collide in a single clone's worktree registry. See `workspace.py`.
 """
 
 from __future__ import annotations
@@ -26,14 +27,18 @@ __all__ = [
     "branch_exists",
     "branches",
     "clone",
+    "clone_sharing",
     "commit",
     "common_dir",
+    "config_value",
     "configure_repo_hooks",
+    "copy_branch",
     "current_branch",
     "default_branch",
     "delete_branch",
     "fetch",
     "hooks_dir",
+    "import_branch",
     "has_commits_ahead",
     "head_sha",
     "is_bare",
@@ -51,6 +56,9 @@ __all__ = [
     "remotes",
     "remote_url",
     "reset_hard",
+    "retain_objects_for_borrowers",
+    "set_hooks_path",
+    "unpublished_branches",
     "worktree_add",
     "worktree_add_detached",
     "worktree_add_existing",
@@ -86,8 +94,18 @@ def configure_repo_hooks(cwd: str | Path) -> Path | None:
     hooks = (Path(cwd) / ".githooks").resolve()
     if not hooks.is_dir():
         return None
-    _git(["config", "core.hooksPath", str(hooks)], cwd=cwd)
+    set_hooks_path(cwd, hooks)
     return hooks
+
+
+def set_hooks_path(cwd: str | Path, hooks: str | Path) -> None:
+    """Point this checkout at an explicit hooks directory."""
+    _git(["config", "core.hooksPath", str(hooks)], cwd=cwd)
+
+
+def config_value(cwd: str | Path, key: str) -> str:
+    """Return one effective config value, or the empty string when it is unset."""
+    return _git(["config", "--get", key], cwd=cwd, check=False).stdout.strip()
 
 
 def hooks_dir(cwd: str | Path) -> Path:
@@ -128,6 +146,71 @@ def clone(url: str, dest: str | Path, *, depth: int | None = None) -> Path:
     args += [url, str(dest)]
     _git(args)
     return Path(dest)
+
+
+def clone_sharing(source: str | Path, dest: str | Path, *, origin: str, base: str) -> Path:
+    """Clone ``source`` into a working-tree-less repo that borrows its object store.
+
+    ``--shared`` records ``source`` in ``objects/info/alternates`` instead of
+    copying its objects, and ``--no-checkout`` skips populating a working tree the
+    caller will never use — every task tree is a linked worktree. The result costs
+    little more than its refs, so one of these per run is affordable where one
+    shared clone per repository is not.
+
+    The clone's ``origin`` is then repointed at the repository's real remote and
+    its remote HEAD recorded, so the fetch that follows sees the same origin every
+    other checkout does rather than the local repo it was seeded from.
+    """
+    _git(["clone", "--shared", "--no-checkout", str(source), str(dest)])
+    _git(["remote", "set-url", "origin", origin], cwd=dest)
+    _git(["symbolic-ref", "refs/remotes/origin/HEAD", f"refs/remotes/origin/{base}"], cwd=dest)
+    return Path(dest)
+
+
+def retain_objects_for_borrowers(cwd: str | Path) -> None:
+    """Stop this repository from deleting objects a borrowing clone still needs.
+
+    A clone made with ``--shared`` reads its history out of *this* object store, and
+    Git offers the lender no way to learn that. Disabling automatic gc and refusing
+    to expire unreachable objects makes the lender safe to borrow from: nothing it
+    does on its own can drop an object out from under a live run.
+    """
+    _git(["config", "gc.auto", "0"], cwd=cwd)
+    _git(["config", "gc.pruneExpire", "never"], cwd=cwd)
+
+
+def unpublished_branches(cwd: str | Path) -> list[str]:
+    """Return local branches holding commits no ``origin`` remote-tracking ref has."""
+    proc = _git(
+        ["for-each-ref", "--format=%(refname:short)", "refs/heads"],
+        cwd=cwd,
+    )
+    unpublished = []
+    for branch in proc.stdout.splitlines():
+        if not branch:
+            continue
+        count = _git(
+            ["rev-list", "--count", branch, "--not", "--remotes=origin"], cwd=cwd, check=False
+        )
+        if count.returncode == 0 and int(count.stdout.strip() or "0") > 0:
+            unpublished.append(branch)
+    return unpublished
+
+
+def copy_branch(cwd: str | Path, destination: str | Path, branch: str) -> None:
+    """Force one local branch into another local repository, objects included."""
+    _git(
+        ["push", "--force", str(destination), f"refs/heads/{branch}:refs/heads/{branch}"],
+        cwd=cwd,
+    )
+
+
+def import_branch(cwd: str | Path, source: str | Path, branch: str) -> bool:
+    """Adopt ``branch`` from a local repository; return whether it had one."""
+    proc = _git(
+        ["fetch", str(source), f"+refs/heads/{branch}:refs/heads/{branch}"], cwd=cwd, check=False
+    )
+    return proc.returncode == 0
 
 
 def fetch(cwd: str | Path, *, remote: str = "origin", prune: bool = True) -> None:
@@ -290,9 +373,9 @@ def branch_exists(cwd: str | Path, branch: str) -> bool:
     return proc.returncode == 0
 
 
-def delete_branch(cwd: str | Path, branch: str) -> None:
+def delete_branch(cwd: str | Path, branch: str, *, check: bool = True) -> None:
     """Delete one exact local branch after its worktree has been removed."""
-    _git(["branch", "-D", branch], cwd=cwd)
+    _git(["branch", "-D", branch], cwd=cwd, check=check)
 
 
 def is_valid_branch_name(branch: str) -> bool:

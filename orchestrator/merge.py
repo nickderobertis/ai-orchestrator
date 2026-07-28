@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Literal, Protocol
 
 from . import gitops
-from .coordination import git_lock_identity
+from .coordination import GitLockIdentity, git_lock_identity
 from .github import AutoMergeUnavailable, Check, GitHubBackend, PRStatus, PullRequest
 from .merge_queue import merge_queue_turn
 from .outcomes import ALREADY_INTEGRATED_OUTCOME, LifecycleOutcome
@@ -66,6 +66,11 @@ class MergeContext:
     branch: str
     title: str
     body: str
+    #: What the merge queue serializes on. It has to name the *repository*, not the
+    #: clone the merge is built in: every run now builds in a clone of its own, and
+    #: a per-run identity would hand each contender its own empty queue. ``None``
+    #: falls back to the clone, which is correct only where one is shared.
+    queue_identity: GitLockIdentity | None = None
     method: str = "squash"  # GitHub merge method; ignored by the local strategy
     policy: MergePolicy = "auto"  # GitHub only
     poll_interval: float = 15.0
@@ -124,6 +129,13 @@ def assess_blocking_checks(status: PRStatus) -> BlockingCheckAssessment:
 
 class MergeStrategy(Protocol):
     def publish_and_merge(self, ctx: MergeContext) -> MergeOutcome: ...
+
+
+def _queue_identity(ctx: MergeContext) -> GitLockIdentity:
+    """Name the repository whose base branch this merge queue protects."""
+    if ctx.queue_identity is not None:
+        return ctx.queue_identity
+    return git_lock_identity(gitops.common_dir(ctx.clone_dir))
 
 
 def _record(ctx: MergeContext, kind: EventKind, detail: Detail) -> None:
@@ -244,8 +256,7 @@ class GitHubMergeStrategy:
 
     def publish_and_merge(self, ctx: MergeContext) -> MergeOutcome:
         if ctx.repository_type == "single-owner" and ctx.policy != "none":
-            identity = git_lock_identity(gitops.common_dir(ctx.clone_dir))
-            with merge_queue_turn(identity):
+            with merge_queue_turn(_queue_identity(ctx)):
                 return self._publish_and_merge(ctx)
         return self._publish_and_merge(ctx)
 
@@ -288,8 +299,7 @@ class LocalMergeStrategy:
     def publish_and_merge(self, ctx: MergeContext) -> MergeOutcome:
         if ctx.publication_attempts < 1:
             raise ValueError("publication_attempts must be at least 1")
-        identity = git_lock_identity(gitops.common_dir(ctx.clone_dir))
-        with merge_queue_turn(identity):
+        with merge_queue_turn(_queue_identity(ctx)):
             return self._publish_and_merge(ctx)
 
     def _publish_and_merge(self, ctx: MergeContext) -> MergeOutcome:

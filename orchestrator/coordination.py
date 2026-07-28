@@ -5,15 +5,17 @@ from __future__ import annotations
 import fcntl
 import hashlib
 import json
+import math
 import os
 import socket
 import tempfile
+import threading
 import time
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager, suppress
 from contextvars import ContextVar, Token
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, NewType, Protocol
+from typing import TYPE_CHECKING, Any, NewType, Protocol, TextIO
 
 if TYPE_CHECKING:
     from .journal import EventKind
@@ -25,6 +27,27 @@ class LockTimeout(TimeoutError):
 
 GitLockIdentity = NewType("GitLockIdentity", str)
 ProcessStart = NewType("ProcessStart", int)
+
+LOCK_TIMEOUT_ENV = "ORCHESTRATOR_LOCK_TIMEOUT_SECONDS"
+#: Contended identities are queued, not raced, so the wait an operator cares about
+#: is "how long may a whole turn take", not "how long until one attempt gives up".
+#: Minutes: a gate run inside a merge turn is normal, and failing a dispatch that
+#: would simply have been served next is the outcome this bound exists to avoid.
+DEFAULT_LOCK_TIMEOUT = 900.0
+
+
+def lock_timeout_seconds(env: Mapping[str, str] | None = None) -> float:
+    """Return the configured watchdog bound for a queued advisory-lock wait."""
+    raw = (os.environ if env is None else env).get(LOCK_TIMEOUT_ENV)
+    if raw is None:
+        return DEFAULT_LOCK_TIMEOUT
+    try:
+        value = float(raw)
+    except ValueError as exc:
+        raise ValueError(f"{LOCK_TIMEOUT_ENV} must be a number of seconds") from exc
+    if not math.isfinite(value) or value <= 0:
+        raise ValueError(f"{LOCK_TIMEOUT_ENV} must be a finite number of seconds above zero")
+    return value
 
 
 def process_start_identity(pid: int) -> ProcessStart | None:
@@ -118,41 +141,94 @@ def git_lock_identity(common_dir: str | Path) -> GitLockIdentity:
     return GitLockIdentity(f"git:{Path(common_dir)}")
 
 
+def _try_lock(path: Path) -> TextIO | None:
+    """Take the lock only if it is free right now (the fail-fast lease mode)."""
+    handle = path.open("a+", encoding="utf-8")
+    try:
+        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        handle.close()
+        return None
+    return handle
+
+
+def _queue_for_lock(path: Path, timeout: float) -> TextIO | None:
+    """Wait in the kernel's own ``flock`` queue, abandoning the turn after ``timeout``.
+
+    A busy-poll of ``LOCK_NB`` does not queue: every waiter races on each retry, so
+    an unlucky one can be passed over indefinitely and then fail while the resource
+    was never actually scarce. A blocking ``flock`` puts this process in line.
+
+    Blocking has no timeout of its own, so the wait happens on a helper thread and
+    this one watches the clock. If the watchdog fires first, the abandoned turn is
+    handed back the instant the kernel grants it: closing the file descriptor
+    releases the lock, so the next waiter is served rather than deadlocked behind a
+    caller that already gave up.
+    """
+    guard = threading.Lock()
+    granted: list[TextIO] = []
+    abandoned = False
+    settled = threading.Event()
+
+    def wait_in_line() -> None:
+        nonlocal abandoned
+        handle = path.open("a+", encoding="utf-8")
+        try:
+            fcntl.flock(handle, fcntl.LOCK_EX)
+        except OSError:
+            handle.close()
+            settled.set()
+            return
+        with guard:
+            if abandoned:
+                handle.close()
+            else:
+                granted.append(handle)
+        settled.set()
+
+    threading.Thread(target=wait_in_line, name="advisory-lock-wait", daemon=True).start()
+    settled.wait(timeout)
+    with guard:
+        if granted:
+            return granted[0]
+        abandoned = True
+        return None
+
+
+def _recorded_owner(path: Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8").strip() or "unknown owner"
+    except OSError:
+        return "unknown owner"
+
+
 @contextmanager
-def advisory_lock(identity: str, *, timeout: float = 30.0) -> Iterator[None]:
-    """Exclusively lock an identity, with owner metadata and a bounded wait."""
+def advisory_lock(identity: str, *, timeout: float | None = None) -> Iterator[None]:
+    """Exclusively lock an identity, with owner metadata and a bounded queued wait.
+
+    ``timeout`` bounds the whole wait; ``None`` takes it from `lock_timeout_seconds`.
+    A non-positive ``timeout`` keeps the fail-fast semantics a lease needs, where
+    "someone else owns this" is the answer rather than something to wait out.
+    """
+    seconds = lock_timeout_seconds() if timeout is None else timeout
     path = lock_path(identity)
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a+", encoding="utf-8") as handle:
-        started = time.monotonic()
-        deadline = started + timeout
-        while True:
-            try:
-                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                break
-            except BlockingIOError:
-                if time.monotonic() >= deadline:
-                    waited = max(0.0, time.monotonic() - started)
-                    if not identity.startswith("journal:"):
-                        observe_harness(
-                            "lock-wait",
-                            {"identity": identity, "seconds": waited, "acquired": False},
-                        )
-                    handle.seek(0)
-                    owner = handle.read().strip() or "unknown owner"
-                    raise LockTimeout(
-                        f"timed out after {timeout:g}s waiting for {identity!r}; owner: {owner}"
-                    ) from None
-                time.sleep(min(0.05, max(0.0, deadline - time.monotonic())))
-        if not identity.startswith("journal:"):
+    started = time.monotonic()
+    handle = _try_lock(path) if seconds <= 0 else _queue_for_lock(path, seconds)
+    waited = max(0.0, time.monotonic() - started)
+    reportable = not identity.startswith("journal:")
+    if handle is None:
+        if reportable:
             observe_harness(
-                "lock-wait",
-                {
-                    "identity": identity,
-                    "seconds": max(0.0, time.monotonic() - started),
-                    "acquired": True,
-                },
+                "lock-wait", {"identity": identity, "seconds": waited, "acquired": False}
             )
+        raise LockTimeout(
+            f"timed out after {seconds:g}s waiting for {identity!r}; "
+            f"owner: {_recorded_owner(path)} (raise {LOCK_TIMEOUT_ENV} if this wait is legitimate)"
+        )
+    if reportable:
+        observe_harness("lock-wait", {"identity": identity, "seconds": waited, "acquired": True})
+    with handle:
         handle.seek(0)
         handle.truncate()
         handle.write(f"pid={os.getpid()} host={socket.gethostname()} acquired={time.time():.0f}\n")

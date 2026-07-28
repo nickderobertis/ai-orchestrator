@@ -101,20 +101,59 @@ command option, which beats stored or inferred type. Change stored type with
 `just migrate-repo-type <repo> --repo-type <single-owner|team>`; choosing team
 also normalizes workflow to `remote`.
 
-The execution checkout hands out a **git worktree per branch** *outside* itself.
-N parallel subtasks against a repo get N isolated trees without N clones. The
-publication checkout is **never worked in directly and only ever fast-forwarded**
-after publication; the execution checkout is fetched and fast-forwarded before a
-worktree is cut from it. Before dispatch, the publication checkout must be clean
-with the selected root branch checked out; a safety clone never makes an arbitrary
-active publication branch the fast-forward target. Worktree
-creation, removal, refresh, publication, and integration are serialized across
-processes by an OS advisory lock keyed by the checkout's resolved git common-dir.
-Locks have bounded waits and report the owning PID/host on timeout. The slow agent
-dispatch remains unlocked. Default lifecycle branches include a unique run suffix;
-an explicit `--branch` is the intentional resume/override path. An active branch or
-occupied worktree is never reset or forcibly removed: inspect the reported path and
-recover that run, or remove it manually only after confirming its owner is gone.
+Each run cuts a **private clone** from the execution checkout and hands out a **git
+worktree per branch** from that clone, under
+`<workspace-root>/<repo-key>/runs/<run-token>/`. Git's worktree registry, ref
+store, and internal locks all belong to one clone, so runs that share a clone
+share the machinery that adds, prunes, and removes worktrees — and one run's
+cleanup can then reach a sibling's live tree. A per-run clone removes the sharing
+rather than the mutual exclusion.
+
+The clone is made with `git clone --shared --no-checkout`, so it borrows the
+execution checkout's object store through `objects/info/alternates` and populates
+no working tree of its own. A second concurrent run against this repository costs
+**184 KB** measured against a current execution checkout; it duplicates no
+history. Because a live run reads its history out of the lender, the lifecycle
+sets `gc.auto=0` and `gc.pruneExpire=never` on every execution checkout it
+borrows from: nothing the lender does on its own can then drop an object a
+borrower needs. Do not run `git gc --prune=now` or `git repack -ad` in a
+registered execution checkout while runs are active — those override the config
+and are the one way to corrupt a live per-run clone.
+
+A run's clone is disposable, so anything that must outlive it — a preserved
+branch, a pushed lifecycle branch, a recovery attestation — is copied back into
+the execution checkout, which stays the durable record every later run, monitor,
+and `repo-recover` reads. A run whose branch was preserved by an earlier run
+adopts it from there before resuming.
+
+The publication checkout is **never worked in directly and only ever
+fast-forwarded** after publication; the execution checkout is fetched and
+fast-forwarded before a run clone is cut from it. Before dispatch, the publication
+checkout must be clean with the selected root branch checked out; a safety clone
+never makes an arbitrary active publication branch the fast-forward target.
+Worktree creation, removal, refresh, publication, and integration are serialized
+by an OS advisory lock keyed by the checkout's resolved git common-dir — now
+per-run for worktree work, and shared only for the brief local operations that
+touch the execution or publication checkout. Fetches run **outside** every
+exclusive section, so one slow origin cannot hold another run out.
+
+Contended locks **queue** in the kernel's own `flock` line rather than racing a
+non-blocking retry, under a watchdog set by `ORCHESTRATOR_LOCK_TIMEOUT_SECONDS`
+(default 900s). `flock` releases on process death, so a crashed holder hands the
+queue to the next waiter instead of wedging it. A timeout reports the owning
+PID/host. The slow agent dispatch remains unlocked. Default lifecycle branches
+include a unique run suffix; an explicit `--branch` is the intentional
+resume/override path. An active branch or occupied worktree is never reset or
+forcibly removed: inspect the reported path and recover that run, or remove it
+manually only after confirming its owner is gone.
+
+Abandoned run directories are reclaimed by the next run on the same identity, and
+only when all three hold: its lease is unheld, its owning process is provably
+gone, and its clone has no commit that never reached origin. A run holding
+unpublished work is kept; rejoin it with that run's token to recover the work
+(tearing its worktree down copies the branch into the execution checkout). Flat
+per-branch directories left by the pre-`runs/` layout are never claimed or
+reaped, and a run never collides with them.
 
 The registry uses its own process-shared locks for resolution and first clone. Its
 JSON is reloaded and merged while locked, then atomically replaced, so concurrent
@@ -264,7 +303,9 @@ then repository-type defaults apply.
   as the effective `direct` policy when the stored workflow remains local.
 
 Single-owner automated publication is serialized by a process-shared FIFO merge
-queue keyed by the repository's git common directory. Worktrees and checkout
+queue keyed by the **publication** checkout's git common directory — the one thing
+every run of an identity shares, now that each run merges from a clone of its own.
+Worktrees and checkout
 aliases of one identity therefore enqueue together, including local direct merges,
 remote `auto`/`direct` merges, recovery, and the direct `integrate` train. Each
 writer waits for its queue position without a bounded merge-lock timeout and runs
@@ -605,13 +646,15 @@ the result.
 - **Several agents in one process:** the run-plan scheduler owns concurrency.
   Per-repo in-process locks serialize short canonical-checkout operations; agent
   dispatches in separate worktrees remain concurrent.
-- **Several processes on one machine:** OS advisory locks serialize registry,
-  ledger-claim, and short shared-state mutations. Automated single-owner merges
-  use the FIFO queue above instead of racing a bounded git lock. Locks and queue
-  state live under
+- **Several processes on one machine:** each run works in its own clone, so the
+  only shared state left is the registry, the ledger claim, and short mutations of
+  the execution/publication checkouts. OS advisory locks serialize those, queueing
+  contenders rather than racing them; automated single-owner merges use the FIFO
+  queue above. Locks and queue state live under
   `$AI_ORCHESTRATOR_HOME/locks` (normally `~/.ai-orchestrator/locks`) and protect
-  only that machine. On timeout, inspect the reported PID and host rather than
-  deleting a live lock or worktree.
+  only that machine. Raise `ORCHESTRATOR_LOCK_TIMEOUT_SECONDS` when a legitimate
+  turn (a gate inside a merge) can exceed the default 900s. On timeout, inspect the
+  reported PID and host rather than deleting a live lock or worktree.
 - **Several machines, remote-first:** GitHub is the remote coordinator. Local
   locks and ledgers are independent; unique branches, PR state, required checks,
   and merge/auto-merge coordinate publication globally.

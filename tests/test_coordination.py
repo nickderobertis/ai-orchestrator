@@ -11,9 +11,12 @@ from pathlib import Path
 import pytest
 
 from orchestrator.coordination import (
+    DEFAULT_LOCK_TIMEOUT,
+    LOCK_TIMEOUT_ENV,
     LockTimeout,
     advisory_lock,
     atomic_json,
+    lock_timeout_seconds,
     reset_harness_observer,
     set_harness_observer,
 )
@@ -70,6 +73,21 @@ def test_advisory_lock_observes_success_and_timeout_waits(monkeypatch, tmp_path)
         ("lock-wait", False),
     ]
     assert all(float(detail["seconds"]) >= 0 for _, detail in observed)
+
+
+def test_lock_timeout_defaults_to_minutes_and_is_configurable(monkeypatch) -> None:
+    assert lock_timeout_seconds({}) == DEFAULT_LOCK_TIMEOUT
+    assert DEFAULT_LOCK_TIMEOUT >= 300, "a queued wait must be bounded in minutes, not seconds"
+    assert lock_timeout_seconds({LOCK_TIMEOUT_ENV: "45.5"}) == 45.5
+
+    monkeypatch.setenv(LOCK_TIMEOUT_ENV, "120")
+    assert lock_timeout_seconds() == 120
+
+
+@pytest.mark.parametrize("value", ["", "soon", "0", "-1", "nan", "inf"])
+def test_lock_timeout_rejects_an_unusable_bound(value: str) -> None:
+    with pytest.raises(ValueError, match=LOCK_TIMEOUT_ENV):
+        lock_timeout_seconds({LOCK_TIMEOUT_ENV: value})
 
 
 def test_atomic_json_interrupted_replace_preserves_old_file(monkeypatch, tmp_path) -> None:

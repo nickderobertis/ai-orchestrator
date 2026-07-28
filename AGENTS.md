@@ -27,8 +27,10 @@ binary.
 Beyond dispatching at a directory, the harness manages a change's **full
 life cycle** against any repo (GitHub or a local path): resolve its normalized
 origin to one **repository identity**, choose a registered publication checkout,
-do the work in an **isolated worktree cut from an execution checkout**, verify it
-with the repo's own gate, and merge it. Checkout aliases share identity-level
+do the work in an **isolated worktree cut from a per-run clone of an execution
+checkout**, verify it with the repo's own gate, and merge it. That per-run clone
+shares the execution checkout's object store and is what keeps concurrent
+orchestrators from racing one worktree registry. Checkout aliases share identity-level
 `workflow`, `repo_type` (`single-owner` or `team`), and verification `gate`.
 Schema-v4 identities infer
 an omitted type from `gh api user --jq .login` versus the normalized GitHub origin
