@@ -9,7 +9,7 @@ ran, with which approval flag, and with which environment.
 Codex is the whole proof here, and deliberately so: it is this role's primary, so
 if routing resolved the worker order instead, codex would never record and the
 wait below fails. There is no matching negative assertion about claude-code —
-oneharness 0.5.9 ignores `ONEHARNESS_BIN_CLAUDE_CODE` (that harness runs through
+oneharness 0.5.10 ignores `ONEHARNESS_BIN_CLAUDE_CODE` (that harness runs through
 an SDK rather than a spawned CLI), so a stand-in cannot observe it and a
 "claude-code did not run" assertion would pass whether or not it did. The
 committed priority itself is held by tests/test_harness_routing.py, and real
