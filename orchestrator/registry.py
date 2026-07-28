@@ -9,6 +9,8 @@ therefore never acquire different publication workflows.
 # legacy workflow/type backfill combinations reuse the unit-proven atomic helper.
 # llmlint: ignore-file[modern_domain_modeling] gate None exists only while loading v2/v3;
 # v4 deliberately serializes command templates or the explicit no-op sentinel.
+# llmlint: ignore-file[names_match_behavior] "coverage" is the task's defined criterion:
+# an executable pre-push hook or a required status context, not content-equivalence to `gate`.
 
 from __future__ import annotations
 
@@ -27,6 +29,7 @@ from typing import NewType, cast
 
 from . import gitops
 from .coordination import advisory_lock, atomic_json, observe_harness
+from .github import CliGitHubBackend, GitHubBackend, GitHubError
 from .verify import NOOP_GATE, detect_gate_candidates
 from .workspace import IdentityKey, RepoRef, RepositoryType, Workflow, normalize_repo
 
@@ -115,6 +118,82 @@ class GateMigration:
     identity: IdentityKey
     gate: str
     aliases: tuple[Slug, ...]
+
+
+@dataclass(frozen=True)
+class MergeGateCoverage:
+    """Evidence that an identity's merge path runs a verification gate."""
+
+    identity: IdentityKey
+    hook: str | None
+    required_checks: tuple[str, ...]
+    default_branch: str | None
+    github_status: str
+    github_detail: str | None = None
+
+    @property
+    def meets_coverage_criteria(self) -> bool:
+        """Whether the operator-defined hook-or-required-check criterion is met."""
+        return self.hook is not None or bool(self.required_checks)
+
+
+def merge_gate_coverage(
+    identity: IdentityKey,
+    checkout: str | Path,
+    *,
+    github: GitHubBackend | None = None,
+) -> MergeGateCoverage:
+    """Inspect local hooks and GitHub branch protection for one identity."""
+    hooks = gitops.hooks_dir(checkout)
+    pre_push = hooks / "pre-push"
+    hook = str(pre_push) if pre_push.is_file() and os.access(pre_push, os.X_OK) else None
+    normalized = str(identity)
+    prefix = "https://github.com/"
+    if not normalized.startswith(prefix):
+        return MergeGateCoverage(identity, hook, (), None, "not-applicable")
+    backend = github or CliGitHubBackend()
+    repo = normalized.removeprefix(prefix)
+    try:
+        branch = backend.default_branch(repo)
+        checks = backend.required_status_checks(repo, branch)
+    except GitHubError as exc:
+        return MergeGateCoverage(identity, hook, (), None, "unknown", str(exc))
+    return MergeGateCoverage(identity, hook, checks, branch, "available")
+
+
+def _print_merge_gate_coverage(coverage: MergeGateCoverage) -> None:
+    evidence: list[str] = []
+    if coverage.hook is not None:
+        evidence.append(f"executable pre-push hook ({coverage.hook})")
+    if coverage.required_checks:
+        evidence.append(
+            f"required PR status checks on {coverage.default_branch} "
+            f"({', '.join(coverage.required_checks)})"
+        )
+    state = "covered" if coverage.meets_coverage_criteria else "not-covered"
+    print(f"merge_gate_coverage identity={coverage.identity} status={state}")
+    for item in evidence:
+        print(f"  coverage={item}")
+    match coverage.github_status:
+        case "not-applicable":
+            print("  required_pr_status_checks=not-applicable (no GitHub origin)")
+        case "unknown":
+            print(f"  required_pr_status_checks=unknown ({coverage.github_detail})")
+        case "available" if not coverage.required_checks:
+            print(f"  required_pr_status_checks=none (default branch {coverage.default_branch})")
+    if coverage.hook is None:
+        print("  executable_pre_push_hook=missing")
+    if not coverage.meets_coverage_criteria:
+        github_gap = (
+            "required PR status checks are unknown"
+            if coverage.github_status == "unknown"
+            else "no required PR status checks exist"
+        )
+        print(
+            f"WARNING: identity {coverage.identity} has no executable pre-push hook and "
+            f"{github_gap}; its merge path is not known to run a gate.",
+            file=sys.stderr,
+        )
 
 
 def _validate_gate(value: object) -> str:
@@ -1163,7 +1242,7 @@ class Registry:
         return results
 
 
-def main_register(argv: list[str] | None = None) -> int:
+def main_register(argv: list[str] | None = None, *, github: GitHubBackend | None = None) -> int:
     parser = argparse.ArgumentParser(description="Register a repository checkout alias")
     parser.add_argument("spec")
     parser.add_argument("path", nargs="?")
@@ -1195,6 +1274,9 @@ def main_register(argv: list[str] | None = None) -> int:
             "Use just migrate-repo-gate <repo> --gate <command> after investigation.",
             file=sys.stderr,
         )
+    _print_merge_gate_coverage(
+        merge_gate_coverage(_url_identity(entry.origin), path, github=github)
+    )
     return 0
 
 
@@ -1255,16 +1337,37 @@ def main_migrate_gate(argv: list[str] | None = None) -> int:
     return 0
 
 
-def main_repos(argv: list[str] | None = None) -> int:
+def main_repos(argv: list[str] | None = None, *, github: GitHubBackend | None = None) -> int:
     parser = argparse.ArgumentParser(description="List repository identities and checkout aliases")
     parser.add_argument("--refresh", action="store_true")
+    parser.add_argument(
+        "--audit-gate-coverage",
+        action="store_true",
+        help="inspect whether each identity's merge path runs a gate",
+    )
     parser.add_argument("--format", choices=("text", "json"), default="text")
     args = parser.parse_args(argv)
     try:
         registry = Registry()
         registry.migrate_legacy()
         refresh = registry.refresh() if args.refresh else []
-    except RegistryError as exc:
+        coverage = (
+            {
+                identity: merge_gate_coverage(
+                    identity,
+                    next(
+                        Path(entry.path)
+                        for entry in registry.entries.values()
+                        if _url_identity(entry.origin) == identity
+                    ),
+                    github=github,
+                )
+                for identity in sorted(registry.identities)
+            }
+            if args.audit_gate_coverage
+            else {}
+        )
+    except (RegistryError, gitops.GitError) as exc:
         parser.error(str(exc))
     if args.format == "json":
         payload: dict[str, object] = {
@@ -1289,6 +1392,15 @@ def main_repos(argv: list[str] | None = None) -> int:
         }
         if args.refresh:
             payload["refresh"] = [asdict(result) for result in refresh]
+        if args.audit_gate_coverage:
+            payload["merge_gate_coverage"] = {
+                str(identity): {
+                    **asdict(result),
+                    "identity": str(result.identity),
+                    "covered": result.meets_coverage_criteria,
+                }
+                for identity, result in coverage.items()
+            }
         json.dump(payload, sys.stdout, indent=2, sort_keys=True)
         print()
     else:
@@ -1306,4 +1418,6 @@ def main_repos(argv: list[str] | None = None) -> int:
             print(f"checkout\t{slug}\t{entry.path}\t{_url_identity(entry.origin)}")
         for result in refresh:
             print(f"{result.slug}: {'updated' if result.refreshed else 'skipped'}: {result.reason}")
+        for coverage_result in coverage.values():
+            _print_merge_gate_coverage(coverage_result)
     return 0

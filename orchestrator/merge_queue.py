@@ -11,11 +11,18 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import NewType, TypedDict, cast
 
-from .coordination import GitLockIdentity, advisory_lock, atomic_json, lock_path, observe_harness
+from .coordination import (
+    GitLockIdentity,
+    ProcessStart,
+    advisory_lock,
+    atomic_json,
+    lock_path,
+    observe_harness,
+    process_start_identity,
+)
 
 _STATE_VERSION = 2
 TicketId = NewType("TicketId", str)
-ProcessStart = NewType("ProcessStart", int)
 
 
 class _Ticket(TypedDict):
@@ -35,30 +42,6 @@ def _queue_path(identity: str) -> Path:
 
 def _state_identity(identity: str) -> str:
     return f"merge-queue-state:{identity}"
-
-
-def _process_start_identity(pid: int) -> ProcessStart | None:
-    """Return Linux's same-host process start token, or ``None`` if not live."""
-    if pid <= 0:
-        return None
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return None
-    except PermissionError:
-        pass
-    try:
-        # The parenthesized comm field may contain spaces or parentheses. Fields
-        # after its final ')' begin with state (field 3); starttime is field 22.
-        proc_root = Path(os.environ.get("AI_ORCHESTRATOR_PROC_ROOT", "/proc"))
-        fields = (
-            (proc_root / str(pid) / "stat").read_text(encoding="utf-8").rsplit(")", 1)[1].split()
-        )
-        if fields[0] == "Z":
-            return None
-        return ProcessStart(int(fields[19]))
-    except (OSError, IndexError, ValueError):
-        return None
 
 
 def _read_state(path: Path) -> _QueueState:
@@ -103,7 +86,7 @@ def _reap_dead(tickets: list[_Ticket]) -> list[_Ticket]:
     return [
         ticket
         for ticket in tickets
-        if _process_start_identity(ticket["pid"]) == ticket["process_start"]
+        if process_start_identity(ticket["pid"]) == ticket["process_start"]
     ]
 
 
@@ -118,7 +101,7 @@ def merge_queue_turn(identity: GitLockIdentity) -> Iterator[None]:
     """
     path = _queue_path(identity)
     pid = os.getpid()
-    process_start = _process_start_identity(pid)
+    process_start = process_start_identity(pid)
     if process_start is None:
         raise RuntimeError(f"cannot identify merge queue process {pid}")
     ticket: _Ticket = {

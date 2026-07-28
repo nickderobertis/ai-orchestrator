@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import socket
 import threading
 from collections.abc import Mapping
@@ -14,6 +15,7 @@ import pytest
 
 from orchestrator.channel import create_channel
 from orchestrator.config import ConfigError
+from orchestrator.coordination import atomic_json
 from orchestrator.dispatch import DispatchError, Report
 from orchestrator.edits import EditCommand
 from orchestrator.gitops import GitError
@@ -400,22 +402,45 @@ def test_main_validates_and_services_inherited_proposal_channel(
     monkeypatch.setenv("AI_ORCHESTRATOR_CHANNEL_RUN_ID", "outer")
 
     pumps: list[_RecordingProposalPump] = []
-    synthesized: list[str] = []
+    dispatched: list[bool] = []
+    runs_dir = tmp_path / "runs space;still-one-argument"
 
     def fake_check_in(persona: str, task: str, **kwargs: object) -> Report:
         assert persona == "check-in"
         assert "Journal:" in task and "Monitor details:" in task
-        output = Path(task.split("Output file: ", 1)[1])
-        output.write_text("worker: running; follow-ups: none\n", encoding="utf-8")
+        command = task.split("Check-in command: ", 1)[1].splitlines()[0]
+        assert shlex.split(command) == [
+            "just",
+            "channel-surface",
+            "outer",
+            "MESSAGE",
+            "--runs-dir",
+            str(runs_dir.resolve()),
+        ]
+        atomic_json(
+            channel / "heartbeat-surface.json",
+            {
+                "op": "supervisor",
+                "run_id": "outer",
+                "round": 1,
+                "surface": {
+                    "kind": "heartbeat",
+                    "message": "worker: running; follow-ups: none",
+                    "blocking": False,
+                },
+                "messages": [],
+            },
+        )
         return _report(persona)
 
     def make_pump(
         path: Path, run_id: str, round_number: int, **kwargs: object
     ) -> _RecordingProposalPump:
         assert (path, run_id, round_number) == (channel, "outer", 1)
-        synthesize = kwargs.get("synthesize_heartbeat")
-        assert callable(synthesize)
-        synthesized.append(synthesize())
+        dispatch_check_in = kwargs.get("dispatch_check_in")
+        assert callable(dispatch_check_in)
+        dispatch_check_in()
+        dispatched.append(True)
         pump = _RecordingProposalPump()
         pumps.append(pump)
         return pump
@@ -428,10 +453,10 @@ def test_main_validates_and_services_inherited_proposal_channel(
     )
     assert main([str(plan), "--no-record"]) == 0
     assert not pumps
-    assert main([str(plan), "--run", "recorded", "--runs-dir", str(tmp_path / "runs")]) == 0
+    assert main([str(plan), "--run", "recorded", "--runs-dir", str(runs_dir)]) == 0
     assert len(pumps) == 1 and pumps[0].drains >= 2
-    assert synthesized == ["worker: running; follow-ups: none\n"]
-    assert (tmp_path / "runs" / "recorded" / "round-01" / "result.json").is_file()
+    assert dispatched == [True]
+    assert (runs_dir / "recorded" / "round-01" / "result.json").is_file()
 
     for key in ("AI_ORCHESTRATOR_CHANNEL_DIR", "AI_ORCHESTRATOR_CHANNEL_RUN_ID"):
         monkeypatch.delenv(key)
@@ -1699,7 +1724,12 @@ def test_repo_plan_alias_warns(monkeypatch, capsys) -> None:
         "oneharness exited with signal: 9 (SIGKILL)",
         "harness failed (auth): login required",
         "harness claude-code cannot write v0.3 history telemetry",
+        "harness codex cannot write v1.0 history telemetry",
         "could not write history: new history record lacks complete v0.3 telemetry",
+        "could not write history: new history run lacks complete v1.0 telemetry",
+        "new history run lacks complete v12.34.5 telemetry",
+        "[Errno 28] No space left on device",
+        "worker was OOMKilled",
     ],
 )
 def test_infrastructure_failure_classifier_recognizes_no_dispatch_errors(detail: str) -> None:
@@ -1718,3 +1748,43 @@ def test_infrastructure_failure_classifier_keeps_ambiguous_errors_retryable(
     detail: str,
 ) -> None:
     assert infrastructure_failure_detail(RuntimeError(detail)) is None
+
+
+def test_infrastructure_failure_classifier_uses_capacity_exception_contract() -> None:
+    from orchestrator.scratch import CAPACITY_ERROR_MARKER, ScratchCapacityError
+
+    detail = "capacity threshold reached"
+    assert infrastructure_failure_detail(ScratchCapacityError(detail)) == detail
+    marked = f"{CAPACITY_ERROR_MARKER} {detail}"
+    assert infrastructure_failure_detail(RuntimeError(marked)) == marked
+
+
+def test_recorded_round_translates_scratch_sweep_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    plan = tmp_path / "plan.json"
+    plan.write_text(
+        json.dumps(
+            {
+                "schema_version": PLAN_SCHEMA_VERSION,
+                "name": "sweep-failure",
+                "tasks": [
+                    {
+                        "id": "no-diff",
+                        "task": "No dispatch.",
+                        "expects_no_diff": True,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "orchestrator.graph.sweep_scratch",
+        lambda: (_ for _ in ()).throw(PermissionError("denied")),
+    )
+
+    assert main([str(plan), "--run", "demo", "--runs-dir", str(tmp_path / "runs")]) == 2
+    error = capsys.readouterr().err
+    assert "scratch sweep failed before claiming the round" in error
+    assert "just sweep-scratch --dry-run" in error

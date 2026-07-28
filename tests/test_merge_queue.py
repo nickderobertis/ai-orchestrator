@@ -17,11 +17,11 @@ from orchestrator.coordination import (
     GitLockIdentity,
     advisory_lock,
     atomic_json,
+    process_start_identity,
     reset_harness_observer,
     set_harness_observer,
 )
 from orchestrator.merge_queue import (
-    _process_start_identity,
     _queue_path,
     _read_state,
     _state_identity,
@@ -264,8 +264,8 @@ def test_queue_state_rejects_other_malformed_tickets(
 
 
 def test_nonexistent_process_has_no_start_identity() -> None:
-    assert _process_start_identity(-1) is None
-    assert _process_start_identity(2**31 - 1) is None
+    assert process_start_identity(-1) is None
+    assert process_start_identity(2**31 - 1) is None
 
 
 def test_zombie_process_has_no_start_identity() -> None:
@@ -283,7 +283,7 @@ def test_zombie_process_has_no_start_identity() -> None:
     else:
         pytest.fail("child process did not become a zombie")
 
-    assert _process_start_identity(process.pid) is None
+    assert process_start_identity(process.pid) is None
     process.join(5)
 
 

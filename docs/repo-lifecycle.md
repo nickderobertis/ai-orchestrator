@@ -58,6 +58,19 @@ For self-dispatch safety, `--execution-checkout` likewise accepts a path or alia
 and cuts the task worktree from that exact clone while keeping `<repo>`'s publication
 workflow and post-merge fast-forward.
 
+Before resolving or cloning the target, lifecycle dispatch checks free space on
+the filesystem backing Python's temporary directory. It refuses to start below
+the conservative default in `orchestrator.scratch.DEFAULT_MIN_FREE_BYTES` and
+reports the scratch path, available bytes, and `just sweep-scratch`.
+Set `ORCHESTRATOR_MIN_FREE_BYTES` to a non-negative byte count when a host needs a
+different threshold. This preflight is a terminal infrastructure failure in a
+tracked graph, so it does not consume another round.
+
+The lifecycle acquires the host scratch shared lock before this preflight and
+holds it through dispatch, verification, and publication. Destructive cleanup of
+aged third-party scratch requires the exclusive lock, so a concurrent sweep
+cannot remove scratch that an in-flight target gate owns or is about to use.
+
 ## Repository identity, checkout roles, and isolation
 
 `Workspace` (`orchestrator/workspace.py`) resolves two independent decisions through
@@ -162,6 +175,23 @@ Lifecycle verification runs this stored command; registering only the subset can
 let gate-only findings escape until publication's pre-push hook. Correct an
 existing identity across every alias with `just migrate-repo-gate <repo> --gate
 '<complete-gate-command>'`.
+
+Registration also audits whether the merge path itself runs a gate. It reports an
+executable effective `pre-push` hook (respecting `core.hooksPath`) and required
+GitHub status checks on the repository's actual default branch. A configured
+hooks directory without an executable `pre-push` does not count. If neither is
+present, registration succeeds but prints an identity-specific warning; an
+unavailable GitHub response is reported as unknown, and local-only origins are
+reported as not applicable. Audit every existing identity without re-registering
+it with:
+
+```sh
+just repos --audit-gate-coverage
+```
+
+Run this audit and resolve every missing or unknown result before relying on the
+merge path to replace lifecycle-side verification. The command only reports
+coverage; it never installs hooks or changes branch protection.
 
 A contradictory `--workflow` is rejected. Change publication policy only through
 the identity-wide migration command. For the current ai-orchestrator aliases, the
@@ -416,13 +446,19 @@ runs/<run-id>/round-01/result.json
 
 The plan mapping is preserved exactly and the result is the command's JSON
 payload. The round directory and `running` status are committed before dispatch;
-the result and `completed` status are atomic updates. A second process cannot claim
-the same explicit run/round. If a process died, inspect its recorded worktrees and
-then use `just run-plan ... --run <id> --recover`; recovery is explicit and never
-silently overwrites a result. Pass `--run <id>` to name a run; without it, a fresh unique run id comes
-from the plan's top-level `name` or filename. The continuation trailer is written
-to stderr, so `--format json` stdout remains machine-readable. Use `--no-record`
-to opt out or `--runs-dir` to move the ledger.
+the result and `completed` status are atomic updates, and an owner that stops
+without recording a result leaves `abandoned` instead of `running`. A second
+process cannot claim the same explicit run/round. If a process died, inspect its
+recorded worktrees and then use `just run-plan ... --run <id> --recover`; recovery
+is explicit and never silently overwrites a result. `just runs` and `just status`
+report a round whose recorded owner no longer exists as `ABANDONED` rather than as
+in flight, so a lifecycle round that lost its executor is visibly waiting for that
+recovery rather than looking like work in progress. Pass `--run <id>` to name a
+run; without it, a fresh unique run id comes from the plan's top-level `name` or
+filename. The continuation trailer is written to stderr, so `--format json` stdout
+remains machine-readable. Use `--no-record` to opt out — it claims no round and so
+has no ledger to abandon or recover, though it detaches like any other round — or
+`--runs-dir` to move the ledger.
 
 After inspecting a round, put retry/split/add/drop or `complete_human` decisions
 in `edits.json`, or attest a ready human on the CLI:

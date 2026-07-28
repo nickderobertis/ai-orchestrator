@@ -255,7 +255,7 @@ def test_run_onejudge_sets_per_turn_timeout(
 ) -> None:
     onejudge = tmp_path / "onejudge"
     onejudge.write_text(
-        "#!/bin/sh\n"
+        '#!/bin/sh\nif [ "$1" = "--version" ]; then echo "onejudge 0.3.4"; exit 0; fi\n'
         "printf '"
         '{"schema_version":4,"transcript":{"messages":[]},"stopped_early":false,'
         '"usage":{"oneharness_timeout":"%s"}}'
@@ -271,6 +271,22 @@ def test_run_onejudge_sets_per_turn_timeout(
 
     assert report.raw is not None
     assert report.usage["oneharness_timeout"] == expected_timeout
+    assert report.raw["provenance"] == {
+        "provider_kind": "oneharness",
+        "onejudge": {"path": str(onejudge), "version": "0.3.4"},
+    }
+
+
+def test_run_onejudge_rejects_shadowed_version_before_dispatch(tmp_path: Path) -> None:
+    onejudge = tmp_path / "onejudge"
+    onejudge.write_text(
+        "#!/bin/sh\nprintf 'onejudge 0.3.0\\n'\n",
+        encoding="utf-8",
+    )
+    onejudge.chmod(0o700)
+
+    with pytest.raises(DispatchError, match=r"expected 'onejudge 0.3.4'.*onejudge"):
+        run_onejudge({}, "task", onejudge_bin=os.fspath(onejudge))
 
 
 @pytest.mark.parametrize("bad_timeout", ["", "abc", "12.5", "0", "-5"])
@@ -291,7 +307,10 @@ def test_run_onejudge_rejects_invalid_stall_timeout(monkeypatch, bad_timeout: st
 
 def test_run_onejudge_surfaces_a_quiet_wedged_process_tree(tmp_path) -> None:
     onejudge = tmp_path / "onejudge"
-    onejudge.write_text("#!/bin/sh\nsleep 30\n", encoding="utf-8")
+    onejudge.write_text(
+        '#!/bin/sh\n[ "$1" = "--version" ] && { echo "onejudge 0.3.4"; exit; }\nsleep 30\n',
+        encoding="utf-8",
+    )
     onejudge.chmod(0o700)
 
     with pytest.raises(DispatchError, match="dispatch stalled for 0.3s.*terminated"):
@@ -307,7 +326,7 @@ def test_run_onejudge_surfaces_a_quiet_wedged_process_tree(tmp_path) -> None:
 def test_run_onejudge_allows_slow_dispatch_with_real_io_progress(tmp_path) -> None:
     onejudge = tmp_path / "onejudge"
     onejudge.write_text(
-        "#!/bin/sh\n"
+        '#!/bin/sh\nif [ "$1" = "--version" ]; then echo "onejudge 0.3.4"; exit 0; fi\n'
         "i=0\n"
         "while [ $i -lt 8 ]; do printf progress >&2; sleep 0.08; i=$((i + 1)); done\n"
         'printf \'%s\\n\' \'{"schema_version":4,"transcript":{"messages":[]},'
@@ -332,7 +351,7 @@ def test_run_onejudge_retries_transient_empty_watchdog_pid(
 ) -> None:
     onejudge = tmp_path / "onejudge"
     onejudge.write_text(
-        "#!/bin/sh\n"
+        '#!/bin/sh\nif [ "$1" = "--version" ]; then echo "onejudge 0.3.4"; exit 0; fi\n'
         "sleep 0.2\n"
         'printf \'%s\\n\' \'{"schema_version":4,"transcript":{"messages":[]},'
         '"stopped_early":false}\'\n',
@@ -365,7 +384,7 @@ def test_worker_heartbeat_deadline_ignores_busy_descendant(tmp_path) -> None:
     status = tmp_path / "agent-status"
     onejudge = tmp_path / "onejudge"
     onejudge.write_text(
-        "#!/bin/sh\n"
+        '#!/bin/sh\nif [ "$1" = "--version" ]; then echo "onejudge 0.3.4"; exit 0; fi\n'
         'printf "%s\\n" "$$" >"$ORCHESTRATOR_AGENT_STATUS_DIR/agent.pid"\n'
         'touch "$ORCHESTRATOR_AGENT_STATUS_DIR/agent.heartbeat"\n'
         "while :; do :; done &\n"
@@ -398,7 +417,7 @@ def test_missing_agent_heartbeat_reaches_worker_death_deadline(tmp_path) -> None
     status = tmp_path / "agent-status"
     onejudge = tmp_path / "onejudge"
     onejudge.write_text(
-        "#!/bin/sh\n"
+        '#!/bin/sh\nif [ "$1" = "--version" ]; then echo "onejudge 0.3.4"; exit 0; fi\n'
         'printf "%s\\n" "$$" >"$ORCHESTRATOR_AGENT_STATUS_DIR/agent.pid"\n'
         "while :; do :; done &\n"
         "child=$!\n"
@@ -427,7 +446,8 @@ def test_malformed_agent_identity_falls_back_to_stall_watchdog(tmp_path) -> None
     status = tmp_path / "agent-status"
     onejudge = tmp_path / "onejudge"
     onejudge.write_text(
-        '#!/bin/sh\nprintf "bad\\n" >"$ORCHESTRATOR_AGENT_STATUS_DIR/agent.pid"\nsleep 60\n',
+        '#!/bin/sh\n[ "$1" = "--version" ] && { echo "onejudge 0.3.4"; exit; }\n'
+        'printf "bad\\n" >"$ORCHESTRATOR_AGENT_STATUS_DIR/agent.pid"\nsleep 60\n',
         encoding="utf-8",
     )
     onejudge.chmod(0o700)
@@ -448,7 +468,7 @@ def test_malformed_agent_child_pid_does_not_mask_heartbeat_deadline(tmp_path) ->
     status = tmp_path / "agent-status"
     onejudge = tmp_path / "onejudge"
     onejudge.write_text(
-        "#!/bin/sh\n"
+        '#!/bin/sh\nif [ "$1" = "--version" ]; then echo "onejudge 0.3.4"; exit 0; fi\n'
         'printf "%s\\n" "$$" >"$ORCHESTRATOR_AGENT_STATUS_DIR/agent.pid"\n'
         'printf "bad\\n" >"$ORCHESTRATOR_AGENT_STATUS_DIR/agent.child.pid"\n'
         'touch "$ORCHESTRATOR_AGENT_STATUS_DIR/agent.heartbeat"\n'
@@ -473,7 +493,8 @@ def test_malformed_agent_child_pid_does_not_mask_heartbeat_deadline(tmp_path) ->
 def test_agent_pid_outside_dispatch_tree_is_rejected(tmp_path) -> None:
     onejudge = tmp_path / "onejudge"
     onejudge.write_text(
-        '#!/bin/sh\nprintf "2147483647\\n" >"$ORCHESTRATOR_AGENT_STATUS_DIR/agent.pid"\nsleep 60\n',
+        '#!/bin/sh\n[ "$1" = "--version" ] && { echo "onejudge 0.3.4"; exit; }\n'
+        'printf "2147483647\\n" >"$ORCHESTRATOR_AGENT_STATUS_DIR/agent.pid"\nsleep 60\n',
         encoding="utf-8",
     )
     onejudge.chmod(0o700)
@@ -481,6 +502,40 @@ def test_agent_pid_outside_dispatch_tree_is_rejected(tmp_path) -> None:
     report = run_onejudge({}, "task", onejudge_bin=os.fspath(onejudge))
 
     assert report.outcome == "worker-died"
+
+
+def test_agent_turns_shorter_than_the_poll_interval_are_not_mistaken_for_death(tmp_path) -> None:
+    """A healthy worker rotates agent turns faster than the supervisor samples.
+
+    The process tree is sampled before the recorded agent pid is read, so a turn
+    that starts or finishes inside that gap is absent from the sample while the
+    worker is perfectly alive.
+    """
+    onejudge = tmp_path / "onejudge"
+    onejudge.write_text(
+        '#!/bin/sh\n[ "$1" = "--version" ] && { echo "onejudge 0.3.4"; exit; }\n'
+        'd="$ORCHESTRATOR_AGENT_STATUS_DIR"\ni=0\n'
+        "while [ $i -lt 40 ]; do\n"
+        "  sh -c 'sleep 0.12' &\n"
+        "  child=$!\n"
+        '  printf "%s\\n" "$child" >"$d/agent.pid.tmp"; mv "$d/agent.pid.tmp" "$d/agent.pid"\n'
+        '  rm -f "$d/agent.done"\n'
+        '  printf "%s\\n" "$i" >"$d/agent.heartbeat.tmp";'
+        ' mv "$d/agent.heartbeat.tmp" "$d/agent.heartbeat"\n'
+        "  wait $child\n"
+        '  printf "%s\\n" "$child" >"$d/agent.done.tmp"; mv "$d/agent.done.tmp" "$d/agent.done"\n'
+        "  i=$((i + 1))\n"
+        "done\n"
+        'printf \'%s\\n\' \'{"schema_version":4,"transcript":{"messages":[]},'
+        '"stopped_early":false}\'\n',
+        encoding="utf-8",
+    )
+    onejudge.chmod(0o700)
+
+    report = run_onejudge({}, "task", onejudge_bin=os.fspath(onejudge))
+
+    assert report.outcome is None
+    assert report.completed is True
 
 
 @pytest.mark.parametrize("value", ["bad", "0", "-1", "nan", "inf"])
@@ -610,7 +665,7 @@ def _label_echoing_onejudge(tmp_path) -> str:
     """A stand-in onejudge that reports the labels it was actually handed."""
     onejudge = tmp_path / "onejudge"
     onejudge.write_text(
-        "#!/bin/sh\n"
+        '#!/bin/sh\nif [ "$1" = "--version" ]; then echo "onejudge 0.3.4"; exit 0; fi\n'
         "printf '"
         '{"schema_version":4,"transcript":{"messages":[]},"stopped_early":false,'
         '"usage":{"labels":"%s"}}'

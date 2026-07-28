@@ -128,10 +128,10 @@ expose_codex() {
 }
 
 ensure_codex() {
-  # codex is the fallback PRIMARY harness in oneharness.toml — it runs as its own
-  # process, so its tools execute directly (nested claude-code defers them; see
-  # docs/onejudge-integration.md "Harnesses and the live path"). Install the CLI;
-  # authentication is a one-time manual step (`codex login`).
+  # codex is the worker fallback plus the judge and llmlint primary. It runs as
+  # its own process, so its tools execute directly (nested claude-code can defer
+  # them; see docs/onejudge-integration.md "Harnesses and the live path").
+  # Authentication is a one-time manual step (`codex login`).
   local codex_binary
   if codex_binary="$(command -v codex 2>/dev/null)"; then
     # npm under asdf installs codex inside the selected Node version, while
@@ -255,6 +255,12 @@ fi
 
 toolchain_failed=0
 install_project_dependencies || toolchain_failed=1
+if [ -f "$REPO_ROOT/justfile" ] && command -v just >/dev/null 2>&1; then
+  just --justfile "$REPO_ROOT/justfile" --working-directory "$REPO_ROOT" sweep-scratch >&2 \
+    || log "scratch sweep failed; continuing session setup"
+else
+  log "scratch sweep unavailable; continuing session setup"
+fi
 install_bun || toolchain_failed=1
 ensure_codex
 ensure_codex_gate
@@ -264,7 +270,8 @@ persist_session_env
 bash "$SCRIPT_DIR/setup-llmlint.sh" || log "setup-llmlint failed (continuing)"
 
 if verify_onejudge; then
-  log "ready (onejudge: $(onejudge --version))"
+  onejudge_binary="$(command -v onejudge)"
+  log "ready (onejudge: $("$onejudge_binary" --version) at $onejudge_binary)"
 else
   log "onejudge $ADOPTED_ONEJUDGE_VERSION is required — 'just check' will fail until setup succeeds"
   toolchain_failed=1

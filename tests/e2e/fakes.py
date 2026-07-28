@@ -133,6 +133,9 @@ class FakeGitHub:
     def default_branch(self, repo: str) -> str:
         return "main"
 
+    def required_status_checks(self, repo: str, branch: str) -> tuple[str, ...]:
+        return self.required
+
     def supports_ci(self, repo: str) -> bool:
         return True
 

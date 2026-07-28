@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# llmlint: ignore-file[changed_behavior_has_e2e] subprocess tests drive every wrapper branch; only the paid oneharness child is replaced at the repository's designated external seam.
 # Force the orchestrator's agent config; target-project discovery must not override it.
 #
 # onejudge routes BOTH conversation sides through this one provider.bin: the agent
@@ -12,23 +13,91 @@ set -euo pipefail
 
 script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 repo_root=$(dirname -- "$script_dir")
+# The worker config maps this portable, non-secret parent value into
+# CLAUDE_CONFIG_DIR only for its alternate-subscription child; the derivation is
+# shared with the orchestrator wrapper so the two roles cannot drift apart.
+alt_config_helper="$script_dir/claude-alt-config-dir.sh"
+if [ ! -f "$alt_config_helper" ] || [ ! -r "$alt_config_helper" ]; then
+    echo "oneharness-agent: required helper is not a readable regular file: $alt_config_helper; restore it from the repository or run 'just bootstrap', then retry" >&2
+    exit 2
+fi
+# shellcheck source=scripts/claude-alt-config-dir.sh
+. "$alt_config_helper"
+resolve_claude_alt_config_dir oneharness-agent || exit $?
+alternate_config_dir=$ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR
+agent_config="$repo_root/oneharness.toml"
 
 if [ "${1-}" != "run" ]; then
-    echo "oneharness-agent: expected the 'run' subcommand" >&2
+    echo "oneharness-agent: expected the 'run' subcommand; invoke through onejudge dispatch or retry as 'scripts/oneharness-agent.sh run ...'" >&2
     exit 2
 fi
 shift
 
+caller_config=false
+caller_config_path=
+expect_config_value=false
+# llmlint: ignore[boundary_inputs_validated] this repository's dispatch layer is the only caller and passes exactly one --config; oneharness honors the last value, which this wrapper validates.
 for arg in "$@"; do
+    if [[ $expect_config_value == true ]]; then
+        if [[ -z $arg ]]; then
+            echo "oneharness-agent: --config requires a non-empty path; retry with '--config /absolute/path/to/config.toml'" >&2
+            exit 2
+        fi
+        caller_config_path=$arg
+        expect_config_value=false
+        continue
+    fi
     case "$arg" in
-        --config | --config=*)
-            exec oneharness run "$@"
+        --config)
+            if [[ $caller_config == true ]]; then
+                echo "oneharness-agent: --config may be provided only once; remove duplicate config arguments and retry" >&2
+                exit 2
+            fi
+            caller_config=true
+            expect_config_value=true
+            ;;
+        --config=*)
+            if [[ $caller_config == true ]]; then
+                echo "oneharness-agent: --config may be provided only once; remove duplicate config arguments and retry" >&2
+                exit 2
+            fi
+            if [[ -z ${arg#--config=} ]]; then
+                echo "oneharness-agent: --config requires a non-empty path; retry with '--config=/absolute/path/to/config.toml'" >&2
+                exit 2
+            fi
+            caller_config=true
+            caller_config_path=${arg#--config=}
             ;;
     esac
 done
+if [[ $expect_config_value == true ]]; then
+    echo "oneharness-agent: --config requires a path; retry with '--config /absolute/path/to/config.toml'" >&2
+    exit 2
+fi
+if [[ $caller_config == true ]]; then
+    if [[ ! -f "$caller_config_path" || ! -r "$caller_config_path" ]]; then
+        echo "oneharness-agent: caller config is not a readable regular file: $caller_config_path; correct the path and retry" >&2
+        exit 2
+    fi
+    # Keep the portable indirection available while oneharness resolves config.
+    # The judge's explicit primary variant does not consume it and masks
+    # CLAUDE_CONFIG_DIR, but oneharness may still discover and layer the project
+    # config before applying the caller's --config.
+    exec oneharness run "$@"
+fi
+
+if [ ! -f "$agent_config" ] || [ ! -r "$agent_config" ]; then
+    echo "oneharness-agent: required agent config is not a readable regular file: $agent_config; restore it from the repository or run 'just bootstrap', then retry" >&2
+    exit 2
+fi
+if [ ! -e "$alternate_config_dir" ] && [ -z "${ONEHARNESS_HARNESSES-}" ]; then
+    # A host with only its primary Claude identity must not fail before fallback:
+    # skip the absent alternate candidate and dispatch directly through Codex.
+    export ONEHARNESS_HARNESSES=codex
+fi
 
 if [ -z "${ORCHESTRATOR_AGENT_STATUS_DIR-}" ]; then
-    exec oneharness run --config "$repo_root/oneharness.toml" "$@"
+    exec oneharness run --config "$agent_config" "$@"
 fi
 
 status_dir=$ORCHESTRATOR_AGENT_STATUS_DIR
@@ -72,7 +141,7 @@ write_status agent.heartbeat "$heartbeat_sequence"
 exec 3<&0
 # llmlint: ignore[tool_output_is_signal, boundary_inputs_validated] this wrapper is a transparent
 # conduit for that protocol in both directions, exactly as the `exec` pass-throughs above are.
-oneharness run --config "$repo_root/oneharness.toml" "$@" <&3 &
+oneharness run --config "$agent_config" "$@" <&3 &
 agent_pid=$!
 write_status agent.child.pid "$agent_pid"
 while agent_state=$(ps -o stat= -p "$agent_pid" 2>/dev/null) &&

@@ -52,7 +52,24 @@ just migrate-repo-type local/ai-orchestrator --repo-type single-owner
 | `personas/` | Per-persona onejudge deltas (roles). See [`personas/README.md`](personas/README.md). |
 | `oneharness.toml` / `oneharness.judge.toml` | The two conversation sides (agent / judge) — harness + model selection. |
 | `orchestrator/` | The mechanics: base⊕persona merge, tracked mixed-graph scheduling, lifecycle publication, and run ledger. |
-| `docs/` | [Tracked graph model](docs/orchestration.md) · [repository lifecycle](docs/repo-lifecycle.md) · [onejudge integration](docs/onejudge-integration.md) |
+| `docs/` | [Tracked graph model](docs/orchestration.md) · [repository lifecycle](docs/repo-lifecycle.md) · [onejudge integration](docs/onejudge-integration.md) · [DAG Observatory](docs/dag-ui.md) |
+
+## DAG Observatory
+
+The web UI in `apps/dag-ui` shows current and historical DAGs grouped by their
+launching Claude or Codex session. It provides a live React Flow graph, node
+tasks and results, PR/check/gate/log detail, per-role oneharness transcripts,
+and a whole-run planner view.
+
+With the read-only telemetry server listening on its default loopback address,
+run:
+
+```sh
+just bootstrap
+just dag-ui
+```
+
+Then open the address Vite prints.
 
 ## One tracked graph
 

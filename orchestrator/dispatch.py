@@ -23,14 +23,13 @@ import shutil
 import socket
 import subprocess
 import sys
-import tempfile
 import threading
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Literal, Protocol, TypedDict, cast
+from typing import Any, Literal, NotRequired, Protocol, TypedDict, cast
 
 import yaml
 from onejudge_sdk import (
@@ -50,13 +49,25 @@ from .channel import (
     ChannelError,
     create_channel,
 )
-from .cli_contract import ROUND_BUDGET_OPTION
+from .cli_contract import DEFAULT_ONEHARNESS_MODE, ONEHARNESS_MODES, ROUND_BUDGET_OPTION
 from .config import ConfigError, build_effective_config, load_yaml
 from .coordination import atomic_json
 from .goals import Goal, graph_identities, register_run, update_run_owner
-from .labels import LABEL_ENV, LabelError, merge_labels
+from .labels import LABEL_ENV, LabelError, merge_labels, semantic_agent_labels
+from .launch import (
+    KNOWN_LAUNCHERS,
+    LAUNCH_RECORD_NAME,
+    LAUNCHER_KINDS,
+    LaunchError,
+    LaunchInfo,
+    generate_launch_id,
+    resolve_launcher_kind,
+    validate_session_id,
+    write_provenance,
+)
 from .personas import persona_path
 from .runs import ArtifactPaths, resolve_run_dir, slugify
+from .scratch import owned_scratch_directory
 from .watchdog import (
     ProcessId,
     process_activity,
@@ -68,15 +79,20 @@ from .watchdog import (
 # onejudge's own exit codes (see docs/cli.md): 0 completed + boolean evals passed,
 # 1 hit the turn cap / a boolean eval failed, 2 bad config or usage.
 EXIT_COMPLETED = 0
+ONEJUDGE_VERSION_FILE = REPO_ROOT / "config" / "onejudge.version"
 EXIT_INCOMPLETE = 1
 EXIT_CONFIG_ERROR = 2
 # Temporary hard per-turn ceiling for legitimate long-running agents. Dispatch
 # inactivity is bounded separately below; issue #6 tracks finer phase budgets.
 DEFAULT_ONEHARNESS_TIMEOUT = "10800"
 DEFAULT_DISPATCH_STALL_TIMEOUT = "600"
-DEFAULT_WORKER_HEARTBEAT_TIMEOUT = "5"
+DEFAULT_WORKER_HEARTBEAT_TIMEOUT = "60"
 ORCHESTRATOR_ONEHARNESS_TIMEOUT = "86400"
 AGENT_ONEHARNESS_BIN = REPO_ROOT / "scripts" / "oneharness-agent.sh"
+# The orchestrator role has its own harness order (codex first) and, like the
+# worker wrapper, exports the alternate-Claude config indirection its fallback
+# variant needs; a raw `oneharness` would discover the worker chain instead.
+ORCHESTRATOR_ONEHARNESS_BIN = REPO_ROOT / "scripts" / "oneharness-orchestrator.sh"
 DispatchOutcome = Literal["worker-died"]
 WatchdogReason = Literal["worker-died", "stalled"]
 
@@ -86,7 +102,12 @@ class DispatchError(Exception):
 
 
 class LaunchRecord(TypedDict):
-    """Stable planner handoff persisted for one orchestrator launch."""
+    """Stable planner handoff persisted for one orchestrator launch.
+
+    The ``launch`` link is the non-sensitive half of the provenance scheme: it names
+    the ``launch_id`` the read API joins to the out-of-repo provenance record. The
+    launcher session id never enters the run directory (see `orchestrator.launch`).
+    """
 
     schema_version: int
     run_id: str
@@ -94,6 +115,36 @@ class LaunchRecord(TypedDict):
     plan_name: str
     commands: dict[str, str]
     goal: Goal | None
+    launch: NotRequired[LaunchInfo]
+
+
+def _launch_provenance(
+    *,
+    launcher: str | None,
+    session_id: str | None,
+    repository_identity: str,
+) -> tuple[str, dict[str, str]]:
+    """Mint a launch id, persist provenance for a known launcher, and build labels.
+
+    Returns the ``launch_id`` and the history labels (``launch_id`` + ``launcher``)
+    to stamp on every oneharness invocation this launch makes, so any nested
+    worker/judge/orchestrator conversation joins back to its launching session. The
+    sensitive session id goes only to the protected out-of-repo provenance record.
+    """
+    try:
+        kind = resolve_launcher_kind(launcher)
+        validated_session = validate_session_id(session_id)
+    except LaunchError as exc:
+        raise DispatchError(str(exc)) from exc
+    launch_id = generate_launch_id()
+    if kind in KNOWN_LAUNCHERS and validated_session is not None:
+        write_provenance(
+            launch_id=launch_id,
+            launcher=kind,
+            launcher_session_id=validated_session,
+            repository_identity=repository_identity,
+        )
+    return launch_id, {"launch_id": launch_id, "launcher": kind}
 
 
 class _TelemetryResult(Protocol):
@@ -155,7 +206,39 @@ class WatchdogSignal:
     observed_pids: tuple[ProcessId, ...]
 
 
-def _build_report(persona: str, result: RunResult) -> Report:
+class OneJudgeProvenance(TypedDict):
+    path: str
+    version: str
+
+
+class DispatchProvenance(TypedDict):
+    provider_kind: str
+    onejudge: OneJudgeProvenance
+
+
+def _resolve_onejudge(onejudge_bin: str, env: Mapping[str, str]) -> OneJudgeProvenance:
+    """Resolve and verify the executable against the repository's adopted version."""
+    resolved = shutil.which(onejudge_bin, path=env.get("PATH"))
+    if resolved is None:
+        raise DispatchError(f"onejudge binary not found: {onejudge_bin!r} — run 'just bootstrap'")
+    resolved = os.path.abspath(resolved)
+    adopted = ONEJUDGE_VERSION_FILE.read_text(encoding="utf-8").strip()
+    version_result = subprocess.run(
+        [resolved, "--version"], text=True, capture_output=True, env=env, check=False
+    )
+    expected = f"onejudge {adopted}"
+    actual = version_result.stdout.strip()
+    if version_result.returncode != 0 or actual != expected:
+        observed = actual or version_result.stderr.strip() or "<no version output>"
+        raise DispatchError(
+            f"onejudge version mismatch: expected {expected!r}, got {observed!r} from {resolved}"
+        )
+    return OneJudgeProvenance(path=resolved, version=adopted)
+
+
+def _build_report(
+    persona: str, result: RunResult, *, provenance: DispatchProvenance | None = None
+) -> Report:
     """Adapt the SDK's validated report without changing our public contract."""
     raw_assessment = result.raw.get("assessment")
     assessment = (
@@ -169,6 +252,9 @@ def _build_report(persona: str, result: RunResult) -> Report:
     raw_telemetry = (
         typed_result.telemetry if hasattr(result, "telemetry") else result.raw.get("telemetry")
     )
+    raw = dict(result.raw)
+    if provenance is not None:
+        raw["provenance"] = provenance
     return Report(
         persona=persona,
         exit_code=result.exit_code,
@@ -177,7 +263,7 @@ def _build_report(persona: str, result: RunResult) -> Report:
         assistant_turns=result.assistant_turns,
         verdicts=cast(list[dict[str, Any]], list(result.verdicts)),
         usage=dict(result.usage),
-        raw=dict(result.raw),
+        raw=raw,
         stderr=result.stderr,
         assessment=assessment,
         telemetry_data=dict(raw_telemetry) if isinstance(raw_telemetry, dict) else None,
@@ -261,6 +347,14 @@ def _read_watchdog_pid(pid_file: Path) -> ProcessId:
     return ProcessId(pid)
 
 
+def _agent_status(status_dir: Path, name: str) -> str | None:
+    """Read one agent status marker, treating an unreadable marker as absent."""
+    try:
+        return (status_dir / name).read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+
+
 def _validate_environment(env: Mapping[str, str]) -> None:
     """Validate caller-provided values before they reach the process boundary."""
     for key, value in env.items():
@@ -303,8 +397,17 @@ def run_onejudge(
     _validate_oneharness_timeout(process_env["ONEHARNESS_TIMEOUT"])
     stall_timeout = _stall_timeout(process_env)
     heartbeat_timeout = _worker_heartbeat_timeout(process_env)
-    if shutil.which(onejudge_bin, path=process_env.get("PATH")) is None:
-        raise DispatchError(f"onejudge binary not found: {onejudge_bin!r} — run 'just bootstrap'")
+    onejudge_provenance = _resolve_onejudge(onejudge_bin, process_env)
+    resolved_onejudge = onejudge_provenance["path"]
+    configured_provider = config.get("provider")
+    provider_kind = provider
+    if provider_kind is None and isinstance(configured_provider, dict):
+        configured_kind = configured_provider.get("kind")
+        provider_kind = configured_kind if isinstance(configured_kind, str) else None
+    provenance = DispatchProvenance(
+        provider_kind=provider_kind or "oneharness",
+        onejudge=onejudge_provenance,
+    )
     inherited_labels = process_env.get(LABEL_ENV)
     if labels or inherited_labels is not None:
         try:
@@ -317,9 +420,9 @@ def run_onejudge(
             process_env.pop(LABEL_ENV, None)
 
     async def execute() -> RunResult | Report | None:
-        with tempfile.TemporaryDirectory(prefix="orchestrator-watchdog-") as directory:
-            pid_file = Path(directory) / "pid"
-            agent_status_dir = Path(directory) / "agent"
+        with owned_scratch_directory() as directory:
+            pid_file = directory / "pid"
+            agent_status_dir = directory / "agent"
             agent_status_dir.mkdir()
             process_env["ORCHESTRATOR_AGENT_STATUS_DIR"] = os.fspath(agent_status_dir)
             runner = OneJudge(
@@ -328,7 +431,7 @@ def run_onejudge(
                     "-m",
                     "orchestrator.watchdog",
                     os.fspath(pid_file),
-                    onejudge_bin,
+                    resolved_onejudge,
                 ),
             )
             run = asyncio.create_task(
@@ -392,25 +495,29 @@ def run_onejudge(
                         except (OSError, ValueError):
                             current_agent = ""
                             agent_pid = ProcessId(0)
-                        done_file = agent_status_dir / "agent.done"
-                        done_agent = (
-                            done_file.read_text(encoding="utf-8").strip()
-                            if done_file.exists()
-                            else None
-                        )
-                        failed_file = agent_status_dir / "agent.failed"
-                        failed_agent = (
-                            failed_file.read_text(encoding="utf-8").strip()
-                            if failed_file.exists()
-                            else None
-                        )
+                        done_agent = _agent_status(agent_status_dir, "agent.done")
+                        failed_agent = _agent_status(agent_status_dir, "agent.failed")
                         if (  # pragma: no cover - real killed-agent e2e
                             current_agent and failed_agent == current_agent
                         ):
                             return WatchdogSignal("worker-died", pid, observed)
                         if current_agent and done_agent != current_agent:
                             if agent_pid not in activity.pids:
-                                return WatchdogSignal("worker-died", pid, observed)
+                                # This tree was sampled before the pid was read, and an
+                                # agent turn can both start and finish inside that gap.
+                                # Re-sample, then re-read the marker the wrapper writes
+                                # before it exits: only a pid missing from the newer
+                                # tree and still unmarked has actually died.
+                                activity = process_activity(pid)
+                                if activity.pids:
+                                    observed = tuple(dict.fromkeys((*observed, *activity.pids)))
+                                    observed_tree = observed
+                                if (
+                                    agent_pid not in activity.pids
+                                    and _agent_status(agent_status_dir, "agent.done")
+                                    != current_agent
+                                ):
+                                    return WatchdogSignal("worker-died", pid, observed)
                             child_pid_file = agent_status_dir / "agent.child.pid"
                             if child_pid_file.exists():
                                 try:
@@ -531,10 +638,22 @@ def run_onejudge(
             f"onejudge failed (exit 2 — bad config or provider/runtime error): {exc}"
         ) from exc
     if isinstance(result, Report):
+        result.raw = dict(result.raw or {})
+        result.raw["provenance"] = provenance
         return result
     if result is None:
-        return Report(persona, 1, False, True, 0, [], {}, None, "cancelled cooperatively")
-    return _build_report(persona, result)
+        return Report(
+            persona,
+            1,
+            False,
+            True,
+            0,
+            [],
+            {},
+            {"provenance": provenance},
+            "cancelled cooperatively",
+        )
+    return _build_report(persona, result, provenance=provenance)
 
 
 def _agent_run_context(
@@ -633,6 +752,10 @@ def dispatch(
     )
     process_env = {**context_env, **(env or {})}
     _validate_environment(process_env)
+    semantic_labels = {
+        **(labels or {}),
+        **semantic_agent_labels(persona),
+    }
     return run_onejudge(
         config,
         task,
@@ -642,7 +765,7 @@ def dispatch(
         provider=provider,
         env=process_env or None,
         unset_llmlint_wrapper=not use_llmlint_wrapper,
-        labels=labels,
+        labels=semantic_labels,
         timeout=timeout,
         cancel=cancel,
     )
@@ -668,8 +791,24 @@ def launch_orchestrator(
     cwd: str | Path = REPO_ROOT,
     acknowledge_concurrent: bool = False,
     round_budget: float | None = None,
+    oneharness_mode: str = DEFAULT_ONEHARNESS_MODE,
+    launcher: str | None = None,
+    launcher_session_id: str | None = None,
 ) -> str:
-    """Launch a detached live-supervised orchestrator and return its run id."""
+    """Launch a detached live-supervised orchestrator and return its run id.
+
+    ``oneharness_mode`` is forwarded to the launched process as ``ONEHARNESS_MODE``
+    and defaults to ``bypass`` for the same reason `just repo-task` does: the
+    container is the sandbox, and claude-code's non-interactive default denies —
+    without prompting — every command outside `.claude/settings.json`, which would
+    leave the orchestrator unable to run the very commands its persona mandates.
+    """
+    # Validate launcher provenance up front so a bad value fails before any side effect.
+    try:
+        resolve_launcher_kind(launcher)
+        validate_session_id(launcher_session_id)
+    except LaunchError as exc:
+        raise DispatchError(str(exc)) from exc
     plan = Path(plan_path).resolve()
     if not plan.is_file():
         raise DispatchError(f"plan does not exist: {plan}")
@@ -677,6 +816,10 @@ def launch_orchestrator(
         raise DispatchError("onejudge binary must be a non-empty, non-NUL string")
     if round_budget is not None and (not math.isfinite(round_budget) or round_budget <= 0):
         raise DispatchError(f"'{ROUND_BUDGET_OPTION}' must be a positive finite number")
+    if oneharness_mode not in ONEHARNESS_MODES:
+        raise DispatchError(
+            f"oneharness mode must be one of {', '.join(ONEHARNESS_MODES)}, got {oneharness_mode!r}"
+        )
     plan_mapping = load_yaml(plan)
     # Import locally because graph's direct-agent runner imports this module.
     from .graph import parse_graph, validate_graph_repo_aliases
@@ -731,6 +874,10 @@ def launch_orchestrator(
         provider_bin = skill.get("bin", "oneharness")
         if not isinstance(provider_bin, str) or not provider_bin or "\x00" in provider_bin:
             raise DispatchError("orchestrator oneharness provider bin must be a non-empty string")
+        # Pin the role's own wrapper, exactly as project dispatch pins the worker's
+        # (`_agent_run_context`): it forces oneharness.orchestrator.toml and exports
+        # the alternate-Claude config indirection that config's fallback names.
+        skill["bin"] = str(ORCHESTRATOR_ONEHARNESS_BIN)
     config["provider"] = {
         "kind": "split",
         "skill": skill,
@@ -770,11 +917,33 @@ def launch_orchestrator(
         "round, review its recorded "
         "result, and surface milestones, blockers, departures, and closeout to your supervisor."
     )
-    command = [onejudge_bin, "run", str(effective), "--task", task, "--format", "json"]
+    resolved_onejudge = _resolve_onejudge(onejudge_bin, os.environ)["path"]
+    command = [resolved_onejudge, "run", str(effective), "--task", task, "--format", "json"]
+    # Stamped once, here: nested dispatches inherit ONEHARNESS_HISTORY_LABELS and layer
+    # their node labels over it (run_onejudge -> merge_labels), so every worker, judge,
+    # and check-in conversation carries the launch join without stamping each one.
+    repository_identity = next(iter(sorted(str(item) for item in graph_identities(graph))), "")
+    launch_id, launch_labels = _launch_provenance(
+        launcher=launcher,
+        session_id=launcher_session_id,
+        repository_identity=repository_identity,
+    )
     process_env = dict(os.environ)
     process_env["ONEHARNESS_TIMEOUT"] = str(turn_timeout)
+    process_env["ONEHARNESS_MODE"] = oneharness_mode
     process_env[CHANNEL_DIR_ENV] = str(channel_dir)
     process_env[CHANNEL_RUN_ID_ENV] = run_dir.name
+    try:
+        process_env[LABEL_ENV] = merge_labels(
+            process_env.get(LABEL_ENV),
+            {
+                **launch_labels,
+                "run_id": run_dir.name,
+                **semantic_agent_labels("orchestrator"),
+            },
+        )
+    except LabelError as exc:
+        raise DispatchError(f"invalid launch label: {exc}") from exc
     _validate_oneharness_timeout(process_env["ONEHARNESS_TIMEOUT"])
     try:
         with (
@@ -807,7 +976,7 @@ def launch_orchestrator(
         raw_plan_name if isinstance(raw_plan_name, str) and raw_plan_name.strip() else plan.stem
     )
     launch: LaunchRecord = {
-        "schema_version": 1,
+        "schema_version": 2,
         "run_id": run_dir.name,
         "channel_id": run_dir.name,
         "plan_name": plan_name,
@@ -816,8 +985,11 @@ def launch_orchestrator(
             "channel_next": f"just channel-next {run_dir.name}",
             "monitor": f"just monitor {run_dir.name}",
         },
+        # The key is a literal because `LaunchRecord` types it; `launch.read_launch_info`
+        # is the only reader, and tests/test_orchestrator_launch.py round-trips the two.
+        "launch": {"launch_id": launch_id},
     }
-    atomic_json(run_dir / "launch.json", launch)
+    atomic_json(run_dir / LAUNCH_RECORD_NAME, launch)
     (run_dir / "planner.md").write_text(
         "# Planner launch\n\n"
         f"- Run id: `{run_dir.name}`\n"
@@ -846,9 +1018,29 @@ def main_orchestrate(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(ROUND_BUDGET_OPTION, type=float, metavar="SECONDS")
     parser.add_argument(
+        "--oneharness-mode",
+        default=DEFAULT_ONEHARNESS_MODE,
+        choices=list(ONEHARNESS_MODES),
+        help="approval/sandbox mode for the orchestrator's harness (via ONEHARNESS_MODE; "
+        f"default: {DEFAULT_ONEHARNESS_MODE} — the no-approval mode; the container is "
+        "the sandbox)",
+    )
+    parser.add_argument(
         "--skill-command",
         nargs="+",
         help="command-provider argv for the orchestrator agent (primarily for deterministic tests)",
+    )
+    parser.add_argument(
+        "--launcher",
+        choices=sorted(LAUNCHER_KINDS),
+        default=os.environ.get("ORCHESTRATOR_LAUNCHER"),
+        help="top-level harness running orchestrate (default: $ORCHESTRATOR_LAUNCHER)",
+    )
+    parser.add_argument(
+        "--launcher-session",
+        default=os.environ.get("ORCHESTRATOR_LAUNCHER_SESSION"),
+        metavar="SESSION_ID",
+        help="launching session id to group runs by (default: $ORCHESTRATOR_LAUNCHER_SESSION)",
     )
     args = parser.parse_args(argv)
     try:
@@ -863,11 +1055,19 @@ def main_orchestrate(argv: list[str] | None = None) -> int:
             heartbeat_interval=args.heartbeat_interval,
             acknowledge_concurrent=args.acknowledge_concurrent,
             round_budget=args.round_budget,
+            oneharness_mode=args.oneharness_mode,
+            launcher=args.launcher,
+            launcher_session_id=args.launcher_session,
         )
         print(
-            (args.runs_dir.resolve() / launched / "launch.json").read_text(encoding="utf-8").strip()
+            (args.runs_dir.resolve() / launched / LAUNCH_RECORD_NAME)
+            .read_text(encoding="utf-8")
+            .strip()
         )
-    except (DispatchError, ConfigError) as exc:
+    except (DispatchError, ConfigError, LaunchError) as exc:
+        # LaunchError reaches here from provenance validation that happens before
+        # anything is spawned; it is a launch-boundary refusal like the others, not
+        # a crash, so it exits 2 with a message rather than a traceback.
         print(f"orchestrate: {exc}", file=sys.stderr)
         return EXIT_CONFIG_ERROR
     return 0
@@ -900,7 +1100,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--oneharness-mode",
         default=None,
-        choices=["read-only", "plan", "default", "edit", "auto", "bypass"],
+        choices=list(ONEHARNESS_MODES),
         help="approval/sandbox mode for the harness (via ONEHARNESS_MODE); "
         "use 'bypass' where codex's OS sandbox can't run",
     )

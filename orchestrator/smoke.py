@@ -19,7 +19,7 @@ from typing import cast
 from . import REPO_ROOT
 from .history import HistoryError, HistorySession, SessionId, all_sessions, session_records
 from .labels import format_labels
-from .telemetry import HistoryRecord, history_session_is_successful_with_complete_telemetry
+from .telemetry import HistoryRecord, history_session_launch_failure
 
 TASK = "Reply with exactly: smoke-ok"
 TIMEOUT_SECONDS = 120
@@ -156,11 +156,11 @@ def _validate_history(
     prompts = [record.get("prompt") for record in records]
     if not prompts or any(prompt != TASK or not prompt for prompt in prompts):
         raise HistoryError("real harness did not receive the dispatched task")
-    if not history_session_is_successful_with_complete_telemetry(session):
-        raise HistoryError("real harness history telemetry is incomplete")
-    harness = records[-1].get("harness")
-    if not isinstance(harness, str) or not harness:
-        raise HistoryError("real harness history does not identify the selected harness")
+    failure = history_session_launch_failure(session)
+    if failure is not None:
+        raise HistoryError(f"real harness history {failure}")
+    # The launch contract above already proved every record names its harness.
+    harness = str(records[-1].get("harness"))
     usage = records[-1].get("usage", {})
     cost = usage.get("cost_usd") if isinstance(usage, dict) else None
     valid_cost = (

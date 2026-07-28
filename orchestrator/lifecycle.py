@@ -34,6 +34,7 @@ from pathlib import Path
 from typing import Any, Protocol, cast
 
 from . import BASE_CONFIG, PERSONA_DIR, gitops
+from .cli_contract import DEFAULT_ONEHARNESS_MODE, ONEHARNESS_MODES
 from .config import ConfigError, load_yaml
 from .coordination import LockTimeout, advisory_lock, atomic_json, atomic_text
 from .dispatch import Report, dispatch
@@ -70,6 +71,7 @@ from .registry import Registry, RegistryError, validate_identity_key
 from .runs import (
     RECORDED_RESULT_SCHEMA_VERSION,
     RESUME_MODES,
+    ClaimedRound,
     RepoPlanPayload,
     RepoPlanResultItem,
     ResumeMode,
@@ -83,6 +85,7 @@ from .runs import (
     status_summary,
     write_result,
 )
+from .scratch import require_scratch_capacity, scratch_dispatch_guarded
 from .verify import NOOP_GATE, VerifyResult, resolve_gate_template, run_gate
 from .workspace import (
     CACHE_ENV,
@@ -1389,6 +1392,7 @@ def _pause_at_human_step(
     return pause(checkpoint, pr.url)
 
 
+@scratch_dispatch_guarded
 def run_repo_task(
     repo: str,
     task: str | None = None,
@@ -1453,6 +1457,7 @@ def run_repo_task(
     belongs to no graph — and because observation must never decide an outcome.
     """
     log: NodeSink = journal if journal is not None else NullNodeJournal()
+    require_scratch_capacity()
     effective_steps = steps or (
         [Step("main", persona, task, max_turns=max_turns, done_when=done_when)]
         if persona and task
@@ -2802,8 +2807,8 @@ def add_lifecycle_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--merge-method", choices=MERGE_METHODS, default="squash")
     parser.add_argument(
         "--oneharness-mode",
-        default="bypass",
-        choices=["read-only", "plan", "default", "edit", "auto", "bypass"],
+        default=DEFAULT_ONEHARNESS_MODE,
+        choices=list(ONEHARNESS_MODES),
         help="approval/sandbox mode for the harness (default: bypass — the "
         "no-approval mode; the container is the sandbox)",
     )
@@ -3035,7 +3040,7 @@ def main_plan(argv: list[str] | None = None) -> int:
         print(f"repo-plan: {exc}", file=sys.stderr)
         return 2
 
-    round_record: tuple[int, Path] | None = None
+    round_record: ClaimedRound | None = None
     if run_dir is not None:
         try:
             round_record = prepare_round(run_dir, plan_mapping, recover=args.recover)
@@ -3061,7 +3066,7 @@ def main_plan(argv: list[str] | None = None) -> int:
 
     payload: RepoPlanPayload = {
         "schema_version": RECORDED_RESULT_SCHEMA_VERSION,
-        **({"round": round_record[0]} if round_record is not None else {}),
+        **({"round": round_record.number} if round_record is not None else {}),
         "ok": result.ok,
         "started_order": result.started_order,
         "results": {

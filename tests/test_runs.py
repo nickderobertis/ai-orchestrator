@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 import socket
 
 import pytest
@@ -11,6 +12,9 @@ import pytest
 from orchestrator.config import ConfigError
 from orchestrator.next_round import main, main_runs
 from orchestrator.runs import (
+    AbandonedRound,
+    abandoned_round,
+    abandoned_round_indicator,
     as_result_payload,
     latest_round,
     list_runs,
@@ -19,6 +23,8 @@ from orchestrator.runs import (
     record_completions,
     resolve_run_dir,
     result_state,
+    round_abandonment_guard,
+    round_appears_in_flight,
     status_summary,
     validate_run_id,
     write_next_plan,
@@ -117,7 +123,7 @@ def test_write_result_rejects_duplicate_result(tmp_path) -> None:
 def test_recovery_refuses_live_owner_and_claims_abandoned_round(tmp_path) -> None:
     run_dir = tmp_path / "run"
     _, round_dir = prepare_round(run_dir, PLAN)
-    with pytest.raises(ConfigError, match="owner is still alive; recovery refused"):
+    with pytest.raises(ConfigError, match="owner may still be alive; recovery refused"):
         prepare_round(run_dir, PLAN, recover=True)
 
     status = round_dir / "status.json"
@@ -146,6 +152,202 @@ def test_recovery_refuses_invalid_owner_metadata(tmp_path, owner) -> None:
 
     with pytest.raises(ConfigError, match="invalid owner metadata; recovery refused"):
         prepare_round(run_dir, PLAN, recover=True)
+
+
+def _own(round_dir, **overrides) -> None:
+    """Rewrite a claimed round's owner record."""
+    record = {"status": "running", "pid": os.getpid(), "host": socket.gethostname(), **overrides}
+    (round_dir / "status.json").write_text(json.dumps(record), encoding="utf-8")
+
+
+def test_a_signalled_round_records_its_abandonment_and_stops_being_live(tmp_path) -> None:
+    """The real signalled journey is tests/e2e/test_round_ownership_e2e.py.
+
+    Here the installed handler is invoked directly, with the signal blocked so its
+    final self-signal stays pending; setting the disposition to `SIG_IGN` before
+    unblocking discards that pending signal so the test process survives what a round
+    owner would not.
+    """
+    run_dir = tmp_path / "run"
+    _, round_dir = prepare_round(run_dir, PLAN)
+    with round_abandonment_guard(round_dir):
+        installed = signal.getsignal(signal.SIGTERM)
+        assert callable(installed)
+        signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTERM})
+        try:
+            installed(signal.SIGTERM, None)
+            signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        finally:
+            signal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGTERM})
+
+    recorded = json.loads((round_dir / "status.json").read_text(encoding="utf-8"))
+    assert recorded["status"] == "abandoned"
+    assert recorded["reason"] == f"owner pid {os.getpid()} took SIGTERM"
+    assert recorded["pid"] == os.getpid()
+    assert round_appears_in_flight(round_dir) is False
+    assert abandoned_round(run_dir) == AbandonedRound(1, os.getpid(), recorded["reason"])
+    assert signal.getsignal(signal.SIGTERM) is signal.SIG_DFL
+
+
+def test_leaving_a_claimed_round_without_a_result_records_the_abandonment(tmp_path) -> None:
+    run_dir = tmp_path / "run"
+    _, round_dir = prepare_round(run_dir, PLAN)
+    with pytest.raises(RuntimeError, match="round exploded"), round_abandonment_guard(round_dir):
+        raise RuntimeError("round exploded")
+
+    recorded = json.loads((round_dir / "status.json").read_text(encoding="utf-8"))
+    assert recorded["status"] == "abandoned"
+    assert recorded["reason"] == f"owner pid {os.getpid()} stopped without recording a result"
+
+
+def test_a_recorded_result_leaves_the_guard_with_nothing_to_abandon(tmp_path) -> None:
+    run_dir = tmp_path / "run"
+    _, round_dir = prepare_round(run_dir, PLAN)
+    with round_abandonment_guard(round_dir):
+        write_result(round_dir, _result("done"))
+
+    assert json.loads((round_dir / "status.json").read_text(encoding="utf-8"))["status"] == (
+        "completed"
+    )
+    assert abandoned_round(run_dir) is None
+
+
+def test_an_abandoned_round_is_reclaimed_only_with_recover(tmp_path) -> None:
+    run_dir = tmp_path / "run"
+    _, round_dir = prepare_round(run_dir, PLAN)
+    gone = os.getpid() + 10_000_000
+    _own(round_dir, status="abandoned", pid=gone, reason=f"owner pid {gone} took SIGTERM")
+
+    with pytest.raises(ConfigError, match="was abandoned.*reclaim it with --recover"):
+        prepare_round(run_dir, PLAN)
+    assert prepare_round(run_dir, PLAN, recover=True) == (1, round_dir)
+    assert json.loads((round_dir / "status.json").read_text(encoding="utf-8")) == {
+        **json.loads((round_dir / "status.json").read_text(encoding="utf-8")),
+        "status": "running",
+        "pid": os.getpid(),
+    }
+
+
+def test_an_abandoned_round_naming_no_usable_owner_is_still_reclaimable(tmp_path) -> None:
+    """`--recover` must still reach the one round it exists for.
+
+    A `running` record naming no usable owner is a contradiction and is refused, but an
+    abandoned round is already over. Refusing it for an owner there is nothing left to
+    probe would leave the operator no way to finish the run.
+    """
+    run_dir = tmp_path / "run"
+    _, round_dir = prepare_round(run_dir, PLAN)
+    _own(round_dir, status="abandoned", pid="unreadable")
+
+    assert prepare_round(run_dir, PLAN, recover=True) == (1, round_dir)
+
+
+@pytest.mark.parametrize(
+    ("owner", "in_flight"),
+    [
+        ({"pid": os.getpid()}, True),
+        ({"pid": os.getpid() + 10_000_000}, False),
+        ({"pid": "not-a-pid"}, True),
+        ({"pid": True}, True),
+        ({"pid": 0}, True),
+        ({"host": "some-other-host"}, True),
+        ({"status": "completed"}, False),
+    ],
+)
+def test_a_round_reads_as_in_flight_unless_its_owner_is_proven_gone(
+    tmp_path, owner, in_flight
+) -> None:
+    run_dir = tmp_path / "run"
+    _, round_dir = prepare_round(run_dir, PLAN)
+    _own(round_dir, **owner)
+    assert round_appears_in_flight(round_dir) is in_flight
+
+
+def test_a_round_with_no_readable_owner_is_never_called_abandoned(tmp_path) -> None:
+    run_dir = tmp_path / "run"
+    _, round_dir = prepare_round(run_dir, PLAN)
+    (round_dir / "status.json").unlink()
+    assert round_appears_in_flight(round_dir) is False
+    assert abandoned_round(run_dir) is None
+
+    (round_dir / "status.json").write_text("{ not json", encoding="utf-8")
+    assert round_appears_in_flight(round_dir) is True
+    assert abandoned_round(run_dir) is None
+
+    _own(round_dir, status="completed")
+    assert abandoned_round(run_dir) is None
+    assert abandoned_round(tmp_path / "never-run") is None
+
+
+def test_an_abandoned_round_names_its_owner_and_how_to_reclaim_it(tmp_path) -> None:
+    run_dir = tmp_path / "run"
+    _, round_dir = prepare_round(run_dir, PLAN)
+    _own(round_dir, pid=os.getpid() + 10_000_000)
+    assert abandoned_round_indicator(run_dir) == (
+        f"round-01 ABANDONED (owner pid {os.getpid() + 10_000_000} is gone); reclaim with: "
+        f"just run-plan {round_dir / 'plan.json'} --run run --runs-dir {tmp_path} --recover"
+    )
+
+    _own(round_dir, status="abandoned", pid="unreadable", reason="  ")
+    assert abandoned_round(run_dir) == AbandonedRound(1, None, None)
+    assert "(recorded owner is gone)" in str(abandoned_round_indicator(run_dir))
+    assert abandoned_round_indicator(tmp_path / "never-run") is None
+
+
+@pytest.mark.parametrize(
+    "reason",
+    [
+        "\x1b[2J\x1b]0;owned\x07",
+        "took SIGTERM\nrun round-01 completed successfully",
+        "x" * 201,
+        42,
+    ],
+    ids=["escape-sequence", "smuggled-line", "unbounded", "not-a-string"],
+)
+def test_a_recorded_reason_unfit_for_a_terminal_never_reaches_one(tmp_path, reason) -> None:
+    """`status.json` is externally writable, so its reason is an untrusted input.
+
+    It is printed verbatim beside the command that reclaims the round, so a reason the
+    terminal would act on rather than show — or one long enough to bury that command —
+    has to be dropped for the reason derived from the recorded owner.
+    """
+    run_dir = tmp_path / "run"
+    _, round_dir = prepare_round(run_dir, PLAN)
+    dead = os.getpid() + 10_000_000
+    _own(round_dir, status="abandoned", pid=dead, reason=reason)
+
+    assert abandoned_round(run_dir) == AbandonedRound(1, dead, None)
+    assert abandoned_round_indicator(run_dir) == (
+        f"round-01 ABANDONED (owner pid {dead} is gone); reclaim with: "
+        f"just run-plan {round_dir / 'plan.json'} --run run --runs-dir {tmp_path} --recover"
+    )
+
+
+def test_runs_cli_reports_an_abandoned_round_beside_a_recorded_one(tmp_path, capsys) -> None:
+    """Both listing shapes at once; the real journey is the e2e this mirrors.
+
+    ``tests/e2e/test_round_ownership_e2e.py`` kills real executors for each shape —
+    ``test_signalled_executor_records_its_own_abandonment`` for a run with no settled
+    history and ``test_runs_reports_a_dead_round_under_the_summary_of_the_last_settled_one``
+    for one that already has a ledger row. This direct call exists so the rendering
+    counts toward the coverage gate, which a subprocess CLI invocation cannot.
+    """
+    dead = tmp_path / "dead"
+    _, first = write_next_plan(dead, PLAN)
+    write_result(first, _result("done"))
+    _, second = write_next_plan(dead, PLAN)
+    _own(second, pid=os.getpid() + 10_000_000)
+    unrecorded = tmp_path / "unrecorded"
+    _, only = write_next_plan(unrecorded, PLAN)
+    _own(only, status="abandoned", reason="owner pid 99 took SIGHUP")
+
+    assert main_runs(["--runs-dir", str(tmp_path)]) == 0
+
+    out = capsys.readouterr().out
+    assert "! unrecorded  round-01 ABANDONED (owner pid 99 took SIGHUP)" in out
+    assert "! dead  round-01  (1 done)" in out
+    assert f"    round-02 ABANDONED (owner pid {os.getpid() + 10_000_000} is gone)" in out
+    assert "No recorded runs" not in out
 
 
 def test_list_runs_uses_latest_completed_round(tmp_path) -> None:
@@ -290,6 +492,79 @@ def test_plan_only_and_runs_cli(tmp_path, capsys) -> None:
 def test_runs_cli_no_recorded_runs(tmp_path, capsys) -> None:
     assert main_runs(["--runs-dir", str(tmp_path)]) == 0
     assert "No recorded runs" in capsys.readouterr().out
+
+
+def _launch(runs_dir, run_id: str, *, pending: object = None):
+    """Record a live orchestrator launch the way `just orchestrate` leaves one."""
+    run = runs_dir / run_id
+    channel = run / "channel"
+    channel.mkdir(parents=True)
+    (run / "launch.json").write_text(json.dumps({"run_id": run_id}), encoding="utf-8")
+    (run / "orchestrator").mkdir()
+    (run / "orchestrator" / "status.json").write_text(
+        json.dumps({"status": "running", "pid": os.getpid(), "host": socket.gethostname()}),
+        encoding="utf-8",
+    )
+    if pending is not None:
+        (channel / "planner-pending.json").write_text(
+            pending if isinstance(pending, str) else json.dumps(pending), encoding="utf-8"
+        )
+    return run
+
+
+def test_runs_cli_marks_active_launches_and_what_they_wait_on(tmp_path, capsys) -> None:
+    """`just runs` must show a live orchestrator, including one with no round yet."""
+    _launch(
+        tmp_path,
+        "unrecorded",
+        pending={"kind": "blocker", "message": "gate is red", "blocking": True},
+    )
+    recorded = _launch(
+        tmp_path,
+        "recorded",
+        pending={"kind": "milestone", "message": "round 1 settled", "blocking": False},
+    )
+    _, round_dir = write_next_plan(recorded, PLAN)
+    write_result(round_dir, _result("done"))
+    quiet = _launch(tmp_path, "quiet")
+    _, quiet_round = write_next_plan(quiet, PLAN)
+    write_result(quiet_round, _result("done"))
+
+    assert main_runs(["--runs-dir", str(tmp_path)]) == 0
+
+    out = capsys.readouterr().out
+    assert "* unrecorded  ACTIVE  (waiting for planner decision: blocker: gate is red)" in out
+    assert "* recorded  round-01  (waiting for planner reply: milestone: round 1 settled)" in out
+    assert "* quiet  round-01  (1 done)" in out
+    assert "No recorded runs" not in out
+
+
+def test_runs_cli_falls_back_when_a_live_channel_cannot_be_read(tmp_path, capsys) -> None:
+    """An unreadable planner surface must not hide the run from the ledger view."""
+    _launch(tmp_path, "unrecorded", pending="{ not json")
+    recorded = _launch(tmp_path, "recorded", pending={"kind": "nonsense", "message": "x"})
+    _, round_dir = write_next_plan(recorded, PLAN)
+    write_result(round_dir, _result("done"))
+
+    assert main_runs(["--runs-dir", str(tmp_path)]) == 0
+
+    out = capsys.readouterr().out
+    assert "* unrecorded  ACTIVE  (orchestrator running)" in out
+    assert "* recorded  round-01  (1 done)" in out
+
+
+def test_runs_cli_ignores_a_launch_whose_orchestrator_exited(tmp_path, capsys) -> None:
+    """A finished launch loses its active marker even before its rounds are pruned."""
+    finished = _launch(tmp_path, "finished", pending={"kind": "closeout", "message": "done"})
+    (finished / "orchestrator" / "report.json").write_text("{}", encoding="utf-8")
+    _, round_dir = write_next_plan(finished, PLAN)
+    write_result(round_dir, _result("done"))
+
+    assert main_runs(["--runs-dir", str(tmp_path)]) == 0
+
+    out = capsys.readouterr().out
+    assert "  finished  round-01  (1 done)" in out
+    assert "ACTIVE" not in out
 
 
 def test_next_round_complete_human_records_attestation_and_releases_dep(tmp_path, capsys) -> None:

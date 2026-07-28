@@ -4,18 +4,20 @@ version = "0.1.0"
 description = "Local orchestration harness: drive many onejudge processes to complete a task DAG in parallel."
 requires-python = ">=3.11"
 dependencies = [
-    "oneharness-cli==0.5.5",
+    "oneharness-cli==0.5.9",
     "onejudge==0.3.4",
     "pyyaml>=6.0",
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
 ]
 
 [project.scripts]
 orchestrator-dispatch = "orchestrator.dispatch:main"
-orchestrator-run-plan = "orchestrator.graph:main"
+orchestrator-run-plan = "orchestrator.graph:main_cli"
 orchestrator-repo-task = "orchestrator.lifecycle:main_task"
-orchestrator-repo-plan = "orchestrator.graph:main_repo_plan"
+orchestrator-repo-plan = "orchestrator.graph:main_repo_plan_cli"
 orchestrator-replan = "orchestrator.replan:main"
-orchestrator-next-round = "orchestrator.next_round:main"
+orchestrator-next-round = "orchestrator.next_round:main_cli"
 orchestrator-runs = "orchestrator.next_round:main_runs"
 orchestrator-goals = "orchestrator.goals:main"
 orchestrator-results = "orchestrator.results:main"
@@ -27,6 +29,7 @@ orchestrator-monitor = "orchestrator.monitor:main"
 orchestrator-history-labels = "orchestrator.labels:main"
 orchestrator-status = "orchestrator.status:main"
 orchestrator-telemetry = "orchestrator.telemetry:main"
+orchestrator-telemetry-server = "orchestrator.server:main"
 orchestrator-smoke = "orchestrator.smoke:main"
 orchestrator-integrate = "orchestrator.integrate:main"
 orchestrator-repo-recover = "orchestrator.recover:main"
@@ -43,6 +46,7 @@ orchestrator-channel-approve = "orchestrator.channel:main_approve"
 orchestrator-channel-reject = "orchestrator.channel:main_reject"
 orchestrator-channel-continue = "orchestrator.channel:main_continue"
 orchestrator-relay-supervisor = "orchestrator.channel:main_relay"
+orchestrator-sweep-scratch = "orchestrator.scratch:main"
 
 [dependency-groups]
 dev = [
@@ -51,6 +55,7 @@ dev = [
     "ruff>=0.6",
     "mypy>=1.11",
     "types-PyYAML>=6.0",
+    "httpx>=0.27",
 ]
 
 [build-system]
@@ -83,6 +88,12 @@ branch = true
 
 [tool.coverage.report]
 show_missing = true
+# The single source of the enforced floor: pytest-cov adopts `fail_under` when no
+# `--cov-fail-under` overrides it. `precision` is load-bearing, not cosmetic — the
+# fail decision compares `round(total, precision)`, so at the default precision 0 a
+# 94.93% total rounded up to 95 and exited 0 while printing "FAIL ... not reached".
+fail_under = 95
+precision = 2
 exclude_lines = [
     "pragma: no cover",
     "if __name__ == .__main__.:",

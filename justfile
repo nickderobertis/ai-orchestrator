@@ -8,7 +8,9 @@
 set shell := ["bash", "-euo", "pipefail", "-c"]
 set positional-arguments
 
-coverage_min := "95"
+# The coverage floor is not restated here: `[tool.coverage.report] fail_under` in
+# pyproject.toml is its one source, enforced by the Nx `test` target this recipe runs.
+repo_root := justfile_directory()
 
 # List available recipes.
 default:
@@ -130,6 +132,11 @@ repo-task *args:
 repo-task-auto *args:
     @./scripts/repo-task-auto.sh "$@"
 
+# Remove dead watchdog scratch and conservatively stale known third-party scratch.
+# Pass `--dry-run` to inspect candidates without removing them.
+sweep-scratch *args:
+    @uv run orchestrator-sweep-scratch "$@"
+
 # Verify and publish a lifecycle-preserved branch through its registered workflow.
 # `just repo-recover <branch> --repo <canonical-checkout>`.
 repo-recover *args:
@@ -210,6 +217,16 @@ monitor *args:
 telemetry *args:
     @uv run orchestrator-telemetry {{args}}
 
+# Serve the read-only DAG Observatory against a running telemetry server.
+# llmlint: ignore[tool_output_is_signal] Vite startup and request logs are the foreground development server's operator-facing product.
+dag-ui:
+    ./scripts/nx.sh run dag-ui:serve
+
+# Serve the read-only DAG telemetry API (FastAPI + SSE), loopback-bound by default.
+# llmlint: ignore[tool_output_is_signal] the requested long-running read API is this command's product.
+telemetry-server *args:
+    uv run orchestrator-telemetry-server {{args}}
+
 # Show running tasks joined with recent output, branch commits, and ledger rounds.
 # Pass N or --all to include recently finished tasks.
 # llmlint: ignore[tool_output_is_signal] the requested multi-task status report is this viewing command's product.
@@ -244,7 +261,7 @@ setup-llmlint:
 # finding stays attributable to the run/round/node that provoked it.
 lint-llm *paths:
     @command -v llmlint >/dev/null 2>&1 || { echo "llmlint not installed — run 'just setup-llmlint'"; exit 1; }
-    @ONEHARNESS_HISTORY_LABELS="$(uv run orchestrator-history-labels role=llmlint)" llmlint "$@"
+    @PATH="{{repo_root}}/.venv/bin:$PATH" LLMLINT_ONEHARNESS_BIN="{{repo_root}}/scripts/llmlint-oneharness.sh" ONEHARNESS_HISTORY_LABELS="$(uv run orchestrator-history-labels role=llmlint)" llmlint "$@"
 
 # Deterministic, model-free llmlint gate: config structure, ignore directives name
 # real rules, edited fragments bumped their version. The fast pre-flight.
@@ -256,4 +273,4 @@ lint-llm-validate *args:
 # changed. This is the blocking pre-push check.
 lint-llm-diff base="origin/main":
     @command -v llmlint >/dev/null 2>&1 || { echo "llmlint not installed — run 'just setup-llmlint'"; exit 1; }
-    ONEHARNESS_HISTORY_LABELS="$(uv run orchestrator-history-labels role=llmlint)" llmlint --diff --diff-base "{{base}}"
+    @PATH="{{repo_root}}/.venv/bin:$PATH" LLMLINT_ONEHARNESS_BIN="{{repo_root}}/scripts/llmlint-oneharness.sh" ONEHARNESS_HISTORY_LABELS="$(uv run orchestrator-history-labels role=llmlint)" llmlint --diff --diff-base "{{base}}"

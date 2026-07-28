@@ -42,7 +42,8 @@ def test_breakdown_aggregates_real_multirole_history_records(
     )
     report_proxy = tmp_path / "onejudge-report-proxy"
     report_proxy.write_text(
-        f'#!/bin/sh\nexec {sys.executable} {FAKE_BACKEND} onejudge-report-proxy "$@"\n',
+        '#!/bin/sh\n[ "$1" = "--version" ] && exec "$REAL_ONEJUDGE" --version\n'
+        f'exec {sys.executable} {FAKE_BACKEND} onejudge-report-proxy "$@"\n',
         encoding="utf-8",
     )
     report_proxy.chmod(0o755)
@@ -265,7 +266,11 @@ def test_breakdown_aggregates_real_multirole_history_records(
         "tool_ms",
         "wall_ms",
     }
-    assert run["telemetry_quality"] == "complete"
+    assert run["timing_quality"] == "complete"
+    # onejudge authoritatively links the agent and judge sessions, but the
+    # additional llmlint histories include legacy name-inferred roles.
+    assert run["nodes"][0]["linkage_quality"] == "inferred"
+    assert run["linkage_quality"] == "inferred"
     assert run["sources"] == ["onejudge", "oneharness", "history_legacy", "journal_legacy"]
 
     breakdown = subprocess.run(
@@ -332,7 +337,7 @@ def test_breakdown_aggregates_real_multirole_history_records(
     )
     assert fallback_run["usage"]["total"]["cache_write_tokens"] == 0
     assert fallback_run["usage"]["total"]["cost_usd"] == 0.033
-    assert fallback_run["telemetry_quality"] == "partial"
+    assert fallback_run["timing_quality"] == "complete"
 
     judge_record = json.loads((tmp_path / "judge.jsonl").read_text(encoding="utf-8"))
     judge_record["usage"].pop("cache_write_tokens")
@@ -384,7 +389,9 @@ def test_breakdown_aggregates_real_multirole_history_records(
         line for line in degraded.stdout.splitlines() if line.startswith("telemetry-invalid")
     )
     assert "partial" in degraded_row
-    assert degraded_row.count("?") >= 4
+    # The agent and tool measurements survive degraded completeness; only the
+    # genuinely absent judge measurement renders as an unknown value/fraction.
+    assert degraded_row[:78].count("?") == 2
 
     judge_record["events"][0]["tool_call_id"] = ""
     (tmp_path / "judge.jsonl").write_text(json.dumps(judge_record) + "\n", encoding="utf-8")
@@ -478,7 +485,7 @@ def test_breakdown_aggregates_real_multirole_history_records(
     legacy_run = next(
         run for run in json.loads(legacy.stdout)["runs"] if run["run_id"] == "telemetry-legacy"
     )
-    assert legacy_run["telemetry_quality"] == "legacy"
+    assert legacy_run["timing_quality"] == "legacy"
     assert legacy_run["timing"]["unattributed_ms"] > 0
     legacy_breakdown = subprocess.run(
         [*command.args, "--breakdown"],

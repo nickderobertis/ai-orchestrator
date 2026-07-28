@@ -32,8 +32,13 @@ lives in an oneharness config, not in onejudge:
 | **Agent** | does the work | `oneharness.toml` (discovered from the repo root) |
 | **Judge / simulated user** | supervises + scores | `oneharness.judge.toml` (via the base config's `provider.judge_config`) |
 
-Edit those two files (or use oneharness's `ONEHARNESS_*` env overrides) to change
-the harness or model on either side. `config/onejudge.base.yaml` carries only the
+A third role sits above both: the **orchestrator** process `just orchestrate`
+launches drives a tracked graph rather than doing the work, so it has its own
+config, `oneharness.orchestrator.toml`, forced by
+`scripts/oneharness-orchestrator.sh`.
+
+Edit those files (or use oneharness's `ONEHARNESS_*` env overrides) to change
+the harness or model on a side. `config/onejudge.base.yaml` carries only the
 loop's own concerns (persona defaults, session), never harness/model selection.
 
 ## Provider wiring
@@ -45,7 +50,9 @@ This repository uses three onejudge provider arrangements:
 - `command` is the deterministic test path. A local JSON-lines process stands in
   for the paid harness boundary.
 - The live orchestrator uses a `split` provider: its `skill` side is either the
-  configured oneharness provider or a command provider, while its `judge` side is
+  configured oneharness provider — with its `bin` pinned to
+  `scripts/oneharness-orchestrator.sh`, since a launch has no `--project-dir` to
+  pin it through — or a command provider, while its `judge` side is
   a command invoking `orchestrator.channel.relay_supervisor`. The relay forwards
   supervisor requests over the run's FIFOs to the live planner and returns the
   planner's completion or continuation reply to onejudge. Final boolean/score
@@ -94,9 +101,11 @@ onejudge init --force    # writes the two oneharness configs + a starter onejudg
 onejudge schema          # the annotated, authoritative config reference
 ```
 
-The committed `oneharness.toml` / `oneharness.judge.toml` are **that init output**
-with two deliberate edits: the judge side runs a cheaper model than the agent, and
-both add an `IS_SANDBOX` env so claude-code runs under root. init's starter
+<!-- llmlint: ignore[contracts_have_one_source_or_a_drift_gate] This prose explains the user-facing routing contract; the TOML files remain authoritative and existing integration tests validate their selections. -->
+The committed configs are **that init output** with deliberate routing edits:
+the worker prefers an alternate Claude subscription, the judge prefers Codex and
+can fall back only to the primary Claude subscription, and both add an
+`IS_SANDBOX` env so claude-code runs under root. init's starter
 `onejudge.yaml` is not kept — `config/onejudge.base.yaml` supersedes it as the base
 this repo merges personas onto.
 
@@ -111,8 +120,9 @@ release binary needs a newer glibc than the host provides, and the crates.io bui
 lags behind the 0.3.x releases that added `init`. The **PyPI `oneharness-cli`
 wheel** (a manylinux build) is the one that both runs on the host's glibc and
 carries `init`, so `scripts/session-setup.sh` installs the exact
-`config/oneharness.version` release and rejects a stale binary. Version 0.4.0 is
-the adopted release; it succeeds 0.3.24, the first release to carry the
+`config/oneharness.version` release and rejects a stale binary. Version 0.5.9 is
+the adopted release; it contains auth variants shipped in 0.5.6 and succeeds
+0.3.24, the first release to carry the
 process-tree timeout and partial telemetry fix from
 [oneharness PR #1147](https://github.com/nickderobertis/oneharness/pull/1147),
 so that fix stays in effect.
@@ -127,12 +137,55 @@ the wheel is installed; keep `~/.local/bin` ahead of `~/.cargo/bin` regardless.
 ## Harnesses and the live path
 
 Live dispatch drives a real harness, chosen by `oneharness.toml`'s fallback chain
-(`codex` primary, `claude-code` secondary). The offline gate needs neither; the
+(`claude-code:alternate` primary, `codex` secondary). A variant is a named
+per-harness preset selected as `<harness>:<variant>`; it composes the base harness
+settings with child-only model, environment, and credential routing.
+`scripts/oneharness-agent.sh` derives
+`ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR` as `$HOME/.claude-alt` unless the caller
+overrides it — through `scripts/claude-alt-config-dir.sh`, the one source both
+alternate-subscription wrappers share. The variant maps that portable path to
+`CLAUDE_CONFIG_DIR` only
+inside the alternate worker process and masks ambient Anthropic API/OAuth
+credentials so they cannot outrank subscription auth. If that directory is absent,
+unauthenticated, or quota-limited, fallback proceeds to Codex; a host with only its
+primary Claude identity therefore still dispatches through an authenticated Codex.
+
+The **orchestrator** reverses that order. It is a long-lived supervisory process,
+not a worker, so `oneharness.orchestrator.toml` selects `codex` first and keeps
+`claude-code:alternate` as its fallback: it never stands in front of the workers
+for the alternate subscription they depend on.
+`launch_orchestrator` pins `scripts/oneharness-orchestrator.sh` as the launched
+process's oneharness binary, which forces that config (upward discovery from the
+repo root would find the worker chain) and exports the same shared
+`ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR` default — so `just orchestrate` launches on a
+fresh shell with nothing exported by hand. That launch also forwards
+`--oneharness-mode` (default `bypass`) as `ONEHARNESS_MODE`, like every other
+dispatch entry point; without it the orchestrator runs at claude-code's
+non-interactive default, which denies outright every command outside
+`.claude/settings.json` — including the `just monitor` its own persona mandates.
+
+The judge's Codex primary is independent. Its `claude-code:primary` fallback
+removes `CLAUDE_CONFIG_DIR` and higher-precedence Anthropic credentials, selecting
+Claude's default `$HOME/.claude` identity and never the alternate worker account.
+llmlint uses `oneharness.llmlint.toml` through
+`scripts/llmlint-oneharness.sh`, which selects Codex only.
+
+To address an identity explicitly in a diagnostic run, use the composed id:
+
+```sh
+ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR="$HOME/.claude-alt" \
+  oneharness run --config oneharness.toml \
+  --harness claude-code:alternate --prompt "Reply with OK"
+oneharness run --config oneharness.judge.toml \
+  --harness claude-code:primary --prompt "Reply with OK"
+```
+
+The offline gate needs neither identity; the
 timeout e2e gate drives the adopted oneharness with a local fixture, and each live
 harness has an **environment requirement** for its tools to actually execute:
 
-- **codex** runs as its own process and executes tools directly, so it is the
-  preferred nested harness (the fallback primary). It sandboxes via **bubblewrap**,
+- **codex** runs as its own process and executes tools directly, so it remains the
+  worker fallback and judge primary. It sandboxes via **bubblewrap**,
   which needs **unprivileged user namespaces**; where the host disallows them (e.g.
   Ubuntu's AppArmor `restrict_unprivileged_userns`), codex can't create its sandbox
   and falls back to read-only. **The fix is `--oneharness-mode bypass`** (codex's
@@ -154,12 +207,26 @@ prompt through the real `scripts/oneharness-agent.sh` heartbeat branch to the
 fallback-selected real harness, using a temporary target and history store. The
 command requires exactly one agent turn, then checks that the stored prompt is
 non-empty and byte-for-byte equal to the dispatched task and that the selected
-harness wrote a successful record with complete native telemetry. Its quota cost
-is therefore one real harness invocation; the provider may leave dollar cost
-unreported (Codex did so in the observed smoke). It is not part of `just gate`.
+harness wrote a record satisfying the launch contract: a supported schema, a named
+harness, a successful status and exit, a measured duration, and well-formed input
+and output token counts.
+
+Native per-phase telemetry is deliberately *not* required. oneharness normalizes
+whatever each harness reports and leaves the rest unset, and neither shipped
+harness reports all of it: codex records `started_at`/`model_ms`/`tool_ms` but
+prices nothing and reports no cache-write count, while claude-code prices its turn
+but records only a measured duration, with `started_at` absent and `finished_at`
+null. Requiring `validated_native_fields` here failed every healthy claude-code
+dispatch, so native-timing completeness stays a telemetry-*quality* signal and the
+launch guard checks only what a launch must produce.
+Counters and timings that *are* present are still validated, so a malformed or
+contradictory record still fails. Its quota cost is one real harness invocation;
+the provider may leave dollar cost unreported (Codex does). It is not part of
+`just gate`.
 Pre-push runs it only when the pushed endpoint diff touches `scripts/`,
-`config/oneharness.version`, `config/onejudge.base.yaml`, `oneharness.toml`, or
-`oneharness.judge.toml`; every other pushed diff skips it.
+`config/oneharness.version`, `config/onejudge.base.yaml`, `oneharness.toml`,
+`oneharness.judge.toml`, or `oneharness.orchestrator.toml`; every other pushed diff
+skips it.
 
 Net: the orchestration setup is harness-agnostic and correct. On a
 no-unprivileged-userns host, dispatch codex with
@@ -191,11 +258,20 @@ owning orchestrator still alive.
 Dispatch wraps the SDK-owned `onejudge` process with a stable pid and additionally
 wraps the agent-side oneharness process with its own pid, completion marker, and
 monotonic heartbeat. A vanished agent pid or heartbeat deadline settles as the
-distinct incomplete `worker-died` outcome within seconds, independent of CPU/I/O
+distinct incomplete `worker-died` outcome promptly, independent of CPU/I/O
 from leaked descendants or `.git` churn. The last observed process tree is reaped
 even after its root has vanished, so those descendants cannot pollute a retry.
 Set `ORCHESTRATOR_WORKER_HEARTBEAT_TIMEOUT` to a positive number of seconds; it
-defaults to `5`.
+defaults to `60`.
+
+The wrapper refreshes that heartbeat every 0.5s, so the deadline is not a latency
+budget — it is the margin by which a *live* worker may be starved of CPU before
+the harness declares it dead. This harness runs many agents at once, so a
+contended host routinely deschedules that loop for far longer than a few seconds;
+a threshold near the write cadence reaps healthy workers under exactly the load
+the harness creates. Detection of a genuinely dead worker does not depend on this
+margin: when the agent exits, its heartbeat stops permanently, so a generous
+deadline delays that settlement without weakening it.
 
 The older activity watchdog remains as a separate slow-stall backstop. Changes
 in descendant membership, cumulative CPU or I/O counters, or files under the
@@ -207,19 +283,45 @@ process activity. `run-plan --round-budget SECONDS` adds an outer round liveness
 budget (default `14400`); exceeding it cooperatively cancels workers and sends a
 blocking proposal over the planner channel.
 
+### Dispatch scratch ownership
+
+Each dispatch works in an `orchestrator-watchdog-*` scratch directory, and the
+unattended sweep (`just sweep-scratch`, session setup, every recorded round
+transition) may delete it concurrently. The pid recorded in `<dir>/pid` cannot
+decide that: it is the *worker's*, and the wrapper `execvpe`s onejudge in place,
+so it dies the moment the worker exits — while the dispatcher is still reaping
+the reparented process tree and parsing the report out of the same directory. A
+sweep that trusted it destroyed healthy in-flight dispatches and their evidence.
+Recorded pids are also not identities: the kernel recycles them, so an unrelated
+live process inheriting the number pinned dead scratch forever, and an
+unreadable-signal pid was treated as live outright.
+
+The dispatcher therefore holds an exclusive `flock` on `<dir>/owner.lock` for its
+whole `TemporaryDirectory` scope, and that file records its own pid plus the
+kernel's start token for it. The sweeper reclaims a watchdog directory only when
+a non-blocking exclusive acquisition succeeds — the kernel's own answer to "can
+anything still be using this tree?", released only when the owner releases the
+directory or dies — *and* the recorded pid-with-start-token no longer identifies
+a live process, so a filesystem that does not honor `flock` still cannot strand a
+live dispatch. Directories predating the lock keep the pid-only judgment, now
+made through the same start-token identity, and a lock that cannot be opened on
+its own terms — symlinked, unreadable — never authorizes removal. Everything the
+proof does not clear is reported as retained rather than silently kept.
+
 ## Dispatching playbook
 
-- **Prepare the harness environment.** codex is oneharness's preferred agent
-  harness, but its executable installs in `~/.local/node/bin`. Keep that
-  directory on `PATH` or oneharness silently falls back to claude-code;
+- **Prepare the harness environment.** claude-code on the alternate subscription
+  is the preferred worker; Codex is its fallback and the preferred judge.
+  Codex installs in `~/.local/node/bin`. Keep that
+  directory on `PATH` so worker fallback, supervision, and llmlint remain available;
   `scripts/session-setup.sh` persists the path. The dispatch code also sets
   `ONEHARNESS_TIMEOUT` to 10,800 seconds (three hours), a temporary hard per-turn
   ceiling so legitimate build-heavy agents can finish. Set the variable
   explicitly to override it; onejudge's `max_turns` and the lifecycle `--timeout`
   still bound the whole run independently. Finer phase budgets remain tracked
   in issue #6. Project dispatch also pins the agent-side
-  oneharness `--config` to this repo's config, which forces codex to
-  `gpt-5.6-sol` while retaining claude-code's Claude fallback model. A global
+  oneharness `--config` to this repo's config, which selects the configured
+  alternate-subscription Claude model before the configured Codex fallback. A global
   `ONEHARNESS_MODELS` chain cannot be used here: onejudge supplies `--session`,
   and oneharness rejects multi-model runs combined with a named session.
 - **Use the tracked graph for coordinated work.** `just run-plan` accepts direct

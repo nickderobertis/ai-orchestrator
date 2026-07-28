@@ -3,9 +3,13 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import ssl
 import subprocess
 import sys
-from collections.abc import Callable
+import threading
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
@@ -19,6 +23,91 @@ from orchestrator.verify import NOOP_GATE
 def _cli(name: str, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
     executable = Path(sys.executable).parent / name
     return subprocess.run([str(executable), *args], text=True, capture_output=True, check=check)
+
+
+@contextmanager
+def _github_api_server(tmp_path: Path) -> Iterator[str]:
+    """Serve GitHub REST shapes through the real gh client's TLS boundary."""
+    cert = tmp_path / "github.crt"
+    key = tmp_path / "github.key"
+    subprocess.run(
+        [
+            "openssl",
+            "req",
+            "-x509",
+            "-newkey",
+            "rsa:2048",
+            "-nodes",
+            "-keyout",
+            str(key),
+            "-out",
+            str(cert),
+            "-days",
+            "1",
+            "-subj",
+            "/CN=127.0.0.1",
+            "-addext",
+            "subjectAltName=IP:127.0.0.1",
+        ],
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+
+    class GitHubHandler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            path = self.path.removeprefix("/api/v3/repos/acme/")
+            match path.split("/"):
+                case ["inaccessible"]:
+                    self._json({"message": "forbidden"}, status=403)
+                case ["empty-default"]:
+                    self._json({"default_branch": ""})
+                case [repo]:
+                    branches = {"required": "master", "slash": "release/next"}
+                    self._json({"default_branch": branches.get(repo, "main")})
+                case ["malformed", "branches", "main"]:
+                    self._json({})
+                case [repo, "branches", branch]:
+                    checks = {
+                        ("required", "master"): ["complete-gate"],
+                        ("slash", "release%2Fnext"): ["slash-gate"],
+                    }
+                    contexts = checks.get((repo, branch))
+                    if contexts is None:
+                        self._json({"protected": False})
+                    else:
+                        self._json(
+                            {
+                                "protected": True,
+                                "protection": {"required_status_checks": {"contexts": contexts}},
+                            }
+                        )
+                case _:
+                    self._json({"message": f"unexpected path {self.path}"}, status=404)
+
+        def _json(self, payload: object, *, status: int = 200) -> None:
+            body = json.dumps(payload).encode()
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, format: str, *args: object) -> None:
+            return
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), GitHubHandler)
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.load_cert_chain(cert, key)
+    server.socket = context.wrap_socket(server.socket, server_side=True)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"127.0.0.1:{server.server_port}"
+    finally:
+        server.shutdown()
+        thread.join()
+        server.server_close()
 
 
 def test_registry_register_discover_and_refresh_journey(
@@ -111,6 +200,90 @@ def test_register_recipe_clones_missing_checkout_to_managed_path(
     )
     stored = json.loads((state / "repos.json").read_text(encoding="utf-8"))
     assert stored["checkouts"]["acme/widget"]["path"] == str(checkout)
+
+
+def test_merge_gate_coverage_onboarding_and_registry_audit_journeys(
+    tmp_path: Path,
+    bare_origin: Callable[..., Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = tmp_path / "state"
+    monkeypatch.setenv("AI_ORCHESTRATOR_HOME", str(state))
+
+    def checkout(name: str) -> Path:
+        path = tmp_path / name
+        git("clone", str(bare_origin()), str(path))
+        git("remote", "set-url", "origin", f"https://github.com/acme/{name}.git", cwd=path)
+        return path
+
+    with _github_api_server(tmp_path) as github_host:
+        monkeypatch.setenv("GH_HOST", github_host)
+        monkeypatch.setenv("GH_ENTERPRISE_TOKEN", "test-token")
+        monkeypatch.setenv("SSL_CERT_FILE", str(tmp_path / "github.crt"))
+        monkeypatch.setenv("GH_CONFIG_DIR", str(tmp_path / "gh-config"))
+
+        hooked = checkout("hooked")
+        hook = hooked / ".git" / "hooks" / "pre-push"
+        hook.write_text("#!/bin/sh\nexec make check\n", encoding="utf-8")
+        hook.chmod(0o755)
+        hook_result = _cli("orchestrator-register-repo", str(hooked), "--repo-type", "single-owner")
+        assert "status=covered" in hook_result.stdout
+        assert "coverage=executable pre-push hook" in hook_result.stdout
+
+        required = checkout("required")
+        required_result = _cli(
+            "orchestrator-register-repo", str(required), "--repo-type", "single-owner"
+        )
+        assert "required PR status checks on master (complete-gate)" in required_result.stdout
+
+        slash = checkout("slash")
+        slash_result = _cli("orchestrator-register-repo", str(slash), "--repo-type", "single-owner")
+        assert "required PR status checks on release/next (slash-gate)" in slash_result.stdout
+
+        empty_husky = checkout("empty-husky")
+        (empty_husky / ".husky").mkdir()
+        git("config", "core.hooksPath", ".husky", cwd=empty_husky)
+        empty_result = _cli(
+            "orchestrator-register-repo", str(empty_husky), "--repo-type", "single-owner"
+        )
+        assert "status=not-covered" in empty_result.stdout
+        assert "executable_pre_push_hook=missing" in empty_result.stdout
+
+        neither = checkout("neither")
+        neither_result = _cli(
+            "orchestrator-register-repo", str(neither), "--repo-type", "single-owner"
+        )
+        assert "identity https://github.com/acme/neither has no executable pre-push hook" in (
+            neither_result.stderr
+        )
+        assert "no required PR status checks exist" in neither_result.stderr
+        assert Registry().entries["local/neither"].path == str(neither.resolve())
+
+        for unavailable in ("inaccessible", "empty-default", "malformed"):
+            result = _cli(
+                "orchestrator-register-repo",
+                str(checkout(unavailable)),
+                "--repo-type",
+                "single-owner",
+            )
+            assert "required_pr_status_checks=unknown" in result.stdout
+            assert "not known to run a gate" in result.stderr
+
+        local_only = tmp_path / "local-only"
+        git("clone", str(bare_origin()), str(local_only))
+        local_result = _cli(
+            "orchestrator-register-repo",
+            str(local_only),
+            "--workflow",
+            "local",
+            "--repo-type",
+            "single-owner",
+        )
+        assert "required_pr_status_checks=not-applicable (no GitHub origin)" in local_result.stdout
+
+        audit = _cli("orchestrator-repos", "--audit-gate-coverage")
+        assert audit.stdout.count("merge_gate_coverage identity=") == 9
+        assert "identity=https://github.com/acme/required status=covered" in audit.stdout
 
 
 def test_lifecycle_clis_reject_unknown_local_aliases_before_dispatch(
@@ -526,7 +699,8 @@ def test_repos_cli_reports_invalid_registry_without_traceback(
     result = _cli("orchestrator-repos", check=False)
 
     expected = (
-        "usage: orchestrator-repos [-h] [--refresh] [--format {text,json}]\n"
+        "usage: orchestrator-repos [-h] [--refresh] [--audit-gate-coverage]\n"
+        "                          [--format {text,json}]\n"
         f"orchestrator-repos: error: {error.format(path=registry_path)}\n"
     )
     assert result.returncode == 2
