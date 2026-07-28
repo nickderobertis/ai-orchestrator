@@ -34,6 +34,8 @@ FAIL_VERDICT = "fake-judge: 15 passed, 1 failed"
 FAIL_FINDING = "fake-judge finding: robust_shell in scripts/llmlint-diff.sh"
 CACHE_HIT = "replayed the recorded verdict (Nx cache hit)"
 CACHE_MISS = "judged this diff (Nx cache miss)"
+# scripts/llmlint-verdict.sh: an unusable record, distinct from the judge's 0 and 1.
+UNUSABLE_RECORD = 2
 
 pytestmark = pytest.mark.skipif(
     shutil.which("llmlint") is None,
@@ -372,6 +374,17 @@ def test_the_target_refuses_a_base_it_cannot_judge(
     assert workspace.judge_runs() == 0
 
 
+def _replay_verdict(workspace: Workspace) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [str(workspace.root / "scripts" / "llmlint-verdict.sh")],
+        cwd=workspace.root,
+        env=workspace.env,
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+
+
 @pytest.mark.parametrize(
     ("record", "expected"),
     [
@@ -390,17 +403,43 @@ def test_an_incomplete_record_is_never_read_as_a_clean_run(
     for name, content in record.items():
         (verdict / name).write_text(content, encoding="utf-8")
 
-    result = subprocess.run(
-        [str(workspace.root / "scripts" / "llmlint-verdict.sh")],
-        cwd=workspace.root,
-        env=workspace.env,
-        check=False,
-        text=True,
-        capture_output=True,
-    )
+    result = _replay_verdict(workspace)
 
-    assert result.returncode != 0
+    assert result.returncode == UNUSABLE_RECORD
     assert expected in result.stderr
+
+
+@pytest.mark.parametrize(
+    ("unreadable", "expected"),
+    [
+        ("status", "could not read the recorded verdict status from"),
+        ("report", "could not read the recorded findings from"),
+    ],
+)
+# A file that passes `-r` and then fails to read is a broken cache restore, not a
+# state any recipe run reaches.
+# llmlint: ignore[tests_mirror_real_usage] Only a broken cache restore reaches this state.
+def test_an_unreadable_record_is_a_hard_error_not_a_silent_pass(
+    workspace: Workspace, unreadable: str, expected: str
+) -> None:
+    verdict = workspace.root / ".nx/llmlint-diff"
+    verdict.mkdir(parents=True)
+    (verdict / "status").write_text("1\n", encoding="utf-8")
+    (verdict / "report").write_text("findings\n", encoding="utf-8")
+    # A directory reads as present and readable, then fails at the read itself —
+    # the shape of an I/O fault, and one that does not depend on running as a user
+    # whose permissions can actually be revoked.
+    (verdict / unreadable).unlink()
+    (verdict / unreadable).mkdir()
+
+    result = _replay_verdict(workspace)
+
+    # Hard error, deliberately: an unusable record is neither a clean tree nor
+    # findings, and this reader never re-judges to paper over one.
+    assert result.returncode == UNUSABLE_RECORD
+    assert expected in result.stderr
+    assert f"{verdict}/{unreadable}" in result.stderr
+    assert workspace.judge_runs() == 0
 
 
 @pytest.mark.parametrize(
