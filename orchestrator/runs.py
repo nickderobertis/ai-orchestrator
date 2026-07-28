@@ -514,6 +514,13 @@ def prepare_round(run_dir: Path, plan: dict[str, Any], *, recover: bool = False)
         return ClaimedRound(number, round_dir)
 
 
+# llmlint: ignore[changed_behavior_has_e2e] untested end to end: an abandoned record whose
+# pid or host is unusable. The journeys either side of it do run e2e in
+# tests/e2e/test_round_ownership_e2e.py — reclaiming a self-recorded abandonment, and the
+# refusal that leaves a live owner its claim — and this branch only decides that a round
+# already reported over stays reclaimable when there is no owner left to probe. A real launch
+# cannot reach it without hand-writing the same malformed status.json tests/test_runs.py
+# writes, so it would re-prove one `if` and nothing about the journey.
 def _owner_may_be_live(state: Mapping[str, Any]) -> bool:
     """Whether recovery must leave this claim alone because its owner may still run.
 
