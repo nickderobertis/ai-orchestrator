@@ -11,7 +11,8 @@ from orchestrator import REPO_ROOT
 
 
 def _uv_free_mirror(source: Path, destination: Path) -> Path:
-    """Symlink every entry of `source` into a fresh `destination`, except `uv`."""
+    """Symlink rather than copy: an entry a launcher follows still resolves to its
+    real path, where the siblings it reaches for live."""
     destination.mkdir(parents=True)
     for entry in source.iterdir():
         if entry.name != "uv":
