@@ -171,7 +171,6 @@ def _queue_for_lock(path: Path, timeout: float) -> TextIO | None:
     settled = threading.Event()
 
     def wait_in_line() -> None:
-        nonlocal abandoned
         handle = path.open("a+", encoding="utf-8")
         try:
             fcntl.flock(handle, fcntl.LOCK_EX)

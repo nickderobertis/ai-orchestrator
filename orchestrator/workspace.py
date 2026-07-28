@@ -471,7 +471,10 @@ class Workspace:
     def _adopt_preserved_branch(self, repo: RepoRef, clone: Path, branch: str) -> bool:
         if gitops.branch_exists(clone, branch):
             return True
-        return gitops.import_branch(clone, self.execution_checkout(repo), branch)
+        checkout = self.execution_checkout(repo)
+        if not gitops.branch_exists(checkout, branch):
+            return False
+        return gitops.import_branch(clone, checkout, branch)
 
     def adopt_preserved_branch(self, repo: RepoRef, branch: str) -> bool:
         """Bring a branch an earlier run preserved into this run's clone.
