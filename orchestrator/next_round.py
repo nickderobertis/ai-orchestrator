@@ -8,12 +8,14 @@ from pathlib import Path
 from typing import Any
 
 from .config import ConfigError
+from .detach import run_detached
 from .journal import open_journal
 from .plan import PlanError
 from .replan import next_round
 from .runs import (
     NodeId,
     StepId,
+    abandoned_round_indicator,
     as_result_payload,
     human_actions,
     latest_round,
@@ -179,28 +181,42 @@ def main_runs(argv: list[str] | None = None) -> int:
     parser.add_argument("--runs-dir", type=Path, default=Path("runs"))
     args = parser.parse_args(argv)
     rows = list_runs(args.runs_dir)
-    active_launches = (
-        {
-            path.name
-            for path in args.runs_dir.iterdir()
-            if path.is_dir() and (path / "launch.json").is_file() and launch_is_active(path)
-        }
+    run_dirs = (
+        sorted(path for path in args.runs_dir.iterdir() if path.is_dir())
         if args.runs_dir.is_dir()
-        else set()
+        else []
     )
-    if not rows and not active_launches:
+    active_launches = {
+        path.name
+        for path in run_dirs
+        if (path / "launch.json").is_file() and launch_is_active(path)
+    }
+    # An abandoned round is reported from the recorded owner's liveness, not from the
+    # last status string it wrote: a round killed with its launching turn never gets
+    # to say so, and a viewer that trusts the string keeps calling it in flight.
+    abandoned = {
+        path.name: indicator
+        for path in run_dirs
+        if (indicator := abandoned_round_indicator(path)) is not None
+    }
+    if not rows and not active_launches and not abandoned:
         print("No recorded runs.")
         return 0
     recorded = {row.run_id for row in rows}
-    for run_id in sorted(active_launches - recorded):
+    for run_id in sorted((active_launches | abandoned.keys()) - recorded):
+        # An abandoned round replaces the planner indicator rather than joining it: the
+        # surface that run last queued outlives it, so reporting what it is waiting for
+        # is exactly the misreading that let a dead run look like live work.
+        if run_id in abandoned:
+            print(f"! {run_id}  {abandoned[run_id]}")
+            continue
         try:
             waiting = planner_wait_indicator(args.runs_dir / run_id / "channel")
         except (ChannelError, ConfigError, OSError):
             waiting = None
-        detail = waiting or "orchestrator running"
-        print(f"* {run_id}  ACTIVE  ({detail})")
+        print(f"* {run_id}  ACTIVE  ({waiting or 'orchestrator running'})")
     for run_id, number, summary in rows:
-        marker = "* " if run_id in active_launches else "  "
+        marker = "! " if run_id in abandoned else "* " if run_id in active_launches else "  "
         waiting = None
         if run_id in active_launches:
             try:
@@ -208,9 +224,16 @@ def main_runs(argv: list[str] | None = None) -> int:
             except (ChannelError, ConfigError, OSError):
                 waiting = None
         print(f"{marker}{run_id}  round-{number:02d}  ({waiting or summary})")
+        if run_id in abandoned:
+            print(f"    {abandoned[run_id]}")
         print(f"    Results: just results {run_id} --runs-dir {args.runs_dir}")
     return 0
 
 
+def main_cli(argv: list[str] | None = None) -> int:
+    """`just next-round` process entry point: detach from the launching turn first."""
+    return run_detached(main, argv, "next-round")
+
+
 if __name__ == "__main__":  # pragma: no cover
-    raise SystemExit(main())
+    raise SystemExit(main_cli())

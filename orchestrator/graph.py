@@ -14,12 +14,12 @@ import json
 import math
 import os
 import re
+import shlex
 import sys
 import threading
 import time
 from collections import Counter
 from collections.abc import Iterable, Mapping
-from contextlib import suppress
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Literal, cast
@@ -29,15 +29,25 @@ from .channel import (
     CHANNEL_DIR_ENV,
     CHANNEL_ENDPOINTS,
     CHANNEL_RUN_ID_ENV,
+    HEARTBEAT_SURFACE_FILE,
     ProposalPump,
     ProposalSink,
 )
 from .cli_contract import ROUND_BUDGET_OPTION
 from .config import ConfigError, load_yaml
 from .coordination import advisory_lock, reset_harness_observer, set_harness_observer
+from .detach import run_detached
 from .dispatch import Report, dispatch
 from .edits import EditError, apply_edit
-from .goals import Goal, find_active_run, finish_run, graph_identities, parse_goal, register_run
+from .goals import (
+    ConcurrentAcknowledgement,
+    Goal,
+    find_active_run,
+    finish_run,
+    graph_identities,
+    parse_goal,
+    register_run,
+)
 from .journal import (
     JOURNAL_NAME,
     TERMINAL_NODE_RESULT_FIELD,
@@ -87,6 +97,7 @@ from .plan import (
 from .registry import Registry
 from .runs import (
     RECORDED_RESULT_SCHEMA_VERSION,
+    ClaimedRound,
     GraphPayload,
     GraphResultItem,
     HumanActionPayload,
@@ -94,6 +105,7 @@ from .runs import (
     RunId,
     prepare_round,
     resolve_run_dir,
+    round_abandonment_guard,
     status_summary,
     validate_run_id,
     write_result,
@@ -1183,7 +1195,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"run-plan: {exc}", file=sys.stderr)
         return 2
 
-    round_record: tuple[int, Path] | None = None
+    round_record: ClaimedRound | None = None
     if run_dir is not None:
         try:
             try:
@@ -1199,6 +1211,31 @@ def main(argv: list[str] | None = None) -> int:
             print(f"run-plan: could not claim run: {exc}", file=sys.stderr)
             return 2
 
+    if round_record is None:
+        return _run_round(args, plan_mapping, graph, run_dir, None, acknowledgements)
+    # Everything past the claim runs under the guard, so no path out of this process
+    # — an early `return 2`, a raised exception, or a teardown signal — can leave the
+    # claimed round recorded as `running` with nothing owning it.
+    with round_abandonment_guard(round_record.directory):
+        return _run_round(args, plan_mapping, graph, run_dir, round_record, acknowledgements)
+
+
+def _run_round(
+    args: argparse.Namespace,
+    plan_mapping: dict[str, Any],
+    graph: Graph,
+    run_dir: Path | None,
+    round_record: ClaimedRound | None,
+    acknowledgements: list[ConcurrentAcknowledgement],
+) -> int:
+    """Execute one already-claimed round and record its result.
+
+    ``plan_mapping`` is the deserialized plan file itself, not the validated ``graph``
+    built from it. It stays ``Any``-valued because it is journaled and compared
+    verbatim — a recovery matches recorded node definitions against these raw entries
+    — and narrowing it to the parsed shape would drop the very keys that comparison
+    exists to notice.
+    """
     journal: JournalSink = NullJournal()
     run_id: RunId | None = None
     round_number: int | None = None
@@ -1207,7 +1244,7 @@ def main(argv: list[str] | None = None) -> int:
     replayed_order: list[str] = []
     if run_dir is not None and round_record is not None:
         run_id = RunId(run_dir.name)
-        round_number = round_record[0]
+        round_number = round_record.number
         journal = open_journal(run_dir, run_id, round_number)
         for acknowledgement in acknowledgements:
             journal.append(
@@ -1299,10 +1336,16 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 return 2
             nodes_by_id = {node.id: node for node in graph.tasks}
-            replayed_runs = {
-                node: _replay_node_run(nodes_by_id[node], replayed.node_results[node])
-                for node in settled
-            }
+            try:
+                replayed_runs = {
+                    node: _replay_node_run(nodes_by_id[node], replayed.node_results[node])
+                    for node in settled
+                }
+            except ConfigError as exc:
+                # A recorded result this cannot read is the same rejected input every
+                # other check in this replay reports, and owes the caller the same 2.
+                print(f"run-plan: cannot replay authoritative event log: {exc}", file=sys.stderr)
+                return 2
             replayed_order = list(replayed.node_states)
             already_started = frozenset(
                 node for node, state in replayed.node_states.items() if state == "running"
@@ -1339,20 +1382,21 @@ def main(argv: list[str] | None = None) -> int:
             print(f"run-plan: invalid proposal channel: {exc}", file=sys.stderr)
             return 2
 
-        def synthesize_heartbeat() -> str:
-            output = resolved_channel / "check-in-message.txt"
-            with suppress(FileNotFoundError):
-                output.unlink()
+        def dispatch_check_in() -> None:
             task = (
-                "Read the durable evidence for this run and write exactly one concise, "
-                "agent-synthesized planner update to the supplied output file. Cover every "
+                "Read the durable evidence for this run and send exactly one concise, "
+                "agent-synthesized planner update with the supplied command. Cover every "
                 "active workstream with concrete current progress and include any non-blocking "
-                "follow-ups. Do not wait for or contact the planner.\n\n"
+                "follow-ups. Do not wait for a planner reply. Replace MESSAGE with the update "
+                "as one shell argument and invoke the command exactly once.\n\n"
                 f"Run directory: {run_dir.resolve()}\n"
                 f"Journal: {(run_dir / JOURNAL_NAME).resolve()}\n"
                 f"Status: {(run_dir / 'orchestrator' / 'status.json').resolve()}\n"
                 f"Monitor details: {(run_dir / 'monitor' / 'details.json').resolve()}\n"
-                f"Output file: {output.resolve()}"
+                f"Channel directory: {resolved_channel}\n"
+                "Check-in command: just channel-surface "
+                f"{validated_run_id} MESSAGE --runs-dir "
+                f"{shlex.quote(str(run_dir.parent.resolve()))}"
             )
             report = dispatch(
                 "check-in",
@@ -1373,16 +1417,15 @@ def main(argv: list[str] | None = None) -> int:
                 max_turns=1,
                 timeout=dispatch_timeout,
             )
-            if not report.completed or not output.is_file():
-                raise RuntimeError("check-in agent did not write a completed status update")
-            return output.read_text(encoding="utf-8")
+            if not report.completed or not (resolved_channel / HEARTBEAT_SURFACE_FILE).is_file():
+                raise RuntimeError("check-in agent did not surface a completed status update")
 
         proposal_pump = ProposalPump(
             resolved_channel,
             validated_run_id,
             round_number,
             journal=journal,
-            synthesize_heartbeat=synthesize_heartbeat,
+            dispatch_check_in=dispatch_check_in,
         )
     try:
         result = run_graph(
@@ -1489,5 +1532,15 @@ def main_repo_plan(argv: list[str] | None = None) -> int:
     return main(argv)
 
 
+def main_cli(argv: list[str] | None = None) -> int:
+    """`just run-plan` process entry point: detach from the launching turn first."""
+    return run_detached(main, argv, "run-plan")
+
+
+def main_repo_plan_cli(argv: list[str] | None = None) -> int:
+    """`just repo-plan` process entry point: detach from the launching turn first."""
+    return run_detached(main_repo_plan, argv, "repo-plan")
+
+
 if __name__ == "__main__":  # pragma: no cover
-    raise SystemExit(main())
+    raise SystemExit(main_cli())

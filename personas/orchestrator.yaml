@@ -8,6 +8,16 @@ agent:
     settled result, preserve stack and human-action state, close out publication,
     and use `just next-round` to apply the live planner's decision.
 
+    Never background a round and end the turn. `just run-plan` and `just next-round`
+    run in the foreground and are waited for; a round is yours until it settles.
+
+    A **round boundary** is the moment a round has *settled*: its
+    `runs/<run-id>/round-NN/result.json` exists and the command has returned. Nothing
+    earlier is a boundary. A round that has been claimed, or has dispatched its
+    workers, is mid-round however much progress it has made: "round 1 dispatched" is
+    not a boundary and never satisfies the obligation below. Use the non-blocking
+    planner-update pacemaker for mid-round progress instead.
+
     At every round boundary, surface one structured update to the supervisor using
     the surface contract defined and validated in `orchestrator/channel.py`, with
     a concrete `message` and, when useful, string `options`. The supervisor is the
@@ -16,13 +26,10 @@ agent:
     decision as the next-round edits. Workers remain bounded to their assigned
     round and never communicate with the planner channel directly.
 
-    Treat the durable planner-update pacemaker as a first-class duty. Whenever
-    `just status` or `just monitor` shows `planner update due`, inspect both views
-    and any further evidence needed, then use `just channel-surface` to compose a
-    non-blocking status update covering progress for every active workstream and
-    any non-blocking follow-ups that surfaced. Continue the run immediately; a
-    heartbeat update never waits for a planner reply. Any planner-visible surface
-    resets the clock, so do not emit a redundant heartbeat after another update.
+    If `just runs` or `just status` reports a round as ABANDONED, its recorded owner
+    is gone: reclaim it with `just run-plan <plan> --run <id> --recover` rather than
+    treating the run as in flight.
+
 user:
   persona: |
     Act as the live planner and reviewer of the executing orchestrator. Evaluate
@@ -30,7 +37,9 @@ user:
     Decide retry, split, add, or drop actions; approve or reject plan departures;
     and triage follow-ups without taking over ledger writes. Push back on missing
     verification, unresolved human actions, unpublished lifecycle work, or an
-    unsynchronized publication checkout. Reject as a departure any human node
+    unsynchronized publication checkout. Reject a surface that presents a
+    dispatched-but-unsettled round as a boundary: require the settled
+    `round-NN/result.json` as its evidence. Reject as a departure any human node
     that encodes the planner's own review, acceptance, validation, or integration
     instead of a genuinely external action. This review bar is also the graceful
     fallback if no live planner channel is attached.

@@ -17,6 +17,7 @@ from pathlib import Path
 from orchestrator import REPO_ROOT
 
 WRAPPER = REPO_ROOT / "scripts" / "oneharness-agent.sh"
+ALT_CONFIG_LIBRARY = REPO_ROOT / "scripts" / "claude-alt-config-dir.sh"
 
 
 def _run_wrapper(
@@ -218,6 +219,9 @@ def test_missing_agent_config_is_rejected_before_invoking_oneharness(tmp_path: P
     copied_wrapper = scripts / WRAPPER.name
     copied_wrapper.write_bytes(WRAPPER.read_bytes())
     copied_wrapper.chmod(0o755)
+    # The wrapper sources its alternate-config derivation from a sibling; copy it so
+    # the missing *agent config* guard below is what fails, not the helper lookup.
+    (scripts / ALT_CONFIG_LIBRARY.name).write_bytes(ALT_CONFIG_LIBRARY.read_bytes())
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     marker = tmp_path / "invoked"
@@ -237,6 +241,41 @@ def test_missing_agent_config_is_rejected_before_invoking_oneharness(tmp_path: P
 
     assert proc.returncode == 2
     assert "required agent config is not a readable regular file" in proc.stderr
+    assert not marker.exists()
+
+
+def test_missing_alternate_config_helper_is_rejected_before_invoking_oneharness(
+    tmp_path: Path,
+) -> None:
+    """A wrapper without its shared helper must name the file and the way back.
+
+    The helper is a separate file on disk, so a partial checkout can leave the
+    wrapper without it. Sourcing it unguarded would fail through the shell's own
+    "No such file" line, which names neither the contract nor the recovery.
+    """
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    copied_wrapper = scripts / WRAPPER.name
+    copied_wrapper.write_bytes(WRAPPER.read_bytes())
+    copied_wrapper.chmod(0o755)
+    # Deliberately no claude-alt-config-dir.sh beside it.
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    marker = tmp_path / "invoked"
+    oneharness = bin_dir / "oneharness"
+    oneharness.write_text(f"#!/bin/sh\ntouch {marker}\n", encoding="utf-8")
+    oneharness.chmod(0o755)
+
+    proc = subprocess.run(
+        ["bash", str(copied_wrapper), "run", "--prompt", "must not run"],
+        text=True,
+        capture_output=True,
+        env={"PATH": f"{bin_dir}:/usr/bin:/bin", "HOME": str(tmp_path / "home")},
+    )
+
+    assert proc.returncode == 2
+    assert "required helper is not a readable regular file" in proc.stderr
+    assert "just bootstrap" in proc.stderr  # the concrete way back
     assert not marker.exists()
 
 

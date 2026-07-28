@@ -147,6 +147,10 @@ The timing model landed in index version 2. Index version 3 added optional
 onejudge-linked session timestamps used by the human timeline. Index version 4
 adds harness-overhead timing for lock waits, repository setup, and scheduling;
 Index version 5 adds the third `llmlint` session role and its separate counters.
+Index version 8 makes `last_event` nullable: a run that has recorded no journal
+event yet serves `null` instead of an empty string, so a reader can tell absence
+from a real event kind. It is a widening of a required field, so readers pinned to
+version 7 reject it and the bump is what tells them to.
 Index version 7 splits timing completeness from linkage authority and makes
 measurement presence explicit; version 6 added `metrics.llmlint_wrong_file_retries`: `initial_calls`,
 `wrong_file_corrections`, `wrong_file_correction_rate`, the broader

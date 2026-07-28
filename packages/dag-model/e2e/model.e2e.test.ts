@@ -5,10 +5,12 @@ import {
   conversationSchema,
   dagConversationSchema,
   launchProvenanceSchema,
+  nodeConversationsSchema,
   nodeTelemetrySchema,
   parseRunDetail,
   parseRunList,
   roundSchema,
+  runConversationsSchema,
   runDetailSchema,
   runSummarySchema,
   sessionLinkSchema,
@@ -48,7 +50,7 @@ test("a package consumer validates an API response through the public export", (
   expect(
     parseRunList({
       api_version: 1,
-      telemetry_schema_version: 7,
+      telemetry_schema_version: 8,
       observed_at: "2026-07-26T12:00:00Z",
       runs: [],
     }).runs,
@@ -59,7 +61,7 @@ test("a package consumer rejects incompatible list and detail payloads", () => {
   expect(() =>
     parseRunList({
       api_version: 2,
-      telemetry_schema_version: 7,
+      telemetry_schema_version: 8,
       observed_at: "2026-07-26T12:00:00Z",
       runs: [],
     }),
@@ -67,7 +69,7 @@ test("a package consumer rejects incompatible list and detail payloads", () => {
   expect(
     runDetailSchema.safeParse({
       api_version: 1,
-      telemetry_schema_version: 7,
+      telemetry_schema_version: 8,
       observed_at: "2026-07-26T12:00:00Z",
       run: {},
       rounds: [{ node_states: { build: "paused" } }],
@@ -76,7 +78,27 @@ test("a package consumer rejects incompatible list and detail payloads", () => {
   ).toBe(false);
 });
 
-test("a package consumer accepts a complete run detail", () => {
+const TRANSCRIPT = {
+  conversation: {
+    canContinue: false,
+    harnesses: ["codex"],
+    id: "worker-session",
+    name: "engineer-build",
+    project: "repo",
+    startedAt: "2026-07-26T12:00:00Z",
+    state: "completed",
+    turns: [],
+  },
+  attribution: {
+    runId: "run-1",
+    nodeId: "build",
+    transportRole: "agent",
+    agentRole: "worker",
+  },
+};
+
+/** A complete `RunDetail` whose transcripts are supplied in the shape under test. */
+function completeDetail(conversations: unknown[]) {
   const usageParty = {
     input_tokens: null,
     output_tokens: null,
@@ -112,9 +134,9 @@ test("a package consumer accepts a complete run detail", () => {
       scheduling: 0,
     },
   };
-  const parsed = parseRunDetail({
+  return {
     api_version: 1,
-    telemetry_schema_version: 7,
+    telemetry_schema_version: 8,
     observed_at: "2026-07-26T12:00:00Z",
     run: {
       run_id: "run-1",
@@ -149,9 +171,47 @@ test("a package consumer accepts a complete run detail", () => {
       lint: 0,
     },
     rounds: [],
-    conversations: [],
-  });
+    conversations,
+  };
+}
+
+test("a package consumer accepts a complete run detail", () => {
+  // The read API serves one flat list of transcripts, each carrying its own node
+  // locator, exactly as `docs/dag-ui/design.md` fixes `RunDetail.conversations`.
+  const parsed = parseRunDetail(completeDetail([TRANSCRIPT]));
   expect(parsed.run.run_id).toBe("run-1");
+  expect(parsed.conversations[0]?.attribution.nodeId).toBe("build");
+});
+
+test("a package consumer accepts a run detail grouped by node", () => {
+  // A payload written against the grouped shape stays valid and reads as the same
+  // list, so one consumer handles both without knowing which it was handed.
+  const parsed = parseRunDetail(
+    completeDetail([{ node: "build", conversations: [TRANSCRIPT] }]),
+  );
+  expect(parsed.conversations).toEqual([TRANSCRIPT]);
+});
+
+test("a package consumer reads both recorded conversation shapes as one list", () => {
+  // What the read API serves: one flat list, each entry carrying its own locator.
+  expect(runConversationsSchema.parse([TRANSCRIPT])).toEqual([TRANSCRIPT]);
+  // What a payload grouped under `nodeConversationsSchema` carries: still valid, and
+  // flattened to the same list so one consumer handles both.
+  expect(
+    runConversationsSchema.parse([
+      { node: "build", conversations: [TRANSCRIPT] },
+      { conversations: [] },
+    ]),
+  ).toEqual([TRANSCRIPT]);
+  // The grouped entry keeps validating on its own, for a consumer holding just one.
+  expect(
+    nodeConversationsSchema.parse({
+      node: "build",
+      conversations: [TRANSCRIPT],
+    }).node,
+  ).toBe("build");
+  expect(() => runConversationsSchema.parse([{ node: "build" }])).toThrow();
+  expect(() => nodeConversationsSchema.parse({ node: "build" })).toThrow();
 });
 
 test("a package consumer validates provenance, SSE names, and counters", () => {

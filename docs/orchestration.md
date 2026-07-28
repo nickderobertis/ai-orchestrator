@@ -99,13 +99,21 @@ messages: transport state lives under `runs/<run-id>/channel/` as `up.fifo`,
 `just orchestrate` seeds a durable 1800-second planner-update interval; override
 it at launch with `--heartbeat-interval SECONDS`. A channel-side pacemaker keeps
 checking that clock independently of graph reconciliation, including while a node
-is inside a long-running agent step. When due, it dispatches a dedicated check-in
-agent to synthesize a concise per-workstream update from the run journal, status,
-monitor, telemetry, and labeled history. The resulting non-blocking surface is
-queued without waiting for a planner reply. Only successful consumption through
-`channel-next` resets the clock and appends `planner-surfaced` to `events.jsonl`;
-an update queued while no planner is attached is neither reset nor audited as
-delivered.
+is inside a long-running agent step. When due, it claims and dispatches a dedicated
+check-in agent. That read-only actor synthesizes a concise per-workstream update
+from the run journal, status, monitor, telemetry, and labeled history, then sends
+it exactly once with `just channel-surface`. The command queues the non-blocking
+surface without waiting for a planner reply; the reconciler neither authors nor
+relays its content. Only successful consumption through `channel-next` resets the
+clock and appends `planner-surfaced` to `events.jsonl`; an update queued while no
+planner is attached is neither reset nor audited as delivered.
+
+The heartbeat record carries an atomic `in_flight` claim so concurrent pacemaker
+ticks cannot dispatch duplicate check-ins. A failed attempt is recorded in
+`channel/check-in.log`, clears its claim, and becomes eligible again at the next
+configured interval without blocking the graph frontier. A successfully queued
+surface retains the claim until delivery, preventing another actor from
+duplicating the pending update.
 
 Every planner-visible update—round boundary, proposal, or delivered heartbeat—
 clears the due signal and restarts the clock. The pacemaker compares wall time
@@ -116,6 +124,11 @@ adjust the cadence, add
 `"heartbeat_interval": false` to disable it. Values must be positive finite
 seconds. This pacemaker is independent of the reader-side `just monitor
 --heartbeat` silence display described below.
+
+Recorded oneharness sessions preserve transport `role` and add semantic
+`agent_role`: `worker`, `judge`, `orchestrator`, `check-in`, or `pr-author`.
+This keeps check-in and PR-author infrastructure visible without counting either
+as a node's implementation worker.
 
 While a consumed surface is persisted awaiting an answer, `just runs` and `just
 status` report `waiting for planner decision` for blocking surfaces and `waiting
@@ -339,7 +352,10 @@ Recording is on by default:
 
 Before each recorded round is claimed, the executor runs the same conservative
 scratch sweep exposed as `just sweep-scratch`. Dead `orchestrator-watchdog-*`
-directories are identified by their recorded PID. Known third-party scratch is
+directories are identified by the ownership proof described under
+[dispatch scratch ownership](onejudge-integration.md#dispatch-scratch-ownership),
+and every directory that proof does not clear is reported as retained rather
+than removed. Known third-party scratch is
 eligible only after the conservative age threshold and only when no lifecycle
 dispatch holds the host scratch shared lock. A destructive sweep takes the
 exclusive lock without waiting; when a dispatch is active it skips third-party
@@ -360,8 +376,9 @@ runs/<run-id>/humans.json
 
 Without `--run`, the id is derived from the plan's `name` or filename and made
 unique. `--runs-dir` moves the ledger, `--no-record` opts out, and `--recover`
-claims a `running` round only after its recorded owner is proven gone. Plan and
-result writes are atomic; a live round cannot be claimed by another process.
+claims a `running` or `abandoned` round only after its recorded owner is proven
+gone. Plan and result writes are atomic; a live round cannot be claimed by
+another process.
 `just runs` summarizes the latest completed round, including waiting action prose
 and what each action unblocks, then points to `just results <run>`. The results
 view lists every node's status and outcome, links its typed-id detail view, and
@@ -390,6 +407,30 @@ schema 2 terminal node events carry the complete serialized node result, so
 resume nodes that were running without another start transition, and converge the
 remaining frontier. Schema 1 journals remain readable, but a schema 1 prefix with
 settled nodes cannot be recovered because it predates durable node results.
+
+### A round outlives the turn that launched it
+
+A round must not die because the orchestrator surfaced an update and ended its turn.
+`just run-plan` and `just next-round` therefore fork before doing anything: the child
+leads a session of its own and owns the round, while the parent exists only to relay
+its exit status. The launching turn's teardown — and `uv run`, which forwards the
+signal it receives to its own direct child and then escalates to SIGKILL — reaches
+only that parent. `orchestrator/detach.py` holds the full reasoning; the practical
+consequence is that Ctrl-C reaches the relaying parent rather than the round, so the
+round announces the pid to signal when you do want it stopped.
+
+The round's own exit statuses cross that fork unchanged — 0 complete, 1 unfinished, 2
+rejected input, 128+N signalled. An exception escaping the round is the exception: it
+ends the round there, prints its traceback, and exits **70**, so a crash is never read
+as the unfinished round that also exits 1.
+
+A round that stops without recording a result never stays `running`. Its owner writes
+`{"status": "abandoned", "reason": ...}` on any catchable teardown signal and on any
+other exit that recorded no result, and `--recover` reclaims an `abandoned` round the
+same way it reclaims a dead `running` one. SIGKILL is the one death nothing can
+record, so `just runs` and `just status` derive abandonment from the recorded owner's
+pid: a dead owner is reported as `round-NN ABANDONED (...)` with the reclaiming
+command, never as work in flight.
 
 ## Monitoring a live run
 
@@ -486,6 +527,14 @@ green gate to publication directly consumable. The default is active runs;
 Use `just telemetry --breakdown [--all]` for the operator view. The practical
 field guide and diagnostic workflow are in [`telemetry.md`](telemetry.md); the
 versioned cross-layer contract is in [`telemetry-model.md`](telemetry-model.md).
+
+`just telemetry-server` serves the same read model continuously instead of once:
+a loopback-bound HTTP API plus an SSE invalidation stream over a runs directory,
+for the DAG UI and any other live viewer. It is read-only in the same sense the
+monitor is — no route mutates a run, executes a command, or accepts a path — so
+it is safe to leave running beside an active orchestration. Its flags, response
+shapes, and event vocabulary are fixed by
+[`dag-ui/design.md`](dag-ui/design.md#running-it).
 
 ## Human completion attestations
 

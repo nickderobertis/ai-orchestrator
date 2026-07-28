@@ -4,7 +4,7 @@ import { TelemetryClient, TelemetryClientError } from "./index.js";
 
 const emptyList = {
   api_version: 1,
-  telemetry_schema_version: 7,
+  telemetry_schema_version: 8,
   observed_at: "2026-07-26T12:00:00Z",
   runs: [],
 } as const;
@@ -86,7 +86,7 @@ test("validates SSE snapshots before notifying subscribers", () => {
   );
   listeners.get("snapshot")?.(
     new MessageEvent("snapshot", {
-      data: JSON.stringify({ ...emptyList, telemetry_schema_version: 8 }),
+      data: JSON.stringify({ ...emptyList, telemetry_schema_version: 9 }),
     }),
   );
   expect(events).toHaveLength(1);

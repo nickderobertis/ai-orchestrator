@@ -42,9 +42,7 @@ import argparse
 import contextlib
 import json
 import math
-import os
 import re
-import socket
 import sys
 import time
 import unicodedata
@@ -79,6 +77,7 @@ from .runs import (
     load_mapping,
     resolve_supervision_run,
     result_state,
+    round_appears_in_flight,
     rounds,
     validate_run_id,
 )
@@ -967,36 +966,6 @@ class RunState:
         return self.state == COMPLETE_STATE and self.ok
 
 
-def _executor_live(round_dir: Path) -> bool:
-    """Whether the round's recorded owner still looks alive on this host.
-
-    Conservative in the direction that keeps the stream open: anything unreadable,
-    or an owner on another host, counts as live. A monitor wrongly reporting "the
-    executor stopped" is worse than one that keeps heartbeating.
-    """
-    path = round_dir / "status.json"
-    if not path.exists():
-        return False
-    try:
-        state = load_mapping(path)
-    except (ConfigError, OSError):
-        return True
-    if state.get("status") != "running":
-        return False
-    pid = state.get("pid")
-    if not isinstance(pid, int) or isinstance(pid, bool) or pid < 1:
-        return True
-    if state.get("host") != socket.gethostname():
-        return True
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    return True
-
-
 # llmlint: ignore[changed_behavior_has_e2e] real blocking and informational pending surfaces run
 # through just monitor e2e; malformed-file tolerance is a deterministic reader boundary.
 def run_state(run_dir: Path, run_id: RunId) -> RunState:
@@ -1030,7 +999,7 @@ def run_state(run_dir: Path, run_id: RunId) -> RunState:
     number, round_dir = latest
     result_path = round_dir / "result.json"
     if not result_path.exists():
-        live = _executor_live(round_dir)
+        live = round_appears_in_flight(round_dir)
         return RunState(
             run_id,
             number,

@@ -217,6 +217,16 @@ monitor *args:
 telemetry *args:
     @uv run orchestrator-telemetry {{args}}
 
+# Serve the read-only DAG Observatory against a running telemetry server.
+# llmlint: ignore[tool_output_is_signal] Vite startup and request logs are the foreground development server's operator-facing product.
+dag-ui:
+    ./scripts/nx.sh run dag-ui:serve
+
+# Serve the read-only DAG telemetry API (FastAPI + SSE), loopback-bound by default.
+# llmlint: ignore[tool_output_is_signal] the requested long-running read API is this command's product.
+telemetry-server *args:
+    uv run orchestrator-telemetry-server {{args}}
+
 # Show running tasks joined with recent output, branch commits, and ledger rounds.
 # Pass N or --all to include recently finished tasks.
 # llmlint: ignore[tool_output_is_signal] the requested multi-task status report is this viewing command's product.

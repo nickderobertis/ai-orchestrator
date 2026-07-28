@@ -111,6 +111,27 @@ def _recorded_run(tmp_path: Path, *, state: str = "failed") -> Path:
     return run_dir
 
 
+def _stretch_recorded_span(run_dir: Path, step_seconds: float = 1.0) -> None:
+    """Space a recorded run's events a second apart, as a real run's are.
+
+    The fixture writes its whole journal in a few milliseconds. Attribution is
+    capped by elapsed wall time, so synthetic sessions reporting tens of
+    milliseconds of model and tool work inside a 3ms run get clamped — which
+    makes such assertions depend on how fast the host wrote the file rather than
+    on the aggregation under test.
+    """
+    path = run_dir / "events.jsonl"
+    events = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+    start = events[0]["at"]
+    path.write_text(
+        "".join(
+            json.dumps({**event, "at": start + index * step_seconds}) + "\n"
+            for index, event in enumerate(events)
+        ),
+        encoding="utf-8",
+    )
+
+
 def test_collect_run_joins_ledger_journal_history_and_attestation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -204,6 +225,23 @@ def test_optional_record_fields_are_omitted() -> None:
     assert Provider("oneharness").record() == {"provider": "oneharness"}
 
 
+def test_a_run_with_no_events_records_a_null_last_event(tmp_path: Path) -> None:
+    """A prepared round that has journalled nothing has no last event, so it is null.
+
+    This is the state every run passes through between `prepare_round` and its first
+    append. `last_event` is required, so absence has to be representable in the value
+    rather than encoded as an empty string a reader must recognise as "none".
+    """
+    run_dir = tmp_path / "runs" / "eventless"
+    prepare_round(run_dir, {"tasks": [{"id": "api", "task": "ship"}]})
+
+    telemetry = collect_run(run_dir, oneharness_bin="definitely-not-installed")
+
+    assert telemetry is not None
+    assert telemetry.last_event is None
+    assert telemetry.record()["last_event"] is None
+
+
 def test_harness_buckets_decompose_wall_time() -> None:
     timing = _timing(
         1000,
@@ -259,9 +297,9 @@ def test_over_budget_buckets_are_clipped_to_exactly_wall_time() -> None:
     assert timing["publication_wait_seconds"] == 0
 
 
-def test_schema_v7_field_golden_prevents_cross_layer_drift() -> None:
+def test_schema_v8_field_golden_prevents_cross_layer_drift() -> None:
     golden = json.loads(
-        (Path(__file__).parent / "golden" / "telemetry-v7-fields.json").read_text(encoding="utf-8")
+        (Path(__file__).parent / "golden" / "telemetry-v8-fields.json").read_text(encoding="utf-8")
     )
     assert golden == {
         "schema_version": TELEMETRY_SCHEMA_VERSION,
@@ -281,7 +319,7 @@ def test_schema_v7_field_golden_prevents_cross_layer_drift() -> None:
     contract = (Path(__file__).parents[1] / "docs" / "telemetry-model.md").read_text(
         encoding="utf-8"
     )
-    assert "Index version 7" in contract
+    assert "Index version 8" in contract
     typescript_contract = (
         Path(__file__).parents[1] / "packages" / "dag-model" / "src" / "index.ts"
     ).read_text(encoding="utf-8")
@@ -333,7 +371,7 @@ def test_index_cli_defaults_to_active_and_all_includes_settled(
     completed.rename(tmp_path / "runs" / "complete")
     assert main(["--runs-dir", str(tmp_path / "runs"), "--oneharness-bin", "absent"]) == 0
     active = json.loads(capsys.readouterr().out)
-    assert active["schema_version"] == 7
+    assert active["schema_version"] == 8
     assert active["runs"] == []
     assert active["metrics"]["recovered_branches"] == 0
 
@@ -349,6 +387,9 @@ def test_native_timing_usage_tools_and_breakdown_are_role_and_node_scoped(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     run_dir = _recorded_run(tmp_path, state="complete")
+    # The attribution asserted below is per-role, not wall-clamped; give the run the
+    # kind of span a real one has.
+    _stretch_recorded_span(run_dir)
 
     def session(role: str, duration: int, model: int, tool: int) -> HistorySession:
         path = tmp_path / f"{role}.jsonl"

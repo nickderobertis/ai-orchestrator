@@ -24,6 +24,43 @@ class LockTimeout(TimeoutError):
 
 
 GitLockIdentity = NewType("GitLockIdentity", str)
+ProcessStart = NewType("ProcessStart", int)
+
+
+def process_start_identity(pid: int) -> ProcessStart | None:
+    """Return Linux's same-host process start token, or ``None`` if not live.
+
+    A bare pid is not an identity. The kernel recycles pids, so a recorded pid on
+    its own can be reported live forever by an unrelated process that happens to
+    inherit the number. Pairing the pid with the start time the kernel stamped on
+    that process makes a recorded owner identifiable across such reuse.
+    """
+    if pid <= 0:
+        return None
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return None
+    except PermissionError:
+        pass
+    try:
+        # The parenthesized comm field may contain spaces or parentheses. Fields
+        # after its final ')' begin with state (field 3); starttime is field 22.
+        # Every unsuitable root — missing, not a directory, or not procfs-shaped —
+        # already degrades through the handler below to "not identifiable", the one
+        # meaning both callers act on. That answer is not conservative by itself:
+        # the merge queue reaps such a ticket and the sweeper may reclaim such
+        # scratch, which is why the sweeper also demands an unheld ownership lock.
+        # llmlint: ignore[boundary_inputs_validated] test-only procfs seam, handled below
+        proc_root = Path(os.environ.get("AI_ORCHESTRATOR_PROC_ROOT", "/proc"))
+        fields = (
+            (proc_root / str(pid) / "stat").read_text(encoding="utf-8").rsplit(")", 1)[1].split()
+        )
+        if fields[0] == "Z":
+            return None
+        return ProcessStart(int(fields[19]))
+    except (OSError, IndexError, ValueError):
+        return None
 
 
 class HarnessObserver(Protocol):

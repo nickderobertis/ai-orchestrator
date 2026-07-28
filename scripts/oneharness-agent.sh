@@ -14,29 +14,18 @@ set -euo pipefail
 script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 repo_root=$(dirname -- "$script_dir")
 # The worker config maps this portable, non-secret parent value into
-# CLAUDE_CONFIG_DIR only for its alternate-subscription child.
-if [ -n "${ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR-}" ]; then
-    alternate_config_dir=$ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR
-else
-    : "${HOME:?oneharness-agent: HOME is required to locate the alternate Claude config; export HOME or set ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR, then retry}"
-    alternate_config_dir="$HOME/.claude-alt"
-fi
-agent_config="$repo_root/oneharness.toml"
-case "$alternate_config_dir" in
-    /*) ;;
-    *)
-        echo "oneharness-agent: alternate Claude config path must be absolute; set ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR to an absolute directory and retry" >&2
-        exit 2
-        ;;
-esac
-if [ -e "$alternate_config_dir" ] &&
-    { [ ! -d "$alternate_config_dir" ] ||
-        [ ! -r "$alternate_config_dir" ] ||
-        [ ! -x "$alternate_config_dir" ]; }; then
-    echo "oneharness-agent: alternate Claude config path is not an accessible directory; create it or fix its permissions, or unset the override to use the default path and retry" >&2
+# CLAUDE_CONFIG_DIR only for its alternate-subscription child; the derivation is
+# shared with the orchestrator wrapper so the two roles cannot drift apart.
+alt_config_helper="$script_dir/claude-alt-config-dir.sh"
+if [ ! -f "$alt_config_helper" ] || [ ! -r "$alt_config_helper" ]; then
+    echo "oneharness-agent: required helper is not a readable regular file: $alt_config_helper; restore it from the repository or run 'just bootstrap', then retry" >&2
     exit 2
 fi
-export ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR="$alternate_config_dir"
+# shellcheck source=scripts/claude-alt-config-dir.sh
+. "$alt_config_helper"
+resolve_claude_alt_config_dir oneharness-agent || exit $?
+alternate_config_dir=$ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR
+agent_config="$repo_root/oneharness.toml"
 
 if [ "${1-}" != "run" ]; then
     echo "oneharness-agent: expected the 'run' subcommand; invoke through onejudge dispatch or retry as 'scripts/oneharness-agent.sh run ...'" >&2

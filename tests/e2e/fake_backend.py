@@ -219,19 +219,48 @@ def main() -> int:
     match op:
         case "respond":
             _wait_at_provider_barrier(task)
-            if "Output file: " in task and "agent-synthesized planner update" in task:
+            if "Check-in command: " in task and "agent-synthesized planner update" in task:
+                channel_dir = Path(task.split("Channel directory: ", 1)[1].splitlines()[0])
+                attempts = channel_dir / "check-in-dispatches.txt"
                 fail_once_value = os.environ.get("FAKE_CHECK_IN_FAIL_ONCE")
                 fail_once = Path(fail_once_value) if fail_once_value else None
+                skip_surface_value = os.environ.get("FAKE_CHECK_IN_SKIP_SURFACE_ONCE")
+                skip_surface = Path(skip_surface_value) if skip_surface_value else None
                 if fail_once is not None and not fail_once.exists():
                     fail_once.write_text("failed\n", encoding="utf-8")
+                    with attempts.open("a", encoding="utf-8") as stream:
+                        stream.write("failed\n")
+                    sys.stderr.write("fake_backend: forced first check-in failure\n")
+                    return 1
                 else:
-                    output = Path(task.split("Output file: ", 1)[1].splitlines()[0])
-                    output.write_text(
-                        "active-worker: executing the slow agent step; "
-                        "evidence: node-started is recorded and node-settled is absent; "
-                        "follow-ups: none\n",
+                    with attempts.open("a", encoding="utf-8") as stream:
+                        stream.write(
+                            "missing-surface\n"
+                            if skip_surface is not None and not skip_surface.exists()
+                            else "success\n"
+                        )
+                    (channel_dir / "check-in-labels.txt").write_text(
+                        os.environ["ONEHARNESS_HISTORY_LABELS"],
                         encoding="utf-8",
                     )
+                    message = (
+                        "active-worker: executing the slow agent step; "
+                        "evidence: node-started is recorded and node-settled is absent; "
+                        "follow-ups: none"
+                    )
+                    if skip_surface is not None and not skip_surface.exists():
+                        skip_surface.write_text("skipped\n", encoding="utf-8")
+                    else:
+                        command = shlex.split(
+                            task.split("Check-in command: ", 1)[1].splitlines()[0]
+                        )
+                        command[command.index("MESSAGE")] = message
+                        surfaced = subprocess.run(
+                            command, text=True, capture_output=True, check=False
+                        )
+                        if surfaced.returncode != 0:
+                            sys.stderr.write(surfaced.stderr)
+                            return 1
             guidance = _planner_guidance(messages)
             run_log = re.search(r"record-run=(\S+)", task)
             if run_log is not None:
@@ -292,11 +321,11 @@ def main() -> int:
             if orchestrator_plan is not None:
                 plan_path = orchestrator_plan.plan
                 plan_text = plan_path.read_text(encoding="utf-8")
+                orchestrator_turn = _assistant_turns(messages)
                 if "pre-round-pause " in plan_text:
                     release = Path(plan_text.split("pre-round-pause ", 1)[1].split()[0])
                     while not release.exists():
                         time.sleep(0.02)
-                orchestrator_turn = _assistant_turns(messages)
                 if orchestrator_turn == 0:
                     run_argv = list(orchestrator_plan.argv)
                     run_env = None

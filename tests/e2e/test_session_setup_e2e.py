@@ -31,7 +31,10 @@ def _setup_repo(
     for name in ("pyproject.toml", "uv.lock"):
         shutil.copy2(REPO_ROOT / name, repo / name)
     shutil.copy2(REPO_ROOT / "justfile", repo / "justfile")
-    shutil.copy2(REPO_ROOT / "orchestrator" / "scratch.py", package / "scratch.py")
+    # The sweep is the only orchestrator code session setup runs, so the fixture
+    # carries exactly its module and the coordination helpers it imports.
+    for module in ("scratch.py", "coordination.py"):
+        shutil.copy2(REPO_ROOT / "orchestrator" / module, package / module)
     if dependency_oneharness != ONEHARNESS_VERSION:
         pyproject = repo / "pyproject.toml"
         pyproject.write_text(

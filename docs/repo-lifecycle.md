@@ -475,13 +475,19 @@ runs/<run-id>/round-01/result.json
 
 The plan mapping is preserved exactly and the result is the command's JSON
 payload. The round directory and `running` status are committed before dispatch;
-the result and `completed` status are atomic updates. A second process cannot claim
-the same explicit run/round. If a process died, inspect its recorded worktrees and
-then use `just run-plan ... --run <id> --recover`; recovery is explicit and never
-silently overwrites a result. Pass `--run <id>` to name a run; without it, a fresh unique run id comes
-from the plan's top-level `name` or filename. The continuation trailer is written
-to stderr, so `--format json` stdout remains machine-readable. Use `--no-record`
-to opt out or `--runs-dir` to move the ledger.
+the result and `completed` status are atomic updates, and an owner that stops
+without recording a result leaves `abandoned` instead of `running`. A second
+process cannot claim the same explicit run/round. If a process died, inspect its
+recorded worktrees and then use `just run-plan ... --run <id> --recover`; recovery
+is explicit and never silently overwrites a result. `just runs` and `just status`
+report a round whose recorded owner no longer exists as `ABANDONED` rather than as
+in flight, so a lifecycle round that lost its executor is visibly waiting for that
+recovery rather than looking like work in progress. Pass `--run <id>` to name a
+run; without it, a fresh unique run id comes from the plan's top-level `name` or
+filename. The continuation trailer is written to stderr, so `--format json` stdout
+remains machine-readable. Use `--no-record` to opt out — it claims no round and so
+has no ledger to abandon or recover, though it detaches like any other round — or
+`--runs-dir` to move the ledger.
 
 After inspecting a round, put retry/split/add/drop or `complete_human` decisions
 in `edits.json`, or attest a ready human on the CLI:
@@ -586,6 +592,19 @@ clean work, it records the preserved branch and commit as a retry resume checkpo
 A later graph retry carries that checkpoint forward and resumes the same branch;
 automatic retry behavior is unchanged. An attempt that produced no commit has no
 checkpoint and retries from a fresh worktree as before.
+
+Ordinary later rounds treat an unresolved lifecycle node the same way as a retry
+replacement: if its prior attempt recorded a committed retry checkpoint, the
+unchanged node resumes that branch automatically. A plan's explicit `branch`
+always takes precedence over inferred retry metadata. To deliberately discard a
+preserved attempt and start fresh, set `branch` to a new valid branch name in the
+retry edit. The opt-out belongs on `branch` because it is already the plan's
+authoritative branch-routing field; a separate reset flag could conflict with it
+and create two sources of truth. The next `branch-discovered` event records
+`resumed: true` only for resume metadata, and `false` for an explicit fresh
+branch. That precedence covers preserved attempts only. A waiting workstream is
+not choosing a branch, so an explicit `branch` never discards its pause resume
+and the human steps it already recorded as completed.
 
 To continue authoring after a lifecycle node hits its turn cap, do not relaunch
 the original plan. While supervising its existing `orchestrate` run, send a

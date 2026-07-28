@@ -19,13 +19,29 @@ def test_repo_task_auto_prepends_uv_tool_bin_to_dispatch_path(tmp_path: Path) ->
     assert uv is not None
     assert just is not None
     (bin_dir / "uv").symlink_to(uv)
+    # The wrapper must find `uv` only through the tool bin it prepends, so the PATH
+    # it inherits carries `just` and the interpreter a wrapper-script install of it
+    # needs (a node-shim `just` is otherwise unrunnable here) — and nothing else.
+    tools = tmp_path / "tools"
+    tools.mkdir()
+    (tools / "just").symlink_to(just)
+    node = shutil.which("node")
+    if node is not None:
+        (tools / "node").symlink_to(node)
+    # `just` may also be a launcher that reaches for a sibling of its own real
+    # path rather than for a bare interpreter name, so keep its directory
+    # reachable too. Neither directory carries uv, so the recipe still has to
+    # derive the tool bin from HOME — the premise under test.
+    launcher_dir = str(Path(just).parent)
+    inherited_path = f"{tools}:{launcher_dir}:/usr/bin:/bin"
+    assert shutil.which("uv", path=inherited_path) is None
 
     proc = subprocess.run(
-        [just, "repo-task-auto", "--help"],
+        [str(tools / "just"), "repo-task-auto", "--help"],
         cwd=REPO_ROOT,
         text=True,
         capture_output=True,
-        env={**os.environ, "HOME": str(home), "PATH": "/usr/bin:/bin"},
+        env={**os.environ, "HOME": str(home), "PATH": inherited_path},
     )
 
     assert proc.returncode == 0, proc.stderr
