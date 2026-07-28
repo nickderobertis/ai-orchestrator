@@ -27,7 +27,7 @@ import shutil
 import threading
 import time
 import uuid
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 from contextlib import AbstractContextManager, suppress
 from dataclasses import dataclass
 from pathlib import Path
@@ -206,14 +206,17 @@ class RunOwner:
     @classmethod
     def parse(cls, value: object) -> RunOwner | None:
         """Return the recorded owner, or ``None`` when it is not identifiable."""
-        if not isinstance(value, Mapping):
-            return None
-        pid, start, token = value.get("pid"), value.get("process_start"), value.get("token")
-        if isinstance(pid, bool) or not isinstance(pid, int):
-            return None
-        if isinstance(start, bool) or not isinstance(start, int):
-            return None
-        return cls(pid, ProcessStart(start), token if isinstance(token, str) else "")
+        match value:
+            # `bool` is an `int`, so the accepted shapes below would otherwise take
+            # `true` for a pid and call an unidentifiable record identifiable.
+            case {"pid": bool()} | {"process_start": bool()}:
+                return None
+            case {"pid": int(pid), "process_start": int(start), "token": str(token)}:
+                return cls(pid, ProcessStart(start), token)
+            case {"pid": int(pid), "process_start": int(start)}:
+                return cls(pid, ProcessStart(start), "")
+            case _:
+                return None
 
     @classmethod
     def read(cls, run_root: Path) -> RunOwner | None:

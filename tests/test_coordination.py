@@ -6,6 +6,8 @@ import json
 import os
 import subprocess
 import sys
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -73,6 +75,62 @@ def test_advisory_lock_observes_success_and_timeout_waits(monkeypatch, tmp_path)
         ("lock-wait", False),
     ]
     assert all(float(detail["seconds"]) >= 0 for _, detail in observed)
+
+
+def _lock_holder(seconds: float) -> subprocess.Popen[str]:
+    """Start a process that takes the shared identity and holds it for ``seconds``."""
+    process = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            "from orchestrator.coordination import advisory_lock; import sys, time; "
+            "seconds = float(sys.argv[1]); "
+            "lock = advisory_lock('contended'); lock.__enter__(); "
+            "print('locked', flush=True); time.sleep(seconds)",
+            str(seconds),
+        ],
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    assert process.stdout is not None
+    assert process.stdout.readline() == "locked\n"
+    return process
+
+
+def test_contenders_queue_for_an_owned_lock_instead_of_failing(monkeypatch, tmp_path) -> None:
+    """A busy resource must make a caller wait its turn, not give up on it."""
+    monkeypatch.setenv("AI_ORCHESTRATOR_HOME", str(tmp_path))
+    holder = _lock_holder(0.4)
+    try:
+        started = time.monotonic()
+        with advisory_lock("contended", timeout=30):
+            waited = time.monotonic() - started
+    finally:
+        assert holder.wait(timeout=5) == 0
+
+    assert waited >= 0.3, "the contender was served before the owner released"
+
+
+def test_a_killed_owner_hands_the_lock_to_the_waiter_already_in_line(monkeypatch, tmp_path) -> None:
+    """`flock` releases on death, so a crashed owner cannot wedge the queue."""
+    monkeypatch.setenv("AI_ORCHESTRATOR_HOME", str(tmp_path))
+    holder = _lock_holder(60)
+    acquired = threading.Event()
+
+    def wait_for_the_lock() -> None:
+        with advisory_lock("contended", timeout=30):
+            acquired.set()
+
+    waiter = threading.Thread(target=wait_for_the_lock, daemon=True)
+    waiter.start()
+    try:
+        assert not acquired.wait(0.3), "the lock was handed out while its owner held it"
+        holder.kill()
+        assert acquired.wait(10), "a killed owner left its queue wedged"
+    finally:
+        holder.wait(timeout=5)
+        waiter.join(timeout=10)
+        assert not waiter.is_alive()
 
 
 def test_lock_timeout_defaults_to_minutes_and_is_configurable(monkeypatch) -> None:

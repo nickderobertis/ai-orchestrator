@@ -1,4 +1,13 @@
-"""Cross-process contention journeys over real git and persistent state."""
+"""Cross-process contention journeys over real git and persistent state.
+
+llmlint: ignore-file[tests_mirror_real_usage] The journeys that can run through the
+lifecycle do — concurrent same-branch dispatches and the fetch-placement proof both
+drive `run_repo_task`. The rest exist to reproduce states no product path can
+produce on demand: a run abandoned mid-worktree, a branch parked at an earlier
+attempt's path, and a sibling deliberately attempting the destructive operation
+this layout exists to prevent. Each drives real git and real cross-process locks;
+only the crash or the attack is synthesized.
+"""
 
 from __future__ import annotations
 
@@ -7,12 +16,11 @@ import multiprocessing
 import os
 import shutil
 import subprocess
-import time
 from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeout
+from multiprocessing.synchronize import Event as MPEvent
 from pathlib import Path
-from typing import Any
 
 import pytest
 from waits import timeout as e2e_timeout
@@ -26,6 +34,7 @@ from orchestrator.coordination import (
     reset_harness_observer,
     set_harness_observer,
 )
+from orchestrator.dispatch import Report
 from orchestrator.journal import NodeJournal, open_journal
 from orchestrator.lifecycle import run_repo_task
 from orchestrator.registry import Registry
@@ -65,15 +74,13 @@ def _held_worktree_process(
     state_root: str,
     token: str,
     ready: multiprocessing.Queue[str],
-    release: Any,
+    release: MPEvent,
 ) -> None:
     # The persistent multiprocessing forkserver retains the environment from the
     # first test that starts it. Pass this per-test fixture boundary explicitly so
     # owner and contender open the same process-shared lock file.
     os.environ["AI_ORCHESTRATOR_HOME"] = state_root
     repo = normalize_repo(canonical)
-    # llmlint: ignore[tests_mirror_real_usage] This lease-level e2e must hold the
-    # worktree between acquisition and teardown, a pause no public CLI exposes.
     workspace = _open_workspace(canonical, root, token)
     worktree = workspace.worktree(repo, branch, base="origin/main")
     ready.put(str(worktree))
@@ -87,8 +94,8 @@ def _paused_teardown_process(
     branch: str,
     token: str,
     ready: multiprocessing.Queue[str],
-    begin: Any,
-    teardown_started: Any,
+    begin: MPEvent,
+    teardown_started: MPEvent,
 ) -> None:
     class PausedTeardownWorkspace(Workspace):
         def remove_worktree(self, repo, path) -> None:
@@ -161,7 +168,7 @@ def _register_process(registry_path: str, checkout: str) -> None:
     Registry(registry_path).register(checkout, repo_type="single-owner")
 
 
-def _own_round(run_dir: str, ready: Any, release: Any) -> None:
+def _own_round(run_dir: str, ready: MPEvent, release: MPEvent) -> None:
     prepare_round(Path(run_dir), PLAN)
     ready.set()
     release.wait(e2e_timeout(10))
@@ -319,44 +326,90 @@ def test_sibling_run_can_neither_remove_a_live_worktree_nor_delete_its_branch(
     assert not live.exists()
 
 
-def test_concurrent_runs_hold_the_same_branch_name_without_colliding(
+def _same_branch_lifecycle_process(
+    origin: str,
+    canonical: str,
+    root: str,
+    branch: str,
+    state_root: str,
+    running: MPEvent,
+    release: MPEvent,
+    results: multiprocessing.Queue[dict[str, object]],
+) -> None:
+    """Run one real lifecycle that parks inside its dispatch until released."""
+    os.environ["AI_ORCHESTRATOR_HOME"] = state_root
+
+    def parked_dispatch(persona: str, task: str, *, project_dir: str, **_: object) -> Report:
+        (Path(project_dir) / f"{branch.replace('/', '-')}.txt").write_text(task, encoding="utf-8")
+        running.set()
+        release.wait(e2e_timeout(30))
+        return Report(persona, 0, True, False, 1, [], {}, {}, "")
+
+    result = run_repo_task(
+        origin,
+        "write the same branch name from two runs at once",
+        "engineer",
+        workspace=Workspace(root, resolver=lambda _spec: Path(canonical), workflow="local"),
+        branch=branch,
+        dispatch_fn=parked_dispatch,
+        verify_cmd=["true"],
+        repo_type="single-owner",
+    )
+    results.put({"ok": result.ok, "outcome": result.outcome, "detail": result.detail})
+
+
+def test_concurrent_lifecycles_share_a_branch_name_without_colliding(
     tmp_path: Path, bare_origin: Callable[..., Path]
 ) -> None:
-    """One identity, two live runs, one branch name — and no shared registry to race."""
+    """One identity, two live dispatches, one branch name — and no registry to race."""
     origin = bare_origin()
     canonical = gitops.clone(origin, tmp_path / "canonical-parallel")
     root = tmp_path / "worktrees-parallel"
+    running = [MP.Event(), MP.Event()]
     releases = [MP.Event(), MP.Event()]
-    readies: list[multiprocessing.Queue[str]] = [MP.Queue(), MP.Queue()]
+    results: multiprocessing.Queue[dict[str, object]] = MP.Queue()
     processes = [
         MP.Process(
-            target=_held_worktree_process,
+            target=_same_branch_lifecycle_process,
             args=(
+                str(origin),
                 str(canonical),
                 str(root),
                 "feature/shared-name",
                 os.environ["AI_ORCHESTRATOR_HOME"],
-                f"parallel-{index}",
-                readies[index],
+                running[index],
                 releases[index],
+                results,
             ),
         )
         for index in range(2)
     ]
     for process in processes:
         process.start()
-    paths = [Path(queue.get(timeout=e2e_timeout(10))) for queue in readies]
     try:
-        assert len({str(path) for path in paths}) == 2
-        assert all(path.exists() for path in paths)
-        # The shared checkout is only an object store here: it never registers a
+        # Both dispatches are inside their agents at the same moment, on the same
+        # branch name, before either can reach teardown.
+        assert all(event.wait(e2e_timeout(20)) for event in running)
+        # The shared checkout is only an object store here: it registers no
         # worktree, so no run's cleanup can prune another run's tree out of it.
         assert gitops.worktrees(canonical) == {"main": canonical.resolve()}
+        # A linked worktree records a `.git` file; two live ones mean two runs cut
+        # the same branch name from clones that know nothing of each other.
+        live = sorted(entry for entry in root.rglob(".git") if entry.is_file())
+        assert len(live) == 2, live
     finally:
         for release in releases:
             release.set()
+        settled = [results.get(timeout=e2e_timeout(30)) for _ in processes]
         for process in processes:
             _join(process)
+
+    # Both settled on their own terms. Two runs deliberately sharing one branch
+    # name still race for the base, so the loser may find its content already
+    # there — what must not happen is either run losing its tree or its work.
+    assert all(item["ok"] for item in settled), settled
+    assert {item["outcome"] for item in settled} <= {"merged", "already-integrated"}
+    assert _has_file(origin, "main", "feature-shared-name.txt")
 
 
 def test_same_branch_redispatch_cannot_overtake_paused_teardown(
@@ -570,91 +623,31 @@ def test_explicit_run_owner_blocks_contention_and_only_dead_owner_can_be_recover
     assert status["pid"] == os.getpid()
 
 
-def _queued_lock_process(
-    state_root: str, identity: str, hold: float, done: multiprocessing.Queue[float]
+def _fetching_lifecycle_process(
+    origin: str, canonical: str, root: str, state_root: str, fetched: MPEvent, release: MPEvent
 ) -> None:
-    os.environ["AI_ORCHESTRATOR_HOME"] = state_root
-    started = time.monotonic()
-    with advisory_lock(identity):
-        waited = time.monotonic() - started
-        time.sleep(hold)
-    done.put(waited)
-
-
-def _dying_lock_holder(state_root: str, identity: str, holding: Any) -> None:
-    os.environ["AI_ORCHESTRATOR_HOME"] = state_root
-    lock = advisory_lock(identity)
-    lock.__enter__()
-    holding.set()
-    time.sleep(e2e_timeout(60))
-
-
-def _fetching_run_process(
-    canonical: str, root: str, state_root: str, fetched: Any, release: Any
-) -> None:
+    """Dispatch for real, reporting the moment setup's origin fetch has finished."""
     os.environ["AI_ORCHESTRATOR_HOME"] = state_root
 
     def observe(kind: str, detail: Mapping[str, str | float | bool]) -> None:
         if kind == "setup-finished" and detail.get("operation") == "fetch":
             fetched.set()
-            release.wait(e2e_timeout(20))
+
+    def parked_dispatch(persona: str, task: str, *, project_dir: str, **_: object) -> Report:
+        (Path(project_dir) / "fetched.txt").write_text(task, encoding="utf-8")
+        release.wait(e2e_timeout(30))
+        return Report(persona, 0, True, False, 1, [], {}, {}, "")
 
     set_harness_observer(observe)
-    _open_workspace(canonical, root)
-
-
-def test_every_contender_is_queued_and_served_instead_of_timing_out(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Four processes want one identity; the shortest turn must not fail the rest."""
-    monkeypatch.setenv(LOCK_TIMEOUT_ENV, str(e2e_timeout(60)))
-    identity = "git:/queued/repository"
-    done: multiprocessing.Queue[float] = MP.Queue()
-    processes = [
-        MP.Process(
-            target=_queued_lock_process,
-            args=(os.environ["AI_ORCHESTRATOR_HOME"], identity, 0.3, done),
-        )
-        for _ in range(4)
-    ]
-    for process in processes:
-        process.start()
-    waits = sorted(done.get(timeout=e2e_timeout(30)) for _ in processes)
-    for process in processes:
-        _join(process)
-
-    # Serialization is the point, so the last contender must genuinely have waited
-    # out the ones before it rather than been told the resource was unavailable.
-    assert len(waits) == 4
-    assert waits[-1] >= 0.6
-
-
-def test_killed_lock_holder_hands_the_queue_to_the_next_waiter(tmp_path: Path) -> None:
-    """`flock` releases on death, so a crashed holder cannot wedge the queue."""
-    identity = "git:/crashed/repository"
-    holding = MP.Event()
-    holder = MP.Process(
-        target=_dying_lock_holder,
-        args=(os.environ["AI_ORCHESTRATOR_HOME"], identity, holding),
+    run_repo_task(
+        origin,
+        "prove setup fetches without the shared checkout",
+        "engineer",
+        workspace=Workspace(root, resolver=lambda _spec: Path(canonical), workflow="local"),
+        dispatch_fn=parked_dispatch,
+        verify_cmd=["true"],
+        repo_type="single-owner",
     )
-    holder.start()
-    assert holding.wait(e2e_timeout(10)), "holder never took the lock"
-
-    pool = ThreadPoolExecutor(max_workers=1)
-    try:
-        waiter = pool.submit(_hold_briefly, identity)
-        with pytest.raises(FutureTimeout):
-            waiter.result(timeout=0.2)
-        holder.kill()
-        holder.join(e2e_timeout(10))
-        assert waiter.result(timeout=e2e_timeout(20)) is True
-    finally:
-        pool.shutdown(wait=True)
-
-
-def _hold_briefly(identity: str) -> bool:
-    with advisory_lock(identity):
-        return True
 
 
 def test_execution_checkout_fetch_never_runs_inside_the_exclusive_section(
@@ -663,25 +656,23 @@ def test_execution_checkout_fetch_never_runs_inside_the_exclusive_section(
     """A run's fetch must not be blocked by a sibling holding the shared checkout."""
     origin = bare_origin()
     canonical = gitops.clone(origin, tmp_path / "canonical-fetch")
-    root = tmp_path / "worktrees-fetch"
-    fetched = MP.Event()
-    release = MP.Event()
+    fetched, release = MP.Event(), MP.Event()
     process = MP.Process(
-        target=_fetching_run_process,
+        target=_fetching_lifecycle_process,
         args=(
+            str(origin),
             str(canonical),
-            str(root),
+            str(tmp_path / "worktrees-fetch"),
             os.environ["AI_ORCHESTRATOR_HOME"],
             fetched,
             release,
         ),
     )
-    identity = git_lock_identity(gitops.common_dir(canonical))
     try:
-        with advisory_lock(identity):
+        with advisory_lock(git_lock_identity(gitops.common_dir(canonical))):
             process.start()
             assert fetched.wait(e2e_timeout(15)), (
-                "the run's fetch never completed while the shared checkout was held"
+                "the dispatch's fetch never completed while the shared checkout was held"
             )
     finally:
         release.set()
@@ -727,7 +718,7 @@ def test_abandoned_run_is_reclaimed_only_once_all_its_work_reached_origin(
 
 
 def _rejoining_run_process(
-    canonical: str, root: str, token: str, state_root: str, joined: Any, release: Any
+    canonical: str, root: str, token: str, state_root: str, joined: MPEvent, release: MPEvent
 ) -> None:
     os.environ["AI_ORCHESTRATOR_HOME"] = state_root
     _open_workspace(canonical, root, token)
