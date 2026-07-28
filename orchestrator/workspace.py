@@ -27,7 +27,7 @@ import shutil
 import threading
 import time
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from contextlib import AbstractContextManager, suppress
 from dataclasses import dataclass
 from pathlib import Path
@@ -36,6 +36,7 @@ from typing import TYPE_CHECKING, Literal, NewType, Protocol
 from . import gitops
 from .coordination import (
     LockTimeout,
+    ProcessStart,
     advisory_lock,
     atomic_json,
     git_lock_identity,
@@ -170,32 +171,76 @@ def _run_lease_identity(run_root: Path) -> str:
     return f"workspace-run:{run_root.resolve()}"
 
 
-def _run_owner_is_live(run_root: Path) -> bool:
-    """Whether the process that created this run root is still running.
+def validate_run_token(token: str) -> str:
+    """Accept a run token only if it can safely name one directory.
 
-    A bare pid cannot answer that — the kernel recycles pids — so the recorded
-    owner pairs it with the start token the kernel stamped on that process. An
-    absent or unreadable record answers "not identifiable", which is safe here only
-    because the caller has already proven the run's lease is unheld.
+    The token becomes a path component under the workspace root, so a separator or
+    a traversal component in it would place a run's clone somewhere the layout does
+    not describe — and put the reaper's `rmtree` there with it.
     """
-    try:
-        record = json.loads((run_root / OWNER_RECORD_NAME).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return False
-    pid, start = record.get("pid"), record.get("process_start")
-    if not isinstance(pid, int) or isinstance(pid, bool) or not isinstance(start, int):
-        return False
-    return process_start_identity(pid) == start
+    if not token or token in {os.curdir, os.pardir} or not re.fullmatch(r"[A-Za-z0-9._-]+", token):
+        raise WorkspaceError(
+            f"run token {token!r} must be a non-empty name of letters, digits, '.', '_', or '-'"
+        )
+    return token
+
+
+@dataclass(frozen=True)
+class RunOwner:
+    """The process that claimed a run root, identifiable across pid reuse.
+
+    A bare pid is not an identity: the kernel recycles pids, so a recorded pid can
+    be reported live forever by an unrelated process that inherits the number.
+    Pairing it with the start token the kernel stamped answers the only question
+    the reaper asks.
+    """
+
+    pid: int
+    process_start: ProcessStart | None
+    token: str
+
+    @classmethod
+    def current(cls, token: str) -> RunOwner:
+        return cls(os.getpid(), process_start_identity(os.getpid()), token)
+
+    @classmethod
+    def parse(cls, value: object) -> RunOwner | None:
+        """Return the recorded owner, or ``None`` when it is not identifiable."""
+        if not isinstance(value, Mapping):
+            return None
+        pid, start, token = value.get("pid"), value.get("process_start"), value.get("token")
+        if isinstance(pid, bool) or not isinstance(pid, int):
+            return None
+        if isinstance(start, bool) or not isinstance(start, int):
+            return None
+        return cls(pid, ProcessStart(start), token if isinstance(token, str) else "")
+
+    @classmethod
+    def read(cls, run_root: Path) -> RunOwner | None:
+        try:
+            return cls.parse(json.loads((run_root / OWNER_RECORD_NAME).read_text(encoding="utf-8")))
+        except (OSError, ValueError):
+            return None
+
+    def record(self) -> dict[str, object]:
+        return {"pid": self.pid, "process_start": self.process_start, "token": self.token}
+
+    def is_live(self) -> bool:
+        return self.process_start is not None and process_start_identity(self.pid) == (
+            self.process_start
+        )
 
 
 def _abandoned_run_is_reclaimable(run_root: Path) -> bool:
-    """Whether an unowned run root provably holds nothing anyone could still want.
+    """Whether an unoccupied run root provably holds nothing anyone could still want.
 
     Deleting a sibling run's tree is the exact failure this layout exists to
-    prevent, so removal needs more than "its owner is gone": the run must also hold
-    no commit that has not reached its origin. Anything this cannot read, it keeps.
+    prevent, so removal needs more than "its lease is free": its recorded owner must
+    also be gone, and the run must hold no commit that has not reached its origin.
+    Anything this cannot read, it keeps.
     """
-    if _run_owner_is_live(run_root):
+    owner = RunOwner.read(run_root)
+    if owner is not None and owner.is_live():
         return False
     clone = run_root / CLONE_DIR_NAME
     if not clone.is_dir():
@@ -221,7 +266,9 @@ class Workspace:
         # for the same reason it keeps separate processes apart. Passing an existing
         # token is how a caller rejoins a run already under way — a re-dispatch that
         # has to see the worktrees and branches the first attempt left behind.
-        self.run_token = run_token or f"{os.getpid()}-{uuid.uuid4().hex[:8]}"
+        self.run_token = validate_run_token(
+            run_token if run_token is not None else f"{os.getpid()}-{uuid.uuid4().hex[:8]}"
+        )
         self._repo_type = repo_type
         self._workflow: Callable[[RepoRef], Workflow | None]
         self._registry: Registry | None = None
@@ -291,19 +338,26 @@ class Workspace:
         except KeyError as exc:
             raise RuntimeError(f"repository {repo.slug} has not been resolved") from exc
 
-    def _worktree_root(self, repo: RepoRef) -> Path:
+    def run_root(self, repo: RepoRef) -> Path:
+        """Return the directory holding this run's clone and task worktrees."""
         return self.root / repo.dir_key / RUNS_DIR_NAME / self.run_token
 
     def _claim_run_root(self, run_root: Path) -> None:
+        """Mark this run root occupied for as long as this process lives.
+
+        The lease is *shared*, because occupancy is what the reaper must not
+        interrupt and several processes may legitimately be in one run at once — a
+        re-dispatch rejoining a run under way is the case that matters. An exclusive
+        lease would make that second process either fail outright or, far worse,
+        work in a tree the reaper still considers free.
+        """
+        if run_root in self._run_leases:
+            return
         run_root.mkdir(parents=True, exist_ok=True)
-        lease = advisory_lock(_run_lease_identity(run_root), timeout=0)
+        lease = advisory_lock(_run_lease_identity(run_root), shared=True)
         lease.__enter__()
         self._run_leases[run_root] = lease
-        owner = process_start_identity(os.getpid())
-        atomic_json(
-            run_root / OWNER_RECORD_NAME,
-            {"pid": os.getpid(), "process_start": owner, "token": self.run_token},
-        )
+        atomic_json(run_root / OWNER_RECORD_NAME, RunOwner.current(self.run_token).record())
 
     def _reap_abandoned_runs(self, repo: RepoRef) -> None:
         """Reclaim run roots whose owner is gone and whose work all reached origin."""
@@ -311,7 +365,7 @@ class Workspace:
             return
         self._reaped.add(repo.dir_key)
         runs = self.root / repo.dir_key / RUNS_DIR_NAME
-        mine = self._worktree_root(repo).resolve()
+        mine = self.run_root(repo).resolve()
         for candidate in sorted(runs.glob("*")):
             if not candidate.is_dir() or candidate.is_symlink() or candidate.resolve() == mine:
                 continue
@@ -450,10 +504,11 @@ class Workspace:
             return clone
 
     def _ensure_run_clone(self, repo: RepoRef, checkout: Path, *, origin: str, base: str) -> Path:
-        clone = self._worktree_root(repo) / CLONE_DIR_NAME
+        run_root = self.run_root(repo)
+        self._claim_run_root(run_root)
+        clone = run_root / CLONE_DIR_NAME
         if clone.is_dir() and gitops.is_repo(clone):
             return clone
-        self._claim_run_root(self._worktree_root(repo))
         started = time.monotonic()
         gitops.clone_sharing(checkout, clone, origin=origin, base=base)
         # The clone's own working tree is never populated, so a tracked hooks
@@ -495,7 +550,7 @@ class Workspace:
         starts clean.
         """
         clone = self.clone_dir(repo)
-        path = self._worktree_root(repo) / _safe_branch_dir(branch)
+        path = self.run_root(repo) / _safe_branch_dir(branch)
         with self._repo_lock(repo), advisory_lock(git_lock_identity(gitops.common_dir(clone))):
             self._adopt_preserved_branch(repo, clone, branch)
             active = gitops.worktrees(clone)

@@ -13,6 +13,7 @@ from orchestrator.workspace import (
     DEFAULT_OWNER,
     OWNER_RECORD_NAME,
     RepoRef,
+    RunOwner,
     Workspace,
     WorkspaceError,
     _abandoned_run_is_reclaimable,
@@ -84,7 +85,7 @@ def test_workspace_clone_worktree_lifecycle(tmp_path, bare_origin) -> None:
     assert clone != canonical
     assert ws.execution_checkout(ref) == canonical
     assert gitops.remote_url(clone) == gitops.remote_url(canonical)
-    assert not str(ws._worktree_root(ref)).startswith(str(canonical))
+    assert not str(ws.run_root(ref)).startswith(str(canonical))
     # A second resolution reuses this run's clone and refreshes the canonical one.
     assert ws.ensure_clone(ref) == clone
     # The per-repo lock is memoized.
@@ -130,7 +131,7 @@ def test_workspace_refuses_unregistered_path_collision(tmp_path, bare_origin) ->
     ref = normalize_repo(str(origin))
     ws = Workspace(tmp_path / "worktrees", resolver=lambda _: canonical)
     ws.ensure_clone(ref)
-    collision = ws._worktree_root(ref) / _safe_branch_dir("feat")
+    collision = ws.run_root(ref) / _safe_branch_dir("feat")
     collision.mkdir(parents=True)
 
     with pytest.raises(RuntimeError, match="worktree path.*already exists"):
@@ -228,15 +229,13 @@ def test_reclaim_predicate_keeps_every_run_root_it_cannot_clear(tmp_path, bare_o
     ref = normalize_repo(str(origin))
     ws = Workspace(tmp_path / "worktrees", resolver=lambda _: canonical)
     ws.ensure_clone(ref)
-    run_root = ws._worktree_root(ref)
+    run_root = ws.run_root(ref)
     owner = run_root / OWNER_RECORD_NAME
 
     # This process wrote the record and is still alive.
     assert not _abandoned_run_is_reclaimable(run_root)
 
     owner.write_text(json.dumps({"pid": os.getpid(), "process_start": "not-a-token"}), "utf-8")
-    assert _abandoned_run_is_reclaimable(run_root)
-    owner.write_text("{ not json", encoding="utf-8")
     assert _abandoned_run_is_reclaimable(run_root)
 
     worktree = ws.worktree(ref, "feat/unpublished", base="origin/main")
@@ -251,6 +250,26 @@ def test_reclaim_predicate_keeps_every_run_root_it_cannot_clear(tmp_path, bare_o
     assert _abandoned_run_is_reclaimable(empty)
     (empty / "leftover").mkdir()
     assert not _abandoned_run_is_reclaimable(empty)
+
+
+@pytest.mark.parametrize("token", ["", "..", ".", "a/b", "../escape", "with space", "sub\\dir"])
+def test_run_token_that_could_name_another_directory_is_refused(tmp_path, token: str) -> None:
+    """The token becomes a path component, and the reaper's rmtree follows it."""
+    with pytest.raises(WorkspaceError, match="run token"):
+        Workspace(tmp_path / "worktrees", resolver=lambda _: tmp_path, run_token=token)
+
+
+@pytest.mark.parametrize(
+    "record",
+    ["[1, 2]", '"text"', "null", '{"pid": true, "process_start": 1}', '{"pid": 1}', "{ not json"],
+)
+def test_unreadable_owner_record_is_not_mistaken_for_a_live_owner(tmp_path, record: str) -> None:
+    run_root = tmp_path / "run"
+    run_root.mkdir()
+    (run_root / OWNER_RECORD_NAME).write_text(record, encoding="utf-8")
+
+    assert RunOwner.read(run_root) is None
+    assert _abandoned_run_is_reclaimable(run_root)
 
 
 def test_unresolved_repository_names_itself_in_every_lookup(tmp_path) -> None:

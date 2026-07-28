@@ -126,7 +126,7 @@ def _committing_run_process(
     gitops.commit(worktree, f"feat: work on {branch}")
     if publish:
         gitops.push(worktree, branch)
-    ready.put(str(workspace._worktree_root(repo)))
+    ready.put(str(workspace.run_root(repo)))
 
 
 def _lifecycle_process(
@@ -449,7 +449,7 @@ def test_abandoned_branch_at_different_path_moves_to_new_owned_worktree(
     repo = normalize_repo(str(canonical))
     workspace = _open_workspace(str(canonical), str(tmp_path / "moved-root"))
     clone = workspace.clone_dir(repo)
-    old_path = workspace._worktree_root(repo) / "earlier-attempt"
+    old_path = workspace.run_root(repo) / "earlier-attempt"
     gitops.worktree_add(clone, old_path, "feature/moved", base="origin/main")
 
     replacement = workspace.worktree(repo, "feature/moved", base="origin/main")
@@ -714,7 +714,7 @@ def test_abandoned_run_is_reclaimed_only_once_all_its_work_reached_origin(
     repo = normalize_repo(str(canonical))
     assert not roots[True].exists()
     assert roots[False].exists()
-    assert later._worktree_root(repo).exists()
+    assert later.run_root(repo).exists()
 
     # Rejoining the abandoned run is how that work gets out: its clone still has
     # the branch, and tearing the tree down hands it to the shared checkout.
@@ -724,3 +724,84 @@ def test_abandoned_run_is_reclaimed_only_once_all_its_work_reached_origin(
 
     assert gitops.branch_exists(canonical, "feature/reap-False")
     assert not _has_file(origin, "main", "work.txt")
+
+
+def _rejoining_run_process(
+    canonical: str, root: str, token: str, state_root: str, joined: Any, release: Any
+) -> None:
+    os.environ["AI_ORCHESTRATOR_HOME"] = state_root
+    _open_workspace(canonical, root, token)
+    joined.set()
+    release.wait(e2e_timeout(20))
+
+
+def test_a_run_rejoined_after_its_first_process_died_is_still_never_reaped(
+    tmp_path: Path, bare_origin: Callable[..., Path]
+) -> None:
+    """The second process in a run must be as protected from the sweep as the first."""
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-rejoin")
+    root = tmp_path / "worktrees-rejoin"
+    token = "rejoined-after-death"
+    ready: multiprocessing.Queue[str] = MP.Queue()
+    first = MP.Process(
+        target=_orphan_worktree_process,
+        args=(str(canonical), str(root), "feature/rejoin", token, ready),
+    )
+    first.start()
+    worktree = Path(ready.get(timeout=e2e_timeout(10)))
+    _join(first)
+
+    joined, release = MP.Event(), MP.Event()
+    rejoiner = MP.Process(
+        target=_rejoining_run_process,
+        args=(
+            str(canonical),
+            str(root),
+            token,
+            os.environ["AI_ORCHESTRATOR_HOME"],
+            joined,
+            release,
+        ),
+    )
+    rejoiner.start()
+    try:
+        assert joined.wait(e2e_timeout(15)), "the rejoining run never opened its workspace"
+        # The creating process is gone and its work is unpublished, but a live
+        # occupant is reason enough on its own to leave the tree alone.
+        sweeper = _open_workspace(str(canonical), str(root))
+        repo = normalize_repo(str(canonical))
+
+        assert worktree.exists()
+        assert (Path(root) / repo.dir_key / "runs" / token / ".clone").is_dir()
+        assert sweeper.run_root(repo).exists()
+    finally:
+        release.set()
+        _join(rejoiner)
+
+    rejoin = _open_workspace(str(canonical), str(root), token)
+    rejoin.remove_worktree(normalize_repo(str(canonical)), worktree)
+
+
+def test_an_unusable_lock_timeout_stops_a_dispatch_by_name(
+    tmp_path: Path,
+    bare_origin: Callable[..., Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A misconfigured watchdog must name its variable, not fail somewhere obscure."""
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-bad-timeout")
+    monkeypatch.setenv(LOCK_TIMEOUT_ENV, "forever")
+
+    with pytest.raises(ValueError, match=LOCK_TIMEOUT_ENV):
+        run_repo_task(
+            str(origin),
+            "never dispatched",
+            "engineer",
+            workspace=Workspace(
+                tmp_path / "worktrees-bad-timeout",
+                resolver=lambda _spec: canonical,
+                workflow="local",
+            ),
+            verify_cmd=["true"],
+        )

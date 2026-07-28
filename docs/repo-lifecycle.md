@@ -139,17 +139,21 @@ exclusive section, so one slow origin cannot hold another run out.
 
 Contended locks **queue** in the kernel's own `flock` line rather than racing a
 non-blocking retry, under a watchdog set by `ORCHESTRATOR_LOCK_TIMEOUT_SECONDS`
-(default 900s). `flock` releases on process death, so a crashed holder hands the
-queue to the next waiter instead of wedging it. A timeout reports the owning
-PID/host. The slow agent dispatch remains unlocked. Default lifecycle branches
+whose default is `DEFAULT_LOCK_TIMEOUT` in `orchestrator/coordination.py` — minutes,
+not seconds, because a legitimate turn can hold a gate run. `flock` releases on
+process death, so a crashed holder hands the queue to the next waiter instead of
+wedging it. A timeout reports the owning PID/host. The slow agent dispatch remains unlocked. Default lifecycle branches
 include a unique run suffix; an explicit `--branch` is the intentional
 resume/override path. An active branch or occupied worktree is never reset or
 forcibly removed: inspect the reported path and recover that run, or remove it
 manually only after confirming its owner is gone.
 
-Abandoned run directories are reclaimed by the next run on the same identity, and
-only when all three hold: its lease is unheld, its owning process is provably
-gone, and its clone has no commit that never reached origin. A run holding
+Every process working in a run root holds a **shared** occupancy lease on it for
+its lifetime, so a re-dispatch that rejoins a run under way is protected too rather
+than only its first process. Abandoned run directories are reclaimed by the next
+run on the same identity, and only when all three hold: no one holds that shared
+lease, the recorded owning process is provably gone, and the clone has no commit
+that never reached origin. A run holding
 unpublished work is kept; rejoin it with that run's token to recover the work
 (tearing its worktree down copies the branch into the execution checkout). Flat
 per-branch directories left by the pre-`runs/` layout are never claimed or
@@ -653,7 +657,7 @@ the result.
   queue above. Locks and queue state live under
   `$AI_ORCHESTRATOR_HOME/locks` (normally `~/.ai-orchestrator/locks`) and protect
   only that machine. Raise `ORCHESTRATOR_LOCK_TIMEOUT_SECONDS` when a legitimate
-  turn (a gate inside a merge) can exceed the default 900s. On timeout, inspect the
+  turn (a gate inside a merge) can exceed the default. On timeout, inspect the
   reported PID and host rather than deleting a live lock or worktree.
 - **Several machines, remote-first:** GitHub is the remote coordinator. Local
   locks and ledgers are independent; unique branches, PR state, required checks,

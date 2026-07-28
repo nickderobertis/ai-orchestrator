@@ -141,18 +141,18 @@ def git_lock_identity(common_dir: str | Path) -> GitLockIdentity:
     return GitLockIdentity(f"git:{Path(common_dir)}")
 
 
-def _try_lock(path: Path) -> TextIO | None:
+def _try_lock(path: Path, mode: int) -> TextIO | None:
     """Take the lock only if it is free right now (the fail-fast lease mode)."""
     handle = path.open("a+", encoding="utf-8")
     try:
-        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        fcntl.flock(handle, mode | fcntl.LOCK_NB)
     except BlockingIOError:
         handle.close()
         return None
     return handle
 
 
-def _queue_for_lock(path: Path, timeout: float) -> TextIO | None:
+def _queue_for_lock(path: Path, mode: int, timeout: float) -> TextIO | None:
     """Wait in the kernel's own ``flock`` queue, abandoning the turn after ``timeout``.
 
     A busy-poll of ``LOCK_NB`` does not queue: every waiter races on each retry, so
@@ -173,7 +173,7 @@ def _queue_for_lock(path: Path, timeout: float) -> TextIO | None:
     def wait_in_line() -> None:
         handle = path.open("a+", encoding="utf-8")
         try:
-            fcntl.flock(handle, fcntl.LOCK_EX)
+            fcntl.flock(handle, mode)
         except OSError:
             handle.close()
             settled.set()
@@ -202,18 +202,27 @@ def _recorded_owner(path: Path) -> str:
 
 
 @contextmanager
-def advisory_lock(identity: str, *, timeout: float | None = None) -> Iterator[None]:
-    """Exclusively lock an identity, with owner metadata and a bounded queued wait.
+def advisory_lock(
+    identity: str, *, timeout: float | None = None, shared: bool = False
+) -> Iterator[None]:
+    """Lock an identity, with owner metadata and a bounded queued wait.
 
     ``timeout`` bounds the whole wait; ``None`` takes it from `lock_timeout_seconds`.
     A non-positive ``timeout`` keeps the fail-fast semantics a lease needs, where
     "someone else owns this" is the answer rather than something to wait out.
+
+    ``shared`` marks occupancy rather than ownership: any number of holders may
+    share it, and an exclusive taker fails while even one does. That is what
+    answers "is anyone still in here?" for a resource several processes legitimately
+    occupy at once — where an exclusive lease would make the second occupant either
+    fail or, worse, proceed unprotected.
     """
     seconds = lock_timeout_seconds() if timeout is None else timeout
+    mode = fcntl.LOCK_SH if shared else fcntl.LOCK_EX
     path = lock_path(identity)
     path.parent.mkdir(parents=True, exist_ok=True)
     started = time.monotonic()
-    handle = _try_lock(path) if seconds <= 0 else _queue_for_lock(path, seconds)
+    handle = _try_lock(path, mode) if seconds <= 0 else _queue_for_lock(path, mode, seconds)
     waited = max(0.0, time.monotonic() - started)
     reportable = not identity.startswith("journal:")
     if handle is None:
@@ -228,11 +237,17 @@ def advisory_lock(identity: str, *, timeout: float | None = None) -> Iterator[No
     if reportable:
         observe_harness("lock-wait", {"identity": identity, "seconds": waited, "acquired": True})
     with handle:
-        handle.seek(0)
-        handle.truncate()
-        handle.write(f"pid={os.getpid()} host={socket.gethostname()} acquired={time.time():.0f}\n")
-        handle.flush()
-        os.fsync(handle.fileno())
+        if not shared:
+            # Only an exclusive holder can honestly name itself the owner; a shared
+            # holder is one of several, and stamping its pid would send a waiter
+            # after an arbitrary one of them.
+            handle.seek(0)
+            handle.truncate()
+            handle.write(
+                f"pid={os.getpid()} host={socket.gethostname()} acquired={time.time():.0f}\n"
+            )
+            handle.flush()
+            os.fsync(handle.fileno())
         try:
             yield
         finally:
