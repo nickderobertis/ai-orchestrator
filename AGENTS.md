@@ -315,6 +315,19 @@ A dispatched change is not done until `just gate` is green. Its agent clears its
 own llmlint findings—by fixing them, adding a justified `ignore-file`, or disabling
 an inapplicable rule in `llmlint.yml`—rather than leaving closeout to integration.
 
+The judge behind that tier is non-deterministic, so its verdict is memoized: `just
+lint-llm-diff` resolves the base ref to a commit and runs the cached Nx
+`workspace:lint-llm-diff` target (the root `project.json` — the check spans the
+whole tree, so it belongs to no single project). Re-running `just gate` on an
+unchanged tree against an unchanged base replays the recorded verdict instead of
+rolling the judge again, which is what stops one branch from being blocked by
+opposite verdicts on an identical diff. The key covers the whole workspace, the
+resolved base commit, and `scripts/llmlint-fingerprint.sh` — the installed llmlint
+version plus the effective merged config, so a rule change in a plugin fetched from
+outside this repository still invalidates. Nx never caches a failure, so findings
+always re-run and can never be replayed as a pass. A wrong verdict does stick:
+force a fresh judge run with `just lint-llm-diff <base> --skip-nx-cache`.
+
 Every remote lifecycle PR without explicit title/body metadata gets one
 post-verification `pr-author` dispatch. It drafts the template-shaped body from
 the actual diff through a temporary out-of-worktree file; drafting failure falls

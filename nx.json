@@ -39,6 +39,15 @@
       "cache": true,
       "inputs": ["default"]
     },
+    "lint-llm-diff": {
+      "cache": true,
+      "inputs": [
+        "{workspaceRoot}/**/*",
+        { "env": "LLMLINT_DIFF_BASE_SHA" },
+        { "runtime": "./scripts/llmlint-fingerprint.sh" }
+      ],
+      "outputs": []
+    },
     "bootstrap": {
       "cache": false
     }

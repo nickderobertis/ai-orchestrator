@@ -271,6 +271,14 @@ lint-llm-validate *args:
 
 # llmlint scoped to the merge-base diff with main — judges only what the branch
 # changed. This is the blocking pre-push check.
-lint-llm-diff base="origin/main":
+#
+# The judge is non-deterministic, so its verdict is memoized by the cached Nx
+# `workspace:lint-llm-diff` target: an unchanged tree judged against an unchanged
+# base replays the recorded verdict instead of rolling the dice again. The base
+# ref is resolved to a commit here, before Nx hashes it, so a rebased or advanced
+# base misses rather than replaying a verdict computed against a different base.
+# Pass extra Nx flags to override that — `just lint-llm-diff origin/main
+# --skip-nx-cache` forces a fresh judge run.
+lint-llm-diff base="origin/main" *nx_args:
     @command -v llmlint >/dev/null 2>&1 || { echo "llmlint not installed — run 'just setup-llmlint'"; exit 1; }
-    @PATH="{{repo_root}}/.venv/bin:$PATH" LLMLINT_ONEHARNESS_BIN="{{repo_root}}/scripts/llmlint-oneharness.sh" ONEHARNESS_HISTORY_LABELS="$(uv run orchestrator-history-labels role=llmlint)" llmlint --diff --diff-base "{{base}}"
+    @base_sha=$(git rev-parse --verify --quiet "{{base}}^{commit}") || { echo "lint-llm-diff: '{{base}}' does not resolve to a commit; fetch it or pass an existing base" >&2; exit 1; }; LLMLINT_DIFF_BASE_SHA="$base_sha" AI_ORCHESTRATOR_NX_SHOW_OUTPUT=1 ./scripts/nx.sh run workspace:lint-llm-diff {{nx_args}}

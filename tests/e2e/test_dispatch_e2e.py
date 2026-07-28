@@ -1104,8 +1104,11 @@ print(json.dumps({
     [
         (["lint-llm", "AGENTS.md"], ["AGENTS.md"]),
         (
-            ["lint-llm-diff", "comparison-base"],
-            ["--diff", "--diff-base", "comparison-base"],
+            # The diff recipe resolves its base ref before Nx hashes it, and judges
+            # exactly the commit it keyed on. `--skip-nx-cache` reaches Nx, not
+            # llmlint, and keeps this boundary check off the recorded verdict.
+            ["lint-llm-diff", "HEAD", "--skip-nx-cache"],
+            ["--diff", "--diff-base", "{base_sha}"],
         ),
     ],
 )
@@ -1122,6 +1125,13 @@ import json
 import os
 import sys
 
+if sys.argv[1:2] == ["--version"]:
+    print("llmlint 0.0.0-test")
+    sys.exit(0)
+if sys.argv[1:2] == ["config"]:
+    print("{}")
+    sys.exit(0)
+
 with open(os.environ["LLMLINT_RECORD"], "w", encoding="utf-8") as stream:
     json.dump({
         "argv": sys.argv[1:],
@@ -1132,6 +1142,13 @@ with open(os.environ["LLMLINT_RECORD"], "w", encoding="utf-8") as stream:
         encoding="utf-8",
     )
     fake_llmlint.chmod(0o755)
+    base_sha = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=REPO_ROOT,
+        check=True,
+        text=True,
+        capture_output=True,
+    ).stdout.strip()
 
     result = subprocess.run(
         ["just", *recipe_args],
@@ -1140,15 +1157,16 @@ with open(os.environ["LLMLINT_RECORD"], "w", encoding="utf-8") as stream:
             **os.environ,
             "PATH": f"{bin_dir}:{os.environ['PATH']}",
             "LLMLINT_RECORD": str(record),
+            "XDG_CACHE_HOME": str(tmp_path / "cache"),
         },
         text=True,
         capture_output=True,
-        timeout=60,
+        timeout=120,
     )
 
     assert result.returncode == 0, result.stderr
     observed = json.loads(record.read_text(encoding="utf-8"))
-    assert observed["argv"] == expected_args
+    assert observed["argv"] == [item.replace("{base_sha}", base_sha) for item in expected_args]
     assert observed["bin"] == str(REPO_ROOT / "scripts" / "llmlint-oneharness.sh")
     assert "role=llmlint" in observed["labels"].split(",")
 
