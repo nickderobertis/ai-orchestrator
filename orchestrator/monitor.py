@@ -77,7 +77,7 @@ from .runs import (
     load_mapping,
     resolve_supervision_run,
     result_state,
-    round_owner_may_be_live,
+    round_appears_in_flight,
     rounds,
     validate_run_id,
 )
@@ -999,7 +999,7 @@ def run_state(run_dir: Path, run_id: RunId) -> RunState:
     number, round_dir = latest
     result_path = round_dir / "result.json"
     if not result_path.exists():
-        live = round_owner_may_be_live(round_dir)
+        live = round_appears_in_flight(round_dir)
         return RunState(
             run_id,
             number,

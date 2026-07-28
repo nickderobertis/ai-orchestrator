@@ -24,7 +24,7 @@ from orchestrator.runs import (
     resolve_run_dir,
     result_state,
     round_abandonment_guard,
-    round_owner_may_be_live,
+    round_appears_in_flight,
     status_summary,
     validate_run_id,
     write_next_plan,
@@ -184,7 +184,7 @@ def test_a_signalled_round_records_its_abandonment_and_stops_being_live(tmp_path
     assert recorded["status"] == "abandoned"
     assert recorded["reason"] == f"owner pid {os.getpid()} took SIGTERM"
     assert recorded["pid"] == os.getpid()
-    assert round_owner_may_be_live(round_dir) is False
+    assert round_appears_in_flight(round_dir) is False
     assert abandoned_round(run_dir) == AbandonedRound(1, os.getpid(), recorded["reason"])
     assert signal.getsignal(signal.SIGTERM) is signal.SIG_DFL
 
@@ -243,7 +243,7 @@ def test_an_abandoned_round_naming_no_usable_owner_is_still_reclaimable(tmp_path
 
 
 @pytest.mark.parametrize(
-    ("owner", "live"),
+    ("owner", "in_flight"),
     [
         ({"pid": os.getpid()}, True),
         ({"pid": os.getpid() + 10_000_000}, False),
@@ -254,24 +254,24 @@ def test_an_abandoned_round_naming_no_usable_owner_is_still_reclaimable(tmp_path
         ({"status": "completed"}, False),
     ],
 )
-def test_round_liveness_is_conservative_about_an_owner_it_cannot_probe(
-    tmp_path, owner, live
+def test_a_round_reads_as_in_flight_unless_its_owner_is_proven_gone(
+    tmp_path, owner, in_flight
 ) -> None:
     run_dir = tmp_path / "run"
     _, round_dir = prepare_round(run_dir, PLAN)
     _own(round_dir, **owner)
-    assert round_owner_may_be_live(round_dir) is live
+    assert round_appears_in_flight(round_dir) is in_flight
 
 
 def test_a_round_with_no_readable_owner_is_never_called_abandoned(tmp_path) -> None:
     run_dir = tmp_path / "run"
     _, round_dir = prepare_round(run_dir, PLAN)
     (round_dir / "status.json").unlink()
-    assert round_owner_may_be_live(round_dir) is False
+    assert round_appears_in_flight(round_dir) is False
     assert abandoned_round(run_dir) is None
 
     (round_dir / "status.json").write_text("{ not json", encoding="utf-8")
-    assert round_owner_may_be_live(round_dir) is True
+    assert round_appears_in_flight(round_dir) is True
     assert abandoned_round(run_dir) is None
 
     _own(round_dir, status="completed")

@@ -125,23 +125,24 @@ def launch_is_active(run_dir: Path) -> bool:
     return process_may_be_live(pid, value.get("host"))
 
 
-def round_owner_may_be_live(round_dir: Path) -> bool:
-    """Whether the round's recorded owner cannot be shown to have stopped.
+def round_appears_in_flight(round_dir: Path) -> bool:
+    """Whether a view must still report this round as work in progress.
 
-    Answers "possibly live", never "certainly live", and leans that way on purpose:
-    an unreadable record or an owner whose pid cannot be trusted counts as possibly
-    live, because a viewer wrongly announcing "this round died" is worse than one
+    Answers "possibly", never "certainly", and leans that way on purpose: an
+    unreadable record or an owner whose pid cannot be trusted still reads as in
+    flight, because a viewer wrongly announcing "this round died" is worse than one
     that keeps reporting it. `False` needs one of three things instead: a round that
     is finished, an owner this host proved gone, or the owner's own recorded report
     that it stopped. A round with no recorded owner at all is `False` too — nothing
     claimed it, so nothing can still be working on it.
 
-    That third case is why reporting reads the recorded status where `_owner_may_be_live`
-    probes past it. A view answers "is this still in flight", and a self-recorded
-    abandonment settles that for good; recovery answers "may I take this round", so it
-    owes the recorded pid a look before it writes. Probing here would trade a permanent
-    answer for a pid that another process may since have been given, and a round whose
-    owner's number came back around would quietly stop being reported dead.
+    That third case is where this parts ways with `_owner_may_be_live`, which probes
+    the recorded pid past the recorded status. A self-recorded abandonment settles the
+    reporting question for good, so reporting reads that status and stops; recovery
+    instead answers "may I take this round", so it owes the pid a look before it
+    writes. Probing here would trade a permanent answer for a pid that another process
+    may since have been given, and a round whose owner's number came back around would
+    quietly stop being reported dead.
     """
     path = round_dir / "status.json"
     if not path.exists():
@@ -215,7 +216,7 @@ def abandoned_round(run_dir: Path) -> AbandonedRound | None:
     except (ConfigError, OSError):
         return None
     status = state.get("status")
-    if status not in {"running", ABANDONED} or round_owner_may_be_live(round_dir):
+    if status not in {"running", ABANDONED} or round_appears_in_flight(round_dir):
         return None
     pid = state.get("pid")
     return AbandonedRound(
