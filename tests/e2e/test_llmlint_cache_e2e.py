@@ -273,3 +273,107 @@ def test_skip_nx_cache_forces_a_fresh_judge_run(workspace: Workspace) -> None:
     assert forced.returncode == 0, forced.stdout + forced.stderr
     assert workspace.judge_runs() == 2
     assert CACHE_HIT_MARKER not in forced.stdout
+
+
+def _stub(directory: Path, name: str, body: str) -> Path:
+    directory.mkdir(parents=True, exist_ok=True)
+    stub = directory / name
+    stub.write_text(f"#!/usr/bin/env bash\n{body}\n", encoding="utf-8")
+    stub.chmod(0o755)
+    return directory
+
+
+def _run_script(
+    workspace: Workspace, script: str, *, cwd: Path | None = None, **overrides: str
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [str(workspace.root / "scripts" / script)],
+        cwd=cwd or workspace.root,
+        env={**workspace.env, **overrides},
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+
+
+@pytest.mark.parametrize(
+    ("base_sha", "expected"),
+    [
+        ("", "must be a resolved commit id"),
+        ("origin/main", "must be a resolved commit id"),
+        ("0" * 40, "missing from this checkout"),
+    ],
+)
+def test_the_target_refuses_a_base_it_cannot_judge(
+    workspace: Workspace, base_sha: str, expected: str
+) -> None:
+    result = _run_script(workspace, "llmlint-diff.sh", LLMLINT_DIFF_BASE_SHA=base_sha)
+
+    assert result.returncode != 0
+    assert expected in result.stderr
+    assert workspace.judge_runs() == 0
+
+
+@pytest.mark.parametrize(
+    ("labels_body", "expected"),
+    [
+        ("exit 1", "could not derive harness history labels"),
+        ("echo 'not labels at all'", "not comma-separated key=value pairs"),
+    ],
+)
+def test_the_target_refuses_unusable_harness_history_labels(
+    workspace: Workspace, tmp_path: Path, labels_body: str, expected: str
+) -> None:
+    stubs = _stub(tmp_path / "label-stub", "uv", labels_body)
+
+    result = _run_script(
+        workspace,
+        "llmlint-diff.sh",
+        LLMLINT_DIFF_BASE_SHA=workspace.head(),
+        PATH=f"{stubs}{os.pathsep}{workspace.env['PATH']}",
+    )
+
+    assert result.returncode != 0
+    assert expected in result.stderr
+    assert workspace.judge_runs() == 0
+
+
+@pytest.mark.parametrize("script", ["llmlint-diff.sh", "llmlint-fingerprint.sh"])
+def test_both_scripts_require_a_git_checkout(
+    workspace: Workspace, tmp_path: Path, script: str
+) -> None:
+    outside = tmp_path / "outside"
+    outside.mkdir()
+
+    result = _run_script(
+        workspace,
+        script,
+        cwd=outside,
+        GIT_CEILING_DIRECTORIES=str(tmp_path),
+        LLMLINT_DIFF_BASE_SHA=workspace.head(),
+    )
+
+    assert result.returncode != 0
+    assert "run from a Git checkout" in result.stderr
+
+
+@pytest.mark.parametrize(
+    ("stub_body", "expected"),
+    [
+        ('[[ ${1:-} == "--version" ]] && exit 1\nexit 0', "'llmlint --version' failed"),
+        ('[[ ${1:-} == "config" ]] && exit 1\necho "llmlint 0.0.0-e2e"', "'llmlint config' failed"),
+    ],
+)
+def test_the_fingerprint_refuses_an_unusable_judge_toolchain(
+    workspace: Workspace, tmp_path: Path, stub_body: str, expected: str
+) -> None:
+    stubs = _stub(tmp_path / "judge-stub", "llmlint", f"set -uo pipefail\n{stub_body}")
+
+    result = _run_script(
+        workspace,
+        "llmlint-fingerprint.sh",
+        PATH=f"{stubs}{os.pathsep}{workspace.env['PATH']}",
+    )
+
+    assert result.returncode != 0
+    assert expected in result.stderr

@@ -279,6 +279,7 @@ lint-llm-validate *args:
 # base misses rather than replaying a verdict computed against a different base.
 # Pass extra Nx flags to override that — `just lint-llm-diff origin/main
 # --skip-nx-cache` forces a fresh judge run.
+# llmlint: ignore[tool_output_is_signal] the judge's per-rule report is this tier's product, and showing Nx's task output is what lets a cache hit replay the same verdict.
 lint-llm-diff base="origin/main" *nx_args:
     @command -v llmlint >/dev/null 2>&1 || { echo "llmlint not installed — run 'just setup-llmlint'"; exit 1; }
     @base_sha=$(git rev-parse --verify --quiet "{{base}}^{commit}") || { echo "lint-llm-diff: '{{base}}' does not resolve to a commit; fetch it or pass an existing base" >&2; exit 1; }; LLMLINT_DIFF_BASE_SHA="$base_sha" AI_ORCHESTRATOR_NX_SHOW_OUTPUT=1 ./scripts/nx.sh run workspace:lint-llm-diff {{nx_args}}

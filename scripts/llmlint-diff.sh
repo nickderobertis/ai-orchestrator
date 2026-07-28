@@ -34,8 +34,13 @@ labels="$(uv run orchestrator-history-labels role=llmlint)" || {
   echo "lint-llm-diff: could not derive harness history labels; run 'just bootstrap' and retry" >&2
   exit 1
 }
+[[ "$labels" =~ ^[A-Za-z0-9_]+=[^,[:space:]]*(,[A-Za-z0-9_]+=[^,[:space:]]*)*$ ]] || {
+  echo "lint-llm-diff: harness history labels are not comma-separated key=value pairs; run 'just bootstrap' and retry" >&2
+  exit 1
+}
 
 export PATH="$root/.venv/bin:$PATH"
 export LLMLINT_ONEHARNESS_BIN="$root/scripts/llmlint-oneharness.sh"
 export ONEHARNESS_HISTORY_LABELS="$labels"
+# llmlint: ignore[tool_output_is_signal] The judge's per-rule report is this tier's product, and replaying it verbatim from the cache is what proves the memoized verdict.
 exec llmlint --diff --diff-base "$base_sha"
