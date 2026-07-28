@@ -10,12 +10,16 @@
 #
 # Absolute paths are folded out so two checkouts of the same repository share
 # cache entries; only the repository root is path-dependent in that output.
+#
+# Run it by hand to see the current judge fingerprint — the answer to "why did the
+# cache miss when nothing in the tree changed?". Nx treats a failing runtime input
+# as no contribution and still runs the task, so these diagnostics are for that
+# direct run; the tier stays safe either way, because an llmlint that cannot report
+# its version or resolve its config also cannot judge the diff, and Nx never caches
+# that failure.
 set -euo pipefail
 
-root="$(git rev-parse --show-toplevel)" || {
-  echo "llmlint fingerprint: run from a Git checkout and retry 'just lint-llm-diff'" >&2
-  exit 1
-}
+root="$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)"
 version="$(llmlint --version)" || {
   echo "llmlint fingerprint: 'llmlint --version' failed; run 'just setup-llmlint' and retry" >&2
   exit 1

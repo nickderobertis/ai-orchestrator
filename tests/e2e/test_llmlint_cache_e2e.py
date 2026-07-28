@@ -8,6 +8,14 @@ definition, and the real `llmlint config` resolution in a throwaway copy of this
 repository. Only the billed judge run is faked — the same boundary the rest of the
 e2e suite fakes — so `llmlint --diff` is counted rather than paid for, while
 `llmlint config` still merges a real plugin off disk.
+
+llmlint: ignore-file[e2e_not_mocked] The judge run is this repository's paid model
+boundary, faked here exactly as tests/e2e/fake_backend.py fakes the agent harness.
+It is also the one thing these journeys cannot use for real: the claim under test
+is that an unchanged tree yields the same verdict twice, which a non-deterministic
+judge cannot demonstrate. Counting `--diff` invocations is what makes a cache hit
+observable at all; every other boundary — the recipe, Nx, git, and llmlint's own
+config resolution — is real.
 """
 
 from __future__ import annotations
@@ -93,7 +101,7 @@ def _copy_checkout(destination: Path) -> None:
         shutil.copy2(ROOT / relative, target, follow_symlinks=False)
 
 
-def _write_fake_judge(directory: Path, real_llmlint: str) -> None:
+def _write_fake_judge(directory: Path) -> None:
     """Install an `llmlint` that counts `--diff` runs but resolves config for real."""
     directory.mkdir(parents=True, exist_ok=True)
     fake = directory / "llmlint"
@@ -105,7 +113,7 @@ def _write_fake_judge(directory: Path, real_llmlint: str) -> None:
         "  exit 0\n"
         "fi\n"
         'if [[ ${1:-} == "config" ]]; then\n'
-        f'  exec "{real_llmlint}" "$@"\n'
+        '  exec "$REAL_LLMLINT" "$@"\n'
         "fi\n"
         'printf "%s\\n" "$*" >>"$FAKE_LLMLINT_LOG"\n'
         "if [[ ${FAKE_LLMLINT_EXIT:-0} != 0 ]]; then\n"
@@ -144,7 +152,7 @@ def workspace(tmp_path: Path) -> Workspace:
     binaries = tmp_path / "bin"
     real_llmlint = shutil.which("llmlint")
     assert real_llmlint is not None
-    _write_fake_judge(binaries, real_llmlint)
+    _write_fake_judge(binaries)
 
     judge_log = tmp_path / "judge-runs.log"
     judge_log.write_text("", encoding="utf-8")
@@ -155,6 +163,7 @@ def workspace(tmp_path: Path) -> Workspace:
         # plugin cache from the developer's real ones.
         "XDG_CACHE_HOME": str(tmp_path / "cache"),
         "FAKE_LLMLINT_LOG": str(judge_log),
+        "REAL_LLMLINT": real_llmlint,
         # Reuse this repository's already-synced environment rather than building
         # the throwaway copy as a distinct project.
         "UV_NO_SYNC": "1",
@@ -283,12 +292,23 @@ def _stub(directory: Path, name: str, body: str) -> Path:
     return directory
 
 
-def _run_script(
-    workspace: Workspace, script: str, *, cwd: Path | None = None, **overrides: str
-) -> subprocess.CompletedProcess[str]:
+def _run_target(workspace: Workspace, **overrides: str) -> subprocess.CompletedProcess[str]:
+    """Invoke the Nx target the way someone who skipped the recipe would."""
     return subprocess.run(
-        [str(workspace.root / "scripts" / script)],
-        cwd=cwd or workspace.root,
+        ["./scripts/nx.sh", "run", "workspace:lint-llm-diff"],
+        cwd=workspace.root,
+        env={**workspace.env, **overrides},
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+
+
+def _run_fingerprint(workspace: Workspace, **overrides: str) -> subprocess.CompletedProcess[str]:
+    """Run the fingerprint the way an operator diagnosing a cache miss would."""
+    return subprocess.run(
+        [str(workspace.root / "scripts" / "llmlint-fingerprint.sh")],
+        cwd=workspace.root,
         env={**workspace.env, **overrides},
         check=False,
         text=True,
@@ -304,57 +324,15 @@ def _run_script(
         ("0" * 40, "missing from this checkout"),
     ],
 )
+# llmlint: ignore[tests_mirror_real_usage] The recipe resolves the base itself, so these states exist only when someone drives the cached target directly — the misuse this guard names and the only way to reach it.
 def test_the_target_refuses_a_base_it_cannot_judge(
     workspace: Workspace, base_sha: str, expected: str
 ) -> None:
-    result = _run_script(workspace, "llmlint-diff.sh", LLMLINT_DIFF_BASE_SHA=base_sha)
+    result = _run_target(workspace, LLMLINT_DIFF_BASE_SHA=base_sha)
 
     assert result.returncode != 0
     assert expected in result.stderr
     assert workspace.judge_runs() == 0
-
-
-@pytest.mark.parametrize(
-    ("labels_body", "expected"),
-    [
-        ("exit 1", "could not derive harness history labels"),
-        ("echo 'not labels at all'", "not comma-separated key=value pairs"),
-    ],
-)
-def test_the_target_refuses_unusable_harness_history_labels(
-    workspace: Workspace, tmp_path: Path, labels_body: str, expected: str
-) -> None:
-    stubs = _stub(tmp_path / "label-stub", "uv", labels_body)
-
-    result = _run_script(
-        workspace,
-        "llmlint-diff.sh",
-        LLMLINT_DIFF_BASE_SHA=workspace.head(),
-        PATH=f"{stubs}{os.pathsep}{workspace.env['PATH']}",
-    )
-
-    assert result.returncode != 0
-    assert expected in result.stderr
-    assert workspace.judge_runs() == 0
-
-
-@pytest.mark.parametrize("script", ["llmlint-diff.sh", "llmlint-fingerprint.sh"])
-def test_both_scripts_require_a_git_checkout(
-    workspace: Workspace, tmp_path: Path, script: str
-) -> None:
-    outside = tmp_path / "outside"
-    outside.mkdir()
-
-    result = _run_script(
-        workspace,
-        script,
-        cwd=outside,
-        GIT_CEILING_DIRECTORIES=str(tmp_path),
-        LLMLINT_DIFF_BASE_SHA=workspace.head(),
-    )
-
-    assert result.returncode != 0
-    assert "run from a Git checkout" in result.stderr
 
 
 @pytest.mark.parametrize(
@@ -364,16 +342,41 @@ def test_both_scripts_require_a_git_checkout(
         ('[[ ${1:-} == "config" ]] && exit 1\necho "llmlint 0.0.0-e2e"', "'llmlint config' failed"),
     ],
 )
-def test_the_fingerprint_refuses_an_unusable_judge_toolchain(
+def test_the_fingerprint_names_an_unusable_judge_toolchain(
     workspace: Workspace, tmp_path: Path, stub_body: str, expected: str
 ) -> None:
     stubs = _stub(tmp_path / "judge-stub", "llmlint", f"set -uo pipefail\n{stub_body}")
 
-    result = _run_script(
-        workspace,
-        "llmlint-fingerprint.sh",
-        PATH=f"{stubs}{os.pathsep}{workspace.env['PATH']}",
-    )
+    result = _run_fingerprint(workspace, PATH=f"{stubs}{os.pathsep}{workspace.env['PATH']}")
 
     assert result.returncode != 0
     assert expected in result.stderr
+
+
+@pytest.mark.parametrize(
+    ("labels_body", "expected"),
+    [
+        ("exit 1", "could not derive harness history labels"),
+        ("echo 'not labels at all'", "not comma-separated key=value pairs"),
+    ],
+)
+def test_the_recipe_refuses_unusable_harness_history_labels(
+    workspace: Workspace, tmp_path: Path, labels_body: str, expected: str
+) -> None:
+    stubs = _stub(tmp_path / "label-stub", "uv", labels_body)
+
+    result = workspace.lint(workspace.head(), PATH=f"{stubs}{os.pathsep}{workspace.env['PATH']}")
+
+    assert result.returncode != 0
+    assert expected in result.stderr
+    assert workspace.judge_runs() == 0
+
+
+def test_an_unresolvable_base_is_rejected_before_the_judge_is_paid(
+    workspace: Workspace,
+) -> None:
+    result = workspace.lint("no-such-ref")
+
+    assert result.returncode != 0
+    assert "does not resolve to a commit" in result.stderr
+    assert workspace.judge_runs() == 0

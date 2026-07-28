@@ -17,10 +17,7 @@
 # judged.
 set -euo pipefail
 
-root="$(git rev-parse --show-toplevel)" || {
-  echo "lint-llm-diff: run from a Git checkout and retry 'just lint-llm-diff'" >&2
-  exit 1
-}
+root="$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)"
 base_sha="${LLMLINT_DIFF_BASE_SHA:-}"
 [[ "$base_sha" =~ ^[0-9a-f]{40,64}$ ]] || {
   echo "lint-llm-diff: LLMLINT_DIFF_BASE_SHA must be a resolved commit id; run 'just lint-llm-diff <base>' instead of this target directly" >&2

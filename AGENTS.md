@@ -326,7 +326,9 @@ resolved base commit, and `scripts/llmlint-fingerprint.sh` — the installed llm
 version plus the effective merged config, so a rule change in a plugin fetched from
 outside this repository still invalidates. Nx never caches a failure, so findings
 always re-run and can never be replayed as a pass. A wrong verdict does stick:
-force a fresh judge run with `just lint-llm-diff <base> --skip-nx-cache`.
+force a fresh judge run with `just lint-llm-diff <base> --skip-nx-cache`. When a
+miss is unexplained, run `scripts/llmlint-fingerprint.sh` — a changed fingerprint
+on an unchanged tree is a changed judge, not a changed diff.
 
 Every remote lifecycle PR without explicit title/body metadata gets one
 post-verification `pr-author` dispatch. It drafts the template-shaped body from
