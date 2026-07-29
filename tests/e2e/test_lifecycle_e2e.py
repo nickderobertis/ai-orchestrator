@@ -2357,6 +2357,42 @@ def test_lifecycle_refuses_remote_identity_without_known_required_checks(
     assert expected in result.detail
 
 
+def test_remote_lifecycle_publishes_on_required_checks_without_a_pre_push_hook(
+    tmp_path, bare_origin
+) -> None:
+    """Required PR status checks alone are sufficient coverage to dispatch.
+
+    Every other lifecycle journey is covered by the hook the clone fixture
+    installs, so this is the one that proves the other half of the criterion
+    actually admits work rather than merely being spelled in the condition.
+    """
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "remote-required-checks-only")
+    gitops.hooks_dir(canonical).joinpath("pre-push").unlink()
+    workspace = Workspace(
+        tmp_path / "remote-required-checks-only-worktrees",
+        resolver=lambda _spec: canonical,
+        workflow="remote",
+        repo_type="single-owner",
+    )
+
+    result = run_repo_task(
+        "acme/widget",
+        "Publish a change covered only by required PR status checks.",
+        "engineer",
+        workspace=workspace,
+        github=FakeGitHub(origin, required=("complete-gate",)),
+        dispatch_fn=make_writing_dispatch(filename="required-checks-only.txt"),
+        recorded_gate=["true"],
+        merge_policy="auto",
+        sleep=lambda _: None,
+    )
+
+    assert result.ok and result.outcome == "merged", result.detail
+    assert result.publication_workflow == "remote"
+    assert _has_file(origin, "main", "required-checks-only.txt")
+
+
 def test_local_workflow_cannot_qualify_on_required_checks_alone(tmp_path, bare_origin) -> None:
     """Branch protection cannot cover a workflow that never opens a PR.
 
