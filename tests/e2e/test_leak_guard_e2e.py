@@ -20,11 +20,15 @@ import os
 import signal
 import subprocess
 import sys
-import time
 from pathlib import Path
 
-from leak_reaper import POLL_SECONDS
-from process_tree import await_reaped, await_recorded_pid, is_running, write_orphaning_tree
+from process_tree import (
+    await_orphaned,
+    await_reaped,
+    await_recorded_pid,
+    is_running,
+    write_orphaning_tree,
+)
 from waits import timeout as e2e_timeout
 
 from orchestrator import REPO_ROOT
@@ -53,6 +57,17 @@ def test_starts_a_dispatch_shaped_tree():
     deadline = time.monotonic() + 60
     while time.monotonic() < deadline:
         if MARKER.is_file() and MARKER.read_text(encoding="utf-8").strip():
+            break
+        time.sleep(0.02)
+    # Held until the worker has been orphaned, so what teardown faces is a process
+    # no walk can reach rather than one still hanging off the tree.
+    worker = int(MARKER.read_text(encoding="utf-8").strip())
+    while time.monotonic() < deadline:
+        try:
+            raw = Path(f"/proc/{{worker}}/stat").read_text(encoding="utf-8")
+        except OSError:
+            break
+        if raw[raw.rfind(")") + 2 :].split()[1] == "1":
             break
         time.sleep(0.02)
     time.sleep(HOLD_SECONDS)
@@ -108,11 +123,9 @@ def test_a_killed_session_leaves_nothing_running_from_its_temp_directory(tmp_pat
         worker = await_recorded_pid(marker, timeout=e2e_timeout(60))
         assert is_running(worker)
         assert _working_directory(worker) == tmp_path
-        # The reaper claims a process within one sampling interval of its appearing,
-        # and that interval is its whole blind spot. Waiting it out here is what makes
-        # the journey deterministic rather than a race against the sampler; the leaks
-        # this closes ran for minutes, not milliseconds.
-        time.sleep(2 * POLL_SECONDS)
+        # Killed only once the worker has been orphaned: what has to survive the
+        # session's death is a process nothing inside it could still reach.
+        assert await_orphaned(worker, timeout=e2e_timeout(30))
 
         os.kill(session.pid, signal.SIGKILL)
         session.wait(timeout=e2e_timeout(30))
@@ -136,6 +149,9 @@ def test_a_finished_test_leaves_nothing_running_from_its_temp_directory(tmp_path
         f"a worker the finished test started is still running out of {tmp_path}"
     )
     # Reported as a failure rather than reaped in silence: an unreported leak is one
-    # nobody fixes, and this suite is the only place it would ever be noticed.
+    # nobody fixes, and this suite is the only place it would ever be noticed. Naming
+    # the orphaned worker specifically is what pins this to the watching layer — the
+    # tree's root is still a descendant at teardown and would be found without it.
     assert session.returncode != 0, reported
     assert "live descendants" in reported, reported
+    assert str(worker) in reported, reported

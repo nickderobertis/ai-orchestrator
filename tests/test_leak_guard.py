@@ -12,7 +12,13 @@ from pathlib import Path
 import leak_reaper
 import pytest
 from leak_guard import ResourceLeak, ResourceLeakGuard, SessionGuard
-from process_tree import await_reaped, await_recorded_pid, is_running, write_orphaning_tree
+from process_tree import (
+    await_orphaned,
+    await_reaped,
+    await_recorded_pid,
+    is_running,
+    write_orphaning_tree,
+)
 
 
 def _git(*args: str, cwd: Path | None = None) -> None:
@@ -86,8 +92,11 @@ def test_guard_sweeps_a_descendant_its_popen_hook_never_saw(
         [sys.executable, str(write_orphaning_tree(tmp_path)), str(marker), "--worker-detaches"]
     )
     worker = await_recorded_pid(marker)
+    # Sampled while its parent still held it, then orphaned: by the time the sweep
+    # runs no walk can reach the worker, and only having watched accounts for it.
+    assert await_orphaned(worker), "the worker never reparented away from its tree"
 
-    with pytest.raises(ResourceLeak, match=rf"live descendants: \[[^]]*{worker}"):
+    with pytest.raises(ResourceLeak, match=rf"live descendants:[^;]*\b{worker}\b"):
         guard.finish()
 
     assert await_reaped(worker)

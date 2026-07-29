@@ -5,6 +5,13 @@ keeps running, an intermediate that starts the real worker and then exits, and a
 worker that reparents away from the tree anyone was watching. Reproducing that
 shape — rather than one sleeping child — is what makes a cleanup test mean
 anything, because a walk from the root can no longer find the worker at all.
+
+The intermediate lingers briefly before it goes, which is the one detail that has
+to be right: a real dispatch's parent runs for minutes while its children work, and
+that is the whole window in which anything can observe them. A parent that vanished
+the instant it forked would be unattributable to anyone by any means short of
+changing what the session means by "still alive", and it is not a shape this
+harness has ever produced.
 """
 
 from __future__ import annotations
@@ -21,6 +28,11 @@ import sys
 import time
 
 LIFETIME = 600
+# How long the intermediate stays before orphaning the worker. A real dispatch's
+# parent lives for minutes while its children work, which is what lets a watcher
+# see them at all; a parent that vanished the instant it forked would model
+# nothing that has ever leaked here.
+LINGER = 1.0
 ROLE = "ORCHESTRATOR_TEST_TREE_ROLE"
 marker = sys.argv[1]
 
@@ -34,6 +46,7 @@ if os.environ.get(ROLE) == "spawner":
     )
     with open(marker, "w", encoding="utf-8") as handle:
         handle.write(str(worker.pid))
+    time.sleep(LINGER)
     # Leave without waiting, so the worker reparents and no walk from the root
     # can reach it again.
     os._exit(0)
@@ -85,6 +98,20 @@ def is_running(pid: int) -> bool:
     # The parenthesized comm field may itself contain spaces, so state is read
     # relative to its closing delimiter rather than by field index.
     return raw[raw.rfind(")") + 2 :].split(" ", 1)[0] != "Z"
+
+
+def await_orphaned(pid: int, *, timeout: float = 30.0) -> bool:
+    """Wait until ``pid`` has been reparented away from whatever started it."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            raw = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
+        except OSError:
+            return False
+        if raw[raw.rfind(")") + 2 :].split()[1] == "1":
+            return True
+        time.sleep(0.02)
+    return False
 
 
 def await_reaped(pid: int, *, timeout: float = 30.0) -> bool:

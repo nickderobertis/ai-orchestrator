@@ -25,6 +25,7 @@ from __future__ import annotations
 import os
 import select
 import sys
+import threading
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -44,25 +45,46 @@ from orchestrator.watchdog import ProcessId, process_activity, terminate_process
 POLL_SECONDS = 0.25
 
 
-def sample(root_pid: int, known: dict[ProcessId, ProcessStart | None]) -> None:
-    """Record every descendant of ``root_pid`` this reaper has not already claimed.
+class TreeSampler:
+    """Everything ever seen running below one root, remembered with its identity.
+
+    Sampling rather than walking once at the end is the whole trick. A process that
+    leaves its parent — and so the tree — is only reachable *while* its parent is
+    still alive, so anything that looks later finds a smaller tree than existed. The
+    cost of remembering is one procfs walk per interval; the cost of not is the
+    process nobody can find again.
 
     Claims are never revised. A process already recorded may have exited since, and
-    re-reading its identity would either fail or — worse, after the kernel reused
-    the number — record a stranger's.
+    re-reading its identity would either fail or — worse, once the kernel reused the
+    number — record a stranger's in its place.
     """
-    for pid in process_activity(ProcessId(root_pid)).pids:
-        if pid != root_pid and pid != os.getpid() and pid not in known:
-            known[pid] = process_start_identity(pid)
 
+    def __init__(self, root_pid: int) -> None:
+        self.root_pid = root_pid
+        self._known: dict[ProcessId, ProcessStart | None] = {}
+        self._guard = threading.Lock()
 
-def survivors(known: dict[ProcessId, ProcessStart | None]) -> tuple[ProcessId, ...]:
-    """The claimed processes still running as the same process that was claimed."""
-    return tuple(
-        pid
-        for pid, start in sorted(known.items())
-        if start is not None and process_start_identity(pid) == start
-    )
+    def sample(self) -> None:
+        """Record every descendant of the root not already claimed."""
+        seen = process_activity(ProcessId(self.root_pid)).pids
+        with self._guard:
+            for pid in seen:
+                if pid != self.root_pid and pid != os.getpid() and pid not in self._known:
+                    self._known[pid] = process_start_identity(pid)
+
+    def claimed(self) -> frozenset[ProcessId]:
+        with self._guard:
+            return frozenset(self._known)
+
+    def survivors(self, *, ignoring: frozenset[ProcessId] = frozenset()) -> tuple[ProcessId, ...]:
+        """Claimed processes still running as the same process that was claimed."""
+        with self._guard:
+            claims = dict(self._known)
+        return tuple(
+            pid
+            for pid, start in sorted(claims.items())
+            if pid not in ignoring and start is not None and process_start_identity(pid) == start
+        )
 
 
 def watch(root_pid: int, *, stream: int = 0, poll: float = POLL_SECONDS) -> tuple[ProcessId, ...]:
@@ -71,15 +93,15 @@ def watch(root_pid: int, *, stream: int = 0, poll: float = POLL_SECONDS) -> tupl
     Returns the processes it terminated, so a caller driving this in-process can
     assert on the reap rather than on a side effect it has to go looking for.
     """
-    known: dict[ProcessId, ProcessStart | None] = {}
+    sampler = TreeSampler(root_pid)
     while True:
         # Sampled before the wait, so the window a process can hide in is measured
         # from when it appeared rather than from when this reaper happened to start.
-        sample(root_pid, known)
+        sampler.sample()
         readable, _, _ = select.select([stream], [], [], poll)
         if readable and os.read(stream, 4096) == b"":
             break
-    reaped = survivors(known)
+    reaped = sampler.survivors()
     if reaped:
         terminate_processes(reaped)
     return reaped
