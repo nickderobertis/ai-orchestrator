@@ -11,6 +11,13 @@
 # One log per label, truncated per run: the newest run of each recipe is the one
 # worth keeping, and unbounded history inside a working tree is its own problem.
 #
+# llmlint: ignore-file[robust_shell] This file is sourced, never executed, so
+# `set -euo pipefail` here would silently impose errexit on whatever shell sourced
+# it — a library must not reach into its caller's options. Both callers
+# (`scripts/nx.sh` and the `justfile`, via `set shell := ["bash", "-euo",
+# "pipefail", "-c"]`) already run strict, and every function below checks and
+# reports its own failures rather than relying on errexit.
+#
 # shellcheck shell=bash
 
 # Open (create and truncate) this repository's log for one labelled command and

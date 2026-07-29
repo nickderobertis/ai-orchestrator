@@ -129,6 +129,13 @@ if ! rm -f "$status_dir/agent.done" "$status_dir/agent.failed" "$status_dir/agen
 fi
 heartbeat_sequence=0
 write_status agent.heartbeat "$heartbeat_sequence"
+# Prove the stderr capture is writable before the agent starts, so a dispatcher
+# that later finds no reason for a death knows the file was openable and empty
+# rather than silently never opened.
+if ! : >>"$status_dir/agent.stderr"; then
+    echo "oneharness-agent: cannot open the agent stderr capture; retry through orchestrator dispatch" >&2
+    exit 2
+fi
 
 # onejudge hands the agent its task on stdin, but a non-interactive shell assigns /dev/null to
 # an asynchronous list's stdin before any explicit redirection, so the backgrounded agent below

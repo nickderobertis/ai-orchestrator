@@ -16,6 +16,7 @@ import pytest
 from conftest import install_pre_push_hook
 from fakes import FakeGitHub, make_writing_dispatch
 
+from orchestrator import gitops
 from orchestrator.integrate import IntegrateError, integrate, main
 from orchestrator.lifecycle import StackBase, run_repo_task
 from orchestrator.recover import main as recover_main
@@ -474,6 +475,81 @@ def test_repo_recover_cli_uses_explicit_local_workflow(tmp_path, bare_origin, ca
         == 0
     )
     assert "claude/text-recovery: merged" in capsys.readouterr().out
+
+
+def test_repo_recover_cli_adopts_a_branch_from_an_explicit_execution_checkout(
+    tmp_path, bare_origin, capsys
+) -> None:
+    """The real command, for the case that used to be unrecoverable.
+
+    A branch that reaches publication on its first attempt has never been pushed,
+    so it exists only where the work was done. Driving the installed argument
+    route here is what proves the operator's way out of that, and that the reported
+    result names the preserved merge-path gate output.
+    """
+    origin = bare_origin()
+    repo = _clone(tmp_path, origin)
+    _allow_local(repo)
+    execution = tmp_path / "execution-checkout"
+    subprocess.run(["git", "clone", str(origin), str(execution)], check=True, capture_output=True)
+    _branch(execution, "claude/execution-only", {"partial.txt": "partial\n"})
+    _git(execution, "checkout", "claude/execution-only")
+    _git(
+        execution,
+        "commit",
+        "--amend",
+        "-m",
+        "wip: partial (incomplete step)\n\nOrchestrator-Status: incomplete",
+    )
+    _git(execution, "checkout", "main")
+    assert not gitops.branch_exists(repo, "claude/execution-only")
+
+    exit_code = recover_main(
+        [
+            "claude/execution-only",
+            "--repo",
+            str(repo),
+            "--execution-checkout",
+            str(execution),
+            "--gate",
+            "true",
+            "--workspace",
+            str(tmp_path / "execution-only-cli-worktrees"),
+        ]
+    )
+
+    printed = capsys.readouterr().out
+    assert exit_code == 0
+    assert "claude/execution-only: merged" in printed
+    gate_log = printed.rsplit("merge-path gate output: ", 1)[1].strip()
+    assert "verdict: passed" in Path(gate_log).read_text(encoding="utf-8")
+    assert _git(origin, "show", "main:partial.txt") == "partial"
+
+
+def test_repo_recover_cli_rejects_an_execution_checkout_of_another_repository(
+    tmp_path, bare_origin, capsys
+) -> None:
+    repo = _clone(tmp_path, bare_origin())
+    _allow_local(repo)
+    stranger = tmp_path / "stranger"
+    subprocess.run(
+        ["git", "clone", str(bare_origin()), str(stranger)], check=True, capture_output=True
+    )
+
+    exit_code = recover_main(
+        [
+            "claude/anything",
+            "--repo",
+            str(repo),
+            "--execution-checkout",
+            str(stranger),
+            "--gate",
+            "true",
+        ]
+    )
+
+    assert exit_code == 2
+    assert "is not a git checkout of the repository identity" in capsys.readouterr().err
 
 
 def test_team_recovery_default_opens_pr_without_polling(tmp_path, bare_origin) -> None:
