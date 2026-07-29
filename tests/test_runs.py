@@ -430,10 +430,10 @@ def test_a_report_this_host_cannot_stat_is_an_unknown_state_not_a_crash(
     report.write_text("{}", encoding="utf-8")
     original = Path.stat
 
-    def refuse(self: Path, *args: object, **kwargs: object) -> object:
+    def refuse(self: Path, *, follow_symlinks: bool = True) -> os.stat_result:
         if self == report:
             raise OSError("stale file handle")
-        return original(self, *args, **kwargs)  # type: ignore[arg-type]
+        return original(self, follow_symlinks=follow_symlinks)
 
     monkeypatch.setattr(Path, "stat", refuse)
 

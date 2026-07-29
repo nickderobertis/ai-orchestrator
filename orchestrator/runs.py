@@ -106,12 +106,15 @@ def process_may_be_live(pid: int, host: object) -> bool:
     return True
 
 
-def _launch_reported(run_dir: Path) -> bool:
-    """Whether the launched orchestrator left a report of its own outcome.
+def _launch_may_have_reported(run_dir: Path) -> bool:
+    """Whether a launched orchestrator's report of its own outcome cannot be ruled out.
 
-    Every reader of this is a planner-facing view, so an unreadable report is an
-    unknown state rather than a reason to raise: a stat that fails mid-teardown, or
-    on a filesystem that has gone away, must not take the whole listing with it.
+    Only `False` is a certainty, in the same shape as `process_may_be_live` above:
+    this host looked and there is no report. A report that cannot be inspected at all
+    answers `True`, because every reader of this is a planner-facing view, and a stat
+    that fails mid-teardown or on a filesystem that has gone away must not take the
+    listing of every other run with it. Both callers then say nothing about this run
+    rather than announcing something they could not establish.
     """
     report = run_dir / "orchestrator" / "report.json"
     try:
@@ -120,11 +123,13 @@ def _launch_reported(run_dir: Path) -> bool:
         return True
 
 
-# llmlint: ignore[changed_behavior_has_e2e] real orchestrate/listing/name-resolution journeys run
-# e2e; host/PID outcomes are deterministic OS-liveness boundary branches.
+# llmlint: ignore[changed_behavior_has_e2e] real orchestrate/listing/name-resolution journeys
+# run e2e. The remaining branches answer for records this host cannot read or a pid it
+# cannot probe -- states no planner command can produce, since reaching them needs a
+# crashed writer, a damaged filesystem, or another host. tests/test_runs.py covers them.
 def launch_is_active(run_dir: Path) -> bool:
     """Return whether a launched orchestrator has not written its final report."""
-    if _launch_reported(run_dir):
+    if _launch_may_have_reported(run_dir):
         return False
     status = run_dir / "orchestrator" / "status.json"
     if not status.is_file():
@@ -281,7 +286,7 @@ def abandoned_launch(run_dir: Path) -> AbandonedLaunch | None:
     """
     if not (run_dir / "launch.json").is_file():
         return None
-    if _launch_reported(run_dir):
+    if _launch_may_have_reported(run_dir):
         return None
     status = run_dir / "orchestrator" / "status.json"
     if not status.is_file():

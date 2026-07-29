@@ -86,10 +86,8 @@ def is_running(pid: int) -> bool:
 
     A zombie is deliberately not running: it has already exited and holds nothing —
     no working directory, no open files — while it waits for a parent to collect its
-    status. That distinction only became visible once the test session made itself a
-    child subreaper, because an orphan now waits for *it* rather than vanishing into
-    init, and a survivor check that counted zombies would report a reaped process as
-    a leak forever.
+    status. Counting one as alive would report a process that has already been reaped
+    as a leak, and keep reporting it until its parent got around to waiting on it.
     """
     try:
         raw = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
