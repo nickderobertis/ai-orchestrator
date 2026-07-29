@@ -127,22 +127,58 @@ def test_workspace_fast_forwards_canonical_before_cutting_worktree(tmp_path, bar
 
 
 def test_workspace_reclaims_an_unregistered_path_collision(tmp_path, bare_origin) -> None:
-    """A directory a killed worker left at this run's worktree path is cleared."""
+    """A directory a killed worker left at this run's worktree path is cleared.
+
+    Git will not help here and says so: a directory it has no registration for is
+    refused outright, which is asserted first so this cannot quietly become a test
+    of a path git was willing to remove all along.
+    """
     origin = bare_origin()
     canonical = gitops.clone(origin, tmp_path / "canonical")
     ref = normalize_repo(str(origin))
     ws = Workspace(tmp_path / "worktrees", resolver=lambda _: canonical)
-    ws.ensure_clone(ref)
+    clone = ws.ensure_clone(ref)
     collision = ws.run_root(ref) / _safe_branch_dir("feat")
     (collision / "node_modules" / ".cache").mkdir(parents=True)
     (collision / "node_modules" / ".cache" / "blob").write_text("stale\n", encoding="utf-8")
     (collision / "node_modules").chmod(0o500)
+
+    with pytest.raises(gitops.GitError, match="is not a working tree"):
+        gitops.worktree_remove(clone, collision, check=True)
 
     worktree = ws.worktree(ref, "feat", base="origin/main")
 
     assert worktree == collision
     assert (worktree / "README.md").is_file()
     assert not (worktree / "node_modules").exists()
+
+
+def test_teardown_finishes_a_removal_git_refuses_instead_of_deferring_it(
+    tmp_path, bare_origin
+) -> None:
+    """The refusal that kept deferring cleanup across branches now clears the path.
+
+    A worktree whose registration is gone but whose directory is not — what a killed
+    worker leaves behind — makes ``git worktree remove --force`` fail with ``is not a
+    working tree``. Teardown used to surface that as deferred cleanup and leave the
+    directory for an operator; it now finishes the removal itself.
+    """
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-refused")
+    ref = normalize_repo(str(origin))
+    ws = Workspace(tmp_path / "worktrees", resolver=lambda _: canonical)
+    clone = ws.ensure_clone(ref)
+    worktree = ws.worktree(ref, "feat", base="origin/main")
+    (worktree / "node_modules").mkdir()
+    (worktree / "node_modules" / "blob").write_text("stale\n", encoding="utf-8")
+    # Disown the tree exactly as a pruned registration does, leaving the directory.
+    shutil.rmtree(gitops.common_dir(clone) / "worktrees")
+    with pytest.raises(gitops.GitError, match="is not a working tree"):
+        gitops.worktree_remove(clone, worktree, check=True)
+
+    ws.remove_worktree(ref, worktree)
+
+    assert not worktree.exists()
 
 
 def test_workspace_refuses_to_reclaim_a_path_outside_its_run_root(tmp_path, bare_origin) -> None:
