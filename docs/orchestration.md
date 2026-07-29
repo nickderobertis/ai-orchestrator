@@ -345,6 +345,12 @@ Each node settles once per round:
   rounds: the reconciler surfaces the underlying error as a blocking planner
   proposal on first occurrence, and replanning does not dispatch the node again.
   Unknown or ambiguous errors remain ordinary retryable task failures.
+- `failed` with a `no-agent-progress` diagnosis: the budget was spent without the
+  agent producing anything. onejudge counts every turn it attempts, and a provider
+  that accepts a turn and answers with nothing still spends one, so a failing
+  provider drains a whole cap in minutes. Reported apart from an ordinary turn cap
+  because the two want opposite responses: retrying this one unchanged spends the
+  next budget the same way.
 - `skipped`: a failed dependency made execution unsafe. Failure takes precedence
   over a simultaneous waiting path, so such a descendant is skipped, not blocked.
 

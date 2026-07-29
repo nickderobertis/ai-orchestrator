@@ -16,12 +16,14 @@ from orchestrator.dispatch import (
     AGENT_ONEHARNESS_BIN,
     DEFAULT_DISPATCH_STALL_TIMEOUT,
     DEFAULT_WORKER_HEARTBEAT_TIMEOUT,
+    NO_AGENT_PROGRESS_OUTCOME,
     DispatchError,
     Report,
     _agent_run_context,
     _build_report,
     _file_progress,
     _read_watchdog_pid,
+    incomplete_detail,
     run_onejudge,
 )
 from orchestrator.dispatch import main as dispatch_main
@@ -77,6 +79,57 @@ def test_build_report_preserves_usage_assessment_and_real_telemetry_field(monkey
     assert report.usage == {"input_tokens": 4, "vendor": "kept"}
     assert report.assessment == "ordinary follow-up"
     assert report.telemetry == {"wall_ms": 7}
+
+
+def _sdk_report(*, completed: bool, contents: list[str]) -> RunResult:
+    """An SDK-validated report whose assistant turns carry the given content."""
+    return RunResult(
+        exit_code=0 if completed else 1,
+        stderr="",
+        raw={
+            "schema_version": 4,
+            "transcript": {
+                "messages": [
+                    message
+                    for content in contents
+                    for message in (
+                        {"role": "user", "content": "go"},
+                        {"role": "assistant", "content": content},
+                    )
+                ]
+            },
+            "stopped_early": not completed,
+        },
+    )
+
+
+def test_a_budget_spent_without_agent_progress_is_not_the_agent_hitting_the_cap() -> None:
+    """Content, not turn count: onejudge records an empty answer as a spent turn.
+
+    The real journey is tests/e2e/test_tracked_graph_e2e.py, which drives a provider
+    that answers nothing through `just run-plan`. This pins the boundary the report
+    is read at, including the blank answer a turn count cannot distinguish.
+    """
+    silent = _build_report("engineer", _sdk_report(completed=False, contents=["", "  ", ""]))
+
+    assert silent.outcome == NO_AGENT_PROGRESS_OUTCOME
+    assert "without the agent producing anything" in incomplete_detail(silent)
+
+    worked = _build_report("engineer", _sdk_report(completed=False, contents=["", "a real answer"]))
+
+    assert worked.outcome is None
+    assert incomplete_detail(worked) == "did not complete (hit the turn cap)"
+
+    finished = _build_report("engineer", _sdk_report(completed=True, contents=["done"]))
+
+    assert finished.completed and finished.outcome is None
+
+
+def test_a_worker_that_died_keeps_its_own_name_over_the_no_progress_one() -> None:
+    """`worker-died` is the more specific diagnosis and is reported ahead of it."""
+    died = Report("engineer", 1, False, True, 0, [], {}, {}, "", outcome="worker-died")
+
+    assert incomplete_detail(died) == "worker-died"
 
 
 def test_build_report_counts_assistant_turns() -> None:

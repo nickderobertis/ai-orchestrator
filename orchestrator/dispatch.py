@@ -94,7 +94,14 @@ AGENT_ONEHARNESS_BIN = REPO_ROOT / "scripts" / "oneharness-agent.sh"
 # worker wrapper, exports the alternate-Claude config indirection its fallback
 # variant needs; a raw `oneharness` would discover the worker chain instead.
 ORCHESTRATOR_ONEHARNESS_BIN = REPO_ROOT / "scripts" / "oneharness-orchestrator.sh"
-DispatchOutcome = Literal["worker-died"]
+#: A dispatch whose budget was spent without the agent producing anything. onejudge
+#: counts every turn it attempts, and a provider that accepts a turn and answers with
+#: nothing still spends one — so a failing provider drains a 30-turn cap in minutes,
+#: at a rate no working agent produces. The accounting is onejudge's and not this
+#: harness's to change; what the harness can stop doing is reporting the result as the
+#: agent running out of room, because that reading is what earns an identical retry.
+NO_AGENT_PROGRESS_OUTCOME: Literal["no-agent-progress"] = "no-agent-progress"
+DispatchOutcome = Literal["worker-died", "no-agent-progress"]
 WatchdogReason = Literal["worker-died", "stalled"]
 
 
@@ -237,6 +244,40 @@ def _resolve_onejudge(onejudge_bin: str, env: Mapping[str, str]) -> OneJudgeProv
     return OneJudgeProvenance(path=resolved, version=adopted)
 
 
+def _agent_produced_nothing(result: RunResult) -> bool:
+    """Whether no assistant turn in this run carried any content.
+
+    Content rather than turn count: onejudge records an empty answer as a turn, so
+    the transcript of a failing provider is a full budget of blank turns rather than
+    an empty one. Counting turns would see a busy run; reading them sees the truth.
+    """
+    transcript = result.raw.get("transcript")
+    messages = transcript.get("messages") if isinstance(transcript, dict) else None
+    if not isinstance(messages, list):
+        return False
+    return not any(
+        isinstance(message, dict)
+        and message.get("role") == "assistant"
+        and str(message.get("content") or "").strip()
+        for message in messages
+    )
+
+
+def incomplete_detail(report: Report) -> str:
+    """Say which kind of unfinished a dispatch is, since they want opposite responses."""
+    match report.outcome:
+        case "worker-died":
+            return "worker-died"
+        case "no-agent-progress":
+            return (
+                "did not complete: the turn budget was spent without the agent "
+                "producing anything, so retrying it unchanged will spend the next "
+                "budget the same way"
+            )
+        case _:
+            return "did not complete (hit the turn cap)"
+
+
 def _build_report(
     persona: str, result: RunResult, *, provenance: DispatchProvenance | None = None
 ) -> Report:
@@ -268,6 +309,11 @@ def _build_report(
         stderr=result.stderr,
         assessment=assessment,
         telemetry_data=dict(raw_telemetry) if isinstance(raw_telemetry, dict) else None,
+        outcome=(
+            NO_AGENT_PROGRESS_OUTCOME
+            if not result.completed and _agent_produced_nothing(result)
+            else None
+        ),
     )
 
 

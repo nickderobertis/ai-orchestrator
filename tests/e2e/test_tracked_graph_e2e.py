@@ -2454,3 +2454,60 @@ def test_run_plan_rejects_a_malformed_resume_attempt_count(tmp_path: Path) -> No
 
     assert rejected.returncode == 2, rejected.stdout
     assert "resume 'attempts' must be a non-negative integer" in rejected.stderr
+
+
+def test_a_budget_spent_without_agent_progress_reads_apart_from_a_turn_cap(
+    tmp_path: Path, command_base, onejudge_bin: str
+) -> None:
+    """The reported failure: a provider answers nothing and the budget drains anyway.
+
+    Real `just run-plan`, real onejudge, and only the paid harness faked — the agent
+    accepts each turn and returns an empty answer, which onejudge counts. The
+    recorded round is where a planner meets the result, so that is where the two
+    kinds of unfinished have to read differently.
+    """
+    runs = tmp_path / "runs"
+    plan = tmp_path / "silent.json"
+    plan.write_text(
+        json.dumps(
+            {
+                "tasks": [
+                    {
+                        "id": "silent",
+                        "persona": "engineer",
+                        "task": "should-fail silent-agent: the provider answers nothing",
+                    },
+                    {
+                        "id": "capped",
+                        "persona": "engineer",
+                        "task": "should-fail: works but runs out of room",
+                    },
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    ran = _just(
+        "run-plan",
+        str(plan),
+        "--run",
+        "silent-agent",
+        "--runs-dir",
+        str(runs),
+        "--base",
+        str(command_base(max_turns=3)),
+        "--onejudge-bin",
+        onejudge_bin,
+        "--format",
+        "json",
+    )
+
+    assert ran.returncode == 1, ran.stderr
+    recorded = json.loads(
+        (runs / "silent-agent" / "round-01" / "result.json").read_text(encoding="utf-8")
+    )["results"]
+    assert recorded["silent"]["status"] == "failed"
+    assert "without the agent producing anything" in recorded["silent"]["error"]
+    # An agent that worked and ran out of room keeps saying exactly what it said.
+    assert recorded["capped"]["error"] == "did not complete (hit the turn cap)"

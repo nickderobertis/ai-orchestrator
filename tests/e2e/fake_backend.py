@@ -507,6 +507,11 @@ def main() -> int:
                     agent_message = json.dumps(
                         {"kind": "closeout", "message": f"orchestration complete{suffix}"}
                     )
+            elif "silent-agent" in task:
+                # A provider that accepts the turn and answers with nothing. onejudge
+                # counts the turn it attempted, so the budget drains at a rate no
+                # working agent produces — the shape a failing provider leaves.
+                agent_message = ""
             else:
                 agent_message = "done" if done else "working on it"
             resp = {
