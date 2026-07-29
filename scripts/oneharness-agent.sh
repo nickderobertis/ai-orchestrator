@@ -170,7 +170,11 @@ set -e
 write_status agent.exit_code "$exit_code"
 # llmlint: ignore[tool_output_is_signal] this replays the child's own stream to the
 # caller unread; the conduit stays transparent, it just also keeps a copy.
-cat "$agent_stderr" >&2 || true
+if ! cat "$agent_stderr" >&2; then
+    # An unreadable replay must not change the child's fate, which is already
+    # decided and recorded; say so and let the exit code below stand.
+    echo "oneharness-agent: could not replay the agent stderr record at $agent_stderr; read it from the worker status directory instead" >&2
+fi
 if [ "$exit_code" -ne 0 ]; then
     echo "oneharness-agent: agent process $agent_pid exited $exit_code; awaiting dispatcher recovery" >&2
     write_status agent.failed "$worker_pid"
