@@ -96,10 +96,28 @@ AGENT_ONEHARNESS_BIN = REPO_ROOT / "scripts" / "oneharness-agent.sh"
 ORCHESTRATOR_ONEHARNESS_BIN = REPO_ROOT / "scripts" / "oneharness-orchestrator.sh"
 DispatchOutcome = Literal["worker-died"]
 WatchdogReason = Literal["worker-died", "stalled"]
-#: Where the agent wrapper leaves the dead child's stderr, and how much of its
-#: tail a death report carries. The tail is the part that names the failure; the
-#: cap keeps one runaway harness from filling a journal entry.
+#: The status files `scripts/oneharness-agent.sh` writes and this module reads —
+#: the whole IPC contract between the two. `tests/test_oneharness_agent_wrapper.py`
+#: is its drift gate: the wrapper has to name every one of these.
+AGENT_PID_NAME = "agent.pid"
+AGENT_CHILD_PID_NAME = "agent.child.pid"
+AGENT_HEARTBEAT_NAME = "agent.heartbeat"
+AGENT_DONE_NAME = "agent.done"
+AGENT_FAILED_NAME = "agent.failed"
+AGENT_EXIT_CODE_NAME = "agent.exit_code"
 AGENT_STDERR_NAME = "agent.stderr"
+AGENT_STATUS_NAMES = (
+    AGENT_PID_NAME,
+    AGENT_CHILD_PID_NAME,
+    AGENT_HEARTBEAT_NAME,
+    AGENT_DONE_NAME,
+    AGENT_FAILED_NAME,
+    AGENT_EXIT_CODE_NAME,
+    AGENT_STDERR_NAME,
+)
+#: How much of the dead child's stderr tail a death report carries. The tail is
+#: the part that names the failure; the cap keeps one runaway harness from
+#: filling a journal entry.
 AGENT_STDERR_TAIL_CHARS = 1200
 
 
@@ -383,7 +401,11 @@ def _worker_death_detail(status_dir: Path, root_pid: ProcessId) -> str:
     child's exit status and stderr for exactly this line; both are best-effort, so
     an absent marker degrades the sentence rather than hiding the death.
     """
-    exit_status = _agent_status(status_dir, "agent.exit_code") or "unknown"
+    # The wrapper is the only writer, but this file crosses a process boundary, so
+    # only a plausible wait status is repeated back; anything else is unknown.
+    recorded = _agent_status(status_dir, AGENT_EXIT_CODE_NAME) or ""
+    plausible = recorded.isascii() and recorded.isdigit() and len(recorded) <= 3
+    exit_status = recorded if plausible and int(recorded) <= 255 else "unknown"
     detail = (
         f"worker-died: tracked worker exited or stopped heartbeating "
         f"(watchdog pid {root_pid}, agent exit status {exit_status})"

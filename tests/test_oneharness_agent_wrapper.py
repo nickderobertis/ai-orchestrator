@@ -10,12 +10,14 @@ faked, mirroring how the e2e suite fakes just the paid harness.
 
 from __future__ import annotations
 
+import re
 import stat
 import subprocess
 import time
 from pathlib import Path
 
 from orchestrator import REPO_ROOT
+from orchestrator.dispatch import AGENT_STATUS_NAMES
 
 WRAPPER = REPO_ROOT / "scripts" / "oneharness-agent.sh"
 ALT_CONFIG_LIBRARY = REPO_ROOT / "scripts" / "claude-alt-config-dir.sh"
@@ -311,6 +313,26 @@ def test_watchdog_path_forwards_the_task_on_stdin(tmp_path: Path) -> None:
     # The heartbeat path is the one under test: it must have run, not the exec branch.
     assert (status_dir / "agent.done").exists()
     assert (status_dir / "agent.exit_code").read_text(encoding="utf-8").strip() == "0"
+
+
+def test_status_file_contract_has_one_source_the_wrapper_honors() -> None:
+    """The dispatcher's status-file names and the wrapper's must not drift apart.
+
+    The status directory is the whole IPC contract between this shell wrapper and
+    the Python dispatcher, and each side spells the filenames itself. Renaming one
+    of them on either side alone would not fail to compile or parse; it would just
+    make the dispatcher stop seeing a marker, which reads as a healthy worker that
+    never finishes.
+    """
+    script = WRAPPER.read_text(encoding="utf-8")
+    for name in AGENT_STATUS_NAMES:
+        assert name in script, f"{WRAPPER.name} does not write the {name!r} status file"
+    written = set(re.findall(r"\$status_dir/(agent\.[a-z_.]+?)(?:\.tmp)?[\"\s]", script))
+    written |= set(re.findall(r"write_status (agent\.[a-z_.]+)", script))
+    assert written <= set(AGENT_STATUS_NAMES), (
+        f"{WRAPPER.name} writes status files the dispatcher does not know: "
+        f"{sorted(written - set(AGENT_STATUS_NAMES))}"
+    )
 
 
 def test_dead_agent_records_its_exit_status_and_stderr_before_parking(tmp_path: Path) -> None:

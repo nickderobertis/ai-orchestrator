@@ -148,6 +148,15 @@ def _directory_scoped_session_dispatch(store: dict[str, str]):
                 ),
                 outcome="worker-died",
             )
+        if persona == "pr-author":
+            output = task.split(
+                "Write the final body, and nothing else, to this absolute path:\n", 1
+            )[1].splitlines()[0]
+            Path(output).write_text(
+                "## What\nContinues the pinned branch.\n\n## Why\nIt carries prior work.\n",
+                encoding="utf-8",
+            )
+            return Report(persona, 0, True, False, 1, [], {}, {}, "")
         sid = session.rsplit(":", 1)[-1]
         (Path(project_dir) / f"{sid}.txt").write_text(f"{persona}\n", encoding="utf-8")
         return Report(persona, 0, True, False, 2, [], {}, {}, "")
@@ -266,6 +275,56 @@ def test_pinned_branch_redispatch_reaches_its_agent_turn(
     assert len(set(sessions.values())) == 2, sessions
     assert _has_file(origin, "main", "PRIOR_first.md")
     assert _has_file(origin, "main", "PRIOR_second.md")
+
+
+def test_pinned_branch_redispatch_redrafts_its_pr_body(tmp_path, bare_origin, personas_dir) -> None:
+    """The PR-author dispatch of a re-pinned branch reaches its turn too.
+
+    Drafting runs in the same per-run worktree the worker did, under a session the
+    lifecycle names for itself rather than for the branch — so a constant name is
+    the same trap one directory later. Its failure is swallowed by the deliberate
+    fallback body, which is exactly why it needs its own assertion.
+    """
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-pinned-remote")
+    root = tmp_path / "pinned-remote-worktrees"
+    branch = "ai-orchestrator/engineer/pinned-remote"
+    sessions: dict[str, str] = {}
+    github = FakeGitHub(origin)
+
+    def dispatch_pinned(marker: str) -> lifecycle_module.LifecycleResult:
+        _preserve_branch_with_commits(canonical, branch, marker)
+        return run_repo_task(
+            str(origin),
+            f"complete-now write-change {marker}",
+            "engineer",
+            workspace=Workspace(
+                root,
+                resolver=lambda _spec: canonical,
+                workflow="remote",
+                repo_type="single-owner",
+            ),
+            branch=branch,
+            persona_dir=personas_dir,
+            recorded_gate=["true"],
+            workflow="remote",
+            repo_type="single-owner",
+            merge_policy="none",
+            github=github,
+            dispatch_fn=_directory_scoped_session_dispatch(sessions),
+        )
+
+    first = dispatch_pinned("first")
+    assert first.outcome == "pr-open", first.detail
+    second = dispatch_pinned("second")
+    assert second.outcome == "pr-open", second.detail
+
+    drafting = sorted(name for name in sessions if name.startswith("pr-author"))
+    assert len(drafting) == 2, sessions
+    assert len({sessions[name] for name in drafting}) == 2, sessions
+    for result in (first, second):
+        assert result.pr is not None
+        assert "Continues the pinned branch." in github._prs[result.pr.number].body
 
 
 def test_published_dispatch_survives_deferred_teardown_and_redispatch_reclaims_it(
