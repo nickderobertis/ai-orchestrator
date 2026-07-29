@@ -1080,7 +1080,17 @@ def test_a_node_that_cannot_finish_settles_instead_of_being_redispatched_forever
                         "verify_cmd": ["true"],
                         "workflow": "local",
                         "repo_type": "single-owner",
-                    }
+                    },
+                    {
+                        "id": "follow",
+                        "repo": str(canonical),
+                        "persona": "engineer",
+                        "task": "complete-now write-change: builds on the change",
+                        "verify_cmd": ["true"],
+                        "workflow": "local",
+                        "repo_type": "single-owner",
+                        "deps": ["change"],
+                    },
                 ]
             }
         ),
@@ -1112,37 +1122,110 @@ def test_a_node_that_cannot_finish_settles_instead_of_being_redispatched_forever
     for attempt in range(1, MAX_AUTOMATIC_ROUND_RESUMES + 1):
         assert next_round_main([run, "--runs-dir", str(runs_dir), *common]) == 1
         capsys.readouterr()
-        dispatched = _recorded(attempt + 1, "plan.json")["tasks"][0]
-        assert dispatched["resume"]["branch"] == branch
-        assert dispatched["resume"]["attempts"] == attempt
+        dispatched = _recorded(attempt + 1, "plan.json")["tasks"]
+        resumed = next(task for task in dispatched if task["id"] == "change")
+        assert resumed["resume"]["branch"] == branch
+        assert resumed["resume"]["attempts"] == attempt
         assert _recorded(attempt + 1, "result.json")["results"]["change"]["branch"] == branch
+        # Its dependent is still gated on it, and holds no anchor to work that has
+        # not landed anywhere.
+        follower = next(task for task in dispatched if task["id"] == "follow")
+        assert follower["deps"] == ["change"]
+        assert not follower.get("stack_bases")
 
     rounds_run = 1 + MAX_AUTOMATIC_ROUND_RESUMES
     markers = len(incomplete_commits(canonical, "origin/main", branch))
     assert 1 <= markers <= rounds_run, markers
 
+    # The exhausted node settles out, and its dependent is released to run against
+    # the base rather than waiting on work nothing is going to finish — the same
+    # release a `drop` gives, and with no publication anchor invented for a branch
+    # that never landed.
+    # Exit 0: with the exhausted node gone, the released dependent is all that runs
+    # and it completes, so the round settles the graph.
     assert next_round_main([run, "--runs-dir", str(runs_dir), *common]) == 0
-    settled = capsys.readouterr().out
-    assert "nothing to iterate" in settled, settled
+    capsys.readouterr()
+    released = _recorded(rounds_run + 1, "plan.json")["tasks"]
 
-    # Nothing was dispatched, so no further round claimed the ledger, no further
-    # marker reached the branch, and the preserved work is still exactly where
-    # `just repo-recover` expects to find it.
-    assert not (runs_dir / run / f"round-{rounds_run + 1:02d}").exists()
+    assert [task["id"] for task in released] == ["follow"]
+    assert released[0]["deps"] == []
+    assert not released[0].get("stack_bases")
+    assert _recorded(rounds_run + 1, "result.json")["results"]["follow"]["status"] == "done"
+
+    # The exhausted node was not dispatched again, so no further marker reached its
+    # branch and the preserved work is still where `just repo-recover` expects it.
+    assert "change" not in _recorded(rounds_run + 1, "result.json")["results"]
     assert len(incomplete_commits(canonical, "origin/main", branch)) == markers
     assert gitops.branch_exists(canonical, branch)
 
-    # The planner can still say "go", and that decision is not what the bound is
-    # there to stop: an explicit retry starts the budget over on the same branch.
+
+def test_an_explicit_retry_restores_an_exhausted_preserved_branchs_budget(
+    tmp_path, bare_origin, command_base, personas_dir, capsys
+) -> None:
+    """The bound stops the harness repeating itself, never a planner decision.
+
+    Same real round CLIs, driven to the same exhausted state, and then given the
+    `retry` edit a planner writes after reading the result. The node runs again on
+    the branch it preserved, with the budget started over rather than topped up.
+    """
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-retry-budget")
+    Registry().register(str(canonical), workflow="local")
+    runs_dir = tmp_path / "runs"
+    plan_path = tmp_path / "retry-budget.json"
+    plan_path.write_text(
+        json.dumps(
+            {
+                "tasks": [
+                    {
+                        "id": "change",
+                        "repo": str(canonical),
+                        "persona": "engineer",
+                        "task": "should-fail write-unique-change: never finishes",
+                        "verify_cmd": ["true"],
+                        "workflow": "local",
+                        "repo_type": "single-owner",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    common = [
+        "--base",
+        str(command_base()),
+        "--persona-dir",
+        str(personas_dir),
+        "--workspace",
+        str(tmp_path / "workspace"),
+        "--format",
+        "json",
+    ]
+    run = "retry-budget"
+
+    def _recorded(number: int, name: str) -> dict:
+        return json.loads((runs_dir / run / f"round-{number:02d}" / name).read_text("utf-8"))
+
+    assert main_plan([str(plan_path), "--run", run, "--runs-dir", str(runs_dir), *common]) == 1
+    capsys.readouterr()
+    branch = _recorded(1, "result.json")["results"]["change"]["branch"]
+    for _ in range(MAX_AUTOMATIC_ROUND_RESUMES):
+        assert next_round_main([run, "--runs-dir", str(runs_dir), *common]) == 1
+        capsys.readouterr()
+    spent = 1 + MAX_AUTOMATIC_ROUND_RESUMES
+    assert _recorded(spent, "plan.json")["tasks"][0]["resume"]["attempts"] == (
+        MAX_AUTOMATIC_ROUND_RESUMES
+    )
+
     edits = tmp_path / "retry.json"
     edits.write_text(json.dumps({"retry": {"change": {}}}), encoding="utf-8")
     assert next_round_main([run, str(edits), "--runs-dir", str(runs_dir), *common]) == 1
     capsys.readouterr()
-    retried = _recorded(rounds_run + 1, "plan.json")["tasks"][0]
+    retried = _recorded(spent + 1, "plan.json")["tasks"][0]
 
     assert retried["resume"]["branch"] == branch
     assert "attempts" not in retried["resume"]
-    assert _recorded(rounds_run + 1, "result.json")["results"]["change"]["branch"] == branch
+    assert _recorded(spent + 1, "result.json")["results"]["change"]["branch"] == branch
 
 
 def test_ordinary_next_round_resumes_committed_lifecycle_branch(

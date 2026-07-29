@@ -8,10 +8,12 @@ import signal
 import subprocess
 import sys
 import time
+from contextlib import suppress
 from pathlib import Path
 
 import pytest
 import yaml
+from process_tree import is_running
 from waits import deadline
 from waits import timeout as e2e_timeout
 
@@ -1289,3 +1291,114 @@ def test_orchestrate_cli_refuses_unusable_launch_provenance(tmp_path: Path) -> N
     )
     assert relative_home.returncode == 2
     assert "absolute state directory" in relative_home.stderr
+
+
+def _await_owner_exit(pid: int) -> bool:
+    """Wait for a recorded owner to stop executing, and report whether it did.
+
+    Zombie-aware on purpose: this launch API keeps its `Popen` inside the test
+    process, so the finished orchestrator waits there for a status nobody collects.
+    It has still stopped, which is the thing being asserted.
+    """
+    wait_deadline = deadline(15)
+    while time.monotonic() < wait_deadline:
+        if not is_running(pid):
+            return True
+        time.sleep(0.02)
+    return False
+
+
+def _view_cli(recipe: str, runs: Path, history: Path) -> str:
+    """One planner-facing read-only view over ``runs``, with no dispatch history."""
+    history.mkdir(exist_ok=True)
+    viewed = subprocess.run(
+        ["just", recipe, "--runs-dir", str(runs)],
+        cwd=REPO_ROOT,
+        env={**os.environ, "ONEHARNESS_HISTORY_DIR": str(history)},
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=180,
+    )
+    assert viewed.returncode == 0, viewed.stderr
+    return viewed.stdout
+
+
+def test_a_launch_that_reported_its_own_outcome_is_never_called_settled(
+    tmp_path: Path, onejudge_bin: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An orchestrator that finished is gone too, and must not read as abandoned.
+
+    The settled report is derived from the recorded owner's liveness, so a run whose
+    orchestrator completed looks identical at the pid: the process is not there. What
+    separates them is the report it wrote on its way out. Driven the way a planner
+    ends a run — read the surface, reply, and let it finish.
+    """
+    runs = tmp_path / "reported-runs"
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    run_id = launch_orchestrator(
+        _plan(tmp_path, "surface-milestone"),
+        runs_dir=runs,
+        base_path=_base(tmp_path),
+        onejudge_bin=onejudge_bin,
+        skill_provider={"kind": "command", "command": [sys.executable, str(FAKE_BACKEND)]},
+        turn_timeout=int(e2e_timeout(10)),
+    )
+    owner = json.loads(
+        (runs / run_id / "orchestrator" / "status.json").read_text(encoding="utf-8")
+    )["pid"]
+
+    assert _next_cli(run_id, runs)["surface"]["kind"] == "milestone"
+    _reply_cli(run_id, runs, {"completion": True, "reason": "verified"})
+    _wait_report(runs / run_id / "orchestrator" / "report.json")
+
+    # Its process is gone, exactly as a killed one would be — the recorded status
+    # still says `running`, because nothing rewrites it either way.
+    assert _await_owner_exit(owner)
+    assert (
+        json.loads((runs / run_id / "orchestrator" / "status.json").read_text(encoding="utf-8"))[
+            "status"
+        ]
+        == "running"
+    )
+
+    listed = _view_cli("runs", runs, tmp_path / "history")
+    reported = _view_cli("status", runs, tmp_path / "history")
+
+    assert "SETTLED" not in listed, listed
+    assert "SETTLED" not in reported, reported
+
+
+def test_planner_views_survive_an_unreadable_launch_record(
+    tmp_path: Path, onejudge_bin: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The record both views read is an ordinary file anything may corrupt.
+
+    A launch record this host cannot parse says nothing about whether the run is
+    alive, so the views must keep quiet about it rather than guess — and must still
+    answer at all, since a crash here would take away the only view of every other
+    run beside it.
+    """
+    runs = tmp_path / "unreadable-runs"
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    run_id = launch_orchestrator(
+        _plan(tmp_path, "surface-milestone"),
+        runs_dir=runs,
+        base_path=_base(tmp_path),
+        onejudge_bin=onejudge_bin,
+        skill_provider={"kind": "command", "command": [sys.executable, str(FAKE_BACKEND)]},
+        turn_timeout=int(e2e_timeout(10)),
+    )
+    status_path = runs / run_id / "orchestrator" / "status.json"
+    owner = json.loads(status_path.read_text(encoding="utf-8"))["pid"]
+    try:
+        status_path.write_text("{ not json", encoding="utf-8")
+
+        listed = _view_cli("runs", runs, tmp_path / "history")
+        reported = _view_cli("status", runs, tmp_path / "history")
+
+        assert "SETTLED" not in listed, listed
+        assert "SETTLED" not in reported, reported
+    finally:
+        with suppress(ProcessLookupError, PermissionError):
+            os.killpg(owner, signal.SIGKILL)

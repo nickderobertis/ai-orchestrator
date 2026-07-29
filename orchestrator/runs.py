@@ -116,7 +116,13 @@ def launch_is_active(run_dir: Path) -> bool:
     status = run_dir / "orchestrator" / "status.json"
     if not status.is_file():
         return False
-    value = load_mapping(status)
+    try:
+        value = load_mapping(status)
+    except (ConfigError, OSError):
+        # An ordinary file anything may corrupt, read by every planner-facing view.
+        # A record this host cannot parse says nothing about whether the run is
+        # alive, and raising here would take the view of every *other* run with it.
+        return False
     if value.get("status") != "running":
         return False
     pid = value.get("pid")
