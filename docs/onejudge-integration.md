@@ -353,14 +353,6 @@ proof does not clear is reported as retained rather than silently kept.
   working repository with
   `git config receive.denyCurrentBranch updateInstead` so that push can update
   the checked-out base branch.
-- **Resolve llmlint findings on touched files.** llmlint evaluates the diff, so
-  it can expose a pre-existing pattern in any file the change touches. Fix the
-  finding or add a narrow, justified ignore-file suppression (the rule name plus
-  why; see `scripts/session-setup.sh` for the directive syntax). If a rule is
-  architecturally inapplicable,
-  disable it once in `llmlint.yml` with `override: true` and `relevance: false`;
-  `async_typed_clients_at_boundaries` is disabled this way because this harness
-  is a synchronous CLI.
 
 See [the repository lifecycle](repo-lifecycle.md) for clone, gate, recovery, and
 merge mechanics.
