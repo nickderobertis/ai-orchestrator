@@ -379,11 +379,11 @@ def test_the_target_refuses_a_base_it_cannot_judge(
     assert workspace.judge_runs() == 0
 
 
-def _replay_verdict(workspace: Workspace) -> subprocess.CompletedProcess[str]:
+def _replay_verdict(workspace: Workspace, **overrides: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [str(workspace.root / "scripts" / "llmlint-verdict.sh")],
         cwd=workspace.root,
-        env=workspace.env,
+        env={**workspace.env, **overrides},
         check=False,
         text=True,
         capture_output=True,
@@ -412,6 +412,47 @@ def test_an_incomplete_record_is_never_read_as_a_clean_run(
 
     assert result.returncode == UNUSABLE_RECORD
     assert expected in result.stderr
+
+
+@pytest.mark.parametrize(
+    "supplied",
+    ["", "origin/main", "not-a-sha", "0123456789abcdef", "../../etc/passwd", "$(id)"],
+)
+def test_provenance_never_names_a_base_it_cannot_vouch_for(
+    workspace: Workspace, supplied: str
+) -> None:
+    """The base reaches this reader through the environment, so it is validated here.
+
+    A verdict's provenance is what an operator reads to know *which* base a green
+    covers. Anything that can set a variable could otherwise write that answer, so
+    only a resolved commit id is echoed; the recorded verdict itself still replays,
+    because the base is provenance about the verdict rather than part of it.
+    """
+    verdict = workspace.root / ".nx/llmlint-diff"
+    verdict.mkdir(parents=True)
+    (verdict / "status").write_text("0\n", encoding="utf-8")
+    (verdict / "report").write_text("findings\n", encoding="utf-8")
+
+    result = _replay_verdict(workspace, LLMLINT_DIFF_BASE_SHA=supplied)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "replayed the recorded verdict for base <unresolved>" in result.stderr
+    assert supplied not in result.stderr or supplied == ""
+    assert "findings" in result.stdout
+
+
+def test_provenance_names_a_resolved_base_commit(workspace: Workspace) -> None:
+    """The validated case still reports the commit the verdict was keyed on."""
+    verdict = workspace.root / ".nx/llmlint-diff"
+    verdict.mkdir(parents=True)
+    (verdict / "status").write_text("0\n", encoding="utf-8")
+    (verdict / "report").write_text("findings\n", encoding="utf-8")
+    base = workspace.head()
+
+    result = _replay_verdict(workspace, LLMLINT_DIFF_BASE_SHA=base)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert f"replayed the recorded verdict for base {base}" in result.stderr
 
 
 @pytest.mark.parametrize(

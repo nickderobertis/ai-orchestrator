@@ -56,9 +56,19 @@ status="$(cat -- "$verdict/status")" || {
 }
 
 # One line, because "green" is a single claim: this verdict, about this diff,
-# against this base commit. The base rides in from the recipe that resolved and
-# keyed on it; a run that somehow lost it says so rather than implying a base.
-base="${LLMLINT_DIFF_BASE_SHA:-<unresolved>}"
+# against this base commit.
+#
+# The base rides in from the recipe that resolved and keyed on it — but it rides
+# in through the environment, which this script does not control. It is a resolved
+# commit id or it is nothing: this line is an operator's evidence for *which* base
+# a verdict covers, so an unvalidated value interpolated here would let anything
+# that can set a variable name a base the judge never saw. Same shape
+# scripts/llmlint-diff.sh accepts before it judges, so both ends of the tier agree
+# on what a base is. Anything else is reported as unresolved and never echoed: the
+# verdict itself is still valid and still replayed, because the base is provenance
+# about the verdict rather than part of the record it reads.
+base="${LLMLINT_DIFF_BASE_SHA:-}"
+[[ "$base" =~ ^[0-9a-f]{40,64}$ ]] || base="<unresolved>"
 if [[ -e "$verdict.judged" ]]; then
   echo "lint-llm-diff: judged this diff against base $base (Nx cache miss)" >&2
 else
