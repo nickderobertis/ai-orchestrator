@@ -1056,9 +1056,11 @@ def test_ordinary_next_round_resumes_committed_lifecycle_branch(
     assert second["branch"] == branch
     assert second["resume"]["checkpoint"] == checkpoint
 
-    clone = Workspace(workspace_root).clone_dir(normalize_repo(str(canonical)))
-    assert gitops.is_ancestor(clone, checkpoint, branch)
-    assert incomplete_commits(clone, "origin/main", branch)
+    # Each round works in a clone of its own that it then discards, so the
+    # registered checkout is where a preserved branch has to survive to be
+    # resumable at all — and where round two just found this one.
+    assert gitops.is_ancestor(canonical, checkpoint, branch)
+    assert incomplete_commits(canonical, "origin/main", branch)
     events = [
         json.loads(line)
         for line in (runs_dir / "ordinary-resume" / "events.jsonl")
@@ -1090,7 +1092,7 @@ def test_ordinary_next_round_resumes_committed_lifecycle_branch(
         (runs_dir / "ordinary-resume" / "round-03" / "result.json").read_text(encoding="utf-8")
     )["results"]["change"]
     assert third["branch"] == fresh_branch
-    assert not gitops.is_ancestor(clone, checkpoint, fresh_branch)
+    assert not gitops.is_ancestor(canonical, checkpoint, fresh_branch)
     events = [
         json.loads(line)
         for line in (runs_dir / "ordinary-resume" / "events.jsonl")
@@ -1119,7 +1121,7 @@ def test_ordinary_next_round_resumes_committed_lifecycle_branch(
         (runs_dir / "ordinary-resume" / "round-04" / "result.json").read_text(encoding="utf-8")
     )["results"]["change"]
     assert fourth["branch"] == branch
-    assert gitops.is_ancestor(clone, checkpoint, branch)
+    assert gitops.is_ancestor(canonical, checkpoint, branch)
     events = [
         json.loads(line)
         for line in (runs_dir / "ordinary-resume" / "events.jsonl")
