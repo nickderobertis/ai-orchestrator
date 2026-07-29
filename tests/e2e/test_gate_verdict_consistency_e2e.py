@@ -160,6 +160,10 @@ def test_publication_replays_a_recorded_failure_a_fresh_judge_would_pass(
     assert result.outcome == "gate-failed", result.detail
     assert "replayed the recorded verdict" in result.detail
     assert (cache / "judge-rolls").read_text(encoding="utf-8").strip() == "1"
-    assert "exit=1" in (cache / "worker-gate.log").read_text(encoding="utf-8")
+    # The worker retried its red gate and got its own verdict back rather than a
+    # second roll: a finding it cannot clear is not one it can outlast either.
+    worker_gate = (cache / "worker-gate.log").read_text(encoding="utf-8")
+    assert worker_gate.count("exit=1") == 2, worker_gate
+    assert "replayed the recorded verdict" in worker_gate
     published = gitops._git(["show", "release:CHANGE.txt"], cwd=origin, check=False)
     assert published.returncode != 0

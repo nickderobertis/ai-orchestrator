@@ -2303,14 +2303,13 @@ def test_local_conflict_resolves_outside_queue_then_requeues_and_merges(
     resolution_calls: list[str] = []
 
     def concurrent_dispatch(
-        persona: str, task: str, *, project_dir: str, **kwargs: object
+        persona: str, task: str, *, project_dir: str, env: dict[str, str], **kwargs: object
     ) -> Report:
         path = Path(project_dir) / "shared.txt"
         if "Resolve the content conflict" in task:
             assert "<<<<<<<" in path.read_text(encoding="utf-8")
             # The resolver works in the same worktree and proves its resolution with
             # the same gate, so it must resolve the same comparison base.
-            env = cast(dict[str, str], kwargs["env"])
             assert env["ORCHESTRATOR_COMPARISON_REMOTE"] == "origin"
             assert env["ORCHESTRATOR_COMPARISON_BASE"] == "main"
             resolution_calls.append(str(kwargs["session"]))

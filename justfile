@@ -36,7 +36,8 @@ check:
 
 # Complete pre-push gate: deterministic checks followed by llmlint on this branch.
 #
-# A passing run still reports where the llmlint verdict came from. That judge is
+# A passing run says one more thing, on one line: which base commit the llmlint
+# verdict covers and whether it was judged now or replayed. That judge is
 # non-deterministic and its verdict is memoized, so "green" is a claim about one
 # judged diff against one base commit — and a worker whose gate replayed a recorded
 # verdict needs to know that, and which base commit it covers, before it settles.
@@ -44,7 +45,7 @@ check:
 gate remote=env_var_or_default("ORCHESTRATOR_COMPARISON_REMOTE", "origin") base=env_var_or_default("ORCHESTRATOR_COMPARISON_BASE", ""):
     @comparison=$(scripts/comparison-base.sh "$1" "$2")
     @log=$(mktemp); trap 'rm -f "$log"' EXIT; just check >"$log" 2>&1 || { cat "$log" >&2; echo "gate: deterministic checks failed; fix the reported findings and rerun 'just gate'" >&2; exit 1; }
-    @comparison=$(scripts/comparison-base.sh "$1" "$2"); log=$(mktemp); trap 'rm -f "$log"' EXIT; just lint-llm-diff "$comparison" >"$log" 2>&1 || { cat "$log" >&2; echo "gate: llmlint failed; clear the reported findings against 'just lint-llm-diff $comparison' alone, then rerun 'just gate $1 $2' once to confirm" >&2; exit 1; }; grep -E '^lint-llm-diff: (judged|replayed|base|ignoring) ' "$log" >&2 || true
+    @comparison=$(scripts/comparison-base.sh "$1" "$2"); log=$(mktemp); trap 'rm -f "$log"' EXIT; just lint-llm-diff "$comparison" >"$log" 2>&1 || { cat "$log" >&2; echo "gate: llmlint failed; clear the reported findings against 'just lint-llm-diff $comparison' alone, then rerun 'just gate $1 $2' once to confirm" >&2; exit 1; }; base=$(sed -n 's/^lint-llm-diff: base \([0-9a-f]\{7,\}\).*/\1/p' "$log" | head -1); verdict=$(sed -n 's/^lint-llm-diff: judged this diff.*/judged/p; s/^lint-llm-diff: replayed the recorded verdict.*/replayed/p' "$log" | head -1); note=$(grep -q '^lint-llm-diff: ignoring ' "$log" && echo "; ignored an ambient global Nx cache skip" || true); echo "gate: green; llmlint ${verdict:-unknown} against base ${base:-unknown}${note}" >&2
 
 # Spend one real harness turn proving prompt delivery and complete history telemetry.
 # Kept out of `gate`; pre-push selects it only for launch-path changes.
