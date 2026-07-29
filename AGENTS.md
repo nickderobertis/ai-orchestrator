@@ -88,7 +88,13 @@ dispatch onejudge.
    that a diff cannot recover. If that why is unclear or absent from the request,
    ask the user before dispatch; never invent it or use the orchestration handoff
    as motivation. Acceptance criteria is the detailed source of truth visible to
-   both worker and judge. The judge-only `done_when` must always require that all
+   both worker and judge. Every criterion must be satisfiable by the worker
+   inside its own dispatch, using only what that dispatch controls; never require
+   evidence that turns on an external event the run does not control — an open
+   PR, a deploy, a scheduled job, a third party. When the natural proof is
+   ephemeral or external, require contract-level proof instead and name the
+   artifact that defines the contract.
+   The judge-only `done_when` must always require that all
    task acceptance criteria are met and may add broader quality measures such as
    a green gate, held coverage, or no regressions. Keep those specific criteria in
    the task, not only in `done_when`; use `max_turns` when needed. Start from
@@ -313,9 +319,34 @@ telemetry-quality signal rather than a launch failure. It is deliberately outsid
 `oneharness.judge.toml`, or `oneharness.orchestrator.toml`; ordinary pushes consume
 no harness quota.
 
-A dispatched change is not done until `just gate` is green. Its agent clears its
-own llmlint findings—by fixing them, adding a justified `ignore-file`, or disabling
-an inapplicable rule in `llmlint.yml`—rather than leaving closeout to integration.
+A dispatched change is not done until `just gate` is green, and its agent clears
+its own llmlint findings rather than leaving closeout to integration: iterate on
+them with `just lint-llm-diff <base>` alone, then run `just gate` once to confirm.
+`llmlint.yml` is a legitimate deliverable when a task names it; otherwise a worker
+fixes the code or adds a justified site-scoped `ignore` directive, and reports a
+rule that looks wrong or misapplied instead of editing it. Deciding when a marginal
+finding stops being worth another gate cycle—landing with a justified line-scoped
+suppression plus a tracked follow-up—is the planner's call from that surfaced
+report, never the worker's by suppressing.
+
+The judge behind that tier is non-deterministic, so its verdict is memoized: `just
+lint-llm-diff` resolves the base ref to a commit and runs the cached Nx
+`workspace:lint-llm-diff` target (the root `project.json` — the check spans the
+whole tree, so it belongs to no single project). Re-running `just gate` on an
+unchanged tree against an unchanged base replays the recorded verdict instead of
+rolling the judge again, which is what stops one branch from being blocked by
+opposite verdicts on an identical diff. The key covers the whole workspace, the
+resolved base commit, and `scripts/llmlint-fingerprint.sh` — the installed llmlint
+version plus the effective merged config, so a rule change in a plugin fetched from
+outside this repository still invalidates. Because Nx caches successful tasks only,
+the target records its verdict — findings and judged status — into its declared
+output and exits 0; `scripts/llmlint-verdict.sh` replays both, so a failure blocks
+`gate` and pre-push identically whether it was just judged or restored from cache.
+Only llmlint's own 0/1 verdicts are recorded: a tool that failed without judging
+propagates and stays uncached. A wrong verdict does stick:
+force a fresh judge run with `just lint-llm-diff <base> --skip-nx-cache`. When a
+miss is unexplained, run `scripts/llmlint-fingerprint.sh` — a changed fingerprint
+on an unchanged tree is a changed judge, not a changed diff.
 
 Every remote lifecycle PR without explicit title/body metadata gets one
 post-verification `pr-author` dispatch. It drafts the template-shaped body from

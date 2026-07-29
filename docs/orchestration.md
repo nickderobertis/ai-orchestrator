@@ -257,6 +257,15 @@ impact and what drove the decision, not an orchestration handoff. If the request
 does not make that why clear, the planner must ask the user before dispatch rather
 than inventing it.
 
+An unsatisfiable criterion does not fail fast. The simulated-user supervisor is
+working correctly when it refuses completion, so the worker is parked and
+re-asked until the turn cap — spending a full attempt, often several, to produce
+a generic `not-completed` that names neither the criterion nor the cause. Before
+dispatch, ask of each criterion: what would the worker run to satisfy it, and can
+that command succeed right now? When a criterion's proof is necessarily
+indirect, pair it with an `## Additional info` instruction to state the blocker in
+the final assessment and stop rather than wait.
+
 | Shape | Required fields | Meaning |
 | --- | --- | --- |
 | Direct agent | `persona`, `task`; no `repo` | Dispatch one real onejudge process in the selected project directory. |
@@ -393,6 +402,12 @@ step payloads carry their step-specific raw onejudge report and stable
 oneharness-session pointer; complete gate stdout and stderr are atomically stored
 as `gate.log` before the terminal result is journaled. Because those paths are in
 the terminal `GraphResultItem`, crash projection retains them byte-for-byte.
+
+A failed `just gate` names the tier that failed and the loop to close it. An
+llmlint failure also prints the comparison base the gate resolved: clear those
+findings against `just lint-llm-diff <base>` alone, then rerun the complete `just
+gate` once to confirm. A full gate cycle per lint fix re-pays the deterministic
+tier for a finding that tier cannot re-check.
 
 Execution is a long-lived reconcile loop: it compares the round's live desired
 graph with actual node state projected from `events.jsonl`, starts the reachable

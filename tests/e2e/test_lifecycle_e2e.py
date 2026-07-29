@@ -989,6 +989,155 @@ def test_repo_plan_ledger_and_guided_next_round(
     assert unrecorded["schema_version"] == 5 and "round" not in unrecorded
 
 
+def test_ordinary_next_round_resumes_committed_lifecycle_branch(
+    tmp_path, bare_origin, command_base, personas_dir, capsys
+) -> None:
+    """An unchanged failed node carries its real committed branch into the next round."""
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-ordinary-resume")
+    Registry().register(str(canonical), workflow="local")
+    runs_dir = tmp_path / "runs"
+    plan_path = tmp_path / "ordinary-resume.json"
+    plan_path.write_text(
+        json.dumps(
+            {
+                "tasks": [
+                    {
+                        "id": "change",
+                        "repo": str(canonical),
+                        "persona": "engineer",
+                        "task": "should-fail write-change: preserve across ordinary rounds",
+                        "verify_cmd": ["true"],
+                        "workflow": "local",
+                        "repo_type": "single-owner",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    workspace_root = tmp_path / "workspace"
+    common = [
+        "--base",
+        str(command_base()),
+        "--persona-dir",
+        str(personas_dir),
+        "--workspace",
+        str(workspace_root),
+        "--format",
+        "json",
+    ]
+
+    assert (
+        main_plan(
+            [
+                str(plan_path),
+                "--run",
+                "ordinary-resume",
+                "--runs-dir",
+                str(runs_dir),
+                *common,
+            ]
+        )
+        == 1
+    )
+    capsys.readouterr()
+    first = json.loads(
+        (runs_dir / "ordinary-resume" / "round-01" / "result.json").read_text(encoding="utf-8")
+    )["results"]["change"]
+    branch = first["branch"]
+    checkpoint = first["resume"]["checkpoint"]
+
+    assert next_round_main(["ordinary-resume", "--runs-dir", str(runs_dir), *common]) == 1
+    capsys.readouterr()
+    second = json.loads(
+        (runs_dir / "ordinary-resume" / "round-02" / "result.json").read_text(encoding="utf-8")
+    )["results"]["change"]
+    assert second["branch"] == branch
+    assert second["resume"]["checkpoint"] == checkpoint
+
+    clone = Workspace(workspace_root).clone_dir(normalize_repo(str(canonical)))
+    assert gitops.is_ancestor(clone, checkpoint, branch)
+    assert incomplete_commits(clone, "origin/main", branch)
+    events = [
+        json.loads(line)
+        for line in (runs_dir / "ordinary-resume" / "events.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    ]
+    discovered = [
+        event
+        for event in events
+        if event["round"] == 2
+        and event["kind"] == "branch-discovered"
+        and event["node"] == "change"
+    ]
+    assert len(discovered) == 1
+    assert discovered[0]["detail"]["branch"] == branch
+    assert discovered[0]["detail"]["resumed"] is True
+
+    edits = tmp_path / "fresh-start.json"
+    fresh_branch = "test/explicit-fresh-start"
+    edits.write_text(
+        json.dumps({"retry": {"change": {"branch": fresh_branch}}}),
+        encoding="utf-8",
+    )
+    assert (
+        next_round_main(["ordinary-resume", str(edits), "--runs-dir", str(runs_dir), *common]) == 1
+    )
+    capsys.readouterr()
+    third = json.loads(
+        (runs_dir / "ordinary-resume" / "round-03" / "result.json").read_text(encoding="utf-8")
+    )["results"]["change"]
+    assert third["branch"] == fresh_branch
+    assert not gitops.is_ancestor(clone, checkpoint, fresh_branch)
+    events = [
+        json.loads(line)
+        for line in (runs_dir / "ordinary-resume" / "events.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    ]
+    fresh_discovered = [
+        event
+        for event in events
+        if event["round"] == 3
+        and event["kind"] == "branch-discovered"
+        and event["node"] == "change"
+    ]
+    assert len(fresh_discovered) == 1
+    assert fresh_discovered[0]["detail"]["branch"] == fresh_branch
+    assert fresh_discovered[0]["detail"]["resumed"] is False
+
+    pin = tmp_path / "pin-existing.json"
+    pin.write_text(
+        json.dumps({"retry": {"change": {"branch": branch}}}),
+        encoding="utf-8",
+    )
+    assert next_round_main(["ordinary-resume", str(pin), "--runs-dir", str(runs_dir), *common]) == 1
+    capsys.readouterr()
+    fourth = json.loads(
+        (runs_dir / "ordinary-resume" / "round-04" / "result.json").read_text(encoding="utf-8")
+    )["results"]["change"]
+    assert fourth["branch"] == branch
+    assert gitops.is_ancestor(clone, checkpoint, branch)
+    events = [
+        json.loads(line)
+        for line in (runs_dir / "ordinary-resume" / "events.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    ]
+    pinned_discovered = [
+        event
+        for event in events
+        if event["round"] == 4
+        and event["kind"] == "branch-discovered"
+        and event["node"] == "change"
+    ]
+    assert len(pinned_discovered) == 1
+    assert pinned_discovered[0]["detail"]["branch"] == branch
+    assert pinned_discovered[0]["detail"]["resumed"] is False
+
+
 def test_lifecycle_records_verified_change_already_integrated_on_base(
     tmp_path, bare_origin, command_base, personas_dir, capsys
 ) -> None:

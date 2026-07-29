@@ -604,6 +604,19 @@ A later graph retry carries that checkpoint forward and resumes the same branch;
 automatic retry behavior is unchanged. An attempt that produced no commit has no
 checkpoint and retries from a fresh worktree as before.
 
+Ordinary later rounds treat an unresolved lifecycle node the same way as a retry
+replacement: if its prior attempt recorded a committed retry checkpoint, the
+unchanged node resumes that branch automatically. A plan's explicit `branch`
+always takes precedence over inferred retry metadata. To deliberately discard a
+preserved attempt and start fresh, set `branch` to a new valid branch name in the
+retry edit. The opt-out belongs on `branch` because it is already the plan's
+authoritative branch-routing field; a separate reset flag could conflict with it
+and create two sources of truth. The next `branch-discovered` event records
+`resumed: true` only for resume metadata, and `false` for an explicit fresh
+branch. That precedence covers preserved attempts only. A waiting workstream is
+not choosing a branch, so an explicit `branch` never discards its pause resume
+and the human steps it already recorded as completed.
+
 To continue authoring after a lifecycle node hits its turn cap, do not relaunch
 the original plan. While supervising its existing `orchestrate` run, send a
 `retry` live edit through `just channel-reply` to replace only the capped node.

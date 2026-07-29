@@ -43,6 +43,7 @@ def _run(
         ("format", "affected -t format"),
         ("format-check", "run-many -t format-check"),
         ("upgrade", "run-many -t build,lint,typecheck,test"),
+        ("lint-llm-diff", "run workspace:lint-llm-diff"),
     ],
 )
 def test_root_recipe_routes_through_nx(recipe: str, target: str) -> None:
