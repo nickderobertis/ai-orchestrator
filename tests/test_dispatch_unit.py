@@ -16,12 +16,14 @@ from orchestrator.dispatch import (
     AGENT_ONEHARNESS_BIN,
     DEFAULT_DISPATCH_STALL_TIMEOUT,
     DEFAULT_WORKER_HEARTBEAT_TIMEOUT,
+    NO_AGENT_TURNS_OUTCOME,
     DispatchError,
     Report,
     _agent_run_context,
     _build_report,
     _file_progress,
     _read_watchdog_pid,
+    incomplete_detail,
     run_onejudge,
 )
 from orchestrator.dispatch import main as dispatch_main
@@ -77,6 +79,59 @@ def test_build_report_preserves_usage_assessment_and_real_telemetry_field(monkey
     assert report.usage == {"input_tokens": 4, "vendor": "kept"}
     assert report.assessment == "ordinary follow-up"
     assert report.telemetry == {"wall_ms": 7}
+
+
+def _sdk_report(*, completed: bool, assistant_turns: int) -> RunResult:
+    """An SDK-validated onejudge report with a given number of agent turns."""
+    return RunResult(
+        exit_code=0 if completed else 1,
+        stderr="",
+        raw={
+            "schema_version": 4,
+            "transcript": {
+                "messages": [
+                    message
+                    for turn in range(assistant_turns)
+                    for message in (
+                        {"role": "user", "content": f"turn {turn}"},
+                        {"role": "assistant", "content": f"reply {turn}"},
+                    )
+                ]
+            },
+            "stopped_early": not completed,
+            "verdicts": [{"kind": "boolean", "criterion": "done", "verdict": {"value": completed}}],
+        },
+    )
+
+
+def test_a_budget_spent_without_one_agent_turn_is_not_the_agent_hitting_the_cap() -> None:
+    """The two are the same status and want opposite responses, so they are named apart.
+
+    A provider that fails every attempt still spends the budget — that is onejudge's
+    accounting and not something the harness can change — but reporting it as the
+    agent running out of room is what earned the second attempt that was spent the
+    same way.
+    """
+    empty = _build_report("engineer", _sdk_report(completed=False, assistant_turns=0))
+
+    assert empty.outcome == NO_AGENT_TURNS_OUTCOME
+    assert "without a single agent turn" in incomplete_detail(empty)
+
+    worked = _build_report("engineer", _sdk_report(completed=False, assistant_turns=12))
+
+    assert worked.outcome is None
+    assert incomplete_detail(worked) == "did not complete (hit the turn cap)"
+
+    finished = _build_report("engineer", _sdk_report(completed=True, assistant_turns=3))
+
+    assert finished.completed and finished.outcome is None
+
+
+def test_a_worker_that_died_keeps_its_own_name_over_the_empty_budget_one() -> None:
+    """`worker-died` is the more specific diagnosis and is reported ahead of it."""
+    died = Report("engineer", 1, False, True, 0, [], {}, {}, "", outcome="worker-died")
+
+    assert incomplete_detail(died) == "worker-died"
 
 
 def test_build_report_counts_assistant_turns() -> None:

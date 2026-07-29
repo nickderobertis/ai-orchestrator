@@ -8,6 +8,7 @@ import shlex
 import socket
 import threading
 from collections.abc import Mapping
+from dataclasses import replace
 from pathlib import Path
 from typing import NotRequired, cast, get_origin, get_type_hints
 
@@ -16,7 +17,7 @@ import pytest
 from orchestrator.channel import create_channel
 from orchestrator.config import ConfigError
 from orchestrator.coordination import atomic_json
-from orchestrator.dispatch import DispatchError, Report
+from orchestrator.dispatch import NO_AGENT_TURNS_OUTCOME, DispatchError, Report
 from orchestrator.edits import EditCommand
 from orchestrator.gitops import GitError
 from orchestrator.goals import register_run
@@ -121,6 +122,41 @@ def test_run_graph_enqueues_worker_assessment_through_reconciler() -> None:
     assert result.state == "complete"
     assert pump.proposals == [("discoverer", "follow up")]
     assert pump.drains >= 2
+
+
+def test_a_budget_spent_without_an_agent_turn_reaches_the_ledger_by_its_own_name() -> None:
+    """The distinction has to survive into what the planner reads, or it buys nothing.
+
+    The producing side is onejudge's own report — it always runs at least one turn
+    when it can, so this shape only appears when the provider failed every attempt.
+    `_build_report` is where that report is interpreted and is covered against real
+    SDK results in tests/test_dispatch_unit.py; this is the half that matters here,
+    that the interpretation is what the recorded round says.
+    """
+    graph = parse_graph(
+        {
+            "tasks": [
+                {"id": "empty", "persona": "engineer", "task": "Dispatch work"},
+                {"id": "capped", "persona": "engineer", "task": "Dispatch work"},
+            ]
+        }
+    )
+    outcomes = {"empty": NO_AGENT_TURNS_OUTCOME, "capped": None}
+
+    def runner(node: PlanNode, **_kwargs) -> Report:
+        return replace(
+            _report(node.persona, completed=False),
+            assistant_turns=0 if outcomes[node.id] else 9,
+            outcome=outcomes[node.id],
+        )
+
+    result = run_graph(graph, agent_runner=runner, lifecycle_runner=lambda node, **_: _lifecycle())
+
+    recorded = graph_payload(result)["results"]
+    assert recorded["empty"]["status"] == "failed"
+    assert "without a single agent turn" in str(recorded["empty"]["error"])
+    # And the ordinary cap keeps saying exactly what it always said.
+    assert recorded["capped"]["error"] == "did not complete (hit the turn cap)"
 
 
 def test_run_graph_records_and_surfaces_terminal_infrastructure_failure() -> None:
