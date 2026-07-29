@@ -281,7 +281,12 @@ Full rationale, the merge strategies, and the claude-code caveat:
 Use the `just` recipes (`just --list` is the index); do not hand-roll
 equivalents. `just bootstrap` sets up from a clean clone (installs the toolchain,
 activates the git hooks); `just check` is the deterministic tier, while `just gate`
-is the complete pre-push bar: `check` plus the llmlint diff tier. `just run-plan`
+is the complete pre-push bar: `check` plus the llmlint diff tier. Both report the
+line-coverage total they measured, and every stage that captures its output keeps
+it at `.logs/<label>.log` (`nx`, `check`, `check-install`, `gate-check`,
+`gate-llmlint`) — gitignored, owner-only, credential values redacted, truncated
+per run. Follow a running recipe with `tail -f .logs/check.log`; read a finished
+one from the same path. Never read a live command through `/proc`. `just run-plan`
 is the recorded mixed-graph executor driven internally by the dedicated
 orchestrator onejudge process. The planner launches multi-node work with `just
 orchestrate <plan.json>` and supervises its surfaced boundaries and proposals

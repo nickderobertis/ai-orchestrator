@@ -12,6 +12,7 @@ import json
 import os
 import shutil
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -298,6 +299,14 @@ def _recipe_checkout(tmp_path: Path) -> tuple[Path, Path]:
     command = """#!/usr/bin/env bash
 set -euo pipefail
 printf '%s %s\\n' "$(basename "$0")" "$*" >>"$TRACE_FILE"
+if [[ "$*" == "run coverage report --format=total" ]]; then
+  printf '%s\\n' "${FAKE_COVERAGE_TOTAL:-}"
+  exit 0
+fi
+if [[ "${ECHO_COMMAND:-}" == "$(basename "$0")" ]]; then echo "$ECHO_LINE"; fi
+if [[ "${BLOCK_COMMAND:-}" == "$(basename "$0")" ]]; then
+  while [[ ! -e "$BLOCK_UNTIL" ]]; do sleep 0.05; done
+fi
 if [[ "${FAIL_COMMAND:-}" == "$(basename "$0")" ]]; then
   echo "$(basename "$0"): captured failure detail" >&2
   exit 9
@@ -316,18 +325,64 @@ fi
     python = binaries / "python3"
     python.write_text(command)
     python.chmod(0o755)
+    # The log preservation and coverage readout under test are the real ones; only
+    # the checkers and package managers they wrap are doubled.
+    for name in ("preserved-log.sh", "coverage-total.sh"):
+        shutil.copy2(ROOT / "scripts" / name, scripts / name)
     return checkout, trace
 
 
-def _recipe_run(
-    checkout: Path, trace: Path, recipe: str, *, fail_command: str | None = None
-) -> subprocess.CompletedProcess[str]:
+def _recipe_env(checkout: Path, trace: Path, **overrides: str) -> dict[str, str]:
     env = os.environ.copy()
     env["PATH"] = f"{checkout / 'bin'}:{env['PATH']}"
     env["TRACE_FILE"] = str(trace)
+    env.update(overrides)
+    return env
+
+
+def _recipe_run(
+    checkout: Path,
+    trace: Path,
+    recipe: str,
+    *args: str,
+    fail_command: str | None = None,
+    **overrides: str,
+) -> subprocess.CompletedProcess[str]:
     if fail_command is not None:
-        env["FAIL_COMMAND"] = fail_command
-    return _run("just", recipe, cwd=checkout, env=env)
+        overrides["FAIL_COMMAND"] = fail_command
+    return _run("just", recipe, *args, cwd=checkout, env=_recipe_env(checkout, trace, **overrides))
+
+
+def _gate_checkout(tmp_path: Path) -> tuple[Path, Path]:
+    """A recipe checkout `just gate` can run in: a real repo with `origin/main`."""
+    checkout, trace = _recipe_checkout(tmp_path)
+    _mark_nx_installed(checkout)
+    shutil.copy2(ROOT / "scripts/comparison-base.sh", checkout / "scripts/comparison-base.sh")
+    verdict = checkout / "scripts/llmlint-verdict.sh"
+    verdict.write_text((checkout / "scripts/nx.sh").read_text())
+    verdict.chmod(0o755)
+    llmlint = checkout / "bin/llmlint"
+    llmlint.write_text((checkout / "scripts/nx.sh").read_text())
+    llmlint.chmod(0o755)
+    for args in (
+        ("init", "-q", "-b", "main"),
+        ("config", "user.name", "test"),
+        ("config", "user.email", "test.invalid"),
+        ("remote", "add", "origin", "https://example.invalid/gate-recipe.git"),
+        ("add", "-A"),
+        ("-c", "commit.gpgsign=false", "commit", "-qm", "fixture"),
+    ):
+        subprocess.run(["git", *args], cwd=checkout, check=True, capture_output=True)
+    head = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=checkout, check=True, text=True, capture_output=True
+    ).stdout.strip()
+    subprocess.run(
+        ["git", "update-ref", "refs/remotes/origin/main", head],
+        cwd=checkout,
+        check=True,
+        capture_output=True,
+    )
+    return checkout, trace
 
 
 def _add_bun_install_double(checkout: Path) -> None:
@@ -409,6 +464,113 @@ def test_check_recipe_preserves_captured_nx_failure(tmp_path: Path) -> None:
     assert "nx.sh: captured failure detail" in result.stderr
     assert "check: deterministic checks failed" in result.stderr
     assert trace.read_text().splitlines() == ["nx.sh run-many -t format-check,lint,typecheck,test"]
+
+
+def test_check_recipe_leaves_the_failing_run_readable_after_it_exits(tmp_path: Path) -> None:
+    """The diagnosis outlives the process: `cat .logs/check.log` still answers."""
+    checkout, trace = _recipe_checkout(tmp_path)
+    _mark_nx_installed(checkout)
+
+    result = _recipe_run(checkout, trace, "check", fail_command="nx.sh")
+
+    assert result.returncode != 0
+    log = checkout / ".logs/check.log"
+    assert f"full output: {log}" in result.stderr
+    assert "nx.sh: captured failure detail" in log.read_text()
+    assert oct(log.stat().st_mode & 0o777) == "0o600"
+
+
+def test_check_recipe_log_is_readable_while_the_recipe_is_still_running(
+    tmp_path: Path,
+) -> None:
+    """A stalled run is diagnosable by reading its log, not its file descriptors."""
+    checkout, trace = _recipe_checkout(tmp_path)
+    _mark_nx_installed(checkout)
+    release = tmp_path / "release"
+    env = _recipe_env(
+        checkout,
+        trace,
+        ECHO_COMMAND="nx.sh",
+        ECHO_LINE="running the deterministic tier",
+        BLOCK_COMMAND="nx.sh",
+        BLOCK_UNTIL=str(release),
+    )
+    log = checkout / ".logs/check.log"
+
+    process = subprocess.Popen(
+        ["just", "check"], cwd=checkout, env=env, text=True, stdout=subprocess.PIPE
+    )
+    try:
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            if log.exists() and "running the deterministic tier" in log.read_text():
+                break
+            time.sleep(0.05)
+        else:  # pragma: no cover - only reached when the log never materializes
+            pytest.fail("the running recipe's log never became readable")
+        assert process.poll() is None
+    finally:
+        release.touch()
+        process.communicate(timeout=60)
+
+    assert process.returncode == 0
+
+
+def test_check_recipe_log_records_the_credential_name_not_its_value(tmp_path: Path) -> None:
+    """A preserved log outlives its terminal, so it must never durably hold a token."""
+    checkout, trace = _recipe_checkout(tmp_path)
+    _mark_nx_installed(checkout)
+    token = "sk-ant-oat01-not-a-real-credential"
+
+    result = _recipe_run(
+        checkout,
+        trace,
+        "check",
+        fail_command="nx.sh",
+        CLAUDE_CODE_OAUTH_TOKEN=token,
+        ECHO_COMMAND="nx.sh",
+        ECHO_LINE=f"CLAUDE_CODE_OAUTH_TOKEN={token}",
+    )
+
+    assert result.returncode != 0
+    log = (checkout / ".logs/check.log").read_text()
+    assert token not in log
+    assert "CLAUDE_CODE_OAUTH_TOKEN=<redacted:CLAUDE_CODE_OAUTH_TOKEN>" in log
+    assert token not in result.stderr
+
+
+def test_check_recipe_reports_the_coverage_total_it_measured(tmp_path: Path) -> None:
+    checkout, trace = _recipe_checkout(tmp_path)
+    _mark_nx_installed(checkout)
+    (checkout / ".coverage").write_text("")
+
+    result = _recipe_run(checkout, trace, "check", FAKE_COVERAGE_TOTAL="96.42")
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "check: all deterministic checks passed (line coverage 96.42%)\n"
+
+
+def test_gate_recipe_reports_the_coverage_total_it_measured(tmp_path: Path) -> None:
+    checkout, trace = _gate_checkout(tmp_path)
+    (checkout / ".coverage").write_text("")
+
+    result = _recipe_run(checkout, trace, "gate", "origin", "main", FAKE_COVERAGE_TOTAL="95.07")
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert result.stdout.splitlines()[-1] == "gate: complete gate passed (line coverage 95.07%)"
+
+
+def test_gate_recipe_leaves_the_failing_llmlint_run_readable(tmp_path: Path) -> None:
+    checkout, trace = _gate_checkout(tmp_path)
+
+    result = _recipe_run(
+        checkout, trace, "gate", "origin", "main", fail_command="llmlint-verdict.sh"
+    )
+
+    assert result.returncode != 0
+    log = checkout / ".logs/gate-llmlint.log"
+    assert f"full output: {log}" in result.stderr
+    assert "llmlint-verdict.sh: captured failure detail" in log.read_text()
 
 
 def test_upgrade_recipe_runs_bun_and_reports_one_success_line(tmp_path: Path) -> None:

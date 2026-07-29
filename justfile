@@ -29,16 +29,22 @@ bootstrap:
 
 # Full quality gate: format check, lint, type check, persona validation, tests
 # (unit + e2e, coverage enforced). Must pass before any commit.
+#
+# Every captured stage writes through `scripts/preserved-log.sh` to `.logs/<label>.log`
+# (owner-only, credential values redacted, truncated per run). That log survives the
+# process, so a failure is still readable afterwards and a *running* recipe can be
+# followed with `tail -f .logs/check.log` instead of through /proc.
 # llmlint: ignore[changed_behavior_has_e2e] The public recipe is the real deterministic gate invoked by this task and pre-push; its sequencing failures use subprocess doubles to avoid recursively invoking the same full suite.
 check:
-    @if [[ ! -x node_modules/.bin/nx ]]; then log=$(mktemp); trap 'rm -f "$log"' EXIT; bun install --frozen-lockfile >"$log" 2>&1 || { cat "$log" >&2; echo "check: install locked workspace dependencies and retry" >&2; exit 1; }; fi
-    @log=$(mktemp); trap 'rm -f "$log"' EXIT; { ./scripts/nx.sh run-many -t format-check,lint,typecheck,test && ./scripts/check-oneharness-ui-contract.sh && python3 ./scripts/check-dag-state-contract.py && ./scripts/check-nx-cache.sh; } >"$log" 2>&1 || { cat "$log" >&2; echo "check: deterministic checks failed; fix the reported findings and retry" >&2; exit 1; }; echo "check: all deterministic checks passed"
+    @if [[ ! -x node_modules/.bin/nx ]]; then source ./scripts/preserved-log.sh; log=$(preserved_log_open "{{repo_root}}" check-install); bun install --frozen-lockfile 2>&1 | redact_secrets >"$log" || { cat "$log" >&2; echo "check: install locked workspace dependencies and retry (full output: $log)" >&2; exit 1; }; fi
+    @source ./scripts/preserved-log.sh; log=$(preserved_log_open "{{repo_root}}" check); { ./scripts/nx.sh run-many -t format-check,lint,typecheck,test && ./scripts/check-oneharness-ui-contract.sh && python3 ./scripts/check-dag-state-contract.py && ./scripts/check-nx-cache.sh; } 2>&1 | redact_secrets >"$log" || { cat "$log" >&2; echo "check: deterministic checks failed; fix the reported findings and retry (full output: $log)" >&2; exit 1; }; total=$(./scripts/coverage-total.sh "{{repo_root}}"); echo "check: all deterministic checks passed${total:+ (line coverage ${total}%)}"
 
 # Complete pre-push gate: deterministic checks followed by llmlint on this branch.
 gate remote=env_var_or_default("ORCHESTRATOR_COMPARISON_REMOTE", "origin") base=env_var_or_default("ORCHESTRATOR_COMPARISON_BASE", ""):
     @comparison=$(scripts/comparison-base.sh "$1" "$2")
-    @log=$(mktemp); trap 'rm -f "$log"' EXIT; just check >"$log" 2>&1 || { cat "$log" >&2; echo "gate: deterministic checks failed; fix the reported findings and rerun 'just gate'" >&2; exit 1; }
-    @comparison=$(scripts/comparison-base.sh "$1" "$2"); log=$(mktemp); trap 'rm -f "$log"' EXIT; just lint-llm-diff "$comparison" >"$log" 2>&1 || { cat "$log" >&2; echo "gate: llmlint failed; clear the reported findings against 'just lint-llm-diff $comparison' alone, then rerun 'just gate $1 $2' once to confirm" >&2; exit 1; }
+    @source ./scripts/preserved-log.sh; log=$(preserved_log_open "{{repo_root}}" gate-check); just check 2>&1 | redact_secrets >"$log" || { cat "$log" >&2; echo "gate: deterministic checks failed; fix the reported findings and rerun 'just gate' (full output: $log)" >&2; exit 1; }
+    @source ./scripts/preserved-log.sh; comparison=$(scripts/comparison-base.sh "$1" "$2"); log=$(preserved_log_open "{{repo_root}}" gate-llmlint); just lint-llm-diff "$comparison" 2>&1 | redact_secrets >"$log" || { cat "$log" >&2; echo "gate: llmlint failed; clear the reported findings against 'just lint-llm-diff $comparison' alone, then rerun 'just gate $1 $2' once to confirm (full output: $log)" >&2; exit 1; }
+    @total=$(./scripts/coverage-total.sh "{{repo_root}}"); echo "gate: complete gate passed${total:+ (line coverage ${total}%)}"
 
 # Spend one real harness turn proving prompt delivery and complete history telemetry.
 # Kept out of `gate`; pre-push selects it only for launch-path changes.
