@@ -220,3 +220,23 @@ class FakeGitHub:
         # (head was branched from base, so this is always a valid fast-forward).
         _git("update-ref", f"refs/heads/{st.base}", head_sha, cwd=self.origin)
         st.merged = True
+
+
+#: A onejudge stand-in whose run ends with no agent turn at all — what a dispatch
+#: reports when its provider failed every turn it attempted. onejudge's own turn
+#: accounting is external and pinned, so this is the only way to hand the harness
+#: that report; everything below it, including the parsing that classifies it, is
+#: the real dispatch path.
+_NO_AGENT_TURN_ONEJUDGE = """#!/bin/sh
+[ "$1" = "--version" ] && { echo "onejudge 0.3.4"; exit 0; }
+printf '%s\\n' '{"schema_version":4,"transcript":{"messages":[]},"stopped_early":true}'
+exit 1
+"""
+
+
+def write_no_agent_turn_onejudge(directory: Path) -> str:
+    """Write a onejudge whose report shows a spent budget and no agent turn."""
+    binary = directory / "onejudge-no-agent-turn"
+    binary.write_text(_NO_AGENT_TURN_ONEJUDGE, encoding="utf-8")
+    binary.chmod(0o700)
+    return str(binary)

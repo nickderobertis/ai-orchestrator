@@ -31,7 +31,6 @@ import yaml
 from waits import deadline
 
 from orchestrator import BASE_CONFIG, REPO_ROOT
-from orchestrator.graph import main as main_plan
 
 # Codex's own no-approval flag: what oneharness maps `ONEHARNESS_MODE=bypass` to.
 CODEX_BYPASS_FLAG = "--dangerously-bypass-approvals-and-sandbox"
@@ -212,6 +211,18 @@ def test_orchestrate_launch_carries_bypass_mode_and_orchestrator_routing(
     assert alternate == f"{os.environ['HOME']}/.claude-alt"
 
 
+def _just(*args: str) -> subprocess.CompletedProcess[str]:
+    """Run one `just` recipe the way an operator would."""
+    return subprocess.run(
+        ["just", *args],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=180,
+    )
+
+
 def _view(command: str, runs: Path, history: Path) -> str:
     """One planner-facing read-only view over ``runs``, with no dispatch history."""
     history.mkdir(exist_ok=True)
@@ -300,25 +311,27 @@ def test_runs_and_status_settle_a_launch_whose_orchestrator_is_gone(
 
         _stop(runs / doomed)
 
-        # Only now that nothing owns this run does a round get recorded into it —
-        # the documented move on a run whose orchestrator is gone, and the one thing
-        # a planner may drive itself. Two writers on a live run would race the
-        # ledger, which is exactly what the orchestrator exists to prevent. Its plan
-        # is human-only, so the round settles as waiting without dispatching.
-        assert (
-            main_plan(
-                [
-                    str(tmp_path / "doomed-plan.json"),
-                    "--run",
-                    doomed,
-                    "--runs-dir",
-                    str(runs),
-                    "--format",
-                    "json",
-                ]
-            )
-            == 1
+        # Reported the moment its owner is gone, before anything else touches it.
+        before = _view("runs", runs, tmp_path / "history")
+        assert f"! {doomed}  SETTLED (orchestrator pid {pid} is gone before its first round)" in (
+            before
         )
+
+        # Only now that nothing owns this run does a round get recorded into it, and
+        # through the command an operator is actually given: two writers on a live
+        # run would race the ledger, which is what the orchestrator exists to
+        # serialize. Its plan is human-only, so the round settles without dispatching.
+        recorded = _just(
+            "run-plan",
+            str(tmp_path / "doomed-plan.json"),
+            "--run",
+            doomed,
+            "--runs-dir",
+            str(runs),
+            "--format",
+            "json",
+        )
+        assert recorded.returncode == 1, recorded.stderr
         assert (runs / doomed / "round-01" / "result.json").is_file()
 
         listed = _view("runs", runs, tmp_path / "history")

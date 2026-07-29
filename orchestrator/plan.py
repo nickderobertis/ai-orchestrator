@@ -383,7 +383,6 @@ def run_plan(
         report = runner(nodes[nid])
         if report.completed:
             return NodeRun("done", None, report)
-        # llmlint: ignore[changed_behavior_has_e2e] real onejudge never yields a zero-turn report
         return NodeRun("failed", incomplete_detail(report), report)
 
     runs, started_order = schedule_dag(list(nodes), deps, run_one, concurrency=conc)

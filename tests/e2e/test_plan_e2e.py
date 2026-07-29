@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import json
 
+from fakes import write_no_agent_turn_onejudge
+
 from orchestrator import PERSONA_DIR
 from orchestrator.plan import main
 
@@ -121,3 +123,31 @@ def test_run_plan_cli_writes_output_file(tmp_path, command_base, onejudge_bin) -
     )
     assert rc == 0
     assert '"ok"' in out.read_text(encoding="utf-8")
+
+
+def test_a_budget_spent_without_an_agent_turn_is_reported_apart_from_a_turn_cap(
+    tmp_path, command_base, onejudge_bin, capsys
+) -> None:
+    """The two are the same status and want opposite responses, so they read apart.
+
+    Driven through the real dispatch path: only the report a failing provider would
+    have produced is supplied, exactly as the paid harness is faked everywhere else.
+    """
+    plan = _write_plan(
+        tmp_path, {"tasks": [{"id": "a", "persona": "planner", "task": "never answers"}]}
+    )
+
+    empty = _run(plan, command_base, write_no_agent_turn_onejudge(tmp_path), capsys)
+    capped = _run(
+        _write_plan(
+            tmp_path, {"tasks": [{"id": "a", "persona": "planner", "task": "should-fail: caps"}]}
+        ),
+        command_base,
+        onejudge_bin,
+        capsys,
+    )
+
+    assert empty["_rc"] == 1 and empty["results"]["a"]["status"] == "failed"
+    assert "without a single agent turn" in empty["results"]["a"]["error"]
+    # The ordinary cap keeps saying exactly what it always said.
+    assert capped["results"]["a"]["error"] == "did not complete (hit the turn cap)"

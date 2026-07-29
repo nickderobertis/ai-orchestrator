@@ -19,6 +19,7 @@ from datetime import datetime
 from pathlib import Path
 
 import pytest
+from fakes import write_no_agent_turn_onejudge
 from waits import deadline as e2e_deadline
 
 from orchestrator import REPO_ROOT, gitops
@@ -2416,3 +2417,41 @@ def test_legacy_repo_plan_runs_through_canonical_and_deprecated_alias(
         ).returncode
         == 0
     )
+
+
+def test_a_graph_reports_a_budget_spent_without_an_agent_turn_apart_from_a_cap(
+    tmp_path: Path, command_base
+) -> None:
+    """The recorded round is where a planner meets this, so that is where it must read.
+
+    Driven through the real `run-plan` CLI; only the report a provider that failed
+    every attempted turn would have produced is supplied.
+    """
+    runs = tmp_path / "runs"
+    plan = tmp_path / "no-agent-turn.json"
+    plan.write_text(
+        json.dumps({"tasks": [{"id": "silent", "persona": "engineer", "task": "never answers"}]}),
+        encoding="utf-8",
+    )
+
+    ran = _just(
+        "run-plan",
+        str(plan),
+        "--run",
+        "no-agent-turn",
+        "--runs-dir",
+        str(runs),
+        "--base",
+        str(command_base()),
+        "--onejudge-bin",
+        write_no_agent_turn_onejudge(tmp_path),
+        "--format",
+        "json",
+    )
+
+    assert ran.returncode == 1, ran.stderr
+    recorded = json.loads(
+        (runs / "no-agent-turn" / "round-01" / "result.json").read_text(encoding="utf-8")
+    )["results"]["silent"]
+    assert recorded["status"] == "failed"
+    assert "without a single agent turn" in recorded["error"]

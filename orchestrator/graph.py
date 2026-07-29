@@ -669,7 +669,6 @@ def run_graph(
                 },
             )
             return run
-        # llmlint: ignore[changed_behavior_has_e2e] real onejudge never yields a zero-turn report
         detail = incomplete_detail(report)
         run = NodeRun("failed", detail, report)
         node_log.append(
