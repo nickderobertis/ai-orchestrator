@@ -310,6 +310,9 @@ class Workspace:
         # having to decide that it crashed.
         self._run_leases: dict[Path, AbstractContextManager[None]] = {}
         self._reaped: set[str] = set()
+        # Branches this run copied into the shared checkout, and so the only ones
+        # it may ever withdraw from there.
+        self._mirrored: dict[str, set[str]] = {}
 
     def workflow(self, repo: RepoRef) -> Workflow | None:
         """Return the registered workflow, if the resolver exposes registry metadata."""
@@ -626,13 +629,20 @@ class Workspace:
         shared checkout is where the harness has always looked for a lifecycle branch
         — to monitor it, to resume it, to recover it — so anything worth outliving
         the run, or worth seeing from outside it, is handed over here.
+
+        The handover only ever moves that branch forward. Two runs can be told to
+        use one branch name, and rewinding the shared copy would destroy whatever
+        the other one preserved under it; this run keeps its own clone's record
+        instead.
         """
         clone = self._clones.get(repo.dir_key)
         checkout = self._checkouts.get(repo.dir_key)
         if clone is None or checkout is None or not gitops.branch_exists(clone, branch):
             return
         with advisory_lock(git_lock_identity(gitops.common_dir(checkout))):
-            gitops.copy_branch(clone, checkout, branch)
+            copied = gitops.copy_branch(clone, checkout, branch)
+        if copied:
+            self._mirrored.setdefault(repo.dir_key, set()).add(branch)
 
     def _mirror_worktree_branch(self, repo: RepoRef, clone: Path, path: Path) -> None:
         branch = next(
@@ -657,12 +667,19 @@ class Workspace:
             self._release_worktree_lease(path)
 
     def delete_branch(self, repo: RepoRef, branch: str) -> None:
-        """Delete an unneeded lifecycle branch from this run and the shared checkout."""
+        """Delete an unneeded lifecycle branch from this run, and any copy it left.
+
+        The shared checkout holds branches from every run of this identity, and two
+        runs can be told to use one branch name. So only a copy *this* run put there
+        is withdrawn: a same-named branch belonging to a sibling — possibly the only
+        surviving record of its preserved work — is never what this deletes.
+        """
         clone = self.clone_dir(repo)
         with self._repo_lock(repo), advisory_lock(git_lock_identity(gitops.common_dir(clone))):
             gitops.delete_branch(clone, branch)
         checkout = self._checkouts.get(repo.dir_key)
-        if checkout is None:
+        if checkout is None or branch not in self._mirrored.get(repo.dir_key, set()):
             return
         with advisory_lock(git_lock_identity(gitops.common_dir(checkout))):
             gitops.delete_branch(checkout, branch, check=False)
+        self._mirrored[repo.dir_key].discard(branch)

@@ -197,12 +197,20 @@ def unpublished_branches(cwd: str | Path) -> list[str]:
     return unpublished
 
 
-def copy_branch(cwd: str | Path, destination: str | Path, branch: str) -> None:
-    """Force one local branch into another local repository, objects included."""
-    _git(
-        ["push", "--force", str(destination), f"refs/heads/{branch}:refs/heads/{branch}"],
+def copy_branch(cwd: str | Path, destination: str | Path, branch: str) -> bool:
+    """Fast-forward one local branch into another local repository, objects included.
+
+    Deliberately not forced. The destination is shared between runs, and two runs
+    can be told to use one branch name, so a non-fast-forward push there would
+    discard commits that are some other run's only record. Returns whether the
+    destination now carries this branch's tip.
+    """
+    proc = _git(
+        ["push", str(destination), f"refs/heads/{branch}:refs/heads/{branch}"],
         cwd=cwd,
+        check=False,
     )
+    return proc.returncode == 0
 
 
 def import_branch(cwd: str | Path, source: str | Path, branch: str) -> bool:
