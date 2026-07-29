@@ -12,9 +12,11 @@ from __future__ import annotations
 
 import stat
 import subprocess
+import time
 from pathlib import Path
 
 from orchestrator import REPO_ROOT
+from orchestrator.dispatch import agent_failure_reason
 
 WRAPPER = REPO_ROOT / "scripts" / "oneharness-agent.sh"
 ALT_CONFIG_LIBRARY = REPO_ROOT / "scripts" / "claude-alt-config-dir.sh"
@@ -309,3 +311,89 @@ def test_watchdog_path_forwards_the_task_on_stdin(tmp_path: Path) -> None:
     assert stdin_file.read_text(encoding="utf-8") == task
     # The heartbeat path is the one under test: it must have run, not the exec branch.
     assert (status_dir / "agent.done").exists()
+
+
+def test_a_failing_agent_harness_records_why_before_awaiting_recovery(tmp_path: Path) -> None:
+    """The dispatcher can only name a provider failure if the wrapper writes it down.
+
+    The wrapper parks after a failed turn so the supervisor can reap it, so this
+    drives the real script and reads the markers while it is still parked.
+    """
+    status_dir = tmp_path / "orchestrator-watchdog-1" / "agent"
+    status_dir.mkdir(parents=True)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    stub = bin_dir / "oneharness"
+    stub.write_text(
+        "#!/usr/bin/env bash\n"
+        'echo "provider error: 429 rate_limit_error quota exhausted" >&2\n'
+        "exit 7\n",
+        encoding="utf-8",
+    )
+    stub.chmod(stub.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+
+    with subprocess.Popen(
+        ["bash", str(WRAPPER), "run", "--compact", "--prompt-file", "-"],
+        text=True,
+        stdin=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        env={
+            "PATH": f"{bin_dir}:/usr/bin:/bin",
+            "ORCHESTRATOR_AGENT_STATUS_DIR": str(status_dir),
+            "HOME": str(tmp_path / "home"),
+        },
+    ) as process:
+        try:
+            deadline = time.monotonic() + 30
+            while time.monotonic() < deadline:
+                if (status_dir / "agent.failed").exists():
+                    break
+                time.sleep(0.05)
+            else:  # pragma: no cover - only reached when the wrapper never marks failure
+                raise AssertionError("the wrapper never recorded the failed turn")
+            reason = (status_dir / "agent.failure").read_text(encoding="utf-8").strip()
+            teed = (status_dir / "agent.stderr").read_text(encoding="utf-8")
+        finally:
+            process.kill()
+
+    assert reason == "agent harness exited 7"
+    assert "429 rate_limit_error quota exhausted" in teed
+    assert agent_failure_reason(status_dir) == (
+        "agent harness exited 7: provider error: 429 rate_limit_error quota exhausted"
+    )
+
+
+def test_a_signal_killed_agent_harness_is_recorded_as_a_signal(tmp_path: Path) -> None:
+    """An OOM kill and an ordinary non-zero exit must not read the same."""
+    status_dir = tmp_path / "orchestrator-watchdog-2" / "agent"
+    status_dir.mkdir(parents=True)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    stub = bin_dir / "oneharness"
+    stub.write_text("#!/usr/bin/env bash\nkill -KILL $$\n", encoding="utf-8")
+    stub.chmod(stub.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+
+    with subprocess.Popen(
+        ["bash", str(WRAPPER), "run", "--compact", "--prompt-file", "-"],
+        text=True,
+        stdin=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        env={
+            "PATH": f"{bin_dir}:/usr/bin:/bin",
+            "ORCHESTRATOR_AGENT_STATUS_DIR": str(status_dir),
+            "HOME": str(tmp_path / "home"),
+        },
+    ) as process:
+        try:
+            deadline = time.monotonic() + 30
+            while time.monotonic() < deadline:
+                if (status_dir / "agent.failed").exists():
+                    break
+                time.sleep(0.05)
+            else:  # pragma: no cover - only reached when the wrapper never marks failure
+                raise AssertionError("the wrapper never recorded the killed turn")
+            reason = (status_dir / "agent.failure").read_text(encoding="utf-8").strip()
+        finally:
+            process.kill()
+
+    assert reason == "agent harness killed by signal 9"

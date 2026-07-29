@@ -123,7 +123,7 @@ write_status() {
 }
 worker_pid=$$
 write_status agent.pid "$worker_pid"
-if ! rm -f "$status_dir/agent.done" "$status_dir/agent.failed"; then
+if ! rm -f "$status_dir/agent.done" "$status_dir/agent.failed" "$status_dir/agent.failure"; then
     echo "oneharness-agent: cannot reset terminal markers; retry through orchestrator dispatch" >&2
     exit 2
 fi
@@ -139,9 +139,14 @@ write_status agent.heartbeat "$heartbeat_sequence"
 # llmlint: ignore[boundary_inputs_validated] this duplicates a file descriptor; the payload it
 # carries is the onejudge protocol that oneharness itself parses and validates.
 exec 3<&0
+# stderr is teed rather than redirected: onejudge still needs it live to report a
+# provider or runtime failure on the ordinary path, and the dispatcher needs a
+# durable copy to say *why* a worker died — throttling, quota exhaustion, an OOM
+# kill, and a genuine crash are indistinguishable without it. Credential values
+# are stripped when the dispatcher reads this back.
 # llmlint: ignore[tool_output_is_signal, boundary_inputs_validated] this wrapper is a transparent
 # conduit for that protocol in both directions, exactly as the `exec` pass-throughs above are.
-oneharness run --config "$agent_config" "$@" <&3 &
+oneharness run --config "$agent_config" "$@" <&3 2> >(tee -a "$status_dir/agent.stderr" >&2) &
 agent_pid=$!
 write_status agent.child.pid "$agent_pid"
 while agent_state=$(ps -o stat= -p "$agent_pid" 2>/dev/null) &&
@@ -157,6 +162,13 @@ exit_code=$?
 set -e
 if [ "$exit_code" -ne 0 ]; then
     echo "oneharness-agent: agent process $agent_pid exited $exit_code; awaiting dispatcher recovery" >&2
+    # Written before the marker the dispatcher polls for, so the reason is always
+    # already there when the failure is observed.
+    if [ "$exit_code" -gt 128 ]; then
+        write_status agent.failure "agent harness killed by signal $((exit_code - 128))"
+    else
+        write_status agent.failure "agent harness exited $exit_code"
+    fi
     write_status agent.failed "$worker_pid"
     while :; do
         :

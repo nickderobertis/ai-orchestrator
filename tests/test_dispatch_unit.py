@@ -21,6 +21,7 @@ from orchestrator.dispatch import (
     _build_report,
     _file_progress,
     _read_watchdog_pid,
+    agent_failure_reason,
     run_onejudge,
 )
 from orchestrator.dispatch import main as dispatch_main
@@ -411,6 +412,89 @@ def test_worker_heartbeat_deadline_ignores_busy_descendant(tmp_path) -> None:
 
     assert report.outcome == "worker-died"
     assert report.completed is False
+
+
+def test_a_provider_failure_reads_differently_from_a_worker_that_stopped(tmp_path) -> None:
+    """`worker-died` alone shaped every wrong hypothesis; the reason is the fix.
+
+    Both journeys below end as `worker-died`. Only the recorded reason says which
+    one to retry and which one to escalate, so the two are compared side by side.
+    """
+    status = tmp_path / "throttled-status"
+    onejudge = tmp_path / "throttled"
+    onejudge.write_text(
+        '#!/bin/sh\nif [ "$1" = "--version" ]; then echo "onejudge 0.3.4"; exit 0; fi\n'
+        'd="$ORCHESTRATOR_AGENT_STATUS_DIR"\n'
+        'printf "%s\\n" "$$" >"$d/agent.pid"\n'
+        'touch "$d/agent.heartbeat"\n'
+        'printf "provider error: 429 rate_limit_error quota exhausted\\n" >"$d/agent.stderr"\n'
+        'printf "agent harness exited 7\\n" >"$d/agent.failure"\n'
+        'printf "%s\\n" "$$" >"$d/agent.failed"\n'
+        "while :; do sleep 0.05; done\n",
+        encoding="utf-8",
+    )
+    onejudge.chmod(0o700)
+
+    throttled = run_onejudge(
+        {},
+        "task",
+        onejudge_bin=os.fspath(onejudge),
+        env={"ORCHESTRATOR_AGENT_STATUS_DIR": os.fspath(status)},
+    )
+
+    quiet_status = tmp_path / "quiet-status"
+    quiet = tmp_path / "quiet"
+    quiet.write_text(
+        '#!/bin/sh\nif [ "$1" = "--version" ]; then echo "onejudge 0.3.4"; exit 0; fi\n'
+        'printf "%s\\n" "$$" >"$ORCHESTRATOR_AGENT_STATUS_DIR/agent.pid"\n'
+        "while :; do :; done &\n"
+        "child=$!\n"
+        'printf "%s\\n" "$child" >"$ORCHESTRATOR_AGENT_STATUS_DIR/agent.child.pid"\n'
+        'trap \'kill "$child" 2>/dev/null || true; wait "$child" 2>/dev/null || true; '
+        "exit 143' TERM\n"
+        'wait "$child"\n',
+        encoding="utf-8",
+    )
+    quiet.chmod(0o700)
+
+    stopped = run_onejudge(
+        {},
+        "task",
+        onejudge_bin=os.fspath(quiet),
+        env={
+            "ORCHESTRATOR_AGENT_STATUS_DIR": os.fspath(quiet_status),
+            "ORCHESTRATOR_WORKER_HEARTBEAT_TIMEOUT": "0.2",
+        },
+    )
+
+    assert throttled.outcome == stopped.outcome == "worker-died"
+    assert throttled.outcome_detail == (
+        "agent harness exited 7: provider error: 429 rate_limit_error quota exhausted"
+    )
+    assert stopped.outcome_detail == "the agent harness stopped heartbeating for 0.2s"
+    assert throttled.stderr == f"worker-died: {throttled.outcome_detail}"
+
+
+def test_a_recorded_agent_failure_never_carries_a_credential_value(tmp_path) -> None:
+    """The harness stderr this reads back is durable evidence, so it is redacted."""
+    status = tmp_path / "agent"
+    status.mkdir()
+    token = "sk-ant-oat01-not-a-real-credential"
+    (status / "agent.failure").write_text("agent harness exited 1\n", encoding="utf-8")
+    (status / "agent.stderr").write_text(
+        f"harness failed (auth): token {token} rejected\n", encoding="utf-8"
+    )
+
+    os.environ["CLAUDE_CODE_OAUTH_TOKEN"] = token
+    try:
+        reason = agent_failure_reason(status)
+    finally:
+        del os.environ["CLAUDE_CODE_OAUTH_TOKEN"]
+
+    assert reason is not None
+    assert token not in reason
+    assert "<redacted:CLAUDE_CODE_OAUTH_TOKEN>" in reason
+    assert reason.startswith("agent harness exited 1: harness failed (auth):")
 
 
 def test_missing_agent_heartbeat_reaches_worker_death_deadline(tmp_path) -> None:

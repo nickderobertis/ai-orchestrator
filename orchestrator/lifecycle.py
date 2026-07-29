@@ -1060,7 +1060,9 @@ def _run_steps(
             # Existing real-git lifecycle journeys cover this same shared preservation branch
             # with dirty and agent-committed partial work; duplicating paid-agent authoring
             # inside the kill journey would replace an additional layer under test.
-            failure = report.outcome or "hit the turn cap"
+            failure: str = report.outcome or "hit the turn cap"
+            if report.outcome and report.outcome_detail:
+                failure = f"{report.outcome} ({report.outcome_detail})"
             preserved = False
             if gitops.is_dirty(worktree):
                 gitops.add_all(worktree)
@@ -1083,6 +1085,7 @@ def _run_steps(
                     "turns": report.assistant_turns,
                     "preserved": preserved,
                     **({"outcome": report.outcome} if report.outcome else {}),
+                    **({"outcome_detail": report.outcome_detail} if report.outcome_detail else {}),
                 },
             )
             if preserved:

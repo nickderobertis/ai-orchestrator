@@ -669,17 +669,24 @@ def run_graph(
                 },
             )
             return run
-        detail = (
-            "worker-died"
-            if report.outcome == "worker-died"
-            else "did not complete (hit the turn cap)"
-        )
+        if report.outcome != "worker-died":
+            detail = "did not complete (hit the turn cap)"
+        else:
+            # The reason the watchdog observed, not just the fact of death: a
+            # planner deciding whether to retry needs to tell provider throttling
+            # from a worker that gave up.
+            detail = (
+                f"worker-died: {report.outcome_detail}"
+                if report.outcome_detail
+                else ("worker-died")
+            )
         run = NodeRun("failed", detail, report)
         node_log.append(
             "node-failed",
             detail={
                 "detail": detail,
                 **({"outcome": report.outcome} if report.outcome else {}),
+                **({"outcome_detail": report.outcome_detail} if report.outcome_detail else {}),
                 "turns": report.assistant_turns,
                 TERMINAL_NODE_RESULT_FIELD: cast(
                     Any, _run_payload(node, run, dependents.get(nid, []))

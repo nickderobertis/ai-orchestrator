@@ -66,6 +66,7 @@ from .launch import (
     write_provenance,
 )
 from .personas import persona_path
+from .redaction import redact
 from .runs import ArtifactPaths, resolve_run_dir, slugify
 from .scratch import owned_scratch_directory
 from .watchdog import (
@@ -180,6 +181,10 @@ class Report:
     telemetry_data: dict[str, Any] | None = None
     artifacts: ArtifactPaths = field(default_factory=ArtifactPaths)
     outcome: DispatchOutcome | None = None
+    #: Why the dispatch ended this way, when the outcome alone cannot say. Set for
+    #: ``worker-died`` so a provider or harness failure reads differently from a
+    #: worker that simply exited.
+    outcome_detail: str | None = None
 
     @property
     def telemetry(self) -> dict[str, Any] | None:
@@ -204,6 +209,10 @@ class WatchdogSignal:
     reason: WatchdogReason
     root_pid: ProcessId
     observed_pids: tuple[ProcessId, ...]
+    #: What was observable at the point of death. Four different failures reach
+    #: this watchdog as one dead tree, and a bare ``worker-died`` shaped every
+    #: wrong hypothesis in the debugging session that motivated recording it.
+    detail: str = ""
 
 
 class OneJudgeProvenance(TypedDict):
@@ -355,6 +364,40 @@ def _agent_status(status_dir: Path, name: str) -> str | None:
         return None
 
 
+#: How much of the harness's own stderr accompanies a death report. Enough to
+#: carry a throttling notice, a quota message, or a stack trace's last frames;
+#: bounded because it lands in a node result a planner has to read.
+AGENT_STDERR_TAIL_BYTES = 1200
+
+
+def agent_failure_reason(status_dir: Path) -> str | None:
+    """Explain a harness-side death from what the agent wrapper recorded.
+
+    Provider throttling, quota exhaustion, an OOM kill, and a genuine crash all
+    reach the dispatcher as the same dead process tree. The wrapper records the
+    child's exit disposition and tees its stderr, so this turns that into one
+    sentence the planner can act on instead of a bare ``worker-died``.
+    """
+    recorded = _agent_status(status_dir, "agent.failure")
+    tail = _agent_stderr_tail(status_dir)
+    if recorded and tail:
+        return f"{recorded}: {tail}"
+    return recorded or tail
+
+
+def _agent_stderr_tail(status_dir: Path) -> str | None:
+    """Return the redacted trailing slice of the agent harness's own stderr."""
+    try:
+        with (status_dir / "agent.stderr").open("rb") as stream:
+            stream.seek(0, os.SEEK_END)
+            stream.seek(max(0, stream.tell() - AGENT_STDERR_TAIL_BYTES))
+            raw = stream.read()
+    except OSError:
+        return None
+    text = redact(raw.decode("utf-8", errors="replace")).strip()
+    return " ".join(text.split()) or None
+
+
 def _validate_environment(env: Mapping[str, str]) -> None:
     """Validate caller-provided values before they reach the process boundary."""
     for key, value in env.items():
@@ -485,7 +528,13 @@ def run_onejudge(
                         if run.done():  # pragma: no cover - real subprocess race
                             return None
                         return WatchdogSignal(  # pragma: no cover - real killed-worker e2e
-                            "worker-died", pid, observed
+                            "worker-died",
+                            pid,
+                            observed,
+                            detail=(
+                                agent_failure_reason(agent_status_dir)
+                                or "the tracked worker process tree exited without a report"
+                            ),
                         )
                     agent_pid_file = agent_status_dir / "agent.pid"
                     if agent_pid_file.exists():
@@ -500,7 +549,15 @@ def run_onejudge(
                         if (  # pragma: no cover - real killed-agent e2e
                             current_agent and failed_agent == current_agent
                         ):
-                            return WatchdogSignal("worker-died", pid, observed)
+                            return WatchdogSignal(
+                                "worker-died",
+                                pid,
+                                observed,
+                                detail=(
+                                    agent_failure_reason(agent_status_dir)
+                                    or "the agent harness reported a failed turn"
+                                ),
+                            )
                         if current_agent and done_agent != current_agent:
                             if agent_pid not in activity.pids:
                                 # This tree was sampled before the pid was read, and an
@@ -517,7 +574,16 @@ def run_onejudge(
                                     and _agent_status(agent_status_dir, "agent.done")
                                     != current_agent
                                 ):
-                                    return WatchdogSignal("worker-died", pid, observed)
+                                    return WatchdogSignal(
+                                        "worker-died",
+                                        pid,
+                                        observed,
+                                        detail=(
+                                            agent_failure_reason(agent_status_dir)
+                                            or "the agent harness process vanished mid-turn "
+                                            "without recording an exit"
+                                        ),
+                                    )
                             child_pid_file = agent_status_dir / "agent.child.pid"
                             if child_pid_file.exists():
                                 try:
@@ -546,7 +612,16 @@ def run_onejudge(
                                 last_agent_heartbeat_ns = observed_agent_heartbeat_ns
                                 last_agent_heartbeat = time.monotonic()
                             elif time.monotonic() - last_agent_heartbeat >= heartbeat_timeout:
-                                return WatchdogSignal("worker-died", pid, observed)
+                                return WatchdogSignal(
+                                    "worker-died",
+                                    pid,
+                                    observed,
+                                    detail=(
+                                        agent_failure_reason(agent_status_dir)
+                                        or "the agent harness stopped heartbeating for "
+                                        f"{heartbeat_timeout:g}s"
+                                    ),
+                                )
                     current = (activity, _file_progress(Path(cwd) / ".git"))
                     if current != previous:
                         previous = current
@@ -598,8 +673,9 @@ def run_onejudge(
                         [],
                         {},
                         None,
-                        "worker-died: tracked worker exited or stopped heartbeating",
+                        f"worker-died: {signal.detail}",
                         outcome="worker-died",
+                        outcome_detail=signal.detail,
                     )
                 raise DispatchError(
                     f"dispatch stalled for {stall_timeout:g}s with no process-tree CPU/I/O "
