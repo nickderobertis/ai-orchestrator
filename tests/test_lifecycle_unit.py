@@ -1247,8 +1247,13 @@ def test_run_repo_task_journals_the_workstream_and_labels_each_dispatch(
     assert ("step-settled", "impl") in located
     assert ("step-started", "check") in located
     assert ("step-settled", "check") in located
-    assert ("verification-started", None) not in located
-    assert ("verification-finished", None) not in located
+    # The merge path is the only verifier, so its own gate runs are what the round
+    # records: one per gated push, each with its verdict and preserved output.
+    assert [e.detail["label"] for e in events if e.kind == "verification-finished"] == [
+        f"branch push {result.branch}",
+        f"publication push {result.branch} -> main",
+    ]
+    assert all(e.detail["ok"] is True for e in events if e.kind == "verification-finished")
     assert ("publication-finished", None) in located
     # The gate now runs behind `git push`, so the round records what dispatch saw
     # of the merge path: which hook will run, and the bar it stands for.

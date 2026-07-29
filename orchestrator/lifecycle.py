@@ -86,7 +86,12 @@ from .runs import (
     write_result,
 )
 from .scratch import require_scratch_capacity, scratch_dispatch_guarded
-from .verify import NOOP_GATE, VerifyResult, resolve_gate_template
+from .verify import (
+    NOOP_GATE,
+    VerifyResult,
+    record_merge_path_verification,
+    resolve_gate_template,
+)
 from .workspace import (
     CACHE_ENV,
     IdentityKey,
@@ -1226,7 +1231,13 @@ def _best_effort_cleanup(
         )
 
 
-def _push_failure(exc: GitError, *, branch: str) -> MergeOutcome:
+def _evidence(result: LifecycleResult) -> str:
+    """Name the preserved merge-path gate log this result points at, if any."""
+    path = result.verify.log_path if result.verify is not None else None
+    return f" — full merge-path gate output: {path}" if path else ""
+
+
+def _push_failure(exc: GitError, *, branch: str, evidence: str = "") -> MergeOutcome:
     """Turn a hook/transport rejection into a durable lifecycle outcome."""
     detail = str(exc)
     outcome = classify_push_failure(exc)
@@ -1236,7 +1247,8 @@ def _push_failure(exc: GitError, *, branch: str) -> MergeOutcome:
             f"repository pre-push gate rejected publication of {branch!r}: {detail}"
             if outcome == "gate-failed"
             else f"push of {branch!r} failed before publication completed: {detail}"
-        ),
+        )
+        + evidence,
     )
 
 
@@ -1864,13 +1876,28 @@ def run_repo_task(
             # The remote path's gate rejection also arrives here, from the hook that
             # qualified this identity for dispatch, and it must read as a gate
             # failure rather than a raw Git error before any PR exists.
+            log.append("verification-started", detail={"label": f"branch push {branch}"})
             try:
-                gitops.push(worktree, branch)
+                pushed = gitops.push(worktree, branch)
             except GitError as exc:
-                failed = _push_failure(exc, branch=branch)
+                result.verify = record_merge_path_verification(
+                    log,
+                    label=f"branch push {branch}",
+                    command=resolved_recorded_gate or [],
+                    ok=False,
+                    output=exc.output,
+                )
+                failed = _push_failure(exc, branch=branch, evidence=_evidence(result))
                 result.outcome = failed.outcome
                 result.detail = failed.detail
                 return result
+            result.verify = record_merge_path_verification(
+                log,
+                label=f"branch push {branch}",
+                command=resolved_recorded_gate or [],
+                ok=True,
+                output=pushed,
+            )
             workspace.mirror_branch(ref, branch)
         preverified_pr: PullRequest | None = None
         if verify_via_ci:
@@ -1948,10 +1975,25 @@ def run_repo_task(
                     "preserved retry completed but cannot be recovered without a successful "
                     "complete gate; retry with the repository gate enabled",
                 )
+            log.append("verification-started", detail={"label": f"branch push {branch}"})
             try:
-                gitops.push(worktree, branch)
+                pushed = gitops.push(worktree, branch)
             except GitError as exc:
-                return _push_failure(exc, branch=branch)
+                result.verify = record_merge_path_verification(
+                    log,
+                    label=f"branch push {branch}",
+                    command=resolved_recorded_gate or [],
+                    ok=False,
+                    output=exc.output,
+                )
+                return _push_failure(exc, branch=branch, evidence=_evidence(result))
+            result.verify = record_merge_path_verification(
+                log,
+                label=f"branch push {branch}",
+                command=resolved_recorded_gate or [],
+                ok=True,
+                output=pushed,
+            )
             workspace.mirror_branch(ref, branch)
             return None
 
@@ -1974,6 +2016,7 @@ def run_repo_task(
             publication_attempts=publication_attempts,
             repository_type=effective_type,
             journal=log,
+            gate_command=tuple(resolved_recorded_gate or ()),
             preverified_pr=preverified_pr,
             local_prepare=(synchronize_and_push_local_publication if local_publication else None),
         )
@@ -2052,6 +2095,10 @@ def run_repo_task(
         result.pr = merge_outcome.pr
         result.outcome = merge_outcome.outcome
         result.detail = merge_outcome.detail
+        # The publication push is the later, decisive gate run: a branch push that
+        # passed says nothing about the tree that was actually published.
+        if merge_outcome.verification is not None:
+            result.verify = merge_outcome.verification
         return result
     except (GitError, GitHubError, ConfigError, RegistryError, WorkspaceError) as exc:
         result.outcome = "error"

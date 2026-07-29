@@ -370,9 +370,13 @@ def test_incomplete_history_needs_recovery_attestation_even_after_normal_commit(
 
     result = integrate(repo, ["claude/incomplete"], gate_command=["true"])
 
-    assert [(item.status, item.reason) for item in result.branches] == [
-        ("skipped", "incomplete-provenance; recover with just repo-recover")
-    ]
+    ((status, reason),) = [(item.status, item.reason) for item in result.branches]
+    assert status == "skipped"
+    # Naming the other verb is not enough: the skip has to hand over the command
+    # that actually publishes this branch, for this repository.
+    assert reason is not None
+    assert reason.startswith("incomplete-provenance (1 unattested commit(s))")
+    assert f"just repo-recover claude/incomplete --repo {repo}" in reason
     assert not result.base_advanced
 
 

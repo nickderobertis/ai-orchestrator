@@ -331,8 +331,17 @@ def test_local_merge_relies_on_push_hook_and_journals_the_merge(
 
     assert out.outcome == "merged"
     events = journal.events()
-    assert [e.kind for e in events] == ["publication-finished"]
-    assert events[0].detail == {"pr": "local:o/r#feature", "branch": "feature", "base": "main"}
+    assert [e.kind for e in events] == [
+        "verification-started",
+        "verification-finished",
+        "publication-finished",
+    ]
+    # A green publication keeps its evidence too: the settled result has to be able
+    # to show that the merge path's gate ran, not only that nothing objected.
+    assert events[1].detail["ok"] is True
+    assert out.verification is not None and out.verification.ok
+    assert "verdict: passed" in Path(str(out.verification.log_path)).read_text(encoding="utf-8")
+    assert events[2].detail == {"pr": "local:o/r#feature", "branch": "feature", "base": "main"}
 
 
 def test_local_merge_records_branch_content_already_on_base(tmp_path: Path, bare_origin) -> None:
@@ -435,7 +444,16 @@ def test_local_merge_records_push_gate_failure_without_claiming_a_merge(
 
     assert out.outcome == "gate-failed"
     assert "repository pre-push gate rejected" in out.detail
-    assert journal.events() == []
+    assert [e.kind for e in journal.events()] == [
+        "verification-started",
+        "verification-finished",
+    ]
+    # The rejection is what a settled run has to explain, so its output is kept.
+    assert out.verification is not None and not out.verification.ok
+    preserved = Path(str(out.verification.log_path)).read_text(encoding="utf-8")
+    assert "verdict: FAILED" in preserved
+    assert "pre-push: complete gate failed" in preserved
+    assert str(out.verification.log_path) in out.detail
     # The rebuilt merge never reached the base branch, so nothing may say it did.
     assert not (gitops.clone(origin, tmp_path / "check") / "feature.txt").exists()
 

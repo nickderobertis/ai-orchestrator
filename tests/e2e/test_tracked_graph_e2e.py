@@ -1510,7 +1510,11 @@ def test_real_cli_recovers_failed_lifecycle_result(
     assert result["results"]["failed-lifecycle"]["outcome"] == "not-completed"
     assert result["results"]["gate-failed-lifecycle"]["outcome"] == "gate-failed"
     assert "tracked gate tail failed" in result["results"]["gate-failed-lifecycle"]["detail"]
-    assert "gate_log" not in result["results"]["gate-failed-lifecycle"]["artifacts"]
+    # A rejected publication points at the rejection's own output, not just at a
+    # one-line detail: re-deriving the cause is the cost this closes.
+    preserved = Path(result["results"]["gate-failed-lifecycle"]["artifacts"]["gate_log"])
+    assert "tracked gate tail failed" in preserved.read_text(encoding="utf-8")
+    assert "verdict: FAILED" in preserved.read_text(encoding="utf-8")
     step_artifacts = result["results"]["gate-failed-lifecycle"]["steps"][0]["artifacts"]
     assert Path(step_artifacts["worker_report"]).is_file()
     assert Path(step_artifacts["oneharness_session"]).is_file()
@@ -1524,10 +1528,13 @@ def test_real_cli_recovers_failed_lifecycle_result(
     missing_results = _just("results", "missing-run", "--runs-dir", str(runs))
     assert missing_results.returncode == 2
     assert "no completed round" in missing_results.stderr
-    assert not any(
-        event["kind"] == "verification-finished" and event.get("node") == "gate-failed-lifecycle"
+    ((verdict),) = [
+        event["detail"]
         for event in records
-    )
+        if event["kind"] == "verification-finished" and event.get("node") == "gate-failed-lifecycle"
+    ]
+    assert verdict["ok"] is False
+    assert "tracked gate tail failed" in verdict["output_tail"]
     # The rejection above arrives as `git push` output. What makes it readable is
     # the record each node writes of the merge path it expected to be verified by.
     coverage = {

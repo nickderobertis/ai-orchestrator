@@ -361,7 +361,11 @@ def test_real_dispatch_detects_killed_agent_and_reaps_orphans(
 
     assert process.returncode == 1, stderr
     result = json.loads(stdout)
-    assert result["results"]["worker"]["error"] == "worker-died"
+    # Not just that it died: a killed harness has to read differently from a worker
+    # that stopped on its own, or the planner cannot tell retry from escalate.
+    assert result["results"]["worker"]["error"] == (
+        "worker-died: agent harness killed by signal 15"
+    )
     assert time.monotonic() - started < 5
     deadline = time.monotonic() + 2
     while Path(f"/proc/{orphan_pid}").exists() and time.monotonic() < deadline:

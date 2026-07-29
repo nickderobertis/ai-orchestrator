@@ -31,6 +31,7 @@ from .coordination import GitLockIdentity, git_lock_identity
 from .github import AutoMergeUnavailable, Check, GitHubBackend, PRStatus, PullRequest
 from .merge_queue import merge_queue_turn
 from .outcomes import ALREADY_INTEGRATED_OUTCOME, LifecycleOutcome
+from .verify import VerifyResult, record_merge_path_verification
 from .workspace import RepositoryType
 
 if TYPE_CHECKING:
@@ -96,6 +97,9 @@ class MergeContext:
     #: first one — after the branch is already pushed. The scope is the contract, so
     #: it is the type.
     journal: NodeSink | None = None
+    #: The repository's complete gate, recorded alongside the publication push it
+    #: verifies. Empty where required PR checks stand in for a pre-push hook.
+    gate_command: tuple[str, ...] = ()
     preverified_pr: PullRequest | None = None
     local_prepare: Callable[[], MergeOutcome | None] | None = None
 
@@ -105,6 +109,11 @@ class MergeOutcome:
     outcome: LifecycleOutcome
     detail: str
     pr: PullRequest | None = None
+    #: Evidence from the merge path's own gate run, when this outcome came from a
+    #: gated push. It supersedes any earlier record on the same lifecycle result:
+    #: a branch push that passed says nothing about the publication push that did
+    #: not.
+    verification: VerifyResult | None = None
 
 
 @dataclass(frozen=True)
@@ -311,6 +320,7 @@ class LocalMergeStrategy:
             prepared = ctx.local_prepare()
             if prepared is not None:
                 return prepared
+        verified: VerifyResult | None = None
         for attempt in range(1, ctx.publication_attempts + 1):
             with tempfile.TemporaryDirectory(prefix="orchestrator-merge-") as parent:
                 scratch = Path(parent) / "worktree"
@@ -348,16 +358,22 @@ class LocalMergeStrategy:
                     # This detached tree is pushed directly below, so the repository's
                     # executable pre-push hook verifies this identical tree.
                     gitops.fetch(ctx.clone_dir)
+                    label = f"publication push {ctx.branch} -> {ctx.base}"
                     try:
                         if gitops.ref_sha(ctx.clone_dir, f"origin/{ctx.base}") != base_sha:
                             raise gitops.GitError(
                                 f"! [rejected] verified merge -> {ctx.base} (fetch first)"
                             )
-                        gitops.push(scratch, f"HEAD:{ctx.base}", set_upstream=False)
+                        pushed = gitops.push(scratch, f"HEAD:{ctx.base}", set_upstream=False)
                     except gitops.GitError as exc:
                         if not _is_push_race(exc):
                             detail = str(exc)
                             outcome = classify_push_failure(exc)
+                            # A lost race is retried below and is not a gate verdict,
+                            # so only a real rejection records one.
+                            verification = _record_verification(
+                                ctx, label=label, ok=False, output=exc.output
+                            )
                             return MergeOutcome(
                                 outcome=outcome,
                                 detail=(
@@ -365,7 +381,9 @@ class LocalMergeStrategy:
                                     f"publication: {detail}"
                                     if outcome == "gate-failed"
                                     else "rebuilt local publication push failed: " + detail
-                                ),
+                                )
+                                + _evidence(verification),
+                                verification=verification,
                             )
                         if attempt == ctx.publication_attempts:
                             return MergeOutcome(
@@ -376,6 +394,7 @@ class LocalMergeStrategy:
                                 ),
                             )
                         continue
+                    verified = _record_verification(ctx, label=label, ok=True, output=pushed)
                     break
                 finally:
                     gitops.worktree_remove(ctx.clone_dir, scratch)
@@ -393,7 +412,30 @@ class LocalMergeStrategy:
             outcome="merged",
             detail=f"local direct-merge of {ctx.branch} into {ctx.base} after checks",
             pr=pr,
+            verification=verified,
         )
+
+
+def _record_verification(
+    ctx: MergeContext, *, label: str, ok: bool, output: str
+) -> VerifyResult | None:
+    """Preserve one gated publication push, when this merge runs in a tracked round."""
+    if ctx.journal is None:
+        return None
+    ctx.journal.append("verification-started", detail={"label": label})
+    return record_merge_path_verification(
+        ctx.journal,
+        label=label,
+        command=list(ctx.gate_command),
+        ok=ok,
+        output=output,
+    )
+
+
+def _evidence(verification: VerifyResult | None) -> str:
+    """Name the preserved gate log this outcome points at, if one was written."""
+    path = verification.log_path if verification is not None else None
+    return f" — full merge-path gate output: {path}" if path else ""
 
 
 def _local_publication_ref(ctx: MergeContext) -> PullRequest:

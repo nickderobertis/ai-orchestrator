@@ -160,7 +160,11 @@ def _integrate_locked(
                 BranchResult(
                     branch,
                     "skipped",
-                    "incomplete-provenance; recover with just repo-recover",
+                    # The other verb by name and by runnable command: an operator who
+                    # reached for this one has to be told which one this branch is for.
+                    f"incomplete-provenance ({len(incomplete)} unattested commit(s)); this "
+                    f"branch belongs to 'just repo-recover {branch} --repo "
+                    f"{shlex.quote(str(root))}'",
                 )
             )
             continue

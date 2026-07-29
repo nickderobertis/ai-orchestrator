@@ -24,22 +24,39 @@ import shlex
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TypedDict, TypeGuard
+from typing import TYPE_CHECKING, TypedDict, TypeGuard
 
 from .coordination import advisory_lock, atomic_json
 from .environment import CHANNEL_ENV_PREFIX
+from .redaction import redact
+
+if TYPE_CHECKING:
+    # Annotation-and-duck-typing only, and load-bearing: the journal imports the run
+    # ledger, which imports `merge`, which imports this module. Nothing here needs
+    # the journal at runtime — evidence is appended through the sink the caller
+    # injects.
+    from .journal import NodeSink
 
 NOOP_GATE = "<no-op>"
 
 __all__ = [
     "GateAttestation",
     "NOOP_GATE",
+    "VERIFICATION_TAIL_BYTES",
     "VerifyResult",
+    "append_gate_log",
     "detect_gate",
     "detect_gate_candidates",
+    "format_merge_path_record",
+    "record_merge_path_verification",
     "resolve_gate_template",
     "run_gate",
 ]
+
+#: How much of the merge path's own output travels in a node result and its journal
+#: event. The whole run stays in the log the result points at; this is the slice a
+#: planner reads without opening it.
+VERIFICATION_TAIL_BYTES = 2000
 
 
 @dataclass(frozen=True)
@@ -90,6 +107,61 @@ class VerifyResult:
     def tail(self, limit: int = 2000) -> str:
         """The trailing slice of output, for a compact failure report."""
         return self.output[-limit:]
+
+
+def format_merge_path_record(*, label: str, command: list[str], ok: bool, output: str) -> str:
+    """Render one gated push's evidence, with any credential value stripped."""
+    return redact(
+        f"merge-path verification: {label}\n"
+        f"repository gate: {shlex.join(command) if command else '<required PR checks>'}\n"
+        f"verdict: {'passed' if ok else 'FAILED'}\n"
+        "--- git push output ---\n" + (output if output.strip() else "<no output>\n")
+    )
+
+
+def append_gate_log(directory: Path, record: str) -> str:
+    """Append one record to ``directory/gate.log``; return its path.
+
+    Appending rather than overwriting is what keeps a run's evidence complete: a
+    branch push that passed and a publication push that did not are both gate runs,
+    and the second must not erase the first.
+    """
+    directory.mkdir(parents=True, exist_ok=True)
+    path = (directory / "gate.log").resolve()
+    with path.open("a", encoding="utf-8") as stream:
+        stream.write(record if record.endswith("\n") else record + "\n")
+    return str(path)
+
+
+def record_merge_path_verification(
+    journal: NodeSink,
+    *,
+    label: str,
+    command: list[str],
+    ok: bool,
+    output: str,
+) -> VerifyResult:
+    """Preserve what the merge path's gate actually did, and where to read it.
+
+    The repository's pre-push hook is the only verifier a publication gets, and its
+    whole run arrives as ``git push`` output. Discarding it on success left a
+    settled run with no evidence the gate ran at all; discarding it on failure left
+    the operator re-deriving the cause from a one-line rejection.
+    """
+    record = format_merge_path_record(label=label, command=command, ok=ok, output=output)
+    directory = journal.artifact_dir
+    log_path = append_gate_log(directory, record) if directory is not None else None
+    journal.append(
+        "verification-finished",
+        detail={
+            "label": label,
+            "ok": ok,
+            "command": list(command),
+            "output_tail": record[-VERIFICATION_TAIL_BYTES:],
+            **({"log_path": log_path} if log_path else {}),
+        },
+    )
+    return VerifyResult(ok=ok, command=list(command), output=record, log_path=log_path)
 
 
 def _justfile_has_recipe(path: Path, recipe: str) -> bool:
