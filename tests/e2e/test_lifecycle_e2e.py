@@ -39,7 +39,7 @@ import orchestrator.graph as graph_module
 import orchestrator.lifecycle as lifecycle_module
 from orchestrator import gitops
 from orchestrator.coordination import LockTimeout, advisory_lock, git_lock_identity
-from orchestrator.dispatch import Report
+from orchestrator.dispatch import DispatchError, Report
 from orchestrator.github import GitHubError, PullRequest
 from orchestrator.graph import graph_payload, parse_graph, run_graph
 from orchestrator.journal import NodeJournal, NodeSink, open_journal
@@ -2699,6 +2699,8 @@ def test_local_conflict_resolves_outside_queue_then_requeues_and_merges(
             dispatched.wait(timeout=e2e_timeout(10))
         return Report(persona, 0, True, False, 2, [], {}, {}, "")
 
+    journal = open_journal(tmp_path / "conflict-run", RunId("local-conflict"), 1)
+
     def run(name: str):
         return run_repo_task(
             str(origin),
@@ -2708,6 +2710,7 @@ def test_local_conflict_resolves_outside_queue_then_requeues_and_merges(
             workspace=workspace,
             dispatch_fn=concurrent_dispatch,
             recorded_gate=["git", "diff", "--check", "origin/main...HEAD"],
+            journal=NodeJournal(journal, NodeId(name), RunId("local-conflict"), 1),
         )
 
     with ThreadPoolExecutor(max_workers=2) as pool:
@@ -2721,6 +2724,23 @@ def test_local_conflict_resolves_outside_queue_then_requeues_and_merges(
     assert [result.outcome for result in results] == ["merged", "merged"]
     assert len(resolution_calls) == 1
     assert resolution_calls[0].endswith(":main")
+    # The publication-path conflict resolution is a dispatch, and the ledger records
+    # its start and finish like any other rather than rendering 90 minutes of real
+    # work as one lock-wait.
+    recorded = journal.events()
+    started = [event for event in recorded if event.kind == "conflict-resolution-started"]
+    finished = [event for event in recorded if event.kind == "conflict-resolution-finished"]
+    assert len(started) == 1 and len(finished) == 1
+    assert started[0].detail["attempt"] == 1
+    assert started[0].detail["persona"] == "engineer"
+    assert finished[0].detail == {
+        "branch": started[0].detail["branch"],
+        "attempt": 1,
+        "completed": True,
+        "resolved": True,
+        "unresolved_paths": [],
+    }
+    assert recorded.index(started[0]) < recorded.index(finished[0])
     final = subprocess.run(
         ["git", "-C", str(origin), "show", "main:shared.txt"],
         check=True,
@@ -2728,6 +2748,101 @@ def test_local_conflict_resolves_outside_queue_then_requeues_and_merges(
         capture_output=True,
     ).stdout
     assert final == "first branch\nsecond branch\n"
+
+
+def test_a_conflict_resolution_dispatch_that_raises_still_closes_its_ledger_events(
+    tmp_path, bare_origin
+) -> None:
+    """A started event with nothing to close it is the reading these events prevent."""
+    origin = bare_origin({"shared.txt": "original\n"})
+    initial = make_writing_dispatch(filename="shared.txt", content="preserved")
+
+    def dispatch_fn(persona: str, task: str, *, project_dir: str, **kwargs: object) -> Report:
+        if "Resolve the content conflict" not in task:
+            report = initial(persona, task, project_dir=project_dir, **kwargs)
+            _advance_origin(tmp_path, origin, "shared.txt", "advanced\n")
+            return report
+        raise DispatchError("onejudge binary not found: 'onejudge'")
+
+    journal = open_journal(tmp_path / "raising-run", RunId("raising-conflict"), 1)
+    with pytest.raises(DispatchError):
+        run_repo_task(
+            str(origin),
+            "Create a conflicting local edit.",
+            "engineer",
+            workspace=_workspace(tmp_path, origin),
+            dispatch_fn=dispatch_fn,
+            recorded_gate=["true"],
+            journal=NodeJournal(journal, NodeId("ship"), RunId("raising-conflict"), 1),
+        )
+
+    recorded = [
+        event
+        for event in journal.events()
+        if event.kind in {"conflict-resolution-started", "conflict-resolution-finished"}
+    ]
+    assert [event.kind for event in recorded] == [
+        "conflict-resolution-started",
+        "conflict-resolution-finished",
+    ]
+    assert recorded[1].detail["completed"] is False
+    assert "DispatchError" in str(recorded[1].detail["error"])
+
+
+def test_a_conflict_resolution_whose_artifact_write_fails_still_closes_its_events(
+    tmp_path, bare_origin
+) -> None:
+    """The close cannot depend on *where* after the start the failure lands.
+
+    Here the resolver itself succeeds and commits; what fails is persisting its
+    report afterwards, against a real read-only artifact directory — the shape a
+    full or permission-denied disk takes in production. The ledger cannot see which
+    step raised, so a start it never closed reads as a hang either way.
+    """
+    origin = bare_origin({"shared.txt": "original\n"})
+    initial = make_writing_dispatch(filename="shared.txt", content="preserved")
+    journal = open_journal(tmp_path / "unwritable-run", RunId("unwritable-conflict"), 1)
+    node_journal = NodeJournal(journal, NodeId("ship"), RunId("unwritable-conflict"), 1)
+    artifacts = node_journal.artifact_dir
+    assert artifacts is not None
+
+    def dispatch_fn(persona: str, task: str, *, project_dir: str, **kwargs: object) -> Report:
+        if "Resolve the content conflict" not in task:
+            report = initial(persona, task, project_dir=project_dir, **kwargs)
+            _advance_origin(tmp_path, origin, "shared.txt", "advanced\n")
+            return report
+        path = Path(project_dir) / "shared.txt"
+        path.write_text("advanced\npreserved by engineer\n", encoding="utf-8")
+        gitops.add_all(project_dir)
+        artifacts.mkdir(parents=True, exist_ok=True)
+        artifacts.chmod(0o500)
+        return Report(persona, 0, True, False, 2, [], {}, {}, "")
+
+    try:
+        with pytest.raises(OSError):
+            run_repo_task(
+                str(origin),
+                "Create a conflicting local edit.",
+                "engineer",
+                workspace=_workspace(tmp_path, origin),
+                dispatch_fn=dispatch_fn,
+                recorded_gate=["true"],
+                journal=node_journal,
+            )
+    finally:
+        artifacts.chmod(0o700)
+
+    recorded = [
+        event
+        for event in journal.events()
+        if event.kind in {"conflict-resolution-started", "conflict-resolution-finished"}
+    ]
+    assert [event.kind for event in recorded] == [
+        "conflict-resolution-started",
+        "conflict-resolution-finished",
+    ]
+    assert recorded[1].detail["completed"] is False
+    assert "Error" in str(recorded[1].detail["error"])
 
 
 @pytest.mark.parametrize("resolver_commits", [False, True])
@@ -2748,6 +2863,7 @@ def test_local_conflict_incomplete_resolver_preserves_branch(
             gitops.add_all(project_dir)
         return Report(persona, 1, False, False, 2, [], {}, {}, "")
 
+    journal = open_journal(tmp_path / "incomplete-run", RunId("incomplete-conflict"), 1)
     result = run_repo_task(
         str(origin),
         "Create a conflicting local edit.",
@@ -2755,11 +2871,19 @@ def test_local_conflict_incomplete_resolver_preserves_branch(
         workspace=_workspace(tmp_path, origin),
         dispatch_fn=dispatch_fn,
         recorded_gate=["true"],
+        journal=NodeJournal(journal, NodeId("ship"), RunId("incomplete-conflict"), 1),
     )
 
     assert result.outcome == "sync-conflict"
     assert "did not complete" in result.detail
     assert not _has_file(origin, result.branch, "shared.txt")
+    # The unresolved and incomplete outcomes are recorded too: the ledger says the
+    # conflict dispatch ran and how it ended, not merely that publication stopped.
+    finished = [event for event in journal.events() if event.kind == "conflict-resolution-finished"]
+    assert len(finished) == 1
+    assert finished[0].detail["completed"] is False
+    assert finished[0].detail["resolved"] is resolver_commits
+    assert finished[0].detail["unresolved_paths"] == ([] if resolver_commits else ["shared.txt"])
 
 
 def test_local_conflict_retry_resumes_committed_branch(tmp_path, bare_origin) -> None:

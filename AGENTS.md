@@ -126,7 +126,12 @@ dispatch onejudge.
    workers propose but never edit. Triage follow-ups, keep the user informed at
    each milestone, and never let more than 30 minutes pass between updates. When
    a completed task published a PR, include the relevant PR link in its completion
-   report. Require verified publication closeout before issuing `complete`.
+   report. Require verified publication closeout before issuing `complete`. A run
+   the progress views report as `PARKED` is alive and not working — no child process,
+   no surface, no ledger write — so treat it as stopped and intervene rather than
+   waiting on it. `channel-reply` refuses an edit it cannot apply, with the reason,
+   and every edit it accepts reaches the graph; a non-zero reply is a rejection to
+   correct, never a command to resend.
 
 After `just orchestrate`, the planner uses **only** `just channel-next`, `just
 channel-reply`, and the read-only `just monitor` / `just runs` / `just status`

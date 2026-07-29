@@ -18,10 +18,14 @@ from pathlib import Path
 from typing import Any, Literal, TypedDict, cast
 
 from .config import ConfigError
+from .edits import EDIT_PROTOCOL_VERSION, EditError, parse_commands
 from .graph import parse_graph
 from .journal import (
     AUDIT_EVENT_KINDS,
     AUTHORITATIVE_EVENT_KINDS,
+    COMMITTED_EDIT_COMMAND_FIELD,
+    COMMITTED_EDIT_COMMAND_SINCE,
+    COMMITTED_EDIT_OPERATIONS_FIELD,
     OPTIONAL_EVENT_FIELDS,
     REQUIRED_EVENT_FIELDS,
     TERMINAL_NODE_RESULT_FIELD,
@@ -169,9 +173,29 @@ def project_round(events: list[Event], run_id: RunId, round_number: int) -> Roun
                     raise ProjectionError("edge-added requires string 'from' and 'to' references")
                 builder.edges.append((source, target))
             case "edit-committed":
-                operations = detail.get("operations")
+                operations = detail.get(COMMITTED_EDIT_OPERATIONS_FIELD)
                 if not isinstance(operations, list) or not operations:
                     raise ProjectionError("edit-committed requires non-empty operations")
+                # The submitted command is required from the schema version that
+                # introduced it and absent from every record written before it, so a
+                # v5 log still replays while a current one cannot omit the command
+                # that produced its mutations.
+                submitted = detail.get(COMMITTED_EDIT_COMMAND_FIELD)
+                if submitted is None:
+                    if event.version >= COMMITTED_EDIT_COMMAND_SINCE:
+                        raise ProjectionError("edit-committed requires the submitted command")
+                else:
+                    # Validated by the same parser the command passed on the wire, so a
+                    # recorded command and an accepted one are held to one contract.
+                    # Per-delta shape stays `apply_edit`'s transactional job, exactly as
+                    # at submission; a replay re-derives its graph from the compiled
+                    # operations rather than from this payload.
+                    try:
+                        parse_commands({"version": EDIT_PROTOCOL_VERSION, "commands": [submitted]})
+                    except EditError as exc:
+                        raise ProjectionError(
+                            f"edit-committed command must be a known edit payload: {exc}"
+                        ) from exc
                 snapshot = _copy_builder(builder)
                 try:
                     for operation in operations:

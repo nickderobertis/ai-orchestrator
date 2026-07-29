@@ -14,6 +14,7 @@ import io
 import json
 import os
 import socket
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -532,6 +533,41 @@ def test_executor_status_corruption_is_interpreted_conservatively(
     # the recovery gate all ask that one function whether an owner still exists.
     monkeypatch.setattr(runs_module.os, "kill", permission_denied)
     assert run_state(run_dir, RUN).state == "running"
+
+
+def test_a_parked_launch_is_reported_before_anything_it_last_recorded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A live pid is ownership, not progress: a parked launch outranks the stale
+    surface and the stale `running` round status it left behind."""
+    run_dir = tmp_path / RUN
+    _, round_dir = prepare_round(run_dir, PLAN)  # records this live process as the owner
+    (run_dir / "orchestrator").mkdir()
+    (run_dir / "launch.json").write_text("{}", encoding="utf-8")
+    (run_dir / "orchestrator" / "status.json").write_text(
+        json.dumps({"status": "running", "pid": os.getpid(), "host": socket.gethostname()}),
+        encoding="utf-8",
+    )
+    (run_dir / "channel").mkdir()
+    (run_dir / "channel" / "planner-pending.json").write_text(
+        json.dumps({"kind": "blocker", "message": "answer me", "blocking": True}),
+        encoding="utf-8",
+    )
+    stale = time.time() - 600
+    for path in (
+        run_dir / "orchestrator" / "status.json",
+        round_dir / "status.json",
+        round_dir / "plan.json",
+    ):
+        os.utime(path, (stale, stale))
+    monkeypatch.setattr("orchestrator.monitor.parked_indicator", lambda run, *, parked_after: None)
+    assert run_state(run_dir, RUN).state == "blocked"
+    monkeypatch.undo()
+    monkeypatch.setattr("orchestrator.liveness._parent_map", lambda: {})
+    parked = run_state(run_dir, RUN, parked_after=60)
+    assert (parked.state, parked.executor_live, parked.round) == ("parked", False, 1)
+    assert "no child process" in parked.detail
+    assert run_state(run_dir, RUN, parked_after=100_000).state == "blocked"
 
 
 def test_a_run_with_no_recorded_rounds_has_nothing_to_report_yet(tmp_path: Path) -> None:

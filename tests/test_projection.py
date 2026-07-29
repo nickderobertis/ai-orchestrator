@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -8,7 +9,13 @@ import pytest
 from orchestrator.config import ConfigError
 from orchestrator.edits import EDIT_OPERATION_KINDS
 from orchestrator.journal import (
+    AUDIT_EVENT_KINDS,
     AUTHORITATIVE_EVENT_KINDS,
+    COMMITTED_EDIT_COMMAND_FIELD,
+    COMMITTED_EDIT_COMMAND_SINCE,
+    COMMITTED_EDIT_COMMAND_TYPE,
+    COMMITTED_EDIT_OPERATIONS_FIELD,
+    JOURNAL_NAME,
     OPTIONAL_EVENT_FIELDS,
     REQUIRED_EVENT_FIELDS,
     SCHEMA_VERSION,
@@ -26,8 +33,11 @@ from orchestrator.runs import prepare_round
 
 
 def test_static_event_contract_golden() -> None:
+    """The checked-in contract and the code must move together, version included."""
     golden = json.loads(
-        (Path(__file__).parent / "golden" / "static-round-events-v5.json").read_text()
+        (
+            Path(__file__).parent / "golden" / f"static-round-events-v{SCHEMA_VERSION}.json"
+        ).read_text()
     )
     assert golden["version"] == SCHEMA_VERSION
     assert golden["terminal_node_kinds"] == list(TERMINAL_NODE_EVENT_KINDS)
@@ -36,8 +46,20 @@ def test_static_event_contract_golden() -> None:
         TERMINAL_NODE_RESULT_FIELD: TERMINAL_NODE_RESULT_TYPE,
     }
     assert golden["state_changing_kinds"] == list(AUTHORITATIVE_EVENT_KINDS)
+    assert golden["audit_kinds"] == sorted(AUDIT_EVENT_KINDS)
     assert golden["required_envelope"] == list(REQUIRED_EVENT_FIELDS)
     assert golden["optional_envelope"] == list(OPTIONAL_EVENT_FIELDS)
+    assert golden["committed_edit_detail"] == {
+        "required": [COMMITTED_EDIT_OPERATIONS_FIELD],
+        "optional": [COMMITTED_EDIT_COMMAND_FIELD],
+        COMMITTED_EDIT_COMMAND_FIELD: COMMITTED_EDIT_COMMAND_TYPE,
+        "command_since": COMMITTED_EDIT_COMMAND_SINCE,
+    }
+    # One golden per version, and only the current one: a stale file beside it would
+    # be a second, unchecked source for the same contract.
+    assert sorted(path.name for path in (Path(__file__).parent / "golden").glob("static-*")) == [
+        f"static-round-events-v{SCHEMA_VERSION}.json"
+    ]
 
 
 def test_projection_reconstructs_plan_states_attestations_and_result(tmp_path: Path) -> None:
@@ -81,12 +103,16 @@ def test_committed_reparent_is_atomic_and_replays_as_one_delta(tmp_path: Path) -
         )
     journal.append("edge-added", detail={"from": "a", "to": "c"})
     journal.append("round-started", detail={"plan": {"schema_version": 3, "concurrency": 2}})
-    journal.append_transaction(
-        [
-            {"kind": "edge-removed", "detail": {"from": "a", "to": "c"}},
-            {"kind": "edge-added", "detail": {"from": "b", "to": "c"}},
-            {"kind": "reparent", "node": "c", "detail": {"from": ["a"], "to": ["b"]}},
-        ]
+    journal.append(
+        "edit-committed",
+        detail={
+            "command": {"op": "reparent", "id": "c", "deps": ["b"]},
+            "operations": [
+                {"kind": "edge-removed", "detail": {"from": "a", "to": "c"}},
+                {"kind": "edge-added", "detail": {"from": "b", "to": "c"}},
+                {"kind": "reparent", "node": "c", "detail": {"from": ["a"], "to": ["b"]}},
+            ],
+        },
     )
 
     projection = project_run(tmp_path / "events.jsonl", run_id, 1)
@@ -832,3 +858,92 @@ def test_prepare_round_regenerates_a_deleted_terminal_result_then_advances(tmp_p
     assert number == 2
     assert json.loads((round_dir / "result.json").read_text()) == result
     assert json.loads((next_dir / "plan.json").read_text()) == plan
+
+
+def test_a_committed_edit_carries_the_command_that_produced_it() -> None:
+    """Replay reads the submitted command, not an inference from the mutations."""
+    submitted = {"op": "drop", "id": "work", "dependents": "drop"}
+    events = [
+        _event(
+            "node-added", 1, detail={"definition": {"id": "keep", "persona": "p", "task": "Keep"}}
+        ),
+        _event(
+            "node-added", 2, detail={"definition": {"id": "work", "persona": "p", "task": "Work"}}
+        ),
+        _event("round-started", 3, detail={"plan": {"schema_version": 3}}),
+        _event(
+            "edit-committed",
+            4,
+            detail={
+                "command": submitted,
+                "operations": [
+                    {"kind": "node-dropped", "node": "work", "detail": {"dependents": "drop"}}
+                ],
+            },
+        ),
+    ]
+    projection = project_round(events, RunId("r"), 1)
+    assert [node["id"] for node in projection.plan["tasks"]] == ["keep"]
+    committed = next(event for event in events if event.kind == "edit-committed")
+    assert committed.detail["command"] == submitted
+
+    for broken in ({"op": "nonsense"}, ["drop"]):
+        corrupt = [
+            *events[:3],
+            _event("edit-committed", 4, detail={**committed.detail, "command": broken}),
+        ]
+        with pytest.raises(ProjectionError, match="known edit payload"):
+            project_round(corrupt, RunId("r"), 1)
+
+
+def test_a_v5_log_still_replays_without_the_command_a_v6_record_must_carry() -> None:
+    """The bump is additive, and both directions of that claim are checked here."""
+    operations = [{"kind": "node-dropped", "node": "work", "detail": {"dependents": "drop"}}]
+    prelude = [
+        _event(
+            "node-added", 1, detail={"definition": {"id": "keep", "persona": "p", "task": "Keep"}}
+        ),
+        _event(
+            "node-added", 2, detail={"definition": {"id": "work", "persona": "p", "task": "Work"}}
+        ),
+        _event("round-started", 3, detail={"plan": {"schema_version": 3}}),
+    ]
+    legacy = replace(_event("edit-committed", 4, detail={"operations": operations}), version=5)
+    projection = project_round([*prelude, legacy], RunId("r"), 1)
+    assert [node["id"] for node in projection.plan["tasks"]] == ["keep"]
+
+    # The same record at the current version is incomplete: a reader would have to
+    # infer the disposition the reconciler was actually given.
+    current = replace(legacy, version=SCHEMA_VERSION)
+    with pytest.raises(ProjectionError, match="requires the submitted command"):
+        project_round([*prelude, current], RunId("r"), 1)
+
+
+def test_a_committed_edit_round_trips_its_command_through_the_journal(tmp_path: Path) -> None:
+    """Written by the real journal, read back by the strict reader, unchanged."""
+    run_id = RunId("round-trip")
+    journal = open_journal(tmp_path, run_id, 1)
+    journal.append(
+        "node-added", detail={"definition": {"id": "keep", "persona": "p", "task": "Keep"}}
+    )
+    journal.append(
+        "node-added", detail={"definition": {"id": "work", "persona": "p", "task": "Work"}}
+    )
+    journal.append("round-started", detail={"plan": {"schema_version": 3}})
+    command = {"op": "drop", "id": "work", "dependents": "drop"}
+    written = journal.append(
+        "edit-committed",
+        detail={
+            "command": command,
+            "operations": [
+                {"kind": "node-dropped", "node": "work", "detail": {"dependents": "drop"}}
+            ],
+        },
+    )
+    assert written.version == SCHEMA_VERSION
+
+    events = read_strict_events(tmp_path / JOURNAL_NAME, run_id)
+    committed = next(event for event in events if event.kind == "edit-committed")
+    assert committed.version == SCHEMA_VERSION
+    assert committed.detail["command"] == command
+    assert [node["id"] for node in project_round(events, run_id, 1).plan["tasks"]] == ["keep"]
