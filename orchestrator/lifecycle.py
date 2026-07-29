@@ -211,6 +211,8 @@ class Resume:
     pr: str | None = None
     mode: ResumeMode = "pause"
     source_round: int | None = None
+    #: Automatic cross-round continuations already spent on this preserved branch.
+    attempts: int = 0
 
 
 @dataclass
@@ -2453,6 +2455,7 @@ def _parse_resume(nid: str, raw: object, steps: list[Step] | None) -> Resume | N
         "pr",
         "mode",
         "source_round",
+        "attempts",
     }
     if unknown := set(raw) - allowed:
         raise PlanError(f"task {nid!r} 'resume' has unknown fields: {', '.join(sorted(unknown))}")
@@ -2492,6 +2495,9 @@ def _parse_resume(nid: str, raw: object, steps: list[Step] | None) -> Resume | N
         not isinstance(source_round, int) or isinstance(source_round, bool) or source_round < 1
     ):
         raise PlanError(f"task {nid!r} resume 'source_round' must be a positive integer")
+    attempts = raw.get("attempts", 0)
+    if not isinstance(attempts, int) or isinstance(attempts, bool) or attempts < 0:
+        raise PlanError(f"task {nid!r} resume 'attempts' must be a non-negative integer")
     return Resume(
         branch=cast(str, raw["branch"]),
         base_branch=cast(str, raw["base_branch"]),
@@ -2501,6 +2507,7 @@ def _parse_resume(nid: str, raw: object, steps: list[Step] | None) -> Resume | N
         pr=pr,
         mode=cast(ResumeMode, mode),
         source_round=source_round,
+        attempts=attempts,
     )
 
 
@@ -2965,6 +2972,8 @@ def resume_payload(resume: Resume | None) -> ResumePayload | None:
         payload["mode"] = resume.mode
     if resume.source_round is not None:
         payload["source_round"] = resume.source_round
+    if resume.attempts:
+        payload["attempts"] = resume.attempts
     return payload
 
 

@@ -330,6 +330,10 @@ class ResumePayload(TypedDict):
     pr: str | None
     mode: NotRequired[ResumeMode]
     source_round: NotRequired[int]
+    #: How many times the harness has continued this preserved branch on its own.
+    #: Absent until the first automatic continuation, so an untouched payload is
+    #: byte-identical to one written before this field existed.
+    attempts: NotRequired[int]
 
 
 class HumanActionPayload(TypedDict):

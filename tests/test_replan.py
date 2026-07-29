@@ -8,7 +8,12 @@ from copy import deepcopy
 import pytest
 
 from orchestrator.plan import PlanError
-from orchestrator.replan import _apply_lifecycle_resume, main, next_round
+from orchestrator.replan import (
+    MAX_AUTOMATIC_ROUND_RESUMES,
+    _apply_lifecycle_resume,
+    main,
+    next_round,
+)
 
 
 def _plan(*tasks: dict) -> dict:
@@ -541,7 +546,99 @@ def test_failed_lifecycle_carries_preserved_resume_without_retry_edit() -> None:
 
     carried = next_round(_plan(work), result)
 
-    assert carried["tasks"][0]["resume"] == {**resume, "source_round": 3}
+    # The continuation is the harness's own, so it is counted against the budget
+    # that stops a node being redispatched at the same branch forever.
+    assert carried["tasks"][0]["resume"] == {**resume, "source_round": 3, "attempts": 1}
+
+
+def _preserved_failure(resume: dict[str, object], *, round_number: int = 3) -> dict[str, object]:
+    return {
+        "round": round_number,
+        "results": {
+            "work": {"status": "failed", "outcome": "not-completed", "resume": resume}
+        },
+    }
+
+
+def test_automatic_continuation_settles_a_node_once_its_budget_is_spent() -> None:
+    """A preserved branch is continued a bounded number of times, then left alone.
+
+    Unbounded, this is the loop that redispatched one node every round and handed it
+    another `(incomplete step)` marker commit each time. The node settles out of the
+    round exactly as a `drop` would, leaving its failed result and its recoverable
+    branch for the planner.
+    """
+    work = {"id": "work", "repo": "o/r", "persona": "engineer", "task": "Continue"}
+    resume: dict[str, object] = {
+        "branch": "feature/preserved",
+        "base_branch": "main",
+        "pr_base": "main",
+        "checkpoint": "abcdef1",
+        "completed_steps": [],
+        "mode": "retry",
+    }
+
+    spent = 0
+    for _ in range(MAX_AUTOMATIC_ROUND_RESUMES):
+        carried = next_round(_plan(work), _preserved_failure(resume))
+        resume = carried["tasks"][0]["resume"]
+        spent += 1
+        assert resume["attempts"] == spent
+
+    assert next_round(_plan(work), _preserved_failure(resume))["tasks"] == []
+
+
+def test_an_explicit_retry_restores_the_full_continuation_budget() -> None:
+    """The bound stops the harness repeating itself, never a planner decision."""
+    work = {"id": "work", "repo": "o/r", "persona": "engineer", "task": "Continue"}
+    exhausted: dict[str, object] = {
+        "branch": "feature/preserved",
+        "base_branch": "main",
+        "pr_base": "main",
+        "checkpoint": "abcdef1",
+        "completed_steps": [],
+        "mode": "retry",
+        "attempts": MAX_AUTOMATIC_ROUND_RESUMES,
+    }
+
+    assert next_round(_plan(work), _preserved_failure(exhausted))["tasks"] == []
+
+    retried = next_round(
+        _plan(work), _preserved_failure(exhausted), {"retry": {"work": {"max_turns": 40}}}
+    )
+
+    assert [task["id"] for task in retried["tasks"]] == ["work"]
+    assert "attempts" not in retried["tasks"][0]["resume"]
+    assert retried["tasks"][0]["max_turns"] == 40
+
+
+def test_a_waiting_human_workstream_is_never_bounded_by_the_retry_budget() -> None:
+    """A human gate is not a failed attempt; waiting rounds must not spend budget."""
+    work = {
+        "id": "work",
+        "repo": "o/r",
+        "persona": "engineer",
+        "task": "Continue",
+        "steps": [{"id": "gate", "kind": "human", "task": "approve"}],
+    }
+    resume: dict[str, object] = {
+        "branch": "feature/paused",
+        "base_branch": "main",
+        "pr_base": "main",
+        "checkpoint": "abcdef1",
+        "completed_steps": [],
+    }
+    waiting = {
+        "round": 2,
+        "results": {
+            "work": {"status": "waiting", "resume": resume, "waiting_steps": ["gate"]}
+        },
+    }
+
+    for _ in range(MAX_AUTOMATIC_ROUND_RESUMES + 2):
+        carried = next_round(_plan(work), waiting)
+        assert [task["id"] for task in carried["tasks"]] == ["work"]
+        assert "attempts" not in carried["tasks"][0]["resume"]
 
 
 def test_explicit_branch_overrides_inferred_preserved_resume() -> None:

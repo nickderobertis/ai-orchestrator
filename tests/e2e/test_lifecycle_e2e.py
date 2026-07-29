@@ -67,7 +67,7 @@ from orchestrator.provenance import (
 )
 from orchestrator.recover import recover_repo
 from orchestrator.registry import Registry, RegistryEntry, Slug
-from orchestrator.replan import next_round
+from orchestrator.replan import MAX_AUTOMATIC_ROUND_RESUMES, next_round
 from orchestrator.runs import NodeId, RunId, prepare_round, write_result
 from orchestrator.workspace import IdentityKey, Workspace, normalize_repo
 
@@ -1033,6 +1033,83 @@ def test_repo_plan_ledger_and_guided_next_round(
     assert main_plan([str(plan_path), "--no-record", *common]) == 0
     unrecorded = json.loads(capsys.readouterr().out)
     assert unrecorded["schema_version"] == 5 and "round" not in unrecorded
+
+
+def test_a_node_that_cannot_finish_settles_instead_of_being_redispatched_forever(
+    tmp_path, bare_origin, command_base, personas_dir, capsys
+) -> None:
+    """A preserved branch is continued to a budget, then left for the planner.
+
+    The loop this closes: a node that never finishes was redispatched every round on
+    the same branch and handed another `chore: ... (incomplete step)` marker commit
+    each time, with nothing recording that the attempts were going nowhere. Driven
+    through the real round CLIs against a real origin, so what is asserted is the
+    ledger and the branch an operator would actually read.
+    """
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-bounded-resume")
+    Registry().register(str(canonical), workflow="local")
+    runs_dir = tmp_path / "runs"
+    plan_path = tmp_path / "bounded-resume.json"
+    plan_path.write_text(
+        json.dumps(
+            {
+                "tasks": [
+                    {
+                        "id": "change",
+                        "repo": str(canonical),
+                        "persona": "engineer",
+                        # Writes real work every round, so every attempt earns a
+                        # marker: the growth is bounded by bounding the attempts.
+                        "task": "should-fail write-unique-change: never finishes",
+                        "verify_cmd": ["true"],
+                        "workflow": "local",
+                        "repo_type": "single-owner",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    common = [
+        "--base",
+        str(command_base()),
+        "--persona-dir",
+        str(personas_dir),
+        "--workspace",
+        str(tmp_path / "workspace"),
+        "--format",
+        "json",
+    ]
+    run = "bounded-resume"
+
+    def _round_result(number: int) -> dict:
+        recorded = runs_dir / run / f"round-{number:02d}" / "result.json"
+        return json.loads(recorded.read_text(encoding="utf-8"))["results"]["change"]
+
+    assert main_plan([str(plan_path), "--run", run, "--runs-dir", str(runs_dir), *common]) == 1
+    capsys.readouterr()
+    branch = _round_result(1)["branch"]
+    markers = [len(incomplete_commits(canonical, "origin/main", branch))]
+
+    # Every automatic continuation the budget allows, and not one more.
+    for _ in range(MAX_AUTOMATIC_ROUND_RESUMES):
+        assert next_round_main([run, "--runs-dir", str(runs_dir), *common]) == 1
+        capsys.readouterr()
+        markers.append(len(incomplete_commits(canonical, "origin/main", branch)))
+
+    rounds_run = 1 + MAX_AUTOMATIC_ROUND_RESUMES
+    assert _round_result(rounds_run)["branch"] == branch
+    assert markers == list(range(1, rounds_run + 1)), markers
+
+    assert next_round_main([run, "--runs-dir", str(runs_dir), *common]) == 0
+    settled = capsys.readouterr().out
+    assert "nothing to iterate" in settled, settled
+
+    # Nothing was dispatched, so the branch stopped growing and still carries every
+    # preserved attempt for `just repo-recover` to verify and publish.
+    assert not (runs_dir / run / f"round-{rounds_run + 1:02d}").exists()
+    assert len(incomplete_commits(canonical, "origin/main", branch)) == rounds_run
 
 
 def test_ordinary_next_round_resumes_committed_lifecycle_branch(
