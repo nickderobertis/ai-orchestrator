@@ -2523,6 +2523,48 @@ def test_three_failing_recoveries_of_one_branch_report_three_distinct_causes(
     assert stale.gate_log in stale.detail
 
 
+def test_a_rejecting_hook_that_echoes_a_credential_records_only_its_name(
+    tmp_path, bare_origin, monkeypatch
+) -> None:
+    """Preserved evidence outlives its terminal, so it must never carry a token.
+
+    The gate log and the recorded detail are both durable records of whatever the
+    pre-push hook wrote, so this drives a real hook that echoes an environment
+    credential and checks both records.
+    """
+    token = "sk-ant-oat01-not-a-real-credential"
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", token)
+    origin = bare_origin()
+    workspace = _workspace(tmp_path, origin)
+    canonical = _shared_checkout(tmp_path)
+    install_pre_push_hook(
+        canonical,
+        "printf 'pre-push: gate failed while authenticating with %s\\n' "
+        '"$CLAUDE_CODE_OAUTH_TOKEN" >&2\nexit 1',
+    )
+    run_dir = tmp_path / "redaction-run"
+    journal = open_journal(run_dir, RunId("redaction"), 1)
+    scope = NodeJournal(journal, NodeId("publish"), RunId("redaction"), 1)
+
+    result = run_repo_task(
+        str(origin),
+        "Publish work the gate rejects while printing a credential.",
+        "engineer",
+        workspace=workspace,
+        dispatch_fn=make_writing_dispatch(filename="rejected.txt"),
+        recorded_gate=["just", "gate"],
+        journal=scope,
+    )
+
+    assert result.outcome == "gate-failed"
+    assert result.verify is not None and result.verify.log_path
+    preserved = Path(result.verify.log_path).read_text(encoding="utf-8")
+    assert token not in preserved and token not in result.detail
+    assert "<redacted:CLAUDE_CODE_OAUTH_TOKEN>" in preserved
+    assert "<redacted:CLAUDE_CODE_OAUTH_TOKEN>" in result.detail
+    assert "gate failed while authenticating with" in preserved
+
+
 def test_lifecycle_refuses_uncovered_identity_before_dispatch(tmp_path, bare_origin) -> None:
     origin = bare_origin()
     canonical = gitops.clone(origin, tmp_path / "uncovered")
@@ -3238,7 +3280,10 @@ def test_local_repo_noop_registry_gate_relies_on_covered_merge_path(tmp_path, ba
 
     assert result.ok and result.outcome == "merged"
     assert "pushed unproven" not in result.detail
-    assert result.verify is not None and result.verify.ok
+    # A `<no-op>` identity gate names no bar, so there is nothing for a record to
+    # claim was run: the hook still gates the push, but the run cannot say what it
+    # ran, and inventing a verdict would be worse than recording none.
+    assert result.verify is None
 
 
 # llmlint: ignore[e2e_not_mocked] GitHub decisioning is the suite's documented external seam.

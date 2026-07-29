@@ -41,6 +41,7 @@ from .provenance import (
     recorded_pr_base,
     unattested_incomplete,
 )
+from .redaction import redact
 from .registry import Registry, RegistryEntry, RegistryError, Slug, merge_gate_coverage
 from .verify import NOOP_GATE, append_gate_log, format_merge_path_record, resolve_gate_template
 from .workspace import IdentityKey, RepoRef, RepositoryType, Workspace, WorkspaceError
@@ -278,7 +279,7 @@ def recover_repo(
                 pushed = gitops.push(worktree, branch)
             except gitops.GitError as exc:
                 outcome = classify_push_failure(exc)
-                detail = str(exc)
+                detail = redact(str(exc))
                 evidence = preserve(ok=False, output=exc.output)
                 return MergeOutcome(
                     outcome,

@@ -31,6 +31,7 @@ from .coordination import GitLockIdentity, git_lock_identity
 from .github import AutoMergeUnavailable, Check, GitHubBackend, PRStatus, PullRequest
 from .merge_queue import merge_queue_turn
 from .outcomes import ALREADY_INTEGRATED_OUTCOME, LifecycleOutcome
+from .redaction import redact
 from .verify import VerifyResult, record_merge_path_verification
 from .workspace import RepositoryType
 
@@ -367,7 +368,7 @@ class LocalMergeStrategy:
                         pushed = gitops.push(scratch, f"HEAD:{ctx.base}", set_upstream=False)
                     except gitops.GitError as exc:
                         if not _is_push_race(exc):
-                            detail = str(exc)
+                            detail = redact(str(exc))
                             outcome = classify_push_failure(exc)
                             # A lost race is retried below and is not a gate verdict,
                             # so only a real rejection records one.

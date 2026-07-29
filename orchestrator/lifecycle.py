@@ -67,6 +67,7 @@ from .provenance import (
     incomplete_commits,
     unattested_incomplete,
 )
+from .redaction import redact
 from .registry import Registry, RegistryError, merge_gate_coverage, validate_identity_key
 from .runs import (
     RECORDED_RESULT_SCHEMA_VERSION,
@@ -1238,8 +1239,13 @@ def _evidence(result: LifecycleResult) -> str:
 
 
 def _push_failure(exc: GitError, *, branch: str, evidence: str = "") -> MergeOutcome:
-    """Turn a hook/transport rejection into a durable lifecycle outcome."""
-    detail = str(exc)
+    """Turn a hook/transport rejection into a durable lifecycle outcome.
+
+    The hook's own message travels into the run ledger, so it is redacted for the
+    same reason the preserved log is: a rejection that happened to echo an
+    environment value would otherwise record a live credential.
+    """
+    detail = redact(str(exc))
     outcome = classify_push_failure(exc)
     return MergeOutcome(
         outcome,

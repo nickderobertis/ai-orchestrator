@@ -550,6 +550,31 @@ def test_check_recipe_reports_the_coverage_total_it_measured(tmp_path: Path) -> 
     assert result.stdout == "check: all deterministic checks passed (line coverage 96.42%)\n"
 
 
+def test_check_recipe_stays_green_when_no_coverage_artifact_exists(tmp_path: Path) -> None:
+    """A missing artifact reports nothing; it must never turn a green tier red."""
+    checkout, trace = _recipe_checkout(tmp_path)
+    _mark_nx_installed(checkout)
+
+    result = _recipe_run(checkout, trace, "check")
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "check: all deterministic checks passed\n"
+    assert not (checkout / ".coverage").exists()
+
+
+def test_check_recipe_stays_green_when_the_coverage_total_is_unusable(tmp_path: Path) -> None:
+    """An unavailable or malformed total is dropped, not reported and not fatal."""
+    checkout, trace = _recipe_checkout(tmp_path)
+    _mark_nx_installed(checkout)
+    (checkout / ".coverage").write_text("")
+
+    result = _recipe_run(checkout, trace, "check", FAKE_COVERAGE_TOTAL="No data to report.")
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "check: all deterministic checks passed\n"
+    assert "uv run coverage report --format=total" in trace.read_text()
+
+
 def test_gate_recipe_reports_the_coverage_total_it_measured(tmp_path: Path) -> None:
     checkout, trace = _gate_checkout(tmp_path)
     (checkout / ".coverage").write_text("")
