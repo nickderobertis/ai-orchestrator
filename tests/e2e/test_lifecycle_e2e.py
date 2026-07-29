@@ -31,6 +31,7 @@ from typing import TypeVar, cast
 import pytest
 from conftest import install_pre_push_hook
 from fakes import FakeGitHub, make_writing_dispatch
+from git_http import serve_github_origin
 from waits import deadline as e2e_deadline
 from waits import timeout as e2e_timeout
 
@@ -3329,6 +3330,119 @@ def test_recovery_push_failure_is_recorded_and_preserves_branch(
     assert expected_detail in recovered.detail
     assert gitops.is_ancestor(canonical, checkpoint, preserved.branch)
     assert not _has_file(origin, "main", "preserved.txt")
+
+
+@pytest.mark.parametrize(
+    ("rejection", "expected_outcome", "expected_detail"),
+    [
+        ("gate", "gate-failed", "repository pre-push gate rejected recovery"),
+        ("transport", "error", "recovery push"),
+    ],
+)
+def test_remote_recovery_push_failure_is_classified_and_opens_no_pr(
+    tmp_path, bare_origin, rejection: str, expected_outcome: str, expected_detail: str
+) -> None:
+    """A remote recovery's branch push is gated before any PR exists.
+
+    The remote path pushes the branch from `attest_and_push` and only then asks
+    GitHub for a PR, so a rejection here has to settle the node itself. A hook
+    rejection reads as the repository's gate; a transport rejection, which Git
+    reports indistinguishably apart from its text, stays an `error` carrying the
+    remote's own diagnostic.
+    """
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / f"canonical-remote-recovery-{rejection}")
+    Registry().register(str(canonical), workflow="remote", repo_type="single-owner", gate="true")
+    github = FakeGitHub(origin)
+
+    preserved = run_repo_task(
+        str(canonical),
+        "Preserve remote work whose recovery push is rejected.",
+        "engineer",
+        workspace=Workspace(tmp_path / f"remote-recovery-source-{rejection}"),
+        branch=f"feature/remote-recovery-{rejection}",
+        github=github,
+        dispatch_fn=make_writing_dispatch(filename="preserved.txt", completed=False),
+        recorded_gate=["true"],
+    )
+    assert preserved.outcome == "not-completed" and preserved.resume is not None
+    checkpoint = gitops.ref_sha(canonical, preserved.branch)
+    open_prs = len(github._prs)
+    if rejection == "gate":
+        install_pre_push_hook(
+            canonical,
+            "printf 'pre-push: complete gate failed during remote recovery\\n' >&2\nexit 1",
+        )
+    else:
+        receive = origin / "hooks" / "pre-receive"
+        receive.write_text("#!/bin/sh\nprintf 'remote denied\\n' >&2\nexit 1\n", encoding="utf-8")
+        receive.chmod(0o755)
+
+    recovered = recover_repo(
+        canonical,
+        preserved.branch,
+        workspace_root=tmp_path / f"remote-recovery-{rejection}-worktrees",
+        github=github,
+        recorded_gate=["true"],
+    )
+
+    assert recovered.outcome == expected_outcome
+    assert expected_detail in recovered.detail
+    assert gitops.is_ancestor(canonical, checkpoint, preserved.branch)
+    # The push precedes PR creation, so a rejected recovery leaves no PR behind.
+    assert len(github._prs) == open_prs
+    assert not _has_file(origin, "main", "preserved.txt")
+
+
+def test_remote_recovery_publishes_on_required_checks_without_a_pre_push_hook(
+    tmp_path, bare_origin
+) -> None:
+    """Recovery admits required PR status checks as its only merge-path gate.
+
+    This is the journey that carries the design's risk: with the orchestrator's
+    own gate run gone, an identity covered *only* by branch protection has to
+    still recover and merge. It needs a genuine GitHub identity, because required
+    checks count as coverage only for one — so the bare origin is served over real
+    TLS at its GitHub clone URL and every fetch and push here crosses the network.
+    """
+    origin = bare_origin()
+    with serve_github_origin(origin, tmp_path, slug="acme/recovered") as remote:
+        canonical = gitops.clone(origin, tmp_path / "canonical-required-checks-recovery")
+        gitops.hooks_dir(canonical).joinpath("pre-push").unlink()
+        remote.attach(canonical)
+        Registry().register(
+            "acme/recovered",
+            str(canonical),
+            workflow="remote",
+            repo_type="single-owner",
+            gate="true",
+        )
+        github = FakeGitHub(origin, required=("complete-gate",))
+
+        preserved = run_repo_task(
+            "acme/recovered",
+            "Preserve work recovered through required PR status checks alone.",
+            "engineer",
+            workspace=Workspace(tmp_path / "required-checks-recovery-source"),
+            branch="feature/required-checks-recovery",
+            github=github,
+            dispatch_fn=make_writing_dispatch(filename="recovered.txt", completed=False),
+            recorded_gate=["true"],
+        )
+        assert preserved.outcome == "not-completed", preserved.detail
+        assert gitops.hooks_dir(canonical).joinpath("pre-push").exists() is False
+
+        recovered = recover_repo(
+            "acme/recovered",
+            preserved.branch,
+            workspace_root=tmp_path / "required-checks-recovery-worktrees",
+            github=github,
+            recorded_gate=["true"],
+            merge_policy="auto",
+        )
+
+    assert recovered.ok and recovered.outcome == "merged", recovered.detail
+    assert _has_file(origin, "main", "recovered.txt")
 
 
 def test_recovery_refuses_uncovered_identity_and_preserves_branch(tmp_path, bare_origin) -> None:
