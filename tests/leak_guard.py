@@ -54,7 +54,7 @@ class SessionGuard:
     root_pid: int
     sampler: TreeSampler
     reaper: subprocess.Popen[bytes] | None
-    _watching: threading.Event = field(default_factory=threading.Event)
+    _stopping: threading.Event = field(default_factory=threading.Event)
     _watcher: threading.Thread | None = None
 
     def start(self) -> None:
@@ -70,7 +70,7 @@ class SessionGuard:
         """
         if self._watcher is not None:
             return
-        self._watching.set()
+        self._stopping.clear()
         previous = signal.pthread_sigmask(signal.SIG_BLOCK, signal.valid_signals())
         try:
             self._watcher = threading.Thread(target=self._watch, name="leak-guard", daemon=True)
@@ -79,9 +79,14 @@ class SessionGuard:
             signal.pthread_sigmask(signal.SIG_SETMASK, previous)
 
     def _watch(self) -> None:
-        while self._watching.is_set():
+        # The event says *stop*, so waiting on it is both the interval between samples
+        # and the shutdown signal: it returns early only once close() sets it. Waiting
+        # on a "still watching" event instead would return immediately every time and
+        # walk /proc in a spin loop for the whole session.
+        while True:
             self.sampler.sample()
-            self._watching.wait(POLL_SECONDS)
+            if self._stopping.wait(POLL_SECONDS):
+                return
 
     def excluded(self) -> frozenset[ProcessId]:
         """Processes the per-test sweep must never claim as a test's leak."""
@@ -89,7 +94,7 @@ class SessionGuard:
 
     def close(self) -> None:
         """Stop watching, then release the reaper's pipe so it reaps and exits."""
-        self._watching.clear()
+        self._stopping.set()
         if self._watcher is not None:
             self._watcher.join(timeout=10)
             self._watcher = None
