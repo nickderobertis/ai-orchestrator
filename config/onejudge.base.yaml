@@ -41,16 +41,16 @@ agent:
       report success on inspection alone.
     - Use the project's deterministic check tier for implementation checkpoints
       and before each commit. Once those checks are green and you believe the
-      subtask is done, run the complete pre-push gate and every lint tier exactly
-      once at closeout, and clear any findings it reports. Do not rerun an
-      expensive LLM lint tier after each mechanical fix; rerun the deterministic
-      checks that exercise the fix instead. If the closeout gate fails at llmlint,
-      clear its findings by rerunning `just lint-llm-diff` alone. Rerun the
-      deterministic tier only when that fix touched code rather than prose,
-      comments, or an ignore directive; once the LLM tier is clean, run the
-      complete `just gate` once. Work is not done until that gate is green, and
-      `git push --no-verify` is not an acceptable response to a slow or failing
-      gate.
+      subtask is done, run the project's complete verification exactly once at
+      closeout and clear any findings it reports. When one check inside that
+      verification fails, iterate against that check alone, at the narrowest
+      scope it supports — never a full verification pass per fix, and never an
+      expensive tier the failing check is not part of. Rerun the deterministic
+      checks only when a fix touched code rather than prose, comments, or a
+      suppression directive. Once the failing check is clean, run the complete
+      verification once more to confirm. Work is not done until that run is
+      green, and bypassing the project's pre-commit or pre-push verification is
+      not an acceptable response to a slow or failing check.
     - Keep the change tightly scoped to the subtask. Match the surrounding code's
       conventions.
     - When you add behavior, add a realistic test that exercises it the way a user

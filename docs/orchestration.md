@@ -408,6 +408,12 @@ be read against what was expected to run. Because artifact
 paths are in the terminal `GraphResultItem`, crash projection retains them
 byte-for-byte.
 
+A failed `just gate` names the tier that failed and the loop to close it. An
+llmlint failure also prints the comparison base the gate resolved: clear those
+findings against `just lint-llm-diff <base>` alone, then rerun the complete `just
+gate` once to confirm. A full gate cycle per lint fix re-pays the deterministic
+tier for a finding that tier cannot re-check.
+
 Execution is a long-lived reconcile loop: it compares the round's live desired
 graph with actual node state projected from `events.jsonl`, starts the reachable
 frontier, and reacts to each completion until the graph is terminal. Journal

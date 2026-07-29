@@ -1,0 +1,12 @@
+{
+  "name": "workspace",
+  "$schema": "./node_modules/nx/schemas/project-schema.json",
+  "projectType": "library",
+  "tags": ["scope:workspace"],
+  "targets": {
+    "lint-llm-diff": {
+      "command": "./scripts/llmlint-diff.sh",
+      "options": { "cwd": "." }
+    }
+  }
+}

@@ -38,7 +38,7 @@ check:
 gate remote=env_var_or_default("ORCHESTRATOR_COMPARISON_REMOTE", "origin") base=env_var_or_default("ORCHESTRATOR_COMPARISON_BASE", ""):
     @comparison=$(scripts/comparison-base.sh "$1" "$2")
     @log=$(mktemp); trap 'rm -f "$log"' EXIT; just check >"$log" 2>&1 || { cat "$log" >&2; echo "gate: deterministic checks failed; fix the reported findings and rerun 'just gate'" >&2; exit 1; }
-    @comparison=$(scripts/comparison-base.sh "$1" "$2"); log=$(mktemp); trap 'rm -f "$log"' EXIT; just lint-llm-diff "$comparison" >"$log" 2>&1 || { cat "$log" >&2; echo "gate: llmlint failed; clear the reported findings and rerun 'just gate $1 $2'" >&2; exit 1; }
+    @comparison=$(scripts/comparison-base.sh "$1" "$2"); log=$(mktemp); trap 'rm -f "$log"' EXIT; just lint-llm-diff "$comparison" >"$log" 2>&1 || { cat "$log" >&2; echo "gate: llmlint failed; clear the reported findings against 'just lint-llm-diff $comparison' alone, then rerun 'just gate $1 $2' once to confirm" >&2; exit 1; }
 
 # Spend one real harness turn proving prompt delivery and complete history telemetry.
 # Kept out of `gate`; pre-push selects it only for launch-path changes.
@@ -271,6 +271,25 @@ lint-llm-validate *args:
 
 # llmlint scoped to the merge-base diff with main — judges only what the branch
 # changed. This is the blocking pre-push check.
-lint-llm-diff base="origin/main":
+#
+# The judge is non-deterministic, so its verdict is memoized by the cached Nx
+# `workspace:lint-llm-diff` target: an unchanged tree judged against an unchanged
+# base replays the recorded verdict instead of rolling the dice again. The base
+# ref is resolved to a commit here, before Nx hashes it, so a rebased or advanced
+# base misses rather than replaying a verdict computed against a different base.
+# Pass extra Nx flags to override that — `just lint-llm-diff origin/main
+# --skip-nx-cache` forces a fresh judge run.
+#
+# The target records the verdict and exits 0 so Nx will cache a failing one too;
+# the last line is what enforces it, replaying the findings and the judged status.
+# A failure therefore fails identically whether it was just judged or replayed.
+# The recorded verdict and its judged marker are cleared first because Nx leaves
+# pre-existing outputs alone rather than comparing them: without this, a stale or
+# edited record would be replayed in place of the cached one. Nx's own success line
+# is dropped so a run says exactly two things: where the verdict came from, and
+# what it was. Its failures still reach stderr.
+# llmlint: ignore[tool_output_is_signal] the judge's per-rule report and its one-line provenance are this tier's product; see scripts/llmlint-verdict.sh.
+lint-llm-diff base="origin/main" *nx_args:
     @command -v llmlint >/dev/null 2>&1 || { echo "llmlint not installed — run 'just setup-llmlint'"; exit 1; }
-    @PATH="{{repo_root}}/.venv/bin:$PATH" LLMLINT_ONEHARNESS_BIN="{{repo_root}}/scripts/llmlint-oneharness.sh" ONEHARNESS_HISTORY_LABELS="$(uv run orchestrator-history-labels role=llmlint)" llmlint --diff --diff-base "{{base}}"
+    @base_sha=$(git rev-parse --verify --quiet "{{base}}^{commit}") || { echo "lint-llm-diff: '{{base}}' does not resolve to a commit; fetch it or pass an existing base" >&2; exit 1; }; rm -rf "{{repo_root}}/.nx/llmlint-diff" "{{repo_root}}/.nx/llmlint-diff.judged"; LLMLINT_DIFF_BASE_SHA="$base_sha" ./scripts/nx.sh run workspace:lint-llm-diff {{nx_args}} >/dev/null
+    @./scripts/llmlint-verdict.sh

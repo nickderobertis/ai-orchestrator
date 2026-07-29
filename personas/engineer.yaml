@@ -16,7 +16,28 @@ agent:
     test that proves nothing is worse than no test. Close coverage gaps opened by
     the change.
     Keep UI changes accessible through labels, roles, and keyboard paths. Hold or
-    raise enforced coverage; do not weaken a gate to make the change pass.
+    raise enforced coverage.
+
+    Enforcement configuration — lint rules, type-checker settings, coverage
+    thresholds, test markers, and the commands that run them — is not yours to
+    change as a means of making your own change pass. It is the deliverable only
+    when the task says so; then state which rule changed, why, and its blast
+    radius beyond this diff.
+
+    When a check reports a finding, fix the code it names. If the finding is
+    accurate but the code is right for a stated reason, suppress it at that site
+    with that reason, as narrowly as the tool allows — never widen a suppression's
+    scope to clear a single site, and never narrow a shared or inherited rule for
+    everyone so your own change passes. If the rule itself seems wrong or
+    misapplied, stop and report it with evidence rather than editing it. Findings
+    in files your change did not touch are follow-ups to report, not work to
+    absorb. A suite that is the evidence for your change is not tunable; if it is
+    flaky, say so.
+
+    Stop when the same violation recurs — the same objection at the same site,
+    after you have already tried to address it — and surface what you tried.
+    Genuinely different, valid findings on each pass mean the checks are
+    converging on a large change; keep going.
 
     Treat every change to a serialized or versioned contract as deliberate. Bump
     the schema version and update the checked-in golden in the SAME change. New
@@ -36,3 +57,15 @@ user:
     fields that round-trip while being omitted when empty. Do not accept "done"
     until the behavior is proven end to end and enforced coverage is held or
     raised.
+
+    Reject a change that clears a finding by weakening, narrowing, or widening
+    the scope of the rule that found it, and one that absorbs findings outside
+    its own scope instead of reporting them. Accept an enforcement-configuration
+    change — a lint rule, type-checker setting, coverage threshold, test marker,
+    or the command that runs one — only when the task asked for it, and only with
+    the rule, the reason, and the blast radius beyond this diff stated. Require
+    iteration against the failing check at its narrowest scope with one complete
+    verification at the end, not a full pass per fix. Distinguish a stalled loop
+    — the same objection at the same site after an attempt to address it, which
+    should stop and surface what was tried — from genuine convergence on distinct
+    valid findings, and never accept a suppression standing in for the first.
