@@ -33,16 +33,19 @@ if str(REPO_ROOT) not in sys.path:  # pragma: no cover - import path for a spawn
     sys.path.insert(0, str(REPO_ROOT))
 
 from orchestrator.coordination import ProcessStart, process_start_identity  # noqa: E402
-from orchestrator.watchdog import ProcessId, process_activity, terminate_processes  # noqa: E402
+from orchestrator.watchdog import ProcessId, descendants, terminate_processes  # noqa: E402
 
 #: How often the session's tree is sampled, and so the whole width of this reaper's
 #: blind spot: a process is claimed within ``POLL_SECONDS`` of appearing, and only a
-#: session that dies inside that window can leave one behind. The leaks this exists
-#: for ran for minutes, so the interval is set to keep the cost of a full procfs
-#: walk invisible when a dozen sessions run at once rather than to chase that window
-#: to zero. A caller that needs the guarantee deterministically — the guard's own
-#: e2e — waits this long after the process appears.
-POLL_SECONDS = 0.25
+#: session that dies inside that window can leave one behind.
+#:
+#: Set for cost rather than for the window, because the leaks this exists for ran
+#: for hours. A full procfs walk on a timer runs in the same interpreter as whatever
+#: that session is supervising — including dispatch's own liveness sampling, which
+#: measures intervals this would otherwise compete with — so it is deliberately
+#: infrequent. `process_tree.LINGER` is what keeps the guard's own e2e deterministic
+#: against it, and must stay comfortably above this.
+POLL_SECONDS = 0.5
 
 
 class TreeSampler:
@@ -76,7 +79,7 @@ class TreeSampler:
 
     def sample(self) -> None:
         """Record every descendant of the root not already claimed."""
-        seen = process_activity(ProcessId(self.root_pid)).pids
+        seen = descendants(ProcessId(self.root_pid))
         with self._guard:
             for pid in seen:
                 if pid != self.root_pid and pid != os.getpid() and pid not in self._known:

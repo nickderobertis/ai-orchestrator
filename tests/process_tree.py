@@ -32,7 +32,7 @@ LIFETIME = 600
 # parent lives for minutes while its children work, which is what lets a watcher
 # see them at all; a parent that vanished the instant it forked would model
 # nothing that has ever leaked here.
-LINGER = 1.0
+LINGER = 2.0
 ROLE = "ORCHESTRATOR_TEST_TREE_ROLE"
 marker = sys.argv[1]
 

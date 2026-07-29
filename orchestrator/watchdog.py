@@ -90,6 +90,35 @@ def process_group_is_running(group_id: ProcessId) -> bool:
     )
 
 
+def descendants(root_pid: ProcessId) -> tuple[ProcessId, ...]:
+    """Every live process below ``root_pid``, by parentage alone.
+
+    Deliberately cheaper than `process_activity`: parentage lives in
+    ``/proc/<pid>/stat``, so a caller that only needs the shape of the tree should
+    not also open ``/proc/<pid>/io`` for every process on the host. That second
+    read doubles the syscalls of a full walk, and a walk that repeats on a timer
+    is competing for the same interpreter as whatever it is watching.
+    """
+    parents: dict[ProcessId, ProcessId] = {}
+    for pid in _process_ids():
+        try:
+            raw = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
+        except OSError:
+            continue
+        fields = raw[raw.rfind(")") + 2 :].split()
+        if len(fields) >= 2 and fields[0] != "Z":
+            parents[pid] = ProcessId(int(fields[1]))
+    found = {root_pid}
+    changed = True
+    while changed:
+        changed = False
+        for pid, parent in parents.items():
+            if parent in found and pid not in found:
+                found.add(pid)
+                changed = True
+    return tuple(sorted(found - {root_pid}))
+
+
 def process_activity(root_pid: ProcessId) -> ProcessActivity:
     """Return live descendants and cumulative CPU/I/O for ``root_pid``."""
     records: dict[ProcessId, ProcessStat] = {}
