@@ -1373,10 +1373,16 @@ def test_planner_views_survive_an_unreadable_launch_record(
 ) -> None:
     """The record both views read is an ordinary file anything may corrupt.
 
-    A launch record this host cannot parse says nothing about whether the run is
-    alive, so the views must keep quiet about it rather than guess — and must still
-    answer at all, since a crash here would take away the only view of every other
-    run beside it.
+    No command produces a malformed record, which is the point: it is left by a
+    crash mid-write, a full disk, or anything else with write access to the ledger.
+    Reproducing that condition directly is the only way to reach it, and it is the
+    same input `test_killed_executor_surfaces_as_abandoned_in_runs_and_status`
+    rewrites for the round-level record. Everything either side of it — the launch,
+    and both views — is the planner-facing interface.
+
+    A record this host cannot parse says nothing about whether the run is alive, so
+    the views must keep quiet about it rather than guess, and must still answer at
+    all: raising here would take away the only view of every other run beside it.
     """
     runs = tmp_path / "unreadable-runs"
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
@@ -1390,6 +1396,8 @@ def test_planner_views_survive_an_unreadable_launch_record(
     status_path = runs / run_id / "orchestrator" / "status.json"
     owner = json.loads(status_path.read_text(encoding="utf-8"))["pid"]
     try:
+        # The corruption a crashed writer leaves behind, not a state any command
+        # can be asked for.
         status_path.write_text("{ not json", encoding="utf-8")
 
         listed = _view_cli("runs", runs, tmp_path / "history")
