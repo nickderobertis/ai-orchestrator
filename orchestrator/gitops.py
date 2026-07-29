@@ -36,6 +36,7 @@ __all__ = [
     "current_branch",
     "default_branch",
     "delete_branch",
+    "delete_branch_at",
     "fetch",
     "hooks_dir",
     "import_branch",
@@ -207,6 +208,22 @@ def copy_branch(cwd: str | Path, destination: str | Path, branch: str) -> bool:
     """
     proc = _git(
         ["push", str(destination), f"refs/heads/{branch}:refs/heads/{branch}"],
+        cwd=cwd,
+        check=False,
+    )
+    return proc.returncode == 0
+
+
+def delete_branch_at(cwd: str | Path, branch: str, expected: str) -> bool:
+    """Delete ``branch`` only while it still points at ``expected``.
+
+    A plain delete would take whatever the ref holds now. This repository's shared
+    checkout is written by every run of an identity, so "still where I left it" is
+    the only safe precondition: `update-ref -d` compares and deletes atomically, and
+    declines when someone else has moved the branch on.
+    """
+    proc = _git(
+        ["update-ref", "-d", f"refs/heads/{branch}", expected],
         cwd=cwd,
         check=False,
     )

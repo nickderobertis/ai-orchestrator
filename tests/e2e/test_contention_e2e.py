@@ -749,6 +749,43 @@ def test_a_runs_branch_cleanup_never_withdraws_a_siblings_preserved_work(
     assert not gitops.branch_exists(canonical, "feature/owned-name")
 
 
+def test_a_sibling_advancing_a_mirrored_branch_keeps_it_from_the_delete(
+    tmp_path: Path, bare_origin: Callable[..., Path]
+) -> None:
+    """The window between one run's copy and its cleanup belongs to whoever moved it."""
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-advanced")
+    root = tmp_path / "worktrees-advanced"
+    repo = normalize_repo(str(canonical))
+    shared = "feature/advanced-name"
+
+    # This run preserves work and hands it to the shared checkout.
+    owner = _open_workspace(str(canonical), str(root))
+    owner_tree = owner.worktree(repo, shared, base="origin/main")
+    (owner_tree / "first.txt").write_text("the first run's work\n", encoding="utf-8")
+    gitops.add_all(owner_tree)
+    gitops.commit(owner_tree, "feat: first run's preserved work")
+    owner.remove_worktree(repo, owner_tree)
+
+    # Before it cleans up, a sibling adopts that branch and preserves newer work
+    # on top — the shared copy now carries commits the first run never had.
+    sibling = _open_workspace(str(canonical), str(root))
+    sibling_tree = sibling.worktree(repo, shared, base="origin/main")
+    (sibling_tree / "second.txt").write_text("the sibling's newer work\n", encoding="utf-8")
+    gitops.add_all(sibling_tree)
+    gitops.commit(sibling_tree, "feat: sibling's newer preserved work")
+    sibling.remove_worktree(repo, sibling_tree)
+    advanced = gitops.ref_sha(canonical, shared)
+
+    owner.delete_branch(repo, shared)
+
+    # The delete declined: the branch is no longer where this run left it, and the
+    # sibling's newer work is the only record of itself.
+    assert gitops.ref_sha(canonical, shared) == advanced
+    assert _has_file(canonical, shared, "second.txt")
+    assert _has_file(canonical, shared, "first.txt")
+
+
 def test_abandoned_run_is_reclaimed_only_once_all_its_work_reached_origin(
     tmp_path: Path, bare_origin: Callable[..., Path]
 ) -> None:

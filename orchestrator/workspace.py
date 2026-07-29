@@ -65,6 +65,8 @@ CACHE_ENV = "ORCHESTRATOR_CACHE_DIR"
 Workflow = Literal["local", "remote"]
 RepositoryType = Literal["single-owner", "team"]
 IdentityKey = NewType("IdentityKey", str)
+#: Names one run's directory, and so authorizes rejoining that run's clone.
+RunToken = NewType("RunToken", str)
 
 #: Per-run state lives under a ``runs/`` level so the flat per-branch directories
 #: an earlier layout created alongside it are never mistaken for run roots — and
@@ -171,7 +173,7 @@ def _run_lease_identity(run_root: Path) -> str:
     return f"workspace-run:{run_root.resolve()}"
 
 
-def validate_run_token(token: str) -> str:
+def validate_run_token(token: str) -> RunToken:
     """Accept a run token only if it can safely name one directory.
 
     The token becomes a path component under the workspace root, so a separator or
@@ -182,7 +184,7 @@ def validate_run_token(token: str) -> str:
         raise WorkspaceError(
             f"run token {token!r} must be a non-empty name of letters, digits, '.', '_', or '-'"
         )
-    return token
+    return RunToken(token)
 
 
 @dataclass(frozen=True)
@@ -197,10 +199,10 @@ class RunOwner:
 
     pid: int
     process_start: ProcessStart | None
-    token: str
+    token: RunToken
 
     @classmethod
-    def current(cls, token: str) -> RunOwner:
+    def current(cls, token: RunToken) -> RunOwner:
         return cls(os.getpid(), process_start_identity(os.getpid()), token)
 
     @classmethod
@@ -212,9 +214,9 @@ class RunOwner:
             case {"pid": bool()} | {"process_start": bool()}:
                 return None
             case {"pid": int(pid), "process_start": int(start), "token": str(token)}:
-                return cls(pid, ProcessStart(start), token)
+                return cls(pid, ProcessStart(start), RunToken(token))
             case {"pid": int(pid), "process_start": int(start)}:
-                return cls(pid, ProcessStart(start), "")
+                return cls(pid, ProcessStart(start), RunToken(""))
             case _:
                 return None
 
@@ -264,7 +266,7 @@ class Workspace:
         resolver: RepoResolver | None = None,
         workflow: Workflow | None = None,
         repo_type: RepositoryType | None = None,
-        run_token: str | None = None,
+        run_token: RunToken | str | None = None,
     ) -> None:
         self.root = Path(root)
         # One token per workspace, not per process: a process may drive several
@@ -312,7 +314,7 @@ class Workspace:
         self._reaped: set[str] = set()
         # Branches this run copied into the shared checkout, and so the only ones
         # it may ever withdraw from there.
-        self._mirrored: dict[str, set[str]] = {}
+        self._mirrored: dict[str, dict[str, str]] = {}
 
     def workflow(self, repo: RepoRef) -> Workflow | None:
         """Return the registered workflow, if the resolver exposes registry metadata."""
@@ -642,7 +644,7 @@ class Workspace:
         with advisory_lock(git_lock_identity(gitops.common_dir(checkout))):
             copied = gitops.copy_branch(clone, checkout, branch)
         if copied:
-            self._mirrored.setdefault(repo.dir_key, set()).add(branch)
+            self._mirrored.setdefault(repo.dir_key, {})[branch] = gitops.ref_sha(clone, branch)
 
     def _mirror_worktree_branch(self, repo: RepoRef, clone: Path, path: Path) -> None:
         branch = next(
@@ -670,16 +672,18 @@ class Workspace:
         """Delete an unneeded lifecycle branch from this run, and any copy it left.
 
         The shared checkout holds branches from every run of this identity, and two
-        runs can be told to use one branch name. So only a copy *this* run put there
-        is withdrawn: a same-named branch belonging to a sibling — possibly the only
-        surviving record of its preserved work — is never what this deletes.
+        runs can be told to use one branch name. So this withdraws only the exact
+        commit *this* run left there: a sibling that has since preserved newer work
+        under that name has moved the branch on, and the delete then declines rather
+        than taking the only record of it.
         """
         clone = self.clone_dir(repo)
         with self._repo_lock(repo), advisory_lock(git_lock_identity(gitops.common_dir(clone))):
             gitops.delete_branch(clone, branch)
         checkout = self._checkouts.get(repo.dir_key)
-        if checkout is None or branch not in self._mirrored.get(repo.dir_key, set()):
+        mirrored = self._mirrored.get(repo.dir_key, {}).get(branch)
+        if checkout is None or mirrored is None:
             return
         with advisory_lock(git_lock_identity(gitops.common_dir(checkout))):
-            gitops.delete_branch(checkout, branch, check=False)
-        self._mirrored[repo.dir_key].discard(branch)
+            gitops.delete_branch_at(checkout, branch, mirrored)
+        self._mirrored[repo.dir_key].pop(branch, None)
