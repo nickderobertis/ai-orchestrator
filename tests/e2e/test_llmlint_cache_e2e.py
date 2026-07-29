@@ -190,6 +190,26 @@ def test_unchanged_tree_and_base_replays_the_recorded_verdict(workspace: Workspa
     assert PASS_VERDICT in first.stdout
     assert PASS_VERDICT in second.stdout
     assert CACHE_HIT in second.stderr
+    # "Green" is a claim about one base commit, so every run names the one it
+    # judged: a gate and a publication rebuild that resolve different bases are
+    # answering different questions, and that has to be visible without digging.
+    for result in (first, second):
+        assert f"lint-llm-diff: base {base} ({base})" in result.stderr
+
+
+def test_an_ambient_global_cache_skip_is_reported_and_ignored(workspace: Workspace) -> None:
+    """The only supported re-judge lever is per-tier, so a global one cannot re-roll."""
+    base = workspace.head()
+
+    first = workspace.lint(base, NX_SKIP_NX_CACHE="true")
+    second = workspace.lint(base, NX_DISABLE_NX_CACHE="true")
+
+    assert workspace.judge_runs() == 1
+    assert CACHE_HIT in second.stderr
+    for result in (first, second):
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "ignoring the ambient global Nx cache skip" in result.stderr
+        assert f"just lint-llm-diff {base} --skip-nx-cache" in result.stderr
 
 
 def test_changed_source_reruns_the_judge(workspace: Workspace) -> None:
@@ -310,10 +330,11 @@ def test_a_judge_that_never_reached_a_verdict_is_not_recorded(workspace: Workspa
 
 
 def test_skip_nx_cache_forces_a_fresh_judge_run(workspace: Workspace) -> None:
+    """The documented way to re-judge one tier, and it works under a global skip too."""
     base = workspace.head()
     workspace.lint(base)
 
-    forced = workspace.lint(base, "--skip-nx-cache")
+    forced = workspace.lint(base, "--skip-nx-cache", NX_SKIP_NX_CACHE="true")
 
     assert forced.returncode == 0, forced.stdout + forced.stderr
     assert workspace.judge_runs() == 2

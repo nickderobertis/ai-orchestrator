@@ -1,5 +1,13 @@
 #!/usr/bin/env bash
+# Prove Nx replays a cached task across worktrees and misses on a changed input.
+#
+# Cache replay is this check's whole claim, so an ambient global cache skip — the
+# lever an operator reaches for to force a re-judge of the llmlint tier — is
+# dropped here rather than allowed to fail a check it says nothing about. Use
+# `just lint-llm-diff <base> --skip-nx-cache` for that instead; the fixture below
+# owns its own cache directory and asserts both a hit and a miss on their merits.
 set -euo pipefail
+unset NX_SKIP_NX_CACHE NX_DISABLE_NX_CACHE
 root="$(git rev-parse --show-toplevel)" || { echo "nx cache check: resolve the repository root and retry 'just check'" >&2; exit 1; }
 [[ "$root" = /* && -r "$root/package.json" && -d "$root/tests/fixtures/nx-cache" ]] || { echo "nx cache check: run from a complete repository checkout and retry 'just check'" >&2; exit 1; }
 temp="$(mktemp -d)" || { echo "nx cache check: make temporary storage available and retry 'just check'" >&2; exit 1; }

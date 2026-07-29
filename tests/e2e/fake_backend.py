@@ -456,6 +456,17 @@ def main() -> int:
                 )
             if "write-change" in task:
                 (Path.cwd() / "CHANGE.txt").write_text("change from fake agent\n", encoding="utf-8")
+            if "run-worker-gate" in task:
+                # A real worker proves its own change with the repository's own gate
+                # before it settles. Its output goes to the shared cache directory,
+                # never into the worktree: a file written here would change the very
+                # content the publication rebuild is asked to judge.
+                gate = subprocess.run(
+                    ["bash", "gate.sh"], capture_output=True, text=True, check=False
+                )
+                log = Path(os.environ["ORCHESTRATOR_CACHE_DIR"]) / "worker-gate.log"
+                with log.open("a", encoding="utf-8") as handle:
+                    handle.write(f"exit={gate.returncode}\n{gate.stdout}{gate.stderr}")
             if "publish-change-to-base" in task:
                 subprocess.run(["git", "add", "CHANGE.txt"], check=True, capture_output=True)
                 subprocess.run(

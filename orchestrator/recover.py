@@ -20,6 +20,7 @@ from .lifecycle import (
     DEFAULT_LIFECYCLE_STEP_MAX_TURNS,
     MAX_MERGE_CONFLICT_RESOLUTIONS,
     DispatchFn,
+    _comparison_env,
     _default_title,
     _effective_publication,
 )
@@ -148,10 +149,7 @@ def recover_repo(
             if identity.gate != NOOP_GATE
             else None
         )
-        env = {
-            "ORCHESTRATOR_COMPARISON_REMOTE": "origin",
-            "ORCHESTRATOR_COMPARISON_BASE": publication_base,
-        }
+        env = _comparison_env(publication_base)
         if command is None:
             raise RegistryError(
                 "repository identity has a no-op gate; migrate it or pass --gate for recovery"

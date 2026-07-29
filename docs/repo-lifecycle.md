@@ -237,11 +237,61 @@ This repository's complete gate resolves that same comparison ref with
 `scripts/comparison-base.sh`. `just gate` discovers the base from a valid remote
 HEAD (or a sole remote branch); use `just gate <remote> <base>` when discovery is
 ambiguous. The lifecycle exports `ORCHESTRATOR_COMPARISON_REMOTE` and
-`ORCHESTRATOR_COMPARISON_BASE` to both verification passes, and the pre-push hook
+`ORCHESTRATOR_COMPARISON_BASE` to **every dispatch and every verification pass of
+a workstream** — see [one judged diff, one
+verdict](#one-judged-diff-one-verdict) — and the pre-push hook
 uses the remote name Git passes as its first argument. Invalid names, missing
 refs, and ambiguous remote branches fail with a remediation instead of falling
 back to `main`. `just sync` discovers the same branch; `just sync <branch>
 <remote>` is the explicit form.
+
+### One judged diff, one verdict
+
+A gate tier can end in a judge that is not reproducible — this repository's
+llmlint tier does — so its verdict is memoized: `just lint-llm-diff` records the
+judged findings and status in the cached Nx `workspace:lint-llm-diff` target,
+keyed on the whole workspace content, the resolved base **commit**, and the judge
+configuration fingerprint. Ask the same question twice and you get the recorded
+answer rather than a second roll of the dice.
+
+**The recorded verdict for exactly that content, base commit, and judge
+configuration is authoritative, and the worker's gate is where it is paid for.**
+The publication rebuild looks up the same key and replays what the worker
+cleared. That is the only assignment consistent with the invariant that *a
+dispatched change is not done until its own gate is green*: an agent can only
+clear findings it was shown, so a verdict that first appears after the agent has
+settled can neither be cleared nor appealed. Replay is not leniency — a recorded
+**failure** replays as a failure and still stops publication, even where a fresh
+roll would have passed.
+
+Keeping the key equal across the two runs is what makes this hold, and the
+comparison base is the part that used to drift. A worker left to discover its own
+base resolves the remote HEAD, while publication judges the workstream's
+`pr_base` — the parent branch for a stacked node, not the repository default. Two
+different base commits are two different diffs and therefore two independent
+judge rolls, the second one invisible to the only party who could act on it. So
+the lifecycle now exports one comparison identity into the dispatch environment as
+well as into every gate run of that workstream.
+
+Where the key genuinely differs the publication rebuild does judge again, and its
+verdict is then the authoritative one, because it is the only judgement of the
+content that will actually land: the base advanced after the worker settled and
+the merge changed what is being published, so the worker's clearance never
+covered it. To keep that honest rather than silent, a passing `just gate` reports
+which base commit was judged and whether the verdict was judged now or replayed
+from the record — green is always a claim about one specific base commit.
+
+Forcing a real re-judge is deliberately **per tier and per invocation**:
+
+```sh
+just lint-llm-diff origin/main --skip-nx-cache
+```
+
+An ambient global Nx cache skip (`NX_SKIP_NX_CACHE` / `NX_DISABLE_NX_CACHE`) is
+reported and ignored by that recipe and by `scripts/check-nx-cache.sh`. Exporting
+one re-rolls the judge from every unrelated command and breaks the checks whose
+contract *is* cache replay, so it is not a supported way to re-judge this tier.
+Every other Nx target still honours it.
 
 ## Merge strategies (where the change lands)
 

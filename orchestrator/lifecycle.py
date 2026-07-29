@@ -963,6 +963,24 @@ MAX_AUTOMATIC_STEP_RESUMES = 2
 MAX_MERGE_CONFLICT_RESOLUTIONS = 2
 
 
+def _comparison_env(pr_base: str) -> dict[str, str]:
+    """The one comparison identity every gate run in this workstream resolves.
+
+    The worker's own gate and the publication rebuild must judge against the same
+    base ref. A gate tier that memoizes a non-deterministic verdict keys that memo
+    on the resolved base commit, so a worker left to discover its own base — the
+    remote HEAD, which is the root base rather than a stacked ``pr_base`` — records
+    its verdict under a different key than publication looks up, and publication
+    silently re-rolls the judge against findings the worker never saw and can no
+    longer clear. Exporting the identity into the dispatch as well as into every
+    verification makes both sides ask the same question.
+    """
+    return {
+        "ORCHESTRATOR_COMPARISON_REMOTE": "origin",
+        "ORCHESTRATOR_COMPARISON_BASE": pr_base,
+    }
+
+
 def _verify_gate(
     journal: NodeSink,
     worktree: Path,
@@ -1282,7 +1300,7 @@ def _pause_at_human_step(
     gate_timeout: float | None,
     recorded_pr: str | None,
     journal: NodeSink,
-    cache_env: dict[str, str],
+    gate_env: dict[str, str],
     dispatch_fn: DispatchFn,
     oneharness_mode: str | None,
     use_llmlint_wrapper: bool,
@@ -1331,11 +1349,7 @@ def _pause_at_human_step(
                 worktree,
                 cmd,
                 timeout=gate_timeout,
-                env={
-                    **cache_env,
-                    "ORCHESTRATOR_COMPARISON_REMOTE": "origin",
-                    "ORCHESTRATOR_COMPARISON_BASE": pr_base,
-                },
+                env=gate_env,
             )
             result.verify = verify
             if not verify.ok:
@@ -1366,7 +1380,7 @@ def _pause_at_human_step(
                 base_path=base_path,
                 persona_dir=persona_dir,
                 journal=journal,
-                dispatch_env=cache_env,
+                dispatch_env=gate_env,
             )
         pr = (github or CliGitHubBackend()).create_pr(
             result.repo,
@@ -1580,6 +1594,9 @@ def run_repo_task(
         else:
             pr_base = root_base
         result.pr_base = pr_base
+        # One environment for every dispatch and every gate run of this workstream,
+        # so the worker's own gate and the publication rebuild judge the same base.
+        gate_env = {**cache_env, **_comparison_env(pr_base)}
         gate_template = selection.gate
         if verify_cmd is not None:
             resolved_verify_cmd = verify_cmd
@@ -1694,7 +1711,7 @@ def run_repo_task(
                 base_path=base_path,
                 persona_dir=persona_dir,
                 journal=log,
-                dispatch_env=cache_env,
+                dispatch_env=gate_env,
                 extra_instructions=CI_ITERATION_INSTRUCTIONS if verify_via_ci else None,
                 completed=frozenset(completed_step_ids),
                 cancel=cancel,
@@ -1765,7 +1782,7 @@ def run_repo_task(
                 gate_timeout=gate_timeout,
                 recorded_pr=resume.pr if resume else None,
                 journal=log,
-                cache_env=cache_env,
+                gate_env=gate_env,
                 dispatch_fn=dispatch_fn,
                 oneharness_mode=oneharness_mode,
                 use_llmlint_wrapper=use_llmlint_wrapper,
@@ -1806,11 +1823,7 @@ def run_repo_task(
                     worktree,
                     cmd,
                     timeout=gate_timeout,
-                    env={
-                        **cache_env,
-                        "ORCHESTRATOR_COMPARISON_REMOTE": "origin",
-                        "ORCHESTRATOR_COMPARISON_BASE": pr_base,
-                    },
+                    env=gate_env,
                 )
                 result.verify = verify
                 if not verify.ok:
@@ -1863,11 +1876,7 @@ def run_repo_task(
                         worktree,
                         resolved_verify_cmd,
                         timeout=gate_timeout,
-                        env={
-                            **cache_env,
-                            "ORCHESTRATOR_COMPARISON_REMOTE": "origin",
-                            "ORCHESTRATOR_COMPARISON_BASE": pr_base,
-                        },
+                        env=gate_env,
                     )
                     result.verify = verify
                     if not verify.ok:
@@ -1911,7 +1920,7 @@ def run_repo_task(
                 base_path=base_path,
                 persona_dir=persona_dir,
                 journal=log,
-                dispatch_env=cache_env,
+                dispatch_env=gate_env,
             )
 
         # llmlint: ignore[changed_behavior_has_e2e] no blocking external operation exists between
@@ -1989,11 +1998,7 @@ def run_repo_task(
                         worktree,
                         cmd,
                         timeout=gate_timeout,
-                        env={
-                            **cache_env,
-                            "ORCHESTRATOR_COMPARISON_REMOTE": "origin",
-                            "ORCHESTRATOR_COMPARISON_BASE": pr_base,
-                        },
+                        env=gate_env,
                     )
                     result.verify = verify
                     if not verify.ok:
@@ -2038,11 +2043,7 @@ def run_repo_task(
             clock=clock,
             verify_command=None if skip_verify else resolved_verify_cmd,
             gate_timeout=gate_timeout,
-            verify_env={
-                **cache_env,
-                "ORCHESTRATOR_COMPARISON_REMOTE": "origin",
-                "ORCHESTRATOR_COMPARISON_BASE": pr_base,
-            },
+            verify_env=gate_env,
             publication_attempts=publication_attempts,
             repository_type=effective_type,
             journal=log,
@@ -2089,7 +2090,7 @@ def run_repo_task(
                 max_turns=lead.max_turns or DEFAULT_LIFECYCLE_STEP_MAX_TURNS,
                 done_when="The conflict is resolved, committed, and the gate is green.",
                 labels=log.labels,
-                env=cache_env,
+                env=gate_env,
                 cancel=cancel,
             )
             persist_report_artifacts(
