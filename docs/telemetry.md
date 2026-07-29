@@ -31,7 +31,11 @@ from dependency readiness until the node worker starts. `UNATTR` is the part of 
 legacy inputs cannot classify. Each timing category shows milliseconds and its
 share of wall time.
 `GATE` is repository verification and `PUB` is the wait from a green gate to
-publication closeout. Both are clipped to their non-overlapping share of the
+publication closeout. Since the repository's own merge path became the
+authoritative verifier, the lifecycle runs no gate of its own, so `GATE` reads
+zero for new runs and the gate's cost lands inside `PUB`, where `git push` runs
+the `pre-push` hook. It stays populated for runs recorded before that change.
+Both are clipped to their non-overlapping share of the
 remaining wall budget, so the displayed model, tool, gate, publication, lock,
 setup, scheduling, and idle buckets sum exactly to `WALL` even when raw journal
 intervals overlap.
@@ -129,7 +133,10 @@ no time.
    add`; inspect `setup-finished.detail.operation` in `events.jsonl`.
 4. A large `SCHED` bucket means the node was dependency-ready but waited for a
    worker slot. Compare it with the graph concurrency and adjacent node intervals.
-5. For a failed gate, read the node result detail or the
-   `verification-finished.detail.output_tail` journal field. Both contain the same
-   bounded tail from the captured gate output, so reproducing the gate is not
-   required to identify the failing tier.
+5. For a failed gate, read the node result detail: it names the rejecting
+   `pre-push` hook and carries the Git diagnostic, so reproducing the gate is not
+   required to identify the failing tier. Read it against the node's
+   `merge-gate-coverage` event, which records the hook and required checks
+   dispatch expected to run. Runs recorded before the merge path became
+   authoritative instead carry the same bounded output tail in
+   `verification-finished.detail.output_tail`.

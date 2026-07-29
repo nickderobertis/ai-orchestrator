@@ -8,11 +8,11 @@ from dataclasses import fields
 from pathlib import Path
 
 import pytest
+from conftest import install_pre_push_hook
 
 import orchestrator.lifecycle as lc
 from orchestrator.config import ConfigError
 from orchestrator.github import CliGitHubBackend, PRStatus, PullRequest
-from orchestrator.journal import NodeJournal, open_journal
 from orchestrator.lifecycle import (
     AI_ORCHESTRATOR_IDENTITY,
     PR_OPTIONAL_SECTIONS,
@@ -35,7 +35,6 @@ from orchestrator.lifecycle import (
     _should_draft_pr_body,
     _subject_from_messages,
     _valid_drafted_body,
-    _verify_gate,
     _workstream_branch_name,
     load_repo_plan,
     make_repo_runner,
@@ -51,7 +50,7 @@ from orchestrator.provenance import (
 )
 from orchestrator.recover import RecoveryResult
 from orchestrator.registry import Registry
-from orchestrator.runs import NodeId, ResumePayload, RetryLineagePayload, RunId
+from orchestrator.runs import ResumePayload, RetryLineagePayload
 from orchestrator.workspace import Workspace, normalize_repo
 
 
@@ -90,23 +89,6 @@ def test_preserved_step_metadata_contract_round_trips() -> None:
 
 
 # --- helpers ---------------------------------------------------------------
-
-
-def test_failed_gate_tail_is_journaled_from_real_subprocess(tmp_path: Path) -> None:
-    journal = open_journal(tmp_path / "run", RunId("run"), 1)
-    node = NodeJournal(journal, NodeId("build"), RunId("run"), 1)
-    verify = _verify_gate(
-        node,
-        tmp_path,
-        ["sh", "-c", "printf 'tier: typecheck failed\\n'; exit 7"],
-        timeout=None,
-        env={},
-    )
-
-    assert not verify.ok
-    finished = journal.events()[-1]
-    assert finished.kind == "verification-finished"
-    assert "tier: typecheck failed" in str(finished.detail["output_tail"])
 
 
 def test_branch_name_is_deterministic() -> None:
@@ -587,7 +569,6 @@ def test_load_valid_repo_plan(tmp_path) -> None:
                                 "pr": "https://github.com/o/r/pull/1",
                             }
                         ],
-                        "skip_verify": True,
                         "verify_via_ci": False,
                     },
                 ],
@@ -596,11 +577,33 @@ def test_load_valid_repo_plan(tmp_path) -> None:
     )
     assert plan.concurrency == 2
     assert [t.id for t in plan.tasks] == ["a", "b"]
-    assert plan.tasks[1].merge_policy == "direct" and plan.tasks[1].skip_verify
+    assert plan.tasks[1].merge_policy == "direct"
     assert plan.tasks[1].verify_via_ci is False
     assert plan.tasks[1].workflow == "local"
     assert plan.tasks[1].repo_type == "single-owner"
     assert plan.tasks[1].stack_bases[0].branch == "feature/parent"
+
+
+@pytest.mark.parametrize("key", ["skip_verify", "no_identity_gate"])
+def test_retired_gate_skipping_plan_keys_still_load_and_do_nothing(tmp_path, key: str) -> None:
+    """Plans written before the merge path became authoritative keep loading.
+
+    Neither key ever skipped merge-path verification, and neither can now, so
+    both are accepted and carry no field into the lifecycle.
+    """
+    plan = load_repo_plan(
+        _write(
+            tmp_path,
+            {
+                "schema_version": 3,
+                "tasks": [
+                    {"id": "a", "repo": "o/r", "persona": "engineer", "task": "t", key: True},
+                ],
+            },
+        )
+    )
+    assert [t.id for t in plan.tasks] == ["a"]
+    assert not any(field.name == key for field in fields(RepoPlanNode))
 
 
 @pytest.mark.parametrize(
@@ -1204,6 +1207,7 @@ def test_run_repo_task_journals_the_workstream_and_labels_each_dispatch(
 
     origin = bare_origin()
     publication = gitops.clone(origin, tmp_path / "publication")
+    install_pre_push_hook(publication)
     labelled: dict[str, dict[str, str]] = {}
     wrapper_modes: list[bool] = []
 
@@ -1229,7 +1233,7 @@ def test_run_repo_task_journals_the_workstream_and_labels_each_dispatch(
             Step("impl", "engineer", "impl"),
             Step("check", "engineer", "check", deps=["impl"]),
         ],
-        verify_cmd=["true"],
+        recorded_gate=["true"],
         dispatch_fn=fake_dispatch,
         journal=scope,
     )
@@ -1243,9 +1247,15 @@ def test_run_repo_task_journals_the_workstream_and_labels_each_dispatch(
     assert ("step-settled", "impl") in located
     assert ("step-started", "check") in located
     assert ("step-settled", "check") in located
-    assert ("verification-started", None) in located
-    assert ("verification-finished", None) in located
+    assert ("verification-started", None) not in located
+    assert ("verification-finished", None) not in located
     assert ("publication-finished", None) in located
+    # The gate now runs behind `git push`, so the round records what dispatch saw
+    # of the merge path: which hook will run, and the bar it stands for.
+    (coverage,) = [e for e in events if e.kind == "merge-gate-coverage"]
+    assert coverage.detail["pre_push_hook"] == str(gitops.hooks_dir(publication) / "pre-push")
+    assert coverage.detail["expected_gate"] == ["true"]
+    assert coverage.detail["required_checks_status"] == "not-applicable"
     # Every transition is attributed to the node the lifecycle was scoped to,
     # though nothing inside the lifecycle ever names it.
     assert {(e.node, e.run_id, e.round) for e in events} == {("api", "run-lc", 4)}
@@ -1265,6 +1275,7 @@ def test_run_repo_task_journals_a_step_that_hit_the_turn_cap(tmp_path, bare_orig
 
     origin = bare_origin()
     publication = gitops.clone(origin, tmp_path / "publication")
+    install_pre_push_hook(publication)
     turn_budgets = []
 
     def fake_dispatch(persona, task, *, project_dir, labels=None, **kw):
@@ -1296,7 +1307,7 @@ def test_run_repo_task_journals_a_step_that_hit_the_turn_cap(tmp_path, bare_orig
         str(origin),
         workspace=workspace,
         steps=[Step("impl", "engineer", "impl")],
-        verify_cmd=["true"],
+        recorded_gate=["true"],
         dispatch_fn=fake_dispatch,
         journal=scope,
     )
@@ -1318,6 +1329,7 @@ def test_run_repo_task_expects_no_diff_step_does_not_dispatch(tmp_path, bare_ori
 
     origin = bare_origin()
     publication = gitops.clone(origin, tmp_path / "publication")
+    install_pre_push_hook(publication)
     workspace = Workspace(
         tmp_path / "ws",
         resolver=lambda _url: publication,
@@ -1332,7 +1344,7 @@ def test_run_repo_task_expects_no_diff_step_does_not_dispatch(tmp_path, bare_ori
         str(origin),
         workspace=workspace,
         steps=[Step("ready", task="certify unchanged", expects_no_diff=True)],
-        verify_cmd=["true"],
+        recorded_gate=["true"],
         dispatch_fn=unexpected_dispatch,
     )
 
@@ -1347,6 +1359,7 @@ def test_run_repo_task_pauses_and_resumes_local_human_step(tmp_path, bare_origin
 
     origin = bare_origin()
     publication = gitops.clone(origin, tmp_path / "publication")
+    install_pre_push_hook(publication)
     calls: list[str] = []
 
     def fake_dispatch(persona, task, *, project_dir, **kw):
@@ -1370,7 +1383,7 @@ def test_run_repo_task_pauses_and_resumes_local_human_step(tmp_path, bare_origin
         str(origin),
         workspace=workspace,
         steps=steps,
-        verify_cmd=["true"],
+        recorded_gate=["true"],
         dispatch_fn=fake_dispatch,
     )
 
@@ -1392,7 +1405,7 @@ def test_run_repo_task_pauses_and_resumes_local_human_step(tmp_path, bare_origin
         str(origin),
         workspace=workspace,
         steps=steps,
-        verify_cmd=["true"],
+        recorded_gate=["true"],
         dispatch_fn=fake_dispatch,
         resume=resume,
     )
@@ -1409,6 +1422,7 @@ def test_run_repo_task_remote_pause_creates_non_empty_draft(tmp_path, bare_origi
 
     origin = bare_origin()
     publication = gitops.clone(origin, tmp_path / "publication")
+    install_pre_push_hook(publication)
     created: list[dict[str, object]] = []
 
     class DraftGitHub:
@@ -1449,7 +1463,7 @@ def test_run_repo_task_remote_pause_creates_non_empty_draft(tmp_path, bare_origi
             Step("prepare", "engineer", "prepare"),
             Step("approve", task="approve", kind="human", deps=["prepare"]),
         ],
-        verify_cmd=["true"],
+        recorded_gate=["true"],
         dispatch_fn=fake_dispatch,
         github=DraftGitHub(),
     )
@@ -1465,6 +1479,7 @@ def test_run_repo_task_remote_pause_does_not_create_empty_draft(tmp_path, bare_o
 
     origin = bare_origin()
     publication = gitops.clone(origin, tmp_path / "publication")
+    install_pre_push_hook(publication)
 
     class NoDraftGitHub:
         def create_pr(self, *args, **kwargs):
@@ -1479,7 +1494,7 @@ def test_run_repo_task_remote_pause_does_not_create_empty_draft(tmp_path, bare_o
             repo_type="single-owner",
         ),
         steps=[Step("approve", task="approve", kind="human")],
-        verify_cmd=["true"],
+        recorded_gate=["true"],
         github=NoDraftGitHub(),
     )
 
@@ -1492,6 +1507,7 @@ def test_run_repo_task_resume_fails_when_branch_is_missing(tmp_path, bare_origin
 
     origin = bare_origin()
     publication = gitops.clone(origin, tmp_path / "publication")
+    install_pre_push_hook(publication)
     result = run_repo_task(
         str(origin),
         workspace=Workspace(
@@ -1501,7 +1517,7 @@ def test_run_repo_task_resume_fails_when_branch_is_missing(tmp_path, bare_origin
             repo_type="single-owner",
         ),
         steps=[Step("approve", task="approve", kind="human")],
-        verify_cmd=["true"],
+        recorded_gate=["true"],
         resume=Resume(
             "feature/missing", "main", "main", gitops.head_sha(publication), ("approve",)
         ),
@@ -1516,6 +1532,7 @@ def test_run_repo_task_resume_fails_when_checkpoint_is_missing(tmp_path, bare_or
 
     origin = bare_origin()
     publication = gitops.clone(origin, tmp_path / "publication")
+    install_pre_push_hook(publication)
     worktree = gitops.worktree_add(
         publication, tmp_path / "branch", "feature/resume", base="origin/main"
     )
@@ -1530,7 +1547,7 @@ def test_run_repo_task_resume_fails_when_checkpoint_is_missing(tmp_path, bare_or
             repo_type="single-owner",
         ),
         steps=[Step("approve", task="approve", kind="human")],
-        verify_cmd=["true"],
+        recorded_gate=["true"],
         resume=Resume("feature/resume", "main", "main", "abcdef1", ("approve",)),
     )
 
@@ -1543,6 +1560,7 @@ def test_run_repo_task_resume_fails_when_recorded_draft_is_closed(tmp_path, bare
 
     origin = bare_origin()
     publication = gitops.clone(origin, tmp_path / "publication")
+    install_pre_push_hook(publication)
     worktree = gitops.worktree_add(
         publication, tmp_path / "branch", "feature/resume", base="origin/main"
     )
@@ -1562,7 +1580,7 @@ def test_run_repo_task_resume_fails_when_recorded_draft_is_closed(tmp_path, bare
             repo_type="single-owner",
         ),
         steps=[Step("approve", task="approve", kind="human")],
-        verify_cmd=["true"],
+        recorded_gate=["true"],
         github=ClosedDraftGitHub(),
         resume=Resume(
             "feature/resume",
@@ -1681,7 +1699,6 @@ def test_make_repo_runner_threads_node_fields(monkeypatch) -> None:
         merge_policy="auto",
         merge_method="squash",
         oneharness_mode="bypass",
-        skip_verify=False,
         verify_via_ci=True,
         poll_interval=1.0,
         timeout=9.0,
@@ -1693,7 +1710,6 @@ def test_make_repo_runner_threads_node_fields(monkeypatch) -> None:
         "reviewer",
         "task",
         merge_policy="direct",
-        skip_verify=True,
         verify_via_ci=False,
         repo_type="single-owner",
     )
@@ -1702,7 +1718,6 @@ def test_make_repo_runner_threads_node_fields(monkeypatch) -> None:
     assert captured["repo"] == "o/r" and captured["persona"] == "reviewer"
     assert captured["merge_policy"] == "direct"  # node override wins
     assert captured["repo_type"] == "single-owner"
-    assert captured["skip_verify"] is True
     assert captured["verify_via_ci"] is False
     assert captured["oneharness_mode"] == "bypass"
 
@@ -1741,7 +1756,7 @@ def test_run_repo_task_git_error_is_reported(tmp_path) -> None:
         "engineer",
         workspace=Workspace(tmp_path / "ws"),
         url=str(tmp_path / "does-not-exist.git"),  # clone fails → GitError
-        verify_cmd=["true"],
+        recorded_gate=["true"],
     )
     assert result.outcome == "error" and not result.ok and result.detail
 

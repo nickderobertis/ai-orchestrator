@@ -1,6 +1,6 @@
-"""How a verified branch gets into the base branch — two strategies, one seam.
+"""How a branch gets through its merge-path gate into base — two strategies, one seam.
 
-The lifecycle does the same work up to a pushed, locally-verified branch; only
+The lifecycle does the same work up to a branch push; only
 the last step differs by where the repo lives:
 
 - `GitHubMergeStrategy` opens a PR and lets GitHub merge it once the repo's
@@ -31,7 +31,6 @@ from .coordination import GitLockIdentity, git_lock_identity
 from .github import AutoMergeUnavailable, Check, GitHubBackend, PRStatus, PullRequest
 from .merge_queue import merge_queue_turn
 from .outcomes import ALREADY_INTEGRATED_OUTCOME, LifecycleOutcome
-from .verify import run_gate
 from .workspace import RepositoryType
 
 if TYPE_CHECKING:
@@ -50,15 +49,23 @@ __all__ = [
     "MergePolicy",
     "MergeStrategy",
     "assess_blocking_checks",
+    "classify_push_failure",
 ]
 
 MergePolicy = Literal["auto", "direct", "none"]
 MERGE_CONFLICT_RETRY: Literal["merge-conflict-retry"] = "merge-conflict-retry"
 
 
+def classify_push_failure(exc: gitops.GitError) -> LifecycleOutcome:
+    """Classify a push rejection using the diagnostics emitted by Git hooks."""
+    detail = str(exc).casefold()
+    gate_markers = ("pre-push", "gate:", "gate failed", "gate rejected")
+    return "gate-failed" if any(marker in detail for marker in gate_markers) else "error"
+
+
 @dataclass
 class MergeContext:
-    """Everything a strategy needs once the branch is pushed and verified."""
+    """Everything a strategy needs once the branch is pushed through its merge path."""
 
     repo_slug: str
     clone_dir: Path
@@ -78,9 +85,6 @@ class MergeContext:
     timeout: float = 3600.0
     sleep: Callable[[float], None] = time.sleep
     clock: Callable[[], float] = time.monotonic
-    verify_command: list[str] | None = None
-    verify_env: dict[str, str] | None = None
-    gate_timeout: float | None = None
     publication_attempts: int = 3
     repository_type: RepositoryType = "single-owner"
     #: Where publication transitions are recorded, already scoped to the node the
@@ -288,7 +292,7 @@ class GitHubMergeStrategy:
 
 
 class LocalMergeStrategy:
-    """Merge the verified branch straight into base with real git (the local path).
+    """Merge the branch straight into base through a gated push (the local path).
 
     The branch is already pushed to the local origin by the lifecycle. The merge is
     built in a detached scratch worktree and pushed to the base ref, leaving the
@@ -340,32 +344,9 @@ class LocalMergeStrategy:
                     gitops.worktree_remove(ctx.clone_dir, scratch)
                     raise
                 try:
-                    if ctx.verify_command is not None:
-                        _record(
-                            ctx,
-                            "verification-started",
-                            {"command": list(ctx.verify_command), "attempt": attempt},
-                        )
-                        verified = run_gate(
-                            scratch,
-                            ctx.verify_command,
-                            timeout=ctx.gate_timeout,
-                            env=ctx.verify_env,
-                        )
-                        _record(
-                            ctx,
-                            "verification-finished",
-                            {
-                                "ok": verified.ok,
-                                "command": list(verified.command),
-                                "attempt": attempt,
-                            },
-                        )
-                        if not verified.ok:
-                            return MergeOutcome(
-                                outcome="gate-failed",
-                                detail="rebuilt local publication failed verification",
-                            )
+                    # Dispatch refuses identities without merge-path gate coverage.
+                    # This detached tree is pushed directly below, so the repository's
+                    # executable pre-push hook verifies this identical tree.
                     gitops.fetch(ctx.clone_dir)
                     try:
                         if gitops.ref_sha(ctx.clone_dir, f"origin/{ctx.base}") != base_sha:
@@ -375,7 +356,17 @@ class LocalMergeStrategy:
                         gitops.push(scratch, f"HEAD:{ctx.base}", set_upstream=False)
                     except gitops.GitError as exc:
                         if not _is_push_race(exc):
-                            raise
+                            detail = str(exc)
+                            outcome = classify_push_failure(exc)
+                            return MergeOutcome(
+                                outcome=outcome,
+                                detail=(
+                                    "repository pre-push gate rejected the rebuilt local "
+                                    f"publication: {detail}"
+                                    if outcome == "gate-failed"
+                                    else "rebuilt local publication push failed: " + detail
+                                ),
+                            )
                         if attempt == ctx.publication_attempts:
                             return MergeOutcome(
                                 outcome="publication-retries-exhausted",

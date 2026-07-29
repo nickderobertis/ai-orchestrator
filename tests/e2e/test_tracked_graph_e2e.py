@@ -1239,7 +1239,6 @@ def test_real_cli_recovers_settled_lifecycle_stack_anchor(
                         "branch": "feature/parent",
                         "workflow": "local",
                         "repo_type": "single-owner",
-                        "skip_verify": True,
                         "stack_bases": [
                             {
                                 "branch": "feature/anchor",
@@ -1333,6 +1332,17 @@ def test_real_cli_recovers_failed_lifecycle_result(
 ) -> None:
     origin = bare_origin()
     canonical = gitops.clone(origin, tmp_path / "failed-lifecycle-canonical")
+    hook = canonical / ".git" / "hooks" / "pre-push"
+    hook.write_text(
+        "#!/bin/sh\n"
+        'if test "$(git symbolic-ref --short HEAD 2>/dev/null || true)" = '
+        '"feature/gate-failed-lifecycle"; then\n'
+        "  printf 'pre-push gate: tracked gate tail failed\\n' >&2\n"
+        "  exit 1\n"
+        "fi\n",
+        encoding="utf-8",
+    )
+    hook.chmod(0o755)
     Registry().register(str(canonical), workflow="local")
     runs = tmp_path / "runs"
     # The in-flight node's rendezvous: it announces it is parked mid-turn, and waits
@@ -1353,7 +1363,6 @@ def test_real_cli_recovers_failed_lifecycle_result(
                         "branch": "feature/failed-lifecycle",
                         "workflow": "local",
                         "repo_type": "single-owner",
-                        "skip_verify": True,
                         "max_turns": 1,
                     },
                     {
@@ -1364,6 +1373,16 @@ def test_real_cli_recovers_failed_lifecycle_result(
                         "branch": "feature/gate-failed-lifecycle",
                         "workflow": "local",
                         "repo_type": "single-owner",
+                        # Retired gate-skipping keys, on the node that reaches
+                        # publication: a plan written before the merge path became
+                        # authoritative must still load, and neither key may let it
+                        # past the rejecting hook below.
+                        "skip_verify": True,
+                        "no_identity_gate": True,
+                        # Deliberately the legacy `verify_cmd` spelling: a plan
+                        # written before the merge path became authoritative must
+                        # still load, and its command must reach the recorded
+                        # `expected_gate` below without the lifecycle running it.
                         "verify_cmd": [
                             "sh",
                             "-c",
@@ -1491,15 +1510,12 @@ def test_real_cli_recovers_failed_lifecycle_result(
     assert result["results"]["failed-lifecycle"]["outcome"] == "not-completed"
     assert result["results"]["gate-failed-lifecycle"]["outcome"] == "gate-failed"
     assert "tracked gate tail failed" in result["results"]["gate-failed-lifecycle"]["detail"]
-    gate_log = Path(result["results"]["gate-failed-lifecycle"]["artifacts"]["gate_log"])
-    assert gate_log.is_file()
-    assert gate_log.read_text().startswith("full-gate-start\n")
+    assert "gate_log" not in result["results"]["gate-failed-lifecycle"]["artifacts"]
     step_artifacts = result["results"]["gate-failed-lifecycle"]["steps"][0]["artifacts"]
     assert Path(step_artifacts["worker_report"]).is_file()
     assert Path(step_artifacts["oneharness_session"]).is_file()
     viewed = _just("results", "failed-lifecycle-prefix", "--runs-dir", str(runs))
     assert viewed.returncode == 0, viewed.stderr
-    assert str(gate_log) in viewed.stdout
     assert "gate-failed-lifecycle  failed  gate-failed" in viewed.stdout
     (runs / "failed-lifecycle-prefix" / "round-02").mkdir()
     while_in_progress = _just("results", "failed-lifecycle-prefix", "--runs-dir", str(runs))
@@ -1508,12 +1524,34 @@ def test_real_cli_recovers_failed_lifecycle_result(
     missing_results = _just("results", "missing-run", "--runs-dir", str(runs))
     assert missing_results.returncode == 2
     assert "no completed round" in missing_results.stderr
-    verification = next(
-        event
+    assert not any(
+        event["kind"] == "verification-finished" and event.get("node") == "gate-failed-lifecycle"
         for event in records
-        if event["kind"] == "verification-finished" and event.get("node") == "gate-failed-lifecycle"
     )
-    assert "tracked gate tail failed" in verification["detail"]["output_tail"]
+    # The rejection above arrives as `git push` output. What makes it readable is
+    # the record each node writes of the merge path it expected to be verified by.
+    coverage = {
+        event["node"]: event["detail"]
+        for event in records
+        if event["kind"] == "merge-gate-coverage"
+    }
+    assert set(coverage) == {"failed-lifecycle", "gate-failed-lifecycle"}
+    for node_id, detail in coverage.items():
+        assert detail["pre_push_hook"] == str(hook.resolve()), node_id
+        assert detail["required_checks"] == []
+        assert detail["required_checks_status"] == "not-applicable"
+        assert detail["checkout"] == str(canonical)
+    # That node also carried the retired `skip_verify` / `no_identity_gate` keys and
+    # still reached publication only to be rejected by the hook, so the legacy plan
+    # spelling loads without weakening verification. Its legacy `verify_cmd` reached
+    # the recorded gate, which the pre-push detail proves was never the thing run.
+    recorded = coverage["gate-failed-lifecycle"]["expected_gate"]
+    assert recorded[:2] == ["sh", "-c"] and "tracked gate tail failed" in recorded[2]
+    assert (
+        "pre-push gate: tracked gate tail failed"
+        in (result["results"]["gate-failed-lifecycle"]["detail"])
+    )
+    assert coverage["failed-lifecycle"]["expected_gate"] == []
     lock_waits = [
         event["detail"]["seconds"]
         for event in records
@@ -1577,7 +1615,6 @@ def test_real_cli_recovers_waiting_and_no_change_lifecycle_results(
                         "branch": "feature/waiting-lifecycle",
                         "workflow": "local",
                         "repo_type": "single-owner",
-                        "skip_verify": True,
                         "steps": [
                             {
                                 "id": "prepare",
@@ -1599,7 +1636,6 @@ def test_real_cli_recovers_waiting_and_no_change_lifecycle_results(
                         "branch": "feature/no-change-lifecycle",
                         "workflow": "local",
                         "repo_type": "single-owner",
-                        "skip_verify": True,
                         "steps": [
                             {
                                 "id": "certify",
@@ -2136,7 +2172,6 @@ def test_expects_no_diff_skips_onejudge_while_sibling_uses_real_boundary(
                     {
                         "id": "step-no-op",
                         "repo": str(canonical),
-                        "skip_verify": True,
                         "steps": [
                             {
                                 "id": "certify",
@@ -2335,7 +2370,6 @@ def test_legacy_repo_plan_runs_through_canonical_and_deprecated_alias(
                             "repo": str(canonical),
                             "persona": "engineer",
                             "task": task,
-                            "skip_verify": True,
                             "workflow": "local",
                             "repo_type": "single-owner",
                         }

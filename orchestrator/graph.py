@@ -156,7 +156,11 @@ _AGENT_NODE_FIELDS = (
     "base_branch",
     "branch",
     "title",
-    "verify_cmd",
+    "recorded_gate",
+    "verify_cmd",  # pre-merge-path spelling of recorded_gate
+    # Accepted and ignored: the repository merge path verifies every publication,
+    # so neither spelling of the old gate-skipping switch can change anything.
+    "no_identity_gate",
     "skip_verify",
     "verify_via_ci",
     "merge_policy",
@@ -1449,7 +1453,6 @@ def _run_round(
                 merge_policy=args.merge_policy,
                 merge_method=args.merge_method,
                 oneharness_mode=args.oneharness_mode,
-                skip_verify=args.skip_verify,
                 verify_via_ci=args.verify_via_ci,
                 poll_interval=args.poll_interval,
                 timeout=args.timeout,
