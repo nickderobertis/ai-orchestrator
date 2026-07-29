@@ -2568,12 +2568,11 @@ def test_a_rejecting_hook_that_echoes_a_credential_records_only_its_name(
 def test_a_publication_that_fails_before_any_gate_preserves_its_error(
     tmp_path, bare_origin
 ) -> None:
-    """This is the shape that killed this node's own previous run.
+    """A publication can fail with no gate to rule on it and no verdict to record.
 
-    The gate passed, and seconds later the publication rebuild failed and settled
-    with nothing in any log — no verdict to record, and the error it did have was
-    dropped. Here a real `post-receive` hook removes the base ref out from under
-    the rebuild, so `origin/main` is genuinely gone when it is next resolved.
+    The settled result must still carry the error rather than only the fact of
+    failure. A real `post-receive` hook removes the base ref out from under the
+    rebuild, so `origin/main` is genuinely gone when it is next resolved.
     """
     origin = bare_origin()
     workspace = _workspace(tmp_path, origin)

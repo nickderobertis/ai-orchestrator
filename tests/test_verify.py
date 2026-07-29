@@ -180,13 +180,9 @@ def test_verify_result_tail() -> None:
     assert result.tail(10) == result.output[-10:]
 
 
-# --- every settled publication leaves something to read ------------------------
-#
-# The failure that killed this node's own run recorded `ok=false` with no output
-# tail and wrote nothing to any log. Both recorders below are the only ways a
-# publication outcome reaches the journal, so the invariant is stated here: a
-# verdict cannot be recorded without the output behind it, and an empty output is
-# still a record rather than a zero-byte file.
+# These two recorders are the only ways a publication outcome reaches the journal,
+# so the invariant belongs here: neither can record an outcome without the output
+# behind it, and an empty output is still a record rather than an empty file.
 
 
 def _scope(tmp_path: Path, run: str) -> tuple[object, NodeJournal]:
@@ -205,7 +201,6 @@ def test_a_recorded_verdict_always_carries_the_output_behind_it(tmp_path: Path) 
     (event,) = [e for e in journal.events() if e.kind == "verification-finished"]
     assert str(event.detail["output_tail"]).strip()
     preserved = Path(str(event.detail["log_path"])).read_text(encoding="utf-8")
-    # The round-1 observation was a *zero-byte* gate.log beside a real verdict.
     assert preserved.strip()
     assert "<no output>" in preserved and "verdict: FAILED" in preserved
 

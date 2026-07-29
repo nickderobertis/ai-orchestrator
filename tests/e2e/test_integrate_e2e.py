@@ -451,6 +451,9 @@ def test_repo_recover_cli_uses_explicit_local_workflow(tmp_path, bare_origin, ca
     )
     payload = json.loads(capsys.readouterr().out)
     assert payload["workflow"] == "local" and payload["outcome"] == "merged"
+    # The documented JSON field, not only the human line: this is what a caller
+    # parsing the result reads to find the merge path's own gate run.
+    assert "verdict: passed" in Path(payload["gate_log"]).read_text(encoding="utf-8")
     assert payload["repo_type"] == "single-owner" and payload["merge_policy"] == "direct"
     assert payload["base"] == payload["pr_base"] == "main"
     assert payload["synthetic_stack_base"] is None
@@ -673,6 +676,23 @@ def test_repo_recover_rejects_branch_without_incomplete_provenance(tmp_path, bar
             repo,
             "claude/ordinary",
             workspace_root=tmp_path / "ordinary-recovery-worktrees",
+            recorded_gate=["true"],
+        )
+
+
+def test_repo_recover_separates_nothing_to_recover_from_the_wrong_verb(
+    tmp_path, bare_origin
+) -> None:
+    """A branch with no commits ahead is a different problem from a complete one."""
+    repo = _clone(tmp_path, bare_origin())
+    _allow_local(repo)
+    _git(repo, "branch", "claude/nothing-ahead", "main")
+
+    with pytest.raises(ValueError, match="no commits ahead of origin/main"):
+        recover_repo(
+            repo,
+            "claude/nothing-ahead",
+            workspace_root=tmp_path / "nothing-ahead-worktrees",
             recorded_gate=["true"],
         )
 

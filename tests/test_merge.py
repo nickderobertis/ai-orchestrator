@@ -488,13 +488,12 @@ def test_local_merge_records_push_gate_failure_without_claiming_a_merge(
 def test_exhausted_publication_retries_preserve_what_each_attempt_saw(
     tmp_path: Path, bare_origin, monkeypatch
 ) -> None:
-    """The failure that killed this node's own previous run preserved nothing.
+    """Exhaustion asserts a cause, so it has to carry the observations behind it.
 
-    A base advancing under the rebuild ends publication in seconds, with no gate
-    ever consulted. It used to settle as one sentence asserting a race and keep no
-    observation behind it, so a base moved by a sibling run, a genuine concurrent
-    publisher, and a synthetic rejection were indistinguishable. The advance here
-    is a real push from a real second clone, scheduled at a real seam.
+    A base advancing under the rebuild ends publication in seconds with no gate
+    ever consulted. Without the per-attempt shas, a base moved by a sibling run, a
+    genuine concurrent publisher, and a synthetic rejection all read alike. The
+    advance here is a real push from a real second clone.
     """
     origin = bare_origin()
     clone = gitops.clone(origin, tmp_path / "clone-exhausted")

@@ -369,6 +369,12 @@ def _agent_status(status_dir: Path, name: str) -> str | None:
 AGENT_STDERR_TAIL_BYTES = 1200
 
 
+#: A recorded disposition is a short sentence, but it arrives from a file the
+#: dispatcher does not write and lands in a durable node result, so it is bounded
+#: and redacted on the same terms as the stderr beside it.
+AGENT_FAILURE_NOTE_BYTES = 300
+
+
 def agent_failure_reason(status_dir: Path) -> str | None:
     """Explain a harness-side death from what the agent wrapper recorded.
 
@@ -377,11 +383,18 @@ def agent_failure_reason(status_dir: Path) -> str | None:
     child's exit disposition and tees its stderr, so this turns that into one
     sentence the planner can act on instead of a bare ``worker-died``.
     """
-    recorded = _agent_status(status_dir, "agent.failure")
+    recorded = _bounded_note(_agent_status(status_dir, "agent.failure"))
     tail = _agent_stderr_tail(status_dir)
     if recorded and tail:
         return f"{recorded}: {tail}"
     return recorded or tail
+
+
+def _bounded_note(raw: str | None) -> str | None:
+    """Bound and redact one harness-authored line before it becomes evidence."""
+    if raw is None:
+        return None
+    return " ".join(redact(raw[:AGENT_FAILURE_NOTE_BYTES]).split()) or None
 
 
 def _agent_stderr_tail(status_dir: Path) -> str | None:
