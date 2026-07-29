@@ -37,7 +37,7 @@ from waits import timeout as e2e_timeout
 import orchestrator.graph as graph_module
 import orchestrator.lifecycle as lifecycle_module
 from orchestrator import gitops
-from orchestrator.coordination import LockTimeout, git_lock_identity
+from orchestrator.coordination import LockTimeout, advisory_lock, git_lock_identity
 from orchestrator.dispatch import Report
 from orchestrator.github import GitHubError, PullRequest
 from orchestrator.graph import graph_payload, parse_graph, run_graph
@@ -2177,6 +2177,57 @@ _REJECT_BASE_PUSH = """while read -r _local _lsha remote _rsha; do
 done"""
 
 
+def test_publication_push_gate_does_not_hold_the_shared_git_lock(tmp_path, bare_origin) -> None:
+    """A concurrent lifecycle can still reach the shared `.git` while the gate runs.
+
+    The gate moved from an orchestrator-side `run_gate` into the `pre-push` hook,
+    but it is the same ten-minute command: holding the shared git lock across it
+    would serialize every other dispatch against this checkout for its duration.
+    The hook blocks on the base push here, and the assertion is that the lock is
+    acquirable meanwhile.
+    """
+    origin = bare_origin()
+    workspace = _workspace(tmp_path, origin)
+    canonical = workspace.clone_dir(normalize_repo(str(origin)))
+    started = tmp_path / "publication-gate-started"
+    release = tmp_path / "publication-gate-release"
+    install_pre_push_hook(
+        canonical,
+        f"""while read -r _local _lsha remote _rsha; do
+  case "$remote" in
+    refs/heads/main)
+      : > {shlex.quote(str(started))}
+      while test ! -f {shlex.quote(str(release))}; do sleep 0.01; done
+      ;;
+  esac
+done""",
+    )
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(
+            run_repo_task,
+            str(origin),
+            "Add a change while the publication gate blocks.",
+            "engineer",
+            workspace=workspace,
+            dispatch_fn=make_writing_dispatch(filename="feature.txt"),
+            recorded_gate=["true"],
+        )
+        deadline = e2e_deadline(15)
+        while not started.exists() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert started.exists(), "the publication push never reached the pre-push gate"
+        try:
+            with advisory_lock(git_lock_identity(gitops.common_dir(canonical)), timeout=0.5):
+                gitops.fetch(canonical)
+        finally:
+            release.touch()
+        result = future.result(timeout=e2e_timeout(30))
+
+    assert result.ok and result.outcome == "merged", result.detail
+    assert _has_file(origin, "main", "feature.txt")
+
+
 def test_publication_push_gate_failure_leaves_the_branch_and_base_intact(
     tmp_path, bare_origin
 ) -> None:
@@ -2492,9 +2543,20 @@ def test_local_repo_gate_failure_blocks_merge(tmp_path, bare_origin) -> None:
     assert _tip(origin, "main") == before  # origin main untouched
 
 
-def test_local_repo_syncs_advanced_base_before_gate(tmp_path, bare_origin) -> None:
+def test_local_repo_syncs_advanced_base_before_the_gated_push(tmp_path, bare_origin) -> None:
+    """The pre-handoff sync lands before the hook sees the tree it will gate.
+
+    The hook asserts the advanced base file is present in whatever tree is being
+    pushed, so it fails if the sync ever moves after publication rather than
+    before it — which is the ordering the repository's gate depends on to judge
+    the branch against the current base.
+    """
     origin = bare_origin()
     ws = _workspace(tmp_path, origin)
+    install_pre_push_hook(
+        ws.clone_dir(normalize_repo(str(origin))),
+        "test -f base.txt || { printf 'pre-push gate: base sync missing\\n' >&2; exit 1; }",
+    )
     writing_dispatch = make_writing_dispatch(filename="feature.txt")
     advanced_sha = ""
 
@@ -2512,11 +2574,7 @@ def test_local_repo_syncs_advanced_base_before_gate(tmp_path, bare_origin) -> No
         "engineer",
         workspace=ws,
         dispatch_fn=dispatch_after_base_advances,
-        recorded_gate=[
-            "sh",
-            "-c",
-            "test -f base.txt && git merge-base --is-ancestor origin/main HEAD",
-        ],
+        recorded_gate=["true"],
     )
 
     assert result.ok and result.outcome == "merged"
