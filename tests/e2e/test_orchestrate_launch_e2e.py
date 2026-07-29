@@ -298,10 +298,13 @@ def test_runs_and_status_settle_a_launch_whose_orchestrator_is_gone(
         assert f"* {neighbour}  ACTIVE" in live
         assert "SETTLED" not in live
 
-        # A real round, recorded by the real executor into the launched run, so what
-        # is reported below is a launch that died *after* finishing work rather than
-        # one that never started any. Its plan is human-only, so it settles as
-        # waiting without dispatching anything.
+        _stop(runs / doomed)
+
+        # Only now that nothing owns this run does a round get recorded into it —
+        # the documented move on a run whose orchestrator is gone, and the one thing
+        # a planner may drive itself. Two writers on a live run would race the
+        # ledger, which is exactly what the orchestrator exists to prevent. Its plan
+        # is human-only, so the round settles as waiting without dispatching.
         assert (
             main_plan(
                 [
@@ -317,8 +320,6 @@ def test_runs_and_status_settle_a_launch_whose_orchestrator_is_gone(
             == 1
         )
         assert (runs / doomed / "round-01" / "result.json").is_file()
-
-        _stop(runs / doomed)
 
         listed = _view("runs", runs, tmp_path / "history")
         reported = _view("status", runs, tmp_path / "history")
