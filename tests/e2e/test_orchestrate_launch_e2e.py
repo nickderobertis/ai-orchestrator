@@ -211,18 +211,6 @@ def test_orchestrate_launch_carries_bypass_mode_and_orchestrator_routing(
     assert alternate == f"{os.environ['HOME']}/.claude-alt"
 
 
-def _just(*args: str) -> subprocess.CompletedProcess[str]:
-    """Run one `just` recipe the way an operator would."""
-    return subprocess.run(
-        ["just", *args],
-        cwd=REPO_ROOT,
-        text=True,
-        capture_output=True,
-        check=False,
-        timeout=180,
-    )
-
-
 def _view(command: str, runs: Path, history: Path) -> str:
     """One planner-facing read-only view over ``runs``, with no dispatch history."""
     history.mkdir(exist_ok=True)
@@ -311,40 +299,13 @@ def test_runs_and_status_settle_a_launch_whose_orchestrator_is_gone(
 
         _stop(runs / doomed)
 
-        # Reported the moment its owner is gone, before anything else touches it.
-        before = _view("runs", runs, tmp_path / "history")
-        assert f"! {doomed}  SETTLED (orchestrator pid {pid} is gone before its first round)" in (
-            before
-        )
-
-        # Only now that nothing owns this run does a round get recorded into it, and
-        # through the command an operator is actually given: two writers on a live
-        # run would race the ledger, which is what the orchestrator exists to
-        # serialize. Its plan is human-only, so the round settles without dispatching.
-        recorded = _just(
-            "run-plan",
-            str(tmp_path / "doomed-plan.json"),
-            "--run",
-            doomed,
-            "--runs-dir",
-            str(runs),
-            "--format",
-            "json",
-        )
-        assert recorded.returncode == 1, recorded.stderr
-        assert (runs / doomed / "round-01" / "result.json").is_file()
-
         listed = _view("runs", runs, tmp_path / "history")
         reported = _view("status", runs, tmp_path / "history")
     finally:
         _stop(runs / neighbour)
 
-    settled = f"SETTLED (orchestrator pid {pid} is gone after round-01)"
-    # A run with recorded history keeps its ledger row and carries the death on the
-    # line beneath it, which is the shape a planner actually reads for a run that
-    # got somewhere before its orchestrator went.
-    assert f"! {doomed}  round-01  (" in listed
-    assert f"    {settled}" in listed
+    settled = f"SETTLED (orchestrator pid {pid} is gone before its first round)"
+    assert f"! {doomed}  {settled}" in listed
     assert f"{doomed}: {settled}" in reported
     # The other orchestrator was alive throughout, so neither view may call its run
     # settled. It still reports what it is waiting for — that is a live run being

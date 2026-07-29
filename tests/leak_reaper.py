@@ -32,6 +32,8 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:  # pragma: no cover - import path for a spawned process
     sys.path.insert(0, str(REPO_ROOT))
 
+# noqa: E402 below — this module is spawned as a script from an arbitrary working
+# directory, so the repository has to reach sys.path before either import resolves.
 from orchestrator.coordination import ProcessStart, process_start_identity  # noqa: E402
 from orchestrator.watchdog import ProcessId, descendants, terminate_processes  # noqa: E402
 

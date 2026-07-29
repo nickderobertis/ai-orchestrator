@@ -37,7 +37,7 @@ from .cli_contract import ROUND_BUDGET_OPTION
 from .config import ConfigError, load_yaml
 from .coordination import advisory_lock, reset_harness_observer, set_harness_observer
 from .detach import run_detached
-from .dispatch import Report, dispatch, incomplete_detail
+from .dispatch import Report, dispatch
 from .edits import EditError, apply_edit
 from .goals import (
     ConcurrentAcknowledgement,
@@ -669,7 +669,11 @@ def run_graph(
                 },
             )
             return run
-        detail = incomplete_detail(report)
+        detail = (
+            "worker-died"
+            if report.outcome == "worker-died"
+            else "did not complete (hit the turn cap)"
+        )
         run = NodeRun("failed", detail, report)
         node_log.append(
             "node-failed",

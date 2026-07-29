@@ -94,13 +94,7 @@ AGENT_ONEHARNESS_BIN = REPO_ROOT / "scripts" / "oneharness-agent.sh"
 # worker wrapper, exports the alternate-Claude config indirection its fallback
 # variant needs; a raw `oneharness` would discover the worker chain instead.
 ORCHESTRATOR_ONEHARNESS_BIN = REPO_ROOT / "scripts" / "oneharness-orchestrator.sh"
-#: A dispatch that ended with the agent never having answered once. onejudge counts
-#: every turn it attempts however that turn went, so a failing provider spends the
-#: whole budget with nothing running. Named apart from an ordinary turn cap because
-#: the two want opposite responses: retrying this one unchanged spends the next
-#: budget the same way.
-NO_AGENT_TURNS_OUTCOME: Literal["no-agent-turns"] = "no-agent-turns"
-DispatchOutcome = Literal["worker-died", "no-agent-turns"]
+DispatchOutcome = Literal["worker-died"]
 WatchdogReason = Literal["worker-died", "stalled"]
 
 
@@ -274,34 +268,7 @@ def _build_report(
         stderr=result.stderr,
         assessment=assessment,
         telemetry_data=dict(raw_telemetry) if isinstance(raw_telemetry, dict) else None,
-        # An unfinished dispatch that produced no assistant turn at all did not run
-        # out of room to work — nothing worked. Naming that apart from the ordinary
-        # turn cap is the whole point: they are the same status and want opposite
-        # responses, and reading one as the other is how a second budget went the
-        # same way as the first.
-        outcome=(
-            NO_AGENT_TURNS_OUTCOME if not result.completed and result.assistant_turns == 0 else None
-        ),
     )
-
-
-def incomplete_detail(report: Report) -> str:
-    """Say which kind of unfinished a dispatch is, since they want opposite responses.
-
-    The one place the distinction is spelled, so a scheduler and a lifecycle cannot
-    describe the same report differently to the planner reading their results.
-    """
-    match report.outcome:
-        case "worker-died":
-            return "worker-died"
-        case "no-agent-turns":
-            return (
-                "did not complete: the turn budget was spent without a single agent "
-                "turn, so nothing ran — retrying it unchanged will spend the next "
-                "budget the same way"
-            )
-        case _:
-            return "did not complete (hit the turn cap)"
 
 
 def _validate_oneharness_timeout(value: str) -> None:

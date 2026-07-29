@@ -19,7 +19,6 @@ from datetime import datetime
 from pathlib import Path
 
 import pytest
-from fakes import write_no_agent_turn_onejudge
 from waits import deadline as e2e_deadline
 
 from orchestrator import REPO_ROOT, gitops
@@ -2419,39 +2418,39 @@ def test_legacy_repo_plan_runs_through_canonical_and_deprecated_alias(
     )
 
 
-def test_a_graph_reports_a_budget_spent_without_an_agent_turn_apart_from_a_cap(
-    tmp_path: Path, command_base
-) -> None:
-    """The recorded round is where a planner meets this, so that is where it must read.
+def test_run_plan_rejects_a_malformed_resume_attempt_count(tmp_path: Path) -> None:
+    """The continuation tally arrives in a plan file, so it is validated like one.
 
-    Driven through the real `run-plan` CLI; only the report a provider that failed
-    every attempted turn would have produced is supplied.
+    A plan is an external input: it is written by a planner, carried across rounds,
+    and hand-edited. A negative or non-integer count would otherwise decide how many
+    times a preserved branch is redispatched.
     """
-    runs = tmp_path / "runs"
-    plan = tmp_path / "no-agent-turn.json"
+    plan = tmp_path / "bad-attempts.json"
     plan.write_text(
-        json.dumps({"tasks": [{"id": "silent", "persona": "engineer", "task": "never answers"}]}),
+        json.dumps(
+            {
+                "tasks": [
+                    {
+                        "id": "work",
+                        "repo": "o/r",
+                        "persona": "engineer",
+                        "task": "Continue",
+                        "resume": {
+                            "branch": "feature/preserved",
+                            "base_branch": "main",
+                            "pr_base": "main",
+                            "checkpoint": "a" * 40,
+                            "completed_steps": [],
+                            "attempts": -1,
+                        },
+                    }
+                ]
+            }
+        ),
         encoding="utf-8",
     )
 
-    ran = _just(
-        "run-plan",
-        str(plan),
-        "--run",
-        "no-agent-turn",
-        "--runs-dir",
-        str(runs),
-        "--base",
-        str(command_base()),
-        "--onejudge-bin",
-        write_no_agent_turn_onejudge(tmp_path),
-        "--format",
-        "json",
-    )
+    rejected = _just("run-plan", str(plan), "--runs-dir", str(tmp_path / "runs"))
 
-    assert ran.returncode == 1, ran.stderr
-    recorded = json.loads(
-        (runs / "no-agent-turn" / "round-01" / "result.json").read_text(encoding="utf-8")
-    )["results"]["silent"]
-    assert recorded["status"] == "failed"
-    assert "without a single agent turn" in recorded["error"]
+    assert rejected.returncode == 2, rejected.stdout
+    assert "resume 'attempts' must be a non-negative integer" in rejected.stderr

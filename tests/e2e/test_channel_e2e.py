@@ -1336,13 +1336,12 @@ def test_a_launch_that_reported_its_own_outcome_is_never_called_settled(
     """
     runs = tmp_path / "reported-runs"
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
-    run_id = launch_orchestrator(
+    run_id = _launch_cli(
         _plan(tmp_path, "surface-milestone"),
-        runs_dir=runs,
-        base_path=_base(tmp_path),
-        onejudge_bin=onejudge_bin,
-        skill_provider={"kind": "command", "command": [sys.executable, str(FAKE_BACKEND)]},
-        turn_timeout=int(e2e_timeout(10)),
+        runs,
+        _base(tmp_path),
+        onejudge_bin,
+        env={"XDG_STATE_HOME": str(tmp_path / "state")},
     )
     owner = json.loads(
         (runs / run_id / "orchestrator" / "status.json").read_text(encoding="utf-8")
@@ -1381,13 +1380,12 @@ def test_planner_views_survive_an_unreadable_launch_record(
     """
     runs = tmp_path / "unreadable-runs"
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
-    run_id = launch_orchestrator(
+    run_id = _launch_cli(
         _plan(tmp_path, "surface-milestone"),
-        runs_dir=runs,
-        base_path=_base(tmp_path),
-        onejudge_bin=onejudge_bin,
-        skill_provider={"kind": "command", "command": [sys.executable, str(FAKE_BACKEND)]},
-        turn_timeout=int(e2e_timeout(10)),
+        runs,
+        _base(tmp_path),
+        onejudge_bin,
+        env={"XDG_STATE_HOME": str(tmp_path / "state")},
     )
     status_path = runs / run_id / "orchestrator" / "status.json"
     owner = json.loads(status_path.read_text(encoding="utf-8"))["pid"]

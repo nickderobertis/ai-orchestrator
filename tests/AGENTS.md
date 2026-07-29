@@ -20,15 +20,11 @@ Conventions for this repo's tests.
   function as an argument, so scheduling behavior (ordering, parallelism,
   skip-on-failure) is tested without spawning onejudge. Prove parallelism with a
   `threading.Barrier`, not a sleep.
-- **Nothing a test starts may outlive it.** `leak_guard.py` is a self-contained
-  pytest plugin (`conftest.py` re-exports its fixtures) that reaps a test's process
-  trees and reports what it could not. Use `process_tree.write_orphaning_tree` when a
-  test needs a realistic tree to clean up, and `process_tree.is_running` rather than
-  the existence of `/proc/<pid>` — a zombie is not a survivor. The guard watches from
-  a background thread, so a test that forks this process or masks a signal on the
-  main thread is relying on assumptions that thread breaks; both are handled there,
-  and any new session-scoped machinery owes the same care.
+- **Nothing a test starts may outlive it.** `leak_guard.py` is a pytest plugin that
+  reaps a test's process trees and fails the test on what it could not. Build a
+  realistic tree with `process_tree.write_orphaning_tree`, and ask
+  `process_tree.is_running` whether a process is gone rather than looking for
+  `/proc/<pid>`.
 - **A test must not leave a background daemon behind.** `NX_DAEMON=false` is set for
-  the whole session (`conftest.py`) because Nx's daemon outlives the command that
-  starts it. Anything else a test starts in the background owes the same.
+  the whole session; anything else a test starts in the background owes the same.
 - Every orchestrator verb needs a real e2e journey here before it is done.

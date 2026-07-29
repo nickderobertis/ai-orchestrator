@@ -450,13 +450,19 @@ def locked_worktrees(cwd: str | Path) -> set[Path]:
     removable drive, a long operation, a tree an operator is protecting. Nothing
     here may reclaim one, however stale it otherwise looks.
     """
-    proc = _git(["worktree", "list", "--porcelain"], cwd=cwd)
+    # ``-z`` rather than plain porcelain: Git quotes a path containing a control
+    # character, a quote, or (under `core.quotePath`) a non-ASCII byte, and this
+    # answer decides whether a directory may be deleted. A quoted path parsed
+    # literally would not match its own worktree, and the lock would be missed.
+    proc = _git(["worktree", "list", "--porcelain", "-z"], cwd=cwd)
     locked: set[Path] = set()
     path: Path | None = None
-    for line in proc.stdout.splitlines():
-        if line.startswith("worktree "):
-            path = Path(line.removeprefix("worktree "))
-        elif line.split(" ", 1)[0] == "locked" and path is not None:
+    for record in proc.stdout.split("\0"):
+        if record.startswith("worktree "):
+            path = Path(record.removeprefix("worktree "))
+        elif not record:
+            path = None
+        elif record.split(" ", 1)[0] == "locked" and path is not None:
             locked.add(path.resolve())
     return locked
 
