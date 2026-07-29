@@ -53,8 +53,13 @@ smoke:
     @uv run orchestrator-smoke
 
 # Whole suite (unit + e2e) with coverage enforced on the orchestrator package.
-test:
-    ./scripts/nx.sh run-many -t test
+#
+# Extra Nx flags pass straight through, which is how one tier is forced to re-run
+# rather than replay: `just test --skip-nx-cache`. It is deliberately
+# per-invocation — an exported global cache skip re-rolls every tier from every
+# unrelated command, including the ones whose contract is cache replay.
+test *nx_args:
+    ./scripts/nx.sh run-many -t test {{nx_args}}
 
 # The e2e suite alone (real onejudge subprocess boundary) — quick inner loop.
 test-e2e:

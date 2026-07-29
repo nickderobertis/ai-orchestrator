@@ -361,7 +361,7 @@ Forcing a real re-judge is deliberately **per tier and per invocation**:
 
 ```sh
 just lint-llm-diff origin/main --skip-nx-cache   # re-judge the llmlint tier
-./scripts/nx.sh run orchestrator:test --skip-nx-cache   # re-run one other tier
+just test --skip-nx-cache                        # re-run the test tier
 ```
 
 An ambient global Nx cache skip (`NX_SKIP_NX_CACHE` / `NX_DISABLE_NX_CACHE`) is
