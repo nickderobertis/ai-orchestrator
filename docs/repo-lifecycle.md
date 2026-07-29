@@ -59,8 +59,7 @@ automatic continuations within one run share that worktree and therefore one
 conversation; a later run pinned, resumed, or recovered onto the same branch cuts
 a worktree under its own run root and gets its own. A name that repeated across
 runs would ask the harness to resume a conversation it filed under a directory
-that no longer exists, which fails before the first turn — see the session-scope
-entry in [`docs/onejudge-integration.md`](onejudge-integration.md).
+that no longer exists, which fails before the first turn.
 
 `just repo-task <repo> <persona> "<task>"` runs one. `<repo>` is a GitHub
 `name` / `owner/name` / URL, a **local filesystem path**, or an exact checkout alias

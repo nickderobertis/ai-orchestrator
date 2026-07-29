@@ -379,8 +379,8 @@ def _agent_status(status_dir: Path, name: str) -> str | None:
         return None
 
 
-def _agent_stderr(status_dir: Path) -> str:
-    """Return a one-line tail of the agent child's captured stderr, if any."""
+def _agent_stderr_tail(status_dir: Path) -> str:
+    """Return a collapsed, length-capped tail of the agent child's stderr, if any."""
     try:
         captured = (status_dir / AGENT_STDERR_NAME).read_text(encoding="utf-8", errors="replace")
     except OSError:
@@ -410,7 +410,7 @@ def _worker_death_detail(status_dir: Path, root_pid: ProcessId) -> str:
         f"worker-died: tracked worker exited or stopped heartbeating "
         f"(watchdog pid {root_pid}, agent exit status {exit_status})"
     )
-    stderr = _agent_stderr(status_dir)
+    stderr = _agent_stderr_tail(status_dir)
     return f"{detail}: {stderr}" if stderr else detail
 
 
