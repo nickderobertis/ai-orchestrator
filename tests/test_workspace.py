@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import subprocess
 
 import pytest
 
@@ -195,6 +196,34 @@ def test_workspace_refuses_to_reclaim_a_path_outside_its_run_root(tmp_path, bare
         ws._reclaim_worktree_path(ref, clone, stranger)
 
     assert (stranger / "work").is_dir()
+
+
+def test_a_locked_worktree_survives_the_reclaim_and_keeps_gits_refusal(
+    tmp_path, bare_origin
+) -> None:
+    """A lock is an instruction to leave a tree alone, and it outranks reclaiming.
+
+    Real `git worktree lock` on a real worktree: the reclaim must not delete it, and
+    the caller must get the refusal Git gives rather than a silently cleared path.
+    """
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-locked")
+    ref = normalize_repo(str(origin))
+    ws = Workspace(tmp_path / "worktrees", resolver=lambda _: canonical)
+    clone = ws.ensure_clone(ref)
+    worktree = ws.worktree(ref, "feat", base="origin/main")
+    (worktree / "work.txt").write_text("in progress\n", encoding="utf-8")
+    subprocess.run(
+        ["git", "-C", str(clone), "worktree", "lock", str(worktree)],
+        check=True,
+        capture_output=True,
+    )
+
+    with pytest.raises(gitops.GitError, match="locked working tree"):
+        ws._reclaim_worktree_path(ref, clone, worktree)
+
+    assert (worktree / "work.txt").is_file()
+    assert worktree.resolve() in gitops.locked_worktrees(clone)
 
 
 def test_a_worktree_path_that_cannot_be_reclaimed_says_so(tmp_path) -> None:

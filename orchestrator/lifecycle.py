@@ -1350,7 +1350,7 @@ def _pause_at_human_step(
                 },
             )
             result.verify = verify
-            if not verify.ok and not verify.cancelled:
+            if not verify.ok:
                 result.outcome = "gate-failed"
                 result.detail = (
                     f"local gate failed at the human pause: {' '.join(cmd)}; "
@@ -1886,7 +1886,7 @@ def run_repo_task(
                         },
                     )
                     result.verify = verify
-                    if not verify.ok and not verify.cancelled:
+                    if not verify.ok:
                         result.outcome = "gate-failed"
                         result.detail = (
                             f"already-integrated change failed local gate: "

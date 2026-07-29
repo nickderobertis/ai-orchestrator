@@ -3349,6 +3349,51 @@ def test_cooperative_real_dispatch_cancellation_preserves_and_recovers_branch(
     assert _has_file(origin, "main", "CHANGE.txt")
 
 
+def test_cancellation_during_remote_verification_preserves_before_publication(
+    tmp_path, bare_origin, command_base, personas_dir
+) -> None:
+    """The same rule on the remote publication path, which has its own gate branch.
+
+    A stopped gate is not a verdict there either: the workstream must preserve and
+    report itself cancelled rather than publish or claim its gate failed.
+    """
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-remote-cancel")
+    Registry().register(str(canonical), workflow="remote", repo_type="team")
+    cancel = threading.Event()
+    gate_started = tmp_path / "remote-verification.started"
+    branch = "feature/remote-verification-cancel"
+    gate = ["sh", "-c", f"touch {shlex.quote(str(gate_started))}; sleep 30; true"]
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        running = pool.submit(
+            run_repo_task,
+            str(canonical),
+            "complete-now write-change",
+            "engineer",
+            workspace=Workspace(tmp_path / "remote-cancel-worktrees"),
+            base_path=command_base(),
+            persona_dir=personas_dir,
+            branch=branch,
+            verify_cmd=gate,
+            github=FakeGitHub(origin),
+            cancel=cancel,
+        )
+        wait_until = e2e_deadline(15)
+        while time.monotonic() < wait_until and not gate_started.exists():
+            time.sleep(0.02)
+        assert gate_started.exists()
+        cancel.set()
+        result = running.result(timeout=e2e_timeout(30))
+
+    assert result.outcome == "not-completed"
+    assert result.detail.startswith("cancelled cooperatively after verification")
+    assert result.verify is not None and result.verify.cancelled and not result.verify.ok
+    assert result.pr is None
+    assert isinstance(result.resume, Resume)
+    assert incomplete_commits(canonical, "origin/main", branch)
+
+
 def test_cancellation_during_verification_preserves_before_publication(
     tmp_path, bare_origin, command_base, personas_dir
 ) -> None:
@@ -3386,6 +3431,12 @@ def test_cancellation_during_verification_preserves_before_publication(
 
     assert result.outcome == "not-completed"
     assert result.detail.startswith("cancelled cooperatively after verification")
+    # The gate was stopped rather than answering, and the whole group it started went
+    # with it. That is not a verdict about the change: reading it as one would report
+    # `gate-failed` and return before any of the preservation below happened.
+    assert result.verify is not None
+    assert result.verify.cancelled and not result.verify.ok
+    assert "terminated its process group" in result.verify.output
     assert isinstance(result.resume, Resume)
     assert result.resume.checkpoint == gitops.ref_sha(canonical, branch)
     assert incomplete_commits(canonical, "origin/main", branch)

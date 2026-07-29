@@ -272,17 +272,11 @@ def _node_human_refs(nid: str, task: dict[str, Any]) -> set[str]:
     }
 
 
-#: How many rounds the harness will continue one preserved lifecycle branch on its
-#: own before it stops and leaves the node to the planner.
-#:
-#: Automatic continuation exists so a workstream that ran out of turns mid-way picks
-#: up where it left off; it was never meant to be a policy for a node that cannot
-#: finish. Unbounded, it was exactly that: a failing node was redispatched every
-#: round on the same branch and handed another `(incomplete step)` marker commit each
-#: time, forever, with nothing recording that the attempts were going nowhere. Two is
-#: the same budget the lifecycle already gives a step within one round
-#: (`MAX_AUTOMATIC_STEP_RESUMES`), for the same reason: a third identical attempt has
-#: never been the thing that was missing.
+#: How many rounds the harness continues one preserved lifecycle branch on its own
+#: before leaving the node to the planner. Continuation exists so a workstream that
+#: ran out of turns picks up where it stopped, not as a policy for work that cannot
+#: finish; unbounded it became the latter. Two matches the budget the lifecycle
+#: already gives a step within one round (`MAX_AUTOMATIC_STEP_RESUMES`).
 MAX_AUTOMATIC_ROUND_RESUMES = 2
 
 

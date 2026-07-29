@@ -63,12 +63,10 @@ def git(*args: str, cwd: str | Path | None = None) -> str:
 def _no_nx_daemon(monkeypatch: pytest.MonkeyPatch) -> None:
     """Keep a test's own Nx invocations from leaving a background daemon behind.
 
-    Nx starts a workspace-scoped daemon that deliberately outlives the command that
-    started it, so every test shelling out to a `just` recipe that reaches Nx leaves
-    one running. That is where the daemons rooted in a single worktree came from:
-    eight, then seventeen, then forty-nine, peaking at 8.9GB of a host with 32. The
-    daemon buys a test nothing — the computation cache is on disk either way — and
-    the developer loop that does want one runs outside this process.
+    Nx's daemon deliberately outlives the command that starts it, so a test shelling
+    out to a `just` recipe that reaches Nx leaves one running per session. It buys a
+    test nothing — the computation cache is on disk either way — and the developer
+    loop that does want one runs outside this process.
     """
     monkeypatch.setenv("NX_DAEMON", "false")
 

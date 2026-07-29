@@ -1,40 +1,23 @@
 """Bounded cleanup for subprocess trees and linked git worktrees in tests.
 
-Three layers, because a test's process tree escapes in three different ways.
+Three layers, because a process tree escapes a test in three ways.
 
-*Registration* is the cheapest and covers what a test starts through ``Popen`` —
-including the dispatch path, which reaches it through
-``asyncio.create_subprocess_exec``. Each such child leads a session of its own, and
-teardown signals that whole group. What a group cannot reach is a process that
-left it: anything below the child that calls ``setsid`` for itself — a daemonizing
-build tool, a round owner detaching from its launching turn — belongs to no group
-but its own from then on, and killing the group it came from does not touch it.
+*Registration* covers what a test starts through ``Popen``, including the dispatch
+path via ``asyncio.create_subprocess_exec``: each child leads its own session, and
+teardown signals that whole group. A process that calls ``setsid`` for itself
+leaves that group and is beyond it.
 
-*Descent* covers those, however they were started. The session samples its own
-process tree every `leak_reaper.POLL_SECONDS` and remembers what it saw, so a
-process is recorded while its parent is still alive and stays accounted for after
-that parent exits and it reparents to init. Teardown then reaps everything this
-test was seen to start that is still running. Sampling rather than walking once at
-the end is what makes this work at all: by teardown the processes that mattered had
-already reparented away, which is exactly why a walk from a recorded root never
-found them again.
+*Descent* covers those. The session samples its own process tree every
+`leak_reaper.POLL_SECONDS` and remembers what it saw, so a process is recorded
+while its parent still holds it and stays accounted for once it reparents away —
+which, by teardown, they have. Its limit is that interval: something orphaned
+inside one was never sampled. A child subreaper would close that, at the price of
+making the session inherit exit statuses nobody collects, so every check asking
+whether a process is gone would read a zombie as alive.
 
-That interval is also this layer's limit, and it is deliberate. Something that
-appears and is orphaned inside one interval was never sampled and cannot be
-attributed afterwards. A child subreaper would close that — orphans would reparent
-here rather than to init — but the session would then inherit exit statuses nobody
-collects, and every liveness check that asks whether a detached round owner is gone
-would read its zombie as still running, in this suite and in the orchestrator's own
-recovery gate. Every leak this exists for ran for hours; none of them would have
-been missed by a quarter second, and none of them are worth changing what the whole
-session means by "still alive".
-
-*Outliving* covers the session's own death. Both layers above run inside the
-session and are lost the moment it is killed rather than asked to stop, which is
-how a killed pytest left twenty-two processes running out of deleted temp
-directories. `leak_reaper` runs outside it and reaps what it watched the session
-produce. See that module for what keeps it from touching anything else.
-
+*Outliving* covers the session's own death, which runs no teardown at all.
+`leak_reaper` watches from outside and reaps what it saw; see that module for what
+keeps it from touching anything else.
 """
 
 from __future__ import annotations
@@ -188,7 +171,12 @@ def _describe(pid: ProcessId) -> str:
 
 
 class PopenFactory(Protocol):
-    """Callable subprocess-construction boundary used by the guard."""
+    """Callable subprocess-construction boundary used by the guard.
+
+    Typed as loosely as `subprocess.Popen` itself is called: this stands in for the
+    real constructor at a seam every caller reaches with its own argument shape, so
+    narrowing it here would only be narrower than the thing it replaces.
+    """
 
     def __call__(self, *args: Any, **kwargs: Any) -> subprocess.Popen[Any]: ...
 
@@ -430,6 +418,8 @@ def resource_leak_guard(
     guard = ResourceLeakGuard.for_test(original_popen, session_leak_guard)
 
     def tracked_popen(*args: Any, **kwargs: Any) -> subprocess.Popen[Any]:
+        # Replaces `subprocess.Popen` for every caller in the process, so it has to
+        # accept exactly what that constructor accepts and nothing narrower.
         return guard.spawn(*args, **kwargs)
 
     monkeypatch.setattr(subprocess, "Popen", tracked_popen)

@@ -251,21 +251,14 @@ class AbandonedLaunch:
 def abandoned_launch(run_dir: Path) -> AbandonedLaunch | None:
     """The run whose orchestrator this host proved gone, with nothing left working.
 
-    A launch records ``running`` once and never rewrites it, so a `just orchestrate`
-    process that dies — crashed, killed, or taken down with the container it ran in —
-    leaves that record standing. Between rounds there is nothing else to notice: the
-    round it finished has a result, no round claims the ledger, and the views read a
-    run that has simply stopped being reported as an ordinary finished one. That is
-    how four runs sat stranded for half a day while the ledger they were read from
-    said nothing was wrong.
+    A launch records ``running`` once and never rewrites it, so a process that died
+    between rounds leaves a run reading exactly like ordinary finished work — no
+    round claims the ledger, and nothing else says otherwise.
 
-    Every condition here is a reason to keep quiet rather than a reason to speak.
-    The run must be a launch, the launch must still claim to be running, it must
-    never have written a report, its owner must be one *this host* proved gone, and
-    nothing it started may still be in flight. A round that is itself abandoned is
-    left to `abandoned_round`, which says the same thing with the command that
-    reclaims it. Anything unreadable, anywhere in that chain, keeps the run silent:
-    reporting a working run as dead would send a planner to tear down live work.
+    Every condition below is a reason to stay quiet rather than to speak, because
+    reporting a working run as dead would send a planner to tear down live work. A
+    round that is itself abandoned is left to `abandoned_round`, which says the same
+    thing and names the command that reclaims it.
     """
     if not (run_dir / "launch.json").is_file():
         return None

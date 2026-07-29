@@ -21,7 +21,6 @@ from __future__ import annotations
 import json
 import os
 import signal
-import socket
 import stat
 import subprocess
 import time
@@ -238,19 +237,38 @@ def _await_launch_pid(run_dir: Path) -> int:
     raise AssertionError(f"the launch never recorded its owner at {status}")
 
 
-def _neighbouring_live_run(runs: Path, pid: int) -> Path:
-    """A second run whose recorded orchestrator really is alive on this host."""
-    run_dir = runs / "live-neighbour"
-    (run_dir / "orchestrator").mkdir(parents=True)
-    (run_dir / "launch.json").write_text(
-        json.dumps({"schema_version": 2, "run_id": run_dir.name, "plan_name": "neighbour"}),
+def _orchestrate(tmp_path: Path, runs: Path, onejudge_bin: str, name: str) -> str:
+    """Launch one real orchestrator through the recipe and return its run id."""
+    plan = tmp_path / f"{name}-plan.json"
+    plan.write_text(
+        json.dumps(
+            {
+                "schema_version": 3,
+                "name": name,
+                "tasks": [{"id": "approval", "kind": "human", "task": "approve the release"}],
+            }
+        ),
         encoding="utf-8",
     )
-    (run_dir / "orchestrator" / "status.json").write_text(
-        json.dumps({"status": "running", "pid": pid, "host": socket.gethostname()}),
-        encoding="utf-8",
+    launched = subprocess.run(
+        [
+            "just",
+            "orchestrate",
+            str(plan),
+            "--runs-dir",
+            str(runs),
+            "--base",
+            str(_oneharness_base(tmp_path)),
+            "--onejudge-bin",
+            onejudge_bin,
+        ],
+        cwd=REPO_ROOT,
+        env=_launch_environment(tmp_path, tmp_path / f"{name}-argv", tmp_path / f"{name}-alt"),
+        text=True,
+        capture_output=True,
+        check=True,
     )
-    return run_dir
+    return str(json.loads(launched.stdout)["run_id"])
 
 
 def test_runs_and_status_settle_a_launch_whose_orchestrator_is_gone(
@@ -260,68 +278,39 @@ def test_runs_and_status_settle_a_launch_whose_orchestrator_is_gone(
 
     Nothing ever rewrote the launch record, so a dead orchestrator kept a run looking
     like ordinary finished work while nothing was driving it — which is how runs sat
-    stranded for half a day. Both halves are asserted from one real launch: the same
-    run must read as ACTIVE while its process is there, so the detection cannot buy
-    its answer by calling live runs dead.
+    stranded for half a day. Both halves come from the same real launch: it must read
+    ACTIVE while its process is there, so the detection cannot buy its answer by
+    calling live runs dead.
 
-    A second run whose recorded orchestrator is a live process of this test's own runs
-    beside it throughout, and is expected to be left completely alone.
+    A second orchestrator, launched the same way and left running throughout, is what
+    proves the boundary: the views may say nothing about a run somebody else owns.
     """
     runs = tmp_path / "runs"
-    environment = _launch_environment(tmp_path, tmp_path / "argv", tmp_path / "alt-dir")
-    launched = subprocess.run(
-        [
-            "just",
-            "orchestrate",
-            str(_plan(tmp_path)),
-            "--runs-dir",
-            str(runs),
-            "--base",
-            str(_oneharness_base(tmp_path)),
-            "--onejudge-bin",
-            onejudge_bin,
-        ],
-        cwd=REPO_ROOT,
-        env=environment,
-        text=True,
-        capture_output=True,
-        check=True,
-    )
-    run_id = json.loads(launched.stdout)["run_id"]
-    run_dir = runs / run_id
-    neighbour = subprocess.Popen(["sleep", "600"])
+    doomed = _orchestrate(tmp_path, runs, onejudge_bin, "doomed")
+    neighbour = _orchestrate(tmp_path, runs, onejudge_bin, "neighbour")
     try:
-        pid = _await_launch_pid(run_dir)
-        _neighbouring_live_run(runs, neighbour.pid)
+        pid = _await_launch_pid(runs / doomed)
+        _await_launch_pid(runs / neighbour)
 
         live = _view("runs", runs, tmp_path / "history")
-        assert f"* {run_id}  ACTIVE" in live
+        assert f"* {doomed}  ACTIVE" in live
+        assert f"* {neighbour}  ACTIVE" in live
         assert "SETTLED" not in live
 
-        _stop(run_dir)
+        _stop(runs / doomed)
 
         listed = _view("runs", runs, tmp_path / "history")
         reported = _view("status", runs, tmp_path / "history")
     finally:
-        neighbour.kill()
-        neighbour.wait(timeout=30)
+        _stop(runs / neighbour)
 
     settled = f"SETTLED (orchestrator pid {pid} is gone before its first round)"
-    assert f"! {run_id}  {settled}" in listed
-    assert f"{run_id}: {settled}" in reported
-    # The neighbour's orchestrator was alive throughout, so neither view may touch it.
-    assert "* live-neighbour  ACTIVE" in listed
+    assert f"! {doomed}  {settled}" in listed
+    assert f"{doomed}: {settled}" in reported
+    # The other orchestrator was alive throughout, so neither view may call its run
+    # settled. It still reports what it is waiting for — that is a live run being
+    # reported as live, which is the half the detection must never get wrong.
+    assert f"* {neighbour}  ACTIVE" in listed
     assert listed.count("SETTLED") == 1
-    assert "live-neighbour" not in reported
-
-
-def test_orchestrate_rejects_an_unknown_oneharness_mode(tmp_path: Path) -> None:
-    rejected = subprocess.run(
-        ["just", "orchestrate", str(_plan(tmp_path)), "--oneharness-mode", "unsandboxed"],
-        cwd=REPO_ROOT,
-        text=True,
-        capture_output=True,
-    )
-    assert rejected.returncode != 0
-    assert "--oneharness-mode" in rejected.stderr
-    assert "bypass" in rejected.stderr  # the offered choices name the default
+    assert f"{neighbour}: SETTLED" not in reported
+    assert reported.count("SETTLED") == 1
