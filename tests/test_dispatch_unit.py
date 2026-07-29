@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 from onejudge_sdk import RunResult
+from process_tree import await_reaped, await_recorded_pid, is_running, write_orphaning_tree
 
 from orchestrator import BASE_CONFIG, REPO_ROOT
 from orchestrator.dispatch import (
@@ -29,6 +30,7 @@ from orchestrator.labels import parse_labels
 from orchestrator.plan import PlanNode, PlanResult, TaskResult, _render
 from orchestrator.plan import main as plan_main
 from orchestrator.watchdog import (
+    OWN_PROCESS_GROUP_FLAG,
     ProcessId,
     _parse_stat,
     process_activity,
@@ -640,6 +642,62 @@ def test_watchdog_terminates_live_process_group() -> None:
     process.wait(timeout=1)
 
     assert process.returncode is not None
+
+
+# A session leader, so the wrapper it starts is *not* already a group leader and the
+# flag has real work to do. Without this the guard's own `start_new_session` would
+# hand the wrapper a group it did not ask for and the journey would prove nothing.
+_SESSION_LAUNCHER = """
+import os, subprocess, sys, time
+try:
+    os.setsid()
+except OSError:
+    pass  # already led its own session, which is all this needs
+subprocess.Popen(sys.argv[1:])
+time.sleep(60)
+"""
+
+
+def test_watchdog_group_reaps_a_worker_that_reparented_away(tmp_path) -> None:
+    """The wrapper's own process group still reaches what a tree walk has lost."""
+    pid_file = tmp_path / "watchdog.pid"
+    marker = tmp_path / "worker.pid"
+    tree = write_orphaning_tree(tmp_path)
+    launcher = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            _SESSION_LAUNCHER,
+            sys.executable,
+            "-m",
+            "orchestrator.watchdog",
+            OWN_PROCESS_GROUP_FLAG,
+            os.fspath(pid_file),
+            sys.executable,
+            os.fspath(tree),
+            os.fspath(marker),
+            "--root-exits",
+        ],
+        cwd=REPO_ROOT,
+    )
+    try:
+        wrapper = ProcessId(await_recorded_pid(pid_file))
+        worker = await_recorded_pid(marker)
+
+        assert os.getpgid(wrapper) == wrapper
+        assert os.getpgid(worker) == wrapper
+        assert os.getpgid(launcher.pid) != wrapper
+        # The recorded root is gone, so the supervisor's tree walk reports an empty
+        # dispatch while the worker is still running — the leak this group closes.
+        assert process_activity(wrapper).pids == ()
+        assert is_running(worker)
+
+        terminate_process_group(wrapper)
+
+        assert await_reaped(worker)
+    finally:
+        launcher.kill()
+        launcher.wait(timeout=5)
 
 
 def test_watchdog_records_pid_and_executes_command(tmp_path, monkeypatch) -> None:

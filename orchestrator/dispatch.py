@@ -69,6 +69,7 @@ from .personas import persona_path
 from .runs import ArtifactPaths, resolve_run_dir, slugify
 from .scratch import owned_scratch_directory
 from .watchdog import (
+    OWN_PROCESS_GROUP_FLAG,
     ProcessId,
     process_activity,
     terminate_process_group,
@@ -430,6 +431,7 @@ def run_onejudge(
                 executable_args=(
                     "-m",
                     "orchestrator.watchdog",
+                    OWN_PROCESS_GROUP_FLAG,
                     os.fspath(pid_file),
                     resolved_onejudge,
                 ),
