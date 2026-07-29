@@ -3725,11 +3725,21 @@ def test_local_recovery_conflict_resumes_worker_then_requeues(tmp_path, bare_ori
     sessions: list[str] = []
 
     def resolving_dispatch(
-        persona: str, task: str, *, project_dir: str, session: str, **_: object
+        persona: str,
+        task: str,
+        *,
+        project_dir: str,
+        session: str,
+        env: dict[str, str],
+        **_: object,
     ) -> Report:
         path = Path(project_dir) / "shared.txt"
         assert "Resolve the content conflict" in task
         assert "<<<<<<<" in path.read_text(encoding="utf-8")
+        # The resolver proves its resolution with the same gate the recovery push
+        # will run, so it must resolve the base that push publishes onto.
+        assert env["ORCHESTRATOR_COMPARISON_REMOTE"] == "origin"
+        assert env["ORCHESTRATOR_COMPARISON_BASE"] == "main"
         sessions.append(session)
         path.write_text("advanced base\npreserved branch by engineer\n", encoding="utf-8")
         gitops.add_all(project_dir)

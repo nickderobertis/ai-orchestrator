@@ -55,10 +55,14 @@ status="$(cat -- "$verdict/status")" || {
   exit "$UNUSABLE_RECORD"
 }
 
+# One line, because "green" is a single claim: this verdict, about this diff,
+# against this base commit. The base rides in from the recipe that resolved and
+# keyed on it; a run that somehow lost it says so rather than implying a base.
+base="${LLMLINT_DIFF_BASE_SHA:-<unresolved>}"
 if [[ -e "$verdict.judged" ]]; then
-  echo "lint-llm-diff: judged this diff (Nx cache miss)" >&2
+  echo "lint-llm-diff: judged this diff against base $base (Nx cache miss)" >&2
 else
-  echo "lint-llm-diff: replayed the recorded verdict (Nx cache hit)" >&2
+  echo "lint-llm-diff: replayed the recorded verdict for base $base (Nx cache hit)" >&2
 fi
 # A partial read is as unusable as none: the findings the operator acts on must be
 # the whole recorded report, so a truncated one exits here instead of falling

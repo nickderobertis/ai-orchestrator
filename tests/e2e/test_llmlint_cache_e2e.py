@@ -33,8 +33,8 @@ ROOT = Path(__file__).resolve().parents[2]
 PASS_VERDICT = "fake-judge: 16 passed, 0 failed"
 FAIL_VERDICT = "fake-judge: 15 passed, 1 failed"
 FAIL_FINDING = "fake-judge finding: robust_shell in scripts/llmlint-diff.sh"
-CACHE_HIT = "replayed the recorded verdict (Nx cache hit)"
-CACHE_MISS = "judged this diff (Nx cache miss)"
+CACHE_HIT = "replayed the recorded verdict for base"
+CACHE_MISS = "judged this diff against base"
 # scripts/llmlint-verdict.sh: an unusable record, distinct from the judge's 0 and 1.
 UNUSABLE_RECORD = 2
 
@@ -174,11 +174,11 @@ def test_unchanged_tree_and_base_replays_the_recorded_verdict(workspace: Workspa
     assert PASS_VERDICT in first.stdout
     assert PASS_VERDICT in second.stdout
     assert CACHE_HIT in second.stderr
-    # "Green" is a claim about one base commit, so every run names the one it
-    # judged: a gate and a publication rebuild that resolve different bases are
-    # answering different questions, and that has to be visible without digging.
-    for result in (first, second):
-        assert f"lint-llm-diff: base {base} ({base})" in result.stderr
+    # "Green" is a claim about one base commit, so the one line of provenance names
+    # it: a worker's gate and the push that publishes its work resolving different
+    # bases are answering different questions, visible without digging.
+    assert f"judged this diff against base {base} (Nx cache miss)" in first.stderr
+    assert f"replayed the recorded verdict for base {base} (Nx cache hit)" in second.stderr
 
 
 def test_an_ambient_global_cache_skip_is_reported_and_ignored(workspace: Workspace) -> None:

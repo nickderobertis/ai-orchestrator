@@ -15,6 +15,12 @@ Each installs a real `pre-push` hook that records what Git handed it, so the
 assertion is on the environment the hook actually ran with.
 """
 
+# llmlint: ignore-file[e2e_not_mocked] these repo-lifecycle e2es fake ONLY the paid
+# harness (the dispatch_fn seam) and GitHub's PR/CI decisioning while driving real
+# git, the real pre-push hook, and the real merge, exactly as AGENTS.md prescribes
+# for lifecycle tests. The boundary under test here — what environment Git hands
+# the hook on a publishing push — is entirely real.
+
 from __future__ import annotations
 
 import subprocess

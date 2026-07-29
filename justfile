@@ -45,7 +45,7 @@ check:
 gate remote=env_var_or_default("ORCHESTRATOR_COMPARISON_REMOTE", "origin") base=env_var_or_default("ORCHESTRATOR_COMPARISON_BASE", ""):
     @comparison=$(scripts/comparison-base.sh "$1" "$2")
     @log=$(mktemp); trap 'rm -f "$log"' EXIT; just check >"$log" 2>&1 || { cat "$log" >&2; echo "gate: deterministic checks failed; fix the reported findings and rerun 'just gate'" >&2; exit 1; }
-    @comparison=$(scripts/comparison-base.sh "$1" "$2"); log=$(mktemp); trap 'rm -f "$log"' EXIT; just lint-llm-diff "$comparison" >"$log" 2>&1 || { cat "$log" >&2; echo "gate: llmlint failed; clear the reported findings against 'just lint-llm-diff $comparison' alone, then rerun 'just gate $1 $2' once to confirm" >&2; exit 1; }; base=$(sed -n 's/^lint-llm-diff: base \([0-9a-f]\{7,\}\).*/\1/p' "$log" | head -1); verdict=$(sed -n 's/^lint-llm-diff: judged this diff.*/judged/p; s/^lint-llm-diff: replayed the recorded verdict.*/replayed/p' "$log" | head -1); note=$(grep -q '^lint-llm-diff: ignoring ' "$log" && echo "; ignored an ambient global Nx cache skip" || true); echo "gate: green; llmlint ${verdict:-unknown} against base ${base:-unknown}${note}" >&2
+    @comparison=$(scripts/comparison-base.sh "$1" "$2"); log=$(mktemp); trap 'rm -f "$log"' EXIT; just lint-llm-diff "$comparison" >"$log" 2>&1 || { cat "$log" >&2; echo "gate: llmlint failed; clear the reported findings against 'just lint-llm-diff $comparison' alone, then rerun 'just gate $1 $2' once to confirm" >&2; exit 1; }; provenance=$(grep -m1 -E '^lint-llm-diff: (judged|replayed) ' "$log" || echo "lint-llm-diff: verdict provenance unavailable"); note=$(grep -q '^lint-llm-diff: ignoring ' "$log" && echo " [ignored an ambient global Nx cache skip]" || true); echo "gate: green; ${provenance#lint-llm-diff: }${note}" >&2
 
 # Spend one real harness turn proving prompt delivery and complete history telemetry.
 # Kept out of `gate`; pre-push selects it only for launch-path changes.
@@ -58,8 +58,11 @@ smoke:
 # rather than replay: `just test --skip-nx-cache`. It is deliberately
 # per-invocation — an exported global cache skip re-rolls every tier from every
 # unrelated command, including the ones whose contract is cache replay.
+#
+# A green run says one line, like `check`: the suite's own output is the failure
+# report, and it is streamed in full when there is one.
 test *nx_args:
-    ./scripts/nx.sh run-many -t test {{nx_args}}
+    @log=$(mktemp); trap 'rm -f "$log"' EXIT; ./scripts/nx.sh run-many -t test {{nx_args}} >"$log" 2>&1 || { cat "$log" >&2; echo "test: suites failed; fix the reported findings and rerun 'just test'" >&2; exit 1; }; echo "test: all suites passed"
 
 # The e2e suite alone (real onejudge subprocess boundary) — quick inner loop.
 test-e2e:
@@ -307,10 +310,10 @@ lint-llm-validate *args:
 # The recorded verdict and its judged marker are cleared first because Nx leaves
 # pre-existing outputs alone rather than comparing them: without this, a stale or
 # edited record would be replayed in place of the cached one. Nx's own success line
-# is dropped so a run says exactly three things: what base commit was judged, where
-# the verdict came from, and what it was. Its failures still reach stderr.
+# is dropped so a run says exactly two things: one line of provenance — this verdict,
+# from here, against that base commit — and the verdict itself. Its failures still
+# reach stderr.
 # llmlint: ignore[tool_output_is_signal] the judge's per-rule report and its one-line provenance are this tier's product; see scripts/llmlint-verdict.sh.
 lint-llm-diff base="origin/main" *nx_args:
     @command -v llmlint >/dev/null 2>&1 || { echo "llmlint not installed — run 'just setup-llmlint'"; exit 1; }
-    @base_sha=$(git rev-parse --verify --quiet "{{base}}^{commit}") || { echo "lint-llm-diff: '{{base}}' does not resolve to a commit; fetch it or pass an existing base" >&2; exit 1; }; if [[ -n "${NX_SKIP_NX_CACHE:-}${NX_DISABLE_NX_CACHE:-}" ]]; then echo "lint-llm-diff: ignoring the ambient global Nx cache skip; force a fresh judgement of this tier alone with 'just lint-llm-diff {{base}} --skip-nx-cache'" >&2; fi; unset NX_SKIP_NX_CACHE NX_DISABLE_NX_CACHE; echo "lint-llm-diff: base $base_sha ({{base}})" >&2; rm -rf "{{repo_root}}/.nx/llmlint-diff" "{{repo_root}}/.nx/llmlint-diff.judged"; LLMLINT_DIFF_BASE_SHA="$base_sha" ./scripts/nx.sh run workspace:lint-llm-diff {{nx_args}} >/dev/null
-    @./scripts/llmlint-verdict.sh
+    @base_sha=$(git rev-parse --verify --quiet "{{base}}^{commit}") || { echo "lint-llm-diff: '{{base}}' does not resolve to a commit; fetch it or pass an existing base" >&2; exit 1; }; if [[ -n "${NX_SKIP_NX_CACHE:-}${NX_DISABLE_NX_CACHE:-}" ]]; then echo "lint-llm-diff: ignoring the ambient global Nx cache skip; force a fresh judgement of this tier alone with 'just lint-llm-diff {{base}} --skip-nx-cache'" >&2; fi; unset NX_SKIP_NX_CACHE NX_DISABLE_NX_CACHE; rm -rf "{{repo_root}}/.nx/llmlint-diff" "{{repo_root}}/.nx/llmlint-diff.judged"; LLMLINT_DIFF_BASE_SHA="$base_sha" ./scripts/nx.sh run workspace:lint-llm-diff {{nx_args}} >/dev/null; LLMLINT_DIFF_BASE_SHA="$base_sha" ./scripts/llmlint-verdict.sh
