@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import subprocess
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -482,6 +483,76 @@ def test_local_merge_records_push_gate_failure_without_claiming_a_merge(
     assert str(out.verification.log_path) in out.detail
     # The rebuilt merge never reached the base branch, so nothing may say it did.
     assert not (gitops.clone(origin, tmp_path / "check") / "feature.txt").exists()
+
+
+def test_exhausted_publication_retries_preserve_what_each_attempt_saw(
+    tmp_path: Path, bare_origin, monkeypatch
+) -> None:
+    """The failure that killed this node's own previous run preserved nothing.
+
+    A base advancing under the rebuild ends publication in seconds, with no gate
+    ever consulted. It used to settle as one sentence asserting a race and keep no
+    observation behind it, so a base moved by a sibling run, a genuine concurrent
+    publisher, and a synthetic rejection were indistinguishable. The advance here
+    is a real push from a real second clone, scheduled at a real seam.
+    """
+    origin = bare_origin()
+    clone = gitops.clone(origin, tmp_path / "clone-exhausted")
+    feature = gitops.worktree_add(
+        clone, tmp_path / "feature-exhausted", "feature", base="origin/main"
+    )
+    (feature / "feature.txt").write_text("change\n", encoding="utf-8")
+    gitops.add_all(feature)
+    gitops.commit(feature, "feat: add feature")
+    gitops.push(feature, "feature")
+    rival = gitops.clone(origin, tmp_path / "rival")
+    advances = 0
+    real_merge_squash = gitops.merge_squash
+
+    def advance_base_then_squash(*args: object, **kwargs: object) -> object:
+        """Let a sibling publisher land on the base mid-rebuild, for real."""
+        nonlocal advances
+        advances += 1
+        (rival / f"rival-{advances}.txt").write_text("rival\n", encoding="utf-8")
+        gitops.add_all(rival)
+        gitops.commit(rival, f"chore: rival publication {advances}")
+        gitops.push(rival, "HEAD:main", set_upstream=False)
+        return real_merge_squash(*args, **kwargs)
+
+    monkeypatch.setattr(gitops, "merge_squash", advance_base_then_squash)
+    journal, node = _scope(tmp_path, "run-exhausted")
+
+    out = LocalMergeStrategy().publish_and_merge(
+        _ctx(
+            clone_dir=clone,
+            branch="feature",
+            journal=node,
+            publication_attempts=2,
+            gate_command=("just", "gate"),
+        )
+    )
+
+    assert out.outcome == "publication-retries-exhausted"
+    assert advances == 2
+    ((failure,),) = ([e for e in journal.events() if e.kind == "publication-failed"],)
+    tail = str(failure.detail["output_tail"])
+    assert "attempt 1:" in tail and "attempt 2:" in tail
+    assert "is now" in tail  # the observed base sha, not just the expected one
+    preserved = Path(str(failure.detail["log_path"])).read_text(encoding="utf-8")
+    assert "outcome: publication-retries-exhausted" in preserved
+    assert str(failure.detail["log_path"]) in out.detail
+    # And the base is untouched: nothing was published without a gate.
+    assert not _has_path(origin, "main", "feature.txt")
+
+
+def _has_path(origin: Path, ref: str, path: str) -> bool:
+    return (
+        subprocess.run(
+            ["git", "-C", str(origin), "cat-file", "-e", f"{ref}:{path}"],
+            capture_output=True,
+        ).returncode
+        == 0
+    )
 
 
 def test_push_race_classification_is_narrow() -> None:

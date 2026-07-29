@@ -32,7 +32,7 @@ from .github import AutoMergeUnavailable, Check, GitHubBackend, PRStatus, PullRe
 from .merge_queue import merge_queue_turn
 from .outcomes import ALREADY_INTEGRATED_OUTCOME, LifecycleOutcome
 from .redaction import redact
-from .verify import VerifyResult, record_merge_path_verification
+from .verify import VerifyResult, record_merge_path_failure, record_merge_path_verification
 from .workspace import RepositoryType
 
 if TYPE_CHECKING:
@@ -322,6 +322,11 @@ class LocalMergeStrategy:
             if prepared is not None:
                 return prepared
         verified: VerifyResult | None = None
+        # What each lost attempt actually saw. "Lost a race on all N attempts" is
+        # an assertion about a cause; these are the observations behind it, and
+        # without them a base being advanced by something else, a genuine
+        # concurrent publisher, and a synthetic rejection all read the same.
+        races: list[str] = []
         for attempt in range(1, ctx.publication_attempts + 1):
             with tempfile.TemporaryDirectory(prefix="orchestrator-merge-") as parent:
                 scratch = Path(parent) / "worktree"
@@ -361,9 +366,11 @@ class LocalMergeStrategy:
                     gitops.fetch(ctx.clone_dir)
                     label = f"publication push {ctx.branch} -> {ctx.base}"
                     try:
-                        if gitops.ref_sha(ctx.clone_dir, f"origin/{ctx.base}") != base_sha:
+                        observed = gitops.ref_sha(ctx.clone_dir, f"origin/{ctx.base}")
+                        if observed != base_sha:
                             raise gitops.GitError(
-                                f"! [rejected] verified merge -> {ctx.base} (fetch first)"
+                                f"! [rejected] verified merge -> {ctx.base} (fetch first); "
+                                f"verified against {base_sha}, {ctx.base} is now {observed}"
                             )
                         pushed = gitops.push(scratch, f"HEAD:{ctx.base}", set_upstream=False)
                     except gitops.GitError as exc:
@@ -386,13 +393,22 @@ class LocalMergeStrategy:
                                 + _evidence(verification),
                                 verification=verification,
                             )
+                        races.append(f"attempt {attempt}: {redact(str(exc))}")
                         if attempt == ctx.publication_attempts:
+                            log_path = _record_failure(
+                                ctx,
+                                label=label,
+                                outcome="publication-retries-exhausted",
+                                output="\n".join(races) + "\n",
+                            )
                             return MergeOutcome(
                                 outcome="publication-retries-exhausted",
                                 detail=(
                                     "local base publication lost a concurrent push race "
-                                    f"on all {ctx.publication_attempts} attempts"
-                                ),
+                                    f"on all {ctx.publication_attempts} attempts; "
+                                    f"last: {races[-1]}"
+                                )
+                                + _evidence_at(log_path),
                             )
                         continue
                     verified = _record_verification(ctx, label=label, ok=True, output=pushed)
@@ -437,10 +453,20 @@ def _record_verification(
     )
 
 
+def _record_failure(ctx: MergeContext, *, label: str, outcome: str, output: str) -> str | None:
+    """Preserve a publication that ended before any gate ruled on it."""
+    if ctx.journal is None:
+        return None
+    return record_merge_path_failure(ctx.journal, label=label, outcome=outcome, output=output)
+
+
 def _evidence(verification: VerifyResult | None) -> str:
     """Name the preserved gate log this outcome points at, if one was written."""
-    path = verification.log_path if verification is not None else None
-    return f" — full merge-path gate output: {path}" if path else ""
+    return _evidence_at(verification.log_path if verification is not None else None)
+
+
+def _evidence_at(path: str | None) -> str:
+    return f" — full merge-path log: {path}" if path else ""
 
 
 def _local_publication_ref(ctx: MergeContext) -> PullRequest:

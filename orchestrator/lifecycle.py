@@ -90,6 +90,7 @@ from .scratch import require_scratch_capacity, scratch_dispatch_guarded
 from .verify import (
     NOOP_GATE,
     VerifyResult,
+    record_merge_path_failure,
     record_merge_path_verification,
     resolve_gate_template,
 )
@@ -2126,8 +2127,21 @@ def run_repo_task(
             result.verify = merge_outcome.verification
         return result
     except (GitError, GitHubError, ConfigError, RegistryError, WorkspaceError) as exc:
+        # The failure that ends a run *this* way used to leave nothing behind: a
+        # publication rebuild that could not fetch, could not build its worktree,
+        # or ran the disk out settled with its exception text in the ledger and its
+        # output dropped. A settled failure has to be as readable as a rejected
+        # one, so it is preserved beside the verdicts that did get recorded.
         result.outcome = "error"
-        result.detail = str(exc)
+        log_path = record_merge_path_failure(
+            log,
+            label=f"publication of {result.branch}",
+            outcome=type(exc).__name__,
+            output=exc.output if isinstance(exc, GitError) else str(exc),
+        )
+        result.detail = redact(str(exc)) + (
+            f" — full merge-path log: {log_path}" if log_path else ""
+        )
         return result
     finally:
         if worktree is not None:

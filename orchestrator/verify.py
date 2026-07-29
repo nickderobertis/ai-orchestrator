@@ -51,7 +51,9 @@ __all__ = [
     "append_gate_log",
     "detect_gate",
     "detect_gate_candidates",
+    "format_merge_path_failure",
     "format_merge_path_record",
+    "record_merge_path_failure",
     "record_merge_path_verification",
     "resolve_gate_template",
     "run_gate",
@@ -124,11 +126,13 @@ def format_merge_path_record(*, label: str, command: list[str], ok: bool, output
 
 
 def append_gate_log(directory: Path, record: str) -> str:
-    """Append one record to ``directory/gate.log``; return its path.
+    """Append one record to the node's merge-path log; return its path.
 
-    Appending rather than overwriting is what keeps a run's evidence complete: a
-    branch push that passed and a publication push that did not are both gate runs,
-    and the second must not erase the first.
+    One file per node, holding every record the merge path produced in order — a
+    gated push's verdict, and a publication that failed before any gate ruled.
+    Appending rather than overwriting is what keeps that complete: a branch push
+    that passed and a publication that did not are both evidence, and the second
+    must not erase the first.
     """
     directory.mkdir(parents=True, exist_ok=True)
     path = (directory / "gate.log").resolve()
@@ -173,6 +177,40 @@ def record_merge_path_verification(
         },
     )
     return VerifyResult(ok=ok, command=list(command), output=record, log_path=log_path)
+
+
+def format_merge_path_failure(*, label: str, outcome: str, output: str) -> str:
+    """Render a publication attempt that ended before any gate could rule on it."""
+    return redact(
+        f"merge-path failure: {label}\n"
+        f"outcome: {outcome}\n"
+        "--- git output ---\n" + (output if output.strip() else "<no output>\n")
+    )
+
+
+def record_merge_path_failure(
+    journal: NodeSink, *, label: str, outcome: str, output: str
+) -> str | None:
+    """Preserve a publication that failed before any gate ruled; return its log path.
+
+    A rejected push has a verdict to record. This is the other half, and the half
+    that was silent: a rebuild that lost its base to a concurrent push, ran out of
+    disk, or could not build its worktree settled with no output in any log and no
+    tail on any event, leaving the operator only the fact that something failed.
+    """
+    record = format_merge_path_failure(label=label, outcome=outcome, output=output)
+    directory = journal.artifact_dir
+    log_path = append_gate_log(directory, record) if directory is not None else None
+    journal.append(
+        "publication-failed",
+        detail={
+            "label": label,
+            "outcome": outcome,
+            "output_tail": record[-VERIFICATION_TAIL_BYTES:],
+            **({"log_path": log_path} if log_path else {}),
+        },
+    )
+    return log_path
 
 
 def _justfile_has_recipe(path: Path, recipe: str) -> bool:

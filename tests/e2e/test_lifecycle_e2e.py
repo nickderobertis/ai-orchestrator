@@ -2565,6 +2565,59 @@ def test_a_rejecting_hook_that_echoes_a_credential_records_only_its_name(
     assert "gate failed while authenticating with" in preserved
 
 
+def test_a_publication_that_fails_before_any_gate_preserves_its_error(
+    tmp_path, bare_origin
+) -> None:
+    """This is the shape that killed this node's own previous run.
+
+    The gate passed, and seconds later the publication rebuild failed and settled
+    with nothing in any log — no verdict to record, and the error it did have was
+    dropped. Here a real `post-receive` hook removes the base ref out from under
+    the rebuild, so `origin/main` is genuinely gone when it is next resolved.
+    """
+    origin = bare_origin()
+    workspace = _workspace(tmp_path, origin)
+    canonical = _shared_checkout(tmp_path)
+    install_pre_push_hook(canonical)
+    receive = origin / "hooks" / "post-receive"
+    receive.write_text(
+        "#!/bin/sh\n"
+        "while read -r _old _new ref; do\n"
+        '  case "$ref" in\n'
+        "    refs/heads/main) ;;\n"
+        "    *) git update-ref -d refs/heads/main ;;\n"
+        "  esac\n"
+        "done\n",
+        encoding="utf-8",
+    )
+    receive.chmod(0o755)
+    run_dir = tmp_path / "publication-failure-run"
+    journal = open_journal(run_dir, RunId("publication-failure"), 1)
+    scope = NodeJournal(journal, NodeId("publish"), RunId("publication-failure"), 1)
+
+    result = run_repo_task(
+        str(origin),
+        "Publish into a base that disappears mid-rebuild.",
+        "engineer",
+        workspace=workspace,
+        dispatch_fn=make_writing_dispatch(filename="doomed.txt"),
+        recorded_gate=["just", "gate"],
+        journal=scope,
+    )
+
+    assert result.outcome == "error", result.detail
+    # The branch push was gated and passed; the failure came after, and used to
+    # leave the settled run with that stale verdict as its only evidence.
+    assert result.verify is not None and result.verify.ok
+    (failure,) = [event for event in journal.events() if event.kind == "publication-failed"]
+    assert failure.detail["outcome"] == "GitError"
+    assert str(failure.detail["output_tail"]).strip()
+    preserved = Path(str(failure.detail["log_path"])).read_text(encoding="utf-8")
+    assert "merge-path failure: publication of" in preserved
+    assert "verdict: passed" in preserved  # the earlier gate run is still there
+    assert str(failure.detail["log_path"]) in result.detail
+
+
 def test_lifecycle_refuses_uncovered_identity_before_dispatch(tmp_path, bare_origin) -> None:
     origin = bare_origin()
     canonical = gitops.clone(origin, tmp_path / "uncovered")

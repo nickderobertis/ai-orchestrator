@@ -98,6 +98,10 @@ EventKind = Literal[
     "pr-ready",
     "pr-merged",
     "publication-finished",
+    # A publication that ended before any gate could rule on it: a lost base race,
+    # a rebuild that could not be built. It carries the output that used to be
+    # dropped, and where the whole record was preserved.
+    "publication-failed",
     "cleanup-deferred",
     "lock-wait",
     "setup-finished",
