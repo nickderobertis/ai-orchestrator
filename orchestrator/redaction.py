@@ -20,14 +20,19 @@ import os
 import re
 from collections.abc import Iterable, Mapping
 
-__all__ = ["SECRET_NAME", "redact", "secret_values"]
+__all__ = ["SECRET_NAME", "SECRET_NAME_PATTERN", "redact", "secret_values"]
 
 #: Names whose value is treated as a credential. Matched against the whole
 #: variable name so ``KEYCHAIN`` or ``TOKENIZER`` cannot be mistaken for one.
-SECRET_NAME = re.compile(
-    r"(^|_)(TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIALS?|API_?KEY|ACCESS_?KEY|"
+#:
+#: The one source of this grammar. ``scripts/preserved-log.sh`` carries a
+#: byte-identical copy because it must run before any virtualenv exists;
+#: ``tests/test_redaction.py`` fails if the two strings ever differ.
+SECRET_NAME_PATTERN = (
+    r"(^|_)(TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|API_?KEY|ACCESS_?KEY|"
     r"PRIVATE_?KEY|SESSION_?KEY|AUTH)S?$"
 )
+SECRET_NAME = re.compile(SECRET_NAME_PATTERN)
 
 #: Shorter values collide with ordinary words and would corrupt the very evidence
 #: this preserves. A credential that short is not one worth protecting.

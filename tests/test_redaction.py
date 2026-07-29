@@ -3,8 +3,10 @@
 Two implementations apply this rule — `redact_secrets` in
 `scripts/preserved-log.sh`, in front of `just check` where no virtualenv is
 guaranteed, and `orchestrator.redaction` for the evidence the lifecycle
-preserves. The last test here is what keeps them one behavior: the shell filter
-is driven for real and compared against the Python function over the same table.
+preserves. `orchestrator.redaction.SECRET_NAME_PATTERN` is the one source of the
+credential-name grammar; the drift gate below fails if the shell copy differs
+from it by a single byte, and the equivalence test drives every name the grammar
+can produce through both implementations rather than a hand-picked few.
 """
 
 from __future__ import annotations
@@ -15,7 +17,7 @@ from pathlib import Path
 
 import pytest
 
-from orchestrator.redaction import redact, secret_values
+from orchestrator.redaction import SECRET_NAME, SECRET_NAME_PATTERN, redact, secret_values
 
 HELPER = Path(__file__).resolve().parents[1] / "scripts" / "preserved-log.sh"
 
@@ -116,3 +118,72 @@ def test_the_shell_filter_streams_before_its_input_closes(tmp_path: Path) -> Non
             (tmp_path / "release").touch()
 
     assert log.read_text() == "first\nsecond\n"
+
+
+def _shell_pattern() -> str:
+    """The credential-name grammar as the shell copy actually spells it."""
+    for line in HELPER.read_text(encoding="utf-8").splitlines():
+        if line.startswith("_PRESERVED_LOG_SECRET_NAME="):
+            return line.split("=", 1)[1].strip().strip("'")
+    raise AssertionError("scripts/preserved-log.sh no longer names its credential grammar")
+
+
+def test_the_shell_copy_of_the_credential_grammar_has_not_drifted() -> None:
+    """One source, and a gate that fails on the first byte of divergence."""
+    assert _shell_pattern() == SECRET_NAME_PATTERN
+
+
+#: Every shape the grammar can take: each keyword, at the start and after an
+#: underscore, singular and plural, plus the near-misses it must not claim.
+_KEYWORDS = (
+    "TOKEN",
+    "SECRET",
+    "PASSWORD",
+    "PASSWD",
+    "CREDENTIAL",
+    "API_KEY",
+    "APIKEY",
+    "ACCESS_KEY",
+    "ACCESSKEY",
+    "PRIVATE_KEY",
+    "PRIVATEKEY",
+    "SESSION_KEY",
+    "SESSIONKEY",
+    "AUTH",
+)
+_DECOYS = ("TOKENIZER", "KEYCHAIN", "SECRETARY", "AUTHOR", "PASSWORDLESS", "KEY", "CREDENTIALSS")
+
+
+def _generated_names() -> list[str]:
+    names: list[str] = []
+    for keyword in _KEYWORDS:
+        for plural in ("", "S"):
+            names.extend(
+                (
+                    f"{keyword}{plural}",
+                    f"CLAUDE_{keyword}{plural}",
+                    f"{keyword}{plural}_PATH",
+                    f"X{keyword}{plural}",
+                )
+            )
+    names.extend(_DECOYS)
+    names.extend(f"PREFIX_{decoy}" for decoy in _DECOYS)
+    return names
+
+
+def test_both_implementations_classify_every_generated_name_alike() -> None:
+    """An example table cannot prove two regexes equal; the whole grammar can."""
+    names = _generated_names()
+    environ = {name: f"value-of-{index:04d}" for index, name in enumerate(names)}
+
+    text = " ".join(f"{name}={environ[name]}" for name in names) + "\n"
+    shell = _shell_redact(text, environ)
+    python = redact(text, secret_values(environ))
+
+    assert shell == python
+    # And the classification itself is the thing that must agree, not just the
+    # rendering: a grammar that matched nothing would also make the two equal.
+    claimed = {name for name in names if f"<redacted:{name}>" in python}
+    assert claimed == {name for name in names if SECRET_NAME.search(name)}
+    assert "TOKEN" in claimed and "CLAUDE_TOKENS" in claimed
+    assert claimed.isdisjoint(_DECOYS)

@@ -210,8 +210,7 @@ class WatchdogSignal:
     root_pid: ProcessId
     observed_pids: tuple[ProcessId, ...]
     #: What was observable at the point of death. Four different failures reach
-    #: this watchdog as one dead tree, and a bare ``worker-died`` shaped every
-    #: wrong hypothesis in the debugging session that motivated recording it.
+    #: this watchdog as one dead tree, so the reason has to be carried explicitly.
     detail: str = ""
 
 

@@ -151,15 +151,7 @@ exec 3<&0
 # durable copy to say *why* a worker died — throttling, quota exhaustion, an OOM
 # kill, and a genuine crash are indistinguishable without it. Credential values
 # are stripped when the dispatcher reads this back.
-# llmlint: ignore[tool_output_is_signal, boundary_inputs_validated] this wrapper is a transparent
-# conduit for that protocol in both directions, exactly as the `exec` pass-throughs above are.
-# llmlint: ignore[robust_shell] The copy is deliberately best-effort and its status is
-# deliberately not allowed to change this turn's outcome: killing a working agent because a
-# diagnostic copy could not be written would be strictly worse than losing the copy, and the
-# alternative shapes (redirect-then-replay, or a checkable pipeline) either withhold the agent's
-# live stderr from onejudge or discard the agent's own exit code. Openability is proven before
-# the turn starts, and the failure branch below re-checks the file and says so when it stopped
-# working, so a lost copy is reported rather than read as "the harness said nothing".
+# llmlint: ignore[tool_output_is_signal, boundary_inputs_validated, robust_shell] this wrapper is a transparent conduit for that protocol in both directions, exactly as the `exec` pass-throughs above are; the tee's write status is deliberately unobserved because failing a live agent turn over a diagnostic copy would be strictly worse than losing the copy, and both alternative shapes lose something real (redirect-then-replay withholds the agent's live stderr from onejudge; a checkable pipeline discards the agent's own exit code). Openability is proven before the turn starts and the failure branch below re-checks the file and reports a capture that stopped working, so a lost copy is never read as "the harness said nothing".
 oneharness run --config "$agent_config" "$@" <&3 2> >(tee -a "$status_dir/agent.stderr" >&2) &
 agent_pid=$!
 write_status agent.child.pid "$agent_pid"

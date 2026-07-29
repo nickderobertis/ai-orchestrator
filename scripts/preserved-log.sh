@@ -42,6 +42,13 @@ preserved_log_open() {
     printf '%s\n' "$path"
 }
 
+# The credential-name grammar, byte-identical to `SECRET_NAME_PATTERN` in
+# `orchestrator/redaction.py`, which is its one source. It is copied rather than
+# read from there because this file runs in front of `just check`, before any
+# virtualenv is guaranteed to exist; tests/test_redaction.py fails if the two
+# strings ever differ.
+_PRESERVED_LOG_SECRET_NAME='(^|_)(TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|API_?KEY|ACCESS_?KEY|PRIVATE_?KEY|SESSION_?KEY|AUTH)S?$'
+
 # Print `length<TAB>name` for every credential-shaped environment variable worth
 # hiding, longest value first so a token that contains a shorter token's value is
 # replaced before the shorter one can split it.
@@ -54,7 +61,7 @@ _preserved_log_secret_names() {
         # protecting.
         ((${#value} >= 8)) || continue
         [[ $value != *[$'\n\r']* ]] || continue
-        [[ ${name^^} =~ (^|_)(TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|API_?KEY|ACCESS_?KEY|PRIVATE_?KEY|SESSION_?KEY|AUTH)S?$ ]] || continue
+        [[ ${name^^} =~ $_PRESERVED_LOG_SECRET_NAME ]] || continue
         printf '%s\t%s\n' "${#value}" "$name"
     done < <(compgen -e) | sort -k1,1nr -k2,2
 }

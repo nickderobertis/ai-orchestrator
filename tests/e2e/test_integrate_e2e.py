@@ -530,8 +530,8 @@ def test_repo_recover_command_adopts_a_branch_from_an_explicit_execution_checkou
     assert _git(origin, "show", "main:partial.txt") == "partial"
 
 
-def test_repo_recover_rejects_an_execution_checkout_of_another_repository(
-    tmp_path, bare_origin, capsys
+def test_repo_recover_command_rejects_an_execution_checkout_of_another_repository(
+    tmp_path, bare_origin
 ) -> None:
     repo = _clone(tmp_path, bare_origin())
     _allow_local(repo)
@@ -540,8 +540,9 @@ def test_repo_recover_rejects_an_execution_checkout_of_another_repository(
         ["git", "clone", str(bare_origin()), str(stranger)], check=True, capture_output=True
     )
 
-    exit_code = recover_main(
+    proc = subprocess.run(
         [
+            "orchestrator-repo-recover",
             "claude/anything",
             "--repo",
             str(repo),
@@ -549,11 +550,14 @@ def test_repo_recover_rejects_an_execution_checkout_of_another_repository(
             str(stranger),
             "--gate",
             "true",
-        ]
+        ],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
     )
 
-    assert exit_code == 2
-    assert "is not a git checkout of the repository identity" in capsys.readouterr().err
+    assert proc.returncode == 2
+    assert "is not a git checkout of the repository identity" in proc.stderr
 
 
 def test_team_recovery_default_opens_pr_without_polling(tmp_path, bare_origin) -> None:
