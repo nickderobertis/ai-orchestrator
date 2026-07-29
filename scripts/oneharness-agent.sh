@@ -169,12 +169,20 @@ exit_code=$?
 set -e
 if [ "$exit_code" -ne 0 ]; then
     echo "oneharness-agent: agent process $agent_pid exited $exit_code; awaiting dispatcher recovery" >&2
+    # The stderr copy above is best-effort by design: failing a live agent turn
+    # because a diagnostic copy could not be written would be strictly worse than
+    # losing the copy. What must not happen is reporting a capture that stopped
+    # working as "the harness said nothing", so re-check it here and say so.
+    capture=""
+    if ! : >>"$status_dir/agent.stderr"; then
+        capture="; agent stderr capture became unwritable, so its tail may be incomplete"
+    fi
     # Written before the marker the dispatcher polls for, so the reason is always
     # already there when the failure is observed.
     if [ "$exit_code" -gt 128 ]; then
-        write_status agent.failure "agent harness killed by signal $((exit_code - 128))"
+        write_status agent.failure "agent harness killed by signal $((exit_code - 128))$capture"
     else
-        write_status agent.failure "agent harness exited $exit_code"
+        write_status agent.failure "agent harness exited $exit_code$capture"
     fi
     write_status agent.failed "$worker_pid"
     while :; do

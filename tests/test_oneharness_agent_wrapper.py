@@ -397,3 +397,79 @@ def test_a_signal_killed_agent_harness_is_recorded_as_a_signal(tmp_path: Path) -
             process.kill()
 
     assert reason == "agent harness killed by signal 9"
+
+
+def test_an_unusable_stderr_capture_is_reported_not_assumed_away(tmp_path: Path) -> None:
+    """A capture that stopped working must not read as "the harness said nothing"."""
+    status_dir = tmp_path / "orchestrator-watchdog-3" / "agent"
+    status_dir.mkdir(parents=True)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    stub = bin_dir / "oneharness"
+    # Replacing the file with a directory makes it unwritable regardless of
+    # privilege, while the copy already holding the old handle keeps running.
+    stub.write_text(
+        "#!/usr/bin/env bash\n"
+        'echo "provider error: 429 rate_limit_error" >&2\n'
+        'rm -f "$ORCHESTRATOR_AGENT_STATUS_DIR/agent.stderr"\n'
+        'mkdir "$ORCHESTRATOR_AGENT_STATUS_DIR/agent.stderr"\n'
+        "exit 7\n",
+        encoding="utf-8",
+    )
+    stub.chmod(stub.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+
+    with subprocess.Popen(
+        ["bash", str(WRAPPER), "run", "--compact", "--prompt-file", "-"],
+        text=True,
+        stdin=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        env={
+            "PATH": f"{bin_dir}:/usr/bin:/bin",
+            "ORCHESTRATOR_AGENT_STATUS_DIR": str(status_dir),
+            "HOME": str(tmp_path / "home"),
+        },
+    ) as process:
+        try:
+            deadline = time.monotonic() + 30
+            while time.monotonic() < deadline:
+                if (status_dir / "agent.failed").exists():
+                    break
+                time.sleep(0.05)
+            else:  # pragma: no cover - only reached when the wrapper never marks failure
+                raise AssertionError("the wrapper never recorded the failed turn")
+            reason = (status_dir / "agent.failure").read_text(encoding="utf-8").strip()
+        finally:
+            process.kill()
+
+    assert reason == (
+        "agent harness exited 7; agent stderr capture became unwritable, "
+        "so its tail may be incomplete"
+    )
+
+
+def test_an_unopenable_stderr_capture_stops_the_turn_before_it_starts(tmp_path: Path) -> None:
+    """A capture that never opened would leave a death with no reason at all."""
+    status_dir = tmp_path / "orchestrator-watchdog-4" / "agent"
+    status_dir.mkdir(parents=True)
+    (status_dir / "agent.stderr").mkdir()
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    stub = bin_dir / "oneharness"
+    stub.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+    stub.chmod(stub.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+
+    proc = subprocess.run(
+        ["bash", str(WRAPPER), "run", "--compact", "--prompt-file", "-"],
+        text=True,
+        input="",
+        capture_output=True,
+        env={
+            "PATH": f"{bin_dir}:/usr/bin:/bin",
+            "ORCHESTRATOR_AGENT_STATUS_DIR": str(status_dir),
+            "HOME": str(tmp_path / "home"),
+        },
+    )
+
+    assert proc.returncode == 2
+    assert "cannot open the agent stderr capture" in proc.stderr
+    assert not (status_dir / "agent.done").exists()
