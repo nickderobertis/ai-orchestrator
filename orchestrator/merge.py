@@ -419,8 +419,12 @@ class LocalMergeStrategy:
 def _record_verification(
     ctx: MergeContext, *, label: str, ok: bool, output: str
 ) -> VerifyResult | None:
-    """Preserve one gated publication push, when this merge runs in a tracked round."""
-    if ctx.journal is None:
+    """Preserve one gated publication push, when this merge runs in a tracked round.
+
+    An empty ``gate_command`` means no repository gate runs at this push, so there
+    is no verdict here to bracket or record.
+    """
+    if ctx.journal is None or not ctx.gate_command:
         return None
     ctx.journal.append("verification-started", detail={"label": label})
     return record_merge_path_verification(

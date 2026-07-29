@@ -477,10 +477,10 @@ def test_repo_recover_cli_uses_explicit_local_workflow(tmp_path, bare_origin, ca
     assert "claude/text-recovery: merged" in capsys.readouterr().out
 
 
-def test_repo_recover_cli_adopts_a_branch_from_an_explicit_execution_checkout(
-    tmp_path, bare_origin, capsys
+def test_repo_recover_command_adopts_a_branch_from_an_explicit_execution_checkout(
+    tmp_path, bare_origin
 ) -> None:
-    """The real command, for the case that used to be unrecoverable.
+    """The installed command, for the case that used to be unrecoverable.
 
     A branch that reaches publication on its first attempt has never been pushed,
     so it exists only where the work was done. Driving the installed argument
@@ -504,8 +504,9 @@ def test_repo_recover_cli_adopts_a_branch_from_an_explicit_execution_checkout(
     _git(execution, "checkout", "main")
     assert not gitops.branch_exists(repo, "claude/execution-only")
 
-    exit_code = recover_main(
+    proc = subprocess.run(
         [
+            "orchestrator-repo-recover",
             "claude/execution-only",
             "--repo",
             str(repo),
@@ -515,18 +516,21 @@ def test_repo_recover_cli_adopts_a_branch_from_an_explicit_execution_checkout(
             "true",
             "--workspace",
             str(tmp_path / "execution-only-cli-worktrees"),
-        ]
+        ],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
     )
 
-    printed = capsys.readouterr().out
-    assert exit_code == 0
+    printed = proc.stdout
+    assert proc.returncode == 0, proc.stderr
     assert "claude/execution-only: merged" in printed
     gate_log = printed.rsplit("merge-path gate output: ", 1)[1].strip()
     assert "verdict: passed" in Path(gate_log).read_text(encoding="utf-8")
     assert _git(origin, "show", "main:partial.txt") == "partial"
 
 
-def test_repo_recover_cli_rejects_an_execution_checkout_of_another_repository(
+def test_repo_recover_rejects_an_execution_checkout_of_another_repository(
     tmp_path, bare_origin, capsys
 ) -> None:
     repo = _clone(tmp_path, bare_origin())

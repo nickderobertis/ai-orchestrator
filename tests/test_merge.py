@@ -326,7 +326,7 @@ def test_local_merge_relies_on_push_hook_and_journals_the_merge(
     journal, node = _scope(tmp_path, "run-local")
 
     out = LocalMergeStrategy().publish_and_merge(
-        _ctx(clone_dir=clone, branch="feature", journal=node)
+        _ctx(clone_dir=clone, branch="feature", journal=node, gate_command=("just", "gate"))
     )
 
     assert out.outcome == "merged"
@@ -342,6 +342,32 @@ def test_local_merge_relies_on_push_hook_and_journals_the_merge(
     assert out.verification is not None and out.verification.ok
     assert "verdict: passed" in Path(str(out.verification.log_path)).read_text(encoding="utf-8")
     assert events[2].detail == {"pr": "local:o/r#feature", "branch": "feature", "base": "main"}
+
+
+def test_an_ungated_publication_push_claims_no_verdict(tmp_path: Path, bare_origin) -> None:
+    """Where required PR checks are the coverage, they decide after this push.
+
+    Recording a bare accepted push as a passed verification would claim a verdict
+    the checks have not reached, so an ungated push records none at all.
+    """
+    origin = bare_origin()
+    clone = gitops.clone(origin, tmp_path / "clone-ungated")
+    feature = gitops.worktree_add(
+        clone, tmp_path / "feature-ungated", "feature", base="origin/main"
+    )
+    (feature / "feature.txt").write_text("change\n", encoding="utf-8")
+    gitops.add_all(feature)
+    gitops.commit(feature, "feat: add feature")
+    gitops.push(feature, "feature")
+    journal, node = _scope(tmp_path, "run-ungated")
+
+    out = LocalMergeStrategy().publish_and_merge(
+        _ctx(clone_dir=clone, branch="feature", journal=node)
+    )
+
+    assert out.outcome == "merged"
+    assert out.verification is None
+    assert [event.kind for event in journal.events()] == ["publication-finished"]
 
 
 def test_local_merge_records_branch_content_already_on_base(tmp_path: Path, bare_origin) -> None:
@@ -439,7 +465,7 @@ def test_local_merge_records_push_gate_failure_without_claiming_a_merge(
         lambda *args, **kwargs: (_ for _ in ()).throw(GitError("pre-push: complete gate failed")),
     )
     out = LocalMergeStrategy().publish_and_merge(
-        _ctx(clone_dir=clone, branch="feature", journal=node)
+        _ctx(clone_dir=clone, branch="feature", journal=node, gate_command=("just", "gate"))
     )
 
     assert out.outcome == "gate-failed"

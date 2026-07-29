@@ -153,6 +153,13 @@ exec 3<&0
 # are stripped when the dispatcher reads this back.
 # llmlint: ignore[tool_output_is_signal, boundary_inputs_validated] this wrapper is a transparent
 # conduit for that protocol in both directions, exactly as the `exec` pass-throughs above are.
+# llmlint: ignore[robust_shell] The copy is deliberately best-effort and its status is
+# deliberately not allowed to change this turn's outcome: killing a working agent because a
+# diagnostic copy could not be written would be strictly worse than losing the copy, and the
+# alternative shapes (redirect-then-replay, or a checkable pipeline) either withhold the agent's
+# live stderr from onejudge or discard the agent's own exit code. Openability is proven before
+# the turn starts, and the failure branch below re-checks the file and says so when it stopped
+# working, so a lost copy is reported rather than read as "the harness said nothing".
 oneharness run --config "$agent_config" "$@" <&3 2> >(tee -a "$status_dir/agent.stderr" >&2) &
 agent_pid=$!
 write_status agent.child.pid "$agent_pid"

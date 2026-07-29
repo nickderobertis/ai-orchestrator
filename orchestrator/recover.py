@@ -244,14 +244,20 @@ def recover_repo(
                 "repository identity has a no-op gate; migrate it or pass --gate for recovery"
             )
 
+        # Only a push a pre-push hook gates carries a verdict; where required PR
+        # checks are the coverage instead, they decide after this push, not at it.
+        merge_path_gate = list(resolved_recorded_gate) if coverage.hook else []
+
         def preserve(*, ok: bool, output: str) -> str:
             """Keep this recovery's merge-path gate run and name where it landed."""
             nonlocal preserved_gate_log
+            if not merge_path_gate:
+                return ""
             preserved_gate_log = append_gate_log(
                 recovery_root / "gate-logs" / branch.replace("/", "-"),
                 format_merge_path_record(
                     label=f"recovery push {branch}",
-                    command=resolved_recorded_gate or [],
+                    command=merge_path_gate,
                     ok=ok,
                     output=output,
                 ),
@@ -354,7 +360,7 @@ def recover_repo(
             method=merge_method,
             policy=decision.merge_policy,
             repository_type=identity.repo_type,
-            gate_command=tuple(resolved_recorded_gate),
+            gate_command=tuple(merge_path_gate),
             local_prepare=(
                 synchronize_attest_and_push_local_recovery if decision.workflow == "local" else None
             ),

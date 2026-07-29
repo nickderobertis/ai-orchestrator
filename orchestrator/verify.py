@@ -117,7 +117,7 @@ def format_merge_path_record(*, label: str, command: list[str], ok: bool, output
     """Render one gated push's evidence, with any credential value stripped."""
     return redact(
         f"merge-path verification: {label}\n"
-        f"repository gate: {shlex.join(command) if command else '<required PR checks>'}\n"
+        f"repository gate: {shlex.join(command)}\n"
         f"verdict: {'passed' if ok else 'FAILED'}\n"
         "--- git push output ---\n" + (output if output.strip() else "<no output>\n")
     )
@@ -144,14 +144,21 @@ def record_merge_path_verification(
     command: list[str],
     ok: bool,
     output: str,
-) -> VerifyResult:
+) -> VerifyResult | None:
     """Preserve what the merge path's gate actually did, and where to read it.
 
-    The repository's pre-push hook is the only verifier a publication gets, and its
-    whole run arrives as ``git push`` output. Discarding it on success left a
-    settled run with no evidence the gate ran at all; discarding it on failure left
-    the operator re-deriving the cause from a one-line rejection.
+    Where a pre-push hook runs the repository's gate, its whole run arrives as
+    ``git push`` output. Discarding it on success left a settled run with no
+    evidence the gate ran at all; discarding it on failure left the operator
+    re-deriving the cause from a one-line rejection.
+
+    ``command`` is the gate that runs *at this push*, so an empty one means no
+    gate runs here — the identity is covered by required PR checks, which decide
+    later and are recorded by ``pr-checks-observed``. Returns ``None`` there
+    rather than calling a bare accepted push a passed verification.
     """
+    if not command:
+        return None
     record = format_merge_path_record(label=label, command=command, ok=ok, output=output)
     directory = journal.artifact_dir
     log_path = append_gate_log(directory, record) if directory is not None else None
