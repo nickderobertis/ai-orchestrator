@@ -29,7 +29,7 @@ from pathlib import Path
 from typing import TypeVar, cast
 
 import pytest
-from conftest import install_pre_push_hook
+from conftest import git, install_pre_push_hook
 from fakes import FakeGitHub, make_writing_dispatch
 from git_http import serve_github_origin
 from waits import deadline as e2e_deadline
@@ -39,7 +39,7 @@ import orchestrator.graph as graph_module
 import orchestrator.lifecycle as lifecycle_module
 from orchestrator import gitops
 from orchestrator.coordination import LockTimeout, advisory_lock, git_lock_identity
-from orchestrator.dispatch import Report
+from orchestrator.dispatch import Report, scoped_session
 from orchestrator.github import GitHubError, PullRequest
 from orchestrator.graph import graph_payload, parse_graph, run_graph
 from orchestrator.journal import NodeJournal, NodeSink, open_journal
@@ -115,6 +115,68 @@ def _per_step_dispatch(fail_step: str | None = None):
     return dispatch_fn
 
 
+def _directory_scoped_session_dispatch(store: dict[str, str]):
+    """A dispatch_fn that enforces the harness's directory-scoped session store.
+
+    oneharness records ``session name -> harness conversation token`` in a store
+    shared by every run, and the harness itself files that conversation under the
+    working directory that created it. Resuming a recorded name from a *different*
+    directory therefore fails before the first turn — the agent process exits, its
+    wrapper parks, and the dispatcher can only report ``worker-died``. That is the
+    single rule this double enforces at the paid-harness seam; everything else here
+    (git, the worktree, the branch, the merge) is real.
+    """
+
+    def dispatch_fn(
+        persona: str, task: str, *, project_dir: str, session: str, **_: object
+    ) -> Report:
+        recorded = store.setdefault(session, project_dir)
+        if recorded != project_dir:
+            return Report(
+                persona,
+                1,
+                False,
+                True,
+                0,
+                [],
+                {},
+                None,
+                (
+                    f"worker-died: tracked worker exited or stopped heartbeating "
+                    f"(watchdog pid 0, agent exit status 1): session {session!r} was "
+                    f"recorded under {recorded} and cannot resume in {project_dir}"
+                ),
+                outcome="worker-died",
+            )
+        sid = session.rsplit(":", 1)[-1]
+        (Path(project_dir) / f"{sid}.txt").write_text(f"{persona}\n", encoding="utf-8")
+        return Report(persona, 0, True, False, 2, [], {}, {}, "")
+
+    return dispatch_fn
+
+
+def _preserve_branch_with_commits(canonical: Path, branch: str, marker: str) -> None:
+    """Leave ``branch`` in the execution checkout carrying committed prior work.
+
+    A merged workstream leaves its published branch behind on origin; a *preserved*
+    one never reached it. Withdraw any published copy first so the branch this
+    seeds is the never-published kind a later run is asked to pin.
+    """
+    subprocess.run(
+        ["git", "-C", str(canonical), "push", "origin", "--delete", branch],
+        capture_output=True,
+        check=False,
+    )
+    git("fetch", "--prune", "origin", cwd=canonical)
+    git("branch", "-f", branch, "origin/main", cwd=canonical)
+    worktree = canonical.parent / f"preserve-{marker}"
+    git("worktree", "add", "--quiet", str(worktree), branch, cwd=canonical)
+    (worktree / f"PRIOR_{marker}.md").write_text(f"prior work {marker}\n", encoding="utf-8")
+    git("add", "-A", cwd=worktree)
+    git("commit", "-m", f"wip: prior partial work {marker}", cwd=worktree)
+    git("worktree", "remove", "--force", str(worktree), cwd=canonical)
+
+
 def _has_file(origin: Path, ref: str, path: str) -> bool:
     return (
         subprocess.run(
@@ -156,6 +218,54 @@ def _run_while_merge_turn_is_held(
             release.set()
             holder.result(timeout=e2e_timeout(10))
     return result
+
+
+def test_pinned_branch_redispatch_reaches_its_agent_turn(
+    tmp_path, bare_origin, personas_dir
+) -> None:
+    """Re-pinning a branch that already carries commits must still run its agent.
+
+    Resuming preserved work and recovering it are both exactly this: a second run
+    told to use a branch name a previous run already dispatched. The two runs cut
+    that branch a worktree under their own run roots, so a session named only after
+    the branch names a conversation the harness filed under a directory that is
+    gone — and the worker dies before its first turn with nothing to show for it.
+    """
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-pinned")
+    root = tmp_path / "pinned-worktrees"
+    branch = "ai-orchestrator/engineer/pinned-existing"
+    sessions: dict[str, str] = {}
+
+    def dispatch_pinned(marker: str) -> lifecycle_module.LifecycleResult:
+        _preserve_branch_with_commits(canonical, branch, marker)
+        return run_repo_task(
+            str(origin),
+            f"complete-now write-change {marker}",
+            "engineer",
+            workspace=Workspace(
+                root,
+                resolver=lambda _spec: canonical,
+                workflow="local",
+                repo_type="single-owner",
+            ),
+            branch=branch,
+            persona_dir=personas_dir,
+            recorded_gate=["true"],
+            dispatch_fn=_directory_scoped_session_dispatch(sessions),
+        )
+
+    first = dispatch_pinned("first")
+    assert first.outcome == "merged", first.detail
+    second = dispatch_pinned("second")
+    assert second.outcome == "merged", second.detail
+
+    assert len(sessions) == 2, sessions
+    assert {session.rsplit(":", 1)[-1] for session in sessions} == {"main"}
+    assert all(session.startswith(branch) for session in sessions), sessions
+    assert len(set(sessions.values())) == 2, sessions
+    assert _has_file(origin, "main", "PRIOR_first.md")
+    assert _has_file(origin, "main", "PRIOR_second.md")
 
 
 def test_published_dispatch_survives_deferred_teardown_and_redispatch_reclaims_it(
@@ -3705,7 +3815,7 @@ def test_local_recovery_conflict_resumes_worker_then_requeues(tmp_path, bare_ori
     )
     assert partial.outcome == "not-completed"
     _advance_origin(tmp_path, origin, "shared.txt", "advanced base\n")
-    sessions: list[str] = []
+    sessions: list[tuple[str, str]] = []
 
     def resolving_dispatch(
         persona: str, task: str, *, project_dir: str, session: str, **_: object
@@ -3713,7 +3823,7 @@ def test_local_recovery_conflict_resumes_worker_then_requeues(tmp_path, bare_ori
         path = Path(project_dir) / "shared.txt"
         assert "Resolve the content conflict" in task
         assert "<<<<<<<" in path.read_text(encoding="utf-8")
-        sessions.append(session)
+        sessions.append((session, project_dir))
         path.write_text("advanced base\npreserved branch by engineer\n", encoding="utf-8")
         gitops.add_all(project_dir)
         return Report(persona, 0, True, False, 2, [], {}, {}, "")
@@ -3727,7 +3837,11 @@ def test_local_recovery_conflict_resumes_worker_then_requeues(tmp_path, bare_ori
     )
 
     assert recovered.outcome == "merged"
-    assert sessions == [f"{partial.branch}:main"]
+    # A recovery cuts its own worktree, so the resolver's conversation is named for
+    # the branch *and* that directory — a bare branch name would resume a session
+    # the harness recorded somewhere the recovery does not run.
+    assert sessions == [(f"{scoped_session(partial.branch, sessions[0][1])}:main", sessions[0][1])]
+    assert sessions[0][0].startswith(partial.branch)
     assert (
         subprocess.run(
             ["git", "-C", str(origin), "show", "main:shared.txt"],

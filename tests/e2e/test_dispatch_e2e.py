@@ -361,7 +361,13 @@ def test_real_dispatch_detects_killed_agent_and_reaps_orphans(
 
     assert process.returncode == 1, stderr
     result = json.loads(stdout)
-    assert result["results"]["worker"]["error"] == "worker-died"
+    # A death before the first turn leaves no report and no transcript, so this
+    # line is the whole account of it: it has to name the child's fate, not just
+    # the outcome. The exact status races the tear-down the dispatcher starts the
+    # moment the child leaves the tree, so require that it is stated, not which.
+    error = result["results"]["worker"]["error"]
+    assert error.startswith("worker-died:"), error
+    assert "agent exit status" in error, error
     assert time.monotonic() - started < 5
     deadline = time.monotonic() + 2
     while Path(f"/proc/{orphan_pid}").exists() and time.monotonic() < deadline:

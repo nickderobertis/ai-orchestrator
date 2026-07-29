@@ -123,7 +123,7 @@ write_status() {
 }
 worker_pid=$$
 write_status agent.pid "$worker_pid"
-if ! rm -f "$status_dir/agent.done" "$status_dir/agent.failed"; then
+if ! rm -f "$status_dir/agent.done" "$status_dir/agent.failed" "$status_dir/agent.exit_code"; then
     echo "oneharness-agent: cannot reset terminal markers; retry through orchestrator dispatch" >&2
     exit 2
 fi
@@ -139,9 +139,18 @@ write_status agent.heartbeat "$heartbeat_sequence"
 # llmlint: ignore[boundary_inputs_validated] this duplicates a file descriptor; the payload it
 # carries is the onejudge protocol that oneharness itself parses and validates.
 exec 3<&0
+# A worker that dies before its first turn produces no report and no transcript, so
+# the child's own stderr is the only account of why. Park it beside the terminal
+# markers rather than letting it vanish with the process tree the dispatcher is
+# about to tear down; it is replayed below so onejudge still receives it.
+agent_stderr=$status_dir/agent.stderr
+if ! : >"$agent_stderr"; then
+    echo "oneharness-agent: cannot open the agent stderr record; retry through orchestrator dispatch" >&2
+    exit 2
+fi
 # llmlint: ignore[tool_output_is_signal, boundary_inputs_validated] this wrapper is a transparent
 # conduit for that protocol in both directions, exactly as the `exec` pass-throughs above are.
-oneharness run --config "$agent_config" "$@" <&3 &
+oneharness run --config "$agent_config" "$@" <&3 2>"$agent_stderr" &
 agent_pid=$!
 write_status agent.child.pid "$agent_pid"
 while agent_state=$(ps -o stat= -p "$agent_pid" 2>/dev/null) &&
@@ -155,6 +164,13 @@ set +e
 wait "$agent_pid"
 exit_code=$?
 set -e
+# Record the status before replaying the stream: the dispatcher can conclude this
+# worker died the moment the child leaves the process tree, and a large stderr
+# would otherwise let it reach that conclusion before the reason was written down.
+write_status agent.exit_code "$exit_code"
+# llmlint: ignore[tool_output_is_signal] this replays the child's own stream to the
+# caller unread; the conduit stays transparent, it just also keeps a copy.
+cat "$agent_stderr" >&2 || true
 if [ "$exit_code" -ne 0 ]; then
     echo "oneharness-agent: agent process $agent_pid exited $exit_code; awaiting dispatcher recovery" >&2
     write_status agent.failed "$worker_pid"

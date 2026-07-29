@@ -670,7 +670,7 @@ def run_graph(
             )
             return run
         detail = (
-            "worker-died"
+            (report.stderr.strip() or "worker-died")
             if report.outcome == "worker-died"
             else "did not complete (hit the turn cap)"
         )

@@ -651,7 +651,7 @@ def test_orchestrator_retries_dead_lifecycle_worker_then_surfaces_blocker(
     first_result = json.loads((run_dir / "round-01" / "result.json").read_text(encoding="utf-8"))
     assert first_result["results"]["change"]["status"] == "failed"
     assert first_result["results"]["change"]["outcome"] == "not-completed"
-    assert first_result["results"]["change"]["error"].endswith("worker-died")
+    assert "worker-died" in first_result["results"]["change"]["error"]
 
     barrier.unlink()
     _convenience_cli("channel-continue", run_id, runs, "retry change")
@@ -667,7 +667,7 @@ def test_orchestrator_retries_dead_lifecycle_worker_then_surfaces_blocker(
     second_result = json.loads((run_dir / "round-02" / "result.json").read_text(encoding="utf-8"))
     assert second_result["results"]["change"]["status"] == "failed"
     assert second_result["results"]["change"]["outcome"] == "not-completed"
-    assert second_result["results"]["change"]["error"].endswith("worker-died")
+    assert "worker-died" in second_result["results"]["change"]["error"]
     retry_plan = json.loads((run_dir / "round-02" / "plan.json").read_text(encoding="utf-8"))
     assert retry_plan["tasks"][0]["id"] == "change"
     _convenience_cli("channel-approve", run_id, runs)
