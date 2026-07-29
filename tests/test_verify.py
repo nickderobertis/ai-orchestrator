@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shlex
 import subprocess
 import sys
 import threading
@@ -213,3 +214,11 @@ def test_run_gate_missing_command(tmp_path) -> None:
 def test_verify_result_tail() -> None:
     result = run_gate(Path("."), ["true"])
     assert result.tail(10) == result.output[-10:]
+
+
+def test_a_gate_that_names_no_command_reports_a_failed_gate(tmp_path) -> None:
+    """`--gate " "` splits to nothing, and must not surface as a harness crash."""
+    result = run_gate(tmp_path, shlex.split("   "))
+
+    assert result.ok is False
+    assert "gate command is empty" in result.output

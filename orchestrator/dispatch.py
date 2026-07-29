@@ -100,8 +100,10 @@ ORCHESTRATOR_ONEHARNESS_BIN = REPO_ROOT / "scripts" / "oneharness-orchestrator.s
 #: at a rate no working agent produces. The accounting is onejudge's and not this
 #: harness's to change; what the harness can stop doing is reporting the result as the
 #: agent running out of room, because that reading is what earns an identical retry.
-NO_AGENT_PROGRESS_OUTCOME: Literal["no-agent-progress"] = "no-agent-progress"
 DispatchOutcome = Literal["worker-died", "no-agent-progress"]
+#: Typed by the union rather than by a literal of its own, so a rename that misses one
+#: of them stops being a spelling both places agree on and starts being a type error.
+NO_AGENT_PROGRESS_OUTCOME: DispatchOutcome = "no-agent-progress"
 WatchdogReason = Literal["worker-died", "stalled"]
 
 

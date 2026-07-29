@@ -276,6 +276,12 @@ def run_gate(
     it; the result then reports a failed gate, because a gate that was stopped
     never said anything about the change.
     """
+    if not command:
+        # `--gate` reaches integrate and recover as raw argv, and a template that is
+        # only whitespace splits to nothing. Popen would raise IndexError from inside
+        # subprocess, which reads as a harness crash rather than what it is: a gate
+        # that names no command, and so verified nothing.
+        return VerifyResult(ok=False, command=command, output="gate command is empty\n")
     directory = Path(project_dir)
     gate_env = {
         key: value

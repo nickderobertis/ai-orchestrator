@@ -119,6 +119,9 @@ def _launch_may_have_reported(run_dir: Path) -> bool:
     report = run_dir / "orchestrator" / "report.json"
     try:
         return report.is_file() and report.stat().st_size > 0
+    # llmlint: ignore[changed_behavior_has_e2e] no planner command can make this host
+    # fail to stat a file it just listed; reaching it needs a damaged filesystem or a
+    # revoked mount. tests/test_runs.py drives it at the boundary that owns the read.
     except OSError:
         return True
 
@@ -136,6 +139,9 @@ def launch_is_active(run_dir: Path) -> bool:
         return False
     try:
         value = load_mapping(status)
+    # llmlint: ignore[changed_behavior_has_e2e] the record is written atomically, so no
+    # planner command leaves it unparseable; it takes a crashed writer or a damaged
+    # filesystem. tests/test_runs.py drives it at the boundary that owns the read.
     except (ConfigError, OSError):
         # An ordinary file anything may corrupt, read by every planner-facing view.
         # A record this host cannot parse says nothing about whether the run is
