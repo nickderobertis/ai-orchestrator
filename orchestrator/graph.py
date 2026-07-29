@@ -669,10 +669,6 @@ def run_graph(
                 },
             )
             return run
-        # The distinguishing branch needs a onejudge report with zero agent turns, and
-        # the real CLI never yields one -- even max_turns 0 runs a turn. Its
-        # interpretation is proven against real SDK reports in test_dispatch_unit.py
-        # and its recorded rendering in test_graph.py; every other outcome is unchanged.
         # llmlint: ignore[changed_behavior_has_e2e] real onejudge never yields a zero-turn report
         detail = incomplete_detail(report)
         run = NodeRun("failed", detail, report)

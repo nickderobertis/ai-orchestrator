@@ -1132,6 +1132,18 @@ def test_a_node_that_cannot_finish_settles_instead_of_being_redispatched_forever
     assert len(incomplete_commits(canonical, "origin/main", branch)) == markers
     assert gitops.branch_exists(canonical, branch)
 
+    # The planner can still say "go", and that decision is not what the bound is
+    # there to stop: an explicit retry starts the budget over on the same branch.
+    edits = tmp_path / "retry.json"
+    edits.write_text(json.dumps({"retry": {"change": {}}}), encoding="utf-8")
+    assert next_round_main([run, str(edits), "--runs-dir", str(runs_dir), *common]) == 1
+    capsys.readouterr()
+    retried = _recorded(rounds_run + 1, "plan.json")["tasks"][0]
+
+    assert retried["resume"]["branch"] == branch
+    assert "attempts" not in retried["resume"]
+    assert _recorded(rounds_run + 1, "result.json")["results"]["change"]["branch"] == branch
+
 
 def test_ordinary_next_round_resumes_committed_lifecycle_branch(
     tmp_path, bare_origin, command_base, personas_dir, capsys

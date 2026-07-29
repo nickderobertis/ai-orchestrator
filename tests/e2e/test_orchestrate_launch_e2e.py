@@ -31,6 +31,7 @@ import yaml
 from waits import deadline
 
 from orchestrator import BASE_CONFIG, REPO_ROOT
+from orchestrator.graph import main as main_plan
 
 # Codex's own no-approval flag: what oneharness maps `ONEHARNESS_MODE=bypass` to.
 CODEX_BYPASS_FLAG = "--dangerously-bypass-approvals-and-sandbox"
@@ -297,6 +298,26 @@ def test_runs_and_status_settle_a_launch_whose_orchestrator_is_gone(
         assert f"* {neighbour}  ACTIVE" in live
         assert "SETTLED" not in live
 
+        # A real round, recorded by the real executor into the launched run, so what
+        # is reported below is a launch that died *after* finishing work rather than
+        # one that never started any. Its plan is human-only, so it settles as
+        # waiting without dispatching anything.
+        assert (
+            main_plan(
+                [
+                    str(tmp_path / "doomed-plan.json"),
+                    "--run",
+                    doomed,
+                    "--runs-dir",
+                    str(runs),
+                    "--format",
+                    "json",
+                ]
+            )
+            == 1
+        )
+        assert (runs / doomed / "round-01" / "result.json").is_file()
+
         _stop(runs / doomed)
 
         listed = _view("runs", runs, tmp_path / "history")
@@ -304,8 +325,12 @@ def test_runs_and_status_settle_a_launch_whose_orchestrator_is_gone(
     finally:
         _stop(runs / neighbour)
 
-    settled = f"SETTLED (orchestrator pid {pid} is gone before its first round)"
-    assert f"! {doomed}  {settled}" in listed
+    settled = f"SETTLED (orchestrator pid {pid} is gone after round-01)"
+    # A run with recorded history keeps its ledger row and carries the death on the
+    # line beneath it, which is the shape a planner actually reads for a run that
+    # got somewhere before its orchestrator went.
+    assert f"! {doomed}  round-01  (" in listed
+    assert f"    {settled}" in listed
     assert f"{doomed}: {settled}" in reported
     # The other orchestrator was alive throughout, so neither view may call its run
     # settled. It still reports what it is waiting for — that is a live run being
