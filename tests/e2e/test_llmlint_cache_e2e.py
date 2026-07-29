@@ -416,7 +416,17 @@ def test_an_incomplete_record_is_never_read_as_a_clean_run(
 
 @pytest.mark.parametrize(
     "supplied",
-    ["", "origin/main", "not-a-sha", "0123456789abcdef", "../../etc/passwd", "$(id)"],
+    [
+        "",
+        "origin/main",
+        "not-a-sha",
+        "0123456789abcdef",
+        "../../etc/passwd",
+        "$(id)",
+        # Right shape, no such commit — the case a shape check alone waves through,
+        # and exactly as false a provenance as a branch name would be.
+        "a" * 40,
+    ],
 )
 def test_provenance_never_names_a_base_it_cannot_vouch_for(
     workspace: Workspace, supplied: str
@@ -425,8 +435,9 @@ def test_provenance_never_names_a_base_it_cannot_vouch_for(
 
     A verdict's provenance is what an operator reads to know *which* base a green
     covers. Anything that can set a variable could otherwise write that answer, so
-    only a resolved commit id is echoed; the recorded verdict itself still replays,
-    because the base is provenance about the verdict rather than part of it.
+    only a commit id this repository actually has is echoed; the recorded verdict
+    itself still replays, because the base is provenance about the verdict rather
+    than part of it.
     """
     verdict = workspace.root / ".nx/llmlint-diff"
     verdict.mkdir(parents=True)
