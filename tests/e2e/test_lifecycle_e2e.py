@@ -2415,6 +2415,26 @@ def test_recovery_accepts_an_execution_checkout_the_identity_does_not_know(
     assert _has_file(origin, "main", "preserved.txt")
 
 
+def test_recovery_rejects_an_execution_checkout_of_another_repository(
+    tmp_path, bare_origin
+) -> None:
+    """Reading a branch out of the wrong tree would publish the wrong work."""
+    origin = bare_origin()
+    canonical, _safety, branch = _preserve_in_execution_checkout(tmp_path, origin, "foreign-exec")
+    stranger = gitops.clone(bare_origin(), tmp_path / "a-different-repository")
+
+    with pytest.raises(RegistryError) as failure:
+        recover_repo(
+            canonical,
+            branch,
+            workspace_root=tmp_path / "foreign-exec-recovery",
+            execution_checkout=stranger,
+            recorded_gate=["true"],
+        )
+
+    assert "is not a git checkout of the repository identity" in str(failure.value)
+
+
 def test_recovery_of_a_missing_branch_names_every_checkout_it_searched(
     tmp_path, bare_origin
 ) -> None:

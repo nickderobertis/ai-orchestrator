@@ -90,6 +90,7 @@ def _registered(repo: str | Path, registry: Registry) -> tuple[Slug, RegistryEnt
 def _search_checkouts(
     registry: Registry,
     identity: IdentityKey,
+    origin: str,
     publication: Path,
     override: str | Path | None,
 ) -> list[Path]:
@@ -97,6 +98,13 @@ def _search_checkouts(
     ordered: list[Path] = [publication]
     if override is not None:
         explicit = registry.checkout_path(override).expanduser().resolve()
+        # An operator-supplied path is a trust boundary: reading a branch out of
+        # some other repository's checkout would publish work from the wrong tree.
+        if not registry.is_checkout_of(explicit, origin):
+            raise RegistryError(
+                f"execution checkout {explicit} is not a git checkout of the repository "
+                f"identity {str(identity)!r}; pass the checkout the preserved work was done in"
+            )
         if explicit not in ordered:
             ordered.append(explicit)
     for candidate in registry.entries.values():
@@ -199,7 +207,9 @@ def recover_repo(
     # execution checkout the work was done in. Adopt it there rather than reporting
     # it missing, which is what fires on exactly the branches that succeed early.
     _adopt_preserved_branch(
-        clone, _search_checkouts(registry, identity.identity, clone, execution_checkout), branch
+        clone,
+        _search_checkouts(registry, identity.identity, entry.origin, clone, execution_checkout),
+        branch,
     )
     try:
         run_clone = workspace.ensure_clone(ref, base_branch=target)
