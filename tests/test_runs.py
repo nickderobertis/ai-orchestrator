@@ -6,6 +6,7 @@ import json
 import os
 import signal
 import socket
+from pathlib import Path
 
 import pytest
 
@@ -20,6 +21,7 @@ from orchestrator.runs import (
     abandoned_round_indicator,
     as_result_payload,
     latest_round,
+    launch_is_active,
     list_runs,
     load_completions,
     prepare_round,
@@ -418,12 +420,40 @@ def test_a_launch_that_reported_its_own_outcome_is_not_abandoned(tmp_path) -> No
     assert abandoned_launch(run_dir) is None
 
 
-def test_an_unreadable_launch_record_keeps_the_run_silent(tmp_path) -> None:
+def test_a_report_this_host_cannot_stat_is_an_unknown_state_not_a_crash(
+    tmp_path, monkeypatch
+) -> None:
+    """The same rule for the other half of the record: unknown, never raising."""
+    run_dir = tmp_path / "unstattable"
+    _orchestrator_launch(run_dir, pid=os.getpid() + 10_000_000)
+    report = run_dir / "orchestrator" / "report.json"
+    report.write_text("{}", encoding="utf-8")
+    original = Path.stat
+
+    def refuse(self: Path, *args: object, **kwargs: object) -> object:
+        if self == report:
+            raise OSError("stale file handle")
+        return original(self, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(Path, "stat", refuse)
+
+    assert abandoned_launch(run_dir) is None
+    assert launch_is_active(run_dir) is False
+
+
+def test_an_unreadable_launch_record_keeps_the_run_silent_without_raising(tmp_path) -> None:
+    """The corruption a crashed writer leaves, which no command can be asked for.
+
+    Both planner-facing views read this record, so an unparseable one has to answer
+    "nothing known" rather than raise: the alternative takes the listing of every
+    other run down with it, which is how a single bad file becomes a blind planner.
+    """
     run_dir = tmp_path / "unreadable"
     _orchestrator_launch(run_dir)
     (run_dir / "orchestrator" / "status.json").write_text("{ not json", encoding="utf-8")
 
     assert abandoned_launch(run_dir) is None
+    assert launch_is_active(run_dir) is False
 
 
 def test_runs_cli_reports_an_abandoned_round_beside_a_recorded_one(tmp_path, capsys) -> None:

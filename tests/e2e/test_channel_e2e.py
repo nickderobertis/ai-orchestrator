@@ -1368,24 +1368,17 @@ def test_a_launch_that_reported_its_own_outcome_is_never_called_settled(
     assert "SETTLED" not in reported, reported
 
 
-def test_planner_views_survive_an_unreadable_launch_record(
-    tmp_path: Path, onejudge_bin: str, monkeypatch: pytest.MonkeyPatch
+def test_a_launch_that_dies_after_a_recorded_round_is_reported_against_its_row(
+    tmp_path: Path, onejudge_bin: str
 ) -> None:
-    """The record both views read is an ordinary file anything may corrupt.
+    """A run that got somewhere before its orchestrator went reads differently.
 
-    No command produces a malformed record, which is the point: it is left by a
-    crash mid-write, a full disk, or anything else with write access to the ledger.
-    Reproducing that condition directly is the only way to reach it, and it is the
-    same input `test_killed_executor_surfaces_as_abandoned_in_runs_and_status`
-    rewrites for the round-level record. Everything either side of it — the launch,
-    and both views — is the planner-facing interface.
-
-    A record this host cannot parse says nothing about whether the run is alive, so
-    the views must keep quiet about it rather than guess, and must still answer at
-    all: raising here would take away the only view of every other run beside it.
+    The round here is recorded by the orchestrator itself, on its own first turn and
+    through its own `run-plan` — the only thing entitled to drive a live run's
+    ledger. Killing it afterwards leaves precisely the state four stranded runs were
+    in: real work recorded, and nothing left driving it.
     """
-    runs = tmp_path / "unreadable-runs"
-    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    runs = tmp_path / "after-round-runs"
     run_id = _launch_cli(
         _plan(tmp_path, "surface-milestone"),
         runs,
@@ -1393,18 +1386,25 @@ def test_planner_views_survive_an_unreadable_launch_record(
         onejudge_bin,
         env={"XDG_STATE_HOME": str(tmp_path / "state")},
     )
-    status_path = runs / run_id / "orchestrator" / "status.json"
-    owner = json.loads(status_path.read_text(encoding="utf-8"))["pid"]
-    try:
-        # The corruption a crashed writer leaves behind, not a state any command
-        # can be asked for.
-        status_path.write_text("{ not json", encoding="utf-8")
+    recorded = runs / run_id / "round-01" / "result.json"
+    round_deadline = deadline(60)
+    while time.monotonic() < round_deadline and not recorded.is_file():
+        time.sleep(0.02)
+    assert recorded.is_file(), "the launched orchestrator never recorded its round"
 
-        listed = _view_cli("runs", runs, tmp_path / "history")
-        reported = _view_cli("status", runs, tmp_path / "history")
+    owner = json.loads(
+        (runs / run_id / "orchestrator" / "status.json").read_text(encoding="utf-8")
+    )["pid"]
+    with suppress(ProcessLookupError, PermissionError):
+        os.killpg(owner, signal.SIGKILL)
+    assert _await_owner_exit(owner)
 
-        assert "SETTLED" not in listed, listed
-        assert "SETTLED" not in reported, reported
-    finally:
-        with suppress(ProcessLookupError, PermissionError):
-            os.killpg(owner, signal.SIGKILL)
+    listed = _view_cli("runs", runs, tmp_path / "history")
+    reported = _view_cli("status", runs, tmp_path / "history")
+
+    settled = f"SETTLED (orchestrator pid {owner} is gone after round-01)"
+    # A run with recorded history keeps its ledger row and carries the death on the
+    # line beneath it, which is what an operator scanning the list actually reads.
+    assert f"! {run_id}  round-01  (" in listed, listed
+    assert f"    {settled}" in listed, listed
+    assert f"{run_id}: {settled}" in reported, reported

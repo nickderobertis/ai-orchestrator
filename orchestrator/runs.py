@@ -106,12 +106,25 @@ def process_may_be_live(pid: int, host: object) -> bool:
     return True
 
 
+def _launch_reported(run_dir: Path) -> bool:
+    """Whether the launched orchestrator left a report of its own outcome.
+
+    Every reader of this is a planner-facing view, so an unreadable report is an
+    unknown state rather than a reason to raise: a stat that fails mid-teardown, or
+    on a filesystem that has gone away, must not take the whole listing with it.
+    """
+    report = run_dir / "orchestrator" / "report.json"
+    try:
+        return report.is_file() and report.stat().st_size > 0
+    except OSError:
+        return True
+
+
 # llmlint: ignore[changed_behavior_has_e2e] real orchestrate/listing/name-resolution journeys run
 # e2e; host/PID outcomes are deterministic OS-liveness boundary branches.
 def launch_is_active(run_dir: Path) -> bool:
     """Return whether a launched orchestrator has not written its final report."""
-    report = run_dir / "orchestrator" / "report.json"
-    if report.is_file() and report.stat().st_size > 0:
+    if _launch_reported(run_dir):
         return False
     status = run_dir / "orchestrator" / "status.json"
     if not status.is_file():
@@ -268,8 +281,7 @@ def abandoned_launch(run_dir: Path) -> AbandonedLaunch | None:
     """
     if not (run_dir / "launch.json").is_file():
         return None
-    report = run_dir / "orchestrator" / "report.json"
-    if report.is_file() and report.stat().st_size > 0:
+    if _launch_reported(run_dir):
         return None
     status = run_dir / "orchestrator" / "status.json"
     if not status.is_file():
