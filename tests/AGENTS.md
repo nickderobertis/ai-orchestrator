@@ -23,14 +23,17 @@ Conventions for this repo's tests.
 - **Nothing a test starts may outlive it.** `leak_guard.py` is a self-contained
   pytest plugin (`conftest.py` re-exports its fixtures; the guard's own e2e loads it
   with `-p leak_guard`) and it works in three layers, because a process tree escapes
-  in three ways: registration through the patched `Popen`, a subreaper-backed sweep
-  of the session's live descendants, and `leak_reaper.py` outside the session for
+  in three ways: registration through the patched `Popen`, continuous sampling of the
+  session's own process tree, and `leak_reaper.py` outside the session for
   when the session is killed rather than asked to stop. Reach for
   `process_tree.write_orphaning_tree` when a test needs a realistic tree to clean up:
   its deepest worker can leave both its process group and its ancestry, which is the
   only shape that distinguishes a real reap from one registration already covered.
-  Under the subreaper a zombie is *not* a survivor — use `process_tree.is_running`,
-  not the existence of `/proc/<pid>`.
+  A zombie is *not* a survivor — use `process_tree.is_running`, not the existence of
+  `/proc/<pid>`. The watching layer runs a background thread, so `os.fork()` in this
+  process (which `run_detached` really does, in `tests/test_detach.py`) warns that it
+  is multi-threaded; the sampler hands its lock across the fork via
+  `os.register_at_fork`, which is what makes that safe rather than merely quiet.
 - **A test must not leave a background daemon behind.** `NX_DAEMON=false` is set for
   the whole session (`conftest.py`), because Nx's daemon deliberately outlives the
   command that starts it and one per test is how a single worktree came to hold

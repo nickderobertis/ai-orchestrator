@@ -75,12 +75,25 @@ class SessionGuard:
     _watcher: threading.Thread | None = None
 
     def start(self) -> None:
-        """Begin sampling this session's tree until the session ends."""
+        """Begin sampling this session's tree until the session ends.
+
+        The watcher is created with every blockable signal masked, and inherits that
+        mask. A signal mask is per-thread, so tests that mask a signal on the main
+        thread and then raise it at this process — which is how the round-ownership
+        journeys drive their own teardown handlers — were relying on there being only
+        one thread to deliver it to. An unmasked helper thread quietly becomes that
+        delivery target and dies of the default disposition, taking the session with
+        it. Nothing here should ever receive a signal, so it accepts none.
+        """
         if self._watcher is not None:
             return
         self._watching.set()
-        self._watcher = threading.Thread(target=self._watch, name="leak-guard", daemon=True)
-        self._watcher.start()
+        previous = signal.pthread_sigmask(signal.SIG_BLOCK, signal.valid_signals())
+        try:
+            self._watcher = threading.Thread(target=self._watch, name="leak-guard", daemon=True)
+            self._watcher.start()
+        finally:
+            signal.pthread_sigmask(signal.SIG_SETMASK, previous)
 
     def _watch(self) -> None:
         while self._watching.is_set():

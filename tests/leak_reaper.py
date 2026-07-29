@@ -63,6 +63,16 @@ class TreeSampler:
         self.root_pid = root_pid
         self._known: dict[ProcessId, ProcessStart | None] = {}
         self._guard = threading.Lock()
+        # Some of this suite forks the very process being watched — that is what
+        # `run_detached` is — and a fork inherits only the calling thread. A lock the
+        # sampling thread happened to hold at that instant would stay held in the
+        # child forever, and the child would hang the first time it touched it.
+        # Handing the lock across the fork is what CPython does for its own locks.
+        os.register_at_fork(
+            before=self._guard.acquire,
+            after_in_parent=self._guard.release,
+            after_in_child=self._guard.release,
+        )
 
     def sample(self) -> None:
         """Record every descendant of the root not already claimed."""
