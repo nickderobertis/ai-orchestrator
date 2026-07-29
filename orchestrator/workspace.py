@@ -2,8 +2,16 @@
 
 `Workspace` independently resolves the checkout used for execution and the
 repository identity used for publication. It hands out a fresh **worktree per
-branch** outside the execution checkout. Parallel tasks share its object store
-without ever using its working tree for task work.
+branch**, cut from a clone that belongs to this run alone.
+
+That per-run clone is what keeps concurrent orchestrators out of each other's
+way. Git's worktree registry, its ref store, and its own locks are all properties
+of one clone, so sharing a clone between runs means sharing the machinery that
+adds, prunes, and removes worktrees — and one run's cleanup can then reach a
+sibling's live tree. Each run gets its own clone instead, made with ``--shared``
+against the identity's execution checkout so it borrows that object store rather
+than copying it: distinct registries and distinct locks, at the cost of little
+more than a set of refs.
 
 A repo is named loosely — ``"onejudge"`` (the default owner is filled in),
 ``"someone/thing"``, or a full clone URL — and normalized once at the boundary.
@@ -12,18 +20,29 @@ A repo is named loosely — ``"onejudge"`` (the default owner is filled in),
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
+import shutil
 import threading
 import time
+import uuid
 from collections.abc import Callable
-from contextlib import AbstractContextManager
+from contextlib import AbstractContextManager, suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, NewType, Protocol
 
 from . import gitops
-from .coordination import LockTimeout, advisory_lock, observe_harness
+from .coordination import (
+    LockTimeout,
+    ProcessStart,
+    advisory_lock,
+    atomic_json,
+    git_lock_identity,
+    observe_harness,
+    process_start_identity,
+)
 
 if TYPE_CHECKING:
     from .registry import Registry
@@ -46,6 +65,15 @@ CACHE_ENV = "ORCHESTRATOR_CACHE_DIR"
 Workflow = Literal["local", "remote"]
 RepositoryType = Literal["single-owner", "team"]
 IdentityKey = NewType("IdentityKey", str)
+#: Names one run's directory, and so authorizes rejoining that run's clone.
+RunToken = NewType("RunToken", str)
+
+#: Per-run state lives under a ``runs/`` level so the flat per-branch directories
+#: an earlier layout created alongside it are never mistaken for run roots — and
+#: are never reaped, since nothing here claims to own them.
+RUNS_DIR_NAME = "runs"
+CLONE_DIR_NAME = ".clone"
+OWNER_RECORD_NAME = "owner.json"
 
 
 class WorkspaceError(RuntimeError):
@@ -141,8 +169,95 @@ def _safe_branch_dir(branch: str) -> str:
     return re.sub(r"[^A-Za-z0-9._-]+", "-", branch).strip("-") or "wt"
 
 
+def _run_lease_identity(run_root: Path) -> str:
+    return f"workspace-run:{run_root.resolve()}"
+
+
+def validate_run_token(token: str) -> RunToken:
+    """Accept a run token only if it can safely name one directory.
+
+    The token becomes a path component under the workspace root, so a separator or
+    a traversal component in it would place a run's clone somewhere the layout does
+    not describe — and put the reaper's `rmtree` there with it.
+    """
+    if not token or token in {os.curdir, os.pardir} or not re.fullmatch(r"[A-Za-z0-9._-]+", token):
+        raise WorkspaceError(
+            f"run token {token!r} must be a non-empty name of letters, digits, '.', '_', or '-'"
+        )
+    return RunToken(token)
+
+
+@dataclass(frozen=True)
+class RunOwner:
+    """The process that claimed a run root, identifiable across pid reuse.
+
+    A bare pid is not an identity: the kernel recycles pids, so a recorded pid can
+    be reported live forever by an unrelated process that inherits the number.
+    Pairing it with the start token the kernel stamped answers the only question
+    the reaper asks.
+    """
+
+    pid: int
+    process_start: ProcessStart | None
+    token: RunToken
+
+    @classmethod
+    def current(cls, token: RunToken) -> RunOwner:
+        return cls(os.getpid(), process_start_identity(os.getpid()), token)
+
+    @classmethod
+    def parse(cls, value: object) -> RunOwner | None:
+        """Return the recorded owner, or ``None`` when it is not identifiable."""
+        match value:
+            # `bool` is an `int`, so the accepted shapes below would otherwise take
+            # `true` for a pid and call an unidentifiable record identifiable.
+            case {"pid": bool()} | {"process_start": bool()}:
+                return None
+            case {"pid": int(pid), "process_start": int(start), "token": str(token)}:
+                return cls(pid, ProcessStart(start), RunToken(token))
+            case {"pid": int(pid), "process_start": int(start)}:
+                return cls(pid, ProcessStart(start), RunToken(""))
+            case _:
+                return None
+
+    @classmethod
+    def read(cls, run_root: Path) -> RunOwner | None:
+        try:
+            return cls.parse(json.loads((run_root / OWNER_RECORD_NAME).read_text(encoding="utf-8")))
+        except (OSError, ValueError):
+            return None
+
+    def record(self) -> dict[str, object]:
+        return {"pid": self.pid, "process_start": self.process_start, "token": self.token}
+
+    def is_live(self) -> bool:
+        return self.process_start is not None and process_start_identity(self.pid) == (
+            self.process_start
+        )
+
+
+def _abandoned_run_is_reclaimable(run_root: Path) -> bool:
+    """Whether an unoccupied run root provably holds nothing anyone could still want.
+
+    Deleting a sibling run's tree is the exact failure this layout exists to
+    prevent, so removal needs more than "its lease is free": no recorded owner may
+    still be running, and the run's own clone must hold no commit that has not
+    reached origin. Only the *work* side of that is conservative when unreadable —
+    a clone this cannot inspect is kept. An unreadable owner record is not, because
+    it names nobody to be alive; the caller's failed exclusive probe of the shared
+    occupancy lease is what already proved the tree empty.
+    """
+    owner = RunOwner.read(run_root)
+    if owner is not None and owner.is_live():
+        return False
+    clone = run_root / CLONE_DIR_NAME
+    if not clone.is_dir():
+        return not any(entry.name != OWNER_RECORD_NAME for entry in run_root.iterdir())
+    return gitops.is_repo(clone) and not gitops.unpublished_branches(clone)
+
+
 class Workspace:
-    """Cuts task worktrees from a selected execution checkout."""
+    """Cuts task worktrees from a private clone of the selected execution checkout."""
 
     def __init__(
         self,
@@ -151,8 +266,17 @@ class Workspace:
         resolver: RepoResolver | None = None,
         workflow: Workflow | None = None,
         repo_type: RepositoryType | None = None,
+        run_token: RunToken | str | None = None,
     ) -> None:
         self.root = Path(root)
+        # One token per workspace, not per process: a process may drive several
+        # workspaces, and giving each its own clone keeps their git metadata apart
+        # for the same reason it keeps separate processes apart. Passing an existing
+        # token is how a caller rejoins a run already under way — a re-dispatch that
+        # has to see the worktrees and branches the first attempt left behind.
+        self.run_token = validate_run_token(
+            run_token if run_token is not None else f"{os.getpid()}-{uuid.uuid4().hex[:8]}"
+        )
         self._repo_type = repo_type
         self._workflow: Callable[[RepoRef], Workflow | None]
         self._registry: Registry | None = None
@@ -174,14 +298,23 @@ class Workspace:
             self._workflow = lambda repo: workflow
         self._resolver = resolver
         self._checkouts: dict[str, Path] = {}
+        self._clones: dict[str, Path] = {}
         self._selections: dict[str, WorkspaceSelection] = {}
-        # Clone/worktree creation touches a repo's shared git metadata, so those
-        # ops are serialized per repo (concurrent `git worktree add` on one clone
-        # races on its lock). Different repos proceed in parallel; the slow part
-        # (the dispatch) is never held.
+        # Clone/worktree creation touches a repo's git metadata, so those ops are
+        # serialized per repo (concurrent `git worktree add` on one clone races on
+        # its lock). Different repos proceed in parallel; the slow part (the
+        # dispatch) is never held.
         self._locks_guard = threading.Lock()
         self._locks: dict[str, threading.Lock] = {}
         self._worktree_leases: dict[Path, AbstractContextManager[None]] = {}
+        # Held until this process exits, which is the point: the kernel releases it
+        # on death, so a crashed run's tree becomes reclaimable without anyone
+        # having to decide that it crashed.
+        self._run_leases: dict[Path, AbstractContextManager[None]] = {}
+        self._reaped: set[str] = set()
+        # Branches this run copied into the shared checkout, and so the only ones
+        # it may ever withdraw from there.
+        self._mirrored: dict[str, dict[str, str]] = {}
 
     def workflow(self, repo: RepoRef) -> Workflow | None:
         """Return the registered workflow, if the resolver exposes registry metadata."""
@@ -203,13 +336,59 @@ class Workspace:
             return self._locks.setdefault(repo.dir_key, threading.Lock())
 
     def clone_dir(self, repo: RepoRef) -> Path:
-        """Return the execution checkout (kept as a lifecycle compatibility name)."""
-        if repo.dir_key not in self._checkouts:
-            self._checkouts[repo.dir_key] = self._resolver(repo.url)
-        return self._checkouts[repo.dir_key]
+        """Return this run's private clone (kept as a lifecycle compatibility name)."""
+        try:
+            return self._clones[repo.dir_key]
+        except KeyError as exc:
+            raise RuntimeError(f"repository {repo.slug} has not been resolved") from exc
 
-    def _worktree_root(self, repo: RepoRef) -> Path:
-        return self.root / repo.dir_key
+    def execution_checkout(self, repo: RepoRef) -> Path:
+        """Return the shared checkout this run's clone borrows its objects from."""
+        try:
+            return self._checkouts[repo.dir_key]
+        except KeyError as exc:
+            raise RuntimeError(f"repository {repo.slug} has not been resolved") from exc
+
+    def run_root(self, repo: RepoRef) -> Path:
+        """Return the directory holding this run's clone and task worktrees."""
+        return self.root / repo.dir_key / RUNS_DIR_NAME / self.run_token
+
+    def _claim_run_root(self, run_root: Path) -> None:
+        """Mark this run root occupied for as long as this process lives.
+
+        The lease is *shared*, because occupancy is what the reaper must not
+        interrupt and several processes may legitimately be in one run at once — a
+        re-dispatch rejoining a run under way is the case that matters. An exclusive
+        lease would make that second process either fail outright or, far worse,
+        work in a tree the reaper still considers free.
+        """
+        if run_root in self._run_leases:
+            return
+        run_root.mkdir(parents=True, exist_ok=True)
+        lease = advisory_lock(_run_lease_identity(run_root), shared=True)
+        lease.__enter__()
+        self._run_leases[run_root] = lease
+        atomic_json(run_root / OWNER_RECORD_NAME, RunOwner.current(self.run_token).record())
+
+    def _reap_abandoned_runs(self, repo: RepoRef) -> None:
+        """Reclaim run roots whose owner is gone and whose work all reached origin."""
+        if repo.dir_key in self._reaped:
+            return
+        self._reaped.add(repo.dir_key)
+        runs = self.root / repo.dir_key / RUNS_DIR_NAME
+        mine = self.run_root(repo).resolve()
+        for candidate in sorted(runs.glob("*")):
+            if not candidate.is_dir() or candidate.is_symlink() or candidate.resolve() == mine:
+                continue
+            # Every reason to keep a candidate — a live lease, a live owner, an
+            # unpublished commit, an unreadable tree — has to win, so anything that
+            # fails to prove reclaimability leaves the tree exactly as it is.
+            with (
+                suppress(LockTimeout, OSError, gitops.GitError),
+                advisory_lock(_run_lease_identity(candidate), timeout=0),
+            ):
+                if _abandoned_run_is_reclaimable(candidate):
+                    shutil.rmtree(candidate)
 
     def _worktree_lease_identity(self, clone: Path, path: Path) -> str:
         return f"worktree:{gitops.common_dir(clone)}:{path.resolve()}"
@@ -258,7 +437,7 @@ class Workspace:
         execution_checkout: str | Path | None = None,
         repo_type: RepositoryType | None = None,
     ) -> Path:
-        """Resolve and fast-forward the selected execution checkout."""
+        """Fast-forward the selected execution checkout and return this run's clone."""
         with self._repo_lock(repo):
             if self._registry is not None:
                 selected = self._registry.select(
@@ -298,29 +477,82 @@ class Workspace:
                 raise RuntimeError(f"execution checkout {checkout} is not a git checkout")
             self._checkouts[repo.dir_key] = checkout
             self._selections[repo.dir_key] = selection
-            with advisory_lock(f"git:{gitops.common_dir(checkout)}"):
+            # Deliberately outside every exclusive section: a fetch is idempotent
+            # and can take as long as the network does, and holding the shared
+            # checkout for it is what turned one slow origin into every other
+            # run's failed dispatch.
+            started = time.monotonic()
+            gitops.fetch(checkout)
+            observe_harness(
+                "setup-finished",
+                {"operation": "fetch", "seconds": max(0.0, time.monotonic() - started)},
+            )
+            base = base_branch or gitops.default_branch(checkout)
+            with advisory_lock(git_lock_identity(gitops.common_dir(checkout))):
                 if gitops.is_dirty(checkout):
                     raise WorkspaceError(
                         f"execution checkout {checkout} is dirty; clean it before dispatch"
                     )
-                started = time.monotonic()
-                gitops.fetch(checkout)
-                observe_harness(
-                    "setup-finished",
-                    {"operation": "fetch", "seconds": max(0.0, time.monotonic() - started)},
-                )
-                base = base_branch or gitops.default_branch(checkout)
                 publication = selection.publication_checkout
                 if gitops.common_dir(publication) == gitops.common_dir(checkout):
                     self._assert_publication_ready(publication, base)
                 else:
-                    with advisory_lock(f"git:{gitops.common_dir(publication)}"):
+                    with advisory_lock(git_lock_identity(gitops.common_dir(publication))):
                         self._assert_publication_ready(publication, base)
                 gitops.checkout(checkout, base)
                 gitops.merge_ff_only(checkout, f"origin/{base}")
                 gitops.configure_repo_hooks(checkout)
-                self.ensure_cache_dir(repo)
-            return checkout
+                gitops.retain_objects_for_borrowers(checkout)
+                origin = gitops.remote_url(checkout)
+                clone = self._ensure_run_clone(repo, checkout, origin=origin, base=base)
+            # This clone belongs to this run alone, so its own fetch — the one that
+            # actually has to reach origin's branches — contends with nothing, and
+            # neither does sweeping the run roots of dead siblings.
+            gitops.fetch(clone)
+            self._reap_abandoned_runs(repo)
+            self._clones[repo.dir_key] = clone
+            self.ensure_cache_dir(repo)
+            return clone
+
+    def _ensure_run_clone(self, repo: RepoRef, checkout: Path, *, origin: str, base: str) -> Path:
+        run_root = self.run_root(repo)
+        self._claim_run_root(run_root)
+        clone = run_root / CLONE_DIR_NAME
+        if clone.is_dir() and gitops.is_repo(clone):
+            return clone
+        started = time.monotonic()
+        gitops.clone_sharing(checkout, clone, origin=origin, base=base)
+        # The clone's own working tree is never populated, so a tracked hooks
+        # directory has to come from the checkout it was cut from — which is the
+        # same absolute path every worktree already resolved hooks through.
+        hooks = (checkout / ".githooks").resolve()
+        if hooks.is_dir():
+            gitops.set_hooks_path(clone, hooks)
+        observe_harness(
+            "setup-finished",
+            {"operation": "run-clone", "seconds": max(0.0, time.monotonic() - started)},
+        )
+        return clone
+
+    def _adopt_preserved_branch(self, repo: RepoRef, clone: Path, branch: str) -> bool:
+        if gitops.branch_exists(clone, branch):
+            return True
+        checkout = self.execution_checkout(repo)
+        if not gitops.branch_exists(checkout, branch):
+            return False
+        return gitops.import_branch(clone, checkout, branch)
+
+    def adopt_preserved_branch(self, repo: RepoRef, branch: str) -> bool:
+        """Bring a branch an earlier run preserved into this run's clone.
+
+        This clone was cut fresh from the shared checkout's remote-tracking refs, so
+        a branch that never reached origin is not in it. Adopting one is what lets a
+        resume or a recovery continue that work rather than start a new branch of
+        the same name off the base. Returns whether the branch is now present.
+        """
+        clone = self.clone_dir(repo)
+        with self._repo_lock(repo), advisory_lock(git_lock_identity(gitops.common_dir(clone))):
+            return self._adopt_preserved_branch(repo, clone, branch)
 
     def worktree(self, repo: RepoRef, branch: str, *, base: str) -> Path:
         """Add a fresh worktree for ``branch`` cut off ``base`` (e.g. ``origin/main``).
@@ -329,8 +561,9 @@ class Workspace:
         starts clean.
         """
         clone = self.clone_dir(repo)
-        path = self._worktree_root(repo) / _safe_branch_dir(branch)
-        with self._repo_lock(repo), advisory_lock(f"git:{gitops.common_dir(clone)}"):
+        path = self.run_root(repo) / _safe_branch_dir(branch)
+        with self._repo_lock(repo), advisory_lock(git_lock_identity(gitops.common_dir(clone))):
+            self._adopt_preserved_branch(repo, clone, branch)
             active = gitops.worktrees(clone)
             if branch in active:
                 registered = active[branch]
@@ -383,23 +616,74 @@ class Workspace:
     def fast_forward(self, repo: RepoRef, branch: str) -> None:
         """Fetch and fast-forward the caller-selected publication checkout."""
         selected = self._selections.get(repo.dir_key)
-        checkout = selected.publication_checkout if selected is not None else self.clone_dir(repo)
-        with self._repo_lock(repo), advisory_lock(f"git:{gitops.common_dir(checkout)}"):
+        checkout = (
+            selected.publication_checkout if selected is not None else self._resolver(repo.url)
+        )
+        with self._repo_lock(repo), advisory_lock(git_lock_identity(gitops.common_dir(checkout))):
             self._assert_publication_ready(checkout, branch)
             gitops.fetch(checkout)
             gitops.merge_ff_only(checkout, f"origin/{branch}")
+
+    def mirror_branch(self, repo: RepoRef, branch: str) -> None:
+        """Copy this run's branch into the shared execution checkout.
+
+        A run's clone is disposable and invisible to everything outside the run. The
+        shared checkout is where the harness has always looked for a lifecycle branch
+        — to monitor it, to resume it, to recover it — so anything worth outliving
+        the run, or worth seeing from outside it, is handed over here.
+
+        The handover only ever moves that branch forward. Two runs can be told to
+        use one branch name, and rewinding the shared copy would destroy whatever
+        the other one preserved under it; this run keeps its own clone's record
+        instead.
+        """
+        clone = self._clones.get(repo.dir_key)
+        checkout = self._checkouts.get(repo.dir_key)
+        if clone is None or checkout is None or not gitops.branch_exists(clone, branch):
+            return
+        with advisory_lock(git_lock_identity(gitops.common_dir(checkout))):
+            copied = gitops.copy_branch(clone, checkout, branch)
+        if copied:
+            self._mirrored.setdefault(repo.dir_key, {})[branch] = gitops.ref_sha(clone, branch)
+
+    def _mirror_worktree_branch(self, repo: RepoRef, clone: Path, path: Path) -> None:
+        branch = next(
+            (
+                name
+                for name, at in gitops.worktrees(clone).items()
+                if at.resolve() == path.resolve()
+            ),
+            None,
+        )
+        if branch is not None:
+            self.mirror_branch(repo, branch)
 
     def remove_worktree(self, repo: RepoRef, path: str | Path) -> None:
         """Tear down a worktree once its subtask is done."""
         clone = self.clone_dir(repo)
         try:
-            with advisory_lock(f"git:{gitops.common_dir(clone)}"):
+            with advisory_lock(git_lock_identity(gitops.common_dir(clone))):
+                self._mirror_worktree_branch(repo, clone, Path(path))
                 gitops.worktree_remove(clone, path, check=True)
         finally:
             self._release_worktree_lease(path)
 
     def delete_branch(self, repo: RepoRef, branch: str) -> None:
-        """Delete an unneeded local lifecycle branch under the shared-git lock."""
+        """Delete an unneeded lifecycle branch from this run, and any copy it left.
+
+        The shared checkout holds branches from every run of this identity, and two
+        runs can be told to use one branch name. So this withdraws only the exact
+        commit *this* run left there: a sibling that has since preserved newer work
+        under that name has moved the branch on, and the delete then declines rather
+        than taking the only record of it.
+        """
         clone = self.clone_dir(repo)
-        with self._repo_lock(repo), advisory_lock(f"git:{gitops.common_dir(clone)}"):
+        with self._repo_lock(repo), advisory_lock(git_lock_identity(gitops.common_dir(clone))):
             gitops.delete_branch(clone, branch)
+        checkout = self._checkouts.get(repo.dir_key)
+        mirrored = self._mirrored.get(repo.dir_key, {}).get(branch)
+        if checkout is None or mirrored is None:
+            return
+        with advisory_lock(git_lock_identity(gitops.common_dir(checkout))):
+            gitops.delete_branch_at(checkout, branch, mirrored)
+        self._mirrored[repo.dir_key].pop(branch, None)
