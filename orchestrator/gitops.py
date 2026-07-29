@@ -443,6 +443,24 @@ def stale_worktree_branches(cwd: str | Path) -> dict[str, Path]:
     return result
 
 
+def locked_worktrees(cwd: str | Path) -> set[Path]:
+    """Paths Git has been told to leave alone.
+
+    A lock is somebody's explicit instruction that a worktree must survive — a
+    removable drive, a long operation, a tree an operator is protecting. Nothing
+    here may reclaim one, however stale it otherwise looks.
+    """
+    proc = _git(["worktree", "list", "--porcelain"], cwd=cwd)
+    locked: set[Path] = set()
+    path: Path | None = None
+    for line in proc.stdout.splitlines():
+        if line.startswith("worktree "):
+            path = Path(line.removeprefix("worktree "))
+        elif line.split(" ", 1)[0] == "locked" and path is not None:
+            locked.add(path.resolve())
+    return locked
+
+
 def worktree_prune(cwd: str | Path) -> None:
     """Remove registrations Git considers prunable without an expiry delay."""
     _git(["worktree", "prune", "--expire", "now"], cwd=cwd)

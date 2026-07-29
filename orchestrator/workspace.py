@@ -615,18 +615,27 @@ class Workspace:
         candidate. Reclaiming what is not ours is the one failure worse than the one
         this fixes, so a path outside that root is refused rather than cleared.
         """
-        root = self.run_root(repo).resolve()
         target = path.resolve()
-        if root not in target.parents:
+        if not self._owns_worktree_path(repo, target):
             raise WorkspaceError(
-                f"refusing to reclaim {path}: it is outside this run's root {root}"
+                f"refusing to reclaim {path}: it is outside this run's root "
+                f"{self.run_root(repo).resolve()}"
             )
+        if target in gitops.locked_worktrees(clone):
+            # A lock is somebody's explicit instruction that this tree must survive.
+            # Git's refusal is the right answer and is left to reach the caller.
+            gitops.worktree_remove(clone, path, check=True)
+            return
         with suppress(gitops.GitError):
             gitops.worktree_remove(clone, path, check=True)
         if not target.exists():
             return
         _remove_directory_tree(target)
         gitops.worktree_prune(clone)
+
+    def _owns_worktree_path(self, repo: RepoRef, target: Path) -> bool:
+        """Whether ``target`` is one of this run's own worktree paths."""
+        return self.run_root(repo).resolve() in target.parents
 
     def worktree(self, repo: RepoRef, branch: str, *, base: str) -> Path:
         """Add a fresh worktree for ``branch`` cut off ``base`` (e.g. ``origin/main``).
@@ -735,7 +744,14 @@ class Workspace:
         try:
             with advisory_lock(git_lock_identity(gitops.common_dir(clone))):
                 self._mirror_worktree_branch(repo, clone, Path(path))
-                self._reclaim_worktree_path(repo, clone, Path(path))
+                # A path outside this run's root belongs to somebody else — a sibling
+                # run being torn down by a workspace that never created it. Git's own
+                # removal is the only thing entitled to act on it, and its refusal is
+                # the answer the caller gets.
+                if self._owns_worktree_path(repo, Path(path).resolve()):
+                    self._reclaim_worktree_path(repo, clone, Path(path))
+                else:
+                    gitops.worktree_remove(clone, path, check=True)
         finally:
             self._release_worktree_lease(path)
 
