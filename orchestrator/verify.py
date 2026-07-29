@@ -86,6 +86,10 @@ class VerifyResult:
     reused: bool = False
     attestation: GateAttestation | None = None
     log_path: str | None = None
+    #: The gate was stopped rather than answering. Not a verdict about the change:
+    #: a caller that treats it as one reports a cancelled workstream as having
+    #: failed its gate, and preserves nothing.
+    cancelled: bool = False
 
     def tail(self, limit: int = 2000) -> str:
         """The trailing slice of output, for a compact failure report."""
@@ -192,6 +196,7 @@ class _GateRun:
     #: ``None`` when the gate never reached a verdict of its own.
     returncode: int | None
     output: str
+    cancelled: bool = False
 
 
 def _execute_gate(
@@ -243,7 +248,9 @@ def _execute_gate(
             reason = "cancelled" if cancelled else f"timed out after {timeout}s"
             # However far the gate got is kept: it is the only account of what a
             # stopped gate was doing, and the reason it stopped means nothing without it.
-            return _GateRun(None, f"gate {reason}; terminated its process group\n{printed}")
+            return _GateRun(
+                None, f"gate {reason}; terminated its process group\n{printed}", cancelled
+            )
         return _GateRun(process.returncode, stdout + stderr)
 
 
@@ -290,7 +297,12 @@ def run_gate(
             command=command,
             output=f"gate command not found: {command[0]!r}",
         )
-    result = VerifyResult(ok=run.returncode == 0, command=command, output=run.output)
+    result = VerifyResult(
+        ok=run.returncode == 0,
+        command=command,
+        output=run.output,
+        cancelled=run.cancelled,
+    )
     if result.ok and context is not None:
         _record_attestation(context)
         result = VerifyResult(
