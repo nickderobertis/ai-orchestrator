@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import ConfigError, load_yaml
+from .lifecycle import MAX_AUTOMATIC_STEP_RESUMES
 from .outcomes import INFRASTRUCTURE_FAILURE_OUTCOME
 from .runs import StackBasePayload
 
@@ -275,9 +276,10 @@ def _node_human_refs(nid: str, task: dict[str, Any]) -> set[str]:
 #: How many rounds the harness continues one preserved lifecycle branch on its own
 #: before leaving the node to the planner. Continuation exists so a workstream that
 #: ran out of turns picks up where it stopped, not as a policy for work that cannot
-#: finish; unbounded it became the latter. Two matches the budget the lifecycle
-#: already gives a step within one round (`MAX_AUTOMATIC_STEP_RESUMES`).
-MAX_AUTOMATIC_ROUND_RESUMES = 2
+#: finish; unbounded it became the latter. It is the same budget the lifecycle gives a
+#: step within one round, and taken from there: the two bound the same patience at
+#: different scales, so a change of heart about one is a change of heart about both.
+MAX_AUTOMATIC_ROUND_RESUMES = MAX_AUTOMATIC_STEP_RESUMES
 
 
 def _spent_attempts(node: dict[str, Any]) -> int:

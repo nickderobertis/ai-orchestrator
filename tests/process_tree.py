@@ -19,6 +19,11 @@ from __future__ import annotations
 import time
 from pathlib import Path
 
+from leak_reaper import POLL_SECONDS
+
+#: Long enough for the guard to take several samples of the tree before it orphans.
+LINGER = POLL_SECONDS * 4
+
 _SOURCE = '''\
 """A three-level process tree whose deepest worker outlives its own ancestry."""
 
@@ -31,8 +36,11 @@ LIFETIME = 600
 # How long the intermediate stays before orphaning the worker. A real dispatch's
 # parent lives for minutes while its children work, which is what lets a watcher
 # see them at all; a parent that vanished the instant it forked would model
-# nothing that has ever leaked here.
-LINGER = 2.0
+# nothing that has ever leaked here. Written in as a multiple of the guard's own
+# sampling interval, because what the number has to buy is samples: too few and the
+# tree is gone before the watcher ever sees it, and the e2e stops being about
+# whether the guard reaps and starts being about whether it looked in time.
+LINGER = LINGER_SECONDS
 ROLE = "ORCHESTRATOR_TEST_TREE_ROLE"
 marker = sys.argv[1]
 
@@ -63,7 +71,7 @@ if "--root-exits" not in sys.argv[2:]:
 def write_orphaning_tree(directory: Path) -> Path:
     """Write the tree script into ``directory`` and return its path."""
     script = directory / "orphaning_tree.py"
-    script.write_text(_SOURCE, encoding="utf-8")
+    script.write_text(_SOURCE.replace("LINGER_SECONDS", repr(LINGER)), encoding="utf-8")
     return script
 
 
