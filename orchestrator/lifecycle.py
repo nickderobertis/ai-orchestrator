@@ -2001,26 +2001,62 @@ def run_repo_task(
                 "- Existing completed work is preserved.\n"
                 "- The repository gate remains green.\n"
             )
-            report = dispatch_fn(
-                cast(str, lead.persona),
-                resolution_task,
-                project_dir=str(worktree),
-                oneharness_mode=oneharness_mode,
-                base_path=base_path,
-                persona_dir=persona_dir,
-                session=f"{branch}:{lead.id}",
-                max_turns=lead.max_turns or DEFAULT_LIFECYCLE_STEP_MAX_TURNS,
-                done_when="The conflict is resolved, committed, and the gate is green.",
-                labels=log.labels,
-                env=cache_env,
-                cancel=cancel,
+            # Publication-path work is dispatched work, and a reader of the ledger
+            # cannot tell an unrecorded 90-minute conflict resolution from a hang.
+            log.append(
+                "conflict-resolution-started",
+                detail={
+                    "branch": branch,
+                    "base": remote_base,
+                    "attempt": merge_resolutions,
+                    "persona": lead.persona,
+                },
             )
+            try:
+                report = dispatch_fn(
+                    cast(str, lead.persona),
+                    resolution_task,
+                    project_dir=str(worktree),
+                    oneharness_mode=oneharness_mode,
+                    base_path=base_path,
+                    persona_dir=persona_dir,
+                    session=f"{branch}:{lead.id}",
+                    max_turns=lead.max_turns or DEFAULT_LIFECYCLE_STEP_MAX_TURNS,
+                    done_when="The conflict is resolved, committed, and the gate is green.",
+                    labels=log.labels,
+                    env=cache_env,
+                    cancel=cancel,
+                )
+            except Exception as exc:
+                # A start with nothing to close it is the "looks like a hang" reading
+                # these events exist to prevent, so a dispatch that raised closes its
+                # own event before the failure travels on.
+                log.append(
+                    "conflict-resolution-finished",
+                    detail={
+                        "branch": branch,
+                        "attempt": merge_resolutions,
+                        "completed": False,
+                        "error": f"{type(exc).__name__}: {exc}",
+                    },
+                )
+                raise
             persist_report_artifacts(
                 log,
                 report,
                 session=f"{branch}:{lead.id}",
             )
             unresolved = gitops.unmerged_paths(worktree)
+            log.append(
+                "conflict-resolution-finished",
+                detail={
+                    "branch": branch,
+                    "attempt": merge_resolutions,
+                    "completed": report.completed,
+                    "resolved": not unresolved,
+                    "unresolved_paths": sorted(unresolved),
+                },
+            )
             if unresolved:
                 gitops.merge_abort(worktree)
                 if not report.completed:

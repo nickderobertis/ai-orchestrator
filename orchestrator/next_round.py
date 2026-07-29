@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import math
 import sys
 from pathlib import Path
 from typing import Any
@@ -176,10 +177,21 @@ def _validate_completions(run_dir: Path, result: dict[str, Any], refs: list[str]
 
 def main_runs(argv: list[str] | None = None) -> int:
     from .channel import ChannelError, planner_wait_indicator
+    from .liveness import PARKED_AFTER_SECONDS, parked_indicator
 
     parser = argparse.ArgumentParser(description="List recorded tracked-graph runs.")
     parser.add_argument("--runs-dir", type=Path, default=Path("runs"))
+    parser.add_argument(
+        "--parked-after",
+        type=float,
+        default=PARKED_AFTER_SECONDS,
+        metavar="SECONDS",
+        help="report a launch with no child process, planner surface, or ledger write for "
+        f"this long as parked (default: {PARKED_AFTER_SECONDS:g})",
+    )
     args = parser.parse_args(argv)
+    if not math.isfinite(args.parked_after) or args.parked_after <= 0:
+        parser.error("--parked-after must be a positive, finite number of seconds")
     rows = list_runs(args.runs_dir)
     run_dirs = (
         sorted(path for path in args.runs_dir.iterdir() if path.is_dir())
@@ -190,6 +202,14 @@ def main_runs(argv: list[str] | None = None) -> int:
         path.name
         for path in run_dirs
         if (path / "launch.json").is_file() and launch_is_active(path)
+    }
+    # A pid is ownership, not progress. A launch that holds its pid while doing
+    # nothing observable is reported parked instead of running, so "ACTIVE" keeps
+    # meaning that the orchestrator is working.
+    parked = {
+        path.name: indicator
+        for path in run_dirs
+        if (indicator := parked_indicator(path, parked_after=args.parked_after)) is not None
     }
     # An abandoned round is reported from the recorded owner's liveness, not from the
     # last status string it wrote: a round killed with its launching turn never gets
@@ -210,13 +230,17 @@ def main_runs(argv: list[str] | None = None) -> int:
         if run_id in abandoned:
             print(f"! {run_id}  {abandoned[run_id]}")
             continue
+        if run_id in parked:
+            print(f"! {run_id}  {parked[run_id]}")
+            continue
         try:
             waiting = planner_wait_indicator(args.runs_dir / run_id / "channel")
         except (ChannelError, ConfigError, OSError):
             waiting = None
         print(f"* {run_id}  ACTIVE  ({waiting or 'orchestrator running'})")
     for run_id, number, summary in rows:
-        marker = "! " if run_id in abandoned else "* " if run_id in active_launches else "  "
+        stopped = run_id in abandoned or run_id in parked
+        marker = "! " if stopped else "* " if run_id in active_launches else "  "
         waiting = None
         if run_id in active_launches:
             try:
@@ -226,6 +250,8 @@ def main_runs(argv: list[str] | None = None) -> int:
         print(f"{marker}{run_id}  round-{number:02d}  ({waiting or summary})")
         if run_id in abandoned:
             print(f"    {abandoned[run_id]}")
+        if run_id in parked:
+            print(f"    {parked[run_id]}")
         print(f"    Results: just results {run_id} --runs-dir {args.runs_dir}")
     return 0
 
