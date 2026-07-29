@@ -100,7 +100,6 @@ def _shared_checkout(root: Path, index: int = 0) -> Path:
     return root / f"canonical-{index}"
 
 
-
 def _per_step_dispatch(fail_step: str | None = None):
     """A dispatch_fn that writes a file named after the step id (from the session)."""
 
