@@ -15,6 +15,7 @@ from .replan import next_round
 from .runs import (
     NodeId,
     StepId,
+    abandoned_launch_indicator,
     abandoned_round_indicator,
     as_result_payload,
     human_actions,
@@ -191,13 +192,16 @@ def main_runs(argv: list[str] | None = None) -> int:
         for path in run_dirs
         if (path / "launch.json").is_file() and launch_is_active(path)
     }
-    # An abandoned round is reported from the recorded owner's liveness, not from the
-    # last status string it wrote: a round killed with its launching turn never gets
-    # to say so, and a viewer that trusts the string keeps calling it in flight.
+    # Both indicators are reported from the recorded owner's liveness, not from the
+    # last status string it wrote: neither a round nor an orchestrator killed with its
+    # launching turn gets to say so, and a viewer that trusts the string keeps calling
+    # it in flight. The round is asked first, because when a *round* died it names the
+    # command that reclaims it, which is the more useful of the two answers.
     abandoned = {
         path.name: indicator
         for path in run_dirs
-        if (indicator := abandoned_round_indicator(path)) is not None
+        if (indicator := abandoned_round_indicator(path) or abandoned_launch_indicator(path))
+        is not None
     }
     if not rows and not active_launches and not abandoned:
         print("No recorded runs.")

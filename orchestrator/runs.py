@@ -239,6 +239,75 @@ def abandoned_round_indicator(run_dir: Path) -> str | None:
     )
 
 
+@dataclass(frozen=True)
+class AbandonedLaunch:
+    """A launched orchestrator that is gone without ever reporting an outcome."""
+
+    pid: int
+    #: The last round it recorded, or ``None`` when it died before recording one.
+    round: int | None
+
+
+def abandoned_launch(run_dir: Path) -> AbandonedLaunch | None:
+    """The run whose orchestrator this host proved gone, with nothing left working.
+
+    A launch records ``running`` once and never rewrites it, so a `just orchestrate`
+    process that dies — crashed, killed, or taken down with the container it ran in —
+    leaves that record standing. Between rounds there is nothing else to notice: the
+    round it finished has a result, no round claims the ledger, and the views read a
+    run that has simply stopped being reported as an ordinary finished one. That is
+    how four runs sat stranded for half a day while the ledger they were read from
+    said nothing was wrong.
+
+    Every condition here is a reason to keep quiet rather than a reason to speak.
+    The run must be a launch, the launch must still claim to be running, it must
+    never have written a report, its owner must be one *this host* proved gone, and
+    nothing it started may still be in flight. A round that is itself abandoned is
+    left to `abandoned_round`, which says the same thing with the command that
+    reclaims it. Anything unreadable, anywhere in that chain, keeps the run silent:
+    reporting a working run as dead would send a planner to tear down live work.
+    """
+    if not (run_dir / "launch.json").is_file():
+        return None
+    report = run_dir / "orchestrator" / "report.json"
+    if report.is_file() and report.stat().st_size > 0:
+        return None
+    status = run_dir / "orchestrator" / "status.json"
+    if not status.is_file():
+        return None
+    try:
+        state = load_mapping(status)
+    except (ConfigError, OSError):
+        return None
+    pid = state.get("pid")
+    if (
+        state.get("status") != "running"
+        or not isinstance(pid, int)
+        or isinstance(pid, bool)
+        or pid < 1
+        or process_may_be_live(pid, state.get("host"))
+    ):
+        return None
+    latest = latest_round(run_dir)
+    if latest is not None and (round_appears_in_flight(latest[1]) or abandoned_round(run_dir)):
+        return None
+    return AbandonedLaunch(pid, latest[0] if latest is not None else None)
+
+
+def abandoned_launch_indicator(run_dir: Path) -> str | None:
+    """One line naming a run nothing is driving any more, and where to review it."""
+    found = abandoned_launch(run_dir)
+    if found is None:
+        return None
+    reached = (
+        f"after round-{found.round:02d}" if found.round is not None else "before its first round"
+    )
+    return (
+        f"SETTLED (orchestrator pid {found.pid} is gone {reached}); nothing is driving this "
+        f"run. Review it with: just results {run_dir.name} --runs-dir {run_dir.parent}"
+    )
+
+
 class StackBasePayload(TypedDict):
     """Stable serialized form of one typed lifecycle stack anchor."""
 
