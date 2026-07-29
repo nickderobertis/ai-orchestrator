@@ -2,9 +2,10 @@
 
 The progress views read a run directory and the operating system, and those are
 the boundaries driven here: real `just runs` / `just status` / `just monitor`
-subprocesses against a run whose channel, heartbeat clock, and journal are written
-by the production writers, and whose recorded owner is a real live process — one
-with a live child and one without.
+subprocesses against a run whose channel, heartbeat clock, journal, and queued
+planner surface are written by the production writers — the surface by the real
+relay the orchestrator's supervisor side runs — and whose recorded owner is a real
+live process, one with a live child and one without.
 
 # llmlint: ignore-file[tests_mirror_real_usage] The two records this writes by hand,
 # `launch.json` and the owner pids, are the ones no command can produce on demand:
@@ -17,8 +18,10 @@ with a live child and one without.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
+import signal
 import socket
 import subprocess
 import sys
@@ -45,6 +48,9 @@ _BUSY = (
     "time.sleep(600)\n"
 )
 
+#: The blocking surface's message, so a view reporting it instead is unmistakable.
+SURFACE = "answer before round 2"
+
 
 @pytest.fixture
 def sleeper(tmp_path: Path) -> Iterator[list[subprocess.Popen[bytes]]]:
@@ -70,6 +76,58 @@ def _busy(started: list[subprocess.Popen[bytes]], ready: Path) -> int:
             return process.pid
         time.sleep(0.02)
     raise AssertionError("the busy launch never spawned its child")
+
+
+@pytest.fixture
+def relays() -> Iterator[list[subprocess.Popen[str]]]:
+    started: list[subprocess.Popen[str]] = []
+    yield started
+    for relay in started:
+        with contextlib.suppress(PermissionError, ProcessLookupError):
+            os.killpg(os.getpgid(relay.pid), signal.SIGKILL)
+        relay.wait(timeout=e2e_timeout(15))
+
+
+def _queue_blocking_surface(run_dir: Path, started: list[subprocess.Popen[str]]) -> None:
+    """Leave one real, unanswered blocking planner surface on the run's channel.
+
+    Written by the production relay the orchestrator's supervisor side runs: it
+    persists the surface and then blocks for a reply that never arrives. That is
+    the exact state observed in the parked run — a surface still queued, so every
+    view that reads it first renders a dead launch as live work waiting on a
+    person. The relay never reaches its `record_surface`, so the run's silence
+    clock is untouched, which is what makes this surface *competing* rather than
+    progress.
+    """
+    relay = subprocess.Popen(
+        [
+            "uv",
+            "run",
+            "orchestrator-relay-supervisor",
+            str(run_dir / "channel"),
+            run_dir.name,
+            "1",
+            "--timeout",
+            str(e2e_timeout(600)),
+        ],
+        cwd=REPO_ROOT,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        text=True,
+        start_new_session=True,
+    )
+    started.append(relay)
+    assert relay.stdin is not None
+    relay.stdin.write(json.dumps({"op": "supervisor", "kind": "blocker", "message": SURFACE}))
+    relay.stdin.close()
+    wait = deadline(60)
+    while time.monotonic() < wait:
+        if (run_dir / "channel" / "planner-pending.json").is_file():
+            return
+        assert relay.poll() is None, f"the relay exited with {relay.returncode}"
+        time.sleep(0.02)
+    raise AssertionError("the relay never queued its planner surface")
 
 
 PLAN = {"tasks": [{"id": "ship", "persona": "engineer", "task": "Ship"}]}
@@ -193,22 +251,47 @@ def test_just_status_reports_a_parked_launch(
     assert "parked-run: PARKED" in reported.stdout
 
 
-def test_just_monitor_reports_a_parked_launch(
-    tmp_path: Path, sleeper: list[subprocess.Popen[bytes]]
-) -> None:
-    """The default threshold, not an override: `just monitor` takes no flag."""
-    runs = tmp_path / "runs"
-    _launch(runs / "parked-run", _idle(sleeper), idle_for=3600)
-    watched = subprocess.run(
-        ["just", "monitor", "parked-run", "--once", "--runs-dir", str(runs)],
+def _monitor(runs: Path, run_id: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["just", "monitor", run_id, "--once", "--runs-dir", str(runs)],
         cwd=REPO_ROOT,
         text=True,
         capture_output=True,
         timeout=e2e_timeout(60),
     )
+
+
+def test_just_monitor_reports_a_parked_launch_over_its_stale_blocking_surface(
+    tmp_path: Path, sleeper: list[subprocess.Popen[bytes]], relays: list[subprocess.Popen[str]]
+) -> None:
+    """The default threshold, not an override: `just monitor` takes no flag.
+
+    Both launches carry the same real unanswered blocking surface, so the surface
+    is genuinely competing to be reported and the only difference between them is
+    the live child. The parked one must be reported as parked *instead of* that
+    surface — reporting the surface is precisely how the observed run rendered an
+    idle orchestrator as work waiting on a person.
+    """
+    runs = tmp_path / "runs"
+    parked = runs / "parked-run"
+    busy = runs / "busy-run"
+    _launch(parked, _idle(sleeper), idle_for=3600)
+    _launch(busy, _busy(sleeper, tmp_path / "busy.ready"), idle_for=3600)
+    _queue_blocking_surface(parked, relays)
+    _queue_blocking_surface(busy, relays)
+
+    watched = _monitor(runs, "parked-run")
     assert watched.returncode == 0, watched.stderr
-    assert "parked" in watched.stdout
-    assert "no child process" in watched.stdout
+    assert "round-01 parked: PARKED (alive with no child process" in watched.stdout
+    # The surface outranked everything else this run recorded, and PARKED outranks it.
+    assert SURFACE not in watched.stdout
+    assert "ACK REQUIRED" not in watched.stdout
+
+    # Same silence, same surface, one live child: the surface is what gets reported.
+    working = _monitor(runs, "busy-run")
+    assert working.returncode == 0, working.stderr
+    assert "PARKED" not in working.stdout
+    assert f"round-01 blocked: ACK REQUIRED: blocker: {SURFACE}" in working.stdout
 
 
 def test_the_progress_views_reject_an_unusable_parked_threshold(tmp_path: Path) -> None:

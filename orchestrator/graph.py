@@ -834,19 +834,20 @@ def run_graph(
             # not a scheduling change; its reconciler commit is unit-tested and its run-ending
             # effect is proven through the real channel journeys rather than this operation loop.
             for operation in operations:
-                if operation["kind"] == "human-attested":
-                    ref = cast(str, operation["detail"]["ref"])
-                    attestations.append(ref)
-                    status[ref] = "done"
-                    actual[ref] = NodeRun("done", payload="human-attested")
-                elif operation["kind"] == "retry-requested":
-                    cancellations[operation["node"]].set()
-                elif operation["kind"] == "node-dropped":
-                    dropped = operation["node"]
-                    cancellations[dropped].set()
-                    if status.get(dropped) != "running":
-                        status.pop(dropped, None)
-                        actual.pop(dropped, None)
+                match operation["kind"]:
+                    case "human-attested":
+                        ref = cast(str, operation["detail"]["ref"])
+                        attestations.append(ref)
+                        status[ref] = "done"
+                        actual[ref] = NodeRun("done", payload="human-attested")
+                    case "retry-requested":
+                        cancellations[operation["node"]].set()
+                    case "node-dropped":
+                        dropped = operation["node"]
+                        cancellations[dropped].set()
+                        if status.get(dropped) != "running":
+                            status.pop(dropped, None)
+                            actual.pop(dropped, None)
             # `skipped` and `blocked` are *derived*: the scheduler writes them when a
             # dependency settled unmet or waiting, and nothing else produces them. An
             # edit that changes eligibility — a reparent off a blocking dep, an attest
