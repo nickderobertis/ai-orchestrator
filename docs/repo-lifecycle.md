@@ -310,8 +310,7 @@ This repository's complete gate resolves that same comparison ref with
 HEAD (or a sole remote branch); use `just gate <remote> <base>` when discovery is
 ambiguous. The lifecycle exports `ORCHESTRATOR_COMPARISON_REMOTE` and
 `ORCHESTRATOR_COMPARISON_BASE` to **every dispatch and every publishing push of a
-workstream** — see [one judged diff, one
-verdict](#one-judged-diff-one-verdict) — and the pre-push hook reads that base and
+workstream**, and the pre-push hook reads that base and
 uses the remote name Git passes as its first argument. Invalid names, missing
 refs, and ambiguous remote branches fail with a remediation instead of falling
 back to `main`. `just sync` discovers the same branch; `just sync <branch>
