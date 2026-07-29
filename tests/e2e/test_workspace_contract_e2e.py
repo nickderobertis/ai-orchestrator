@@ -301,7 +301,7 @@ set -euo pipefail
 printf '%s %s\\n' "$(basename "$0")" "$*" >>"$TRACE_FILE"
 if [[ "$*" == "run coverage report --format=total" ]]; then
   printf '%s\\n' "${FAKE_COVERAGE_TOTAL:-}"
-  exit 0
+  exit "${FAKE_COVERAGE_EXIT:-0}"
 fi
 if [[ "${ECHO_COMMAND:-}" == "$(basename "$0")" ]]; then echo "$ECHO_LINE"; fi
 if [[ "${BLOCK_COMMAND:-}" == "$(basename "$0")" ]]; then
@@ -573,6 +573,26 @@ def test_check_recipe_stays_green_when_the_coverage_total_is_unusable(tmp_path: 
     assert result.returncode == 0, result.stderr
     assert result.stdout == "check: all deterministic checks passed\n"
     assert "uv run coverage report --format=total" in trace.read_text()
+
+
+def test_check_recipe_reports_a_total_that_coverage_exited_nonzero_to_report(
+    tmp_path: Path,
+) -> None:
+    """`coverage report` exits 2 below the floor and still prints the number.
+
+    Dropping it there would hide the total in exactly the situation an operator
+    most wants it; the floor is the `test` target's to enforce, not this readout's.
+    """
+    checkout, trace = _recipe_checkout(tmp_path)
+    _mark_nx_installed(checkout)
+    (checkout / ".coverage").write_text("")
+
+    result = _recipe_run(
+        checkout, trace, "check", FAKE_COVERAGE_TOTAL="94.13", FAKE_COVERAGE_EXIT="2"
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "check: all deterministic checks passed (line coverage 94.13%)\n"
 
 
 def test_gate_recipe_reports_the_coverage_total_it_measured(tmp_path: Path) -> None:

@@ -17,8 +17,10 @@ if [[ -z $root ]]; then
     root=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
 fi
 [[ -f "$root/.coverage" ]] || exit 0
-# `coverage report` exits 2 when the total is below the floor but still prints it,
-# so keep the number and let the shape check below decide whether it is usable.
-total=$(cd "$root" && uv run coverage report --format=total 2>/dev/null) || total=""
+# `coverage report` exits 2 when the total is below the floor but still prints it.
+# `|| true` keeps that number — the assignment has already happened, and only the
+# status is being swallowed — where `|| total=""` would throw away the very output
+# this is here to read. The shape check below decides whether it is usable.
+total=$(cd "$root" && uv run coverage report --format=total 2>/dev/null) || true
 [[ $total =~ ^[0-9]+(\.[0-9]+)?$ ]] || exit 0
 printf '%s\n' "$total"
