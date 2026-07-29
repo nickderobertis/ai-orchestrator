@@ -1,12 +1,7 @@
 """Cross-process contention journeys over real git and persistent state.
 
-llmlint: ignore-file[tests_mirror_real_usage] The journeys that can run through the
-lifecycle do — concurrent same-branch dispatches and the fetch-placement proof both
-drive `run_repo_task`. The rest exist to reproduce states no product path can
-produce on demand: a run abandoned mid-worktree, a branch parked at an earlier
-attempt's path, and a sibling deliberately attempting the destructive operation
-this layout exists to prevent. Each drives real git and real cross-process locks;
-only the crash or the attack is synthesized.
+llmlint: ignore-file[tests_mirror_real_usage] A crashed run and a sibling's
+destructive reach have no public entry point that produces them on demand.
 """
 
 from __future__ import annotations
@@ -16,6 +11,7 @@ import multiprocessing
 import os
 import shutil
 import subprocess
+import time
 from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeout
@@ -23,6 +19,7 @@ from multiprocessing.synchronize import Event as MPEvent
 from pathlib import Path
 
 import pytest
+from waits import deadline as e2e_deadline
 from waits import timeout as e2e_timeout
 
 from orchestrator import gitops
@@ -34,7 +31,6 @@ from orchestrator.coordination import (
     reset_harness_observer,
     set_harness_observer,
 )
-from orchestrator.dispatch import Report
 from orchestrator.journal import NodeJournal, open_journal
 from orchestrator.lifecycle import run_repo_task
 from orchestrator.registry import Registry
@@ -332,26 +328,29 @@ def _same_branch_lifecycle_process(
     root: str,
     branch: str,
     state_root: str,
-    running: MPEvent,
-    release: MPEvent,
+    base_config: str,
+    persona_dir: str,
+    ready: str,
+    release: str,
     results: multiprocessing.Queue[dict[str, object]],
 ) -> None:
-    """Run one real lifecycle that parks inside its dispatch until released."""
+    """Drive a real onejudge dispatch that halts at the provider barrier.
+
+    The barrier lives inside the faked paid model, so the dispatch itself — the
+    onejudge subprocess, its worktree, its git — is entirely real. That is the only
+    way to hold two runs inside their agents at one instant without standing in for
+    the boundary under test.
+    """
     os.environ["AI_ORCHESTRATOR_HOME"] = state_root
-
-    def parked_dispatch(persona: str, task: str, *, project_dir: str, **_: object) -> Report:
-        (Path(project_dir) / f"{branch.replace('/', '-')}.txt").write_text(task, encoding="utf-8")
-        running.set()
-        release.wait(e2e_timeout(30))
-        return Report(persona, 0, True, False, 1, [], {}, {}, "")
-
     result = run_repo_task(
         origin,
-        "write the same branch name from two runs at once",
+        "complete-now write-unique-change: the same branch name from two runs at once "
+        f"provider-barrier-ready={ready} provider-barrier-release={release}",
         "engineer",
         workspace=Workspace(root, resolver=lambda _spec: Path(canonical), workflow="local"),
         branch=branch,
-        dispatch_fn=parked_dispatch,
+        base_path=base_config,
+        persona_dir=persona_dir,
         verify_cmd=["true"],
         repo_type="single-owner",
     )
@@ -359,14 +358,19 @@ def _same_branch_lifecycle_process(
 
 
 def test_concurrent_lifecycles_share_a_branch_name_without_colliding(
-    tmp_path: Path, bare_origin: Callable[..., Path]
+    tmp_path: Path,
+    bare_origin: Callable[..., Path],
+    command_base: Callable[..., Path],
+    personas_dir: Path,
 ) -> None:
     """One identity, two live dispatches, one branch name — and no registry to race."""
     origin = bare_origin()
     canonical = gitops.clone(origin, tmp_path / "canonical-parallel")
     root = tmp_path / "worktrees-parallel"
-    running = [MP.Event(), MP.Event()]
-    releases = [MP.Event(), MP.Event()]
+    barrier = tmp_path / "barrier"
+    barrier.mkdir()
+    release = barrier / "release"
+    readies = [barrier / f"ready-{index}" for index in range(2)]
     results: multiprocessing.Queue[dict[str, object]] = MP.Queue()
     processes = [
         MP.Process(
@@ -377,8 +381,10 @@ def test_concurrent_lifecycles_share_a_branch_name_without_colliding(
                 str(root),
                 "feature/shared-name",
                 os.environ["AI_ORCHESTRATOR_HOME"],
-                running[index],
-                releases[index],
+                str(command_base()),
+                str(personas_dir),
+                str(readies[index]),
+                str(release),
                 results,
             ),
         )
@@ -387,9 +393,12 @@ def test_concurrent_lifecycles_share_a_branch_name_without_colliding(
     for process in processes:
         process.start()
     try:
-        # Both dispatches are inside their agents at the same moment, on the same
-        # branch name, before either can reach teardown.
-        assert all(event.wait(e2e_timeout(20)) for event in running)
+        # Both real dispatches are inside their agents at the same moment, on the
+        # same branch name, before either can reach teardown.
+        deadline = e2e_deadline(60)
+        while not all(ready.exists() for ready in readies) and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert all(ready.exists() for ready in readies), "both dispatches never ran at once"
         # The shared checkout is only an object store here: it registers no
         # worktree, so no run's cleanup can prune another run's tree out of it.
         assert gitops.worktrees(canonical) == {"main": canonical.resolve()}
@@ -398,9 +407,8 @@ def test_concurrent_lifecycles_share_a_branch_name_without_colliding(
         live = sorted(entry for entry in root.rglob(".git") if entry.is_file())
         assert len(live) == 2, live
     finally:
-        for release in releases:
-            release.set()
-        settled = [results.get(timeout=e2e_timeout(30)) for _ in processes]
+        release.write_text("go\n", encoding="utf-8")
+        settled = [results.get(timeout=e2e_timeout(60)) for _ in processes]
         for process in processes:
             _join(process)
 
@@ -409,7 +417,6 @@ def test_concurrent_lifecycles_share_a_branch_name_without_colliding(
     # there — what must not happen is either run losing its tree or its work.
     assert all(item["ok"] for item in settled), settled
     assert {item["outcome"] for item in settled} <= {"merged", "already-integrated"}
-    assert _has_file(origin, "main", "feature-shared-name.txt")
 
 
 def test_same_branch_redispatch_cannot_overtake_paused_teardown(
@@ -624,39 +631,49 @@ def test_explicit_run_owner_blocks_contention_and_only_dead_owner_can_be_recover
 
 
 def _fetching_lifecycle_process(
-    origin: str, canonical: str, root: str, state_root: str, fetched: MPEvent, release: MPEvent
+    origin: str,
+    canonical: str,
+    root: str,
+    state_root: str,
+    base_config: str,
+    persona_dir: str,
+    fetched: MPEvent,
 ) -> None:
-    """Dispatch for real, reporting the moment setup's origin fetch has finished."""
+    """Run a real dispatch, reporting the moment setup's origin fetch has finished.
+
+    Nothing has to be held open here: setup fetches before it ever dispatches, so
+    the observation lands while the parent still holds the shared checkout, and the
+    onejudge subprocess that follows is entirely real.
+    """
     os.environ["AI_ORCHESTRATOR_HOME"] = state_root
 
     def observe(kind: str, detail: Mapping[str, str | float | bool]) -> None:
         if kind == "setup-finished" and detail.get("operation") == "fetch":
             fetched.set()
 
-    def parked_dispatch(persona: str, task: str, *, project_dir: str, **_: object) -> Report:
-        (Path(project_dir) / "fetched.txt").write_text(task, encoding="utf-8")
-        release.wait(e2e_timeout(30))
-        return Report(persona, 0, True, False, 1, [], {}, {}, "")
-
     set_harness_observer(observe)
     run_repo_task(
         origin,
-        "prove setup fetches without the shared checkout",
+        "complete-now write-change: prove setup fetches without the shared checkout",
         "engineer",
         workspace=Workspace(root, resolver=lambda _spec: Path(canonical), workflow="local"),
-        dispatch_fn=parked_dispatch,
+        base_path=base_config,
+        persona_dir=persona_dir,
         verify_cmd=["true"],
         repo_type="single-owner",
     )
 
 
 def test_execution_checkout_fetch_never_runs_inside_the_exclusive_section(
-    tmp_path: Path, bare_origin: Callable[..., Path]
+    tmp_path: Path,
+    bare_origin: Callable[..., Path],
+    command_base: Callable[..., Path],
+    personas_dir: Path,
 ) -> None:
     """A run's fetch must not be blocked by a sibling holding the shared checkout."""
     origin = bare_origin()
     canonical = gitops.clone(origin, tmp_path / "canonical-fetch")
-    fetched, release = MP.Event(), MP.Event()
+    fetched = MP.Event()
     process = MP.Process(
         target=_fetching_lifecycle_process,
         args=(
@@ -664,19 +681,72 @@ def test_execution_checkout_fetch_never_runs_inside_the_exclusive_section(
             str(canonical),
             str(tmp_path / "worktrees-fetch"),
             os.environ["AI_ORCHESTRATOR_HOME"],
+            str(command_base()),
+            str(personas_dir),
             fetched,
-            release,
         ),
     )
     try:
         with advisory_lock(git_lock_identity(gitops.common_dir(canonical))):
             process.start()
-            assert fetched.wait(e2e_timeout(15)), (
+            assert fetched.wait(e2e_timeout(30)), (
                 "the dispatch's fetch never completed while the shared checkout was held"
             )
     finally:
-        release.set()
         _join(process)
+
+
+def test_a_runs_branch_cleanup_never_withdraws_a_siblings_preserved_work(
+    tmp_path: Path, bare_origin: Callable[..., Path]
+) -> None:
+    """Two runs, one branch name, divergent work — neither may erase the other's."""
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-cleanup")
+    root = tmp_path / "worktrees-cleanup"
+    repo = normalize_repo(str(canonical))
+    shared = "feature/contested-name"
+
+    # This run cuts the name first, so it adopts nothing: its branch and the
+    # sibling's are unrelated lines of work that happen to share a name.
+    other = _open_workspace(str(canonical), str(root))
+    other_tree = other.worktree(repo, shared, base="origin/main")
+
+    # The sibling preserves work under that name. Its worktree teardown copies the
+    # branch into the shared checkout, which becomes its only surviving record.
+    sibling = _open_workspace(str(canonical), str(root))
+    sibling_tree = sibling.worktree(repo, shared, base="origin/main")
+    (sibling_tree / "sibling.txt").write_text("only the sibling has this\n", encoding="utf-8")
+    gitops.add_all(sibling_tree)
+    gitops.commit(sibling_tree, "feat: sibling work that never reached origin")
+    sibling.remove_worktree(repo, sibling_tree)
+    preserved = gitops.ref_sha(canonical, shared)
+
+    # This run finishes its own divergent work and abandons the branch — the
+    # synthetic-stack-base teardown path, which deletes what it is done with.
+    (other_tree / "other.txt").write_text("a different line of work\n", encoding="utf-8")
+    gitops.add_all(other_tree)
+    gitops.commit(other_tree, "feat: work that must not overwrite the sibling")
+    other.remove_worktree(repo, other_tree)
+    other.delete_branch(repo, shared)
+
+    # Its own clone dropped the branch; the sibling's record is untouched, neither
+    # rewound by the teardown copy nor withdrawn by the delete.
+    assert not gitops.branch_exists(other.clone_dir(repo), shared)
+    assert gitops.ref_sha(canonical, shared) == preserved
+    assert _has_file(canonical, shared, "sibling.txt")
+    assert not _has_file(canonical, shared, "other.txt")
+
+    # A run still withdraws the copy it made itself, so cleanup reclaims its own.
+    owner = _open_workspace(str(canonical), str(root))
+    owner_tree = owner.worktree(repo, "feature/owned-name", base="origin/main")
+    (owner_tree / "owned.txt").write_text("mine\n", encoding="utf-8")
+    gitops.add_all(owner_tree)
+    gitops.commit(owner_tree, "feat: work this run owns")
+    owner.remove_worktree(repo, owner_tree)
+    assert gitops.branch_exists(canonical, "feature/owned-name")
+    owner.delete_branch(repo, "feature/owned-name")
+
+    assert not gitops.branch_exists(canonical, "feature/owned-name")
 
 
 def test_abandoned_run_is_reclaimed_only_once_all_its_work_reached_origin(
