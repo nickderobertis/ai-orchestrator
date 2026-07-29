@@ -26,6 +26,7 @@ from pathlib import Path
 import onejudge_sdk
 import pytest
 import yaml
+from nx_workspace import requires_workspace_install
 
 from orchestrator import PERSONA_DIR, REPO_ROOT
 from orchestrator.channel import (
@@ -1099,6 +1100,7 @@ print(json.dumps({
     assert report["results"][0]["text"] == "wrapper fallback recovered"
 
 
+@requires_workspace_install
 @pytest.mark.parametrize(
     ("recipe_args", "expected_args"),
     [

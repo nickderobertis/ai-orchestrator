@@ -284,7 +284,8 @@ from the record — green is always a claim about one specific base commit.
 Forcing a real re-judge is deliberately **per tier and per invocation**:
 
 ```sh
-just lint-llm-diff origin/main --skip-nx-cache
+just lint-llm-diff origin/main --skip-nx-cache   # re-judge the llmlint tier
+./scripts/nx.sh run orchestrator:test --skip-nx-cache   # re-run one other tier
 ```
 
 An ambient global Nx cache skip (`NX_SKIP_NX_CACHE` / `NX_DISABLE_NX_CACHE`) is
@@ -292,6 +293,43 @@ reported and ignored by that recipe and by `scripts/check-nx-cache.sh`. Exportin
 one re-rolls the judge from every unrelated command and breaks the checks whose
 contract *is* cache replay, so it is not a supported way to re-judge this tier.
 Every other Nx target still honours it.
+
+### When a cached verdict may stand in for a verdict on this tree
+
+llmlint is not the only memoized tier. **Every cached Nx target replays a recorded
+answer**, including `orchestrator:test` — the tier the coverage floor and the
+"tests are the only QA loop" invariant rest on. One rule governs all of them:
+
+> A cached verdict may stand in for a verdict on this tree only when the cache key
+> covers everything the check reads.
+
+Where it does, replay is exactly right and the recorded verdict is authoritative:
+the same question gets the same answer, and the worker's gate is where that answer
+was paid for. Where the key covers less than the check reads, replay is not a
+saving but a **false green** — a file the check reads can change the answer without
+changing the hash, and the tier reports a pass for a tree whose run would have
+failed.
+
+`orchestrator:test` used to be keyed on a hand-listed subset:
+`orchestrator/`, `tests/`, `personas/`, `config/`, `pyproject.toml`, `uv.lock`. The
+suite reads well past that list — `AGENTS.md`, `docs/`, the `justfile`,
+`llmlint.yml`, `scripts/`, `.githooks/pre-push`, `apps/dag-ui/vite.config.ts` — so
+editing any of them replayed a green verdict on a tree carrying a real regression.
+So the Python targets, which all run from the workspace root over the whole tree,
+now share the `wholeWorkspace` named input in `nx.json` with the llmlint tier and
+are keyed on the whole workspace.
+
+That trade is deliberate: a documentation-only or TypeScript-only change now
+re-runs the ~8-minute Python suite that reads documentation and app config. Paying
+that is the point — the alternative is the enumerated list going stale again the
+next time a test learns to read a new file, and a stale list fails *open*.
+`tests/test_nx_cache_scope.py` keeps it from narrowing by checking every repository
+path the suite names against the declared key, and
+`tests/e2e/test_nx_cache_scope_e2e.py` drives real Nx over a copy of this checkout
+to prove an edit to `AGENTS.md` re-runs the suite rather than replaying it.
+
+Two tiers, one answer, and neither is lenient: a recorded llmlint **failure**
+replays as a failure, and a tree the suite would fail can no longer replay a pass.
 
 ## Merge strategies (where the change lands)
 

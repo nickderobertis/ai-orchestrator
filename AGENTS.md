@@ -355,6 +355,16 @@ the dispatch and to every gate run of a workstream so publication replays what t
 worker cleared instead of re-rolling against findings it never saw. See
 [One judged diff, one verdict](docs/repo-lifecycle.md#one-judged-diff-one-verdict).
 
+Every cached Nx target replays a recorded answer, so one rule governs the test tier
+too: a memo may stand in for a verdict on this tree only when its key covers
+everything the check reads. The Python targets run from the workspace root over the
+whole tree — pytest reads documentation, recipes, hooks, and app config — so they
+are keyed on it through `nx.json`'s `wholeWorkspace` input. Narrowing one back to a
+subset makes a green suite a claim about a tree that was never run; force a real
+re-run of a single tier with `--skip-nx-cache` on that one invocation instead. See
+[When a cached verdict may stand
+in](docs/repo-lifecycle.md#when-a-cached-verdict-may-stand-in-for-a-verdict-on-this-tree).
+
 Every remote lifecycle PR without explicit title/body metadata gets one
 post-verification `pr-author` dispatch. It drafts the template-shaped body from
 the actual diff through a temporary out-of-worktree file; drafting failure falls

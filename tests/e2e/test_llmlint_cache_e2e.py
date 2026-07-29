@@ -27,6 +27,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
+from nx_workspace import copy_checkout, requires_workspace_install
 
 ROOT = Path(__file__).resolve().parents[2]
 PASS_VERDICT = "fake-judge: 16 passed, 0 failed"
@@ -37,11 +38,14 @@ CACHE_MISS = "judged this diff (Nx cache miss)"
 # scripts/llmlint-verdict.sh: an unusable record, distinct from the judge's 0 and 1.
 UNUSABLE_RECORD = 2
 
-pytestmark = pytest.mark.skipif(
-    shutil.which("llmlint") is None,
-    reason="llmlint resolves the judge configuration this cache key is built from; "
-    "run 'just setup-llmlint'",
-)
+pytestmark = [
+    pytest.mark.skipif(
+        shutil.which("llmlint") is None,
+        reason="llmlint resolves the judge configuration this cache key is built from; "
+        "run 'just setup-llmlint'",
+    ),
+    requires_workspace_install,
+]
 
 
 @dataclass(frozen=True)
@@ -85,25 +89,6 @@ class Workspace:
         ).stdout
 
 
-def _copy_checkout(destination: Path) -> None:
-    """Copy exactly the files Nx would hash: everything git would commit from here.
-
-    Ignored state — live run directories with their channel FIFOs, node_modules,
-    the virtualenv, Nx's own scratch — is deliberately left behind.
-    """
-    listing = subprocess.run(
-        ["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
-        cwd=ROOT,
-        check=True,
-        text=True,
-        capture_output=True,
-    ).stdout
-    for relative in filter(None, listing.split("\0")):
-        target = destination / relative
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(ROOT / relative, target, follow_symlinks=False)
-
-
 def _write_fake_judge(directory: Path) -> None:
     """Install an `llmlint` that counts `--diff` runs but resolves config for real."""
     directory.mkdir(parents=True, exist_ok=True)
@@ -133,8 +118,7 @@ def _write_fake_judge(directory: Path) -> None:
 @pytest.fixture
 def workspace(tmp_path: Path) -> Workspace:
     root = tmp_path / "checkout"
-    _copy_checkout(root)
-    (root / "node_modules").symlink_to(ROOT / "node_modules", target_is_directory=True)
+    copy_checkout(root)
 
     # A plugin outside the tree: no file input can see it, so only the judge
     # configuration fingerprint can notice when its rules change.
