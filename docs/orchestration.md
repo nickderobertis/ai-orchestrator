@@ -404,7 +404,11 @@ records a self-describing `error` outcome with Git's diagnostic.
 Remote-first failures remain named required-check outcomes. Each lifecycle node
 also records one `merge-gate-coverage` event before it dispatches, naming the
 `pre-push` hook and required checks that will verify it, so a late rejection can
-be read against what was expected to run. Because artifact
+be read against what was expected to run. Each gated push then records a
+`verification-finished` event with its verdict and a bounded `output_tail`, and
+appends the whole run to the node's `artifacts.gate_log` — for a green
+publication as much as a rejected one, so a settled node can show what its gate
+did rather than only that nothing objected. Because artifact
 paths are in the terminal `GraphResultItem`, crash projection retains them
 byte-for-byte.
 

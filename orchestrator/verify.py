@@ -8,6 +8,10 @@ complete bar) and `just integrate`, whose per-candidate run has no later verifie
 because each candidate fast-forwards the local base before the single push. The
 gate's own exit code is the verdict — 0 passes, anything else fails, with captured
 output kept for the report.
+
+`record_merge_path_verification` is the other half of that move: the merge path
+runs the gate, so its evidence has to be captured where it arrives — as `git push`
+output — rather than where this module used to produce it.
 """
 
 # llmlint: ignore-file[changed_behavior_has_e2e] Bazel proves affected execution e2e;
