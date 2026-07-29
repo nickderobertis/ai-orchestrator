@@ -3445,6 +3445,123 @@ def test_remote_recovery_publishes_on_required_checks_without_a_pre_push_hook(
     assert _has_file(origin, "main", "recovered.txt")
 
 
+def test_stacked_lifecycle_publishes_on_required_checks_without_a_pre_push_hook(
+    tmp_path, bare_origin
+) -> None:
+    """The admission rule holds for a stacked PR base, not just the root.
+
+    Coverage is judged from required checks on the repository's *default* branch,
+    while a stacked node publishes onto its parent's branch instead. That makes
+    the stacked case a distinct admission, so it gets its own journey: with no
+    pre-push hook anywhere, the child still dispatches and opens its PR against
+    the parent branch rather than the root.
+    """
+    origin = bare_origin()
+    with serve_github_origin(origin, tmp_path, slug="acme/stacked") as remote:
+        canonical = gitops.clone(origin, tmp_path / "canonical-stacked-required-checks")
+        gitops.hooks_dir(canonical).joinpath("pre-push").unlink()
+        remote.attach(canonical)
+        Registry().register(
+            "acme/stacked", str(canonical), workflow="remote", repo_type="team", gate="true"
+        )
+        github = FakeGitHub(origin, required=("complete-gate",))
+        workspace = Workspace(tmp_path / "stacked-required-checks-worktrees")
+
+        parent = run_repo_task(
+            "acme/stacked",
+            "Open the stack's parent PR.",
+            "engineer",
+            workspace=workspace,
+            github=github,
+            branch="feature/stacked-required-parent",
+            dispatch_fn=make_writing_dispatch(filename="parent.txt"),
+            recorded_gate=["true"],
+        )
+        assert parent.outcome == "pr-open", parent.detail
+
+        child = run_repo_task(
+            "acme/stacked",
+            "Stack a child on the unmerged parent.",
+            "engineer",
+            workspace=workspace,
+            github=github,
+            branch="feature/stacked-required-child",
+            dispatch_fn=make_writing_dispatch(filename="child.txt"),
+            recorded_gate=["true"],
+            stack_bases=[StackBase(parent.branch, repo=parent.repo)],
+        )
+        assert gitops.hooks_dir(canonical).joinpath("pre-push").exists() is False
+
+    assert child.outcome == "pr-open", child.detail
+    # The stacked base, not the root: this is the admission the root journey misses.
+    assert child.pr_base == parent.branch
+    assert _has_file(origin, child.branch, "child.txt")
+    assert _has_file(origin, child.branch, "parent.txt")
+
+
+def test_stacked_recovery_publishes_on_required_checks_without_a_pre_push_hook(
+    tmp_path, bare_origin
+) -> None:
+    """Stacked recovery is admitted by required checks and targets the stack.
+
+    Recovery re-derives the preserved branch's recorded PR base, so an identity
+    covered only by branch protection has to be admitted *and* land its PR on the
+    parent branch. Both are proven here with no pre-push hook in the checkout.
+    """
+    origin = bare_origin()
+    with serve_github_origin(origin, tmp_path, slug="acme/stacked-recovery") as remote:
+        canonical = gitops.clone(origin, tmp_path / "canonical-stacked-recovery")
+        gitops.hooks_dir(canonical).joinpath("pre-push").unlink()
+        remote.attach(canonical)
+        Registry().register(
+            "acme/stacked-recovery",
+            str(canonical),
+            workflow="remote",
+            repo_type="team",
+            gate="true",
+        )
+        github = FakeGitHub(origin, required=("complete-gate",))
+        workspace = Workspace(tmp_path / "stacked-recovery-worktrees")
+
+        parent = run_repo_task(
+            "acme/stacked-recovery",
+            "Open the parent the preserved child stacks on.",
+            "engineer",
+            workspace=workspace,
+            github=github,
+            branch="feature/stacked-recovery-parent",
+            dispatch_fn=make_writing_dispatch(filename="parent.txt"),
+            recorded_gate=["true"],
+        )
+        assert parent.outcome == "pr-open", parent.detail
+
+        preserved = run_repo_task(
+            "acme/stacked-recovery",
+            "Preserve a stacked child for recovery through required checks.",
+            "engineer",
+            workspace=workspace,
+            github=github,
+            branch="feature/stacked-recovery-child",
+            dispatch_fn=make_writing_dispatch(filename="child.txt", completed=False),
+            recorded_gate=["true"],
+            stack_bases=[StackBase(parent.branch, repo=parent.repo)],
+        )
+        assert preserved.outcome == "not-completed", preserved.detail
+
+        recovered = recover_repo(
+            "acme/stacked-recovery",
+            preserved.branch,
+            workspace_root=tmp_path / "stacked-recovery-recover-worktrees",
+            github=github,
+            recorded_gate=["true"],
+        )
+        assert gitops.hooks_dir(canonical).joinpath("pre-push").exists() is False
+
+    assert recovered.ok and recovered.outcome == "pr-open", recovered.detail
+    assert recovered.pr_base == parent.branch
+    assert _has_file(origin, preserved.branch, "child.txt")
+
+
 def test_recovery_refuses_uncovered_identity_and_preserves_branch(tmp_path, bare_origin) -> None:
     origin = bare_origin()
     canonical = gitops.clone(origin, tmp_path / "canonical-uncovered-recovery")
