@@ -89,6 +89,18 @@ def _workspace(tmp_path: Path, *origins: Path, workflow: str = "local") -> Works
     )
 
 
+def _shared_checkout(root: Path, index: int = 0) -> Path:
+    """The checkout `_workspace` resolves to, before any run clone exists.
+
+    A run clone borrows its objects *and* its hooks path from this checkout, so a
+    `pre-push` installed here is the one Git runs for every publishing push. It has
+    to be addressed directly: `clone_dir` is the run's own clone and does not exist
+    until the lifecycle resolves the repository.
+    """
+    return root / f"canonical-{index}"
+
+
+
 def _per_step_dispatch(fail_step: str | None = None):
     """A dispatch_fn that writes a file named after the step id (from the session)."""
 
@@ -184,11 +196,15 @@ def test_published_dispatch_survives_deferred_teardown_and_redispatch_reclaims_i
     assert serialized["deferred_cleanup"] == first.deferred_cleanup
     deferred = [event for event in journal.events() if event.kind == "cleanup-deferred"]
     assert deferred and deferred[0].detail["operation"] == "remove-worktree"
-    orphan = gitops.worktrees(canonical)["teardown-retry"]
+    orphan = gitops.worktrees(contended.clone_dir(normalize_repo(str(origin))))["teardown-retry"]
     assert orphan.exists()
 
     recovered = Workspace(
-        root, resolver=lambda _spec: canonical, workflow="local", repo_type="single-owner"
+        root,
+        resolver=lambda _spec: canonical,
+        workflow="local",
+        repo_type="single-owner",
+        run_token=contended.run_token,
     )
     second = run_repo_task(
         str(origin),
@@ -214,16 +230,17 @@ def test_lifecycle_failure_survives_simultaneous_deferred_teardown(
             self._release_worktree_lease(path)
             raise LockTimeout("shared .git remains busy")
 
+    workspace = ContendedTeardownWorkspace(
+        tmp_path / "failed-worktrees",
+        resolver=lambda _spec: canonical,
+        workflow="local",
+        repo_type="single-owner",
+    )
     result = run_repo_task(
         str(origin),
         "should-fail write-change preserve original failure",
         "engineer",
-        workspace=ContendedTeardownWorkspace(
-            tmp_path / "failed-worktrees",
-            resolver=lambda _spec: canonical,
-            workflow="local",
-            repo_type="single-owner",
-        ),
+        workspace=workspace,
         branch="failed-teardown",
         base_path=command_base(),
         persona_dir=personas_dir,
@@ -233,10 +250,14 @@ def test_lifecycle_failure_survives_simultaneous_deferred_teardown(
     assert result.outcome == "not-completed"
     assert "step 'main' hit the turn cap" in result.detail
     assert result.deferred_cleanup and "remove-worktree deferred" in result.deferred_cleanup[0]
-    cleanup = Workspace(tmp_path / "failed-worktrees", resolver=lambda _spec: canonical)
-    cleanup.remove_worktree(
-        normalize_repo(str(origin)), gitops.worktrees(canonical)["failed-teardown"]
+    ref = normalize_repo(str(origin))
+    cleanup = Workspace(
+        tmp_path / "failed-worktrees",
+        resolver=lambda _spec: canonical,
+        run_token=workspace.run_token,
     )
+    cleanup.ensure_clone(ref)
+    cleanup.remove_worktree(ref, gitops.worktrees(cleanup.clone_dir(ref))["failed-teardown"])
 
 
 def test_turn_cap_auto_resumes_preserved_branch_without_rerunning_completed_steps(
@@ -297,7 +318,8 @@ def test_real_git_teardown_refusal_is_deferred_after_publication(tmp_path, bare_
     def locking_dispatch(persona, task, *, project_dir, **kwargs):
         worktree = Path(project_dir)
         (worktree / "locked-cleanup.txt").write_text("published\n", encoding="utf-8")
-        subprocess.run(["git", "-C", str(canonical), "worktree", "lock", str(worktree)], check=True)
+        run_clone = workspace.clone_dir(normalize_repo(str(origin)))
+        subprocess.run(["git", "-C", str(run_clone), "worktree", "lock", str(worktree)], check=True)
         return Report(persona, 0, True, False, 1, [], {}, {}, "")
 
     result = run_repo_task(
@@ -312,8 +334,9 @@ def test_real_git_teardown_refusal_is_deferred_after_publication(tmp_path, bare_
 
     assert result.outcome == "merged", result.detail
     assert result.deferred_cleanup and "locked working tree" in result.deferred_cleanup[0]
-    orphan = gitops.worktrees(canonical)["locked-cleanup"]
-    subprocess.run(["git", "-C", str(canonical), "worktree", "unlock", str(orphan)], check=True)
+    run_clone = workspace.clone_dir(normalize_repo(str(origin)))
+    orphan = gitops.worktrees(run_clone)["locked-cleanup"]
+    subprocess.run(["git", "-C", str(run_clone), "worktree", "unlock", str(orphan)], check=True)
     workspace.remove_worktree(normalize_repo(str(origin)), orphan)
 
 
@@ -352,8 +375,13 @@ def test_synthetic_stack_teardown_contention_is_deferred_with_real_git(
     assert isinstance(built, lifecycle_module.SyntheticStackBase)
     assert _tip(origin, f"refs/heads/{built.branch}")
     assert result.deferred_cleanup and "remove-worktree deferred" in result.deferred_cleanup[0]
-    cleanup = Workspace(tmp_path / "stack-worktrees", resolver=lambda _spec: canonical)
-    cleanup.remove_worktree(ref, gitops.worktrees(canonical)[built.branch])
+    cleanup = Workspace(
+        tmp_path / "stack-worktrees",
+        resolver=lambda _spec: canonical,
+        run_token=workspace.run_token,
+    )
+    cleanup.ensure_clone(ref)
+    cleanup.remove_worktree(ref, gitops.worktrees(cleanup.clone_dir(ref))[built.branch])
 
 
 def test_failed_synthetic_stack_defers_worktree_and_branch_cleanup_with_real_git(
@@ -402,13 +430,19 @@ def test_failed_synthetic_stack_defers_worktree_and_branch_cleanup_with_real_git
         "remove-worktree",
         "delete-branch",
     ]
+    run_clone = workspace.clone_dir(ref)
     synthetic = next(
         branch
-        for branch in gitops.worktrees(canonical)
+        for branch in gitops.worktrees(run_clone)
         if branch.startswith("ai-orchestrator/stack-base/")
     )
-    cleanup = Workspace(tmp_path / "conflict-worktrees", resolver=lambda _spec: canonical)
-    cleanup.remove_worktree(ref, gitops.worktrees(canonical)[synthetic])
+    cleanup = Workspace(
+        tmp_path / "conflict-worktrees",
+        resolver=lambda _spec: canonical,
+        run_token=workspace.run_token,
+    )
+    cleanup.ensure_clone(ref)
+    cleanup.remove_worktree(ref, gitops.worktrees(run_clone)[synthetic])
     cleanup.delete_branch(ref, synthetic)
 
 
@@ -1038,9 +1072,11 @@ def test_ordinary_next_round_resumes_committed_lifecycle_branch(
     assert second["branch"] == branch
     assert second["resume"]["checkpoint"] == checkpoint
 
-    clone = Workspace(workspace_root).clone_dir(normalize_repo(str(canonical)))
-    assert gitops.is_ancestor(clone, checkpoint, branch)
-    assert incomplete_commits(clone, "origin/main", branch)
+    # Each round works in a clone of its own that it then discards, so the
+    # registered checkout is where a preserved branch has to survive to be
+    # resumable at all — and where round two just found this one.
+    assert gitops.is_ancestor(canonical, checkpoint, branch)
+    assert incomplete_commits(canonical, "origin/main", branch)
     events = [
         json.loads(line)
         for line in (runs_dir / "ordinary-resume" / "events.jsonl")
@@ -1072,7 +1108,7 @@ def test_ordinary_next_round_resumes_committed_lifecycle_branch(
         (runs_dir / "ordinary-resume" / "round-03" / "result.json").read_text(encoding="utf-8")
     )["results"]["change"]
     assert third["branch"] == fresh_branch
-    assert not gitops.is_ancestor(clone, checkpoint, fresh_branch)
+    assert not gitops.is_ancestor(canonical, checkpoint, fresh_branch)
     events = [
         json.loads(line)
         for line in (runs_dir / "ordinary-resume" / "events.jsonl")
@@ -1101,7 +1137,7 @@ def test_ordinary_next_round_resumes_committed_lifecycle_branch(
         (runs_dir / "ordinary-resume" / "round-04" / "result.json").read_text(encoding="utf-8")
     )["results"]["change"]
     assert fourth["branch"] == branch
-    assert gitops.is_ancestor(clone, checkpoint, branch)
+    assert gitops.is_ancestor(canonical, checkpoint, branch)
     events = [
         json.loads(line)
         for line in (runs_dir / "ordinary-resume" / "events.jsonl")
@@ -2069,7 +2105,7 @@ def test_local_repo_direct_merge(tmp_path, bare_origin) -> None:
     assert result.outcome == "merged"
     assert result.base_branch == "main"
     assert _has_file(origin, "main", "feature.txt")  # the change really landed on origin main
-    canonical = ws.clone_dir(normalize_repo(str(origin)))
+    canonical = ws.execution_checkout(normalize_repo(str(origin)))
     assert gitops.current_branch(canonical) == "main"
     assert gitops.head_sha(canonical) == _tip(origin, "main")
     landed = _tip(origin, "main")
@@ -2120,9 +2156,16 @@ def test_covered_lifecycle_uses_push_gate_without_orchestrator_gate_run(
 ) -> None:
     origin = bare_origin()
     workspace = _workspace(tmp_path, origin)
-    canonical = workspace.clone_dir(normalize_repo(str(origin)))
+    canonical = _shared_checkout(tmp_path)
     hook_log = tmp_path / "pre-push-gates.log"
-    install_pre_push_hook(canonical, f"printf 'gate\\n' >> {shlex.quote(str(hook_log))}")
+    # Record which ref each gated push targets, so the journey says what the merge
+    # path actually covers rather than asserting an opaque count.
+    install_pre_push_hook(
+        canonical,
+        f"""while read -r _local _lsha remote _rsha; do
+  printf '%s\\n' "$remote" >> {shlex.quote(str(hook_log))}
+done""",
+    )
 
     result = run_repo_task(
         str(origin),
@@ -2136,14 +2179,22 @@ def test_covered_lifecycle_uses_push_gate_without_orchestrator_gate_run(
 
     assert result.ok and result.outcome == "merged", result.detail
     assert result.verify is None
-    assert hook_log.read_text(encoding="utf-8").splitlines() == ["gate", "gate"]
+    gated = hook_log.read_text(encoding="utf-8").splitlines()
+    # The feature branch (pushed, then mirrored into the shared checkout) and the
+    # squashed publication onto base. Every push this lifecycle makes is gated, and
+    # the orchestrator adds none of its own.
+    assert gated == [
+        f"refs/heads/{result.branch}",
+        f"refs/heads/{result.branch}",
+        "refs/heads/main",
+    ], gated
     assert _has_file(origin, "main", "covered.txt")
 
 
 def test_pre_push_gate_failure_is_recorded_as_gate_failure(tmp_path, bare_origin) -> None:
     origin = bare_origin()
     workspace = _workspace(tmp_path, origin)
-    canonical = workspace.clone_dir(normalize_repo(str(origin)))
+    canonical = _shared_checkout(tmp_path)
     install_pre_push_hook(
         canonical,
         "printf 'pre-push: complete gate failed\\n' >&2\nexit 1",
@@ -2189,7 +2240,7 @@ def test_publication_push_gate_does_not_hold_the_shared_git_lock(tmp_path, bare_
     """
     origin = bare_origin()
     workspace = _workspace(tmp_path, origin)
-    canonical = workspace.clone_dir(normalize_repo(str(origin)))
+    canonical = _shared_checkout(tmp_path)
     started = tmp_path / "publication-gate-started"
     release = tmp_path / "publication-gate-release"
     install_pre_push_hook(
@@ -2234,7 +2285,7 @@ def test_publication_push_gate_failure_leaves_the_branch_and_base_intact(
 ) -> None:
     origin = bare_origin()
     workspace = _workspace(tmp_path, origin)
-    canonical = workspace.clone_dir(normalize_repo(str(origin)))
+    canonical = _shared_checkout(tmp_path)
     install_pre_push_hook(canonical, _REJECT_BASE_PUSH)
     before = _tip(origin, "main")
 
@@ -2562,7 +2613,7 @@ def test_local_repo_gate_failure_blocks_merge(tmp_path, bare_origin) -> None:
     before = _tip(origin, "main")
     workspace = _workspace(tmp_path, origin)
     install_pre_push_hook(
-        workspace.clone_dir(normalize_repo(str(origin))),
+        _shared_checkout(tmp_path),
         "printf 'pre-push gate: lint tier: bad import\\n' >&2\nexit 1",
     )
     result = run_repo_task(
@@ -2591,7 +2642,7 @@ def test_local_repo_syncs_advanced_base_before_the_gated_push(tmp_path, bare_ori
     origin = bare_origin()
     ws = _workspace(tmp_path, origin)
     install_pre_push_hook(
-        ws.clone_dir(normalize_repo(str(origin))),
+        _shared_checkout(tmp_path),
         "test -f base.txt || { printf 'pre-push gate: base sync missing\\n' >&2; exit 1; }",
     )
     writing_dispatch = make_writing_dispatch(filename="feature.txt")
@@ -3067,7 +3118,7 @@ def test_lifecycle_without_explicit_or_registry_gate_errors(tmp_path, bare_origi
 def test_recorded_gate_override_cannot_bypass_the_merge_path_gate(tmp_path, bare_origin) -> None:
     origin = bare_origin()
     workspace = _workspace(tmp_path, origin)
-    canonical = workspace.clone_dir(normalize_repo(str(origin)))
+    canonical = _shared_checkout(tmp_path)
     install_pre_push_hook(canonical, "printf 'pre-push gate failed\\n' >&2\nexit 1")
     before = _tip(origin, "main")
 
@@ -4048,7 +4099,7 @@ def test_real_lifecycle_outcomes_round_trip_through_telemetry_cli(tmp_path, bare
     gate_origin = bare_origin()
     gate_workspace = _workspace(tmp_path / "gate-workspace", gate_origin)
     install_pre_push_hook(
-        gate_workspace.clone_dir(normalize_repo(str(gate_origin))),
+        _shared_checkout(tmp_path / "gate-workspace"),
         "printf 'pre-push gate failed\\n' >&2\nexit 1",
     )
     run_recorded("gate", origin=gate_origin, workspace=gate_workspace)
@@ -4181,7 +4232,7 @@ def test_github_auto_merge_on_required_checks(tmp_path, bare_origin) -> None:
     assert result.outcome == "merged"
     assert result.pr is not None and result.pr.number == 1
     assert _has_file(origin, "main", "feature.txt")
-    canonical = workspace.clone_dir(normalize_repo("acme/widget"))
+    canonical = workspace.execution_checkout(normalize_repo("acme/widget"))
     assert gitops.head_sha(canonical) == _tip(origin, "main")
 
 
@@ -4863,7 +4914,14 @@ def test_remote_human_workstream_draft_checkpoint_and_safe_resume(tmp_path, bare
     )
     assert dispatched == ["prepare", "implement"]
     subprocess.run(
-        ["git", "-C", str(canonical), "update-ref", f"refs/heads/{second.branch}", saved_tip],
+        [
+            "git",
+            "-C",
+            str(workspace.clone_dir(normalize_repo("acme/widget"))),
+            "update-ref",
+            f"refs/heads/{second.branch}",
+            saved_tip,
+        ],
         check=True,
     )
 
@@ -5671,7 +5729,7 @@ def test_multi_pr_failure_skips_dependents(tmp_path, bare_origin) -> None:
     repo_x = bare_origin()
     ws = _workspace(tmp_path, repo_x)
     install_pre_push_hook(
-        ws.clone_dir(normalize_repo(str(repo_x))),
+        _shared_checkout(tmp_path),
         "if test -f a.txt; then printf 'pre-push gate failed\\n' >&2; exit 1; fi",
     )
 

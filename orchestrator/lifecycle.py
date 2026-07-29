@@ -35,7 +35,7 @@ from typing import Any, Protocol, cast
 from . import BASE_CONFIG, PERSONA_DIR, gitops
 from .cli_contract import DEFAULT_ONEHARNESS_MODE, ONEHARNESS_MODES
 from .config import ConfigError, load_yaml
-from .coordination import LockTimeout, advisory_lock, atomic_json
+from .coordination import LockTimeout, advisory_lock, atomic_json, git_lock_identity
 from .dispatch import Report, dispatch
 from .github import CliGitHubBackend, GitHubBackend, GitHubError, PullRequest
 from .gitops import GitError
@@ -1180,6 +1180,7 @@ def _build_synthetic_stack_base(
                     )
                 )
         gitops.push(worktree, branch)
+        workspace.mirror_branch(ref, branch)
         pushed = True
         return SyntheticStackBase(branch)
     finally:
@@ -1582,6 +1583,7 @@ def run_repo_task(
         worktree_base = f"origin/{pr_base}"
         prepared: ResumePrep | None = None
         if resume is not None:
+            workspace.adopt_preserved_branch(ref, resume.branch)
             validated = _validate_resume(clone, resume, github)
             if isinstance(validated, str):
                 invalid_provenance = "valid unattested incomplete provenance" in validated
@@ -1866,6 +1868,7 @@ def run_repo_task(
                 result.outcome = failed.outcome
                 result.detail = failed.detail
                 return result
+            workspace.mirror_branch(ref, branch)
         preverified_pr: PullRequest | None = None
         if verify_via_ci:
             backend = cast(GitHubBackend, ci_backend)
@@ -1946,11 +1949,15 @@ def run_repo_task(
                 gitops.push(worktree, branch)
             except GitError as exc:
                 return _push_failure(exc, branch=branch)
+            workspace.mirror_branch(ref, branch)
             return None
 
         ctx = MergeContext(
             repo_slug=ref.slug,
             clone_dir=clone,
+            queue_identity=git_lock_identity(
+                gitops.common_dir(selection.publication_checkout),
+            ),
             base=pr_base,
             branch=branch,
             title=title or _default_title(worktree, remote_base, lead.task),

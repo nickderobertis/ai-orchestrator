@@ -30,7 +30,9 @@ from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
 #: Held for the life of the listener so concurrent suites on one host serialize
-#: instead of colliding on the fixed port.
+#: instead of colliding on the fixed port. The path is deliberately fixed and
+#: outside any tmp_path: it has to be the same file for every suite on the machine,
+#: which is exactly what S108 warns about and exactly what is needed here.
 PORT_LOCK = Path("/tmp/ai-orchestrator-github-git-https.lock")  # noqa: S108
 
 
@@ -42,13 +44,18 @@ class GitHubOrigin:
     ca_certificate: Path
 
     def attach(self, checkout: Path) -> None:
-        """Point ``checkout``'s origin at this server without faking git."""
-        for args in (
-            ["remote", "set-url", "origin", self.url],
-            ["config", "http.sslCAInfo", str(self.ca_certificate)],
-            ["config", "--add", "http.curloptResolve", "github.com:443:127.0.0.1"],
-        ):
-            subprocess.run(["git", "-C", str(checkout), *args], check=True, capture_output=True)
+        """Give ``checkout`` this server's clone URL as its real origin.
+
+        Only the origin URL is per-checkout, because it is what the repository
+        *identity* is derived from. Reaching the listener is process-wide config
+        (see `serve_github_origin`): a lifecycle run pushes from a private clone it
+        makes itself, which inherits nothing from this checkout's config file.
+        """
+        subprocess.run(
+            ["git", "-C", str(checkout), "remote", "set-url", "origin", self.url],
+            check=True,
+            capture_output=True,
+        )
 
 
 def _certificate(directory: Path) -> tuple[Path, Path]:
@@ -185,9 +192,29 @@ def serve_github_origin(origin: Path, tmp_path: Path, *, slug: str) -> Iterator[
         server.socket = context.wrap_socket(server.socket, server_side=True)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
+        # Git's own environment-config mechanism, so every git process the lifecycle
+        # starts is reached — including the private run clone, which is created after
+        # this point and inherits no checkout's config file.
+        transport = {
+            "http.sslCAInfo": str(certificate),
+            "http.curloptResolve": "github.com:443:127.0.0.1",
+        }
+        previous = {name: os.environ.get(name) for name in ("GIT_CONFIG_COUNT",)}
+        offset = int(os.environ.get("GIT_CONFIG_COUNT") or 0)
+        for index, (key, value) in enumerate(transport.items(), start=offset):
+            previous[f"GIT_CONFIG_KEY_{index}"] = os.environ.get(f"GIT_CONFIG_KEY_{index}")
+            previous[f"GIT_CONFIG_VALUE_{index}"] = os.environ.get(f"GIT_CONFIG_VALUE_{index}")
+            os.environ[f"GIT_CONFIG_KEY_{index}"] = key
+            os.environ[f"GIT_CONFIG_VALUE_{index}"] = value
+        os.environ["GIT_CONFIG_COUNT"] = str(offset + len(transport))
         try:
             yield GitHubOrigin(f"https://github.com/{slug}.git", certificate)
         finally:
+            for name, value in previous.items():
+                if value is None:
+                    os.environ.pop(name, None)
+                else:
+                    os.environ[name] = value
             server.shutdown()
             server.server_close()
             thread.join(timeout=10)

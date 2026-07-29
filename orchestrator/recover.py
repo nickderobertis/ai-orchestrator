@@ -14,6 +14,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from . import BASE_CONFIG, PERSONA_DIR, gitops
+from .coordination import git_lock_identity
 from .dispatch import Report, dispatch
 from .github import CliGitHubBackend, GitHubBackend, GitHubError
 from .lifecycle import (
@@ -134,7 +135,7 @@ def recover_repo(
             raise RegistryError(f"{field_name} {value!r} is not a valid Git branch")
     worktree: Path | None = None
     try:
-        workspace.ensure_clone(ref, base_branch=target)
+        run_clone = workspace.ensure_clone(ref, base_branch=target)
         if not gitops.branch_exists(clone, branch):
             raise RegistryError(f"preserved branch {branch!r} does not exist in {clone}")
         recorded_base = recorded_pr_base(clone, f"origin/{target}", branch)
@@ -193,6 +194,7 @@ def recover_repo(
                         else f"recovery push of {branch!r} failed: {detail}"
                     ),
                 )
+            workspace.mirror_branch(ref, branch)
             return None
 
         def synchronize_attest_and_push_local_recovery() -> MergeOutcome | None:
@@ -247,7 +249,8 @@ def recover_repo(
         )
         context = MergeContext(
             repo_slug=str(slug),
-            clone_dir=clone,
+            clone_dir=run_clone,
+            queue_identity=git_lock_identity(gitops.common_dir(clone)),
             base=publication_base,
             branch=branch,
             title=_default_title(worktree, remote_base, f"Recover preserved branch {branch}"),
