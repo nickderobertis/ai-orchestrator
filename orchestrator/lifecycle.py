@@ -2007,26 +2007,67 @@ def run_repo_task(
                 "- Existing completed work is preserved.\n"
                 "- The repository gate remains green.\n"
             )
-            report = dispatch_fn(
-                cast(str, lead.persona),
-                resolution_task,
-                project_dir=str(worktree),
-                oneharness_mode=oneharness_mode,
-                base_path=base_path,
-                persona_dir=persona_dir,
-                session=f"{scoped_session(branch, worktree)}:{lead.id}",
-                max_turns=lead.max_turns or DEFAULT_LIFECYCLE_STEP_MAX_TURNS,
-                done_when="The conflict is resolved, committed, and the gate is green.",
-                labels=log.labels,
-                env=cache_env,
-                cancel=cancel,
+            # Publication-path work is dispatched work, and a reader of the ledger
+            # cannot tell an unrecorded 90-minute conflict resolution from a hang.
+            log.append(
+                "conflict-resolution-started",
+                detail={
+                    "branch": branch,
+                    "base": remote_base,
+                    "attempt": merge_resolutions,
+                    "persona": lead.persona,
+                },
             )
-            persist_report_artifacts(
-                log,
-                report,
-                session=f"{scoped_session(branch, worktree)}:{lead.id}",
+            # This dispatch runs against an already-checked-out branch, so it needs the
+            # same worktree-scoped session name every other pinned-branch dispatch uses.
+            resolution_session = f"{scoped_session(branch, worktree)}:{lead.id}"
+            # Everything between the start event and its close is guarded, not the
+            # dispatch alone: a start with nothing to close it is the "looks like a
+            # hang" reading these events exist to prevent, and the ledger cannot tell
+            # *where* after the start a failure landed. Persisting the report and
+            # inspecting the worktree both touch the filesystem and both can fail.
+            try:
+                report = dispatch_fn(
+                    cast(str, lead.persona),
+                    resolution_task,
+                    project_dir=str(worktree),
+                    oneharness_mode=oneharness_mode,
+                    base_path=base_path,
+                    persona_dir=persona_dir,
+                    session=resolution_session,
+                    max_turns=lead.max_turns or DEFAULT_LIFECYCLE_STEP_MAX_TURNS,
+                    done_when="The conflict is resolved, committed, and the gate is green.",
+                    labels=log.labels,
+                    env=cache_env,
+                    cancel=cancel,
+                )
+                persist_report_artifacts(
+                    log,
+                    report,
+                    session=resolution_session,
+                )
+                unresolved = gitops.unmerged_paths(worktree)
+            except Exception as exc:
+                log.append(
+                    "conflict-resolution-finished",
+                    detail={
+                        "branch": branch,
+                        "attempt": merge_resolutions,
+                        "completed": False,
+                        "error": f"{type(exc).__name__}: {exc}",
+                    },
+                )
+                raise
+            log.append(
+                "conflict-resolution-finished",
+                detail={
+                    "branch": branch,
+                    "attempt": merge_resolutions,
+                    "completed": report.completed,
+                    "resolved": not unresolved,
+                    "unresolved_paths": sorted(unresolved),
+                },
             )
-            unresolved = gitops.unmerged_paths(worktree)
             if unresolved:
                 gitops.merge_abort(worktree)
                 if not report.completed:
