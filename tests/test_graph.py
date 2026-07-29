@@ -44,6 +44,7 @@ from orchestrator.runs import (
     ArtifactPaths,
     GraphResultItem,
     NodeId,
+    ResumePayload,
     RunId,
     StepResultPayload,
 )
@@ -1164,16 +1165,26 @@ def test_recorded_result_schema_v5_field_golden_cannot_drift() -> None:
         )
     )
 
-    step_hints = get_type_hints(StepResultPayload, include_extras=True)
-    step_optional = sorted(
-        key for key, annotation in step_hints.items() if get_origin(annotation) is NotRequired
-    )
+    def _split(payload: type) -> tuple[list[str], list[str]]:
+        hints = get_type_hints(payload, include_extras=True)
+        optional = sorted(
+            key for key, annotation in hints.items() if get_origin(annotation) is NotRequired
+        )
+        return sorted(set(hints) - set(optional)), optional
+
+    step_required, step_optional = _split(StepResultPayload)
+    # `resume` crosses rounds rather than only being read back once, so a field
+    # added to it silently is a field an older ledger will not carry — the drift
+    # this golden exists to make loud.
+    resume_required, resume_optional = _split(ResumePayload)
     assert golden == {
         "schema_version": RECORDED_RESULT_SCHEMA_VERSION,
         "artifact_paths": sorted(ArtifactPaths.__optional_keys__),
         "graph_result_item_optional": sorted(GraphResultItem.__optional_keys__),
-        "step_result_required": sorted(set(step_hints) - set(step_optional)),
+        "step_result_required": step_required,
         "step_result_optional": step_optional,
+        "resume_required": resume_required,
+        "resume_optional": resume_optional,
     }
 
 

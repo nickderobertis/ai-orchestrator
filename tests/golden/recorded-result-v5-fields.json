@@ -50,5 +50,18 @@
   "step_result_optional": [
     "artifacts",
     "telemetry"
+  ],
+  "resume_required": [
+    "base_branch",
+    "branch",
+    "checkpoint",
+    "completed_steps",
+    "pr",
+    "pr_base"
+  ],
+  "resume_optional": [
+    "attempts",
+    "mode",
+    "source_round"
   ]
 }
