@@ -20,13 +20,16 @@ import re
 import shutil
 import subprocess
 import sys
-from collections.abc import Callable, Iterator
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any
 
 import pytest
 import yaml
-from leak_guard import ResourceLeakGuard
+
+# Re-exported rather than defined here: `leak_guard` is a self-contained pytest
+# plugin, so a session that loads it with `-p leak_guard` — which is how the guard's
+# own e2e drives a real session — gets exactly the fixtures this suite runs under.
+from leak_guard import resource_leak_guard, session_leak_guard  # noqa: F401
 
 from orchestrator import BASE_CONFIG, PERSONA_DIR, REPO_ROOT
 from orchestrator.config import load_yaml
@@ -43,27 +46,6 @@ def _isolate_orchestrator_channel(monkeypatch: pytest.MonkeyPatch) -> None:
             monkeypatch.delenv(key)
 
 
-@pytest.fixture(autouse=True)
-def resource_leak_guard(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, request: pytest.FixtureRequest
-) -> Iterator[ResourceLeakGuard]:
-    """Reap complete subprocess trees and report test-owned resource leaks."""
-    original_popen = subprocess.Popen
-    e2e_test = "e2e" in Path(str(request.node.path)).parts
-    guard = ResourceLeakGuard(popen=original_popen)
-
-    def tracked_popen(*args: Any, **kwargs: Any) -> subprocess.Popen[Any]:
-        return guard.spawn(*args, **kwargs)
-
-    monkeypatch.setattr(subprocess, "Popen", tracked_popen)
-    yield guard
-    if e2e_test:
-        for git_file in tmp_path.rglob(".git"):
-            if guard.is_linked_worktree(git_file.parent):
-                guard.register_worktree(git_file.parent)
-    guard.finish()
-
-
 def git(*args: str, cwd: str | Path | None = None) -> str:
     """Run a real git command in a test, failing loudly; return stdout."""
     proc = subprocess.run(
@@ -75,6 +57,20 @@ def git(*args: str, cwd: str | Path | None = None) -> str:
     if proc.returncode != 0:
         raise AssertionError(f"git {' '.join(args)} failed: {proc.stderr or proc.stdout}")
     return proc.stdout
+
+
+@pytest.fixture(autouse=True)
+def _no_nx_daemon(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep a test's own Nx invocations from leaving a background daemon behind.
+
+    Nx starts a workspace-scoped daemon that deliberately outlives the command that
+    started it, so every test shelling out to a `just` recipe that reaches Nx leaves
+    one running. That is where the daemons rooted in a single worktree came from:
+    eight, then seventeen, then forty-nine, peaking at 8.9GB of a host with 32. The
+    daemon buys a test nothing — the computation cache is on disk either way — and
+    the developer loop that does want one runs outside this process.
+    """
+    monkeypatch.setenv("NX_DAEMON", "false")
 
 
 @pytest.fixture(autouse=True)
