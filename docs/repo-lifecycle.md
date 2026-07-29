@@ -685,10 +685,12 @@ provenance: it has commits ahead of origin/<base>, and all of them are complete.
 ```
 
 `just integrate` names `repo-recover` symmetrically, with the exact command, when
-it skips a candidate for incomplete provenance. Each failing recovery also
-preserves the merge path's own gate run under the recovery workspace's
+it skips a candidate for incomplete provenance. A recovery whose push a pre-push
+hook gates also preserves that gate run under the recovery workspace's
 `gate-logs/`, named in the reported detail and in `--format json` as `gate_log`,
 so consecutive failures on one branch are comparable instead of reading alike.
+An identity covered by required PR checks instead has no gate at its push — the
+checks decide afterwards — so no verdict is recorded there.
 
 A branch can nevertheless be complete and unpublished: the agent finishes and
 commits, then publication fails at push because of the environment. For example,
