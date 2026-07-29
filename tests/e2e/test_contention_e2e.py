@@ -351,7 +351,7 @@ def _same_branch_lifecycle_process(
         branch=branch,
         base_path=base_config,
         persona_dir=persona_dir,
-        verify_cmd=["true"],
+        recorded_gate=["true"],
         repo_type="single-owner",
     )
     results.put({"ok": result.ok, "outcome": result.outcome, "detail": result.detail})
@@ -659,7 +659,7 @@ def _fetching_lifecycle_process(
         workspace=Workspace(root, resolver=lambda _spec: Path(canonical), workflow="local"),
         base_path=base_config,
         persona_dir=persona_dir,
-        verify_cmd=["true"],
+        recorded_gate=["true"],
         repo_type="single-owner",
     )
 
@@ -901,5 +901,5 @@ def test_an_unusable_lock_timeout_stops_a_dispatch_by_name(
                 resolver=lambda _spec: canonical,
                 workflow="local",
             ),
-            verify_cmd=["true"],
+            recorded_gate=["true"],
         )
