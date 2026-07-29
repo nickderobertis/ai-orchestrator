@@ -1,4 +1,8 @@
-"""Cross-process contention journeys over real git and persistent state."""
+"""Cross-process contention journeys over real git and persistent state.
+
+llmlint: ignore-file[tests_mirror_real_usage] A crashed run and a sibling's
+destructive reach have no public entry point that produces them on demand.
+"""
 
 from __future__ import annotations
 
@@ -7,19 +11,23 @@ import multiprocessing
 import os
 import shutil
 import subprocess
-from collections.abc import Callable
+import time
+from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeout
+from multiprocessing.synchronize import Event as MPEvent
 from pathlib import Path
-from typing import Any
 
 import pytest
+from waits import deadline as e2e_deadline
 from waits import timeout as e2e_timeout
 
 from orchestrator import gitops
 from orchestrator.config import ConfigError
 from orchestrator.coordination import (
+    LOCK_TIMEOUT_ENV,
     advisory_lock,
+    git_lock_identity,
     reset_harness_observer,
     set_harness_observer,
 )
@@ -36,11 +44,20 @@ PLAN = {
 MP = multiprocessing.get_context("spawn")
 
 
+def _open_workspace(canonical: str, root: str, token: str | None = None) -> Workspace:
+    """Resolve one run's workspace exactly as a dispatch does, in this process."""
+    workspace = Workspace(
+        root, resolver=lambda _spec: Path(canonical), workflow="local", run_token=token
+    )
+    workspace.ensure_clone(normalize_repo(canonical))
+    return workspace
+
+
 def _worktree_process(
     canonical: str, root: str, branch: str, ready: multiprocessing.Queue[str]
 ) -> None:
     repo = normalize_repo(canonical)
-    workspace = Workspace(root, resolver=lambda _spec: Path(canonical), workflow="local")
+    workspace = _open_workspace(canonical, root)
     worktree = workspace.worktree(repo, branch, base="origin/main")
     ready.put(str(worktree))
     workspace.remove_worktree(repo, worktree)
@@ -51,17 +68,16 @@ def _held_worktree_process(
     root: str,
     branch: str,
     state_root: str,
+    token: str,
     ready: multiprocessing.Queue[str],
-    release: Any,
+    release: MPEvent,
 ) -> None:
     # The persistent multiprocessing forkserver retains the environment from the
     # first test that starts it. Pass this per-test fixture boundary explicitly so
     # owner and contender open the same process-shared lock file.
     os.environ["AI_ORCHESTRATOR_HOME"] = state_root
     repo = normalize_repo(canonical)
-    # llmlint: ignore[tests_mirror_real_usage] This lease-level e2e must hold the
-    # worktree between acquisition and teardown, a pause no public CLI exposes.
-    workspace = Workspace(root, resolver=lambda _spec: Path(canonical), workflow="local")
+    workspace = _open_workspace(canonical, root, token)
     worktree = workspace.worktree(repo, branch, base="origin/main")
     ready.put(str(worktree))
     release.wait(e2e_timeout(10))
@@ -72,9 +88,10 @@ def _paused_teardown_process(
     canonical: str,
     root: str,
     branch: str,
+    token: str,
     ready: multiprocessing.Queue[str],
-    begin: Any,
-    teardown_started: Any,
+    begin: MPEvent,
+    teardown_started: MPEvent,
 ) -> None:
     class PausedTeardownWorkspace(Workspace):
         def remove_worktree(self, repo, path) -> None:
@@ -83,8 +100,9 @@ def _paused_teardown_process(
 
     repo = normalize_repo(canonical)
     workspace = PausedTeardownWorkspace(
-        root, resolver=lambda _spec: Path(canonical), workflow="local"
+        root, resolver=lambda _spec: Path(canonical), workflow="local", run_token=token
     )
+    workspace.ensure_clone(repo)
     worktree = workspace.worktree(repo, branch, base="origin/main")
     ready.put(str(worktree))
     begin.wait(e2e_timeout(10))
@@ -92,11 +110,26 @@ def _paused_teardown_process(
 
 
 def _orphan_worktree_process(
-    canonical: str, root: str, branch: str, ready: multiprocessing.Queue[str]
+    canonical: str, root: str, branch: str, token: str, ready: multiprocessing.Queue[str]
 ) -> None:
     repo = normalize_repo(canonical)
-    workspace = Workspace(root, resolver=lambda _spec: Path(canonical), workflow="local")
+    workspace = _open_workspace(canonical, root, token)
     ready.put(str(workspace.worktree(repo, branch, base="origin/main")))
+
+
+def _committing_run_process(
+    canonical: str, root: str, branch: str, publish: bool, ready: multiprocessing.Queue[str]
+) -> None:
+    """Leave one abandoned run root behind, with work either pushed or not."""
+    repo = normalize_repo(canonical)
+    workspace = _open_workspace(canonical, root)
+    worktree = workspace.worktree(repo, branch, base="origin/main")
+    (worktree / "work.txt").write_text(f"work only {branch} has\n", encoding="utf-8")
+    gitops.add_all(worktree)
+    gitops.commit(worktree, f"feat: work on {branch}")
+    if publish:
+        gitops.push(worktree, branch)
+    ready.put(str(workspace.run_root(repo)))
 
 
 def _lifecycle_process(
@@ -115,7 +148,7 @@ def _lifecycle_process(
         workspace=workspace,
         base_path=base_config,
         persona_dir=persona_dir,
-        verify_cmd=["true"],
+        recorded_gate=["true"],
     )
     results.put(
         {
@@ -131,7 +164,7 @@ def _register_process(registry_path: str, checkout: str) -> None:
     Registry(registry_path).register(checkout, repo_type="single-owner")
 
 
-def _own_round(run_dir: str, ready: Any, release: Any) -> None:
+def _own_round(run_dir: str, ready: MPEvent, release: MPEvent) -> None:
     prepare_round(Path(run_dir), PLAN)
     ready.set()
     release.wait(e2e_timeout(10))
@@ -141,6 +174,15 @@ def _join(process: multiprocessing.Process) -> None:
     process.join(15)
     assert not process.is_alive(), f"child {process.pid} did not finish"
     assert process.exitcode == 0
+
+
+def _has_file(repo: Path, ref: str, path: str) -> bool:
+    return (
+        subprocess.run(
+            ["git", "-C", str(repo), "cat-file", "-e", f"{ref}:{path}"], capture_output=True
+        ).returncode
+        == 0
+    )
 
 
 def _git(cwd: Path, *args: str) -> str:
@@ -173,16 +215,21 @@ def test_separate_processes_create_and_remove_distinct_worktrees(
 
     assert len(paths) == 2
     assert all(not Path(path).exists() for path in paths)
+    # Each run cut its worktree from its own clone, so the shared checkout never
+    # carried a registration either of them could have pruned.
     assert gitops.worktrees(canonical) == {"main": canonical.resolve()}
+    assert len({Path(path).parent for path in paths}) == 2
     assert _git(canonical, "config", "--bool", "core.bare") == "false"
 
 
-def test_active_cross_process_worktree_is_never_reclaimed(
+def test_active_worktree_of_a_rejoined_run_is_never_reclaimed(
     tmp_path: Path, bare_origin: Callable[..., Path]
 ) -> None:
+    """Two processes on one run share its clone, so its live worktree stays its own."""
     origin = bare_origin()
     canonical = gitops.clone(origin, tmp_path / "canonical-active")
     root = tmp_path / "worktrees-active"
+    token = "rejoined-run"
     # Python 3.14's shared forkserver captures the prior test's isolated
     # AI_ORCHESTRATOR_HOME. Spawn proves both contenders use this test's lock root.
     ready: multiprocessing.Queue[str] = MP.Queue()
@@ -194,6 +241,7 @@ def test_active_cross_process_worktree_is_never_reclaimed(
             str(root),
             "feature/held",
             os.environ["AI_ORCHESTRATOR_HOME"],
+            token,
             ready,
             release,
         ),
@@ -201,7 +249,7 @@ def test_active_cross_process_worktree_is_never_reclaimed(
     process.start()
     held_path = Path(ready.get(timeout=e2e_timeout(10)))
     repo = normalize_repo(str(canonical))
-    contender = Workspace(root, resolver=lambda _spec: canonical, workflow="local")
+    contender = _open_workspace(str(canonical), str(root), token)
     run_id = RunId("worktree-lock-timeout")
     run_dir = tmp_path / "runs" / run_id
     prepare_round(run_dir, PLAN)
@@ -212,7 +260,7 @@ def test_active_cross_process_worktree_is_never_reclaimed(
         with pytest.raises(RuntimeError, match="branch 'feature/held' is active"):
             contender.worktree(repo, "feature/held", base="origin/main")
         assert held_path.exists()
-        assert gitops.worktrees(canonical)["feature/held"] == held_path
+        assert gitops.worktrees(contender.clone_dir(repo))["feature/held"] == held_path
     finally:
         reset_harness_observer(observer)
         release.set()
@@ -228,6 +276,149 @@ def test_active_cross_process_worktree_is_never_reclaimed(
     assert float(timed_out[0].detail["seconds"]) >= 0
 
 
+def test_sibling_run_can_neither_remove_a_live_worktree_nor_delete_its_branch(
+    tmp_path: Path, bare_origin: Callable[..., Path]
+) -> None:
+    """The failure that cost real work: a sibling reaching into a running dispatch."""
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-sibling")
+    root = tmp_path / "worktrees-sibling"
+    ready: multiprocessing.Queue[str] = MP.Queue()
+    release = MP.Event()
+    process = MP.Process(
+        target=_held_worktree_process,
+        args=(
+            str(canonical),
+            str(root),
+            "feature/live",
+            os.environ["AI_ORCHESTRATOR_HOME"],
+            "owning-run",
+            ready,
+            release,
+        ),
+    )
+    process.start()
+    live = Path(ready.get(timeout=e2e_timeout(10)))
+    repo = normalize_repo(str(canonical))
+    sibling = _open_workspace(str(canonical), str(root))
+    try:
+        # The sibling's own clone is the only worktree registry and ref store it can
+        # reach, and neither knows anything about the live run's tree or branch.
+        with pytest.raises(gitops.GitError):
+            sibling.remove_worktree(repo, live)
+        with pytest.raises(gitops.GitError):
+            sibling.delete_branch(repo, "feature/live")
+        sibling.ensure_clone(repo)
+
+        assert live.exists() and (live / ".git").exists()
+        assert "feature/live" not in gitops.worktrees(sibling.clone_dir(repo))
+        assert sibling.clone_dir(repo) != _open_workspace(
+            str(canonical), str(root), "owning-run"
+        ).clone_dir(repo)
+    finally:
+        release.set()
+        _join(process)
+
+    assert not live.exists()
+
+
+def _same_branch_lifecycle_process(
+    origin: str,
+    canonical: str,
+    root: str,
+    branch: str,
+    state_root: str,
+    base_config: str,
+    persona_dir: str,
+    ready: str,
+    release: str,
+    results: multiprocessing.Queue[dict[str, object]],
+) -> None:
+    """Drive a real onejudge dispatch that halts at the provider barrier.
+
+    The barrier lives inside the faked paid model, so the dispatch itself — the
+    onejudge subprocess, its worktree, its git — is entirely real. That is the only
+    way to hold two runs inside their agents at one instant without standing in for
+    the boundary under test.
+    """
+    os.environ["AI_ORCHESTRATOR_HOME"] = state_root
+    result = run_repo_task(
+        origin,
+        "complete-now write-unique-change: the same branch name from two runs at once "
+        f"provider-barrier-ready={ready} provider-barrier-release={release}",
+        "engineer",
+        workspace=Workspace(root, resolver=lambda _spec: Path(canonical), workflow="local"),
+        branch=branch,
+        base_path=base_config,
+        persona_dir=persona_dir,
+        recorded_gate=["true"],
+        repo_type="single-owner",
+    )
+    results.put({"ok": result.ok, "outcome": result.outcome, "detail": result.detail})
+
+
+def test_concurrent_lifecycles_share_a_branch_name_without_colliding(
+    tmp_path: Path,
+    bare_origin: Callable[..., Path],
+    command_base: Callable[..., Path],
+    personas_dir: Path,
+) -> None:
+    """One identity, two live dispatches, one branch name — and no registry to race."""
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-parallel")
+    root = tmp_path / "worktrees-parallel"
+    barrier = tmp_path / "barrier"
+    barrier.mkdir()
+    release = barrier / "release"
+    readies = [barrier / f"ready-{index}" for index in range(2)]
+    results: multiprocessing.Queue[dict[str, object]] = MP.Queue()
+    processes = [
+        MP.Process(
+            target=_same_branch_lifecycle_process,
+            args=(
+                str(origin),
+                str(canonical),
+                str(root),
+                "feature/shared-name",
+                os.environ["AI_ORCHESTRATOR_HOME"],
+                str(command_base()),
+                str(personas_dir),
+                str(readies[index]),
+                str(release),
+                results,
+            ),
+        )
+        for index in range(2)
+    ]
+    for process in processes:
+        process.start()
+    try:
+        # Both real dispatches are inside their agents at the same moment, on the
+        # same branch name, before either can reach teardown.
+        deadline = e2e_deadline(60)
+        while not all(ready.exists() for ready in readies) and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert all(ready.exists() for ready in readies), "both dispatches never ran at once"
+        # The shared checkout is only an object store here: it registers no
+        # worktree, so no run's cleanup can prune another run's tree out of it.
+        assert gitops.worktrees(canonical) == {"main": canonical.resolve()}
+        # A linked worktree records a `.git` file; two live ones mean two runs cut
+        # the same branch name from clones that know nothing of each other.
+        live = sorted(entry for entry in root.rglob(".git") if entry.is_file())
+        assert len(live) == 2, live
+    finally:
+        release.write_text("go\n", encoding="utf-8")
+        settled = [results.get(timeout=e2e_timeout(60)) for _ in processes]
+        for process in processes:
+            _join(process)
+
+    # Both settled on their own terms. Two runs deliberately sharing one branch
+    # name still race for the base, so the loser may find its content already
+    # there — what must not happen is either run losing its tree or its work.
+    assert all(item["ok"] for item in settled), settled
+    assert {item["outcome"] for item in settled} <= {"merged", "already-integrated"}
+
+
 def test_same_branch_redispatch_cannot_overtake_paused_teardown(
     tmp_path: Path, bare_origin: Callable[..., Path]
 ) -> None:
@@ -237,12 +428,14 @@ def test_same_branch_redispatch_cannot_overtake_paused_teardown(
     ready: multiprocessing.Queue[str] = MP.Queue()
     begin = MP.Event()
     teardown_started = MP.Event()
+    token = "teardown-race-run"
     process = MP.Process(
         target=_paused_teardown_process,
         args=(
             str(canonical),
             str(root),
             "feature/race",
+            token,
             ready,
             begin,
             teardown_started,
@@ -251,10 +444,11 @@ def test_same_branch_redispatch_cannot_overtake_paused_teardown(
     process.start()
     original = Path(ready.get(timeout=e2e_timeout(10)))
     repo = normalize_repo(str(canonical))
-    contender = Workspace(root, resolver=lambda _spec: canonical, workflow="local")
+    contender = _open_workspace(str(canonical), str(root), token)
+    clone = contender.clone_dir(repo)
     pool = ThreadPoolExecutor(max_workers=1)
     try:
-        with advisory_lock(f"git:{gitops.common_dir(canonical)}"):
+        with advisory_lock(git_lock_identity(gitops.common_dir(clone))):
             begin.set()
             assert teardown_started.wait(e2e_timeout(10))
             redispatch = pool.submit(contender.worktree, repo, "feature/race", base="origin/main")
@@ -272,7 +466,7 @@ def test_same_branch_redispatch_cannot_overtake_paused_teardown(
     if replacement is None:
         replacement = contender.worktree(repo, "feature/race", base="origin/main")
     assert replacement.exists()
-    assert gitops.worktrees(canonical)["feature/race"] == replacement
+    assert gitops.worktrees(clone)["feature/race"] == replacement
     assert replacement == original
     contender.remove_worktree(repo, replacement)
 
@@ -284,21 +478,23 @@ def test_failed_abandoned_reclaim_releases_lease_for_retry(
     canonical = gitops.clone(origin, tmp_path / "canonical-locked-orphan")
     root = tmp_path / "worktrees-locked-orphan"
     ready: multiprocessing.Queue[str] = MP.Queue()
+    token = "locked-orphan-run"
     process = MP.Process(
         target=_orphan_worktree_process,
-        args=(str(canonical), str(root), "feature/orphan", ready),
+        args=(str(canonical), str(root), "feature/orphan", token, ready),
     )
     process.start()
     orphan = Path(ready.get(timeout=e2e_timeout(10)))
     _join(process)
-    subprocess.run(["git", "-C", str(canonical), "worktree", "lock", str(orphan)], check=True)
-
     repo = normalize_repo(str(canonical))
-    workspace = Workspace(root, resolver=lambda _spec: canonical, workflow="local")
+    workspace = _open_workspace(str(canonical), str(root), token)
+    clone = workspace.clone_dir(repo)
+    subprocess.run(["git", "-C", str(clone), "worktree", "lock", str(orphan)], check=True)
+
     with pytest.raises(gitops.GitError, match="locked working tree"):
         workspace.worktree(repo, "feature/orphan", base="origin/main")
 
-    subprocess.run(["git", "-C", str(canonical), "worktree", "unlock", str(orphan)], check=True)
+    subprocess.run(["git", "-C", str(clone), "worktree", "unlock", str(orphan)], check=True)
     replacement = workspace.worktree(repo, "feature/orphan", base="origin/main")
     assert replacement.exists()
     workspace.remove_worktree(repo, replacement)
@@ -307,25 +503,21 @@ def test_failed_abandoned_reclaim_releases_lease_for_retry(
 def test_abandoned_branch_at_different_path_moves_to_new_owned_worktree(
     tmp_path: Path, bare_origin: Callable[..., Path]
 ) -> None:
+    """An earlier attempt in this run parked the branch somewhere else and died."""
     origin = bare_origin()
     canonical = gitops.clone(origin, tmp_path / "canonical-moved-orphan")
-    ready: multiprocessing.Queue[str] = MP.Queue()
-    process = MP.Process(
-        target=_orphan_worktree_process,
-        args=(str(canonical), str(tmp_path / "old-root"), "feature/moved", ready),
-    )
-    process.start()
-    old_path = Path(ready.get(timeout=e2e_timeout(10)))
-    _join(process)
-
     repo = normalize_repo(str(canonical))
-    workspace = Workspace(tmp_path / "new-root", resolver=lambda _spec: canonical, workflow="local")
+    workspace = _open_workspace(str(canonical), str(tmp_path / "moved-root"))
+    clone = workspace.clone_dir(repo)
+    old_path = workspace.run_root(repo) / "earlier-attempt"
+    gitops.worktree_add(clone, old_path, "feature/moved", base="origin/main")
+
     replacement = workspace.worktree(repo, "feature/moved", base="origin/main")
 
     assert replacement != old_path
     assert not old_path.exists()
     assert replacement.exists()
-    assert gitops.worktrees(canonical)["feature/moved"] == replacement
+    assert gitops.worktrees(clone)["feature/moved"] == replacement
     workspace.remove_worktree(repo, replacement)
 
 
@@ -336,9 +528,10 @@ def test_missing_abandoned_worktree_registration_is_pruned_and_recreated(
     canonical = gitops.clone(origin, tmp_path / "canonical-missing-orphan")
     root = tmp_path / "worktrees-missing-orphan"
     ready: multiprocessing.Queue[str] = MP.Queue()
+    token = "missing-orphan-run"
     process = MP.Process(
         target=_orphan_worktree_process,
-        args=(str(canonical), str(root), "feature/missing", ready),
+        args=(str(canonical), str(root), "feature/missing", token, ready),
     )
     process.start()
     missing = Path(ready.get(timeout=e2e_timeout(10)))
@@ -346,12 +539,12 @@ def test_missing_abandoned_worktree_registration_is_pruned_and_recreated(
     shutil.rmtree(missing)
 
     repo = normalize_repo(str(canonical))
-    workspace = Workspace(root, resolver=lambda _spec: canonical, workflow="local")
+    workspace = _open_workspace(str(canonical), str(root), token)
     replacement = workspace.worktree(repo, "feature/missing", base="origin/main")
 
     assert replacement == missing
     assert replacement.exists()
-    assert gitops.worktrees(canonical)["feature/missing"] == replacement
+    assert gitops.worktrees(workspace.clone_dir(repo))["feature/missing"] == replacement
     workspace.remove_worktree(repo, replacement)
 
 
@@ -435,3 +628,278 @@ def test_explicit_run_owner_blocks_contention_and_only_dead_owner_can_be_recover
     assert number == 1
     status = json.loads((claimed / "status.json").read_text(encoding="utf-8"))
     assert status["pid"] == os.getpid()
+
+
+def _fetching_lifecycle_process(
+    origin: str,
+    canonical: str,
+    root: str,
+    state_root: str,
+    base_config: str,
+    persona_dir: str,
+    fetched: MPEvent,
+) -> None:
+    """Run a real dispatch, reporting the moment setup's origin fetch has finished.
+
+    Nothing has to be held open here: setup fetches before it ever dispatches, so
+    the observation lands while the parent still holds the shared checkout, and the
+    onejudge subprocess that follows is entirely real.
+    """
+    os.environ["AI_ORCHESTRATOR_HOME"] = state_root
+
+    def observe(kind: str, detail: Mapping[str, str | float | bool]) -> None:
+        if kind == "setup-finished" and detail.get("operation") == "fetch":
+            fetched.set()
+
+    set_harness_observer(observe)
+    run_repo_task(
+        origin,
+        "complete-now write-change: prove setup fetches without the shared checkout",
+        "engineer",
+        workspace=Workspace(root, resolver=lambda _spec: Path(canonical), workflow="local"),
+        base_path=base_config,
+        persona_dir=persona_dir,
+        recorded_gate=["true"],
+        repo_type="single-owner",
+    )
+
+
+def test_execution_checkout_fetch_never_runs_inside_the_exclusive_section(
+    tmp_path: Path,
+    bare_origin: Callable[..., Path],
+    command_base: Callable[..., Path],
+    personas_dir: Path,
+) -> None:
+    """A run's fetch must not be blocked by a sibling holding the shared checkout."""
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-fetch")
+    fetched = MP.Event()
+    process = MP.Process(
+        target=_fetching_lifecycle_process,
+        args=(
+            str(origin),
+            str(canonical),
+            str(tmp_path / "worktrees-fetch"),
+            os.environ["AI_ORCHESTRATOR_HOME"],
+            str(command_base()),
+            str(personas_dir),
+            fetched,
+        ),
+    )
+    try:
+        with advisory_lock(git_lock_identity(gitops.common_dir(canonical))):
+            process.start()
+            assert fetched.wait(e2e_timeout(30)), (
+                "the dispatch's fetch never completed while the shared checkout was held"
+            )
+    finally:
+        _join(process)
+
+
+def test_a_runs_branch_cleanup_never_withdraws_a_siblings_preserved_work(
+    tmp_path: Path, bare_origin: Callable[..., Path]
+) -> None:
+    """Two runs, one branch name, divergent work — neither may erase the other's."""
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-cleanup")
+    root = tmp_path / "worktrees-cleanup"
+    repo = normalize_repo(str(canonical))
+    shared = "feature/contested-name"
+
+    # This run cuts the name first, so it adopts nothing: its branch and the
+    # sibling's are unrelated lines of work that happen to share a name.
+    other = _open_workspace(str(canonical), str(root))
+    other_tree = other.worktree(repo, shared, base="origin/main")
+
+    # The sibling preserves work under that name. Its worktree teardown copies the
+    # branch into the shared checkout, which becomes its only surviving record.
+    sibling = _open_workspace(str(canonical), str(root))
+    sibling_tree = sibling.worktree(repo, shared, base="origin/main")
+    (sibling_tree / "sibling.txt").write_text("only the sibling has this\n", encoding="utf-8")
+    gitops.add_all(sibling_tree)
+    gitops.commit(sibling_tree, "feat: sibling work that never reached origin")
+    sibling.remove_worktree(repo, sibling_tree)
+    preserved = gitops.ref_sha(canonical, shared)
+
+    # This run finishes its own divergent work and abandons the branch — the
+    # synthetic-stack-base teardown path, which deletes what it is done with.
+    (other_tree / "other.txt").write_text("a different line of work\n", encoding="utf-8")
+    gitops.add_all(other_tree)
+    gitops.commit(other_tree, "feat: work that must not overwrite the sibling")
+    other.remove_worktree(repo, other_tree)
+    other.delete_branch(repo, shared)
+
+    # Its own clone dropped the branch; the sibling's record is untouched, neither
+    # rewound by the teardown copy nor withdrawn by the delete.
+    assert not gitops.branch_exists(other.clone_dir(repo), shared)
+    assert gitops.ref_sha(canonical, shared) == preserved
+    assert _has_file(canonical, shared, "sibling.txt")
+    assert not _has_file(canonical, shared, "other.txt")
+
+    # A run still withdraws the copy it made itself, so cleanup reclaims its own.
+    owner = _open_workspace(str(canonical), str(root))
+    owner_tree = owner.worktree(repo, "feature/owned-name", base="origin/main")
+    (owner_tree / "owned.txt").write_text("mine\n", encoding="utf-8")
+    gitops.add_all(owner_tree)
+    gitops.commit(owner_tree, "feat: work this run owns")
+    owner.remove_worktree(repo, owner_tree)
+    assert gitops.branch_exists(canonical, "feature/owned-name")
+    owner.delete_branch(repo, "feature/owned-name")
+
+    assert not gitops.branch_exists(canonical, "feature/owned-name")
+
+
+def test_a_sibling_advancing_a_mirrored_branch_keeps_it_from_the_delete(
+    tmp_path: Path, bare_origin: Callable[..., Path]
+) -> None:
+    """The window between one run's copy and its cleanup belongs to whoever moved it."""
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-advanced")
+    root = tmp_path / "worktrees-advanced"
+    repo = normalize_repo(str(canonical))
+    shared = "feature/advanced-name"
+
+    # This run preserves work and hands it to the shared checkout.
+    owner = _open_workspace(str(canonical), str(root))
+    owner_tree = owner.worktree(repo, shared, base="origin/main")
+    (owner_tree / "first.txt").write_text("the first run's work\n", encoding="utf-8")
+    gitops.add_all(owner_tree)
+    gitops.commit(owner_tree, "feat: first run's preserved work")
+    owner.remove_worktree(repo, owner_tree)
+
+    # Before it cleans up, a sibling adopts that branch and preserves newer work
+    # on top — the shared copy now carries commits the first run never had.
+    sibling = _open_workspace(str(canonical), str(root))
+    sibling_tree = sibling.worktree(repo, shared, base="origin/main")
+    (sibling_tree / "second.txt").write_text("the sibling's newer work\n", encoding="utf-8")
+    gitops.add_all(sibling_tree)
+    gitops.commit(sibling_tree, "feat: sibling's newer preserved work")
+    sibling.remove_worktree(repo, sibling_tree)
+    advanced = gitops.ref_sha(canonical, shared)
+
+    owner.delete_branch(repo, shared)
+
+    # The delete declined: the branch is no longer where this run left it, and the
+    # sibling's newer work is the only record of itself.
+    assert gitops.ref_sha(canonical, shared) == advanced
+    assert _has_file(canonical, shared, "second.txt")
+    assert _has_file(canonical, shared, "first.txt")
+
+
+def test_abandoned_run_is_reclaimed_only_once_all_its_work_reached_origin(
+    tmp_path: Path, bare_origin: Callable[..., Path]
+) -> None:
+    """Reclaiming disk must never be able to discard a dead run's unpushed commits."""
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-reap")
+    root = tmp_path / "worktrees-reap"
+    roots: dict[bool, Path] = {}
+    for publish in (True, False):
+        ready: multiprocessing.Queue[str] = MP.Queue()
+        process = MP.Process(
+            target=_committing_run_process,
+            args=(str(canonical), str(root), f"feature/reap-{publish}", publish, ready),
+        )
+        process.start()
+        roots[publish] = Path(ready.get(timeout=e2e_timeout(10)))
+        _join(process)
+    assert roots[True] != roots[False]
+
+    # A later run on this identity is the only thing that sweeps; it must keep the
+    # one holding work that exists nowhere else.
+    later = _open_workspace(str(canonical), str(root))
+
+    repo = normalize_repo(str(canonical))
+    assert not roots[True].exists()
+    assert roots[False].exists()
+    assert later.run_root(repo).exists()
+
+    # Rejoining the abandoned run is how that work gets out: its clone still has
+    # the branch, and tearing the tree down hands it to the shared checkout.
+    reclaim = _open_workspace(str(canonical), str(root), roots[False].name)
+    retained = gitops.worktrees(reclaim.clone_dir(repo))["feature/reap-False"]
+    reclaim.remove_worktree(repo, retained)
+
+    assert gitops.branch_exists(canonical, "feature/reap-False")
+    assert not _has_file(origin, "main", "work.txt")
+
+
+def _rejoining_run_process(
+    canonical: str, root: str, token: str, state_root: str, joined: MPEvent, release: MPEvent
+) -> None:
+    os.environ["AI_ORCHESTRATOR_HOME"] = state_root
+    _open_workspace(canonical, root, token)
+    joined.set()
+    release.wait(e2e_timeout(20))
+
+
+def test_a_run_rejoined_after_its_first_process_died_is_still_never_reaped(
+    tmp_path: Path, bare_origin: Callable[..., Path]
+) -> None:
+    """The second process in a run must be as protected from the sweep as the first."""
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-rejoin")
+    root = tmp_path / "worktrees-rejoin"
+    token = "rejoined-after-death"
+    ready: multiprocessing.Queue[str] = MP.Queue()
+    first = MP.Process(
+        target=_orphan_worktree_process,
+        args=(str(canonical), str(root), "feature/rejoin", token, ready),
+    )
+    first.start()
+    worktree = Path(ready.get(timeout=e2e_timeout(10)))
+    _join(first)
+
+    joined, release = MP.Event(), MP.Event()
+    rejoiner = MP.Process(
+        target=_rejoining_run_process,
+        args=(
+            str(canonical),
+            str(root),
+            token,
+            os.environ["AI_ORCHESTRATOR_HOME"],
+            joined,
+            release,
+        ),
+    )
+    rejoiner.start()
+    try:
+        assert joined.wait(e2e_timeout(15)), "the rejoining run never opened its workspace"
+        # The creating process is gone and its work is unpublished, but a live
+        # occupant is reason enough on its own to leave the tree alone.
+        sweeper = _open_workspace(str(canonical), str(root))
+        repo = normalize_repo(str(canonical))
+
+        assert worktree.exists()
+        assert (Path(root) / repo.dir_key / "runs" / token / ".clone").is_dir()
+        assert sweeper.run_root(repo).exists()
+    finally:
+        release.set()
+        _join(rejoiner)
+
+    rejoin = _open_workspace(str(canonical), str(root), token)
+    rejoin.remove_worktree(normalize_repo(str(canonical)), worktree)
+
+
+def test_an_unusable_lock_timeout_stops_a_dispatch_by_name(
+    tmp_path: Path,
+    bare_origin: Callable[..., Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A misconfigured watchdog must name its variable, not fail somewhere obscure."""
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-bad-timeout")
+    monkeypatch.setenv(LOCK_TIMEOUT_ENV, "forever")
+
+    with pytest.raises(ValueError, match=LOCK_TIMEOUT_ENV):
+        run_repo_task(
+            str(origin),
+            "never dispatched",
+            "engineer",
+            workspace=Workspace(
+                tmp_path / "worktrees-bad-timeout",
+                resolver=lambda _spec: canonical,
+                workflow="local",
+            ),
+            recorded_gate=["true"],
+        )

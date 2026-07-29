@@ -313,7 +313,9 @@ def test_github_merge_does_not_journal_a_merge_that_did_not_happen(tmp_path: Pat
     assert "pr-merged" not in kinds
 
 
-def test_local_merge_journals_verification_and_the_merge(tmp_path: Path, bare_origin) -> None:
+def test_local_merge_relies_on_push_hook_and_journals_the_merge(
+    tmp_path: Path, bare_origin
+) -> None:
     origin = bare_origin()
     clone = gitops.clone(origin, tmp_path / "clone")
     feature = gitops.worktree_add(clone, tmp_path / "feature", "feature", base="origin/main")
@@ -324,19 +326,13 @@ def test_local_merge_journals_verification_and_the_merge(tmp_path: Path, bare_or
     journal, node = _scope(tmp_path, "run-local")
 
     out = LocalMergeStrategy().publish_and_merge(
-        _ctx(clone_dir=clone, branch="feature", verify_command=["true"], journal=node)
+        _ctx(clone_dir=clone, branch="feature", journal=node)
     )
 
     assert out.outcome == "merged"
     events = journal.events()
-    assert [e.kind for e in events] == [
-        "verification-started",
-        "verification-finished",
-        "publication-finished",
-    ]
-    assert events[0].detail == {"command": ["true"], "attempt": 1}
-    assert events[1].detail == {"ok": True, "command": ["true"], "attempt": 1}
-    assert events[2].detail == {"pr": "local:o/r#feature", "branch": "feature", "base": "main"}
+    assert [e.kind for e in events] == ["publication-finished"]
+    assert events[0].detail == {"pr": "local:o/r#feature", "branch": "feature", "base": "main"}
 
 
 def test_local_merge_records_branch_content_already_on_base(tmp_path: Path, bare_origin) -> None:
@@ -389,9 +385,7 @@ def test_local_merge_cleans_scratch_worktree_after_content_conflict(
     gitops.push(updater, "main")
 
     with pytest.raises(GitError):
-        LocalMergeStrategy().publish_and_merge(
-            _ctx(clone_dir=clone, branch="feature", verify_command=["true"])
-        )
+        LocalMergeStrategy().publish_and_merge(_ctx(clone_dir=clone, branch="feature"))
 
 
 def test_local_merge_surfaces_non_race_push_failure(
@@ -412,12 +406,14 @@ def test_local_merge_surfaces_non_race_push_failure(
         lambda *args, **kwargs: (_ for _ in ()).throw(GitError("remote: permission denied")),
     )
 
-    with pytest.raises(GitError, match="permission denied"):
-        LocalMergeStrategy().publish_and_merge(_ctx(clone_dir=clone, branch="feature"))
+    out = LocalMergeStrategy().publish_and_merge(_ctx(clone_dir=clone, branch="feature"))
+    assert out.outcome == "error"
+    assert "rebuilt local publication push failed" in out.detail
+    assert "permission denied" in out.detail
 
 
-def test_local_merge_journals_a_gate_failure_without_claiming_a_merge(
-    tmp_path: Path, bare_origin
+def test_local_merge_records_push_gate_failure_without_claiming_a_merge(
+    tmp_path: Path, bare_origin, monkeypatch
 ) -> None:
     origin = bare_origin()
     clone = gitops.clone(origin, tmp_path / "clone")
@@ -428,14 +424,18 @@ def test_local_merge_journals_a_gate_failure_without_claiming_a_merge(
     gitops.push(feature, "feature")
     journal, node = _scope(tmp_path, "run-gate")
 
+    monkeypatch.setattr(
+        gitops,
+        "push",
+        lambda *args, **kwargs: (_ for _ in ()).throw(GitError("pre-push: complete gate failed")),
+    )
     out = LocalMergeStrategy().publish_and_merge(
-        _ctx(clone_dir=clone, branch="feature", verify_command=["false"], journal=node)
+        _ctx(clone_dir=clone, branch="feature", journal=node)
     )
 
     assert out.outcome == "gate-failed"
-    events = journal.events()
-    assert [e.kind for e in events] == ["verification-started", "verification-finished"]
-    assert events[1].detail["ok"] is False
+    assert "repository pre-push gate rejected" in out.detail
+    assert journal.events() == []
     # The rebuilt merge never reached the base branch, so nothing may say it did.
     assert not (gitops.clone(origin, tmp_path / "check") / "feature.txt").exists()
 
@@ -467,7 +467,6 @@ def test_local_publication_classifies_retry_exhaustion(tmp_path, bare_origin, mo
             clone_dir=clone,
             branch="feature",
             publication_attempts=2,
-            verify_command=["true"],
         )
     )
 

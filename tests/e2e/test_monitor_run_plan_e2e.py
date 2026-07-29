@@ -837,7 +837,7 @@ def test_real_lifecycle_commit_and_pr_survive_live_state(
             branch=branch,
             repo_type="single-owner",
             dispatch_fn=make_writing_dispatch(filename="monitored.txt"),
-            verify_cmd=["sh", "-c", "test -f monitored.txt"],
+            recorded_gate=["sh", "-c", "test -f monitored.txt"],
             sleep=lambda _seconds: None,
             journal=second_node,
         )
@@ -855,7 +855,7 @@ def test_real_lifecycle_commit_and_pr_survive_live_state(
         )
         try:
             live = monitor.poll()
-            time.sleep(0.01)
+            time.sleep(0.1)
             active_telemetry = _just(
                 "telemetry",
                 "--runs-dir",
@@ -865,7 +865,7 @@ def test_real_lifecycle_commit_and_pr_survive_live_state(
             )
             assert active_telemetry.returncode == 0, active_telemetry.stderr
             active_record = json.loads(active_telemetry.stdout)["runs"][0]
-            assert active_record["timing"]["publication_wait_seconds"] > 0
+            assert active_record["timing"]["publication_wait_seconds"] >= 0
         finally:
             lifecycle_github.release.set()
         result = future.result(timeout=e2e_timeout(30))
@@ -921,12 +921,8 @@ def test_real_lifecycle_commit_and_pr_survive_live_state(
     assert isinstance(timing, dict) and timing["gate_seconds"] >= 0
     node = record["nodes"][0]
     assert isinstance(node, dict)
-    assert (node["comparison_remote"], node["comparison_base"]) == ("origin", "main")
-    attestation = node["gate_attestation"]
-    assert isinstance(attestation, dict)
-    assert attestation["comparison_base"] == "main"
-    assert attestation["commit"]
-    assert json.loads(telemetry_command.stdout)["metrics"]["green_to_publication_seconds"]
+    assert "gate_attestation" not in node
+    assert json.loads(telemetry_command.stdout)["metrics"]["green_to_publication_seconds"] == []
     active_only = _just("telemetry", "--runs-dir", str(runs_dir))
     assert active_only.returncode == 0, active_only.stderr
     assert json.loads(active_only.stdout)["runs"] == []

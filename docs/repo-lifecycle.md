@@ -14,8 +14,7 @@ ensure clone (once per repo)  →  fresh worktree on a new branch off base
    →  dispatch onejudge in the worktree  (agent makes the change, bypass mode)
    →  commit the agent's changes
    →  fetch + merge the current origin/base into the branch  (pre-handoff sync)
-   →  run the repo's own gate on the merged result  (local verification)
-   →  push the branch
+   →  push the branch  (the repository's pre-push hook runs its complete gate)
    →  publish + merge  (strategy: GitHub PR / local direct-merge)
    →  remove the worktree
 ```
@@ -101,20 +100,63 @@ command option, which beats stored or inferred type. Change stored type with
 `just migrate-repo-type <repo> --repo-type <single-owner|team>`; choosing team
 also normalizes workflow to `remote`.
 
-The execution checkout hands out a **git worktree per branch** *outside* itself.
-N parallel subtasks against a repo get N isolated trees without N clones. The
-publication checkout is **never worked in directly and only ever fast-forwarded**
-after publication; the execution checkout is fetched and fast-forwarded before a
-worktree is cut from it. Before dispatch, the publication checkout must be clean
-with the selected root branch checked out; a safety clone never makes an arbitrary
-active publication branch the fast-forward target. Worktree
-creation, removal, refresh, publication, and integration are serialized across
-processes by an OS advisory lock keyed by the checkout's resolved git common-dir.
-Locks have bounded waits and report the owning PID/host on timeout. The slow agent
-dispatch remains unlocked. Default lifecycle branches include a unique run suffix;
-an explicit `--branch` is the intentional resume/override path. An active branch or
-occupied worktree is never reset or forcibly removed: inspect the reported path and
-recover that run, or remove it manually only after confirming its owner is gone.
+Each run cuts a **private clone** from the execution checkout and hands out a **git
+worktree per branch** from that clone, under
+`<workspace-root>/<repo-key>/runs/<run-token>/`. Git's worktree registry, ref
+store, and internal locks all belong to one clone, so runs that share a clone
+share the machinery that adds, prunes, and removes worktrees — and one run's
+cleanup can then reach a sibling's live tree. A per-run clone removes the sharing
+rather than the mutual exclusion.
+
+The clone is made with `git clone --shared --no-checkout`, so it borrows the
+execution checkout's object store through `objects/info/alternates` and populates
+no working tree of its own. A second concurrent run against this repository costs
+**184 KB** measured against a current execution checkout; it duplicates no
+history. Because a live run reads its history out of the lender, the lifecycle
+sets `gc.auto=0` and `gc.pruneExpire=never` on every execution checkout it
+borrows from: nothing the lender does on its own can then drop an object a
+borrower needs. Do not run `git gc --prune=now` or `git repack -ad` in a
+registered execution checkout while runs are active — those override the config
+and are the one way to corrupt a live per-run clone.
+
+A run's clone is disposable, so anything that must outlive it — a preserved
+branch, a pushed lifecycle branch, a recovery attestation — is copied back into
+the execution checkout, which stays the durable record every later run, monitor,
+and `repo-recover` reads. A run whose branch was preserved by an earlier run
+adopts it from there before resuming.
+
+The publication checkout is **never worked in directly and only ever
+fast-forwarded** after publication; the execution checkout is fetched and
+fast-forwarded before a run clone is cut from it. Before dispatch, the publication
+checkout must be clean with the selected root branch checked out; a safety clone
+never makes an arbitrary active publication branch the fast-forward target.
+Worktree creation, removal, refresh, publication, and integration are serialized
+by an OS advisory lock keyed by the checkout's resolved git common-dir — now
+per-run for worktree work, and shared only for the brief local operations that
+touch the execution or publication checkout. Fetches run **outside** every
+exclusive section, so one slow origin cannot hold another run out.
+
+Contended locks **queue** in the kernel's own `flock` line rather than racing a
+non-blocking retry, under a watchdog set by `ORCHESTRATOR_LOCK_TIMEOUT_SECONDS`
+whose default is `DEFAULT_LOCK_TIMEOUT` in `orchestrator/coordination.py` — minutes,
+not seconds, because a legitimate turn can hold a gate run. `flock` releases on
+process death, so a crashed holder hands the queue to the next waiter instead of
+wedging it. A timeout reports the owning PID/host. The slow agent dispatch remains unlocked. Default lifecycle branches
+include a unique run suffix; an explicit `--branch` is the intentional
+resume/override path. An active branch or occupied worktree is never reset or
+forcibly removed: inspect the reported path and recover that run, or remove it
+manually only after confirming its owner is gone.
+
+Every process working in a run root holds a **shared** occupancy lease on it for
+its lifetime, so a re-dispatch that rejoins a run under way is protected too rather
+than only its first process. Abandoned run directories are reclaimed by the next
+run on the same identity, and only when all three hold: no one holds that shared
+lease, the recorded owning process is provably gone, and the clone has no commit
+that never reached origin. A run holding
+unpublished work is kept; rejoin it with that run's token to recover the work
+(tearing its worktree down copies the branch into the execution checkout). Flat
+per-branch directories left by the pre-`runs/` layout are never claimed or
+reaped, and a run never collides with them.
 
 The registry uses its own process-shared locks for resolution and first clone. Its
 JSON is reloaded and merged while locked, then atomically replaced, so concurrent
@@ -169,17 +211,21 @@ Registration prints ranked gate candidates. Monorepo affected commands (Nx,
 Turborepo, Bazel, pnpm, or Lerna) rank ahead of whole-repository gates (`just
 check`, `make check`, `npm test`, Cargo, or pytest). Accept one, override it with
 `--gate`, or investigate first. A gateless checkout stores `<no-op>` and warns
-that it is unproven. The stored identity gate must be the repository's complete
-pre-push bar, including stricter tiers that a deterministic `check` subset omits.
-Lifecycle verification runs this stored command; registering only the subset can
-let gate-only findings escape until publication's pre-push hook. Correct an
-existing identity across every alias with `just migrate-repo-gate <repo> --gate
-'<complete-gate-command>'`.
+that it is unproven. The stored identity gate describes the repository's complete
+bar and remains available to agents and recovery metadata. The merge path itself
+is authoritative: an executable pre-push hook runs the local bar, or required PR
+status checks gate remote-first publication. Correct an existing identity across
+every alias with `just migrate-repo-gate <repo> --gate '<complete-gate-command>'`.
 
 Registration also audits whether the merge path itself runs a gate. It reports an
 executable effective `pre-push` hook (respecting `core.hooksPath`) and required
 GitHub status checks on the repository's actual default branch. A configured
-hooks directory without an executable `pre-push` does not count. If neither is
+hooks directory without an executable `pre-push` does not count. Which evidence
+counts depends on the identity's workflow: a **local** workflow pushes straight
+to its base branch and never opens a PR, so branch protection has nothing to run
+against and only the hook can cover it. A remote workflow is covered by either —
+the hook gates the branch push that feeds the PR, and required checks gate the
+merge. If nothing applicable is
 present, registration succeeds but prints an identity-specific warning; an
 unavailable GitHub response is reported as unknown, and local-only origins are
 reported as not applicable. Audit every existing identity without re-registering
@@ -189,9 +235,15 @@ it with:
 just repos --audit-gate-coverage
 ```
 
-Run this audit and resolve every missing or unknown result before relying on the
-merge path to replace lifecycle-side verification. The command only reports
-coverage; it never installs hooks or changes branch protection.
+Lifecycle dispatch and `just repo-recover` repeat this audit and refuse before
+starting any work when coverage is missing or unknown, because neither runs the
+gate itself any more. They inspect the **execution** checkout rather than an
+arbitrary alias: every publishing push originates in one of its worktrees, and
+Git resolves hooks through the shared common directory, so its `pre-push` is the
+hook that will actually run. Both judge against the run's *effective* workflow, so
+a run that publishes locally cannot qualify on required checks a local push never
+triggers. The command only reports coverage; it never installs
+hooks or changes branch protection.
 
 A contradictory `--workflow` is rejected. Change publication policy only through
 the identity-wide migration command. For the current ai-orchestrator aliases, the
@@ -201,27 +253,47 @@ remediation is:
 just migrate-repo-workflow local/ai-orchestrator --workflow local
 ```
 
-## Local verification before push
+## Merge-path verification
 
-Before the final gate, the lifecycle fetches `origin` and merges the current
-`origin/<base>` into the dispatched branch. It then runs
-the target repo's gate on that merged result and pushes only after the gate
-passes. If the sync conflicts, the lifecycle aborts the merge, reports a
-`gate-failed` result with `sync-conflict` detail, and does not push.
+Before publication, the lifecycle fetches `origin` and merges the current
+`origin/<base>` into the dispatched branch. A sync conflict aborts before any
+push.
 
-This ordering makes the agent's gate exercise the same branch-plus-current-base
-diff that the target repo's pre-push boundary enforces, rather than proving a
-stale view of the base. Gate precedence is an explicit plan-node `verify_cmd`,
-then the identity-level registry command with `{base}` replaced by the resolved
-`origin/<pr-base>`. There is no dispatch-time detection fallback. A failing gate
-stops the lifecycle at `gate-failed` (nothing is pushed). Its result detail and
-the `verification-finished.detail.output_tail` journal field carry the same
-bounded captured-output tail for diagnosis without reproduction. Pass an
-explicit `verify_cmd`, or `--skip-verify` to skip the
-gate; the pre-handoff sync still occurs.
+For a local workflow, each push runs the repository's executable pre-push hook.
+The branch push verifies the branch-plus-current-base tree; the later direct-base
+push verifies the detached squash publication tree itself. The orchestrator does
+not invoke the stored command again before either push. A hook rejection becomes
+a recorded `gate-failed` outcome when its output identifies the pre-push gate;
+otherwise the lifecycle records `error`, preserving a self-describing publication
+failure and Git's diagnostic
+because Git cannot distinguish an arbitrary hook rejection from a transport
+rejection.
 
-An identity carrying `<no-op>` may publish, but its result always says `gate:
-no-op -- pushed unproven`; it is never presented as green verification.
+For a remote-first workflow, required status checks are authoritative at PR merge
+time. A remote identity may also carry a pre-push hook, and then the branch push
+is gated too: a rejection there settles the node the same way, before any PR
+exists, rather than surfacing as a raw Git error.
+A node's `recorded_gate` runs nothing: it overrides which gate command the
+round *records* as the identity's complete bar, and cannot bypass or replace
+merge-path coverage. `verify_cmd` is its pre-merge-path spelling and remains
+accepted. The gate-skipping switch is gone — the `--skip-verify` flag was
+removed, and the `skip_verify` and `no_identity_gate` plan keys are accepted and
+ignored so existing plans and in-flight ledgers keep loading. Neither ever
+skipped merge-path verification, and nothing can.
+
+Because the gate's verdict now arrives late — as `git push` output — each
+lifecycle node records one `merge-gate-coverage` event before it dispatches,
+naming the hook path, the required checks, and the identity gate that hook stands
+for. That is what separates "the gate ran and rejected this" from "nothing was
+ever going to run" without re-auditing the identity after the fact.
+
+Two gate runs are deliberately **not** removed, because no merge-path verifier
+subsumes them:
+
+| Gate run | Why it stays |
+| --- | --- |
+| `just integrate` per candidate | Each candidate fast-forwards the *local* base before the single optional push, so skipping it lets unverified commits reach the local base — and a later aggregate hook rejection can no longer name the branch of the train that broke it. |
+| The repository's own `pre-push` hook | It is the merge-path gate. Never weaken it, and never push with `--no-verify`. |
 
 For work whose real verifier is remote CI, `verify_via_ci: true` (or the
 run-level `--verify-via-ci`) injects a standard CI iteration contract into the
@@ -237,9 +309,9 @@ This repository's complete gate resolves that same comparison ref with
 `scripts/comparison-base.sh`. `just gate` discovers the base from a valid remote
 HEAD (or a sole remote branch); use `just gate <remote> <base>` when discovery is
 ambiguous. The lifecycle exports `ORCHESTRATOR_COMPARISON_REMOTE` and
-`ORCHESTRATOR_COMPARISON_BASE` to **every dispatch and every verification pass of
-a workstream** — see [one judged diff, one
-verdict](#one-judged-diff-one-verdict) — and the pre-push hook
+`ORCHESTRATOR_COMPARISON_BASE` to **every dispatch and every publishing push of a
+workstream** — see [one judged diff, one
+verdict](#one-judged-diff-one-verdict) — and the pre-push hook reads that base and
 uses the remote name Git passes as its first argument. Invalid names, missing
 refs, and ambiguous remote branches fail with a remediation instead of falling
 back to `main`. `just sync` discovers the same branch; `just sync <branch>
@@ -256,30 +328,34 @@ answer rather than a second roll of the dice.
 
 **The recorded verdict for exactly that content, base commit, and judge
 configuration is authoritative, and the worker's gate is where it is paid for.**
-The publication rebuild looks up the same key and replays what the worker
-cleared. That is the only assignment consistent with the invariant that *a
-dispatched change is not done until its own gate is green*: an agent can only
-clear findings it was shown, so a verdict that first appears after the agent has
-settled can neither be cleared nor appealed. Replay is not leniency — a recorded
-**failure** replays as a failure and still stops publication, even where a fresh
-roll would have passed.
+The merge-path gate — the `pre-push` hook, which is the only verifier the
+lifecycle now runs — looks up the same key and replays what the worker cleared.
+That is the only assignment consistent with the invariant that *a dispatched
+change is not done until its own gate is green*: an agent can only clear findings
+it was shown, so a verdict that first appears after the agent has settled can
+neither be cleared nor appealed. Replay is not leniency — a recorded **failure**
+replays as a failure, the hook rejects the push, and the run ends `gate-failed`
+even where a fresh roll would have passed.
 
 Keeping the key equal across the two runs is what makes this hold, and the
 comparison base is the part that used to drift. A worker left to discover its own
-base resolves the remote HEAD, while publication judges the workstream's
+base resolves the remote HEAD, while the publishing push judges the workstream's
 `pr_base` — the parent branch for a stacked node, not the repository default. Two
 different base commits are two different diffs and therefore two independent
 judge rolls, the second one invisible to the only party who could act on it. So
-the lifecycle now exports one comparison identity into the dispatch environment as
-well as into every gate run of that workstream.
+`verify.comparison_env` is the one source of that identity, and the lifecycle
+exports it into every dispatch of a workstream **and into every publishing push**,
+where the hook reads it. Nothing else stands between the worker's verdict and the
+merge, so a push that resolved its own base could merge work whose own gate had
+failed.
 
-Where the key genuinely differs the publication rebuild does judge again, and its
-verdict is then the authoritative one, because it is the only judgement of the
-content that will actually land: the base advanced after the worker settled and
-the merge changed what is being published, so the worker's clearance never
-covered it. To keep that honest rather than silent, a passing `just gate` reports
-which base commit was judged and whether the verdict was judged now or replayed
-from the record — green is always a claim about one specific base commit.
+Where the key genuinely differs the hook does judge again, and its verdict is
+then the authoritative one, because it is the only judgement of the content that
+will actually land: the base advanced after the worker settled and the merge
+changed what is being published, so the worker's clearance never covered it. To
+keep that honest rather than silent, a passing `just gate` reports which base
+commit was judged and whether the verdict was judged now or replayed from the
+record — green is always a claim about one specific base commit.
 
 Forcing a real re-judge is deliberately **per tier and per invocation**:
 
@@ -352,7 +428,9 @@ then repository-type defaults apply.
   as the effective `direct` policy when the stored workflow remains local.
 
 Single-owner automated publication is serialized by a process-shared FIFO merge
-queue keyed by the repository's git common directory. Worktrees and checkout
+queue keyed by the **publication** checkout's git common directory — the one thing
+every run of an identity shares, now that each run merges from a clone of its own.
+Worktrees and checkout
 aliases of one identity therefore enqueue together, including local direct merges,
 remote `auto`/`direct` merges, recovery, and the direct `integrate` train. Each
 writer waits for its queue position without a bounded merge-lock timeout and runs
@@ -377,8 +455,8 @@ returns `sync-conflict` and retains the branch for manual recovery.
   required checks), `none` (open the PR and stop). Required-vs-optional comes from
   `statusCheckRollup.isRequired`; a failed required check ends at `checks-failed`.
 - **`LocalMergeStrategy`** (`workflow: local`) — there is no PR/CI to wait on, so
-  it builds the verified branch-to-base merge in a detached scratch worktree and
-  pushes the result to the origin. The branch lands as one squashed commit whose
+  it builds the branch-to-base merge in a detached scratch worktree and pushes
+  that exact tree through the repository's pre-push gate. The branch lands as one squashed commit whose
   single parent is the prior base tip and whose message is the merge title. This
   is the model for direct merge into main after the checks pass, including GitHub
   origins intentionally marked local.
@@ -410,7 +488,7 @@ from both the release and `CHANGELOG`.
 
 A lifecycle node is an `agent` node in `just run-plan` with a `repo` and either a
 `persona`+`task` or a `steps` workstream. It may also carry `deps`, `base_branch`,
-`branch`, `title`, `verify_cmd`, `skip_verify`, `verify_via_ci`, `merge_policy`, `workflow`,
+`branch`, `title`, `recorded_gate`, `verify_via_ci`, `merge_policy`, `workflow`,
 `repo_type`, validated `stack_bases`, `execution_checkout`, or validated `resume`
 metadata. Independent top-level nodes run concurrently, and a node whose
 dependency failed is skipped. Cross-repository dependencies only schedule. A
@@ -497,8 +575,8 @@ harness never infers the human completion.
 For `workflow: local`, a pause remains only on the isolated local branch: no gate,
 push, or base publication occurs until the final agent steps complete. For a
 remote workflow with commits, the pause fetches and merges current
-`origin/<pr-base>`, runs the available local gate with the same comparison
-environment used at final publication, and pushes the branch without force. It
+`origin/<pr-base>` and pushes the branch without force through any configured
+pre-push hook. It
 then creates or reuses a draft PR. A sync conflict or gate failure publishes no
 draft; a pause with no commits creates no empty draft. Later pauses reuse the PR.
 On final success the existing draft is marked ready, then the repository's normal
@@ -601,10 +679,13 @@ remains available because it updates candidate branches without advancing base.
 
 Each permitted candidate fetches the selected remote, merges current
 `<remote>/<base>` (then earlier train candidates) in its own worktree, and runs
-the gate with `ORCHESTRATOR_COMPARISON_REMOTE` and
-`ORCHESTRATOR_COMPARISON_BASE`. A passing branch fast-forwards the local base.
-Conflicts and gate failures are reported as skips. `--push` updates the remote
-only when the base advanced. Omit branch names to
+the gate with `ORCHESTRATOR_COMPARISON_REMOTE` and `ORCHESTRATOR_COMPARISON_BASE`.
+Unlike the lifecycle's own gate runs, this one is kept even with `--push`: every
+candidate fast-forwards the local base *before* the single push, so the pre-push
+hook does not stand between an unverified candidate and the local base, and an
+aggregate rejection could not say which branch of the train caused it. A passing
+branch fast-forwards the local base. Conflicts and gate failures are reported as
+skips. `--push` updates the remote only when the base advanced. Omit branch names to
 discover checked-out worktree branches and local branches matching `claude/*`;
 use `--pattern` to change the glob or `--gate` to inject a different gate command.
 The base and candidate worktrees must be clean.
@@ -621,11 +702,13 @@ its registered workflow:
 just repo-recover <branch> --repo <canonical-checkout>
 ```
 
-Recovery retains the source branch on failure. It uses an isolated worktree,
+Recovery retains the source branch on failure. It refuses an identity whose merge
+path has no coverage, exactly as dispatch does, then uses an isolated worktree,
 infers a recorded stack/PR base from new preserved commits, fetches and merges
-current `origin/<pr-base>`, runs the lifecycle gate with the
-resolved comparison environment, writes an attestation, and pushes the feature
-branch. Recovery uses the same type defaults and accepts run-only `--repo-type`;
+current `origin/<pr-base>`, writes an attestation, and pushes the feature branch
+through the same pre-push/required-check merge path. It still refuses a `<no-op>`
+identity gate: an identity that cannot name its complete bar has nothing to hand a
+resolver worker or a reader of the recovery attestation. Recovery uses the same type defaults and accepts run-only `--repo-type`;
 team omission leaves its ready-for-review PR open, remote single-owner omission
 enables auto-merge, and local single-owner omission uses direct merge. For an
 older stacked preserved commit without the base trailer, pass the ledger's values
@@ -634,8 +717,8 @@ fast-forwards the root publication checkout after a merge into a non-root base.
 `repo-task-auto` prints this
 command when it reports `not-completed`.
 
-Local recovery performs its base sync, complete gate, recovery attestation, branch
-push, and direct merge inside one FIFO turn. A content conflict dequeues the turn,
+Local recovery performs its base sync, recovery attestation, gated branch push,
+and gated direct merge inside one FIFO turn. A content conflict dequeues the turn,
 resumes the worker session recorded by the incomplete step commit, and requeues at
 the tail after the worker commits a resolution. Recovery uses the same bounded
 retry policy. Missing or invalid worker metadata, an incomplete resolver, or exhausted
@@ -706,13 +789,15 @@ the result.
 - **Several agents in one process:** the run-plan scheduler owns concurrency.
   Per-repo in-process locks serialize short canonical-checkout operations; agent
   dispatches in separate worktrees remain concurrent.
-- **Several processes on one machine:** OS advisory locks serialize registry,
-  ledger-claim, and short shared-state mutations. Automated single-owner merges
-  use the FIFO queue above instead of racing a bounded git lock. Locks and queue
-  state live under
+- **Several processes on one machine:** each run works in its own clone, so the
+  only shared state left is the registry, the ledger claim, and short mutations of
+  the execution/publication checkouts. OS advisory locks serialize those, queueing
+  contenders rather than racing them; automated single-owner merges use the FIFO
+  queue above. Locks and queue state live under
   `$AI_ORCHESTRATOR_HOME/locks` (normally `~/.ai-orchestrator/locks`) and protect
-  only that machine. On timeout, inspect the reported PID and host rather than
-  deleting a live lock or worktree.
+  only that machine. Raise `ORCHESTRATOR_LOCK_TIMEOUT_SECONDS` when a legitimate
+  turn (a gate inside a merge) can exceed the default. On timeout, inspect the
+  reported PID and host rather than deleting a live lock or worktree.
 - **Several machines, remote-first:** GitHub is the remote coordinator. Local
   locks and ledgers are independent; unique branches, PR state, required checks,
   and merge/auto-merge coordinate publication globally.

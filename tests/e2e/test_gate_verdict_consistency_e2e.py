@@ -3,28 +3,34 @@
 The complete gate of this repository ends in an LLM judge whose answer is not
 reproducible, so its verdict is memoized per judged content and resolved base
 commit. That memo only holds the invariant "a dispatched change is not done until
-its own gate is green" if the worker's gate and the publication rebuild look the
-same verdict up. When they resolve different base commits they do not: the worker
-passes against a recorded verdict, publication re-rolls the judge, and the run
-dies at closeout on findings the worker never saw and can no longer clear.
+its own gate is green" if the worker's gate and the gate the merge path runs look
+the same verdict up. When they resolve different base commits they do not: the
+worker passes against a recorded verdict, the `pre-push` hook re-rolls the judge,
+and the run dies at closeout on findings the worker never saw and can no longer
+clear.
 
-These journeys drive the real lifecycle — real git, real clone/worktree/branch,
-real merge — against a repository whose own gate is a miniature of that tier: a
-non-deterministic judge behind a verdict store keyed on (content, base commit) in
-the shared cache directory. Only the paid harness is faked, as everywhere else in
-this suite, and the fake agent runs the repository's real gate command before it
-settles, exactly as a real worker does.
+The lifecycle no longer runs the repository's gate itself — the executable
+`pre-push` hook it required at dispatch does — so that hook is where this has to
+hold. These journeys drive the real lifecycle (real git, real clone, worktree and
+branch, real merge) against a repository whose own gate is a miniature of that
+tier: a non-deterministic judge behind a verdict store keyed on (content, base
+commit) in the shared cache directory, installed as a real `pre-push` hook and run
+for real by Git on the publishing push. Only the paid harness is faked, as
+everywhere else in this suite, and the fake agent runs the repository's real gate
+command before it settles, exactly as a real worker does.
 
 llmlint: ignore-file[e2e_not_mocked] The judge here is a fixture because the claim
 under test is that one tree yields one verdict across two runs, which a genuinely
 non-deterministic judge cannot demonstrate. Everything the lifecycle owns — the
-dispatch environment, the gate invocation, git, and the merge — is real.
+dispatch environment, the pre-push hook, git, and the merge — is real.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable
 from pathlib import Path
+
+from conftest import install_pre_push_hook
 
 from orchestrator import gitops
 from orchestrator.lifecycle import run_repo_task
@@ -60,7 +66,15 @@ printf '%s\\n' "$status" >"$record"
 exit "$status"
 """
 
-GATE_CMD = ["bash", "gate.sh"]
+# The real merge-path gate: Git runs this for every publishing push out of the
+# checkout. Its diagnostic names the hook so a rejection classifies as a gate
+# failure rather than a raw transport error, exactly as production's does.
+HOOK = """cd "$(git rev-parse --show-toplevel)"
+if ! bash gate.sh; then
+  echo "pre-push: complete gate rejected this tree" >&2
+  exit 1
+fi
+"""
 
 
 def _gate(*, first_roll: int, later_roll: int) -> str:
@@ -76,7 +90,7 @@ def _origin_with_release(
 
     A stacked workstream publishes onto its parent branch, not onto the repository
     default. That is the everyday case in which a worker left to discover its own
-    comparison base resolves a different commit than publication does.
+    comparison base resolves a different commit than the publishing push does.
     """
     origin = bare_origin(files={"gate.sh": gate}, branch="main")
     seed = gitops.clone(str(origin), tmp_path / "release-seed")
@@ -99,6 +113,10 @@ def _run(
     name: str,
 ):
     canonical = gitops.clone(str(origin), tmp_path / f"canonical-{name}")
+    # The gate this repository publishes through, on the checkout every publishing
+    # push originates in. `gitops.clone` installs a permissive hook for the suite;
+    # this replaces it with the real judge for these journeys.
+    install_pre_push_hook(canonical, HOOK)
     # The publication checkout is only ever fast-forwarded, and must have the root
     # branch this workstream publishes onto checked out before dispatch.
     gitops._git(["checkout", "-q", "release"], cwd=canonical)
@@ -117,7 +135,7 @@ def _run(
         branch=f"verdict-{name}",
         base_path=command_base(),
         persona_dir=personas_dir,
-        verify_cmd=list(GATE_CMD),
+        recorded_gate=["bash", "gate.sh"],
     )
     cache = workspace.ensure_cache_dir(workspace.repo_ref(str(origin)))
     return result, cache
@@ -138,11 +156,9 @@ def test_publication_replays_the_verdict_the_worker_cleared(
     # The worker judged the publication base, not the branch remote HEAD names.
     assert f"judged this tree against base {release_sha}" in worker_gate
     assert "exit=0" in worker_gate
-    # One roll of a judge that would have failed every later roll: publication
-    # replayed the worker's verdict instead of asking the question again.
+    # One roll of a judge that would have failed every later roll: the pre-push
+    # hook replayed the worker's verdict instead of asking the question again.
     assert (cache / "judge-rolls").read_text(encoding="utf-8").strip() == "1"
-    assert result.verify is not None
-    assert "replayed the recorded verdict" in result.verify.output
     merged = gitops._git(["show", "release:CHANGE.txt"], cwd=origin).stdout
     assert merged.strip() == "change from fake agent"
 
@@ -158,7 +174,7 @@ def test_publication_replays_a_recorded_failure_a_fresh_judge_would_pass(
     result, cache = _run(tmp_path, origin, command_base, personas_dir, name="failure")
 
     assert result.outcome == "gate-failed", result.detail
-    assert "replayed the recorded verdict" in result.detail
+    assert "pre-push gate rejected" in result.detail
     assert (cache / "judge-rolls").read_text(encoding="utf-8").strip() == "1"
     # The worker retried its red gate and got its own verdict back rather than a
     # second roll: a finding it cannot clear is not one it can outlast either.

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import os
 import shutil
 
 import pytest
@@ -9,9 +11,12 @@ import pytest
 from orchestrator import gitops
 from orchestrator.workspace import (
     DEFAULT_OWNER,
+    OWNER_RECORD_NAME,
     RepoRef,
+    RunOwner,
     Workspace,
     WorkspaceError,
+    _abandoned_run_is_reclaimable,
     _safe_branch_dir,
     normalize_repo,
 )
@@ -76,9 +81,12 @@ def test_workspace_clone_worktree_lifecycle(tmp_path, bare_origin) -> None:
     ws = Workspace(tmp_path / "worktrees", resolver=lambda _: canonical)
 
     clone = ws.ensure_clone(ref)
-    assert clone == canonical
-    assert not str(ws._worktree_root(ref)).startswith(str(canonical))
-    # A second resolution reuses and refreshes the canonical checkout.
+    # The run works in its own clone of the canonical checkout, never in it.
+    assert clone != canonical
+    assert ws.execution_checkout(ref) == canonical
+    assert gitops.remote_url(clone) == gitops.remote_url(canonical)
+    assert not str(ws.run_root(ref)).startswith(str(canonical))
+    # A second resolution reuses this run's clone and refreshes the canonical one.
     assert ws.ensure_clone(ref) == clone
     # The per-repo lock is memoized.
     assert ws._repo_lock(ref) is ws._repo_lock(ref)
@@ -123,7 +131,7 @@ def test_workspace_refuses_unregistered_path_collision(tmp_path, bare_origin) ->
     ref = normalize_repo(str(origin))
     ws = Workspace(tmp_path / "worktrees", resolver=lambda _: canonical)
     ws.ensure_clone(ref)
-    collision = ws._worktree_root(ref) / _safe_branch_dir("feat")
+    collision = ws.run_root(ref) / _safe_branch_dir("feat")
     collision.mkdir(parents=True)
 
     with pytest.raises(RuntimeError, match="worktree path.*already exists"):
@@ -186,6 +194,109 @@ def test_cache_rejects_empty_state_home(tmp_path, bare_origin, monkeypatch) -> N
 
     with pytest.raises(WorkspaceError, match="must not be empty"):
         workspace.ensure_cache_dir(ref)
+
+
+def test_run_clone_borrows_the_shared_object_store_instead_of_copying_it(
+    tmp_path, bare_origin
+) -> None:
+    """Per-run clones are only affordable because they cost refs, not objects."""
+    origin = bare_origin({f"payload-{index}.txt": "x" * 4096 for index in range(64)})
+    canonical = gitops.clone(origin, tmp_path / "canonical-shared")
+    ref = normalize_repo(str(origin))
+    ws = Workspace(tmp_path / "worktrees", resolver=lambda _: canonical)
+
+    clone = ws.ensure_clone(ref)
+
+    alternates = clone / ".git" / "objects" / "info" / "alternates"
+    assert alternates.read_text(encoding="utf-8").strip() == str(
+        (canonical / ".git" / "objects").resolve()
+    )
+    # The lender must never expire an object a live borrower still reads through it.
+    assert gitops.config_value(canonical, "gc.auto") == "0"
+    assert gitops.config_value(canonical, "gc.pruneExpire") == "never"
+    # The pointer is the whole object store: a second concurrent run duplicates no
+    # history at all, which is what makes one clone per run affordable.
+    objects = clone / ".git" / "objects"
+    assert [
+        str(entry.relative_to(objects)) for entry in sorted(objects.rglob("*")) if entry.is_file()
+    ] == ["info/alternates"]
+
+
+def test_reclaim_predicate_keeps_every_run_root_it_cannot_clear(tmp_path, bare_origin) -> None:
+    """The one predicate that authorizes deleting a run's tree, exercised directly."""
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-reclaim")
+    ref = normalize_repo(str(origin))
+    ws = Workspace(tmp_path / "worktrees", resolver=lambda _: canonical)
+    ws.ensure_clone(ref)
+    run_root = ws.run_root(ref)
+    owner = run_root / OWNER_RECORD_NAME
+
+    # This process wrote the record and is still alive.
+    assert not _abandoned_run_is_reclaimable(run_root)
+
+    owner.write_text(json.dumps({"pid": os.getpid(), "process_start": "not-a-token"}), "utf-8")
+    assert _abandoned_run_is_reclaimable(run_root)
+
+    worktree = ws.worktree(ref, "feat/unpublished", base="origin/main")
+    (worktree / "only-here.txt").write_text("never pushed\n", encoding="utf-8")
+    gitops.add_all(worktree)
+    gitops.commit(worktree, "feat: work that exists nowhere else")
+    assert not _abandoned_run_is_reclaimable(run_root)
+
+    ws.remove_worktree(ref, worktree)
+    empty = tmp_path / "empty-run"
+    empty.mkdir()
+    assert _abandoned_run_is_reclaimable(empty)
+    (empty / "leftover").mkdir()
+    assert not _abandoned_run_is_reclaimable(empty)
+
+
+@pytest.mark.parametrize("token", ["", "..", ".", "a/b", "../escape", "with space", "sub\\dir"])
+def test_run_token_that_could_name_another_directory_is_refused(tmp_path, token: str) -> None:
+    """The token becomes a path component, and the reaper's rmtree follows it."""
+    with pytest.raises(WorkspaceError, match="run token"):
+        Workspace(tmp_path / "worktrees", resolver=lambda _: tmp_path, run_token=token)
+
+
+@pytest.mark.parametrize(
+    "record",
+    ["[1, 2]", '"text"', "null", '{"pid": true, "process_start": 1}', '{"pid": 1}', "{ not json"],
+)
+def test_unreadable_owner_record_is_not_mistaken_for_a_live_owner(tmp_path, record: str) -> None:
+    run_root = tmp_path / "run"
+    run_root.mkdir()
+    (run_root / OWNER_RECORD_NAME).write_text(record, encoding="utf-8")
+
+    assert RunOwner.read(run_root) is None
+    assert _abandoned_run_is_reclaimable(run_root)
+
+
+def test_unresolved_repository_names_itself_in_every_lookup(tmp_path) -> None:
+    ws = Workspace(tmp_path / "worktrees", resolver=lambda _: tmp_path)
+    ref = normalize_repo("o/r")
+
+    for lookup in (ws.clone_dir, ws.execution_checkout, ws.selection):
+        with pytest.raises(RuntimeError, match="o/r has not been resolved"):
+            lookup(ref)
+
+
+def test_legacy_flat_worktree_directory_does_not_block_a_run(tmp_path, bare_origin) -> None:
+    """An earlier layout's leftovers sit beside the run tree, not in its way."""
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-legacy")
+    ref = normalize_repo(str(origin))
+    legacy = tmp_path / "worktrees" / ref.dir_key / _safe_branch_dir("feat")
+    gitops.worktree_add(canonical, legacy, "feat", base="origin/main")
+    ws = Workspace(tmp_path / "worktrees", resolver=lambda _: canonical)
+
+    ws.ensure_clone(ref)
+    worktree = ws.worktree(ref, "feat", base="origin/main")
+
+    assert worktree != legacy
+    assert legacy.exists() and gitops.worktrees(canonical)["feat"] == legacy
+    ws.remove_worktree(ref, worktree)
+    gitops.worktree_remove(canonical, legacy)
 
 
 def test_repo_ref_defaults() -> None:

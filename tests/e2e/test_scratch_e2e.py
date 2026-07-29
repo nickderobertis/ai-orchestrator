@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import multiprocessing
 import os
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -13,6 +14,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 import pytest
+from conftest import install_pre_push_hook
 
 from orchestrator import REPO_ROOT
 from orchestrator.lifecycle import run_repo_task
@@ -41,6 +43,28 @@ while not release.exists():
 """
 
 
+def _install_blocking_pre_push_gate(
+    checkout: Path, candidate: Path, ready: Path, release: Path
+) -> None:
+    """Hold the lifecycle open inside its real merge-path gate.
+
+    The repository's `pre-push` hook is where the gate runs now, so that is the
+    only point at which a dispatch is genuinely in flight with scratch to protect.
+    """
+    argv = " ".join(
+        shlex.quote(part)
+        for part in (
+            sys.executable,
+            "-c",
+            _BLOCKING_GATE,
+            str(candidate),
+            str(ready),
+            str(release),
+        )
+    )
+    install_pre_push_hook(checkout, argv)
+
+
 def _run_lifecycle_with_blocking_gate(
     origin: str,
     canonical: str,
@@ -48,9 +72,6 @@ def _run_lifecycle_with_blocking_gate(
     base_path: str,
     persona_dir: str,
     scratch_root: str,
-    candidate: str,
-    ready: str,
-    release: str,
     result_path: str,
 ) -> None:
     os.environ["TMPDIR"] = scratch_root
@@ -67,7 +88,7 @@ def _run_lifecycle_with_blocking_gate(
         workspace=workspace,
         base_path=base_path,
         persona_dir=persona_dir,
-        verify_cmd=[sys.executable, "-c", _BLOCKING_GATE, candidate, ready, release],
+        recorded_gate=["true"],
         repo_type="single-owner",
     )
     Path(result_path).write_text(
@@ -201,6 +222,7 @@ def test_third_party_sweep_skips_inflight_lifecycle_then_reclaims(
         capture_output=True,
         check=True,
     )
+    _install_blocking_pre_push_gate(canonical, candidate, ready, release)
     process = multiprocessing.Process(
         target=_run_lifecycle_with_blocking_gate,
         args=(
@@ -210,9 +232,6 @@ def test_third_party_sweep_skips_inflight_lifecycle_then_reclaims(
             str(command_base()),
             str(personas_dir),
             str(scratch),
-            str(candidate),
-            str(ready),
-            str(release),
             str(result_path),
         ),
     )
@@ -420,6 +439,7 @@ def test_lifecycle_dispatch_honors_valid_scratch_capacity_override(
         capture_output=True,
         check=True,
     )
+    install_pre_push_hook(canonical)
     monkeypatch.setenv(MIN_FREE_BYTES_ENV, "0")
     workspace = Workspace(
         tmp_path / "worktrees",
@@ -433,7 +453,7 @@ def test_lifecycle_dispatch_honors_valid_scratch_capacity_override(
         workspace=workspace,
         base_path=command_base(),
         persona_dir=personas_dir,
-        verify_cmd=["true"],
+        recorded_gate=["true"],
         repo_type="single-owner",
     )
 

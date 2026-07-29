@@ -27,8 +27,10 @@ binary.
 Beyond dispatching at a directory, the harness manages a change's **full
 life cycle** against any repo (GitHub or a local path): resolve its normalized
 origin to one **repository identity**, choose a registered publication checkout,
-do the work in an **isolated worktree cut from an execution checkout**, verify it
-with the repo's own gate, and merge it. Checkout aliases share identity-level
+do the work in an **isolated worktree cut from a per-run clone of an execution
+checkout**, verify it with the repo's own gate, and merge it. That per-run clone
+shares the execution checkout's object store and is what keeps concurrent
+orchestrators from racing one worktree registry. Checkout aliases share identity-level
 `workflow`, `repo_type` (`single-owner` or `team`), and verification `gate`.
 Schema-v4 identities infer
 an omitted type from `gh api user --jq .login` versus the normalized GitHub origin
@@ -350,9 +352,11 @@ whose contract is cache replay. When a
 miss is unexplained, run `scripts/llmlint-fingerprint.sh` — a changed fingerprint
 on an unchanged tree is a changed judge, not a changed diff. The recorded verdict
 for one content, base commit, and judge configuration is authoritative and the
-worker's own gate pays for it: the lifecycle exports one comparison identity to
-the dispatch and to every gate run of a workstream so publication replays what the
-worker cleared instead of re-rolling against findings it never saw. See
+worker's own gate pays for it: `verify.comparison_env` is that identity's one
+source, and the lifecycle exports it to every dispatch and every publishing push
+of a workstream so the `pre-push` hook replays what the worker cleared instead of
+re-rolling against findings it never saw — a push that resolved its own base could
+merge work whose own gate had failed. See
 [One judged diff, one verdict](docs/repo-lifecycle.md#one-judged-diff-one-verdict).
 
 Every cached Nx target replays a recorded answer, so one rule governs the test tier

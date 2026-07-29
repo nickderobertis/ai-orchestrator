@@ -1,6 +1,6 @@
-"""How a verified branch gets into the base branch — two strategies, one seam.
+"""How a branch gets through its merge-path gate into base — two strategies, one seam.
 
-The lifecycle does the same work up to a pushed, locally-verified branch; only
+The lifecycle does the same work up to a branch push; only
 the last step differs by where the repo lives:
 
 - `GitHubMergeStrategy` opens a PR and lets GitHub merge it once the repo's
@@ -27,11 +27,11 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Literal, Protocol
 
 from . import gitops
-from .coordination import git_lock_identity
+from .coordination import GitLockIdentity, git_lock_identity
 from .github import AutoMergeUnavailable, Check, GitHubBackend, PRStatus, PullRequest
 from .merge_queue import merge_queue_turn
 from .outcomes import ALREADY_INTEGRATED_OUTCOME, LifecycleOutcome
-from .verify import run_gate
+from .verify import comparison_env
 from .workspace import RepositoryType
 
 if TYPE_CHECKING:
@@ -50,15 +50,23 @@ __all__ = [
     "MergePolicy",
     "MergeStrategy",
     "assess_blocking_checks",
+    "classify_push_failure",
 ]
 
 MergePolicy = Literal["auto", "direct", "none"]
 MERGE_CONFLICT_RETRY: Literal["merge-conflict-retry"] = "merge-conflict-retry"
 
 
+def classify_push_failure(exc: gitops.GitError) -> LifecycleOutcome:
+    """Classify a push rejection using the diagnostics emitted by Git hooks."""
+    detail = str(exc).casefold()
+    gate_markers = ("pre-push", "gate:", "gate failed", "gate rejected")
+    return "gate-failed" if any(marker in detail for marker in gate_markers) else "error"
+
+
 @dataclass
 class MergeContext:
-    """Everything a strategy needs once the branch is pushed and verified."""
+    """Everything a strategy needs once the branch is pushed through its merge path."""
 
     repo_slug: str
     clone_dir: Path
@@ -66,6 +74,11 @@ class MergeContext:
     branch: str
     title: str
     body: str
+    #: What the merge queue serializes on. It has to name the *repository*, not the
+    #: clone the merge is built in: every run now builds in a clone of its own, and
+    #: a per-run identity would hand each contender its own empty queue. ``None``
+    #: falls back to the clone, which is correct only where one is shared.
+    queue_identity: GitLockIdentity | None = None
     method: str = "squash"  # GitHub merge method; ignored by the local strategy
     policy: MergePolicy = "auto"  # GitHub only
     poll_interval: float = 15.0
@@ -73,9 +86,6 @@ class MergeContext:
     timeout: float = 3600.0
     sleep: Callable[[float], None] = time.sleep
     clock: Callable[[], float] = time.monotonic
-    verify_command: list[str] | None = None
-    verify_env: dict[str, str] | None = None
-    gate_timeout: float | None = None
     publication_attempts: int = 3
     repository_type: RepositoryType = "single-owner"
     #: Where publication transitions are recorded, already scoped to the node the
@@ -89,6 +99,12 @@ class MergeContext:
     journal: NodeSink | None = None
     preverified_pr: PullRequest | None = None
     local_prepare: Callable[[], MergeOutcome | None] | None = None
+    #: The workstream environment every publishing push carries. The merge path is
+    #: the verifier now, so the `pre-push` hook running the repository's gate has to
+    #: see the same comparison base and build cache the worker's own gate saw —
+    #: otherwise it re-judges a memoized verdict against a base the worker never had.
+    #: `None` where a caller has no workstream, which resolves the base as Git would.
+    push_env: dict[str, str] | None = None
 
 
 @dataclass
@@ -124,6 +140,13 @@ def assess_blocking_checks(status: PRStatus) -> BlockingCheckAssessment:
 
 class MergeStrategy(Protocol):
     def publish_and_merge(self, ctx: MergeContext) -> MergeOutcome: ...
+
+
+def _queue_identity(ctx: MergeContext) -> GitLockIdentity:
+    """Name the repository whose base branch this merge queue protects."""
+    if ctx.queue_identity is not None:
+        return ctx.queue_identity
+    return git_lock_identity(gitops.common_dir(ctx.clone_dir))
 
 
 def _record(ctx: MergeContext, kind: EventKind, detail: Detail) -> None:
@@ -244,8 +267,7 @@ class GitHubMergeStrategy:
 
     def publish_and_merge(self, ctx: MergeContext) -> MergeOutcome:
         if ctx.repository_type == "single-owner" and ctx.policy != "none":
-            identity = git_lock_identity(gitops.common_dir(ctx.clone_dir))
-            with merge_queue_turn(identity):
+            with merge_queue_turn(_queue_identity(ctx)):
                 return self._publish_and_merge(ctx)
         return self._publish_and_merge(ctx)
 
@@ -277,7 +299,7 @@ class GitHubMergeStrategy:
 
 
 class LocalMergeStrategy:
-    """Merge the verified branch straight into base with real git (the local path).
+    """Merge the branch straight into base through a gated push (the local path).
 
     The branch is already pushed to the local origin by the lifecycle. The merge is
     built in a detached scratch worktree and pushed to the base ref, leaving the
@@ -288,8 +310,7 @@ class LocalMergeStrategy:
     def publish_and_merge(self, ctx: MergeContext) -> MergeOutcome:
         if ctx.publication_attempts < 1:
             raise ValueError("publication_attempts must be at least 1")
-        identity = git_lock_identity(gitops.common_dir(ctx.clone_dir))
-        with merge_queue_turn(identity):
+        with merge_queue_turn(_queue_identity(ctx)):
             return self._publish_and_merge(ctx)
 
     def _publish_and_merge(self, ctx: MergeContext) -> MergeOutcome:
@@ -330,42 +351,37 @@ class LocalMergeStrategy:
                     gitops.worktree_remove(ctx.clone_dir, scratch)
                     raise
                 try:
-                    if ctx.verify_command is not None:
-                        _record(
-                            ctx,
-                            "verification-started",
-                            {"command": list(ctx.verify_command), "attempt": attempt},
-                        )
-                        verified = run_gate(
-                            scratch,
-                            ctx.verify_command,
-                            timeout=ctx.gate_timeout,
-                            env=ctx.verify_env,
-                        )
-                        _record(
-                            ctx,
-                            "verification-finished",
-                            {
-                                "ok": verified.ok,
-                                "command": list(verified.command),
-                                "attempt": attempt,
-                            },
-                        )
-                        if not verified.ok:
-                            return MergeOutcome(
-                                outcome="gate-failed",
-                                detail="rebuilt local publication failed verification",
-                            )
+                    # Dispatch refuses identities without merge-path gate coverage.
+                    # This detached tree is pushed directly below, so the repository's
+                    # executable pre-push hook verifies this identical tree.
                     gitops.fetch(ctx.clone_dir)
                     try:
                         if gitops.ref_sha(ctx.clone_dir, f"origin/{ctx.base}") != base_sha:
                             raise gitops.GitError(
                                 f"! [rejected] verified merge -> {ctx.base} (fetch first)"
                             )
-                        gitops.push(scratch, f"HEAD:{ctx.base}", set_upstream=False)
+                        gitops.push(
+                            scratch,
+                            f"HEAD:{ctx.base}",
+                            set_upstream=False,
+                            # The hook that verifies this tree must judge it against
+                            # the base it is being published onto, which for a stacked
+                            # workstream is not the remote HEAD it would discover.
+                            env=ctx.push_env or comparison_env(ctx.base),
+                        )
                     except gitops.GitError as exc:
                         if not _is_push_race(exc):
-                            raise
+                            detail = str(exc)
+                            outcome = classify_push_failure(exc)
+                            return MergeOutcome(
+                                outcome=outcome,
+                                detail=(
+                                    "repository pre-push gate rejected the rebuilt local "
+                                    f"publication: {detail}"
+                                    if outcome == "gate-failed"
+                                    else "rebuilt local publication push failed: " + detail
+                                ),
+                            )
                         if attempt == ctx.publication_attempts:
                             return MergeOutcome(
                                 outcome="publication-retries-exhausted",
