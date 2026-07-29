@@ -120,7 +120,7 @@ release binary needs a newer glibc than the host provides, and the crates.io bui
 lags behind the 0.3.x releases that added `init`. The **PyPI `oneharness-cli`
 wheel** (a manylinux build) is the one that both runs on the host's glibc and
 carries `init`, so `scripts/session-setup.sh` installs the exact
-`config/oneharness.version` release and rejects a stale binary. Version 0.5.9 is
+`config/oneharness.version` release and rejects a stale binary. Version 0.5.10 is
 the adopted release; it contains auth variants shipped in 0.5.6 and succeeds
 0.3.24, the first release to carry the
 process-tree timeout and partial telemetry fix from
@@ -353,14 +353,6 @@ proof does not clear is reported as retained rather than silently kept.
   working repository with
   `git config receive.denyCurrentBranch updateInstead` so that push can update
   the checked-out base branch.
-- **Resolve llmlint findings on touched files.** llmlint evaluates the diff, so
-  it can expose a pre-existing pattern in any file the change touches. Fix the
-  finding or add a narrow, justified ignore-file suppression (the rule name plus
-  why; see `scripts/session-setup.sh` for the directive syntax). If a rule is
-  architecturally inapplicable,
-  disable it once in `llmlint.yml` with `override: true` and `relevance: false`;
-  `async_typed_clients_at_boundaries` is disabled this way because this harness
-  is a synchronous CLI.
 
 See [the repository lifecycle](repo-lifecycle.md) for clone, gate, recovery, and
 merge mechanics.
