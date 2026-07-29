@@ -285,8 +285,10 @@ is the complete pre-push bar: `check` plus the llmlint diff tier. Both report th
 line-coverage total they measured, and every stage that captures its output keeps
 it at `.logs/<label>.log` (`nx`, `check`, `check-install`, `gate-check`,
 `gate-llmlint`) — gitignored, owner-only, credential values redacted, truncated
-per run. Follow a running recipe with `tail -f .logs/check.log`; read a finished
-one from the same path. Never read a live command through `/proc`. `just run-plan`
+per run. Each log fills as its own stage runs, so follow the innermost one:
+`.logs/nx.log` while the Nx targets run (the long part), `.logs/check.log` for
+the stages after them. Read a finished run from the same paths, and never read a
+live command through `/proc`. `just run-plan`
 is the recorded mixed-graph executor driven internally by the dedicated
 orchestrator onejudge process. The planner launches multi-node work with `just
 orchestrate <plan.json>` and supervises its surfaced boundaries and proposals
