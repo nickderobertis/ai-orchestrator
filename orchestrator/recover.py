@@ -10,6 +10,7 @@ import json
 import re
 import shlex
 import sys
+import threading
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -96,6 +97,7 @@ def recover_repo(
     repo_type: RepositoryType | None = None,
     merge_method: str = "squash",
     cleanup: bool = True,
+    cancel: threading.Event | None = None,
     dispatch_fn: DispatchFn = dispatch,
     oneharness_mode: str | None = "bypass",
     base_path: str | Path = BASE_CONFIG,
@@ -159,7 +161,7 @@ def recover_repo(
             )
 
         def verify_attest_push() -> MergeOutcome | None:
-            verified = run_gate(worktree, command, env=env)
+            verified = run_gate(worktree, command, env=env, cancel=cancel)
             if not verified.ok:
                 return MergeOutcome(
                     "gate-failed",
@@ -243,6 +245,7 @@ def recover_repo(
             repository_type=identity.repo_type,
             verify_command=command,
             verify_env=env,
+            verify_cancel=cancel,
             local_prepare=(
                 synchronize_verify_attest_and_push_local_recovery
                 if decision.workflow == "local"

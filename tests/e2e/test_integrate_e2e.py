@@ -10,10 +10,15 @@ import json
 import os
 import shlex
 import subprocess
+import sys
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
 from fakes import FakeGitHub, make_writing_dispatch
+from process_tree import await_reaped, await_recorded_pid, is_running, write_orphaning_tree
+from waits import timeout as e2e_timeout
 
 from orchestrator.integrate import IntegrateError, integrate, main
 from orchestrator.lifecycle import StackBase, run_repo_task
@@ -586,6 +591,44 @@ def test_repo_recover_gate_failure_preserves_source_branch(tmp_path, bare_origin
 
     assert result.outcome == "gate-failed" and not result.ok
     assert _git(repo, "rev-parse", "claude/failed-recovery") == before
+
+
+def test_cancelling_a_recovery_reaps_its_whole_gate_tree(tmp_path, bare_origin) -> None:
+    """Cancelling a recovery leaves no part of the tree its gate started running.
+
+    The leak this closes was a recovery whose gate kept building long after the
+    workstream that asked for it was gone, contending with the next attempt for the
+    same worktree. The gate here is a real three-level tree whose worker reparents
+    away, so only ending the gate's process group can reach it.
+    """
+    repo = _clone(tmp_path, bare_origin())
+    _allow_local(repo)
+    _branch(repo, "claude/cancelled-recovery", {"partial.txt": "partial\n"})
+    _git(repo, "checkout", "claude/cancelled-recovery")
+    _git(repo, "commit", "--amend", "-m", "wip: cancelled preserved (incomplete step)")
+    _git(repo, "checkout", "main")
+    marker = tmp_path / "gate-worker.pid"
+    gate = [sys.executable, str(write_orphaning_tree(tmp_path)), str(marker)]
+    cancel = threading.Event()
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        recovery = pool.submit(
+            recover_repo,
+            repo,
+            "claude/cancelled-recovery",
+            workspace_root=tmp_path / "cancelled-recovery-worktrees",
+            verify_cmd=gate,
+            cancel=cancel,
+        )
+        worker = await_recorded_pid(marker, timeout=e2e_timeout(20))
+        assert is_running(worker)
+        cancel.set()
+        result = recovery.result(timeout=e2e_timeout(30))
+
+    assert result.outcome == "gate-failed" and not result.ok
+    assert await_reaped(worker, timeout=e2e_timeout(10)), (
+        "the cancelled recovery's gate worker outlived the recovery that started it"
+    )
 
 
 def test_repo_recover_cli_requires_registration(tmp_path, bare_origin, capsys) -> None:

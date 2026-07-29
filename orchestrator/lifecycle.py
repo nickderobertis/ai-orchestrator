@@ -976,6 +976,7 @@ def _verify_gate(
     *,
     timeout: float | None,
     env: dict[str, str],
+    cancel: threading.Event | None = None,
 ) -> VerifyResult:
     """Run the repo's own gate, bracketing the *actual* run with its transitions.
 
@@ -992,7 +993,7 @@ def _verify_gate(
             "comparison_base": env.get("ORCHESTRATOR_COMPARISON_BASE", ""),
         },
     )
-    verify = run_gate(worktree, cmd, timeout=timeout, env=env)
+    verify = run_gate(worktree, cmd, timeout=timeout, env=env, cancel=cancel)
     if journal.artifact_dir is not None:
         gate_path = (journal.artifact_dir / "gate.log").resolve()
         atomic_text(gate_path, verify.output)
@@ -1287,6 +1288,7 @@ def _pause_at_human_step(
     verify_cmd: list[str] | None,
     skip_verify: bool,
     gate_timeout: float | None,
+    cancel: threading.Event | None,
     recorded_pr: str | None,
     journal: NodeSink,
     cache_env: dict[str, str],
@@ -1338,6 +1340,7 @@ def _pause_at_human_step(
                 worktree,
                 cmd,
                 timeout=gate_timeout,
+                cancel=cancel,
                 env={
                     **cache_env,
                     "ORCHESTRATOR_COMPARISON_REMOTE": "origin",
@@ -1771,6 +1774,7 @@ def run_repo_task(
                 verify_cmd=resolved_verify_cmd,
                 skip_verify=skip_verify,
                 gate_timeout=gate_timeout,
+                cancel=cancel,
                 recorded_pr=resume.pr if resume else None,
                 journal=log,
                 cache_env=cache_env,
@@ -1814,6 +1818,7 @@ def run_repo_task(
                     worktree,
                     cmd,
                     timeout=gate_timeout,
+                    cancel=cancel,
                     env={
                         **cache_env,
                         "ORCHESTRATOR_COMPARISON_REMOTE": "origin",
@@ -1871,6 +1876,7 @@ def run_repo_task(
                         worktree,
                         resolved_verify_cmd,
                         timeout=gate_timeout,
+                        cancel=cancel,
                         env={
                             **cache_env,
                             "ORCHESTRATOR_COMPARISON_REMOTE": "origin",
@@ -1998,6 +2004,7 @@ def run_repo_task(
                         worktree,
                         cmd,
                         timeout=gate_timeout,
+                        cancel=cancel,
                         env={
                             **cache_env,
                             "ORCHESTRATOR_COMPARISON_REMOTE": "origin",
@@ -2051,6 +2058,7 @@ def run_repo_task(
             clock=clock,
             verify_command=None if skip_verify else resolved_verify_cmd,
             gate_timeout=gate_timeout,
+            verify_cancel=cancel,
             verify_env={
                 **cache_env,
                 "ORCHESTRATOR_COMPARISON_REMOTE": "origin",

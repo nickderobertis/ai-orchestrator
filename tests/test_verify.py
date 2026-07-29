@@ -3,7 +3,12 @@
 from __future__ import annotations
 
 import subprocess
+import sys
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+
+from process_tree import await_reaped, await_recorded_pid, is_running, write_orphaning_tree
 
 from orchestrator.verify import detect_gate, detect_gate_candidates, run_gate
 
@@ -160,6 +165,44 @@ def test_run_gate_reuses_only_exact_commit_and_comparison(tmp_path) -> None:
     subprocess.run(["git", "-C", str(tmp_path), "commit", "-am", "change"], check=True)
     assert run_gate(tmp_path, command, env=env).ok
     assert log.read_text(encoding="utf-8").splitlines() == ["run", "run", "run"]
+
+
+def test_run_gate_timeout_reaps_the_whole_gate_tree(tmp_path) -> None:
+    """A gate that overruns takes every process it started down with it."""
+    marker = tmp_path / "worker.pid"
+    command = [sys.executable, str(write_orphaning_tree(tmp_path)), str(marker)]
+
+    result = run_gate(tmp_path, command, timeout=0.5)
+    worker = await_recorded_pid(marker)
+
+    assert not result.ok
+    assert "gate timed out after 0.5s" in result.output
+    assert await_reaped(worker), "the gate's reparented worker outlived its own gate"
+
+
+def test_run_gate_cancellation_reaps_the_whole_gate_tree(tmp_path) -> None:
+    """A cancelled gate stops paying for a verdict nothing is left to read."""
+    marker = tmp_path / "worker.pid"
+    command = [sys.executable, str(write_orphaning_tree(tmp_path)), str(marker)]
+    cancel = threading.Event()
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        running = pool.submit(run_gate, tmp_path, command, cancel=cancel)
+        worker = await_recorded_pid(marker)
+        assert is_running(worker)
+        cancel.set()
+        result = running.result(timeout=30)
+
+    assert not result.ok
+    assert "gate cancelled" in result.output
+    assert await_reaped(worker), "the cancelled gate's reparented worker survived"
+
+
+def test_run_gate_leaves_an_uncancelled_gate_alone(tmp_path) -> None:
+    """An event that never fires must not disturb a gate that is doing its job."""
+    result = run_gate(tmp_path, ["sh", "-c", "sleep 0.3; echo done"], cancel=threading.Event())
+
+    assert result.ok and result.output.strip() == "done"
 
 
 def test_run_gate_missing_command(tmp_path) -> None:

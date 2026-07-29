@@ -20,6 +20,7 @@ Both are `MergeStrategy`, so `run_repo_task` calls one method and stays uniform.
 from __future__ import annotations
 
 import tempfile
+import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -81,6 +82,11 @@ class MergeContext:
     verify_command: list[str] | None = None
     verify_env: dict[str, str] | None = None
     gate_timeout: float | None = None
+    #: Stops a re-verification already under way, and the process group it started
+    #: with it. Publication is the lifecycle's commit point, so a set event does not
+    #: abandon a merge in flight — it only keeps a cancelled workstream from paying
+    #: for a gate whose verdict nothing is left to read.
+    verify_cancel: threading.Event | None = None
     publication_attempts: int = 3
     repository_type: RepositoryType = "single-owner"
     #: Where publication transitions are recorded, already scoped to the node the
@@ -351,6 +357,7 @@ class LocalMergeStrategy:
                             ctx.verify_command,
                             timeout=ctx.gate_timeout,
                             env=ctx.verify_env,
+                            cancel=ctx.verify_cancel,
                         )
                         _record(
                             ctx,
