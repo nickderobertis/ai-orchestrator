@@ -188,11 +188,12 @@ def _integrate_locked(
             if refresh:
                 results.append(BranchResult(branch, "updated"))
                 continue
-            if not run_gate(
-                worktree,
-                gate_command,
-                env=comparison_env,
-            ).ok:
+            # Kept deliberately, unlike the lifecycle's own gate runs: the merge path
+            # does not subsume this one. Each candidate fast-forwards the local base
+            # below, before the single optional push, so without this run unverified
+            # commits reach the local base and a later hook rejection can no longer
+            # say which branch of the train broke it.
+            if not run_gate(worktree, gate_command, env=comparison_env).ok:
                 results.append(BranchResult(branch, "skipped", "gate-failed"))
                 continue
             try:

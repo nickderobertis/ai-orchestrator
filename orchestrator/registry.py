@@ -125,6 +125,7 @@ class MergeGateCoverage:
     """Evidence that an identity's merge path runs a verification gate."""
 
     identity: IdentityKey
+    workflow: Workflow | None
     hook: str | None
     required_checks: tuple[str, ...]
     default_branch: str | None
@@ -132,40 +133,71 @@ class MergeGateCoverage:
     github_detail: str | None = None
 
     @property
+    def required_checks_gate_publication(self) -> bool:
+        """Whether required PR status checks stand on this identity's merge path.
+
+        A ``local`` workflow pushes straight to its base branch and never opens a
+        PR, so branch protection has nothing to run against: however many required
+        checks the remote declares, none of them see a locally published change.
+        """
+        return self.workflow != "local" and bool(self.required_checks)
+
+    @property
     def meets_coverage_criteria(self) -> bool:
-        """Whether the operator-defined hook-or-required-check criterion is met."""
-        return self.hook is not None or bool(self.required_checks)
+        """Whether something on this identity's merge path verifies publication."""
+        return self.hook is not None or self.required_checks_gate_publication
+
+    @property
+    def coverage_gap(self) -> str:
+        """Describe why this identity's merge path is not known to run a gate."""
+        if self.workflow == "local":
+            return (
+                "no executable pre-push hook, and a local workflow publishes without a "
+                "PR for required status checks to gate"
+            )
+        github_gap = (
+            "required PR status checks are unknown"
+            if self.github_status == "unknown"
+            else "no required PR status checks exist"
+        )
+        return f"no executable pre-push hook and {github_gap}"
 
 
 def merge_gate_coverage(
     identity: IdentityKey,
     checkout: str | Path,
     *,
+    workflow: Workflow | None = None,
     github: GitHubBackend | None = None,
 ) -> MergeGateCoverage:
-    """Inspect local hooks and GitHub branch protection for one identity."""
+    """Inspect local hooks and GitHub branch protection for one identity.
+
+    ``workflow`` selects which evidence can actually gate publication; pass the
+    identity's registered (or run-effective) workflow rather than leaving it
+    unset, so a local identity is not credited with checks that never run.
+    """
     hooks = gitops.hooks_dir(checkout)
     pre_push = hooks / "pre-push"
     hook = str(pre_push) if pre_push.is_file() and os.access(pre_push, os.X_OK) else None
     normalized = str(identity)
     prefix = "https://github.com/"
     if not normalized.startswith(prefix):
-        return MergeGateCoverage(identity, hook, (), None, "not-applicable")
+        return MergeGateCoverage(identity, workflow, hook, (), None, "not-applicable")
     backend = github or CliGitHubBackend()
     repo = normalized.removeprefix(prefix)
     try:
         branch = backend.default_branch(repo)
         checks = backend.required_status_checks(repo, branch)
     except GitHubError as exc:
-        return MergeGateCoverage(identity, hook, (), None, "unknown", str(exc))
-    return MergeGateCoverage(identity, hook, checks, branch, "available")
+        return MergeGateCoverage(identity, workflow, hook, (), None, "unknown", str(exc))
+    return MergeGateCoverage(identity, workflow, hook, checks, branch, "available")
 
 
 def _print_merge_gate_coverage(coverage: MergeGateCoverage) -> None:
     evidence: list[str] = []
     if coverage.hook is not None:
         evidence.append(f"executable pre-push hook ({coverage.hook})")
-    if coverage.required_checks:
+    if coverage.required_checks_gate_publication:
         evidence.append(
             f"required PR status checks on {coverage.default_branch} "
             f"({', '.join(coverage.required_checks)})"
@@ -174,6 +206,12 @@ def _print_merge_gate_coverage(coverage: MergeGateCoverage) -> None:
     print(f"merge_gate_coverage identity={coverage.identity} status={state}")
     for item in evidence:
         print(f"  coverage={item}")
+    if coverage.workflow == "local" and coverage.github_status != "not-applicable":
+        print("  required_pr_status_checks=not-applicable (local workflow publishes without a PR)")
+        if coverage.hook is None:
+            print("  executable_pre_push_hook=missing")
+        _warn_uncovered(coverage)
+        return
     match coverage.github_status:
         case "not-applicable":
             print("  required_pr_status_checks=not-applicable (no GitHub origin)")
@@ -183,17 +221,17 @@ def _print_merge_gate_coverage(coverage: MergeGateCoverage) -> None:
             print(f"  required_pr_status_checks=none (default branch {coverage.default_branch})")
     if coverage.hook is None:
         print("  executable_pre_push_hook=missing")
-    if not coverage.meets_coverage_criteria:
-        github_gap = (
-            "required PR status checks are unknown"
-            if coverage.github_status == "unknown"
-            else "no required PR status checks exist"
-        )
-        print(
-            f"WARNING: identity {coverage.identity} has no executable pre-push hook and "
-            f"{github_gap}; its merge path is not known to run a gate.",
-            file=sys.stderr,
-        )
+    _warn_uncovered(coverage)
+
+
+def _warn_uncovered(coverage: MergeGateCoverage) -> None:
+    if coverage.meets_coverage_criteria:
+        return
+    print(
+        f"WARNING: identity {coverage.identity} has {coverage.coverage_gap}; "
+        "its merge path is not known to run a gate.",
+        file=sys.stderr,
+    )
 
 
 def _validate_gate(value: object) -> str:
@@ -1275,7 +1313,9 @@ def main_register(argv: list[str] | None = None, *, github: GitHubBackend | None
             file=sys.stderr,
         )
     _print_merge_gate_coverage(
-        merge_gate_coverage(_url_identity(entry.origin), path, github=github)
+        merge_gate_coverage(
+            _url_identity(entry.origin), path, workflow=entry.workflow, github=github
+        )
     )
     return 0
 
@@ -1360,6 +1400,7 @@ def main_repos(argv: list[str] | None = None, *, github: GitHubBackend | None = 
                         for entry in registry.entries.values()
                         if _url_identity(entry.origin) == identity
                     ),
+                    workflow=registry.identities[identity].workflow,
                     github=github,
                 )
                 for identity in sorted(registry.identities)

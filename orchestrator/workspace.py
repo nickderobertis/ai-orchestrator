@@ -565,10 +565,15 @@ class Workspace:
             return clone
         started = time.monotonic()
         gitops.clone_sharing(checkout, clone, origin=origin, base=base)
-        # The clone's own working tree is never populated, so a tracked hooks
-        # directory has to come from the checkout it was cut from — which is the
-        # same absolute path every worktree already resolved hooks through.
-        hooks = (checkout / ".githooks").resolve()
+        # The clone's own working tree is never populated, so its hooks have to come
+        # from the checkout it was cut from — which is the same absolute path every
+        # worktree already resolved hooks through. This takes the checkout's
+        # *effective* directory rather than only a tracked `.githooks`, because every
+        # publishing push now leaves from this clone: dispatch admits an identity by
+        # reading the checkout's effective `pre-push`, so anything that hook would
+        # have gated has to be gated here or the guard is admitting on evidence that
+        # never runs.
+        hooks = gitops.hooks_dir(checkout)
         if hooks.is_dir():
             gitops.set_hooks_path(clone, hooks)
         observe_harness(

@@ -10,7 +10,6 @@ import json
 import re
 import shlex
 import sys
-import threading
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -32,6 +31,7 @@ from .merge import (
     MergeContext,
     MergeOutcome,
     MergePolicy,
+    classify_push_failure,
 )
 from .personas import persona_path
 from .provenance import (
@@ -41,8 +41,8 @@ from .provenance import (
     recorded_pr_base,
     unattested_incomplete,
 )
-from .registry import Registry, RegistryEntry, RegistryError, Slug
-from .verify import NOOP_GATE, resolve_gate_template, run_gate
+from .registry import Registry, RegistryEntry, RegistryError, Slug, merge_gate_coverage
+from .verify import NOOP_GATE, resolve_gate_template
 from .workspace import RepoRef, RepositoryType, Workspace, WorkspaceError
 
 _STEP_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
@@ -91,19 +91,18 @@ def recover_repo(
     workspace_root: str | Path | None = None,
     base: str | None = None,
     pr_base: str | None = None,
-    verify_cmd: list[str] | None = None,
+    recorded_gate: list[str] | None = None,
     github: GitHubBackend | None = None,
     merge_policy: MergePolicy | None = None,
     repo_type: RepositoryType | None = None,
     merge_method: str = "squash",
     cleanup: bool = True,
-    cancel: threading.Event | None = None,
     dispatch_fn: DispatchFn = dispatch,
     oneharness_mode: str | None = "bypass",
     base_path: str | Path = BASE_CONFIG,
     persona_dir: str | Path = PERSONA_DIR,
 ) -> RecoveryResult:
-    """Verify and publish a preserved branch through its registered workflow."""
+    """Publish a preserved branch through its registered merge-path gate."""
     registry = registry or Registry()
     slug, entry = _registered(repo, registry)
     clone = Path(entry.path)
@@ -111,6 +110,19 @@ def recover_repo(
     if identity is None:
         raise RegistryError(f"registered checkout {clone} has no repository identity")
     decision = _effective_publication(identity.repo_type, identity.workflow, None, merge_policy)
+    # Recovery no longer runs the gate itself, so refuse the same way dispatch does
+    # rather than publishing preserved work that nothing will verify. Recovery
+    # worktrees are cut from `clone`, so its hooks are the ones Git will run, and
+    # the effective workflow decides whether required PR checks can stand in.
+    coverage = merge_gate_coverage(
+        identity.identity, clone, workflow=decision.workflow, github=github
+    )
+    if not coverage.meets_coverage_criteria:
+        raise RegistryError(
+            f"recovery refused for identity {coverage.identity}: {coverage.coverage_gap}; "
+            "run 'just repos --audit-gate-coverage' and repair the merge-path gate "
+            "before recovering preserved work"
+        )
     owner, name = str(slug).split("/", 1)
     ref = RepoRef(owner, name, entry.origin)
     workspace = Workspace(
@@ -146,27 +158,22 @@ def recover_repo(
             raise RegistryError(
                 f"branch {branch!r} has no lifecycle-preserved incomplete provenance"
             )
-        command = verify_cmd or (
+        # The merge path verifies the recovery, but an identity that cannot even name
+        # its complete bar has nothing to hand a resolver worker or a reader of the
+        # recovery attestation, so recovery still refuses a no-op gate.
+        resolved_recorded_gate = recorded_gate or (
             resolve_gate_template(identity.gate, remote_base)
             if identity.gate != NOOP_GATE
             else None
         )
-        env = {
-            "ORCHESTRATOR_COMPARISON_REMOTE": "origin",
-            "ORCHESTRATOR_COMPARISON_BASE": publication_base,
-        }
-        if command is None:
+        if resolved_recorded_gate is None:
             raise RegistryError(
                 "repository identity has a no-op gate; migrate it or pass --gate for recovery"
             )
 
-        def verify_attest_push() -> MergeOutcome | None:
-            verified = run_gate(worktree, command, env=env, cancel=cancel)
-            if not verified.ok:
-                return MergeOutcome(
-                    "gate-failed",
-                    f"recovery gate failed; fix {branch!r} in its preserved branch and retry",
-                )
+        def attest_and_push() -> MergeOutcome | None:
+            # Recovery always publishes through a push or a PR. The executable
+            # pre-push hook / required PR checks are therefore authoritative.
             missing = sorted(unattested_incomplete(worktree, remote_base, branch))
             if missing:
                 trailers = "\n".join(f"{RECOVERY_TRAILER} {sha}" for sha in missing)
@@ -174,11 +181,23 @@ def recover_repo(
                     worktree,
                     "chore: attest verified recovery of preserved work\n\n" + trailers,
                 )
-            gitops.push(worktree, branch)
+            try:
+                gitops.push(worktree, branch)
+            except gitops.GitError as exc:
+                outcome = classify_push_failure(exc)
+                detail = str(exc)
+                return MergeOutcome(
+                    outcome,
+                    (
+                        f"repository pre-push gate rejected recovery of {branch!r}: {detail}"
+                        if outcome == "gate-failed"
+                        else f"recovery push of {branch!r} failed: {detail}"
+                    ),
+                )
             workspace.mirror_branch(ref, branch)
             return None
 
-        def synchronize_verify_attest_and_push_local_recovery() -> MergeOutcome | None:
+        def synchronize_attest_and_push_local_recovery() -> MergeOutcome | None:
             gitops.fetch(worktree)
             if not gitops.merge_base_into_branch(
                 worktree,
@@ -190,7 +209,7 @@ def recover_repo(
                     MERGE_CONFLICT_RETRY,
                     f"current {remote_base} conflicts with preserved branch {branch}",
                 )
-            return verify_attest_push()
+            return attest_and_push()
 
         if decision.workflow != "local":
             if not gitops.merge_base_into_branch(
@@ -209,7 +228,7 @@ def recover_repo(
                     pr_base=publication_base,
                     synthetic_stack_base=synthetic_stack_base,
                 )
-            failed = verify_attest_push()
+            failed = attest_and_push()
             if failed is not None:
                 return RecoveryResult(
                     str(slug),
@@ -236,20 +255,15 @@ def recover_repo(
             branch=branch,
             title=_default_title(worktree, remote_base, f"Recover preserved branch {branch}"),
             body=(
-                "## What\nRecover lifecycle-preserved work after explicit verification.\n\n"
+                "## What\nRecover lifecycle-preserved work through its merge-path gate.\n\n"
                 "## Why\nThe original dispatch did not complete; this branch now carries "
                 "a verified recovery attestation.\n"
             ),
             method=merge_method,
             policy=decision.merge_policy,
             repository_type=identity.repo_type,
-            verify_command=command,
-            verify_env=env,
-            verify_cancel=cancel,
             local_prepare=(
-                synchronize_verify_attest_and_push_local_recovery
-                if decision.workflow == "local"
-                else None
+                synchronize_attest_and_push_local_recovery if decision.workflow == "local" else None
             ),
         )
         published = strategy.publish_and_merge(context)
@@ -373,9 +387,7 @@ def recover_repo(
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description=(
-            "Verify and publish a lifecycle-preserved branch through its registered workflow."
-        )
+        description=("Publish a lifecycle-preserved branch through its registered merge-path gate.")
     )
     parser.add_argument("branch")
     parser.add_argument("--repo", type=Path, default=Path.cwd())
@@ -385,7 +397,10 @@ def main(argv: list[str] | None = None) -> int:
         help="recorded PR/stack base for a preserved stacked branch (default: --base)",
     )
     parser.add_argument(
-        "--gate", help="gate command, parsed like a shell line (default: auto-detect)"
+        "--gate",
+        help="the repository's complete gate command, parsed like a shell line, recorded "
+        "as the bar this recovery is held to; the merge path is what runs it "
+        "(default: the registered identity gate)",
     )
     parser.add_argument("--workspace", type=Path)
     parser.add_argument("--merge-policy", choices=("auto", "direct", "none"), default=None)
@@ -400,7 +415,7 @@ def main(argv: list[str] | None = None) -> int:
             workspace_root=args.workspace,
             base=args.base,
             pr_base=args.pr_base,
-            verify_cmd=shlex.split(args.gate) if args.gate else None,
+            recorded_gate=shlex.split(args.gate) if args.gate else None,
             merge_policy=args.merge_policy,
             repo_type=args.repo_type,
             merge_method=args.merge_method,
