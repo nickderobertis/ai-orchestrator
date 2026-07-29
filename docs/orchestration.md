@@ -257,6 +257,15 @@ impact and what drove the decision, not an orchestration handoff. If the request
 does not make that why clear, the planner must ask the user before dispatch rather
 than inventing it.
 
+An unsatisfiable criterion does not fail fast. The simulated-user supervisor is
+working correctly when it refuses completion, so the worker is parked and
+re-asked until the turn cap — spending a full attempt, often several, to produce
+a generic `not-completed` that names neither the criterion nor the cause. Before
+dispatch, ask of each criterion: what would the worker run to satisfy it, and can
+that command succeed right now? When a criterion's proof is necessarily
+indirect, pair it with an `## Additional info` instruction to state the blocker in
+the final assessment and stop rather than wait.
+
 | Shape | Required fields | Meaning |
 | --- | --- | --- |
 | Direct agent | `persona`, `task`; no `repo` | Dispatch one real onejudge process in the selected project directory. |

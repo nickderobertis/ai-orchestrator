@@ -86,7 +86,13 @@ dispatch onejudge.
    that a diff cannot recover. If that why is unclear or absent from the request,
    ask the user before dispatch; never invent it or use the orchestration handoff
    as motivation. Acceptance criteria is the detailed source of truth visible to
-   both worker and judge. The judge-only `done_when` must always require that all
+   both worker and judge. Every criterion must be satisfiable by the worker
+   inside its own dispatch, using only what that dispatch controls; never require
+   evidence that turns on an external event the run does not control — an open
+   PR, a deploy, a scheduled job, a third party. When the natural proof is
+   ephemeral or external, require contract-level proof instead and name the
+   artifact that defines the contract.
+   The judge-only `done_when` must always require that all
    task acceptance criteria are met and may add broader quality measures such as
    a green gate, held coverage, or no regressions. Keep those specific criteria in
    the task, not only in `done_when`; use `max_turns` when needed. Start from
