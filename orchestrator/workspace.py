@@ -24,6 +24,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import threading
 import time
 import uuid
@@ -234,6 +235,48 @@ class RunOwner:
         return self.process_start is not None and process_start_identity(self.pid) == (
             self.process_start
         )
+
+
+#: A tree a killed worker left behind can still be written to while it is being
+#: removed — a build daemon flushing its cache is the ordinary case — and each such
+#: write can fail one `rmtree` pass on a directory that was empty a moment earlier.
+#: A few passes settle that; anything surviving them is a real problem to report.
+_RECLAIM_ATTEMPTS = 3
+
+
+def _grant_owner_access(path: Path) -> None:
+    """Restore this user's ability to delete a tree a worker made read-only.
+
+    Only the owner bits, and only on directories: the delete needs the containing
+    directory writable and searchable, and nothing here needs to widen access for
+    anybody else. A path this process may not chmod at all is left alone, and the
+    removal that follows reports what it could not do.
+    """
+    for parent, directories, _files in os.walk(path):
+        for name in (parent, *(os.path.join(parent, entry) for entry in directories)):
+            with suppress(OSError):
+                os.chmod(name, os.stat(name).st_mode | stat.S_IRWXU)
+
+
+def _remove_directory_tree(path: Path) -> None:
+    """Delete a directory tree, tolerating the debris a killed worker leaves."""
+    failure: OSError | None = None
+    for attempt in range(_RECLAIM_ATTEMPTS):
+        try:
+            shutil.rmtree(path)
+        except FileNotFoundError:
+            return
+        except PermissionError as exc:
+            failure = exc
+            _grant_owner_access(path)
+        except OSError as exc:
+            failure = exc
+            time.sleep(0.1 * (attempt + 1))
+        else:
+            return
+    raise WorkspaceError(
+        f"could not reclaim worktree path {path} after {_RECLAIM_ATTEMPTS} attempts: {failure}"
+    )
 
 
 def _abandoned_run_is_reclaimable(run_root: Path) -> bool:
@@ -554,6 +597,37 @@ class Workspace:
         with self._repo_lock(repo), advisory_lock(git_lock_identity(gitops.common_dir(clone))):
             return self._adopt_preserved_branch(repo, clone, branch)
 
+    def _reclaim_worktree_path(self, repo: RepoRef, clone: Path, path: Path) -> None:
+        """Clear one of *this run's* worktree paths, however its worker left it.
+
+        Git's own removal is the first choice and usually the only step, but it is
+        not something the harness can depend on: it refuses a directory that is no
+        longer a registered working tree, and it fails outright on the ``node_modules``
+        and build caches a killed worker leaves behind. Every one of those refusals
+        used to end a re-dispatch with a path an operator had to clear by hand, so
+        what git declines is finished here — the registration pruned, the directory
+        removed — and the dispatch goes on.
+
+        Ownership is not assumed, it is established. The path must sit under this
+        run's own root, whose occupancy this process leases and whose per-path lease
+        it holds exclusively before anything is deleted; a live sibling in the same
+        run therefore keeps its tree, and another run's tree is never even a
+        candidate. Reclaiming what is not ours is the one failure worse than the one
+        this fixes, so a path outside that root is refused rather than cleared.
+        """
+        root = self.run_root(repo).resolve()
+        target = path.resolve()
+        if root not in target.parents:
+            raise WorkspaceError(
+                f"refusing to reclaim {path}: it is outside this run's root {root}"
+            )
+        with suppress(gitops.GitError):
+            gitops.worktree_remove(clone, path, check=True)
+        if not target.exists():
+            return
+        _remove_directory_tree(target)
+        gitops.worktree_prune(clone)
+
     def worktree(self, repo: RepoRef, branch: str, *, base: str) -> Path:
         """Add a fresh worktree for ``branch`` cut off ``base`` (e.g. ``origin/main``).
 
@@ -580,7 +654,7 @@ class Workspace:
                             "or resume that worktree explicitly"
                         ) from None
                     try:
-                        gitops.worktree_remove(clone, registered, check=True)
+                        self._reclaim_worktree_path(repo, clone, registered)
                     except Exception:
                         self._release_worktree_lease(registered)
                         raise
@@ -590,15 +664,12 @@ class Workspace:
                         finally:
                             self._release_worktree_lease(registered)
                     active = gitops.worktrees(clone)
-            if path.exists():
-                raise RuntimeError(
-                    f"worktree path {path} already exists; inspect and remove it only after "
-                    "confirming its run is abandoned"
-                )
             path.parent.mkdir(parents=True, exist_ok=True)
             if path.resolve() not in self._worktree_leases:
                 self._acquire_worktree_lease(clone, path)
             try:
+                if path.exists():
+                    self._reclaim_worktree_path(repo, clone, path)
                 started = time.monotonic()
                 if gitops.branch_exists(clone, branch):
                     result = gitops.worktree_add_existing(clone, path, branch)
@@ -664,7 +735,7 @@ class Workspace:
         try:
             with advisory_lock(git_lock_identity(gitops.common_dir(clone))):
                 self._mirror_worktree_branch(repo, clone, Path(path))
-                gitops.worktree_remove(clone, path, check=True)
+                self._reclaim_worktree_path(repo, clone, Path(path))
         finally:
             self._release_worktree_lease(path)
 

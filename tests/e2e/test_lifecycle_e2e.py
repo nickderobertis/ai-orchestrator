@@ -205,6 +205,52 @@ def test_published_dispatch_survives_deferred_teardown_and_redispatch_reclaims_i
     assert second.outcome == "merged", second.detail
 
 
+def test_redispatch_reclaims_a_worktree_a_killed_worker_left_dirty(
+    tmp_path, bare_origin, command_base, personas_dir
+) -> None:
+    """A re-dispatch clears the debris of a killed worker instead of refusing it.
+
+    A worker that dies mid-run leaves a real worktree with a build cache in it and a
+    ``.git`` pointer git will no longer honour, so ``git worktree remove`` answers
+    "is not a working tree" and the plain directory stays. That used to end every
+    later attempt at the same branch until an operator cleared the path by hand.
+    """
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-killed")
+    root = tmp_path / "killed-worktrees"
+    ref = normalize_repo(str(origin))
+    killed = Workspace(
+        root, resolver=lambda _spec: canonical, workflow="local", repo_type="single-owner"
+    )
+    killed.ensure_clone(ref)
+    abandoned = killed.worktree(ref, "killed-worker", base="origin/main")
+    (abandoned / "node_modules" / ".cache").mkdir(parents=True)
+    (abandoned / "node_modules" / ".cache" / "daemon.log").write_text("stale\n", encoding="utf-8")
+    (abandoned / ".git").unlink()
+    killed._release_worktree_lease(abandoned)
+
+    resumed = Workspace(
+        root,
+        resolver=lambda _spec: canonical,
+        workflow="local",
+        repo_type="single-owner",
+        run_token=killed.run_token,
+    )
+    result = run_repo_task(
+        str(origin),
+        "complete-now write-change reclaimed after a killed worker",
+        "engineer",
+        workspace=resumed,
+        branch="killed-worker",
+        base_path=command_base(),
+        persona_dir=personas_dir,
+        verify_cmd=["true"],
+    )
+
+    assert result.outcome == "merged", result.detail
+    assert not (abandoned / "node_modules").exists()
+
+
 def test_lifecycle_failure_survives_simultaneous_deferred_teardown(
     tmp_path, bare_origin, command_base, personas_dir
 ) -> None:

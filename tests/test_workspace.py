@@ -17,6 +17,7 @@ from orchestrator.workspace import (
     Workspace,
     WorkspaceError,
     _abandoned_run_is_reclaimable,
+    _remove_directory_tree,
     _safe_branch_dir,
     normalize_repo,
 )
@@ -125,17 +126,62 @@ def test_workspace_fast_forwards_canonical_before_cutting_worktree(tmp_path, bar
     assert (worktree / "new.txt").read_text(encoding="utf-8") == "current\n"
 
 
-def test_workspace_refuses_unregistered_path_collision(tmp_path, bare_origin) -> None:
+def test_workspace_reclaims_an_unregistered_path_collision(tmp_path, bare_origin) -> None:
+    """A directory a killed worker left at this run's worktree path is cleared."""
     origin = bare_origin()
     canonical = gitops.clone(origin, tmp_path / "canonical")
     ref = normalize_repo(str(origin))
     ws = Workspace(tmp_path / "worktrees", resolver=lambda _: canonical)
     ws.ensure_clone(ref)
     collision = ws.run_root(ref) / _safe_branch_dir("feat")
-    collision.mkdir(parents=True)
+    (collision / "node_modules" / ".cache").mkdir(parents=True)
+    (collision / "node_modules" / ".cache" / "blob").write_text("stale\n", encoding="utf-8")
+    (collision / "node_modules").chmod(0o500)
 
-    with pytest.raises(RuntimeError, match="worktree path.*already exists"):
-        ws.worktree(ref, "feat", base="origin/main")
+    worktree = ws.worktree(ref, "feat", base="origin/main")
+
+    assert worktree == collision
+    assert (worktree / "README.md").is_file()
+    assert not (worktree / "node_modules").exists()
+
+
+def test_workspace_refuses_to_reclaim_a_path_outside_its_run_root(tmp_path, bare_origin) -> None:
+    """Ownership is the precondition: another run's tree is never a candidate."""
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical")
+    ref = normalize_repo(str(origin))
+    ws = Workspace(tmp_path / "worktrees", resolver=lambda _: canonical)
+    clone = ws.ensure_clone(ref)
+    stranger = tmp_path / "another-run" / "feat"
+    (stranger / "work").mkdir(parents=True)
+
+    with pytest.raises(WorkspaceError, match="outside this run's root"):
+        ws._reclaim_worktree_path(ref, clone, stranger)
+
+    assert (stranger / "work").is_dir()
+
+
+def test_a_worktree_path_that_cannot_be_reclaimed_says_so(tmp_path) -> None:
+    """The one leftover this cannot clear is named, not silently worked around.
+
+    A tree whose *parent* denies this user is the shape that made a re-dispatch
+    unrecoverable without ``sudo`` — root-owned container files — and no amount of
+    restoring the owner bits below it helps. It has to reach an operator as itself.
+    """
+    parent = tmp_path / "sealed"
+    target = parent / "worktree"
+    target.mkdir(parents=True)
+    (target / "leftover").write_text("stale\n", encoding="utf-8")
+    parent.chmod(0o500)
+    try:
+        with pytest.raises(WorkspaceError, match="could not reclaim worktree path"):
+            _remove_directory_tree(target)
+    finally:
+        parent.chmod(0o700)
+
+    # The path is still occupied, which is exactly why the caller must hear about it
+    # rather than go on and fail later on `git worktree add`.
+    assert target.is_dir()
 
 
 def test_workspace_refuses_dirty_execution_checkout(tmp_path, bare_origin) -> None:
