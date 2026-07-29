@@ -286,8 +286,18 @@ def _node_human_refs(nid: str, task: dict[str, Any]) -> set[str]:
 MAX_AUTOMATIC_ROUND_RESUMES = 2
 
 
-def _spent_attempts(resume: dict[str, Any]) -> int:
-    """Automatic continuations already recorded, ignoring an unusable count."""
+def _spent_attempts(node: dict[str, Any]) -> int:
+    """Automatic continuations this node already carries, ignoring an unusable count.
+
+    Read from the node as the *previous plan* recorded it, not from the round's
+    result. A lifecycle builds a fresh continuation for whatever it preserved and
+    has no reason to know how many rounds preceded it, so a count taken from the
+    result would reset to zero every round and bound nothing. The prior plan is
+    this function's own output from last round, which is exactly the tally.
+    """
+    resume = node.get("resume")
+    if not isinstance(resume, dict):
+        return 0
     spent = resume.get("attempts")
     return spent if isinstance(spent, int) and not isinstance(spent, bool) and spent > 0 else 0
 
@@ -341,14 +351,14 @@ def _apply_lifecycle_resume(
         from .plan import PlanError
 
         raise PlanError(f"task {nid!r} has no valid resume metadata")
+    spent = _spent_attempts(node)
     next_resume = dict(resume)
-    if retrying_preserved:
-        # The planner asked for this one by name, so it starts with a full budget:
-        # the bound exists to stop the harness repeating itself, not to overrule a
-        # decision somebody made after reading the result.
-        next_resume.pop("attempts", None)
-    elif continuing_preserved:
-        spent = _spent_attempts(next_resume)
+    # The tally belongs to the plan, never to the result the lifecycle wrote.
+    next_resume.pop("attempts", None)
+    # An explicit retry starts over with a full budget: the bound exists to stop the
+    # harness repeating itself, not to overrule a decision somebody made after
+    # reading the result.
+    if continuing_preserved and not retrying_preserved:
         if spent >= MAX_AUTOMATIC_ROUND_RESUMES:
             return False
         next_resume["attempts"] = spent + 1

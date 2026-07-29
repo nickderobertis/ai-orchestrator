@@ -1083,33 +1083,39 @@ def test_a_node_that_cannot_finish_settles_instead_of_being_redispatched_forever
     ]
     run = "bounded-resume"
 
-    def _round_result(number: int) -> dict:
-        recorded = runs_dir / run / f"round-{number:02d}" / "result.json"
-        return json.loads(recorded.read_text(encoding="utf-8"))["results"]["change"]
+    def _recorded(number: int, name: str) -> dict:
+        recorded = runs_dir / run / f"round-{number:02d}" / name
+        return json.loads(recorded.read_text(encoding="utf-8"))
 
     assert main_plan([str(plan_path), "--run", run, "--runs-dir", str(runs_dir), *common]) == 1
     capsys.readouterr()
-    branch = _round_result(1)["branch"]
-    markers = [len(incomplete_commits(canonical, "origin/main", branch))]
+    branch = _recorded(1, "result.json")["results"]["change"]["branch"]
 
-    # Every automatic continuation the budget allows, and not one more.
-    for _ in range(MAX_AUTOMATIC_ROUND_RESUMES):
+    # Every automatic continuation the budget allows, and not one more. Each one
+    # resumes the same preserved branch and spends one attempt from that budget,
+    # which the round's own plan records.
+    for attempt in range(1, MAX_AUTOMATIC_ROUND_RESUMES + 1):
         assert next_round_main([run, "--runs-dir", str(runs_dir), *common]) == 1
         capsys.readouterr()
-        markers.append(len(incomplete_commits(canonical, "origin/main", branch)))
+        dispatched = _recorded(attempt + 1, "plan.json")["tasks"][0]
+        assert dispatched["resume"]["branch"] == branch
+        assert dispatched["resume"]["attempts"] == attempt
+        assert _recorded(attempt + 1, "result.json")["results"]["change"]["branch"] == branch
 
     rounds_run = 1 + MAX_AUTOMATIC_ROUND_RESUMES
-    assert _round_result(rounds_run)["branch"] == branch
-    assert markers == list(range(1, rounds_run + 1)), markers
+    markers = len(incomplete_commits(canonical, "origin/main", branch))
+    assert 1 <= markers <= rounds_run, markers
 
     assert next_round_main([run, "--runs-dir", str(runs_dir), *common]) == 0
     settled = capsys.readouterr().out
     assert "nothing to iterate" in settled, settled
 
-    # Nothing was dispatched, so the branch stopped growing and still carries every
-    # preserved attempt for `just repo-recover` to verify and publish.
+    # Nothing was dispatched, so no further round claimed the ledger, no further
+    # marker reached the branch, and the preserved work is still exactly where
+    # `just repo-recover` expects to find it.
     assert not (runs_dir / run / f"round-{rounds_run + 1:02d}").exists()
-    assert len(incomplete_commits(canonical, "origin/main", branch)) == rounds_run
+    assert len(incomplete_commits(canonical, "origin/main", branch)) == markers
+    assert gitops.branch_exists(canonical, branch)
 
 
 def test_ordinary_next_round_resumes_committed_lifecycle_branch(

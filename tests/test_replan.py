@@ -554,57 +554,50 @@ def test_failed_lifecycle_carries_preserved_resume_without_retry_edit() -> None:
 def _preserved_failure(resume: dict[str, object], *, round_number: int = 3) -> dict[str, object]:
     return {
         "round": round_number,
-        "results": {
-            "work": {"status": "failed", "outcome": "not-completed", "resume": resume}
-        },
+        "results": {"work": {"status": "failed", "outcome": "not-completed", "resume": resume}},
     }
+
+
+#: The continuation a failing lifecycle node preserves. The lifecycle rebuilds one
+#: of these every round from whatever it just preserved, so it never carries a tally
+#: of how many rounds preceded it — which is why the budget is counted on the plan.
+_PRESERVED_RESUME: dict[str, object] = {
+    "branch": "feature/preserved",
+    "base_branch": "main",
+    "pr_base": "main",
+    "checkpoint": "abcdef1",
+    "completed_steps": [],
+    "mode": "retry",
+}
 
 
 def test_automatic_continuation_settles_a_node_once_its_budget_is_spent() -> None:
     """A preserved branch is continued a bounded number of times, then left alone.
 
-    Unbounded, this is the loop that redispatched one node every round and handed it
-    another `(incomplete step)` marker commit each time. The node settles out of the
-    round exactly as a `drop` would, leaving its failed result and its recoverable
-    branch for the planner.
+    Unbounded, this is the loop that redispatched one node every round on the same
+    branch, handing it another `(incomplete step)` marker commit each time. Rounds
+    are chained the way the real ledger chains them — each plan derived from the last
+    — because the tally lives on the plan and a result-only chain would never bound.
     """
     work = {"id": "work", "repo": "o/r", "persona": "engineer", "task": "Continue"}
-    resume: dict[str, object] = {
-        "branch": "feature/preserved",
-        "base_branch": "main",
-        "pr_base": "main",
-        "checkpoint": "abcdef1",
-        "completed_steps": [],
-        "mode": "retry",
-    }
+    plan = _plan(work)
 
-    spent = 0
-    for _ in range(MAX_AUTOMATIC_ROUND_RESUMES):
-        carried = next_round(_plan(work), _preserved_failure(resume))
-        resume = carried["tasks"][0]["resume"]
-        spent += 1
-        assert resume["attempts"] == spent
+    for attempt in range(1, MAX_AUTOMATIC_ROUND_RESUMES + 1):
+        plan = next_round(plan, _preserved_failure(_PRESERVED_RESUME))
+        assert plan["tasks"][0]["resume"]["attempts"] == attempt
 
-    assert next_round(_plan(work), _preserved_failure(resume))["tasks"] == []
+    assert next_round(plan, _preserved_failure(_PRESERVED_RESUME))["tasks"] == []
 
 
 def test_an_explicit_retry_restores_the_full_continuation_budget() -> None:
     """The bound stops the harness repeating itself, never a planner decision."""
     work = {"id": "work", "repo": "o/r", "persona": "engineer", "task": "Continue"}
-    exhausted: dict[str, object] = {
-        "branch": "feature/preserved",
-        "base_branch": "main",
-        "pr_base": "main",
-        "checkpoint": "abcdef1",
-        "completed_steps": [],
-        "mode": "retry",
-        "attempts": MAX_AUTOMATIC_ROUND_RESUMES,
-    }
+    exhausted = _plan({**work, "resume": {**_PRESERVED_RESUME, "attempts": 2}})
 
-    assert next_round(_plan(work), _preserved_failure(exhausted))["tasks"] == []
+    assert next_round(exhausted, _preserved_failure(_PRESERVED_RESUME))["tasks"] == []
 
     retried = next_round(
-        _plan(work), _preserved_failure(exhausted), {"retry": {"work": {"max_turns": 40}}}
+        exhausted, _preserved_failure(_PRESERVED_RESUME), {"retry": {"work": {"max_turns": 40}}}
     )
 
     assert [task["id"] for task in retried["tasks"]] == ["work"]
@@ -621,7 +614,7 @@ def test_a_waiting_human_workstream_is_never_bounded_by_the_retry_budget() -> No
         "task": "Continue",
         "steps": [{"id": "gate", "kind": "human", "task": "approve"}],
     }
-    resume: dict[str, object] = {
+    resume = {
         "branch": "feature/paused",
         "base_branch": "main",
         "pr_base": "main",
@@ -630,15 +623,14 @@ def test_a_waiting_human_workstream_is_never_bounded_by_the_retry_budget() -> No
     }
     waiting = {
         "round": 2,
-        "results": {
-            "work": {"status": "waiting", "resume": resume, "waiting_steps": ["gate"]}
-        },
+        "results": {"work": {"status": "waiting", "resume": resume, "waiting_steps": ["gate"]}},
     }
+    plan = _plan(work)
 
     for _ in range(MAX_AUTOMATIC_ROUND_RESUMES + 2):
-        carried = next_round(_plan(work), waiting)
-        assert [task["id"] for task in carried["tasks"]] == ["work"]
-        assert "attempts" not in carried["tasks"][0]["resume"]
+        plan = next_round(plan, waiting)
+        assert [task["id"] for task in plan["tasks"]] == ["work"]
+        assert "attempts" not in plan["tasks"][0]["resume"]
 
 
 def test_explicit_branch_overrides_inferred_preserved_resume() -> None:
