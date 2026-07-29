@@ -67,7 +67,7 @@ def resolve_supervision_run(runs_dir: Path, identifier: str) -> RunId:
             if not metadata.is_file():
                 continue
             value = load_mapping(metadata)
-            if value.get("plan_name") == identifier and launch_is_active(run_dir):
+            if value.get("plan_name") == identifier and launch_is_provably_active(run_dir):
                 matches.append(validate_run_id(run_dir.name))
     if len(matches) == 1:
         return matches[0]
@@ -130,8 +130,15 @@ def _launch_may_have_reported(run_dir: Path) -> bool:
 # run e2e. The remaining branches answer for records this host cannot read or a pid it
 # cannot probe -- states no planner command can produce, since reaching them needs a
 # crashed writer, a damaged filesystem, or another host. tests/test_runs.py covers them.
-def launch_is_active(run_dir: Path) -> bool:
-    """Return whether a launched orchestrator has not written its final report."""
+def launch_is_provably_active(run_dir: Path) -> bool:
+    """Whether this host can show a launched orchestrator is still working.
+
+    The mirror of `process_may_be_live`, and deliberately the opposite polarity:
+    only `True` is a certainty here. Everything this host cannot establish -- a
+    record it cannot read, an owner it cannot parse -- answers `False`, because
+    the callers use it to *claim* a run, and a claim made on evidence nobody has
+    is how a live orchestrator ends up with a second one addressing its run.
+    """
     if _launch_may_have_reported(run_dir):
         return False
     status = run_dir / "orchestrator" / "status.json"

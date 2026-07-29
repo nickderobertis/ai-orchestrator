@@ -21,7 +21,7 @@ from orchestrator.runs import (
     abandoned_round_indicator,
     as_result_payload,
     latest_round,
-    launch_is_active,
+    launch_is_provably_active,
     list_runs,
     load_completions,
     prepare_round,
@@ -438,7 +438,7 @@ def test_a_report_this_host_cannot_stat_is_an_unknown_state_not_a_crash(
     monkeypatch.setattr(Path, "stat", refuse)
 
     assert abandoned_launch(run_dir) is None
-    assert launch_is_active(run_dir) is False
+    assert launch_is_provably_active(run_dir) is False
 
 
 def test_an_unreadable_launch_record_keeps_the_run_silent_without_raising(tmp_path) -> None:
@@ -453,7 +453,7 @@ def test_an_unreadable_launch_record_keeps_the_run_silent_without_raising(tmp_pa
     (run_dir / "orchestrator" / "status.json").write_text("{ not json", encoding="utf-8")
 
     assert abandoned_launch(run_dir) is None
-    assert launch_is_active(run_dir) is False
+    assert launch_is_provably_active(run_dir) is False
 
 
 def test_runs_cli_reports_an_abandoned_round_beside_a_recorded_one(tmp_path, capsys) -> None:

@@ -20,7 +20,7 @@ from .runs import (
     as_result_payload,
     human_actions,
     latest_round,
-    launch_is_active,
+    launch_is_provably_active,
     list_runs,
     load_completions,
     load_mapping,
@@ -190,7 +190,7 @@ def main_runs(argv: list[str] | None = None) -> int:
     active_launches = {
         path.name
         for path in run_dirs
-        if (path / "launch.json").is_file() and launch_is_active(path)
+        if (path / "launch.json").is_file() and launch_is_provably_active(path)
     }
     # Both indicators are reported from the recorded owner's liveness, not from the
     # last status string it wrote: neither a round nor an orchestrator killed with its
