@@ -2789,6 +2789,62 @@ def test_a_conflict_resolution_dispatch_that_raises_still_closes_its_ledger_even
     assert "DispatchError" in str(recorded[1].detail["error"])
 
 
+def test_a_conflict_resolution_whose_artifact_write_fails_still_closes_its_events(
+    tmp_path, bare_origin
+) -> None:
+    """The close cannot depend on *where* after the start the failure lands.
+
+    Here the resolver itself succeeds and commits; what fails is persisting its
+    report afterwards, against a real read-only artifact directory — the shape a
+    full or permission-denied disk takes in production. The ledger cannot see which
+    step raised, so a start it never closed reads as a hang either way.
+    """
+    origin = bare_origin({"shared.txt": "original\n"})
+    initial = make_writing_dispatch(filename="shared.txt", content="preserved")
+    journal = open_journal(tmp_path / "unwritable-run", RunId("unwritable-conflict"), 1)
+    node_journal = NodeJournal(journal, NodeId("ship"), RunId("unwritable-conflict"), 1)
+    artifacts = node_journal.artifact_dir
+    assert artifacts is not None
+
+    def dispatch_fn(persona: str, task: str, *, project_dir: str, **kwargs: object) -> Report:
+        if "Resolve the content conflict" not in task:
+            report = initial(persona, task, project_dir=project_dir, **kwargs)
+            _advance_origin(tmp_path, origin, "shared.txt", "advanced\n")
+            return report
+        path = Path(project_dir) / "shared.txt"
+        path.write_text("advanced\npreserved by engineer\n", encoding="utf-8")
+        gitops.add_all(project_dir)
+        artifacts.mkdir(parents=True, exist_ok=True)
+        artifacts.chmod(0o500)
+        return Report(persona, 0, True, False, 2, [], {}, {}, "")
+
+    try:
+        with pytest.raises(OSError):
+            run_repo_task(
+                str(origin),
+                "Create a conflicting local edit.",
+                "engineer",
+                workspace=_workspace(tmp_path, origin),
+                dispatch_fn=dispatch_fn,
+                recorded_gate=["true"],
+                journal=node_journal,
+            )
+    finally:
+        artifacts.chmod(0o700)
+
+    recorded = [
+        event
+        for event in journal.events()
+        if event.kind in {"conflict-resolution-started", "conflict-resolution-finished"}
+    ]
+    assert [event.kind for event in recorded] == [
+        "conflict-resolution-started",
+        "conflict-resolution-finished",
+    ]
+    assert recorded[1].detail["completed"] is False
+    assert "Error" in str(recorded[1].detail["error"])
+
+
 @pytest.mark.parametrize("resolver_commits", [False, True])
 def test_local_conflict_incomplete_resolver_preserves_branch(
     tmp_path, bare_origin, resolver_commits: bool

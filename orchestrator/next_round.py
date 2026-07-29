@@ -242,7 +242,11 @@ def main_runs(argv: list[str] | None = None) -> int:
         stopped = run_id in abandoned or run_id in parked
         marker = "! " if stopped else "* " if run_id in active_launches else "  "
         waiting = None
-        if run_id in active_launches:
+        # `not stopped` is the same rule the unrecorded rows above apply: a queued
+        # surface outlives the work that queued it, so a stopped run wearing it as its
+        # summary reads as a launch actively waiting on the planner. The round summary
+        # is what that row is, and the indicator below says why it is stopped.
+        if run_id in active_launches and not stopped:
             try:
                 waiting = planner_wait_indicator(args.runs_dir / run_id / "channel")
             except (ChannelError, ConfigError, OSError):

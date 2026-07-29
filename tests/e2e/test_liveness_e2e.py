@@ -132,25 +132,67 @@ def _queue_blocking_surface(run_dir: Path, started: list[subprocess.Popen[str]])
 
 PLAN = {"tasks": [{"id": "ship", "persona": "engineer", "task": "Ship"}]}
 
+#: A graph the real executor settles without dispatching anything: it records the
+#: round, writes its result, and stops on the human action. That is the observed
+#: run's exact shape — round 1 finished waiting on a person, and the orchestrator
+#: then went quiet instead of opening round 2.
+HUMAN_PLAN = {"tasks": [{"id": "gate", "kind": "human", "task": "Attest the release."}]}
 
-def _launch(run_dir: Path, pid: int, *, idle_for: float) -> None:
+
+def _settle_round(runs_dir: Path, run_id: str, plan_path: Path) -> None:
+    """Settle one real recorded round through `just run-plan`.
+
+    The round directory, its result, and the summary the listing later renders are
+    the real executor's, so the row this test asserts against is one production
+    actually produces. A human-only graph reaches that state spending no harness
+    turn, and `run-plan` exits non-zero because the graph is not complete.
+    """
+    plan_path.write_text(json.dumps(HUMAN_PLAN), encoding="utf-8")
+    settled = subprocess.run(
+        [
+            "just",
+            "run-plan",
+            str(plan_path),
+            "--run",
+            run_id,
+            "--runs-dir",
+            str(runs_dir),
+            "--format",
+            "json",
+        ],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(180),
+    )
+    assert (runs_dir / run_id / "round-01" / "result.json").is_file(), settled.stderr
+
+
+def _launch(run_dir: Path, pid: int, *, idle_for: float, settled: bool = False) -> None:
     """Record one launched run, silent since ``idle_for`` seconds ago, owned by ``pid``.
 
     The channel, its pacemaker clock, and the journal are written by the same
     functions production uses, through their own injectable clock where they have
     one. Only the two ownership records are written here, and only because they
-    must name a process this test can hold in a known state.
+    must name a process this test can hold in a known state. With ``settled``, the
+    round is the one `_settle_round` already recorded and nothing about it is
+    written here at all.
     """
     stale = time.time() - idle_for
+    round_dir = run_dir / "round-01"
+    host = socket.gethostname()
+    if not settled:
+        open_journal(run_dir, RunId(run_dir.name), 1).append(
+            "round-started", detail={"nodes": 1, "concurrency": 1, "plan": {}}
+        )
+        round_dir.mkdir()
+        (round_dir / "plan.json").write_text(json.dumps(PLAN), encoding="utf-8")
+        (round_dir / "status.json").write_text(
+            json.dumps({"status": "running", "pid": pid, "host": host}), encoding="utf-8"
+        )
     create_channel(run_dir)
     record_surface(run_dir / "channel", now=stale)
-    open_journal(run_dir, RunId(run_dir.name), 1).append(
-        "round-started", detail={"nodes": 1, "concurrency": 1, "plan": {}}
-    )
-    round_dir = run_dir / "round-01"
-    round_dir.mkdir()
     (run_dir / "orchestrator").mkdir()
-    host = socket.gethostname()
     (run_dir / "launch.json").write_text(
         json.dumps({"schema_version": 2, "run_id": run_dir.name, "channel_id": run_dir.name}),
         encoding="utf-8",
@@ -158,15 +200,10 @@ def _launch(run_dir: Path, pid: int, *, idle_for: float) -> None:
     (run_dir / "orchestrator" / "status.json").write_text(
         json.dumps({"status": "running", "pid": pid, "host": host}), encoding="utf-8"
     )
-    (round_dir / "plan.json").write_text(json.dumps(PLAN), encoding="utf-8")
-    (round_dir / "status.json").write_text(
-        json.dumps({"status": "running", "pid": pid, "host": host}), encoding="utf-8"
-    )
     for path in (
         run_dir / "events.jsonl",
         run_dir / "orchestrator" / "status.json",
-        round_dir / "plan.json",
-        round_dir / "status.json",
+        *sorted(round_dir.iterdir()),
     ):
         os.utime(path, (stale, stale))
 
@@ -221,11 +258,55 @@ def test_just_runs_reports_a_parked_launch_and_never_a_busy_one(
     assert "PARKED" not in _runs(runs, parked_after=60)
 
 
-def test_just_status_reports_a_parked_launch(
-    tmp_path: Path, sleeper: list[subprocess.Popen[bytes]]
+def test_just_runs_reports_a_settled_rounds_own_summary_under_a_parked_launch(
+    tmp_path: Path, sleeper: list[subprocess.Popen[bytes]], relays: list[subprocess.Popen[str]]
 ) -> None:
+    """The observed shape: round 1 settled, a surface still queued, nothing working.
+
+    A recorded row renders what the run is *waiting on* in place of the round
+    summary, which is right for a live launch and a half-truth for a stopped one:
+    the queued surface outlives the work that queued it, so a parked run would wear
+    it as its summary and read as a launch actively waiting on the planner. The
+    round's own summary is what that row is; the PARKED line beneath says why it
+    stopped.
+    """
     runs = tmp_path / "runs"
-    _launch(runs / "parked-run", _idle(sleeper), idle_for=600)
+    parked = runs / "parked-run"
+    busy = runs / "busy-run"
+    for run_id in ("parked-run", "busy-run"):
+        _settle_round(runs, run_id, tmp_path / f"{run_id}.json")
+    _launch(parked, _idle(sleeper), idle_for=600, settled=True)
+    _launch(busy, _busy(sleeper, tmp_path / "busy.ready"), idle_for=600, settled=True)
+    _queue_blocking_surface(parked, relays)
+    _queue_blocking_surface(busy, relays)
+
+    listed = _runs(runs, parked_after=60)
+    stopped = _line(listed, "parked-run")
+    assert stopped.startswith("! parked-run  round-01  (1 waiting;")
+    assert SURFACE not in stopped
+    assert "PARKED (alive with no child process" in listed
+
+    # The same surface on a launch that is working is exactly what the row should
+    # say, so the summary it replaces above is genuinely competing.
+    assert _line(listed, "busy-run") == (
+        f"* busy-run  round-01  (waiting for planner decision: blocker: {SURFACE})"
+    )
+
+
+def test_just_status_reports_a_parked_launch_beside_its_stale_surface(
+    tmp_path: Path, sleeper: list[subprocess.Popen[bytes]], relays: list[subprocess.Popen[str]]
+) -> None:
+    """Beside, not instead of, and the parked line first.
+
+    `just status` is the surface-reporting view, so hiding the queued surface would
+    lose the reason the run is stuck. Ordering carries the whole meaning: read the
+    other way round, the run is waiting on a person who is being waited on by
+    nothing. This is the same contract an abandoned round already keeps.
+    """
+    runs = tmp_path / "runs"
+    parked = runs / "parked-run"
+    _launch(parked, _idle(sleeper), idle_for=600)
+    _queue_blocking_surface(parked, relays)
     history_dir = tmp_path / "history"
     history_dir.mkdir()
     reported = subprocess.run(
@@ -248,7 +329,12 @@ def test_just_status_reports_a_parked_launch(
         timeout=e2e_timeout(60),
     )
     assert reported.returncode == 0, reported.stderr
-    assert "parked-run: PARKED" in reported.stdout
+    lines = reported.stdout.splitlines()
+    stalled = next(line for line in lines if "PARKED" in line)
+    stale = f"parked-run: waiting for planner decision: blocker: {SURFACE}"
+    assert stalled.startswith("parked-run: PARKED (alive with no child process")
+    assert stale in lines, reported.stdout
+    assert lines.index(stalled) + 1 == lines.index(stale), reported.stdout
 
 
 def _monitor(runs: Path, run_id: str) -> subprocess.CompletedProcess[str]:
@@ -311,14 +397,27 @@ def test_the_progress_views_reject_an_unusable_parked_threshold(tmp_path: Path) 
         assert "--parked-after must be a positive, finite number of seconds" in refused.stderr
 
 
-def test_unreadable_liveness_records_do_not_hide_a_parked_launch(
-    tmp_path: Path, sleeper: list[subprocess.Popen[bytes]]
+@pytest.mark.parametrize(
+    "heartbeat",
+    [
+        pytest.param("{ truncated", id="truncated"),
+        # Numeric and unusable. `.inf` and `.nan` are the tokens the ledger's own YAML
+        # reader turns into real floats, so any process that writes this file can put
+        # them there. Untimed, `.inf` reads as the newest moment there is and a parked
+        # launch looks as if it had just surfaced; `.nan` loses every comparison it
+        # takes part in, which reaches the same wrong answer by the other route.
+        pytest.param('{"schema_version": 1, "last_surface_at": .inf}', id="infinite"),
+        pytest.param('{"schema_version": 1, "last_surface_at": .nan}', id="not-a-number"),
+    ],
+)
+def test_unusable_liveness_records_do_not_hide_a_parked_launch(
+    tmp_path: Path, sleeper: list[subprocess.Popen[bytes]], heartbeat: str
 ) -> None:
-    """A record a view cannot read is not evidence of work, and must not read as any."""
+    """A record a view cannot use is not evidence of work, and must not read as any."""
     runs = tmp_path / "runs"
     parked = runs / "parked-run"
     _launch(parked, _idle(sleeper), idle_for=600)
-    (parked / "channel" / "heartbeat.json").write_text("{ truncated", encoding="utf-8")
+    (parked / "channel" / "heartbeat.json").write_text(heartbeat, encoding="utf-8")
     (parked / "round-01" / "status.json").write_text("{ truncated", encoding="utf-8")
     stale = time.time() - 600
     os.utime(parked / "channel" / "heartbeat.json", (stale, stale))

@@ -2012,6 +2012,11 @@ def run_repo_task(
                     "persona": lead.persona,
                 },
             )
+            # Everything between the start event and its close is guarded, not the
+            # dispatch alone: a start with nothing to close it is the "looks like a
+            # hang" reading these events exist to prevent, and the ledger cannot tell
+            # *where* after the start a failure landed. Persisting the report and
+            # inspecting the worktree both touch the filesystem and both can fail.
             try:
                 report = dispatch_fn(
                     cast(str, lead.persona),
@@ -2027,10 +2032,13 @@ def run_repo_task(
                     env=cache_env,
                     cancel=cancel,
                 )
+                persist_report_artifacts(
+                    log,
+                    report,
+                    session=f"{branch}:{lead.id}",
+                )
+                unresolved = gitops.unmerged_paths(worktree)
             except Exception as exc:
-                # A start with nothing to close it is the "looks like a hang" reading
-                # these events exist to prevent, so a dispatch that raised closes its
-                # own event before the failure travels on.
                 log.append(
                     "conflict-resolution-finished",
                     detail={
@@ -2041,12 +2049,6 @@ def run_repo_task(
                     },
                 )
                 raise
-            persist_report_artifacts(
-                log,
-                report,
-                session=f"{branch}:{lead.id}",
-            )
-            unresolved = gitops.unmerged_paths(worktree)
             log.append(
                 "conflict-resolution-finished",
                 detail={

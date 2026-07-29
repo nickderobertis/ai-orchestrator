@@ -137,6 +137,14 @@ message. A queued, unconsumed heartbeat remains non-blocking and is not reported
 as a reply wait. This distinguishes completed work held at a planner boundary
 from an orchestrator that is actively executing work.
 
+That wait describes a *live* launch only. A queued surface outlives the work that
+queued it, so a run reported abandoned or parked never wears it as its `just runs`
+summary: the row keeps the round's own summary and the `ABANDONED (...)` or
+`PARKED (...)` line beneath it says why the run stopped. `just status` is the
+surface-reporting view and keeps both, in that order — the stopped line first, the
+stale wait immediately after — so the reason the run is stuck stays visible without
+the run reading as live supervision.
+
 Every proposal includes `surface.blocking`: `true` means the worker or orchestrator
 is awaiting the decision, while `false` is an informational follow-up that does
 not stop the graph frontier. `monitor` renders `ACK REQUIRED` while any blocking
@@ -502,7 +510,9 @@ interval) and is overridable with `--parked-after SECONDS` on `just runs` and
 `just status`. Every unreadable input resolves toward "still working", so a busy
 orchestrator is never misreported as parked: one live descendant of the launch or
 of its round owner, one fresh surface, or one journal, plan, status, or result
-write is enough to keep it reported as running.
+write is enough to keep it reported as running. A persisted `last_surface_at` that
+is not a finite number is discarded rather than timed, since a non-finite stamp
+would otherwise make the run look eternally fresh or eternally silent.
 
 ## Monitoring a live run
 

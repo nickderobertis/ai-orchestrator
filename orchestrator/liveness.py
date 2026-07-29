@@ -24,6 +24,7 @@ only ever make a parked launch look busy, never a busy one look parked.
 
 from __future__ import annotations
 
+import math
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -131,7 +132,15 @@ def _mtime(path: Path) -> float | None:
 
 
 def _last_surface_at(run_dir: Path) -> float | None:
-    """The channel pacemaker's durable last-surface stamp, when it is readable."""
+    """The channel pacemaker's durable last-surface stamp, when it is usable.
+
+    A persisted file any process may write is a trust boundary, and a stamp only
+    known to be *numeric* is not yet usable: `NaN` orders inconsistently against
+    the other stamps in `max` and makes every idle comparison false, `inf` makes
+    the run look eternally fresh, and `-inf` parks it forever. None of the three
+    can be honestly timed, so each is discarded exactly like an unreadable record —
+    toward "still working", per this module's asymmetry.
+    """
     path = run_dir / "channel" / "heartbeat.json"
     if not path.is_file():
         return None
@@ -141,7 +150,7 @@ def _last_surface_at(run_dir: Path) -> float | None:
         return None
     if isinstance(value, bool) or not isinstance(value, int | float):
         return None
-    return float(value)
+    return float(value) if math.isfinite(value) else None
 
 
 def _round_owner(run_dir: Path) -> tuple[int | None, tuple[Path, ...]]:
