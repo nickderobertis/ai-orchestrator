@@ -86,7 +86,7 @@ from .runs import (
     write_result,
 )
 from .scratch import require_scratch_capacity, scratch_dispatch_guarded
-from .verify import NOOP_GATE, VerifyResult, resolve_gate_template
+from .verify import NOOP_GATE, VerifyResult, comparison_env, resolve_gate_template
 from .workspace import (
     CACHE_ENV,
     IdentityKey,
@@ -1185,7 +1185,9 @@ def _build_synthetic_stack_base(
                         f"into synthetic base from {root_base!r}"
                     )
                 )
-        gitops.push(worktree, branch)
+        # This branch publishes onto the root base, so that is the base its
+        # pre-push gate must judge it against.
+        gitops.push(worktree, branch, env=comparison_env(root_base))
         workspace.mirror_branch(ref, branch)
         pushed = True
         return SyntheticStackBase(branch)
@@ -1259,7 +1261,7 @@ def _pause_at_human_step(
     applicable_stack: list[StackBase],
     recorded_pr: str | None,
     journal: NodeSink,
-    cache_env: dict[str, str],
+    workstream_env: dict[str, str],
     dispatch_fn: DispatchFn,
     oneharness_mode: str | None,
     use_llmlint_wrapper: bool,
@@ -1302,7 +1304,7 @@ def _pause_at_human_step(
         return result
     checkpoint = gitops.head_sha(worktree)
     try:
-        gitops.push(worktree, branch)
+        gitops.push(worktree, branch, env=workstream_env)
     except GitError as exc:
         failed = _push_failure(exc, branch=branch)
         result.outcome = failed.outcome
@@ -1326,7 +1328,7 @@ def _pause_at_human_step(
                 base_path=base_path,
                 persona_dir=persona_dir,
                 journal=journal,
-                dispatch_env=cache_env,
+                dispatch_env=workstream_env,
             )
         pr = (github or CliGitHubBackend()).create_pr(
             result.repo,
@@ -1557,6 +1559,10 @@ def run_repo_task(
         else:
             pr_base = root_base
         result.pr_base = pr_base
+        # One environment for every dispatch and every gate run of this workstream:
+        # its shared build cache plus its comparison identity, so a worker's own
+        # gate and the publication rebuild judge the same base.
+        workstream_env = {**cache_env, **comparison_env(pr_base)}
         gate_template = selection.gate
         if recorded_gate is not None:
             resolved_recorded_gate = recorded_gate
@@ -1683,7 +1689,7 @@ def run_repo_task(
                 base_path=base_path,
                 persona_dir=persona_dir,
                 journal=log,
-                dispatch_env=cache_env,
+                dispatch_env=workstream_env,
                 extra_instructions=CI_ITERATION_INSTRUCTIONS if verify_via_ci else None,
                 completed=frozenset(completed_step_ids),
                 cancel=cancel,
@@ -1751,7 +1757,7 @@ def run_repo_task(
                 applicable_stack=applicable_stack,
                 recorded_pr=resume.pr if resume else None,
                 journal=log,
-                cache_env=cache_env,
+                workstream_env=workstream_env,
                 dispatch_fn=dispatch_fn,
                 oneharness_mode=oneharness_mode,
                 use_llmlint_wrapper=use_llmlint_wrapper,
@@ -1850,7 +1856,7 @@ def run_repo_task(
                 base_path=base_path,
                 persona_dir=persona_dir,
                 journal=log,
-                dispatch_env=cache_env,
+                dispatch_env=workstream_env,
             )
 
         # llmlint: ignore[changed_behavior_has_e2e] no blocking external operation exists between
@@ -1868,7 +1874,7 @@ def run_repo_task(
             # qualified this identity for dispatch, and it must read as a gate
             # failure rather than a raw Git error before any PR exists.
             try:
-                gitops.push(worktree, branch)
+                gitops.push(worktree, branch, env=workstream_env)
             except GitError as exc:
                 failed = _push_failure(exc, branch=branch)
                 result.outcome = failed.outcome
@@ -1952,7 +1958,7 @@ def run_repo_task(
                     "complete gate; retry with the repository gate enabled",
                 )
             try:
-                gitops.push(worktree, branch)
+                gitops.push(worktree, branch, env=workstream_env)
             except GitError as exc:
                 return _push_failure(exc, branch=branch)
             workspace.mirror_branch(ref, branch)
@@ -1977,6 +1983,7 @@ def run_repo_task(
             publication_attempts=publication_attempts,
             repository_type=effective_type,
             journal=log,
+            push_env=workstream_env,
             preverified_pr=preverified_pr,
             local_prepare=(synchronize_and_push_local_publication if local_publication else None),
         )
@@ -2038,7 +2045,7 @@ def run_repo_task(
                     max_turns=lead.max_turns or DEFAULT_LIFECYCLE_STEP_MAX_TURNS,
                     done_when="The conflict is resolved, committed, and the gate is green.",
                     labels=log.labels,
-                    env=cache_env,
+                    env=workstream_env,
                     cancel=cancel,
                 )
                 persist_report_artifacts(

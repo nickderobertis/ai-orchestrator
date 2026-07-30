@@ -4,6 +4,7 @@
   "defaultBase": "main",
   "namedInputs": {
     "default": ["{projectRoot}/**/*", "sharedGlobals"],
+    "wholeWorkspace": ["{workspaceRoot}/**/*"],
     "sharedGlobals": [
       "{workspaceRoot}/package.json",
       "{workspaceRoot}/bun.lock",
@@ -42,7 +43,7 @@
     "lint-llm-diff": {
       "cache": true,
       "inputs": [
-        "{workspaceRoot}/**/*",
+        "wholeWorkspace",
         { "env": "LLMLINT_DIFF_BASE_SHA" },
         { "runtime": "./scripts/llmlint-fingerprint.sh" }
       ],

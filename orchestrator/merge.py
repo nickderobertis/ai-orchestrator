@@ -31,6 +31,7 @@ from .coordination import GitLockIdentity, git_lock_identity
 from .github import AutoMergeUnavailable, Check, GitHubBackend, PRStatus, PullRequest
 from .merge_queue import merge_queue_turn
 from .outcomes import ALREADY_INTEGRATED_OUTCOME, LifecycleOutcome
+from .verify import comparison_env
 from .workspace import RepositoryType
 
 if TYPE_CHECKING:
@@ -98,6 +99,12 @@ class MergeContext:
     journal: NodeSink | None = None
     preverified_pr: PullRequest | None = None
     local_prepare: Callable[[], MergeOutcome | None] | None = None
+    #: The workstream environment every publishing push carries. The merge path is
+    #: the verifier now, so the `pre-push` hook running the repository's gate has to
+    #: see the same comparison base and build cache the worker's own gate saw —
+    #: otherwise it re-judges a memoized verdict against a base the worker never had.
+    #: `None` where a caller has no workstream, which resolves the base as Git would.
+    push_env: dict[str, str] | None = None
 
 
 @dataclass
@@ -353,7 +360,15 @@ class LocalMergeStrategy:
                             raise gitops.GitError(
                                 f"! [rejected] verified merge -> {ctx.base} (fetch first)"
                             )
-                        gitops.push(scratch, f"HEAD:{ctx.base}", set_upstream=False)
+                        gitops.push(
+                            scratch,
+                            f"HEAD:{ctx.base}",
+                            set_upstream=False,
+                            # The hook that verifies this tree must judge it against
+                            # the base it is being published onto, which for a stacked
+                            # workstream is not the remote HEAD it would discover.
+                            env=ctx.push_env or comparison_env(ctx.base),
+                        )
                     except gitops.GitError as exc:
                         if not _is_push_race(exc):
                             detail = str(exc)

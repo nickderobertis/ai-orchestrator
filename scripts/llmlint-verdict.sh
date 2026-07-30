@@ -55,10 +55,31 @@ status="$(cat -- "$verdict/status")" || {
   exit "$UNUSABLE_RECORD"
 }
 
+# One line, because "green" is a single claim: this verdict, about this diff,
+# against this base commit.
+#
+# The base rides in from the recipe that resolved and keyed on it — but it rides
+# in through the environment, which this script does not control. It is a resolved
+# commit id or it is nothing: this line is an operator's evidence for *which* base
+# a verdict covers, so an unvalidated value interpolated here would let anything
+# that can set a variable name a base the judge never saw.
+#
+# Both halves of the boundary scripts/llmlint-diff.sh applies before it judges, so
+# the two ends of the tier agree on what a base is: the right shape, *and* a commit
+# this repository actually has. Shape alone is not identity — forty hex characters
+# naming nothing is exactly as false a provenance as a branch name. Anything that
+# fails either half is reported as unresolved and never echoed: the verdict itself
+# is still valid and still replayed, because the base is provenance about the
+# verdict rather than part of the record it reads.
+base="${LLMLINT_DIFF_BASE_SHA:-}"
+if ! [[ "$base" =~ ^[0-9a-f]{40,64}$ ]] ||
+  ! git -C "$root" rev-parse --verify --quiet "${base}^{commit}" >/dev/null 2>&1; then
+  base="<unresolved>"
+fi
 if [[ -e "$verdict.judged" ]]; then
-  echo "lint-llm-diff: judged this diff (Nx cache miss)" >&2
+  echo "lint-llm-diff: judged this diff against base $base (Nx cache miss)" >&2
 else
-  echo "lint-llm-diff: replayed the recorded verdict (Nx cache hit)" >&2
+  echo "lint-llm-diff: replayed the recorded verdict for base $base (Nx cache hit)" >&2
 fi
 # A partial read is as unusable as none: the findings the operator acts on must be
 # the whole recorded report, so a truncated one exits here instead of falling

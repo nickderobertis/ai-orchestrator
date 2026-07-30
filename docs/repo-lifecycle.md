@@ -320,11 +320,102 @@ This repository's complete gate resolves that same comparison ref with
 `scripts/comparison-base.sh`. `just gate` discovers the base from a valid remote
 HEAD (or a sole remote branch); use `just gate <remote> <base>` when discovery is
 ambiguous. The lifecycle exports `ORCHESTRATOR_COMPARISON_REMOTE` and
-`ORCHESTRATOR_COMPARISON_BASE` to both verification passes, and the pre-push hook
+`ORCHESTRATOR_COMPARISON_BASE` to **every dispatch and every publishing push of a
+workstream**, and the pre-push hook reads that base and
 uses the remote name Git passes as its first argument. Invalid names, missing
 refs, and ambiguous remote branches fail with a remediation instead of falling
 back to `main`. `just sync` discovers the same branch; `just sync <branch>
 <remote>` is the explicit form.
+
+### One judged diff, one verdict
+
+A gate tier can end in a judge that is not reproducible — this repository's
+llmlint tier does — so its verdict is memoized: `just lint-llm-diff` records the
+judged findings and status in the cached Nx `workspace:lint-llm-diff` target,
+keyed on the whole workspace content, the resolved base **commit**, and the judge
+configuration fingerprint. Ask the same question twice and you get the recorded
+answer rather than a second roll of the dice.
+
+**The recorded verdict for exactly that content, base commit, and judge
+configuration is authoritative, and the worker's gate is where it is paid for.**
+The merge-path gate — the `pre-push` hook, which is the only verifier the
+lifecycle now runs — looks up the same key and replays what the worker cleared.
+That is the only assignment consistent with the invariant that *a dispatched
+change is not done until its own gate is green*: an agent can only clear findings
+it was shown, so a verdict that first appears after the agent has settled can
+neither be cleared nor appealed. Replay is not leniency — a recorded **failure**
+replays as a failure, the hook rejects the push, and the run ends `gate-failed`
+even where a fresh roll would have passed.
+
+Keeping the key equal across the two runs is what makes this hold, and the
+comparison base is the part that used to drift. A worker left to discover its own
+base resolves the remote HEAD, while the publishing push judges the workstream's
+`pr_base` — the parent branch for a stacked node, not the repository default. Two
+different base commits are two different diffs and therefore two independent
+judge rolls, the second one invisible to the only party who could act on it. So
+`verify.comparison_env` is the one source of that identity, and the lifecycle
+exports it into every dispatch of a workstream **and into every publishing push**,
+where the hook reads it. Nothing else stands between the worker's verdict and the
+merge, so a push that resolved its own base could merge work whose own gate had
+failed.
+
+Where the key genuinely differs the hook does judge again, and its verdict is
+then the authoritative one, because it is the only judgement of the content that
+will actually land: the base advanced after the worker settled and the merge
+changed what is being published, so the worker's clearance never covered it. To
+keep that honest rather than silent, a passing `just gate` reports which base
+commit was judged and whether the verdict was judged now or replayed from the
+record — green is always a claim about one specific base commit.
+
+Forcing a real re-judge is deliberately **per tier and per invocation**:
+
+```sh
+just lint-llm-diff origin/main --skip-nx-cache   # re-judge the llmlint tier
+just test --skip-nx-cache                        # re-run the test tier
+```
+
+An ambient global Nx cache skip (`NX_SKIP_NX_CACHE` / `NX_DISABLE_NX_CACHE`) is
+reported and ignored by that recipe and by `scripts/check-nx-cache.sh`. Exporting
+one re-rolls the judge from every unrelated command and breaks the checks whose
+contract *is* cache replay, so it is not a supported way to re-judge this tier.
+Every other Nx target still honours it.
+
+### When a cached verdict may stand in for a verdict on this tree
+
+llmlint is not the only memoized tier. **Every cached Nx target replays a recorded
+answer**, including `orchestrator:test` — the tier the coverage floor and the
+"tests are the only QA loop" invariant rest on. One rule governs all of them:
+
+> A cached verdict may stand in for a verdict on this tree only when the cache key
+> covers everything the check reads.
+
+Where it does, replay is exactly right and the recorded verdict is authoritative:
+the same question gets the same answer, and the worker's gate is where that answer
+was paid for. Where the key covers less than the check reads, replay is not a
+saving but a **false green** — a file the check reads can change the answer without
+changing the hash, and the tier reports a pass for a tree whose run would have
+failed.
+
+`orchestrator:test` used to be keyed on a hand-listed subset:
+`orchestrator/`, `tests/`, `personas/`, `config/`, `pyproject.toml`, `uv.lock`. The
+suite reads well past that list — `AGENTS.md`, `docs/`, the `justfile`,
+`llmlint.yml`, `scripts/`, `.githooks/pre-push`, `apps/dag-ui/vite.config.ts` — so
+editing any of them replayed a green verdict on a tree carrying a real regression.
+So the Python targets, which all run from the workspace root over the whole tree,
+now share the `wholeWorkspace` named input in `nx.json` with the llmlint tier and
+are keyed on the whole workspace.
+
+That trade is deliberate: a documentation-only or TypeScript-only change now
+re-runs the ~8-minute Python suite that reads documentation and app config. Paying
+that is the point — the alternative is the enumerated list going stale again the
+next time a test learns to read a new file, and a stale list fails *open*.
+`tests/test_nx_cache_scope.py` keeps it from narrowing by checking every repository
+path the suite names against the declared key, and
+`tests/e2e/test_nx_cache_scope_e2e.py` drives real Nx over a copy of this checkout
+to prove an edit to `AGENTS.md` re-runs the suite rather than replaying it.
+
+Two tiers, one answer, and neither is lenient: a recorded llmlint **failure**
+replays as a failure, and a tree the suite would fail can no longer replay a pass.
 
 ## Merge strategies (where the change lands)
 
