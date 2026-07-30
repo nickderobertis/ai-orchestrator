@@ -4,8 +4,10 @@
 Several shapes and vocabularies are mirrored across languages and would otherwise
 drift silently: renderer node states against ``orchestrator/projection.py``, the
 transcript payloads against the pinned ``@oneharness/ui`` declaration, and this
-repository's own envelope, HTTP payloads, SSE event names, and documented network
-defaults against ``docs/dag-ui/design.md``, and the semantic agent roles across
+repository's own envelope, HTTP payloads, timeline spans, SSE event names, and
+documented network defaults against ``docs/dag-ui/design.md``, the timeline's own
+closed vocabularies across Python, the ``dag-model`` schemas, and that contract, and
+the semantic agent roles across
 ``orchestrator/labels.py``, the ``dag-model`` enum, the design contract, and the
 judge's history-label config. Each side is parsed from its own file so a change to
 one without the other fails ``just check``.
@@ -514,58 +516,58 @@ def literal_values(path: Path, name: str) -> list[str]:
     return values
 
 
-def typescript_agent_roles(path: Path) -> list[str]:
+def zod_enum_members(path: Path, name: str) -> list[str]:
+    """The string members of one exported ``z.enum([...])`` schema."""
     try:
         source = path.read_text(encoding="utf-8")
     except OSError as exc:
         fail(
-            f"read TypeScript agent-role contract: {exc}; restore {path} from the "
-            "repository and retry"
+            f"read TypeScript {name} contract: {exc}; restore {path} from the repository and retry"
         )
     matches = re.findall(
-        r"export\s+const\s+agentRoleSchema\s*=\s*z\.enum\(\[(.*?)\]\);",
+        rf"export\s+const\s+{re.escape(name)}\s*=\s*z\.enum\(\[(.*?)\]\);",
         source,
         flags=re.DOTALL,
     )
     if len(matches) != 1:
         fail(
-            "packages/dag-model/src/index.ts must declare exactly one agentRoleSchema; "
+            f"packages/dag-model/src/index.ts must declare exactly one {name}; "
             "restore one exported `z.enum([...])` declaration and remove duplicates"
         )
     body = matches[0]
-    roles = re.findall(r'"([^"]+)"', body)
+    members = re.findall(r'"([^"]+)"', body)
     remainder = re.sub(r'"[^"]+"\s*,?', "", body)
-    if remainder.strip() or not roles or len(roles) != len(set(roles)):
+    if remainder.strip() or not members or len(members) != len(set(members)):
         fail(
-            "packages/dag-model/src/index.ts agentRoleSchema must contain unique string "
-            "roles; remove duplicates or non-string entries and restore any missing roles"
+            f"packages/dag-model/src/index.ts {name} must contain unique string members; "
+            "remove duplicates or non-string entries and restore any missing ones"
         )
-    return roles
+    return members
 
 
-def documented_agent_roles(path: Path) -> list[str]:
+def documented_type_union(path: Path, name: str) -> list[str]:
+    """The string members of one documented ``type Name =\n  | "a"\n  | "b";`` union."""
     try:
         source = path.read_text(encoding="utf-8")
     except OSError as exc:
         fail(
-            f"read documented agent-role contract: {exc}; restore {path} from the "
-            "repository and retry"
+            f"read documented {name} contract: {exc}; restore {path} from the repository and retry"
         )
-    matches = re.findall(r"type AgentRole =\n(.*?);", source, flags=re.DOTALL)
+    matches = re.findall(rf"type {re.escape(name)} =\n(.*?);", source, flags=re.DOTALL)
     if len(matches) != 1:
         fail(
-            "docs/dag-ui/design.md must declare exactly one AgentRole union; restore "
-            "one `type AgentRole = ...;` block and remove duplicates"
+            f"docs/dag-ui/design.md must declare exactly one {name} union; restore "
+            f"one `type {name} = ...;` block and remove duplicates"
         )
     body = matches[0]
-    roles = re.findall(r'"([^"]+)"', body)
+    members = re.findall(r'"([^"]+)"', body)
     remainder = re.sub(r'\s*\|\s*"[^"]+"', "", body)
-    if remainder.strip() or not roles or len(roles) != len(set(roles)):
+    if remainder.strip() or not members or len(members) != len(set(members)):
         fail(
-            "docs/dag-ui/design.md AgentRole must contain unique string union members; "
-            "remove duplicates or malformed members and restore any missing roles"
+            f"docs/dag-ui/design.md {name} must contain unique string union members; "
+            "remove duplicates or malformed members and restore any missing ones"
         )
-    return roles
+    return members
 
 
 def judge_agent_role(path: Path) -> str:
@@ -612,8 +614,10 @@ def main() -> None:
     # declaration) and the SSE event names fixed by the design contract.
     conversations = root / "orchestrator/conversations.py"
     read_model = root / "orchestrator/read_model.py"
+    timeline = root / "orchestrator/timeline.py"
     pinned = root / "docs/dag-ui/oneharness-ui-contract.d.ts"
     design = root / "docs/dag-ui/design.md"
+    dag_model = root / "packages/dag-model/src/index.ts"
 
     # Transcript shapes: the pinned `@oneharness/ui` declaration is authoritative.
     for name in ("ConversationUsage", "ConversationToolEvent", "ConversationTurn", "Conversation"):
@@ -645,6 +649,33 @@ def main() -> None:
     )
     for name in ("RunLaunch", "RunSummary", "RunList", "Round", "RunDetail"):
         reconcile_shape(read_model, name, design, interface_fields(design, name))
+
+    # The served run timeline: the design contract is authoritative for its payload
+    # shapes, and its two closed vocabularies are mirrored in the dag-model schemas a
+    # client parses with, so all three sides are reconciled here.
+    for name in ("TimelineReference", "TimelineEvent", "TimelineSpan", "RunTimeline"):
+        reconcile_shape(timeline, name, design, interface_fields(design, name))
+    for python_name, schema_name in (
+        ("TimelineSpanKind", "timelineSpanKindSchema"),
+        ("TimelineReferenceKind", "timelineReferenceKindSchema"),
+    ):
+        members = literal_values(timeline, python_name)
+        reconcile(
+            f"{python_name} vocabulary",
+            (f"orchestrator/timeline.py {python_name}", members),
+            (
+                f"packages/dag-model/src/index.ts {schema_name}",
+                zod_enum_members(dag_model, schema_name),
+            ),
+        )
+        reconcile(
+            f"{python_name} vocabulary",
+            (f"orchestrator/timeline.py {python_name}", members),
+            (
+                f"docs/dag-ui/design.md {python_name}",
+                documented_type_union(design, python_name),
+            ),
+        )
 
     # The out-of-repo provenance record: its shape, its own schema version, and the
     # narrower launcher set that actually gets a record written.
@@ -711,7 +742,7 @@ def main() -> None:
         (
             "packages/dag-model/src/index.ts",
             documented_number(
-                root / "packages/dag-model/src/index.ts",
+                dag_model,
                 "telemetry schema version",
                 r"telemetry_schema_version: z\.literal\((\d+)\)",
             ),
@@ -800,8 +831,8 @@ def main() -> None:
     # Semantic agent roles and the judge's configured role, reconciled across the
     # Python Literal, the dag-model enum, the design contract, and the judge config.
     roles = literal_values(root / "orchestrator/labels.py", "AgentRole")
-    typescript_roles = typescript_agent_roles(root / "packages/dag-model/src/index.ts")
-    documented_roles = documented_agent_roles(root / "docs/dag-ui/design.md")
+    typescript_roles = zod_enum_members(dag_model, "agentRoleSchema")
+    documented_roles = documented_type_union(design, "AgentRole")
     configured_judge_role = judge_agent_role(root / "oneharness.judge.toml")
     if not set(roles) == set(typescript_roles) == set(documented_roles):
         fail(

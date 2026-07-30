@@ -106,6 +106,13 @@ interface DetailSnapshot {
 prs:{}}`); `logs` and `launch` are omitted when the run wrote no logs or recorded no
 `launch_id`.
 
+`GET /api/v1/runs/{run_id}?include_conversations=false` serves `conversations` as
+an empty array. Transcripts dominate this payload — a real run carries megabytes of
+them across hundreds of sessions, refetched on every live update — so a client that
+reads the run timeline instead asks for none of them. This is an opt-out, not a
+schema change: `api_version` stays `1`, `conversations` stays required and present,
+and the client simply asked for nothing in it. It defaults to `true`.
+
 `RunTelemetry` is exactly `RunTelemetry.record()` from
 `orchestrator/telemetry.py`: required `run_id`, `state`, `phase`, `last_event`,
 `timing`, `nodes`, `usage`, `timing_quality`, `linkage_quality`, `sources`,
@@ -213,6 +220,115 @@ authoritative stream fails the detail request with `409 projection_error`; it is
 never rendered as a plausible graph. Pending nodes are plan tasks absent from
 `node_states`.
 
+### Run timeline
+
+`GET /api/v1/runs/{run_id}/timeline` returns one `RunTimeline` for the whole run;
+a consumer filters it by `node_id` rather than issuing one request per node. The
+server assembles it — clients never fold the journal, history, or the monitor
+snapshot themselves.
+
+```ts
+interface RunTimeline {
+  api_version: 1;
+  observed_at: string;
+  run_id: string;
+  spans: TimelineSpan[];
+}
+
+// One interval of recorded work. ended_at is null for work the recorded stream
+// never closed, which is what an in-flight run looks like rather than an error.
+// parent_id links spans into a tree; a span with no parent is run-level.
+// count and total_duration_ms appear only on a "rollup" span.
+interface TimelineSpan {
+  id: string;
+  kind: TimelineSpanKind;
+  label: string;
+  started_at: string;
+  ended_at: string | null;
+  events: TimelineEvent[];
+  parent_id?: string;
+  node_id?: string;
+  step_id?: string;
+  round?: number;
+  status?: string;
+  count?: number;
+  total_duration_ms?: number;
+  reference?: TimelineReference;
+}
+
+// One instant recorded inside a span. `kind` is the journal event kind that
+// produced it, or "conversation-turn" for a turn, and is an open string.
+interface TimelineEvent {
+  id: string;
+  kind: string;
+  at: string;
+  node_id?: string;
+  step_id?: string;
+  round?: number;
+  status?: string;
+  reference?: TimelineReference;
+}
+
+// Where an item's heavy content lives. The payload never inlines a transcript,
+// a gate log, or a report body; a consumer fetches only the item it opens.
+interface TimelineReference {
+  kind: TimelineReferenceKind;
+  value: string;
+}
+
+type TimelineSpanKind =
+  | "round"
+  | "node"
+  | "step"
+  | "dispatch"
+  | "verification"
+  | "publication"
+  | "pr-drafting"
+  | "conflict-resolution"
+  | "human-wait"
+  | "rollup";
+
+type TimelineReferenceKind =
+  | "conversation"
+  | "gate_log"
+  | "worker_report"
+  | "oneharness_session"
+  | "pr";
+```
+
+`orchestrator/timeline.py` owns the fold, from the run journal, the run's
+conversations, and the persisted `DetailSnapshot`. Its rules:
+
+- Journal `at` is epoch seconds on disk and is normalized to RFC 3339 UTC here,
+  like every other timestamp in this API.
+- A span brackets a recorded pair: `node-started`/`node-settled`\|`node-failed`,
+  `step-started`/`step-settled`, `verification-started`/`verification-finished`,
+  `pr-drafting-started`/`pr-drafting-finished`,
+  `conflict-resolution-started`/`conflict-resolution-finished`, and
+  `human-waiting`/`human-attested`. A round span opens at the first record
+  carrying its round and closes at `round-finished`. A publication span has no
+  recorded start, so it opens at the first of `pr-created`, `pr-ready`,
+  `pr-checks-observed`, `pr-merged`, `publication-finished`, or
+  `publication-failed` and closes on the last two — which remain events inside
+  it, unlike the other boundary kinds.
+- Every other record becomes an event inside the innermost span still open at its
+  own locator, so `pr-drafting-fallback` reads as the reason drafting failed
+  rather than as a sibling of the drafting it explains.
+- One `dispatch` span per conversation, one `conversation-turn` event per turn. A
+  conversation whose `attribution.transportRole` is `llmlint` is nested under the
+  dispatch span it ran within rather than emitted beside it; a conversation whose
+  attribution names no node attaches to its round, or to the run when it names
+  neither.
+- High-frequency kinds — those recorded per lock acquisition rather than per graph
+  transition, currently `lock-wait` — collapse into one `rollup` span per node
+  carrying `count` and `total_duration_ms`, never one item each.
+- The `DetailSnapshot` carries no timestamps and so contributes no ordered item.
+  It supplies the observed PR `state` as the `status` of a publication span the
+  journal has not closed.
+- A missing or unreadable history store or monitor snapshot degrades to an empty
+  contribution; a corrupt authoritative journal fails the read with `409
+  projection_error`, exactly as `RunDetail` does.
+
 Errors use `{"error":{"code":string,"message":string}}`. A missing run is 404
 `run_not_found`; a present run with no such transcript is 404
 `conversation_not_found`, which a viewer can treat as "still being written" rather
@@ -228,7 +344,9 @@ The server exposes only:
 
 - `GET /healthz` → `{"status":"ok"}` without touching run storage.
 - `GET /api/v1/runs`.
-- `GET /api/v1/runs/{run_id}`.
+- `GET /api/v1/runs/{run_id}?include_conversations={optional}`.
+- `GET /api/v1/runs/{run_id}/timeline` for the whole run's ordered spans and
+  events.
 - `GET /api/v1/runs/{run_id}/conversations/{conversation_id}` for one complete
   conversation when detail responses use summaries.
 - `GET /api/v1/events?run_id={optional}&after={optional}` as SSE.

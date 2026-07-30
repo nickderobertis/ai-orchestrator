@@ -5,9 +5,9 @@ import { z } from "zod";
 // Python read server is a sibling implementation that has not landed yet, so there is no second
 // executable API declaration to generate from or drift-check against. Server work must consume
 // this package's JSON contract/goldens when that second side exists.
-// llmlint: ignore-file[changed_behavior_has_e2e] model.e2e.test.ts exercises both top-level API
-// parsers plus populated telemetry, projection, provenance, and conversation attribution through
-// the package export. Nested Zod records compose those same tested boundaries; exhaustively
+// llmlint: ignore-file[changed_behavior_has_e2e] model.e2e.test.ts exercises every top-level API
+// parser plus populated telemetry, projection, provenance, timeline, and conversation attribution
+// through the package export. Nested Zod records compose those same tested boundaries; exhaustively
 // repeating every nested optional combination as an e2e would duplicate their focused unit tests.
 
 const finite = z.number().finite();
@@ -26,12 +26,21 @@ const openObject = <T extends z.ZodRawShape>(shape: T) =>
 export const API_V1_PATHS = {
   runs: "/api/v1/runs",
   run: (runId: string) => `/api/v1/runs/${encodeURIComponent(runId)}`,
+  timeline: (runId: string) =>
+    `/api/v1/runs/${encodeURIComponent(runId)}/timeline`,
   conversation: (runId: string, conversationId: string) =>
     `/api/v1/runs/${encodeURIComponent(runId)}/conversations/${encodeURIComponent(conversationId)}`,
   events: "/api/v1/events",
 } as const;
 export const API_V1_QUERY = {
   includeSettled: "include_settled",
+  /**
+   * Opt out of run-detail transcripts. `false` serves `conversations` as an empty
+   * array — an opt-out, not a schema change: the field stays required and present,
+   * so `api_version` is untouched and a client reading the timeline instead simply
+   * stops refetching megabytes of transcript on every live update.
+   */
+  includeConversations: "include_conversations",
   runId: "run_id",
   after: "after",
 } as const;
@@ -385,6 +394,76 @@ export const runDetailSchema = openObject({
   conversations: runConversationsSchema,
 });
 
+export const timelineReferenceKindSchema = z.enum([
+  "conversation",
+  "gate_log",
+  "worker_report",
+  "oneharness_session",
+  "pr",
+]);
+export const timelineSpanKindSchema = z.enum([
+  "round",
+  "node",
+  "step",
+  "dispatch",
+  "verification",
+  "publication",
+  "pr-drafting",
+  "conflict-resolution",
+  "human-wait",
+  "rollup",
+]);
+/**
+ * Where one timeline item's heavy content lives. The payload never inlines a
+ * transcript, a gate log, or a report body, so a consumer fetches only what it opens.
+ */
+export const timelineReferenceSchema = openObject({
+  kind: timelineReferenceKindSchema,
+  value: z.string().min(1),
+});
+/**
+ * `kind` is an open string on purpose: it is the journal event kind that produced
+ * the item, or `conversation-turn` for a turn, and the journal owns that vocabulary.
+ */
+export const timelineEventSchema = openObject({
+  id: z.string().min(1),
+  kind: z.string().min(1),
+  at: timestamp,
+  node_id: z.string().min(1).optional(),
+  step_id: z.string().min(1).optional(),
+  round: counter.optional(),
+  status: z.string().min(1).optional(),
+  reference: timelineReferenceSchema.optional(),
+});
+/**
+ * One interval of recorded work. `ended_at` is null for work the recorded stream
+ * never closed — an in-flight run, not an error — and `parent_id` links spans into
+ * the tree the recorded nesting implies. `count` and `total_duration_ms` appear only
+ * on a `rollup` span, which stands in for thousands of high-frequency records.
+ */
+export const timelineSpanSchema = openObject({
+  id: z.string().min(1),
+  kind: timelineSpanKindSchema,
+  label: z.string(),
+  started_at: timestamp,
+  ended_at: timestamp.nullable(),
+  events: z.array(timelineEventSchema),
+  parent_id: z.string().min(1).optional(),
+  node_id: z.string().min(1).optional(),
+  step_id: z.string().min(1).optional(),
+  round: counter.optional(),
+  status: z.string().min(1).optional(),
+  count: counter.optional(),
+  total_duration_ms: counter.optional(),
+  reference: timelineReferenceSchema.optional(),
+});
+export const runTimelineSchema = openObject({
+  api_version: z.literal(1),
+  observed_at: timestamp,
+  run_id: z.string().min(1),
+  spans: z.array(timelineSpanSchema),
+});
+
 export const apiErrorSchema = openObject({
   error: openObject({ code: z.string(), message: z.string() }),
 });
@@ -422,6 +501,12 @@ export type DagConversation = z.infer<typeof dagConversationSchema>;
 export type NodeConversations = z.infer<typeof nodeConversationsSchema>;
 export type RunConversations = z.infer<typeof runConversationsSchema>;
 export type RunDetail = z.infer<typeof runDetailSchema>;
+export type TimelineReferenceKind = z.infer<typeof timelineReferenceKindSchema>;
+export type TimelineSpanKind = z.infer<typeof timelineSpanKindSchema>;
+export type TimelineReference = z.infer<typeof timelineReferenceSchema>;
+export type TimelineEvent = z.infer<typeof timelineEventSchema>;
+export type TimelineSpan = z.infer<typeof timelineSpanSchema>;
+export type RunTimeline = z.infer<typeof runTimelineSchema>;
 export type ApiError = z.infer<typeof apiErrorSchema>;
 export type LaunchProvenance = z.infer<typeof launchProvenanceSchema>;
 export type SseEventName = z.infer<typeof sseEventNameSchema>;
@@ -430,3 +515,5 @@ export const parseRunList = (value: unknown): RunList =>
   runListSchema.parse(value);
 export const parseRunDetail = (value: unknown): RunDetail =>
   runDetailSchema.parse(value);
+export const parseRunTimeline = (value: unknown): RunTimeline =>
+  runTimelineSchema.parse(value);
