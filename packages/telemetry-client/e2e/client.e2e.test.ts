@@ -123,3 +123,61 @@ test("a package consumer reads and validates one complete conversation", async (
     await server.stop();
   }
 });
+
+test("a package consumer fetches a run timeline over a real HTTP boundary", async () => {
+  let seen = "";
+  const server = Bun.serve({
+    port: 0,
+    fetch(request) {
+      const url = new URL(request.url);
+      seen = url.pathname + url.search;
+      if (url.pathname === "/api/v1/runs/demo/timeline") {
+        return Response.json({
+          api_version: 1,
+          observed_at: "2026-07-26T12:00:00Z",
+          run_id: "demo",
+          spans: [
+            {
+              id: "node-1-api",
+              kind: "node",
+              label: "api",
+              started_at: "2026-07-26T12:00:00Z",
+              ended_at: null,
+              node_id: "api",
+              events: [],
+            },
+            {
+              id: "rollup-lock-wait-9",
+              kind: "rollup",
+              label: "lock-wait",
+              started_at: "2026-07-26T12:00:01Z",
+              ended_at: "2026-07-26T12:00:30Z",
+              parent_id: "node-1-api",
+              count: 1722,
+              total_duration_ms: 430500,
+              events: [],
+            },
+          ],
+        });
+      }
+      return Response.json(
+        { error: { code: "run_not_found", message: "Run is missing" } },
+        { status: 404 },
+      );
+    },
+  });
+  try {
+    const client = new TelemetryClient(`http://127.0.0.1:${server.port}`);
+    const timeline = await client.getTimeline("demo");
+    expect(seen).toBe("/api/v1/runs/demo/timeline");
+    // The node is still running, and a thousand lock waits arrived as one rollup.
+    expect(timeline.spans[0]?.ended_at).toBeNull();
+    expect(timeline.spans[1]?.count).toBe(1722);
+    await expect(client.getTimeline("absent")).rejects.toMatchObject({
+      status: 404,
+      code: "run_not_found",
+    });
+  } finally {
+    await server.stop();
+  }
+});
