@@ -21,7 +21,7 @@ from .runs import (
     as_result_payload,
     human_actions,
     latest_round,
-    launch_is_provably_active,
+    launch_claims_a_live_owner,
     list_runs,
     load_completions,
     load_mapping,
@@ -202,7 +202,7 @@ def main_runs(argv: list[str] | None = None) -> int:
     active_launches = {
         path.name
         for path in run_dirs
-        if (path / "launch.json").is_file() and launch_is_provably_active(path)
+        if (path / "launch.json").is_file() and launch_claims_a_live_owner(path)
     }
     # A pid is ownership, not progress. A launch that holds its pid while doing
     # nothing observable is reported parked instead of running, so "ACTIVE" keeps

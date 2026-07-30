@@ -6,7 +6,6 @@ import json
 import os
 import signal
 import socket
-from pathlib import Path
 
 import pytest
 
@@ -21,7 +20,7 @@ from orchestrator.runs import (
     abandoned_round_indicator,
     as_result_payload,
     latest_round,
-    launch_is_provably_active,
+    launch_claims_a_live_owner,
     list_runs,
     load_completions,
     prepare_round,
@@ -420,25 +419,31 @@ def test_a_launch_that_reported_its_own_outcome_is_not_abandoned(tmp_path) -> No
     assert abandoned_launch(run_dir) is None
 
 
-def test_a_report_this_host_cannot_stat_is_an_unknown_state_not_a_crash(
-    tmp_path, monkeypatch
-) -> None:
-    """The same rule for the other half of the record: unknown, never raising."""
+def test_a_report_this_host_cannot_stat_is_an_unknown_state_not_a_crash(tmp_path) -> None:
+    """The same rule for the other half of the record: unknown, never raising.
+
+    A real refusal rather than a patched one — the report sits behind a directory this
+    user may not traverse, which `is_file()` raises out of instead of answering, since
+    it only reports `False` for the errors that mean *not there*. The planner-facing
+    journey is ``test_the_views_stay_quiet_about_a_launch_whose_record_they_cannot_trust``
+    in tests/e2e/test_orchestrate_launch_e2e.py; this pins the predicates it reads.
+    """
     run_dir = tmp_path / "unstattable"
     _orchestrator_launch(run_dir, pid=os.getpid() + 10_000_000)
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    (vault / "report.json").write_text("{}", encoding="utf-8")
     report = run_dir / "orchestrator" / "report.json"
-    report.write_text("{}", encoding="utf-8")
-    original = Path.stat
+    report.unlink(missing_ok=True)
+    report.symlink_to(vault / "report.json")
+    vault.chmod(0o000)
+    try:
+        assert not os.access(report, os.R_OK), "the report stayed readable, nothing refused"
 
-    def refuse(self: Path, *, follow_symlinks: bool = True) -> os.stat_result:
-        if self == report:
-            raise OSError("stale file handle")
-        return original(self, follow_symlinks=follow_symlinks)
-
-    monkeypatch.setattr(Path, "stat", refuse)
-
-    assert abandoned_launch(run_dir) is None
-    assert launch_is_provably_active(run_dir) is False
+        assert abandoned_launch(run_dir) is None
+        assert launch_claims_a_live_owner(run_dir) is False
+    finally:
+        vault.chmod(0o700)
 
 
 def test_an_unreadable_launch_record_keeps_the_run_silent_without_raising(tmp_path) -> None:
@@ -453,7 +458,7 @@ def test_an_unreadable_launch_record_keeps_the_run_silent_without_raising(tmp_pa
     (run_dir / "orchestrator" / "status.json").write_text("{ not json", encoding="utf-8")
 
     assert abandoned_launch(run_dir) is None
-    assert launch_is_provably_active(run_dir) is False
+    assert launch_claims_a_live_owner(run_dir) is False
 
 
 def test_runs_cli_reports_an_abandoned_round_beside_a_recorded_one(tmp_path, capsys) -> None:

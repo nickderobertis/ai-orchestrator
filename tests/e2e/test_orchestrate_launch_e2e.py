@@ -314,3 +314,83 @@ def test_runs_and_status_settle_a_launch_whose_orchestrator_is_gone(
     assert listed.count("SETTLED") == 1
     assert f"{neighbour}: SETTLED" not in reported
     assert reported.count("SETTLED") == 1
+
+
+def test_the_views_stay_quiet_about_a_launch_whose_record_they_cannot_trust(
+    tmp_path: Path, onejudge_bin: str
+) -> None:
+    """Evidence a view cannot read downgrades a dead run to silence, never to a claim.
+
+    One real launch, killed, is degraded three ways in turn and read back through the
+    real planner commands each time. Killing it first is what makes each assertion
+    sharp: with the record intact these same commands do report it settled, so every
+    silence below is the degraded evidence being refused rather than a view that had
+    nothing to say anyway.
+
+    The third case is the one that must read as live work. An owner on another host
+    cannot be probed from here at all, and a pid number means nothing across machines
+    — so a run another orchestrator is driving is somebody else's to account for.
+    """
+    runs = tmp_path / "runs"
+    history = tmp_path / "history"
+    run_id = _orchestrate(tmp_path, runs, onejudge_bin, "degraded")
+    run_dir = runs / run_id
+    try:
+        _await_launch_pid(run_dir)
+    finally:
+        _stop(run_dir)
+    status_path = run_dir / "orchestrator" / "status.json"
+    intact = status_path.read_text(encoding="utf-8")
+
+    assert f"! {run_id}  SETTLED" in _view("runs", runs, history), (
+        "the intact record must report settled, or the silences below prove nothing"
+    )
+
+    status_path.write_text("{status: running, pid: ", encoding="utf-8")
+    unparsable_listed = _view("runs", runs, history)
+    unparsable_reported = _view("status", runs, history)
+
+    # The report alone put out of reach, behind a directory this host may not traverse,
+    # with the status record beside it left perfectly readable. That is what isolates
+    # the question: the record still says a dead pid is running it, and the only thing
+    # standing between that and a settled verdict is a report nobody here can inspect.
+    status_path.write_text(intact, encoding="utf-8")
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    (vault / "report.json").write_text("{}", encoding="utf-8")
+    # A launch leaves an empty report placeholder from the start, which is why an
+    # existing report is not itself an answer — only a nonempty one is. Put the report
+    # out of reach in the state that matters: present, and impossible to size.
+    report = run_dir / "orchestrator" / "report.json"
+    report.unlink(missing_ok=True)
+    report.symlink_to(vault / "report.json")
+    vault.chmod(0o000)
+    try:
+        denied = not os.access(report, os.R_OK)
+        unreadable_listed = _view("runs", runs, history)
+        unreadable_reported = _view("status", runs, history)
+    finally:
+        vault.chmod(0o700)
+        report.unlink()
+
+    record = json.loads(intact)
+    status_path.write_text(
+        json.dumps({**record, "host": f"not-{record['host']}"}), encoding="utf-8"
+    )
+    foreign_listed = _view("runs", runs, history)
+    foreign_reported = _view("status", runs, history)
+
+    # A record this host cannot parse says nothing about whether the run is alive, so
+    # neither view claims anything about it — and both still exit 0 having read it,
+    # which is the other half: one damaged run must not blind the whole listing.
+    assert "SETTLED" not in unparsable_listed
+    assert "SETTLED" not in unparsable_reported
+    # Nor does a report this host may not inspect: it might say the orchestrator
+    # finished normally, and that is not a thing to guess at from the pid alone.
+    assert denied, "the report stayed readable, so nothing was refused here"
+    assert "SETTLED" not in unreadable_listed
+    assert "SETTLED" not in unreadable_reported
+    # And an owner on another host reads as the live work it may well be.
+    assert f"* {run_id}  ACTIVE" in foreign_listed
+    assert "SETTLED" not in foreign_listed
+    assert "SETTLED" not in foreign_reported

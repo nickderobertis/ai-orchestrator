@@ -67,7 +67,7 @@ def resolve_supervision_run(runs_dir: Path, identifier: str) -> RunId:
             if not metadata.is_file():
                 continue
             value = load_mapping(metadata)
-            if value.get("plan_name") == identifier and launch_is_provably_active(run_dir):
+            if value.get("plan_name") == identifier and launch_claims_a_live_owner(run_dir):
                 matches.append(validate_run_id(run_dir.name))
     if len(matches) == 1:
         return matches[0]
@@ -111,33 +111,38 @@ def _launch_may_have_reported(run_dir: Path) -> bool:
 
     Only `False` is a certainty, in the same shape as `process_may_be_live` above:
     this host looked and there is no report. A report that cannot be inspected at all
-    answers `True`, because every reader of this is a planner-facing view, and a stat
-    that fails mid-teardown or on a filesystem that has gone away must not take the
-    listing of every other run with it. Both callers then say nothing about this run
-    rather than announcing something they could not establish.
+    answers `True`, because every reader of this is a planner-facing view, and a run
+    directory this host cannot read must not take the listing of every other run with
+    it. Both callers then say nothing about this run rather than announcing something
+    they could not establish.
+
+    The guard covers `is_file()` as well as `stat()`, because `is_file()` only answers
+    `False` for the errors that mean *not there*; a path this host may not traverse
+    raises out of it exactly as `stat()` would. An existing report is also not an
+    answer by itself — a launch leaves an empty one from the start — so only a nonempty
+    one settles it.
     """
     report = run_dir / "orchestrator" / "report.json"
     try:
         return report.is_file() and report.stat().st_size > 0
-    # llmlint: ignore[changed_behavior_has_e2e] no planner command can make this host
-    # fail to stat a file it just listed; reaching it needs a damaged filesystem or a
-    # revoked mount. tests/test_runs.py drives it at the boundary that owns the read.
     except OSError:
         return True
 
 
-# llmlint: ignore[changed_behavior_has_e2e] real orchestrate/listing/name-resolution journeys
-# run e2e. The remaining branches answer for records this host cannot read or a pid it
-# cannot probe -- states no planner command can produce, since reaching them needs a
-# crashed writer, a damaged filesystem, or another host. tests/test_runs.py covers them.
-def launch_is_provably_active(run_dir: Path) -> bool:
-    """Whether this host can show a launched orchestrator is still working.
+def launch_claims_a_live_owner(run_dir: Path) -> bool:
+    """Whether a launch's own record still claims an orchestrator is running it.
 
-    The mirror of `process_may_be_live`, and deliberately the opposite polarity:
-    only `True` is a certainty here. Everything this host cannot establish -- a
-    record it cannot read, an owner it cannot parse -- answers `False`, because
-    the callers use it to *claim* a run, and a claim made on evidence nobody has
-    is how a live orchestrator ends up with a second one addressing its run.
+    `True` is a claim this host could not refute rather than a proof of one: the
+    record says `running`, names a usable pid, and nothing contradicts it — including
+    an owner on another host, which this host cannot probe at all and therefore leaves
+    alone. Naming it a proof would be the overclaim, since that is the one case where
+    the answer rests on somebody else's evidence.
+
+    `False` needs that claim to be absent, which is where every input this host cannot
+    read lands: a report already written, no status record, one it cannot parse, a
+    status other than `running`, or a pid it proved gone. The callers use the answer to
+    *address* a run, and addressing one on evidence nobody has is how a live
+    orchestrator ends up with a second planner talking to it.
     """
     if _launch_may_have_reported(run_dir):
         return False
@@ -146,9 +151,6 @@ def launch_is_provably_active(run_dir: Path) -> bool:
         return False
     try:
         value = load_mapping(status)
-    # llmlint: ignore[changed_behavior_has_e2e] the record is written atomically, so no
-    # planner command leaves it unparseable; it takes a crashed writer or a damaged
-    # filesystem. tests/test_runs.py drives it at the boundary that owns the read.
     except (ConfigError, OSError):
         # An ordinary file anything may corrupt, read by every planner-facing view.
         # A record this host cannot parse says nothing about whether the run is
