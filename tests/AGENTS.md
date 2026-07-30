@@ -26,7 +26,11 @@ Conventions for this repo's tests.
   `flock` request in `/proc/locks`, the marker `scripts/oneharness-agent.sh` writes
   before it exits — and assert what the run recorded rather than a threshold a loaded
   box falls under. A double owes the same care: it must keep the ordering its
-  production original guarantees, or it tests a protocol nothing implements.
+  production original guarantees, or it tests a protocol nothing implements. And a
+  fact about one event has to be read from one event: two substring searches over a
+  whole `events.jsonl` say only that both strings occur somewhere, which is why
+  `'"kind": "node-failed"' in text and '"node": "failed"' in text` waits for any
+  node's failure rather than that node's — a distinction load decides.
 - **Nothing a test starts may outlive it.** `leak_guard.py` is a pytest plugin that
   reaps a test's process trees and fails the test on what it could not. Build a
   realistic tree with `process_tree.write_orphaning_tree`, and ask
