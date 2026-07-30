@@ -46,8 +46,12 @@ from .runs import NodeId, RunId, StepId
 # gained an optional `command` beside its `operations`. A v5 record therefore still
 # projects — it simply carries no `command` — and this build's records stay readable
 # to a v5 reader as skipped-unknown rather than as corruption.
-SCHEMA_VERSION = 6
-SUPPORTED_SCHEMA_VERSIONS = frozenset({1, 2, 3, 4, 5, SCHEMA_VERSION})
+#
+# v7 is additive too: the `publication-failed` kind joined the vocabulary, for a
+# publication that ended before any gate could rule on it. A v6 reader skips it as
+# unknown, which is exactly the evidence gap it exists to close for a v7 reader.
+SCHEMA_VERSION = 7
+SUPPORTED_SCHEMA_VERSIONS = frozenset({1, 2, 3, 4, 5, 6, SCHEMA_VERSION})
 
 JOURNAL_NAME = "events.jsonl"
 REQUIRED_EVENT_FIELDS = ("version", "seq", "at", "kind", "run_id", "round")
@@ -91,8 +95,9 @@ EventKind = Literal[
     "step-settled",
     "branch-discovered",
     "merge-gate-coverage",
-    # Retained for reading journals written before the repository's own merge path
-    # became the authoritative verifier; nothing emits them now.
+    # The merge path is the authoritative verifier, so these now bracket the branch
+    # push that runs it: `verification-finished` carries the verdict, the bounded
+    # output tail, and the preserved gate log the node result points at.
     "verification-started",
     "verification-finished",
     "pr-drafting-started",
@@ -108,6 +113,10 @@ EventKind = Literal[
     "pr-ready",
     "pr-merged",
     "publication-finished",
+    # A publication that ended before any gate could rule on it: a lost base race,
+    # a rebuild that could not be built. It carries the output that used to be
+    # dropped, and where the whole record was preserved.
+    "publication-failed",
     "cleanup-deferred",
     "lock-wait",
     "setup-finished",

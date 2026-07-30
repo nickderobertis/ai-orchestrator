@@ -10,6 +10,11 @@ parse, real loop, real subprocess boundary) with a fake only at that seam.
 Outcome is steered by sentinels in the task (the first user message):
   * "should-fail"   -> the agent never declares done and the done_when judge
                        returns false, so the run hits the turn cap (exit 1).
+  * "stop-short"    -> the supervisor releases the agent on its first turn but the
+                       done_when judge returns false, so the run ends incomplete
+                       *without* reaching the cap. onejudge's exit 1 covers both
+                       this and the cap, which is why a settled result has to say
+                       which one it was.
   * "complete-now"  -> the agent completes on its first turn (exit 0).
   * otherwise       -> the unified supervisor completes on the second agent turn,
                        after one push, exercising the two-sided loop (exit 0).
@@ -567,7 +572,8 @@ def main() -> int:
             supervisor = cast(SupervisorRequest, req)
             completion_turn = 13 if "complete-after-13" in task else 2
             complete = (not fail) and (
-                "agent-synthesized planner update" in task
+                "stop-short" in task
+                or "agent-synthesized planner update" in task
                 or _assistant_turns(messages) >= completion_turn
                 or "resume-after-cap" in task
                 and resume_segments >= 2
@@ -588,12 +594,23 @@ def main() -> int:
             # Final evals still use the standalone judge operation. The loop's
             # The adopted version routes the completion decision through `supervisor` above.
             completion_turn = 13 if "complete-after-13" in task else 2
-            value = (not fail) and (
-                "complete-now" in task
-                or "agent-synthesized planner update" in task
-                or _assistant_turns(messages) >= completion_turn
+            value = (
+                (not fail)
+                and "stop-short" not in task
+                and (
+                    "complete-now" in task
+                    or "agent-synthesized planner update" in task
+                    or _assistant_turns(messages) >= completion_turn
+                )
             )
-            resp = {"value": value, "reason": "fake judge verdict"}
+            resp = {
+                "value": value,
+                "reason": (
+                    "the supervisor released it before its criteria were met"
+                    if "stop-short" in task
+                    else "fake judge verdict"
+                ),
+            }
         case "judge":
             resp = {"value": req.get("max", 5), "reason": "fake numeric verdict"}
         case "assess":

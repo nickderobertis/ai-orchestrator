@@ -1,5 +1,5 @@
 {
-  "version": 6,
+  "version": 7,
   "state_changing_kinds": [
     "node-added",
     "edge-added",
@@ -33,6 +33,7 @@
     "pr-drafting-started",
     "pr-merged",
     "pr-ready",
+    "publication-failed",
     "publication-finished",
     "reparent",
     "retry-requested",
@@ -43,13 +44,37 @@
     "verification-finished",
     "verification-started"
   ],
-  "required_envelope": ["version", "seq", "at", "kind", "run_id", "round"],
-  "optional_envelope": ["node", "step", "detail"],
-  "terminal_node_kinds": ["human-waiting", "node-settled", "node-failed"],
-  "terminal_detail": {"required": ["result"], "result": "GraphResultItem"},
+  "required_envelope": [
+    "version",
+    "seq",
+    "at",
+    "kind",
+    "run_id",
+    "round"
+  ],
+  "optional_envelope": [
+    "node",
+    "step",
+    "detail"
+  ],
+  "terminal_node_kinds": [
+    "human-waiting",
+    "node-settled",
+    "node-failed"
+  ],
+  "terminal_detail": {
+    "required": [
+      "result"
+    ],
+    "result": "GraphResultItem"
+  },
   "committed_edit_detail": {
-    "required": ["operations"],
-    "optional": ["command"],
+    "required": [
+      "operations"
+    ],
+    "optional": [
+      "command"
+    ],
     "command": "EditPayload",
     "command_since": 6
   }

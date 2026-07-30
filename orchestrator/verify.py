@@ -8,6 +8,10 @@ complete bar) and `just integrate`, whose per-candidate run has no later verifie
 because each candidate fast-forwards the local base before the single push. The
 gate's own exit code is the verdict — 0 passes, anything else fails, with captured
 output kept for the report.
+
+`record_merge_path_verification` is the other half of that move: the merge path
+runs the gate, so its evidence has to be captured where it arrives — as `git push`
+output — rather than where this module used to produce it.
 """
 
 # llmlint: ignore-file[changed_behavior_has_e2e] Bazel proves affected execution e2e;
@@ -27,24 +31,43 @@ import time
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TypedDict, TypeGuard
+from typing import TYPE_CHECKING, TypedDict, TypeGuard
 
 from .coordination import advisory_lock, atomic_json
 from .environment import CHANNEL_ENV_PREFIX, COMPARISON_ENV_PREFIX
+from .redaction import redact
 from .watchdog import ProcessId, terminate_process_group
+
+if TYPE_CHECKING:
+    # Annotation-and-duck-typing only, and load-bearing: the journal imports the run
+    # ledger, which imports `merge`, which imports this module. Nothing here needs
+    # the journal at runtime — evidence is appended through the sink the caller
+    # injects.
+    from .journal import NodeSink
 
 NOOP_GATE = "<no-op>"
 
 __all__ = [
     "GateAttestation",
     "NOOP_GATE",
+    "VERIFICATION_TAIL_BYTES",
     "VerifyResult",
+    "append_gate_log",
     "comparison_env",
     "detect_gate",
     "detect_gate_candidates",
+    "format_merge_path_failure",
+    "format_merge_path_record",
+    "record_merge_path_failure",
+    "record_merge_path_verification",
     "resolve_gate_template",
     "run_gate",
 ]
+
+#: How much of the merge path's own output travels in a node result and its journal
+#: event. The whole run stays in the log the result points at; this is the slice a
+#: planner reads without opening it.
+VERIFICATION_TAIL_BYTES = 2000
 
 
 def comparison_env(base: str, *, remote: str = "origin") -> dict[str, str]:
@@ -119,6 +142,104 @@ class VerifyResult:
     def tail(self, limit: int = 2000) -> str:
         """The trailing slice of output, for a compact failure report."""
         return self.output[-limit:]
+
+
+def format_merge_path_record(*, label: str, command: list[str], ok: bool, output: str) -> str:
+    """Render one gated push's evidence, with any credential value stripped."""
+    return redact(
+        f"merge-path verification: {label}\n"
+        f"repository gate: {shlex.join(command)}\n"
+        f"verdict: {'passed' if ok else 'FAILED'}\n"
+        "--- git push output ---\n" + (output if output.strip() else "<no output>\n")
+    )
+
+
+def append_gate_log(directory: Path, record: str) -> str:
+    """Append one record to the node's merge-path log; return its path.
+
+    One file per node, holding every record the merge path produced in order — a
+    gated push's verdict, and a publication that failed before any gate ruled.
+    Appending rather than overwriting is what keeps that complete: a branch push
+    that passed and a publication that did not are both evidence, and the second
+    must not erase the first.
+    """
+    directory.mkdir(parents=True, exist_ok=True)
+    path = (directory / "gate.log").resolve()
+    with path.open("a", encoding="utf-8") as stream:
+        stream.write(record if record.endswith("\n") else record + "\n")
+    return str(path)
+
+
+def record_merge_path_verification(
+    journal: NodeSink,
+    *,
+    label: str,
+    command: list[str],
+    ok: bool,
+    output: str,
+) -> VerifyResult | None:
+    """Preserve what the merge path's gate actually did, and where to read it.
+
+    Where a pre-push hook runs the repository's gate, its whole run arrives as
+    ``git push`` output. Discarding it on success left a settled run with no
+    evidence the gate ran at all; discarding it on failure left the operator
+    re-deriving the cause from a one-line rejection.
+
+    ``command`` is the gate that runs *at this push*, so an empty one means no
+    gate runs here — the identity is covered by required PR checks, which decide
+    later and are recorded by ``pr-checks-observed``. Returns ``None`` there
+    rather than calling a bare accepted push a passed verification.
+    """
+    if not command:
+        return None
+    record = format_merge_path_record(label=label, command=command, ok=ok, output=output)
+    directory = journal.artifact_dir
+    log_path = append_gate_log(directory, record) if directory is not None else None
+    journal.append(
+        "verification-finished",
+        detail={
+            "label": label,
+            "ok": ok,
+            "command": list(command),
+            "output_tail": record[-VERIFICATION_TAIL_BYTES:],
+            **({"log_path": log_path} if log_path else {}),
+        },
+    )
+    return VerifyResult(ok=ok, command=list(command), output=record, log_path=log_path)
+
+
+def format_merge_path_failure(*, label: str, outcome: str, output: str) -> str:
+    """Render a publication attempt that ended before any gate could rule on it."""
+    return redact(
+        f"merge-path failure: {label}\n"
+        f"outcome: {outcome}\n"
+        "--- git output ---\n" + (output if output.strip() else "<no output>\n")
+    )
+
+
+def record_merge_path_failure(
+    journal: NodeSink, *, label: str, outcome: str, output: str
+) -> str | None:
+    """Preserve a publication that failed before any gate ruled; return its log path.
+
+    A rejected push has a verdict to record. This is the other half, and the half
+    that was silent: a rebuild that lost its base to a concurrent push, ran out of
+    disk, or could not build its worktree settled with no output in any log and no
+    tail on any event, leaving the operator only the fact that something failed.
+    """
+    record = format_merge_path_failure(label=label, outcome=outcome, output=output)
+    directory = journal.artifact_dir
+    log_path = append_gate_log(directory, record) if directory is not None else None
+    journal.append(
+        "publication-failed",
+        detail={
+            "label": label,
+            "outcome": outcome,
+            "output_tail": record[-VERIFICATION_TAIL_BYTES:],
+            **({"log_path": log_path} if log_path else {}),
+        },
+    )
+    return log_path
 
 
 def _justfile_has_recipe(path: Path, recipe: str) -> bool:

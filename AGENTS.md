@@ -286,7 +286,20 @@ Full rationale, the merge strategies, and the claude-code caveat:
 Use the `just` recipes (`just --list` is the index); do not hand-roll
 equivalents. `just bootstrap` sets up from a clean clone (installs the toolchain,
 activates the git hooks); `just check` is the deterministic tier, while `just gate`
-is the complete pre-push bar: `check` plus the llmlint diff tier. `just run-plan`
+is the complete pre-push bar: `check` plus the llmlint diff tier. Both report the
+line-coverage total they measured, and every stage that captures its output keeps
+it at `.logs/<label>.log` (`nx`, `check`, `check-install`, `gate-check`,
+`gate-llmlint`) — gitignored, owner-only, credential values redacted, truncated
+per run. Each log fills as its own stage runs, so follow the innermost one:
+`.logs/nx.log` while the Nx targets run (the long part), `.logs/check.log` for
+the stages after them. Read a finished run from the same paths, and never read a
+live command through `/proc`. Those paths are safe to tail because the truncation
+is per *invocation*, not per path: a run records the log it is writing in the
+exported `ORCHESTRATOR_PRESERVED_LOGS` claim list, and a nested run that finds its
+path already claimed by a live enclosing one writes `.logs/<label>.<pid>.log`
+instead and names that path in its own failure. This matters here because the
+suite runs `just lint-llm-diff` against this checkout from inside `just check`.
+`just run-plan`
 is the recorded mixed-graph executor driven internally by the dedicated
 orchestrator onejudge process. The planner launches multi-node work with `just
 orchestrate <plan.json>` and supervises its surfaced boundaries and proposals

@@ -712,6 +712,15 @@ its registered workflow:
 just repo-recover <branch> --repo <canonical-checkout>
 ```
 
+Recovery resolves the branch across every registered checkout of the identity,
+publication checkout first, because a lifecycle branch only reaches the
+publication checkout once something has already pushed it — a branch that reaches
+publication on its first attempt exists solely in the execution checkout the work
+was done in. It fetches that ref into the publication checkout (a ref write only;
+the publication checkout is still never worked in) and, when the work was done
+somewhere the identity does not know about, accepts `--execution-checkout PATH`.
+A branch found nowhere names every checkout that was searched.
+
 Recovery retains the source branch on failure. It refuses an identity whose merge
 path has no coverage, exactly as dispatch does, then uses an isolated worktree,
 infers a recorded stack/PR base from new preserved commits, fetches and merges
@@ -767,11 +776,23 @@ verification and publication, not when the worker needs more turns.
 ### Complete branch after publication failure
 
 `repo-recover` applies only to a branch with lifecycle-preserved incomplete
-provenance. It correctly rejects a complete branch:
+provenance. It correctly rejects a complete branch, and hands over to the verb
+that does publish one rather than only refusing:
 
 ```text
-repo-recover: branch '<branch>' has no lifecycle-preserved incomplete provenance
+repo-recover: branch '<branch>' carries no lifecycle-preserved incomplete
+provenance: it has commits ahead of origin/<base>, and all of them are complete.
+'repo-recover' publishes interrupted work; publish a completed branch with
+'just integrate <branch> --repo <checkout>' or through its lifecycle/PR path
 ```
+
+`just integrate` names `repo-recover` symmetrically, with the exact command, when
+it skips a candidate for incomplete provenance. A recovery whose push a pre-push
+hook gates also preserves that gate run under the recovery workspace's
+`gate-logs/`, named in the reported detail and in `--format json` as `gate_log`,
+so consecutive failures on one branch are comparable instead of reading alike.
+An identity covered by required PR checks instead has no gate at its push — the
+checks decide afterwards — so no verdict is recorded there.
 
 A branch can nevertheless be complete and unpublished: the agent finishes and
 commits, then publication fails at push because of the environment. For example,

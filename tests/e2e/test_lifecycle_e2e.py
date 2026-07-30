@@ -1167,7 +1167,10 @@ def test_repo_plan_ledger_and_guided_next_round(
     assert second_result["results"]["change"]["status"] == "done"
     assert second_result["results"]["change"]["follow_ups"] == follow_up
     publication = second_result["results"]["change"]
-    assert "gate_log" not in publication["artifacts"]
+    # A settled publication points at the merge path's own gate run, for both
+    # verdicts: without it a green round is indistinguishable from an unverified one.
+    gate_log = Path(publication["artifacts"]["gate_log"])
+    assert gate_log.read_text(encoding="utf-8").count("verdict: passed") == 2
     assert publication["branch"] == preserved_branch
     assert publication["retry_lineage"] == {
         "supersedes_branch": preserved_branch,
@@ -1192,7 +1195,10 @@ def test_repo_plan_ledger_and_guided_next_round(
     telemetry = json.loads(indexed.stdout)
     assert telemetry["metrics"]["recovered_branches"] == 1
 
-    assert telemetry["metrics"]["green_to_publication_seconds"] == []
+    # The merge path's gate is journaled again, so the interval between a green
+    # gate and the publication it released is measurable rather than absent.
+    (green_to_publication,) = telemetry["metrics"]["green_to_publication_seconds"]
+    assert green_to_publication >= 0.0
     listed = subprocess.run(
         ["just", "runs", "--runs-dir", str(runs_dir)],
         cwd=Path(__file__).parents[2],
@@ -2592,7 +2598,10 @@ done""",
     )
 
     assert result.ok and result.outcome == "merged", result.detail
-    assert result.verify is None
+    # The orchestrator ran no gate of its own — `recorded_gate=["false"]` would have
+    # failed if it had. What it recorded is the merge path's own run.
+    assert result.verify is not None and result.verify.ok
+    assert result.verify.command == ["false"]
     gated = hook_log.read_text(encoding="utf-8").splitlines()
     # The feature branch (pushed, then mirrored into the shared checkout) and the
     # squashed publication onto base. Every push this lifecycle makes is gated, and
@@ -2751,6 +2760,276 @@ def test_recovery_publication_push_gate_failure_preserves_the_branch(tmp_path, b
     assert gitops.branch_exists(canonical, preserved.branch)
     assert _tip(origin, "main") == before
     assert not _has_file(origin, "main", "preserved.txt")
+
+
+def _preserve_in_execution_checkout(
+    tmp_path: Path, origin: Path, name: str
+) -> tuple[Path, Path, str]:
+    """Leave interrupted work in the execution checkout, where the lifecycle puts it."""
+    canonical = gitops.clone(origin, tmp_path / f"canonical-{name}")
+    safety = gitops.clone(origin, tmp_path / f"safety-{name}")
+    registry = Registry()
+    registry.register(str(canonical), workflow="local", repo_type="single-owner")
+    registry.register(str(safety))
+
+    preserved = run_repo_task(
+        f"local/canonical-{name}",
+        "Preserve interrupted work in the isolated execution checkout.",
+        "engineer",
+        workspace=Workspace(tmp_path / f"{name}-worktrees"),
+        execution_checkout=f"local/safety-{name}",
+        branch=f"feature/{name}",
+        dispatch_fn=make_writing_dispatch(filename="preserved.txt", completed=False),
+        recorded_gate=["true"],
+    )
+
+    assert preserved.outcome == "not-completed"
+    # The defect this covers: a branch that reaches publication on its first try has
+    # never been pushed, so the publication checkout has never heard of it.
+    assert not gitops.branch_exists(canonical, preserved.branch)
+    assert gitops.branch_exists(safety, preserved.branch)
+    return canonical, safety, preserved.branch
+
+
+def test_recovery_publishes_a_branch_only_the_execution_checkout_has(tmp_path, bare_origin) -> None:
+    origin = bare_origin()
+    canonical, safety, branch = _preserve_in_execution_checkout(tmp_path, origin, "execution-only")
+
+    recovered = recover_repo(
+        canonical,
+        branch,
+        workspace_root=tmp_path / "execution-only-recovery",
+        recorded_gate=["true"],
+    )
+
+    assert recovered.ok and recovered.outcome == "merged", recovered.detail
+    assert _has_file(origin, "main", "preserved.txt")
+    # Fetching the ref in is allowed; working in the publication checkout is not.
+    assert gitops.current_branch(canonical) == "main"
+    assert not gitops.is_dirty(canonical)
+
+
+def test_recovery_accepts_an_execution_checkout_the_identity_does_not_know(
+    tmp_path, bare_origin
+) -> None:
+    """The branch can live somewhere the registry never recorded; say so explicitly."""
+    origin = bare_origin()
+    canonical, safety, branch = _preserve_in_execution_checkout(tmp_path, origin, "explicit-exec")
+    unregistered = tmp_path / "moved-execution-checkout"
+    safety.rename(unregistered)
+
+    recovered = recover_repo(
+        canonical,
+        branch,
+        workspace_root=tmp_path / "explicit-exec-recovery",
+        execution_checkout=unregistered,
+        recorded_gate=["true"],
+    )
+
+    assert recovered.ok and recovered.outcome == "merged", recovered.detail
+    assert _has_file(origin, "main", "preserved.txt")
+
+
+def test_recovery_rejects_an_execution_checkout_of_another_repository(
+    tmp_path, bare_origin
+) -> None:
+    """Reading a branch out of the wrong tree would publish the wrong work."""
+    origin = bare_origin()
+    canonical, _safety, branch = _preserve_in_execution_checkout(tmp_path, origin, "foreign-exec")
+    stranger = gitops.clone(bare_origin(), tmp_path / "a-different-repository")
+
+    with pytest.raises(RegistryError) as failure:
+        recover_repo(
+            canonical,
+            branch,
+            workspace_root=tmp_path / "foreign-exec-recovery",
+            execution_checkout=stranger,
+            recorded_gate=["true"],
+        )
+
+    assert "is not a git checkout of the repository identity" in str(failure.value)
+
+
+def test_recovery_of_a_missing_branch_names_every_checkout_it_searched(
+    tmp_path, bare_origin
+) -> None:
+    origin = bare_origin()
+    canonical, safety, _branch = _preserve_in_execution_checkout(tmp_path, origin, "missing-branch")
+
+    with pytest.raises(RegistryError) as failure:
+        recover_repo(
+            canonical,
+            "feature/never-existed",
+            workspace_root=tmp_path / "missing-branch-recovery",
+            recorded_gate=["true"],
+        )
+
+    detail = str(failure.value)
+    assert "does not exist in any registered checkout" in detail
+    assert str(canonical) in detail and str(safety) in detail
+    assert "--execution-checkout" in detail
+
+
+def test_recovery_of_a_completed_branch_hands_over_to_integrate(tmp_path, bare_origin) -> None:
+    """Picking the wrong verb has to name the right one, not just refuse."""
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-completed-branch")
+    Registry().register(str(canonical), workflow="local", repo_type="single-owner")
+    tree = gitops.worktree_add(
+        canonical,
+        tmp_path / "completed-branch-tree",
+        "feature/already-complete",
+        base="origin/main",
+    )
+    (tree / "complete.txt").write_text("complete\n", encoding="utf-8")
+    gitops.add_all(tree)
+    gitops.commit(tree, "feat: complete work that never needed recovery")
+    gitops.worktree_remove(canonical, tree)
+
+    with pytest.raises(RegistryError) as failure:
+        recover_repo(
+            canonical,
+            "feature/already-complete",
+            workspace_root=tmp_path / "completed-branch-recovery",
+            recorded_gate=["true"],
+        )
+
+    detail = str(failure.value)
+    assert "carries no lifecycle-preserved incomplete provenance" in detail
+    assert f"just integrate feature/already-complete --repo {canonical}" in detail
+
+
+def test_three_failing_recoveries_of_one_branch_report_three_distinct_causes(
+    tmp_path, bare_origin
+) -> None:
+    """The defect this closes: one opaque sentence for three unrelated failures."""
+    origin = bare_origin()
+    canonical, _safety, branch = _preserve_in_execution_checkout(tmp_path, origin, "three-causes")
+    workspace_root = tmp_path / "three-causes-recovery"
+
+    with pytest.raises(RegistryError) as missing:
+        recover_repo(
+            canonical, "feature/typo", workspace_root=workspace_root, recorded_gate=["true"]
+        )
+
+    install_pre_push_hook(canonical, "printf 'pre-push: llmlint stale finding\\n' >&2\nexit 1")
+    stale = recover_repo(
+        canonical, branch, workspace_root=workspace_root, recorded_gate=["just gate"]
+    )
+
+    install_pre_push_hook(
+        canonical, "printf 'pre-push: ruff found a dead CLI option\\n' >&2\nexit 1"
+    )
+    dead_option = recover_repo(
+        canonical, branch, workspace_root=workspace_root, recorded_gate=["just gate"]
+    )
+
+    causes = [str(missing.value), stale.detail, dead_option.detail]
+    assert len(set(causes)) == 3, causes
+    assert "does not exist in any registered checkout" in causes[0]
+    assert stale.outcome == dead_option.outcome == "gate-failed"
+    # Each rejection keeps its own output, so "the same failure again" is checkable
+    # rather than assumed.
+    assert stale.gate_log is not None and stale.gate_log == dead_option.gate_log
+    preserved = Path(stale.gate_log).read_text(encoding="utf-8")
+    assert "pre-push: llmlint stale finding" in preserved
+    assert "pre-push: ruff found a dead CLI option" in preserved
+    assert preserved.count("verdict: FAILED") == 2
+    assert stale.gate_log in stale.detail
+
+
+def test_a_rejecting_hook_that_echoes_a_credential_records_only_its_name(
+    tmp_path, bare_origin, monkeypatch
+) -> None:
+    """Preserved evidence outlives its terminal, so it must never carry a token.
+
+    The gate log and the recorded detail are both durable records of whatever the
+    pre-push hook wrote, so this drives a real hook that echoes an environment
+    credential and checks both records.
+    """
+    token = "sk-ant-oat01-not-a-real-credential"
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", token)
+    origin = bare_origin()
+    workspace = _workspace(tmp_path, origin)
+    canonical = _shared_checkout(tmp_path)
+    install_pre_push_hook(
+        canonical,
+        "printf 'pre-push: gate failed while authenticating with %s\\n' "
+        '"$CLAUDE_CODE_OAUTH_TOKEN" >&2\nexit 1',
+    )
+    run_dir = tmp_path / "redaction-run"
+    journal = open_journal(run_dir, RunId("redaction"), 1)
+    scope = NodeJournal(journal, NodeId("publish"), RunId("redaction"), 1)
+
+    result = run_repo_task(
+        str(origin),
+        "Publish work the gate rejects while printing a credential.",
+        "engineer",
+        workspace=workspace,
+        dispatch_fn=make_writing_dispatch(filename="rejected.txt"),
+        recorded_gate=["just", "gate"],
+        journal=scope,
+    )
+
+    assert result.outcome == "gate-failed"
+    assert result.verify is not None and result.verify.log_path
+    preserved = Path(result.verify.log_path).read_text(encoding="utf-8")
+    assert token not in preserved and token not in result.detail
+    assert "<redacted:CLAUDE_CODE_OAUTH_TOKEN>" in preserved
+    assert "<redacted:CLAUDE_CODE_OAUTH_TOKEN>" in result.detail
+    assert "gate failed while authenticating with" in preserved
+
+
+def test_a_publication_that_fails_before_any_gate_preserves_its_error(
+    tmp_path, bare_origin
+) -> None:
+    """A publication can fail with no gate to rule on it and no verdict to record.
+
+    The settled result must still carry the error rather than only the fact of
+    failure. A real `post-receive` hook removes the base ref out from under the
+    rebuild, so `origin/main` is genuinely gone when it is next resolved.
+    """
+    origin = bare_origin()
+    workspace = _workspace(tmp_path, origin)
+    canonical = _shared_checkout(tmp_path)
+    install_pre_push_hook(canonical)
+    receive = origin / "hooks" / "post-receive"
+    receive.write_text(
+        "#!/bin/sh\n"
+        "while read -r _old _new ref; do\n"
+        '  case "$ref" in\n'
+        "    refs/heads/main) ;;\n"
+        "    *) git update-ref -d refs/heads/main ;;\n"
+        "  esac\n"
+        "done\n",
+        encoding="utf-8",
+    )
+    receive.chmod(0o755)
+    run_dir = tmp_path / "publication-failure-run"
+    journal = open_journal(run_dir, RunId("publication-failure"), 1)
+    scope = NodeJournal(journal, NodeId("publish"), RunId("publication-failure"), 1)
+
+    result = run_repo_task(
+        str(origin),
+        "Publish into a base that disappears mid-rebuild.",
+        "engineer",
+        workspace=workspace,
+        dispatch_fn=make_writing_dispatch(filename="doomed.txt"),
+        recorded_gate=["just", "gate"],
+        journal=scope,
+    )
+
+    assert result.outcome == "error", result.detail
+    # The branch push was gated and passed; the failure came after, and used to
+    # leave the settled run with that stale verdict as its only evidence.
+    assert result.verify is not None and result.verify.ok
+    (failure,) = [event for event in journal.events() if event.kind == "publication-failed"]
+    assert failure.detail["outcome"] == "GitError"
+    assert str(failure.detail["output_tail"]).strip()
+    preserved = Path(str(failure.detail["log_path"])).read_text(encoding="utf-8")
+    assert "merge-path failure: publication of" in preserved
+    assert "verdict: passed" in preserved  # the earlier gate run is still there
+    assert str(failure.detail["log_path"]) in result.detail
 
 
 def test_lifecycle_refuses_uncovered_identity_before_dispatch(tmp_path, bare_origin) -> None:
@@ -3080,7 +3359,7 @@ def test_local_repo_syncs_advanced_base_before_the_gated_push(tmp_path, bare_ori
     )
 
     assert result.ok and result.outcome == "merged"
-    assert result.verify is None
+    assert result.verify is not None and result.verify.ok
     assert _has_file(origin, "main", "base.txt")
     assert _has_file(origin, "main", "feature.txt")
     assert (
@@ -3287,7 +3566,7 @@ def test_local_conflict_incomplete_resolver_preserves_branch(
             path = Path(project_dir) / "shared.txt"
             path.write_text("advanced\npreserved by engineer\n", encoding="utf-8")
             gitops.add_all(project_dir)
-        return Report(persona, 1, False, False, 2, [], {}, {}, "")
+        return Report(persona, 1, False, False, 2, [], {}, {}, "", max_turns=2)
 
     journal = open_journal(tmp_path / "incomplete-run", RunId("incomplete-conflict"), 1)
     result = run_repo_task(
@@ -3465,7 +3744,7 @@ def test_local_repo_pre_push_hook_verifies_the_real_worktree(tmp_path, bare_orig
         dispatch_fn=make_writing_dispatch(filename="feature.txt"),
     )
     assert result.ok and result.outcome == "merged"
-    assert result.verify is None
+    assert result.verify is not None and result.verify.ok
     assert marker.exists()
     assert _has_file(origin, "main", "feature.txt")
 
@@ -3483,7 +3762,8 @@ def test_local_repo_pre_push_hook_failure_stops_publication(tmp_path, bare_origi
         dispatch_fn=make_writing_dispatch(filename="feature.txt"),
     )
     assert result.outcome == "gate-failed"
-    assert result.verify is None
+    assert result.verify is not None and not result.verify.ok
+    assert "pre-push" in result.verify.output
     assert not _has_file(origin, "main", "feature.txt")
 
 
@@ -3526,7 +3806,8 @@ def test_pre_push_complete_gate_catches_a_strict_tier_then_allows_clean_work(
     )
 
     assert rejected.outcome == "gate-failed"
-    assert rejected.verify is None
+    assert rejected.verify is not None and not rejected.verify.ok
+    assert "strict-tier" in rejected.verify.output
     assert gate_log.read_text(encoding="utf-8").splitlines() == ["check", "strict-tier"]
     assert _tip(origin, "main") == base_before_failure
     assert not _has_file(origin, "main", "feature.txt")
@@ -3541,7 +3822,7 @@ def test_pre_push_complete_gate_catches_a_strict_tier_then_allows_clean_work(
     )
 
     assert published.ok and published.outcome == "merged", published.detail
-    assert published.verify is None
+    assert published.verify is not None and published.verify.ok
     assert gate_log.read_text(encoding="utf-8").splitlines() == [
         "check",
         "strict-tier",
@@ -3583,7 +3864,7 @@ def test_bazel_affected_candidate_runs_in_lifecycle_worktree(
         workspace=Workspace(tmp_path / "worktrees"),
         dispatch_fn=make_writing_dispatch(filename="feature.txt"),
     )
-    assert result.ok and result.verify is None
+    assert result.ok and result.verify is not None and result.verify.ok
 
 
 def test_local_repo_noop_registry_gate_relies_on_covered_merge_path(tmp_path, bare_origin) -> None:
@@ -3601,6 +3882,9 @@ def test_local_repo_noop_registry_gate_relies_on_covered_merge_path(tmp_path, ba
 
     assert result.ok and result.outcome == "merged"
     assert "pushed unproven" not in result.detail
+    # A `<no-op>` identity gate names no bar, so there is nothing for a record to
+    # claim was run: the hook still gates the push, but the run cannot say what it
+    # ran, and inventing a verdict would be worse than recording none.
     assert result.verify is None
 
 
@@ -3717,6 +4001,56 @@ def test_agent_not_completed_stops_early(tmp_path, bare_origin) -> None:
     assert not _has_file(origin, result.branch, "partial.txt")  # incomplete work is not pushed
 
 
+def test_a_stop_short_of_the_cap_is_not_reported_as_hitting_it(tmp_path, bare_origin) -> None:
+    """One turn is not twelve, and the settled result has to say so.
+
+    onejudge exits 1 for a worker that exhausted its turns *and* for one that
+    stopped for any other reason, and this harness reported both as "hit the turn
+    cap". A real run of this very node settled as `step 'main' hit the turn cap` at
+    `turns: 1`, which sent its reader to raise a cap that was never approached. The
+    honest line names how far the worker got and what account it left.
+    """
+    origin = bare_origin()
+    ws = _workspace(tmp_path, origin)
+
+    def stops_early(persona: str, task: str, *, project_dir: str, **_: object) -> Report:
+        (Path(project_dir) / "partial.txt").write_text("one turn in\n", encoding="utf-8")
+        return Report(
+            persona,
+            1,
+            False,
+            True,
+            1,
+            [
+                {
+                    "kind": "done_when",
+                    "criterion": "the gate is green",
+                    "verdict": {"value": False, "reason": "the supervisor ended the workstream"},
+                }
+            ],
+            {},
+            {},
+            "",
+            max_turns=12,
+        )
+
+    result = run_repo_task(
+        str(origin),
+        "Task the agent will abandon on its first turn.",
+        "engineer",
+        workspace=ws,
+        dispatch_fn=stops_early,
+        recorded_gate=["true"],
+    )
+
+    assert result.outcome == "not-completed"
+    assert "hit the turn cap" not in result.detail
+    assert "did not complete after 1 turn, short of its 12-turn cap" in result.detail
+    # And the reason the run did leave behind travels with it, so the settled node
+    # says why rather than only how far.
+    assert "the supervisor ended the workstream" in result.detail
+
+
 def test_retry_with_invalid_incomplete_provenance_records_fresh_branch_fallback(
     tmp_path, bare_origin
 ) -> None:
@@ -3811,7 +4145,7 @@ def test_preserved_retry_publishes_despite_a_red_recorded_gate(tmp_path, bare_or
     )
 
     assert retried.outcome == "merged" and retried.ok
-    assert retried.verify is None
+    assert retried.verify is not None and retried.verify.ok
     assert _has_file(origin, "main", "complete.txt")
 
 
@@ -3830,7 +4164,7 @@ def test_clean_committed_partial_work_is_marked_and_recoverable(tmp_path, bare_o
             gitops.add_all(worktree)
             partial_shas.append(gitops.commit(worktree, "wip: agent commits partial work"))
         assert not gitops.is_dirty(worktree)
-        return Report(persona, 1, False, False, 2, [], {}, {}, "")
+        return Report(persona, 1, False, False, 2, [], {}, {}, "", max_turns=2)
 
     result = run_repo_task(
         str(canonical),
@@ -4408,7 +4742,7 @@ def test_local_recovery_incomplete_resolver_preserves_branch(
             path = Path(project_dir) / "shared.txt"
             path.write_text("advanced\npreserved by engineer\n", encoding="utf-8")
             gitops.add_all(project_dir)
-        return Report(persona, 1, False, False, 2, [], {}, {}, "")
+        return Report(persona, 1, False, False, 2, [], {}, {}, "", max_turns=2)
 
     recovered = recover_repo(
         canonical,

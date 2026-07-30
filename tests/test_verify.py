@@ -11,7 +11,15 @@ from pathlib import Path
 
 from process_tree import await_reaped, await_recorded_pid, is_running, write_orphaning_tree
 
-from orchestrator.verify import detect_gate, detect_gate_candidates, run_gate
+from orchestrator.journal import NodeJournal, open_journal
+from orchestrator.runs import NodeId, RunId
+from orchestrator.verify import (
+    detect_gate,
+    detect_gate_candidates,
+    record_merge_path_failure,
+    record_merge_path_verification,
+    run_gate,
+)
 
 
 def _seed(tmp_path: Path, files: dict[str, str]) -> Path:
@@ -242,3 +250,46 @@ def test_a_gate_that_names_no_command_reports_a_failed_gate(tmp_path) -> None:
 
     assert result.ok is False
     assert "gate command is empty" in result.output
+
+
+# These two recorders are the only ways a publication outcome reaches the journal,
+# so the invariant belongs here: neither can record an outcome without the output
+# behind it, and an empty output is still a record rather than an empty file.
+
+
+def _scope(tmp_path: Path, run: str) -> tuple[object, NodeJournal]:
+    journal = open_journal(tmp_path / run, RunId(run), 1)
+    return journal, NodeJournal(journal, NodeId("publish"), RunId(run), 1)
+
+
+def test_a_recorded_verdict_always_carries_the_output_behind_it(tmp_path: Path) -> None:
+    journal, scope = _scope(tmp_path, "verdict-evidence")
+
+    result = record_merge_path_verification(
+        scope, label="publication push", command=["just", "gate"], ok=False, output=""
+    )
+
+    assert result is not None
+    (event,) = [e for e in journal.events() if e.kind == "verification-finished"]
+    assert str(event.detail["output_tail"]).strip()
+    preserved = Path(str(event.detail["log_path"])).read_text(encoding="utf-8")
+    assert preserved.strip()
+    assert "<no output>" in preserved and "verdict: FAILED" in preserved
+
+
+def test_a_publication_that_never_reached_a_gate_still_records_its_error(
+    tmp_path: Path,
+) -> None:
+    journal, scope = _scope(tmp_path, "failure-evidence")
+
+    log_path = record_merge_path_failure(
+        scope,
+        label="publication of feature",
+        outcome="GitError",
+        output="fatal: could not read from remote repository\n",
+    )
+
+    assert log_path is not None
+    (event,) = [e for e in journal.events() if e.kind == "publication-failed"]
+    assert "could not read from remote repository" in str(event.detail["output_tail"])
+    assert "could not read from remote repository" in Path(log_path).read_text(encoding="utf-8")

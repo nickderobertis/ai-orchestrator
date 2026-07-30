@@ -21,8 +21,10 @@ from orchestrator.dispatch import (
     Report,
     _agent_run_context,
     _build_report,
+    _configured_turn_cap,
     _file_progress,
     _read_watchdog_pid,
+    agent_failure_reason,
     incomplete_detail,
     run_onejudge,
 )
@@ -110,15 +112,25 @@ def test_a_budget_spent_without_agent_progress_is_not_the_agent_hitting_the_cap(
     that answers nothing through `just run-plan`. This pins the boundary the report
     is read at, including the blank answer a turn count cannot distinguish.
     """
-    silent = _build_report("engineer", _sdk_report(completed=False, contents=["", "  ", ""]))
+    silent = _build_report(
+        "engineer", _sdk_report(completed=False, contents=["", "  ", ""]), max_turns=3
+    )
 
     assert silent.outcome == NO_AGENT_PROGRESS_OUTCOME
+    # It did spend its whole cap, and saying so is exactly the misreading: this stop
+    # answers ahead of the turn accounting, because a bigger cap is no answer to it.
+    assert silent.assistant_turns == silent.max_turns
     assert "without the agent producing anything" in incomplete_detail(silent)
+    assert "turn cap" not in incomplete_detail(silent)
 
-    worked = _build_report("engineer", _sdk_report(completed=False, contents=["", "a real answer"]))
+    worked = _build_report(
+        "engineer", _sdk_report(completed=False, contents=["", "a real answer"]), max_turns=3
+    )
 
     assert worked.outcome is None
-    assert incomplete_detail(worked) == "did not complete (hit the turn cap)"
+    # A run that produced something falls through to the ordinary accounting, which
+    # reports how far it got against the cap it was given.
+    assert incomplete_detail(worked) == "did not complete after 2 turns, short of its 3-turn cap"
 
     finished = _build_report("engineer", _sdk_report(completed=True, contents=["done"]))
 
@@ -498,11 +510,97 @@ def test_worker_death_report_carries_the_recorded_exit_status_and_stderr(tmp_pat
     )
 
     assert report.outcome == "worker-died"
-    assert report.stderr.startswith("worker-died:")
+    assert report.stderr.startswith("worker-died")
     assert "agent exit status 7" in report.stderr
     assert report.stderr.endswith("claude: no conversation found with session id 0dd")
     assert "..." in report.stderr
     assert len(report.stderr) < 1600
+
+
+def test_a_provider_failure_reads_differently_from_a_worker_that_stopped(tmp_path) -> None:
+    """`worker-died` alone shaped every wrong hypothesis; the reason is the fix.
+
+    Both journeys below end as `worker-died`. Only the recorded reason says which
+    one to retry and which one to escalate, so the two are compared side by side.
+    """
+    status = tmp_path / "throttled-status"
+    onejudge = tmp_path / "throttled"
+    onejudge.write_text(
+        '#!/bin/sh\nif [ "$1" = "--version" ]; then echo "onejudge 0.3.4"; exit 0; fi\n'
+        'd="$ORCHESTRATOR_AGENT_STATUS_DIR"\n'
+        'printf "%s\\n" "$$" >"$d/agent.pid"\n'
+        'touch "$d/agent.heartbeat"\n'
+        'printf "provider error: 429 rate_limit_error quota exhausted\\n" >"$d/agent.stderr"\n'
+        'printf "agent harness exited 7\\n" >"$d/agent.failure"\n'
+        'printf "%s\\n" "$$" >"$d/agent.failed"\n'
+        "while :; do sleep 0.05; done\n",
+        encoding="utf-8",
+    )
+    onejudge.chmod(0o700)
+
+    throttled = run_onejudge(
+        {},
+        "task",
+        onejudge_bin=os.fspath(onejudge),
+        env={"ORCHESTRATOR_AGENT_STATUS_DIR": os.fspath(status)},
+    )
+
+    quiet_status = tmp_path / "quiet-status"
+    quiet = tmp_path / "quiet"
+    quiet.write_text(
+        '#!/bin/sh\nif [ "$1" = "--version" ]; then echo "onejudge 0.3.4"; exit 0; fi\n'
+        'printf "%s\\n" "$$" >"$ORCHESTRATOR_AGENT_STATUS_DIR/agent.pid"\n'
+        "while :; do :; done &\n"
+        "child=$!\n"
+        'printf "%s\\n" "$child" >"$ORCHESTRATOR_AGENT_STATUS_DIR/agent.child.pid"\n'
+        'trap \'kill "$child" 2>/dev/null || true; wait "$child" 2>/dev/null || true; '
+        "exit 143' TERM\n"
+        'wait "$child"\n',
+        encoding="utf-8",
+    )
+    quiet.chmod(0o700)
+
+    stopped = run_onejudge(
+        {},
+        "task",
+        onejudge_bin=os.fspath(quiet),
+        env={
+            "ORCHESTRATOR_AGENT_STATUS_DIR": os.fspath(quiet_status),
+            "ORCHESTRATOR_WORKER_HEARTBEAT_TIMEOUT": "0.2",
+        },
+    )
+
+    assert throttled.outcome == stopped.outcome == "worker-died"
+    assert throttled.outcome_detail == (
+        "agent harness exited 7: provider error: 429 rate_limit_error quota exhausted"
+    )
+    assert stopped.outcome_detail == "the agent harness stopped heartbeating for 0.2s"
+    # The reported sentence is the observed condition wrapped in what the wrapper
+    # recorded about the child, so both halves reach a reader of the node result.
+    assert throttled.stderr.startswith("worker-died (watchdog pid ")
+    assert throttled.stderr.endswith(f": {throttled.outcome_detail}")
+
+
+def test_a_recorded_agent_failure_never_carries_a_credential_value(tmp_path) -> None:
+    """The harness stderr this reads back is durable evidence, so it is redacted."""
+    status = tmp_path / "agent"
+    status.mkdir()
+    token = "sk-ant-oat01-not-a-real-credential"
+    (status / "agent.failure").write_text("agent harness exited 1\n", encoding="utf-8")
+    (status / "agent.stderr").write_text(
+        f"harness failed (auth): token {token} rejected\n", encoding="utf-8"
+    )
+
+    os.environ["CLAUDE_CODE_OAUTH_TOKEN"] = token
+    try:
+        reason = agent_failure_reason(status)
+    finally:
+        del os.environ["CLAUDE_CODE_OAUTH_TOKEN"]
+
+    assert reason is not None
+    assert token not in reason
+    assert "<redacted:CLAUDE_CODE_OAUTH_TOKEN>" in reason
+    assert reason.startswith("agent harness exited 1: harness failed (auth):")
 
 
 def test_missing_agent_heartbeat_reaches_worker_death_deadline(tmp_path) -> None:
@@ -875,3 +973,80 @@ def test_run_onejudge_rejects_an_off_contract_label(tmp_path) -> None:
         run_onejudge(
             {}, "task", onejudge_bin=_label_echoing_onejudge(tmp_path), labels={"node": "a,b"}
         )
+
+
+def _incomplete(
+    *,
+    turns: int,
+    max_turns: int | None,
+    verdicts: list[dict[str, object]] | None = None,
+    assessment: str | None = None,
+    stderr: str = "",
+) -> Report:
+    return Report(
+        "engineer",
+        1,
+        False,
+        True,
+        turns,
+        verdicts or [],
+        {},
+        {},
+        stderr,
+        assessment=assessment,
+        max_turns=max_turns,
+    )
+
+
+def test_only_a_run_that_reached_its_cap_is_reported_as_hitting_it() -> None:
+    """onejudge exits 1 for both, so the turn count is the only thing that tells them apart."""
+    assert incomplete_detail(_incomplete(turns=12, max_turns=12)) == (
+        "hit the turn cap after 12 turns"
+    )
+    assert incomplete_detail(_incomplete(turns=1, max_turns=12)) == (
+        "did not complete after 1 turn, short of its 12-turn cap"
+    )
+    # A dispatch whose config states no cap can still say how far it got.
+    assert incomplete_detail(_incomplete(turns=3, max_turns=None)) == (
+        "did not complete after 3 turns"
+    )
+
+
+def test_an_incomplete_stop_carries_the_most_specific_reason_it_has() -> None:
+    """Verdict, then assessment, then the harness's own words — never nothing."""
+    unmet = {
+        "kind": "done_when",
+        "criterion": "the gate is green",
+        "verdict": {"value": False, "reason": "the gate was never run"},
+    }
+    met = {"kind": "check", "verdict": {"value": True, "reason": "ignored"}}
+    detail = incomplete_detail(
+        _incomplete(turns=2, max_turns=9, verdicts=[met, unmet], assessment="unused")
+    )
+    assert detail.endswith(": unmet done_when verdict: the gate was never run")
+
+    # No unmet verdict carries a reason, so the worker's own assessment stands in.
+    assert incomplete_detail(
+        _incomplete(turns=2, max_turns=9, verdicts=[met], assessment="ran out of context")
+    ).endswith(": ran out of context")
+
+    # Neither exists: the harness stderr is the last thing that can say anything.
+    assert incomplete_detail(
+        _incomplete(turns=2, max_turns=9, stderr="  provider error: 503\n")
+    ).endswith(": provider error: 503")
+
+    # And when there is genuinely nothing, the sentence stops rather than trailing.
+    assert incomplete_detail(_incomplete(turns=2, max_turns=9)) == (
+        "did not complete after 2 turns, short of its 9-turn cap"
+    )
+
+
+def test_an_unusable_turn_cap_is_read_as_no_cap_at_all() -> None:
+    """The cap crosses in from a merged config, so an unusable value must not be trusted."""
+    assert _configured_turn_cap({"user": {"max_turns": 12}}) == 12
+    assert _configured_turn_cap({}) is None
+    assert _configured_turn_cap({"user": "not-a-mapping"}) is None
+    assert _configured_turn_cap({"user": {}}) is None
+    assert _configured_turn_cap({"user": {"max_turns": True}}) is None
+    assert _configured_turn_cap({"user": {"max_turns": 0}}) is None
+    assert _configured_turn_cap({"user": {"max_turns": "12"}}) is None
