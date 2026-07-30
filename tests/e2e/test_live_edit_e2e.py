@@ -37,6 +37,27 @@ def _wait_for(path: Path, predicate, timeout: float = 30) -> None:
     raise AssertionError(f"condition did not appear in {path}")
 
 
+def _wait_for_event(events: Path, kind: str, node: str, timeout: float = 30) -> None:
+    """Wait until one journaled event carries both ``kind`` and ``node``.
+
+    A substring search over the whole log cannot say this: `"node": "failed"` is
+    already on that node's `node-started` line, so pairing it with a bare
+    `"kind": "node-failed"` search is satisfied by *any* node's failure. That
+    matters because the batch below retries `failed`, and `retry` on a node still
+    running cancels it — the node then settles `cancelled`, contradicting the
+    lineage this journey asserts. Which of the two the run reaches first is a race
+    the box's load decides, so read one event at a time and match within it.
+    """
+    _wait_for(
+        events,
+        lambda text: any(
+            record.get("kind") == kind and record.get("node") == node
+            for record in (json.loads(line) for line in text.splitlines() if line.strip())
+        ),
+        timeout,
+    )
+
+
 def _reply(run_id: str, runs: Path, commands: list[dict[str, object]]) -> None:
     subprocess.run(
         ["just", "channel-reply", run_id, "--runs-dir", str(runs)],
@@ -197,12 +218,14 @@ def test_real_cli_mutates_live_frontier_and_replays_atomic_edits(
         time.sleep(0.02)
     assert run_dir is not None
     events = run_dir / "events.jsonl"
-    _wait_for(
-        events,
-        lambda text: (
-            text.count('"kind": "node-started"') >= 3 and '"kind": "human-waiting"' in text
-        ),
-    )
+    # Parked, not merely started: `node-started` is journaled before the dispatch
+    # launches, so it does not say the slow nodes are somewhere a retry or a drop
+    # can still cancel them. Their ready files do — the backend writes one from
+    # inside the turn it then holds until a release this test never writes, so from
+    # here they provably cannot settle first however starved the box is.
+    _wait_for(tmp_path / "a.ready", lambda text: text == "ready\n", LIVE_PROCESS_TIMEOUT)
+    _wait_for(tmp_path / "b.ready", lambda text: text == "ready\n", LIVE_PROCESS_TIMEOUT)
+    _wait_for_event(events, "human-waiting", "approve")
 
     # A command that cannot be applied is refused at submission with the reason,
     # never accepted into the channel and silently dropped.
@@ -219,7 +242,7 @@ def test_real_cli_mutates_live_frontier_and_replays_atomic_edits(
     ):
         assert diagnostic in _rejected(run_id, runs, [command])
     assert events.read_text(encoding="utf-8").count('"kind": "edit-committed"') == before
-    _wait_for(events, lambda text: '"kind": "node-failed"' in text and '"node": "failed"' in text)
+    _wait_for_event(events, "node-failed", "failed")
 
     _reply(
         run_id,
