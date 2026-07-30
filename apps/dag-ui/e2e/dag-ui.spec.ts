@@ -66,6 +66,33 @@ async function tabTo(
   return false;
 }
 
+async function backgroundColor(locator: Locator): Promise<string> {
+  return locator.evaluate(
+    (element) => getComputedStyle(element).backgroundColor,
+  );
+}
+
+/** The brightest channel of a serialized colour — how a dark surface is told from a light one. */
+function brightestChannel(color: string): number {
+  return Math.max(...(color.match(/\d+/g) ?? ["255"]).slice(0, 3).map(Number));
+}
+
+/**
+ * Painting a throwaway element is what makes a token comparable to a surface: reading
+ * the custom property back gives its declaration text, which is never the `rgb(…)` the
+ * browser reports for a `background-color`, so the two could not be compared directly.
+ */
+async function tokenColor(page: Page, token: string): Promise<string> {
+  return page.evaluate((name) => {
+    const probe = document.createElement("div");
+    probe.style.backgroundColor = `var(${name})`;
+    document.body.append(probe);
+    const computed = getComputedStyle(probe).backgroundColor;
+    probe.remove();
+    return computed;
+  }, token);
+}
+
 /**
  * Change what the server is serving — record progress, or take a run away — through
  * the fixture module that wrote the run directory in the first place.
@@ -105,7 +132,17 @@ test("tracks every node state, node detail, and role transcript of a live run", 
     "obsolete",
   );
 
+  // Each card names the kind of work it stands for, so an operator can tell the two
+  // apart without opening either: agent work runs itself, a human action does not.
+  await expect(page.locator(".dag-node.state-running")).toContainText("agent");
+  await expect(page.locator(".dag-node.state-waiting")).toContainText("human");
+
   await page.locator(".dag-node.state-running").click();
+  const panel = page.locator(".detail-panel");
+  await expect(panel).toContainText("agent node");
+  // The panel restates the node's state in words beside the graph's colour, which is
+  // the only reading of it available to anyone who cannot rely on that colour.
+  await expect(panel).toContainText("running");
   await expect(page.getByText("Build the live dashboard")).toBeVisible();
   await expect(page.getByText("Users can inspect transcripts")).toBeVisible();
   for (const role of ["Worker", "Judge", "Check-in", "PR author", "Lint"]) {
@@ -144,6 +181,7 @@ test("tracks every node state, node detail, and role transcript of a live run", 
   // bar; the panel has to say that rather than render an empty criteria block.
   await page.locator(".dag-node.state-waiting").click();
   await expect(page.getByText("Wait for release approval")).toBeVisible();
+  await expect(panel).toContainText("human node");
   await expect(
     page.getByText("No completion criteria recorded."),
   ).toBeVisible();
@@ -210,6 +248,21 @@ test("navigates historical DAGs grouped by their launching session", async ({
   await openObservatory(page);
   await expect(page.getByText(/Codex session/)).toBeVisible();
   await expect(page.getByText(/Claude session/)).toBeVisible();
+
+  // Every row states the run's own state and whether it is still moving, so the list
+  // is readable without opening a run.
+  const liveRow = page.getByRole("button", { name: RegExp(runs().live) });
+  await expect(liveRow).toContainText("running");
+  await expect(
+    page.getByRole("button", { name: RegExp(runs().history) }),
+  ).toContainText("complete");
+
+  // The live marker is a bare dot, so it carries a name of its own and repeats it on
+  // hover rather than leaving colour to say the only thing that distinguishes it.
+  const liveMarker = liveRow.getByRole("img", { name: "Live" });
+  await expect(liveMarker).toBeVisible();
+  await liveMarker.hover();
+  await expect(page.getByRole("tooltip")).toContainText("Live");
 
   await page.getByRole("button", { name: RegExp(runs().history) }).click();
   await expect(page.locator(".dag-node.state-done")).toContainText("archive");
@@ -393,6 +446,126 @@ test("reflows navigation, detail, and metrics at a narrow viewport", async ({
   expect(new Set(narrowRows).size).toBe(2);
 });
 
+test("paints the design system's components in the application's dark palette", async ({
+  page,
+}) => {
+  await openObservatory(page, `/?run=${runs().live}&node=dashboard`);
+
+  // `dark` on the document element is the switch @oneharness/ui's stylesheet selects
+  // its dark tokens with. Without it every component the package ships renders its
+  // light default inside this dark application shell.
+  await expect(page.locator("html")).toHaveClass(/\bdark\b/);
+
+  // The detail sections are the package's own Card, so their surface proves two
+  // things at once: that the utilities its components are written in are generated
+  // for this app at all, and that they resolve to the dark token rather than white.
+  const card = await backgroundColor(page.locator(".detail-section").first());
+  // An opaque `rgb(…)`: a token this build never defined would leave the utility
+  // invalid and the surface transparent, which is the shape this must not accept.
+  expect(card).toMatch(/^rgb\(\d+, \d+, \d+\)$/);
+  expect(card).toBe(await tokenColor(page, "--card"));
+  expect(brightestChannel(card)).toBeLessThan(80);
+
+  // The transcripts the package renders sit on that same surface, which is the
+  // defect an operator saw on every node they opened.
+  const turn = page.getByRole("article", { name: /^Turn / }).first();
+  await expect(turn).toBeVisible();
+  expect(
+    await backgroundColor(
+      turn.locator("xpath=ancestor::*[@data-slot='card'][1]"),
+    ),
+  ).toBe(card);
+
+  // And the application's own chrome is painted from the same token set rather than
+  // a hand-picked palette beside it.
+  const panel = await backgroundColor(page.locator(".detail-panel"));
+  expect(panel).toMatch(/^rgb\(\d+, \d+, \d+\)$/);
+  expect(panel).toBe(await tokenColor(page, "--sidebar"));
+
+  // The graph canvas scopes its own variables, so it needs its own switch; without
+  // it the minimap and zoom controls stay white inside the dark workspace.
+  expect(
+    brightestChannel(
+      await backgroundColor(page.locator(".react-flow__minimap")),
+    ),
+  ).toBeLessThan(80);
+});
+
+test("tells each outcome apart by the palette's semantic tones", async ({
+  page,
+}) => {
+  await openObservatory(page);
+  // The node's own state is the one badge a card carries directly; the panel's other
+  // badges — the node's kind, and a status on every transcript the package renders —
+  // all sit inside a card's content. Each reading is checked against its word too, so
+  // a selector that drifted onto one of those would fail rather than pass quietly.
+  const stateBadge = page.locator(
+    '.detail-panel [data-slot="card"] > [data-slot="badge"]',
+  );
+
+  // Reading a state costs an operator nothing only while the outcomes look different:
+  // settled work green, work that was lost red, work still moving blue. The design
+  // system's own status vocabulary stops at four states and includes none of these
+  // words, so without the app's mapping every one of them paints the same neutral
+  // pill. `toHaveCSS` rather than one reading of the computed style: the badge
+  // transitions its colour, so an immediate read catches it partway between two.
+  for (const { state, token } of [
+    { state: "done", token: "--success" },
+    { state: "cancelled", token: "--destructive" },
+    { state: "failed", token: "--destructive" },
+    { state: "running", token: "--info" },
+  ]) {
+    await page.locator(`.dag-node.state-${state}`).click();
+    await expect(stateBadge).toHaveText(state);
+    await expect(stateBadge).toHaveCSS("color", await tokenColor(page, token));
+  }
+
+  // Work that has not started has no outcome to report, so it must not borrow one of
+  // those meanings — which is also what stops the assertions above from passing on a
+  // mapping that simply paints everything.
+  const neutral = await tokenColor(page, "--foreground");
+  for (const state of ["waiting", "pending"]) {
+    await page.locator(`.dag-node.state-${state}`).click();
+    await expect(stateBadge).toHaveText(state);
+    await expect(stateBadge).toHaveCSS("color", neutral);
+  }
+
+  // The run list is the other surface that states an outcome, and `complete` is a
+  // state the package's own badge does not know at all.
+  const runBadge = (runId: string): Locator =>
+    page
+      .getByRole("button", { name: RegExp(runId) })
+      .locator('[data-slot="badge"]');
+  await expect(runBadge(runs().history)).toHaveCSS(
+    "color",
+    await tokenColor(page, "--success"),
+  );
+  await expect(runBadge(runs().live)).toHaveCSS(
+    "color",
+    await tokenColor(page, "--info"),
+  );
+  // A run's state is an open string in the read contract, and the sibling run's
+  // executor stopped without recording a result — a real state with no outcome in it.
+  // The list has to say the word and stop there rather than colour it in.
+  await expect(runBadge(runs().sibling)).toHaveText("stopped");
+  await expect(runBadge(runs().sibling)).toHaveCSS("color", neutral);
+
+  // And the canvas says the same things on its own surfaces, out of the same tokens
+  // rather than the hex values it used to carry. `waiting` is blocked work, the one
+  // meaning the cards state and the badges deliberately do not.
+  for (const { state, token } of [
+    { state: "done", token: "--success-surface" },
+    { state: "failed", token: "--destructive-surface" },
+    { state: "running", token: "--info-surface" },
+    { state: "waiting", token: "--warning-surface" },
+  ]) {
+    await expect(page.locator(`.dag-node.state-${state}`)).toHaveCSS(
+      "background-color",
+      await tokenColor(page, token),
+    );
+  }
+});
+
 test("shows the loading view while its first read is still in flight", async ({
   page,
 }) => {
@@ -401,6 +574,9 @@ test("shows the loading view while its first read is still in flight", async ({
   // loading view still long enough to look at.
   await page.goto(STALLED_UI_URL);
   await expect(page.getByText("Loading execution history…")).toBeVisible();
+  // Placeholder bars stand where the run will be, so the wait reads as work in
+  // progress rather than as a screen that has finished and found nothing.
+  await expect(page.locator('[data-slot="skeleton"]').first()).toBeVisible();
   await expect(page.getByText("No DAG runs found")).toHaveCount(0);
   await expect(page.getByRole("alert")).toHaveCount(0);
 });
@@ -410,8 +586,19 @@ test("surfaces a telemetry read it cannot complete", async ({ page }) => {
   // EventSource both fail for real, and the operator must be told rather than shown
   // an empty graph that looks like "no runs yet".
   await page.goto(OFFLINE_UI_URL);
-  await expect(page.getByRole("alert")).toContainText("Live telemetry issue");
+  const banner = page.getByRole("alert");
+  await expect(banner).toContainText("Live telemetry issue");
+  // The banner names the failure as well as announcing one: an operator who cannot
+  // see what broke cannot tell a wedged server from a mistyped API address.
+  await expect(
+    banner.locator('[data-slot="alert-description"]'),
+  ).not.toBeEmpty();
   await expect(page.getByText("Awaiting updates")).toBeVisible();
+
+  // The one control that can retry the read stays reachable while the read is
+  // failing, and reporting the failure again is the honest outcome of pressing it.
+  await page.getByRole("button", { name: "Refresh" }).click();
+  await expect(banner).toContainText("Live telemetry issue");
 });
 
 // The remaining journeys change what the server is serving, so they run last and in

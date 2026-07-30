@@ -195,6 +195,7 @@ def _dag_state_contract_checkout(tmp_path: Path) -> Path:
         "orchestrator/launch.py",
         "orchestrator/read_model.py",
         "orchestrator/telemetry.py",
+        "orchestrator/timeline.py",
         "orchestrator/server.py",
         "packages/dag-layout/src/index.ts",
         "packages/dag-model/src/index.ts",
@@ -273,6 +274,40 @@ def test_dag_state_contract_checker_reports_sse_event_drift(tmp_path: Path) -> N
     assert "SSE event vocabulary" in result.stderr
     assert "run.deleted" in result.stderr
     assert "docs/dag-ui/design.md" in result.stderr
+
+
+def test_dag_state_contract_checker_reports_timeline_span_drift(tmp_path: Path) -> None:
+    """A timeline span kind added in Python alone must fail, not ship unparseable."""
+    checkout = _dag_state_contract_checkout(tmp_path)
+    timeline = checkout / "orchestrator/timeline.py"
+    timeline.write_text(
+        timeline.read_text().replace('    "rollup",\n]', '    "rollup",\n    "recovery",\n]')
+    )
+
+    result = _dag_state_contract_run(checkout)
+
+    assert result.returncode != 0
+    assert "TimelineSpanKind vocabulary" in result.stderr
+    assert "recovery" in result.stderr
+    assert "packages/dag-model/src/index.ts timelineSpanKindSchema" in result.stderr
+
+
+def test_dag_state_contract_checker_reports_timeline_payload_drift(tmp_path: Path) -> None:
+    """A timeline field invented server-side must fail against the design contract."""
+    checkout = _dag_state_contract_checkout(tmp_path)
+    timeline = checkout / "orchestrator/timeline.py"
+    timeline.write_text(
+        timeline.read_text().replace(
+            "    kind: TimelineReferenceKind\n    value: str",
+            "    kind: TimelineReferenceKind\n    value: str\n    body: str",
+        )
+    )
+
+    result = _dag_state_contract_run(checkout)
+
+    assert result.returncode != 0
+    assert "TimelineReference declares ['body']" in result.stderr
+    assert "design.md does not" in result.stderr
 
 
 def test_dag_state_contract_checker_reports_dag_ui_proxy_drift(tmp_path: Path) -> None:
@@ -883,7 +918,7 @@ def test_dag_state_contract_checker_rejects_duplicate_agent_roles(tmp_path: Path
     result = _dag_state_contract_run(checkout)
 
     assert result.returncode != 0
-    assert "agentRoleSchema must contain unique string roles" in result.stderr
+    assert "agentRoleSchema must contain unique string members" in result.stderr
 
 
 def test_dag_state_contract_checker_reports_telemetry_schema_drift(tmp_path: Path) -> None:

@@ -43,6 +43,7 @@ from .read_model import (
     run_signature,
 )
 from .runs import RunId, validate_run_id
+from .timeline import run_timeline
 
 DEFAULT_POLL_INTERVAL = 0.5
 DEFAULT_HEARTBEAT_INTERVAL = 15.0
@@ -157,6 +158,13 @@ def create_app(
         """Liveness that never touches run storage."""
         return {"status": "ok"}
 
+    # Every read route below is annotated `-> Any` rather than with its payload type.
+    # Each returns *either* that payload or the contract error envelope, and FastAPI
+    # treats a handler's return annotation as its `response_model`: declaring the
+    # payload would make the framework validate — and silently reshape — the error
+    # body against it, which is exactly the envelope `_error` exists to keep intact.
+    # The payload shapes stay enforced where they are built, in the read model, and
+    # reconciled against the contract by `check-dag-state-contract`.
     @app.get("/api/v1/runs")
     async def get_runs(include_settled: bool = False) -> Any:
         try:
@@ -171,14 +179,30 @@ def create_app(
             return _error(status, code, str(exc))
 
     @app.get("/api/v1/runs/{run_id}")
-    async def get_run(run_id: str) -> Any:
+    async def get_run(run_id: str, include_conversations: bool = True) -> Any:
+        """The run detail; ``include_conversations=false`` serves no transcripts.
+
+        The opt-out is a size lever, not a version change: `conversations` stays
+        required and present, empty, for a client that reads the timeline instead of
+        re-downloading every transcript on each live update.
+        """
         try:
             return run_detail(
                 root,
                 run_id,
                 oneharness_bin=oneharness_bin,
                 expose_launcher_session_id=expose_launcher_session_id,
+                include_conversations=include_conversations,
             )
+        except ReadError as exc:
+            status, code = _status_for(exc)
+            return _error(status, code, str(exc))
+
+    @app.get("/api/v1/runs/{run_id}/timeline")
+    async def get_timeline(run_id: str) -> Any:
+        """The whole run's ordered spans and events; a consumer filters by node."""
+        try:
+            return run_timeline(root, run_id, oneharness_bin=oneharness_bin)
         except ReadError as exc:
             status, code = _status_for(exc)
             return _error(status, code, str(exc))

@@ -2,6 +2,7 @@ import type {
   DagNodeState,
   StatusStyleToken,
 } from "@ai-orchestrator/dag-layout";
+import { Badge, cn } from "@oneharness/ui";
 import { Handle, type Node, type NodeProps, Position } from "@xyflow/react";
 import { Check, CircleDashed, Clock3, X } from "lucide-react";
 
@@ -26,13 +27,18 @@ export function DagNodeCard({ data }: NodeProps<DagFlowNode>) {
           : Clock3;
   return (
     <div
-      className={`dag-node state-${data.state} token-${data.style}`}
+      className={cn("dag-node", `state-${data.state}`, `token-${data.style}`)}
       data-selected={data.selected}
     >
       <Handle type="target" position={Position.Left} />
       <div className="node-heading">
-        <span className="node-kind">{data.kind}</span>
-        <Icon className={data.style === "active" ? "spin" : ""} size={17} />
+        <Badge
+          className="px-1.5 py-0 text-[9px] tracking-[.1em] uppercase"
+          variant="outline"
+        >
+          {data.kind}
+        </Badge>
+        <Icon className={cn(data.style === "active" && "spin")} size={17} />
       </div>
       <strong>{data.label}</strong>
       <span className="node-status">{data.state}</span>

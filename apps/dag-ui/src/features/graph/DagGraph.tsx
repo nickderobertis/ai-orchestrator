@@ -80,6 +80,9 @@ export function DagGraph({
       <ReactFlow
         nodes={nodes}
         edges={edges}
+        // React Flow scopes its own variables to `.react-flow`, so the document-level
+        // `dark` class never reaches its canvas chrome; this is its own switch for it.
+        colorMode="dark"
         nodeTypes={nodeTypes}
         edgeTypes={edgeTypes}
         nodesDraggable={false}
@@ -90,7 +93,7 @@ export function DagGraph({
         onNodeClick={(_, node) => onSelectNode(node.id)}
         aria-label="DAG execution graph"
       >
-        <Background color="#2b2f3a" gap={22} />
+        <Background color="var(--border)" gap={22} />
         <MiniMap
           pannable
           zoomable
@@ -111,12 +114,16 @@ export function DagGraph({
   );
 }
 
+/**
+ * The minimap paints each node with a `fill` style, so it can name the design
+ * system's own tokens rather than repeating their values in a second palette.
+ */
 function tokenColor(token: string): string {
-  if (token === "success") return "#38d39f";
-  if (token === "danger") return "#ff6b72";
-  if (token === "active") return "#d9ff72";
-  if (token === "blocked") return "#f2bd68";
-  return "#72798a";
+  if (token === "success") return "var(--success)";
+  if (token === "danger") return "var(--destructive)";
+  if (token === "active") return "var(--info)";
+  if (token === "blocked") return "var(--warning)";
+  return "var(--muted-foreground)";
 }
 
 function statusToken(data: Record<string, unknown>): string {
