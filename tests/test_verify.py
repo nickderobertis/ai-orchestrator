@@ -181,6 +181,26 @@ def test_run_gate_timeout_reaps_the_whole_gate_tree(tmp_path) -> None:
     assert await_reaped(worker), "the gate's reparented worker outlived its own gate"
 
 
+def test_run_gate_honours_a_deadline_shorter_than_its_supervision_interval(tmp_path) -> None:
+    """A gate that finishes after its deadline is timed out, not credited with a verdict.
+
+    A timeout the lifecycle asks for is the longest it is willing to wait, so a gate
+    still running at that moment has already failed to answer in time. Supervising the
+    gate on a coarser interval than the deadline must not quietly extend it: this gate
+    finishes well inside the supervision interval but well outside its own deadline,
+    and the verdict it produces there is one nothing was waiting for any more.
+    """
+    log = tmp_path / "finished"
+    command = ["sh", "-c", f"sleep 0.1; echo done > {log}; echo done"]
+
+    result = run_gate(tmp_path, command, timeout=0.01)
+
+    assert not result.ok
+    assert "gate timed out after 0.01s" in result.output
+    assert result.output.strip() != "done"
+    assert not log.exists(), "the gate outlived the deadline instead of being stopped at it"
+
+
 def test_run_gate_cancellation_reaps_the_whole_gate_tree(tmp_path) -> None:
     """A cancelled gate stops paying for a verdict nothing is left to read."""
     marker = tmp_path / "worker.pid"

@@ -235,10 +235,19 @@ def _execute_gate(
     )
     deadline = None if timeout is None else time.monotonic() + timeout
     while True:
+        # The supervision interval is a *poll*, never an extension of the caller's
+        # deadline: a fixed wait that straddles it would let a gate finishing inside
+        # that excess be reported as a verdict, even though the timeout this function
+        # was given had already passed. Clamped this way, a returned verdict is always
+        # one the gate reached while the caller was still waiting for it.
+        remaining = None if deadline is None else max(0.0, deadline - time.monotonic())
+        supervise_for = (
+            _GATE_POLL_SECONDS if remaining is None else min(_GATE_POLL_SECONDS, remaining)
+        )
         try:
             # Re-entrant after a timeout by contract: partial output already read is
             # buffered on the Popen, so polling this way never loses gate output.
-            stdout, stderr = process.communicate(timeout=_GATE_POLL_SECONDS)
+            stdout, stderr = process.communicate(timeout=supervise_for)
         except subprocess.TimeoutExpired:
             cancelled = cancel is not None and cancel.is_set()
             expired = deadline is not None and time.monotonic() >= deadline
