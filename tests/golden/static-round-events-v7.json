@@ -1,0 +1,81 @@
+{
+  "version": 7,
+  "state_changing_kinds": [
+    "node-added",
+    "edge-added",
+    "edit-committed",
+    "completion-requested",
+    "round-started",
+    "node-started",
+    "human-waiting",
+    "node-settled",
+    "node-failed",
+    "human-attested",
+    "round-finished"
+  ],
+  "audit_kinds": [
+    "branch-discovered",
+    "cleanup-deferred",
+    "concurrent-acknowledged",
+    "conflict-resolution-finished",
+    "conflict-resolution-started",
+    "cross-dag-satisfied",
+    "edge-removed",
+    "edit-rejected",
+    "lock-wait",
+    "merge-gate-coverage",
+    "node-dropped",
+    "planner-surfaced",
+    "pr-checks-observed",
+    "pr-created",
+    "pr-drafting-fallback",
+    "pr-drafting-finished",
+    "pr-drafting-started",
+    "pr-merged",
+    "pr-ready",
+    "publication-failed",
+    "publication-finished",
+    "reparent",
+    "retry-requested",
+    "setup-finished",
+    "step-settled",
+    "step-started",
+    "upstream-modified",
+    "verification-finished",
+    "verification-started"
+  ],
+  "required_envelope": [
+    "version",
+    "seq",
+    "at",
+    "kind",
+    "run_id",
+    "round"
+  ],
+  "optional_envelope": [
+    "node",
+    "step",
+    "detail"
+  ],
+  "terminal_node_kinds": [
+    "human-waiting",
+    "node-settled",
+    "node-failed"
+  ],
+  "terminal_detail": {
+    "required": [
+      "result"
+    ],
+    "result": "GraphResultItem"
+  },
+  "committed_edit_detail": {
+    "required": [
+      "operations"
+    ],
+    "optional": [
+      "command"
+    ],
+    "command": "EditPayload",
+    "command_since": 6
+  }
+}

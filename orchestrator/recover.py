@@ -15,7 +15,7 @@ from pathlib import Path
 
 from . import BASE_CONFIG, PERSONA_DIR, gitops
 from .coordination import git_lock_identity
-from .dispatch import Report, dispatch
+from .dispatch import Report, dispatch, scoped_session
 from .github import CliGitHubBackend, GitHubBackend, GitHubError
 from .lifecycle import (
     DEFAULT_LIFECYCLE_STEP_MAX_TURNS,
@@ -43,7 +43,13 @@ from .provenance import (
 )
 from .redaction import redact
 from .registry import Registry, RegistryEntry, RegistryError, Slug, merge_gate_coverage
-from .verify import NOOP_GATE, append_gate_log, format_merge_path_record, resolve_gate_template
+from .verify import (
+    NOOP_GATE,
+    append_gate_log,
+    comparison_env,
+    format_merge_path_record,
+    resolve_gate_template,
+)
 from .workspace import IdentityKey, RepoRef, RepositoryType, Workspace, WorkspaceError
 
 _STEP_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
@@ -244,6 +250,10 @@ def recover_repo(
             raise RegistryError(
                 "repository identity has a no-op gate; migrate it or pass --gate for recovery"
             )
+        # The pre-push hook is what verifies this recovery, so it has to judge the
+        # base the preserved branch actually publishes onto — a stack's parent, not
+        # the remote HEAD it would otherwise discover.
+        push_env = comparison_env(publication_base)
 
         # Only a push a pre-push hook gates carries a verdict; where required PR
         # checks are the coverage instead, they decide after this push, not at it.
@@ -276,7 +286,7 @@ def recover_repo(
                     "chore: attest verified recovery of preserved work\n\n" + trailers,
                 )
             try:
-                pushed = gitops.push(worktree, branch)
+                pushed = gitops.push(worktree, branch, env=push_env)
             except gitops.GitError as exc:
                 outcome = classify_push_failure(exc)
                 detail = redact(str(exc))
@@ -436,10 +446,12 @@ def recover_repo(
                 oneharness_mode=oneharness_mode,
                 base_path=base_path,
                 persona_dir=persona_dir,
-                session=f"{branch}:{step_id}",
+                session=f"{scoped_session(branch, worktree)}:{step_id}",
                 max_turns=DEFAULT_LIFECYCLE_STEP_MAX_TURNS,
                 done_when="The conflict is resolved, committed, and the gate is green.",
-                env={},
+                # The resolver proves its resolution with the same gate the push will
+                # run, so it must resolve the same comparison base.
+                env=push_env,
             )
             if gitops.unmerged_paths(worktree):
                 gitops.merge_abort(worktree)

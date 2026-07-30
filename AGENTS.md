@@ -126,7 +126,12 @@ dispatch onejudge.
    workers propose but never edit. Triage follow-ups, keep the user informed at
    each milestone, and never let more than 30 minutes pass between updates. When
    a completed task published a PR, include the relevant PR link in its completion
-   report. Require verified publication closeout before issuing `complete`.
+   report. Require verified publication closeout before issuing `complete`. A run
+   the progress views report as `PARKED` is alive and not working — no child process,
+   no surface, no ledger write — so treat it as stopped and intervene rather than
+   waiting on it. `channel-reply` refuses an edit it cannot apply, with the reason,
+   and every edit it accepts reaches the graph; a non-zero reply is a rejection to
+   correct, never a command to resend.
 
 After `just orchestrate`, the planner uses **only** `just channel-next`, `just
 channel-reply`, and the read-only `just monitor` / `just runs` / `just status`
@@ -351,9 +356,30 @@ output and exits 0; `scripts/llmlint-verdict.sh` replays both, so a failure bloc
 `gate` and pre-push identically whether it was just judged or restored from cache.
 Only llmlint's own 0/1 verdicts are recorded: a tool that failed without judging
 propagates and stays uncached. A wrong verdict does stick:
-force a fresh judge run with `just lint-llm-diff <base> --skip-nx-cache`. When a
+force a fresh judge run with `just lint-llm-diff <base> --skip-nx-cache`. That
+per-invocation flag is the only supported re-judge lever; an ambient global
+`NX_SKIP_NX_CACHE` / `NX_DISABLE_NX_CACHE` is reported and ignored by this tier,
+because it re-rolls the judge from every unrelated command and breaks the checks
+whose contract is cache replay. When a
 miss is unexplained, run `scripts/llmlint-fingerprint.sh` — a changed fingerprint
-on an unchanged tree is a changed judge, not a changed diff.
+on an unchanged tree is a changed judge, not a changed diff. The recorded verdict
+for one content, base commit, and judge configuration is authoritative and the
+worker's own gate pays for it: `verify.comparison_env` is that identity's one
+source, and the lifecycle exports it to every dispatch and every publishing push
+of a workstream so the `pre-push` hook replays what the worker cleared instead of
+re-rolling against findings it never saw — a push that resolved its own base could
+merge work whose own gate had failed. See
+[One judged diff, one verdict](docs/repo-lifecycle.md#one-judged-diff-one-verdict).
+
+Every cached Nx target replays a recorded answer, so one rule governs the test tier
+too: a memo may stand in for a verdict on this tree only when its key covers
+everything the check reads. The Python targets run from the workspace root over the
+whole tree — pytest reads documentation, recipes, hooks, and app config — so they
+are keyed on it through `nx.json`'s `wholeWorkspace` input. Narrowing one back to a
+subset makes a green suite a claim about a tree that was never run; force a real
+re-run of a single tier with `--skip-nx-cache` on that one invocation instead. See
+[When a cached verdict may stand
+in](docs/repo-lifecycle.md#when-a-cached-verdict-may-stand-in-for-a-verdict-on-this-tree).
 
 Every remote lifecycle PR without explicit title/body metadata gets one
 post-verification `pr-author` dispatch. It drafts the template-shaped body from

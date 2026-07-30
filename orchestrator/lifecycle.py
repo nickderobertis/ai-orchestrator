@@ -36,7 +36,7 @@ from . import BASE_CONFIG, PERSONA_DIR, gitops
 from .cli_contract import DEFAULT_ONEHARNESS_MODE, ONEHARNESS_MODES
 from .config import ConfigError, load_yaml
 from .coordination import LockTimeout, advisory_lock, atomic_json, git_lock_identity
-from .dispatch import Report, dispatch
+from .dispatch import Report, dispatch, incomplete_detail, scoped_session
 from .github import CliGitHubBackend, GitHubBackend, GitHubError, PullRequest
 from .gitops import GitError
 from .ids import GraphId
@@ -90,6 +90,7 @@ from .scratch import require_scratch_capacity, scratch_dispatch_guarded
 from .verify import (
     NOOP_GATE,
     VerifyResult,
+    comparison_env,
     record_merge_path_failure,
     record_merge_path_verification,
     resolve_gate_template,
@@ -672,7 +673,7 @@ def _draft_pr_body(
                 use_llmlint_wrapper=use_llmlint_wrapper,
                 base_path=base_path,
                 persona_dir=persona_dir,
-                session="pr-author",
+                session=scoped_session("pr-author", worktree),
                 labels=journal.labels,
                 env=dispatch_env,
             )
@@ -1043,6 +1044,7 @@ def _run_steps(
             return NodeRun("done", None, None)
         log.append("step-started", detail={"step_kind": step.kind, "persona": step.persona})
         dispatch_head = gitops.head_sha(worktree)
+        step_session = f"{scoped_session(branch, worktree)}:{sid}"
         report = dispatch_fn(
             cast(str, step.persona),
             step.task,
@@ -1051,7 +1053,7 @@ def _run_steps(
             use_llmlint_wrapper=use_llmlint_wrapper,
             base_path=base_path,
             persona_dir=persona_dir,
-            session=f"{branch}:{sid}",
+            session=step_session,
             max_turns=step.max_turns or DEFAULT_LIFECYCLE_STEP_MAX_TURNS,
             done_when=step.done_when,
             extra_instructions=extra_instructions,
@@ -1059,7 +1061,7 @@ def _run_steps(
             env=dispatch_env,
             cancel=cancel,
         )
-        persist_report_artifacts(log, report, session=f"{branch}:{sid}")
+        persist_report_artifacts(log, report, session=step_session)
         reports[sid] = report
         if not report.completed:
             # llmlint: ignore[changed_behavior_has_e2e] The live orchestrator e2e kills this
@@ -1067,9 +1069,14 @@ def _run_steps(
             # Existing real-git lifecycle journeys cover this same shared preservation branch
             # with dirty and agent-committed partial work; duplicating paid-agent authoring
             # inside the kill journey would replace an additional layer under test.
-            failure: str = report.outcome or "hit the turn cap"
-            if report.outcome and report.outcome_detail:
-                failure = f"{report.outcome} ({report.outcome_detail})"
+            # A death carries the dispatcher's account of it (exit status, stderr);
+            # a stop that is not a death says how far it got and why, because
+            # "hit the turn cap" on turn 1 is a lie a reader cannot see through.
+            failure: str = (
+                (report.stderr.strip() or report.outcome)
+                if report.outcome
+                else incomplete_detail(report)
+            )
             preserved = False
             if gitops.is_dirty(worktree):
                 gitops.add_all(worktree)
@@ -1189,7 +1196,9 @@ def _build_synthetic_stack_base(
                         f"into synthetic base from {root_base!r}"
                     )
                 )
-        gitops.push(worktree, branch)
+        # This branch publishes onto the root base, so that is the base its
+        # pre-push gate must judge it against.
+        gitops.push(worktree, branch, env=comparison_env(root_base))
         workspace.mirror_branch(ref, branch)
         pushed = True
         return SyntheticStackBase(branch)
@@ -1275,7 +1284,7 @@ def _pause_at_human_step(
     applicable_stack: list[StackBase],
     recorded_pr: str | None,
     journal: NodeSink,
-    cache_env: dict[str, str],
+    workstream_env: dict[str, str],
     dispatch_fn: DispatchFn,
     oneharness_mode: str | None,
     use_llmlint_wrapper: bool,
@@ -1318,7 +1327,7 @@ def _pause_at_human_step(
         return result
     checkpoint = gitops.head_sha(worktree)
     try:
-        gitops.push(worktree, branch)
+        gitops.push(worktree, branch, env=workstream_env)
     except GitError as exc:
         failed = _push_failure(exc, branch=branch)
         result.outcome = failed.outcome
@@ -1342,7 +1351,7 @@ def _pause_at_human_step(
                 base_path=base_path,
                 persona_dir=persona_dir,
                 journal=journal,
-                dispatch_env=cache_env,
+                dispatch_env=workstream_env,
             )
         pr = (github or CliGitHubBackend()).create_pr(
             result.repo,
@@ -1573,6 +1582,10 @@ def run_repo_task(
         else:
             pr_base = root_base
         result.pr_base = pr_base
+        # One environment for every dispatch and every gate run of this workstream:
+        # its shared build cache plus its comparison identity, so a worker's own
+        # gate and the publication rebuild judge the same base.
+        workstream_env = {**cache_env, **comparison_env(pr_base)}
         gate_template = selection.gate
         if recorded_gate is not None:
             resolved_recorded_gate = recorded_gate
@@ -1704,7 +1717,7 @@ def run_repo_task(
                 base_path=base_path,
                 persona_dir=persona_dir,
                 journal=log,
-                dispatch_env=cache_env,
+                dispatch_env=workstream_env,
                 extra_instructions=CI_ITERATION_INSTRUCTIONS if verify_via_ci else None,
                 completed=frozenset(completed_step_ids),
                 cancel=cancel,
@@ -1772,7 +1785,7 @@ def run_repo_task(
                 applicable_stack=applicable_stack,
                 recorded_pr=resume.pr if resume else None,
                 journal=log,
-                cache_env=cache_env,
+                workstream_env=workstream_env,
                 dispatch_fn=dispatch_fn,
                 oneharness_mode=oneharness_mode,
                 use_llmlint_wrapper=use_llmlint_wrapper,
@@ -1871,7 +1884,7 @@ def run_repo_task(
                 base_path=base_path,
                 persona_dir=persona_dir,
                 journal=log,
-                dispatch_env=cache_env,
+                dispatch_env=workstream_env,
             )
 
         # llmlint: ignore[changed_behavior_has_e2e] no blocking external operation exists between
@@ -1891,7 +1904,7 @@ def run_repo_task(
             if merge_path_gate:
                 log.append("verification-started", detail={"label": f"branch push {branch}"})
             try:
-                pushed = gitops.push(worktree, branch)
+                pushed = gitops.push(worktree, branch, env=workstream_env)
             except GitError as exc:
                 result.verify = (
                     record_merge_path_verification(
@@ -1997,7 +2010,7 @@ def run_repo_task(
             if merge_path_gate:
                 log.append("verification-started", detail={"label": f"branch push {branch}"})
             try:
-                pushed = gitops.push(worktree, branch)
+                pushed = gitops.push(worktree, branch, env=workstream_env)
             except GitError as exc:
                 result.verify = (
                     record_merge_path_verification(
@@ -2043,6 +2056,7 @@ def run_repo_task(
             repository_type=effective_type,
             journal=log,
             gate_command=tuple(merge_path_gate),
+            push_env=workstream_env,
             preverified_pr=preverified_pr,
             local_prepare=(synchronize_and_push_local_publication if local_publication else None),
         )
@@ -2073,26 +2087,67 @@ def run_repo_task(
                 "- Existing completed work is preserved.\n"
                 "- The repository gate remains green.\n"
             )
-            report = dispatch_fn(
-                cast(str, lead.persona),
-                resolution_task,
-                project_dir=str(worktree),
-                oneharness_mode=oneharness_mode,
-                base_path=base_path,
-                persona_dir=persona_dir,
-                session=f"{branch}:{lead.id}",
-                max_turns=lead.max_turns or DEFAULT_LIFECYCLE_STEP_MAX_TURNS,
-                done_when="The conflict is resolved, committed, and the gate is green.",
-                labels=log.labels,
-                env=cache_env,
-                cancel=cancel,
+            # Publication-path work is dispatched work, and a reader of the ledger
+            # cannot tell an unrecorded 90-minute conflict resolution from a hang.
+            log.append(
+                "conflict-resolution-started",
+                detail={
+                    "branch": branch,
+                    "base": remote_base,
+                    "attempt": merge_resolutions,
+                    "persona": lead.persona,
+                },
             )
-            persist_report_artifacts(
-                log,
-                report,
-                session=f"{branch}:{lead.id}",
+            # This dispatch runs against an already-checked-out branch, so it needs the
+            # same worktree-scoped session name every other pinned-branch dispatch uses.
+            resolution_session = f"{scoped_session(branch, worktree)}:{lead.id}"
+            # Everything between the start event and its close is guarded, not the
+            # dispatch alone: a start with nothing to close it is the "looks like a
+            # hang" reading these events exist to prevent, and the ledger cannot tell
+            # *where* after the start a failure landed. Persisting the report and
+            # inspecting the worktree both touch the filesystem and both can fail.
+            try:
+                report = dispatch_fn(
+                    cast(str, lead.persona),
+                    resolution_task,
+                    project_dir=str(worktree),
+                    oneharness_mode=oneharness_mode,
+                    base_path=base_path,
+                    persona_dir=persona_dir,
+                    session=resolution_session,
+                    max_turns=lead.max_turns or DEFAULT_LIFECYCLE_STEP_MAX_TURNS,
+                    done_when="The conflict is resolved, committed, and the gate is green.",
+                    labels=log.labels,
+                    env=workstream_env,
+                    cancel=cancel,
+                )
+                persist_report_artifacts(
+                    log,
+                    report,
+                    session=resolution_session,
+                )
+                unresolved = gitops.unmerged_paths(worktree)
+            except Exception as exc:
+                log.append(
+                    "conflict-resolution-finished",
+                    detail={
+                        "branch": branch,
+                        "attempt": merge_resolutions,
+                        "completed": False,
+                        "error": f"{type(exc).__name__}: {exc}",
+                    },
+                )
+                raise
+            log.append(
+                "conflict-resolution-finished",
+                detail={
+                    "branch": branch,
+                    "attempt": merge_resolutions,
+                    "completed": report.completed,
+                    "resolved": not unresolved,
+                    "unresolved_paths": sorted(unresolved),
+                },
             )
-            unresolved = gitops.unmerged_paths(worktree)
             if unresolved:
                 gitops.merge_abort(worktree)
                 if not report.completed:

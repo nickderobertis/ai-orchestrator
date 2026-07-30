@@ -36,10 +36,22 @@ from .coordination import advisory_lock
 from .labels import graph_labels
 from .runs import NodeId, RunId, StepId
 
-# Bump when a record's *shape* changes incompatibly. Readers skip records they do
-# not understand rather than failing a round that is only being observed.
-SCHEMA_VERSION = 5
-SUPPORTED_SCHEMA_VERSIONS = frozenset({1, 2, 3, 4, SCHEMA_VERSION})
+# Bump when a record's *shape* or vocabulary changes, and update
+# `tests/golden/static-round-events-v<N>.json` in the same change. Readers skip
+# records they do not understand rather than failing a round that is only being
+# observed, so every earlier version stays supported and readable.
+#
+# v6 is additive: the `edit-rejected`, `conflict-resolution-started`, and
+# `conflict-resolution-finished` kinds joined the vocabulary, and `edit-committed`
+# gained an optional `command` beside its `operations`. A v5 record therefore still
+# projects — it simply carries no `command` — and this build's records stay readable
+# to a v5 reader as skipped-unknown rather than as corruption.
+#
+# v7 is additive too: the `publication-failed` kind joined the vocabulary, for a
+# publication that ended before any gate could rule on it. A v6 reader skips it as
+# unknown, which is exactly the evidence gap it exists to close for a v7 reader.
+SCHEMA_VERSION = 7
+SUPPORTED_SCHEMA_VERSIONS = frozenset({1, 2, 3, 4, 5, 6, SCHEMA_VERSION})
 
 JOURNAL_NAME = "events.jsonl"
 REQUIRED_EVENT_FIELDS = ("version", "seq", "at", "kind", "run_id", "round")
@@ -68,6 +80,7 @@ EventKind = Literal[
     "node-added",
     "edge-added",
     "edit-committed",
+    "edit-rejected",
     "node-dropped",
     "edge-removed",
     "reparent",
@@ -90,6 +103,8 @@ EventKind = Literal[
     "pr-drafting-started",
     "pr-drafting-finished",
     "pr-drafting-fallback",
+    "conflict-resolution-started",
+    "conflict-resolution-finished",
     "human-waiting",
     "human-attested",
     "node-failed",
@@ -133,6 +148,14 @@ TERMINAL_NODE_EVENT_KINDS: tuple[EventKind, ...] = (
 )
 TERMINAL_NODE_RESULT_FIELD = "result"
 TERMINAL_NODE_RESULT_TYPE = "GraphResultItem"
+#: `edit-committed` detail: the compiled mutations are required, and the planner
+#: command that produced them is optional only because v5 records predate it. Named
+#: here so the strict reader, the writer, and the checked-in golden share one source.
+COMMITTED_EDIT_OPERATIONS_FIELD = "operations"
+COMMITTED_EDIT_COMMAND_FIELD = "command"
+COMMITTED_EDIT_COMMAND_TYPE = "EditPayload"
+#: The first schema version whose `edit-committed` records carry the command.
+COMMITTED_EDIT_COMMAND_SINCE = 6
 AUDIT_EVENT_KINDS: frozenset[EventKind] = EVENT_KINDS - frozenset(AUTHORITATIVE_EVENT_KINDS)
 ROUND_EVENT_KINDS: frozenset[EventKind] = frozenset(
     {
@@ -148,6 +171,10 @@ GRAPH_EVENT_KINDS: frozenset[EventKind] = frozenset(
         "node-added",
         "edge-added",
         "edit-committed",
+        # A rejection names a command, not a node: the id it carries may not exist, and
+        # a rejected edit changes no node's state. It is a graph event without a locator
+        # for the same reason `edit-committed` is.
+        "edit-rejected",
         "node-dropped",
         "edge-removed",
         "reparent",
@@ -527,12 +554,6 @@ class Journal:
                 os.fsync(handle.fileno())
             self.seq = events[-1].seq
         return events
-
-    def append_transaction(self, operations: Sequence[Mapping[str, DetailValue]]) -> Event:
-        """Append a validated edit's events as one atomic replay record."""
-        if not operations:
-            raise JournalError("an edit transaction requires at least one operation")
-        return self.append("edit-committed", detail={"operations": list(operations)})
 
     def events(self) -> list[Event]:
         """Read only records owned by this journal's run.

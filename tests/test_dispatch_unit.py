@@ -414,6 +414,43 @@ def test_worker_heartbeat_deadline_ignores_busy_descendant(tmp_path) -> None:
     assert report.completed is False
 
 
+def test_worker_death_report_carries_the_recorded_exit_status_and_stderr(tmp_path) -> None:
+    """A death before the first turn reports the wrapper's account of it.
+
+    The wrapper parks after its child fails so the dispatcher can see the marker,
+    then the whole tree is torn down — so the exit status and stderr it left in the
+    status directory are the only evidence that outlives the failure.
+    """
+    status = tmp_path / "agent-status"
+    onejudge = tmp_path / "onejudge"
+    onejudge.write_text(
+        '#!/bin/sh\nif [ "$1" = "--version" ]; then echo "onejudge 0.3.4"; exit 0; fi\n'
+        'dir=$ORCHESTRATOR_AGENT_STATUS_DIR\nprintf "%s\\n" "$$" >"$dir/agent.pid"\n'
+        'printf "7\\n" >"$dir/agent.exit_code"\n'
+        # A verbose harness precedes its own failure with pages of startup chatter;
+        # the tail is the part that names the failure, so that is what survives.
+        'python3 -c "print(\'noise \' * 400)" >"$dir/agent.stderr"\n'
+        'printf "claude: no conversation found with session id 0dd\\n" >>"$dir/agent.stderr"\n'
+        'printf "%s\\n" "$$" >"$dir/agent.failed"\nwhile :; do :; done\n',
+        encoding="utf-8",
+    )
+    onejudge.chmod(0o700)
+
+    report = run_onejudge(
+        {},
+        "task",
+        onejudge_bin=os.fspath(onejudge),
+        env={"ORCHESTRATOR_AGENT_STATUS_DIR": os.fspath(status)},
+    )
+
+    assert report.outcome == "worker-died"
+    assert report.stderr.startswith("worker-died")
+    assert "agent exit status 7" in report.stderr
+    assert report.stderr.endswith("claude: no conversation found with session id 0dd")
+    assert "..." in report.stderr
+    assert len(report.stderr) < 1600
+
+
 def test_a_provider_failure_reads_differently_from_a_worker_that_stopped(tmp_path) -> None:
     """`worker-died` alone shaped every wrong hypothesis; the reason is the fix.
 
@@ -472,7 +509,10 @@ def test_a_provider_failure_reads_differently_from_a_worker_that_stopped(tmp_pat
         "agent harness exited 7: provider error: 429 rate_limit_error quota exhausted"
     )
     assert stopped.outcome_detail == "the agent harness stopped heartbeating for 0.2s"
-    assert throttled.stderr == f"worker-died: {throttled.outcome_detail}"
+    # The reported sentence is the observed condition wrapped in what the wrapper
+    # recorded about the child, so both halves reach a reader of the node result.
+    assert throttled.stderr.startswith("worker-died (watchdog pid ")
+    assert throttled.stderr.endswith(f": {throttled.outcome_detail}")
 
 
 def test_a_recorded_agent_failure_never_carries_a_credential_value(tmp_path) -> None:

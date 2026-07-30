@@ -49,6 +49,7 @@ __all__ = [
     "VERIFICATION_TAIL_BYTES",
     "VerifyResult",
     "append_gate_log",
+    "comparison_env",
     "detect_gate",
     "detect_gate_candidates",
     "format_merge_path_failure",
@@ -63,6 +64,26 @@ __all__ = [
 #: event. The whole run stays in the log the result points at; this is the slice a
 #: planner reads without opening it.
 VERIFICATION_TAIL_BYTES = 2000
+
+
+def comparison_env(base: str, *, remote: str = "origin") -> dict[str, str]:
+    """The one comparison identity every process judging this work resolves.
+
+    Every gate a change meets — the one its worker runs before it settles, and the
+    one the repository's merge path runs at the publishing push — must judge it
+    against the same base ref. A gate tier that memoizes a non-deterministic
+    verdict keys that memo on the resolved base commit, so a worker left to
+    discover its own base resolves the remote HEAD, which is the root base rather
+    than a stacked publication base. That records the verdict under a different key
+    than the push looks up, and the pre-push hook silently re-judges against
+    findings the worker never saw and can no longer clear.
+
+    One source, because two copies of this contract are how the two sides drift.
+    """
+    return {
+        "ORCHESTRATOR_COMPARISON_REMOTE": remote,
+        "ORCHESTRATOR_COMPARISON_BASE": base,
+    }
 
 
 @dataclass(frozen=True)

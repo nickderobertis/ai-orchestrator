@@ -1295,7 +1295,8 @@ def test_run_repo_task_journals_a_step_that_hit_the_turn_cap(tmp_path, bare_orig
             [],
             {},
             {},
-            "worker died",
+            "worker-died: tracked worker exited or stopped heartbeating "
+            "(watchdog pid 4242, agent exit status 143)",
             outcome="worker-died",
         )
 
@@ -1318,7 +1319,10 @@ def test_run_repo_task_journals_a_step_that_hit_the_turn_cap(tmp_path, bare_orig
     )
 
     assert result.outcome == "not-completed"
+    # The dispatcher's account of the death is what a reader gets; carry it through
+    # rather than replacing it with the outcome name.
     assert "worker-died" in result.detail
+    assert "agent exit status 143" in result.detail
     settled = next(e for e in journal.events() if e.kind == "step-settled")
     assert settled.step == "impl"
     assert settled.detail["status"] == "not-completed"

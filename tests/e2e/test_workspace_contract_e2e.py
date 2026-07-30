@@ -54,6 +54,21 @@ def test_root_recipe_routes_through_nx(recipe: str, target: str) -> None:
     assert f"./scripts/nx.sh {target}" in result.stderr
 
 
+def test_test_recipe_forces_one_tier_to_re_run_through_the_command_surface() -> None:
+    """The documented way to re-run a memoized tier is a flag on one invocation.
+
+    A cached test verdict is a recorded answer. When an operator has reason to
+    distrust one, the supported lever has to reach Nx from the `just` surface —
+    otherwise the only way out is an exported global cache skip, which re-rolls
+    every tier from every unrelated command and breaks the checks whose contract
+    is cache replay.
+    """
+    result = _run("just", "--dry-run", "test", "--skip-nx-cache")
+
+    assert result.returncode == 0, result.stderr
+    assert "./scripts/nx.sh run-many -t test --skip-nx-cache" in result.stderr
+
+
 def test_orchestrator_lint_target_reports_missing_shellcheck(tmp_path: Path) -> None:
     command = json.loads((ROOT / "orchestrator/project.json").read_text())["targets"]["lint"][
         "command"

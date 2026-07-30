@@ -26,7 +26,7 @@ from .coordination import git_lock_identity
 from .merge_queue import merge_queue_turn
 from .provenance import unattested_incomplete
 from .registry import Registry, RegistryError
-from .verify import run_gate
+from .verify import comparison_env, run_gate
 
 __all__ = ["IntegrateError", "IntegrationResult", "BranchResult", "integrate", "plan"]
 
@@ -144,10 +144,7 @@ def _integrate_locked(
     planned = plan(selected, base, merged)
     initial_base = gitops.head_sha(root)
     results: list[BranchResult] = []
-    comparison_env = {
-        "ORCHESTRATOR_COMPARISON_REMOTE": remote,
-        "ORCHESTRATOR_COMPARISON_BASE": base,
-    }
+    integration_env = comparison_env(base, remote=remote)
 
     for item in planned:
         if item.status == "already-merged":
@@ -197,7 +194,7 @@ def _integrate_locked(
             # below, before the single optional push, so without this run unverified
             # commits reach the local base and a later hook rejection can no longer
             # say which branch of the train broke it.
-            if not run_gate(worktree, gate_command, env=comparison_env).ok:
+            if not run_gate(worktree, gate_command, env=integration_env).ok:
                 results.append(BranchResult(branch, "skipped", "gate-failed"))
                 continue
             try:
@@ -218,7 +215,7 @@ def _integrate_locked(
             base,
             remote=remote,
             set_upstream=False,
-            env=comparison_env,
+            env=integration_env,
         )
         pushed = True
     return IntegrationResult(base, tuple(results), advanced, pushed)

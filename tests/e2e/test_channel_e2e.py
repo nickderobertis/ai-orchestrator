@@ -651,11 +651,14 @@ def test_orchestrator_retries_dead_lifecycle_worker_then_surfaces_blocker(
     first_result = json.loads((run_dir / "round-01" / "result.json").read_text(encoding="utf-8"))
     assert first_result["results"]["change"]["status"] == "failed"
     assert first_result["results"]["change"]["outcome"] == "not-completed"
-    # The recorded failure names the disposition the supervisor observed, not just
-    # that the worker died: a killed harness must not read like one that gave up.
-    assert first_result["results"]["change"]["error"].endswith(
-        "worker-died (agent harness killed by signal 15)"
-    )
+    # The recorded failure is all a planner gets for a worker that never reported;
+    # it has to say what became of the child and name the disposition the supervisor
+    # observed, not just that one died — a killed harness must not read like one
+    # that gave up.
+    first_error = first_result["results"]["change"]["error"]
+    assert "worker-died" in first_error
+    assert "agent exit status" in first_error, first_error
+    assert "agent harness killed by signal 15" in first_error, first_error
 
     barrier.unlink()
     _convenience_cli("channel-continue", run_id, runs, "retry change")
@@ -671,9 +674,10 @@ def test_orchestrator_retries_dead_lifecycle_worker_then_surfaces_blocker(
     second_result = json.loads((run_dir / "round-02" / "result.json").read_text(encoding="utf-8"))
     assert second_result["results"]["change"]["status"] == "failed"
     assert second_result["results"]["change"]["outcome"] == "not-completed"
-    assert second_result["results"]["change"]["error"].endswith(
-        "worker-died (agent harness killed by signal 15)"
-    )
+    second_error = second_result["results"]["change"]["error"]
+    assert "worker-died" in second_error
+    assert "agent exit status" in second_error, second_error
+    assert "agent harness killed by signal 15" in second_error, second_error
     retry_plan = json.loads((run_dir / "round-02" / "plan.json").read_text(encoding="utf-8"))
     assert retry_plan["tasks"][0]["id"] == "change"
     _convenience_cli("channel-approve", run_id, runs)
