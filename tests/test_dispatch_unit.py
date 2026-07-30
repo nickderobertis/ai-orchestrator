@@ -701,14 +701,13 @@ def test_agent_turns_shorter_than_the_poll_interval_are_not_mistaken_for_death(t
     that starts or finishes inside that gap is absent from the sample while the
     worker is perfectly alive.
 
-    The double keeps `scripts/oneharness-agent.sh`'s liveness protocol, because that
-    ordering is the whole reason the gap is survivable: the pid a turn advertises is
-    the turn's *own* process, and it records `agent.done` before it exits. So a pid
-    missing from a re-sampled tree has, by construction, already left its marker —
-    which is what lets a supervisor tell "this turn ended" from "this worker died"
-    without timing either one. Advertising a pid that dies before the marker is
-    written would open a window no re-sample can close, and CPU starvation would
-    widen it until a live worker was reported dead.
+    The double keeps `scripts/oneharness-agent.sh`'s ordering — the pid a turn
+    advertises is the turn's own process, and it records `agent.done` before
+    exiting — because that is the whole reason the gap is survivable: a pid missing
+    from a re-sampled tree has by construction already left its marker. The wrapper
+    owns that contract and
+    `test_oneharness_agent_wrapper.test_the_pid_a_turn_advertises_outlives_the_marker_that_closes_it`
+    gates the two against drifting apart.
     """
     onejudge = tmp_path / "onejudge"
     onejudge.write_text(

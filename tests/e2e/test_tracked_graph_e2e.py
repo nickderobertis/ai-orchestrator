@@ -1526,6 +1526,10 @@ def test_real_cli_recovers_failed_lifecycle_result(
         "json",
     ]
     events_path = runs / "failed-lifecycle-prefix" / "events.jsonl"
+    # llmlint: ignore[tests_mirror_real_usage] The lock is deliberately internal, so no
+    # user-facing command holds it for a controlled window; the only alternative is a
+    # second real dispatch racing for it, which is the nondeterminism this journey exists
+    # to remove. The run under test is still driven entirely through `just run-plan`.
     git_lock = git_lock_identity(gitops.common_dir(canonical))
     held = advisory_lock(git_lock)
     held.__enter__()
@@ -1563,14 +1567,9 @@ def test_real_cli_recovers_failed_lifecycle_result(
         failed_lifecycles = {
             event.get("node") for event in records if event["kind"] == "node-failed"
         }
-        # Parked, not merely started: the ready file proves in-flight reached its
-        # turn, and no terminal event for it proves it is still inside one, so the
-        # round cannot finalize between this check and the kill. The second half is
-        # what the ready file alone cannot say — it stays on disk after the turn
-        # that wrote it ends — and the whole recovery boundary rests on it. If the
-        # round did finalize, `--recover` legitimately opens round-02 and re-attempts
-        # both still-failed nodes, so every assertion below would be reading a second
-        # attempt as a duplicated event. Say that here rather than there.
+        # Parked, not merely started: the ready file survives the turn that wrote
+        # it, so only the absence of a terminal event proves in-flight is still
+        # inside one and the round cannot finalize before the kill.
         in_flight_settled = any(
             event["kind"] in {"node-settled", "node-failed"} and event.get("node") == "in-flight"
             for event in records
