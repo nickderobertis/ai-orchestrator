@@ -784,6 +784,15 @@ class Registry:
             identity, metadata.workflow, effective_type, Path(entry.path), metadata.gate
         )
 
+    def is_checkout_of(self, path: str | Path, origin: str) -> bool:
+        """Whether ``path`` is a usable git checkout of ``origin``'s identity.
+
+        The public form of the internal check, for callers that accept a checkout
+        path from an operator and must reject one belonging to another repository
+        before reading branches out of it.
+        """
+        return self._valid_checkout(Path(path), origin)
+
     @staticmethod
     def _valid_checkout(path: Path, expected_origin: str) -> bool:
         return (

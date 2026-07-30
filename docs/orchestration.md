@@ -448,7 +448,20 @@ records a self-describing `error` outcome with Git's diagnostic.
 Remote-first failures remain named required-check outcomes. Each lifecycle node
 also records one `merge-gate-coverage` event before it dispatches, naming the
 `pre-push` hook and required checks that will verify it, so a late rejection can
-be read against what was expected to run. Because artifact
+be read against what was expected to run. Each gated push then records a
+`verification-finished` event with its verdict and a bounded `output_tail`, and
+appends the whole run to the node's `artifacts.gate_log` — for a green
+publication as much as a rejected one, so a settled node can show what its gate
+did rather than only that nothing objected.
+
+That log holds every record the merge path produced, in order, including the
+publications that never reached a gate at all: a rebuild whose base was advanced
+under it, or that could not fetch, build its worktree, or write. Those settle
+with a `publication-failed` event carrying the same bounded `output_tail` — for a
+lost base race, one line per attempt naming the sha it verified against and the
+sha it then observed — and the result's detail names the log. Before that, such a
+failure recorded neither, which is how a run could settle seconds after a green
+gate with no evidence of what went wrong. Because artifact
 paths are in the terminal `GraphResultItem`, crash projection retains them
 byte-for-byte.
 

@@ -261,6 +261,16 @@ monotonic heartbeat. A vanished agent pid or heartbeat deadline settles as the
 distinct incomplete `worker-died` outcome promptly, independent of CPU/I/O
 from leaked descendants or `.git` churn. The last observed process tree is reaped
 even after its root has vanished, so those descendants cannot pollute a retry.
+
+`worker-died` also carries **why**, because provider throttling, quota
+exhaustion, an OOM kill, and a genuine crash otherwise all reach the supervisor
+as the same dead process tree. The wrapper records the agent harness's exit
+disposition (`agent.failure`, distinguishing a signal from an exit status) and
+tees its stderr (`agent.stderr`) beside the heartbeat; dispatch reads both back
+into `Report.outcome_detail`, redacted, and the node result and journal
+`node-failed` / `step-settled` events carry that sentence. Each of the four death
+paths names itself, so a harness failure to escalate reads differently from a
+worker that simply stopped.
 Set `ORCHESTRATOR_WORKER_HEARTBEAT_TIMEOUT` to a positive number of seconds; it
 defaults to `60`.
 

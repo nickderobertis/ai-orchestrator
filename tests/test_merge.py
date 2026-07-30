@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import subprocess
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -326,13 +327,48 @@ def test_local_merge_relies_on_push_hook_and_journals_the_merge(
     journal, node = _scope(tmp_path, "run-local")
 
     out = LocalMergeStrategy().publish_and_merge(
-        _ctx(clone_dir=clone, branch="feature", journal=node)
+        _ctx(clone_dir=clone, branch="feature", journal=node, gate_command=("just", "gate"))
     )
 
     assert out.outcome == "merged"
     events = journal.events()
-    assert [e.kind for e in events] == ["publication-finished"]
-    assert events[0].detail == {"pr": "local:o/r#feature", "branch": "feature", "base": "main"}
+    assert [e.kind for e in events] == [
+        "verification-started",
+        "verification-finished",
+        "publication-finished",
+    ]
+    # A green publication keeps its evidence too: the settled result has to be able
+    # to show that the merge path's gate ran, not only that nothing objected.
+    assert events[1].detail["ok"] is True
+    assert out.verification is not None and out.verification.ok
+    assert "verdict: passed" in Path(str(out.verification.log_path)).read_text(encoding="utf-8")
+    assert events[2].detail == {"pr": "local:o/r#feature", "branch": "feature", "base": "main"}
+
+
+def test_an_ungated_publication_push_claims_no_verdict(tmp_path: Path, bare_origin) -> None:
+    """Where required PR checks are the coverage, they decide after this push.
+
+    Recording a bare accepted push as a passed verification would claim a verdict
+    the checks have not reached, so an ungated push records none at all.
+    """
+    origin = bare_origin()
+    clone = gitops.clone(origin, tmp_path / "clone-ungated")
+    feature = gitops.worktree_add(
+        clone, tmp_path / "feature-ungated", "feature", base="origin/main"
+    )
+    (feature / "feature.txt").write_text("change\n", encoding="utf-8")
+    gitops.add_all(feature)
+    gitops.commit(feature, "feat: add feature")
+    gitops.push(feature, "feature")
+    journal, node = _scope(tmp_path, "run-ungated")
+
+    out = LocalMergeStrategy().publish_and_merge(
+        _ctx(clone_dir=clone, branch="feature", journal=node)
+    )
+
+    assert out.outcome == "merged"
+    assert out.verification is None
+    assert [event.kind for event in journal.events()] == ["publication-finished"]
 
 
 def test_local_merge_records_branch_content_already_on_base(tmp_path: Path, bare_origin) -> None:
@@ -430,14 +466,92 @@ def test_local_merge_records_push_gate_failure_without_claiming_a_merge(
         lambda *args, **kwargs: (_ for _ in ()).throw(GitError("pre-push: complete gate failed")),
     )
     out = LocalMergeStrategy().publish_and_merge(
-        _ctx(clone_dir=clone, branch="feature", journal=node)
+        _ctx(clone_dir=clone, branch="feature", journal=node, gate_command=("just", "gate"))
     )
 
     assert out.outcome == "gate-failed"
     assert "repository pre-push gate rejected" in out.detail
-    assert journal.events() == []
+    assert [e.kind for e in journal.events()] == [
+        "verification-started",
+        "verification-finished",
+    ]
+    # The rejection is what a settled run has to explain, so its output is kept.
+    assert out.verification is not None and not out.verification.ok
+    preserved = Path(str(out.verification.log_path)).read_text(encoding="utf-8")
+    assert "verdict: FAILED" in preserved
+    assert "pre-push: complete gate failed" in preserved
+    assert str(out.verification.log_path) in out.detail
     # The rebuilt merge never reached the base branch, so nothing may say it did.
     assert not (gitops.clone(origin, tmp_path / "check") / "feature.txt").exists()
+
+
+def test_exhausted_publication_retries_preserve_what_each_attempt_saw(
+    tmp_path: Path, bare_origin, monkeypatch
+) -> None:
+    """Exhaustion asserts a cause, so it has to carry the observations behind it.
+
+    A base advancing under the rebuild ends publication in seconds with no gate
+    ever consulted. Without the per-attempt shas, a base moved by a sibling run, a
+    genuine concurrent publisher, and a synthetic rejection all read alike. The
+    advance here is a real push from a real second clone.
+    """
+    origin = bare_origin()
+    clone = gitops.clone(origin, tmp_path / "clone-exhausted")
+    feature = gitops.worktree_add(
+        clone, tmp_path / "feature-exhausted", "feature", base="origin/main"
+    )
+    (feature / "feature.txt").write_text("change\n", encoding="utf-8")
+    gitops.add_all(feature)
+    gitops.commit(feature, "feat: add feature")
+    gitops.push(feature, "feature")
+    rival = gitops.clone(origin, tmp_path / "rival")
+    advances = 0
+    real_merge_squash = gitops.merge_squash
+
+    def advance_base_then_squash(*args: object, **kwargs: object) -> object:
+        """Let a sibling publisher land on the base mid-rebuild, for real."""
+        nonlocal advances
+        advances += 1
+        (rival / f"rival-{advances}.txt").write_text("rival\n", encoding="utf-8")
+        gitops.add_all(rival)
+        gitops.commit(rival, f"chore: rival publication {advances}")
+        gitops.push(rival, "HEAD:main", set_upstream=False)
+        return real_merge_squash(*args, **kwargs)
+
+    monkeypatch.setattr(gitops, "merge_squash", advance_base_then_squash)
+    journal, node = _scope(tmp_path, "run-exhausted")
+
+    out = LocalMergeStrategy().publish_and_merge(
+        _ctx(
+            clone_dir=clone,
+            branch="feature",
+            journal=node,
+            publication_attempts=2,
+            gate_command=("just", "gate"),
+        )
+    )
+
+    assert out.outcome == "publication-retries-exhausted"
+    assert advances == 2
+    ((failure,),) = ([e for e in journal.events() if e.kind == "publication-failed"],)
+    tail = str(failure.detail["output_tail"])
+    assert "attempt 1:" in tail and "attempt 2:" in tail
+    assert "is now" in tail  # the observed base sha, not just the expected one
+    preserved = Path(str(failure.detail["log_path"])).read_text(encoding="utf-8")
+    assert "outcome: publication-retries-exhausted" in preserved
+    assert str(failure.detail["log_path"]) in out.detail
+    # And the base is untouched: nothing was published without a gate.
+    assert not _has_path(origin, "main", "feature.txt")
+
+
+def _has_path(origin: Path, ref: str, path: str) -> bool:
+    return (
+        subprocess.run(
+            ["git", "-C", str(origin), "cat-file", "-e", f"{ref}:{path}"],
+            capture_output=True,
+        ).returncode
+        == 0
+    )
 
 
 def test_push_race_classification_is_narrow() -> None:

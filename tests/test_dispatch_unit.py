@@ -21,6 +21,7 @@ from orchestrator.dispatch import (
     _build_report,
     _file_progress,
     _read_watchdog_pid,
+    _worker_death_detail,
     run_onejudge,
 )
 from orchestrator.dispatch import main as dispatch_main
@@ -413,41 +414,110 @@ def test_worker_heartbeat_deadline_ignores_busy_descendant(tmp_path) -> None:
     assert report.completed is False
 
 
-def test_worker_death_report_carries_the_recorded_exit_status_and_stderr(tmp_path) -> None:
-    """A death before the first turn reports the wrapper's account of it.
+def test_a_provider_failure_reads_differently_from_a_worker_that_stopped(tmp_path) -> None:
+    """`worker-died` alone shaped every wrong hypothesis; the reason is the fix.
 
-    The wrapper parks after its child fails so the dispatcher can see the marker,
-    then the whole tree is torn down — so the exit status and stderr it left in the
-    status directory are the only evidence that outlives the failure.
+    Both journeys below end as `worker-died`. Only the recorded reason says which
+    one to retry and which one to escalate, so the two are compared side by side.
+    The wrapper parks after its child fails so the dispatcher can see the marker and
+    the whole tree is then torn down, so the exit status, the wrapper's own reading
+    of it, and the stderr left in the status directory are the only evidence that
+    outlives the failure.
     """
-    status = tmp_path / "agent-status"
-    onejudge = tmp_path / "onejudge"
+    status = tmp_path / "throttled-status"
+    onejudge = tmp_path / "throttled"
     onejudge.write_text(
         '#!/bin/sh\nif [ "$1" = "--version" ]; then echo "onejudge 0.3.4"; exit 0; fi\n'
-        'dir=$ORCHESTRATOR_AGENT_STATUS_DIR\nprintf "%s\\n" "$$" >"$dir/agent.pid"\n'
-        'printf "7\\n" >"$dir/agent.exit_code"\n'
+        'd="$ORCHESTRATOR_AGENT_STATUS_DIR"\n'
+        'printf "%s\\n" "$$" >"$d/agent.pid"\n'
+        'touch "$d/agent.heartbeat"\n'
+        'printf "7\\n" >"$d/agent.exit_code"\n'
         # A verbose harness precedes its own failure with pages of startup chatter;
         # the tail is the part that names the failure, so that is what survives.
-        'python3 -c "print(\'noise \' * 400)" >"$dir/agent.stderr"\n'
-        'printf "claude: no conversation found with session id 0dd\\n" >>"$dir/agent.stderr"\n'
-        'printf "%s\\n" "$$" >"$dir/agent.failed"\nwhile :; do :; done\n',
+        'python3 -c "print(\'noise \' * 400)" >"$d/agent.stderr"\n'
+        'printf "provider error: 429 rate_limit_error quota exhausted\\n" >>"$d/agent.stderr"\n'
+        'printf "agent harness exited 7\\n" >"$d/agent.failure"\n'
+        'printf "%s\\n" "$$" >"$d/agent.failed"\n'
+        "while :; do sleep 0.05; done\n",
         encoding="utf-8",
     )
     onejudge.chmod(0o700)
 
-    report = run_onejudge(
+    throttled = run_onejudge(
         {},
         "task",
         onejudge_bin=os.fspath(onejudge),
         env={"ORCHESTRATOR_AGENT_STATUS_DIR": os.fspath(status)},
     )
 
-    assert report.outcome == "worker-died"
-    assert report.stderr.startswith("worker-died:")
-    assert "agent exit status 7" in report.stderr
-    assert report.stderr.endswith("claude: no conversation found with session id 0dd")
-    assert "..." in report.stderr
-    assert len(report.stderr) < 1600
+    quiet_status = tmp_path / "quiet-status"
+    quiet = tmp_path / "quiet"
+    quiet.write_text(
+        '#!/bin/sh\nif [ "$1" = "--version" ]; then echo "onejudge 0.3.4"; exit 0; fi\n'
+        'printf "%s\\n" "$$" >"$ORCHESTRATOR_AGENT_STATUS_DIR/agent.pid"\n'
+        "while :; do :; done &\n"
+        "child=$!\n"
+        'printf "%s\\n" "$child" >"$ORCHESTRATOR_AGENT_STATUS_DIR/agent.child.pid"\n'
+        'trap \'kill "$child" 2>/dev/null || true; wait "$child" 2>/dev/null || true; '
+        "exit 143' TERM\n"
+        'wait "$child"\n',
+        encoding="utf-8",
+    )
+    quiet.chmod(0o700)
+
+    stopped = run_onejudge(
+        {},
+        "task",
+        onejudge_bin=os.fspath(quiet),
+        env={
+            "ORCHESTRATOR_AGENT_STATUS_DIR": os.fspath(quiet_status),
+            "ORCHESTRATOR_WORKER_HEARTBEAT_TIMEOUT": "0.2",
+        },
+    )
+
+    assert throttled.outcome == stopped.outcome == "worker-died"
+    detail = throttled.outcome_detail or ""
+    assert detail.startswith("the agent harness reported a failed turn (watchdog pid ")
+    assert "agent exit status 7" in detail
+    assert "agent harness exited 7" in detail
+    # Only the tail of a chatty harness survives, and it is the part that names why.
+    assert detail.endswith("provider error: 429 rate_limit_error quota exhausted")
+    assert ": ...noise" in detail
+    assert len(detail) < 1600
+    assert throttled.stderr == f"worker-died: {detail}"
+    # The same outcome, a different reason: nothing failed here, it simply stopped,
+    # and its wrapper left no exit status behind to explain the silence.
+    stopped_detail = stopped.outcome_detail or ""
+    assert stopped_detail.startswith("the agent harness stopped heartbeating for 0.2s ")
+    assert stopped_detail.endswith("agent exit status unknown)")
+
+
+def test_a_recorded_worker_death_never_carries_a_credential_value(tmp_path) -> None:
+    """The harness stderr this reads back is durable evidence, so it is redacted."""
+    status = tmp_path / "agent"
+    status.mkdir()
+    token = "sk-ant-oat01-not-a-real-credential"
+    (status / "agent.exit_code").write_text("1\n", encoding="utf-8")
+    (status / "agent.failure").write_text(
+        f"agent harness exited 1 while holding {token}\n", encoding="utf-8"
+    )
+    (status / "agent.stderr").write_text(
+        f"harness failed (auth): token {token} rejected\n", encoding="utf-8"
+    )
+
+    os.environ["CLAUDE_CODE_OAUTH_TOKEN"] = token
+    try:
+        detail = _worker_death_detail(status, ProcessId(4321), "the agent harness died")
+    finally:
+        del os.environ["CLAUDE_CODE_OAUTH_TOKEN"]
+
+    assert token not in detail
+    assert detail.count("<redacted:CLAUDE_CODE_OAUTH_TOKEN>") == 2
+    assert detail.startswith(
+        "the agent harness died (watchdog pid 4321, agent exit status 1): "
+        "agent harness exited 1 while holding <redacted:CLAUDE_CODE_OAUTH_TOKEN>: "
+        "harness failed (auth): token <redacted:CLAUDE_CODE_OAUTH_TOKEN> rejected"
+    )
 
 
 def test_missing_agent_heartbeat_reaches_worker_death_deadline(tmp_path) -> None:

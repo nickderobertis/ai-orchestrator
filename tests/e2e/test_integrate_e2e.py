@@ -16,6 +16,7 @@ import pytest
 from conftest import install_pre_push_hook
 from fakes import FakeGitHub, make_writing_dispatch
 
+from orchestrator import gitops
 from orchestrator.integrate import IntegrateError, integrate, main
 from orchestrator.lifecycle import StackBase, run_repo_task
 from orchestrator.recover import main as recover_main
@@ -370,9 +371,13 @@ def test_incomplete_history_needs_recovery_attestation_even_after_normal_commit(
 
     result = integrate(repo, ["claude/incomplete"], gate_command=["true"])
 
-    assert [(item.status, item.reason) for item in result.branches] == [
-        ("skipped", "incomplete-provenance; recover with just repo-recover")
-    ]
+    ((status, reason),) = [(item.status, item.reason) for item in result.branches]
+    assert status == "skipped"
+    # Naming the other verb is not enough: the skip has to hand over the command
+    # that actually publishes this branch, for this repository.
+    assert reason is not None
+    assert reason.startswith("incomplete-provenance (1 unattested commit(s))")
+    assert f"just repo-recover claude/incomplete --repo {repo}" in reason
     assert not result.base_advanced
 
 
@@ -446,6 +451,9 @@ def test_repo_recover_cli_uses_explicit_local_workflow(tmp_path, bare_origin, ca
     )
     payload = json.loads(capsys.readouterr().out)
     assert payload["workflow"] == "local" and payload["outcome"] == "merged"
+    # The documented JSON field, not only the human line: this is what a caller
+    # parsing the result reads to find the merge path's own gate run.
+    assert "verdict: passed" in Path(payload["gate_log"]).read_text(encoding="utf-8")
     assert payload["repo_type"] == "single-owner" and payload["merge_policy"] == "direct"
     assert payload["base"] == payload["pr_base"] == "main"
     assert payload["synthetic_stack_base"] is None
@@ -470,6 +478,89 @@ def test_repo_recover_cli_uses_explicit_local_workflow(tmp_path, bare_origin, ca
         == 0
     )
     assert "claude/text-recovery: merged" in capsys.readouterr().out
+
+
+def test_repo_recover_command_adopts_a_branch_from_an_explicit_execution_checkout(
+    tmp_path, bare_origin
+) -> None:
+    """The installed command, for the case that used to be unrecoverable.
+
+    A branch that reaches publication on its first attempt has never been pushed,
+    so it exists only where the work was done. Driving the installed argument
+    route here is what proves the operator's way out of that, and that the reported
+    result names the preserved merge-path gate output.
+    """
+    origin = bare_origin()
+    repo = _clone(tmp_path, origin)
+    _allow_local(repo)
+    execution = tmp_path / "execution-checkout"
+    subprocess.run(["git", "clone", str(origin), str(execution)], check=True, capture_output=True)
+    _branch(execution, "claude/execution-only", {"partial.txt": "partial\n"})
+    _git(execution, "checkout", "claude/execution-only")
+    _git(
+        execution,
+        "commit",
+        "--amend",
+        "-m",
+        "wip: partial (incomplete step)\n\nOrchestrator-Status: incomplete",
+    )
+    _git(execution, "checkout", "main")
+    assert not gitops.branch_exists(repo, "claude/execution-only")
+
+    proc = subprocess.run(
+        [
+            "orchestrator-repo-recover",
+            "claude/execution-only",
+            "--repo",
+            str(repo),
+            "--execution-checkout",
+            str(execution),
+            "--gate",
+            "true",
+            "--workspace",
+            str(tmp_path / "execution-only-cli-worktrees"),
+        ],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+    )
+
+    printed = proc.stdout
+    assert proc.returncode == 0, proc.stderr
+    assert "claude/execution-only: merged" in printed
+    gate_log = printed.rsplit("merge-path gate output: ", 1)[1].strip()
+    assert "verdict: passed" in Path(gate_log).read_text(encoding="utf-8")
+    assert _git(origin, "show", "main:partial.txt") == "partial"
+
+
+def test_repo_recover_command_rejects_an_execution_checkout_of_another_repository(
+    tmp_path, bare_origin
+) -> None:
+    repo = _clone(tmp_path, bare_origin())
+    _allow_local(repo)
+    stranger = tmp_path / "stranger"
+    subprocess.run(
+        ["git", "clone", str(bare_origin()), str(stranger)], check=True, capture_output=True
+    )
+
+    proc = subprocess.run(
+        [
+            "orchestrator-repo-recover",
+            "claude/anything",
+            "--repo",
+            str(repo),
+            "--execution-checkout",
+            str(stranger),
+            "--gate",
+            "true",
+        ],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+    )
+
+    assert proc.returncode == 2
+    assert "is not a git checkout of the repository identity" in proc.stderr
 
 
 def test_team_recovery_default_opens_pr_without_polling(tmp_path, bare_origin) -> None:
@@ -585,6 +676,23 @@ def test_repo_recover_rejects_branch_without_incomplete_provenance(tmp_path, bar
             repo,
             "claude/ordinary",
             workspace_root=tmp_path / "ordinary-recovery-worktrees",
+            recorded_gate=["true"],
+        )
+
+
+def test_repo_recover_separates_nothing_to_recover_from_the_wrong_verb(
+    tmp_path, bare_origin
+) -> None:
+    """A branch with no commits ahead is a different problem from a complete one."""
+    repo = _clone(tmp_path, bare_origin())
+    _allow_local(repo)
+    _git(repo, "branch", "claude/nothing-ahead", "main")
+
+    with pytest.raises(ValueError, match="no commits ahead of origin/main"):
+        recover_repo(
+            repo,
+            "claude/nothing-ahead",
+            workspace_root=tmp_path / "nothing-ahead-worktrees",
             recorded_gate=["true"],
         )
 

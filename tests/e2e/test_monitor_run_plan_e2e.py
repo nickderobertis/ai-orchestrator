@@ -922,7 +922,8 @@ def test_real_lifecycle_commit_and_pr_survive_live_state(
     node = record["nodes"][0]
     assert isinstance(node, dict)
     assert "gate_attestation" not in node
-    assert json.loads(telemetry_command.stdout)["metrics"]["green_to_publication_seconds"] == []
+    # The merge path's gate is journaled again, so this interval is measurable.
+    assert json.loads(telemetry_command.stdout)["metrics"]["green_to_publication_seconds"]
     active_only = _just("telemetry", "--runs-dir", str(runs_dir))
     assert active_only.returncode == 0, active_only.stderr
     assert json.loads(active_only.stdout)["runs"] == []

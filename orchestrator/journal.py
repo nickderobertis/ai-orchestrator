@@ -91,8 +91,9 @@ EventKind = Literal[
     "step-settled",
     "branch-discovered",
     "merge-gate-coverage",
-    # Retained for reading journals written before the repository's own merge path
-    # became the authoritative verifier; nothing emits them now.
+    # The merge path is the authoritative verifier, so these now bracket the branch
+    # push that runs it: `verification-finished` carries the verdict, the bounded
+    # output tail, and the preserved gate log the node result points at.
     "verification-started",
     "verification-finished",
     "pr-drafting-started",
@@ -108,6 +109,10 @@ EventKind = Literal[
     "pr-ready",
     "pr-merged",
     "publication-finished",
+    # A publication that ended before any gate could rule on it: a lost base race,
+    # a rebuild that could not be built. It carries the output that used to be
+    # dropped, and where the whole record was preserved.
+    "publication-failed",
     "cleanup-deferred",
     "lock-wait",
     "setup-finished",

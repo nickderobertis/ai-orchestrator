@@ -69,7 +69,16 @@ __all__ = [
 
 
 class GitError(Exception):
-    """A git command exited non-zero (carries git's own stderr)."""
+    """A git command exited non-zero (carries git's own stderr).
+
+    ``output`` additionally carries everything the command wrote. A pre-push hook
+    runs the repository's whole gate, so that is where a publication's real
+    verification evidence arrives; the message keeps only enough of it to read.
+    """
+
+    def __init__(self, message: str, *, output: str = "") -> None:
+        super().__init__(message)
+        self.output = output or message
 
 
 class NothingToCommit(GitError):
@@ -134,9 +143,20 @@ def _git(
     if check and proc.returncode != 0:
         raise GitError(
             f"git {' '.join(args)} failed (exit {proc.returncode}): "
-            f"{proc.stderr.strip() or proc.stdout.strip() or '<no output>'}"
+            f"{proc.stderr.strip() or proc.stdout.strip() or '<no output>'}",
+            output=combined_output(proc),
         )
     return proc
+
+
+def combined_output(proc: subprocess.CompletedProcess[str]) -> str:
+    """Everything a git command wrote, porcelain first then diagnostics.
+
+    Interleaving is not recoverable from two captured pipes; what matters for
+    preserved evidence is that a hook's whole gate run survives, not the exact
+    order it raced git's own progress reporting in.
+    """
+    return proc.stdout + proc.stderr
 
 
 def clone(url: str, dest: str | Path, *, depth: int | None = None) -> Path:
@@ -554,15 +574,20 @@ def push(
     set_upstream: bool = True,
     force: bool = False,
     env: dict[str, str] | None = None,
-) -> None:
-    """Push ``branch`` to ``remote`` with an optional environment overlay."""
+) -> str:
+    """Push ``branch`` to ``remote``; return everything the push wrote.
+
+    The returned text is the merge path's own verification evidence: a repository
+    whose pre-push hook runs its complete gate reports that run here, and callers
+    preserve it whether the push passed or was rejected.
+    """
     args = ["push"]
     if set_upstream:
         args.append("--set-upstream")
     if force:
         args.append("--force-with-lease")
     args += [remote, branch]
-    _git(args, cwd=cwd, env=env)
+    return combined_output(_git(args, cwd=cwd, env=env))
 
 
 def remotes(cwd: str | Path) -> list[str]:

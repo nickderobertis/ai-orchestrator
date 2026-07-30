@@ -241,8 +241,8 @@ def resolve_launch(
 _LOG_TAIL_BYTES = 64_000
 
 #: Logs that live *beneath the run directory* and are therefore safe to serve under
-#: the configured root. Node gate logs live in ephemeral execution worktrees outside
-#: this root and are referenced by the node result's artifact pointers instead.
+#: the configured root. A node's own merge-path gate log is reached through the node
+#: result's artifact pointers instead, not through this run-level map.
 _RUN_LOGS = {
     "orchestrator_stderr": ("orchestrator", "stderr.log"),
     "gate_log": ("orchestrator", "gate.log"),

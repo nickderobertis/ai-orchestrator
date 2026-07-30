@@ -318,6 +318,8 @@ def test_watchdog_path_forwards_the_task_on_stdin(tmp_path: Path) -> None:
     # chatter it happened to print stays in the record and out of the caller's face.
     assert proc.stderr == "", proc.stderr
     assert "startup chatter" in (status_dir / "agent.stderr").read_text(encoding="utf-8")
+    # Nothing died, so nothing claims a reason for a death that did not happen.
+    assert not (status_dir / "agent.failure").exists()
 
 
 def test_status_file_contract_has_one_source_the_wrapper_honors() -> None:
@@ -340,6 +342,33 @@ def test_status_file_contract_has_one_source_the_wrapper_honors() -> None:
     )
 
 
+def _park_until_failed(status_dir: Path, bin_dir: Path, tmp_path: Path) -> subprocess.Popen[str]:
+    """Start the wrapper and return it parked, having recorded a failed turn."""
+    process = subprocess.Popen(
+        ["bash", str(WRAPPER), "run", "--compact", "--prompt-file", "-"],
+        text=True,
+        stdin=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        env={
+            "PATH": f"{bin_dir}:/usr/bin:/bin",
+            "ORCHESTRATOR_AGENT_STATUS_DIR": str(status_dir),
+            "HOME": str(tmp_path / "home"),
+        },
+    )
+    deadline = time.monotonic() + 30
+    while not (status_dir / "agent.failed").exists() and time.monotonic() < deadline:
+        assert process.poll() is None, "wrapper exited instead of parking for the dispatcher"
+        time.sleep(0.02)
+    assert (status_dir / "agent.failed").exists(), "the wrapper never recorded the failure"
+    return process
+
+
+def _stub_harness(bin_dir: Path, body: str) -> None:
+    stub = bin_dir / "oneharness"
+    stub.write_text(f"#!/usr/bin/env bash\n{body}", encoding="utf-8")
+    stub.chmod(stub.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+
+
 def test_dead_agent_records_its_exit_status_and_stderr_before_parking(tmp_path: Path) -> None:
     """A failed agent leaves the dispatcher an account of why it died.
 
@@ -352,34 +381,90 @@ def test_dead_agent_records_its_exit_status_and_stderr_before_parking(tmp_path: 
     status_dir.mkdir(parents=True)
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir(exist_ok=True)
-    stub = bin_dir / "oneharness"
-    stub.write_text(
-        "#!/usr/bin/env bash\n"
-        'echo "claude: no conversation found with session id 0dd" >&2\nexit 7\n',
-        encoding="utf-8",
+    _stub_harness(
+        bin_dir,
+        'echo "provider error: 429 rate_limit_error quota exhausted" >&2\nexit 7\n',
     )
-    stub.chmod(stub.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
-    proc = subprocess.Popen(
-        ["bash", str(WRAPPER), "run", "--prompt", "task"],
+    process = _park_until_failed(status_dir, bin_dir, tmp_path)
+    try:
+        assert (status_dir / "agent.exit_code").read_text(encoding="utf-8").strip() == "7"
+        assert (status_dir / "agent.failure").read_text(
+            encoding="utf-8"
+        ).strip() == "agent harness exited 7"
+        captured = (status_dir / "agent.stderr").read_text(encoding="utf-8")
+        assert "429 rate_limit_error quota exhausted" in captured
+        assert not (status_dir / "agent.done").exists()
+    finally:
+        process.kill()
+        process.communicate(timeout=10)
+
+
+def test_a_signal_killed_agent_harness_is_recorded_as_a_signal(tmp_path: Path) -> None:
+    """An OOM kill and an ordinary non-zero exit must not read the same."""
+    status_dir = tmp_path / "orchestrator-watchdog-3" / "agent"
+    status_dir.mkdir(parents=True)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    _stub_harness(bin_dir, "kill -KILL $$\n")
+    process = _park_until_failed(status_dir, bin_dir, tmp_path)
+    try:
+        reason = (status_dir / "agent.failure").read_text(encoding="utf-8").strip()
+    finally:
+        process.kill()
+        process.communicate(timeout=10)
+
+    assert reason == "agent harness killed by signal 9"
+
+
+def test_an_unusable_stderr_capture_is_reported_not_assumed_away(tmp_path: Path) -> None:
+    """A capture that stopped working must not read as "the harness said nothing"."""
+    status_dir = tmp_path / "orchestrator-watchdog-4" / "agent"
+    status_dir.mkdir(parents=True)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    # Replacing the file with a directory makes it unwritable regardless of
+    # privilege, while the copy already holding the old handle keeps running.
+    _stub_harness(
+        bin_dir,
+        'echo "provider error: 429 rate_limit_error" >&2\n'
+        'rm -f "$ORCHESTRATOR_AGENT_STATUS_DIR/agent.stderr"\n'
+        'mkdir "$ORCHESTRATOR_AGENT_STATUS_DIR/agent.stderr"\n'
+        "exit 7\n",
+    )
+    process = _park_until_failed(status_dir, bin_dir, tmp_path)
+    try:
+        reason = (status_dir / "agent.failure").read_text(encoding="utf-8").strip()
+    finally:
+        process.kill()
+        process.communicate(timeout=10)
+
+    assert reason == (
+        "agent harness exited 7; agent stderr capture became unwritable, "
+        "so its tail may be incomplete"
+    )
+
+
+def test_an_unopenable_stderr_capture_stops_the_turn_before_it_starts(tmp_path: Path) -> None:
+    """A capture that never opened would leave a death with no reason at all."""
+    status_dir = tmp_path / "orchestrator-watchdog-5" / "agent"
+    status_dir.mkdir(parents=True)
+    (status_dir / "agent.stderr").mkdir()
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    _stub_harness(bin_dir, "exit 0\n")
+
+    proc = subprocess.run(
+        ["bash", str(WRAPPER), "run", "--compact", "--prompt-file", "-"],
         text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        input="",
+        capture_output=True,
         env={
             "PATH": f"{bin_dir}:/usr/bin:/bin",
             "ORCHESTRATOR_AGENT_STATUS_DIR": str(status_dir),
             "HOME": str(tmp_path / "home"),
         },
     )
-    try:
-        failed = status_dir / "agent.failed"
-        deadline = time.monotonic() + 30
-        while not failed.exists() and time.monotonic() < deadline:
-            assert proc.poll() is None, "wrapper exited instead of parking for the dispatcher"
-            time.sleep(0.02)
-        assert failed.exists(), "the wrapper never recorded the failure"
-        assert (status_dir / "agent.exit_code").read_text(encoding="utf-8").strip() == "7"
-        assert "no conversation found" in (status_dir / "agent.stderr").read_text(encoding="utf-8")
-        assert not (status_dir / "agent.done").exists()
-    finally:
-        proc.kill()
-        proc.communicate(timeout=10)
+
+    assert proc.returncode == 2
+    assert "cannot open the agent stderr record" in proc.stderr
+    assert not (status_dir / "agent.done").exists()

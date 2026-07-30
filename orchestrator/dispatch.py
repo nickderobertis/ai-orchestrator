@@ -67,6 +67,7 @@ from .launch import (
     write_provenance,
 )
 from .personas import persona_path
+from .redaction import redact
 from .runs import ArtifactPaths, resolve_run_dir, slugify
 from .scratch import owned_scratch_directory
 from .watchdog import (
@@ -105,6 +106,7 @@ AGENT_HEARTBEAT_NAME = "agent.heartbeat"
 AGENT_DONE_NAME = "agent.done"
 AGENT_FAILED_NAME = "agent.failed"
 AGENT_EXIT_CODE_NAME = "agent.exit_code"
+AGENT_FAILURE_NAME = "agent.failure"
 AGENT_STDERR_NAME = "agent.stderr"
 AGENT_STATUS_NAMES = (
     AGENT_PID_NAME,
@@ -113,12 +115,20 @@ AGENT_STATUS_NAMES = (
     AGENT_DONE_NAME,
     AGENT_FAILED_NAME,
     AGENT_EXIT_CODE_NAME,
+    AGENT_FAILURE_NAME,
     AGENT_STDERR_NAME,
 )
 #: How much of the dead child's stderr tail a death report carries. The tail is
 #: the part that names the failure; the cap keeps one runaway harness from
 #: filling a journal entry.
-AGENT_STDERR_TAIL_CHARS = 1200
+AGENT_STDERR_TAIL_BYTES = 1200
+#: The wrapper's own account of the child's disposition is a short sentence, but
+#: it arrives from a file this module does not write and lands in a durable node
+#: result, so it is bounded and redacted on the same terms as the stderr beside it.
+AGENT_FAILURE_NOTE_BYTES = 300
+#: How much of an incomplete dispatch's own account travels with it, on the same
+#: bounded, redacted terms — it lands in the same durable node result a planner reads.
+INCOMPLETE_DETAIL_CHARS = 400
 
 
 class DispatchError(Exception):
@@ -204,6 +214,10 @@ class Report:
     telemetry_data: dict[str, Any] | None = None
     artifacts: ArtifactPaths = field(default_factory=ArtifactPaths)
     outcome: DispatchOutcome | None = None
+    #: Why the dispatch ended this way, when the outcome alone cannot say. Set for
+    #: ``worker-died`` so a provider or harness failure reads differently from a
+    #: worker that simply exited.
+    outcome_detail: str | None = None
 
     @property
     def telemetry(self) -> dict[str, Any] | None:
@@ -228,6 +242,10 @@ class WatchdogSignal:
     reason: WatchdogReason
     root_pid: ProcessId
     observed_pids: tuple[ProcessId, ...]
+    #: What this watchdog actually saw. Four distinct conditions end a worker, and
+    #: they all reach the caller as one dead tree, so the one that fired has to be
+    #: carried explicitly rather than re-derived from files written after the fact.
+    observation: str = ""
 
 
 class OneJudgeProvenance(TypedDict):
@@ -380,38 +398,84 @@ def _agent_status(status_dir: Path, name: str) -> str | None:
 
 
 def _agent_stderr_tail(status_dir: Path) -> str:
-    """Return a collapsed, length-capped tail of the agent child's stderr, if any."""
+    """Return the redacted, collapsed trailing slice of the agent harness's stderr."""
     try:
-        captured = (status_dir / AGENT_STDERR_NAME).read_text(encoding="utf-8", errors="replace")
+        with (status_dir / AGENT_STDERR_NAME).open("rb") as stream:
+            stream.seek(0, os.SEEK_END)
+            truncated = stream.tell() > AGENT_STDERR_TAIL_BYTES
+            stream.seek(max(0, stream.tell() - AGENT_STDERR_TAIL_BYTES))
+            raw = stream.read()
     except OSError:
         return ""
-    collapsed = " ".join(captured.split())
-    if len(collapsed) <= AGENT_STDERR_TAIL_CHARS:
-        return collapsed
-    return f"...{collapsed[-AGENT_STDERR_TAIL_CHARS:]}"
+    collapsed = " ".join(redact(raw.decode("utf-8", errors="replace")).split())
+    if not collapsed:
+        return ""
+    return f"...{collapsed}" if truncated else collapsed
 
 
-def _worker_death_detail(status_dir: Path, root_pid: ProcessId) -> str:
+def _agent_failure_note(status_dir: Path) -> str:
+    """Bound and redact the wrapper's own account of the child's disposition.
+
+    The exit status beside it is a number; this is the wrapper's reading of it —
+    which signal killed the child, and whether its stderr capture stopped working
+    part way through, a caveat the number cannot carry.
+    """
+    raw = _agent_status(status_dir, AGENT_FAILURE_NAME)
+    if raw is None:
+        return ""
+    return " ".join(redact(raw[:AGENT_FAILURE_NOTE_BYTES]).split())
+
+
+def _worker_death_detail(status_dir: Path, root_pid: ProcessId, observed: str) -> str:
     """Say why a worker died, carrying whatever its wrapper managed to record.
 
     A worker that dies before its first turn produces no report, no transcript and
     no verdict, so the bare outcome name is the whole of what a reader gets — and
     it is the same string whether the harness refused to start, the provider was
-    killed, or the turn simply stopped heartbeating. The agent wrapper records the
-    child's exit status and stderr for exactly this line; both are best-effort, so
-    an absent marker degrades the sentence rather than hiding the death.
+    killed, or the turn simply stopped heartbeating. ``observed`` names which of
+    those the watchdog actually saw; the agent wrapper records the child's exit
+    status, its own reading of it, and the child's stderr for the rest. Every part
+    but ``observed`` is best-effort, so an absent marker degrades the sentence
+    rather than hiding the death.
     """
     # The wrapper is the only writer, but this file crosses a process boundary, so
     # only a plausible wait status is repeated back; anything else is unknown.
     recorded = _agent_status(status_dir, AGENT_EXIT_CODE_NAME) or ""
     plausible = recorded.isascii() and recorded.isdigit() and len(recorded) <= 3
     exit_status = recorded if plausible and int(recorded) <= 255 else "unknown"
-    detail = (
-        f"worker-died: tracked worker exited or stopped heartbeating "
-        f"(watchdog pid {root_pid}, agent exit status {exit_status})"
+    parts = [f"{observed} (watchdog pid {root_pid}, agent exit status {exit_status})"]
+    parts.extend(
+        part for part in (_agent_failure_note(status_dir), _agent_stderr_tail(status_dir)) if part
     )
-    stderr = _agent_stderr_tail(status_dir)
-    return f"{detail}: {stderr}" if stderr else detail
+    return ": ".join(parts)
+
+
+def incomplete_reason(report: Report, max_turns: int | None = None) -> str:
+    """Say why a dispatch ended without completing, instead of assuming the cap.
+
+    onejudge exits 1 both when a conversation exhausts its turn budget and when it
+    ends short of it for any other reason — an unmet ``done_when``, a harness that
+    stopped, a judge that closed the conversation. Reporting all of them as "hit the
+    turn cap" hides the difference between the one failure an operator fixes by
+    raising a budget and the ones they do not, and a cap report at one turn is simply
+    false. Name what actually happened, and only claim the cap when the turns
+    recorded actually reached it.
+    """
+    if report.outcome:
+        return report.stderr.strip() or report.outcome
+    turns = report.assistant_turns
+    if max_turns is not None and turns >= max_turns:
+        return f"hit the turn cap after {turns} turn(s)"
+    budget = f" of {max_turns}" if max_turns is not None else ""
+    unmet = [
+        str(entry.get("criterion") or entry.get("kind") or "unnamed")
+        for entry in report.verdicts
+        if isinstance(entry, dict) and (entry.get("verdict") or {}).get("value") is False
+    ]
+    detail = ("unmet: " + "; ".join(unmet)) if unmet else " ".join(redact(report.stderr).split())
+    ended = "stopped early" if report.stopped_early else "ended"
+    sentence = f"{ended} after {turns} turn(s){budget} without completing"
+    return f"{sentence}: {detail[:INCOMPLETE_DETAIL_CHARS]}" if detail else sentence
 
 
 def scoped_session(name: str, project_dir: str | Path) -> str:
@@ -561,7 +625,10 @@ def run_onejudge(
                         if run.done():  # pragma: no cover - real subprocess race
                             return None
                         return WatchdogSignal(  # pragma: no cover - real killed-worker e2e
-                            "worker-died", pid, observed
+                            "worker-died",
+                            pid,
+                            observed,
+                            observation=("the tracked worker process tree exited without a report"),
                         )
                     agent_pid_file = agent_status_dir / "agent.pid"
                     if agent_pid_file.exists():
@@ -576,7 +643,12 @@ def run_onejudge(
                         if (  # pragma: no cover - real killed-agent e2e
                             current_agent and failed_agent == current_agent
                         ):
-                            return WatchdogSignal("worker-died", pid, observed)
+                            return WatchdogSignal(
+                                "worker-died",
+                                pid,
+                                observed,
+                                observation="the agent harness reported a failed turn",
+                            )
                         if current_agent and done_agent != current_agent:
                             if agent_pid not in activity.pids:
                                 # This tree was sampled before the pid was read, and an
@@ -593,7 +665,15 @@ def run_onejudge(
                                     and _agent_status(agent_status_dir, "agent.done")
                                     != current_agent
                                 ):
-                                    return WatchdogSignal("worker-died", pid, observed)
+                                    return WatchdogSignal(
+                                        "worker-died",
+                                        pid,
+                                        observed,
+                                        observation=(
+                                            "the agent harness process vanished mid-turn "
+                                            "without recording an exit"
+                                        ),
+                                    )
                             child_pid_file = agent_status_dir / "agent.child.pid"
                             if child_pid_file.exists():
                                 try:
@@ -622,7 +702,15 @@ def run_onejudge(
                                 last_agent_heartbeat_ns = observed_agent_heartbeat_ns
                                 last_agent_heartbeat = time.monotonic()
                             elif time.monotonic() - last_agent_heartbeat >= heartbeat_timeout:
-                                return WatchdogSignal("worker-died", pid, observed)
+                                return WatchdogSignal(
+                                    "worker-died",
+                                    pid,
+                                    observed,
+                                    observation=(
+                                        "the agent harness stopped heartbeating for "
+                                        f"{heartbeat_timeout:g}s"
+                                    ),
+                                )
                     current = (activity, _file_progress(Path(cwd) / ".git"))
                     if current != previous:
                         previous = current
@@ -665,6 +753,9 @@ def run_onejudge(
                 with contextlib.suppress(asyncio.CancelledError):
                     await run
                 if signal.reason == "worker-died":
+                    death_detail = _worker_death_detail(
+                        agent_status_dir, signal.root_pid, signal.observation
+                    )
                     return Report(
                         persona,
                         EXIT_INCOMPLETE,
@@ -674,8 +765,9 @@ def run_onejudge(
                         [],
                         {},
                         None,
-                        _worker_death_detail(agent_status_dir, signal.root_pid),
+                        f"worker-died: {death_detail}",
                         outcome="worker-died",
+                        outcome_detail=death_detail,
                     )
                 raise DispatchError(
                     f"dispatch stalled for {stall_timeout:g}s with no process-tree CPU/I/O "
