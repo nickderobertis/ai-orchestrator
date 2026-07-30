@@ -30,4 +30,13 @@ grep -Eq 'local cache|existing outputs match the cache' "$temp/second.log" || { 
 sed -i 's/"valid"/1/' "$second/src/index.ts" || { echo "nx cache check: make the fixture source writable and retry 'just check'" >&2; exit 1; }
 if (cd "$second"; XDG_CACHE_HOME="$cache" ./scripts/nx.sh run cache-proof:typecheck) >"$temp/broken.log" 2>&1; then echo "nx cache check: broken input replayed success; inspect Nx input declarations before retrying 'just check'" >&2; exit 1; fi
 grep -Fq "not assignable to type 'string'" "$temp/broken.log" || { cat "$temp/broken.log" >&2; echo "nx cache check: unexpected failure; repair the fixture typecheck journey and retry 'just check'" >&2; exit 1; }
-printf 'nx cache check: cross-worktree hit and broken-input miss verified\n'
+# That failure's own log has to outlive the process that produced it. `nx.sh` used
+# to write to a `mktemp` file an EXIT trap removed, so a failing run was readable
+# once, on stderr, and a running one only through /proc. This asserts the surviving
+# copy on the real script, right where a real failure has just happened.
+preserved="$second/.logs/nx.log"
+[[ -f "$preserved" ]] || { echo "nx cache check: the failing nx.sh run left no log at $preserved; restore scripts/preserved-log.sh and retry 'just check'" >&2; exit 1; }
+grep -Fq "not assignable to type 'string'" "$preserved" || { cat "$preserved" >&2; echo "nx cache check: the preserved nx.sh log does not carry the failure it reported; repair scripts/nx.sh and retry 'just check'" >&2; exit 1; }
+mode=$(stat -c '%a' "$preserved") || { echo "nx cache check: cannot read the preserved log's mode; retry 'just check'" >&2; exit 1; }
+[[ $mode == 600 ]] || { echo "nx cache check: preserved log $preserved is mode $mode, not 600; preserved evidence stays owner-only" >&2; exit 1; }
+printf 'nx cache check: cross-worktree hit, broken-input miss, and preserved failure log verified\n'

@@ -665,10 +665,20 @@ def test_upgrade_recipe_preserves_bun_failure_and_stops(tmp_path: Path) -> None:
 
 
 def test_real_cache_check_drives_both_linked_worktrees() -> None:
+    """Two real worktrees, a real cache hit and miss, and the failing run's own log.
+
+    The miss half of this check makes the real `scripts/nx.sh` fail, which is the
+    only place a genuine `nx.sh` failure happens under the gate — so it is also
+    where the preserved log is asserted. That log used to be a `mktemp` file an
+    EXIT trap removed.
+    """
     result = _run("bash", "scripts/check-nx-cache.sh")
 
     assert result.returncode == 0, result.stderr
-    assert result.stdout == ("nx cache check: cross-worktree hit and broken-input miss verified\n")
+    assert result.stdout == (
+        "nx cache check: cross-worktree hit, broken-input miss, "
+        "and preserved failure log verified\n"
+    )
 
 
 def test_dag_state_contract_checker_reports_an_invented_payload_field(tmp_path: Path) -> None:
