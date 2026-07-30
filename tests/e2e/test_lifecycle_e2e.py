@@ -2603,32 +2603,39 @@ done""",
     assert result.verify is not None and result.verify.ok
     assert result.verify.command == ["false"]
     gated = hook_log.read_text(encoding="utf-8").splitlines()
-    # The feature branch (pushed, then mirrored into the shared checkout) and the
-    # squashed publication onto base. Every push this lifecycle makes is gated, and
-    # the orchestrator adds none of its own.
+    # The feature branch and the squashed publication onto base are gated. Mirroring
+    # the branch into the registered execution checkout is a local durability copy,
+    # not publication, so it deliberately does not invoke the pre-push hook.
     assert gated == [
-        f"refs/heads/{result.branch}",
         f"refs/heads/{result.branch}",
         "refs/heads/main",
     ], gated
     assert _has_file(origin, "main", "covered.txt")
 
 
-def test_pre_push_gate_failure_is_recorded_as_gate_failure(tmp_path, bare_origin) -> None:
+def test_pre_push_gate_failure_preserves_completed_work_in_execution_checkout(
+    tmp_path, bare_origin
+) -> None:
     origin = bare_origin()
-    workspace = _workspace(tmp_path, origin)
-    canonical = _shared_checkout(tmp_path)
+    canonical = gitops.clone(origin, tmp_path / "canonical-gate-rejection")
+    safety = gitops.clone(origin, tmp_path / "safety-gate-rejection")
+    registry = Registry()
+    registry.register(str(canonical), workflow="local")
+    registry.register(str(safety))
     install_pre_push_hook(
-        canonical,
+        safety,
         "printf 'pre-push: complete gate failed\\n' >&2\nexit 1",
     )
     before = _tip(origin, "main")
+    branch = "feature/recover-rejected-complete-work"
 
     result = run_repo_task(
-        str(origin),
+        str(canonical),
         "Publish work rejected by the merge-path gate.",
         "engineer",
-        workspace=workspace,
+        workspace=Workspace(tmp_path / "gate-rejection-worktrees"),
+        execution_checkout=safety,
+        branch=branch,
         dispatch_fn=make_writing_dispatch(filename="rejected.txt"),
         recorded_gate=["true"],
     )
@@ -2636,6 +2643,17 @@ def test_pre_push_gate_failure_is_recorded_as_gate_failure(tmp_path, bare_origin
     assert result.outcome == "gate-failed"
     assert "repository pre-push gate rejected publication" in result.detail
     assert "complete gate failed" in result.detail
+    assert str(safety) in result.detail and branch in result.detail
+    assert gitops.branch_exists(safety, branch)
+    preserved = subprocess.run(
+        ["git", "-C", str(safety), "show", f"{branch}:rejected.txt"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert preserved.stdout == "change by engineer\n"
+    assert not incomplete_commits(safety, "origin/main", branch)
+    assert not gitops.branch_exists(origin, branch)
     assert _tip(origin, "main") == before
 
 

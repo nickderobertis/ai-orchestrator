@@ -551,6 +551,29 @@ def _preserve_failed_retry(
     )
 
 
+def _preserve_gate_failed_work(
+    result: LifecycleResult,
+    *,
+    workspace: Workspace,
+    ref: RepoRef,
+    worktree: Path,
+    remote_base: str,
+) -> None:
+    """Hand rejected commits to the registered execution checkout before teardown."""
+    if result.outcome != "gate-failed" or not gitops.has_commits_ahead(worktree, remote_base):
+        return
+    if not workspace.mirror_branch(ref, result.branch):
+        result.detail += (
+            f"; could not preserve rejected work on branch {result.branch!r} in registered "
+            f"execution checkout {result.execution_checkout}"
+        )
+        return
+    result.detail += (
+        f"; rejected work was not published and is preserved on local branch "
+        f"{result.branch!r} in registered execution checkout {result.execution_checkout}"
+    )
+
+
 def _workstream_branch_name(steps: list[Step]) -> str:
     lead = steps[0]
     key = "\x00".join(f"{_step_label(s)}:{s.task}" for s in steps)
@@ -2216,6 +2239,13 @@ def run_repo_task(
                 root_base=result.base_branch,
                 pr_base=result.pr_base,
                 lead=lead,
+            )
+            _preserve_gate_failed_work(
+                result,
+                workspace=workspace,
+                ref=ref,
+                worktree=worktree,
+                remote_base=f"origin/{result.pr_base}",
             )
         if cleanup and worktree is not None:
             _best_effort_cleanup(

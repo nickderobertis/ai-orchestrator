@@ -225,10 +225,15 @@ def copy_branch(cwd: str | Path, destination: str | Path, branch: str) -> bool:
     can be told to use one branch name, so a non-fast-forward push there would
     discard commits that are some other run's only record. Returns whether the
     destination now carries this branch's tip.
+
+    Fetch from the destination side rather than pushing from the run clone. The
+    clone deliberately inherits the execution checkout's pre-push hook, but this
+    is a local durability handoff rather than publication: running that hook here
+    rejects the exact gate-failed work this operation must preserve.
     """
     proc = _git(
-        ["push", str(destination), f"refs/heads/{branch}:refs/heads/{branch}"],
-        cwd=cwd,
+        ["fetch", str(cwd), f"refs/heads/{branch}:refs/heads/{branch}"],
+        cwd=destination,
         check=False,
     )
     return proc.returncode == 0
