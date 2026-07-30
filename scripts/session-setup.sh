@@ -45,6 +45,38 @@ export LLMLINT_ONEHARNESS_BIN="$REPO_ROOT/scripts/llmlint-oneharness.sh"
 
 log() { printf 'session-setup: %s\n' "$*" >&2; }
 
+mark_alternate_claude_trust() {
+  local config_path=$1
+  shift
+  [ -f "$config_path" ] || return 0
+  if ! command -v jq >/dev/null 2>&1; then
+    log "cannot mark alternate Claude workspaces trusted: jq is unavailable"
+    return 1
+  fi
+  local updated root
+  updated=$(mktemp "${config_path}.trust.XXXXXX") || return 1
+  if ! jq '.' "$config_path" >"$updated"; then
+    log "alternate Claude config is not valid JSON: $config_path"
+    rm -f "$updated"
+    return 1
+  fi
+  for root in "$@"; do
+    if ! jq --arg root "$root" \
+      '.projects = (.projects // {}) | .projects[$root] = ((.projects[$root] // {}) + {hasTrustDialogAccepted: true})' \
+      "$updated" >"${updated}.next"; then
+      rm -f "$updated" "${updated}.next"
+      return 1
+    fi
+    mv "${updated}.next" "$updated"
+  done
+  if cmp -s "$config_path" "$updated"; then
+    rm -f "$updated"
+  else
+    chmod --reference="$config_path" "$updated"
+    mv "$updated" "$config_path"
+  fi
+}
+
 if [[ ! $ADOPTED_ONEJUDGE_VERSION =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
   log "invalid adopted onejudge version in $ONEJUDGE_VERSION_FILE: '$ADOPTED_ONEJUDGE_VERSION'"
   if [[ ${BASH_SOURCE[0]} != "$0" ]]; then
@@ -264,6 +296,15 @@ fi
 install_bun || toolchain_failed=1
 ensure_codex
 ensure_codex_gate
+alternate_config_path="${ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR:-$HOME/.claude-alt}/.claude.json"
+managed_checkout_root="$(git -C "$REPO_ROOT" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)"
+if [ -n "$managed_checkout_root" ]; then
+  managed_checkout_root="$(dirname "$managed_checkout_root")"
+else
+  managed_checkout_root="$REPO_ROOT"
+fi
+mark_alternate_claude_trust "$alternate_config_path" "$managed_checkout_root" "$REPO_ROOT" \
+  || log "alternate Claude workspace trust setup failed; continuing"
 persist_session_env
 
 # Install the llmlint LLM-judge tier (llmlint + its bundled oneharness).

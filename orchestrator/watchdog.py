@@ -152,7 +152,9 @@ def terminate_tree(root_pid: ProcessId) -> None:
             os.kill(pid, signal.SIGKILL)
 
 
-def terminate_processes(pids: tuple[ProcessId, ...]) -> None:
+def terminate_processes(
+    pids: tuple[ProcessId, ...], *, externally_reaped: tuple[ProcessId, ...] = ()
+) -> None:
     """Best-effort termination of a previously observed worker process tree.
 
     Descendants are reparented as soon as their worker exits, so walking from the
@@ -167,7 +169,12 @@ def terminate_processes(pids: tuple[ProcessId, ...]) -> None:
         with suppress(PermissionError, ProcessLookupError):
             os.kill(pid, signal.SIGKILL)
     deadline = time.monotonic() + 1.5
-    pending = set(pids)
+    # asyncio's child watcher owns the direct subprocess it created. Calling
+    # waitpid for that process here races the watcher and makes it fabricate
+    # return code 255 after ChildProcessError, destroying the child's real status
+    # and stderr. Still signal every recorded process, but leave those roots for
+    # their registered waiter while reaping orphaned descendants ourselves.
+    pending = set(pids).difference(externally_reaped)
     while pending and time.monotonic() < deadline:
         for pid in tuple(pending):
             try:
@@ -182,7 +189,9 @@ def terminate_processes(pids: tuple[ProcessId, ...]) -> None:
             time.sleep(0.01)
 
 
-def terminate_process_group(group_id: ProcessId) -> None:
+def terminate_process_group(
+    group_id: ProcessId, *, externally_reaped: tuple[ProcessId, ...] = ()
+) -> None:
     """Terminate and reap every process in a dispatch-owned process group."""
     with suppress(PermissionError, ProcessLookupError):
         os.killpg(group_id, signal.SIGTERM)
@@ -194,7 +203,7 @@ def terminate_process_group(group_id: ProcessId) -> None:
         for pid in _process_ids()
         if (record := _stat(pid)) is not None and record.process_group == group_id
     ]
-    terminate_processes(tuple(members))
+    terminate_processes(tuple(members), externally_reaped=externally_reaped)
 
 
 def lead_process_group() -> None:

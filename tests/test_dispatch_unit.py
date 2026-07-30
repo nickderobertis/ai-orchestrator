@@ -25,6 +25,7 @@ from orchestrator.dispatch import (
     _file_progress,
     _read_watchdog_pid,
     agent_failure_reason,
+    dispatch,
     incomplete_detail,
     run_onejudge,
 )
@@ -257,6 +258,26 @@ def test_agent_run_context_defaults() -> None:
     run_cwd, env = _agent_run_context(cfg, cwd="/repo", project_dir=None, oneharness_mode=None)
     assert run_cwd == "/repo"
     assert env == {}
+
+
+def test_omitted_dispatch_sessions_are_unique_and_explicit_sessions_are_preserved(
+    monkeypatch,
+) -> None:
+    observed: list[str] = []
+
+    def record(config, task, **kwargs):
+        observed.append(config["session"])
+        return Report("engineer", 0, True, False, 1, [], {}, {}, "")
+
+    monkeypatch.setattr("orchestrator.dispatch.run_onejudge", record)
+
+    dispatch("engineer", "first")
+    dispatch("engineer", "second")
+    dispatch("engineer", "resume", session="operator-session")
+
+    assert observed[0] != observed[1]
+    assert all(name.startswith("dispatch-engineer-") for name in observed[:2])
+    assert observed[2] == "operator-session"
 
 
 def test_agent_run_context_forwards_mode() -> None:

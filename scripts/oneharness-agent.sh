@@ -147,13 +147,19 @@ exec 3<&0
 # dispatcher is about to tear down; a failing exit replays it below, a successful one
 # does not. Credential values are stripped when the dispatcher reads this back.
 agent_stderr=$status_dir/agent.stderr
+agent_stdout=$status_dir/agent.stdout
 if ! : >"$agent_stderr"; then
     echo "oneharness-agent: cannot open the agent stderr record; retry through orchestrator dispatch" >&2
     exit 2
 fi
+if ! : >"$agent_stdout"; then
+    echo "oneharness-agent: cannot open the agent stdout record; retry through orchestrator dispatch" >&2
+    exit 2
+fi
 # llmlint: ignore[tool_output_is_signal, boundary_inputs_validated] this wrapper is a transparent
 # conduit for that protocol in both directions, exactly as the `exec` pass-throughs above are.
-oneharness run --config "$agent_config" "$@" <&3 2>"$agent_stderr" &
+oneharness run --config "$agent_config" "$@" <&3 \
+    > >(tee "$agent_stdout") 2>"$agent_stderr" &
 agent_pid=$!
 write_status agent.child.pid "$agent_pid"
 while agent_state=$(ps -o stat= -p "$agent_pid" 2>/dev/null) &&
@@ -172,6 +178,14 @@ set -e
 # would otherwise let it reach that conclusion before the reason was written down.
 write_status agent.exit_code "$exit_code"
 if [ "$exit_code" -ne 0 ]; then
+    if grep -Fq "was created on harness" "$agent_stderr" &&
+        grep -Fq "cannot be continued on" "$agent_stderr"; then
+        echo "oneharness-agent: dispatch failure: session/harness binding rejection; the named session and both harnesses are shown below; retry with a new --session or the originally bound harness" >>"$agent_stderr"
+    fi
+    quota_line=$(grep -E -m1 "hit your (session|usage) limit|quota exhausted|rate.?limit" "$agent_stdout" || true)
+    if [ -n "$quota_line" ]; then
+        echo "oneharness-agent: dispatch failure: harness claude-code:alternate is out of quota; $quota_line; configure a usable fallback or retry after the stated reset time" >>"$agent_stderr"
+    fi
     # Replay the child's own words only now. A turn that succeeded says everything
     # it has to say through the protocol on stdout, so its harness chatter is noise
     # here; a turn that failed leaves this stream as the only account of why. The

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
 import tomllib
 from pathlib import Path
@@ -152,6 +153,50 @@ chmod +x "$HOME/.local/node/bin/bun"
         capture_output=True,
         env=env,
     )
+
+
+def test_alternate_claude_trust_is_idempotent_and_preserves_other_config(tmp_path: Path) -> None:
+    config = tmp_path / "alternate" / ".claude.json"
+    config.parent.mkdir()
+    config.write_text(
+        json.dumps(
+            {
+                "theme": "dark",
+                "projects": {"/already": {"hasTrustDialogAccepted": False, "other": "kept"}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    script = REPO_ROOT / "scripts" / "session-setup.sh"
+    roots = (tmp_path / "checkout", tmp_path / "worktrees")
+    command = 'source "$1"; mark_alternate_claude_trust "$2" "$3" "$4"'
+    env = {"HOME": str(tmp_path), "PATH": "/usr/bin:/bin"}
+
+    first = subprocess.run(
+        ["bash", "-c", command, "test-trust", str(script), str(config), *(map(str, roots))],
+        text=True,
+        capture_output=True,
+        env=env,
+    )
+    assert first.returncode == 0, first.stderr
+    first_bytes = config.read_bytes()
+    second = subprocess.run(
+        ["bash", "-c", command, "test-trust", str(script), str(config), *(map(str, roots))],
+        text=True,
+        capture_output=True,
+        env=env,
+    )
+
+    assert second.returncode == 0, second.stderr
+    assert config.read_bytes() == first_bytes
+    data = json.loads(first_bytes)
+    assert data["theme"] == "dark"
+    assert data["projects"]["/already"] == {
+        "hasTrustDialogAccepted": False,
+        "other": "kept",
+    }
+    for root in roots:
+        assert data["projects"][str(root)] == {"hasTrustDialogAccepted": True}
 
 
 def _run_full_setup_without_bun(tmp_path: Path) -> subprocess.CompletedProcess[str]:

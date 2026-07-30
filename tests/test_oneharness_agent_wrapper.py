@@ -399,7 +399,8 @@ def test_a_failing_agent_harness_records_why_before_awaiting_recovery(tmp_path: 
     stub = bin_dir / "oneharness"
     stub.write_text(
         "#!/usr/bin/env bash\n"
-        'echo "provider error: 429 rate_limit_error quota exhausted" >&2\n'
+        'echo "You\'ve hit your session limit · resets 7pm (UTC)"\n'
+        "echo 'oneharness: fallback harness `claude-code:alternate` ran but did not succeed' >&2\n"
         "exit 7\n",
         encoding="utf-8",
     )
@@ -430,9 +431,13 @@ def test_a_failing_agent_harness_records_why_before_awaiting_recovery(tmp_path: 
             process.kill()
 
     assert reason == "agent harness exited 7"
-    assert "429 rate_limit_error quota exhausted" in recorded
+    assert "out of quota" in recorded
+    assert "resets 7pm (UTC)" in recorded
     assert agent_failure_reason(status_dir) == (
-        "agent harness exited 7: provider error: 429 rate_limit_error quota exhausted"
+        "agent harness exited 7: oneharness: fallback harness `claude-code:alternate` "
+        "ran but did not succeed oneharness-agent: dispatch failure: harness "
+        "claude-code:alternate is out of quota; You've hit your session limit · "
+        "resets 7pm (UTC); configure a usable fallback or retry after the stated reset time"
     )
 
 
