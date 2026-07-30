@@ -41,17 +41,18 @@ check:
 
 # Complete pre-push gate: deterministic checks followed by llmlint on this branch.
 #
-# A passing run says one more thing, on one line: which base commit the llmlint
-# verdict covers and whether it was judged now or replayed. That judge is
-# non-deterministic and its verdict is memoized, so "green" is a claim about one
-# judged diff against one base commit — and a worker whose gate replayed a recorded
-# verdict needs to know that, and which base commit it covers, before it settles.
+# A passing run says everything it has to say on one line: the line coverage it
+# measured, which base commit the llmlint verdict covers, and whether that verdict
+# was judged now or replayed. The judge is non-deterministic and its verdict is
+# memoized, so "green" is a claim about one judged diff against one base commit —
+# and a worker whose gate replayed a recorded verdict needs to know that, and which
+# base commit it covers, before it settles. The coverage total is measured either
+# way; printing it here is what stops a reader opening `.coverage` by hand.
 # llmlint: ignore[changed_behavior_has_e2e] Running the complete gate from a test would recursively run this same suite; the tier whose provenance is passed through here is proven end to end in tests/e2e/test_llmlint_cache_e2e.py.
 gate remote=env_var_or_default("ORCHESTRATOR_COMPARISON_REMOTE", "origin") base=env_var_or_default("ORCHESTRATOR_COMPARISON_BASE", ""):
     @comparison=$(scripts/comparison-base.sh "$1" "$2")
     @source ./scripts/preserved-log.sh; log=$(preserved_log_open "{{repo_root}}" gate-check); just check 2>&1 | redact_secrets >"$log" || { cat "$log" >&2; echo "gate: deterministic checks failed; fix the reported findings and rerun 'just gate' (full output: $log)" >&2; exit 1; }
-    @source ./scripts/preserved-log.sh; comparison=$(scripts/comparison-base.sh "$1" "$2"); log=$(preserved_log_open "{{repo_root}}" gate-llmlint); just lint-llm-diff "$comparison" 2>&1 | redact_secrets >"$log" || { cat "$log" >&2; echo "gate: llmlint failed; clear the reported findings against 'just lint-llm-diff $comparison' alone, then rerun 'just gate $1 $2' once to confirm (full output: $log)" >&2; exit 1; }; provenance=$(grep -m1 -E '^lint-llm-diff: (judged|replayed) ' "$log" || echo "lint-llm-diff: verdict provenance unavailable"); note=$(grep -q '^lint-llm-diff: ignoring ' "$log" && echo " [ignored an ambient global Nx cache skip]" || true); echo "gate: ${provenance#lint-llm-diff: }${note}" >&2
-    @total=$(./scripts/coverage-total.sh "{{repo_root}}"); echo "gate: complete gate passed${total:+ (line coverage ${total}%)}"
+    @source ./scripts/preserved-log.sh; comparison=$(scripts/comparison-base.sh "$1" "$2"); log=$(preserved_log_open "{{repo_root}}" gate-llmlint); just lint-llm-diff "$comparison" 2>&1 | redact_secrets >"$log" || { cat "$log" >&2; echo "gate: llmlint failed; clear the reported findings against 'just lint-llm-diff $comparison' alone, then rerun 'just gate $1 $2' once to confirm (full output: $log)" >&2; exit 1; }; provenance=$(grep -m1 -E '^lint-llm-diff: (judged|replayed) ' "$log" || echo "lint-llm-diff: verdict provenance unavailable"); note=$(grep -q '^lint-llm-diff: ignoring ' "$log" && echo " [ignored an ambient global Nx cache skip]" || true); total=$(./scripts/coverage-total.sh "{{repo_root}}"); echo "gate: complete gate passed${total:+ (line coverage ${total}%)}; ${provenance#lint-llm-diff: }${note}"
 
 # Spend one real harness turn proving prompt delivery and complete history telemetry.
 # Kept out of `gate`; pre-push selects it only for launch-path changes.

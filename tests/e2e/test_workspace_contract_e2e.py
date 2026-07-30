@@ -617,7 +617,11 @@ def test_gate_recipe_reports_the_coverage_total_it_measured(tmp_path: Path) -> N
     result = _recipe_run(checkout, trace, "gate", "origin", "main", FAKE_COVERAGE_TOTAL="95.07")
 
     assert result.returncode == 0, result.stderr + result.stdout
-    assert result.stdout.splitlines()[-1] == "gate: complete gate passed (line coverage 95.07%)"
+    # One success line, carrying both things a passing gate measured: the coverage
+    # total, and which llmlint verdict the "green" is a claim about.
+    (success,) = [line for line in result.stdout.splitlines() if line.startswith("gate: ")]
+    assert success.startswith("gate: complete gate passed (line coverage 95.07%); ")
+    assert not [line for line in result.stderr.splitlines() if line.startswith("gate: ")]
 
 
 def test_gate_recipe_leaves_the_failing_llmlint_run_readable(tmp_path: Path) -> None:
