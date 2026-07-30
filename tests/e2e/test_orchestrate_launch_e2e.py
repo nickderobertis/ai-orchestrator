@@ -360,7 +360,9 @@ def test_the_views_stay_quiet_about_a_launch_whose_record_they_cannot_trust(
     (vault / "report.json").write_text("{}", encoding="utf-8")
     # A launch leaves an empty report placeholder from the start, which is why an
     # existing report is not itself an answer — only a nonempty one is. Put the report
-    # out of reach in the state that matters: present, and impossible to size.
+    # out of reach in the state that matters: present, and impossible to size. A
+    # symlink is what isolates it — an unreadable directory is the only way to be
+    # refused a stat, and the status record beside it has to stay readable.
     report = run_dir / "orchestrator" / "report.json"
     report.unlink(missing_ok=True)
     report.symlink_to(vault / "report.json")

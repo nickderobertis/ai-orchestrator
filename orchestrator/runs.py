@@ -6,6 +6,7 @@ import os
 import re
 import signal
 import socket
+import stat
 import sys
 from collections import Counter
 from collections.abc import Callable, Iterator, Mapping
@@ -116,17 +117,22 @@ def _launch_may_have_reported(run_dir: Path) -> bool:
     it. Both callers then say nothing about this run rather than announcing something
     they could not establish.
 
-    The guard covers `is_file()` as well as `stat()`, because `is_file()` only answers
-    `False` for the errors that mean *not there*; a path this host may not traverse
-    raises out of it exactly as `stat()` would. An existing report is also not an
-    answer by itself — a launch leaves an empty one from the start — so only a nonempty
-    one settles it.
+    One `stat` decides it, and only the errors that mean *not there* are read as an
+    absent report. `Path.is_file()` cannot be the guard here: it answers plain `False`
+    for a path this host may not traverse, which is the one error that must read as
+    *unknown*, so asking it first would quietly turn an unreadable report into proof
+    that there is none. An existing report is not an answer by itself either — a
+    launch leaves an empty one from the start — so only a nonempty regular file
+    settles it.
     """
     report = run_dir / "orchestrator" / "report.json"
     try:
-        return report.is_file() and report.stat().st_size > 0
+        found = report.stat()
+    except (FileNotFoundError, NotADirectoryError):
+        return False
     except OSError:
         return True
+    return stat.S_ISREG(found.st_mode) and found.st_size > 0
 
 
 def launch_claims_a_live_owner(run_dir: Path) -> bool:

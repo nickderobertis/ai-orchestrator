@@ -423,8 +423,9 @@ def test_a_report_this_host_cannot_stat_is_an_unknown_state_not_a_crash(tmp_path
     """The same rule for the other half of the record: unknown, never raising.
 
     A real refusal rather than a patched one — the report sits behind a directory this
-    user may not traverse, which `is_file()` raises out of instead of answering, since
-    it only reports `False` for the errors that mean *not there*. The planner-facing
+    user may not traverse. `Path.is_file()` answers a flat `False` for exactly that
+    error, so a predicate that asked it first would read a report it was refused as
+    proof that no report exists, and settle a run on it. The planner-facing
     journey is ``test_the_views_stay_quiet_about_a_launch_whose_record_they_cannot_trust``
     in tests/e2e/test_orchestrate_launch_e2e.py; this pins the predicates it reads.
     """
