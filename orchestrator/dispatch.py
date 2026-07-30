@@ -281,7 +281,7 @@ def _resolve_onejudge(onejudge_bin: str, env: Mapping[str, str]) -> OneJudgeProv
     return OneJudgeProvenance(path=resolved, version=adopted)
 
 
-def configured_turn_cap(config: Mapping[str, Any]) -> int | None:
+def _configured_turn_cap(config: Mapping[str, Any]) -> int | None:
     """Read the turn cap out of an effective config, ignoring an unusable value.
 
     The cap is what tells an incomplete dispatch apart from one that ran out of
@@ -570,7 +570,7 @@ def run_onejudge(
     _validate_oneharness_timeout(process_env["ONEHARNESS_TIMEOUT"])
     stall_timeout = _stall_timeout(process_env)
     heartbeat_timeout = _worker_heartbeat_timeout(process_env)
-    turn_cap = configured_turn_cap(config)
+    turn_cap = _configured_turn_cap(config)
     onejudge_provenance = _resolve_onejudge(onejudge_bin, process_env)
     resolved_onejudge = onejudge_provenance["path"]
     configured_provider = config.get("provider")

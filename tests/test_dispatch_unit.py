@@ -19,9 +19,11 @@ from orchestrator.dispatch import (
     Report,
     _agent_run_context,
     _build_report,
+    _configured_turn_cap,
     _file_progress,
     _read_watchdog_pid,
     agent_failure_reason,
+    incomplete_detail,
     run_onejudge,
 )
 from orchestrator.dispatch import main as dispatch_main
@@ -851,3 +853,80 @@ def test_run_onejudge_rejects_an_off_contract_label(tmp_path) -> None:
         run_onejudge(
             {}, "task", onejudge_bin=_label_echoing_onejudge(tmp_path), labels={"node": "a,b"}
         )
+
+
+def _incomplete(
+    *,
+    turns: int,
+    max_turns: int | None,
+    verdicts: list[dict[str, object]] | None = None,
+    assessment: str | None = None,
+    stderr: str = "",
+) -> Report:
+    return Report(
+        "engineer",
+        1,
+        False,
+        True,
+        turns,
+        verdicts or [],
+        {},
+        {},
+        stderr,
+        assessment=assessment,
+        max_turns=max_turns,
+    )
+
+
+def test_only_a_run_that_reached_its_cap_is_reported_as_hitting_it() -> None:
+    """onejudge exits 1 for both, so the turn count is the only thing that tells them apart."""
+    assert incomplete_detail(_incomplete(turns=12, max_turns=12)) == (
+        "hit the turn cap after 12 turns"
+    )
+    assert incomplete_detail(_incomplete(turns=1, max_turns=12)) == (
+        "did not complete after 1 turn, short of its 12-turn cap"
+    )
+    # A dispatch whose config states no cap can still say how far it got.
+    assert incomplete_detail(_incomplete(turns=3, max_turns=None)) == (
+        "did not complete after 3 turns"
+    )
+
+
+def test_an_incomplete_stop_carries_the_most_specific_reason_it_has() -> None:
+    """Verdict, then assessment, then the harness's own words — never nothing."""
+    unmet = {
+        "kind": "done_when",
+        "criterion": "the gate is green",
+        "verdict": {"value": False, "reason": "the gate was never run"},
+    }
+    met = {"kind": "check", "verdict": {"value": True, "reason": "ignored"}}
+    detail = incomplete_detail(
+        _incomplete(turns=2, max_turns=9, verdicts=[met, unmet], assessment="unused")
+    )
+    assert detail.endswith(": unmet done_when verdict: the gate was never run")
+
+    # No unmet verdict carries a reason, so the worker's own assessment stands in.
+    assert incomplete_detail(
+        _incomplete(turns=2, max_turns=9, verdicts=[met], assessment="ran out of context")
+    ).endswith(": ran out of context")
+
+    # Neither exists: the harness stderr is the last thing that can say anything.
+    assert incomplete_detail(
+        _incomplete(turns=2, max_turns=9, stderr="  provider error: 503\n")
+    ).endswith(": provider error: 503")
+
+    # And when there is genuinely nothing, the sentence stops rather than trailing.
+    assert incomplete_detail(_incomplete(turns=2, max_turns=9)) == (
+        "did not complete after 2 turns, short of its 9-turn cap"
+    )
+
+
+def test_an_unusable_turn_cap_is_read_as_no_cap_at_all() -> None:
+    """The cap crosses in from a merged config, so an unusable value must not be trusted."""
+    assert _configured_turn_cap({"user": {"max_turns": 12}}) == 12
+    assert _configured_turn_cap({}) is None
+    assert _configured_turn_cap({"user": "not-a-mapping"}) is None
+    assert _configured_turn_cap({"user": {}}) is None
+    assert _configured_turn_cap({"user": {"max_turns": True}}) is None
+    assert _configured_turn_cap({"user": {"max_turns": 0}}) is None
+    assert _configured_turn_cap({"user": {"max_turns": "12"}}) is None
