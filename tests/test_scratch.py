@@ -38,6 +38,19 @@ def _fabricate_proc_entry(proc_root: Path, pid: int, start_token: int) -> None:
     (entry / "stat").write_text(f"{pid} (fake comm) {' '.join(fields)}\n", encoding="utf-8")
 
 
+def _fabricate_proc_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Point procfs reads at a fabricated root that can still see this process.
+
+    A root that cannot show the sweeping process is not a procfs the reference proof
+    can be built on, so every fabricated one has to carry that entry.
+    """
+    proc_root = tmp_path / "proc"
+    proc_root.mkdir()
+    monkeypatch.setenv("AI_ORCHESTRATOR_PROC_ROOT", str(proc_root))
+    _fabricate_proc_entry(proc_root, os.getpid(), start_token=7)
+    return proc_root
+
+
 def _fabricate_proc_process(
     proc_root: Path,
     pid: int,
@@ -323,10 +336,7 @@ def test_nx_temp_installs_are_identified_by_shape_and_lookalikes_are_preserved(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """`tmp-*` is far too generic to sweep on, so only the install shape decides."""
-    proc_root = tmp_path / "proc"
-    proc_root.mkdir()
-    monkeypatch.setenv("AI_ORCHESTRATOR_PROC_ROOT", str(proc_root))
-    _fabricate_proc_entry(proc_root, os.getpid(), start_token=7)
+    _fabricate_proc_root(tmp_path, monkeypatch)
     root = tmp_path / "scratch"
     root.mkdir()
     disposable = _make_nx_install(root / "tmp-999999999-disposable")
@@ -372,10 +382,7 @@ def test_pytest_runs_are_swept_below_pytest_s_own_retention_and_live_lock(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The nested `pytest-of-*/pytest-<n>` layout, judged by pytest's own conventions."""
-    proc_root = tmp_path / "proc"
-    proc_root.mkdir()
-    monkeypatch.setenv("AI_ORCHESTRATOR_PROC_ROOT", str(proc_root))
-    _fabricate_proc_entry(proc_root, os.getpid(), start_token=7)
+    _fabricate_proc_root(tmp_path, monkeypatch)
     root = tmp_path / "scratch"
     root.mkdir()
     parent = root / "pytest-of-alice"
@@ -446,9 +453,7 @@ def test_live_process_references_are_protected_while_a_dispatch_holds_the_scratc
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """Non-reference, not quiescence, is what makes removal safe during a dispatch."""
-    proc_root = tmp_path / "proc"
-    proc_root.mkdir()
-    monkeypatch.setenv("AI_ORCHESTRATOR_PROC_ROOT", str(proc_root))
+    proc_root = _fabricate_proc_root(tmp_path, monkeypatch)
     root = tmp_path / "scratch"
     root.mkdir()
     named, working, opened, stale = (
@@ -506,9 +511,7 @@ def test_reference_proof_is_retaken_before_removal(
     demand, so this drives the sweep through it directly.
     """
     # llmlint: ignore[changed_behavior_has_e2e] in-process interleaving only
-    proc_root = tmp_path / "proc"
-    proc_root.mkdir()
-    monkeypatch.setenv("AI_ORCHESTRATOR_PROC_ROOT", str(proc_root))
+    proc_root = _fabricate_proc_root(tmp_path, monkeypatch)
     root = tmp_path / "scratch"
     root.mkdir()
     claimed = root / "onejudge-python-claimed"
@@ -544,9 +547,7 @@ def test_unreferenced_families_use_their_own_minimum_age(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """These families are eligible in minutes; the 24h third-party default is unchanged."""
-    proc_root = tmp_path / "proc"
-    proc_root.mkdir()
-    monkeypatch.setenv("AI_ORCHESTRATOR_PROC_ROOT", str(proc_root))
+    _fabricate_proc_root(tmp_path, monkeypatch)
     root = tmp_path / "scratch"
     root.mkdir()
     eligible = _make_nx_install(
@@ -563,6 +564,65 @@ def test_unreferenced_families_use_their_own_minimum_age(
     assert just_made.exists() and third_party.exists()
     # An explicit shorter age still means "now"; the third-party rule follows it too.
     assert set(sweep_scratch(root, min_age_seconds=0).removed) == {just_made, third_party}
+
+
+def test_a_procfs_that_cannot_see_this_process_withdraws_the_whole_proof(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """ "Cannot ask" is not "nothing is referenced", and must not authorize removal."""
+    blind = tmp_path / "not-procfs"
+    blind.mkdir()
+    monkeypatch.setenv("AI_ORCHESTRATOR_PROC_ROOT", str(blind))
+    root = tmp_path / "scratch"
+    root.mkdir()
+    install = _make_nx_install(root / "tmp-999999999-unprovable")
+    onejudge_scratch = root / "onejudge-python-unprovable"
+    onejudge_scratch.mkdir()
+    _age(onejudge_scratch, 60 * 60)
+    dead_watchdog = root / "orchestrator-watchdog-dead"
+    dead_watchdog.mkdir()
+    (dead_watchdog / "pid").write_text("999999999", encoding="utf-8")
+
+    assert main(["--root", str(root)]) == 0
+
+    output = capsys.readouterr().out
+    assert install.exists() and onejudge_scratch.exists()
+    # The watchdog proof stands on its own lock, so its accounting is unaffected.
+    assert not dead_watchdog.exists()
+    assert "removed 1 directories" in output
+    assert f"no usable procfs at {blind}" in output
+
+
+def test_a_proof_withdrawn_between_discovery_and_removal_keeps_every_candidate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Removal re-asks, and an unanswerable second question retains rather than deletes."""
+    # llmlint: ignore[changed_behavior_has_e2e] in-process interleaving only
+    proc_root = _fabricate_proc_root(tmp_path, monkeypatch)
+    root = tmp_path / "scratch"
+    root.mkdir()
+    candidate = root / "onejudge-python-candidate"
+    candidate.mkdir()
+    _age(candidate, 60 * 60)
+    original = scratch._referenced_scratch_paths
+    proofs = 0
+
+    def blind_the_second_proof(scratch_root: Path) -> frozenset[str] | None:
+        nonlocal proofs
+        proofs += 1
+        if proofs == 2:
+            (proc_root / str(os.getpid()) / "stat").unlink()
+            (proc_root / str(os.getpid())).rmdir()
+        return original(scratch_root)
+
+    monkeypatch.setattr(scratch, "_referenced_scratch_paths", blind_the_second_proof)
+
+    result = sweep_scratch(root)
+
+    assert result.candidates == (candidate,)
+    assert result.removed == ()
+    assert result.reference_proof_unavailable is True
+    assert candidate.exists()
 
 
 def test_cli_translates_unexpected_filesystem_failure(

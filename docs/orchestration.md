@@ -433,7 +433,10 @@ dispatches run, without the exclusive lock. What replaces quiescence is proven
 non-reference: the sweep reads every live process's argv, working directory, and
 open descriptors, and a candidate any of them names is retained and reported —
 `retained N directories referenced by live processes`. That proof is retaken
-against fresh procfs state immediately before removal. A short minimum age
+against fresh procfs state immediately before removal. A procfs that cannot show
+the sweeping process itself cannot answer the question at all, which is not the
+same as answering "nothing is referenced": these families are then left alone
+entirely and the run reports that it could not prove them unused. A short minimum age
 (`UNREFERENCED_MIN_AGE_SECONDS`, 15 minutes) covers only the gap between creating a
 directory and the first instant a process names it; the 24-hour default still
 governs `THIRD_PARTY_PATTERNS`, which have no such proof behind them.

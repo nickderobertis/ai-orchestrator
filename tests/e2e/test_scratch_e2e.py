@@ -338,11 +338,15 @@ def test_harness_scratch_is_reclaimed_during_an_active_dispatch_but_never_when_r
     pytest_root = scratch / "pytest-of-e2e"
     pytest_root.mkdir()
     runs = {}
-    for number in range(1, 6):
+    for number in range(0, 6):
         run = pytest_root / f"pytest-{number}"
         run.mkdir()
         runs[number] = run
     (pytest_root / "pytest-current").symlink_to(runs[5])
+    # pytest treats a lock it cannot read as proof the run is not deletable.
+    unreadable_lock = runs[0] / ".lock"
+    unreadable_lock.write_text("999999999", encoding="utf-8")
+    unreadable_lock.chmod(0o000)
 
     holder = subprocess.Popen(
         [sys.executable, "-c", _LIVE_REFERENCE_HOLDER, str(argv_named)],
@@ -435,12 +439,13 @@ def test_harness_scratch_is_reclaimed_during_an_active_dispatch_but_never_when_r
         if process.is_alive():
             process.terminate()
             process.join(10)
+        unreadable_lock.chmod(0o600)
 
     assert not stale.exists()
     assert not onejudge_scratch.exists()
     assert not runs[2].exists()
     preserved = [argv_named, working, opened, lookalike, self_named]
-    preserved += [runs[number] for number in (1, 3, 4, 5)]
+    preserved += [runs[number] for number in (0, 1, 3, 4, 5)]
     assert [path for path in preserved if not path.exists()] == []
     referenced = re.search(
         r"retained (\d+) directories referenced by live processes", during.stdout
@@ -455,6 +460,47 @@ def test_harness_scratch_is_reclaimed_during_an_active_dispatch_but_never_when_r
     lifecycle_result = json.loads(result_path.read_text(encoding="utf-8"))
     assert lifecycle_result["ok"] is True, lifecycle_result
     assert lifecycle_result["outcome"] == "merged"
+
+
+def test_sweep_recipe_leaves_harness_scratch_alone_when_procfs_cannot_answer(
+    tmp_path: Path,
+) -> None:
+    """Without a procfs that can see the sweeper, these families are never removed."""
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    install = _write_nx_install(
+        scratch / "tmp-999999999-unprovable", dependencies={"nx": "^23.1.0"}
+    )
+    onejudge_scratch = scratch / "onejudge-python-unprovable"
+    onejudge_scratch.mkdir()
+    pytest_root = scratch / "pytest-of-unprovable"
+    pytest_root.mkdir()
+    runs = [pytest_root / f"pytest-{number}" for number in range(1, 6)]
+    for run in runs:
+        run.mkdir()
+    dead_watchdog = scratch / "orchestrator-watchdog-dead"
+    dead_watchdog.mkdir()
+    (dead_watchdog / "pid").write_text("999999999\n", encoding="utf-8")
+    for path in (install, onejudge_scratch, pytest_root, *runs):
+        _age(path)
+    blind = tmp_path / "not-procfs"
+    blind.mkdir()
+
+    result = subprocess.run(
+        ["just", "sweep-scratch", "--root", str(scratch)],
+        cwd=REPO_ROOT,
+        env={**os.environ, "AI_ORCHESTRATOR_PROC_ROOT": str(blind)},
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+
+    assert install.exists() and onejudge_scratch.exists()
+    assert [run for run in runs if not run.exists()] == []
+    # The watchdog proof stands on its own lock, so its accounting is unaffected.
+    assert not dead_watchdog.exists()
+    assert "removed 1 directories" in result.stdout
+    assert f"no usable procfs at {blind}" in result.stdout
 
 
 @pytest.mark.parametrize("identifiable", [True, False], ids=["identified", "unidentifiable"])

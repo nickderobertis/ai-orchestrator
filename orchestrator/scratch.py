@@ -103,6 +103,7 @@ class SweepResult:
     third_party_skipped: bool = False
     watchdog_retained: tuple[Path, ...] = ()
     referenced_retained: tuple[Path, ...] = ()
+    reference_proof_unavailable: bool = False
 
 
 def _open_lock_file(path: Path, *, create: bool) -> int:
@@ -265,10 +266,11 @@ def _is_nx_temp_install(path: Path) -> bool:
         manifest = json.loads((path / "package.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return False
-    if not isinstance(manifest, dict) or set(manifest) != {"devDependencies"}:
-        return False
-    development = manifest["devDependencies"]
-    return isinstance(development, dict) and set(development) == {"nx"}
+    match manifest:
+        case {"devDependencies": {"nx": _, **other_dependencies}, **other_fields}:
+            return not other_dependencies and not other_fields
+        case _:
+            return False
 
 
 def _nx_install_candidates(root: Path) -> Iterator[Path]:
@@ -358,20 +360,29 @@ def _record_reference(text: str, scratch_root: Path, sink: set[str]) -> None:
         path = path.parent
 
 
-def _referenced_scratch_paths(scratch_root: Path) -> frozenset[str]:
+def _referenced_scratch_paths(scratch_root: Path) -> frozenset[str] | None:
     """Return every path under the scratch root that a live process still names.
 
     This is what lets these families be reclaimed *during* a dispatch. An mtime
     cutoff answers "was anything written here lately", which is neither necessary nor
     sufficient; asking the kernel who still names a path protects a directory in use
     for one second and releases one abandoned a minute ago.
+
+    ``None`` means the question could not be asked, which is not the same answer as
+    "nothing is referenced" and must never be confused with it: an absent, unmounted,
+    or misconfigured procfs root would otherwise authorize deleting every live
+    dispatch's scratch at once. This process is necessarily alive, so a root that
+    cannot show *it* is not a procfs this proof can be built on.
     """
+    root = proc_root()
+    if not (root / str(os.getpid())).is_dir():
+        return None
     marker = os.fspath(scratch_root) + os.sep
     referenced: set[str] = set()
     try:
-        entries = sorted(proc_root().iterdir())
-    except OSError:  # pragma: no cover - a host without procfs cannot dispatch at all
-        return frozenset()
+        entries = sorted(root.iterdir())
+    except OSError:  # pragma: no cover - unreadable between the self probe and here
+        return None
     for entry in entries:
         if not entry.name.isdigit():
             continue
@@ -433,16 +444,18 @@ def sweep_scratch(
     referenced = _referenced_scratch_paths(scratch_root)
     referenced_retained: list[Path] = []
     unreferenced: set[Path] = set()
-    for family_candidates in UNREFERENCED_FAMILIES:
-        for path in family_candidates(scratch_root):
-            if os.fspath(path) in referenced:
-                referenced_retained.append(path)
-            elif _older_than(path, unreferenced_cutoff):
-                unreferenced.add(path)
+    if referenced is not None:
+        for family_candidates in UNREFERENCED_FAMILIES:
+            for path in family_candidates(scratch_root):
+                if os.fspath(path) in referenced:
+                    referenced_retained.append(path)
+                elif _older_than(path, unreferenced_cutoff):
+                    unreferenced.add(path)
     candidates |= unreferenced
 
     removed: list[Path] = []
     reclaimed = 0
+    fresh: frozenset[str] | None = frozenset()
     with _scratch_lock(scratch_root, exclusive=True, nonblocking=True) as can_sweep_third_party:
         if can_sweep_third_party:
             for pattern in THIRD_PARTY_PATTERNS:
@@ -468,6 +481,9 @@ def sweep_scratch(
             fresh = _referenced_scratch_paths(scratch_root) if unreferenced else frozenset()
             for path in ordered:
                 if path in unreferenced:
+                    if fresh is None:
+                        # The proof was withdrawn between discovery and removal.
+                        continue
                     if os.fspath(path) in fresh:
                         referenced_retained.append(path)
                         continue
@@ -508,6 +524,7 @@ def sweep_scratch(
         third_party_skipped=not can_sweep_third_party,
         watchdog_retained=tuple(sorted(skipped)),
         referenced_retained=tuple(sorted(referenced_retained)),
+        reference_proof_unavailable=referenced is None or fresh is None,
     )
 
 
@@ -590,6 +607,11 @@ def main(argv: list[str] | None = None) -> int:
     if result.referenced_retained:
         inspection += (
             f"; retained {len(result.referenced_retained)} directories referenced by live processes"
+        )
+    if result.reference_proof_unavailable:
+        inspection += (
+            f"; harness scratch left alone: no usable procfs at {proc_root()}, so no "
+            "live process could be proven done with it"
         )
     print(
         f"sweep-scratch: {action} {len(paths)} directories; "
