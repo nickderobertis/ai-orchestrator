@@ -1174,7 +1174,7 @@ print(json.dumps({
     fake_claude.chmod(0o755)
     fallback_bin = fake_codex if fallback_harness == "codex" else fake_claude
     environment = {
-        **os.environ,
+        **{key: value for key, value in os.environ.items() if key != "ONEHARNESS_HARNESSES"},
         "ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR": str(tmp_path / "absent-claude-alt"),
         "ONEHARNESS_HISTORY": "false",
     }
@@ -1259,7 +1259,7 @@ print(json.dumps({
         ],
         cwd=REPO_ROOT,
         env={
-            **os.environ,
+            **{key: value for key, value in os.environ.items() if key != "ONEHARNESS_HARNESSES"},
             "ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR": str(tmp_path / ".claude-alt"),
             "ONEHARNESS_HISTORY": "false",
         },

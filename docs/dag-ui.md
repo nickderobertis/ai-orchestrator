@@ -2,10 +2,58 @@
 
 `apps/dag-ui` is the read-only live and historical view of orchestrated DAG
 execution. It visualizes each round with React Flow, using the exact coordinates
-from `@ai-orchestrator/dag-layout`, and renders agent transcripts with the
-published `@oneharness/ui` components. Every payload it reads is validated by
+from `@ai-orchestrator/dag-layout`, and builds its surface out of the published
+`@oneharness/ui` components. Every payload it reads is validated by
 `@ai-orchestrator/dag-model` through `@ai-orchestrator/telemetry-client`; the app
 declares no schema, event name, or API path of its own.
+
+## Design system
+
+`@oneharness/ui` is the app's design system, not just its transcript renderer.
+The view switcher is its `Tabs`; panels, metric tiles and transcript cards are its
+`Card`; the navigation, detail panel and overall view scroll inside its
+`ScrollArea`; the telemetry banner is its `Alert`; the loading view is its
+`Skeleton`; and every secondary action is its `Button`, with `Separator`,
+`Tooltip` and the `cn` helper where they fit. `ConversationView` is deliberately
+not adopted: it requires a reply handler and continuation callbacks, and this app
+is read-only.
+
+Status is the one place the package's components are not used unchanged.
+`StatusBadge` is the right component for a conversation, whose state really is one
+of the four it knows, and `TranscriptPanel` uses it. A run or a node is not: the
+ledger settles a node as `done` and a run as `complete`, holds a human action at
+`waiting`, and abandons work as `cancelled`. `StatusBadge` gives an unrecognized
+state no tone, so passing these through would leave a finished run and an
+abandoned one looking alike, and relabelling them to fit its vocabulary would
+replace the word the ledger recorded. `src/features/runs/StateBadge.tsx` keeps
+both, mapping the orchestrator's own states onto the package's `Badge` and its
+semantic utilities: settled work (`done` for a node, `complete` for a run) reads
+`success`, lost work (`failed`, `cancelled`) reads `destructive`, and `running`
+reads `info`. Every other state it can report — `pending`, `waiting`, `stopped`,
+`parked`, `blocked`, `unknown` — stays neutral on purpose, because work with no
+outcome yet has none to report. `e2e/dag-ui.spec.ts` asserts each of those tones
+against the token it claims, on the detail panel, the run list, and the graph
+canvas, whose node surfaces carry the same meanings.
+
+One palette governs the whole surface. `src/styles.css` imports the package
+stylesheet **through this app's Tailwind build** rather than injecting it as raw
+text, which is what makes the package's tokens, its `dark` variant, its `@theme`
+and its `@layer` rules real here — a raw `<style>` element would deliver the token
+values and silently drop every `@apply` rule and every utility its components are
+written in. The import carries `source(none)` because the package bakes
+`source(…)` modifiers into its own `@import "tailwindcss"` that name directories
+existing only in its source tree; the `@source` lines beside it name the trees
+this app scans instead, including the package's `dist`, which Tailwind never scans
+on its own. The dark palette is selected by `class="dark"` on the document element
+in `index.html`, and the app's own chrome is written in the package's tokens
+(`--card`, `--sidebar`, `--border`, `--success`, `--destructive`, `--info`,
+`--warning`) rather than a palette of its own. React Flow scopes its variables to
+its own root, so the canvas takes `colorMode="dark"` for the same reason.
+
+The package's Radix, markdown and Tailwind peer dependencies are declared in
+`apps/dag-ui/package.json`: the app imports the package's root entry, whose module
+graph statically pulls all of them, and a locked install has to reproduce that
+tree rather than rely on the installer filling peers in implicitly.
 
 ## Run locally
 

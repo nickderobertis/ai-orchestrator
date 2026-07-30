@@ -9,6 +9,7 @@ import {
   nodeTelemetrySchema,
   parseRunDetail,
   parseRunList,
+  parseRunTimeline,
   roundSchema,
   runConversationsSchema,
   runDetailSchema,
@@ -319,4 +320,45 @@ test("a package consumer validates populated telemetry and attribution", () => {
       },
     }).attribution.nodeId,
   ).toBe("build");
+});
+
+test("a package consumer parses a served run timeline through the export", () => {
+  const timeline = parseRunTimeline({
+    api_version: 1,
+    observed_at: "2026-07-26T12:00:00Z",
+    run_id: "run-1",
+    spans: [
+      {
+        id: "round-1",
+        kind: "round",
+        label: "round 1",
+        started_at: "2026-07-26T12:00:00Z",
+        ended_at: null,
+        events: [],
+      },
+      {
+        id: "dispatch-worker-1",
+        kind: "dispatch",
+        label: "engineer-build",
+        started_at: "2026-07-26T12:00:01Z",
+        ended_at: "2026-07-26T12:04:00Z",
+        parent_id: "round-1",
+        node_id: "build",
+        round: 1,
+        status: "completed",
+        reference: { kind: "conversation", value: "worker-1" },
+        events: [
+          {
+            id: "worker-1-0",
+            kind: "conversation-turn",
+            at: "2026-07-26T12:00:01Z",
+            status: "completed",
+            reference: { kind: "conversation", value: "worker-1" },
+          },
+        ],
+      },
+    ],
+  });
+  expect(timeline.spans[0]?.ended_at).toBeNull();
+  expect(timeline.spans[1]?.events[0]?.reference?.kind).toBe("conversation");
 });

@@ -81,6 +81,7 @@ warn_unused_ignores = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+tmp_path_retention_count = 3
 
 [tool.coverage.run]
 source = ["orchestrator"]
