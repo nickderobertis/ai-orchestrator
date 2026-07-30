@@ -13,7 +13,7 @@ from typing import NotRequired, cast, get_origin, get_type_hints
 
 import pytest
 
-from orchestrator.channel import create_channel
+from orchestrator.channel import QueuedCommand, create_channel
 from orchestrator.config import ConfigError
 from orchestrator.coordination import atomic_json
 from orchestrator.dispatch import DispatchError, Report
@@ -91,13 +91,19 @@ class _EditingPump(_RecordingProposalPump):
         super().__init__()
         self.commands = commands
         self.wait_ticks = wait_ticks
+        self.outcomes: list[tuple[int, bool, str]] = []
 
-    def drain_commands(self) -> tuple[EditCommand, ...]:
+    def drain_commands(self) -> tuple[QueuedCommand, ...]:
         if self.wait_ticks:
             self.wait_ticks -= 1
             return ()
         commands, self.commands = self.commands, []
-        return tuple(commands)
+        return tuple(
+            QueuedCommand(seq, 1, command) for seq, command in enumerate(commands, start=1)
+        )
+
+    def record_outcome(self, seq: int, *, applied: bool, reason: str) -> None:
+        self.outcomes.append((seq, applied, reason))
 
 
 def test_run_graph_enqueues_worker_assessment_through_reconciler() -> None:
@@ -213,6 +219,33 @@ def test_reconciler_alone_applies_and_rejects_live_commands() -> None:
     )
     assert rejected.proposals[0][0] == "reconciler"
     assert "depends on itself" in rejected.proposals[0][1]
+
+
+def test_a_rejected_edit_is_journalled_with_its_command_and_reason(tmp_path: Path) -> None:
+    """A rejection is evidence: the surfaced proposal is transient, the event is not."""
+    graph = parse_graph(
+        {
+            "tasks": [
+                {"id": "approve", "kind": "human", "task": "Approve"},
+                {"id": "pending", "persona": "engineer", "task": "Ship", "deps": ["approve"]},
+            ]
+        }
+    )
+    journal = open_journal(tmp_path / "run-r", RunId("run-r"), 1)
+    command = EditCommand("attest", {"op": "attest", "ref": "pending"})
+    run_graph(
+        graph,
+        agent_runner=lambda node, **_: _report(node.persona),
+        lifecycle_runner=lambda node, **_: _lifecycle(),
+        journal=journal,
+        run_id=RunId("run-r"),
+        round_number=1,
+        proposal_pump=_EditingPump([command]),  # type: ignore[arg-type] - in-memory pump
+    )
+    events = [event for event in journal.events() if event.kind == "edit-rejected"]
+    assert [event.detail["command"] for event in events] == [command.payload]
+    assert "currently-ready human action" in str(events[0].detail["reason"])
+    assert events[0].node is None
 
 
 def test_running_direct_and_lifecycle_drops_cancel_cooperatively() -> None:

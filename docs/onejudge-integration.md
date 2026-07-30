@@ -324,6 +324,17 @@ proof does not clear is reported as retained rather than silently kept.
   alternate-subscription Claude model before the configured Codex fallback. A global
   `ONEHARNESS_MODELS` chain cannot be used here: onejudge supplies `--session`,
   and oneharness rejects multi-model runs combined with a named session.
+- **A session name is scoped to a working directory.** oneharness records
+  `session name -> harness conversation token` in a store shared by every run
+  (`~/.local/state/oneharness/sessions`), and the harness files that conversation
+  under the directory that created it. So a recorded name resumed from a *different*
+  directory fails before the first turn: the agent process exits, its wrapper parks,
+  and the dispatch reports `worker-died`. The lifecycle names a session after the
+  branch and every run cuts that branch a worktree under its own run root, so
+  `dispatch.scoped_session` folds the worktree into the name. Steps and retries
+  within one run share the worktree, and therefore one conversation; a later run
+  pinned, resumed, or recovered onto the same branch gets its own. Give any new
+  caller that dispatches into a per-run directory the same treatment.
 - **Use the tracked graph for coordinated work.** `just run-plan` accepts direct
   agents, repository lifecycle agents, and explicit human nodes in one recorded
   DAG. A lifecycle `steps` list may mix agent steps with `kind: human` steps on a

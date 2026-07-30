@@ -13,6 +13,11 @@ from pathlib import Path
 
 from waits import timeout as e2e_timeout
 
+#: What this mock writes to stderr when it is killed at the provider barrier. It
+#: stands in for the words a real harness leaves behind when it refuses to start,
+#: and is what a dispatch's worker-death report has to carry through to its caller.
+BARRIER_DEATH_NOTICE = "mock_oneharness: terminated at the provider barrier"
+
 
 def mock_run_command(
     oneharness_bin: str, *args: str, harnesses: Sequence[str] = ("codex",)
@@ -59,6 +64,10 @@ def main(argv: list[str]) -> int:
         def stop_descendant(_signum: int, _frame: object) -> None:
             descendant.terminate()
             descendant.wait(timeout=2)
+            # A real harness that cannot start says so on stderr and exits; that
+            # line is the only account a worker dying before its first turn leaves
+            # behind, so emit a recognizable one here for the dispatcher to carry.
+            print(BARRIER_DEATH_NOTICE, file=sys.stderr, flush=True)
             raise SystemExit(143)
 
         signal.signal(signal.SIGTERM, stop_descendant)

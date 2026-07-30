@@ -347,6 +347,11 @@ def main() -> int:
                             for sentinel in (
                                 "continuation-channel",
                                 '"name": "live-edit"',
+                                # Live-edit journeys whose round legitimately settles
+                                # waiting or failed; run-plan's non-zero status is the
+                                # expected outcome, not an orchestrator failure.
+                                '"name": "eligibility"',
+                                '"name": "rejection"',
                                 "lifecycle-worker-death-retry",
                                 "provider-errors",
                                 "infrastructure-",

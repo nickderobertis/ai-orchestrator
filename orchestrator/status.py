@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -12,6 +13,7 @@ from typing import Any
 from . import gitops, history, runs
 from .channel import ChannelError, due_indicator, planner_wait_indicator
 from .config import ConfigError
+from .liveness import PARKED_AFTER_SECONDS, parked_indicator
 from .registry import Registry, RegistryError
 from .workspace import IdentityKey, RepositoryType, Workflow
 
@@ -215,9 +217,19 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--all", action="store_true", help="include recent finished tasks")
     parser.add_argument("--format", choices=("human", "json"), default="human")
     parser.add_argument("--runs-dir", type=Path, default=Path("runs"))
+    parser.add_argument(
+        "--parked-after",
+        type=float,
+        default=PARKED_AFTER_SECONDS,
+        metavar="SECONDS",
+        help="report a launch with no child process, planner surface, or ledger write for "
+        f"this long as parked (default: {PARKED_AFTER_SECONDS:g})",
+    )
     args = parser.parse_args(argv)
     if args.limit is not None and args.limit <= 0:
         parser.error("N must be a positive integer")
+    if not math.isfinite(args.parked_after) or args.parked_after <= 0:
+        parser.error("--parked-after must be a positive, finite number of seconds")
     try:
         tasks = collect(runs_dir=args.runs_dir)
     except (history.HistoryError, RegistryError) as exc:
@@ -237,6 +249,13 @@ def main(argv: list[str] | None = None) -> int:
                 # that died mid-round would otherwise still read as "waiting on me".
                 if (dead := runs.abandoned_round_indicator(run_dir)) is not None:
                     indicators.append(f"{run_dir.name}: {dead}")
+                # Reported for the same reason, one layer up: a launch that keeps its
+                # pid while nothing progresses is not running work, and its stale
+                # planner surface would otherwise read as live supervision.
+                if (
+                    parked := parked_indicator(run_dir, parked_after=args.parked_after)
+                ) is not None:
+                    indicators.append(f"{run_dir.name}: {parked}")
                 try:
                     waiting = planner_wait_indicator(run_dir / "channel")
                     indicator = due_indicator(run_dir / "channel")

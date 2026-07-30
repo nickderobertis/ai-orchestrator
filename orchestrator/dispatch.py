@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import contextlib
+import hashlib
 import json
 import math
 import os
@@ -95,6 +96,29 @@ AGENT_ONEHARNESS_BIN = REPO_ROOT / "scripts" / "oneharness-agent.sh"
 ORCHESTRATOR_ONEHARNESS_BIN = REPO_ROOT / "scripts" / "oneharness-orchestrator.sh"
 DispatchOutcome = Literal["worker-died"]
 WatchdogReason = Literal["worker-died", "stalled"]
+#: The status files `scripts/oneharness-agent.sh` writes and this module reads —
+#: the whole IPC contract between the two. `tests/test_oneharness_agent_wrapper.py`
+#: is its drift gate: the wrapper has to name every one of these.
+AGENT_PID_NAME = "agent.pid"
+AGENT_CHILD_PID_NAME = "agent.child.pid"
+AGENT_HEARTBEAT_NAME = "agent.heartbeat"
+AGENT_DONE_NAME = "agent.done"
+AGENT_FAILED_NAME = "agent.failed"
+AGENT_EXIT_CODE_NAME = "agent.exit_code"
+AGENT_STDERR_NAME = "agent.stderr"
+AGENT_STATUS_NAMES = (
+    AGENT_PID_NAME,
+    AGENT_CHILD_PID_NAME,
+    AGENT_HEARTBEAT_NAME,
+    AGENT_DONE_NAME,
+    AGENT_FAILED_NAME,
+    AGENT_EXIT_CODE_NAME,
+    AGENT_STDERR_NAME,
+)
+#: How much of the dead child's stderr tail a death report carries. The tail is
+#: the part that names the failure; the cap keeps one runaway harness from
+#: filling a journal entry.
+AGENT_STDERR_TAIL_CHARS = 1200
 
 
 class DispatchError(Exception):
@@ -355,6 +379,58 @@ def _agent_status(status_dir: Path, name: str) -> str | None:
         return None
 
 
+def _agent_stderr_tail(status_dir: Path) -> str:
+    """Return a collapsed, length-capped tail of the agent child's stderr, if any."""
+    try:
+        captured = (status_dir / AGENT_STDERR_NAME).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+    collapsed = " ".join(captured.split())
+    if len(collapsed) <= AGENT_STDERR_TAIL_CHARS:
+        return collapsed
+    return f"...{collapsed[-AGENT_STDERR_TAIL_CHARS:]}"
+
+
+def _worker_death_detail(status_dir: Path, root_pid: ProcessId) -> str:
+    """Say why a worker died, carrying whatever its wrapper managed to record.
+
+    A worker that dies before its first turn produces no report, no transcript and
+    no verdict, so the bare outcome name is the whole of what a reader gets — and
+    it is the same string whether the harness refused to start, the provider was
+    killed, or the turn simply stopped heartbeating. The agent wrapper records the
+    child's exit status and stderr for exactly this line; both are best-effort, so
+    an absent marker degrades the sentence rather than hiding the death.
+    """
+    # The wrapper is the only writer, but this file crosses a process boundary, so
+    # only a plausible wait status is repeated back; anything else is unknown.
+    recorded = _agent_status(status_dir, AGENT_EXIT_CODE_NAME) or ""
+    plausible = recorded.isascii() and recorded.isdigit() and len(recorded) <= 3
+    exit_status = recorded if plausible and int(recorded) <= 255 else "unknown"
+    detail = (
+        f"worker-died: tracked worker exited or stopped heartbeating "
+        f"(watchdog pid {root_pid}, agent exit status {exit_status})"
+    )
+    stderr = _agent_stderr_tail(status_dir)
+    return f"{detail}: {stderr}" if stderr else detail
+
+
+def scoped_session(name: str, project_dir: str | Path) -> str:
+    """Bind a conversation name to the directory the agent will actually run in.
+
+    A harness stores its resumable conversations per working directory, so a
+    recorded session name is only resolvable from the directory that created it.
+    The lifecycle names a session after the branch, and every run cuts that branch
+    a worktree under its own run root — so re-dispatching a branch (pinning one,
+    resuming one, recovering one) would otherwise hand the harness a name whose
+    conversation lives under a directory that no longer exists, and the resume
+    fails before the first turn. Folding the directory into the name keeps a
+    re-dispatch resolvable, while steps and retries *within* one run, which share
+    the worktree, still share one conversation.
+    """
+    digest = hashlib.sha256(os.fspath(Path(project_dir).resolve()).encode("utf-8")).hexdigest()
+    return f"{name}@{digest[:10]}"
+
+
 def _validate_environment(env: Mapping[str, str]) -> None:
     """Validate caller-provided values before they reach the process boundary."""
     for key, value in env.items():
@@ -598,7 +674,7 @@ def run_onejudge(
                         [],
                         {},
                         None,
-                        "worker-died: tracked worker exited or stopped heartbeating",
+                        _worker_death_detail(agent_status_dir, signal.root_pid),
                         outcome="worker-died",
                     )
                 raise DispatchError(
