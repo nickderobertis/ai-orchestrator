@@ -1563,8 +1563,25 @@ def test_real_cli_recovers_failed_lifecycle_result(
         failed_lifecycles = {
             event.get("node") for event in records if event["kind"] == "node-failed"
         }
-        # Parked, not merely started: the ready file proves in-flight is still inside
-        # its turn, so the round cannot finalize between this check and the kill.
+        # Parked, not merely started: the ready file proves in-flight reached its
+        # turn, and no terminal event for it proves it is still inside one, so the
+        # round cannot finalize between this check and the kill. The second half is
+        # what the ready file alone cannot say — it stays on disk after the turn
+        # that wrote it ends — and the whole recovery boundary rests on it. If the
+        # round did finalize, `--recover` legitimately opens round-02 and re-attempts
+        # both still-failed nodes, so every assertion below would be reading a second
+        # attempt as a duplicated event. Say that here rather than there.
+        in_flight_settled = any(
+            event["kind"] in {"node-settled", "node-failed"} and event.get("node") == "in-flight"
+            for event in records
+        )
+        if in_flight_settled:
+            _kill_round_owner(process)
+            pytest.fail(
+                "the parked in-flight node settled before the round was killed, so "
+                "round-01 finished and this run can no longer observe the mid-round "
+                "recovery boundary it exists to prove"
+            )
         in_flight = in_flight_ready.exists() and any(
             event["kind"] == "node-started" and event.get("node") == "in-flight"
             for event in records
