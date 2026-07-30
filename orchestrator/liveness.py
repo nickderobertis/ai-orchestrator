@@ -1,6 +1,6 @@
 """Whether a launched orchestrator is *working*, not merely alive.
 
-`runs.launch_is_active` answers ownership: a report was never written and the
+`runs.launch_is_provably_active` answers ownership: a report was never written and the
 recorded pid cannot be shown to be gone. That is necessary and not sufficient. A
 launched orchestrator can keep its pid while doing nothing at all — no agent
 child process, no planner surface, no ledger write — and every progress view that
@@ -32,7 +32,7 @@ from pathlib import Path
 from .channel import DEFAULT_HEARTBEAT_INTERVAL
 from .config import ConfigError
 from .journal import JOURNAL_NAME
-from .runs import latest_round, launch_is_active, load_mapping
+from .runs import latest_round, launch_is_provably_active, load_mapping
 
 #: How long a launched orchestrator may show no observable progress before every
 #: progress view must report it parked. Sourced from the planner-update pacemaker's
@@ -185,7 +185,7 @@ def observe_launch(
     now: float | None = None,
 ) -> LaunchLiveness:
     """Observe one launched orchestrator's progress, not merely its pid."""
-    active = (run_dir / "launch.json").is_file() and launch_is_active(run_dir)
+    active = (run_dir / "launch.json").is_file() and launch_is_provably_active(run_dir)
     if not active:
         return LaunchLiveness(False, False, None, parked_after)
     owner_pid, round_files = _round_owner(run_dir)
