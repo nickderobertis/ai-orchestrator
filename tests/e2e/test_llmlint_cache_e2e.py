@@ -115,6 +115,21 @@ def _write_fake_judge(directory: Path) -> None:
     fake.chmod(0o755)
 
 
+def _write_version_only_llmlint(directory: Path, version: str) -> Path:
+    """Install an ambient llmlint whose version must not enter the pinned target."""
+    directory.mkdir(parents=True, exist_ok=True)
+    fake = directory / "llmlint"
+    fake.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        '[[ ${1:-} == "--version" ]] || { echo "ambient llmlint reached $1" >&2; exit 2; }\n'
+        f'echo "llmlint {version}"\n',
+        encoding="utf-8",
+    )
+    fake.chmod(0o755)
+    return directory
+
+
 @pytest.fixture
 def workspace(tmp_path: Path) -> Workspace:
     root = tmp_path / "checkout"
@@ -140,6 +155,9 @@ def workspace(tmp_path: Path) -> Workspace:
     real_llmlint = shutil.which("llmlint")
     assert real_llmlint is not None
     _write_fake_judge(binaries)
+    pinned = root / ".venv/bin"
+    pinned.mkdir(parents=True)
+    (pinned / "llmlint").symlink_to(binaries / "llmlint")
 
     judge_log = tmp_path / "judge-runs.log"
     judge_log.write_text("", encoding="utf-8")
@@ -272,6 +290,21 @@ def test_ambient_judge_bin_does_not_invalidate_the_verdict(workspace: Workspace)
 
     second = workspace.lint(base, LLMLINT_ONEHARNESS_BIN="/caller/two/oneharness")
 
+    assert second.returncode == 0, second.stdout + second.stderr
+    assert workspace.judge_runs() == 1
+    assert CACHE_HIT in second.stderr
+
+
+def test_ambient_llmlint_path_does_not_invalidate_the_verdict(workspace: Workspace) -> None:
+    """Both fingerprint commands use the same checkout-pinned llmlint as the judge."""
+    base = workspace.head()
+    first_bin = _write_version_only_llmlint(workspace.root.parent / "ambient-one", "1.0.0")
+    second_bin = _write_version_only_llmlint(workspace.root.parent / "ambient-two", "2.0.0")
+
+    first = workspace.lint(base, PATH=f"{first_bin}{os.pathsep}{workspace.env['PATH']}")
+    second = workspace.lint(base, PATH=f"{second_bin}{os.pathsep}{workspace.env['PATH']}")
+
+    assert first.returncode == 0, first.stdout + first.stderr
     assert second.returncode == 0, second.stdout + second.stderr
     assert workspace.judge_runs() == 1
     assert CACHE_HIT in second.stderr
@@ -522,11 +555,33 @@ def test_the_fingerprint_names_an_unusable_judge_toolchain(
     workspace: Workspace, tmp_path: Path, stub_body: str, expected: str
 ) -> None:
     stubs = _stub(tmp_path / "judge-stub", "llmlint", f"set -uo pipefail\n{stub_body}")
+    pinned = workspace.root / ".venv/bin/llmlint"
+    pinned.unlink()
+    pinned.symlink_to(stubs / "llmlint")
 
-    result = _run_fingerprint(workspace, PATH=f"{stubs}{os.pathsep}{workspace.env['PATH']}")
+    result = _run_fingerprint(workspace)
 
     assert result.returncode != 0
     assert expected in result.stderr
+
+
+@pytest.mark.parametrize("entrypoint", ["fingerprint", "target"])
+def test_a_missing_pinned_runtime_helper_is_actionable(
+    workspace: Workspace, entrypoint: str
+) -> None:
+    (workspace.root / "scripts/llmlint-runtime-env.sh").unlink()
+
+    if entrypoint == "fingerprint":
+        result = _run_fingerprint(workspace)
+        expected = "llmlint fingerprint: could not load the pinned runtime environment"
+    else:
+        result = _run_target(workspace, LLMLINT_DIFF_BASE_SHA=workspace.head())
+        expected = "lint-llm-diff: could not load the pinned runtime environment"
+
+    assert result.returncode != 0
+    assert expected in result.stderr
+    assert "restore scripts/llmlint-runtime-env.sh and retry" in result.stderr
+    assert workspace.judge_runs() == 0
 
 
 @pytest.mark.parametrize(

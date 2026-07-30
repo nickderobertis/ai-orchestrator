@@ -41,7 +41,10 @@ root="$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)" || {
   exit 1
 }
 # shellcheck source=scripts/llmlint-runtime-env.sh
-. "$root/scripts/llmlint-runtime-env.sh"
+. "$root/scripts/llmlint-runtime-env.sh" || {
+  echo "lint-llm-diff: could not load the pinned runtime environment; restore scripts/llmlint-runtime-env.sh and retry" >&2
+  exit 1
+}
 base_sha="${LLMLINT_DIFF_BASE_SHA:-}"
 [[ "$base_sha" =~ ^[0-9a-f]{40,64}$ ]] || {
   echo "lint-llm-diff: LLMLINT_DIFF_BASE_SHA must be a resolved commit id; run 'just lint-llm-diff <base>' instead of this target directly" >&2
