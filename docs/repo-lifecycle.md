@@ -80,6 +80,9 @@ The lifecycle acquires the host scratch shared lock before this preflight and
 holds it through dispatch, verification, and publication. Destructive cleanup of
 aged third-party scratch requires the exclusive lock, so a concurrent sweep
 cannot remove scratch that an in-flight target gate owns or is about to use.
+The families a dispatch produces itself are exempt from that lock and swept while
+it runs, because they only accumulate while dispatches run; their safety comes from
+proven non-reference rather than quiescence.
 
 ## Repository identity, checkout roles, and isolation
 
