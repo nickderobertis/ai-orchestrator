@@ -515,41 +515,45 @@ def test_sweep_cli_keeps_visible_references_when_a_process_hides_its_descriptors
     stale.mkdir()
     for path in (candidate, stale):
         _age(path)
-    fake_proc = tmp_path / "proc"
-    fake_proc.mkdir()
-    script = """
-import os
+    ready = tmp_path / "ready"
+    release = tmp_path / "release"
+    holder_script = """
+import sys
+import time
 from pathlib import Path
-from orchestrator.scratch import main
 
-proc = Path(os.environ["AI_ORCHESTRATOR_PROC_ROOT"])
-own = proc / str(os.getpid())
-own.mkdir()
-(own / "cmdline").write_bytes(b"sweep-scratch")
-(own / "cwd").symlink_to(Path.cwd())
-# A still-live numeric entry without a readable fd directory models hidepid or
-# another per-process permission boundary.
-hidden = proc / "4242"
-hidden.mkdir()
-(hidden / "cmdline").write_bytes(
-    b"worker\\0" + os.fsencode(os.environ["REFERENCED_SCRATCH"])
-)
-raise SystemExit(main(["--root", os.environ["SCRATCH_ROOT"]]))
+candidate, ready, release = map(Path, sys.argv[1:])
+ready.write_text("ready", encoding="utf-8")
+while not release.exists():
+    time.sleep(0.02)
+assert candidate
 """
-
-    result = subprocess.run(
-        [sys.executable, "-c", script],
-        cwd=REPO_ROOT,
-        env={
-            **os.environ,
-            "AI_ORCHESTRATOR_PROC_ROOT": str(fake_proc),
-            "REFERENCED_SCRATCH": str(candidate),
-            "SCRATCH_ROOT": str(scratch),
-        },
-        text=True,
-        capture_output=True,
-        check=True,
+    holder = subprocess.Popen(
+        [
+            "sudo",
+            "-n",
+            "/usr/bin/python3",
+            "-c",
+            holder_script,
+            str(candidate),
+            str(ready),
+            str(release),
+        ]
     )
+    try:
+        _wait_for_path(ready)
+        with pytest.raises(PermissionError):
+            next(Path(f"/proc/{holder.pid}/fd").iterdir())
+        result = subprocess.run(
+            ["just", "sweep-scratch", "--root", str(scratch)],
+            cwd=REPO_ROOT,
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+    finally:
+        release.touch()
+        holder.wait(timeout=30)
 
     assert candidate.exists()
     assert not stale.exists()
