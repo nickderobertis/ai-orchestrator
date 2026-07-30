@@ -480,15 +480,16 @@ resume nodes that were running without another start transition, and converge th
 remaining frontier. Schema 1 journals remain readable, but a schema 1 prefix with
 settled nodes cannot be recovered because it predates durable node results.
 
-The journal record contract is schema version 6, pinned by
-`tests/golden/static-round-events-v6.json`; bump both together. Version 6 is
+The journal record contract is schema version 7, pinned by
+`tests/golden/static-round-events-v7.json`; bump both together. Version 6 is
 additive over 5: it adds the `edit-rejected`, `conflict-resolution-started`, and
 `conflict-resolution-finished` kinds, and an optional `command` beside
 `edit-committed`'s `operations`. A v5 journal therefore still replays — its
 committed edits simply carry no command — while a record written at 6 or later
-must carry the command that produced its mutations. Every supported version stays
-readable; a reader skips records from a version it does not know rather than
-failing the round it is observing.
+must carry the command that produced its mutations. Version 7 is additive over 6:
+it adds `publication-failed`, for a publication that ended before any gate could
+rule on it. Every supported version stays readable; a reader skips records from a
+version it does not know rather than failing the round it is observing.
 
 ### A round outlives the turn that launched it
 

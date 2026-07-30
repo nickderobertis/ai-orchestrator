@@ -19,9 +19,11 @@ from orchestrator.dispatch import (
     Report,
     _agent_run_context,
     _build_report,
+    _configured_turn_cap,
     _file_progress,
     _read_watchdog_pid,
-    _worker_death_detail,
+    agent_failure_reason,
+    incomplete_detail,
     run_onejudge,
 )
 from orchestrator.dispatch import main as dispatch_main
@@ -414,15 +416,48 @@ def test_worker_heartbeat_deadline_ignores_busy_descendant(tmp_path) -> None:
     assert report.completed is False
 
 
+def test_worker_death_report_carries_the_recorded_exit_status_and_stderr(tmp_path) -> None:
+    """A death before the first turn reports the wrapper's account of it.
+
+    The wrapper parks after its child fails so the dispatcher can see the marker,
+    then the whole tree is torn down — so the exit status and stderr it left in the
+    status directory are the only evidence that outlives the failure.
+    """
+    status = tmp_path / "agent-status"
+    onejudge = tmp_path / "onejudge"
+    onejudge.write_text(
+        '#!/bin/sh\nif [ "$1" = "--version" ]; then echo "onejudge 0.3.4"; exit 0; fi\n'
+        'dir=$ORCHESTRATOR_AGENT_STATUS_DIR\nprintf "%s\\n" "$$" >"$dir/agent.pid"\n'
+        'printf "7\\n" >"$dir/agent.exit_code"\n'
+        # A verbose harness precedes its own failure with pages of startup chatter;
+        # the tail is the part that names the failure, so that is what survives.
+        'python3 -c "print(\'noise \' * 400)" >"$dir/agent.stderr"\n'
+        'printf "claude: no conversation found with session id 0dd\\n" >>"$dir/agent.stderr"\n'
+        'printf "%s\\n" "$$" >"$dir/agent.failed"\nwhile :; do :; done\n',
+        encoding="utf-8",
+    )
+    onejudge.chmod(0o700)
+
+    report = run_onejudge(
+        {},
+        "task",
+        onejudge_bin=os.fspath(onejudge),
+        env={"ORCHESTRATOR_AGENT_STATUS_DIR": os.fspath(status)},
+    )
+
+    assert report.outcome == "worker-died"
+    assert report.stderr.startswith("worker-died")
+    assert "agent exit status 7" in report.stderr
+    assert report.stderr.endswith("claude: no conversation found with session id 0dd")
+    assert "..." in report.stderr
+    assert len(report.stderr) < 1600
+
+
 def test_a_provider_failure_reads_differently_from_a_worker_that_stopped(tmp_path) -> None:
     """`worker-died` alone shaped every wrong hypothesis; the reason is the fix.
 
     Both journeys below end as `worker-died`. Only the recorded reason says which
     one to retry and which one to escalate, so the two are compared side by side.
-    The wrapper parks after its child fails so the dispatcher can see the marker and
-    the whole tree is then torn down, so the exit status, the wrapper's own reading
-    of it, and the stderr left in the status directory are the only evidence that
-    outlives the failure.
     """
     status = tmp_path / "throttled-status"
     onejudge = tmp_path / "throttled"
@@ -431,11 +466,7 @@ def test_a_provider_failure_reads_differently_from_a_worker_that_stopped(tmp_pat
         'd="$ORCHESTRATOR_AGENT_STATUS_DIR"\n'
         'printf "%s\\n" "$$" >"$d/agent.pid"\n'
         'touch "$d/agent.heartbeat"\n'
-        'printf "7\\n" >"$d/agent.exit_code"\n'
-        # A verbose harness precedes its own failure with pages of startup chatter;
-        # the tail is the part that names the failure, so that is what survives.
-        'python3 -c "print(\'noise \' * 400)" >"$d/agent.stderr"\n'
-        'printf "provider error: 429 rate_limit_error quota exhausted\\n" >>"$d/agent.stderr"\n'
+        'printf "provider error: 429 rate_limit_error quota exhausted\\n" >"$d/agent.stderr"\n'
         'printf "agent harness exited 7\\n" >"$d/agent.failure"\n'
         'printf "%s\\n" "$$" >"$d/agent.failed"\n'
         "while :; do sleep 0.05; done\n",
@@ -476,48 +507,36 @@ def test_a_provider_failure_reads_differently_from_a_worker_that_stopped(tmp_pat
     )
 
     assert throttled.outcome == stopped.outcome == "worker-died"
-    detail = throttled.outcome_detail or ""
-    assert detail.startswith("the agent harness reported a failed turn (watchdog pid ")
-    assert "agent exit status 7" in detail
-    assert "agent harness exited 7" in detail
-    # Only the tail of a chatty harness survives, and it is the part that names why.
-    assert detail.endswith("provider error: 429 rate_limit_error quota exhausted")
-    assert ": ...noise" in detail
-    assert len(detail) < 1600
-    assert throttled.stderr == f"worker-died: {detail}"
-    # The same outcome, a different reason: nothing failed here, it simply stopped,
-    # and its wrapper left no exit status behind to explain the silence.
-    stopped_detail = stopped.outcome_detail or ""
-    assert stopped_detail.startswith("the agent harness stopped heartbeating for 0.2s ")
-    assert stopped_detail.endswith("agent exit status unknown)")
+    assert throttled.outcome_detail == (
+        "agent harness exited 7: provider error: 429 rate_limit_error quota exhausted"
+    )
+    assert stopped.outcome_detail == "the agent harness stopped heartbeating for 0.2s"
+    # The reported sentence is the observed condition wrapped in what the wrapper
+    # recorded about the child, so both halves reach a reader of the node result.
+    assert throttled.stderr.startswith("worker-died (watchdog pid ")
+    assert throttled.stderr.endswith(f": {throttled.outcome_detail}")
 
 
-def test_a_recorded_worker_death_never_carries_a_credential_value(tmp_path) -> None:
+def test_a_recorded_agent_failure_never_carries_a_credential_value(tmp_path) -> None:
     """The harness stderr this reads back is durable evidence, so it is redacted."""
     status = tmp_path / "agent"
     status.mkdir()
     token = "sk-ant-oat01-not-a-real-credential"
-    (status / "agent.exit_code").write_text("1\n", encoding="utf-8")
-    (status / "agent.failure").write_text(
-        f"agent harness exited 1 while holding {token}\n", encoding="utf-8"
-    )
+    (status / "agent.failure").write_text("agent harness exited 1\n", encoding="utf-8")
     (status / "agent.stderr").write_text(
         f"harness failed (auth): token {token} rejected\n", encoding="utf-8"
     )
 
     os.environ["CLAUDE_CODE_OAUTH_TOKEN"] = token
     try:
-        detail = _worker_death_detail(status, ProcessId(4321), "the agent harness died")
+        reason = agent_failure_reason(status)
     finally:
         del os.environ["CLAUDE_CODE_OAUTH_TOKEN"]
 
-    assert token not in detail
-    assert detail.count("<redacted:CLAUDE_CODE_OAUTH_TOKEN>") == 2
-    assert detail.startswith(
-        "the agent harness died (watchdog pid 4321, agent exit status 1): "
-        "agent harness exited 1 while holding <redacted:CLAUDE_CODE_OAUTH_TOKEN>: "
-        "harness failed (auth): token <redacted:CLAUDE_CODE_OAUTH_TOKEN> rejected"
-    )
+    assert reason is not None
+    assert token not in reason
+    assert "<redacted:CLAUDE_CODE_OAUTH_TOKEN>" in reason
+    assert reason.startswith("agent harness exited 1: harness failed (auth):")
 
 
 def test_missing_agent_heartbeat_reaches_worker_death_deadline(tmp_path) -> None:
@@ -834,3 +853,80 @@ def test_run_onejudge_rejects_an_off_contract_label(tmp_path) -> None:
         run_onejudge(
             {}, "task", onejudge_bin=_label_echoing_onejudge(tmp_path), labels={"node": "a,b"}
         )
+
+
+def _incomplete(
+    *,
+    turns: int,
+    max_turns: int | None,
+    verdicts: list[dict[str, object]] | None = None,
+    assessment: str | None = None,
+    stderr: str = "",
+) -> Report:
+    return Report(
+        "engineer",
+        1,
+        False,
+        True,
+        turns,
+        verdicts or [],
+        {},
+        {},
+        stderr,
+        assessment=assessment,
+        max_turns=max_turns,
+    )
+
+
+def test_only_a_run_that_reached_its_cap_is_reported_as_hitting_it() -> None:
+    """onejudge exits 1 for both, so the turn count is the only thing that tells them apart."""
+    assert incomplete_detail(_incomplete(turns=12, max_turns=12)) == (
+        "hit the turn cap after 12 turns"
+    )
+    assert incomplete_detail(_incomplete(turns=1, max_turns=12)) == (
+        "did not complete after 1 turn, short of its 12-turn cap"
+    )
+    # A dispatch whose config states no cap can still say how far it got.
+    assert incomplete_detail(_incomplete(turns=3, max_turns=None)) == (
+        "did not complete after 3 turns"
+    )
+
+
+def test_an_incomplete_stop_carries_the_most_specific_reason_it_has() -> None:
+    """Verdict, then assessment, then the harness's own words — never nothing."""
+    unmet = {
+        "kind": "done_when",
+        "criterion": "the gate is green",
+        "verdict": {"value": False, "reason": "the gate was never run"},
+    }
+    met = {"kind": "check", "verdict": {"value": True, "reason": "ignored"}}
+    detail = incomplete_detail(
+        _incomplete(turns=2, max_turns=9, verdicts=[met, unmet], assessment="unused")
+    )
+    assert detail.endswith(": unmet done_when verdict: the gate was never run")
+
+    # No unmet verdict carries a reason, so the worker's own assessment stands in.
+    assert incomplete_detail(
+        _incomplete(turns=2, max_turns=9, verdicts=[met], assessment="ran out of context")
+    ).endswith(": ran out of context")
+
+    # Neither exists: the harness stderr is the last thing that can say anything.
+    assert incomplete_detail(
+        _incomplete(turns=2, max_turns=9, stderr="  provider error: 503\n")
+    ).endswith(": provider error: 503")
+
+    # And when there is genuinely nothing, the sentence stops rather than trailing.
+    assert incomplete_detail(_incomplete(turns=2, max_turns=9)) == (
+        "did not complete after 2 turns, short of its 9-turn cap"
+    )
+
+
+def test_an_unusable_turn_cap_is_read_as_no_cap_at_all() -> None:
+    """The cap crosses in from a merged config, so an unusable value must not be trusted."""
+    assert _configured_turn_cap({"user": {"max_turns": 12}}) == 12
+    assert _configured_turn_cap({}) is None
+    assert _configured_turn_cap({"user": "not-a-mapping"}) is None
+    assert _configured_turn_cap({"user": {}}) is None
+    assert _configured_turn_cap({"user": {"max_turns": True}}) is None
+    assert _configured_turn_cap({"user": {"max_turns": 0}}) is None
+    assert _configured_turn_cap({"user": {"max_turns": "12"}}) is None

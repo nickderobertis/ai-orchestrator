@@ -37,7 +37,7 @@ from .cli_contract import ROUND_BUDGET_OPTION
 from .config import ConfigError, load_yaml
 from .coordination import advisory_lock, reset_harness_observer, set_harness_observer
 from .detach import run_detached
-from .dispatch import Report, dispatch, incomplete_reason
+from .dispatch import Report, dispatch, incomplete_detail
 from .edits import EditError, apply_edit
 from .goals import (
     ConcurrentAcknowledgement,
@@ -669,10 +669,15 @@ def run_graph(
                 },
             )
             return run
-        # The reason the dispatcher actually observed, not just the fact of failure:
-        # a planner deciding whether to retry needs to tell provider throttling from
-        # a worker that gave up, and both from a budget that ran out.
-        detail = incomplete_reason(report, direct.max_turns)
+        # The reason the watchdog observed, not just the fact of death: a planner
+        # deciding whether to retry needs to tell provider throttling from a worker
+        # that gave up. And a worker that stopped short of the cap did not hit it —
+        # reporting one as the other is what sent a whole run's diagnosis wrong.
+        detail = (
+            (report.stderr.strip() or "worker-died")
+            if report.outcome == "worker-died"
+            else incomplete_detail(report)
+        )
         run = NodeRun("failed", detail, report)
         node_log.append(
             "node-failed",

@@ -264,13 +264,24 @@ even after its root has vanished, so those descendants cannot pollute a retry.
 
 `worker-died` also carries **why**, because provider throttling, quota
 exhaustion, an OOM kill, and a genuine crash otherwise all reach the supervisor
-as the same dead process tree. The wrapper records the agent harness's exit
-disposition (`agent.failure`, distinguishing a signal from an exit status) and
-tees its stderr (`agent.stderr`) beside the heartbeat; dispatch reads both back
-into `Report.outcome_detail`, redacted, and the node result and journal
-`node-failed` / `step-settled` events carry that sentence. Each of the four death
-paths names itself, so a harness failure to escalate reads differently from a
-worker that simply stopped.
+as the same dead process tree. The wrapper records the agent harness's raw exit
+status (`agent.exit_code`), its exit disposition (`agent.failure`, which
+distinguishes a signal from an exit status), and its stderr (`agent.stderr`)
+beside the heartbeat. `AGENT_STATUS_NAMES` is the one source for those filenames
+and a drift gate holds the wrapper to it. Dispatch reads them back, redacted, and
+composes one sentence: the liveness rule that fired, wrapped in the watchdog pid
+and the child's exit status, followed by the recorded disposition and the stderr
+tail. `Report.outcome_detail` carries the reason alone, `Report.stderr` the whole
+sentence, and the node result and journal `node-failed` / `step-settled` events
+carry it onward. Each of the four death paths names itself, so a harness failure
+to escalate reads differently from a worker that simply stopped.
+
+An incomplete dispatch that is *not* a death says how far it got. onejudge exits
+1 both for a worker that exhausted its turns and for one that stopped for any
+other reason, so `Report` carries the cap the dispatch asked for and the settled
+detail compares the turns actually taken against it. Only a run that reached its
+cap is reported as having hit it; a run that stopped short says so and carries
+the unmet verdict, the assessment, or the harness stderr behind it.
 Set `ORCHESTRATOR_WORKER_HEARTBEAT_TIMEOUT` to a positive number of seconds; it
 defaults to `60`.
 

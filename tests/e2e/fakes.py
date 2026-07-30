@@ -55,7 +55,9 @@ def make_writing_dispatch(
     """A `dispatch`-shaped fn that writes a real file into the worktree.
 
     ``filename=None`` writes nothing (to exercise the no-changes path);
-    ``completed=False`` simulates an agent that hit the turn cap.
+    ``completed=False`` simulates an agent that hit the turn cap — so it reports the
+    turns it took *as* its cap, because a report that stopped short of its cap is a
+    different journey and has to read differently.
     """
 
     def dispatch_fn(persona: str, task: str, *, project_dir: str, **_: object) -> Report:
@@ -81,6 +83,7 @@ def make_writing_dispatch(
             usage={"output_tokens": 7},
             raw={},
             stderr="",
+            max_turns=2,
         )
 
     return dispatch_fn

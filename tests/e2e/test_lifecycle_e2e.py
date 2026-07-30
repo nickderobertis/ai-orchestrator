@@ -3333,7 +3333,7 @@ def test_local_conflict_incomplete_resolver_preserves_branch(
             path = Path(project_dir) / "shared.txt"
             path.write_text("advanced\npreserved by engineer\n", encoding="utf-8")
             gitops.add_all(project_dir)
-        return Report(persona, 1, False, False, 2, [], {}, {}, "")
+        return Report(persona, 1, False, False, 2, [], {}, {}, "", max_turns=2)
 
     journal = open_journal(tmp_path / "incomplete-run", RunId("incomplete-conflict"), 1)
     result = run_repo_task(
@@ -3768,6 +3768,56 @@ def test_agent_not_completed_stops_early(tmp_path, bare_origin) -> None:
     assert not _has_file(origin, result.branch, "partial.txt")  # incomplete work is not pushed
 
 
+def test_a_stop_short_of_the_cap_is_not_reported_as_hitting_it(tmp_path, bare_origin) -> None:
+    """One turn is not twelve, and the settled result has to say so.
+
+    onejudge exits 1 for a worker that exhausted its turns *and* for one that
+    stopped for any other reason, and this harness reported both as "hit the turn
+    cap". A real run of this very node settled as `step 'main' hit the turn cap` at
+    `turns: 1`, which sent its reader to raise a cap that was never approached. The
+    honest line names how far the worker got and what account it left.
+    """
+    origin = bare_origin()
+    ws = _workspace(tmp_path, origin)
+
+    def stops_early(persona: str, task: str, *, project_dir: str, **_: object) -> Report:
+        (Path(project_dir) / "partial.txt").write_text("one turn in\n", encoding="utf-8")
+        return Report(
+            persona,
+            1,
+            False,
+            True,
+            1,
+            [
+                {
+                    "kind": "done_when",
+                    "criterion": "the gate is green",
+                    "verdict": {"value": False, "reason": "the supervisor ended the workstream"},
+                }
+            ],
+            {},
+            {},
+            "",
+            max_turns=12,
+        )
+
+    result = run_repo_task(
+        str(origin),
+        "Task the agent will abandon on its first turn.",
+        "engineer",
+        workspace=ws,
+        dispatch_fn=stops_early,
+        recorded_gate=["true"],
+    )
+
+    assert result.outcome == "not-completed"
+    assert "hit the turn cap" not in result.detail
+    assert "did not complete after 1 turn, short of its 12-turn cap" in result.detail
+    # And the reason the run did leave behind travels with it, so the settled node
+    # says why rather than only how far.
+    assert "the supervisor ended the workstream" in result.detail
+
+
 def test_retry_with_invalid_incomplete_provenance_records_fresh_branch_fallback(
     tmp_path, bare_origin
 ) -> None:
@@ -3881,7 +3931,7 @@ def test_clean_committed_partial_work_is_marked_and_recoverable(tmp_path, bare_o
             gitops.add_all(worktree)
             partial_shas.append(gitops.commit(worktree, "wip: agent commits partial work"))
         assert not gitops.is_dirty(worktree)
-        return Report(persona, 1, False, False, 2, [], {}, {}, "")
+        return Report(persona, 1, False, False, 2, [], {}, {}, "", max_turns=2)
 
     result = run_repo_task(
         str(canonical),
@@ -4378,7 +4428,7 @@ def test_local_recovery_incomplete_resolver_preserves_branch(
             path = Path(project_dir) / "shared.txt"
             path.write_text("advanced\npreserved by engineer\n", encoding="utf-8")
             gitops.add_all(project_dir)
-        return Report(persona, 1, False, False, 2, [], {}, {}, "")
+        return Report(persona, 1, False, False, 2, [], {}, {}, "", max_turns=2)
 
     recovered = recover_repo(
         canonical,

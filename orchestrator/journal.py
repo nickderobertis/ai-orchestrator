@@ -46,8 +46,12 @@ from .runs import NodeId, RunId, StepId
 # gained an optional `command` beside its `operations`. A v5 record therefore still
 # projects — it simply carries no `command` — and this build's records stay readable
 # to a v5 reader as skipped-unknown rather than as corruption.
-SCHEMA_VERSION = 6
-SUPPORTED_SCHEMA_VERSIONS = frozenset({1, 2, 3, 4, 5, SCHEMA_VERSION})
+#
+# v7 is additive too: the `publication-failed` kind joined the vocabulary, for a
+# publication that ended before any gate could rule on it. A v6 reader skips it as
+# unknown, which is exactly the evidence gap it exists to close for a v7 reader.
+SCHEMA_VERSION = 7
+SUPPORTED_SCHEMA_VERSIONS = frozenset({1, 2, 3, 4, 5, 6, SCHEMA_VERSION})
 
 JOURNAL_NAME = "events.jsonl"
 REQUIRED_EVENT_FIELDS = ("version", "seq", "at", "kind", "run_id", "round")

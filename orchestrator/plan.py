@@ -26,7 +26,7 @@ from typing import Any, Protocol
 from . import BASE_CONFIG, PERSONA_DIR, REPO_ROOT
 from .cli_contract import ONEHARNESS_MODES
 from .config import ConfigError, load_yaml
-from .dispatch import Report, dispatch, incomplete_reason
+from .dispatch import Report, dispatch, incomplete_detail
 
 
 class PlanError(Exception):
@@ -383,7 +383,7 @@ def run_plan(
         report = runner(nodes[nid])
         if report.completed:
             return NodeRun("done", None, report)
-        return NodeRun("failed", incomplete_reason(report, nodes[nid].max_turns), report)
+        return NodeRun("failed", incomplete_detail(report), report)
 
     runs, started_order = schedule_dag(list(nodes), deps, run_one, concurrency=conc)
     results = {

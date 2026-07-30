@@ -121,14 +121,16 @@ AGENT_STATUS_NAMES = (
 #: How much of the dead child's stderr tail a death report carries. The tail is
 #: the part that names the failure; the cap keeps one runaway harness from
 #: filling a journal entry.
-AGENT_STDERR_TAIL_BYTES = 1200
-#: The wrapper's own account of the child's disposition is a short sentence, but
-#: it arrives from a file this module does not write and lands in a durable node
-#: result, so it is bounded and redacted on the same terms as the stderr beside it.
-AGENT_FAILURE_NOTE_BYTES = 300
-#: How much of an incomplete dispatch's own account travels with it, on the same
-#: bounded, redacted terms — it lands in the same durable node result a planner reads.
-INCOMPLETE_DETAIL_CHARS = 400
+AGENT_STDERR_TAIL_CHARS = 1200
+#: Read more raw bytes than the cap so collapsing whitespace still leaves a full
+#: tail to trim, without pulling a multi-megabyte harness log into memory.
+AGENT_STDERR_READ_BYTES = 8 * AGENT_STDERR_TAIL_CHARS
+#: How long any one sentence of reported evidence may be — the wrapper's recorded
+#: exit disposition, an unmet verdict's reason, a worker's assessment, a harness
+#: stderr line. Each is short by nature, each arrives from somewhere this module
+#: does not write, and each lands in a durable node result, so all are bounded and
+#: redacted on the same terms.
+REPORTED_NOTE_CHARS = 300
 
 
 class DispatchError(Exception):
@@ -218,6 +220,10 @@ class Report:
     #: ``worker-died`` so a provider or harness failure reads differently from a
     #: worker that simply exited.
     outcome_detail: str | None = None
+    #: The turn cap this dispatch asked for. onejudge exits 1 both when a worker
+    #: exhausts its turns and when it stops for any other reason, so without the
+    #: cap an incomplete run cannot say which of the two it was.
+    max_turns: int | None = None
 
     @property
     def telemetry(self) -> dict[str, Any] | None:
@@ -242,10 +248,9 @@ class WatchdogSignal:
     reason: WatchdogReason
     root_pid: ProcessId
     observed_pids: tuple[ProcessId, ...]
-    #: What this watchdog actually saw. Four distinct conditions end a worker, and
-    #: they all reach the caller as one dead tree, so the one that fired has to be
-    #: carried explicitly rather than re-derived from files written after the fact.
-    observation: str = ""
+    #: What was observable at the point of death. Four different failures reach
+    #: this watchdog as one dead tree, so the reason has to be carried explicitly.
+    detail: str = ""
 
 
 class OneJudgeProvenance(TypedDict):
@@ -278,8 +283,58 @@ def _resolve_onejudge(onejudge_bin: str, env: Mapping[str, str]) -> OneJudgeProv
     return OneJudgeProvenance(path=resolved, version=adopted)
 
 
+def _configured_turn_cap(config: Mapping[str, Any]) -> int | None:
+    """Read the turn cap out of an effective config, ignoring an unusable value.
+
+    The cap is what tells an incomplete dispatch apart from one that ran out of
+    turns, so it is read defensively: a config that does not state one leaves the
+    report saying only how far the worker got, which is still true.
+    """
+    user = config.get("user")
+    cap = user.get("max_turns") if isinstance(user, Mapping) else None
+    return cap if isinstance(cap, int) and not isinstance(cap, bool) and cap > 0 else None
+
+
+def incomplete_detail(report: Report) -> str:
+    """Name why a dispatch ended incomplete, instead of assuming the turn cap.
+
+    onejudge exits 1 both when a worker exhausts its turns and when it stops for
+    any other reason, and every incomplete dispatch used to be reported as "hit the
+    turn cap" — including runs that ended on turn 1. That sentence sends its reader
+    to raise a cap that was never reached, so compare the turns actually taken with
+    the cap the dispatch asked for, and when the cap was not reached carry whatever
+    account of the stop the run did leave behind.
+    """
+    turns = report.assistant_turns
+    plural = "" if turns == 1 else "s"
+    cap = report.max_turns
+    if cap is not None and turns >= cap:
+        return f"hit the turn cap after {turns} turn{plural}"
+    short_of = f", short of its {cap}-turn cap" if cap is not None else ""
+    reason = _incomplete_reason(report)
+    return f"did not complete after {turns} turn{plural}{short_of}" + (
+        f": {reason}" if reason else ""
+    )
+
+
+def _incomplete_reason(report: Report) -> str | None:
+    """The most specific account of an incomplete stop the report actually carries."""
+    for entry in reversed(report.verdicts):
+        verdict = entry.get("verdict")
+        if not isinstance(verdict, dict) or verdict.get("value"):
+            continue
+        reason = verdict.get("reason")
+        if isinstance(reason, str) and reason.strip():
+            return _bounded_note(f"unmet {entry.get('kind')} verdict: {reason}")
+    return _bounded_note(report.assessment) or _bounded_note(report.stderr)
+
+
 def _build_report(
-    persona: str, result: RunResult, *, provenance: DispatchProvenance | None = None
+    persona: str,
+    result: RunResult,
+    *,
+    provenance: DispatchProvenance | None = None,
+    max_turns: int | None = None,
 ) -> Report:
     """Adapt the SDK's validated report without changing our public contract."""
     raw_assessment = result.raw.get("assessment")
@@ -309,6 +364,7 @@ def _build_report(
         stderr=result.stderr,
         assessment=assessment,
         telemetry_data=dict(raw_telemetry) if isinstance(raw_telemetry, dict) else None,
+        max_turns=max_turns,
     )
 
 
@@ -397,85 +453,64 @@ def _agent_status(status_dir: Path, name: str) -> str | None:
         return None
 
 
+def agent_failure_reason(status_dir: Path) -> str | None:
+    """Explain a harness-side death from what the agent wrapper recorded.
+
+    Provider throttling, quota exhaustion, an OOM kill, and a genuine crash all
+    reach the dispatcher as the same dead process tree. The wrapper records the
+    child's exit disposition and parks its stderr, so this turns that into one
+    sentence the planner can act on instead of a bare ``worker-died``.
+    """
+    recorded = _bounded_note(_agent_status(status_dir, AGENT_FAILURE_NAME))
+    tail = _agent_stderr_tail(status_dir)
+    if recorded and tail:
+        return f"{recorded}: {tail}"
+    return recorded or tail or None
+
+
+def _bounded_note(raw: str | None) -> str | None:
+    """Bound and redact one harness-authored line before it becomes evidence."""
+    if raw is None:
+        return None
+    return " ".join(redact(raw[:REPORTED_NOTE_CHARS]).split()) or None
+
+
 def _agent_stderr_tail(status_dir: Path) -> str:
-    """Return the redacted, collapsed trailing slice of the agent harness's stderr."""
+    """Return a collapsed, redacted, length-capped tail of the child's stderr.
+
+    Read from the end: a verbose harness leaves pages of startup chatter before it
+    fails, and the part that names the failure is the last of it.
+    """
     try:
         with (status_dir / AGENT_STDERR_NAME).open("rb") as stream:
             stream.seek(0, os.SEEK_END)
-            truncated = stream.tell() > AGENT_STDERR_TAIL_BYTES
-            stream.seek(max(0, stream.tell() - AGENT_STDERR_TAIL_BYTES))
+            stream.seek(max(0, stream.tell() - AGENT_STDERR_READ_BYTES))
             raw = stream.read()
     except OSError:
         return ""
     collapsed = " ".join(redact(raw.decode("utf-8", errors="replace")).split())
-    if not collapsed:
-        return ""
-    return f"...{collapsed}" if truncated else collapsed
+    if len(collapsed) <= AGENT_STDERR_TAIL_CHARS:
+        return collapsed
+    return f"...{collapsed[-AGENT_STDERR_TAIL_CHARS:]}"
 
 
-def _agent_failure_note(status_dir: Path) -> str:
-    """Bound and redact the wrapper's own account of the child's disposition.
-
-    The exit status beside it is a number; this is the wrapper's reading of it —
-    which signal killed the child, and whether its stderr capture stopped working
-    part way through, a caveat the number cannot carry.
-    """
-    raw = _agent_status(status_dir, AGENT_FAILURE_NAME)
-    if raw is None:
-        return ""
-    return " ".join(redact(raw[:AGENT_FAILURE_NOTE_BYTES]).split())
-
-
-def _worker_death_detail(status_dir: Path, root_pid: ProcessId, observed: str) -> str:
+def _worker_death_detail(status_dir: Path, root_pid: ProcessId, condition: str) -> str:
     """Say why a worker died, carrying whatever its wrapper managed to record.
 
     A worker that dies before its first turn produces no report, no transcript and
     no verdict, so the bare outcome name is the whole of what a reader gets — and
     it is the same string whether the harness refused to start, the provider was
-    killed, or the turn simply stopped heartbeating. ``observed`` names which of
-    those the watchdog actually saw; the agent wrapper records the child's exit
-    status, its own reading of it, and the child's stderr for the rest. Every part
-    but ``observed`` is best-effort, so an absent marker degrades the sentence
-    rather than hiding the death.
+    throttled, or the turn simply stopped heartbeating. ``condition`` names the
+    liveness rule that fired; the agent wrapper records the child's exit status and
+    stderr for the rest. All of it is best-effort, so an absent marker degrades the
+    sentence rather than hiding the death.
     """
     # The wrapper is the only writer, but this file crosses a process boundary, so
     # only a plausible wait status is repeated back; anything else is unknown.
     recorded = _agent_status(status_dir, AGENT_EXIT_CODE_NAME) or ""
     plausible = recorded.isascii() and recorded.isdigit() and len(recorded) <= 3
     exit_status = recorded if plausible and int(recorded) <= 255 else "unknown"
-    parts = [f"{observed} (watchdog pid {root_pid}, agent exit status {exit_status})"]
-    parts.extend(
-        part for part in (_agent_failure_note(status_dir), _agent_stderr_tail(status_dir)) if part
-    )
-    return ": ".join(parts)
-
-
-def incomplete_reason(report: Report, max_turns: int | None = None) -> str:
-    """Say why a dispatch ended without completing, instead of assuming the cap.
-
-    onejudge exits 1 both when a conversation exhausts its turn budget and when it
-    ends short of it for any other reason — an unmet ``done_when``, a harness that
-    stopped, a judge that closed the conversation. Reporting all of them as "hit the
-    turn cap" hides the difference between the one failure an operator fixes by
-    raising a budget and the ones they do not, and a cap report at one turn is simply
-    false. Name what actually happened, and only claim the cap when the turns
-    recorded actually reached it.
-    """
-    if report.outcome:
-        return report.stderr.strip() or report.outcome
-    turns = report.assistant_turns
-    if max_turns is not None and turns >= max_turns:
-        return f"hit the turn cap after {turns} turn(s)"
-    budget = f" of {max_turns}" if max_turns is not None else ""
-    unmet = [
-        str(entry.get("criterion") or entry.get("kind") or "unnamed")
-        for entry in report.verdicts
-        if isinstance(entry, dict) and (entry.get("verdict") or {}).get("value") is False
-    ]
-    detail = ("unmet: " + "; ".join(unmet)) if unmet else " ".join(redact(report.stderr).split())
-    ended = "stopped early" if report.stopped_early else "ended"
-    sentence = f"{ended} after {turns} turn(s){budget} without completing"
-    return f"{sentence}: {detail[:INCOMPLETE_DETAIL_CHARS]}" if detail else sentence
+    return f"worker-died (watchdog pid {root_pid}, agent exit status {exit_status}): {condition}"
 
 
 def scoped_session(name: str, project_dir: str | Path) -> str:
@@ -537,6 +572,7 @@ def run_onejudge(
     _validate_oneharness_timeout(process_env["ONEHARNESS_TIMEOUT"])
     stall_timeout = _stall_timeout(process_env)
     heartbeat_timeout = _worker_heartbeat_timeout(process_env)
+    turn_cap = _configured_turn_cap(config)
     onejudge_provenance = _resolve_onejudge(onejudge_bin, process_env)
     resolved_onejudge = onejudge_provenance["path"]
     configured_provider = config.get("provider")
@@ -628,7 +664,10 @@ def run_onejudge(
                             "worker-died",
                             pid,
                             observed,
-                            observation=("the tracked worker process tree exited without a report"),
+                            detail=(
+                                agent_failure_reason(agent_status_dir)
+                                or "the tracked worker process tree exited without a report"
+                            ),
                         )
                     agent_pid_file = agent_status_dir / "agent.pid"
                     if agent_pid_file.exists():
@@ -647,7 +686,10 @@ def run_onejudge(
                                 "worker-died",
                                 pid,
                                 observed,
-                                observation="the agent harness reported a failed turn",
+                                detail=(
+                                    agent_failure_reason(agent_status_dir)
+                                    or "the agent harness reported a failed turn"
+                                ),
                             )
                         if current_agent and done_agent != current_agent:
                             if agent_pid not in activity.pids:
@@ -669,8 +711,9 @@ def run_onejudge(
                                         "worker-died",
                                         pid,
                                         observed,
-                                        observation=(
-                                            "the agent harness process vanished mid-turn "
+                                        detail=(
+                                            agent_failure_reason(agent_status_dir)
+                                            or "the agent harness process vanished mid-turn "
                                             "without recording an exit"
                                         ),
                                     )
@@ -706,8 +749,9 @@ def run_onejudge(
                                     "worker-died",
                                     pid,
                                     observed,
-                                    observation=(
-                                        "the agent harness stopped heartbeating for "
+                                    detail=(
+                                        agent_failure_reason(agent_status_dir)
+                                        or "the agent harness stopped heartbeating for "
                                         f"{heartbeat_timeout:g}s"
                                     ),
                                 )
@@ -753,9 +797,6 @@ def run_onejudge(
                 with contextlib.suppress(asyncio.CancelledError):
                     await run
                 if signal.reason == "worker-died":
-                    death_detail = _worker_death_detail(
-                        agent_status_dir, signal.root_pid, signal.observation
-                    )
                     return Report(
                         persona,
                         EXIT_INCOMPLETE,
@@ -765,9 +806,12 @@ def run_onejudge(
                         [],
                         {},
                         None,
-                        f"worker-died: {death_detail}",
+                        _worker_death_detail(
+                            agent_status_dir, signal.root_pid, signal.detail or "worker-died"
+                        ),
                         outcome="worker-died",
-                        outcome_detail=death_detail,
+                        outcome_detail=signal.detail,
+                        max_turns=turn_cap,
                     )
                 raise DispatchError(
                     f"dispatch stalled for {stall_timeout:g}s with no process-tree CPU/I/O "
@@ -820,8 +864,9 @@ def run_onejudge(
             {},
             {"provenance": provenance},
             "cancelled cooperatively",
+            max_turns=turn_cap,
         )
-    return _build_report(persona, result, provenance=provenance)
+    return _build_report(persona, result, provenance=provenance, max_turns=turn_cap)
 
 
 def _agent_run_context(

@@ -22,7 +22,8 @@ export NX_CACHE_DIRECTORY="$cache_root"
 # The log outlives this process on purpose: a failing run needs its full output
 # after the fact, and a *running* one has to be inspectable (`tail -f`) without
 # reading this process's file descriptors through /proc.
-log="$(preserved_log_open "$(dirname -- "$script_dir")" nx)" || exit 1
+preserved_log_open "$(dirname -- "$script_dir")" nx || exit 1
+log=$PRESERVED_LOG
 if bunx nx "$@" 2>&1 | redact_secrets >"$log"; then
   # llmlint: ignore[tool_output_is_signal] Explicit debug output lets the cache-contract check inspect Nx's success evidence; default successful invocations still emit one line.
   if [[ "${AI_ORCHESTRATOR_NX_SHOW_OUTPUT:-}" == "1" ]]; then cat "$log"; fi

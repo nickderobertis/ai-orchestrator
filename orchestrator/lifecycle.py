@@ -36,7 +36,7 @@ from . import BASE_CONFIG, PERSONA_DIR, gitops
 from .cli_contract import DEFAULT_ONEHARNESS_MODE, ONEHARNESS_MODES
 from .config import ConfigError, load_yaml
 from .coordination import LockTimeout, advisory_lock, atomic_json, git_lock_identity
-from .dispatch import Report, dispatch, incomplete_reason, scoped_session
+from .dispatch import Report, dispatch, incomplete_detail, scoped_session
 from .github import CliGitHubBackend, GitHubBackend, GitHubError, PullRequest
 from .gitops import GitError
 from .ids import GraphId
@@ -1070,9 +1070,13 @@ def _run_steps(
             # with dirty and agent-committed partial work; duplicating paid-agent authoring
             # inside the kill journey would replace an additional layer under test.
             # A death carries the dispatcher's account of it (exit status, stderr);
-            # a stop short of the cap names what it actually was rather than
-            # reporting every incomplete turn as an exhausted budget.
-            failure = incomplete_reason(report, step.max_turns or DEFAULT_LIFECYCLE_STEP_MAX_TURNS)
+            # a stop that is not a death says how far it got and why, because
+            # "hit the turn cap" on turn 1 is a lie a reader cannot see through.
+            failure: str = (
+                (report.stderr.strip() or report.outcome)
+                if report.outcome
+                else incomplete_detail(report)
+            )
             preserved = False
             if gitops.is_dirty(worktree):
                 gitops.add_all(worktree)
@@ -2051,8 +2055,8 @@ def run_repo_task(
             publication_attempts=publication_attempts,
             repository_type=effective_type,
             journal=log,
-            push_env=workstream_env,
             gate_command=tuple(merge_path_gate),
+            push_env=workstream_env,
             preverified_pr=preverified_pr,
             local_prepare=(synchronize_and_push_local_publication if local_publication else None),
         )

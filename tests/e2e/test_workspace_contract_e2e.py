@@ -531,6 +531,110 @@ def test_check_recipe_log_is_readable_while_the_recipe_is_still_running(
     assert process.returncode == 0
 
 
+def _nx_nesting_checkout(tmp_path: Path) -> Path:
+    """A checkout the *real* `scripts/nx.sh` runs in, with `bunx` doubled.
+
+    Only Nx itself is replaced. `nx.sh` and `preserved-log.sh` are the real files,
+    because the destination they choose is what is under test.
+    """
+    checkout = tmp_path / "nesting"
+    (checkout / "scripts").mkdir(parents=True)
+    (checkout / "bin").mkdir()
+    for name in ("nx.sh", "preserved-log.sh"):
+        shutil.copy2(ROOT / "scripts" / name, checkout / "scripts" / name)
+        (checkout / "scripts" / name).chmod(0o755)
+    # `nx.sh` derives its shared cache key from the repository identity.
+    subprocess.run(["git", "init", "-q"], cwd=checkout, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "remote", "add", "origin", "https://example.invalid/nx-nesting.git"],
+        cwd=checkout,
+        check=True,
+        capture_output=True,
+    )
+    return checkout
+
+
+def test_a_nested_nx_run_cannot_erase_the_running_one_s_log(tmp_path: Path) -> None:
+    """The running check's log survives a nested Nx invocation in the same checkout.
+
+    This is the exact shape that made the deterministic path unsafe in this
+    repository: `just check` runs the suite, and the suite runs `just lint-llm-diff`
+    against this same checkout, so a second `scripts/nx.sh` resolved the very
+    `.logs/nx.log` the outer one was still writing and truncated it — leaving a
+    running check uninspectable at the moment a reader needs it.
+
+    So the doubled `bunx` here does what pytest does to its parent: it invokes
+    `scripts/nx.sh` again, in the same checkout, from inside the outer run's own
+    process tree. The outer log has to still hold what it wrote *before* the nested
+    run, and go on to hold what it writes after.
+    """
+    checkout = _nx_nesting_checkout(tmp_path)
+    nested_started = tmp_path / "nested.started"
+    release = tmp_path / "release"
+    bunx = checkout / "bin" / "bunx"
+    bunx.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        # The nested run fails, so it also has to *name* where its own evidence
+        # went — a diverted log nobody can find would be no better than a lost one.
+        'if [[ -n "${NX_NESTING_INNER:-}" ]]; then\n'
+        '  echo "inner nx ran" >&2\n'
+        "  exit 1\n"
+        "fi\n"
+        'echo "outer line before the nested run"\n'
+        # The nested invocation, inheriting this process tree's environment
+        # exactly as the suite's own `just lint-llm-diff` does.
+        f'NX_NESTING_INNER=1 "{checkout}/scripts/nx.sh" run inner >"{tmp_path}/inner.out" 2>&1'
+        " || true\n"
+        f'touch "{nested_started}"\n'
+        f'while [[ ! -e "{release}" ]]; do sleep 0.05; done\n'
+        'echo "outer line after the nested run"\n',
+        encoding="utf-8",
+    )
+    bunx.chmod(0o755)
+    env = os.environ.copy()
+    env["PATH"] = f"{checkout / 'bin'}:{env['PATH']}"
+    env["XDG_CACHE_HOME"] = str(tmp_path / "cache")
+    # Whatever claims this process already inherited belong to other checkouts and
+    # must not divert anything here; the outer run below is the first claim on it.
+    env.pop("ORCHESTRATOR_PRESERVED_LOGS", None)
+    outer_log = checkout / ".logs" / "nx.log"
+
+    process = subprocess.Popen(
+        [str(checkout / "scripts" / "nx.sh"), "run", "outer"],
+        cwd=checkout,
+        env=env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    try:
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline and not nested_started.exists():
+            assert process.poll() is None, "the outer run exited before nesting"
+            time.sleep(0.05)
+        assert nested_started.exists(), "the nested run never completed"
+        # The moment that used to lose the evidence: the nested run has been and
+        # gone while the outer one is still going.
+        assert "outer line before the nested run" in outer_log.read_text(encoding="utf-8")
+    finally:
+        release.touch()
+        process.communicate(timeout=60)
+
+    assert process.returncode == 0
+    preserved = outer_log.read_text(encoding="utf-8")
+    assert "outer line before the nested run" in preserved
+    assert "outer line after the nested run" in preserved
+    # The nested run is not silenced to achieve that — it gets a log of its own,
+    # owner-only like every other, and its failure names where that log went.
+    (diverted,) = [path for path in (checkout / ".logs").glob("nx.*.log") if path.name != "nx.log"]
+    assert "inner nx ran" in diverted.read_text(encoding="utf-8")
+    assert oct(diverted.stat().st_mode & 0o777) == "0o600"
+    assert f"full output: {diverted}" in (tmp_path / "inner.out").read_text(encoding="utf-8")
+    # And the outer run's evidence never held the nested run's.
+    assert "inner nx ran" not in preserved
+
+
 def test_check_recipe_log_records_the_credential_name_not_its_value(tmp_path: Path) -> None:
     """A preserved log outlives its terminal, so it must never durably hold a token."""
     checkout, trace = _recipe_checkout(tmp_path)
@@ -617,7 +721,11 @@ def test_gate_recipe_reports_the_coverage_total_it_measured(tmp_path: Path) -> N
     result = _recipe_run(checkout, trace, "gate", "origin", "main", FAKE_COVERAGE_TOTAL="95.07")
 
     assert result.returncode == 0, result.stderr + result.stdout
-    assert result.stdout.splitlines()[-1] == "gate: complete gate passed (line coverage 95.07%)"
+    # One success line, carrying both things a passing gate measured: the coverage
+    # total, and which llmlint verdict the "green" is a claim about.
+    (success,) = [line for line in result.stdout.splitlines() if line.startswith("gate: ")]
+    assert success.startswith("gate: complete gate passed (line coverage 95.07%); ")
+    assert not [line for line in result.stderr.splitlines() if line.startswith("gate: ")]
 
 
 def test_gate_recipe_leaves_the_failing_llmlint_run_readable(tmp_path: Path) -> None:
@@ -665,10 +773,20 @@ def test_upgrade_recipe_preserves_bun_failure_and_stops(tmp_path: Path) -> None:
 
 
 def test_real_cache_check_drives_both_linked_worktrees() -> None:
+    """Two real worktrees, a real cache hit and miss, and the failing run's own log.
+
+    The miss half of this check makes the real `scripts/nx.sh` fail, which is the
+    only place a genuine `nx.sh` failure happens under the gate — so it is also
+    where the preserved log is asserted. That log used to be a `mktemp` file an
+    EXIT trap removed.
+    """
     result = _run("bash", "scripts/check-nx-cache.sh")
 
     assert result.returncode == 0, result.stderr
-    assert result.stdout == ("nx cache check: cross-worktree hit and broken-input miss verified\n")
+    assert result.stdout == (
+        "nx cache check: cross-worktree hit, broken-input miss, "
+        "and preserved failure log verified\n"
+    )
 
 
 def test_dag_state_contract_checker_reports_an_invented_payload_field(tmp_path: Path) -> None:

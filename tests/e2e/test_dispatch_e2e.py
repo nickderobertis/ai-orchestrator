@@ -365,13 +365,13 @@ def test_real_dispatch_detects_killed_agent_and_reaps_orphans(
     result = json.loads(stdout)
     # A death before the first turn leaves no report and no transcript, so this
     # recorded line is the whole account of it. It has to carry the child's fate
-    # *and* the child's own words — a killed harness must read differently from a
-    # worker that stopped on its own, or the planner cannot tell retry from
-    # escalate, and the stderr the killed harness wrote is what tells a reader why.
-    # All of it has to survive the wrapper, the status directory, the dispatcher,
-    # and the graph to reach this JSON.
+    # *and* the child's own words — the stderr the killed harness wrote is what
+    # tells a reader why it died, and it has to survive the wrapper, the status
+    # directory, the dispatcher, and the graph to reach this JSON. And a killed
+    # harness has to read differently from a worker that stopped on its own, or the
+    # planner cannot tell retry from escalate.
     error = result["results"]["worker"]["error"]
-    assert error.startswith("worker-died:"), error
+    assert error.startswith("worker-died"), error
     assert "agent exit status 143" in error, error
     assert "agent harness killed by signal 15" in error, error
     assert BARRIER_DEATH_NOTICE in error, error

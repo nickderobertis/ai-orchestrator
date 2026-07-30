@@ -144,11 +144,8 @@ exec 3<&0
 # the child's own stderr is the only account of why — throttling, quota exhaustion,
 # an OOM kill, and a genuine crash are indistinguishable without it. Park it beside
 # the terminal markers rather than letting it vanish with the process tree the
-# dispatcher is about to tear down; a failing exit replays it below, a successful
-# one does not. Opening it here proves it was writable before the turn started, so a
-# dispatcher that later finds no reason for a death knows the file was openable and
-# empty rather than silently never opened. Credential values are stripped when the
-# dispatcher reads this back.
+# dispatcher is about to tear down; a failing exit replays it below, a successful one
+# does not. Credential values are stripped when the dispatcher reads this back.
 agent_stderr=$status_dir/agent.stderr
 if ! : >"$agent_stderr"; then
     echo "oneharness-agent: cannot open the agent stderr record; retry through orchestrator dispatch" >&2
@@ -175,23 +172,6 @@ set -e
 # would otherwise let it reach that conclusion before the reason was written down.
 write_status agent.exit_code "$exit_code"
 if [ "$exit_code" -ne 0 ]; then
-    # The exit status alone does not say what it means, and the stderr beside it is
-    # only as complete as the disk allowed. The capture was proven openable before
-    # the turn started, so re-checking it here separates "the harness said nothing"
-    # from "the record stopped being writable part way through" — a distinction the
-    # number cannot carry and the reader would otherwise have to guess at.
-    capture=""
-    if ! : >>"$agent_stderr"; then
-        capture="; agent stderr capture became unwritable, so its tail may be incomplete"
-    fi
-    # Written before both the replay and the marker the dispatcher polls for: a
-    # large stderr would otherwise let the dispatcher observe the death before the
-    # reason for it was written down.
-    if [ "$exit_code" -gt 128 ]; then
-        write_status agent.failure "agent harness killed by signal $((exit_code - 128))$capture"
-    else
-        write_status agent.failure "agent harness exited $exit_code$capture"
-    fi
     # Replay the child's own words only now. A turn that succeeded says everything
     # it has to say through the protocol on stdout, so its harness chatter is noise
     # here; a turn that failed leaves this stream as the only account of why. The
@@ -203,6 +183,21 @@ if [ "$exit_code" -ne 0 ]; then
         echo "oneharness-agent: could not replay the agent stderr record at $agent_stderr; read it from the worker status directory instead" >&2
     fi
     echo "oneharness-agent: agent process $agent_pid exited $exit_code; awaiting dispatcher recovery" >&2
+    # The stderr copy above is best-effort by design: failing a live agent turn
+    # because a diagnostic copy could not be written would be strictly worse than
+    # losing the copy. What must not happen is reporting a capture that stopped
+    # working as "the harness said nothing", so re-check it here and say so.
+    capture=""
+    if ! : >>"$status_dir/agent.stderr"; then
+        capture="; agent stderr capture became unwritable, so its tail may be incomplete"
+    fi
+    # Written before the marker the dispatcher polls for, so the reason is always
+    # already there when the failure is observed.
+    if [ "$exit_code" -gt 128 ]; then
+        write_status agent.failure "agent harness killed by signal $((exit_code - 128))$capture"
+    else
+        write_status agent.failure "agent harness exited $exit_code$capture"
+    fi
     write_status agent.failed "$worker_pid"
     while :; do
         :
