@@ -64,6 +64,7 @@ from orchestrator.next_round import main as next_round_main
 from orchestrator.provenance import (
     INCOMPLETE_TRAILER,
     PR_BASE_TRAILER,
+    RECOVERY_TRAILER,
     format_preserved_step_metadata,
     incomplete_commits,
 )
@@ -1303,8 +1304,16 @@ def test_a_node_that_cannot_finish_settles_instead_of_being_redispatched_forever
         assert not follower.get("stack_bases")
 
     rounds_run = 1 + MAX_AUTOMATIC_ROUND_RESUMES
+    # Exactly one marker, across every round that ran — and every one of those rounds
+    # committed real work and then failed, so each was entitled to preserve something.
+    # The marker states one fact about the branch, that it carries preserved incomplete
+    # work, and a round that finds it already stated adds nothing by stating it again.
+    # Bounding the attempts stopped the growth from being unbounded; this is what stops
+    # it accruing one commit per round inside that bound, each of which recovery would
+    # otherwise have to attest separately.
     markers = len(incomplete_commits(canonical, "origin/main", branch))
-    assert 1 <= markers <= rounds_run, markers
+    assert markers == 1, markers
+    assert rounds_run > 1, "a single round could not tell repetition from the first mark"
 
     # The exhausted node settles out, and its dependent is released to run against
     # the base rather than waiting on work nothing is going to finish — the same
@@ -3873,6 +3882,87 @@ def test_clean_committed_partial_work_is_marked_and_recoverable(tmp_path, bare_o
     assert f"Orchestrator-Recovered-Incomplete: {marker_sha}" in attestation[0].message
     assert not gitops.is_ancestor(canonical, attestation[0].sha, "origin/main")
     assert _has_file(origin, "main", "partial.txt")
+
+
+def test_a_redispatched_branch_is_not_handed_a_second_incomplete_marker(
+    tmp_path, bare_origin
+) -> None:
+    """The marker states one fact about the branch; a redispatch does not restate it.
+
+    Observed on this repository's own workstreams: every redispatch of a branch that
+    committed real work and then ran out of turns appended one more empty
+    `chore: ... (incomplete step)` commit, because the "is it already marked?" question
+    was asked from that dispatch's own head — where the answer is always no. The cost is
+    not only a noisy branch: recovery attests every unattested marker it finds, so the
+    accumulation reaches the published history too.
+
+    Two real dispatches against a real origin, each committing its own work and leaving
+    a clean tree before it runs out of turns, then the real recovery that publishes it.
+    """
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-remarked")
+    Registry().register(str(canonical), workflow="local", repo_type="single-owner")
+    workspace = Workspace(tmp_path / "remarked-worktrees")
+
+    def committing_dispatch(persona: str, task: str, *, project_dir: str, **_: object) -> Report:
+        """Commit this round's own work, leave the tree clean, and run out of turns."""
+        worktree = Path(project_dir)
+        round_file = f"{task.split()[0]}.txt"
+        (worktree / round_file).write_text(f"partial work: {task}\n", encoding="utf-8")
+        gitops.add_all(worktree)
+        gitops.commit(worktree, f"wip: {task}")
+        assert not gitops.is_dirty(worktree)
+        return Report(persona, 1, False, False, 2, [], {}, {}, "")
+
+    first = run_repo_task(
+        str(canonical),
+        "first round of partial work",
+        "engineer",
+        workspace=workspace,
+        branch="feature/remarked",
+        dispatch_fn=committing_dispatch,
+        recorded_gate=["true"],
+    )
+
+    assert first.outcome == "not-completed" and isinstance(first.resume, Resume)
+    first_markers = incomplete_commits(canonical, "origin/main", first.branch)
+    assert len(first_markers) == 1, sorted(first_markers)
+
+    second = run_repo_task(
+        str(canonical),
+        "second round of partial work",
+        "engineer",
+        workspace=workspace,
+        dispatch_fn=committing_dispatch,
+        recorded_gate=["true"],
+        resume=first.resume,
+    )
+
+    # The second round resumed the same branch, committed to it, and is still
+    # not-completed with work worth recovering. It simply did not mark it again.
+    assert second.outcome == "not-completed" and second.branch == first.branch
+    assert second.resume is not None
+    assert _has_file(canonical, second.branch, "second.txt")
+    assert incomplete_commits(canonical, "origin/main", second.branch) == first_markers
+
+    recovered = recover_repo(
+        canonical,
+        second.branch,
+        workspace_root=tmp_path / "remarked-recovery-worktrees",
+        recorded_gate=["true"],
+    )
+
+    # One marker, so one attestation: what recovery publishes accounts for this
+    # branch's incomplete provenance exactly once, and carries both rounds' work.
+    assert recovered.ok and recovered.outcome == "merged", recovered.detail
+    attested = [
+        line
+        for commit in gitops.log_messages(canonical, next(iter(first_markers)), second.branch)
+        for line in commit.message.splitlines()
+        if line.startswith(RECOVERY_TRAILER)
+    ]
+    assert attested == [f"{RECOVERY_TRAILER} {next(iter(first_markers))}"], attested
+    assert _has_file(origin, "main", "first.txt") and _has_file(origin, "main", "second.txt")
 
 
 @pytest.mark.parametrize(

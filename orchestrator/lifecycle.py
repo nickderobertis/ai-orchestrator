@@ -1077,7 +1077,16 @@ def _run_steps(
             else:
                 dispatch_committed = gitops.head_sha(worktree) != dispatch_head
                 ahead_of_pr_base = gitops.has_commits_ahead(worktree, f"origin/{pr_base}")
-                already_marked = bool(incomplete_commits(worktree, dispatch_head, "HEAD"))
+                # The whole branch, not this dispatch's slice of it. The marker records
+                # one fact about the branch — that it carries preserved incomplete work
+                # — and every reader of it (recovery's refusal, its attestation, the
+                # recorded PR base) asks that question base-relative. Asked from this
+                # dispatch's own head, the answer is always "no marker yet" on a
+                # redispatch, so each round handed one more empty marker to a branch
+                # already carrying one, and recovery then had one more commit to attest.
+                already_marked = bool(
+                    incomplete_commits(worktree, f"origin/{pr_base}", "HEAD")
+                )
                 if dispatch_committed and ahead_of_pr_base and not already_marked:
                     gitops.commit_empty(worktree, _incomplete_commit_message(step, pr_base))
                     preserved = True
