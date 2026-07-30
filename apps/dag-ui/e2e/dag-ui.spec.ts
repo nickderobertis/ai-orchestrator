@@ -66,7 +66,6 @@ async function tabTo(
   return false;
 }
 
-/** The computed `background-color` of `locator`, as the browser serializes it. */
 async function backgroundColor(locator: Locator): Promise<string> {
   return locator.evaluate(
     (element) => getComputedStyle(element).backgroundColor,
@@ -78,7 +77,11 @@ function brightestChannel(color: string): number {
   return Math.max(...(color.match(/\d+/g) ?? ["255"]).slice(0, 3).map(Number));
 }
 
-/** What `background: var(<token>)` actually computes to in the live document. */
+/**
+ * Painting a throwaway element is what makes a token comparable to a surface: reading
+ * the custom property back gives its declaration text, which is never the `rgb(…)` the
+ * browser reports for a `background-color`, so the two could not be compared directly.
+ */
 async function tokenColor(page: Page, token: string): Promise<string> {
   return page.evaluate((name) => {
     const probe = document.createElement("div");
