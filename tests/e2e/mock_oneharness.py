@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import signal
 import subprocess
@@ -57,6 +58,10 @@ def main(argv: list[str]) -> int:
     if not argv or argv[0] != "run":
         print(f"mock_oneharness: unsupported invocation {argv}", file=sys.stderr)
         return 2
+    invocation_log = os.environ.get("MOCK_INVOCATION_LOG")
+    if invocation_log:
+        with Path(invocation_log).open("a", encoding="utf-8") as stream:
+            stream.write(json.dumps(argv) + "\n")
     barrier = os.environ.get("MOCK_AGENT_BARRIER")
     if barrier:
         descendant = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])

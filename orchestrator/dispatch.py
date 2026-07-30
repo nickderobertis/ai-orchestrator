@@ -859,6 +859,11 @@ def run_onejudge(
                 with contextlib.suppress(asyncio.CancelledError):
                     await run
                 if signal.reason == "worker-died":
+                    worker_detail = _worker_death_detail(
+                        agent_status_dir, signal.root_pid, signal.detail or "worker-died"
+                    )
+                    if "dispatch failure:" in worker_detail:
+                        raise DispatchError(worker_detail)
                     return Report(
                         persona,
                         EXIT_INCOMPLETE,
@@ -868,9 +873,7 @@ def run_onejudge(
                         [],
                         {},
                         None,
-                        _worker_death_detail(
-                            agent_status_dir, signal.root_pid, signal.detail or "worker-died"
-                        ),
+                        worker_detail,
                         outcome="worker-died",
                         outcome_detail=signal.detail,
                         max_turns=turn_cap,
