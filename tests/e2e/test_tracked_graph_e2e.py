@@ -2643,5 +2643,8 @@ def test_a_budget_spent_without_agent_progress_reads_apart_from_a_turn_cap(
     )["results"]
     assert recorded["silent"]["status"] == "failed"
     assert "without the agent producing anything" in recorded["silent"]["error"]
-    # An agent that worked and ran out of room keeps saying exactly what it said.
-    assert recorded["capped"]["error"] == "did not complete (hit the turn cap)"
+    # An agent that worked and ran out of room still reads as having run out of room,
+    # and now says how far it got — the whole point being that the two are not one
+    # result with one explanation. Only the silent one is told not to retry unchanged.
+    assert recorded["capped"]["error"] == "hit the turn cap after 3 turns"
+    assert "without the agent producing anything" not in recorded["capped"]["error"]
