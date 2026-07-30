@@ -114,6 +114,80 @@ def test_run_plan_rejects_invalid_retry_resume_contract(
     assert message in result.stderr
 
 
+def test_a_recorded_direct_node_names_the_stop_it_actually_had(
+    tmp_path: Path, command_base, onejudge_bin: str
+) -> None:
+    """A tracked direct node that stopped short of its cap must not claim it hit one.
+
+    onejudge exits 1 both for an exhausted worker and for one released before its
+    criteria were met, and the tracked graph reported both as "did not complete
+    (hit the turn cap)". A real run of this repository's own node settled that way
+    at `turns: 1`, which is the sentence that sent its diagnosis wrong. Both stops
+    run here through the real recorded CLI so the recorded errors differ.
+    """
+    runs = tmp_path / "runs"
+    plan = tmp_path / "stop-kinds.json"
+    plan.write_text(
+        json.dumps(
+            {
+                "concurrency": 2,
+                "tasks": [
+                    {
+                        "id": "capped",
+                        "persona": "engineer",
+                        "task": "should-fail: unsatisfiable.",
+                        "max_turns": 2,
+                    },
+                    {
+                        "id": "released",
+                        "persona": "engineer",
+                        # The supervisor releases this one on turn 1; the done_when
+                        # judge then rejects it, so it settles at turn 1 of 6.
+                        "task": "stop-short: released before its criteria were met.",
+                        "max_turns": 6,
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    settled = _just(
+        "run-plan",
+        str(plan),
+        "--run",
+        "stop-kinds",
+        "--runs-dir",
+        str(runs),
+        "--base",
+        str(command_base()),
+        "--onejudge-bin",
+        onejudge_bin,
+        "--format",
+        "json",
+    )
+
+    assert settled.returncode == 1, settled.stderr
+    result = json.loads(settled.stdout)
+    capped = result["results"]["capped"]
+    released = result["results"]["released"]
+    assert capped["status"] == released["status"] == "failed"
+    assert capped["error"] == "hit the turn cap after 2 turns"
+    assert released["error"].startswith("did not complete after 1 turn, short of its 6-turn cap")
+    assert "released it before its criteria were met" in released["error"]
+    # The journal carries the same distinction, so a reader of the recorded round
+    # is not left with the round result's summary alone.
+    events = [
+        json.loads(line) for line in (runs / "stop-kinds" / "events.jsonl").read_text().splitlines()
+    ]
+    failures = {
+        event["node"]: event["detail"] for event in events if event["kind"] == "node-failed"
+    }
+    assert failures["capped"]["turns"] == 2
+    assert failures["released"]["turns"] == 1
+    assert "hit the turn cap" not in failures["released"]["detail"]
+
+
 def test_direct_human_pause_attestation_and_release_use_real_onejudge(
     tmp_path: Path, command_base, onejudge_bin: str
 ) -> None:

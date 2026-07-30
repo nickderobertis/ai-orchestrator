@@ -125,10 +125,12 @@ AGENT_STDERR_TAIL_CHARS = 1200
 #: Read more raw bytes than the cap so collapsing whitespace still leaves a full
 #: tail to trim, without pulling a multi-megabyte harness log into memory.
 AGENT_STDERR_READ_BYTES = 8 * AGENT_STDERR_TAIL_CHARS
-#: A recorded disposition is a short sentence, but it arrives from a file this
-#: module does not write and lands in a durable node result, so it is bounded and
-#: redacted on the same terms as the stderr beside it.
-AGENT_FAILURE_NOTE_CHARS = 300
+#: How long any one sentence of reported evidence may be — the wrapper's recorded
+#: exit disposition, an unmet verdict's reason, a worker's assessment, a harness
+#: stderr line. Each is short by nature, each arrives from somewhere this module
+#: does not write, and each lands in a durable node result, so all are bounded and
+#: redacted on the same terms.
+REPORTED_NOTE_CHARS = 300
 
 
 class DispatchError(Exception):
@@ -470,7 +472,7 @@ def _bounded_note(raw: str | None) -> str | None:
     """Bound and redact one harness-authored line before it becomes evidence."""
     if raw is None:
         return None
-    return " ".join(redact(raw[:AGENT_FAILURE_NOTE_CHARS]).split()) or None
+    return " ".join(redact(raw[:REPORTED_NOTE_CHARS]).split()) or None
 
 
 def _agent_stderr_tail(status_dir: Path) -> str:
