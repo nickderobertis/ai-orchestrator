@@ -512,10 +512,15 @@ A launched orchestrator is derived the same way. `just orchestrate` records
 crashed or was killed between rounds left a run reading exactly like ordinary
 finished work. When this host can prove that pid gone, the launch never wrote a
 report, and no round is still in flight, both views report the run as
-`SETTLED (orchestrator pid N is gone ...)`. Every unknown resolves the other way —
-another host, an owner that cannot be probed, an unreadable record, or a round
-still working all keep the run silent — because sending a planner to tear down
-live work is the worse error.
+`SETTLED (orchestrator pid N is gone ...)`. Every unknown withholds that verdict
+instead — an owner that cannot be probed, an unreadable or unparseable record, or a
+round still working — because sending a planner to tear down live work is the worse
+error. Withholding it is not the same as saying nothing: a record that still claims a
+`running` owner this host could not refute keeps its run listed as `ACTIVE`, and an
+owner on **another host** is exactly that case, since a pid means nothing across
+machines. A run another orchestrator is driving therefore reads as the live work it
+is. Only a record this host cannot read at all drops out of both views, having
+supported no claim either way.
 
 A live pid is ownership, not progress. A launched orchestrator that keeps its pid
 while doing nothing — no child process, no planner surface, and no ledger

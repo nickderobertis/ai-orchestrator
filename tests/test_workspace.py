@@ -192,7 +192,9 @@ def test_workspace_refuses_to_reclaim_a_path_outside_its_run_root(tmp_path, bare
     stranger = tmp_path / "another-run" / "feat"
     (stranger / "work").mkdir(parents=True)
 
-    with pytest.raises(WorkspaceError, match="not one of this run's own worktree slots"):
+    with pytest.raises(
+        WorkspaceError, match="does not have the shape of a worktree this run lays out"
+    ):
         ws._reclaim_worktree_path(ref, clone, stranger)
 
     assert (stranger / "work").is_dir()
@@ -217,7 +219,9 @@ def test_workspace_refuses_to_reclaim_a_directory_inside_one_of_its_worktrees(
     nested.mkdir()
     (nested / "work.py").write_text("real work\n", encoding="utf-8")
 
-    with pytest.raises(WorkspaceError, match="not one of this run's own worktree slots"):
+    with pytest.raises(
+        WorkspaceError, match="does not have the shape of a worktree this run lays out"
+    ):
         ws._reclaim_worktree_path(ref, clone, nested)
 
     assert (nested / "work.py").is_file()
