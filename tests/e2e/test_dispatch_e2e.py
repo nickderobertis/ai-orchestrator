@@ -649,27 +649,16 @@ def test_dispatch_provider_override(command_base, onejudge_bin) -> None:
 
 
 def test_dispatch_preserves_real_onejudge_failure_status_and_stderr(
-    command_base, onejudge_bin: str
+    tmp_path: Path, onejudge_bin: str, oneharness_bin: str
 ) -> None:
-    """A real backend rejection must survive onejudge and the dispatch watchdog."""
-    process = subprocess.run(
-        [
-            str(Path(onejudge_bin).with_name("orchestrator-dispatch")),
-            "engineer",
-            "provider-errors: distinctive-dispatch-child-failure",
-            "--base",
-            str(command_base()),
-            "--onejudge-bin",
-            onejudge_bin,
-        ],
-        cwd=REPO_ROOT,
-        text=True,
-        capture_output=True,
-    )
+    """The binding backend's exact failure must survive watchdog termination."""
+    process, bound_session = _run_real_binding_rejection(tmp_path, onejudge_bin, oneharness_bin)
 
-    assert process.returncode == 2
-    assert "onejudge failed (exit 2" in process.stderr
-    assert "fake_backend: provider error" in process.stderr
+    assert process.returncode == 2, (
+        f"operator stderr={process.stderr!r}\noperator report={process.stdout}"
+    )
+    assert f"`{bound_session}-skill` was created on harness `codex`" in process.stderr
+    assert "cannot be continued on `claude-code`" in process.stderr
     assert "exit 255" not in process.stderr
     assert "<no stderr>" not in process.stderr
 
@@ -712,7 +701,7 @@ def _dispatch_command(
     executable = [str(Path(onejudge_bin).with_name("orchestrator-dispatch"))]
     if source_override:
         executable = [
-            sys.executable,
+            os.environ.get("DISPATCH_E2E_PYTHON", sys.executable),
             "-c",
             (
                 "import sys;"
@@ -796,9 +785,9 @@ def test_explicit_session_is_threaded_across_real_harness_turns(
     assert sessions == ["operator-resume-skill", "operator-resume-skill"]
 
 
-def test_real_session_harness_binding_rejection_names_session_and_both_harnesses(
+def _run_real_binding_rejection(
     tmp_path: Path, onejudge_bin: str, oneharness_bin: str
-) -> None:
+) -> tuple[subprocess.CompletedProcess[str], str]:
     target, base_path, env, _ = _split_oneharness_fixture(tmp_path, oneharness_bin)
     bin_dir = tmp_path / "bin"
     (bin_dir / "oneharness").unlink()
@@ -875,6 +864,13 @@ print(json.dumps({"type": "result", "subtype": "success", "is_error": False,
         capture_output=True,
         timeout=30,
     )
+    return process, bound_session
+
+
+def test_real_session_harness_binding_rejection_names_session_and_both_harnesses(
+    tmp_path: Path, onejudge_bin: str, oneharness_bin: str
+) -> None:
+    process, bound_session = _run_real_binding_rejection(tmp_path, onejudge_bin, oneharness_bin)
 
     assert process.returncode == 2
     detail = process.stderr
