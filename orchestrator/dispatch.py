@@ -761,8 +761,18 @@ def run_onejudge(
                                 if activity.pids:
                                     observed = tuple(dict.fromkeys((*observed, *activity.pids)))
                                     observed_tree = observed
+                                # The wrapper publishes agent.done immediately after
+                                # wait(2) observes the child exit. Under host load,
+                                # this coroutine can run in the valid scheduling gap
+                                # between those two operations. Give the marker
+                                # writer one short turn, then require both the same
+                                # identity and the absent terminal marker before
+                                # diagnosing a vanished agent.
+                                await asyncio.sleep(min(0.05, heartbeat_timeout / 4))
+                                latest_agent = _agent_status(agent_status_dir, "agent.pid")
                                 if (
                                     agent_pid not in activity.pids
+                                    and latest_agent == current_agent
                                     and _agent_status(agent_status_dir, "agent.done")
                                     != current_agent
                                 ):
