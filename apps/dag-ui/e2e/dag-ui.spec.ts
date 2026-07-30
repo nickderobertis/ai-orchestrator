@@ -142,7 +142,7 @@ test("tracks every node state, node detail, and role transcript of a live run", 
   await expect(panel).toContainText("agent node");
   // The panel restates the node's state in words beside the graph's colour, which is
   // the only reading of it available to anyone who cannot rely on that colour.
-  await expect(panel).toContainText("Running");
+  await expect(panel).toContainText("running");
   await expect(page.getByText("Build the live dashboard")).toBeVisible();
   await expect(page.getByText("Users can inspect transcripts")).toBeVisible();
   for (const role of ["Worker", "Judge", "Check-in", "PR author", "Lint"]) {
@@ -252,7 +252,7 @@ test("navigates historical DAGs grouped by their launching session", async ({
   // Every row states the run's own state and whether it is still moving, so the list
   // is readable without opening a run.
   const liveRow = page.getByRole("button", { name: RegExp(runs().live) });
-  await expect(liveRow).toContainText("Running");
+  await expect(liveRow).toContainText("running");
   await expect(
     page.getByRole("button", { name: RegExp(runs().history) }),
   ).toContainText("complete");
@@ -489,6 +489,61 @@ test("paints the design system's components in the application's dark palette", 
       await backgroundColor(page.locator(".react-flow__minimap")),
     ),
   ).toBeLessThan(80);
+});
+
+test("tells each outcome apart by the palette's semantic tones", async ({
+  page,
+}) => {
+  await openObservatory(page);
+  // The node's own state is the one badge a card carries directly; the panel's other
+  // badges — the node's kind, and a status on every transcript the package renders —
+  // all sit inside a card's content. Each reading is checked against its word too, so
+  // a selector that drifted onto one of those would fail rather than pass quietly.
+  const stateBadge = page.locator(
+    '.detail-panel [data-slot="card"] > [data-slot="badge"]',
+  );
+
+  // Reading a state costs an operator nothing only while the outcomes look different:
+  // settled work green, work that was lost red, work still moving blue. The design
+  // system's own status vocabulary stops at four states and includes none of these
+  // words, so without the app's mapping every one of them paints the same neutral
+  // pill. `toHaveCSS` rather than one reading of the computed style: the badge
+  // transitions its colour, so an immediate read catches it partway between two.
+  for (const [node, state, token] of [
+    [".dag-node.state-done", "done", "--success"],
+    [".dag-node.state-cancelled", "cancelled", "--destructive"],
+    [".dag-node.state-failed", "failed", "--destructive"],
+    [".dag-node.state-running", "running", "--info"],
+  ] as const) {
+    await page.locator(node).click();
+    await expect(stateBadge).toHaveText(state);
+    await expect(stateBadge).toHaveCSS("color", await tokenColor(page, token));
+  }
+
+  // Work that has not started has no outcome to report, so it must not borrow one of
+  // those meanings — which is also what stops the assertions above from passing on a
+  // mapping that simply paints everything.
+  await page.locator(".dag-node.state-waiting").click();
+  await expect(stateBadge).toHaveText("waiting");
+  await expect(stateBadge).toHaveCSS(
+    "color",
+    await tokenColor(page, "--foreground"),
+  );
+
+  // The run list is the other surface that states an outcome, and `complete` is a
+  // state the package's own badge does not know at all.
+  const runBadge = (runId: string): Locator =>
+    page
+      .getByRole("button", { name: RegExp(runId) })
+      .locator('[data-slot="badge"]');
+  await expect(runBadge(runs().history)).toHaveCSS(
+    "color",
+    await tokenColor(page, "--success"),
+  );
+  await expect(runBadge(runs().live)).toHaveCSS(
+    "color",
+    await tokenColor(page, "--info"),
+  );
 });
 
 test("shows the loading view while its first read is still in flight", async ({

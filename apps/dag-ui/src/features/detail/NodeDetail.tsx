@@ -1,11 +1,4 @@
-import {
-  Badge,
-  Button,
-  Card,
-  CardContent,
-  ScrollArea,
-  StatusBadge,
-} from "@oneharness/ui";
+import { Badge, Button, Card, CardContent, ScrollArea } from "@oneharness/ui";
 import {
   ExternalLink,
   FileText,
@@ -13,6 +6,7 @@ import {
   ScrollText,
 } from "lucide-react";
 import type { NodeView } from "../runs/run-model";
+import { StateBadge } from "../runs/StateBadge";
 import { TranscriptPanel } from "./TranscriptPanel";
 
 export function NodeDetail({
@@ -51,7 +45,7 @@ export function NodeDetail({
           </header>
 
           <Card className="my-5 flex-row items-center gap-3 p-3.5">
-            <StatusBadge state={node.state} />
+            <StateBadge state={node.state} />
             <div>
               <p className="eyebrow">Progress</p>
               <p className="m-0 text-[11px] text-muted-foreground">

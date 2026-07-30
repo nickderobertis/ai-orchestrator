@@ -156,16 +156,6 @@ p {
   font-size: 12px;
 }
 
-/*
- * `StatusBadge` takes no class of its own, so the run list sets its own density
- * here: this column is the one place a full-size pill would crowd the run id it
- * sits beside out of the row.
- */
-.run-link [data-slot="badge"] {
-  padding: 1px 5px;
-  font-size: 9px;
-}
-
 .run-link-main span:last-child {
   overflow: hidden;
   text-overflow: ellipsis;

@@ -11,12 +11,27 @@ declares no schema, event name, or API path of its own.
 
 `@oneharness/ui` is the app's design system, not just its transcript renderer.
 The view switcher is its `Tabs`; panels, metric tiles and transcript cards are its
-`Card`; run, node and conversation status are its `StatusBadge` and `Badge`; the
-navigation, detail panel and overall view scroll inside its `ScrollArea`; the
-telemetry banner is its `Alert`; the loading view is its `Skeleton`; and every
-secondary action is its `Button`, with `Separator`, `Tooltip` and the `cn` helper
-where they fit. `ConversationView` is deliberately not adopted: it requires a
-reply handler and continuation callbacks, and this app is read-only.
+`Card`; the navigation, detail panel and overall view scroll inside its
+`ScrollArea`; the telemetry banner is its `Alert`; the loading view is its
+`Skeleton`; and every secondary action is its `Button`, with `Separator`,
+`Tooltip` and the `cn` helper where they fit. `ConversationView` is deliberately
+not adopted: it requires a reply handler and continuation callbacks, and this app
+is read-only.
+
+Status is the one place the package's components are not used unchanged.
+`StatusBadge` is the right component for a conversation, whose state really is one
+of the four it knows, and `TranscriptPanel` uses it. A run or a node is not: the
+ledger settles a node as `done` and a run as `complete`, holds a human action at
+`waiting`, and abandons work as `cancelled`. `StatusBadge` gives an unrecognized
+state no tone, so passing these through would leave a finished run and an
+abandoned one looking alike, and relabelling them to fit its vocabulary would
+replace the word the ledger recorded. `src/features/runs/StateBadge.tsx` keeps
+both, mapping the orchestrator's own states onto the package's `Badge` and its
+semantic utilities: settled work (`done`, `complete`, `completed`) reads
+`success`, lost work (`failed`, `cancelled`) reads `destructive`, and `running`
+reads `info`. `waiting` and `pending` stay neutral on purpose — work that has not
+started has no outcome to report. `e2e/dag-ui.spec.ts` asserts each of those
+tones against the token it claims, on both the detail panel and the run list.
 
 One palette governs the whole surface. `src/styles.css` imports the package
 stylesheet **through this app's Tailwind build** rather than injecting it as raw

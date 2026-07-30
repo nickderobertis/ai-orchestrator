@@ -1,13 +1,13 @@
 import {
   ScrollArea,
   Separator,
-  StatusBadge,
   Tooltip,
   TooltipContent,
   TooltipTrigger,
 } from "@oneharness/ui";
 import { Activity, Bot, ChevronRight, History } from "lucide-react";
 import type { RunGroup } from "../runs/run-model";
+import { StateBadge } from "../runs/StateBadge";
 
 export function RunNavigation({
   groups,
@@ -72,7 +72,12 @@ export function RunNavigation({
                         )}
                         <span>{run.run_id}</span>
                       </span>
-                      <StatusBadge state={run.state} />
+                      {/* This column is the one place a full-size pill would crowd
+                          the run id beside it out of the row. */}
+                      <StateBadge
+                        className="px-[5px] py-px text-[9px]"
+                        state={run.state}
+                      />
                       <ChevronRight aria-hidden="true" size={14} />
                     </button>
                   );
