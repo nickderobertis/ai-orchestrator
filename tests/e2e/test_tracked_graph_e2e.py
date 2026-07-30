@@ -1526,11 +1526,11 @@ def test_real_cli_recovers_failed_lifecycle_result(
         "json",
     ]
     events_path = runs / "failed-lifecycle-prefix" / "events.jsonl"
-    # llmlint: ignore[tests_mirror_real_usage] The lock is deliberately internal, so no
-    # user-facing command holds it for a controlled window; the only alternative is a
-    # second real dispatch racing for it, which is the nondeterminism this journey exists
-    # to remove. The run under test is still driven entirely through `just run-plan`.
+    # A public command cannot hold this lock for a controlled window; a second dispatch
+    # would recreate the race this journey removes. The run itself still uses run-plan.
+    # llmlint: ignore[tests_mirror_real_usage] Internal setup creates deterministic contention.
     git_lock = git_lock_identity(gitops.common_dir(canonical))
+    # llmlint: ignore[tests_mirror_real_usage] Internal setup creates deterministic contention.
     held = advisory_lock(git_lock)
     held.__enter__()
     try:
