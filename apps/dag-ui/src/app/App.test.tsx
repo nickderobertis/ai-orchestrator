@@ -5,6 +5,7 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { HISTORY_RUN, LIVE_RUN, runDetail, runList } from "../test/fixtures";
 import {
@@ -74,7 +75,10 @@ describe("DAG application", () => {
     const { client } = telemetryHarness();
     render(<App client={client} />);
     await screen.findByText("dashboard");
-    fireEvent.click(screen.getByRole("tab", { name: "Overall" }));
+    // The view switcher is a real tab set now, and a tab set selects on the pointer
+    // press rather than on the synthetic click that follows it — so this drives the
+    // whole pointer sequence a person produces instead of dispatching one event.
+    await userEvent.click(screen.getByRole("tab", { name: "Overall" }));
     await waitFor(() =>
       expect(window.location.search).toContain("view=overall"),
     );

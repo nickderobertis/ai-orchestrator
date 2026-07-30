@@ -1,5 +1,12 @@
 import type { DagConversation } from "@ai-orchestrator/dag-model";
-import { type Conversation, TurnCard } from "@oneharness/ui";
+import {
+  Card,
+  CardContent,
+  type Conversation,
+  Separator,
+  StatusBadge,
+  TurnCard,
+} from "@oneharness/ui";
 
 type Attribution = DagConversation["attribution"];
 type AgentRole = Attribution["agentRole"];
@@ -11,30 +18,33 @@ export function TranscriptPanel({
 }) {
   if (conversations.length === 0)
     return (
-      <p className="empty-note">No conversations recorded for this node.</p>
+      <p className="m-0 text-[11px] text-muted-foreground">
+        No conversations recorded for this node.
+      </p>
     );
   return (
-    <div className="transcripts">
+    <div className="flex flex-col gap-3">
       {conversations.map(({ conversation, attribution }) => (
-        <section className="transcript" key={conversation.id}>
-          <header>
-            <div>
-              <p className="eyebrow">
-                {roleLabel(attribution.agentRole, attribution.transportRole)}
-              </p>
-              <h4>{attribution.persona ?? conversation.name}</h4>
-            </div>
-            <span className={`status status-${conversation.state}`}>
-              {conversation.state}
-            </span>
-          </header>
-          {conversation.turns.map((turn) => (
-            <TurnCard
-              key={turn.id}
-              turn={turn as Conversation["turns"][number]}
-            />
-          ))}
-        </section>
+        <Card className="gap-0 py-3" key={conversation.id}>
+          <CardContent className="px-3">
+            <header className="transcript-header">
+              <div>
+                <p className="eyebrow">
+                  {roleLabel(attribution.agentRole, attribution.transportRole)}
+                </p>
+                <h4>{attribution.persona ?? conversation.name}</h4>
+              </div>
+              <StatusBadge state={conversation.state} />
+            </header>
+            <Separator className="my-2.5" />
+            {conversation.turns.map((turn) => (
+              <TurnCard
+                key={turn.id}
+                turn={turn as Conversation["turns"][number]}
+              />
+            ))}
+          </CardContent>
+        </Card>
       ))}
     </div>
   );

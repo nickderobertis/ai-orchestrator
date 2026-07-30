@@ -2,10 +2,41 @@
 
 `apps/dag-ui` is the read-only live and historical view of orchestrated DAG
 execution. It visualizes each round with React Flow, using the exact coordinates
-from `@ai-orchestrator/dag-layout`, and renders agent transcripts with the
-published `@oneharness/ui` components. Every payload it reads is validated by
+from `@ai-orchestrator/dag-layout`, and builds its surface out of the published
+`@oneharness/ui` components. Every payload it reads is validated by
 `@ai-orchestrator/dag-model` through `@ai-orchestrator/telemetry-client`; the app
 declares no schema, event name, or API path of its own.
+
+## Design system
+
+`@oneharness/ui` is the app's design system, not just its transcript renderer.
+The view switcher is its `Tabs`; panels, metric tiles and transcript cards are its
+`Card`; run, node and conversation status are its `StatusBadge` and `Badge`; the
+navigation, detail panel and overall view scroll inside its `ScrollArea`; the
+telemetry banner is its `Alert`; the loading view is its `Skeleton`; and every
+secondary action is its `Button`, with `Separator`, `Tooltip` and the `cn` helper
+where they fit. `ConversationView` is deliberately not adopted: it requires a
+reply handler and continuation callbacks, and this app is read-only.
+
+One palette governs the whole surface. `src/styles.css` imports the package
+stylesheet **through this app's Tailwind build** rather than injecting it as raw
+text, which is what makes the package's tokens, its `dark` variant, its `@theme`
+and its `@layer` rules real here — a raw `<style>` element would deliver the token
+values and silently drop every `@apply` rule and every utility its components are
+written in. The import carries `source(none)` because the package bakes
+`source(…)` modifiers into its own `@import "tailwindcss"` that name directories
+existing only in its source tree; the `@source` lines beside it name the trees
+this app scans instead, including the package's `dist`, which Tailwind never scans
+on its own. The dark palette is selected by `class="dark"` on the document element
+in `index.html`, and the app's own chrome is written in the package's tokens
+(`--card`, `--sidebar`, `--border`, `--success`, `--destructive`, `--info`,
+`--warning`) rather than a palette of its own. React Flow scopes its variables to
+its own root, so the canvas takes `colorMode="dark"` for the same reason.
+
+The package's Radix, markdown and Tailwind peer dependencies are declared in
+`apps/dag-ui/package.json`: the app imports the package's root entry, whose module
+graph statically pulls all of them, and a locked install has to reproduce that
+tree rather than rely on the installer filling peers in implicitly.
 
 ## Run locally
 

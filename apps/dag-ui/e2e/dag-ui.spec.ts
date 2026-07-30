@@ -66,6 +66,30 @@ async function tabTo(
   return false;
 }
 
+/** The computed `background-color` of `locator`, as the browser serializes it. */
+async function backgroundColor(locator: Locator): Promise<string> {
+  return locator.evaluate(
+    (element) => getComputedStyle(element).backgroundColor,
+  );
+}
+
+/** The brightest channel of a serialized colour — how a dark surface is told from a light one. */
+function brightestChannel(color: string): number {
+  return Math.max(...(color.match(/\d+/g) ?? ["255"]).slice(0, 3).map(Number));
+}
+
+/** What `background: var(<token>)` actually computes to in the live document. */
+async function tokenColor(page: Page, token: string): Promise<string> {
+  return page.evaluate((name) => {
+    const probe = document.createElement("div");
+    probe.style.backgroundColor = `var(${name})`;
+    document.body.append(probe);
+    const computed = getComputedStyle(probe).backgroundColor;
+    probe.remove();
+    return computed;
+  }, token);
+}
+
 /**
  * Change what the server is serving — record progress, or take a run away — through
  * the fixture module that wrote the run directory in the first place.
@@ -391,6 +415,51 @@ test("reflows navigation, detail, and metrics at a narrow viewport", async ({
     tiles.map((tile) => tile.getBoundingClientRect().top),
   );
   expect(new Set(narrowRows).size).toBe(2);
+});
+
+test("paints the design system's components in the application's dark palette", async ({
+  page,
+}) => {
+  await openObservatory(page, `/?run=${runs().live}&node=dashboard`);
+
+  // `dark` on the document element is the switch @oneharness/ui's stylesheet selects
+  // its dark tokens with. Without it every component the package ships renders its
+  // light default inside this dark application shell.
+  await expect(page.locator("html")).toHaveClass(/\bdark\b/);
+
+  // The detail sections are the package's own Card, so their surface proves two
+  // things at once: that the utilities its components are written in are generated
+  // for this app at all, and that they resolve to the dark token rather than white.
+  const card = await backgroundColor(page.locator(".detail-section").first());
+  // An opaque `rgb(…)`: a token this build never defined would leave the utility
+  // invalid and the surface transparent, which is the shape this must not accept.
+  expect(card).toMatch(/^rgb\(\d+, \d+, \d+\)$/);
+  expect(card).toBe(await tokenColor(page, "--card"));
+  expect(brightestChannel(card)).toBeLessThan(80);
+
+  // The transcripts the package renders sit on that same surface, which is the
+  // defect an operator saw on every node they opened.
+  const turn = page.getByRole("article", { name: /^Turn / }).first();
+  await expect(turn).toBeVisible();
+  expect(
+    await backgroundColor(
+      turn.locator("xpath=ancestor::*[@data-slot='card'][1]"),
+    ),
+  ).toBe(card);
+
+  // And the application's own chrome is painted from the same token set rather than
+  // a hand-picked palette beside it.
+  const panel = await backgroundColor(page.locator(".detail-panel"));
+  expect(panel).toMatch(/^rgb\(\d+, \d+, \d+\)$/);
+  expect(panel).toBe(await tokenColor(page, "--sidebar"));
+
+  // The graph canvas scopes its own variables, so it needs its own switch; without
+  // it the minimap and zoom controls stay white inside the dark workspace.
+  expect(
+    brightestChannel(
+      await backgroundColor(page.locator(".react-flow__minimap")),
+    ),
+  ).toBeLessThan(80);
 });
 
 test("shows the loading view while its first read is still in flight", async ({
