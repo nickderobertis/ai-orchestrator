@@ -213,6 +213,8 @@ class Resume:
     pr: str | None = None
     mode: ResumeMode = "pause"
     source_round: int | None = None
+    #: Automatic cross-round continuations already spent on this preserved branch.
+    attempts: int = 0
 
 
 @dataclass
@@ -1085,7 +1087,14 @@ def _run_steps(
             else:
                 dispatch_committed = gitops.head_sha(worktree) != dispatch_head
                 ahead_of_pr_base = gitops.has_commits_ahead(worktree, f"origin/{pr_base}")
-                already_marked = bool(incomplete_commits(worktree, dispatch_head, "HEAD"))
+                # The whole branch, not this dispatch's slice of it. The marker records
+                # one fact about the branch — that it carries preserved incomplete work
+                # — and every reader of it (recovery's refusal, its attestation, the
+                # recorded PR base) asks that question base-relative. Asked from this
+                # dispatch's own head, the answer is always "no marker yet" on a
+                # redispatch, so each round handed one more empty marker to a branch
+                # already carrying one, and recovery then had one more commit to attest.
+                already_marked = bool(incomplete_commits(worktree, f"origin/{pr_base}", "HEAD"))
                 if dispatch_committed and ahead_of_pr_base and not already_marked:
                     gitops.commit_empty(worktree, _incomplete_commit_message(step, pr_base))
                     preserved = True
@@ -2497,6 +2506,7 @@ def _parse_resume(nid: str, raw: object, steps: list[Step] | None) -> Resume | N
         "pr",
         "mode",
         "source_round",
+        "attempts",
     }
     if unknown := set(raw) - allowed:
         raise PlanError(f"task {nid!r} 'resume' has unknown fields: {', '.join(sorted(unknown))}")
@@ -2536,6 +2546,9 @@ def _parse_resume(nid: str, raw: object, steps: list[Step] | None) -> Resume | N
         not isinstance(source_round, int) or isinstance(source_round, bool) or source_round < 1
     ):
         raise PlanError(f"task {nid!r} resume 'source_round' must be a positive integer")
+    attempts = raw.get("attempts", 0)
+    if not isinstance(attempts, int) or isinstance(attempts, bool) or attempts < 0:
+        raise PlanError(f"task {nid!r} resume 'attempts' must be a non-negative integer")
     return Resume(
         branch=cast(str, raw["branch"]),
         base_branch=cast(str, raw["base_branch"]),
@@ -2545,6 +2558,7 @@ def _parse_resume(nid: str, raw: object, steps: list[Step] | None) -> Resume | N
         pr=pr,
         mode=cast(ResumeMode, mode),
         source_round=source_round,
+        attempts=attempts,
     )
 
 
@@ -3006,6 +3020,8 @@ def resume_payload(resume: Resume | None) -> ResumePayload | None:
         payload["mode"] = resume.mode
     if resume.source_round is not None:
         payload["source_round"] = resume.source_round
+    if resume.attempts:
+        payload["attempts"] = resume.attempts
     return payload
 
 

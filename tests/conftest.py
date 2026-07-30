@@ -20,17 +20,20 @@ import re
 import shutil
 import subprocess
 import sys
-from collections.abc import Callable, Iterator
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any
 
 import pytest
 import yaml
-from leak_guard import ResourceLeakGuard
+
+# Re-exported rather than defined here: `leak_guard` is a self-contained pytest
+# plugin, so a session that loads it with `-p leak_guard` — which is how the guard's
+# own e2e drives a real session — gets exactly the fixtures this suite runs under.
+from leak_guard import resource_leak_guard, session_leak_guard  # noqa: F401
 
 from orchestrator import BASE_CONFIG, PERSONA_DIR, REPO_ROOT, gitops
 from orchestrator.config import load_yaml
-from orchestrator.environment import CHANNEL_ENV_PREFIX
+from orchestrator.environment import CHANNEL_ENV_PREFIX, COMPARISON_ENV_PREFIX
 
 FAKE_BACKEND = REPO_ROOT / "tests" / "e2e" / "fake_backend.py"
 
@@ -78,24 +81,20 @@ def _isolate_orchestrator_channel(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(autouse=True)
-def resource_leak_guard(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, request: pytest.FixtureRequest
-) -> Iterator[ResourceLeakGuard]:
-    """Reap complete subprocess trees and report test-owned resource leaks."""
-    original_popen = subprocess.Popen
-    e2e_test = "e2e" in Path(str(request.node.path)).parts
-    guard = ResourceLeakGuard(popen=original_popen)
+def _isolate_gate_comparison_identity(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep the enclosing dispatch's comparison base out of the suite's own pushes.
 
-    def tracked_popen(*args: Any, **kwargs: Any) -> subprocess.Popen[Any]:
-        return guard.spawn(*args, **kwargs)
-
-    monkeypatch.setattr(subprocess, "Popen", tracked_popen)
-    yield guard
-    if e2e_test:
-        for git_file in tmp_path.rglob(".git"):
-            if guard.is_linked_worktree(git_file.parent):
-                guard.register_worktree(git_file.parent)
-    guard.finish()
+    The lifecycle exports one comparison identity to every process judging a change,
+    so this suite run inside a dispatch — which is how every worker verifies itself —
+    inherits `ORCHESTRATOR_COMPARISON_BASE` from the branch it is proving. Git hands a
+    `pre-push` hook the whole environment, so a test push that deliberately carries no
+    publication base silently arrived carrying the outer branch's, and the journeys
+    asserting which pushes name a base failed on the inherited value rather than on
+    anything they did. A test's environment is the test's to state.
+    """
+    for key in tuple(os.environ):
+        if key.startswith(COMPARISON_ENV_PREFIX):
+            monkeypatch.delenv(key)
 
 
 def git(*args: str, cwd: str | Path | None = None) -> str:
@@ -109,6 +108,18 @@ def git(*args: str, cwd: str | Path | None = None) -> str:
     if proc.returncode != 0:
         raise AssertionError(f"git {' '.join(args)} failed: {proc.stderr or proc.stdout}")
     return proc.stdout
+
+
+@pytest.fixture(autouse=True)
+def _no_nx_daemon(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep a test's own Nx invocations from leaving a background daemon behind.
+
+    Nx's daemon deliberately outlives the command that starts it, so a test shelling
+    out to a `just` recipe that reaches Nx leaves one running per session. It buys a
+    test nothing — the computation cache is on disk either way — and the developer
+    loop that does want one runs outside this process.
+    """
+    monkeypatch.setenv("NX_DAEMON", "false")
 
 
 @pytest.fixture(autouse=True)

@@ -463,6 +463,30 @@ def stale_worktree_branches(cwd: str | Path) -> dict[str, Path]:
     return result
 
 
+def locked_worktrees(cwd: str | Path) -> set[Path]:
+    """Paths Git has been told to leave alone.
+
+    A lock is somebody's explicit instruction that a worktree must survive — a
+    removable drive, a long operation, a tree an operator is protecting. Nothing
+    here may reclaim one, however stale it otherwise looks.
+    """
+    # ``-z`` rather than plain porcelain: Git quotes a path containing a control
+    # character, a quote, or (under `core.quotePath`) a non-ASCII byte, and this
+    # answer decides whether a directory may be deleted. A quoted path parsed
+    # literally would not match its own worktree, and the lock would be missed.
+    proc = _git(["worktree", "list", "--porcelain", "-z"], cwd=cwd)
+    locked: set[Path] = set()
+    path: Path | None = None
+    for record in proc.stdout.split("\0"):
+        if record.startswith("worktree "):
+            path = Path(record.removeprefix("worktree "))
+        elif not record:
+            path = None
+        elif record.split(" ", 1)[0] == "locked" and path is not None:
+            locked.add(path.resolve())
+    return locked
+
+
 def worktree_prune(cwd: str | Path) -> None:
     """Remove registrations Git considers prunable without an expiry delay."""
     _git(["worktree", "prune", "--expire", "now"], cwd=cwd)

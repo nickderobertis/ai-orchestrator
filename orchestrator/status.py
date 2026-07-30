@@ -244,10 +244,13 @@ def main(argv: list[str] | None = None) -> int:
         indicators: list[str] = []
         if args.runs_dir.is_dir():
             for run_dir in sorted(path for path in args.runs_dir.iterdir() if path.is_dir()):
-                # Reported before the channel indicators and independently of them: an
-                # abandoned round leaves its last planner surface in place, so a run
-                # that died mid-round would otherwise still read as "waiting on me".
-                if (dead := runs.abandoned_round_indicator(run_dir)) is not None:
+                # Reported before the channel indicators and independently of them: a
+                # run that lost its round or its orchestrator leaves its last planner
+                # surface in place, so it would otherwise still read as "waiting on me".
+                dead = runs.abandoned_round_indicator(run_dir) or runs.abandoned_launch_indicator(
+                    run_dir
+                )
+                if dead is not None:
                     indicators.append(f"{run_dir.name}: {dead}")
                 # Reported for the same reason, one layer up: a launch that keeps its
                 # pid while nothing progresses is not running work, and its stale

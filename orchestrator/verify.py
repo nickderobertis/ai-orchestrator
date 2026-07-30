@@ -26,13 +26,17 @@ import os
 import re
 import shlex
 import subprocess
+import threading
+import time
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, TypedDict, TypeGuard
 
 from .coordination import advisory_lock, atomic_json
-from .environment import CHANNEL_ENV_PREFIX
+from .environment import CHANNEL_ENV_PREFIX, COMPARISON_ENV_PREFIX
 from .redaction import redact
+from .watchdog import ProcessId, terminate_process_group
 
 if TYPE_CHECKING:
     # Annotation-and-duck-typing only, and load-bearing: the journal imports the run
@@ -81,8 +85,8 @@ def comparison_env(base: str, *, remote: str = "origin") -> dict[str, str]:
     One source, because two copies of this contract are how the two sides drift.
     """
     return {
-        "ORCHESTRATOR_COMPARISON_REMOTE": remote,
-        "ORCHESTRATOR_COMPARISON_BASE": base,
+        f"{COMPARISON_ENV_PREFIX}REMOTE": remote,
+        f"{COMPARISON_ENV_PREFIX}BASE": base,
     }
 
 
@@ -130,6 +134,10 @@ class VerifyResult:
     reused: bool = False
     attestation: GateAttestation | None = None
     log_path: str | None = None
+    #: The gate was stopped rather than answering. Not a verdict about the change:
+    #: a caller that treats it as one reports a cancelled workstream as having
+    #: failed its gate, and preserves nothing.
+    cancelled: bool = False
 
     def tail(self, limit: int = 2000) -> str:
         """The trailing slice of output, for a compact failure report."""
@@ -319,19 +327,112 @@ def _makefile_has_target(path: Path, target: str) -> bool:
     return False
 
 
+#: How often a running gate is checked against its deadline and its cancellation.
+#: Short enough that a cancelled workstream stops paying for a gate it no longer
+#: wants, long enough that supervising one costs nothing measurable.
+_GATE_POLL_SECONDS = 0.25
+#: How long a stopped gate is given to close its pipes before its output is dropped.
+_GATE_DRAIN_SECONDS = 5.0
+
+
+@dataclass(frozen=True)
+class _GateRun:
+    """One finished gate invocation: its status, and everything it printed."""
+
+    #: ``None`` when the gate never reached a verdict of its own.
+    returncode: int | None
+    output: str
+    cancelled: bool = False
+
+
+def _execute_gate(
+    command: list[str],
+    *,
+    cwd: str,
+    env: dict[str, str],
+    timeout: float | None,
+    cancel: threading.Event | None,
+) -> _GateRun:
+    """Run a gate as a whole process group, and stop that group as a whole.
+
+    A gate is the longest thing the lifecycle runs and the one that spawns most
+    freely — build tools, test runners, and the judges under them. Started in a
+    session of its own, all of that is one process group, so ending it early ends
+    every process it started rather than the one this process happens to hold a
+    handle to. That is the difference between a cancelled workstream and a build
+    tree that keeps a machine busy long after nothing is waiting for it.
+
+    Cancellation is checked here rather than around the call because that is the
+    only place it can be acted on: a gate can run for many minutes, and a check
+    that only happens once the gate returns is a check that changes nothing.
+    """
+    process = subprocess.Popen(
+        command,
+        cwd=cwd,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=env,
+        start_new_session=True,
+    )
+    deadline = None if timeout is None else time.monotonic() + timeout
+    while True:
+        # The supervision interval is a *poll*, never an extension of the caller's
+        # deadline: a fixed wait that straddles it would let a gate finishing inside
+        # that excess be reported as a verdict, even though the timeout this function
+        # was given had already passed. Clamped this way, a returned verdict is always
+        # one the gate reached while the caller was still waiting for it.
+        remaining = None if deadline is None else max(0.0, deadline - time.monotonic())
+        supervise_for = (
+            _GATE_POLL_SECONDS if remaining is None else min(_GATE_POLL_SECONDS, remaining)
+        )
+        try:
+            # Re-entrant after a timeout by contract: partial output already read is
+            # buffered on the Popen, so polling this way never loses gate output.
+            stdout, stderr = process.communicate(timeout=supervise_for)
+        except subprocess.TimeoutExpired:
+            cancelled = cancel is not None and cancel.is_set()
+            expired = deadline is not None and time.monotonic() >= deadline
+            if not cancelled and not expired:
+                continue
+            terminate_process_group(ProcessId(process.pid))
+            printed = ""
+            with suppress(subprocess.TimeoutExpired):
+                stopped_out, stopped_err = process.communicate(timeout=_GATE_DRAIN_SECONDS)
+                printed = stopped_out + stopped_err
+            reason = "cancelled" if cancelled else f"timed out after {timeout}s"
+            # However far the gate got is kept: it is the only account of what a
+            # stopped gate was doing, and the reason it stopped means nothing without it.
+            return _GateRun(
+                None, f"gate {reason}; terminated its process group\n{printed}", cancelled
+            )
+        return _GateRun(process.returncode, stdout + stderr)
+
+
 def run_gate(
     project_dir: str | Path,
     command: list[str],
     *,
     timeout: float | None = None,
     env: dict[str, str] | None = None,
+    cancel: threading.Event | None = None,
 ) -> VerifyResult:
     """Run ``command`` in ``project_dir``; reuse an exact successful certification.
 
     Reuse is deliberately unavailable outside a Git checkout or without the
     resolved comparison remote/base.  The durable record is repository-local
     and binds the verdict to HEAD, comparison identity, and the gate command.
+
+    ``cancel`` stops a gate already under way, taking its whole process group with
+    it; the result then reports a failed gate, because a gate that was stopped
+    never said anything about the change.
     """
+    if not command:
+        # `--gate` reaches integrate and recover as raw argv, and a template that is
+        # only whitespace splits to nothing. Popen would raise IndexError from inside
+        # subprocess, which reads as a harness crash rather than what it is: a gate
+        # that names no command, and so verified nothing.
+        return VerifyResult(ok=False, command=command, output="gate command is empty\n")
     directory = Path(project_dir)
     gate_env = {
         key: value
@@ -348,13 +449,8 @@ def run_gate(
             attestation=_public_attestation(context.record),
         )
     try:
-        proc = subprocess.run(
-            command,
-            cwd=str(project_dir),
-            text=True,
-            capture_output=True,
-            timeout=timeout,
-            env=gate_env,
+        run = _execute_gate(
+            command, cwd=str(project_dir), env=gate_env, timeout=timeout, cancel=cancel
         )
     except FileNotFoundError:
         return VerifyResult(
@@ -362,10 +458,11 @@ def run_gate(
             command=command,
             output=f"gate command not found: {command[0]!r}",
         )
-    except subprocess.TimeoutExpired:  # pragma: no cover - timing-dependent
-        return VerifyResult(ok=False, command=command, output=f"gate timed out after {timeout}s")
     result = VerifyResult(
-        ok=proc.returncode == 0, command=command, output=proc.stdout + proc.stderr
+        ok=run.returncode == 0,
+        command=command,
+        output=run.output,
+        cancelled=run.cancelled,
     )
     if result.ok and context is not None:
         _record_attestation(context)
@@ -425,8 +522,8 @@ def _git_value(directory: Path, *args: str) -> str | None:
 def _attestation_context(
     directory: Path, command: list[str], env: dict[str, str] | None
 ) -> _AttestationContext | None:
-    remote = (env or {}).get("ORCHESTRATOR_COMPARISON_REMOTE")
-    base = (env or {}).get("ORCHESTRATOR_COMPARISON_BASE")
+    remote = (env or {}).get(f"{COMPARISON_ENV_PREFIX}REMOTE")
+    base = (env or {}).get(f"{COMPARISON_ENV_PREFIX}BASE")
     head = _git_value(directory, "rev-parse", "HEAD")
     common = _git_value(directory, "rev-parse", "--path-format=absolute", "--git-common-dir")
     valid_comparison = False

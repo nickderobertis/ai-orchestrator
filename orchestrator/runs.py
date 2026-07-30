@@ -6,6 +6,7 @@ import os
 import re
 import signal
 import socket
+import stat
 import sys
 from collections import Counter
 from collections.abc import Callable, Iterator, Mapping
@@ -67,7 +68,7 @@ def resolve_supervision_run(runs_dir: Path, identifier: str) -> RunId:
             if not metadata.is_file():
                 continue
             value = load_mapping(metadata)
-            if value.get("plan_name") == identifier and launch_is_active(run_dir):
+            if value.get("plan_name") == identifier and launch_claims_a_live_owner(run_dir):
                 matches.append(validate_run_id(run_dir.name))
     if len(matches) == 1:
         return matches[0]
@@ -106,17 +107,61 @@ def process_may_be_live(pid: int, host: object) -> bool:
     return True
 
 
-# llmlint: ignore[changed_behavior_has_e2e] real orchestrate/listing/name-resolution journeys run
-# e2e; host/PID outcomes are deterministic OS-liveness boundary branches.
-def launch_is_active(run_dir: Path) -> bool:
-    """Return whether a launched orchestrator has not written its final report."""
+def _launch_may_have_reported(run_dir: Path) -> bool:
+    """Whether a launched orchestrator's report of its own outcome cannot be ruled out.
+
+    Only `False` is a certainty, in the same shape as `process_may_be_live` above:
+    this host looked and there is no report. A report that cannot be inspected at all
+    answers `True`, because every reader of this is a planner-facing view, and a run
+    directory this host cannot read must not take the listing of every other run with
+    it. Both callers then say nothing about this run rather than announcing something
+    they could not establish.
+
+    One `stat` decides it, and only the errors that mean *not there* are read as an
+    absent report. `Path.is_file()` cannot be the guard here: it answers plain `False`
+    for a path this host may not traverse, which is the one error that must read as
+    *unknown*, so asking it first would quietly turn an unreadable report into proof
+    that there is none. An existing report is not an answer by itself either — a
+    launch leaves an empty one from the start — so only a nonempty regular file
+    settles it.
+    """
     report = run_dir / "orchestrator" / "report.json"
-    if report.is_file() and report.stat().st_size > 0:
+    try:
+        found = report.stat()
+    except (FileNotFoundError, NotADirectoryError):
+        return False
+    except OSError:
+        return True
+    return stat.S_ISREG(found.st_mode) and found.st_size > 0
+
+
+def launch_claims_a_live_owner(run_dir: Path) -> bool:
+    """Whether a launch's own record still claims an orchestrator is running it.
+
+    `True` is a claim this host could not refute rather than a proof of one: the
+    record says `running`, names a usable pid, and nothing contradicts it — including
+    an owner on another host, which this host cannot probe at all and therefore leaves
+    alone. Naming it a proof would be the overclaim, since that is the one case where
+    the answer rests on somebody else's evidence.
+
+    `False` needs that claim to be absent, which is where every input this host cannot
+    read lands: a report already written, no status record, one it cannot parse, a
+    status other than `running`, or a pid it proved gone. The callers use the answer to
+    *address* a run, and addressing one on evidence nobody has is how a live
+    orchestrator ends up with a second planner talking to it.
+    """
+    if _launch_may_have_reported(run_dir):
         return False
     status = run_dir / "orchestrator" / "status.json"
     if not status.is_file():
         return False
-    value = load_mapping(status)
+    try:
+        value = load_mapping(status)
+    except (ConfigError, OSError):
+        # An ordinary file anything may corrupt, read by every planner-facing view.
+        # A record this host cannot parse says nothing about whether the run is
+        # alive, and raising here would take the view of every *other* run with it.
+        return False
     if value.get("status") != "running":
         return False
     pid = value.get("pid")
@@ -239,6 +284,67 @@ def abandoned_round_indicator(run_dir: Path) -> str | None:
     )
 
 
+@dataclass(frozen=True)
+class AbandonedLaunch:
+    """A launched orchestrator that is gone without ever reporting an outcome."""
+
+    pid: int
+    #: The last round it recorded, or ``None`` when it died before recording one.
+    round: int | None
+
+
+def abandoned_launch(run_dir: Path) -> AbandonedLaunch | None:
+    """The run whose orchestrator this host proved gone, with nothing left working.
+
+    A launch records ``running`` once and never rewrites it, so a process that died
+    between rounds leaves a run reading exactly like ordinary finished work — no
+    round claims the ledger, and nothing else says otherwise.
+
+    Every condition below is a reason to stay quiet rather than to speak, because
+    reporting a working run as dead would send a planner to tear down live work. A
+    round that is itself abandoned is left to `abandoned_round`, which says the same
+    thing and names the command that reclaims it.
+    """
+    if not (run_dir / "launch.json").is_file():
+        return None
+    if _launch_may_have_reported(run_dir):
+        return None
+    status = run_dir / "orchestrator" / "status.json"
+    if not status.is_file():
+        return None
+    try:
+        state = load_mapping(status)
+    except (ConfigError, OSError):
+        return None
+    pid = state.get("pid")
+    if (
+        state.get("status") != "running"
+        or not isinstance(pid, int)
+        or isinstance(pid, bool)
+        or pid < 1
+        or process_may_be_live(pid, state.get("host"))
+    ):
+        return None
+    latest = latest_round(run_dir)
+    if latest is not None and (round_appears_in_flight(latest[1]) or abandoned_round(run_dir)):
+        return None
+    return AbandonedLaunch(pid, latest[0] if latest is not None else None)
+
+
+def abandoned_launch_indicator(run_dir: Path) -> str | None:
+    """One line naming a run nothing is driving any more, and where to review it."""
+    found = abandoned_launch(run_dir)
+    if found is None:
+        return None
+    reached = (
+        f"after round-{found.round:02d}" if found.round is not None else "before its first round"
+    )
+    return (
+        f"SETTLED (orchestrator pid {found.pid} is gone {reached}); nothing is driving this "
+        f"run. Review it with: just results {run_dir.name} --runs-dir {run_dir.parent}"
+    )
+
+
 class StackBasePayload(TypedDict):
     """Stable serialized form of one typed lifecycle stack anchor."""
 
@@ -261,6 +367,10 @@ class ResumePayload(TypedDict):
     pr: str | None
     mode: NotRequired[ResumeMode]
     source_round: NotRequired[int]
+    #: How many times the harness has continued this preserved branch on its own.
+    #: Absent until the first automatic continuation, so an untouched payload is
+    #: byte-identical to one written before this field existed.
+    attempts: NotRequired[int]
 
 
 class HumanActionPayload(TypedDict):

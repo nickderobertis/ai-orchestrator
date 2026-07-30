@@ -8,7 +8,12 @@ from copy import deepcopy
 import pytest
 
 from orchestrator.plan import PlanError
-from orchestrator.replan import _apply_lifecycle_resume, main, next_round
+from orchestrator.replan import (
+    MAX_AUTOMATIC_ROUND_RESUMES,
+    _apply_lifecycle_resume,
+    main,
+    next_round,
+)
 
 
 def _plan(*tasks: dict) -> dict:
@@ -541,7 +546,106 @@ def test_failed_lifecycle_carries_preserved_resume_without_retry_edit() -> None:
 
     carried = next_round(_plan(work), result)
 
-    assert carried["tasks"][0]["resume"] == {**resume, "source_round": 3}
+    # The continuation is the harness's own, so it is counted against the budget
+    # that stops a node being redispatched at the same branch forever.
+    assert carried["tasks"][0]["resume"] == {**resume, "source_round": 3, "attempts": 1}
+
+
+def _preserved_failure(resume: dict[str, object], *, round_number: int = 3) -> dict[str, object]:
+    return {
+        "round": round_number,
+        "results": {"work": {"status": "failed", "outcome": "not-completed", "resume": resume}},
+    }
+
+
+#: The continuation a failing lifecycle node preserves. The lifecycle rebuilds one
+#: of these every round from whatever it just preserved, so it never carries a tally
+#: of how many rounds preceded it — which is why the budget is counted on the plan.
+_PRESERVED_RESUME: dict[str, object] = {
+    "branch": "feature/preserved",
+    "base_branch": "main",
+    "pr_base": "main",
+    "checkpoint": "abcdef1",
+    "completed_steps": [],
+    "mode": "retry",
+}
+
+
+def test_automatic_continuation_settles_a_node_once_its_budget_is_spent() -> None:
+    """A preserved branch is continued a bounded number of times, then left alone.
+
+    Unbounded, this is the loop that redispatched one node every round on the same
+    branch, handing it another `(incomplete step)` marker commit each time. Rounds
+    are chained the way the real ledger chains them — each plan derived from the last
+    — because the tally lives on the plan and a result-only chain would never bound.
+    """
+    work = {"id": "work", "repo": "o/r", "persona": "engineer", "task": "Continue"}
+    plan = _plan(work)
+
+    for attempt in range(1, MAX_AUTOMATIC_ROUND_RESUMES + 1):
+        plan = next_round(plan, _preserved_failure(_PRESERVED_RESUME))
+        assert plan["tasks"][0]["resume"]["attempts"] == attempt
+
+    assert next_round(plan, _preserved_failure(_PRESERVED_RESUME))["tasks"] == []
+
+
+@pytest.mark.parametrize("tally", [-1, 1.5, "2", True, None])
+def test_a_malformed_carried_continuation_tally_is_refused(tally: object) -> None:
+    """A tally that is not a whole count is bad input, never a budget to start over.
+
+    Coercing it to zero is the failure mode with teeth: a plan carried across rounds
+    or hand-edited would silently regain a full continuation budget every round, which
+    is the unbounded redispatch of one preserved branch the budget exists to stop.
+    """
+    work = {"id": "work", "repo": "o/r", "persona": "engineer", "task": "Continue"}
+    carried = _plan({**work, "resume": {**_PRESERVED_RESUME, "attempts": tally}})
+
+    with pytest.raises(PlanError, match="resume 'attempts' must be a non-negative integer"):
+        next_round(carried, _preserved_failure(_PRESERVED_RESUME))
+
+
+def test_an_explicit_retry_restores_the_full_continuation_budget() -> None:
+    """The bound stops the harness repeating itself, never a planner decision."""
+    work = {"id": "work", "repo": "o/r", "persona": "engineer", "task": "Continue"}
+    exhausted = _plan({**work, "resume": {**_PRESERVED_RESUME, "attempts": 2}})
+
+    assert next_round(exhausted, _preserved_failure(_PRESERVED_RESUME))["tasks"] == []
+
+    retried = next_round(
+        exhausted, _preserved_failure(_PRESERVED_RESUME), {"retry": {"work": {"max_turns": 40}}}
+    )
+
+    assert [task["id"] for task in retried["tasks"]] == ["work"]
+    assert "attempts" not in retried["tasks"][0]["resume"]
+    assert retried["tasks"][0]["max_turns"] == 40
+
+
+def test_a_waiting_human_workstream_is_never_bounded_by_the_retry_budget() -> None:
+    """A human gate is not a failed attempt; waiting rounds must not spend budget."""
+    work = {
+        "id": "work",
+        "repo": "o/r",
+        "persona": "engineer",
+        "task": "Continue",
+        "steps": [{"id": "gate", "kind": "human", "task": "approve"}],
+    }
+    resume = {
+        "branch": "feature/paused",
+        "base_branch": "main",
+        "pr_base": "main",
+        "checkpoint": "abcdef1",
+        "completed_steps": [],
+    }
+    waiting = {
+        "round": 2,
+        "results": {"work": {"status": "waiting", "resume": resume, "waiting_steps": ["gate"]}},
+    }
+    plan = _plan(work)
+
+    for _ in range(MAX_AUTOMATIC_ROUND_RESUMES + 2):
+        plan = next_round(plan, waiting)
+        assert [task["id"] for task in plan["tasks"]] == ["work"]
+        assert "attempts" not in plan["tasks"][0]["resume"]
 
 
 def test_explicit_branch_overrides_inferred_preserved_resume() -> None:

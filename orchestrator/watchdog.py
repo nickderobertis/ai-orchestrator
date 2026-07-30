@@ -70,12 +70,60 @@ def _stat(pid: ProcessId) -> ProcessStat | None:
     return _parse_stat(raw_stat, io_fields)
 
 
+def _process_ids() -> list[ProcessId]:
+    """Every pid procfs currently lists."""
+    return [ProcessId(int(entry.name)) for entry in Path("/proc").iterdir() if entry.name.isdigit()]
+
+
+def process_group_is_running(group_id: ProcessId) -> bool:
+    """Whether any process in ``group_id`` is still executing.
+
+    ``killpg(group, 0)`` is not this answer: it counts zombies, and anything that
+    made itself a child subreaper keeps its orphans' exit statuses until it collects
+    them. A group whose remaining members have all exited is finished, and a caller
+    waiting on ``killpg`` would wait for a group that is never going to empty.
+    """
+    return any(
+        record.process_group == group_id and record.state != "Z"
+        for pid in _process_ids()
+        if (record := _stat(pid)) is not None
+    )
+
+
+def descendants(root_pid: ProcessId) -> tuple[ProcessId, ...]:
+    """Every live process below ``root_pid``, by parentage alone.
+
+    Deliberately cheaper than `process_activity`: parentage lives in
+    ``/proc/<pid>/stat``, so a caller that only needs the shape of the tree should
+    not also open ``/proc/<pid>/io`` for every process on the host. That second
+    read doubles the syscalls of a full walk, and a walk that repeats on a timer
+    is competing for the same interpreter as whatever it is watching.
+    """
+    parents: dict[ProcessId, ProcessId] = {}
+    for pid in _process_ids():
+        try:
+            raw = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
+        except OSError:
+            continue
+        fields = raw[raw.rfind(")") + 2 :].split()
+        if len(fields) >= 2 and fields[0] != "Z":
+            parents[pid] = ProcessId(int(fields[1]))
+    found = {root_pid}
+    changed = True
+    while changed:
+        changed = False
+        for pid, parent in parents.items():
+            if parent in found and pid not in found:
+                found.add(pid)
+                changed = True
+    return tuple(sorted(found - {root_pid}))
+
+
 def process_activity(root_pid: ProcessId) -> ProcessActivity:
     """Return live descendants and cumulative CPU/I/O for ``root_pid``."""
     records: dict[ProcessId, ProcessStat] = {}
-    for entry in Path("/proc").iterdir():
-        pid = ProcessId(int(entry.name)) if entry.name.isdigit() else None
-        if pid is not None and (record := _stat(pid)) is not None and record.state != "Z":
+    for pid in _process_ids():
+        if (record := _stat(pid)) is not None and record.state != "Z":
             records[pid] = record
     selected = {root_pid} if root_pid in records else set()
     changed = True
@@ -141,24 +189,56 @@ def terminate_process_group(group_id: ProcessId) -> None:
     time.sleep(0.05)
     with suppress(PermissionError, ProcessLookupError):
         os.killpg(group_id, signal.SIGKILL)
-    members: list[ProcessId] = []
-    for entry in Path("/proc").iterdir():
-        if not entry.name.isdigit():
-            continue
-        pid = ProcessId(int(entry.name))
-        record = _stat(pid)
-        if record is not None and record.process_group == group_id:
-            members.append(pid)
+    members = [
+        pid
+        for pid in _process_ids()
+        if (record := _stat(pid)) is not None and record.process_group == group_id
+    ]
     terminate_processes(tuple(members))
+
+
+def lead_process_group() -> None:
+    """Make this process the leader of a process group of its own.
+
+    Without this the whole dispatched tree sits in whatever group the supervisor was
+    launched in, so ``terminate_process_group`` has no group to signal — the recorded
+    pid is not a group id, and ``killpg`` answers ESRCH. What is left is walking
+    ``/proc`` from the root, and that walk loses a descendant the moment its parent
+    exits and it reparents away. A process group is the one handle the kernel keeps
+    valid across that reparenting.
+
+    ``setpgid`` rather than ``setsid``: this needs a signalling handle, not a new
+    session, and leaving the session alone keeps the tree's controlling terminal — and
+    so any tty-aware harness below it — exactly as it was. A process that already
+    leads its group gets a harmless success, and anything the kernel refuses leaves
+    the inherited group in place, which is no worse than the state this replaces.
+    """
+    with suppress(OSError):
+        os.setpgid(0, 0)
+
+
+#: Opt-in flag for `lead_process_group`. The wrapper is normally reached by exec from
+#: a process spawned for it, but it is also called in-process by its own unit test,
+#: and regrouping *that* process would move the whole test session out of its group.
+#: Asking for the new group explicitly keeps the side effect where the caller wants it.
+OWN_PROCESS_GROUP_FLAG = "--own-process-group"
 
 
 def main(argv: list[str] | None = None) -> int:
     """Record this stable pre-exec pid, then replace the wrapper with onejudge."""
     args = list(sys.argv[1:] if argv is None else argv)
+    own_group = bool(args) and args[0] == OWN_PROCESS_GROUP_FLAG
+    if own_group:
+        args.pop(0)
     if len(args) < 2:
-        print("usage: watchdog PID_FILE COMMAND [ARG ...]", file=sys.stderr)
+        print(
+            f"usage: watchdog [{OWN_PROCESS_GROUP_FLAG}] PID_FILE COMMAND [ARG ...]",
+            file=sys.stderr,
+        )
         return 2
     pid_file = Path(args.pop(0))
+    if own_group:
+        lead_process_group()
     pid_file.write_text(str(os.getpid()), encoding="utf-8")
     if os.environ.pop("ORCHESTRATOR_WATCHDOG_UNSET_LLMLINT", None) == "1":
         os.environ.pop("LLMLINT_ONEHARNESS_BIN", None)

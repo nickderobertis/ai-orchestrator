@@ -64,12 +64,13 @@ from orchestrator.next_round import main as next_round_main
 from orchestrator.provenance import (
     INCOMPLETE_TRAILER,
     PR_BASE_TRAILER,
+    RECOVERY_TRAILER,
     format_preserved_step_metadata,
     incomplete_commits,
 )
 from orchestrator.recover import recover_repo
 from orchestrator.registry import Registry, RegistryEntry, RegistryError, Slug
-from orchestrator.replan import next_round
+from orchestrator.replan import MAX_AUTOMATIC_ROUND_RESUMES, next_round
 from orchestrator.runs import NodeId, RunId, prepare_round, write_result
 from orchestrator.workspace import IdentityKey, Workspace, normalize_repo
 
@@ -385,6 +386,52 @@ def test_published_dispatch_survives_deferred_teardown_and_redispatch_reclaims_i
         recorded_gate=["true"],
     )
     assert second.outcome == "merged", second.detail
+
+
+def test_redispatch_reclaims_a_worktree_a_killed_worker_left_dirty(
+    tmp_path, bare_origin, command_base, personas_dir
+) -> None:
+    """A re-dispatch clears the debris of a killed worker instead of refusing it.
+
+    A worker that dies mid-run leaves a real worktree with a build cache in it and a
+    ``.git`` pointer git will no longer honour, so ``git worktree remove`` answers
+    "is not a working tree" and the plain directory stays. That used to end every
+    later attempt at the same branch until an operator cleared the path by hand.
+    """
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-killed")
+    root = tmp_path / "killed-worktrees"
+    ref = normalize_repo(str(origin))
+    killed = Workspace(
+        root, resolver=lambda _spec: canonical, workflow="local", repo_type="single-owner"
+    )
+    killed.ensure_clone(ref)
+    abandoned = killed.worktree(ref, "killed-worker", base="origin/main")
+    (abandoned / "node_modules" / ".cache").mkdir(parents=True)
+    (abandoned / "node_modules" / ".cache" / "daemon.log").write_text("stale\n", encoding="utf-8")
+    (abandoned / ".git").unlink()
+    killed._release_worktree_lease(abandoned)
+
+    resumed = Workspace(
+        root,
+        resolver=lambda _spec: canonical,
+        workflow="local",
+        repo_type="single-owner",
+        run_token=killed.run_token,
+    )
+    result = run_repo_task(
+        str(origin),
+        "complete-now write-change reclaimed after a killed worker",
+        "engineer",
+        workspace=resumed,
+        branch="killed-worker",
+        base_path=command_base(),
+        persona_dir=personas_dir,
+        recorded_gate=["true"],
+    )
+
+    assert result.outcome == "merged", result.detail
+    assert not (abandoned / "node_modules").exists()
 
 
 def test_lifecycle_failure_survives_simultaneous_deferred_teardown(
@@ -1177,6 +1224,192 @@ def test_repo_plan_ledger_and_guided_next_round(
     assert main_plan([str(plan_path), "--no-record", *common]) == 0
     unrecorded = json.loads(capsys.readouterr().out)
     assert unrecorded["schema_version"] == 5 and "round" not in unrecorded
+
+
+def test_a_node_that_cannot_finish_settles_instead_of_being_redispatched_forever(
+    tmp_path, bare_origin, command_base, personas_dir, capsys
+) -> None:
+    """A preserved branch is continued to a budget, then left for the planner.
+
+    The loop this closes: a node that never finishes was redispatched every round on
+    the same branch and handed another `chore: ... (incomplete step)` marker commit
+    each time, with nothing recording that the attempts were going nowhere. Driven
+    through the real round CLIs against a real origin, so what is asserted is the
+    ledger and the branch an operator would actually read.
+    """
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-bounded-resume")
+    Registry().register(str(canonical), workflow="local")
+    runs_dir = tmp_path / "runs"
+    plan_path = tmp_path / "bounded-resume.json"
+    plan_path.write_text(
+        json.dumps(
+            {
+                "tasks": [
+                    {
+                        "id": "change",
+                        "repo": str(canonical),
+                        "persona": "engineer",
+                        # Writes real work every round, so every attempt earns a
+                        # marker: the growth is bounded by bounding the attempts.
+                        "task": "should-fail write-unique-change: never finishes",
+                        "verify_cmd": ["true"],
+                        "workflow": "local",
+                        "repo_type": "single-owner",
+                    },
+                    {
+                        "id": "follow",
+                        "repo": str(canonical),
+                        "persona": "engineer",
+                        "task": "complete-now write-change: builds on the change",
+                        "verify_cmd": ["true"],
+                        "workflow": "local",
+                        "repo_type": "single-owner",
+                        "deps": ["change"],
+                    },
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    common = [
+        "--base",
+        str(command_base()),
+        "--persona-dir",
+        str(personas_dir),
+        "--workspace",
+        str(tmp_path / "workspace"),
+        "--format",
+        "json",
+    ]
+    run = "bounded-resume"
+
+    def _recorded(number: int, name: str) -> dict:
+        recorded = runs_dir / run / f"round-{number:02d}" / name
+        return json.loads(recorded.read_text(encoding="utf-8"))
+
+    assert main_plan([str(plan_path), "--run", run, "--runs-dir", str(runs_dir), *common]) == 1
+    capsys.readouterr()
+    branch = _recorded(1, "result.json")["results"]["change"]["branch"]
+
+    # Every automatic continuation the budget allows, and not one more. Each one
+    # resumes the same preserved branch and spends one attempt from that budget,
+    # which the round's own plan records.
+    for attempt in range(1, MAX_AUTOMATIC_ROUND_RESUMES + 1):
+        assert next_round_main([run, "--runs-dir", str(runs_dir), *common]) == 1
+        capsys.readouterr()
+        dispatched = _recorded(attempt + 1, "plan.json")["tasks"]
+        resumed = next(task for task in dispatched if task["id"] == "change")
+        assert resumed["resume"]["branch"] == branch
+        assert resumed["resume"]["attempts"] == attempt
+        assert _recorded(attempt + 1, "result.json")["results"]["change"]["branch"] == branch
+        # Its dependent is still gated on it, and holds no anchor to work that has
+        # not landed anywhere.
+        follower = next(task for task in dispatched if task["id"] == "follow")
+        assert follower["deps"] == ["change"]
+        assert not follower.get("stack_bases")
+
+    rounds_run = 1 + MAX_AUTOMATIC_ROUND_RESUMES
+    # Exactly one marker, across every round that ran — and every one of those rounds
+    # committed real work and then failed, so each was entitled to preserve something.
+    # The marker states one fact about the branch, that it carries preserved incomplete
+    # work, and a round that finds it already stated adds nothing by stating it again.
+    # Bounding the attempts stopped the growth from being unbounded; this is what stops
+    # it accruing one commit per round inside that bound, each of which recovery would
+    # otherwise have to attest separately.
+    markers = len(incomplete_commits(canonical, "origin/main", branch))
+    assert markers == 1, markers
+    assert rounds_run > 1, "a single round could not tell repetition from the first mark"
+
+    # The exhausted node settles out, and its dependent is released to run against
+    # the base rather than waiting on work nothing is going to finish — the same
+    # release a `drop` gives, and with no publication anchor invented for a branch
+    # that never landed.
+    # Exit 0: with the exhausted node gone, the released dependent is all that runs
+    # and it completes, so the round settles the graph.
+    assert next_round_main([run, "--runs-dir", str(runs_dir), *common]) == 0
+    capsys.readouterr()
+    released = _recorded(rounds_run + 1, "plan.json")["tasks"]
+
+    assert [task["id"] for task in released] == ["follow"]
+    assert released[0]["deps"] == []
+    assert not released[0].get("stack_bases")
+    assert _recorded(rounds_run + 1, "result.json")["results"]["follow"]["status"] == "done"
+
+    # The exhausted node was not dispatched again, so no further marker reached its
+    # branch and the preserved work is still where `just repo-recover` expects it.
+    assert "change" not in _recorded(rounds_run + 1, "result.json")["results"]
+    assert len(incomplete_commits(canonical, "origin/main", branch)) == markers
+    assert gitops.branch_exists(canonical, branch)
+
+
+def test_an_explicit_retry_restores_an_exhausted_preserved_branchs_budget(
+    tmp_path, bare_origin, command_base, personas_dir, capsys
+) -> None:
+    """The bound stops the harness repeating itself, never a planner decision.
+
+    Same real round CLIs, driven to the same exhausted state, and then given the
+    `retry` edit a planner writes after reading the result. The node runs again on
+    the branch it preserved, with the budget started over rather than topped up.
+    """
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-retry-budget")
+    Registry().register(str(canonical), workflow="local")
+    runs_dir = tmp_path / "runs"
+    plan_path = tmp_path / "retry-budget.json"
+    plan_path.write_text(
+        json.dumps(
+            {
+                "tasks": [
+                    {
+                        "id": "change",
+                        "repo": str(canonical),
+                        "persona": "engineer",
+                        "task": "should-fail write-unique-change: never finishes",
+                        "verify_cmd": ["true"],
+                        "workflow": "local",
+                        "repo_type": "single-owner",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    common = [
+        "--base",
+        str(command_base()),
+        "--persona-dir",
+        str(personas_dir),
+        "--workspace",
+        str(tmp_path / "workspace"),
+        "--format",
+        "json",
+    ]
+    run = "retry-budget"
+
+    def _recorded(number: int, name: str) -> dict:
+        return json.loads((runs_dir / run / f"round-{number:02d}" / name).read_text("utf-8"))
+
+    assert main_plan([str(plan_path), "--run", run, "--runs-dir", str(runs_dir), *common]) == 1
+    capsys.readouterr()
+    branch = _recorded(1, "result.json")["results"]["change"]["branch"]
+    for _ in range(MAX_AUTOMATIC_ROUND_RESUMES):
+        assert next_round_main([run, "--runs-dir", str(runs_dir), *common]) == 1
+        capsys.readouterr()
+    spent = 1 + MAX_AUTOMATIC_ROUND_RESUMES
+    assert _recorded(spent, "plan.json")["tasks"][0]["resume"]["attempts"] == (
+        MAX_AUTOMATIC_ROUND_RESUMES
+    )
+
+    edits = tmp_path / "retry.json"
+    edits.write_text(json.dumps({"retry": {"change": {}}}), encoding="utf-8")
+    assert next_round_main([run, str(edits), "--runs-dir", str(runs_dir), *common]) == 1
+    capsys.readouterr()
+    retried = _recorded(spent + 1, "plan.json")["tasks"][0]
+
+    assert retried["resume"]["branch"] == branch
+    assert "attempts" not in retried["resume"]
+    assert _recorded(spent + 1, "result.json")["results"]["change"]["branch"] == branch
 
 
 def test_ordinary_next_round_resumes_committed_lifecycle_branch(
@@ -3983,6 +4216,87 @@ def test_clean_committed_partial_work_is_marked_and_recoverable(tmp_path, bare_o
     assert f"Orchestrator-Recovered-Incomplete: {marker_sha}" in attestation[0].message
     assert not gitops.is_ancestor(canonical, attestation[0].sha, "origin/main")
     assert _has_file(origin, "main", "partial.txt")
+
+
+def test_a_redispatched_branch_is_not_handed_a_second_incomplete_marker(
+    tmp_path, bare_origin
+) -> None:
+    """The marker states one fact about the branch; a redispatch does not restate it.
+
+    Observed on this repository's own workstreams: every redispatch of a branch that
+    committed real work and then ran out of turns appended one more empty
+    `chore: ... (incomplete step)` commit, because the "is it already marked?" question
+    was asked from that dispatch's own head — where the answer is always no. The cost is
+    not only a noisy branch: recovery attests every unattested marker it finds, so the
+    accumulation reaches the published history too.
+
+    Two real dispatches against a real origin, each committing its own work and leaving
+    a clean tree before it runs out of turns, then the real recovery that publishes it.
+    """
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-remarked")
+    Registry().register(str(canonical), workflow="local", repo_type="single-owner")
+    workspace = Workspace(tmp_path / "remarked-worktrees")
+
+    def committing_dispatch(persona: str, task: str, *, project_dir: str, **_: object) -> Report:
+        """Commit this round's own work, leave the tree clean, and run out of turns."""
+        worktree = Path(project_dir)
+        round_file = f"{task.split()[0]}.txt"
+        (worktree / round_file).write_text(f"partial work: {task}\n", encoding="utf-8")
+        gitops.add_all(worktree)
+        gitops.commit(worktree, f"wip: {task}")
+        assert not gitops.is_dirty(worktree)
+        return Report(persona, 1, False, False, 2, [], {}, {}, "")
+
+    first = run_repo_task(
+        str(canonical),
+        "first round of partial work",
+        "engineer",
+        workspace=workspace,
+        branch="feature/remarked",
+        dispatch_fn=committing_dispatch,
+        recorded_gate=["true"],
+    )
+
+    assert first.outcome == "not-completed" and isinstance(first.resume, Resume)
+    first_markers = incomplete_commits(canonical, "origin/main", first.branch)
+    assert len(first_markers) == 1, sorted(first_markers)
+
+    second = run_repo_task(
+        str(canonical),
+        "second round of partial work",
+        "engineer",
+        workspace=workspace,
+        dispatch_fn=committing_dispatch,
+        recorded_gate=["true"],
+        resume=first.resume,
+    )
+
+    # The second round resumed the same branch, committed to it, and is still
+    # not-completed with work worth recovering. It simply did not mark it again.
+    assert second.outcome == "not-completed" and second.branch == first.branch
+    assert second.resume is not None
+    assert _has_file(canonical, second.branch, "second.txt")
+    assert incomplete_commits(canonical, "origin/main", second.branch) == first_markers
+
+    recovered = recover_repo(
+        canonical,
+        second.branch,
+        workspace_root=tmp_path / "remarked-recovery-worktrees",
+        recorded_gate=["true"],
+    )
+
+    # One marker, so one attestation: what recovery publishes accounts for this
+    # branch's incomplete provenance exactly once, and carries both rounds' work.
+    assert recovered.ok and recovered.outcome == "merged", recovered.detail
+    attested = [
+        line
+        for commit in gitops.log_messages(canonical, next(iter(first_markers)), second.branch)
+        for line in commit.message.splitlines()
+        if line.startswith(RECOVERY_TRAILER)
+    ]
+    assert attested == [f"{RECOVERY_TRAILER} {next(iter(first_markers))}"], attested
+    assert _has_file(origin, "main", "first.txt") and _has_file(origin, "main", "second.txt")
 
 
 @pytest.mark.parametrize(

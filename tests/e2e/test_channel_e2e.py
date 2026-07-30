@@ -8,10 +8,12 @@ import signal
 import subprocess
 import sys
 import time
+from contextlib import suppress
 from pathlib import Path
 
 import pytest
 import yaml
+from process_tree import is_running
 from waits import deadline
 from waits import timeout as e2e_timeout
 
@@ -1299,3 +1301,120 @@ def test_orchestrate_cli_refuses_unusable_launch_provenance(tmp_path: Path) -> N
     )
     assert relative_home.returncode == 2
     assert "absolute state directory" in relative_home.stderr
+
+
+def _await_owner_exit(pid: int) -> bool:
+    """Wait for a recorded owner to stop executing, and report whether it did.
+
+    Zombie-aware on purpose: this launch API keeps its `Popen` inside the test
+    process, so the finished orchestrator waits there for a status nobody collects.
+    It has still stopped, which is the thing being asserted.
+    """
+    wait_deadline = deadline(15)
+    while time.monotonic() < wait_deadline:
+        if not is_running(pid):
+            return True
+        time.sleep(0.02)
+    return False
+
+
+def _view_cli(recipe: str, runs: Path, history: Path) -> str:
+    """One planner-facing read-only view over ``runs``, with no dispatch history."""
+    history.mkdir(exist_ok=True)
+    viewed = subprocess.run(
+        ["just", recipe, "--runs-dir", str(runs)],
+        cwd=REPO_ROOT,
+        env={**os.environ, "ONEHARNESS_HISTORY_DIR": str(history)},
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=180,
+    )
+    assert viewed.returncode == 0, viewed.stderr
+    return viewed.stdout
+
+
+def test_a_launch_that_reported_its_own_outcome_is_never_called_settled(
+    tmp_path: Path, onejudge_bin: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An orchestrator that finished is gone too, and must not read as abandoned.
+
+    The settled report is derived from the recorded owner's liveness, so a run whose
+    orchestrator completed looks identical at the pid: the process is not there. What
+    separates them is the report it wrote on its way out. Driven the way a planner
+    ends a run — read the surface, reply, and let it finish.
+    """
+    runs = tmp_path / "reported-runs"
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    run_id = _launch_cli(
+        _plan(tmp_path, "surface-milestone"),
+        runs,
+        _base(tmp_path),
+        onejudge_bin,
+        env={"XDG_STATE_HOME": str(tmp_path / "state")},
+    )
+    owner = json.loads(
+        (runs / run_id / "orchestrator" / "status.json").read_text(encoding="utf-8")
+    )["pid"]
+
+    assert _next_cli(run_id, runs)["surface"]["kind"] == "milestone"
+    _reply_cli(run_id, runs, {"completion": True, "reason": "verified"})
+    _wait_report(runs / run_id / "orchestrator" / "report.json")
+
+    # Its process is gone, exactly as a killed one would be — the recorded status
+    # still says `running`, because nothing rewrites it either way.
+    assert _await_owner_exit(owner)
+    assert (
+        json.loads((runs / run_id / "orchestrator" / "status.json").read_text(encoding="utf-8"))[
+            "status"
+        ]
+        == "running"
+    )
+
+    listed = _view_cli("runs", runs, tmp_path / "history")
+    reported = _view_cli("status", runs, tmp_path / "history")
+
+    assert "SETTLED" not in listed, listed
+    assert "SETTLED" not in reported, reported
+
+
+def test_a_launch_that_dies_after_a_recorded_round_is_reported_against_its_row(
+    tmp_path: Path, onejudge_bin: str
+) -> None:
+    """A run that got somewhere before its orchestrator went reads differently.
+
+    The round here is recorded by the orchestrator itself, on its own first turn and
+    through its own `run-plan` — the only thing entitled to drive a live run's
+    ledger. Killing it afterwards leaves precisely the state four stranded runs were
+    in: real work recorded, and nothing left driving it.
+    """
+    runs = tmp_path / "after-round-runs"
+    run_id = _launch_cli(
+        _plan(tmp_path, "surface-milestone"),
+        runs,
+        _base(tmp_path),
+        onejudge_bin,
+        env={"XDG_STATE_HOME": str(tmp_path / "state")},
+    )
+    recorded = runs / run_id / "round-01" / "result.json"
+    round_deadline = deadline(60)
+    while time.monotonic() < round_deadline and not recorded.is_file():
+        time.sleep(0.02)
+    assert recorded.is_file(), "the launched orchestrator never recorded its round"
+
+    owner = json.loads(
+        (runs / run_id / "orchestrator" / "status.json").read_text(encoding="utf-8")
+    )["pid"]
+    with suppress(ProcessLookupError, PermissionError):
+        os.killpg(owner, signal.SIGKILL)
+    assert _await_owner_exit(owner)
+
+    listed = _view_cli("runs", runs, tmp_path / "history")
+    reported = _view_cli("status", runs, tmp_path / "history")
+
+    settled = f"SETTLED (orchestrator pid {owner} is gone after round-01)"
+    # A run with recorded history keeps its ledger row and carries the death on the
+    # line beneath it, which is what an operator scanning the list actually reads.
+    assert f"! {run_id}  round-01  (" in listed, listed
+    assert f"    {settled}" in listed, listed
+    assert f"{run_id}: {settled}" in reported, reported

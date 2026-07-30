@@ -2497,3 +2497,154 @@ def test_legacy_repo_plan_runs_through_canonical_and_deprecated_alias(
         ).returncode
         == 0
     )
+
+
+def test_run_plan_rejects_a_malformed_resume_attempt_count(tmp_path: Path) -> None:
+    """The continuation tally arrives in a plan file, so it is validated like one.
+
+    A plan is an external input: it is written by a planner, carried across rounds,
+    and hand-edited. A negative or non-integer count would otherwise decide how many
+    times a preserved branch is redispatched.
+    """
+    plan = tmp_path / "bad-attempts.json"
+    plan.write_text(
+        json.dumps(
+            {
+                "tasks": [
+                    {
+                        "id": "work",
+                        "repo": "o/r",
+                        "persona": "engineer",
+                        "task": "Continue",
+                        "resume": {
+                            "branch": "feature/preserved",
+                            "base_branch": "main",
+                            "pr_base": "main",
+                            "checkpoint": "a" * 40,
+                            "completed_steps": [],
+                            "attempts": -1,
+                        },
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    rejected = _just("run-plan", str(plan), "--runs-dir", str(tmp_path / "runs"))
+
+    assert rejected.returncode == 2, rejected.stdout
+    assert "resume 'attempts' must be a non-negative integer" in rejected.stderr
+
+
+def test_replan_rejects_a_malformed_resume_attempt_count(tmp_path: Path) -> None:
+    """Replanning is a second door onto the same tally, and it must refuse the same.
+
+    `just replan` reads a prior plan straight off disk and spends its continuation
+    budget without any round having validated it first — so this is the path where a
+    malformed count could quietly reset the budget that stops one preserved branch
+    being redispatched forever. The prior result is a preserved failure, which is
+    exactly the case that reads the tally rather than discarding it.
+    """
+    prev_plan = tmp_path / "prev-plan.json"
+    resume = {
+        "branch": "feature/preserved",
+        "base_branch": "main",
+        "pr_base": "main",
+        "checkpoint": "a" * 40,
+        "completed_steps": [],
+        "mode": "retry",
+    }
+    prev_plan.write_text(
+        json.dumps(
+            {
+                "tasks": [
+                    {
+                        "id": "work",
+                        "repo": "o/r",
+                        "persona": "engineer",
+                        "task": "Continue",
+                        "resume": {**resume, "attempts": "2"},
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    prev_result = tmp_path / "prev-result.json"
+    prev_result.write_text(
+        json.dumps(
+            {
+                "round": 3,
+                "results": {
+                    "work": {"status": "failed", "outcome": "not-completed", "resume": resume}
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    rejected = _just("replan", str(prev_plan), str(prev_result))
+
+    assert rejected.returncode == 2, rejected.stdout
+    assert "task 'work' resume 'attempts' must be a non-negative integer" in rejected.stderr
+
+
+def test_a_budget_spent_without_agent_progress_reads_apart_from_a_turn_cap(
+    tmp_path: Path, command_base, onejudge_bin: str
+) -> None:
+    """The reported failure: a provider answers nothing and the budget drains anyway.
+
+    Real `just run-plan`, real onejudge, and only the paid harness faked — the agent
+    accepts each turn and returns an empty answer, which onejudge counts. The
+    recorded round is where a planner meets the result, so that is where the two
+    kinds of unfinished have to read differently.
+    """
+    runs = tmp_path / "runs"
+    plan = tmp_path / "silent.json"
+    plan.write_text(
+        json.dumps(
+            {
+                "tasks": [
+                    {
+                        "id": "silent",
+                        "persona": "engineer",
+                        "task": "should-fail silent-agent: the provider answers nothing",
+                    },
+                    {
+                        "id": "capped",
+                        "persona": "engineer",
+                        "task": "should-fail: works but runs out of room",
+                    },
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    ran = _just(
+        "run-plan",
+        str(plan),
+        "--run",
+        "silent-agent",
+        "--runs-dir",
+        str(runs),
+        "--base",
+        str(command_base(max_turns=3)),
+        "--onejudge-bin",
+        onejudge_bin,
+        "--format",
+        "json",
+    )
+
+    assert ran.returncode == 1, ran.stderr
+    recorded = json.loads(
+        (runs / "silent-agent" / "round-01" / "result.json").read_text(encoding="utf-8")
+    )["results"]
+    assert recorded["silent"]["status"] == "failed"
+    assert "without the agent producing anything" in recorded["silent"]["error"]
+    # An agent that worked and ran out of room still reads as having run out of room,
+    # and now says how far it got — the whole point being that the two are not one
+    # result with one explanation. Only the silent one is told not to retry unchanged.
+    assert recorded["capped"]["error"] == "hit the turn cap after 3 turns"
+    assert "without the agent producing anything" not in recorded["capped"]["error"]

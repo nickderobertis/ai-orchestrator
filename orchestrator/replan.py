@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import ConfigError, load_yaml
+from .lifecycle import MAX_AUTOMATIC_STEP_RESUMES
 from .outcomes import INFRASTRUCTURE_FAILURE_OUTCOME
 from .runs import StackBasePayload
 
@@ -161,13 +162,14 @@ def next_round(
         node = dict(task)
         if tid in retry:
             node.update(retry[tid])
-        _apply_lifecycle_resume(
+        if not _apply_lifecycle_resume(
             node,
             results,
             completed_humans,
             retry_requested=tid in retry,
             source_round=prev_result.get("round"),
-        )
+        ):
+            continue
         _emit(node)
 
     for subs in split.values():  # replacement subnodes for split nodes
@@ -271,6 +273,47 @@ def _node_human_refs(nid: str, task: dict[str, Any]) -> set[str]:
     }
 
 
+#: How many rounds the harness continues one preserved lifecycle branch on its own
+#: before leaving the node to the planner. Continuation exists so a workstream that
+#: ran out of turns picks up where it stopped, not as a policy for work that cannot
+#: finish; unbounded it became the latter. It is the same budget the lifecycle gives a
+#: step within one round, and taken from there: the two bound the same patience at
+#: different scales, so a change of heart about one is a change of heart about both.
+MAX_AUTOMATIC_ROUND_RESUMES = MAX_AUTOMATIC_STEP_RESUMES
+
+
+def _spent_attempts(nid: str, node: dict[str, Any]) -> int:
+    """Automatic continuations this node already carries; reject an unusable count.
+
+    Read from the node as the *previous plan* recorded it, not from the round's
+    result. A lifecycle builds a fresh continuation for whatever it preserved and
+    has no reason to know how many rounds preceded it, so a count taken from the
+    result would reset to zero every round and bound nothing. The prior plan is
+    this function's own output from last round, which is exactly the tally.
+
+    That plan is external input: `replan` reads a prior one straight off disk, and a
+    planner may hand-write or hand-edit it. So a count that is present but is not a
+    whole non-negative number is malformed input rather than an absent tally, and
+    reading it as zero would restore a full continuation budget every round — the
+    unbounded redispatch of one preserved branch that the budget exists to stop.
+    Refuse it in the same terms the lifecycle plan parser refuses the same field.
+
+    Called only where the tally is about to be trusted. The paths that instead
+    discard it — an explicit branch, or a waiting round, which resets the count by
+    design — need no verdict on a value nothing will read; a malformed count that
+    survives into the emitted plan is refused by the plan parser on the way out.
+    """
+    resume = node.get("resume")
+    if not isinstance(resume, dict) or "attempts" not in resume:
+        return 0
+    spent = resume["attempts"]
+    if not isinstance(spent, int) or isinstance(spent, bool) or spent < 0:
+        from .plan import PlanError
+
+        raise PlanError(f"task {nid!r} resume 'attempts' must be a non-negative integer")
+    return spent
+
+
 def _apply_lifecycle_resume(
     node: dict[str, Any],
     results: dict[str, Any],
@@ -278,13 +321,24 @@ def _apply_lifecycle_resume(
     *,
     retry_requested: bool = False,
     source_round: object = None,
-) -> None:
+) -> bool:
+    """Attach continuation metadata; return whether the node runs again at all.
+
+    ``False`` settles the node out of the next round the way an explicit ``drop``
+    would — its dependents lose the dependency and its publication ancestry is
+    carried through by `_anchors_through`, exactly as for any other removed node.
+    That is reserved for one case: a preserved branch the harness has already
+    continued to its budget. The failed result from the round that exhausted it
+    stands for the planner to act on, its branch is still recoverable with
+    ``just repo-recover``, and an explicit ``retry`` starts the budget over — so the
+    decision to keep going stays the planner's rather than being taken by default.
+    """
     nid = node.get("id")
     if not isinstance(nid, str):
-        return
+        return True
     item = results.get(nid)
     if not isinstance(item, dict):
-        return
+        return True
     status = item.get("status")
     # An explicit branch is an intentional routing decision for a preserved
     # attempt. It may pin a known branch or opt out by naming a fresh branch. A
@@ -292,7 +346,7 @@ def _apply_lifecycle_resume(
     # metadata that carries its already completed steps.
     if "branch" in node and status != "waiting":
         node.pop("resume", None)
-        return
+        return True
     resume = item.get("resume")
     waiting_steps = item.get("waiting_steps") or []
     prefix = f"{nid}/"
@@ -304,12 +358,22 @@ def _apply_lifecycle_resume(
     if not (status == "waiting" or retrying_preserved or continuing_preserved) or (
         resume is None and not waiting_steps
     ):
-        return
+        return True
     if not isinstance(resume, dict):
         from .plan import PlanError
 
         raise PlanError(f"task {nid!r} has no valid resume metadata")
     next_resume = dict(resume)
+    # The tally belongs to the plan, never to the result the lifecycle wrote.
+    next_resume.pop("attempts", None)
+    # An explicit retry starts over with a full budget: the bound exists to stop the
+    # harness repeating itself, not to overrule a decision somebody made after
+    # reading the result.
+    if continuing_preserved and not retrying_preserved:
+        spent = _spent_attempts(nid, node)
+        if spent >= MAX_AUTOMATIC_ROUND_RESUMES:
+            return False
+        next_resume["attempts"] = spent + 1
     if isinstance(source_round, int) and not isinstance(source_round, bool) and source_round > 0:
         next_resume["source_round"] = source_round
     existing = next_resume.get("completed_steps") or []
@@ -320,6 +384,7 @@ def _apply_lifecycle_resume(
     merged = list(dict.fromkeys([*existing, *completed_steps]))
     next_resume["completed_steps"] = merged
     node["resume"] = next_resume
+    return True
 
 
 def _read_mapping(path: Path) -> dict[str, Any]:

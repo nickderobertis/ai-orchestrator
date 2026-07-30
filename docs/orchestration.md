@@ -389,6 +389,12 @@ Each node settles once per round:
   rounds: the reconciler surfaces the underlying error as a blocking planner
   proposal on first occurrence, and replanning does not dispatch the node again.
   Unknown or ambiguous errors remain ordinary retryable task failures.
+- `failed` with a `no-agent-progress` diagnosis: the budget was spent without the
+  agent producing anything. onejudge counts every turn it attempts, and a provider
+  that accepts a turn and answers with nothing still spends one, so a failing
+  provider drains a whole cap in minutes. Reported apart from an ordinary turn cap
+  because the two want opposite responses: retrying this one unchanged spends the
+  next budget the same way.
 - `skipped`: a failed dependency made execution unsafe. Failure takes precedence
   over a simultaneous waiting path, so such a descendant is skipped, not blocked.
 
@@ -514,6 +520,21 @@ same way it reclaims a dead `running` one. SIGKILL is the one death nothing can
 record, so `just runs` and `just status` derive abandonment from the recorded owner's
 pid: a dead owner is reported as `round-NN ABANDONED (...)` with the reclaiming
 command, never as work in flight.
+
+A launched orchestrator is derived the same way. `just orchestrate` records
+`{"status": "running", "pid": ...}` once and never rewrites it, so a process that
+crashed or was killed between rounds left a run reading exactly like ordinary
+finished work. When this host can prove that pid gone, the launch never wrote a
+report, and no round is still in flight, both views report the run as
+`SETTLED (orchestrator pid N is gone ...)`. Every unknown withholds that verdict
+instead — an owner that cannot be probed, an unreadable or unparseable record, or a
+round still working — because sending a planner to tear down live work is the worse
+error. Withholding it is not the same as saying nothing: a record that still claims a
+`running` owner this host could not refute keeps its run listed as `ACTIVE`, and an
+owner on **another host** is exactly that case, since a pid means nothing across
+machines. A run another orchestrator is driving therefore reads as the live work it
+is. Only a record this host cannot read at all drops out of both views, having
+supported no claim either way.
 
 A live pid is ownership, not progress. A launched orchestrator that keeps its pid
 while doing nothing — no child process, no planner surface, and no ledger
@@ -666,6 +687,14 @@ preserved. An unresolved same-repository publication anchor passes through remov
 human gates (and other non-publication nodes), so attestation cannot silently cut a
 downstream lifecycle branch from the root. The derived graph is validated before
 an attestation is recorded.
+
+A failed lifecycle node whose preserved branch is carried forward is continued
+**automatically at most `replan.MAX_AUTOMATIC_ROUND_RESUMES` times**. The count is
+kept on the plan node's `resume.attempts` and settles the node out of the next
+round once it is spent, exactly as a `drop` would: the failing result stands for
+the planner, and the branch stays recoverable with `just repo-recover`. An explicit
+`retry` edit clears the count, so the bound only ever stops the harness repeating
+itself — never a decision the planner made after reading the result.
 
 `just replan PREV_PLAN PREV_RESULT [edits.json]` exposes the lower-level pure
 derivation command. Old direct plans, old lifecycle-only repo plans, and recorded

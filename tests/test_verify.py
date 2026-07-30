@@ -2,8 +2,14 @@
 
 from __future__ import annotations
 
+import shlex
 import subprocess
+import sys
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+
+from process_tree import await_reaped, await_recorded_pid, is_running, write_orphaning_tree
 
 from orchestrator.journal import NodeJournal, open_journal
 from orchestrator.runs import NodeId, RunId
@@ -170,6 +176,64 @@ def test_run_gate_reuses_only_exact_commit_and_comparison(tmp_path) -> None:
     assert log.read_text(encoding="utf-8").splitlines() == ["run", "run", "run"]
 
 
+def test_run_gate_timeout_reaps_the_whole_gate_tree(tmp_path) -> None:
+    """A gate that overruns takes every process it started down with it."""
+    marker = tmp_path / "worker.pid"
+    command = [sys.executable, str(write_orphaning_tree(tmp_path)), str(marker)]
+
+    result = run_gate(tmp_path, command, timeout=0.5)
+    worker = await_recorded_pid(marker)
+
+    assert not result.ok
+    assert "gate timed out after 0.5s" in result.output
+    assert await_reaped(worker), "the gate's reparented worker outlived its own gate"
+
+
+def test_run_gate_honours_a_deadline_shorter_than_its_supervision_interval(tmp_path) -> None:
+    """A gate that finishes after its deadline is timed out, not credited with a verdict.
+
+    A timeout the lifecycle asks for is the longest it is willing to wait, so a gate
+    still running at that moment has already failed to answer in time. Supervising the
+    gate on a coarser interval than the deadline must not quietly extend it: this gate
+    finishes well inside the supervision interval but well outside its own deadline,
+    and the verdict it produces there is one nothing was waiting for any more.
+    """
+    log = tmp_path / "finished"
+    command = ["sh", "-c", f"sleep 0.1; echo done > {log}; echo done"]
+
+    result = run_gate(tmp_path, command, timeout=0.01)
+
+    assert not result.ok
+    assert "gate timed out after 0.01s" in result.output
+    assert result.output.strip() != "done"
+    assert not log.exists(), "the gate outlived the deadline instead of being stopped at it"
+
+
+def test_run_gate_cancellation_reaps_the_whole_gate_tree(tmp_path) -> None:
+    """A cancelled gate stops paying for a verdict nothing is left to read."""
+    marker = tmp_path / "worker.pid"
+    command = [sys.executable, str(write_orphaning_tree(tmp_path)), str(marker)]
+    cancel = threading.Event()
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        running = pool.submit(run_gate, tmp_path, command, cancel=cancel)
+        worker = await_recorded_pid(marker)
+        assert is_running(worker)
+        cancel.set()
+        result = running.result(timeout=30)
+
+    assert not result.ok
+    assert "gate cancelled" in result.output
+    assert await_reaped(worker), "the cancelled gate's reparented worker survived"
+
+
+def test_run_gate_leaves_an_uncancelled_gate_alone(tmp_path) -> None:
+    """An event that never fires must not disturb a gate that is doing its job."""
+    result = run_gate(tmp_path, ["sh", "-c", "sleep 0.3; echo done"], cancel=threading.Event())
+
+    assert result.ok and result.output.strip() == "done"
+
+
 def test_run_gate_missing_command(tmp_path) -> None:
     result = run_gate(tmp_path, ["definitely-not-a-real-command-xyz"])
     assert not result.ok and "not found" in result.output
@@ -178,6 +242,14 @@ def test_run_gate_missing_command(tmp_path) -> None:
 def test_verify_result_tail() -> None:
     result = run_gate(Path("."), ["true"])
     assert result.tail(10) == result.output[-10:]
+
+
+def test_a_gate_that_names_no_command_reports_a_failed_gate(tmp_path) -> None:
+    """`--gate " "` splits to nothing, and must not surface as a harness crash."""
+    result = run_gate(tmp_path, shlex.split("   "))
+
+    assert result.ok is False
+    assert "gate command is empty" in result.output
 
 
 # These two recorders are the only ways a publication outcome reaches the journal,

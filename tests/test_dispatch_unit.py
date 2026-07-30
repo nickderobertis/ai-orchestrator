@@ -9,12 +9,14 @@ from pathlib import Path
 
 import pytest
 from onejudge_sdk import RunResult
+from process_tree import await_reaped, await_recorded_pid, is_running, write_orphaning_tree
 
 from orchestrator import BASE_CONFIG, REPO_ROOT
 from orchestrator.dispatch import (
     AGENT_ONEHARNESS_BIN,
     DEFAULT_DISPATCH_STALL_TIMEOUT,
     DEFAULT_WORKER_HEARTBEAT_TIMEOUT,
+    NO_AGENT_PROGRESS_OUTCOME,
     DispatchError,
     Report,
     _agent_run_context,
@@ -32,6 +34,7 @@ from orchestrator.labels import parse_labels
 from orchestrator.plan import PlanNode, PlanResult, TaskResult, _render
 from orchestrator.plan import main as plan_main
 from orchestrator.watchdog import (
+    OWN_PROCESS_GROUP_FLAG,
     ProcessId,
     _parse_stat,
     process_activity,
@@ -78,6 +81,67 @@ def test_build_report_preserves_usage_assessment_and_real_telemetry_field(monkey
     assert report.usage == {"input_tokens": 4, "vendor": "kept"}
     assert report.assessment == "ordinary follow-up"
     assert report.telemetry == {"wall_ms": 7}
+
+
+def _sdk_report(*, completed: bool, contents: list[str]) -> RunResult:
+    """An SDK-validated report whose assistant turns carry the given content."""
+    return RunResult(
+        exit_code=0 if completed else 1,
+        stderr="",
+        raw={
+            "schema_version": 4,
+            "transcript": {
+                "messages": [
+                    message
+                    for content in contents
+                    for message in (
+                        {"role": "user", "content": "go"},
+                        {"role": "assistant", "content": content},
+                    )
+                ]
+            },
+            "stopped_early": not completed,
+        },
+    )
+
+
+def test_a_budget_spent_without_agent_progress_is_not_the_agent_hitting_the_cap() -> None:
+    """Content, not turn count: onejudge records an empty answer as a spent turn.
+
+    The real journey is tests/e2e/test_tracked_graph_e2e.py, which drives a provider
+    that answers nothing through `just run-plan`. This pins the boundary the report
+    is read at, including the blank answer a turn count cannot distinguish.
+    """
+    silent = _build_report(
+        "engineer", _sdk_report(completed=False, contents=["", "  ", ""]), max_turns=3
+    )
+
+    assert silent.outcome == NO_AGENT_PROGRESS_OUTCOME
+    # It did spend its whole cap, and saying so is exactly the misreading: this stop
+    # answers ahead of the turn accounting, because a bigger cap is no answer to it.
+    assert silent.assistant_turns == silent.max_turns
+    assert "without the agent producing anything" in incomplete_detail(silent)
+    assert "turn cap" not in incomplete_detail(silent)
+
+    worked = _build_report(
+        "engineer", _sdk_report(completed=False, contents=["", "a real answer"]), max_turns=3
+    )
+
+    assert worked.outcome is None
+    # A run that produced something falls through to the ordinary accounting, which
+    # reports how far it got against the cap it was given.
+    assert incomplete_detail(worked) == "did not complete after 2 turns, short of its 3-turn cap"
+
+    finished = _build_report("engineer", _sdk_report(completed=True, contents=["done"]))
+
+    assert finished.completed and finished.outcome is None
+
+
+def test_a_worker_that_died_keeps_its_own_name_over_the_no_progress_one() -> None:
+    """`worker-died` is the more specific diagnosis and is reported ahead of it."""
+    died = Report("engineer", 1, False, True, 0, [], {}, {}, "", outcome="worker-died")
+
+    assert incomplete_detail(died) == "worker-died"
 
 
 def test_build_report_counts_assistant_turns() -> None:
@@ -766,6 +830,62 @@ def test_watchdog_terminates_live_process_group() -> None:
     process.wait(timeout=1)
 
     assert process.returncode is not None
+
+
+# A session leader, so the wrapper it starts is *not* already a group leader and the
+# flag has real work to do. Without this the guard's own `start_new_session` would
+# hand the wrapper a group it did not ask for and the journey would prove nothing.
+_SESSION_LAUNCHER = """
+import os, subprocess, sys, time
+try:
+    os.setsid()
+except OSError:
+    pass  # already led its own session, which is all this needs
+subprocess.Popen(sys.argv[1:])
+time.sleep(60)
+"""
+
+
+def test_watchdog_group_reaps_a_worker_that_reparented_away(tmp_path) -> None:
+    """The wrapper's own process group still reaches what a tree walk has lost."""
+    pid_file = tmp_path / "watchdog.pid"
+    marker = tmp_path / "worker.pid"
+    tree = write_orphaning_tree(tmp_path)
+    launcher = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            _SESSION_LAUNCHER,
+            sys.executable,
+            "-m",
+            "orchestrator.watchdog",
+            OWN_PROCESS_GROUP_FLAG,
+            os.fspath(pid_file),
+            sys.executable,
+            os.fspath(tree),
+            os.fspath(marker),
+            "--root-exits",
+        ],
+        cwd=REPO_ROOT,
+    )
+    try:
+        wrapper = ProcessId(await_recorded_pid(pid_file))
+        worker = await_recorded_pid(marker)
+
+        assert os.getpgid(wrapper) == wrapper
+        assert os.getpgid(worker) == wrapper
+        assert os.getpgid(launcher.pid) != wrapper
+        # The recorded root is gone, so the supervisor's tree walk reports an empty
+        # dispatch while the worker is still running — the leak this group closes.
+        assert process_activity(wrapper).pids == ()
+        assert is_running(worker)
+
+        terminate_process_group(wrapper)
+
+        assert await_reaped(worker)
+    finally:
+        launcher.kill()
+        launcher.wait(timeout=5)
 
 
 def test_watchdog_records_pid_and_executes_command(tmp_path, monkeypatch) -> None:

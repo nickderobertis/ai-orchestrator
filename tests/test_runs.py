@@ -12,11 +12,15 @@ import pytest
 from orchestrator.config import ConfigError
 from orchestrator.next_round import main, main_runs
 from orchestrator.runs import (
+    AbandonedLaunch,
     AbandonedRound,
+    abandoned_launch,
+    abandoned_launch_indicator,
     abandoned_round,
     abandoned_round_indicator,
     as_result_payload,
     latest_round,
+    launch_claims_a_live_owner,
     list_runs,
     load_completions,
     prepare_round,
@@ -321,6 +325,141 @@ def test_a_recorded_reason_unfit_for_a_terminal_never_reaches_one(tmp_path, reas
         f"round-01 ABANDONED (owner pid {dead} is gone); reclaim with: "
         f"just run-plan {round_dir / 'plan.json'} --run run --runs-dir {tmp_path} --recover"
     )
+
+
+def _orchestrator_launch(run_dir, **overrides) -> None:
+    """Record a launched orchestrator the way `just orchestrate` does."""
+    (run_dir / "orchestrator").mkdir(parents=True, exist_ok=True)
+    (run_dir / "launch.json").write_text(json.dumps({"run_id": run_dir.name}), encoding="utf-8")
+    record = {"status": "running", "pid": os.getpid(), "host": socket.gethostname(), **overrides}
+    (run_dir / "orchestrator" / "status.json").write_text(json.dumps(record), encoding="utf-8")
+
+
+def test_a_launch_whose_orchestrator_is_gone_is_reported_as_settled(tmp_path) -> None:
+    """The whole symptom: a run nothing is driving reads exactly like a healthy one.
+
+    The real journey — a real `just orchestrate` process killed, and both views read
+    back — is tests/e2e/test_orchestrate_launch_e2e.py. This drives the decision
+    directly so its rendering counts toward the coverage gate.
+    """
+    run_dir = tmp_path / "stranded"
+    _, round_dir = prepare_round(run_dir, PLAN)
+    write_result(round_dir, _result("waiting"))
+    dead = os.getpid() + 10_000_000
+    _orchestrator_launch(run_dir, pid=dead)
+
+    assert abandoned_launch(run_dir) == AbandonedLaunch(dead, 1)
+    assert abandoned_launch_indicator(run_dir) == (
+        f"SETTLED (orchestrator pid {dead} is gone after round-01); nothing is driving "
+        f"this run. Review it with: just results stranded --runs-dir {tmp_path}"
+    )
+
+
+def test_a_launch_that_died_before_its_first_round_says_so(tmp_path) -> None:
+    run_dir = tmp_path / "early"
+    run_dir.mkdir()
+    _orchestrator_launch(run_dir, pid=os.getpid() + 10_000_000)
+
+    assert abandoned_launch(run_dir) == AbandonedLaunch(os.getpid() + 10_000_000, None)
+    assert "gone before its first round" in str(abandoned_launch_indicator(run_dir))
+
+
+@pytest.mark.parametrize(
+    "prepare",
+    [
+        pytest.param(lambda run_dir: None, id="no-launch-record"),
+        pytest.param(lambda run_dir: _orchestrator_launch(run_dir), id="owner-is-alive"),
+        pytest.param(
+            lambda run_dir: _orchestrator_launch(run_dir, host="somewhere-else", pid=1),
+            id="another-host",
+        ),
+        pytest.param(
+            lambda run_dir: _orchestrator_launch(run_dir, status="completed"), id="already-settled"
+        ),
+        pytest.param(
+            lambda run_dir: _orchestrator_launch(run_dir, pid="not-a-pid"), id="unusable-owner"
+        ),
+        pytest.param(
+            lambda run_dir: (run_dir / "orchestrator").mkdir(parents=True), id="never-recorded"
+        ),
+    ],
+)
+def test_a_launch_this_host_cannot_prove_dead_is_left_alone(tmp_path, prepare) -> None:
+    """Every unknown resolves toward "still working"; a wrong "dead" is the costly one."""
+    run_dir = tmp_path / "unproven"
+    run_dir.mkdir()
+    prepare(run_dir)
+
+    assert abandoned_launch(run_dir) is None
+    assert abandoned_launch_indicator(run_dir) is None
+
+
+def test_a_launch_is_silent_while_its_own_round_is_still_reported(tmp_path) -> None:
+    """One dead run, one line: the round's report names the command that reclaims it."""
+    run_dir = tmp_path / "both"
+    _, round_dir = prepare_round(run_dir, PLAN)
+    dead = os.getpid() + 10_000_000
+    _orchestrator_launch(run_dir, pid=dead)
+
+    # A round claimed by a live owner is work in flight, whatever became of the launch.
+    assert abandoned_launch(run_dir) is None
+
+    _own(round_dir, pid=dead)
+
+    assert abandoned_round(run_dir) == AbandonedRound(1, dead, None)
+    assert abandoned_launch(run_dir) is None
+
+
+def test_a_launch_that_reported_its_own_outcome_is_not_abandoned(tmp_path) -> None:
+    run_dir = tmp_path / "reported"
+    run_dir.mkdir()
+    _orchestrator_launch(run_dir, pid=os.getpid() + 10_000_000)
+    (run_dir / "orchestrator" / "report.json").write_text('{"ok": true}', encoding="utf-8")
+
+    assert abandoned_launch(run_dir) is None
+
+
+def test_a_report_this_host_cannot_stat_is_an_unknown_state_not_a_crash(tmp_path) -> None:
+    """The same rule for the other half of the record: unknown, never raising.
+
+    A real refusal rather than a patched one — the report sits behind a directory this
+    user may not traverse. `Path.is_file()` answers a flat `False` for exactly that
+    error, so a predicate that asked it first would read a report it was refused as
+    proof that no report exists, and settle a run on it. The planner-facing
+    journey is ``test_the_views_stay_quiet_about_a_launch_whose_record_they_cannot_trust``
+    in tests/e2e/test_orchestrate_launch_e2e.py; this pins the predicates it reads.
+    """
+    run_dir = tmp_path / "unstattable"
+    _orchestrator_launch(run_dir, pid=os.getpid() + 10_000_000)
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    (vault / "report.json").write_text("{}", encoding="utf-8")
+    report = run_dir / "orchestrator" / "report.json"
+    report.unlink(missing_ok=True)
+    report.symlink_to(vault / "report.json")
+    vault.chmod(0o000)
+    try:
+        assert not os.access(report, os.R_OK), "the report stayed readable, nothing refused"
+
+        assert abandoned_launch(run_dir) is None
+        assert launch_claims_a_live_owner(run_dir) is False
+    finally:
+        vault.chmod(0o700)
+
+
+def test_an_unreadable_launch_record_keeps_the_run_silent_without_raising(tmp_path) -> None:
+    """The corruption a crashed writer leaves, which no command can be asked for.
+
+    Both planner-facing views read this record, so an unparseable one has to answer
+    "nothing known" rather than raise: the alternative takes the listing of every
+    other run down with it, which is how a single bad file becomes a blind planner.
+    """
+    run_dir = tmp_path / "unreadable"
+    _orchestrator_launch(run_dir)
+    (run_dir / "orchestrator" / "status.json").write_text("{ not json", encoding="utf-8")
+
+    assert abandoned_launch(run_dir) is None
+    assert launch_claims_a_live_owner(run_dir) is False
 
 
 def test_runs_cli_reports_an_abandoned_round_beside_a_recorded_one(tmp_path, capsys) -> None:

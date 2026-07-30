@@ -71,6 +71,7 @@ from .redaction import redact
 from .runs import ArtifactPaths, resolve_run_dir, slugify
 from .scratch import owned_scratch_directory
 from .watchdog import (
+    OWN_PROCESS_GROUP_FLAG,
     ProcessId,
     process_activity,
     terminate_process_group,
@@ -95,7 +96,16 @@ AGENT_ONEHARNESS_BIN = REPO_ROOT / "scripts" / "oneharness-agent.sh"
 # worker wrapper, exports the alternate-Claude config indirection its fallback
 # variant needs; a raw `oneharness` would discover the worker chain instead.
 ORCHESTRATOR_ONEHARNESS_BIN = REPO_ROOT / "scripts" / "oneharness-orchestrator.sh"
-DispatchOutcome = Literal["worker-died"]
+#: A dispatch whose budget was spent without the agent producing anything. onejudge
+#: counts every turn it attempts, and a provider that accepts a turn and answers with
+#: nothing still spends one — so a failing provider drains a 30-turn cap in minutes,
+#: at a rate no working agent produces. The accounting is onejudge's and not this
+#: harness's to change; what the harness can stop doing is reporting the result as the
+#: agent running out of room, because that reading is what earns an identical retry.
+DispatchOutcome = Literal["worker-died", "no-agent-progress"]
+#: Typed by the union rather than by a literal of its own, so a rename that misses one
+#: of them stops being a spelling both places agree on and starts being a type error.
+NO_AGENT_PROGRESS_OUTCOME: DispatchOutcome = "no-agent-progress"
 WatchdogReason = Literal["worker-died", "stalled"]
 #: The status files `scripts/oneharness-agent.sh` writes and this module reads —
 #: the whole IPC contract between the two. `tests/test_oneharness_agent_wrapper.py`
@@ -283,6 +293,25 @@ def _resolve_onejudge(onejudge_bin: str, env: Mapping[str, str]) -> OneJudgeProv
     return OneJudgeProvenance(path=resolved, version=adopted)
 
 
+def _agent_produced_nothing(result: RunResult) -> bool:
+    """Whether no assistant turn in this run carried any content.
+
+    Content rather than turn count: onejudge records an empty answer as a turn, so
+    the transcript of a failing provider is a full budget of blank turns rather than
+    an empty one. Counting turns would see a busy run; reading them sees the truth.
+    """
+    transcript = result.raw.get("transcript")
+    messages = transcript.get("messages") if isinstance(transcript, dict) else None
+    if not isinstance(messages, list):
+        return False
+    return not any(
+        isinstance(message, dict)
+        and message.get("role") == "assistant"
+        and str(message.get("content") or "").strip()
+        for message in messages
+    )
+
+
 def _configured_turn_cap(config: Mapping[str, Any]) -> int | None:
     """Read the turn cap out of an effective config, ignoring an unusable value.
 
@@ -304,7 +333,25 @@ def incomplete_detail(report: Report) -> str:
     to raise a cap that was never reached, so compare the turns actually taken with
     the cap the dispatch asked for, and when the cap was not reached carry whatever
     account of the stop the run did leave behind.
+
+    Two stops answer ahead of that comparison, because each wants a response the turn
+    count cannot suggest. A worker the watchdog saw die leaves the watchdog's account
+    and nothing else worth saying. And a budget spent without the agent producing
+    anything did reach the cap, but it is not a cap that was too small — retrying it
+    unchanged spends the next budget exactly the same way.
     """
+    match report.outcome:
+        case "worker-died":
+            # The watchdog's own account of how the worker died — which pid it was
+            # watching, and what it last saw — is the whole diagnosis; the bare
+            # outcome name only says that one happened.
+            return report.stderr.strip() or "worker-died"
+        case "no-agent-progress":
+            return (
+                "did not complete: the turn budget was spent without the agent "
+                "producing anything, so retrying it unchanged will spend the next "
+                "budget the same way"
+            )
     turns = report.assistant_turns
     plural = "" if turns == 1 else "s"
     cap = report.max_turns
@@ -364,6 +411,11 @@ def _build_report(
         stderr=result.stderr,
         assessment=assessment,
         telemetry_data=dict(raw_telemetry) if isinstance(raw_telemetry, dict) else None,
+        outcome=(
+            NO_AGENT_PROGRESS_OUTCOME
+            if not result.completed and _agent_produced_nothing(result)
+            else None
+        ),
         max_turns=max_turns,
     )
 
@@ -606,6 +658,7 @@ def run_onejudge(
                 executable_args=(
                     "-m",
                     "orchestrator.watchdog",
+                    OWN_PROCESS_GROUP_FLAG,
                     os.fspath(pid_file),
                     resolved_onejudge,
                 ),

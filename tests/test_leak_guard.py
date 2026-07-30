@@ -2,12 +2,23 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
+import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+import leak_reaper
 import pytest
-from leak_guard import ResourceLeak, ResourceLeakGuard
+from leak_guard import ResourceLeak, ResourceLeakGuard, SessionGuard
+from process_tree import (
+    await_orphaned,
+    await_reaped,
+    await_recorded_pid,
+    is_running,
+    write_orphaning_tree,
+)
 
 
 def _git(*args: str, cwd: Path | None = None) -> None:
@@ -65,3 +76,118 @@ def test_guard_passes_when_registered_resources_are_already_clean(
     guard.register_worktree(tmp_path / "never-created")
 
     guard.finish()
+
+
+def test_guard_sweeps_a_descendant_its_popen_hook_never_saw(
+    tmp_path: Path, resource_leak_guard: ResourceLeakGuard, session_leak_guard: SessionGuard
+) -> None:
+    """The layer that catches what registration cannot: a tree started elsewhere."""
+    marker = tmp_path / "worker.pid"
+    guard = ResourceLeakGuard.for_test(
+        resource_leak_guard.popen, session_leak_guard, grace_seconds=0.5
+    )
+    # Started through the unpatched constructor and detaching twice over, so neither
+    # the guard's registration nor a walk from a recorded root can reach the worker.
+    resource_leak_guard.popen(
+        [sys.executable, str(write_orphaning_tree(tmp_path)), str(marker), "--worker-detaches"]
+    )
+    worker = await_recorded_pid(marker)
+    # Sampled while its parent still held it, then orphaned: by the time the sweep
+    # runs no walk can reach the worker, and only having watched accounts for it.
+    assert await_orphaned(worker), "the worker never reparented away from its tree"
+
+    with pytest.raises(ResourceLeak, match=rf"live descendants:[^;]*\b{worker}\b"):
+        guard.finish()
+
+    assert await_reaped(worker)
+
+
+#: A stable two-level tree: the root stays, so its child stays a descendant of it
+#: rather than reparenting away. What is being proven here is the reaper's ownership
+#: boundary, not its ability to follow an orphan — `write_orphaning_tree` covers that.
+_OWNED_TREE = (
+    "import subprocess, sys, time\n"
+    "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(600)'])\n"
+    "open(sys.argv[1], 'w').write(str(child.pid))\n"
+    "time.sleep(600)\n"
+)
+
+
+def test_the_reaper_leaves_a_process_it_never_watched_alone(tmp_path: Path) -> None:
+    """Ownership is the whole contract: only what it watched below its own root.
+
+    Driven through the reaper's real loop, against a real pipe and real processes.
+    The stranger is what another live session's tree looks like from the outside —
+    running on the same host, and never below the root this reaper was given.
+    """
+    marker = tmp_path / "child.pid"
+    watched = subprocess.Popen([sys.executable, "-c", _OWNED_TREE, str(marker)])
+    stranger = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(600)"])
+    child = await_recorded_pid(marker)
+    read_fd, write_fd = os.pipe()
+    try:
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            reaping = pool.submit(leak_reaper.watch, watched.pid, stream=read_fd, poll=0.05)
+            time.sleep(0.5)
+            os.close(write_fd)
+            reaped = reaping.result(timeout=30)
+
+        assert reaped == (child,)
+        assert await_reaped(child)
+        assert is_running(stranger.pid)
+    finally:
+        os.close(read_fd)
+        for process in (watched, stranger):
+            process.kill()
+            process.wait(timeout=10)
+
+
+_SLEEPER = ("import time", "time.sleep(600)")
+
+
+def test_the_reaper_claims_only_processes_carrying_its_own_session_token(tmp_path: Path) -> None:
+    """The token is the claim of last resort, so its boundary is the one that matters.
+
+    It is what reaches a launch nothing could have sampled, which means it is also the
+    only claim not bounded by having been *seen*. So the three cases that must come
+    apart are driven for real, against the reaper's real loop: a process carrying this
+    session's token, one carrying a token this one is a prefix of — which a substring
+    match over the environment block would wrongly claim — and one carrying none.
+
+    The root given to the reaper has no descendants of its own, so nothing here is
+    claimed by parentage and every verdict below is the token's alone.
+    """
+    token = f"session-{os.getpid()}-a"
+    stamped = subprocess.Popen(
+        [sys.executable, "-c", "; ".join(_SLEEPER)],
+        env={**os.environ, leak_reaper.SESSION_TOKEN_ENV: token},
+    )
+    # A superstring of the token, not a different value: this is the case that fails if
+    # the environment block is searched as one blob instead of entry by entry.
+    neighbour = subprocess.Popen(
+        [sys.executable, "-c", "; ".join(_SLEEPER)],
+        env={**os.environ, leak_reaper.SESSION_TOKEN_ENV: f"{token}nd-session"},
+    )
+    bare_env = {k: v for k, v in os.environ.items() if k != leak_reaper.SESSION_TOKEN_ENV}
+    unstamped = subprocess.Popen([sys.executable, "-c", "; ".join(_SLEEPER)], env=bare_env)
+    childless_root = subprocess.Popen([sys.executable, "-c", "; ".join(_SLEEPER)], env=bare_env)
+    read_fd, write_fd = os.pipe()
+    try:
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            reaping = pool.submit(
+                leak_reaper.watch, childless_root.pid, token=token, stream=read_fd, poll=0.05
+            )
+            time.sleep(0.5)
+            os.close(write_fd)
+            reaped = reaping.result(timeout=30)
+
+        assert reaped == (stamped.pid,), reaped
+        assert await_reaped(stamped.pid)
+        assert is_running(neighbour.pid), "a token this one is a prefix of was claimed"
+        assert is_running(unstamped.pid), "a process carrying no token was claimed"
+        assert is_running(childless_root.pid), "the reaper claimed the root it was given"
+    finally:
+        os.close(read_fd)
+        for process in (stamped, neighbour, unstamped, childless_root):
+            process.kill()
+            process.wait(timeout=10)

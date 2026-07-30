@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import subprocess
 
 import pytest
 
@@ -17,6 +18,7 @@ from orchestrator.workspace import (
     Workspace,
     WorkspaceError,
     _abandoned_run_is_reclaimable,
+    _remove_directory_tree,
     _safe_branch_dir,
     normalize_repo,
 )
@@ -125,17 +127,155 @@ def test_workspace_fast_forwards_canonical_before_cutting_worktree(tmp_path, bar
     assert (worktree / "new.txt").read_text(encoding="utf-8") == "current\n"
 
 
-def test_workspace_refuses_unregistered_path_collision(tmp_path, bare_origin) -> None:
+def test_workspace_reclaims_an_unregistered_path_collision(tmp_path, bare_origin) -> None:
+    """A directory a killed worker left at this run's worktree path is cleared.
+
+    Git will not help here and says so: a directory it has no registration for is
+    refused outright, which is asserted first so this cannot quietly become a test
+    of a path git was willing to remove all along.
+    """
     origin = bare_origin()
     canonical = gitops.clone(origin, tmp_path / "canonical")
     ref = normalize_repo(str(origin))
     ws = Workspace(tmp_path / "worktrees", resolver=lambda _: canonical)
-    ws.ensure_clone(ref)
+    clone = ws.ensure_clone(ref)
     collision = ws.run_root(ref) / _safe_branch_dir("feat")
-    collision.mkdir(parents=True)
+    (collision / "node_modules" / ".cache").mkdir(parents=True)
+    (collision / "node_modules" / ".cache" / "blob").write_text("stale\n", encoding="utf-8")
+    (collision / "node_modules").chmod(0o500)
 
-    with pytest.raises(RuntimeError, match="worktree path.*already exists"):
-        ws.worktree(ref, "feat", base="origin/main")
+    with pytest.raises(gitops.GitError, match="is not a working tree"):
+        gitops.worktree_remove(clone, collision, check=True)
+
+    worktree = ws.worktree(ref, "feat", base="origin/main")
+
+    assert worktree == collision
+    assert (worktree / "README.md").is_file()
+    assert not (worktree / "node_modules").exists()
+
+
+def test_teardown_finishes_a_removal_git_refuses_instead_of_deferring_it(
+    tmp_path, bare_origin
+) -> None:
+    """The refusal that kept deferring cleanup across branches now clears the path.
+
+    A worktree whose registration is gone but whose directory is not — what a killed
+    worker leaves behind — makes ``git worktree remove --force`` fail with ``is not a
+    working tree``. Teardown used to surface that as deferred cleanup and leave the
+    directory for an operator; it now finishes the removal itself.
+    """
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-refused")
+    ref = normalize_repo(str(origin))
+    ws = Workspace(tmp_path / "worktrees", resolver=lambda _: canonical)
+    clone = ws.ensure_clone(ref)
+    worktree = ws.worktree(ref, "feat", base="origin/main")
+    (worktree / "node_modules").mkdir()
+    (worktree / "node_modules" / "blob").write_text("stale\n", encoding="utf-8")
+    # Disown the tree exactly as a pruned registration does, leaving the directory.
+    shutil.rmtree(gitops.common_dir(clone) / "worktrees")
+    with pytest.raises(gitops.GitError, match="is not a working tree"):
+        gitops.worktree_remove(clone, worktree, check=True)
+
+    ws.remove_worktree(ref, worktree)
+
+    assert not worktree.exists()
+
+
+def test_workspace_refuses_to_reclaim_a_path_outside_its_run_root(tmp_path, bare_origin) -> None:
+    """Ownership is the precondition: another run's tree is never a candidate."""
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical")
+    ref = normalize_repo(str(origin))
+    ws = Workspace(tmp_path / "worktrees", resolver=lambda _: canonical)
+    clone = ws.ensure_clone(ref)
+    stranger = tmp_path / "another-run" / "feat"
+    (stranger / "work").mkdir(parents=True)
+
+    with pytest.raises(
+        WorkspaceError, match="does not have the shape of a worktree this run lays out"
+    ):
+        ws._reclaim_worktree_path(ref, clone, stranger)
+
+    assert (stranger / "work").is_dir()
+
+
+def test_workspace_refuses_to_reclaim_a_directory_inside_one_of_its_worktrees(
+    tmp_path, bare_origin
+) -> None:
+    """Sitting under the run root is not enough: content inside a tree is not a tree.
+
+    Everything a worker creates lives below this run's root, so containment alone
+    would make a worker's own source directory a candidate for recursive deletion.
+    Only the slots this layout lays out — direct children of the run root — are.
+    """
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-nested")
+    ref = normalize_repo(str(origin))
+    ws = Workspace(tmp_path / "worktrees", resolver=lambda _: canonical)
+    clone = ws.ensure_clone(ref)
+    worktree = ws.worktree(ref, "feat", base="origin/main")
+    nested = worktree / "src"
+    nested.mkdir()
+    (nested / "work.py").write_text("real work\n", encoding="utf-8")
+
+    with pytest.raises(
+        WorkspaceError, match="does not have the shape of a worktree this run lays out"
+    ):
+        ws._reclaim_worktree_path(ref, clone, nested)
+
+    assert (nested / "work.py").is_file()
+
+
+def test_a_locked_worktree_survives_the_reclaim_and_keeps_gits_refusal(
+    tmp_path, bare_origin
+) -> None:
+    """A lock is an instruction to leave a tree alone, and it outranks reclaiming.
+
+    Real `git worktree lock` on a real worktree: the reclaim must not delete it, and
+    the caller must get the refusal Git gives rather than a silently cleared path.
+    """
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-locked")
+    ref = normalize_repo(str(origin))
+    ws = Workspace(tmp_path / "worktrees", resolver=lambda _: canonical)
+    clone = ws.ensure_clone(ref)
+    worktree = ws.worktree(ref, "feat", base="origin/main")
+    (worktree / "work.txt").write_text("in progress\n", encoding="utf-8")
+    subprocess.run(
+        ["git", "-C", str(clone), "worktree", "lock", str(worktree)],
+        check=True,
+        capture_output=True,
+    )
+
+    with pytest.raises(gitops.GitError, match="locked working tree"):
+        ws._reclaim_worktree_path(ref, clone, worktree)
+
+    assert (worktree / "work.txt").is_file()
+    assert worktree.resolve() in gitops.locked_worktrees(clone)
+
+
+def test_a_worktree_path_that_cannot_be_reclaimed_says_so(tmp_path) -> None:
+    """The one leftover this cannot clear is named, not silently worked around.
+
+    A tree whose *parent* denies this user is the shape that made a re-dispatch
+    unrecoverable without ``sudo`` — root-owned container files — and no amount of
+    restoring the owner bits below it helps. It has to reach an operator as itself.
+    """
+    parent = tmp_path / "sealed"
+    target = parent / "worktree"
+    target.mkdir(parents=True)
+    (target / "leftover").write_text("stale\n", encoding="utf-8")
+    parent.chmod(0o500)
+    try:
+        with pytest.raises(WorkspaceError, match="could not reclaim worktree path"):
+            _remove_directory_tree(target)
+    finally:
+        parent.chmod(0o700)
+
+    # The path is still occupied, which is exactly why the caller must hear about it
+    # rather than go on and fail later on `git worktree add`.
+    assert target.is_dir()
 
 
 def test_workspace_refuses_dirty_execution_checkout(tmp_path, bare_origin) -> None:
