@@ -268,9 +268,18 @@ def _write_history_run(runs_dir: Path) -> None:
 
 
 def _write_sibling_run(runs_dir: Path) -> None:
-    """A second run recorded under the same launch id as the live run."""
+    """A second run under the live run's launch id, whose executor then stopped.
+
+    Its round is claimed and then abandoned with no result recorded, which is what an
+    executor that took a signal leaves behind and what the read model reports as
+    ``stopped``. That makes this the one run here whose state falls outside the
+    vocabulary the UI gives a meaning to, so the navigation has to render it plainly
+    rather than borrow an outcome it does not have. The abandonment is written by the
+    same private helper the executor's own teardown uses, so the recorded shape stays
+    the one the reader was built against.
+    """
     from orchestrator.journal import NodeId, RunId, open_journal
-    from orchestrator.runs import prepare_round
+    from orchestrator.runs import _abandon_if_running, prepare_round
 
     run_dir = runs_dir / SIBLING_RUN
     prepare_round(run_dir, {"tasks": _SIBLING_TASKS})
@@ -278,6 +287,7 @@ def _write_sibling_run(runs_dir: Path) -> None:
     journal.append("node-added", detail={"definition": _SIBLING_TASKS[0]})
     journal.append("round-started", detail={"plan": {"schema_version": 3, "concurrency": 1}})
     journal.append("node-started", node=NodeId("sibling"), detail={"persona": "engineer"})
+    _abandon_if_running(run_dir / "round-01", "owner took SIGTERM")
     _record_launch(run_dir, SIBLING_RUN, CODEX_LAUNCH)
 
 

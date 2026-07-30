@@ -523,12 +523,12 @@ test("tells each outcome apart by the palette's semantic tones", async ({
   // Work that has not started has no outcome to report, so it must not borrow one of
   // those meanings — which is also what stops the assertions above from passing on a
   // mapping that simply paints everything.
-  await page.locator(".dag-node.state-waiting").click();
-  await expect(stateBadge).toHaveText("waiting");
-  await expect(stateBadge).toHaveCSS(
-    "color",
-    await tokenColor(page, "--foreground"),
-  );
+  const neutral = await tokenColor(page, "--foreground");
+  for (const state of ["waiting", "pending"]) {
+    await page.locator(`.dag-node.state-${state}`).click();
+    await expect(stateBadge).toHaveText(state);
+    await expect(stateBadge).toHaveCSS("color", neutral);
+  }
 
   // The run list is the other surface that states an outcome, and `complete` is a
   // state the package's own badge does not know at all.
@@ -544,6 +544,11 @@ test("tells each outcome apart by the palette's semantic tones", async ({
     "color",
     await tokenColor(page, "--info"),
   );
+  // A run's state is an open string in the read contract, and the sibling run's
+  // executor stopped without recording a result — a real state with no outcome in it.
+  // The list has to say the word and stop there rather than colour it in.
+  await expect(runBadge(runs().sibling)).toHaveText("stopped");
+  await expect(runBadge(runs().sibling)).toHaveCSS("color", neutral);
 
   // And the canvas says the same things on its own surfaces, out of the same tokens
   // rather than the hex values it used to carry. `waiting` is blocked work, the one
