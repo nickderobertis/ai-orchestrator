@@ -40,7 +40,7 @@ import uvicorn
 
 from orchestrator import REPO_ROOT
 from orchestrator.detail_snapshot import PrDetail
-from orchestrator.journal import NodeId, RunId, open_journal
+from orchestrator.journal import JournalOperation, NodeId, RunId, StepId, open_journal
 from orchestrator.launch import DEFAULT_MAX_AGE_SECONDS, provenance_path, write_provenance
 from orchestrator.monitor import DetailSnapshot, save_snapshot
 from orchestrator.runs import prepare_round, write_result
@@ -967,3 +967,479 @@ def test_a_directory_with_no_recorded_round_is_not_a_run(tmp_path: Path) -> None
 
         listed = client.get("/api/v1/runs", params={"include_settled": "true"}).json()
         assert [row["run_id"] for row in listed["runs"]] == ["demo"]
+
+
+LOCK_WAITS = 1200
+
+
+def _lifecycle_run(runs_dir: Path, run_id: str) -> Path:
+    """A lifecycle run recorded the way the executor records one, still in flight.
+
+    It carries the whole span vocabulary a reader cares about — a step, a merge-path
+    verification, a PR that has not merged — plus the contention a real run drowns
+    in, so the served timeline is exercised at the shape and the scale it must hold.
+    """
+    run_dir = runs_dir / run_id
+    prepare_round(
+        run_dir,
+        {
+            "tasks": [
+                {"id": "api", "repo": "acme/app", "task": "ship"},
+                {"id": "docs", "repo": "acme/app", "task": "document"},
+                {"id": "signoff", "kind": "human", "task": "Approve the release"},
+            ]
+        },
+    )
+    journal = open_journal(run_dir, RunId(run_id), 1)
+    node = NodeId("api")
+    step = StepId("implement")
+    journal.append(
+        "node-added",
+        detail={"definition": {"id": "api", "persona": "engineer", "task": "ship"}},
+    )
+    journal.append(
+        "node-added",
+        detail={"definition": {"id": "docs", "persona": "engineer", "task": "document"}},
+    )
+    journal.append(
+        "node-added",
+        detail={"definition": {"id": "signoff", "kind": "human", "task": "Approve the release"}},
+    )
+    journal.append("round-started", detail={"plan": {"schema_version": 3, "concurrency": 1}})
+    journal.append("setup-finished", node=node, detail={"seconds": 3.5, "checkout": "acme/app"})
+    journal.append("node-started", node=node, detail={"node_kind": "lifecycle"})
+    journal.append(
+        "merge-gate-coverage",
+        node=node,
+        detail={"identity": "acme/app", "pre_push_hook": ".githooks/pre-push"},
+    )
+    journal.append(
+        "branch-discovered",
+        node=node,
+        detail={"repo": "acme/app", "branch": "feature/api", "base_branch": "main"},
+    )
+    journal.append(
+        "step-started", node=node, step=step, detail={"step_kind": "agent", "persona": "engineer"}
+    )
+    journal.append("step-settled", node=node, step=step, detail={"status": "done", "turns": 6})
+    journal.append("verification-started", node=node, detail={"label": "branch push feature/api"})
+    journal.append(
+        "verification-finished",
+        node=node,
+        detail={
+            "label": "branch push feature/api",
+            "ok": True,
+            "command": ["just", "gate"],
+            "output_tail": "gate: passed with a secret token in the tail",
+            "log_path": "runs/demo/round-01/api/gate.log",
+        },
+    )
+    journal.append(
+        "pr-created",
+        node=node,
+        detail={"repo": "acme/app", "pr": "https://x/pull/7", "number": 7, "base": "main"},
+    )
+    journal.append(
+        "pr-checks-observed",
+        node=node,
+        detail={"repo": "acme/app", "pr": "https://x/pull/7", "state": "OPEN", "merged": False},
+    )
+    # The contention a real run records: thousands of these against a handful of
+    # everything else. They must reach the client as one span, not as one item each.
+    journal.append_batch(
+        [
+            JournalOperation(
+                kind="lock-wait", detail={"identity": "merge:acme/app", "seconds": 0.5}
+            )
+            for _ in range(LOCK_WAITS)
+        ],
+        node=node,
+    )
+    # A second node that reached the rest of the recorded vocabulary: it drafted a PR
+    # (badly), resolved a conflict, waited on a human, and published.
+    docs = NodeId("docs")
+    journal.append("node-started", node=docs, detail={"node_kind": "lifecycle"})
+    journal.append("conflict-resolution-started", node=docs, detail={"base": "main"})
+    journal.append("conflict-resolution-finished", node=docs, detail={"ok": True})
+    journal.append("pr-drafting-started", node=docs, detail={"base": "main"})
+    journal.append("pr-drafting-fallback", node=docs, detail={"reason": "drafting worker died"})
+    journal.append(
+        "pr-drafting-finished",
+        node=docs,
+        detail={"completed": False, "reason": "drafting worker died"},
+    )
+    # The one action only a person can take: a top-level human node, waited on and
+    # then attested by the planner.
+    signoff = NodeId("signoff")
+    journal.append(
+        "human-waiting",
+        node=signoff,
+        detail={
+            "step_kind": "human",
+            "result": {
+                "kind": "human",
+                "status": "waiting",
+                "task": "Approve the release",
+                "human_actions": [
+                    {
+                        "ref": "signoff",
+                        "task": "Approve the release",
+                        "unblocks": [],
+                        "unblocks_publication": False,
+                    }
+                ],
+            },
+        },
+    )
+    journal.append("human-attested", node=signoff, detail={"ref": "signoff"})
+    journal.append(
+        "publication-finished",
+        node=docs,
+        detail={"repo": "acme/app", "pr": "https://x/pull/8", "branch": "feature/docs"},
+    )
+    journal.append(
+        "node-settled",
+        node=docs,
+        detail={
+            "status": "done",
+            "result": {
+                "status": "done",
+                "artifacts": {"worker_report": "runs/demo/round-01/docs/report.json"},
+            },
+        },
+    )
+    save_snapshot(
+        run_dir,
+        DetailSnapshot(
+            prs={
+                "pr:acme/app#7": PrDetail(
+                    number=7, url="https://x/pull/7", state="BLOCKED", draft=False
+                ).to_record()
+            }
+        ),
+    )
+    return run_dir
+
+
+def _lifecycle_history(tmp_path: Path, run_id: str, base: datetime) -> Path:
+    """A store with a worker, the lint run nested under it, and a run-level check-in.
+
+    Session times are relative to ``base`` — the moment the run fixture finished
+    journaling — because history and the journal are written by different processes
+    against the same wall clock, and the nesting the timeline resolves is exactly
+    that overlap. Pinned literals would place every session before the whole run.
+    """
+
+    def at(seconds: int) -> str:
+        return (base + timedelta(seconds=seconds)).isoformat().replace("+00:00", "Z")
+
+    sessions = []
+    for session_id, name, role, agent_role, turns, labels in (
+        (
+            "worker-native",
+            "engineer-ship",
+            "agent",
+            "worker",
+            (1, 40),
+            {"node": "api", "step": "implement", "round": "1", "persona": "engineer"},
+        ),
+        # Nested inside the worker's turns: this is the lint run that dispatch drove.
+        ("lint-native", "llmlint-diff", "llmlint", "worker", (20,), {"node": "api", "round": "1"}),
+        (
+            "check-in-native",
+            "check-in-round-1",
+            "agent",
+            "check-in",
+            (60,),
+            {"round": "1", "persona": "check-in"},
+        ),
+    ):
+        record = tmp_path / f"{session_id}.jsonl"
+        record.write_text(
+            "".join(
+                json.dumps(
+                    {
+                        "session": session_id,
+                        "name": name,
+                        "project": str(tmp_path),
+                        "harness": "codex",
+                        "model": "gpt",
+                        "timestamp": at(offset),
+                        "prompt": "go",
+                        "text": "a transcript body that must never reach the timeline payload",
+                        "status": "ok",
+                        "session_id": session_id,
+                    }
+                )
+                + "\n"
+                for offset in turns
+            ),
+            encoding="utf-8",
+        )
+        sessions.append(
+            {
+                "id": session_id,
+                "name": name,
+                "project": str(tmp_path),
+                "started": at(turns[0]),
+                "path": str(record),
+                "labels": {"run_id": run_id, "role": role, "agent_role": agent_role, **labels},
+            }
+        )
+    # A session history recorded with a timestamp nothing can place in time. It is
+    # well-formed enough to reach the mapper, so only the fold can drop it.
+    undatable = tmp_path / "undatable-native.jsonl"
+    undatable.write_text(
+        json.dumps(
+            {
+                "session": "undatable-native",
+                "name": "engineer-undatable",
+                "project": str(tmp_path),
+                "harness": "codex",
+                "timestamp": "whenever",
+                "prompt": "go",
+                "text": "a transcript body that must never reach the timeline payload",
+                "status": "ok",
+                "session_id": "undatable-native",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    sessions.append(
+        {
+            "id": "undatable-native",
+            "name": "engineer-undatable",
+            "project": str(tmp_path),
+            "started": "whenever",
+            "path": str(undatable),
+            "labels": {
+                "run_id": run_id,
+                "role": "agent",
+                "agent_role": "worker",
+                "node": "api",
+                "round": "1",
+            },
+        }
+    )
+    store = tmp_path / "timeline-store.json"
+    store.write_text(json.dumps({"sessions": sessions}), encoding="utf-8")
+    return store
+
+
+def test_timeline_endpoint_serves_one_ordered_run_history_over_http(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The whole journey a viewer takes: one timeline fetch, and detail without transcripts."""
+    runs = tmp_path / "runs"
+    run_dir = _lifecycle_run(runs, "demo")
+    store = _lifecycle_history(tmp_path, "demo", datetime.now(UTC))
+    monkeypatch.setenv("FAKE_ONEHARNESS_STORE", str(store))
+    app = create_app(runs, oneharness_bin=str(_oneharness_bin(tmp_path)))
+    before = _tree(runs)
+
+    with _serve(app) as base:
+        client = httpx.Client(base_url=base, timeout=30)
+
+        body = client.get("/api/v1/runs/demo/timeline")
+        assert body.status_code == 200
+        timeline = body.json()
+        assert timeline["api_version"] == 1
+        assert timeline["run_id"] == "demo"
+        spans = timeline["spans"]
+        by_id = {span["id"]: span for span in spans}
+        by_kind: dict[str, list[dict[str, object]]] = {}
+        for span in spans:
+            by_kind.setdefault(span["kind"], []).append(span)
+
+        # One span per recorded activity, and 1200 lock waits as exactly one rollup.
+        assert sorted(by_kind) == [
+            "conflict-resolution",
+            "dispatch",
+            "human-wait",
+            "node",
+            "pr-drafting",
+            "publication",
+            "rollup",
+            "round",
+            "step",
+            "verification",
+        ]
+        assert len(spans) < 25, "the timeline must stay bounded by the graph, not by contention"
+        rollup = by_kind["rollup"][0]
+        assert rollup["label"] == "lock-wait"
+        assert rollup["count"] == LOCK_WAITS
+        assert rollup["total_duration_ms"] == LOCK_WAITS * 500
+
+        nodes = {span["node_id"]: span for span in by_kind["node"]}
+        # The node is still running, so its span is open — that is what a live run is.
+        node_span = nodes["api"]
+        assert node_span["ended_at"] is None
+        assert by_kind["step"][0]["parent_id"] == node_span["id"]
+        assert by_kind["step"][0]["ended_at"] is not None
+
+        # The second node reached the rest of the vocabulary, all of it closed and
+        # nested under the node it ran in.
+        settled = nodes["docs"]
+        assert settled["ended_at"] is not None
+        assert settled["status"] == "done"
+        assert settled["reference"] == {
+            "kind": "worker_report",
+            "value": "runs/demo/round-01/docs/report.json",
+        }
+        drafting = by_kind["pr-drafting"][0]
+        assert drafting["parent_id"] == settled["id"]
+        # Drafting failure must never block publication, so it settles not-completed —
+        # and the fallback that says why reads as work inside it, not beside it.
+        assert drafting["status"] == "not-completed"
+        assert [event["kind"] for event in drafting["events"]] == ["pr-drafting-fallback"]
+        conflict = by_kind["conflict-resolution"][0]
+        assert (conflict["parent_id"], conflict["status"]) == (settled["id"], "ok")
+        assert conflict["ended_at"] is not None
+        waited = by_kind["human-wait"][0]
+        # A human node never "starts": its wait span is the node's own recorded work,
+        # so it hangs off the round rather than off a node span that does not exist.
+        assert waited["parent_id"] == by_kind["round"][0]["id"]
+        assert (waited["node_id"], waited["status"]) == ("signoff", "attested")
+        assert waited["ended_at"] is not None
+        closed = next(span for span in by_kind["publication"] if span["node_id"] == "docs")
+        assert closed["status"] == "finished"
+        assert closed["reference"] == {"kind": "pr", "value": "https://x/pull/8"}
+        assert [event["kind"] for event in closed["events"]] == ["publication-finished"]
+
+        # The lint run reads as work inside the worker dispatch, not beside it.
+        dispatches = {span["reference"]["value"]: span for span in by_kind["dispatch"]}
+        assert dispatches["lint-native"]["parent_id"] == dispatches["worker-native"]["id"]
+        # And the worker itself hangs off the step it was labelled with.
+        assert dispatches["worker-native"]["parent_id"] == by_kind["step"][0]["id"]
+        # A check-in names a round and no node, so it lands on the round.
+        assert dispatches["check-in-native"]["parent_id"] == by_kind["round"][0]["id"]
+        turns = dispatches["worker-native"]["events"]
+        assert [event["kind"] for event in turns] == ["conversation-turn"] * 2
+        # A session whose recorded start cannot be placed in time is omitted rather
+        # than given an invented one — every other transcript still reaches the view.
+        assert set(dispatches) == {"worker-native", "lint-native", "check-in-native"}
+
+        # Heavy content is addressed, never inlined — and each address resolves.
+        verification = by_kind["verification"][0]
+        assert verification["reference"] == {
+            "kind": "gate_log",
+            "value": "runs/demo/round-01/api/gate.log",
+        }
+        publication = next(span for span in by_kind["publication"] if span["node_id"] == "api")
+        assert publication["reference"] == {"kind": "pr", "value": "https://x/pull/7"}
+        # The publication has not closed, so it shows the state the monitor observed.
+        assert publication["status"] == "BLOCKED"
+        assert [event["kind"] for event in publication["events"]] == [
+            "pr-created",
+            "pr-checks-observed",
+        ]
+        rendered = json.dumps(timeline)
+        assert "a transcript body that must never reach the timeline payload" not in rendered
+        assert "a secret token in the tail" not in rendered
+
+        # Ordering and normalization hold across the whole payload.
+        assert [span["started_at"] for span in spans] == sorted(
+            span["started_at"] for span in spans
+        )
+        assert all(span["started_at"].endswith("+00:00") for span in spans)
+        for span in spans:
+            assert span.get("parent_id") in {None, *by_id}
+
+        # Detail without transcripts: same api_version, same required fields, no bodies.
+        lean = client.get("/api/v1/runs/demo", params={"include_conversations": "false"}).json()
+        assert lean["conversations"] == []
+        assert lean["api_version"] == 1
+        assert lean["run"]["run_id"] == "demo"
+        assert lean["rounds"][0]["node_states"] == {
+            "api": "running",
+            "docs": "done",
+            "signoff": "waiting",
+        }
+        assert "details" in lean
+        # The default is unchanged: a client that asks for nothing still gets them.
+        full = client.get("/api/v1/runs/demo").json()
+        # The detail view still serves the undatable transcript: only its *position in
+        # time* is unknown, and this payload does not order by it.
+        assert {item["conversation"]["id"] for item in full["conversations"]} == {
+            "worker-native",
+            "lint-native",
+            "check-in-native",
+            "undatable-native",
+        }
+
+        # A malformed opt-out is refused in the same envelope as any other bad query,
+        # rather than being read as "false" and quietly serving a smaller payload.
+        malformed = client.get("/api/v1/runs/demo", params={"include_conversations": "sometimes"})
+        assert malformed.status_code == 422
+        assert malformed.json()["error"]["code"] == "invalid_request"
+
+        # Every trust boundary behaves like the rest of this read model.
+        assert client.get("/api/v1/runs/bad!id/timeline").status_code == 422
+        absent = client.get("/api/v1/runs/absent/timeline")
+        assert absent.status_code == 404
+        assert absent.json()["error"]["code"] == "run_not_found"
+
+        journal = run_dir / "events.jsonl"
+        journal.write_text(
+            journal.read_text(encoding="utf-8") + '{"kind":"bogus"}\n', encoding="utf-8"
+        )
+        corrupt = client.get("/api/v1/runs/demo/timeline")
+        assert corrupt.status_code == 409
+        assert corrupt.json()["error"]["code"] == "projection_error"
+        journal.write_text(
+            journal.read_text(encoding="utf-8").replace('{"kind":"bogus"}\n', ""), encoding="utf-8"
+        )
+
+    # Serving the timeline is a read: the run directory it folded is byte-identical.
+    assert _tree(runs) == before
+
+
+def test_timeline_degrades_when_history_and_the_snapshot_are_unusable(tmp_path: Path) -> None:
+    """A viewer still gets the recorded graph when the optional sources cannot be read.
+
+    Neither source is evidence a decision is made on: history lives outside the runs
+    root and the snapshot is an optimization over observation, so a machine without
+    oneharness and a snapshot this build cannot parse must both degrade to an empty
+    contribution rather than failing a read the journal can serve.
+    """
+    runs = tmp_path / "runs"
+    run_dir = _lifecycle_run(runs, "demo")
+    snapshot = run_dir / "monitor" / "details.json"
+    snapshot.write_text(json.dumps({"version": 999, "prs": "not a mapping"}), encoding="utf-8")
+    app = create_app(runs, oneharness_bin=str(tmp_path / "definitely-not-installed"))
+
+    with _serve(app) as base:
+        timeline = httpx.Client(base_url=base, timeout=30).get("/api/v1/runs/demo/timeline").json()
+
+    open_publication = next(
+        span
+        for span in timeline["spans"]
+        if span["kind"] == "publication" and span["node_id"] == "api"
+    )
+    # Nothing observed: the open publication carries no state it could not have read.
+    assert "status" not in open_publication
+    assert open_publication["reference"] == {"kind": "pr", "value": "https://x/pull/7"}
+    # And the verdict the journal itself recorded is unaffected.
+    assert (
+        next(
+            span["status"]
+            for span in timeline["spans"]
+            if span["kind"] == "publication" and span["node_id"] == "docs"
+        )
+        == "finished"
+    )
+
+    kinds = {span["kind"] for span in timeline["spans"]}
+    assert "dispatch" not in kinds  # no transcripts to place
+    assert {
+        "round",
+        "node",
+        "step",
+        "verification",
+        "publication",
+        "pr-drafting",
+        "conflict-resolution",
+        "human-wait",
+        "rollup",
+    } <= kinds
