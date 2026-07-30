@@ -30,6 +30,8 @@ root="$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)" || {
   echo "llmlint fingerprint: could not locate the repository from this script; reinstall the checkout and retry" >&2
   exit 1
 }
+# shellcheck source=scripts/llmlint-runtime-env.sh
+. "$root/scripts/llmlint-runtime-env.sh"
 version="$(llmlint --version)" || {
   echo "llmlint fingerprint: 'llmlint --version' failed; run 'just setup-llmlint' and retry" >&2
   exit 1
@@ -38,6 +40,10 @@ cd "$root" || {
   echo "llmlint fingerprint: could not enter '$root'; repair its permissions and retry" >&2
   exit 1
 }
+# Resolve the config under the same pinned runtime environment the target uses to
+# judge. A dispatch's inherited checkout path never reaches the judge and therefore
+# must not split identical verdicts across cache keys.
+llmlint_runtime_env "$root"
 config="$(llmlint config)" || {
   echo "llmlint fingerprint: 'llmlint config' failed; repair llmlint.yml or its plugin pins and retry" >&2
   exit 1

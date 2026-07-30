@@ -265,6 +265,18 @@ def test_changed_llmlint_version_reruns_the_judge(workspace: Workspace) -> None:
     assert CACHE_MISS in second.stderr
 
 
+def test_ambient_judge_bin_does_not_invalidate_the_verdict(workspace: Workspace) -> None:
+    """The target pins its judge binary, so an inherited caller value is not an input."""
+    base = workspace.head()
+    workspace.lint(base, LLMLINT_ONEHARNESS_BIN="/caller/one/oneharness")
+
+    second = workspace.lint(base, LLMLINT_ONEHARNESS_BIN="/caller/two/oneharness")
+
+    assert second.returncode == 0, second.stdout + second.stderr
+    assert workspace.judge_runs() == 1
+    assert CACHE_HIT in second.stderr
+
+
 def test_a_failing_verdict_is_replayed_with_its_findings_and_its_exit(
     workspace: Workspace,
 ) -> None:
