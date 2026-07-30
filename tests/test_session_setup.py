@@ -267,6 +267,59 @@ def test_full_setup_trusts_its_dispatch_checkout_and_keeps_failure_nonfatal(
     assert data["projects"][repo] == {"hasTrustDialogAccepted": True}
 
 
+def test_full_setup_accepts_absent_alternate_config(tmp_path: Path) -> None:
+    alternate = tmp_path / "alternate"
+    alternate.mkdir()
+
+    result = _run_full_setup_without_bun(
+        tmp_path, ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR=str(alternate)
+    )
+
+    assert result.returncode == 1
+    assert not (alternate / ".claude.json").exists()
+    assert "workspace trust setup failed" not in result.stderr
+
+
+def test_full_setup_continues_after_alternate_trust_failure(tmp_path: Path) -> None:
+    alternate = tmp_path / "alternate"
+    alternate.mkdir()
+    config = alternate / ".claude.json"
+    config.write_text("{broken", encoding="utf-8")
+
+    result = _run_full_setup_without_bun(
+        tmp_path, ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR=str(alternate)
+    )
+
+    assert result.returncode == 1
+    assert "alternate Claude workspace trust setup failed; continuing" in result.stderr
+    assert "bun is required" in result.stderr
+
+
+def test_full_setup_trusts_distinct_managed_and_worktree_roots(tmp_path: Path) -> None:
+    alternate = tmp_path / "alternate"
+    alternate.mkdir()
+    config = alternate / ".claude.json"
+    config.write_text("{}", encoding="utf-8")
+    managed = tmp_path / "managed"
+    tools = tmp_path / "git-tools"
+    fake_git = tools / "git"
+    _write_executable(
+        fake_git,
+        f"#!/bin/sh\nprintf '%s\\n' '{managed}/.git'\n",
+    )
+
+    result = _run_full_setup_without_bun(
+        tmp_path,
+        ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR=str(alternate),
+        PATH=f"{tools}:/usr/bin:/bin",
+    )
+
+    assert result.returncode == 1
+    projects = json.loads(config.read_text(encoding="utf-8"))["projects"]
+    assert projects[str(managed)] == {"hasTrustDialogAccepted": True}
+    assert projects[str(tmp_path / "repo")] == {"hasTrustDialogAccepted": True}
+
+
 def _run_full_setup_without_bun(
     tmp_path: Path, **extra_env: str
 ) -> subprocess.CompletedProcess[str]:

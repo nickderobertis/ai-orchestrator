@@ -22,6 +22,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import NamedTuple
 
 import onejudge_sdk
 import pytest
@@ -648,24 +649,34 @@ def test_dispatch_provider_override(command_base, onejudge_bin) -> None:
     assert report.completed
 
 
+class SplitHarnessFixture(NamedTuple):
+    target: Path
+    base_path: Path
+    env: dict[str, str]
+    invocation_log: Path
+
+
+class BindingRejection(NamedTuple):
+    process: subprocess.CompletedProcess[str]
+    session: str
+
+
 def test_dispatch_preserves_real_onejudge_failure_status_and_stderr(
     tmp_path: Path, onejudge_bin: str, oneharness_bin: str
 ) -> None:
     """The binding backend's exact failure must survive watchdog termination."""
-    process, bound_session = _run_real_binding_rejection(tmp_path, onejudge_bin, oneharness_bin)
+    rejection = _run_real_binding_rejection(tmp_path, onejudge_bin, oneharness_bin)
 
-    assert process.returncode == 2, (
-        f"operator stderr={process.stderr!r}\noperator report={process.stdout}"
+    assert rejection.process.returncode == 2, (
+        f"operator stderr={rejection.process.stderr!r}\noperator report={rejection.process.stdout}"
     )
-    assert f"`{bound_session}-skill` was created on harness `codex`" in process.stderr
-    assert "cannot be continued on `claude-code`" in process.stderr
-    assert "exit 255" not in process.stderr
-    assert "<no stderr>" not in process.stderr
+    assert f"`{rejection.session}-skill` was created on harness `codex`" in rejection.process.stderr
+    assert "cannot be continued on `claude-code`" in rejection.process.stderr
+    assert "exit 255" not in rejection.process.stderr
+    assert "<no stderr>" not in rejection.process.stderr
 
 
-def _split_oneharness_fixture(
-    tmp_path: Path, oneharness_bin: str
-) -> tuple[Path, Path, dict[str, str], Path]:
+def _split_oneharness_fixture(tmp_path: Path, oneharness_bin: str) -> SplitHarnessFixture:
     target = tmp_path / "target"
     target.mkdir()
     judge = {"kind": "command", "command": [sys.executable, str(FAKE_BACKEND)]}
@@ -691,7 +702,7 @@ def _split_oneharness_fixture(
         "MOCK_INVOCATION_LOG": str(invocation_log),
         "XDG_STATE_HOME": str(tmp_path / "state"),
     }
-    return target, base_path, env, invocation_log
+    return SplitHarnessFixture(target, base_path, env, invocation_log)
 
 
 def _dispatch_command(
@@ -737,24 +748,32 @@ def _recorded_sessions(path: Path) -> list[str]:
 def test_concurrent_sessionless_dispatches_reach_distinct_real_harness_sessions(
     tmp_path: Path, onejudge_bin: str, oneharness_bin: str
 ) -> None:
-    target, base_path, env, invocation_log = _split_oneharness_fixture(tmp_path, oneharness_bin)
+    fixture = _split_oneharness_fixture(tmp_path, oneharness_bin)
     commands = [
         _dispatch_command(
-            onejudge_bin, target, base_path, f"complete-now: concurrent dispatch {index}"
+            onejudge_bin,
+            fixture.target,
+            fixture.base_path,
+            f"complete-now: concurrent dispatch {index}",
         )
         for index in range(2)
     ]
 
     processes = [
         subprocess.Popen(
-            command, cwd=target, env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+            command,
+            cwd=fixture.target,
+            env=fixture.env,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
         )
         for command in commands
     ]
     results = [process.communicate(timeout=30) for process in processes]
 
     assert [process.returncode for process in processes] == [0, 0], results
-    sessions = _recorded_sessions(invocation_log)
+    sessions = _recorded_sessions(fixture.invocation_log)
     assert len(sessions) == 4
     assert len(set(sessions)) == 2
     assert all(sessions.count(session) == 2 for session in set(sessions))
@@ -763,32 +782,33 @@ def test_concurrent_sessionless_dispatches_reach_distinct_real_harness_sessions(
 def test_explicit_session_is_threaded_across_real_harness_turns(
     tmp_path: Path, onejudge_bin: str, oneharness_bin: str
 ) -> None:
-    target, base_path, env, invocation_log = _split_oneharness_fixture(tmp_path, oneharness_bin)
+    fixture = _split_oneharness_fixture(tmp_path, oneharness_bin)
     process = subprocess.run(
         _dispatch_command(
             onejudge_bin,
-            target,
-            base_path,
+            fixture.target,
+            fixture.base_path,
             "finish on the second turn",
             "--session",
             "operator-resume",
         ),
-        cwd=target,
-        env=env,
+        cwd=fixture.target,
+        env=fixture.env,
         text=True,
         capture_output=True,
     )
 
     assert process.returncode == 0, process.stderr
-    sessions = _recorded_sessions(invocation_log)
+    sessions = _recorded_sessions(fixture.invocation_log)
     assert len(sessions) == 2
     assert sessions == ["operator-resume-skill", "operator-resume-skill"]
 
 
 def _run_real_binding_rejection(
     tmp_path: Path, onejudge_bin: str, oneharness_bin: str
-) -> tuple[subprocess.CompletedProcess[str], str]:
-    target, base_path, env, _ = _split_oneharness_fixture(tmp_path, oneharness_bin)
+) -> BindingRejection:
+    fixture = _split_oneharness_fixture(tmp_path, oneharness_bin)
+    target, base_path, env = fixture.target, fixture.base_path, fixture.env
     bin_dir = tmp_path / "bin"
     (bin_dir / "oneharness").unlink()
     (bin_dir / "oneharness").symlink_to(oneharness_bin)
@@ -864,18 +884,18 @@ print(json.dumps({"type": "result", "subtype": "success", "is_error": False,
         capture_output=True,
         timeout=30,
     )
-    return process, bound_session
+    return BindingRejection(process, bound_session)
 
 
 def test_real_session_harness_binding_rejection_names_session_and_both_harnesses(
     tmp_path: Path, onejudge_bin: str, oneharness_bin: str
 ) -> None:
-    process, bound_session = _run_real_binding_rejection(tmp_path, onejudge_bin, oneharness_bin)
+    rejection = _run_real_binding_rejection(tmp_path, onejudge_bin, oneharness_bin)
 
-    assert process.returncode == 2
-    detail = process.stderr
+    assert rejection.process.returncode == 2
+    detail = rejection.process.stderr
     assert "session/harness binding rejection" in detail
-    assert f"`{bound_session}-skill`" in detail
+    assert f"`{rejection.session}-skill`" in detail
     assert "`codex`" in detail
     assert "`claude-code`" in detail
 
