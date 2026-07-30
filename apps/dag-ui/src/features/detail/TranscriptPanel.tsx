@@ -2,7 +2,6 @@ import type { DagConversation } from "@ai-orchestrator/dag-model";
 import {
   Card,
   CardContent,
-  type Conversation,
   Separator,
   StatusBadge,
   TurnCard,
@@ -38,10 +37,7 @@ export function TranscriptPanel({
             </header>
             <Separator className="my-2.5" />
             {conversation.turns.map((turn) => (
-              <TurnCard
-                key={turn.id}
-                turn={turn as Conversation["turns"][number]}
-              />
+              <TurnCard key={turn.id} turn={turn} />
             ))}
           </CardContent>
         </Card>

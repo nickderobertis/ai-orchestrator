@@ -3,7 +3,6 @@ import {
   Badge,
   Card,
   CardContent,
-  type Conversation,
   ScrollArea,
   Separator,
   TurnCard,
@@ -74,10 +73,7 @@ export function OverallView({ detail }: { readonly detail: RunDetail }) {
                     </header>
                     <Separator className="my-2.5" />
                     {conversation.turns.map((turn) => (
-                      <TurnCard
-                        key={turn.id}
-                        turn={turn as Conversation["turns"][number]}
-                      />
+                      <TurnCard key={turn.id} turn={turn} />
                     ))}
                   </article>
                 ))

@@ -129,7 +129,17 @@ test("tracks every node state, node detail, and role transcript of a live run", 
     "obsolete",
   );
 
+  // Each card names the kind of work it stands for, so an operator can tell the two
+  // apart without opening either: agent work runs itself, a human action does not.
+  await expect(page.locator(".dag-node.state-running")).toContainText("agent");
+  await expect(page.locator(".dag-node.state-waiting")).toContainText("human");
+
   await page.locator(".dag-node.state-running").click();
+  const panel = page.locator(".detail-panel");
+  await expect(panel).toContainText("agent node");
+  // The panel restates the node's state in words beside the graph's colour, which is
+  // the only reading of it available to anyone who cannot rely on that colour.
+  await expect(panel).toContainText("Running");
   await expect(page.getByText("Build the live dashboard")).toBeVisible();
   await expect(page.getByText("Users can inspect transcripts")).toBeVisible();
   for (const role of ["Worker", "Judge", "Check-in", "PR author", "Lint"]) {
@@ -168,6 +178,7 @@ test("tracks every node state, node detail, and role transcript of a live run", 
   // bar; the panel has to say that rather than render an empty criteria block.
   await page.locator(".dag-node.state-waiting").click();
   await expect(page.getByText("Wait for release approval")).toBeVisible();
+  await expect(panel).toContainText("human node");
   await expect(
     page.getByText("No completion criteria recorded."),
   ).toBeVisible();
@@ -234,6 +245,21 @@ test("navigates historical DAGs grouped by their launching session", async ({
   await openObservatory(page);
   await expect(page.getByText(/Codex session/)).toBeVisible();
   await expect(page.getByText(/Claude session/)).toBeVisible();
+
+  // Every row states the run's own state and whether it is still moving, so the list
+  // is readable without opening a run.
+  const liveRow = page.getByRole("button", { name: RegExp(runs().live) });
+  await expect(liveRow).toContainText("Running");
+  await expect(
+    page.getByRole("button", { name: RegExp(runs().history) }),
+  ).toContainText("complete");
+
+  // The live marker is a bare dot, so it carries a name of its own and repeats it on
+  // hover rather than leaving colour to say the only thing that distinguishes it.
+  const liveMarker = liveRow.getByRole("img", { name: "Live" });
+  await expect(liveMarker).toBeVisible();
+  await liveMarker.hover();
+  await expect(page.getByRole("tooltip")).toContainText("Live");
 
   await page.getByRole("button", { name: RegExp(runs().history) }).click();
   await expect(page.locator(".dag-node.state-done")).toContainText("archive");
@@ -470,6 +496,9 @@ test("shows the loading view while its first read is still in flight", async ({
   // loading view still long enough to look at.
   await page.goto(STALLED_UI_URL);
   await expect(page.getByText("Loading execution history…")).toBeVisible();
+  // Placeholder bars stand where the run will be, so the wait reads as work in
+  // progress rather than as a screen that has finished and found nothing.
+  await expect(page.locator('[data-slot="skeleton"]').first()).toBeVisible();
   await expect(page.getByText("No DAG runs found")).toHaveCount(0);
   await expect(page.getByRole("alert")).toHaveCount(0);
 });
@@ -479,8 +508,19 @@ test("surfaces a telemetry read it cannot complete", async ({ page }) => {
   // EventSource both fail for real, and the operator must be told rather than shown
   // an empty graph that looks like "no runs yet".
   await page.goto(OFFLINE_UI_URL);
-  await expect(page.getByRole("alert")).toContainText("Live telemetry issue");
+  const banner = page.getByRole("alert");
+  await expect(banner).toContainText("Live telemetry issue");
+  // The banner names the failure as well as announcing one: an operator who cannot
+  // see what broke cannot tell a wedged server from a mistyped API address.
+  await expect(
+    banner.locator('[data-slot="alert-description"]'),
+  ).not.toBeEmpty();
   await expect(page.getByText("Awaiting updates")).toBeVisible();
+
+  // The one control that can retry the read stays reachable while the read is
+  // failing, and reporting the failure again is the honest outcome of pressing it.
+  await page.getByRole("button", { name: "Refresh" }).click();
+  await expect(banner).toContainText("Live telemetry issue");
 });
 
 // The remaining journeys change what the server is serving, so they run last and in
