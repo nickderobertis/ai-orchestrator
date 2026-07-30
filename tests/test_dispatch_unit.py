@@ -700,20 +700,30 @@ def test_agent_turns_shorter_than_the_poll_interval_are_not_mistaken_for_death(t
     The process tree is sampled before the recorded agent pid is read, so a turn
     that starts or finishes inside that gap is absent from the sample while the
     worker is perfectly alive.
+
+    The double keeps `scripts/oneharness-agent.sh`'s liveness protocol, because that
+    ordering is the whole reason the gap is survivable: the pid a turn advertises is
+    the turn's *own* process, and it records `agent.done` before it exits. So a pid
+    missing from a re-sampled tree has, by construction, already left its marker —
+    which is what lets a supervisor tell "this turn ended" from "this worker died"
+    without timing either one. Advertising a pid that dies before the marker is
+    written would open a window no re-sample can close, and CPU starvation would
+    widen it until a live worker was reported dead.
     """
     onejudge = tmp_path / "onejudge"
     onejudge.write_text(
         '#!/bin/sh\n[ "$1" = "--version" ] && { echo "onejudge 0.3.4"; exit; }\n'
         'd="$ORCHESTRATOR_AGENT_STATUS_DIR"\ni=0\n'
         "while [ $i -lt 40 ]; do\n"
-        "  sh -c 'sleep 0.12' &\n"
-        "  child=$!\n"
-        '  printf "%s\\n" "$child" >"$d/agent.pid.tmp"; mv "$d/agent.pid.tmp" "$d/agent.pid"\n'
-        '  rm -f "$d/agent.done"\n'
-        '  printf "%s\\n" "$i" >"$d/agent.heartbeat.tmp";'
+        "  sh -c '\n"
+        "    d=$1\n"
+        '    printf "%s\\n" "$$" >"$d/agent.pid.tmp"; mv "$d/agent.pid.tmp" "$d/agent.pid"\n'
+        '    rm -f "$d/agent.done"\n'
+        '    printf "%s\\n" "$$" >"$d/agent.heartbeat.tmp";'
         ' mv "$d/agent.heartbeat.tmp" "$d/agent.heartbeat"\n'
-        "  wait $child\n"
-        '  printf "%s\\n" "$child" >"$d/agent.done.tmp"; mv "$d/agent.done.tmp" "$d/agent.done"\n'
+        "    sleep 0.12\n"
+        '    printf "%s\\n" "$$" >"$d/agent.done.tmp"; mv "$d/agent.done.tmp" "$d/agent.done"\n'
+        '  \' turn "$d"\n'
         "  i=$((i + 1))\n"
         "done\n"
         'printf \'%s\\n\' \'{"schema_version":4,"transcript":{"messages":[]},'
