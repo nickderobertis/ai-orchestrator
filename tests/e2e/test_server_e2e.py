@@ -40,7 +40,14 @@ import uvicorn
 
 from orchestrator import REPO_ROOT
 from orchestrator.detail_snapshot import PrDetail
-from orchestrator.journal import JournalOperation, NodeId, RunId, StepId, open_journal
+from orchestrator.journal import (
+    JOURNAL_NAME,
+    JournalOperation,
+    NodeId,
+    RunId,
+    StepId,
+    open_journal,
+)
 from orchestrator.launch import DEFAULT_MAX_AGE_SECONDS, provenance_path, write_provenance
 from orchestrator.monitor import DetailSnapshot, save_snapshot
 from orchestrator.runs import prepare_round, write_result
@@ -1443,3 +1450,150 @@ def test_timeline_degrades_when_history_and_the_snapshot_are_unusable(tmp_path: 
         "human-wait",
         "rollup",
     } <= kinds
+
+
+#: A finite, non-negative epoch — everything the journal contract demands of one — that
+#: no calendar can represent. A host whose clock is wrong records exactly this: storable,
+#: replayable, and impossible to place in time.
+UNPLACEABLE_EPOCH = 1e30
+
+
+def _skew_last_record(run_dir: Path, at: float) -> None:
+    """Rewrite the clock on the record just journaled, leaving the rest byte-identical.
+
+    The writer stamps ``at`` from its own clock, so a skewed one cannot be produced
+    through ``append``. Editing the stored line is how the wrong clock reaches the
+    reader — which is the boundary under test here, not the writer.
+    """
+    journal = run_dir / JOURNAL_NAME
+    lines = journal.read_text(encoding="utf-8").splitlines()
+    record = json.loads(lines[-1])
+    record["at"] = at
+    lines[-1] = json.dumps(record)
+    journal.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _live_history(tmp_path: Path, run_id: str, started: datetime) -> Path:
+    """A store holding one session that is still speaking, so nothing can end its span."""
+    stamp = started.isoformat().replace("+00:00", "Z")
+    record = tmp_path / "live-native.jsonl"
+    record.write_text(
+        json.dumps(
+            {
+                "session": "live-native",
+                "name": "engineer-live",
+                "project": str(tmp_path),
+                "harness": "codex",
+                "model": "gpt",
+                "timestamp": stamp,
+                "prompt": "go",
+                "text": "a transcript body that must never reach the timeline payload",
+                # Neither a terminal status nor a `finished_at`: this worker is mid-turn.
+                "status": "running",
+                "session_id": "live-native",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    store = tmp_path / "live-store.json"
+    store.write_text(
+        json.dumps(
+            {
+                "sessions": [
+                    {
+                        "id": "live-native",
+                        "name": "engineer-live",
+                        "project": str(tmp_path),
+                        "started": stamp,
+                        "path": str(record),
+                        "labels": {
+                            "run_id": run_id,
+                            "role": "agent",
+                            "agent_role": "worker",
+                            "node": "api",
+                            "round": "1",
+                        },
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    return store
+
+
+def test_timeline_survives_a_skewed_clock_a_half_pair_and_a_session_still_speaking(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The recovery paths an imperfectly recorded live run puts through the server.
+
+    Three of them compound in one request, which is how they actually arrive. A host
+    whose clock was wrong journals a `verification-started` nothing can place on a
+    calendar; dropping it leaves the `verification-finished` behind it closing a span
+    this build never opened; and the worker that is still speaking has no end to
+    record. Each must degrade in place — no invented timestamp, no invented span, no
+    invented end — and none may fail a read the rest of the journal can serve.
+    """
+    runs = tmp_path / "runs"
+    run_dir = runs / "skewed"
+    prepare_round(run_dir, {"tasks": [{"id": "api", "repo": "acme/app", "task": "ship"}]})
+    journal = open_journal(run_dir, RunId("skewed"), 1)
+    node = NodeId("api")
+    journal.append(
+        "node-added",
+        detail={"definition": {"id": "api", "repo": "acme/app", "task": "ship"}},
+    )
+    journal.append("round-started", detail={"plan": {"schema_version": 3, "concurrency": 1}})
+    journal.append("node-started", node=node, detail={"node_kind": "lifecycle"})
+    journal.append("verification-started", node=node, detail={"label": "branch push feature/api"})
+    _skew_last_record(run_dir, UNPLACEABLE_EPOCH)
+    journal.append(
+        "verification-finished",
+        node=node,
+        detail={
+            "label": "branch push feature/api",
+            "ok": True,
+            "log_path": "runs/skewed/round-01/api/gate.log",
+        },
+    )
+    # The unplaceable record really is on disk: without this the test would prove only
+    # that a record nobody wrote produced no span.
+    assert f'"at": {UNPLACEABLE_EPOCH}' in (run_dir / JOURNAL_NAME).read_text(encoding="utf-8")
+
+    monkeypatch.setenv(
+        "FAKE_ONEHARNESS_STORE", str(_live_history(tmp_path, "skewed", datetime.now(UTC)))
+    )
+    app = create_app(runs, oneharness_bin=str(_oneharness_bin(tmp_path)))
+
+    with _serve(app) as base:
+        response = httpx.Client(base_url=base, timeout=30).get("/api/v1/runs/skewed/timeline")
+
+    assert response.status_code == 200
+    spans = response.json()["spans"]
+    by_kind: dict[str, list[dict[str, object]]] = {}
+    for span in spans:
+        by_kind.setdefault(str(span["kind"]), []).append(span)
+
+    # The unplaceable start is dropped rather than given a time, and the finish it
+    # orphaned closes nothing rather than conjuring a span out of one endpoint.
+    assert "verification" not in by_kind
+    # Every item that did survive is placeable, and the payload is still ordered.
+    assert all(str(span["started_at"]).endswith("+00:00") for span in spans)
+    assert [span["started_at"] for span in spans] == sorted(
+        str(span["started_at"]) for span in spans
+    )
+
+    # The rest of the recorded graph is unaffected, and the node is still running.
+    node_span = by_kind["node"][0]
+    assert (node_span["node_id"], node_span["ended_at"]) == ("api", None)
+    assert node_span["parent_id"] == by_kind["round"][0]["id"]
+
+    # A worker mid-turn has no end to record, so its span stays open — that is what a
+    # live run looks like, not a defect — and it still points at its transcript.
+    dispatch = by_kind["dispatch"][0]
+    assert dispatch["ended_at"] is None
+    assert dispatch["status"] == "running"
+    assert dispatch["parent_id"] == node_span["id"]
+    assert dispatch["reference"] == {"kind": "conversation", "value": "live-native"}
+    assert "a transcript body that must never reach the timeline payload" not in response.text
