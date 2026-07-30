@@ -503,6 +503,64 @@ def test_sweep_recipe_leaves_harness_scratch_alone_when_procfs_cannot_answer(
     assert f"no usable procfs at {blind}" in result.stdout
 
 
+def test_sweep_cli_keeps_visible_references_when_a_process_hides_its_descriptors(
+    tmp_path: Path,
+) -> None:
+    """Readable references still protect a process whose descriptors are hidden."""
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    candidate = scratch / "onejudge-python-unprovable"
+    candidate.mkdir()
+    stale = scratch / "onejudge-python-stale-sibling"
+    stale.mkdir()
+    for path in (candidate, stale):
+        _age(path)
+    ready = tmp_path / "ready"
+    release = tmp_path / "release"
+    holder_script = """
+import sys
+import time
+from pathlib import Path
+
+candidate, ready, release = map(Path, sys.argv[1:])
+ready.write_text("ready", encoding="utf-8")
+while not release.exists():
+    time.sleep(0.02)
+assert candidate
+"""
+    holder = subprocess.Popen(
+        [
+            "sudo",
+            "-n",
+            "/usr/bin/python3",
+            "-c",
+            holder_script,
+            str(candidate),
+            str(ready),
+            str(release),
+        ]
+    )
+    try:
+        _wait_for_path(ready)
+        with pytest.raises(PermissionError):
+            next(Path(f"/proc/{holder.pid}/fd").iterdir())
+        result = subprocess.run(
+            ["just", "sweep-scratch", "--root", str(scratch)],
+            cwd=REPO_ROOT,
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+    finally:
+        release.touch()
+        holder.wait(timeout=30)
+
+    assert candidate.exists()
+    assert not stale.exists()
+    assert "removed 1 directories" in result.stdout
+    assert "retained 1 directories referenced by live processes" in result.stdout
+
+
 @pytest.mark.parametrize("identifiable", [True, False], ids=["identified", "unidentifiable"])
 def test_concurrent_sweep_preserves_a_dispatch_past_its_worker_exit(
     tmp_path: Path, command_base: Callable[..., Path], onejudge_bin: str, identifiable: bool

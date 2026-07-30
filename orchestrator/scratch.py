@@ -342,21 +342,21 @@ UNREFERENCED_FAMILIES: tuple[ScratchFamilyFinder, ...] = (
 )
 
 
-def _process_reference_strings(entry: Path) -> Iterator[str]:
-    """Yield every path a single live process names: its argv, its cwd, its open files."""
+def _process_reference_strings(entry: Path) -> tuple[str, ...]:
+    """Return every process reference visible through argv, cwd, and open files."""
+    references: list[str] = []
     with suppress(OSError):
-        yield (entry / "cmdline").read_bytes().decode("utf-8", "replace")
+        references.append((entry / "cmdline").read_bytes().decode("utf-8", "replace"))
     with suppress(OSError):
-        yield os.readlink(entry / "cwd")
+        references.append(os.readlink(entry / "cwd"))
     try:
         descriptors = sorted((entry / "fd").iterdir())
     except OSError:
-        # Another user's process hides its descriptors from this one. It also cannot
-        # be using scratch this sweep is able to delete, since `/tmp` is sticky.
-        return
+        return tuple(references)
     for descriptor in descriptors:
         with suppress(OSError):
-            yield os.readlink(descriptor)
+            references.append(os.readlink(descriptor))
+    return tuple(references)
 
 
 def _record_reference(text: str, scratch_root: Path, sink: set[str]) -> None:
@@ -486,11 +486,8 @@ def sweep_scratch(
             # abandoned directory in these families — every one is named at random by
             # the single process that created it — so the remaining window is a
             # process that made one between the two proofs, which the age covers.
-            # llmlint: ignore[changed_behavior_has_e2e] The real CLI covers procfs
-            # unavailable at startup and live argv/cwd/fd retention. Withdrawing
-            # procfs in this in-process interval cannot be deterministic without a
-            # production test hook; test_a_proof_withdrawn_between_discovery_and_removal
-            # drives the exact interleaving directly.
+            # llmlint: ignore[changed_behavior_has_e2e] The real CLI covers live
+            # references; deterministic unit tests drive this in-process-only race.
             fresh = _referenced_scratch_paths(scratch_root) if unreferenced else frozenset()
             for path in ordered:
                 if path in unreferenced:
