@@ -140,3 +140,54 @@ def test_the_reaper_leaves_a_process_it_never_watched_alone(tmp_path: Path) -> N
         for process in (watched, stranger):
             process.kill()
             process.wait(timeout=10)
+
+
+_SLEEPER = ("import time", "time.sleep(600)")
+
+
+def test_the_reaper_claims_only_processes_carrying_its_own_session_token(tmp_path: Path) -> None:
+    """The token is the claim of last resort, so its boundary is the one that matters.
+
+    It is what reaches a launch nothing could have sampled, which means it is also the
+    only claim not bounded by having been *seen*. So the three cases that must come
+    apart are driven for real, against the reaper's real loop: a process carrying this
+    session's token, one carrying a token this one is a prefix of — which a substring
+    match over the environment block would wrongly claim — and one carrying none.
+
+    The root given to the reaper has no descendants of its own, so nothing here is
+    claimed by parentage and every verdict below is the token's alone.
+    """
+    token = f"session-{os.getpid()}-a"
+    stamped = subprocess.Popen(
+        [sys.executable, "-c", "; ".join(_SLEEPER)],
+        env={**os.environ, leak_reaper.SESSION_TOKEN_ENV: token},
+    )
+    # A superstring of the token, not a different value: this is the case that fails if
+    # the environment block is searched as one blob instead of entry by entry.
+    neighbour = subprocess.Popen(
+        [sys.executable, "-c", "; ".join(_SLEEPER)],
+        env={**os.environ, leak_reaper.SESSION_TOKEN_ENV: f"{token}nd-session"},
+    )
+    bare_env = {k: v for k, v in os.environ.items() if k != leak_reaper.SESSION_TOKEN_ENV}
+    unstamped = subprocess.Popen([sys.executable, "-c", "; ".join(_SLEEPER)], env=bare_env)
+    childless_root = subprocess.Popen([sys.executable, "-c", "; ".join(_SLEEPER)], env=bare_env)
+    read_fd, write_fd = os.pipe()
+    try:
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            reaping = pool.submit(
+                leak_reaper.watch, childless_root.pid, token=token, stream=read_fd, poll=0.05
+            )
+            time.sleep(0.5)
+            os.close(write_fd)
+            reaped = reaping.result(timeout=30)
+
+        assert reaped == (stamped.pid,), reaped
+        assert await_reaped(stamped.pid)
+        assert is_running(neighbour.pid), "a token this one is a prefix of was claimed"
+        assert is_running(unstamped.pid), "a process carrying no token was claimed"
+        assert is_running(childless_root.pid), "the reaper claimed the root it was given"
+    finally:
+        os.close(read_fd)
+        for process in (stamped, neighbour, unstamped, childless_root):
+            process.kill()
+            process.wait(timeout=10)

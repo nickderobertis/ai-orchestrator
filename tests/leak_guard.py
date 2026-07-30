@@ -1,11 +1,14 @@
 """Bounded cleanup for subprocess trees and linked git worktrees in tests.
 
-Three layers, because a process tree escapes a test in three ways: what the test
+Layered, because a process tree escapes a test in more ways than one: what the test
 starts through ``Popen`` (`ResourceLeakGuard`, which leads each child in a process
 group of its own and signals that whole group), what leaves that group by calling
 ``setsid`` for itself (`SessionGuard`, which samples the session's own tree and
-remembers what it saw), and the session's death, which runs no teardown at all
-(`leak_reaper`, watching from outside the session).
+remembers what it saw), what a *launch* starts and never waits for — which parentage
+loses within milliseconds and no interval can sample — and the session's death, which
+runs no teardown at all. The last two are `leak_reaper`'s, watching from outside the
+session: it claims by parentage while the session runs and by this session's inherited
+environment token once it is over.
 """
 
 from __future__ import annotations
@@ -17,6 +20,7 @@ import subprocess
 import sys
 import threading
 import time
+import uuid
 from collections.abc import Iterator
 from contextlib import suppress
 from dataclasses import dataclass, field
@@ -24,7 +28,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 import pytest
-from leak_reaper import POLL_SECONDS, TreeSampler
+from leak_reaper import POLL_SECONDS, SESSION_TOKEN_ENV, TreeSampler
 
 from orchestrator.watchdog import ProcessId, process_group_is_running, terminate_processes
 
@@ -39,15 +43,22 @@ class ResourceLeak(AssertionError):
 class SessionGuard:
     """The session-wide half of the guard: the watcher inside, the reaper outside.
 
-    Sampling is as wide as its interval: a process orphaned and reparented away
-    inside one was never seen, and is missed. Making the session a child subreaper
-    would close that, at the price of inheriting exit statuses nobody collects — so
-    every check asking whether a process is gone would read a zombie as alive.
+    Sampling is as wide as its interval, and what escapes inside one is invisible to
+    it forever: a process orphaned and reparented away was never below this session
+    when anything looked. Making the session a child subreaper would narrow that, at
+    the price of inheriting exit statuses nobody collects — so every check asking
+    whether a process is gone would read a zombie as alive. The environment token
+    below closes it instead, from outside and without a subreaper.
     """
 
     root_pid: int
     sampler: TreeSampler
     reaper: subprocess.Popen[bytes] | None
+    #: This session's environment stamp, which the reaper scans for once the session
+    #: is over. It is what covers a launch: `dispatch.launch_orchestrator` starts its
+    #: process detached and returns without waiting, so everything that process goes
+    #: on to start never existed below this session and no interval could sample it.
+    token: str = ""
     _stopping: threading.Event = field(default_factory=threading.Event)
     _watcher: threading.Thread | None = None
 
@@ -111,20 +122,30 @@ _SESSION: SessionGuard | None = None
 def install_session_guard() -> SessionGuard:
     """Start watching this session's tree, and post the reaper that outlives it.
 
+    The token is exported into this session's own environment *before* anything is
+    started, so every process the session goes on to start inherits it — including
+    the ones a launch detaches and never waits for, which parentage loses within
+    milliseconds. It is unique per session, so carrying it is proof of descent from
+    this one and from nothing else. A nested session (this suite runs real ones)
+    exports a token of its own and its tree carries both, which is right: those
+    processes belong to both sessions and either may account for them.
+
     Idempotent: a session that reaches this both as a plugin hook and as a fixture
     installs one guard, not two reapers racing each other over the same tree.
     """
     global _SESSION
     if _SESSION is None:
+        token = f"{os.getpid()}-{uuid.uuid4().hex}"
+        os.environ[SESSION_TOKEN_ENV] = token
         reaper = subprocess.Popen(
-            [sys.executable, str(REAPER_SCRIPT), str(os.getpid())],
+            [sys.executable, str(REAPER_SCRIPT), str(os.getpid()), token],
             stdin=subprocess.PIPE,
             stdout=subprocess.DEVNULL,
             # A session of its own: a group kill aimed at this test session must not
             # reach the one process whose whole job is to survive it.
             start_new_session=True,
         )
-        _SESSION = SessionGuard(os.getpid(), TreeSampler(os.getpid()), reaper)
+        _SESSION = SessionGuard(os.getpid(), TreeSampler(os.getpid()), reaper, token)
         _SESSION.start()
     return _SESSION
 
@@ -135,6 +156,9 @@ def remove_session_guard() -> None:
     if _SESSION is not None:
         _SESSION.close()
         _SESSION = None
+        # Withdrawn with the guard: a token still exported after its reaper has gone
+        # would be inherited by processes nothing is left watching for.
+        os.environ.pop(SESSION_TOKEN_ENV, None)
 
 
 #: Helpers a Python session starts for itself and ends with. They appear mid-run,

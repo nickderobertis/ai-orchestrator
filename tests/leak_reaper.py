@@ -12,12 +12,30 @@ open. While that pipe is open it samples the session's descendants and remembers
 each one; when the pipe closes — for any reason, including a death nothing in the
 session could have handled — it terminates what it remembered.
 
-It only ever reaps what it watched the session produce, and only while the kernel
-still agrees that pid is the same process it sampled: each claim carries the start
-token procfs stamped it with, so a pid the kernel has since handed to somebody
-else's process is left alone. Nothing else on the host is a candidate.
+Sampling parentage is necessary but not sufficient. A *launch* — what
+`dispatch.launch_orchestrator` does, and `just orchestrate` with it — starts its
+process in a session of its own and never waits for it, so the launcher returns
+within milliseconds and everything the launched process goes on to start was never
+below this session at all. No sampling interval closes that: those children did not
+exist while any of their ancestors was still in the tree. That is the shape of the
+`onejudge` and `orchestrator.channel` processes this repository has had to reap by
+hand, still running out of temp directories deleted a day earlier.
 
-Usage: ``leak_reaper.py ROOT_PID``, with the session's pipe on stdin.
+So the claim of last resort is one the kernel fixes at `exec` and a process cannot
+leave behind: the session's own environment. Every session exports a token unique to
+it, every process it starts inherits that token however it detaches, and it is still
+there to read at the end. A single scan then finds every survivor, whatever became
+of its ancestry.
+
+That token is also what bounds this: it is generated per session, so a process
+carries it only by having inherited it from *this* session. Another session's tree,
+another orchestrator's run, anything else on the host — none of them carry it and
+none of them are candidates. Parentage claims are bounded the same way and, in
+addition, only while the kernel still agrees the pid is the same process that was
+sampled: each carries the start token procfs stamped it with, so a pid since handed
+to a stranger is left alone.
+
+Usage: ``leak_reaper.py ROOT_PID SESSION_TOKEN``, with the session's pipe on stdin.
 """
 
 from __future__ import annotations
@@ -48,6 +66,35 @@ from orchestrator.watchdog import ProcessId, descendants, terminate_processes  #
 #: infrequent. `process_tree.LINGER` is what keeps the guard's own e2e deterministic
 #: against it, and must stay comfortably above this.
 POLL_SECONDS = 0.5
+
+#: The variable one test session exports to stamp everything it starts. Read from
+#: `/proc/<pid>/environ`, which the kernel fixes at `exec` — so a process cannot shed
+#: it by detaching, and a scan at the end finds what parentage lost track of.
+SESSION_TOKEN_ENV = "AI_ORCHESTRATOR_LEAK_GUARD_SESSION"
+
+
+def token_carriers(token: str, *, ignoring: frozenset[ProcessId] = frozenset()) -> set[ProcessId]:
+    """Every live process whose inherited environment names this session's token.
+
+    Read as whole NUL-delimited entries rather than as a substring of the block, so
+    a value that merely contains the token cannot be mistaken for the variable.
+    """
+    stamp = f"{SESSION_TOKEN_ENV}={token}".encode()
+    found: set[ProcessId] = set()
+    for entry in Path("/proc").iterdir():
+        if not entry.name.isdigit():
+            continue
+        pid = ProcessId(int(entry.name))
+        if pid in ignoring:
+            continue
+        try:
+            block = (entry / "environ").read_bytes()
+        except OSError:
+            # Gone, or another user's. Either way not this session's to account for.
+            continue
+        if stamp in block.split(b"\0"):
+            found.add(pid)
+    return found
 
 
 class TreeSampler:
@@ -102,11 +149,26 @@ class TreeSampler:
         )
 
 
-def watch(root_pid: int, *, stream: int = 0, poll: float = POLL_SECONDS) -> tuple[ProcessId, ...]:
+def watch(
+    root_pid: int,
+    *,
+    token: str | None = None,
+    stream: int = 0,
+    poll: float = POLL_SECONDS,
+) -> tuple[ProcessId, ...]:
     """Track ``root_pid``'s tree until ``stream`` closes, then reap what outlived it.
 
     Returns the processes it terminated, so a caller driving this in-process can
     assert on the reap rather than on a side effect it has to go looking for.
+
+    ``token`` is this session's environment stamp. The scan for it happens once, here
+    at the end, because unlike parentage the stamp does not decay: a survivor still
+    carries it however long ago its ancestors left. So the steady-state cost of
+    closing the launch-shaped gap is nothing — no extra work per interval, only one
+    pass over procfs when the session is already over.
+
+    ``root_pid`` itself is never a candidate. A clean shutdown closes this pipe while
+    the session is still running, and the session carries its own stamp.
     """
     sampler = TreeSampler(root_pid)
     while True:
@@ -116,7 +178,9 @@ def watch(root_pid: int, *, stream: int = 0, poll: float = POLL_SECONDS) -> tupl
         readable, _, _ = select.select([stream], [], [], poll)
         if readable and os.read(stream, 4096) == b"":
             break
-    reaped = sampler.survivors()
+    mine = frozenset({ProcessId(os.getpid()), ProcessId(root_pid)})
+    stamped = token_carriers(token, ignoring=mine) if token else set()
+    reaped = tuple(sorted(set(sampler.survivors(ignoring=mine)) | stamped))
     if reaped:
         terminate_processes(reaped)
     return reaped
@@ -124,10 +188,10 @@ def watch(root_pid: int, *, stream: int = 0, poll: float = POLL_SECONDS) -> tupl
 
 def main(argv: list[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
-    if len(args) != 1 or not args[0].isdigit():
-        print("usage: leak_reaper.py ROOT_PID", file=sys.stderr)
+    if len(args) != 2 or not args[0].isdigit() or not args[1]:
+        print("usage: leak_reaper.py ROOT_PID SESSION_TOKEN", file=sys.stderr)
         return 2
-    reaped = watch(int(args[0]))
+    reaped = watch(int(args[0]), token=args[1])
     if reaped:
         print(
             f"leak-reaper: session {args[0]} died leaving {len(reaped)} process(es); "

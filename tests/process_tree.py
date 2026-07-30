@@ -7,11 +7,14 @@ shape — rather than one sleeping child — is what makes a cleanup test mean
 anything, because a walk from the root can no longer find the worker at all.
 
 The intermediate lingers briefly before it goes, which is the one detail that has
-to be right: a real dispatch's parent runs for minutes while its children work, and
-that is the whole window in which anything can observe them. A parent that vanished
-the instant it forked would be unattributable to anyone by any means short of
-changing what the session means by "still alive", and it is not a shape this
-harness has ever produced.
+to be right for *that* shape: a real dispatch's parent runs for minutes while its
+children work, and that is the whole window in which anything can observe them.
+
+The harness produces a second shape with no such window at all — a launch, below —
+so the two are written separately rather than as one parameterized tree. What
+distinguishes them is not how long the window is but whether there is one, and that
+is the difference between a guard that has to look in time and a guard that cannot
+attribute the process by parentage however often it looks.
 """
 
 from __future__ import annotations
@@ -73,6 +76,72 @@ def write_orphaning_tree(directory: Path) -> Path:
     script = directory / "orphaning_tree.py"
     script.write_text(_SOURCE.replace("LINGER_SECONDS", repr(LINGER)), encoding="utf-8")
     return script
+
+
+#: The other shape, and the one no sampling interval can reach: a *launch*. This is
+#: what `dispatch.launch_orchestrator` does for `just orchestrate` — start the process
+#: in a session of its own and return without waiting for it — and it is the shape of
+#: the `onejudge` and `orchestrator.channel` orphans this repository reaped by hand.
+#:
+#: The distinction from the tree above is not a shorter window; it is no window. There
+#: the worker existed while its parent was still in the session, so a sample could see
+#: it. Here the launched process waits until it has already been reparented to init
+#: before it starts the worker at all, so the worker was never below the session at any
+#: instant, at any sampling rate. Only something a process carries with it — its
+#: inherited environment — can still attribute it.
+_LAUNCH_SOURCE = '''\
+"""A launch: detached, never waited for, and only then does it start a worker."""
+
+import os
+import subprocess
+import sys
+import time
+
+LIFETIME = 600
+ROLE = "ORCHESTRATOR_TEST_LAUNCH_ROLE"
+marker = sys.argv[1]
+
+if os.environ.get(ROLE) == "launched":
+    # Wait to be reparented before starting anything, so the worker below is one no
+    # walk from the launching session could ever have found.
+    deadline = time.monotonic() + 60
+    while os.getppid() != 1 and time.monotonic() < deadline:
+        time.sleep(0.01)
+    worker = subprocess.Popen([sys.executable, "-c", f"import time; time.sleep({LIFETIME})"])
+    with open(marker, "w", encoding="utf-8") as handle:
+        handle.write(f"{os.getpid()} {worker.pid}")
+    time.sleep(LIFETIME)
+
+else:
+    subprocess.Popen(
+        [sys.executable, *sys.argv],
+        env={**os.environ, ROLE: "launched"},
+        # Exactly `launch_orchestrator`: its own session, and no wait for it.
+        start_new_session=True,
+    )
+    os._exit(0)
+'''
+
+
+def write_launching_tree(directory: Path) -> Path:
+    """Write the launch-shaped script into ``directory`` and return its path."""
+    script = directory / "launching_tree.py"
+    script.write_text(_LAUNCH_SOURCE, encoding="utf-8")
+    return script
+
+
+def await_recorded_pids(path: Path, *, timeout: float = 30.0) -> tuple[int, ...]:
+    """Wait for a launch to record its own pid and its worker's, and return both."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            recorded = path.read_text(encoding="utf-8").split()
+        except OSError:
+            recorded = []
+        if len(recorded) == 2:
+            return tuple(int(value) for value in recorded)
+        time.sleep(0.02)
+    raise AssertionError(f"no launched pids were recorded at {path} within {timeout:g}s")
 
 
 def await_recorded_pid(path: Path, *, timeout: float = 30.0) -> int:

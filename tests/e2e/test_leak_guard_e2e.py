@@ -1,15 +1,20 @@
 """E2E: a test session's process tree does not outlive the session.
 
-Both ways a session ends are driven for real. A real ``pytest`` session runs as a
-subprocess with the real guard loaded as its plugin; it starts a real three-level
-process tree out of its own temp directory, whose deepest worker leaves both its
-process group and its ancestry; and then the session ends — normally in one journey,
-under the SIGKILL of a cancellation in the other. Nothing about the guard is
-stubbed. The only thing standing in for a dispatch is the shape of the tree.
+Both ways a session ends, and both shapes of tree it can leave, are driven for real.
+A real ``pytest`` session runs as a subprocess with the real guard loaded as its
+plugin; it starts a real process tree out of its own temp directory; and then the
+session ends — normally in one journey, under the SIGKILL of a cancellation in the
+others. Nothing about the guard is stubbed. The only thing standing in for a dispatch
+is the shape of the tree, and both shapes this harness actually produces are here: a
+worker that leaves the group and ancestry it was started in, and a *launch* whose
+worker was never below the session at all. A last journey pins the bound on all of
+it — a second live session, identical in every way but whose environment its tree
+inherited, which the reaper must not touch.
 """
 
 from __future__ import annotations
 
+import contextlib
 import os
 import signal
 import subprocess
@@ -20,7 +25,9 @@ from process_tree import (
     await_orphaned,
     await_reaped,
     await_recorded_pid,
+    await_recorded_pids,
     is_running,
+    write_launching_tree,
     write_orphaning_tree,
 )
 from waits import timeout as e2e_timeout
@@ -109,6 +116,18 @@ def _working_directory(pid: int) -> Path:
     return Path(os.readlink(f"/proc/{pid}/cwd"))
 
 
+def _sweep(*pids: int | None) -> None:
+    """Leave nothing of this journey's own behind, whatever it was asserting.
+
+    A journey about leaks is the last place to leak from: if an assertion fails, the
+    processes it was watching are exactly the ones nothing else is going to end.
+    """
+    for pid in pids:
+        if pid is not None:
+            with contextlib.suppress(ProcessLookupError, PermissionError):
+                os.kill(pid, signal.SIGKILL)
+
+
 def test_a_killed_session_leaves_nothing_running_from_its_temp_directory(tmp_path) -> None:
     """SIGKILL runs no teardown, so only something outside the session can clean up."""
     marker = tmp_path / "worker.pid"
@@ -130,6 +149,126 @@ def test_a_killed_session_leaves_nothing_running_from_its_temp_directory(tmp_pat
     finally:
         session.kill()
         session.wait(timeout=e2e_timeout(30))
+
+
+_LAUNCHING_TEST = '''\
+"""A test that launches a detached process which only then starts its worker."""
+
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+MARKER = Path({marker!r})
+TREE = {tree!r}
+
+
+def test_launches_a_detached_orchestrator():
+    subprocess.Popen([sys.executable, TREE, str(MARKER)])
+    # Held open until the launch has recorded both pids, so the session never ends
+    # before the processes that have to outlive it exist.
+    deadline = time.monotonic() + 60
+    while time.monotonic() < deadline:
+        recorded = MARKER.read_text(encoding="utf-8").split() if MARKER.is_file() else []
+        if len(recorded) == 2:
+            break
+        time.sleep(0.02)
+    time.sleep({hold_seconds})
+'''
+
+
+def _launching_session(directory: Path, marker: Path, *, hold_seconds: float) -> Path:
+    """Write the launch-shaped test into ``directory``; ``hold_seconds`` keeps it open."""
+    path = directory / "test_launching_session.py"
+    path.write_text(
+        _LAUNCHING_TEST.format(
+            marker=str(marker),
+            tree=str(write_launching_tree(directory)),
+            hold_seconds=hold_seconds,
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
+def test_a_killed_session_reaps_what_it_launched_and_never_had_below_it(tmp_path) -> None:
+    """The leak parentage cannot see at all: a launch, and what it starts afterwards.
+
+    `dispatch.launch_orchestrator` — `just orchestrate` — starts its process in a
+    session of its own and returns without waiting, so the launcher is gone within
+    milliseconds and everything that process goes on to start was never below this
+    session at any instant. That is not a sampling window to widen; the recorded
+    orphans this closes were an `onejudge` and the `orchestrator.channel` it started
+    31 seconds later, out of a session that had already died.
+
+    The tree waits to be reparented to init *before* it starts its worker, so what is
+    asserted cannot be a sample that got lucky.
+    """
+    marker = tmp_path / "launched.pid"
+    session = _run_session(tmp_path, _launching_session(tmp_path, marker, hold_seconds=600))
+    launched: int | None = None
+    worker: int | None = None
+    try:
+        launched, worker = await_recorded_pids(marker, timeout=e2e_timeout(60))
+        assert is_running(launched) and is_running(worker)
+        assert _working_directory(worker) == tmp_path
+        # Already reparented before the worker existed: nothing in the session was ever
+        # an ancestor of it, which is what makes this distinct from the tree above.
+        assert await_orphaned(launched, timeout=e2e_timeout(30))
+
+        os.kill(session.pid, signal.SIGKILL)
+        session.wait(timeout=e2e_timeout(30))
+
+        assert await_reaped(worker, timeout=e2e_timeout(20)), (
+            f"a launched worker of the killed session is still running out of {tmp_path}"
+        )
+        assert await_reaped(launched, timeout=e2e_timeout(20)), (
+            f"the launched process of the killed session is still running out of {tmp_path}"
+        )
+    finally:
+        session.kill()
+        session.wait(timeout=e2e_timeout(30))
+        _sweep(worker, launched)
+
+
+def test_reaping_one_session_leaves_another_live_sessions_launch_untouched(tmp_path) -> None:
+    """The bound on all of this: a token is proof of descent from one session only.
+
+    Two real sessions, each launching a detached tree the same way, and only one of
+    them killed. The other is a stand-in for the live orchestrator this box always has
+    running — its processes look exactly like the reaped ones by every signal except
+    whose environment they inherited, and that is the signal the reaper uses.
+    """
+    doomed_dir = tmp_path / "doomed"
+    live_dir = tmp_path / "live"
+    for directory in (doomed_dir, live_dir):
+        directory.mkdir()
+    doomed_marker = doomed_dir / "launched.pid"
+    live_marker = live_dir / "launched.pid"
+    doomed = _run_session(
+        doomed_dir, _launching_session(doomed_dir, doomed_marker, hold_seconds=600)
+    )
+    live = _run_session(live_dir, _launching_session(live_dir, live_marker, hold_seconds=600))
+    doomed_launched = doomed_worker = live_launched = live_worker = None
+    try:
+        doomed_launched, doomed_worker = await_recorded_pids(doomed_marker, timeout=e2e_timeout(60))
+        live_launched, live_worker = await_recorded_pids(live_marker, timeout=e2e_timeout(60))
+        assert await_orphaned(doomed_launched, timeout=e2e_timeout(30))
+        assert await_orphaned(live_launched, timeout=e2e_timeout(30))
+
+        os.kill(doomed.pid, signal.SIGKILL)
+        doomed.wait(timeout=e2e_timeout(30))
+
+        assert await_reaped(doomed_worker, timeout=e2e_timeout(20))
+        # The whole point: the surviving session's launch is the same shape, in the same
+        # state, on the same host — and it is not this reaper's to end.
+        assert is_running(live_launched), "another live session's launch was reaped"
+        assert is_running(live_worker), "another live session's worker was reaped"
+    finally:
+        for session in (doomed, live):
+            session.kill()
+            session.wait(timeout=e2e_timeout(30))
+        _sweep(live_worker, live_launched, doomed_worker, doomed_launched)
 
 
 def test_a_finished_test_leaves_nothing_running_from_its_temp_directory(tmp_path) -> None:
