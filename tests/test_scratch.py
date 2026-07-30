@@ -48,6 +48,7 @@ def _fabricate_proc_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Pat
     proc_root.mkdir()
     monkeypatch.setenv("AI_ORCHESTRATOR_PROC_ROOT", str(proc_root))
     _fabricate_proc_entry(proc_root, os.getpid(), start_token=7)
+    (proc_root / str(os.getpid()) / "fd").mkdir()
     return proc_root
 
 
@@ -480,15 +481,10 @@ def test_live_process_references_are_protected_while_a_dispatch_holds_the_scratc
         cwd=working,
         open_files=[opened / "effective.onejudge.json"],
     )
-    _fabricate_proc_process(proc_root, 4243, cmdline=["idle"])
-    (proc_root / "4243" / "fd").chmod(0o000)
     (proc_root / "self").mkdir()
 
-    try:
-        with scratch._scratch_lock(root, exclusive=False):
-            assert main(["--root", str(root)]) == 0
-    finally:
-        (proc_root / "4243" / "fd").chmod(0o755)
+    with scratch._scratch_lock(root, exclusive=False):
+        assert main(["--root", str(root)]) == 0
 
     output = capsys.readouterr().out
     assert not stale.exists()
@@ -612,6 +608,7 @@ def test_a_proof_withdrawn_between_discovery_and_removal_keeps_every_candidate(
         proofs += 1
         if proofs == 2:
             (proc_root / str(os.getpid()) / "stat").unlink()
+            (proc_root / str(os.getpid()) / "fd").rmdir()
             (proc_root / str(os.getpid())).rmdir()
         return original(scratch_root)
 

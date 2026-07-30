@@ -503,6 +503,60 @@ def test_sweep_recipe_leaves_harness_scratch_alone_when_procfs_cannot_answer(
     assert f"no usable procfs at {blind}" in result.stdout
 
 
+def test_sweep_cli_keeps_visible_references_when_a_process_hides_its_descriptors(
+    tmp_path: Path,
+) -> None:
+    """Readable references still protect a process whose descriptors are hidden."""
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    candidate = scratch / "onejudge-python-unprovable"
+    candidate.mkdir()
+    stale = scratch / "onejudge-python-stale-sibling"
+    stale.mkdir()
+    for path in (candidate, stale):
+        _age(path)
+    fake_proc = tmp_path / "proc"
+    fake_proc.mkdir()
+    script = """
+import os
+from pathlib import Path
+from orchestrator.scratch import main
+
+proc = Path(os.environ["AI_ORCHESTRATOR_PROC_ROOT"])
+own = proc / str(os.getpid())
+own.mkdir()
+(own / "cmdline").write_bytes(b"sweep-scratch")
+(own / "cwd").symlink_to(Path.cwd())
+# A still-live numeric entry without a readable fd directory models hidepid or
+# another per-process permission boundary.
+hidden = proc / "4242"
+hidden.mkdir()
+(hidden / "cmdline").write_bytes(
+    b"worker\\0" + os.fsencode(os.environ["REFERENCED_SCRATCH"])
+)
+raise SystemExit(main(["--root", os.environ["SCRATCH_ROOT"]]))
+"""
+
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=REPO_ROOT,
+        env={
+            **os.environ,
+            "AI_ORCHESTRATOR_PROC_ROOT": str(fake_proc),
+            "REFERENCED_SCRATCH": str(candidate),
+            "SCRATCH_ROOT": str(scratch),
+        },
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+
+    assert candidate.exists()
+    assert not stale.exists()
+    assert "removed 1 directories" in result.stdout
+    assert "retained 1 directories referenced by live processes" in result.stdout
+
+
 @pytest.mark.parametrize("identifiable", [True, False], ids=["identified", "unidentifiable"])
 def test_concurrent_sweep_preserves_a_dispatch_past_its_worker_exit(
     tmp_path: Path, command_base: Callable[..., Path], onejudge_bin: str, identifiable: bool
