@@ -29,6 +29,7 @@ GitLockIdentity = NewType("GitLockIdentity", str)
 ProcessStart = NewType("ProcessStart", int)
 
 LOCK_TIMEOUT_ENV = "ORCHESTRATOR_LOCK_TIMEOUT_SECONDS"
+PROC_ROOT_ENV = "AI_ORCHESTRATOR_PROC_ROOT"
 #: Contended identities are queued, not raced, so the wait an operator cares about
 #: is "how long may a whole turn take", not "how long until one attempt gives up".
 #: Minutes: a gate run inside a merge turn is normal, and failing a dispatch that
@@ -48,6 +49,17 @@ def lock_timeout_seconds(env: Mapping[str, str] | None = None) -> float:
     if not math.isfinite(value) or value <= 0:
         raise ValueError(f"{LOCK_TIMEOUT_ENV} must be a finite number of seconds above zero")
     return value
+
+
+def proc_root() -> Path:
+    """Return the procfs root every liveness probe reads, honoring its test seam.
+
+    Every unsuitable root — missing, not a directory, or not procfs-shaped — has to
+    degrade to "nothing is identifiable" at each caller rather than raise here, so
+    this returns the configured path without validating it.
+    """
+    # llmlint: ignore[boundary_inputs_validated] test-only procfs seam, handled per caller
+    return Path(os.environ.get(PROC_ROOT_ENV, "/proc"))
 
 
 def process_start_identity(pid: int) -> ProcessStart | None:
@@ -74,10 +86,8 @@ def process_start_identity(pid: int) -> ProcessStart | None:
         # meaning both callers act on. That answer is not conservative by itself:
         # the merge queue reaps such a ticket and the sweeper may reclaim such
         # scratch, which is why the sweeper also demands an unheld ownership lock.
-        # llmlint: ignore[boundary_inputs_validated] test-only procfs seam, handled below
-        proc_root = Path(os.environ.get("AI_ORCHESTRATOR_PROC_ROOT", "/proc"))
         fields = (
-            (proc_root / str(pid) / "stat").read_text(encoding="utf-8").rsplit(")", 1)[1].split()
+            (proc_root() / str(pid) / "stat").read_text(encoding="utf-8").rsplit(")", 1)[1].split()
         )
         if fields[0] == "Z":
             return None
