@@ -12,24 +12,19 @@
     },
     "lint": {
       "command": "uv run ruff check . && { command -v shellcheck >/dev/null || { echo \"lint: required 'shellcheck' executable was not found; run 'just bootstrap' from the repository root to install it, then retry\" >&2; exit 1; }; } && shellcheck scripts/*.sh .githooks/pre-push && uv run orchestrator-validate-personas",
-      "options": { "cwd": "." }
+      "options": { "cwd": "." },
+      "inputs": ["wholeWorkspace"]
     },
     "test": {
       "command": "env -u FORCE_COLOR NO_COLOR=1 uv run pytest --cov=orchestrator --cov-report=term-missing",
       "options": { "cwd": "." },
       "outputs": ["{workspaceRoot}/.coverage"],
-      "inputs": [
-        "{projectRoot}/**/*",
-        "{workspaceRoot}/tests/**/*",
-        "{workspaceRoot}/personas/**/*",
-        "{workspaceRoot}/config/**/*",
-        "{workspaceRoot}/pyproject.toml",
-        "{workspaceRoot}/uv.lock"
-      ]
+      "inputs": ["wholeWorkspace"]
     },
     "typecheck": {
       "command": "uv run mypy",
-      "options": { "cwd": "." }
+      "options": { "cwd": "." },
+      "inputs": ["wholeWorkspace"]
     },
     "format": {
       "command": "uv run ruff format .",
@@ -37,7 +32,8 @@
     },
     "format-check": {
       "command": "uv run ruff format --check .",
-      "options": { "cwd": "." }
+      "options": { "cwd": "." },
+      "inputs": ["wholeWorkspace"]
     },
     "bootstrap": {
       "command": "uv sync --locked",

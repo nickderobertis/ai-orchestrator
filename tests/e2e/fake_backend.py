@@ -461,6 +461,24 @@ def main() -> int:
                 )
             if "write-change" in task:
                 (Path.cwd() / "CHANGE.txt").write_text("change from fake agent\n", encoding="utf-8")
+            if "run-worker-gate" in task:
+                # A real worker proves its own change with the repository's own gate
+                # before it settles, and iterates on a red one rather than accepting
+                # it. This worker has nothing left to change, so it runs the gate
+                # again and settles only once retrying stops helping — the turn-cap
+                # exhaustion the lifecycle's own gate-failed outcome exists for.
+                # Output goes to the shared cache directory, never into the worktree:
+                # a file written here would change the very content the publication
+                # rebuild is asked to judge.
+                log = Path(os.environ["ORCHESTRATOR_CACHE_DIR"]) / "worker-gate.log"
+                for _attempt in range(2):
+                    gate = subprocess.run(
+                        ["bash", "gate.sh"], capture_output=True, text=True, check=False
+                    )
+                    with log.open("a", encoding="utf-8") as handle:
+                        handle.write(f"exit={gate.returncode}\n{gate.stdout}{gate.stderr}")
+                    if gate.returncode == 0:
+                        break
             if "publish-change-to-base" in task:
                 subprocess.run(["git", "add", "CHANGE.txt"], check=True, capture_output=True)
                 subprocess.run(

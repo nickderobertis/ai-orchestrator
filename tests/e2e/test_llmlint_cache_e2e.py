@@ -27,21 +27,25 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
+from nx_workspace import copy_checkout, requires_workspace_install
 
 ROOT = Path(__file__).resolve().parents[2]
 PASS_VERDICT = "fake-judge: 16 passed, 0 failed"
 FAIL_VERDICT = "fake-judge: 15 passed, 1 failed"
 FAIL_FINDING = "fake-judge finding: robust_shell in scripts/llmlint-diff.sh"
-CACHE_HIT = "replayed the recorded verdict (Nx cache hit)"
-CACHE_MISS = "judged this diff (Nx cache miss)"
+CACHE_HIT = "replayed the recorded verdict for base"
+CACHE_MISS = "judged this diff against base"
 # scripts/llmlint-verdict.sh: an unusable record, distinct from the judge's 0 and 1.
 UNUSABLE_RECORD = 2
 
-pytestmark = pytest.mark.skipif(
-    shutil.which("llmlint") is None,
-    reason="llmlint resolves the judge configuration this cache key is built from; "
-    "run 'just setup-llmlint'",
-)
+pytestmark = [
+    pytest.mark.skipif(
+        shutil.which("llmlint") is None,
+        reason="llmlint resolves the judge configuration this cache key is built from; "
+        "run 'just setup-llmlint'",
+    ),
+    requires_workspace_install,
+]
 
 
 @dataclass(frozen=True)
@@ -85,25 +89,6 @@ class Workspace:
         ).stdout
 
 
-def _copy_checkout(destination: Path) -> None:
-    """Copy exactly the files Nx would hash: everything git would commit from here.
-
-    Ignored state — live run directories with their channel FIFOs, node_modules,
-    the virtualenv, Nx's own scratch — is deliberately left behind.
-    """
-    listing = subprocess.run(
-        ["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
-        cwd=ROOT,
-        check=True,
-        text=True,
-        capture_output=True,
-    ).stdout
-    for relative in filter(None, listing.split("\0")):
-        target = destination / relative
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(ROOT / relative, target, follow_symlinks=False)
-
-
 def _write_fake_judge(directory: Path) -> None:
     """Install an `llmlint` that counts `--diff` runs but resolves config for real."""
     directory.mkdir(parents=True, exist_ok=True)
@@ -133,8 +118,7 @@ def _write_fake_judge(directory: Path) -> None:
 @pytest.fixture
 def workspace(tmp_path: Path) -> Workspace:
     root = tmp_path / "checkout"
-    _copy_checkout(root)
-    (root / "node_modules").symlink_to(ROOT / "node_modules", target_is_directory=True)
+    copy_checkout(root)
 
     # A plugin outside the tree: no file input can see it, so only the judge
     # configuration fingerprint can notice when its rules change.
@@ -190,6 +174,26 @@ def test_unchanged_tree_and_base_replays_the_recorded_verdict(workspace: Workspa
     assert PASS_VERDICT in first.stdout
     assert PASS_VERDICT in second.stdout
     assert CACHE_HIT in second.stderr
+    # "Green" is a claim about one base commit, so the one line of provenance names
+    # it: a worker's gate and the push that publishes its work resolving different
+    # bases are answering different questions, visible without digging.
+    assert f"judged this diff against base {base} (Nx cache miss)" in first.stderr
+    assert f"replayed the recorded verdict for base {base} (Nx cache hit)" in second.stderr
+
+
+def test_an_ambient_global_cache_skip_is_reported_and_ignored(workspace: Workspace) -> None:
+    """The only supported re-judge lever is per-tier, so a global one cannot re-roll."""
+    base = workspace.head()
+
+    first = workspace.lint(base, NX_SKIP_NX_CACHE="true")
+    second = workspace.lint(base, NX_DISABLE_NX_CACHE="true")
+
+    assert workspace.judge_runs() == 1
+    assert CACHE_HIT in second.stderr
+    for result in (first, second):
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "ignoring the ambient global Nx cache skip" in result.stderr
+        assert f"just lint-llm-diff {base} --skip-nx-cache" in result.stderr
 
 
 def test_changed_source_reruns_the_judge(workspace: Workspace) -> None:
@@ -310,10 +314,11 @@ def test_a_judge_that_never_reached_a_verdict_is_not_recorded(workspace: Workspa
 
 
 def test_skip_nx_cache_forces_a_fresh_judge_run(workspace: Workspace) -> None:
+    """The documented way to re-judge one tier, and it works under a global skip too."""
     base = workspace.head()
     workspace.lint(base)
 
-    forced = workspace.lint(base, "--skip-nx-cache")
+    forced = workspace.lint(base, "--skip-nx-cache", NX_SKIP_NX_CACHE="true")
 
     assert forced.returncode == 0, forced.stdout + forced.stderr
     assert workspace.judge_runs() == 2
@@ -374,11 +379,11 @@ def test_the_target_refuses_a_base_it_cannot_judge(
     assert workspace.judge_runs() == 0
 
 
-def _replay_verdict(workspace: Workspace) -> subprocess.CompletedProcess[str]:
+def _replay_verdict(workspace: Workspace, **overrides: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [str(workspace.root / "scripts" / "llmlint-verdict.sh")],
         cwd=workspace.root,
-        env=workspace.env,
+        env={**workspace.env, **overrides},
         check=False,
         text=True,
         capture_output=True,
@@ -407,6 +412,58 @@ def test_an_incomplete_record_is_never_read_as_a_clean_run(
 
     assert result.returncode == UNUSABLE_RECORD
     assert expected in result.stderr
+
+
+@pytest.mark.parametrize(
+    "supplied",
+    [
+        "",
+        "origin/main",
+        "not-a-sha",
+        "0123456789abcdef",
+        "../../etc/passwd",
+        "$(id)",
+        # Right shape, no such commit — the case a shape check alone waves through,
+        # and exactly as false a provenance as a branch name would be.
+        "a" * 40,
+    ],
+)
+def test_provenance_never_names_a_base_it_cannot_vouch_for(
+    workspace: Workspace, supplied: str
+) -> None:
+    """The base reaches this reader through the environment, so it is validated here.
+
+    A verdict's provenance is what an operator reads to know *which* base a green
+    covers. Anything that can set a variable could otherwise write that answer, so
+    only a commit id this repository actually has is echoed; the recorded verdict
+    itself still replays, because the base is provenance about the verdict rather
+    than part of it.
+    """
+    verdict = workspace.root / ".nx/llmlint-diff"
+    verdict.mkdir(parents=True)
+    (verdict / "status").write_text("0\n", encoding="utf-8")
+    (verdict / "report").write_text("findings\n", encoding="utf-8")
+
+    result = _replay_verdict(workspace, LLMLINT_DIFF_BASE_SHA=supplied)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "replayed the recorded verdict for base <unresolved>" in result.stderr
+    assert supplied not in result.stderr or supplied == ""
+    assert "findings" in result.stdout
+
+
+def test_provenance_names_a_resolved_base_commit(workspace: Workspace) -> None:
+    """The validated case still reports the commit the verdict was keyed on."""
+    verdict = workspace.root / ".nx/llmlint-diff"
+    verdict.mkdir(parents=True)
+    (verdict / "status").write_text("0\n", encoding="utf-8")
+    (verdict / "report").write_text("findings\n", encoding="utf-8")
+    base = workspace.head()
+
+    result = _replay_verdict(workspace, LLMLINT_DIFF_BASE_SHA=base)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert f"replayed the recorded verdict for base {base}" in result.stderr
 
 
 @pytest.mark.parametrize(

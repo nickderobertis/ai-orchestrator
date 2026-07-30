@@ -42,7 +42,7 @@ from .provenance import (
     unattested_incomplete,
 )
 from .registry import Registry, RegistryEntry, RegistryError, Slug, merge_gate_coverage
-from .verify import NOOP_GATE, resolve_gate_template
+from .verify import NOOP_GATE, comparison_env, resolve_gate_template
 from .workspace import RepoRef, RepositoryType, Workspace, WorkspaceError
 
 _STEP_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
@@ -170,6 +170,10 @@ def recover_repo(
             raise RegistryError(
                 "repository identity has a no-op gate; migrate it or pass --gate for recovery"
             )
+        # The pre-push hook is what verifies this recovery, so it has to judge the
+        # base the preserved branch actually publishes onto — a stack's parent, not
+        # the remote HEAD it would otherwise discover.
+        push_env = comparison_env(publication_base)
 
         def attest_and_push() -> MergeOutcome | None:
             # Recovery always publishes through a push or a PR. The executable
@@ -182,7 +186,7 @@ def recover_repo(
                     "chore: attest verified recovery of preserved work\n\n" + trailers,
                 )
             try:
-                gitops.push(worktree, branch)
+                gitops.push(worktree, branch, env=push_env)
             except gitops.GitError as exc:
                 outcome = classify_push_failure(exc)
                 detail = str(exc)
@@ -337,7 +341,9 @@ def recover_repo(
                 session=f"{scoped_session(branch, worktree)}:{step_id}",
                 max_turns=DEFAULT_LIFECYCLE_STEP_MAX_TURNS,
                 done_when="The conflict is resolved, committed, and the gate is green.",
-                env={},
+                # The resolver proves its resolution with the same gate the push will
+                # run, so it must resolve the same comparison base.
+                env=push_env,
             )
             if gitops.unmerged_paths(worktree):
                 gitops.merge_abort(worktree)

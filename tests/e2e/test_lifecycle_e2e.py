@@ -1760,9 +1760,17 @@ def test_lifecycle_scopes_llmlint_wrapper_from_resolved_repository_identity(
     origin = bare_origin()
     canonical = gitops.clone(origin, tmp_path / "canonical")
     seen: list[tuple[str, bool]] = []
+    comparisons: list[tuple[str, str, str]] = []
 
-    def writing_dispatch(persona, task, *, project_dir, use_llmlint_wrapper, **_):
+    def writing_dispatch(persona, task, *, project_dir, use_llmlint_wrapper, env, **_):
         seen.append((persona, use_llmlint_wrapper))
+        comparisons.append(
+            (
+                persona,
+                env["ORCHESTRATOR_COMPARISON_REMOTE"],
+                env["ORCHESTRATOR_COMPARISON_BASE"],
+            )
+        )
         if persona == "pr-author":
             output = task.split(
                 "Write the final body, and nothing else, to this absolute path:\n", 1
@@ -1804,6 +1812,11 @@ def test_lifecycle_scopes_llmlint_wrapper_from_resolved_repository_identity(
 
     assert result.outcome == ("waiting-human" if human_pause else "pr-open")
     assert seen == [("engineer", expected_wrapper), ("pr-author", expected_wrapper)]
+    # Every dispatch of one workstream — the worker and the PR-author drafting that
+    # follows it, on the ordinary and the human-paused publication path alike — is
+    # handed the same comparison identity, so nothing it runs can resolve a
+    # different base than the publication rebuild judges.
+    assert comparisons == [("engineer", "origin", "main"), ("pr-author", "origin", "main")]
 
 
 def test_registered_aliases_drive_real_lifecycle_without_a_stray_clone(
@@ -3078,11 +3091,15 @@ def test_local_conflict_resolves_outside_queue_then_requeues_and_merges(
     resolution_calls: list[tuple[str, str]] = []
 
     def concurrent_dispatch(
-        persona: str, task: str, *, project_dir: str, **kwargs: object
+        persona: str, task: str, *, project_dir: str, env: dict[str, str], **kwargs: object
     ) -> Report:
         path = Path(project_dir) / "shared.txt"
         if "Resolve the content conflict" in task:
             assert "<<<<<<<" in path.read_text(encoding="utf-8")
+            # The resolver works in the same worktree and proves its resolution with
+            # the same gate, so it must resolve the same comparison base.
+            assert env["ORCHESTRATOR_COMPARISON_REMOTE"] == "origin"
+            assert env["ORCHESTRATOR_COMPARISON_BASE"] == "main"
             resolution_calls.append((str(kwargs["session"]), project_dir))
             path.write_text("first branch\nsecond branch\n", encoding="utf-8")
             gitops.add_all(project_dir)
@@ -4232,11 +4249,21 @@ def test_local_recovery_conflict_resumes_worker_then_requeues(tmp_path, bare_ori
     sessions: list[tuple[str, str]] = []
 
     def resolving_dispatch(
-        persona: str, task: str, *, project_dir: str, session: str, **_: object
+        persona: str,
+        task: str,
+        *,
+        project_dir: str,
+        session: str,
+        env: dict[str, str],
+        **_: object,
     ) -> Report:
         path = Path(project_dir) / "shared.txt"
         assert "Resolve the content conflict" in task
         assert "<<<<<<<" in path.read_text(encoding="utf-8")
+        # The resolver proves its resolution with the same gate the recovery push
+        # will run, so it must resolve the base that push publishes onto.
+        assert env["ORCHESTRATOR_COMPARISON_REMOTE"] == "origin"
+        assert env["ORCHESTRATOR_COMPARISON_BASE"] == "main"
         sessions.append((session, project_dir))
         path.write_text("advanced base\npreserved branch by engineer\n", encoding="utf-8")
         gitops.add_all(project_dir)
