@@ -1,15 +1,10 @@
 """E2E: a test session's process tree does not outlive the session.
 
-Both ways a session ends, and both shapes of tree it can leave, are driven for real.
 A real ``pytest`` session runs as a subprocess with the real guard loaded as its
 plugin; it starts a real process tree out of its own temp directory; and then the
 session ends — normally in one journey, under the SIGKILL of a cancellation in the
-others. Nothing about the guard is stubbed. The only thing standing in for a dispatch
-is the shape of the tree, and both shapes this harness actually produces are here: a
-worker that leaves the group and ancestry it was started in, and a *launch* whose
-worker was never below the session at all. A last journey pins the bound on all of
-it — a second live session, identical in every way but whose environment its tree
-inherited, which the reaper must not touch.
+others. Nothing about the guard is stubbed, and the only thing standing in for a
+dispatch is the shape of the tree.
 """
 
 from __future__ import annotations

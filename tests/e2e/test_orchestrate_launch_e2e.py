@@ -316,6 +316,10 @@ def test_runs_and_status_settle_a_launch_whose_orchestrator_is_gone(
     assert reported.count("SETTLED") == 1
 
 
+# llmlint: ignore-block[tests_mirror_real_usage] the states under test are damaged
+# evidence — a half-written record, a report this host may not stat, an owner on
+# another machine — and no command surface produces any of them; the behaviour being
+# judged is read back entirely through the real planner commands.
 def test_the_views_stay_quiet_about_a_launch_whose_record_they_cannot_trust(
     tmp_path: Path, onejudge_bin: str
 ) -> None:
@@ -396,3 +400,6 @@ def test_the_views_stay_quiet_about_a_launch_whose_record_they_cannot_trust(
     assert f"* {run_id}  ACTIVE" in foreign_listed
     assert "SETTLED" not in foreign_listed
     assert "SETTLED" not in foreign_reported
+
+
+# llmlint: ignore-end[tests_mirror_real_usage]

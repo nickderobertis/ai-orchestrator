@@ -1,39 +1,31 @@
 """Reap a test session's process tree when the session itself dies uncleanly.
 
-Every other layer of the guard runs *inside* the session, so every other layer is
-lost the moment the session is killed rather than asked to stop. That is not the
-exotic case: a SIGKILLed pytest is how these runs actually end when a supervisor
-cancels one or the host runs out of room, and it is how twenty-two onejudge
-processes came to be running out of temp directories deleted a day earlier.
-
-So the last layer lives outside the session. This process is started by the guard
-in a session of its own and given the read end of a pipe the test session holds
-open. While that pipe is open it samples the session's descendants and remembers
-each one; when the pipe closes — for any reason, including a death nothing in the
-session could have handled — it terminates what it remembered.
+Every other layer of the guard runs *inside* the session, so a SIGKILLed pytest —
+how these runs actually end when a supervisor cancels one or the host runs out of
+room — runs no teardown at all. So the last layer lives outside. This process is
+started by the guard in a session of its own and given the read end of a pipe the
+test session holds open: while that pipe is open it samples the session's
+descendants and remembers each one, and when it closes it terminates what it
+remembered.
 
 Sampling parentage is necessary but not sufficient. A *launch* — what
 `dispatch.launch_orchestrator` does, and `just orchestrate` with it — starts its
-process in a session of its own and never waits for it, so the launcher returns
-within milliseconds and everything the launched process goes on to start was never
-below this session at all. No sampling interval closes that: those children did not
-exist while any of their ancestors was still in the tree. That is the shape of the
-`onejudge` and `orchestrator.channel` processes this repository has had to reap by
-hand, still running out of temp directories deleted a day earlier.
+process in a session of its own and never waits for it, so everything the launched
+process goes on to start was never below this session at any instant. No sampling
+interval closes that. The claim of last resort is instead one the kernel fixes at
+`exec` and a process cannot leave behind: a token unique to this session, exported
+into its environment before anything starts and inherited however a descendant
+detaches, so one scan at the end finds every survivor whatever became of its
+ancestry.
 
-So the claim of last resort is one the kernel fixes at `exec` and a process cannot
-leave behind: the session's own environment. Every session exports a token unique to
-it, every process it starts inherits that token however it detaches, and it is still
-there to read at the end. A single scan then finds every survivor, whatever became
-of its ancestry.
+That token is also what bounds the reap. Another session's tree, another
+orchestrator's run, anything else on the host — none of them carry it. Parentage
+claims are bounded the same way and, in addition, by the start token procfs stamped
+each pid with, so a pid since handed to a stranger is left alone.
 
-That token is also what bounds this: it is generated per session, so a process
-carries it only by having inherited it from *this* session. Another session's tree,
-another orchestrator's run, anything else on the host — none of them carry it and
-none of them are candidates. Parentage claims are bounded the same way and, in
-addition, only while the kernel still agrees the pid is the same process that was
-sampled: each carries the start token procfs stamped it with, so a pid since handed
-to a stranger is left alone.
+Between them they cover what this repository has had to reap by hand: the `onejudge`
+and `orchestrator.channel` processes found running out of temp directories that had
+been deleted a day earlier.
 
 Usage: ``leak_reaper.py ROOT_PID SESSION_TOKEN``, with the session's pipe on stdin.
 """

@@ -1,20 +1,10 @@
-"""A real dispatch-shaped process tree for tests that prove nothing survives it.
+"""Real dispatch-shaped process trees for tests that prove nothing survives them.
 
-Every leak this repository has had to reap by hand had the same shape: a root that
-keeps running, an intermediate that starts the real worker and then exits, and a
-worker that reparents away from the tree anyone was watching. Reproducing that
-shape — rather than one sleeping child — is what makes a cleanup test mean
-anything, because a walk from the root can no longer find the worker at all.
-
-The intermediate lingers briefly before it goes, which is the one detail that has
-to be right for *that* shape: a real dispatch's parent runs for minutes while its
-children work, and that is the whole window in which anything can observe them.
-
-The harness produces a second shape with no such window at all — a launch, below —
-so the two are written separately rather than as one parameterized tree. What
-distinguishes them is not how long the window is but whether there is one, and that
-is the difference between a guard that has to look in time and a guard that cannot
-attribute the process by parentage however often it looks.
+Reproducing the shape of an actual leak — rather than one sleeping child — is what
+makes a cleanup test mean anything. Both shapes this harness produces are here, and
+they are written separately rather than as one parameterized tree because what
+distinguishes them is not how wide the window is in which parentage can still
+attribute the worker but whether there is a window at all.
 """
 
 from __future__ import annotations
