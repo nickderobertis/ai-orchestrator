@@ -21,17 +21,25 @@ import socket
 import sys
 import threading
 import time
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager, suppress
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal, Protocol, get_args
+from typing import Any, Literal, Protocol, cast, get_args
 
 from .config import ConfigError
 from .coordination import advisory_lock, atomic_json
-from .edits import EDIT_PROTOCOL_VERSION, EditCommand, EditError, parse_commands
+from .edits import EDIT_PROTOCOL_VERSION, EditCommand, EditError, apply_edit, parse_commands
 from .environment import CHANNEL_ENV_PREFIX
-from .journal import JournalSink, NullJournal, open_journal
-from .runs import RunId, latest_round, load_mapping, resolve_supervision_run, validate_run_id
+from .journal import JOURNAL_NAME, JournalSink, NullJournal, open_journal
+from .runs import (
+    RunId,
+    latest_round,
+    load_mapping,
+    resolve_supervision_run,
+    round_appears_in_flight,
+    validate_run_id,
+)
 
 
 class ChannelError(Exception):
@@ -48,6 +56,18 @@ CHANNEL_ENDPOINTS = ("up.fifo", "down.fifo")
 HEARTBEAT_FILE = "heartbeat.json"
 HEARTBEAT_SURFACE_FILE = "heartbeat-surface.json"
 DEFAULT_HEARTBEAT_INTERVAL = 1800.0
+#: Accepted graph edits, and how far the reconciler has consumed them. The down
+#: FIFO cannot carry them: `relay_supervisor` and the reconciler's own receiver
+#: both read that endpoint, so whichever wins the race decides whether a command
+#: reaches the graph — and the relay has no graph to apply it to. Submission
+#: therefore appends here first, and the reconciler drains from here, so delivery
+#: no longer depends on which reader consumed the frame.
+COMMAND_QUEUE_FILE = "commands.jsonl"
+COMMAND_CURSOR_FILE = "commands-cursor.json"
+#: The reconciler's verdict on each accepted command, by queue sequence. This is
+#: what makes acceptance mean *applied*: the submitter waits here for the answer
+#: rather than exiting on "queued" and learning the outcome later, or never.
+COMMAND_OUTCOME_FILE = "command-outcomes.jsonl"
 
 PlannerSurfaceKind = Literal[
     "supervisor",
@@ -80,7 +100,9 @@ class ProposalSink(Protocol):
 
     def persist_replies(self) -> None: ...
 
-    def drain_commands(self) -> tuple[EditCommand, ...]: ...
+    def drain_commands(self) -> tuple[QueuedCommand, ...]: ...
+
+    def record_outcome(self, seq: int, *, applied: bool, reason: str) -> None: ...
 
     def heartbeat_tick(self) -> None: ...
 
@@ -257,6 +279,261 @@ def planner_wait_indicator(channel_dir: Path) -> str | None:
     surface = _validated_persisted_surface(load_mapping(pending))
     action = "planner decision" if surface["blocking"] else "planner reply"
     return f"waiting for {action}: {surface['kind']}: {surface['message']}"
+
+
+@dataclass(frozen=True)
+class QueuedCommand:
+    """One accepted graph edit awaiting the reconciler, with where it belongs."""
+
+    seq: int
+    round: int
+    command: EditCommand
+
+
+def _command_lock(channel_dir: Path) -> str:
+    return f"channel-commands:{channel_dir.resolve()}"
+
+
+def _queued(line: str) -> QueuedCommand | None:
+    """Parse one queue record, returning None for anything unreadable."""
+    try:
+        record = json.loads(line)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(record, dict):
+        return None
+    seq, round_number, payload = record.get("seq"), record.get("round"), record.get("command")
+    if (
+        not isinstance(seq, int)
+        or isinstance(seq, bool)
+        or not isinstance(round_number, int)
+        or isinstance(round_number, bool)
+        or not isinstance(payload, dict)
+    ):
+        return None
+    try:
+        commands = parse_commands({"version": EDIT_PROTOCOL_VERSION, "commands": [payload]})
+    except EditError:
+        return None
+    return QueuedCommand(seq, round_number, commands[0])
+
+
+def _read_queue(channel_dir: Path) -> list[QueuedCommand]:
+    path = channel_dir / COMMAND_QUEUE_FILE
+    if not path.is_file():
+        return []
+    raw = path.read_text(encoding="utf-8", errors="replace")
+    return [
+        queued
+        for line in raw.splitlines()
+        if line.strip() and (queued := _queued(line)) is not None
+    ]
+
+
+def submit_commands(
+    channel_dir: Path, commands: Sequence[EditCommand], *, round_number: int
+) -> tuple[int, ...]:
+    """Durably accept graph edits for one round and return their queue sequences."""
+    if not commands:
+        return ()
+    channel_dir.mkdir(parents=True, exist_ok=True)
+    with advisory_lock(_command_lock(channel_dir)):
+        next_seq = max((item.seq for item in _read_queue(channel_dir)), default=0) + 1
+        accepted = tuple(range(next_seq, next_seq + len(commands)))
+        with (channel_dir / COMMAND_QUEUE_FILE).open("a", encoding="utf-8") as handle:
+            for seq, command in zip(accepted, commands, strict=True):
+                handle.write(
+                    json.dumps(
+                        {"seq": seq, "round": round_number, "command": command.payload},
+                        sort_keys=True,
+                    )
+                    + "\n"
+                )
+            handle.flush()
+            os.fsync(handle.fileno())
+    return accepted
+
+
+def _consumed(channel_dir: Path) -> int:
+    """How far the reconciler has claimed, from the durable cursor."""
+    cursor_path = channel_dir / COMMAND_CURSOR_FILE
+    if not cursor_path.is_file():
+        return 0
+    value = load_mapping(cursor_path).get("consumed")
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        raise ChannelError("command cursor is invalid")
+    return value
+
+
+def claim_commands(channel_dir: Path) -> tuple[QueuedCommand, ...]:
+    """Claim every unconsumed queued command, advancing the durable cursor.
+
+    Commands from another round are claimed too rather than left behind: the
+    caller reports them as rejected, which is the whole point of the queue — an
+    accepted command is either applied or answered, never silently retained.
+    """
+    with advisory_lock(_command_lock(channel_dir)):
+        claimed = tuple(
+            item for item in _read_queue(channel_dir) if item.seq > _consumed(channel_dir)
+        )
+        if claimed:
+            atomic_json(
+                channel_dir / COMMAND_CURSOR_FILE, {"consumed": max(item.seq for item in claimed)}
+            )
+        return claimed
+
+
+def pending_commands(channel_dir: Path) -> tuple[QueuedCommand, ...]:
+    """Read accepted, unclaimed commands without consuming them."""
+    with advisory_lock(_command_lock(channel_dir)):
+        return tuple(item for item in _read_queue(channel_dir) if item.seq > _consumed(channel_dir))
+
+
+def unanswered_commands(channel_dir: Path) -> tuple[QueuedCommand, ...]:
+    """Every accepted command with no recorded verdict, claimed or not.
+
+    Claiming advances the cursor before the reconciler can answer, so "unclaimed"
+    is the wrong question at teardown: a command consumed by a reconciler that then
+    stopped is exactly the one that would otherwise be left unanswered forever.
+    """
+    with advisory_lock(_command_lock(channel_dir)):
+        answered = set(command_outcomes(channel_dir))
+        return tuple(item for item in _read_queue(channel_dir) if item.seq not in answered)
+
+
+@dataclass(frozen=True)
+class CommandOutcome:
+    """The reconciler's verdict on one accepted command."""
+
+    seq: int
+    applied: bool
+    reason: str
+
+
+@dataclass(frozen=True)
+class CommandVerdicts:
+    """What became of one submission's commands within the caller's deadline."""
+
+    applied: tuple[CommandOutcome, ...]
+    rejected: tuple[CommandOutcome, ...]
+    #: Accepted, durable, and not yet reconciled. Not a rejection: the command is
+    #: still queued, so the submitter must be told to wait rather than resubmit.
+    unreconciled: tuple[int, ...]
+
+
+def record_command_outcome(channel_dir: Path, seq: int, *, applied: bool, reason: str) -> None:
+    """Durably answer one accepted command, so its submitter cannot be left guessing."""
+    with (
+        advisory_lock(_command_lock(channel_dir)),
+        (channel_dir / COMMAND_OUTCOME_FILE).open("a", encoding="utf-8") as handle,
+    ):
+        handle.write(
+            json.dumps({"seq": seq, "applied": applied, "reason": reason}, sort_keys=True) + "\n"
+        )
+        handle.flush()
+        os.fsync(handle.fileno())
+
+
+def _outcome(line: str) -> CommandOutcome | None:
+    try:
+        record = json.loads(line)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(record, dict):
+        return None
+    seq, applied, reason = record.get("seq"), record.get("applied"), record.get("reason")
+    if (
+        not isinstance(seq, int)
+        or isinstance(seq, bool)
+        or not isinstance(applied, bool)
+        or not isinstance(reason, str)
+    ):
+        return None
+    return CommandOutcome(seq, applied, reason)
+
+
+def command_outcomes(channel_dir: Path) -> dict[int, CommandOutcome]:
+    """Every recorded verdict, keyed by queue sequence."""
+    path = channel_dir / COMMAND_OUTCOME_FILE
+    if not path.is_file():
+        return {}
+    raw = path.read_text(encoding="utf-8", errors="replace")
+    found: dict[int, CommandOutcome] = {}
+    for line in raw.splitlines():
+        if line.strip() and (outcome := _outcome(line)) is not None:
+            found.setdefault(outcome.seq, outcome)
+    return found
+
+
+def await_command_outcomes(
+    channel_dir: Path, seqs: Sequence[int], *, timeout: float
+) -> CommandVerdicts:
+    """Wait for the reconciler's verdict on each accepted command, bounded by ``timeout``.
+
+    The bound is the point, so it is validated here rather than trusted: a
+    non-finite deadline never compares true and would wait forever.
+    """
+    if not math.isfinite(timeout) or timeout < 0:
+        raise ChannelError("timeout must be finite and non-negative")
+    deadline = time.monotonic() + timeout
+    outstanding = list(seqs)
+    found: dict[int, CommandOutcome] = {}
+    while True:
+        found = {seq: outcome for seq, outcome in command_outcomes(channel_dir).items()}
+        outstanding = [seq for seq in seqs if seq not in found]
+        if not outstanding or time.monotonic() >= deadline:
+            break
+        time.sleep(0.02)
+    answered = [found[seq] for seq in seqs if seq in found]
+    return CommandVerdicts(
+        applied=tuple(outcome for outcome in answered if outcome.applied),
+        rejected=tuple(outcome for outcome in answered if not outcome.applied),
+        unreconciled=tuple(outstanding),
+    )
+
+
+def live_round(run_dir: Path) -> int:
+    """The round currently accepting graph edits, else raise a stated rejection."""
+    latest = latest_round(run_dir)
+    if latest is None:
+        raise ChannelError("this run has no recorded round, so no graph edit can be applied")
+    number, round_dir = latest
+    if (round_dir / "result.json").is_file() or not round_appears_in_flight(round_dir):
+        raise ChannelError(
+            f"round-{number:02d} is not executing, so no graph edit can be applied; "
+            "reply with a verdict and let the orchestrator open the next round"
+        )
+    return number
+
+
+def validate_commands(run_dir: Path, round_number: int, commands: Sequence[EditCommand]) -> None:
+    """Reject a command that cannot be applied to the live graph, with the reason.
+
+    Validation runs through the reconciler's own `apply_edit`, against the graph
+    projected from the authoritative event log, so the answer a submitter gets is
+    the answer the reconciler would give rather than a second, drifting rulebook.
+    """
+    from .graph import parse_graph
+    from .plan import PlanError
+    from .projection import ProjectionError, project_run
+
+    try:
+        projection = project_run(run_dir / JOURNAL_NAME, RunId(run_dir.name), round_number)
+        graph = parse_graph(dict(projection.plan))
+    except (ConfigError, PlanError, ProjectionError, OSError) as exc:
+        raise ChannelError(f"cannot validate against the live graph: {exc}") from exc
+    attestations = list(projection.attestations)
+    states = dict(projection.node_states)
+    for index, command in enumerate(commands):
+        try:
+            graph, operations = apply_edit(graph, command, states=states, attestations=attestations)
+        except EditError as exc:
+            raise ChannelError(f"command #{index} ({command.op}) cannot be applied: {exc}") from exc
+        for operation in operations:
+            if operation["kind"] == "human-attested":
+                ref = str(operation["detail"]["ref"])
+                attestations.append(ref)
+                states[ref] = "done"
 
 
 def create_channel(
@@ -547,7 +824,6 @@ class ProposalPump:
         self._round = round_number
         self._proposals: queue.Queue[dict[str, Any] | None] = queue.Queue()
         self._replies: queue.Queue[dict[str, Any]] = queue.Queue()
-        self._commands: queue.Queue[EditCommand] = queue.Queue()
         self._stop = threading.Event()
         self._awaiting_reply = threading.Event()
         self._reply_received = threading.Event()
@@ -624,14 +900,27 @@ class ProposalPump:
                 return
             atomic_json(self._channel_dir / "planner-verdict.json", response)
 
-    def drain_commands(self) -> tuple[EditCommand, ...]:
-        """Return commands to the reconciler thread without applying them here."""
-        commands: list[EditCommand] = []
-        while True:
-            try:
-                commands.append(self._commands.get_nowait())
-            except queue.Empty:
-                return tuple(commands)
+    def drain_commands(self) -> tuple[QueuedCommand, ...]:
+        """Claim durably accepted commands for this round, rejecting the rest aloud.
+
+        Read from the durable queue rather than from this pump's FIFO receiver: the
+        relay competes for the same endpoint and would otherwise consume a frame
+        whose commands nothing then applies. Each claimed command keeps its queue
+        sequence so the reconciler can answer it by name.
+        """
+        commands: list[QueuedCommand] = []
+        for item in claim_commands(self._channel_dir):
+            if item.round != self._round:
+                reason = f"submitted for round {item.round}, which is no longer executing"
+                self.propose("reconciler", f"rejected {item.command.op}: {reason}")
+                self.record_outcome(item.seq, applied=False, reason=reason)
+                continue
+            commands.append(item)
+        return tuple(commands)
+
+    def record_outcome(self, seq: int, *, applied: bool, reason: str) -> None:
+        """Answer one claimed command, so `channel-reply` can report its fate."""
+        record_command_outcome(self._channel_dir, seq, applied=applied, reason=reason)
 
     def heartbeat_tick(self) -> None:
         mark_heartbeat_due(self._channel_dir)
@@ -643,6 +932,25 @@ class ProposalPump:
         self._receiver.join()
         self._pacemaker.join()
         self.persist_replies()
+        # Answer every accepted command this round did not: one still queued, and one
+        # the reconciler claimed — advancing the cursor — but stopped before deciding.
+        # Both are the same failure to a waiting submitter, so both are rejected here
+        # rather than left to look applied to a reader of the ledger.
+        claim_commands(self._channel_dir)
+        for item in unanswered_commands(self._channel_dir):
+            reason = f"round {self._round} finished before the reconciler answered it"
+            self._journal.append(
+                "edit-rejected",
+                detail={
+                    # `EditPayload` is a closed TypedDict union that the journal's open
+                    # `DetailValue` cannot express; the payload was validated as JSON by
+                    # `parse_commands` before it was ever queued.
+                    "command": cast(Any, item.command.payload),
+                    "round": item.round,
+                    "reason": reason,
+                },
+            )
+            self.record_outcome(item.seq, applied=False, reason=reason)
 
     def _pace(self) -> None:
         """Keep checking the durable clock while the reconciler is inside a node."""
@@ -731,8 +1039,8 @@ class ProposalPump:
             try:
                 response = _reply(read_message(self._channel_dir / "down.fifo", timeout=0.1))
                 apply_heartbeat_reply(self._channel_dir, response)
-                for command in parse_commands(response):
-                    self._commands.put(command)
+                # Commands travel the durable queue, not this frame: whichever reader
+                # wins the endpoint, the reconciler still claims every accepted edit.
                 self._replies.put(response)
                 if self._awaiting_reply.is_set():
                     self._reply_received.set()
@@ -933,6 +1241,7 @@ def main_reply(argv: list[str] | None = None) -> int:
     parser.add_argument("--runs-dir", type=Path, default=Path("runs"))
     parser.add_argument("--timeout", type=float, default=30.0)
     args = parser.parse_args(argv)
+    accepted: tuple[int, ...] = ()
     try:
         raw = (
             sys.stdin.read() if args.reply == "-" else Path(args.reply).read_text(encoding="utf-8")
@@ -940,12 +1249,26 @@ def main_reply(argv: list[str] | None = None) -> int:
         value = json.loads(raw)
         if not isinstance(value, dict):
             raise ChannelError("reply must be a JSON object")
+        # The reply now waits for the reconciler's verdict, so its bound has to be one.
+        _validated_interval(args.timeout, field="timeout")
         resolved = resolve_supervision_run(args.runs_dir, args.run_id)
-        write_message(
-            args.runs_dir / resolved / "channel" / "down.fifo",
-            _reply(value),
-            timeout=args.timeout,
-        )
+        run_dir = args.runs_dir / resolved
+        response = _reply(value)
+        commands = parse_commands(response)
+        # `complete` is a closeout verdict rather than a graph mutation, so it rides
+        # the reply itself and stays legal at a round boundary where no graph is live.
+        edits = [command for command in commands if command.op != "complete"]
+        if commands:
+            try:
+                round_number: int | None = live_round(run_dir)
+            except ChannelError:
+                if edits:
+                    raise
+                round_number = None
+            if round_number is not None:
+                validate_commands(run_dir, round_number, commands)
+                accepted = submit_commands(run_dir / "channel", commands, round_number=round_number)
+        write_message(run_dir / "channel" / "down.fifo", response, timeout=args.timeout)
     except (
         ChannelError,
         ChannelTimeout,
@@ -954,11 +1277,44 @@ def main_reply(argv: list[str] | None = None) -> int:
         json.JSONDecodeError,
         OSError,
     ) as exc:
+        # Accepted edits are already durable, so a transport failure after acceptance
+        # must not read as "nothing happened": resubmitting them would apply them twice.
+        queued = (
+            ""
+            if not accepted
+            else f"; edit(s) {', '.join(f'#{seq}' for seq in accepted)} were accepted and "
+            "will be applied — do not resubmit them"
+        )
         print(
-            f"channel-reply: {exc}; check the run id and reply shape, then rerun the command",
+            f"channel-reply: {exc}; check the run id and reply shape, then rerun the command"
+            f"{queued}",
             file=sys.stderr,
         )
         return 2
+    if not accepted:
+        return 0
+    # Apply-or-reject, synchronously. An edit that passed submission can still lose a
+    # race to the frontier it was validated against, and "queued" is not an answer:
+    # this waits for the reconciler's verdict and reports a rejection to the caller
+    # that issued it, rather than leaving it as a proposal to be noticed later.
+    verdicts = await_command_outcomes(run_dir / "channel", accepted, timeout=args.timeout)
+    if verdicts.rejected:
+        for outcome in verdicts.rejected:
+            print(
+                f"channel-reply: edit #{outcome.seq} was rejected by the reconciler: "
+                f"{outcome.reason}",
+                file=sys.stderr,
+            )
+        return 2
+    if verdicts.unreconciled:
+        print(
+            "channel-reply: edit(s) "
+            + ", ".join(f"#{seq}" for seq in verdicts.unreconciled)
+            + f" were accepted but not reconciled within {args.timeout:g}s; they remain "
+            "queued — check `just monitor` rather than resubmitting them",
+            file=sys.stderr,
+        )
+        return 1
     return 0
 
 

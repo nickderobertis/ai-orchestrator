@@ -21,11 +21,15 @@ from orchestrator.channel import (
     _surface,
     _validated_heartbeat_surface,
     apply_heartbeat_reply,
+    await_command_outcomes,
+    claim_commands,
     claim_heartbeat,
+    command_outcomes,
     create_channel,
     due_indicator,
     finish_heartbeat_attempt,
     heartbeat_state,
+    live_round,
     main_approve,
     main_continue,
     main_next,
@@ -34,12 +38,18 @@ from orchestrator.channel import (
     main_reply,
     main_surface,
     mark_heartbeat_due,
+    pending_commands,
     read_message,
+    record_command_outcome,
     record_surface,
     relay_supervisor,
+    submit_commands,
+    unanswered_commands,
+    validate_commands,
     write_message,
 )
 from orchestrator.coordination import atomic_json
+from orchestrator.edits import parse_commands
 
 
 def _heartbeat(channel: Path) -> dict[str, object]:
@@ -1143,3 +1153,368 @@ def test_surface_ignores_json_without_emitted_surface_shape(content: str) -> Non
         1,
     )
     assert value["surface"] == {"kind": "supervisor", "message": "fallback"}
+
+
+def _round(run_dir: Path, *, running: bool = True) -> None:
+    """Record one claimed round owned by this live process."""
+    round_dir = run_dir / "round-01"
+    round_dir.mkdir(parents=True, exist_ok=True)
+    atomic_json(round_dir / "plan.json", {"tasks": []})
+    atomic_json(
+        round_dir / "status.json",
+        {
+            "status": "running" if running else "completed",
+            "pid": os.getpid(),
+            "host": socket.gethostname(),
+        },
+    )
+
+
+def test_accepted_commands_survive_the_frame_and_are_claimed_once(tmp_path: Path) -> None:
+    channel = create_channel(tmp_path / "queue-run")
+    commands = parse_commands(
+        {
+            "version": 1,
+            "commands": [
+                {"op": "attest", "ref": "approve"},
+                {"op": "complete", "reason": "verified"},
+            ],
+        }
+    )
+    assert submit_commands(channel, commands, round_number=1) == (1, 2)
+    assert [item.seq for item in pending_commands(channel)] == [1, 2]
+    claimed = claim_commands(channel)
+    assert [item.command.payload for item in claimed] == [
+        {"op": "attest", "ref": "approve"},
+        {"op": "complete", "reason": "verified"},
+    ]
+    assert claim_commands(channel) == ()
+    assert pending_commands(channel) == ()
+    assert submit_commands(channel, (), round_number=1) == ()
+
+
+def test_queue_skips_unreadable_records_and_rejects_a_broken_cursor(tmp_path: Path) -> None:
+    channel = create_channel(tmp_path / "queue-junk")
+    (channel / "commands.jsonl").write_text(
+        "\n".join(
+            [
+                "not json",
+                json.dumps({"seq": "x", "round": 1, "command": {"op": "attest", "ref": "a"}}),
+                json.dumps({"seq": 4, "round": 1, "command": {"op": "nonsense"}}),
+                json.dumps([1, 2]),
+                json.dumps({"seq": 7, "round": 2, "command": {"op": "attest", "ref": "a"}}),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    assert [item.seq for item in pending_commands(channel)] == [7]
+    atomic_json(channel / "commands-cursor.json", {"consumed": -1})
+    with pytest.raises(ChannelError, match="command cursor is invalid"):
+        claim_commands(channel)
+
+
+def test_live_round_names_why_an_edit_cannot_be_applied(tmp_path: Path) -> None:
+    run_dir = tmp_path / "runs" / "orch"
+    run_dir.mkdir(parents=True)
+    with pytest.raises(ChannelError, match="no recorded round"):
+        live_round(run_dir)
+    _round(run_dir, running=False)
+    with pytest.raises(ChannelError, match="is not executing"):
+        live_round(run_dir)
+    _round(run_dir)
+    assert live_round(run_dir) == 1
+    atomic_json(run_dir / "round-01" / "result.json", {"ok": True})
+    with pytest.raises(ChannelError, match="is not executing"):
+        live_round(run_dir)
+
+
+def test_validate_commands_rejects_an_unreadable_graph(tmp_path: Path) -> None:
+    run_dir = tmp_path / "runs" / "orch"
+    run_dir.mkdir(parents=True)
+    commands = parse_commands({"version": 1, "commands": [{"op": "attest", "ref": "approve"}]})
+    with pytest.raises(ChannelError, match="cannot validate against the live graph"):
+        validate_commands(run_dir, 1, commands)
+
+
+def test_main_reply_refuses_an_edit_with_no_live_round(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    runs = tmp_path / "runs"
+    run_dir = runs / "orch"
+    create_channel(run_dir)
+    reply = tmp_path / "edit.json"
+    reply.write_text(
+        json.dumps({"version": 1, "commands": [{"op": "attest", "ref": "approve"}]}),
+        encoding="utf-8",
+    )
+    assert main_reply(["orch", str(reply), "--runs-dir", str(runs)]) == 2
+    assert "no graph edit can be applied" in capsys.readouterr().err
+    assert not (run_dir / "channel" / "commands.jsonl").exists()
+
+
+def test_main_reply_reports_accepted_edits_when_the_transport_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    runs = tmp_path / "runs"
+    run_dir = runs / "orch"
+    create_channel(run_dir)
+    _round(run_dir)
+    monkeypatch.setattr("orchestrator.channel.validate_commands", lambda *args: None)
+
+    def refuse(path: Path, value: object, *, timeout: float) -> None:
+        raise ChannelTimeout("no reader")
+
+    monkeypatch.setattr("orchestrator.channel.write_message", refuse)
+    reply = tmp_path / "edit.json"
+    reply.write_text(
+        json.dumps({"version": 1, "commands": [{"op": "attest", "ref": "approve"}]}),
+        encoding="utf-8",
+    )
+    assert main_reply(["orch", str(reply), "--runs-dir", str(runs)]) == 2
+    assert "edit(s) #1 were accepted" in capsys.readouterr().err
+    assert [item.seq for item in pending_commands(run_dir / "channel")] == [1]
+
+
+def test_pump_rejects_a_command_left_over_from_another_round(tmp_path: Path) -> None:
+    channel = create_channel(tmp_path / "stale-run")
+    commands = parse_commands({"version": 1, "commands": [{"op": "attest", "ref": "approve"}]})
+    submit_commands(channel, commands, round_number=1)
+    pump = ProposalPump(channel, "stale-run", 2)
+    try:
+        assert pump.drain_commands() == ()
+        pending = channel / "planner-pending.json"
+        deadline = time.monotonic() + 2
+        while not pending.is_file() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        surface = json.loads(pending.read_text(encoding="utf-8"))
+    finally:
+        pump.close()
+    assert "rejected attest: submitted for round 1" in surface["message"]
+    assert pending_commands(channel) == ()
+
+
+def _live_graph_run(tmp_path: Path) -> Path:
+    """One recorded, executing round whose human node is waiting."""
+    from orchestrator.journal import open_journal
+    from orchestrator.runs import NodeId, RunId
+
+    runs = tmp_path / "runs"
+    run_dir = runs / "orch"
+    create_channel(run_dir)
+    _round(run_dir)
+    journal = open_journal(run_dir, RunId("orch"), 1)
+    journal.append(
+        "node-added", detail={"definition": {"id": "approve", "kind": "human", "task": "Approve"}}
+    )
+    journal.append(
+        "node-added", detail={"definition": {"id": "ship", "persona": "engineer", "task": "Ship"}}
+    )
+    journal.append("edge-added", detail={"from": "approve", "to": "ship"})
+    journal.append("round-started", detail={"plan": {"schema_version": 5, "concurrency": 2}})
+    journal.append(
+        "human-waiting",
+        node=NodeId("approve"),
+        detail={"task": "Approve", "result": {"status": "waiting", "kind": "human"}},
+    )
+    return runs
+
+
+def test_validate_commands_accepts_an_attest_and_refuses_a_repeat(tmp_path: Path) -> None:
+    runs = _live_graph_run(tmp_path)
+    once = parse_commands({"version": 1, "commands": [{"op": "attest", "ref": "approve"}]})
+    validate_commands(runs / "orch", 1, once)
+    twice = parse_commands(
+        {
+            "version": 1,
+            "commands": [{"op": "attest", "ref": "approve"}, {"op": "attest", "ref": "approve"}],
+        }
+    )
+    with pytest.raises(ChannelError, match="command #1 \\(attest\\)"):
+        validate_commands(runs / "orch", 1, twice)
+
+
+def test_main_reply_queues_a_validated_edit_before_sending_the_frame(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    runs = _live_graph_run(tmp_path)
+    channel = runs / "orch" / "channel"
+    sent: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        "orchestrator.channel.write_message",
+        lambda path, value, timeout: sent.append(dict(value)),
+    )
+    reply = tmp_path / "edit.json"
+    reply.write_text(
+        json.dumps({"version": 1, "commands": [{"op": "attest", "ref": "approve"}]}),
+        encoding="utf-8",
+    )
+    # No reconciler is draining, so the edit is durably accepted but unanswered: that
+    # is neither success nor a rejection, and the caller is told not to resubmit.
+    assert main_reply(["orch", str(reply), "--runs-dir", str(runs), "--timeout", "0.2"]) == 1
+    assert "were accepted but not reconciled" in capsys.readouterr().err
+    assert sent[0]["commands"] == [{"op": "attest", "ref": "approve"}]
+    queued = pending_commands(channel)
+    assert [(item.seq, item.round, item.command.payload) for item in queued] == [
+        (1, 1, {"op": "attest", "ref": "approve"})
+    ]
+
+    # Once the reconciler answers it, the same wait reports success.
+    record_command_outcome(channel, 1, applied=True, reason="applied attest")
+    reply.write_text(
+        json.dumps({"version": 1, "commands": [{"op": "attest", "ref": "approve"}]}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("orchestrator.channel.validate_commands", lambda *args: None)
+    threading.Thread(
+        target=lambda: (
+            time.sleep(0.05),
+            record_command_outcome(channel, 2, applied=True, reason="applied attest"),
+        ),
+        daemon=True,
+    ).start()
+    assert main_reply(["orch", str(reply), "--runs-dir", str(runs), "--timeout", "5"]) == 0
+
+
+def test_main_reply_refuses_an_inapplicable_edit_without_queueing_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    runs = _live_graph_run(tmp_path)
+    monkeypatch.setattr(
+        "orchestrator.channel.write_message",
+        lambda path, value, timeout: pytest.fail("an inapplicable edit must not be sent"),
+    )
+    reply = tmp_path / "edit.json"
+    reply.write_text(
+        json.dumps({"version": 1, "commands": [{"op": "attest", "ref": "ship"}]}),
+        encoding="utf-8",
+    )
+    assert main_reply(["orch", str(reply), "--runs-dir", str(runs)]) == 2
+    assert "attest requires a currently-ready human action" in capsys.readouterr().err
+    assert pending_commands(runs / "orch" / "channel") == ()
+
+
+def test_main_reply_keeps_a_bare_completion_legal_at_a_round_boundary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runs = tmp_path / "runs"
+    create_channel(runs / "orch")
+    sent: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        "orchestrator.channel.write_message",
+        lambda path, value, timeout: sent.append(dict(value)),
+    )
+    reply = tmp_path / "complete.json"
+    reply.write_text(
+        json.dumps({"version": 1, "commands": [{"op": "complete", "reason": "verified"}]}),
+        encoding="utf-8",
+    )
+    assert main_reply(["orch", str(reply), "--runs-dir", str(runs)]) == 0
+    assert sent[0]["completion"] is True
+    assert not (runs / "orch" / "channel" / "commands.jsonl").exists()
+
+
+def test_a_command_that_loses_the_applicability_race_is_rejected_to_its_submitter(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Apply-or-reject, end to end, against the real reconciler.
+
+    Submission validates against the authoritative log; the reconciler validates
+    against the live frontier. When those disagree — which is what losing a race to
+    a concurrently settling node looks like — the command is not quietly downgraded
+    to a proposal: `channel-reply` itself exits non-zero with the reconciler's
+    reason. The divergence is set up directly here (the log records a waiting human
+    action the running graph no longer has) because a genuine race window is
+    microseconds wide and cannot be held open through the CLI.
+    """
+    from orchestrator.graph import parse_graph, run_graph
+
+    runs = _live_graph_run(tmp_path)
+    run_dir = runs / "orch"
+    channel = run_dir / "channel"
+    release = threading.Event()
+    graph = parse_graph({"tasks": [{"id": "ship", "persona": "engineer", "task": "Ship"}]})
+
+    def blocking_runner(node: object, **_: object) -> object:
+        from orchestrator.dispatch import Report
+
+        release.wait(timeout=30)
+        return Report("engineer", 0, True, False, 1, [], {}, {}, "")
+
+    pump = ProposalPump(channel, "orch", 1)
+    reconciler = threading.Thread(
+        target=run_graph,
+        args=(graph,),
+        kwargs={
+            "agent_runner": blocking_runner,
+            "lifecycle_runner": lambda node, **_: None,
+            "proposal_pump": pump,
+        },
+        daemon=True,
+    )
+    reconciler.start()
+    try:
+        reply = tmp_path / "raced.json"
+        reply.write_text(
+            json.dumps({"version": 1, "commands": [{"op": "attest", "ref": "approve"}]}),
+            encoding="utf-8",
+        )
+        assert main_reply(["orch", str(reply), "--runs-dir", str(runs), "--timeout", "10"]) == 2
+    finally:
+        release.set()
+        reconciler.join(timeout=30)
+        pump.close()
+    error = capsys.readouterr().err
+    assert "was rejected by the reconciler" in error
+    assert "attest requires a currently-ready human action" in error
+    outcomes = command_outcomes(channel)
+    assert [(seq, outcome.applied) for seq, outcome in outcomes.items()] == [(1, False)]
+    # And the durable queue is answered, not merely consumed: nothing is left pending.
+    assert pending_commands(channel) == ()
+
+
+def test_a_claimed_command_the_reconciler_never_answered_is_rejected_at_teardown(
+    tmp_path: Path,
+) -> None:
+    """Claiming advances the cursor before a verdict exists, so teardown must sweep it.
+
+    A reconciler that stops between claiming a command and deciding it would
+    otherwise leave that command consumed and unanswered — indistinguishable, to a
+    submitter waiting on its verdict, from one still queued.
+    """
+    channel = create_channel(tmp_path / "unanswered-run")
+    commands = parse_commands(
+        {
+            "version": 1,
+            "commands": [{"op": "attest", "ref": "approve"}, {"op": "attest", "ref": "release"}],
+        }
+    )
+    submit_commands(channel, commands, round_number=1)
+    pump = ProposalPump(channel, "unanswered-run", 1)
+    claimed = pump.drain_commands()
+    assert [item.seq for item in claimed] == [1, 2]
+    # Only the first is decided; the round then ends.
+    pump.record_outcome(1, applied=True, reason="applied attest")
+    assert pending_commands(channel) == ()  # the cursor already consumed both
+    assert [item.seq for item in unanswered_commands(channel)] == [2]
+
+    pump.close()
+    outcomes = command_outcomes(channel)
+    assert outcomes[1].applied is True
+    assert outcomes[2].applied is False
+    assert "finished before the reconciler answered it" in outcomes[2].reason
+    assert unanswered_commands(channel) == ()
+
+
+def test_a_reply_timeout_that_cannot_bound_the_wait_is_refused(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The wait for a verdict is only a contract if its bound is a real one."""
+    runs = _live_graph_run(tmp_path)
+    reply = tmp_path / "edit.json"
+    reply.write_text(json.dumps({"completion": True, "reason": "done"}), encoding="utf-8")
+    for bad in ("nan", "0", "-1"):
+        assert main_reply(["orch", str(reply), "--runs-dir", str(runs), "--timeout", bad]) == 2
+        assert "timeout must be a positive, finite number" in capsys.readouterr().err
+    with pytest.raises(ChannelError, match="finite and non-negative"):
+        await_command_outcomes(runs / "orch" / "channel", (1,), timeout=float("nan"))

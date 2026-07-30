@@ -123,7 +123,7 @@ write_status() {
 }
 worker_pid=$$
 write_status agent.pid "$worker_pid"
-if ! rm -f "$status_dir/agent.done" "$status_dir/agent.failed"; then
+if ! rm -f "$status_dir/agent.done" "$status_dir/agent.failed" "$status_dir/agent.exit_code"; then
     echo "oneharness-agent: cannot reset terminal markers; retry through orchestrator dispatch" >&2
     exit 2
 fi
@@ -139,9 +139,18 @@ write_status agent.heartbeat "$heartbeat_sequence"
 # llmlint: ignore[boundary_inputs_validated] this duplicates a file descriptor; the payload it
 # carries is the onejudge protocol that oneharness itself parses and validates.
 exec 3<&0
+# A worker that dies before its first turn produces no report and no transcript, so
+# the child's own stderr is the only account of why. Park it beside the terminal
+# markers rather than letting it vanish with the process tree the dispatcher is
+# about to tear down; a failing exit replays it below, a successful one does not.
+agent_stderr=$status_dir/agent.stderr
+if ! : >"$agent_stderr"; then
+    echo "oneharness-agent: cannot open the agent stderr record; retry through orchestrator dispatch" >&2
+    exit 2
+fi
 # llmlint: ignore[tool_output_is_signal, boundary_inputs_validated] this wrapper is a transparent
 # conduit for that protocol in both directions, exactly as the `exec` pass-throughs above are.
-oneharness run --config "$agent_config" "$@" <&3 &
+oneharness run --config "$agent_config" "$@" <&3 2>"$agent_stderr" &
 agent_pid=$!
 write_status agent.child.pid "$agent_pid"
 while agent_state=$(ps -o stat= -p "$agent_pid" 2>/dev/null) &&
@@ -155,7 +164,21 @@ set +e
 wait "$agent_pid"
 exit_code=$?
 set -e
+# Record the status before replaying the stream: the dispatcher can conclude this
+# worker died the moment the child leaves the process tree, and a large stderr
+# would otherwise let it reach that conclusion before the reason was written down.
+write_status agent.exit_code "$exit_code"
 if [ "$exit_code" -ne 0 ]; then
+    # Replay the child's own words only now. A turn that succeeded says everything
+    # it has to say through the protocol on stdout, so its harness chatter is noise
+    # here; a turn that failed leaves this stream as the only account of why. The
+    # record in the status directory is written either way, so nothing is lost by
+    # staying quiet on the way out.
+    if ! cat "$agent_stderr" >&2; then
+        # An unreadable replay must not change the child's fate, which is already
+        # decided and recorded; say so and let the exit code below stand.
+        echo "oneharness-agent: could not replay the agent stderr record at $agent_stderr; read it from the worker status directory instead" >&2
+    fi
     echo "oneharness-agent: agent process $agent_pid exited $exit_code; awaiting dispatcher recovery" >&2
     write_status agent.failed "$worker_pid"
     while :; do

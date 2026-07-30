@@ -48,7 +48,18 @@ step or node `max_turns` replaces the default segment size. Cancellation, a
 continuations settles as `not-completed` for planner review; partial committed
 work retains the same incomplete provenance marker. The orchestrator can retry
 through its existing bounded continuation/live-edit path, and a later explicit
-retry uses the same recorded resume metadata.
+retry uses the same recorded resume metadata. A `worker-died` settlement carries
+the dispatcher's account of the death — the watchdog pid, the agent child's exit
+status, and the tail of its stderr — because a worker that dies before its first
+turn leaves no report, transcript, or verdict to read instead.
+
+Each agent step names its conversation for the branch **and** the worktree it
+runs in (`dispatch.scoped_session`), and so does the PR-author dispatch. Steps and
+automatic continuations within one run share that worktree and therefore one
+conversation; a later run pinned, resumed, or recovered onto the same branch cuts
+a worktree under its own run root and gets its own. A name that repeated across
+runs would ask the harness to resume a conversation it filed under a directory
+that no longer exists, which fails before the first turn.
 
 `just repo-task <repo> <persona> "<task>"` runs one. `<repo>` is a GitHub
 `name` / `owner/name` / URL, a **local filesystem path**, or an exact checkout alias

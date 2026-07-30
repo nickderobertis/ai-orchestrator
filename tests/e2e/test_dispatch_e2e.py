@@ -26,6 +26,7 @@ from pathlib import Path
 import onejudge_sdk
 import pytest
 import yaml
+from mock_oneharness import BARRIER_DEATH_NOTICE
 
 from orchestrator import PERSONA_DIR, REPO_ROOT
 from orchestrator.channel import (
@@ -361,7 +362,15 @@ def test_real_dispatch_detects_killed_agent_and_reaps_orphans(
 
     assert process.returncode == 1, stderr
     result = json.loads(stdout)
-    assert result["results"]["worker"]["error"] == "worker-died"
+    # A death before the first turn leaves no report and no transcript, so this
+    # recorded line is the whole account of it. It has to carry the child's fate
+    # *and* the child's own words — the stderr the killed harness wrote is what
+    # tells a reader why it died, and it has to survive the wrapper, the status
+    # directory, the dispatcher, and the graph to reach this JSON.
+    error = result["results"]["worker"]["error"]
+    assert error.startswith("worker-died:"), error
+    assert "agent exit status 143" in error, error
+    assert BARRIER_DEATH_NOTICE in error, error
     assert time.monotonic() - started < 5
     deadline = time.monotonic() + 2
     while Path(f"/proc/{orphan_pid}").exists() and time.monotonic() < deadline:

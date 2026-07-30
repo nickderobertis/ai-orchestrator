@@ -10,11 +10,14 @@ faked, mirroring how the e2e suite fakes just the paid harness.
 
 from __future__ import annotations
 
+import re
 import stat
 import subprocess
+import time
 from pathlib import Path
 
 from orchestrator import REPO_ROOT
+from orchestrator.dispatch import AGENT_STATUS_NAMES
 
 WRAPPER = REPO_ROOT / "scripts" / "oneharness-agent.sh"
 ALT_CONFIG_LIBRARY = REPO_ROOT / "scripts" / "claude-alt-config-dir.sh"
@@ -288,7 +291,8 @@ def test_watchdog_path_forwards_the_task_on_stdin(tmp_path: Path) -> None:
     stdin_file = tmp_path / "agent-stdin"
     stub = bin_dir / "oneharness"
     stub.write_text(
-        '#!/usr/bin/env bash\ncat > "$ONEHARNESS_STDIN_FILE"\n',
+        '#!/usr/bin/env bash\ncat > "$ONEHARNESS_STDIN_FILE"\n'
+        'echo "harness: startup chatter nobody asked for" >&2\n',
         encoding="utf-8",
     )
     stub.chmod(stub.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
@@ -309,3 +313,73 @@ def test_watchdog_path_forwards_the_task_on_stdin(tmp_path: Path) -> None:
     assert stdin_file.read_text(encoding="utf-8") == task
     # The heartbeat path is the one under test: it must have run, not the exec branch.
     assert (status_dir / "agent.done").exists()
+    assert (status_dir / "agent.exit_code").read_text(encoding="utf-8").strip() == "0"
+    # A turn that succeeded reports through the protocol on stdout, so the harness
+    # chatter it happened to print stays in the record and out of the caller's face.
+    assert proc.stderr == "", proc.stderr
+    assert "startup chatter" in (status_dir / "agent.stderr").read_text(encoding="utf-8")
+
+
+def test_status_file_contract_has_one_source_the_wrapper_honors() -> None:
+    """The dispatcher's status-file names and the wrapper's must not drift apart.
+
+    The status directory is the whole IPC contract between this shell wrapper and
+    the Python dispatcher, and each side spells the filenames itself. Renaming one
+    of them on either side alone would not fail to compile or parse; it would just
+    make the dispatcher stop seeing a marker, which reads as a healthy worker that
+    never finishes.
+    """
+    script = WRAPPER.read_text(encoding="utf-8")
+    for name in AGENT_STATUS_NAMES:
+        assert name in script, f"{WRAPPER.name} does not write the {name!r} status file"
+    written = set(re.findall(r"\$status_dir/(agent\.[a-z_.]+?)(?:\.tmp)?[\"\s]", script))
+    written |= set(re.findall(r"write_status (agent\.[a-z_.]+)", script))
+    assert written <= set(AGENT_STATUS_NAMES), (
+        f"{WRAPPER.name} writes status files the dispatcher does not know: "
+        f"{sorted(written - set(AGENT_STATUS_NAMES))}"
+    )
+
+
+def test_dead_agent_records_its_exit_status_and_stderr_before_parking(tmp_path: Path) -> None:
+    """A failed agent leaves the dispatcher an account of why it died.
+
+    The wrapper parks after a failure so the dispatcher can observe the marker, and
+    the child's process tree is torn down right after — so anything not written to
+    the status directory here is simply lost, and the dispatch reports a bare
+    outcome name for a failure nobody can diagnose.
+    """
+    status_dir = tmp_path / "orchestrator-watchdog-2" / "agent"
+    status_dir.mkdir(parents=True)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    stub = bin_dir / "oneharness"
+    stub.write_text(
+        "#!/usr/bin/env bash\n"
+        'echo "claude: no conversation found with session id 0dd" >&2\nexit 7\n',
+        encoding="utf-8",
+    )
+    stub.chmod(stub.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    proc = subprocess.Popen(
+        ["bash", str(WRAPPER), "run", "--prompt", "task"],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env={
+            "PATH": f"{bin_dir}:/usr/bin:/bin",
+            "ORCHESTRATOR_AGENT_STATUS_DIR": str(status_dir),
+            "HOME": str(tmp_path / "home"),
+        },
+    )
+    try:
+        failed = status_dir / "agent.failed"
+        deadline = time.monotonic() + 30
+        while not failed.exists() and time.monotonic() < deadline:
+            assert proc.poll() is None, "wrapper exited instead of parking for the dispatcher"
+            time.sleep(0.02)
+        assert failed.exists(), "the wrapper never recorded the failure"
+        assert (status_dir / "agent.exit_code").read_text(encoding="utf-8").strip() == "7"
+        assert "no conversation found" in (status_dir / "agent.stderr").read_text(encoding="utf-8")
+        assert not (status_dir / "agent.done").exists()
+    finally:
+        proc.kill()
+        proc.communicate(timeout=10)

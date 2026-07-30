@@ -763,17 +763,46 @@ def run_graph(
             heartbeat_tick()
         proposal_pump.persist_replies()
         drain = getattr(proposal_pump, "drain_commands", lambda: ())
-        for command in drain():
+        for claimed in drain():
+            command = claimed.command
             try:
                 updated, operations = apply_edit(
                     graph, command, states=frontier, attestations=attestations
                 )
             except EditError as exc:
+                # Every claimed command is answered before the next is considered, so a
+                # submitter waiting on its verdict is never left to infer one.
+                proposal_pump.record_outcome(claimed.seq, applied=False, reason=str(exc))
                 proposal_pump.propose("reconciler", f"rejected {command.op}: {exc}")
+                # llmlint: ignore[changed_behavior_has_e2e] `channel-reply` refuses an
+                # inapplicable edit at submission (proven e2e), so reaching here means the
+                # frontier moved between submission and reconciliation — a race with no
+                # deterministic handle through the real CLI. The synchronous rejection the
+                # submitter receives, the journalled event, and the stale-round variant are
+                # each proven against this same reconciler in test_channel.py/test_graph.py.
+                log.append(
+                    "edit-rejected",
+                    # `EditPayload` is a closed TypedDict union whose per-op value types
+                    # the open recursive `DetailValue` cannot express; the payload is
+                    # already JSON by construction (`parse_commands` validated it off the
+                    # wire), so the escape is at the journal's serialization boundary only.
+                    detail={"command": cast(Any, command.payload), "reason": str(exc)},
+                )
                 continue
             # One event is the commit boundary: replay either sees every compiled
-            # edge mutation or none of them.
-            log.append("edit-committed", detail={"operations": cast(Any, operations)})
+            # edge mutation or none of them. The submitted command rides along with
+            # its compiled operations so a reader of the log alone reconstructs the
+            # graph that ran rather than inferring it from the mutations.
+            log.append(
+                "edit-committed",
+                detail={
+                    # Both escapes are the same TypedDict-into-`DetailValue` boundary as
+                    # above: `EditPayload` and `EditOperation` are validated JSON that the
+                    # journal's open value type cannot restate without losing their shape.
+                    "command": cast(Any, command.payload),
+                    "operations": cast(Any, operations),
+                },
+            )
             graph = updated
             nodes.clear()
             nodes.update({node.id: node for node in graph.tasks})
@@ -801,29 +830,35 @@ def run_graph(
             # not a scheduling change; its reconciler commit is unit-tested and its run-ending
             # effect is proven through the real channel journeys rather than this operation loop.
             for operation in operations:
-                if operation["kind"] == "human-attested":
-                    ref = cast(str, operation["detail"]["ref"])
-                    attestations.append(ref)
-                    status[ref] = "done"
-                    actual[ref] = NodeRun("done", payload="human-attested")
-                elif operation["kind"] == "retry-requested":
-                    retried = operation["node"]
-                    cancellations[retried].set()
-                    reset = operation["detail"].get("reset", [])
-                    if isinstance(reset, list):
-                        for dependent in reset:
-                            if isinstance(dependent, str) and status.get(dependent) in {
-                                "skipped",
-                                "blocked",
-                            }:
-                                status[dependent] = "pending"
-                                actual.pop(dependent, None)
-                elif operation["kind"] == "node-dropped":
-                    dropped = operation["node"]
-                    cancellations[dropped].set()
-                    if status.get(dropped) != "running":
-                        status.pop(dropped, None)
-                        actual.pop(dropped, None)
+                match operation["kind"]:
+                    case "human-attested":
+                        ref = cast(str, operation["detail"]["ref"])
+                        attestations.append(ref)
+                        status[ref] = "done"
+                        actual[ref] = NodeRun("done", payload="human-attested")
+                    case "retry-requested":
+                        cancellations[operation["node"]].set()
+                    case "node-dropped":
+                        dropped = operation["node"]
+                        cancellations[dropped].set()
+                        if status.get(dropped) != "running":
+                            status.pop(dropped, None)
+                            actual.pop(dropped, None)
+            # `skipped` and `blocked` are *derived*: the scheduler writes them when a
+            # dependency settled unmet or waiting, and nothing else produces them. An
+            # edit that changes eligibility — a reparent off a blocking dep, an attest
+            # that releases one, a detaching drop — therefore leaves them stale, and a
+            # node the planner just made eligible would sit unscheduled behind a gate
+            # that no longer exists. Discard every derived gate after a committed edit
+            # so the same reconciler pass re-derives it against the new graph.
+            for nid, state in list(status.items()):
+                if state in {"skipped", "blocked"}:
+                    status[nid] = "pending"
+                    actual.pop(nid, None)
+            # Answered last, once the commit is durable and the updated graph is
+            # installed: a submitter is told "applied" only after that is a fact of
+            # this round, never while the append that makes it one could still fail.
+            proposal_pump.record_outcome(claimed.seq, applied=True, reason=f"applied {command.op}")
 
     def observe_tick() -> None:
         nonlocal budget_surfaced

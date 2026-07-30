@@ -67,6 +67,7 @@ from .journal import (
     Event,
     read_events,
 )
+from .liveness import PARKED_AFTER_SECONDS, parked_indicator
 from .registry import Registry, RegistryError
 from .runs import (
     GraphPayload,
@@ -968,8 +969,21 @@ class RunState:
 
 # llmlint: ignore[changed_behavior_has_e2e] real blocking and informational pending surfaces run
 # through just monitor e2e; malformed-file tolerance is a deterministic reader boundary.
-def run_state(run_dir: Path, run_id: RunId) -> RunState:
-    """Read the run's current state from its newest round."""
+def run_state(
+    run_dir: Path, run_id: RunId, *, parked_after: float = PARKED_AFTER_SECONDS
+) -> RunState:
+    """Read the run's current state from its newest round.
+
+    A parked launch is reported before anything else the run recorded. Both the
+    persisted planner surface and the round's ``running`` status outlive the work
+    that wrote them, so a launch that is alive and doing nothing would otherwise be
+    rendered as the last thing it *was* doing.
+    """
+    if (parked := parked_indicator(run_dir, parked_after=parked_after)) is not None:
+        parked_round = latest_round(run_dir)
+        return RunState(
+            run_id, parked_round[0] if parked_round else None, "parked", False, False, parked
+        )
     pending = run_dir / "channel" / "planner-pending.json"
     if pending.is_file():
         try:

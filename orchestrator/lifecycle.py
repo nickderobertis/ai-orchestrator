@@ -36,7 +36,7 @@ from . import BASE_CONFIG, PERSONA_DIR, gitops
 from .cli_contract import DEFAULT_ONEHARNESS_MODE, ONEHARNESS_MODES
 from .config import ConfigError, load_yaml
 from .coordination import LockTimeout, advisory_lock, atomic_json, git_lock_identity
-from .dispatch import Report, dispatch
+from .dispatch import Report, dispatch, scoped_session
 from .github import CliGitHubBackend, GitHubBackend, GitHubError, PullRequest
 from .gitops import GitError
 from .ids import GraphId
@@ -667,7 +667,7 @@ def _draft_pr_body(
                 use_llmlint_wrapper=use_llmlint_wrapper,
                 base_path=base_path,
                 persona_dir=persona_dir,
-                session="pr-author",
+                session=scoped_session("pr-author", worktree),
                 labels=journal.labels,
                 env=dispatch_env,
             )
@@ -1038,6 +1038,7 @@ def _run_steps(
             return NodeRun("done", None, None)
         log.append("step-started", detail={"step_kind": step.kind, "persona": step.persona})
         dispatch_head = gitops.head_sha(worktree)
+        step_session = f"{scoped_session(branch, worktree)}:{sid}"
         report = dispatch_fn(
             cast(str, step.persona),
             step.task,
@@ -1046,7 +1047,7 @@ def _run_steps(
             use_llmlint_wrapper=use_llmlint_wrapper,
             base_path=base_path,
             persona_dir=persona_dir,
-            session=f"{branch}:{sid}",
+            session=step_session,
             max_turns=step.max_turns or DEFAULT_LIFECYCLE_STEP_MAX_TURNS,
             done_when=step.done_when,
             extra_instructions=extra_instructions,
@@ -1054,7 +1055,7 @@ def _run_steps(
             env=dispatch_env,
             cancel=cancel,
         )
-        persist_report_artifacts(log, report, session=f"{branch}:{sid}")
+        persist_report_artifacts(log, report, session=step_session)
         reports[sid] = report
         if not report.completed:
             # llmlint: ignore[changed_behavior_has_e2e] The live orchestrator e2e kills this
@@ -1062,7 +1063,12 @@ def _run_steps(
             # Existing real-git lifecycle journeys cover this same shared preservation branch
             # with dirty and agent-committed partial work; duplicating paid-agent authoring
             # inside the kill journey would replace an additional layer under test.
-            failure = report.outcome or "hit the turn cap"
+            # A death carries the dispatcher's account of it (exit status, stderr);
+            # a turn-cap stop is self-explanatory and its stderr is harness noise.
+            if report.outcome:
+                failure = report.stderr.strip() or report.outcome
+            else:
+                failure = "hit the turn cap"
             preserved = False
             if gitops.is_dirty(worktree):
                 gitops.add_all(worktree)
@@ -2003,26 +2009,67 @@ def run_repo_task(
                 "- Existing completed work is preserved.\n"
                 "- The repository gate remains green.\n"
             )
-            report = dispatch_fn(
-                cast(str, lead.persona),
-                resolution_task,
-                project_dir=str(worktree),
-                oneharness_mode=oneharness_mode,
-                base_path=base_path,
-                persona_dir=persona_dir,
-                session=f"{branch}:{lead.id}",
-                max_turns=lead.max_turns or DEFAULT_LIFECYCLE_STEP_MAX_TURNS,
-                done_when="The conflict is resolved, committed, and the gate is green.",
-                labels=log.labels,
-                env=cache_env,
-                cancel=cancel,
+            # Publication-path work is dispatched work, and a reader of the ledger
+            # cannot tell an unrecorded 90-minute conflict resolution from a hang.
+            log.append(
+                "conflict-resolution-started",
+                detail={
+                    "branch": branch,
+                    "base": remote_base,
+                    "attempt": merge_resolutions,
+                    "persona": lead.persona,
+                },
             )
-            persist_report_artifacts(
-                log,
-                report,
-                session=f"{branch}:{lead.id}",
+            # This dispatch runs against an already-checked-out branch, so it needs the
+            # same worktree-scoped session name every other pinned-branch dispatch uses.
+            resolution_session = f"{scoped_session(branch, worktree)}:{lead.id}"
+            # Everything between the start event and its close is guarded, not the
+            # dispatch alone: a start with nothing to close it is the "looks like a
+            # hang" reading these events exist to prevent, and the ledger cannot tell
+            # *where* after the start a failure landed. Persisting the report and
+            # inspecting the worktree both touch the filesystem and both can fail.
+            try:
+                report = dispatch_fn(
+                    cast(str, lead.persona),
+                    resolution_task,
+                    project_dir=str(worktree),
+                    oneharness_mode=oneharness_mode,
+                    base_path=base_path,
+                    persona_dir=persona_dir,
+                    session=resolution_session,
+                    max_turns=lead.max_turns or DEFAULT_LIFECYCLE_STEP_MAX_TURNS,
+                    done_when="The conflict is resolved, committed, and the gate is green.",
+                    labels=log.labels,
+                    env=cache_env,
+                    cancel=cancel,
+                )
+                persist_report_artifacts(
+                    log,
+                    report,
+                    session=resolution_session,
+                )
+                unresolved = gitops.unmerged_paths(worktree)
+            except Exception as exc:
+                log.append(
+                    "conflict-resolution-finished",
+                    detail={
+                        "branch": branch,
+                        "attempt": merge_resolutions,
+                        "completed": False,
+                        "error": f"{type(exc).__name__}: {exc}",
+                    },
+                )
+                raise
+            log.append(
+                "conflict-resolution-finished",
+                detail={
+                    "branch": branch,
+                    "attempt": merge_resolutions,
+                    "completed": report.completed,
+                    "resolved": not unresolved,
+                    "unresolved_paths": sorted(unresolved),
+                },
             )
-            unresolved = gitops.unmerged_paths(worktree)
             if unresolved:
                 gitops.merge_abort(worktree)
                 if not report.completed:

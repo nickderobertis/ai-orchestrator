@@ -137,6 +137,14 @@ message. A queued, unconsumed heartbeat remains non-blocking and is not reported
 as a reply wait. This distinguishes completed work held at a planner boundary
 from an orchestrator that is actively executing work.
 
+That wait describes a *live* launch only. A queued surface outlives the work that
+queued it, so a run reported abandoned or parked never wears it as its `just runs`
+summary: the row keeps the round's own summary and the `ABANDONED (...)` or
+`PARKED (...)` line beneath it says why the run stopped. `just status` is the
+surface-reporting view and keeps both, in that order — the stopped line first, the
+stale wait immediately after — so the reason the run is stuck stays visible without
+the run reading as live supervision.
+
 Every proposal includes `surface.blocking`: `true` means the worker or orchestrator
 is awaiting the decision, while `false` is an informational follow-up that does
 not stop the graph frontier. `monitor` renders `ACK REQUIRED` while any blocking
@@ -207,13 +215,49 @@ must exist, and dependencies cannot form a cycle or self-edge. `reparent` cannot
 change a started node; `retry` requires a running, failed, or cancelled target and
 a new replacement id; `attest` requires a ready waiting human action. `drop` must
 state the dependents' fate and cannot remove the last publication anchor while an
-unresolved same-identity dependent remains. A rejected delta changes no state and
-returns as a `reconciler: rejected ...` proposal. Commands are reconciled in
+unresolved same-identity dependent remains. Commands are reconciled in
 order. Each accepted delta, including a multi-edge reparent or retry, is appended
-by the reconciler's single writer as one `edit-committed` event, so replay sees
-all of that delta's compiled mutations or none of them. Channel frames are
-locked, acknowledged JSON lines and are not limited to a FIFO's atomic-write
-size.
+by the reconciler's single writer as one `edit-committed` event carrying both the
+submitted `command` and its compiled `operations`, so replay sees all of that
+delta's compiled mutations or none of them, and reconstructs the graph from what
+was actually submitted rather than inferring it. Channel frames are locked,
+acknowledged JSON lines and are not limited to a FIFO's atomic-write size.
+
+**Every edit is applied or rejected, and `channel-reply` reports which.** It
+validates each edit against the graph projected from `events.jsonl` — through the
+reconciler's own validator, so the answer is the one the reconciler would give —
+and exits non-zero with the reason when it cannot be applied, before anything is
+queued or sent. Edits also require a live round: replying with an edit when no
+round is executing is refused with that reason, while a bare `complete` verdict
+stays legal at a round boundary.
+
+Accepted edits are appended to `runs/<run-id>/channel/commands.jsonl` and drained
+from there by the reconciler, which advances `commands-cursor.json`. That durable
+queue is what makes acceptance mean delivery: both `relay_supervisor` and the
+reconciler's own receiver read the down FIFO, so a command riding only the frame
+reached the graph or not depending on which reader won. The reconciler then
+answers each claimed command in `command-outcomes.jsonl`, and `channel-reply`
+waits for that verdict before it exits:
+
+| Exit | Meaning |
+| --- | --- |
+| 0 | every edit in the envelope was applied by the reconciler |
+| 1 | the edits were accepted and durable but not reconciled within `--timeout`; they remain queued — check `just monitor` rather than resubmitting |
+| 2 | the reply was malformed, or an edit was refused at submission, or the reconciler rejected it (the reason is printed) |
+
+An edit that passes submission can still lose a race to the frontier it was
+validated against — the log a submitter reads lags the live frontier — and that
+case is a synchronous rejection to the caller that issued it, not a proposal to
+be noticed later. The same holds for a command left over from an earlier round or
+one the round ended too soon to claim. Every rejection is also surfaced as a
+`reconciler: rejected ...` proposal and recorded as an `edit-rejected` event
+carrying the command and the reason. No accepted command is silently dropped.
+
+Both edits that change only *eligibility* — `attest` and `reparent` — wake the
+scheduler on the same reconciler pass. `blocked` and `skipped` are derived
+statuses, so every committed edit discards them and re-derives them against the
+new graph; a node the planner just made eligible is scheduled against a free
+concurrency slot without waiting for an unrelated event.
 
 Dropping or retrying a running node sets its cooperative cancellation signal. A
 direct dispatch stops; a lifecycle dispatch preserves commits already made on
@@ -429,6 +473,16 @@ resume nodes that were running without another start transition, and converge th
 remaining frontier. Schema 1 journals remain readable, but a schema 1 prefix with
 settled nodes cannot be recovered because it predates durable node results.
 
+The journal record contract is schema version 6, pinned by
+`tests/golden/static-round-events-v6.json`; bump both together. Version 6 is
+additive over 5: it adds the `edit-rejected`, `conflict-resolution-started`, and
+`conflict-resolution-finished` kinds, and an optional `command` beside
+`edit-committed`'s `operations`. A v5 journal therefore still replays — its
+committed edits simply carry no command — while a record written at 6 or later
+must carry the command that produced its mutations. Every supported version stays
+readable; a reader skips records from a version it does not know rather than
+failing the round it is observing.
+
 ### A round outlives the turn that launched it
 
 A round must not die because the orchestrator surfaced an update and ended its turn.
@@ -462,6 +516,19 @@ report, and no round is still in flight, both views report the run as
 another host, an owner that cannot be probed, an unreadable record, or a round
 still working all keep the run silent — because sending a planner to tear down
 live work is the worse error.
+
+A live pid is ownership, not progress. A launched orchestrator that keeps its pid
+while doing nothing — no child process, no planner surface, and no ledger
+write — is *parked*, and `just runs`, `just status`, and `just monitor` report it
+as `PARKED (...)` rather than as running. All three signals must be absent past
+the threshold, which defaults to 1800 seconds (the default planner-update
+interval) and is overridable with `--parked-after SECONDS` on `just runs` and
+`just status`. Every unreadable input resolves toward "still working", so a busy
+orchestrator is never misreported as parked: one live descendant of the launch or
+of its round owner, one fresh surface, or one journal, plan, status, or result
+write is enough to keep it reported as running. A persisted `last_surface_at` that
+is not a finite number is discarded rather than timed, since a non-finite stamp
+would otherwise make the run look eternally fresh or eternally silent.
 
 ## Monitoring a live run
 

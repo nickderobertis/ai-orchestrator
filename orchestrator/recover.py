@@ -15,7 +15,7 @@ from pathlib import Path
 
 from . import BASE_CONFIG, PERSONA_DIR, gitops
 from .coordination import git_lock_identity
-from .dispatch import Report, dispatch
+from .dispatch import Report, dispatch, scoped_session
 from .github import CliGitHubBackend, GitHubBackend, GitHubError
 from .lifecycle import (
     DEFAULT_LIFECYCLE_STEP_MAX_TURNS,
@@ -334,7 +334,7 @@ def recover_repo(
                 oneharness_mode=oneharness_mode,
                 base_path=base_path,
                 persona_dir=persona_dir,
-                session=f"{branch}:{step_id}",
+                session=f"{scoped_session(branch, worktree)}:{step_id}",
                 max_turns=DEFAULT_LIFECYCLE_STEP_MAX_TURNS,
                 done_when="The conflict is resolved, committed, and the gate is green.",
                 env={},
