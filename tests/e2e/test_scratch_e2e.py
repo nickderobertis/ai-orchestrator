@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import multiprocessing
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -41,6 +42,43 @@ ready.write_text("ready", encoding="utf-8")
 while not release.exists():
     time.sleep(0.02)
 """
+
+
+_LIVE_REFERENCE_HOLDER = """
+import json
+import os
+import sys
+import time
+from pathlib import Path
+
+# argv is one of the three reference channels the sweep reads; the other two
+# arrive over stdin so that this process names each scratch path exactly once.
+named = Path(sys.argv[1])
+plan = json.loads(sys.stdin.readline())
+os.chdir(plan["cwd"])
+handle = open(plan["open"], "rb")
+Path(plan["pidfile"]).write_text(str(os.getpid()), encoding="utf-8")
+release = Path(plan["release"])
+while not release.exists():
+    time.sleep(0.02)
+handle.close()
+assert named
+"""
+
+
+def _write_nx_install(path: Path, *, dependencies: dict[str, str]) -> Path:
+    """Write the throwaway single-`nx` install shape Nx leaves behind per invocation."""
+    (path / "node_modules" / "nx").mkdir(parents=True)
+    (path / "package.json").write_text(
+        json.dumps({"devDependencies": dependencies}), encoding="utf-8"
+    )
+    (path / "bun.lock").write_text("{}", encoding="utf-8")
+    return path
+
+
+def _age(path: Path) -> None:
+    old = time.time() - 48 * 60 * 60
+    os.utime(path, (old, old))
 
 
 def _install_blocking_pre_push_gate(
@@ -268,6 +306,155 @@ def test_third_party_sweep_skips_inflight_lifecycle_then_reclaims(
     )
     assert not candidate.exists()
     assert "removed 1 directories" in after.stdout
+
+
+def test_harness_scratch_is_reclaimed_during_an_active_dispatch_but_never_when_referenced(
+    tmp_path: Path,
+    bare_origin: Callable[..., Path],
+    command_base: Callable[..., Path],
+    personas_dir: Path,
+) -> None:
+    """The families that fill this disk are reclaimed while a real dispatch runs.
+
+    Every fixture here is two days old, so age never explains a survival: what keeps
+    a directory is a live process still naming it, Nx's own pid in the name, pytest's
+    own retention and `.lock`, or a shape that is not a disposable install at all.
+    """
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    third_party = scratch / "visual-inflight"
+    argv_named = _write_nx_install(scratch / "tmp-999999999-argv", dependencies={"nx": "^23.1.0"})
+    working = _write_nx_install(scratch / "tmp-999999999-cwd", dependencies={"nx": "^23.1.0"})
+    opened = _write_nx_install(scratch / "tmp-999999999-open", dependencies={"nx": "^23.1.0"})
+    stale = _write_nx_install(scratch / "tmp-999999999-stale", dependencies={"nx": "^23.1.0"})
+    lookalike = _write_nx_install(
+        scratch / "tmp-999999999-lookalike", dependencies={"nx": "^23.1.0", "eslint": "^9"}
+    )
+    self_named = _write_nx_install(
+        scratch / f"tmp-{os.getpid()}-live", dependencies={"nx": "^23.1.0"}
+    )
+    onejudge_scratch = scratch / "onejudge-python-stale"
+    onejudge_scratch.mkdir()
+    pytest_root = scratch / "pytest-of-e2e"
+    pytest_root.mkdir()
+    runs = {}
+    for number in range(1, 6):
+        run = pytest_root / f"pytest-{number}"
+        run.mkdir()
+        runs[number] = run
+    (pytest_root / "pytest-current").symlink_to(runs[5])
+
+    holder = subprocess.Popen(
+        [sys.executable, "-c", _LIVE_REFERENCE_HOLDER, str(argv_named)],
+        cwd=tmp_path,
+        text=True,
+        stdin=subprocess.PIPE,
+    )
+    ready = tmp_path / "gate-ready"
+    release = tmp_path / "gate-release"
+    holder_pidfile = tmp_path / "holder.pid"
+    result_path = tmp_path / "lifecycle-result.json"
+    origin = bare_origin()
+    canonical = tmp_path / "canonical"
+    subprocess.run(
+        ["git", "clone", str(origin), str(canonical)],
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    _install_blocking_pre_push_gate(canonical, third_party, ready, release)
+    process = multiprocessing.Process(
+        target=_run_lifecycle_with_blocking_gate,
+        args=(
+            str(origin),
+            str(canonical),
+            str(tmp_path / "worktrees"),
+            str(command_base()),
+            str(personas_dir),
+            str(scratch),
+            str(result_path),
+        ),
+    )
+    process.start()
+    try:
+        assert holder.stdin is not None
+        holder.stdin.write(
+            json.dumps(
+                {
+                    "cwd": str(working),
+                    "open": str(opened / "package.json"),
+                    "pidfile": str(holder_pidfile),
+                    "release": str(release),
+                }
+            )
+            + "\n"
+        )
+        holder.stdin.flush()
+        _wait_for_path(holder_pidfile)
+        # pytest keeps the newest three runs itself and marks a live session with a
+        # `.lock` holding its pid; both conventions are honored rather than fought.
+        (runs[1] / ".lock").write_text(
+            holder_pidfile.read_text(encoding="utf-8").strip(), encoding="utf-8"
+        )
+        for path in (
+            *runs.values(),
+            pytest_root,
+            onejudge_scratch,
+            argv_named,
+            working,
+            opened,
+            stale,
+            lookalike,
+            self_named,
+        ):
+            _age(path)
+        _wait_for_path(ready)
+
+        inspected = subprocess.run(
+            ["just", "sweep-scratch", "--root", str(scratch), "--dry-run"],
+            cwd=REPO_ROOT,
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+        assert str(stale) in inspected.stdout and "would remove" in inspected.stdout
+        assert "reclaimed 0 bytes" in inspected.stdout
+        assert all(path.exists() for path in (stale, onejudge_scratch, runs[2]))
+
+        during = subprocess.run(
+            ["just", "sweep-scratch", "--root", str(scratch)],
+            cwd=REPO_ROOT,
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+    finally:
+        release.write_text("release", encoding="utf-8")
+        holder.communicate(timeout=60)
+        process.join(60)
+        if process.is_alive():
+            process.terminate()
+            process.join(10)
+
+    assert not stale.exists()
+    assert not onejudge_scratch.exists()
+    assert not runs[2].exists()
+    preserved = [argv_named, working, opened, lookalike, self_named]
+    preserved += [runs[number] for number in (1, 3, 4, 5)]
+    assert [path for path in preserved if not path.exists()] == []
+    referenced = re.search(
+        r"retained (\d+) directories referenced by live processes", during.stdout
+    )
+    assert referenced is not None, during.stdout
+    assert int(referenced.group(1)) >= 3
+    # The dispatch's own third-party scratch still waits for the exclusive lock.
+    assert third_party.exists()
+    assert "third-party sweep skipped: lifecycle dispatch active" in during.stdout
+
+    assert process.exitcode == 0
+    lifecycle_result = json.loads(result_path.read_text(encoding="utf-8"))
+    assert lifecycle_result["ok"] is True, lifecycle_result
+    assert lifecycle_result["outcome"] == "merged"
 
 
 @pytest.mark.parametrize("identifiable", [True, False], ids=["identified", "unidentifiable"])

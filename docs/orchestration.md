@@ -424,6 +424,26 @@ directories. Use
 `orchestrator.scratch.THIRD_PARTY_PATTERNS` is the authoritative documented
 pattern list and extension point.
 
+Scratch the harness itself produces cannot wait for quiescence: a private `nx`
+install per `bunx nx` invocation, a run directory per pytest session, and an
+effective-config directory per onejudge dispatch appear *because* dispatches are
+running, at gigabytes per hour. `orchestrator.scratch.UNREFERENCED_FAMILIES` is the
+authoritative family list and extension point for these, and they are swept while
+dispatches run, without the exclusive lock. What replaces quiescence is proven
+non-reference: the sweep reads every live process's argv, working directory, and
+open descriptors, and a candidate any of them names is retained and reported —
+`retained N directories referenced by live processes`. That proof is retaken
+against fresh procfs state immediately before removal. A short minimum age
+(`UNREFERENCED_MIN_AGE_SECONDS`, 15 minutes) covers only the gap between creating a
+directory and the first instant a process names it; the 24-hour default still
+governs `THIRD_PARTY_PATTERNS`, which have no such proof behind them.
+`--min-age-hours` can shorten that age but never lengthens it past the family
+default. A name too generic to sweep on is not swept on: an Nx temp install is
+recognized by its shape — one `nx` devDependency, an installed `node_modules`, and
+nothing else — and each family honors its producer's own retention, so pytest keeps
+the newest three runs per root, a run whose `.lock` names a live session, and
+whatever `pytest-current` points at.
+
 ```text
 runs/<run-id>/round-01/plan.json
 runs/<run-id>/round-01/status.json

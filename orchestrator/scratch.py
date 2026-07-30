@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import fcntl
 import functools
+import json
 import math
 import os
 import shutil
@@ -12,12 +13,12 @@ import sys
 import tempfile
 import time
 from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import ParamSpec, TypeVar
 
-from .coordination import ProcessStart, process_start_identity
+from .coordination import ProcessStart, proc_root, process_start_identity
 
 WATCHDOG_PREFIX = "orchestrator-watchdog-"
 WATCHDOG_PATTERN = f"{WATCHDOG_PREFIX}*"
@@ -32,6 +33,47 @@ THIRD_PARTY_PATTERNS = (
     "playwright*",
 )
 DEFAULT_MIN_AGE_SECONDS = 24 * 60 * 60
+#: The families below are produced *by* an active dispatch — one Nx temp install per
+#: `nx` invocation, one run directory per pytest session, one effective-config
+#: directory per onejudge dispatch — at roughly 8 GB/hour under load. Waiting out
+#: `DEFAULT_MIN_AGE_SECONDS` fills the filesystem a day before the first byte becomes
+#: eligible, so age is not what makes removing them safe: proven non-reference is.
+#: The short age that remains guards only the gap between creating such a directory
+#: and the first instant a live process names it — a spawn, measured in
+#: milliseconds — plus a procfs scan that raced a fork. Fifteen minutes is orders of
+#: magnitude beyond that window and still well inside one round transition, and it
+#: deliberately does not touch the conservative default that governs
+#: `THIRD_PARTY_PATTERNS`, which have no such reference proof behind them.
+UNREFERENCED_MIN_AGE_SECONDS = 15 * 60
+#: Every `bunx nx` — which is how `scripts/nx.sh` runs every target — installs a
+#: private `nx` into a fresh temp directory and never removes it (~80 MB each).
+#: `tmp-*` is far too generic to sweep on its own, so the glob only narrows the scan
+#: and the *shape* decides: a manifest declaring one `nx` devDependency and nothing
+#: else, an installed `node_modules`, and no content beyond the package manager's own
+#: bookkeeping. Anything else is somebody's real work.
+NX_INSTALL_PATTERN = "tmp-*"
+NX_INSTALL_ENTRIES = frozenset(
+    {
+        "package.json",
+        "node_modules",
+        ".npmrc",
+        "package-lock.json",
+        "bun.lock",
+        "bun.lockb",
+        "yarn.lock",
+        "pnpm-lock.yaml",
+    }
+)
+PYTEST_ROOT_PATTERN = "pytest-of-*"
+PYTEST_RUN_PREFIX = "pytest-"
+PYTEST_CURRENT_LINK = "pytest-current"
+PYTEST_LOCK_NAME = ".lock"
+#: pytest's own `tmp_path_retention_count` default: it keeps the newest three run
+#: directories per user root and deletes older ones itself. Sweeping the same three
+#: would fight that convention and destroy the trees an operator reaches for after a
+#: failure, so the sweep starts where pytest's own retention ends.
+PYTEST_RETAINED_RUNS = 3
+ONEJUDGE_SCRATCH_PATTERN = "onejudge-python-*"
 DEFAULT_MIN_FREE_BYTES = 5 * 1024**3
 MIN_FREE_BYTES_ENV = "ORCHESTRATOR_MIN_FREE_BYTES"
 MAX_INSPECTED_PATHS = 20
@@ -60,6 +102,7 @@ class SweepResult:
     candidates: tuple[Path, ...]
     third_party_skipped: bool = False
     watchdog_retained: tuple[Path, ...] = ()
+    referenced_retained: tuple[Path, ...] = ()
 
 
 def _open_lock_file(path: Path, *, create: bool) -> int:
@@ -192,6 +235,162 @@ def _watchdog_is_reclaimable(path: Path) -> bool:
     return owner is None or not owner.is_live()
 
 
+def _names_a_live_process(name: str) -> bool:
+    """Report whether a temp install directory still names the process that made it.
+
+    The creating process stamps its own pid into the name (`tmp-<pid>-<random>`).
+    That is a second signal independent of the reference proof: a node process can
+    finish installing and then require modules out of the tree with nothing left open
+    and nothing naming the path, so the pid is what covers that gap. Pid reuse only
+    over-protects here, which is the direction this decision must fail in.
+    """
+    _, _, remainder = name.partition("-")
+    pid, _, _ = remainder.partition("-")
+    return pid.isdigit() and process_start_identity(int(pid)) is not None
+
+
+def _is_nx_temp_install(path: Path) -> bool:
+    """Return whether this directory is one throwaway single-`nx` install and nothing else."""
+    if path.is_symlink() or not path.is_dir():
+        return False
+    try:
+        names = {entry.name for entry in path.iterdir()}
+    except OSError:
+        return False
+    if "package.json" not in names or names - NX_INSTALL_ENTRIES:
+        return False
+    if not (path / "node_modules").is_dir():
+        return False
+    try:
+        manifest = json.loads((path / "package.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    if not isinstance(manifest, dict) or set(manifest) != {"devDependencies"}:
+        return False
+    development = manifest["devDependencies"]
+    return isinstance(development, dict) and set(development) == {"nx"}
+
+
+def _nx_install_candidates(root: Path) -> Iterator[Path]:
+    for path in root.glob(NX_INSTALL_PATTERN):
+        if _is_nx_temp_install(path) and not _names_a_live_process(path.name):
+            yield path
+
+
+def _pytest_session_is_live(path: Path) -> bool:
+    """Honor pytest's own in-use marker: the `.lock` it writes its session pid into."""
+    try:
+        record = (path / PYTEST_LOCK_NAME).read_text(encoding="utf-8").strip()
+    except FileNotFoundError:
+        return False
+    except OSError:
+        # pytest treats a lock it cannot read as proof the tree is not deletable,
+        # because the same permission failure hides the rest of the directory.
+        return True
+    return not record.isdigit() or process_start_identity(int(record)) is not None
+
+
+def _pytest_run_candidates(root: Path) -> Iterator[Path]:
+    """Yield numbered pytest run directories, which live one level below the root."""
+    for parent in sorted(root.glob(PYTEST_ROOT_PATTERN)):
+        if parent.is_symlink() or not parent.is_dir():
+            continue
+        current = Path(os.path.realpath(parent / PYTEST_CURRENT_LINK))
+        try:
+            entries = list(parent.iterdir())
+        except OSError:
+            continue
+        numbered: dict[int, Path] = {}
+        for entry in entries:
+            suffix = entry.name.removeprefix(PYTEST_RUN_PREFIX)
+            if suffix == entry.name or not suffix.isdigit():
+                continue
+            if entry.is_symlink() or not entry.is_dir():
+                continue
+            numbered[int(suffix)] = entry
+        for number in sorted(numbered)[:-PYTEST_RETAINED_RUNS]:
+            path = numbered[number]
+            if path != current and not _pytest_session_is_live(path):
+                yield path
+
+
+def _onejudge_scratch_candidates(root: Path) -> Iterator[Path]:
+    for path in root.glob(ONEJUDGE_SCRATCH_PATTERN):
+        if not path.is_symlink() and path.is_dir():
+            yield path
+
+
+#: The authoritative family list and extension point for scratch that an active
+#: dispatch keeps producing. Unlike `THIRD_PARTY_PATTERNS`, these are reclaimed while
+#: dispatches run, so a family is a candidate *finder* rather than a name glob: each
+#: one has to identify its own directories without a pattern wide enough to catch
+#: unrelated trees, and to honor whatever retention its producer already applies.
+UNREFERENCED_FAMILIES: tuple[Callable[[Path], Iterator[Path]], ...] = (
+    _nx_install_candidates,
+    _pytest_run_candidates,
+    _onejudge_scratch_candidates,
+)
+
+
+def _process_reference_strings(entry: Path) -> Iterator[str]:
+    """Yield every path a single live process names: its argv, its cwd, its open files."""
+    with suppress(OSError):
+        yield (entry / "cmdline").read_bytes().decode("utf-8", "replace")
+    with suppress(OSError):
+        yield os.readlink(entry / "cwd")
+    try:
+        descriptors = sorted((entry / "fd").iterdir())
+    except OSError:
+        # Another user's process hides its descriptors from this one. It also cannot
+        # be using scratch this sweep is able to delete, since `/tmp` is sticky.
+        return
+    for descriptor in descriptors:
+        with suppress(OSError):
+            yield os.readlink(descriptor)
+
+
+def _record_reference(text: str, scratch_root: Path, sink: set[str]) -> None:
+    """Protect a named path and every scratch directory containing it."""
+    path = PurePosixPath(text)
+    root = os.fspath(scratch_root)
+    while os.fspath(path) != root and path != path.parent:
+        sink.add(os.fspath(path))
+        path = path.parent
+
+
+def _referenced_scratch_paths(scratch_root: Path) -> frozenset[str]:
+    """Return every path under the scratch root that a live process still names.
+
+    This is what lets these families be reclaimed *during* a dispatch. An mtime
+    cutoff answers "was anything written here lately", which is neither necessary nor
+    sufficient; asking the kernel who still names a path protects a directory in use
+    for one second and releases one abandoned a minute ago.
+    """
+    marker = os.fspath(scratch_root) + os.sep
+    referenced: set[str] = set()
+    try:
+        entries = sorted(proc_root().iterdir())
+    except OSError:  # pragma: no cover - a host without procfs cannot dispatch at all
+        return frozenset()
+    for entry in entries:
+        if not entry.name.isdigit():
+            continue
+        for text in _process_reference_strings(entry):
+            # One argv or one NUL-joined command line may name several paths.
+            index = text.find(marker)
+            while index != -1:
+                _record_reference(text[index:].split("\0", 1)[0], scratch_root, referenced)
+                index = text.find(marker, index + 1)
+    return frozenset(referenced)
+
+
+def _older_than(path: Path, cutoff: float) -> bool:
+    try:
+        return path.stat().st_mtime < cutoff
+    except OSError:
+        return False
+
+
 def _tree_size(path: Path) -> int:
     total = 0
     try:
@@ -214,9 +413,13 @@ def sweep_scratch(
     dry_run: bool = False,
     now: float | None = None,
 ) -> SweepResult:
-    """Remove definite watchdog orphans and conservatively stale known scratch."""
+    """Remove definite watchdog orphans, unreferenced harness scratch, and stale known scratch."""
     scratch_root = (root or Path(tempfile.gettempdir())).resolve()
-    cutoff = (time.time() if now is None else now) - min_age_seconds
+    moment = time.time() if now is None else now
+    cutoff = moment - min_age_seconds
+    # A caller asking for a shorter age is honored, so `--min-age-hours 0` still means
+    # "now"; a longer one never delays a family whose safety comes from non-reference.
+    unreferenced_cutoff = moment - min(min_age_seconds, UNREFERENCED_MIN_AGE_SECONDS)
     candidates: set[Path] = set()
     skipped: list[Path] = []
     for path in sorted(scratch_root.glob(WATCHDOG_PATTERN)):
@@ -226,6 +429,17 @@ def sweep_scratch(
             candidates.add(path)
         else:
             skipped.append(path)
+
+    referenced = _referenced_scratch_paths(scratch_root)
+    referenced_retained: list[Path] = []
+    unreferenced: set[Path] = set()
+    for family_candidates in UNREFERENCED_FAMILIES:
+        for path in family_candidates(scratch_root):
+            if os.fspath(path) in referenced:
+                referenced_retained.append(path)
+            elif _older_than(path, unreferenced_cutoff):
+                unreferenced.add(path)
+    candidates |= unreferenced
 
     removed: list[Path] = []
     reclaimed = 0
@@ -246,8 +460,20 @@ def sweep_scratch(
 
         ordered = tuple(sorted(candidates))
         if not dry_run:
+            # Discovery precedes a whole third-party pass, so the non-reference proof
+            # is retaken here against the freshest procfs state. Nothing adopts an
+            # abandoned directory in these families — every one is named at random by
+            # the single process that created it — so the remaining window is a
+            # process that made one between the two proofs, which the age covers.
+            fresh = _referenced_scratch_paths(scratch_root) if unreferenced else frozenset()
             for path in ordered:
-                if path.match(WATCHDOG_PATTERN):
+                if path in unreferenced:
+                    if os.fspath(path) in fresh:
+                        referenced_retained.append(path)
+                        continue
+                    if not _older_than(path, unreferenced_cutoff):
+                        continue
+                elif path.match(WATCHDOG_PATTERN):
                     # Re-prove ownership against the freshest state: discovery ran
                     # before the third-party pass. A dispatch that owned the tree
                     # for either pass is preserved by the e2e above; only the
@@ -281,6 +507,7 @@ def sweep_scratch(
         ordered,
         third_party_skipped=not can_sweep_third_party,
         watchdog_retained=tuple(sorted(skipped)),
+        referenced_retained=tuple(sorted(referenced_retained)),
     )
 
 
@@ -319,7 +546,11 @@ def main(argv: list[str] | None = None) -> int:
         "--min-age-hours",
         type=float,
         default=DEFAULT_MIN_AGE_SECONDS / 3600,
-        help="minimum age for third-party scratch (default: 24)",
+        help=(
+            "minimum age for third-party scratch (default: 24); families proven "
+            f"unreferenced by any live process use {UNREFERENCED_MIN_AGE_SECONDS / 60:g} "
+            "minutes, or this value when it is shorter"
+        ),
     )
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(argv)
@@ -355,6 +586,10 @@ def main(argv: list[str] | None = None) -> int:
         inspection += (
             f"; retained {len(result.watchdog_retained)} watchdog directories "
             "not proven reclaimable"
+        )
+    if result.referenced_retained:
+        inspection += (
+            f"; retained {len(result.referenced_retained)} directories referenced by live processes"
         )
     print(
         f"sweep-scratch: {action} {len(paths)} directories; "
