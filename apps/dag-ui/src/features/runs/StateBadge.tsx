@@ -1,3 +1,4 @@
+import type { DagNodeState } from "@ai-orchestrator/dag-layout";
 import { Badge, cn } from "@oneharness/ui";
 
 /**
@@ -45,16 +46,31 @@ const SETTLED = "border-success bg-success-surface text-success";
 const LOST = "border-destructive bg-destructive-surface text-destructive";
 
 /**
- * Every state the orchestrator distinguishes by outcome, in the package's semantic
- * utilities: a run settles as `complete`, a node as `done`. The states it can also
- * report and this map leaves out are the ones with no outcome yet to report —
- * `pending`, `waiting`, `stopped`, `parked`, `blocked`, `unknown` — for which the
- * neutral badge is the honest reading.
+ * What each node state means, in the package's semantic utilities. Keying it by the
+ * contract's own `DagNodeState` is the drift gate: `DAG_NODE_STATES` is reconciled
+ * with `orchestrator/projection.py` by `scripts/check-dag-state-contract.py`, so a
+ * state added there reaches this record and fails to compile until it is given a
+ * meaning, rather than quietly rendering as a badge that says nothing. `pending` and
+ * `waiting` are `undefined` deliberately: work that has not started has no outcome
+ * to report, and neutral is the honest reading of that.
  */
-const TONE: Readonly<Record<string, string>> = {
+const NODE_TONE: Readonly<Record<DagNodeState, string | undefined>> = {
   cancelled: LOST,
-  complete: SETTLED,
   done: SETTLED,
   failed: LOST,
+  pending: undefined,
   running: "border-info bg-info-surface text-info",
+  waiting: undefined,
+};
+
+/**
+ * The same table, plus the one word a run carries that a node does not: a run settles
+ * as `complete` where a node settles as `done`, so it takes that state's meaning
+ * rather than restating it. The read contract types a run's state as an open string —
+ * it can also report `stopped`, `parked`, `blocked` or `unknown` — and anything not
+ * named here falls through to the neutral badge.
+ */
+const TONE: Readonly<Record<string, string | undefined>> = {
+  ...NODE_TONE,
+  complete: NODE_TONE.done,
 };
