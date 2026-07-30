@@ -47,15 +47,23 @@ def _wait_for_event(events: Path, kind: str, node: str, timeout: float = 30) -> 
     running cancels it — the node then settles `cancelled`, contradicting the
     lineage this journey asserts. Which of the two the run reaches first is a race
     the box's load decides, so read one event at a time and match within it.
+
+    Only a trailing fragment is dropped, and only while it is unterminated: the
+    journal appends whole newline-terminated records and documents "at worst, one
+    torn trailing line", so that is the one thing a poll of a live log must expect
+    and the one thing it may skip. Every durable record still has to parse.
     """
-    _wait_for(
-        events,
-        lambda text: any(
+
+    def satisfied(text: str) -> bool:
+        lines = text.splitlines()
+        if lines and not text.endswith("\n"):
+            lines.pop()
+        return any(
             record.get("kind") == kind and record.get("node") == node
-            for record in (json.loads(line) for line in text.splitlines() if line.strip())
-        ),
-        timeout,
-    )
+            for record in (json.loads(line) for line in lines if line.strip())
+        )
+
+    _wait_for(events, satisfied, timeout)
 
 
 def _reply(run_id: str, runs: Path, commands: list[dict[str, object]]) -> None:
