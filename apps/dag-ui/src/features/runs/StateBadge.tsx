@@ -46,13 +46,14 @@ const LOST = "border-destructive bg-destructive-surface text-destructive";
 
 /**
  * Every state the orchestrator distinguishes by outcome, in the package's semantic
- * utilities. `waiting` and `pending` are deliberately absent: work that has not
- * started yet has no outcome to report, and the neutral badge is what says so.
+ * utilities: a run settles as `complete`, a node as `done`. The states it can also
+ * report and this map leaves out are the ones with no outcome yet to report —
+ * `pending`, `waiting`, `stopped`, `parked`, `blocked`, `unknown` — for which the
+ * neutral badge is the honest reading.
  */
 const TONE: Readonly<Record<string, string>> = {
   cancelled: LOST,
   complete: SETTLED,
-  completed: SETTLED,
   done: SETTLED,
   failed: LOST,
   running: "border-info bg-info-surface text-info",

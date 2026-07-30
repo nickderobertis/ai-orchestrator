@@ -509,13 +509,13 @@ test("tells each outcome apart by the palette's semantic tones", async ({
   // words, so without the app's mapping every one of them paints the same neutral
   // pill. `toHaveCSS` rather than one reading of the computed style: the badge
   // transitions its colour, so an immediate read catches it partway between two.
-  for (const [node, state, token] of [
-    [".dag-node.state-done", "done", "--success"],
-    [".dag-node.state-cancelled", "cancelled", "--destructive"],
-    [".dag-node.state-failed", "failed", "--destructive"],
-    [".dag-node.state-running", "running", "--info"],
-  ] as const) {
-    await page.locator(node).click();
+  for (const { state, token } of [
+    { state: "done", token: "--success" },
+    { state: "cancelled", token: "--destructive" },
+    { state: "failed", token: "--destructive" },
+    { state: "running", token: "--info" },
+  ]) {
+    await page.locator(`.dag-node.state-${state}`).click();
     await expect(stateBadge).toHaveText(state);
     await expect(stateBadge).toHaveCSS("color", await tokenColor(page, token));
   }
@@ -544,6 +544,21 @@ test("tells each outcome apart by the palette's semantic tones", async ({
     "color",
     await tokenColor(page, "--info"),
   );
+
+  // And the canvas says the same things on its own surfaces, out of the same tokens
+  // rather than the hex values it used to carry. `waiting` is blocked work, the one
+  // meaning the cards state and the badges deliberately do not.
+  for (const { state, token } of [
+    { state: "done", token: "--success-surface" },
+    { state: "failed", token: "--destructive-surface" },
+    { state: "running", token: "--info-surface" },
+    { state: "waiting", token: "--warning-surface" },
+  ]) {
+    await expect(page.locator(`.dag-node.state-${state}`)).toHaveCSS(
+      "background-color",
+      await tokenColor(page, token),
+    );
+  }
 });
 
 test("shows the loading view while its first read is still in flight", async ({

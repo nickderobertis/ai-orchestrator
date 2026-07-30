@@ -27,11 +27,13 @@ state no tone, so passing these through would leave a finished run and an
 abandoned one looking alike, and relabelling them to fit its vocabulary would
 replace the word the ledger recorded. `src/features/runs/StateBadge.tsx` keeps
 both, mapping the orchestrator's own states onto the package's `Badge` and its
-semantic utilities: settled work (`done`, `complete`, `completed`) reads
+semantic utilities: settled work (`done` for a node, `complete` for a run) reads
 `success`, lost work (`failed`, `cancelled`) reads `destructive`, and `running`
-reads `info`. `waiting` and `pending` stay neutral on purpose — work that has not
-started has no outcome to report. `e2e/dag-ui.spec.ts` asserts each of those
-tones against the token it claims, on both the detail panel and the run list.
+reads `info`. Every other state it can report — `pending`, `waiting`, `stopped`,
+`parked`, `blocked`, `unknown` — stays neutral on purpose, because work with no
+outcome yet has none to report. `e2e/dag-ui.spec.ts` asserts each of those tones
+against the token it claims, on the detail panel, the run list, and the graph
+canvas, whose node surfaces carry the same meanings.
 
 One palette governs the whole surface. `src/styles.css` imports the package
 stylesheet **through this app's Tailwind build** rather than injecting it as raw
