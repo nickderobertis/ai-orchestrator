@@ -126,9 +126,15 @@ def install_session_guard() -> SessionGuard:
     started, so every process the session goes on to start inherits it — including
     the ones a launch detaches and never waits for, which parentage loses within
     milliseconds. It is unique per session, so carrying it is proof of descent from
-    this one and from nothing else. A nested session (this suite runs real ones)
-    exports a token of its own and its tree carries both, which is right: those
-    processes belong to both sessions and either may account for them.
+    this one and from nothing else. A nested session (this suite runs real ones) is
+    not additive: one variable holds one token, so the inherited value is replaced
+    and everything the nested session execs afterwards carries the inner token alone.
+    That matches how the layers divide the work — the nested session posts a reaper
+    of its own and is what accounts for its own tree — and the outer session keeps
+    both of its claims on it regardless: the nested session process itself carries
+    the outer token, fixed in its `/proc` environment at `exec` and unaffected by
+    what the interpreter later assigns, and what runs below it is sampled by
+    parentage for as long as it is there to sample.
 
     Idempotent: a session that reaches this both as a plugin hook and as a fixture
     installs one guard, not two reapers racing each other over the same tree.
