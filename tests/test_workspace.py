@@ -192,10 +192,35 @@ def test_workspace_refuses_to_reclaim_a_path_outside_its_run_root(tmp_path, bare
     stranger = tmp_path / "another-run" / "feat"
     (stranger / "work").mkdir(parents=True)
 
-    with pytest.raises(WorkspaceError, match="outside this run's root"):
+    with pytest.raises(WorkspaceError, match="not one of this run's own worktree slots"):
         ws._reclaim_worktree_path(ref, clone, stranger)
 
     assert (stranger / "work").is_dir()
+
+
+def test_workspace_refuses_to_reclaim_a_directory_inside_one_of_its_worktrees(
+    tmp_path, bare_origin
+) -> None:
+    """Sitting under the run root is not enough: content inside a tree is not a tree.
+
+    Everything a worker creates lives below this run's root, so containment alone
+    would make a worker's own source directory a candidate for recursive deletion.
+    Only the slots this layout lays out — direct children of the run root — are.
+    """
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-nested")
+    ref = normalize_repo(str(origin))
+    ws = Workspace(tmp_path / "worktrees", resolver=lambda _: canonical)
+    clone = ws.ensure_clone(ref)
+    worktree = ws.worktree(ref, "feat", base="origin/main")
+    nested = worktree / "src"
+    nested.mkdir()
+    (nested / "work.py").write_text("real work\n", encoding="utf-8")
+
+    with pytest.raises(WorkspaceError, match="not one of this run's own worktree slots"):
+        ws._reclaim_worktree_path(ref, clone, nested)
+
+    assert (nested / "work.py").is_file()
 
 
 def test_a_locked_worktree_survives_the_reclaim_and_keeps_gits_refusal(

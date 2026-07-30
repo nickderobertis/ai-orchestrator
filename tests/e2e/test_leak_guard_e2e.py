@@ -1,11 +1,5 @@
 """E2E: a test session's process tree does not outlive the session.
 
-The suite is the only QA loop this repository has, so a leaking session is not a
-tidiness problem: twenty-two onejudge, channel, and run-plan processes were once
-found still running out of temp directories that had been deleted a day earlier,
-and the load they put on an eight-core host is what made the timing-sensitive e2es
-fail for reasons that had nothing to do with the code under test.
-
 Both ways a session ends are driven for real. A real ``pytest`` session runs as a
 subprocess with the real guard loaded as its plugin; it starts a real three-level
 process tree out of its own temp directory, whose deepest worker leaves both its

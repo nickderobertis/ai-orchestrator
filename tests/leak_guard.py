@@ -1,23 +1,11 @@
 """Bounded cleanup for subprocess trees and linked git worktrees in tests.
 
-Three layers, because a process tree escapes a test in three ways.
-
-*Registration* covers what a test starts through ``Popen``, including the dispatch
-path via ``asyncio.create_subprocess_exec``: each child leads its own session, and
-teardown signals that whole group. A process that calls ``setsid`` for itself
-leaves that group and is beyond it.
-
-*Descent* covers those. The session samples its own process tree every
-`leak_reaper.POLL_SECONDS` and remembers what it saw, so a process is recorded
-while its parent still holds it and stays accounted for once it reparents away —
-which, by teardown, they have. Its limit is that interval: something orphaned
-inside one was never sampled. A child subreaper would close that, at the price of
-making the session inherit exit statuses nobody collects, so every check asking
-whether a process is gone would read a zombie as alive.
-
-*Outliving* covers the session's own death, which runs no teardown at all.
-`leak_reaper` watches from outside and reaps what it saw; see that module for what
-keeps it from touching anything else.
+Three layers, because a process tree escapes a test in three ways: what the test
+starts through ``Popen`` (`ResourceLeakGuard`, which leads each child in a process
+group of its own and signals that whole group), what leaves that group by calling
+``setsid`` for itself (`SessionGuard`, which samples the session's own tree and
+remembers what it saw), and the session's death, which runs no teardown at all
+(`leak_reaper`, watching from outside the session).
 """
 
 from __future__ import annotations
@@ -49,7 +37,13 @@ class ResourceLeak(AssertionError):
 
 @dataclass
 class SessionGuard:
-    """The session-wide half of the guard: the watcher inside, the reaper outside."""
+    """The session-wide half of the guard: the watcher inside, the reaper outside.
+
+    Sampling is as wide as its interval: a process orphaned and reparented away
+    inside one was never seen, and is missed. Making the session a child subreaper
+    would close that, at the price of inheriting exit statuses nobody collects — so
+    every check asking whether a process is gone would read a zombie as alive.
+    """
 
     root_pid: int
     sampler: TreeSampler

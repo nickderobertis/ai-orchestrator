@@ -613,18 +613,19 @@ class Workspace:
         what git declines is finished here — the registration pruned, the directory
         removed — and the dispatch goes on.
 
-        Ownership is not assumed, it is established. The path must sit under this
-        run's own root, whose occupancy this process leases and whose per-path lease
-        it holds exclusively before anything is deleted; a live sibling in the same
-        run therefore keeps its tree, and another run's tree is never even a
-        candidate. Reclaiming what is not ours is the one failure worse than the one
-        this fixes, so a path outside that root is refused rather than cleared.
+        Ownership is not assumed, it is established. The path must be one of the
+        worktree slots this run's own layout creates, and this process must hold both
+        that run root's occupancy lease and the path's own exclusive lease before
+        anything is deleted; a live sibling in the same run therefore keeps its tree,
+        and another run's tree is never even a candidate. Reclaiming what is not ours
+        is the one failure worse than the one this fixes, so any other path is
+        refused rather than cleared.
         """
         target = path.resolve()
-        if not self._owns_worktree_path(repo, target):
+        if not self._is_own_worktree_slot(repo, target):
             raise WorkspaceError(
-                f"refusing to reclaim {path}: it is outside this run's root "
-                f"{self.run_root(repo).resolve()}"
+                f"refusing to reclaim {path}: it is not one of this run's own worktree "
+                f"slots directly under {self.run_root(repo).resolve()}"
             )
         if target in gitops.locked_worktrees(clone):
             # A lock is somebody's explicit instruction that this tree must survive.
@@ -638,9 +639,22 @@ class Workspace:
         _remove_directory_tree(target)
         gitops.worktree_prune(clone)
 
-    def _owns_worktree_path(self, repo: RepoRef, target: Path) -> bool:
-        """Whether ``target`` is one of this run's own worktree paths."""
-        return self.run_root(repo).resolve() in target.parents
+    def _is_own_worktree_slot(self, repo: RepoRef, target: Path) -> bool:
+        """Whether ``target`` is a path this run's own layout puts a worktree at.
+
+        A slot, not a registered worktree: whether git still knows one is there is
+        the one thing that cannot be required, since the leftover directory of a
+        killed worker — registration already pruned — is exactly what needs
+        reclaiming. What is required instead is the shape this class lays out, a
+        direct child of this run's root named the way `_safe_branch_dir` names one.
+        Mere containment would be weaker than it looks: it also admits every
+        directory *inside* a worktree, which is a worker's own content, and recursive
+        deletion is not something to point at a path on the strength of where it
+        happens to sit.
+        """
+        return target.parent == self.run_root(repo).resolve() and target.name == _safe_branch_dir(
+            target.name
+        )
 
     def worktree(self, repo: RepoRef, branch: str, *, base: str) -> Path:
         """Add a fresh worktree for ``branch`` cut off ``base`` (e.g. ``origin/main``).
@@ -749,11 +763,11 @@ class Workspace:
         try:
             with advisory_lock(git_lock_identity(gitops.common_dir(clone))):
                 self._mirror_worktree_branch(repo, clone, Path(path))
-                # A path outside this run's root belongs to somebody else — a sibling
-                # run being torn down by a workspace that never created it. Git's own
-                # removal is the only thing entitled to act on it, and its refusal is
-                # the answer the caller gets.
-                if self._owns_worktree_path(repo, Path(path).resolve()):
+                # A path this run's layout never laid out belongs to somebody else — a
+                # sibling run being torn down by a workspace that never created it.
+                # Git's own removal is the only thing entitled to act on it, and its
+                # refusal is the answer the caller gets.
+                if self._is_own_worktree_slot(repo, Path(path).resolve()):
                     self._reclaim_worktree_path(repo, clone, Path(path))
                 else:
                     gitops.worktree_remove(clone, path, check=True)
