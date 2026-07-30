@@ -199,7 +199,77 @@ def test_alternate_claude_trust_is_idempotent_and_preserves_other_config(tmp_pat
         assert data["projects"][str(root)] == {"hasTrustDialogAccepted": True}
 
 
-def _run_full_setup_without_bun(tmp_path: Path) -> subprocess.CompletedProcess[str]:
+def test_alternate_claude_trust_rejects_invalid_json(tmp_path: Path) -> None:
+    config = tmp_path / ".claude.json"
+    config.write_text("{broken", encoding="utf-8")
+    script = REPO_ROOT / "scripts" / "session-setup.sh"
+
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            'source "$1"; mark_alternate_claude_trust "$2" /checkout',
+            "test-trust",
+            str(script),
+            str(config),
+        ],
+        text=True,
+        capture_output=True,
+        env={"HOME": str(tmp_path), "PATH": "/usr/bin:/bin"},
+    )
+
+    assert result.returncode == 1
+    assert "not valid JSON" in result.stderr
+    assert config.read_text(encoding="utf-8") == "{broken"
+
+
+def test_alternate_claude_trust_reports_missing_jq(tmp_path: Path) -> None:
+    config = tmp_path / ".claude.json"
+    config.write_text("{}", encoding="utf-8")
+    script = REPO_ROOT / "scripts" / "session-setup.sh"
+
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            'source "$1"; PATH=/missing; mark_alternate_claude_trust "$2" /checkout',
+            "test-trust",
+            str(script),
+            str(config),
+        ],
+        text=True,
+        capture_output=True,
+        env={"HOME": str(tmp_path), "PATH": "/usr/bin:/bin"},
+    )
+
+    assert result.returncode == 1
+    assert "jq is unavailable" in result.stderr
+
+
+def test_full_setup_trusts_its_dispatch_checkout_and_keeps_failure_nonfatal(
+    tmp_path: Path,
+) -> None:
+    alternate = tmp_path / "alternate"
+    alternate.mkdir()
+    config = alternate / ".claude.json"
+    config.write_text('{"theme":"dark"}', encoding="utf-8")
+
+    result = _run_full_setup_without_bun(
+        tmp_path, ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR=str(alternate)
+    )
+
+    # Bun is deliberately absent from this fixture; trust setup still ran and
+    # did not replace the required-tool failure with its own.
+    assert result.returncode == 1
+    data = json.loads(config.read_text(encoding="utf-8"))
+    repo = str(tmp_path / "repo")
+    assert data["theme"] == "dark"
+    assert data["projects"][repo] == {"hasTrustDialogAccepted": True}
+
+
+def _run_full_setup_without_bun(
+    tmp_path: Path, **extra_env: str
+) -> subprocess.CompletedProcess[str]:
     test_repo = tmp_path / "repo"
     scripts = test_repo / "scripts"
     config = test_repo / "config"
@@ -220,7 +290,7 @@ def _run_full_setup_without_bun(tmp_path: Path) -> subprocess.CompletedProcess[s
         ["bash", str(session_setup)],
         text=True,
         capture_output=True,
-        env={"HOME": str(tmp_path), "PATH": "/usr/bin:/bin"},
+        env={"HOME": str(tmp_path), "PATH": "/usr/bin:/bin", **extra_env},
     )
 
 

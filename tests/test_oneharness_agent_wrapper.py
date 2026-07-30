@@ -14,6 +14,7 @@ import re
 import stat
 import subprocess
 import time
+import tomllib
 from pathlib import Path
 
 from orchestrator import REPO_ROOT
@@ -338,6 +339,16 @@ def test_status_file_contract_has_one_source_the_wrapper_honors() -> None:
         f"{WRAPPER.name} writes status files the dispatcher does not know: "
         f"{sorted(written - set(AGENT_STATUS_NAMES))}"
     )
+
+
+def test_quota_diagnostic_harness_matches_worker_primary() -> None:
+    """DRIFT-GATE the diagnostic identity against the configured first candidate."""
+    config = tomllib.loads((REPO_ROOT / "oneharness.toml").read_text(encoding="utf-8"))
+    primary = config["harnesses"][0]
+    script = WRAPPER.read_text(encoding="utf-8")
+
+    assert primary == "claude-code:alternate"
+    assert f"alternate_harness={primary}" in script
 
 
 def test_dead_agent_records_its_exit_status_and_stderr_before_parking(tmp_path: Path) -> None:

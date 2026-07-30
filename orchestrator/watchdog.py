@@ -153,7 +153,7 @@ def terminate_tree(root_pid: ProcessId) -> None:
 
 
 def terminate_processes(
-    pids: tuple[ProcessId, ...], *, externally_reaped: tuple[ProcessId, ...] = ()
+    pids: tuple[ProcessId, ...], *, externally_waited: tuple[ProcessId, ...] = ()
 ) -> None:
     """Best-effort termination of a previously observed worker process tree.
 
@@ -174,7 +174,7 @@ def terminate_processes(
     # return code 255 after ChildProcessError, destroying the child's real status
     # and stderr. Still signal every recorded process, but leave those roots for
     # their registered waiter while reaping orphaned descendants ourselves.
-    pending = set(pids).difference(externally_reaped)
+    pending = set(pids).difference(externally_waited)
     while pending and time.monotonic() < deadline:
         for pid in tuple(pending):
             try:
@@ -190,7 +190,7 @@ def terminate_processes(
 
 
 def terminate_process_group(
-    group_id: ProcessId, *, externally_reaped: tuple[ProcessId, ...] = ()
+    group_id: ProcessId, *, externally_waited: tuple[ProcessId, ...] = ()
 ) -> None:
     """Terminate and reap every process in a dispatch-owned process group."""
     with suppress(PermissionError, ProcessLookupError):
@@ -203,7 +203,7 @@ def terminate_process_group(
         for pid in _process_ids()
         if (record := _stat(pid)) is not None and record.process_group == group_id
     ]
-    terminate_processes(tuple(members), externally_reaped=externally_reaped)
+    terminate_processes(tuple(members), externally_waited=externally_waited)
 
 
 def lead_process_group() -> None:

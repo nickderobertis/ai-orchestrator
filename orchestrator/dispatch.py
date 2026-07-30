@@ -119,6 +119,9 @@ AGENT_FAILED_NAME = "agent.failed"
 AGENT_EXIT_CODE_NAME = "agent.exit_code"
 AGENT_FAILURE_NAME = "agent.failure"
 AGENT_STDERR_NAME = "agent.stderr"
+# DRIFT-GATE: test_status_file_contract_has_one_source_the_wrapper_honors parses
+# every agent.* path written by scripts/oneharness-agent.sh and rejects names
+# absent from AGENT_STATUS_NAMES.
 AGENT_STDOUT_NAME = "agent.stdout"
 AGENT_STATUS_NAMES = (
     AGENT_PID_NAME,
@@ -837,20 +840,20 @@ def run_onejudge(
                 for pending_task in pending:
                     pending_task.cancel()
                 if signal is not None:
-                    terminate_processes(signal.observed_pids, externally_reaped=(signal.root_pid,))
+                    terminate_processes(signal.observed_pids, externally_waited=(signal.root_pid,))
                 elif pid_file.exists():
                     terminate_processes(
                         observed_tree,
-                        externally_reaped=(_read_watchdog_pid(pid_file),),
+                        externally_waited=(_read_watchdog_pid(pid_file),),
                     )
                 if pid_file.exists():
                     completed_pid = _read_watchdog_pid(pid_file)
-                    terminate_process_group(completed_pid, externally_reaped=(completed_pid,))
+                    terminate_process_group(completed_pid, externally_waited=(completed_pid,))
                     terminate_tree(completed_pid)
                 return await run
             if watcher in done and (signal := await watcher):
-                terminate_processes(signal.observed_pids, externally_reaped=(signal.root_pid,))
-                terminate_process_group(signal.root_pid, externally_reaped=(signal.root_pid,))
+                terminate_processes(signal.observed_pids, externally_waited=(signal.root_pid,))
+                terminate_process_group(signal.root_pid, externally_waited=(signal.root_pid,))
                 terminate_tree(signal.root_pid)
                 run.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
@@ -882,11 +885,11 @@ def run_onejudge(
                 await run
             terminate_processes(
                 observed_tree,
-                externally_reaped=(_read_watchdog_pid(pid_file),) if pid_file.exists() else (),
+                externally_waited=(_read_watchdog_pid(pid_file),) if pid_file.exists() else (),
             )
             if pid_file.exists():
                 cancelled_pid = _read_watchdog_pid(pid_file)
-                terminate_process_group(cancelled_pid, externally_reaped=(cancelled_pid,))
+                terminate_process_group(cancelled_pid, externally_waited=(cancelled_pid,))
                 terminate_tree(cancelled_pid)
             return None
 

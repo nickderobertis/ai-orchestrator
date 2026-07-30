@@ -25,6 +25,7 @@ fi
 . "$alt_config_helper"
 resolve_claude_alt_config_dir oneharness-agent || exit $?
 alternate_config_dir=$ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR
+alternate_harness=claude-code:alternate
 agent_config="$repo_root/oneharness.toml"
 
 if [ "${1-}" != "run" ]; then
@@ -184,7 +185,7 @@ if [ "$exit_code" -ne 0 ]; then
     fi
     quota_line=$(grep -E -m1 "hit your (session|usage) limit|quota exhausted|rate.?limit" "$agent_stdout" || true)
     if [ -n "$quota_line" ]; then
-        echo "oneharness-agent: dispatch failure: harness claude-code:alternate is out of quota; $quota_line; configure a usable fallback or retry after the stated reset time" >>"$agent_stderr"
+        echo "oneharness-agent: dispatch failure: harness $alternate_harness is out of quota; $quota_line; configure a usable fallback or retry after the stated reset time" >>"$agent_stderr"
     fi
     # Replay the child's own words only now. A turn that succeeded says everything
     # it has to say through the protocol on stdout, so its harness chatter is noise
