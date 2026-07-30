@@ -1737,6 +1737,7 @@ def run_repo_task(
         prior_step_results: dict[str, StepResult] = {}
         automatic_resumes = 0
         workstream_start_head = gitops.head_sha(worktree)
+        initial_incomplete = incomplete_commits(worktree, remote_base, "HEAD")
         while True:
             step_run = _run_steps(
                 effective_steps,
@@ -1776,6 +1777,17 @@ def run_repo_task(
                     "reused",
                 )
             automatic_resumes += 1
+        if step_run.status == "done" and automatic_resumes:
+            provisional = incomplete_commits(worktree, remote_base, "HEAD") - initial_incomplete
+            ordered = [
+                commit.sha
+                for commit in reversed(gitops.log_messages(worktree, remote_base, "HEAD"))
+                if commit.sha in provisional
+            ]
+            for marker in ordered:
+                gitops.drop_empty_commit(worktree, marker)
+            if provisional and not incomplete_commits(worktree, remote_base, "HEAD"):
+                result.retry_lineage = None
         step_run.results = [prior_step_results[step.id] for step in effective_steps]
         result.steps = step_run.results
         result.report = next(

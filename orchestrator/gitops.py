@@ -396,6 +396,22 @@ def commit_empty(cwd: str | Path, message: str) -> str:
     return head_sha(cwd)
 
 
+def drop_empty_commit(cwd: str | Path, sha: str) -> None:
+    """Remove one unpublished empty commit while replaying later branch work."""
+    parents = _git(["rev-list", "--parents", "-n", "1", sha], cwd=cwd).stdout.split()
+    if len(parents) != 2:
+        raise GitError(f"refusing to drop non-linear commit {sha}")
+    if _git(["diff-tree", "--quiet", parents[1], sha], cwd=cwd, check=False).returncode != 0:
+        raise GitError(f"refusing to drop non-empty commit {sha}")
+    if head_sha(cwd) == sha:
+        reset_hard(cwd, parents[1])
+    else:
+        branch = current_branch(cwd)
+        if branch == "HEAD":
+            raise GitError(f"refusing to rewrite detached HEAD while dropping {sha}")
+        _git(["rebase", "--onto", parents[1], sha, branch], cwd=cwd)
+
+
 def head_sha(cwd: str | Path) -> str:
     """The current HEAD commit sha."""
     return _git(["rev-parse", "HEAD"], cwd=cwd).stdout.strip()

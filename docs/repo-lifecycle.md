@@ -729,6 +729,12 @@ branch there or retry it by that branch name without reaching into run scratch.
 Because the dispatch itself completed, this preservation does not add incomplete
 provenance; genuine stopped dispatches retain the marker contract above.
 
+An automatic continuation may temporarily add that provenance when its first
+bounded attempt stops after committing work. If a later attempt in the same
+lifecycle completes, the provisional empty marker is removed from the unpublished
+branch while any later commits are replayed. Markers inherited from an earlier
+run are not provisional and still require `repo-recover` attestation.
+
 Recovery retains the source branch on failure. It refuses an identity whose merge
 path has no coverage, exactly as dispatch does, then uses an isolated worktree,
 infers a recorded stack/PR base from new preserved commits, fetches and merges

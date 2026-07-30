@@ -4019,6 +4019,47 @@ def test_agent_not_completed_stops_early(tmp_path, bare_origin) -> None:
     assert not _has_file(origin, result.branch, "partial.txt")  # incomplete work is not pushed
 
 
+def test_completed_automatic_resume_drops_its_provisional_incomplete_marker(
+    tmp_path, bare_origin
+) -> None:
+    """A later green completion supersedes the marker from its first bounded attempt."""
+    origin = bare_origin()
+    workspace = _workspace(tmp_path, origin)
+    canonical = _shared_checkout(tmp_path)
+    before = _tip(origin, "main")
+    attempts = 0
+
+    def completes_after_resume(persona: str, task: str, *, project_dir: str, **_: object) -> Report:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            change = Path(project_dir) / "completed-after-resume.txt"
+            change.write_text("finished work\n", encoding="utf-8")
+            gitops.add_all(project_dir)
+            gitops.commit(project_dir, "fix: finish work before the supervisor settles")
+            return Report(persona, 1, False, False, 2, [], {}, {}, "", max_turns=2)
+        verification = Path(project_dir) / "verified-after-resume.txt"
+        verification.write_text("gate is green\n", encoding="utf-8")
+        gitops.add_all(project_dir)
+        gitops.commit(project_dir, "test: record the completed continuation")
+        return Report(persona, 0, True, False, 1, [], {}, {}, "")
+
+    result = run_repo_task(
+        str(origin),
+        "Finish and verify work across one automatic continuation.",
+        "engineer",
+        workspace=workspace,
+        dispatch_fn=completes_after_resume,
+        recorded_gate=["true"],
+    )
+
+    assert attempts == 2
+    assert result.ok and result.outcome == "merged", result.detail
+    assert _has_file(origin, "main", "completed-after-resume.txt")
+    assert _has_file(origin, "main", "verified-after-resume.txt")
+    assert not incomplete_commits(canonical, before, result.branch)
+
+
 def test_a_stop_short_of_the_cap_is_not_reported_as_hitting_it(tmp_path, bare_origin) -> None:
     """One turn is not twelve, and the settled result has to say so.
 
