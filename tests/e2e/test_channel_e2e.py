@@ -14,6 +14,7 @@ from pathlib import Path
 import pytest
 import yaml
 from process_tree import is_running
+from run_rows import without_ownership
 from waits import deadline
 from waits import timeout as e2e_timeout
 
@@ -739,7 +740,9 @@ def test_live_channel_runs_real_nested_graph_and_round_trips_guidance(
         capture_output=True,
         check=True,
     )
-    assert f"* {pre_round_id}  ACTIVE  (orchestrator running)" in pre_round_listing.stdout
+    assert f"* {pre_round_id}  ACTIVE  (orchestrator running)" in without_ownership(
+        pre_round_listing.stdout
+    )
     release.touch()
     assert _wait_surface(pre_round_id, runs)["surface"]["kind"] == "milestone"
     _convenience_cli("channel-approve", pre_round_id, runs)
@@ -1331,7 +1334,9 @@ def _view_cli(recipe: str, runs: Path, history: Path) -> str:
         timeout=180,
     )
     assert viewed.returncode == 0, viewed.stderr
-    return viewed.stdout
+    # The ownership column is dropped here: it names the launching session, which
+    # differs per developer. tests/e2e/test_run_ownership_e2e.py asserts it directly.
+    return without_ownership(viewed.stdout)
 
 
 def test_a_launch_that_reported_its_own_outcome_is_never_called_settled(

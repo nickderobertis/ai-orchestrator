@@ -30,6 +30,7 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+from run_rows import without_ownership
 from waits import deadline
 from waits import timeout as e2e_timeout
 
@@ -226,7 +227,9 @@ def _runs(runs_dir: Path, parked_after: float) -> str:
         check=True,
         timeout=e2e_timeout(60),
     )
-    return listed.stdout
+    # The ownership column is dropped here: it names the launching session, which
+    # differs per developer. tests/e2e/test_run_ownership_e2e.py asserts it directly.
+    return without_ownership(listed.stdout)
 
 
 def _line(output: str, run_id: str) -> str:
