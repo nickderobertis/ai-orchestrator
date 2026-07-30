@@ -282,20 +282,36 @@ def _node_human_refs(nid: str, task: dict[str, Any]) -> set[str]:
 MAX_AUTOMATIC_ROUND_RESUMES = MAX_AUTOMATIC_STEP_RESUMES
 
 
-def _spent_attempts(node: dict[str, Any]) -> int:
-    """Automatic continuations this node already carries, ignoring an unusable count.
+def _spent_attempts(nid: str, node: dict[str, Any]) -> int:
+    """Automatic continuations this node already carries; reject an unusable count.
 
     Read from the node as the *previous plan* recorded it, not from the round's
     result. A lifecycle builds a fresh continuation for whatever it preserved and
     has no reason to know how many rounds preceded it, so a count taken from the
     result would reset to zero every round and bound nothing. The prior plan is
     this function's own output from last round, which is exactly the tally.
+
+    That plan is external input: `replan` reads a prior one straight off disk, and a
+    planner may hand-write or hand-edit it. So a count that is present but is not a
+    whole non-negative number is malformed input rather than an absent tally, and
+    reading it as zero would restore a full continuation budget every round — the
+    unbounded redispatch of one preserved branch that the budget exists to stop.
+    Refuse it in the same terms the lifecycle plan parser refuses the same field.
+
+    Called only where the tally is about to be trusted. The paths that instead
+    discard it — an explicit branch, or a waiting round, which resets the count by
+    design — need no verdict on a value nothing will read; a malformed count that
+    survives into the emitted plan is refused by the plan parser on the way out.
     """
     resume = node.get("resume")
-    if not isinstance(resume, dict):
+    if not isinstance(resume, dict) or "attempts" not in resume:
         return 0
-    spent = resume.get("attempts")
-    return spent if isinstance(spent, int) and not isinstance(spent, bool) and spent > 0 else 0
+    spent = resume["attempts"]
+    if not isinstance(spent, int) or isinstance(spent, bool) or spent < 0:
+        from .plan import PlanError
+
+        raise PlanError(f"task {nid!r} resume 'attempts' must be a non-negative integer")
+    return spent
 
 
 def _apply_lifecycle_resume(
@@ -347,7 +363,6 @@ def _apply_lifecycle_resume(
         from .plan import PlanError
 
         raise PlanError(f"task {nid!r} has no valid resume metadata")
-    spent = _spent_attempts(node)
     next_resume = dict(resume)
     # The tally belongs to the plan, never to the result the lifecycle wrote.
     next_resume.pop("attempts", None)
@@ -355,6 +370,7 @@ def _apply_lifecycle_resume(
     # harness repeating itself, not to overrule a decision somebody made after
     # reading the result.
     if continuing_preserved and not retrying_preserved:
+        spent = _spent_attempts(nid, node)
         if spent >= MAX_AUTOMATIC_ROUND_RESUMES:
             return False
         next_resume["attempts"] = spent + 1

@@ -589,6 +589,21 @@ def test_automatic_continuation_settles_a_node_once_its_budget_is_spent() -> Non
     assert next_round(plan, _preserved_failure(_PRESERVED_RESUME))["tasks"] == []
 
 
+@pytest.mark.parametrize("tally", [-1, 1.5, "2", True, None])
+def test_a_malformed_carried_continuation_tally_is_refused(tally: object) -> None:
+    """A tally that is not a whole count is bad input, never a budget to start over.
+
+    Coercing it to zero is the failure mode with teeth: a plan carried across rounds
+    or hand-edited would silently regain a full continuation budget every round, which
+    is the unbounded redispatch of one preserved branch the budget exists to stop.
+    """
+    work = {"id": "work", "repo": "o/r", "persona": "engineer", "task": "Continue"}
+    carried = _plan({**work, "resume": {**_PRESERVED_RESUME, "attempts": tally}})
+
+    with pytest.raises(PlanError, match="resume 'attempts' must be a non-negative integer"):
+        next_round(carried, _preserved_failure(_PRESERVED_RESUME))
+
+
 def test_an_explicit_retry_restores_the_full_continuation_budget() -> None:
     """The bound stops the harness repeating itself, never a planner decision."""
     work = {"id": "work", "repo": "o/r", "persona": "engineer", "task": "Continue"}

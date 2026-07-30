@@ -2456,6 +2456,59 @@ def test_run_plan_rejects_a_malformed_resume_attempt_count(tmp_path: Path) -> No
     assert "resume 'attempts' must be a non-negative integer" in rejected.stderr
 
 
+def test_replan_rejects_a_malformed_resume_attempt_count(tmp_path: Path) -> None:
+    """Replanning is a second door onto the same tally, and it must refuse the same.
+
+    `just replan` reads a prior plan straight off disk and spends its continuation
+    budget without any round having validated it first — so this is the path where a
+    malformed count could quietly reset the budget that stops one preserved branch
+    being redispatched forever. The prior result is a preserved failure, which is
+    exactly the case that reads the tally rather than discarding it.
+    """
+    prev_plan = tmp_path / "prev-plan.json"
+    resume = {
+        "branch": "feature/preserved",
+        "base_branch": "main",
+        "pr_base": "main",
+        "checkpoint": "a" * 40,
+        "completed_steps": [],
+        "mode": "retry",
+    }
+    prev_plan.write_text(
+        json.dumps(
+            {
+                "tasks": [
+                    {
+                        "id": "work",
+                        "repo": "o/r",
+                        "persona": "engineer",
+                        "task": "Continue",
+                        "resume": {**resume, "attempts": "2"},
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    prev_result = tmp_path / "prev-result.json"
+    prev_result.write_text(
+        json.dumps(
+            {
+                "round": 3,
+                "results": {
+                    "work": {"status": "failed", "outcome": "not-completed", "resume": resume}
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    rejected = _just("replan", str(prev_plan), str(prev_result))
+
+    assert rejected.returncode == 2, rejected.stdout
+    assert "task 'work' resume 'attempts' must be a non-negative integer" in rejected.stderr
+
+
 def test_a_budget_spent_without_agent_progress_reads_apart_from_a_turn_cap(
     tmp_path: Path, command_base, onejudge_bin: str
 ) -> None:
