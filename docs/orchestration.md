@@ -448,7 +448,20 @@ records a self-describing `error` outcome with Git's diagnostic.
 Remote-first failures remain named required-check outcomes. Each lifecycle node
 also records one `merge-gate-coverage` event before it dispatches, naming the
 `pre-push` hook and required checks that will verify it, so a late rejection can
-be read against what was expected to run. Because artifact
+be read against what was expected to run. Each gated push then records a
+`verification-finished` event with its verdict and a bounded `output_tail`, and
+appends the whole run to the node's `artifacts.gate_log` — for a green
+publication as much as a rejected one, so a settled node can show what its gate
+did rather than only that nothing objected.
+
+That log holds every record the merge path produced, in order, including the
+publications that never reached a gate at all: a rebuild whose base was advanced
+under it, or that could not fetch, build its worktree, or write. Those settle
+with a `publication-failed` event carrying the same bounded `output_tail` — for a
+lost base race, one line per attempt naming the sha it verified against and the
+sha it then observed — and the result's detail names the log. Before that, such a
+failure recorded neither, which is how a run could settle seconds after a green
+gate with no evidence of what went wrong. Because artifact
 paths are in the terminal `GraphResultItem`, crash projection retains them
 byte-for-byte.
 
@@ -467,15 +480,16 @@ resume nodes that were running without another start transition, and converge th
 remaining frontier. Schema 1 journals remain readable, but a schema 1 prefix with
 settled nodes cannot be recovered because it predates durable node results.
 
-The journal record contract is schema version 6, pinned by
-`tests/golden/static-round-events-v6.json`; bump both together. Version 6 is
+The journal record contract is schema version 7, pinned by
+`tests/golden/static-round-events-v7.json`; bump both together. Version 6 is
 additive over 5: it adds the `edit-rejected`, `conflict-resolution-started`, and
 `conflict-resolution-finished` kinds, and an optional `command` beside
 `edit-committed`'s `operations`. A v5 journal therefore still replays — its
 committed edits simply carry no command — while a record written at 6 or later
-must carry the command that produced its mutations. Every supported version stays
-readable; a reader skips records from a version it does not know rather than
-failing the round it is observing.
+must carry the command that produced its mutations. Version 7 is additive over 6:
+it adds `publication-failed`, for a publication that ended before any gate could
+rule on it. Every supported version stays readable; a reader skips records from a
+version it does not know rather than failing the round it is observing.
 
 ### A round outlives the turn that launched it
 

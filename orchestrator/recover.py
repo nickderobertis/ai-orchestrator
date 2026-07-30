@@ -41,9 +41,16 @@ from .provenance import (
     recorded_pr_base,
     unattested_incomplete,
 )
+from .redaction import redact
 from .registry import Registry, RegistryEntry, RegistryError, Slug, merge_gate_coverage
-from .verify import NOOP_GATE, comparison_env, resolve_gate_template
-from .workspace import RepoRef, RepositoryType, Workspace, WorkspaceError
+from .verify import (
+    NOOP_GATE,
+    append_gate_log,
+    comparison_env,
+    format_merge_path_record,
+    resolve_gate_template,
+)
+from .workspace import IdentityKey, RepoRef, RepositoryType, Workspace, WorkspaceError
 
 _STEP_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
@@ -61,6 +68,10 @@ class RecoveryResult:
     pr: str | None = None
     pr_base: str = ""
     synthetic_stack_base: str | None = None
+    #: Where this recovery's merge-path gate run was preserved. Three consecutive
+    #: recoveries of one branch previously reported three different causes with one
+    #: sentence; this is the evidence that tells them apart.
+    gate_log: str | None = None
 
     def __post_init__(self) -> None:
         if not self.pr_base:
@@ -83,6 +94,70 @@ def _registered(repo: str | Path, registry: Registry) -> tuple[Slug, RegistryEnt
     return matched
 
 
+def _search_checkouts(
+    registry: Registry,
+    identity: IdentityKey,
+    origin: str,
+    publication: Path,
+    override: str | Path | None,
+) -> list[Path]:
+    """Every checkout a preserved branch of this identity could be in, best first."""
+    ordered: list[Path] = [publication]
+    if override is not None:
+        explicit = registry.checkout_path(override).expanduser().resolve()
+        # An operator-supplied path is a trust boundary: reading a branch out of
+        # some other repository's checkout would publish work from the wrong tree.
+        if not registry.is_checkout_of(explicit, origin):
+            raise RegistryError(
+                f"execution checkout {explicit} is not a git checkout of the repository "
+                f"identity {str(identity)!r}; pass the checkout the preserved work was done in"
+            )
+        if explicit not in ordered:
+            ordered.append(explicit)
+    for candidate in registry.entries.values():
+        path = Path(candidate.path).expanduser().resolve()
+        matched = registry.identity_for_checkout(path)
+        if path not in ordered and matched is not None and matched.identity == identity:
+            ordered.append(path)
+    return ordered
+
+
+def _adopt_preserved_branch(publication: Path, candidates: list[Path], branch: str) -> None:
+    """Make ``branch`` visible in the publication checkout, as a ref and nothing more.
+
+    Fetching a ref into the publication checkout keeps its invariant intact; what
+    it must never do is check the branch out and work in it.
+    """
+    if gitops.branch_exists(publication, branch):
+        return
+    for source in candidates[1:]:
+        if gitops.branch_exists(source, branch) and gitops.import_branch(
+            publication, source, branch
+        ):
+            return
+    searched = ", ".join(str(path) for path in candidates)
+    raise RegistryError(
+        f"preserved branch {branch!r} does not exist in any registered checkout of this "
+        f"identity (searched {searched}); pass --execution-checkout PATH if the work was "
+        "done in a checkout this identity does not know about"
+    )
+
+
+def _wrong_verb_detail(worktree: Path, publication: Path, branch: str, remote_base: str) -> str:
+    """Name the verb this branch actually belongs to, instead of just refusing it."""
+    if not gitops.has_commits_ahead(worktree, remote_base):
+        return (
+            f"branch {branch!r} has no commits ahead of {remote_base}; there is nothing to "
+            "recover — its work already reached the base, or none was ever committed"
+        )
+    return (
+        f"branch {branch!r} carries no lifecycle-preserved incomplete provenance: it has "
+        f"commits ahead of {remote_base}, and all of them are complete. 'repo-recover' "
+        "publishes interrupted work; publish a completed branch with 'just integrate "
+        f"{branch} --repo {shlex.quote(str(publication))}' or through its lifecycle/PR path"
+    )
+
+
 def recover_repo(
     repo: str | Path,
     branch: str,
@@ -91,6 +166,7 @@ def recover_repo(
     workspace_root: str | Path | None = None,
     base: str | None = None,
     pr_base: str | None = None,
+    execution_checkout: str | Path | None = None,
     recorded_gate: list[str] | None = None,
     github: GitHubBackend | None = None,
     merge_policy: MergePolicy | None = None,
@@ -125,19 +201,25 @@ def recover_repo(
         )
     owner, name = str(slug).split("/", 1)
     ref = RepoRef(owner, name, entry.origin)
-    workspace = Workspace(
-        workspace_root or Path.home() / ".ai-orchestrator" / "recovery-worktrees",
-        resolver=lambda _spec: clone,
-    )
+    recovery_root = Path(workspace_root or Path.home() / ".ai-orchestrator" / "recovery-worktrees")
+    workspace = Workspace(recovery_root, resolver=lambda _spec: clone)
     target = base or gitops.default_branch(clone)
     for field_name, value in (("branch", branch), ("base", target)):
         if not gitops.is_valid_branch_name(value):
             raise RegistryError(f"{field_name} {value!r} is not a valid Git branch")
     worktree: Path | None = None
+    preserved_gate_log: str | None = None
+    # A lifecycle branch only reaches the publication checkout once something has
+    # already pushed it, so a first-attempt publication lives *only* in the
+    # execution checkout the work was done in. Adopt it there rather than reporting
+    # it missing, which is what fires on exactly the branches that succeed early.
+    _adopt_preserved_branch(
+        clone,
+        _search_checkouts(registry, identity.identity, entry.origin, clone, execution_checkout),
+        branch,
+    )
     try:
         run_clone = workspace.ensure_clone(ref, base_branch=target)
-        if not gitops.branch_exists(clone, branch):
-            raise RegistryError(f"preserved branch {branch!r} does not exist in {clone}")
         recorded_base = recorded_pr_base(clone, f"origin/{target}", branch)
         if pr_base is not None and recorded_base is not None and pr_base != recorded_base:
             raise RegistryError(
@@ -155,9 +237,7 @@ def recover_repo(
             raise RegistryError(f"preserved branch worktree for {branch!r} is dirty")
         remote_base = f"origin/{publication_base}"
         if not incomplete_commits(worktree, remote_base, branch):
-            raise RegistryError(
-                f"branch {branch!r} has no lifecycle-preserved incomplete provenance"
-            )
+            raise RegistryError(_wrong_verb_detail(worktree, clone, branch, remote_base))
         # The merge path verifies the recovery, but an identity that cannot even name
         # its complete bar has nothing to hand a resolver worker or a reader of the
         # recovery attestation, so recovery still refuses a no-op gate.
@@ -175,6 +255,26 @@ def recover_repo(
         # the remote HEAD it would otherwise discover.
         push_env = comparison_env(publication_base)
 
+        # Only a push a pre-push hook gates carries a verdict; where required PR
+        # checks are the coverage instead, they decide after this push, not at it.
+        merge_path_gate = list(resolved_recorded_gate) if coverage.hook else []
+
+        def preserve(*, ok: bool, output: str) -> str:
+            """Keep this recovery's merge-path gate run and name where it landed."""
+            nonlocal preserved_gate_log
+            if not merge_path_gate:
+                return ""
+            preserved_gate_log = append_gate_log(
+                recovery_root / "gate-logs" / branch.replace("/", "-"),
+                format_merge_path_record(
+                    label=f"recovery push {branch}",
+                    command=merge_path_gate,
+                    ok=ok,
+                    output=output,
+                ),
+            )
+            return f" — full merge-path gate output: {preserved_gate_log}"
+
         def attest_and_push() -> MergeOutcome | None:
             # Recovery always publishes through a push or a PR. The executable
             # pre-push hook / required PR checks are therefore authoritative.
@@ -186,18 +286,21 @@ def recover_repo(
                     "chore: attest verified recovery of preserved work\n\n" + trailers,
                 )
             try:
-                gitops.push(worktree, branch, env=push_env)
+                pushed = gitops.push(worktree, branch, env=push_env)
             except gitops.GitError as exc:
                 outcome = classify_push_failure(exc)
-                detail = str(exc)
+                detail = redact(str(exc))
+                evidence = preserve(ok=False, output=exc.output)
                 return MergeOutcome(
                     outcome,
                     (
                         f"repository pre-push gate rejected recovery of {branch!r}: {detail}"
                         if outcome == "gate-failed"
                         else f"recovery push of {branch!r} failed: {detail}"
-                    ),
+                    )
+                    + evidence,
                 )
+            preserve(ok=True, output=pushed)
             workspace.mirror_branch(ref, branch)
             return None
 
@@ -231,6 +334,7 @@ def recover_repo(
                     "then retry",
                     pr_base=publication_base,
                     synthetic_stack_base=synthetic_stack_base,
+                    gate_log=preserved_gate_log,
                 )
             failed = attest_and_push()
             if failed is not None:
@@ -245,6 +349,7 @@ def recover_repo(
                     failed.detail,
                     pr_base=publication_base,
                     synthetic_stack_base=synthetic_stack_base,
+                    gate_log=preserved_gate_log,
                 )
         strategy = (
             LocalMergeStrategy()
@@ -266,11 +371,14 @@ def recover_repo(
             method=merge_method,
             policy=decision.merge_policy,
             repository_type=identity.repo_type,
+            gate_command=tuple(merge_path_gate),
             local_prepare=(
                 synchronize_attest_and_push_local_recovery if decision.workflow == "local" else None
             ),
         )
         published = strategy.publish_and_merge(context)
+        if published.verification is not None and published.verification.log_path:
+            preserved_gate_log = published.verification.log_path
         conflict_resolutions = 0
         while published.outcome == MERGE_CONFLICT_RETRY:
             if conflict_resolutions >= MAX_MERGE_CONFLICT_RESOLUTIONS:
@@ -385,6 +493,7 @@ def recover_repo(
                 if publication_base.startswith("ai-orchestrator/stack-base/")
                 else None
             ),
+            gate_log=preserved_gate_log,
         )
     finally:
         if cleanup and worktree is not None:
@@ -408,6 +517,11 @@ def main(argv: list[str] | None = None) -> int:
         "as the bar this recovery is held to; the merge path is what runs it "
         "(default: the registered identity gate)",
     )
+    parser.add_argument(
+        "--execution-checkout",
+        help="checkout the preserved work was done in, when it is not one this "
+        "identity has registered; its branch is fetched into the publication checkout",
+    )
     parser.add_argument("--workspace", type=Path)
     parser.add_argument("--merge-policy", choices=("auto", "direct", "none"), default=None)
     parser.add_argument("--repo-type", choices=("single-owner", "team"), default=None)
@@ -421,6 +535,7 @@ def main(argv: list[str] | None = None) -> int:
             workspace_root=args.workspace,
             base=args.base,
             pr_base=args.pr_base,
+            execution_checkout=args.execution_checkout,
             recorded_gate=shlex.split(args.gate) if args.gate else None,
             merge_policy=args.merge_policy,
             repo_type=args.repo_type,
@@ -438,6 +553,8 @@ def main(argv: list[str] | None = None) -> int:
             f"merge_policy={result.merge_policy} pr_base={result.pr_base} "
             f"synthetic_stack_base={result.synthetic_stack_base or '-'}] — {result.detail}"
         )
+        if result.gate_log:
+            print(f"  merge-path gate output: {result.gate_log}")
     return 0 if result.ok else 1
 
 

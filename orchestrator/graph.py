@@ -37,7 +37,7 @@ from .cli_contract import ROUND_BUDGET_OPTION
 from .config import ConfigError, load_yaml
 from .coordination import advisory_lock, reset_harness_observer, set_harness_observer
 from .detach import run_detached
-from .dispatch import Report, dispatch
+from .dispatch import Report, dispatch, incomplete_detail
 from .edits import EditError, apply_edit
 from .goals import (
     ConcurrentAcknowledgement,
@@ -669,10 +669,14 @@ def run_graph(
                 },
             )
             return run
+        # The reason the watchdog observed, not just the fact of death: a planner
+        # deciding whether to retry needs to tell provider throttling from a worker
+        # that gave up. And a worker that stopped short of the cap did not hit it —
+        # reporting one as the other is what sent a whole run's diagnosis wrong.
         detail = (
             (report.stderr.strip() or "worker-died")
             if report.outcome == "worker-died"
-            else "did not complete (hit the turn cap)"
+            else incomplete_detail(report)
         )
         run = NodeRun("failed", detail, report)
         node_log.append(
@@ -680,6 +684,7 @@ def run_graph(
             detail={
                 "detail": detail,
                 **({"outcome": report.outcome} if report.outcome else {}),
+                **({"outcome_detail": report.outcome_detail} if report.outcome_detail else {}),
                 "turns": report.assistant_turns,
                 TERMINAL_NODE_RESULT_FIELD: cast(
                     Any, _run_payload(node, run, dependents.get(nid, []))

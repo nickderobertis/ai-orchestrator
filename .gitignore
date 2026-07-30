@@ -27,3 +27,7 @@ dist/
 # points; keep any local scratch out of the tree)
 /scratch/
 /runs/
+
+# Preserved command output (scripts/preserved-log.sh). Deliberately per-worktree
+# and deliberately ignored: it is diagnostic evidence, not repository content.
+/.logs/

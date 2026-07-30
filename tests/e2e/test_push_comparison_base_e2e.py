@@ -26,6 +26,7 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+import pytest
 from conftest import install_pre_push_hook
 from fakes import FakeGitHub, make_writing_dispatch
 
@@ -39,6 +40,27 @@ from orchestrator.provenance import (
 from orchestrator.recover import recover_repo
 from orchestrator.registry import Registry
 from orchestrator.workspace import Workspace
+
+
+@pytest.fixture(autouse=True)
+def _only_the_lifecycle_names_a_comparison_base(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Let the hook record only what the lifecycle passed, never what leaked in.
+
+    These journeys read one variable out of the environment Git handed the hook,
+    and a child process inherits that environment from this one. The lifecycle
+    exports the comparison identity to every dispatch, so a worker running the
+    suite has `ORCHESTRATOR_COMPARISON_BASE` set — and then *every* push records
+    it, including the local `mirror_branch` handover that names no publication
+    base at all.
+
+    That is worse than the noise it adds. A publication push that stopped passing
+    the identity would still be recorded with the leaked value, so in the one
+    environment the lifecycle actually runs in, these assertions could no longer
+    fail for their intended reason. Clearing the inherited value is what keeps
+    every recorded base attributable to the push that set it.
+    """
+    for name in ("ORCHESTRATOR_COMPARISON_BASE", "ORCHESTRATOR_COMPARISON_REMOTE"):
+        monkeypatch.delenv(name, raising=False)
 
 
 def _recording_hook(checkout: Path, log: Path) -> None:

@@ -137,6 +137,13 @@ no time.
    `pre-push` hook and carries the Git diagnostic, so reproducing the gate is not
    required to identify the failing tier. Read it against the node's
    `merge-gate-coverage` event, which records the hook and required checks
-   dispatch expected to run. Runs recorded before the merge path became
-   authoritative instead carry the same bounded output tail in
-   `verification-finished.detail.output_tail`.
+   dispatch expected to run, and against `verification-finished`, which brackets
+   each gated push with its verdict and a bounded `detail.output_tail`. The whole
+   run is preserved at the node's `artifacts.gate_log`, which accumulates one
+   record per gated push (branch, then publication) — so a green publication can
+   also show what its gate did, not only that nothing objected.
+6. For a failure that never reached a gate — a base advanced under the rebuild,
+   a fetch or worktree that could not be built — read `publication-failed`. It
+   carries the same bounded `output_tail` and points at the same log, so "the
+   gate rejected it", "a sibling run moved the base", and "the host failed" are
+   three different readings rather than one silent settle.
