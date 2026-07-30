@@ -16,7 +16,7 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import ParamSpec, TypeVar
+from typing import ParamSpec, Protocol, TypeVar
 
 from .coordination import ProcessStart, proc_root, process_start_identity
 
@@ -78,6 +78,14 @@ DEFAULT_MIN_FREE_BYTES = 5 * 1024**3
 MIN_FREE_BYTES_ENV = "ORCHESTRATOR_MIN_FREE_BYTES"
 MAX_INSPECTED_PATHS = 20
 CAPACITY_ERROR_MARKER = "scratch-capacity-preflight:"
+
+
+class ScratchFamilyFinder(Protocol):
+    """Find conservatively identified members of one unreferenced scratch family."""
+
+    def __call__(self, root: Path) -> Iterator[Path]: ...
+
+
 SCRATCH_LOCK_NAME = ".orchestrator-scratch.lock"
 
 P = ParamSpec("P")
@@ -327,7 +335,7 @@ def _onejudge_scratch_candidates(root: Path) -> Iterator[Path]:
 #: dispatches run, so a family is a candidate *finder* rather than a name glob: each
 #: one has to identify its own directories without a pattern wide enough to catch
 #: unrelated trees, and to honor whatever retention its producer already applies.
-UNREFERENCED_FAMILIES: tuple[Callable[[Path], Iterator[Path]], ...] = (
+UNREFERENCED_FAMILIES: tuple[ScratchFamilyFinder, ...] = (
     _nx_install_candidates,
     _pytest_run_candidates,
     _onejudge_scratch_candidates,

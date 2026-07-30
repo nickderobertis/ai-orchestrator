@@ -737,8 +737,11 @@ def test_sweep_recipe_rejects_nonfinite_or_negative_age(tmp_path: Path) -> None:
 def test_sweep_recipe_custom_age_and_bounded_inspection(tmp_path: Path) -> None:
     eligible = tmp_path / "visual-custom-age"
     eligible.mkdir()
+    harness_eligible = tmp_path / "onejudge-python-custom-age"
+    harness_eligible.mkdir()
     two_hours_old = time.time() - 2 * 60 * 60
-    os.utime(eligible, (two_hours_old, two_hours_old))
+    for path in (eligible, harness_eligible):
+        os.utime(path, (two_hours_old, two_hours_old))
     subprocess.run(
         [
             "just",
@@ -753,7 +756,7 @@ def test_sweep_recipe_custom_age_and_bounded_inspection(tmp_path: Path) -> None:
         capture_output=True,
         check=True,
     )
-    assert not eligible.exists()
+    assert not eligible.exists() and not harness_eligible.exists()
 
     for index in range(22):
         path = tmp_path / f"playwright-old-{index:02d}"
