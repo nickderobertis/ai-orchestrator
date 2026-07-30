@@ -486,11 +486,8 @@ def sweep_scratch(
             # abandoned directory in these families — every one is named at random by
             # the single process that created it — so the remaining window is a
             # process that made one between the two proofs, which the age covers.
-            # llmlint: ignore[changed_behavior_has_e2e] The real CLI covers procfs
-            # unavailable at startup and live argv/cwd/fd retention. Withdrawing
-            # procfs in this in-process interval cannot be deterministic without a
-            # production test hook; test_a_proof_withdrawn_between_discovery_and_removal
-            # drives the exact interleaving directly.
+            # llmlint: ignore[changed_behavior_has_e2e] The real CLI covers live
+            # references; deterministic unit tests drive this in-process-only race.
             fresh = _referenced_scratch_paths(scratch_root) if unreferenced else frozenset()
             for path in ordered:
                 if path in unreferenced:
