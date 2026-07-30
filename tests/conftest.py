@@ -33,7 +33,7 @@ from leak_guard import resource_leak_guard, session_leak_guard  # noqa: F401
 
 from orchestrator import BASE_CONFIG, PERSONA_DIR, REPO_ROOT, gitops
 from orchestrator.config import load_yaml
-from orchestrator.environment import CHANNEL_ENV_PREFIX
+from orchestrator.environment import CHANNEL_ENV_PREFIX, COMPARISON_ENV_PREFIX
 
 FAKE_BACKEND = REPO_ROOT / "tests" / "e2e" / "fake_backend.py"
 
@@ -77,6 +77,23 @@ def _isolate_orchestrator_channel(monkeypatch: pytest.MonkeyPatch) -> None:
     """Keep nested real CLI tests off the parent orchestrator's live channel."""
     for key in tuple(os.environ):
         if key.startswith(CHANNEL_ENV_PREFIX):
+            monkeypatch.delenv(key)
+
+
+@pytest.fixture(autouse=True)
+def _isolate_gate_comparison_identity(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep the enclosing dispatch's comparison base out of the suite's own pushes.
+
+    The lifecycle exports one comparison identity to every process judging a change,
+    so this suite run inside a dispatch — which is how every worker verifies itself —
+    inherits `ORCHESTRATOR_COMPARISON_BASE` from the branch it is proving. Git hands a
+    `pre-push` hook the whole environment, so a test push that deliberately carries no
+    publication base silently arrived carrying the outer branch's, and the journeys
+    asserting which pushes name a base failed on the inherited value rather than on
+    anything they did. A test's environment is the test's to state.
+    """
+    for key in tuple(os.environ):
+        if key.startswith(COMPARISON_ENV_PREFIX):
             monkeypatch.delenv(key)
 
 

@@ -30,7 +30,7 @@ from pathlib import Path
 from typing import TypedDict, TypeGuard
 
 from .coordination import advisory_lock, atomic_json
-from .environment import CHANNEL_ENV_PREFIX
+from .environment import CHANNEL_ENV_PREFIX, COMPARISON_ENV_PREFIX
 from .watchdog import ProcessId, terminate_process_group
 
 NOOP_GATE = "<no-op>"
@@ -62,8 +62,8 @@ def comparison_env(base: str, *, remote: str = "origin") -> dict[str, str]:
     One source, because two copies of this contract are how the two sides drift.
     """
     return {
-        "ORCHESTRATOR_COMPARISON_REMOTE": remote,
-        "ORCHESTRATOR_COMPARISON_BASE": base,
+        f"{COMPARISON_ENV_PREFIX}REMOTE": remote,
+        f"{COMPARISON_ENV_PREFIX}BASE": base,
     }
 
 
@@ -401,8 +401,8 @@ def _git_value(directory: Path, *args: str) -> str | None:
 def _attestation_context(
     directory: Path, command: list[str], env: dict[str, str] | None
 ) -> _AttestationContext | None:
-    remote = (env or {}).get("ORCHESTRATOR_COMPARISON_REMOTE")
-    base = (env or {}).get("ORCHESTRATOR_COMPARISON_BASE")
+    remote = (env or {}).get(f"{COMPARISON_ENV_PREFIX}REMOTE")
+    base = (env or {}).get(f"{COMPARISON_ENV_PREFIX}BASE")
     head = _git_value(directory, "rev-parse", "HEAD")
     common = _git_value(directory, "rev-parse", "--path-format=absolute", "--git-common-dir")
     valid_comparison = False
