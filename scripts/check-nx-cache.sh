@@ -37,6 +37,8 @@ grep -Fq "not assignable to type 'string'" "$temp/broken.log" || { cat "$temp/br
 preserved="$second/.logs/nx.log"
 [[ -f "$preserved" ]] || { echo "nx cache check: the failing nx.sh run left no log at $preserved; restore scripts/preserved-log.sh and retry 'just check'" >&2; exit 1; }
 grep -Fq "not assignable to type 'string'" "$preserved" || { cat "$preserved" >&2; echo "nx cache check: the preserved nx.sh log does not carry the failure it reported; repair scripts/nx.sh and retry 'just check'" >&2; exit 1; }
-mode=$(stat -c '%a' "$preserved") || { echo "nx cache check: cannot read the preserved log's mode; retry 'just check'" >&2; exit 1; }
+# `stat -c` is GNU and `stat -f` is BSD/macOS; ask each in turn rather than
+# assuming the platform, so this check means the same thing wherever it runs.
+mode=$(stat -c '%a' "$preserved" 2>/dev/null || stat -f '%Lp' "$preserved" 2>/dev/null) || { echo "nx cache check: cannot read the preserved log's mode; retry 'just check'" >&2; exit 1; }
 [[ $mode == 600 ]] || { echo "nx cache check: preserved log $preserved is mode $mode, not 600; preserved evidence stays owner-only" >&2; exit 1; }
 printf 'nx cache check: cross-worktree hit, broken-input miss, and preserved failure log verified\n'
