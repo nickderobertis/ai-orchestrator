@@ -56,12 +56,42 @@ __all__ = [
     "MergeOutcome",
     "MergePolicy",
     "MergeStrategy",
+    "adopt_or_create_pr",
     "assess_blocking_checks",
     "classify_push_failure",
 ]
 
 MergePolicy = Literal["auto", "direct", "none"]
 MERGE_CONFLICT_RETRY: Literal["merge-conflict-retry"] = "merge-conflict-retry"
+
+
+@dataclass(frozen=True)
+class PullRequestResolution:
+    pr: PullRequest
+    created: bool
+
+
+def adopt_or_create_pr(
+    github: GitHubBackend,
+    repo: str,
+    *,
+    head: str,
+    base: str,
+    head_sha: str,
+    title: str,
+    body: str,
+    draft: bool = False,
+) -> PullRequestResolution:
+    """Adopt a matching publication when possible, otherwise create one."""
+    lookup = getattr(github, "adoptable_pr", None)
+    existing = lookup(repo, head=head, base=base, head_sha=head_sha) if lookup else None
+    if existing is not None:
+        return PullRequestResolution(existing, created=False)
+    if draft:
+        created = github.create_pr(repo, head=head, base=base, title=title, body=body, draft=True)
+    else:
+        created = github.create_pr(repo, head=head, base=base, title=title, body=body)
+    return PullRequestResolution(created, created=True)
 
 
 def classify_push_failure(exc: gitops.GitError) -> LifecycleOutcome:
@@ -81,6 +111,7 @@ class MergeContext:
     branch: str
     title: str
     body: str
+    head_sha: str = ""
     #: What the merge queue serializes on. It has to name the *repository*, not the
     #: clone the merge is built in: every run now builds in a clone of its own, and
     #: a per-run identity would hand each contender its own empty queue. ``None``
@@ -302,10 +333,22 @@ class GitHubMergeStrategy:
         return self._publish_and_merge(ctx)
 
     def _publish_and_merge(self, ctx: MergeContext) -> MergeOutcome:
-        pr = ctx.preverified_pr or self._github.create_pr(
-            ctx.repo_slug, head=ctx.branch, base=ctx.base, title=ctx.title, body=ctx.body
-        )
-        if ctx.preverified_pr is None:
+        created = False
+        if ctx.preverified_pr is not None:
+            pr = ctx.preverified_pr
+        else:
+            resolution = adopt_or_create_pr(
+                self._github,
+                ctx.repo_slug,
+                head=ctx.branch,
+                base=ctx.base,
+                head_sha=ctx.head_sha,
+                title=ctx.title,
+                body=ctx.body,
+            )
+            pr = resolution.pr
+            created = resolution.created
+        if created:
             _record(
                 ctx,
                 "pr-created",

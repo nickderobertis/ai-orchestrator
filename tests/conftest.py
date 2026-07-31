@@ -39,11 +39,33 @@ from orchestrator.config import load_yaml
 from orchestrator.environment import CHANNEL_ENV_PREFIX, COMPARISON_ENV_PREFIX
 
 FAKE_BACKEND = REPO_ROOT / "tests" / "e2e" / "fake_backend.py"
+WORKSPACE_INSTALL = REPO_ROOT / "scripts" / "workspace-install.sh"
 #: The marker that moves a test from the code-only key to the whole-workspace one.
 #: Its one source is `pyproject.toml`'s marker registration, and `orchestrator`'s
 #: `test` / `test-docs` targets select on it.
 READS_DOCS_MARKER = "reads_docs"
 DOCUMENTATION_DIRECTORY = "docs"
+
+
+@pytest.fixture(scope="session")
+def workspace_install() -> None:
+    """Provision the locked workspace install the real-Nx journeys drive.
+
+    Nx runs from `node_modules/.bin`, which a freshly created worktree does not
+    have. Skipping used to be the answer, which quietly withdrew the journeys that
+    prove Nx's cache accounting from every bare `pytest` run — exactly where a
+    worker looks first, and exactly where a green run then meant less than the
+    gate's. The step asked for here is the one `scripts/nx.sh` already performs and
+    `just bootstrap` forces, so it is free once the workspace is provisioned and
+    asks no operator to run Bun by hand.
+
+    Session-scoped because it is one idempotent step for a whole run: the first
+    journey to ask for it pays the Bun install, and every later one finds it done.
+    """
+    result = subprocess.run([WORKSPACE_INSTALL], text=True, capture_output=True)
+    if result.returncode != 0:
+        detail = result.stderr.strip() or result.stdout.strip() or "no output"
+        pytest.fail(f"could not provision the workspace Nx install: {detail}")
 
 
 def install_pre_push_hook(checkout: Path, body: str = "exit 0") -> Path:

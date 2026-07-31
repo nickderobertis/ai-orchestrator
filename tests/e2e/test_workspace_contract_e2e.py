@@ -16,6 +16,8 @@ import time
 from pathlib import Path
 
 import pytest
+from nx_workspace import copy_working_tree
+from waits import timeout as e2e_timeout
 
 # The contracts checked here span the whole tree, and documentation is one of the
 # layers they hold together — `docs/dag-ui.md` and `docs/dag-ui/design.md` are
@@ -380,9 +382,12 @@ fi
     python = binaries / "python3"
     python.write_text(command)
     python.chmod(0o755)
-    # The log preservation and coverage readout under test are the real ones; only
-    # the checkers and package managers they wrap are doubled.
-    for name in ("preserved-log.sh", "coverage-total.sh"):
+    session_setup = scripts / "session-setup.sh"
+    session_setup.write_text(command)
+    session_setup.chmod(0o755)
+    # The log preservation, coverage readout, and workspace provisioning under test
+    # are the real ones; only the checkers and package managers they wrap are doubled.
+    for name in ("preserved-log.sh", "coverage-total.sh", "workspace-install.sh"):
         shutil.copy2(ROOT / "scripts" / name, scripts / name)
     return checkout, trace
 
@@ -411,7 +416,6 @@ def _recipe_run(
 def _gate_checkout(tmp_path: Path) -> tuple[Path, Path]:
     """A recipe checkout `just gate` can run in: a real repo with `origin/main`."""
     checkout, trace = _recipe_checkout(tmp_path)
-    _mark_nx_installed(checkout)
     shutil.copy2(ROOT / "scripts/comparison-base.sh", checkout / "scripts/comparison-base.sh")
     verdict = checkout / "scripts/llmlint-verdict.sh"
     verdict.write_text((checkout / "scripts/nx.sh").read_text())
@@ -440,7 +444,8 @@ def _gate_checkout(tmp_path: Path) -> tuple[Path, Path]:
     return checkout, trace
 
 
-def _add_bun_install_double(checkout: Path) -> None:
+def _add_bun_double(checkout: Path) -> None:
+    """Trace Bun, and let it provision what the real one would."""
     bun = checkout / "bin/bun"
     bun.write_text(
         """#!/usr/bin/env bash
@@ -460,42 +465,67 @@ chmod +x node_modules/.bin/nx
 
 def _mark_nx_installed(checkout: Path) -> None:
     nx = checkout / "node_modules/.bin/nx"
-    nx.parent.mkdir(parents=True)
+    nx.parent.mkdir(parents=True, exist_ok=True)
     nx.touch()
     nx.chmod(0o755)
 
 
-def test_check_recipe_installs_locked_dependencies_when_nx_is_absent(
+def _init_repository(checkout: Path) -> None:
+    for args in (
+        ("init", "-q", "-b", "main"),
+        ("config", "user.name", "test"),
+        ("config", "user.email", "test.invalid"),
+        ("remote", "add", "origin", "https://example.invalid/workspace-recipe.git"),
+    ):
+        subprocess.run(["git", *args], cwd=checkout, check=True, capture_output=True)
+
+
+def test_bootstrap_recipe_reinstalls_the_locked_workspace_from_a_clean_clone(
     tmp_path: Path,
 ) -> None:
+    """Bootstrap forces the install rather than heals it: the lockfile may have moved."""
     checkout, trace = _recipe_checkout(tmp_path)
-    _add_bun_install_double(checkout)
+    _add_bun_double(checkout)
+    _mark_nx_installed(checkout)
+    _init_repository(checkout)
 
-    result = _recipe_run(checkout, trace, "check")
+    result = _recipe_run(checkout, trace, "bootstrap")
 
     assert result.returncode == 0, result.stderr
-    assert trace.read_text().splitlines()[0] == "bun install --frozen-lockfile"
+    assert trace.read_text().splitlines() == [
+        "session-setup.sh ",
+        "bun install --frozen-lockfile",
+        "nx.sh run-many -t bootstrap",
+    ]
 
 
-def test_check_recipe_preserves_locked_dependency_install_failure(
+def test_bootstrap_recipe_leaves_the_failing_workspace_install_readable(
     tmp_path: Path,
 ) -> None:
+    """A bootstrap that cannot install must not take the reason with it."""
     checkout, trace = _recipe_checkout(tmp_path)
-    _add_bun_install_double(checkout)
+    _add_bun_double(checkout)
+    _init_repository(checkout)
 
-    result = _recipe_run(checkout, trace, "check", fail_command="bun")
+    result = _recipe_run(checkout, trace, "bootstrap", fail_command="bun")
 
     assert result.returncode != 0
+    log = checkout / ".logs/workspace-install.log"
     assert "bun: captured failure detail" in result.stderr
-    assert "check: install locked workspace dependencies" in result.stderr
-    assert trace.read_text().splitlines() == ["bun install --frozen-lockfile"]
+    assert "install locked workspace dependencies and retry" in result.stderr
+    assert f"full output: {log}" in result.stderr
+    assert "bun: captured failure detail" in log.read_text()
+    assert oct(log.stat().st_mode & 0o777) == "0o600"
+    assert trace.read_text().splitlines() == [
+        "session-setup.sh ",
+        "bun install --frozen-lockfile",
+    ]
 
 
 def test_check_recipe_runs_the_combined_public_journey_with_concise_output(
     tmp_path: Path,
 ) -> None:
     checkout, trace = _recipe_checkout(tmp_path)
-    _mark_nx_installed(checkout)
 
     result = _recipe_run(checkout, trace, "check")
 
@@ -511,7 +541,6 @@ def test_check_recipe_runs_the_combined_public_journey_with_concise_output(
 
 def test_check_recipe_preserves_captured_nx_failure(tmp_path: Path) -> None:
     checkout, trace = _recipe_checkout(tmp_path)
-    _mark_nx_installed(checkout)
 
     result = _recipe_run(checkout, trace, "check", fail_command="nx.sh")
 
@@ -526,7 +555,6 @@ def test_check_recipe_preserves_captured_nx_failure(tmp_path: Path) -> None:
 def test_check_recipe_leaves_the_failing_run_readable_after_it_exits(tmp_path: Path) -> None:
     """The diagnosis outlives the process: `cat .logs/check.log` still answers."""
     checkout, trace = _recipe_checkout(tmp_path)
-    _mark_nx_installed(checkout)
 
     result = _recipe_run(checkout, trace, "check", fail_command="nx.sh")
 
@@ -542,7 +570,6 @@ def test_check_recipe_log_is_readable_while_the_recipe_is_still_running(
 ) -> None:
     """A stalled run is diagnosable by reading its log, not its file descriptors."""
     checkout, trace = _recipe_checkout(tmp_path)
-    _mark_nx_installed(checkout)
     release = tmp_path / "release"
     env = _recipe_env(
         checkout,
@@ -573,27 +600,317 @@ def test_check_recipe_log_is_readable_while_the_recipe_is_still_running(
     assert process.returncode == 0
 
 
-def _nx_nesting_checkout(tmp_path: Path) -> Path:
+def _nx_wrapper_checkout(tmp_path: Path, name: str) -> Path:
     """A checkout the *real* `scripts/nx.sh` runs in, with `bunx` doubled.
 
-    Only Nx itself is replaced. `nx.sh` and `preserved-log.sh` are the real files,
-    because the destination they choose is what is under test.
+    Only Nx itself is replaced. `nx.sh`, `preserved-log.sh`, and
+    `workspace-install.sh` are the real files, because what they choose to do —
+    which log to write, and whether to provision the workspace first — is what is
+    under test.
     """
-    checkout = tmp_path / "nesting"
+    checkout = tmp_path / name
     (checkout / "scripts").mkdir(parents=True)
     (checkout / "bin").mkdir()
-    for name in ("nx.sh", "preserved-log.sh"):
-        shutil.copy2(ROOT / "scripts" / name, checkout / "scripts" / name)
-        (checkout / "scripts" / name).chmod(0o755)
+    for script in ("nx.sh", "preserved-log.sh", "workspace-install.sh"):
+        shutil.copy2(ROOT / "scripts" / script, checkout / "scripts" / script)
+        (checkout / "scripts" / script).chmod(0o755)
     # `nx.sh` derives its shared cache key from the repository identity.
     subprocess.run(["git", "init", "-q"], cwd=checkout, check=True, capture_output=True)
     subprocess.run(
-        ["git", "remote", "add", "origin", "https://example.invalid/nx-nesting.git"],
+        ["git", "remote", "add", "origin", f"https://example.invalid/{name}.git"],
         cwd=checkout,
         check=True,
         capture_output=True,
     )
     return checkout
+
+
+def _nx_nesting_checkout(tmp_path: Path) -> Path:
+    """The wrapper checkout with its workspace already provisioned."""
+    checkout = _nx_wrapper_checkout(tmp_path, "nesting")
+    _mark_nx_installed(checkout)
+    return checkout
+
+
+def _nx_wrapper_env(
+    checkout: Path, tmp_path: Path, trace: Path, **overrides: str
+) -> dict[str, str]:
+    environment = os.environ.copy()
+    environment["PATH"] = f"{checkout / 'bin'}:{environment['PATH']}"
+    environment["XDG_CACHE_HOME"] = str(tmp_path / "cache")
+    environment["TRACE_FILE"] = str(trace)
+    # Claims inherited from an enclosing run belong to other checkouts and must not
+    # divert the log this checkout is about to write.
+    environment.pop("ORCHESTRATOR_PRESERVED_LOGS", None)
+    environment.update(overrides)
+    return environment
+
+
+def _add_nx_wrapper_doubles(checkout: Path) -> None:
+    """Trace Bun and Nx without installing or running either."""
+    _add_bun_double(checkout)
+    bunx = checkout / "bin" / "bunx"
+    bunx.write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+printf 'bunx %s\\n' "$*" >>"$TRACE_FILE"
+""",
+        encoding="utf-8",
+    )
+    bunx.chmod(0o755)
+
+
+def test_nx_wrapper_provisions_the_locked_workspace_when_nx_is_absent(tmp_path: Path) -> None:
+    """A bare Nx invocation in a fresh worktree heals itself instead of failing.
+
+    `just check` used to repair this inline, so the same missing install produced
+    two different stories: one recipe named the provisioning and fixed it, and
+    every other one failed with Nx's own "Could not find Nx modules" under advice
+    to fix project findings it had never reached.
+    """
+    checkout = _nx_wrapper_checkout(tmp_path, "provisioning")
+    _add_nx_wrapper_doubles(checkout)
+    trace = tmp_path / "trace"
+
+    result = _run(
+        str(checkout / "scripts" / "nx.sh"),
+        "run-many",
+        "-t",
+        "test",
+        cwd=checkout,
+        env=_nx_wrapper_env(checkout, tmp_path, trace),
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert trace.read_text().splitlines() == [
+        "bun install --frozen-lockfile",
+        "bunx nx run-many -t test",
+    ]
+
+
+def test_nx_wrapper_skips_provisioning_once_the_workspace_is_installed(tmp_path: Path) -> None:
+    """The heal is a no-op on every ordinary invocation, which is most of them."""
+    checkout = _nx_wrapper_checkout(tmp_path, "provisioned")
+    _add_nx_wrapper_doubles(checkout)
+    _mark_nx_installed(checkout)
+    trace = tmp_path / "trace"
+
+    result = _run(
+        str(checkout / "scripts" / "nx.sh"),
+        "run",
+        "cached",
+        cwd=checkout,
+        env=_nx_wrapper_env(checkout, tmp_path, trace),
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert trace.read_text().splitlines() == ["bunx nx run cached"]
+
+
+def test_nx_wrapper_names_the_provisioning_it_could_not_complete(tmp_path: Path) -> None:
+    """A failed install stops before Nx and leaves its own reason on disk."""
+    checkout = _nx_wrapper_checkout(tmp_path, "unprovisionable")
+    _add_nx_wrapper_doubles(checkout)
+    trace = tmp_path / "trace"
+
+    result = _run(
+        str(checkout / "scripts" / "nx.sh"),
+        "run",
+        "anything",
+        cwd=checkout,
+        env=_nx_wrapper_env(checkout, tmp_path, trace, FAIL_COMMAND="bun"),
+    )
+
+    assert result.returncode != 0
+    log = checkout / ".logs" / "workspace-install.log"
+    assert "workspace-install: install locked workspace dependencies and retry" in result.stderr
+    assert f"full output: {log}" in result.stderr
+    assert "bun: captured failure detail" in log.read_text(encoding="utf-8")
+    assert oct(log.stat().st_mode & 0o777) == "0o600"
+    # Nx is never reached: running it without its modules is what produced the
+    # misleading diagnosis this replaces.
+    assert trace.read_text().splitlines() == ["bun install --frozen-lockfile"]
+
+
+@pytest.mark.parametrize(
+    ("arguments", "message"),
+    [
+        (["--reinstall"], "unknown argument '--reinstall'"),
+        (["--force", "unexpected"], "expected at most one argument"),
+    ],
+)
+def test_workspace_install_rejects_arguments_it_does_not_define(
+    tmp_path: Path, arguments: list[str], message: str
+) -> None:
+    """An installer that ran on a misread argument would install the wrong thing."""
+    checkout = _nx_wrapper_checkout(tmp_path, "arguments")
+    _add_nx_wrapper_doubles(checkout)
+    trace = tmp_path / "trace"
+
+    result = _run(
+        str(checkout / "scripts" / "workspace-install.sh"),
+        *arguments,
+        cwd=checkout,
+        env=_nx_wrapper_env(checkout, tmp_path, trace),
+    )
+
+    assert result.returncode == 2
+    assert message in result.stderr
+    assert not trace.exists(), "a rejected invocation must not have run Bun"
+
+
+def _sabotage_installer_state(checkout: Path, mode: str) -> None:
+    """Break one of the pieces of its own state the installer has to open."""
+    logs = checkout / ".logs"
+    match mode:
+        case "lock-directory":
+            # A regular file where the directory belongs: `mkdir -p` refuses.
+            logs.write_text("not a directory\n", encoding="utf-8")
+        case "unreadable-lock" | "write-only-lock":
+            logs.mkdir()
+            lock = logs / "workspace-install.lock"
+            lock.touch()
+            lock.chmod(0o000 if mode == "unreadable-lock" else 0o200)
+        case "unacquirable-lock":
+            # The one refusal no permission can produce: `flock` itself failing.
+            flock = checkout / "bin" / "flock"
+            flock.write_text(
+                '#!/usr/bin/env bash\necho "flock: cannot lock this file" >&2\nexit 1\n',
+                encoding="utf-8",
+            )
+            flock.chmod(0o755)
+        case "unopenable-log":
+            logs.mkdir()
+            (logs / "workspace-install.log").mkdir()
+        case _:  # pragma: no cover - guards the parametrization above
+            raise AssertionError(f"unknown installer sabotage {mode!r}")
+
+
+@pytest.mark.parametrize(
+    ("mode", "message"),
+    [
+        ("lock-directory", "cannot prepare"),
+        ("unreadable-lock", "cannot open the install lock at"),
+        ("write-only-lock", "cannot open the install lock at"),
+        ("unacquirable-lock", "cannot serialize the locked install"),
+        ("unopenable-log", "preserved-log: cannot open"),
+    ],
+)
+def test_workspace_install_names_every_piece_of_its_own_state_that_refuses(
+    tmp_path: Path, mode: str, message: str
+) -> None:
+    """Each way the installer's own state can refuse arrives as a diagnostic.
+
+    The descriptor its lock is held on is opened with `exec`, whose redirection
+    failures are exactly the kind a script dies on without a word — and the lock
+    directory, the lock acquisition, and the preserved log can each refuse too.
+    Every one of them has to name what could not be opened and stop before Bun,
+    because an installer that ran anyway would be installing unserialized.
+    """
+    checkout = _nx_wrapper_checkout(tmp_path, f"refusing-{mode}")
+    _add_nx_wrapper_doubles(checkout)
+    _sabotage_installer_state(checkout, mode)
+    trace = tmp_path / "trace"
+
+    result = _run(
+        str(checkout / "scripts" / "workspace-install.sh"),
+        cwd=checkout,
+        env=_nx_wrapper_env(checkout, tmp_path, trace),
+    )
+
+    assert result.returncode == 1
+    assert message in result.stderr
+    assert not trace.exists(), "an installer that never took its lock must not have run Bun"
+
+
+def test_concurrent_workspace_installs_install_once_and_both_succeed(tmp_path: Path) -> None:
+    """Two Nx invocations in one fresh worktree must not install over each other.
+
+    The lock is what makes the self-heal safe to put in front of *every* Nx
+    invocation: `just check` and the suite's own nested `just lint-llm-diff` reach
+    it from the same checkout at once. The loser must wait, see the workspace the
+    winner provisioned, and go on rather than reinstalling on top of it.
+    """
+    checkout = _nx_wrapper_checkout(tmp_path, "concurrent")
+    _add_nx_wrapper_doubles(checkout)
+    # Slow enough that the second caller certainly arrives while the first holds
+    # the lock, which is the interleaving under test.
+    bun = checkout / "bin" / "bun"
+    bun.write_text(
+        bun.read_text().replace("mkdir -p node_modules/.bin", "sleep 2\nmkdir -p node_modules/.bin")
+    )
+    trace = tmp_path / "trace"
+    environment = _nx_wrapper_env(checkout, tmp_path, trace)
+
+    installs = [
+        subprocess.Popen(
+            [str(checkout / "scripts" / "workspace-install.sh")],
+            cwd=checkout,
+            env=environment,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        for _ in range(2)
+    ]
+    outcomes = [install.communicate(timeout=e2e_timeout(60)) for install in installs]
+
+    assert [install.returncode for install in installs] == [0, 0], outcomes
+    assert trace.read_text().splitlines() == ["bun install --frozen-lockfile"]
+    assert (checkout / "node_modules/.bin/nx").is_file()
+
+
+#: One real journey carrying `requires_workspace_install`, run inside the fresh
+#: worktree below. It reaches Nx through the real `just` recipes, so it is exactly
+#: the shape that used to skip there — and a skip is what made a worker's own
+#: `pytest` say something different from the gate's.
+FRESH_WORKTREE_JOURNEY = (
+    "tests/e2e/test_dispatch_e2e.py::test_just_llmlint_recipes_pin_the_dedicated_harness_boundary"
+)
+
+
+def test_a_freshly_created_worktree_provisions_itself_for_nx_and_for_pytest(
+    tmp_path: Path,
+) -> None:
+    """The situation every dispatched worker starts in, driven end to end.
+
+    `node_modules` is ignored state that no checkout shares, so a new worktree has
+    none. Both entry points into Nx are exercised here in a real linked worktree
+    carrying this working tree's own changes: a bare `./scripts/nx.sh`, and a bare
+    `pytest` on a journey that drives real Nx. Neither may ask an operator to run
+    Bun by hand, which is what a worker had to do.
+    """
+    worktree = tmp_path / "fresh-worktree"
+    # `--no-checkout`, so what lands here is this working tree exactly rather than
+    # HEAD with the change laid over it — a file this change deletes would
+    # otherwise survive into the tree that is supposed to be proving the change.
+    _run("git", "worktree", "add", "--no-checkout", "--detach", str(worktree), "HEAD")
+    try:
+        copy_working_tree(worktree)
+        assert not (worktree / "node_modules").exists()
+
+        wrapper = _run("./scripts/nx.sh", "show", "projects", cwd=worktree)
+
+        assert wrapper.returncode == 0, wrapper.stderr
+        assert (worktree / "node_modules/.bin/nx").is_file()
+
+        # Again from the other entry point, with the install withdrawn: the suite
+        # provisions rather than skipping, so a green run here means what the gate
+        # means. `uv run` builds this worktree's own environment on the way in.
+        shutil.rmtree(worktree / "node_modules")
+        suite = _run(
+            "uv", "run", "pytest", FRESH_WORKTREE_JOURNEY, "-q", "-p", "no:randomly", cwd=worktree
+        )
+
+        assert suite.returncode == 0, suite.stdout + suite.stderr
+        assert "skipped" not in suite.stdout
+        assert (worktree / "node_modules/.bin/nx").is_file()
+    finally:
+        # Removed here rather than left to teardown: a linked worktree surviving a
+        # test is a leak the guard reports, and rightly. `remove` deregisters this
+        # one on its own; `prune` would reach across a registry other live
+        # orchestrator runs share.
+        _run("git", "worktree", "remove", "--force", str(worktree))
 
 
 def test_a_nested_nx_run_cannot_erase_the_running_one_s_log(tmp_path: Path) -> None:
@@ -680,7 +997,6 @@ def test_a_nested_nx_run_cannot_erase_the_running_one_s_log(tmp_path: Path) -> N
 def test_check_recipe_log_records_the_credential_name_not_its_value(tmp_path: Path) -> None:
     """A preserved log outlives its terminal, so it must never durably hold a token."""
     checkout, trace = _recipe_checkout(tmp_path)
-    _mark_nx_installed(checkout)
     token = "sk-ant-oat01-not-a-real-credential"
 
     result = _recipe_run(
@@ -702,7 +1018,6 @@ def test_check_recipe_log_records_the_credential_name_not_its_value(tmp_path: Pa
 
 def test_check_recipe_reports_the_coverage_total_it_measured(tmp_path: Path) -> None:
     checkout, trace = _recipe_checkout(tmp_path)
-    _mark_nx_installed(checkout)
     (checkout / ".coverage").write_text("")
 
     result = _recipe_run(checkout, trace, "check", FAKE_COVERAGE_TOTAL="96.42")
@@ -714,7 +1029,6 @@ def test_check_recipe_reports_the_coverage_total_it_measured(tmp_path: Path) -> 
 def test_check_recipe_stays_green_when_no_coverage_artifact_exists(tmp_path: Path) -> None:
     """A missing artifact reports nothing; it must never turn a green tier red."""
     checkout, trace = _recipe_checkout(tmp_path)
-    _mark_nx_installed(checkout)
 
     result = _recipe_run(checkout, trace, "check")
 
@@ -726,7 +1040,6 @@ def test_check_recipe_stays_green_when_no_coverage_artifact_exists(tmp_path: Pat
 def test_check_recipe_stays_green_when_the_coverage_total_is_unusable(tmp_path: Path) -> None:
     """An unavailable or malformed total is dropped, not reported and not fatal."""
     checkout, trace = _recipe_checkout(tmp_path)
-    _mark_nx_installed(checkout)
     (checkout / ".coverage").write_text("")
 
     result = _recipe_run(checkout, trace, "check", FAKE_COVERAGE_TOTAL="No data to report.")
@@ -745,7 +1058,6 @@ def test_check_recipe_reports_a_total_that_coverage_exited_nonzero_to_report(
     most wants it; the floor is the `test` target's to enforce, not this readout's.
     """
     checkout, trace = _recipe_checkout(tmp_path)
-    _mark_nx_installed(checkout)
     (checkout / ".coverage").write_text("")
 
     result = _recipe_run(
@@ -800,14 +1112,24 @@ def test_upgrade_recipe_runs_bun_and_reports_one_success_line(tmp_path: Path) ->
 
 
 def test_upgrade_recipe_preserves_bun_failure_and_stops(tmp_path: Path) -> None:
+    """A real Bun failure, and the log that outlives the process which reported it.
+
+    `upgrade` swallows the whole of uv's and Bun's output, so that log is the only
+    account of which constraint could not be solved — and it used to be a `mktemp`
+    file an EXIT trap removed, leaving a failed upgrade with nothing to read.
+    """
     checkout, trace = _recipe_checkout(tmp_path)
     (checkout / "package.json").write_text("{invalid")
 
     result = _recipe_run(checkout, trace, "upgrade")
 
     assert result.returncode != 0
+    log = checkout / ".logs/upgrade.log"
     assert "package.json" in result.stderr
     assert "upgrade: repair dependency constraints or target findings" in result.stderr
+    assert f"full output: {log}" in result.stderr
+    assert "package.json" in log.read_text()
+    assert oct(log.stat().st_mode & 0o777) == "0o600"
     assert trace.read_text().splitlines() == [
         "uv lock --upgrade",
         "uv sync",

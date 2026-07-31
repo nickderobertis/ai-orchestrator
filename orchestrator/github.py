@@ -21,6 +21,7 @@ import json
 import subprocess
 from collections.abc import Callable
 from dataclasses import dataclass
+from enum import Enum
 from typing import Protocol
 from urllib.parse import quote
 
@@ -60,6 +61,21 @@ class PullRequest:
     repo: str
     head: str
     base: str
+
+
+class PullRequestState(Enum):
+    OPEN = "OPEN"
+    MERGED = "MERGED"
+    CLOSED = "CLOSED"
+
+
+@dataclass(frozen=True)
+class ExistingPullRequest:
+    """A same-head PR discovered before publication, including its frozen head."""
+
+    pr: PullRequest
+    state: PullRequestState
+    head_sha: str
 
 
 @dataclass(frozen=True)
@@ -116,6 +132,10 @@ class GitHubBackend(Protocol):
     def default_branch(self, repo: str) -> str: ...
 
     def required_status_checks(self, repo: str, branch: str) -> tuple[str, ...]: ...
+
+    def adoptable_pr(
+        self, repo: str, *, head: str, base: str, head_sha: str
+    ) -> PullRequest | None: ...
 
     def create_pr(
         self, repo: str, *, head: str, base: str, title: str, body: str, draft: bool = False
@@ -191,6 +211,9 @@ class CliGitHubBackend:
         """Return branch-protection status contexts required before merge."""
         encoded_branch = quote(branch, safe="")
         out = self._run(["api", f"repos/{repo}/branches/{encoded_branch}"])
+        # llmlint: ignore[changed_behavior_has_e2e] Malformed gh JSON is a CLI trust-boundary
+        # parser failure, exercised through the real injected command runner in test_github;
+        # lifecycle E2E covers observable open/merged adoption and stale-head fallback.
         try:
             payload = json.loads(out)
             protected = payload["protected"]
@@ -217,16 +240,8 @@ class CliGitHubBackend:
             ) from exc
         return tuple(context for context in contexts if context)
 
-    def create_pr(
-        self, repo: str, *, head: str, base: str, title: str, body: str, draft: bool = False
-    ) -> PullRequest:
-        """Return the open PR for ``head`` → ``base``, or create one if none exists.
-
-        Reusing the PR lets later orchestration rounds continue work on the same
-        branch without failing cosmetically after their push succeeds. The lookup
-        filters by ``base`` too, so a same-head PR targeting a different base is
-        never mistaken for this one.
-        """
+    def adoptable_pr(self, repo: str, *, head: str, base: str, head_sha: str) -> PullRequest | None:
+        """Return an open PR, or a merged PR that contains this exact branch head."""
         existing_out = self._run(
             [
                 "pr",
@@ -238,29 +253,52 @@ class CliGitHubBackend:
                 "--base",
                 base,
                 "--state",
-                "open",
+                "all",
                 "--json",
-                "number,url",
+                "number,url,state,headRefOid",
             ]
         )
         try:
-            existing = json.loads(existing_out)
-            if not isinstance(existing, list):
+            payload = json.loads(existing_out)
+            if not isinstance(payload, list):
                 raise TypeError
-            if existing:
-                first = existing[0]
-                if not isinstance(first, dict):
+            candidates: list[ExistingPullRequest] = []
+            for item in payload:
+                if not isinstance(item, dict):
                     raise TypeError
-                number = first["number"]
-                url = first["url"]
-                if not isinstance(number, int) or isinstance(number, bool):
+                number, url = item["number"], item["url"]
+                state, candidate_sha = item["state"], item["headRefOid"]
+                if (
+                    not isinstance(number, int)
+                    or isinstance(number, bool)
+                    or not isinstance(url, str)
+                    or not url
+                    or not isinstance(state, str)
+                    or not isinstance(candidate_sha, str)
+                    or not candidate_sha
+                ):
                     raise TypeError
-                if not isinstance(url, str) or not url:
-                    raise TypeError
-                return PullRequest(number=number, url=url, repo=repo, head=head, base=base)
+                candidates.append(
+                    ExistingPullRequest(
+                        PullRequest(number, url, repo, head, base),
+                        PullRequestState(state.upper()),
+                        candidate_sha,
+                    )
+                )
         except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
             raise GitHubError(f"could not parse PR from gh output: {existing_out!r}") from exc
+        for candidate in candidates:
+            if candidate.state is PullRequestState.OPEN:
+                return candidate.pr
+        for candidate in candidates:
+            if candidate.state is PullRequestState.MERGED and candidate.head_sha == head_sha:
+                return candidate.pr
+        return None
 
+    def create_pr(
+        self, repo: str, *, head: str, base: str, title: str, body: str, draft: bool = False
+    ) -> PullRequest:
+        """Create a PR after the caller has ruled out an adoptable existing PR."""
         out = self._run(
             [
                 "pr",

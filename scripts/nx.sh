@@ -12,6 +12,13 @@ script_dir="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"
 # shellcheck source=scripts/preserved-log.sh
 . "$script_dir/preserved-log.sh"
 
+# Nx lives in `node_modules/.bin`, which a freshly created worktree does not have.
+# Healing it here rather than in one recipe is what stops the same missing install
+# from failing `just lint` with "Could not find Nx modules" while `just check`
+# quietly repaired it — and what lets a bare `pytest` drive these targets without
+# an operator running Bun by hand first. It exits immediately once provisioned.
+"$script_dir/workspace-install.sh" || exit 1
+
 repo_identity="$(git config --get remote.origin.url || git rev-parse --show-toplevel)" || { echo "nx: cannot resolve repository identity; run from a Git checkout and retry" >&2; exit 1; }
 repo_key="$(printf '%s' "$repo_identity" | sha256sum | cut -c1-16)" || { echo "nx: cannot derive the repository cache key; verify sha256sum is available and retry" >&2; exit 1; }
 [[ "$repo_key" =~ ^[0-9a-f]{16}$ ]] || { echo "nx: derived an invalid repository cache key; verify sha256sum output and retry" >&2; exit 1; }
