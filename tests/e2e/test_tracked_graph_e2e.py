@@ -2922,6 +2922,25 @@ def test_next_round_carries_committed_context_and_yields_to_a_stated_retry(
     # The round's own notes replace the set the node arrived with, in submission order.
     assert carried["tasks"][0]["context"] == list(notes)
 
+    # And it travels exactly one transition. Round two commits no edit of its own, so
+    # the node it carries forward has no context at all: what the planner still means
+    # is what the planner attaches again, and stale state cannot pile up.
+    (collected / "round-02" / "result.json").write_text(
+        json.dumps(
+            {
+                "ok": False,
+                "state": "failed",
+                "started_order": ["work"],
+                "results": {"work": {"status": "failed", "outcome": "not-completed"}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    expired = _just("next-round", "collected-context", "--runs-dir", str(runs), "--plan-only")
+    assert expired.returncode == 0, expired.stderr
+    third = json.loads((collected / "round-03" / "plan.json").read_text(encoding="utf-8"))
+    assert "context" not in third["tasks"][0]
+
     stated = _context_ledger(runs, "stated-context", notes)
     edits = tmp_path / "stated.json"
     edits.write_text(

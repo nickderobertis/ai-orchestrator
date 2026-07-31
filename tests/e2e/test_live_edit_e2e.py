@@ -9,7 +9,6 @@
 from __future__ import annotations
 
 import json
-import os
 import subprocess
 import sys
 import time
@@ -20,7 +19,6 @@ from waits import deadline
 from waits import timeout as e2e_timeout
 
 from orchestrator import BASE_CONFIG, REPO_ROOT, gitops
-from orchestrator.channel import CHANNEL_DIR_ENV, CHANNEL_RUN_ID_ENV, create_channel
 from orchestrator.projection import project_run
 from orchestrator.provenance import incomplete_commits
 from orchestrator.registry import Registry
@@ -781,28 +779,32 @@ def test_real_cli_live_drop_preserves_and_recovers_running_lifecycle(
 
 
 def test_planner_context_attached_mid_round_reaches_the_next_round_dispatch(
-    tmp_path: Path, command_base, onejudge_bin: str
+    tmp_path: Path, onejudge_bin: str
 ) -> None:
     """What the planner learns during a round reaches the node's next dispatch.
 
     The transition used to restore the plan the round was launched with, so a node
     carried forward was re-briefed with prose that predated everything the round had
-    just proven — and the worker set about redoing finished work. The note is
-    submitted through the real `channel-reply`, and the prompt the agent side
-    actually receives is recorded by the backend, so this asserts on the delivered
-    text rather than on the plan alone.
+    just proven — and the worker set about redoing finished work. Every step here is
+    the operator's own: `just orchestrate` launches and owns the channel, the note is
+    submitted through `just channel-reply` while the round runs, the orchestrator
+    drives the transition after the continuing verdict, and the assertion is on the
+    prompt the agent side actually received rather than on the plan alone.
     """
     runs = tmp_path / "runs"
-    run_dir = runs / "planner-context"
-    channel = create_channel(run_dir)
+    base = yaml.safe_load(BASE_CONFIG.read_text(encoding="utf-8"))
+    base["provider"] = {"kind": "command", "command": [sys.executable, str(FAKE_BACKEND)]}
+    base_path = tmp_path / "context-base.yaml"
+    base_path.write_text(yaml.safe_dump(base), encoding="utf-8")
     prompts = tmp_path / "prompts.jsonl"
-    ready, release = tmp_path / "hold.ready", tmp_path / "hold.release"
     note = "41 commits are on the branch and the gate is green; only llmlint remains."
-    plan = tmp_path / "plan.json"
+    plan = tmp_path / "planner-context-plan.json"
     plan.write_text(
         json.dumps(
             {
                 "schema_version": 6,
+                "name": "planner-context",
+                "concurrency": 4,
                 "tasks": [
                     {
                         "id": "work",
@@ -813,11 +815,14 @@ def test_planner_context_attached_mid_round_reaches_the_next_round_dispatch(
                         ),
                         "max_turns": 1,
                     },
+                    {"id": "settled", "task": "No diff", "expects_no_diff": True},
                     {
                         "id": "hold",
                         "persona": "engineer",
                         "task": (
-                            f"provider-barrier-ready={ready} provider-barrier-release={release}"
+                            f"slow-branch {tmp_path / 'hold.ticks'} live-edit-slow "
+                            f"live-edit-ready={tmp_path / 'hold.ready'} "
+                            f"live-edit-release={tmp_path / 'hold.release'}"
                         ),
                     },
                 ],
@@ -825,49 +830,64 @@ def test_planner_context_attached_mid_round_reaches_the_next_round_dispatch(
         ),
         encoding="utf-8",
     )
-    common = [
-        "--runs-dir",
-        str(runs),
-        "--base",
-        str(command_base()),
-        "--onejudge-bin",
-        onejudge_bin,
-    ]
-    first = subprocess.Popen(
+    launched = subprocess.run(
         [
-            str(Path(onejudge_bin).with_name("orchestrator-run-plan")),
+            "just",
+            "orchestrate",
             str(plan),
-            "--run",
-            "planner-context",
-            *common,
+            "--runs-dir",
+            str(runs),
+            "--base",
+            str(base_path),
+            "--onejudge-bin",
+            onejudge_bin,
+            "--skill-command",
+            sys.executable,
+            str(FAKE_BACKEND),
         ],
-        cwd=REPO_ROOT,
-        env={**os.environ, CHANNEL_DIR_ENV: str(channel), CHANNEL_RUN_ID_ENV: "planner-context"},
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-    events = run_dir / "events.jsonl"
-    # The round has to still be executing when the note is submitted — that is the
-    # case the incident was — so one worker is held at the provider boundary while
-    # the node the note is about has already failed.
-    _wait_for(ready, lambda text: text == "ready\n", LIVE_PROCESS_TIMEOUT)
-    _wait_for_event(events, "node-failed", "work", LIVE_PROCESS_TIMEOUT)
-
-    _reply(str(run_dir.name), runs, [{"op": "context", "id": "work", "note": note}])
-
-    release.touch()
-    first.communicate(timeout=e2e_timeout(LIVE_PROCESS_TIMEOUT))
-    round_one = json.loads((run_dir / "round-01" / "result.json").read_text(encoding="utf-8"))
-    assert round_one["results"]["work"]["status"] == "failed"
-
-    resumed = subprocess.run(
-        ["just", "next-round", "planner-context", *common, "--format", "json"],
         cwd=REPO_ROOT,
         text=True,
         capture_output=True,
+        check=True,
     )
-    assert resumed.returncode == 1, resumed.stderr  # `work` fails again, by design
+    run_id = str(json.loads(launched.stdout)["run_id"])
+    run_dir = runs / run_id
+    _wait_for(run_dir / "events.jsonl", lambda text: bool(text.strip()), LIVE_PROCESS_TIMEOUT)
+    events = run_dir / "events.jsonl"
+    # The round has to still be executing when the note is submitted — that is the
+    # case the incident was — so one worker is held inside its turn while the node
+    # the note is about has already failed and a third node has already settled.
+    _wait_for(tmp_path / "hold.ready", lambda text: text == "ready\n", LIVE_PROCESS_TIMEOUT)
+    _wait_for_event(events, "node-failed", "work", LIVE_PROCESS_TIMEOUT)
+    _wait_for_event(events, "node-settled", "settled", LIVE_PROCESS_TIMEOUT)
+
+    # A note aimed at a node that already settled `done` could reach no dispatch, so
+    # the planner is told that at submission rather than left believing it landed.
+    assert "can still be dispatched" in _rejected(
+        run_id, runs, [{"op": "context", "id": "settled", "note": "too late"}]
+    )
+    _reply(run_id, runs, [{"op": "context", "id": "work", "note": note}])
+
+    (tmp_path / "hold.release").touch()
+    _wait_for(run_dir / "round-01" / "result.json", lambda text: bool(text.strip()))
+    round_one = json.loads((run_dir / "round-01" / "result.json").read_text(encoding="utf-8"))
+    assert round_one["results"]["work"]["status"] == "failed"
+
+    # The planner's continuing verdict is what sends the orchestrator into the
+    # transition; the carried node runs again there and fails again, by design.
+    for _ in range(6):
+        boundary = _next_surface(run_id, runs, LIVE_PROCESS_TIMEOUT)
+        if boundary.get("status") == "finished":
+            break
+        surface = boundary.get("surface")
+        if surface is None:
+            continue
+        if surface["kind"] in {"milestone", "closeout"}:
+            _continue(run_id, runs)
+            break
+        _continue(run_id, runs)
+    _wait_for(run_dir / "round-02" / "plan.json", lambda text: bool(text.strip()), 120)
+    _wait_for(run_dir / "round-02" / "result.json", lambda text: bool(text.strip()), 120)
 
     carried = json.loads((run_dir / "round-02" / "plan.json").read_text(encoding="utf-8"))
     work = next(task for task in carried["tasks"] if task["id"] == "work")
@@ -881,15 +901,10 @@ def test_planner_context_attached_mid_round_reaches_the_next_round_dispatch(
     assert "## What\nSweep the harness debt." in delivered[-1]
     assert "## Planner context" in delivered[-1]
 
-    # And it travels exactly one transition: a round that attaches nothing new hands
-    # the node no context at all, so instructions cannot pile up across rounds.
-    quiet = subprocess.run(
-        ["just", "next-round", "planner-context", "--runs-dir", str(runs), "--plan-only"],
+    subprocess.run(
+        ["just", "stop", run_id, "--runs-dir", str(runs)],
         cwd=REPO_ROOT,
         text=True,
         capture_output=True,
-        check=True,
+        check=False,
     )
-    assert "round-03" in quiet.stdout
-    third = json.loads((run_dir / "round-03" / "plan.json").read_text(encoding="utf-8"))
-    assert "context" not in next(task for task in third["tasks"] if task["id"] == "work")
