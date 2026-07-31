@@ -240,6 +240,29 @@ def test_retry_replacement_shape_and_lineage_are_validated() -> None:
             states={"root": "failed"},
             attestations=(),
         )
+    # A retry answering "which branch does this change live on?" twice is refused at
+    # submission rather than resolved silently: the lifecycle honours the checkpoint's
+    # branch and ignores the pin, so the planner would not get the branch it named.
+    with pytest.raises(EditError, match="pins branch 'wanted' but resumes branch 'other'"):
+        apply_edit(
+            _graph(),
+            EditCommand(
+                "retry",
+                {
+                    "op": "retry",
+                    "id": "root",
+                    "node": {
+                        "id": "replacement",
+                        "repo": "acme/widget",
+                        "task": "Continue",
+                        "branch": "wanted",
+                        "resume": {"branch": "other", "checkpoint": "abc"},
+                    },
+                },
+            ),
+            states={"root": "failed"},
+            attestations=(),
+        )
     _, events = apply_edit(
         _graph(),
         EditCommand(

@@ -3,6 +3,9 @@ from __future__ import annotations
 import json
 import os
 import socket
+import subprocess
+import sys
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -10,6 +13,8 @@ import pytest
 
 from orchestrator.config import ConfigError
 from orchestrator.goals import (
+    concurrent_indicator,
+    concurrent_runs,
     finish_run,
     graph_identities,
     main,
@@ -17,6 +22,7 @@ from orchestrator.goals import (
     sweep_and_list_active_runs,
     update_run_owner,
 )
+from orchestrator.liveness import PARKED_AFTER_SECONDS
 from orchestrator.registry import Registry
 
 
@@ -81,7 +87,7 @@ def test_live_overlap_requires_ack_and_reader_lists_audit(
         pid=os.getpid(),
         acknowledge_concurrent=False,
     )
-    with pytest.raises(ConfigError, match="first.*First goal.*identity"):
+    with pytest.raises(ConfigError, match="'first' is LIVE.*First goal.*identity"):
         register_run(
             run_id="second",
             run_dir=second_dir,
@@ -90,6 +96,7 @@ def test_live_overlap_requires_ack_and_reader_lists_audit(
             pid=os.getpid(),
             acknowledge_concurrent=False,
         )
+    notices: list[str] = []
     acknowledgements = register_run(
         run_id="second",
         run_dir=second_dir,
@@ -97,13 +104,150 @@ def test_live_overlap_requires_ack_and_reader_lists_audit(
         identities=["identity"],
         pid=os.getpid(),
         acknowledge_concurrent=True,
+        report=notices.append,
     )
     assert acknowledgements[0]["runs"] == ["first"]
+    # Acknowledging gets past the guard; it never makes the live neighbour invisible.
+    assert notices == [
+        f"proceeding alongside a live concurrent run — {concurrent_runs(second_dir)[0].describe()}"
+        "; inspect it with: just monitor first"
+    ]
+    assert "CONCURRENT: run 'first' is LIVE" in str(concurrent_indicator(second_dir))
     assert main([]) == 0
     output = capsys.readouterr().out
     assert "First goal" in output
     assert "(no goal)" in output
     assert str(second_dir.resolve()) in output
+
+
+def test_a_parked_launch_is_not_reported_as_live_company(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Holding a pid is not working, and the guard's report has to say which it is.
+
+    A launched orchestrator can keep its pid while doing nothing observable, and
+    reporting that as a second run *at work* on the identity is the same misreading
+    the parked indicator exists to prevent one layer down.
+    """
+    monkeypatch.setenv("AI_ORCHESTRATOR_HOME", str(tmp_path / "state"))
+    # A real process that holds a pid and does nothing: no child of its own, and a
+    # launch record whose every stamp predates the threshold. That is what a parked
+    # orchestrator looks like from outside.
+    owner = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)"])
+    parked_dir = tmp_path / "parked"
+    (parked_dir / "orchestrator").mkdir(parents=True)
+    (parked_dir / "launch.json").write_text(json.dumps({"run_id": "parked"}), encoding="utf-8")
+    (parked_dir / "orchestrator" / "status.json").write_text(
+        json.dumps({"status": "running", "pid": owner.pid, "host": socket.gethostname()}),
+        encoding="utf-8",
+    )
+    stale = time.time() - PARKED_AFTER_SECONDS * 4
+    for path in (parked_dir / "launch.json", parked_dir / "orchestrator" / "status.json"):
+        os.utime(path, (stale, stale))
+    try:
+        register_run(
+            run_id="parked",
+            run_dir=parked_dir,
+            goal={"id": "parked", "text": "A launch that stopped working"},
+            identities=["identity"],
+            pid=owner.pid,
+            acknowledge_concurrent=False,
+        )
+
+        notices: list[str] = []
+        with pytest.raises(ConfigError, match=r"holds pid \d+ on .* but shows no progress"):
+            register_run(
+                run_id="next",
+                run_dir=tmp_path / "next",
+                goal=None,
+                identities=["identity"],
+                pid=os.getpid(),
+                acknowledge_concurrent=False,
+                report=notices.append,
+            )
+        register_run(
+            run_id="next",
+            run_dir=tmp_path / "next",
+            goal=None,
+            identities=["identity"],
+            pid=os.getpid(),
+            acknowledge_concurrent=True,
+            report=notices.append,
+        )
+
+        # Acknowledged, and still no claim of a live neighbour: there is not one.
+        assert notices == []
+        assert concurrent_indicator(tmp_path / "next") is None
+    finally:
+        owner.kill()
+        owner.wait(timeout=10)
+
+
+def test_an_unobservable_registration_is_never_reported_as_live(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every registration this host cannot rule on reads as exactly that.
+
+    Another host's entry and an owner whose pid the kernel says is gone are both
+    residue rather than work. Saying so is what lets a planner tell the run it must
+    not collide with from the one it may launch past.
+    """
+    state = tmp_path / "state"
+    monkeypatch.setenv("AI_ORCHESTRATOR_HOME", str(state))
+    state.mkdir()
+    reader = tmp_path / "reader"
+    owners = {
+        "elsewhere": (4242, "a-host-that-is-not-this-one"),
+        # On this host with a pid the kernel says is gone. `concurrent_runs` never
+        # rewrites the index, so an entry no sweep has retired yet is classified here.
+        "departed": (999_999_999, socket.gethostname()),
+        "reader": (os.getpid(), socket.gethostname()),
+    }
+    (state / "runs-index.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "runs": {
+                    name: {
+                        "run_id": name,
+                        "run_dir": str(reader if name == "reader" else tmp_path / name),
+                        "goal": None,
+                        "identities": ["shared"],
+                        "pid": pid,
+                        "host": host,
+                        "started": "earlier",
+                        "status": "active",
+                    }
+                    for name, (pid, host) in owners.items()
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    found = {run.run_id: run for run in concurrent_runs(reader)}
+
+    assert set(found) == {"elsewhere", "departed"}
+    assert all(run.state == "unobservable" for run in found.values())
+    assert "is registered but not observable here (recorded owner pid 4242 on " in (
+        found["elsewhere"].describe()
+    )
+    assert "goal '(no goal)'; shared identities: shared" in found["elsewhere"].describe()
+    # None of them is company a progress view should report as work in flight.
+    assert concurrent_indicator(reader) is None
+
+    # An owner this user may not signal is still an owner that exists: pid 1 belongs
+    # to another user here, and "I may not ask" is not "it is gone". Resolving that
+    # toward still-running is the same asymmetry every liveness probe here keeps.
+    indexed = json.loads((state / "runs-index.json").read_text(encoding="utf-8"))
+    indexed["runs"]["departed"]["pid"] = 1
+    (state / "runs-index.json").write_text(json.dumps(indexed), encoding="utf-8")
+    assert {run.run_id: run.state for run in concurrent_runs(reader)}["departed"] == "live"
+
+    # An index this build cannot parse leaves the view silent rather than failing it:
+    # the concurrency line is an extra, never a reason a planner loses `just status`.
+    (state / "runs-index.json").write_text('{"schema_version":99,"runs":{}}', encoding="utf-8")
+    assert concurrent_indicator(reader) is None
 
 
 def test_report_sweep_and_invalid_or_missing_index_paths(

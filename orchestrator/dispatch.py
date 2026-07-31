@@ -1172,6 +1172,9 @@ def launch_orchestrator(
         identities=graph_identities(graph),
         pid=os.getpid(),
         acknowledge_concurrent=acknowledge_concurrent,
+        # stderr, not the launch record: stdout is the record `just orchestrate`
+        # prints for a caller to parse, and a notice is for the planner reading along.
+        report=lambda notice: print(f"orchestrate: {notice}", file=sys.stderr),
     )
     run_dir.mkdir(parents=True, exist_ok=False)
     try:

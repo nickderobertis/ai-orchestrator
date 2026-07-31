@@ -21,6 +21,21 @@ are then recorded as a `concurrent-acknowledged` journal event for audit. The
 reservation remains visible across incomplete orchestrated rounds and is removed
 after a standalone run completes or the final orchestrator report is durable.
 
+The refusal says *which kind* of company each overlapping run is, because they
+call for opposite decisions. A run reported `is LIVE (owner pid N on HOST)` has a
+working owner: a second orchestration would share its checkouts. One reported
+`holds pid N ... but shows no progress (PARKED)`, or `registered but not
+observable here`, is a registration whose owner is not working — the residue
+`--acknowledge-concurrent` exists to launch past. Acknowledging never hides a
+live one: launching past it prints `proceeding alongside a live concurrent run`
+on stderr, `just goals` states each registered owner's observed state, and the
+planner's `just runs` and `just status` views carry a `CONCURRENT:` line naming
+every live run that shares this one's identities — under the same
+`--parked-after` threshold those views report parked with, so one view cannot
+call a launch parked and a live neighbour in consecutive lines. Liveness is
+observed at read time and never stored, because a recorded "this run was alive"
+is false the moment its process exits.
+
 ## The planner<->orchestrator channel
 
 `just orchestrate <plan.json>` starts a detached orchestrator onejudge run and
@@ -258,6 +273,17 @@ scheduler on the same reconciler pass. `blocked` and `skipped` are derived
 statuses, so every committed edit discards them and re-derives them against the
 new graph; a node the planner just made eligible is scheduled against a free
 concurrency slot without waiting for an unrelated event.
+
+**A retry may name only one branch, and it gets that branch every time.** A
+lifecycle replacement node that carries both a `branch` pin and a `resume`
+checkpoint is refused at submission when the two name different branches: the
+lifecycle honours the checkpoint's branch and ignores the pin, so the planner
+would not get the branch it named. When the pin and the resume agree but the
+preserved work can no longer be resumed — it stopped being unattested-incomplete
+because a recovery or an attestation landed on it — the node settles
+`resume-failed` on the pinned branch with that reason, rather than moving to a
+freshly generated branch. Which branch a retry produces is a function of the
+envelope alone; resubmit without a `branch` pin to start the work fresh.
 
 Dropping or retrying a running node sets its cooperative cancellation signal. A
 direct dispatch stops; a lifecycle dispatch preserves commits already made on
@@ -519,6 +545,19 @@ must carry the command that produced its mutations. Version 7 is additive over 6
 it adds `publication-failed`, for a publication that ended before any gate could
 rule on it. Every supported version stays readable; a reader skips records from a
 version it does not know rather than failing the round it is observing.
+
+**A record's readability and its claim on a sequence number are different
+questions.** A writer resuming a journal takes its next sequence above every line
+that *claims* one for this run — including a line written by a newer schema, which
+it cannot read. Skipping such a line when picking the number is how one run came to
+hold two events at `seq` 104: the planner's `channel-next` ran from a newer
+checkout than the orchestrator it was supervising. Strict replay stays strict in the
+other direction — a line it cannot read might have been an authoritative graph
+mutation, so a round refuses to record a result folded without it and says so — but
+a *collision*, two records sharing a number with both present and in order, loses
+nothing and is read through. That last part is not cosmetic: `channel-reply`
+validates every live edit against this reader, so treating a collision as fatal
+ends a healthy run's supervisability, which is what it did.
 
 ### A round outlives the turn that launched it
 
