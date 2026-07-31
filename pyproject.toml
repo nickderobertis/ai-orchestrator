@@ -19,6 +19,7 @@ orchestrator-repo-plan = "orchestrator.graph:main_repo_plan_cli"
 orchestrator-replan = "orchestrator.replan:main"
 orchestrator-next-round = "orchestrator.next_round:main_cli"
 orchestrator-runs = "orchestrator.next_round:main_runs"
+orchestrator-stop = "orchestrator.stop:main"
 orchestrator-goals = "orchestrator.goals:main"
 orchestrator-results = "orchestrator.results:main"
 orchestrator-new-persona = "orchestrator.personas:main_new"
@@ -82,6 +83,9 @@ warn_unused_ignores = true
 testpaths = ["tests"]
 addopts = "-q"
 tmp_path_retention_count = 3
+markers = [
+    "reads_docs: asserts on this repository's own prose, so it belongs to the whole-workspace test tier rather than the code-only one",
+]
 
 [tool.coverage.run]
 source = ["orchestrator"]

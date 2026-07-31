@@ -99,6 +99,17 @@ def descendants(root_pid: ProcessId) -> tuple[ProcessId, ...]:
     read doubles the syscalls of a full walk, and a walk that repeats on a timer
     is competing for the same interpreter as whatever it is watching.
     """
+    return descendants_of(frozenset({root_pid}))
+
+
+def descendants_of(root_pids: frozenset[ProcessId]) -> tuple[ProcessId, ...]:
+    """Every live process below any of ``root_pids``, excluding the roots themselves.
+
+    One ``/proc`` scan for the whole set rather than one per root: a caller holding
+    a run's several recorded owners — and everything it has already seen under them —
+    re-walks on a short timer while it terminates them, and repeating the scan per
+    pid would multiply that cost by the size of the tree it is watching.
+    """
     parents: dict[ProcessId, ProcessId] = {}
     for pid in _process_ids():
         try:
@@ -108,7 +119,7 @@ def descendants(root_pid: ProcessId) -> tuple[ProcessId, ...]:
         fields = raw[raw.rfind(")") + 2 :].split()
         if len(fields) >= 2 and fields[0] != "Z":
             parents[pid] = ProcessId(int(fields[1]))
-    found = {root_pid}
+    found = set(root_pids)
     changed = True
     while changed:
         changed = False
@@ -116,7 +127,7 @@ def descendants(root_pid: ProcessId) -> tuple[ProcessId, ...]:
             if parent in found and pid not in found:
                 found.add(pid)
                 changed = True
-    return tuple(sorted(found - {root_pid}))
+    return tuple(sorted(found - set(root_pids)))
 
 
 def process_activity(root_pid: ProcessId) -> ProcessActivity:

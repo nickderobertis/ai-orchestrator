@@ -6,11 +6,14 @@ import re
 import subprocess
 from pathlib import Path
 
+import pytest
+
 from orchestrator import gitops
 
 ROOT = Path(__file__).parents[1]
 
 
+@pytest.mark.reads_docs
 def test_smoke_selector_covers_exact_documented_launch_paths(tmp_path: Path) -> None:
     clone = gitops.clone(str(ROOT), tmp_path / "clone")
 
