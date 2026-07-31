@@ -26,8 +26,8 @@ from orchestrator.launch import generate_launch_id, session_fingerprint, write_p
 from orchestrator.stop import (
     ProcessId,
     StopReport,
-    is_running,
     main,
+    process_may_be_live,
     recorded_owners,
     report_outcome,
 )
@@ -295,8 +295,8 @@ def test_a_status_record_that_names_no_working_process_contributes_no_pid(tmp_pa
 
 def test_a_process_this_user_may_not_signal_is_reported_running() -> None:
     """Init is the honest example: unprobeable must never read as gone."""
-    assert is_running(ProcessId(1))
-    assert not is_running(ProcessId(DEAD_PID))
+    assert process_may_be_live(ProcessId(1))
+    assert not process_may_be_live(ProcessId(DEAD_PID))
 
 
 def test_a_stop_that_left_something_running_is_a_failure_with_a_status(capsys) -> None:

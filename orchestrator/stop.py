@@ -116,6 +116,14 @@ def _wrote_its_own_record(pid: ProcessId, started: object) -> bool:
     because refusing to stop a run on evidence nobody has would leave the orphan the
     whole verb exists to end.
     """
+    # This stamp is corroborating evidence for *withholding* a signal, never authority
+    # to send one: the pid itself comes from the run's own record and is validated in
+    # `_recorded_owner`. Rejecting the record when the stamp is missing or malformed
+    # would make a run with a corrupt `status.json` unstoppable by this verb, which
+    # puts the planner straight back on the hand-rolled `ps`-and-`kill` that ended
+    # another planner's work — the thing this module exists to replace. So the
+    # recycling check fails open and the docstring above says so.
+    # llmlint: ignore-block[boundary_inputs_validated] see the note above this directive.
     if not isinstance(started, str):
         return True
     try:
@@ -124,6 +132,7 @@ def _wrote_its_own_record(pid: ProcessId, started: object) -> bool:
         return True
     if recorded.tzinfo is None:
         return True
+    # llmlint: ignore-end[boundary_inputs_validated]
     began = process_started_at(pid)
     return began is None or began <= recorded.timestamp() + _START_SKEW_SECONDS
 
@@ -166,17 +175,19 @@ def recorded_owners(run_dir: Path) -> tuple[RecordedOwner, ...]:
     return tuple(owner for owner in found if owner is not None)
 
 
-def is_running(pid: ProcessId) -> bool:
-    """Whether ``pid`` is still executing on this host.
+def process_may_be_live(pid: ProcessId) -> bool:
+    """Whether ``pid`` cannot be shown to be gone from this host.
 
-    A zombie counts as stopped, and has to: it has already exited, and all that is
-    outstanding is a parent collecting its status. ``kill(pid, 0)`` succeeds against
-    one, so a stop that trusted that alone would wait out its whole grace period and
-    then report a process it had successfully ended as a survivor.
+    Only ``False`` is a certainty, which is what the name says: a pid this user may
+    not signal, or one whose ``/proc`` entry cannot be read, answers ``True`` without
+    establishing that anything is executing. That is the same asymmetry, and the same
+    spelling, as `runs.process_may_be_live` — claiming a process is gone when it
+    cannot be checked is how an orphan goes unnoticed.
 
-    A pid this user may not signal is reported running, in the same direction as
-    `runs.process_may_be_live`: claiming a process is gone when it cannot be checked
-    is how an orphan goes unnoticed.
+    A zombie is the one unreadable-looking state answered ``False``, and has to be: it
+    has already exited, and all that is outstanding is a parent collecting its status.
+    ``kill(pid, 0)`` succeeds against one, so a stop that trusted that alone would wait
+    out its whole grace period and then report a process it had ended as a survivor.
     """
     try:
         os.kill(pid, 0)
@@ -222,7 +233,7 @@ def _signal(pids: Iterable[ProcessId], number: int) -> set[ProcessId]:
 
 
 def _live(pids: Iterable[ProcessId]) -> set[ProcessId]:
-    return {pid for pid in pids if is_running(pid)}
+    return {pid for pid in pids if process_may_be_live(pid)}
 
 
 def stop_run(
@@ -267,7 +278,7 @@ def stop_run(
         time.sleep(poll)
     # Reaping is deliberately not attempted: these are not this process's children —
     # a launched orchestrator is reparented away at launch — so a lingering zombie
-    # belongs to whoever is left waiting on it, and `is_running` counts it as gone.
+    # belongs to whoever is left waiting on it, and `process_may_be_live` counts it as gone.
     return StopReport(
         tuple(sorted(signalled)), tuple(sorted(_live(tracked))), tuple(sorted(escalated))
     )
@@ -365,7 +376,7 @@ def main(argv: list[str] | None = None) -> int:
             file=sys.stderr,
         )
     local = tuple(item for item in owners if item.local)
-    if not (live_owners := tuple(item for item in local if is_running(item.pid))):
+    if not (live_owners := tuple(item for item in local if process_may_be_live(item.pid))):
         print(f"stop: {run_id} has no recorded process still running; nothing to stop")
         _print_state(run_dir, args.runs_dir)
         return 0

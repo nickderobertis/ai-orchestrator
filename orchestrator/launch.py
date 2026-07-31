@@ -325,6 +325,18 @@ _LAUNCHER_ENVIRONMENTS: tuple[_LauncherEnvironment, ...] = (
 )
 
 
+#: Every variable the detection above reads, derived from it rather than restated.
+#: A caller that has to neutralise an ambient session — a test isolating the launch it
+#: is exercising from the developer session running it — needs exactly this set, and
+#: deriving it means a marker production learns to read cannot silently keep leaking
+#: into an environment that believes it cleared them all.
+LAUNCHER_ENVIRONMENT_VARIABLES: frozenset[str] = frozenset(
+    name
+    for candidate in _LAUNCHER_ENVIRONMENTS
+    for name in candidate.markers + candidate.session_ids
+)
+
+
 @dataclass(frozen=True)
 class DetectedLaunch:
     """The launching harness and session the ambient environment identifies."""

@@ -16,13 +16,18 @@ anything.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
+import re
+import signal
+import socket
 import subprocess
 import sys
 import time
 from collections.abc import Iterator
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -32,7 +37,12 @@ from waits import deadline
 from waits import timeout as e2e_timeout
 
 from orchestrator import BASE_CONFIG, REPO_ROOT
-from orchestrator.launch import provenance_dir, read_launch_info, session_fingerprint
+from orchestrator.launch import (
+    LAUNCHER_ENVIRONMENT_VARIABLES,
+    provenance_dir,
+    read_launch_info,
+    session_fingerprint,
+)
 from orchestrator.stop import RecordedOwner, recorded_owners, run_tree
 from orchestrator.watchdog import ProcessId
 
@@ -40,14 +50,15 @@ FAKE_BACKEND = REPO_ROOT / "tests" / "e2e" / "fake_backend.py"
 
 #: Everything a harness exports to say which session it is. Cleared before each
 #: launch so a test's session is the one under test, not the one running the suite.
+#: The detection inputs are taken from production rather than restated, so a marker
+#: added there cannot go on leaking the developer's own session into these launches
+#: while this list still claims to have isolated them.
 _LAUNCHER_VARIABLES = (
-    "CLAUDECODE",
-    "CLAUDE_CODE_ENTRYPOINT",
-    "CLAUDE_CODE_SESSION_ID",
-    "CLAUDE_SESSION_ID",
-    "CODEX_THREAD_ID",
-    "CODEX_SESSION_ID",
-    "CODEX_SANDBOX",
+    *sorted(LAUNCHER_ENVIRONMENT_VARIABLES),
+    # Not detection inputs, so not derivable: `CODEX_HOME` is ambient configuration
+    # production deliberately refuses to identify a session by, and the rest are the
+    # explicit overrides and the label channel. A planner session exports all of them,
+    # so they would still reach the launch under test.
     "CODEX_HOME",
     "ORCHESTRATOR_LAUNCHER",
     "ORCHESTRATOR_LAUNCHER_SESSION",
@@ -225,6 +236,117 @@ def _await_gone(pids: set[ProcessId]) -> set[ProcessId]:
             return set()
         time.sleep(0.05)
     return {pid for pid in pids if is_running(pid)}
+
+
+#: A detached process that refuses SIGTERM. Nothing a real dispatch runs behaves this
+#: way on demand, so the escalation path needs one planted; it is a real process taking
+#: real signals, which is the part that matters.
+_STUBBORN = """
+import signal, sys, time
+from pathlib import Path
+signal.signal(signal.SIGTERM, signal.SIG_IGN)
+Path(sys.argv[1]).write_text(str(__import__("os").getpid()), encoding="utf-8")
+while True:
+    time.sleep(0.05)
+"""
+
+#: A detached process that takes signals normally, used as the pid a stale record names.
+_SLEEPER = """
+import sys, time
+from pathlib import Path
+Path(sys.argv[1]).write_text(str(__import__("os").getpid()), encoding="utf-8")
+while True:
+    time.sleep(0.05)
+"""
+
+
+def _spawn(source: str, marker: Path) -> ProcessId:
+    """Start a detached helper process and return the pid it reports."""
+    subprocess.Popen([sys.executable, "-c", source, str(marker)], start_new_session=True)
+    wait = deadline(60)
+    while time.monotonic() < wait:
+        if marker.is_file() and marker.read_text(encoding="utf-8").strip():
+            return ProcessId(int(marker.read_text(encoding="utf-8")))
+        time.sleep(0.02)
+    raise AssertionError(f"helper process never reported its pid to {marker}")
+
+
+# The one thing in this file the public surface cannot produce, and it is deliberate.
+# `just stop` decides from a round's recorded pid and start stamp, so reaching the
+# escalation and pid-recycling paths needs an owner process that ignores SIGTERM and
+# one whose record predates it. No plan onejudge can run produces either on demand,
+# and a pid cannot be recycled to schedule. The run, its provenance, its own owners,
+# and the stop itself all still come from the real recipes; only these two extra
+# owners are planted, and they are real processes taking real signals.
+# llmlint: ignore-block[tests_mirror_real_usage] see the note above this directive.
+def _record_owner(run_dir: Path, round_name: str, pid: ProcessId, started: datetime) -> None:
+    """Record ``pid`` as one of this run's own round owners, as a round would."""
+    round_dir = run_dir / round_name
+    round_dir.mkdir(parents=True, exist_ok=True)
+    (round_dir / "status.json").write_text(
+        json.dumps(
+            {
+                "status": "running",
+                "pid": int(pid),
+                "host": socket.gethostname(),
+                "started": started.isoformat(),
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+# llmlint: ignore-end[tests_mirror_real_usage]
+
+
+def test_stop_escalates_a_process_that_refuses_sigterm_and_spares_a_recycled_pid(
+    tmp_path: Path, onejudge_bin: str, launches: list[Launch]
+) -> None:
+    """The two teardown paths a real dispatch cannot be asked to produce on demand.
+
+    The run, its provenance, and its own owners are real: `just orchestrate` launched
+    it and `just stop` ends it through the recipe. What is planted is two extra owner
+    processes, because neither state can be ordered up from a real dispatch — nothing
+    onejudge runs ignores SIGTERM, and a pid cannot be recycled to schedule. Both are
+    real processes taking real signals from the real CLI, which is what these paths
+    are about.
+    """
+    runs = tmp_path / "runs"
+    planner = _session_env(tmp_path, "session-alpha")
+    mine = _orchestrate(tmp_path, runs, onejudge_bin, "escalated", planner, launches)
+    owners = _await_parked_worker(mine, "escalated", tmp_path)
+    tree = run_tree(owners)
+
+    stubborn = _spawn(_STUBBORN, tmp_path / "stubborn.pid")
+    # Recorded as a live round owner, exactly as a working round records itself.
+    _record_owner(mine.run_dir, "round-90", stubborn, datetime.now(UTC))
+
+    # A pid whose process demonstrably began *after* the record naming it: the number
+    # came around again, and the process wearing it now is somebody else's.
+    recycled = _spawn(_SLEEPER, tmp_path / "recycled.pid")
+    _record_owner(mine.run_dir, "round-91", recycled, datetime.now(UTC) - timedelta(hours=2))
+
+    # Both plants are live and equally reachable; only the recycling guard tells them
+    # apart, so this is what makes the survival assertion below mean anything. Without
+    # it the stale record would name a signalling target like any other owner.
+    sources = {item.source for item in recorded_owners(mine.run_dir)}
+    assert "round-90" in sources
+    assert "round-91" not in sources, "a pid its record predates was adopted as an owner"
+
+    try:
+        stopped = _stop(mine, planner, "--grace", "1")
+        assert stopped.returncode == 0, stopped.stderr
+        # The stubborn owner outlived SIGTERM and was escalated, and the report counts it.
+        counted = re.search(r"\((\d+) needed SIGKILL\)", stopped.stdout)
+        assert counted is not None, stopped.stdout
+        assert int(counted.group(1)) >= 1, stopped.stdout
+        assert _await_gone(tree | {stubborn}) == set()
+
+        # The recycled pid was never signalled: this stop left the stranger alone.
+        assert is_running(recycled), "a pid the record predates was signalled"
+    finally:
+        with contextlib.suppress(ProcessLookupError, PermissionError):
+            os.kill(recycled, signal.SIGKILL)
 
 
 def test_orchestrate_records_this_session_and_runs_shows_who_owns_each_run(
