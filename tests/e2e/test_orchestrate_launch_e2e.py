@@ -28,6 +28,7 @@ from contextlib import suppress
 from pathlib import Path
 
 import yaml
+from run_rows import without_ownership
 from waits import deadline
 
 from orchestrator import BASE_CONFIG, REPO_ROOT
@@ -224,7 +225,9 @@ def _view(command: str, runs: Path, history: Path) -> str:
         timeout=180,
     )
     assert viewed.returncode == 0, viewed.stderr
-    return viewed.stdout
+    # The ownership column is dropped here: it names the launching session, which
+    # differs per developer. tests/e2e/test_run_ownership_e2e.py asserts it directly.
+    return without_ownership(viewed.stdout)
 
 
 def _await_launch_pid(run_dir: Path) -> int:
