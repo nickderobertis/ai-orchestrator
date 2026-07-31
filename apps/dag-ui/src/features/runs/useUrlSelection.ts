@@ -1,11 +1,25 @@
 import { useCallback, useSyncExternalStore } from "react";
 
+/**
+ * The whole drill-down, held in the query string: which run, which node, which view,
+ * and which moment of that node's recorded execution. One mechanism, so every one of
+ * them is bookmarkable and every one of them survives a back button.
+ */
 export interface UrlSelection {
   readonly runId?: string;
   readonly nodeId?: string;
+  /**
+   * The timeline item opened in the node view, by its recorded id.
+   *
+   * A span is as linkable as an event — a dispatch and one of its turns are both
+   * moments of the node's execution — so this is an item id, not an event id. The
+   * query key stays `event` because that is the shared address already in use.
+   */
+  readonly itemId?: string;
   readonly view: "graph" | "overall";
   readonly selectRun: (runId: string) => void;
   readonly selectNode: (nodeId?: string) => void;
+  readonly selectItem: (itemId?: string) => void;
   readonly showOverall: () => void;
 }
 
@@ -14,6 +28,7 @@ export function useUrlSelection(): UrlSelection {
   const params = new URLSearchParams(query);
   const runId = params.get("run") ?? undefined;
   const nodeId = params.get("node") ?? undefined;
+  const itemId = params.get("event") ?? undefined;
   const view = params.get("view") === "overall" ? "overall" : "graph";
 
   const update = useCallback((change: (next: URLSearchParams) => void) => {
@@ -26,23 +41,34 @@ export function useUrlSelection(): UrlSelection {
   return {
     runId,
     nodeId,
+    itemId,
     view,
     selectRun: (id) =>
       update((next) => {
         next.set("run", id);
         next.delete("node");
+        next.delete("event");
         next.delete("view");
       }),
+    // A different node has different recorded work, so the moment selected inside the
+    // one being left cannot survive the move.
     selectNode: (id) =>
       update((next) => {
         if (id) next.set("node", id);
         else next.delete("node");
+        next.delete("event");
         next.delete("view");
+      }),
+    selectItem: (id) =>
+      update((next) => {
+        if (id) next.set("event", id);
+        else next.delete("event");
       }),
     showOverall: () =>
       update((next) => {
         next.set("view", "overall");
         next.delete("node");
+        next.delete("event");
       }),
   };
 }

@@ -54,6 +54,9 @@ const timingPresence = {
   tool_ms: true,
 };
 
+const CODEX_LAUNCH = "c0de".repeat(8);
+const CLAUDE_LAUNCH = "c1a0".repeat(8);
+
 export const runList = {
   api_version: 1,
   telemetry_schema_version: 8,
@@ -120,13 +123,15 @@ export function runDetail(runId: string = LIVE_RUN) {
         approval: "waiting",
         obsolete: "cancelled",
       };
-  const launchId = historical ? "c1a0".repeat(8) : "c0de".repeat(8);
+  const launchId = historical ? CLAUDE_LAUNCH : CODEX_LAUNCH;
   const launcher = historical ? "claude-code" : "codex";
   const node = historical ? "archive" : "dashboard";
   return {
     api_version: 1,
     telemetry_schema_version: 8,
     observed_at: "2026-07-26T12:00:00Z",
+    // The launching session is served on the run itself, and on every list row.
+    launch: { launch_id: launchId, launcher },
     run: {
       run_id: runId,
       state: historical ? "complete" : "running",
@@ -145,7 +150,12 @@ export function runDetail(runId: string = LIVE_RUN) {
           linkage_quality: "labelled",
           timing_presence: timingPresence,
           ...(id === "foundation"
-            ? { gate_attestation: { command: ["just", "gate"] } }
+            ? {
+                gate_attestation: {
+                  command: ["just", "gate"],
+                  comparison_base: "origin/main",
+                },
+              }
             : {}),
         })),
       usage: { agent: party, judge: party, llmlint: party, total: party },
@@ -175,8 +185,9 @@ export function runDetail(runId: string = LIVE_RUN) {
               foundation: {
                 status: "done",
                 ok: true,
-                pr: "https://github.com/example/repo/pull/12",
+                pr: PR_URL,
                 detail: "Gate completed successfully",
+                telemetry: { checks: { unit: "passed", lint: "passed" } },
               },
               publish: { status: "failed", ok: false, detail: "Deploy failed" },
             },
@@ -240,6 +251,15 @@ export function runDetail(runId: string = LIVE_RUN) {
         launcher,
         "Coordinating the execution frontier",
       ),
+      conversation(
+        ROUND_CHECK_IN_SESSION,
+        "check-in",
+        "agent",
+        undefined,
+        launchId,
+        launcher,
+        "Round 1 progress reported",
+      ),
     ],
   };
 }
@@ -249,6 +269,7 @@ function summary(
   state: string,
   nodeCounts: Record<string, number>,
 ) {
+  const historical = runId === HISTORY_RUN;
   return {
     run_id: runId,
     state,
@@ -258,6 +279,390 @@ function summary(
     linkage_quality: "labelled",
     timing,
     node_counts: nodeCounts,
+    launch: {
+      launch_id: historical ? CLAUDE_LAUNCH : CODEX_LAUNCH,
+      launcher: historical ? "claude-code" : "codex",
+    },
+  };
+}
+
+/** `2026-07-26T11:00:00Z` plus `seconds`, so every fixture stamp is ordered. */
+function stamp(seconds: number): string {
+  return new Date(
+    Date.UTC(2026, 6, 26, 11, 0, 0) + seconds * 1000,
+  ).toISOString();
+}
+
+/**
+ * The served timeline of a run, shaped exactly as `orchestrator/timeline.py` folds
+ * one: a round span holding node spans, each holding the dispatches, verification,
+ * publication and rollups recorded inside it, with references instead of bodies.
+ */
+export function runTimeline(runId: string = LIVE_RUN) {
+  return {
+    api_version: 1,
+    observed_at: "2026-07-26T12:00:00Z",
+    run_id: runId,
+    spans: runId === HISTORY_RUN ? historySpans() : liveSpans(),
+  };
+}
+
+/** The settled run's one recorded session, long enough to be read a page at a time. */
+export const LONG_SESSION = "archive-session";
+
+/**
+ * One session whose transcript is longer than a reader is handed at once.
+ *
+ * A real worker session runs to dozens of turns, which is what makes the detail
+ * region page them rather than render the whole conversation on selection.
+ */
+export function longConversation(turns = 30) {
+  const recorded = conversation(
+    LONG_SESSION,
+    "worker",
+    "agent",
+    "archive",
+    CLAUDE_LAUNCH,
+    "claude-code",
+    "Archived the release",
+  );
+  return {
+    ...recorded,
+    conversation: {
+      ...recorded.conversation,
+      turns: Array.from({ length: turns }, (_, index) => ({
+        ...recorded.conversation.turns[0],
+        id: `${LONG_SESSION}-${index}`,
+        assistant: `Archive step ${index}`,
+      })),
+    },
+  };
+}
+
+function historySpans() {
+  return [
+    {
+      id: "round-1",
+      kind: "round",
+      label: "round 1",
+      started_at: stamp(0),
+      ended_at: stamp(120),
+      round: 1,
+      status: "finished",
+      events: [],
+    },
+    {
+      id: "node-1-archive",
+      kind: "node",
+      label: "archive",
+      parent_id: "round-1",
+      node_id: "archive",
+      round: 1,
+      started_at: stamp(10),
+      ended_at: stamp(90),
+      status: "done",
+      events: [],
+    },
+    // Every recorded session of this run belongs to a node, so it has no run-level
+    // planner conversation at all.
+    dispatch(LONG_SESSION, "engineer-archive", "archive", 20, 80, [
+      `${LONG_SESSION}-0`,
+      `${LONG_SESSION}-1`,
+    ]),
+  ];
+}
+
+function liveSpans() {
+  return [
+    {
+      id: "round-1",
+      kind: "round",
+      label: "round 1",
+      started_at: stamp(0),
+      ended_at: null,
+      round: 1,
+      events: [
+        {
+          id: "event-0",
+          kind: "node-added",
+          at: stamp(0),
+          round: 1,
+        },
+      ],
+    },
+    {
+      id: "node-1-foundation",
+      kind: "node",
+      label: "foundation",
+      parent_id: "round-1",
+      node_id: "foundation",
+      round: 1,
+      started_at: stamp(5),
+      ended_at: stamp(180),
+      status: "done",
+      reference: {
+        kind: "worker_report",
+        value: "round-01/foundation/report.md",
+      },
+      events: [],
+    },
+    {
+      id: "verification-4",
+      kind: "verification",
+      label: "just gate",
+      parent_id: "node-1-foundation",
+      node_id: "foundation",
+      round: 1,
+      started_at: stamp(30),
+      ended_at: stamp(95),
+      status: "ok",
+      reference: { kind: "gate_log", value: "round-01/foundation/gate.log" },
+      events: [],
+    },
+    {
+      id: "publication-6",
+      kind: "publication",
+      label: "local/example",
+      parent_id: "node-1-foundation",
+      node_id: "foundation",
+      round: 1,
+      started_at: stamp(100),
+      ended_at: stamp(180),
+      status: "finished",
+      reference: { kind: "pr", value: PR_URL },
+      events: [
+        {
+          id: "event-6",
+          kind: "pr-created",
+          at: stamp(100),
+          round: 1,
+          node_id: "foundation",
+          reference: { kind: "pr", value: PR_URL },
+        },
+        {
+          id: "event-7",
+          kind: "pr-checks-observed",
+          at: stamp(140),
+          round: 1,
+          node_id: "foundation",
+          status: "passing",
+          reference: { kind: "pr", value: PR_URL },
+        },
+      ],
+    },
+    {
+      id: "node-1-dashboard",
+      kind: "node",
+      label: "dashboard",
+      parent_id: "round-1",
+      node_id: "dashboard",
+      round: 1,
+      started_at: stamp(10),
+      ended_at: null,
+      events: [
+        {
+          id: "event-9",
+          kind: "checkpoint-recorded",
+          at: stamp(45),
+          round: 1,
+          node_id: "dashboard",
+          status: "verified",
+        },
+      ],
+    },
+    dispatch("worker-session", "engineer-dashboard", "dashboard", 12, 60, [
+      "worker-session-0",
+    ]),
+    dispatch(
+      "judge-session",
+      "you-are-a-strict-careful-evaluator",
+      "dashboard",
+      62,
+      90,
+      ["judge-session-0"],
+    ),
+    dispatch("check-in-session", "check-in-dashboard", "dashboard", 92, 110, [
+      "check-in-session-0",
+    ]),
+    dispatch(
+      "pr-author-session",
+      "pr-author-dashboard",
+      "dashboard",
+      112,
+      130,
+      ["pr-author-session-0"],
+    ),
+    dispatch("llmlint-session", "llmlint-dashboard", "dashboard", 132, 150, [
+      "llmlint-session-0",
+    ]),
+    {
+      id: "rollup-lock-wait-11",
+      kind: "rollup",
+      label: "lock-wait",
+      parent_id: "node-1-dashboard",
+      node_id: "dashboard",
+      round: 1,
+      started_at: stamp(15),
+      ended_at: stamp(155),
+      count: 1240,
+      total_duration_ms: 4200,
+      events: [],
+    },
+    {
+      id: "node-1-publish",
+      kind: "node",
+      label: "publish",
+      parent_id: "round-1",
+      node_id: "publish",
+      round: 1,
+      started_at: stamp(20),
+      ended_at: stamp(70),
+      status: "failed",
+      events: [],
+    },
+    // The failed node's own attempts: a gate that never reached an attestation, and
+    // a publication that recorded no PR and observed no checks.
+    {
+      id: "verification-12",
+      kind: "verification",
+      label: "branch push ai-orchestrator/engineer/publish",
+      parent_id: "node-1-publish",
+      node_id: "publish",
+      round: 1,
+      started_at: stamp(30),
+      ended_at: stamp(50),
+      status: "failed",
+      events: [],
+    },
+    {
+      id: "publication-13",
+      kind: "publication",
+      label: "publication",
+      parent_id: "node-1-publish",
+      node_id: "publish",
+      round: 1,
+      started_at: stamp(55),
+      ended_at: stamp(70),
+      status: "failed",
+      events: [],
+    },
+    {
+      id: "human-wait-14",
+      kind: "human-wait",
+      label: "approval",
+      parent_id: "round-1",
+      node_id: "approval",
+      round: 1,
+      started_at: stamp(75),
+      ended_at: null,
+      status: "waiting",
+      events: [],
+    },
+    // Run-level work, recorded at no node: the planner driving the whole graph, and
+    // the round's own check-in dispatched beside it once the round was under way.
+    runLevelDispatch(
+      "orchestrator-session",
+      "orchestrator-dag-ui-live",
+      1,
+      200,
+    ),
+    runLevelDispatch(ROUND_CHECK_IN_SESSION, "check-in-round-1", 160, 170),
+  ];
+}
+
+/** The second run-level session: the per-round check-in, recorded at no node. */
+export const ROUND_CHECK_IN_SESSION = "round-check-in-session";
+
+/** One dispatched session the graph placed at the run rather than at any node. */
+function runLevelDispatch(
+  conversationId: string,
+  label: string,
+  from: number,
+  to: number,
+) {
+  const reference = { kind: "conversation", value: conversationId };
+  return {
+    id: `dispatch-${conversationId}`,
+    kind: "dispatch",
+    label,
+    parent_id: "round-1",
+    round: 1,
+    started_at: stamp(from),
+    ended_at: stamp(to),
+    status: "completed",
+    reference,
+    events: [
+      {
+        id: `${conversationId}-0`,
+        kind: "conversation-turn",
+        at: stamp(from),
+        round: 1,
+        status: "completed",
+        reference,
+      },
+    ],
+  };
+}
+
+const PR_URL = "https://github.com/example/repo/pull/12";
+
+function dispatch(
+  conversationId: string,
+  label: string,
+  nodeId: string,
+  from: number,
+  to: number,
+  turnIds: readonly string[],
+) {
+  const reference = { kind: "conversation", value: conversationId };
+  return {
+    id: `dispatch-${conversationId}`,
+    kind: "dispatch",
+    label,
+    parent_id: `node-1-${nodeId}`,
+    node_id: nodeId,
+    round: 1,
+    started_at: stamp(from),
+    ended_at: stamp(to),
+    status: "completed",
+    reference,
+    events: turnIds.map((id, index) => ({
+      id,
+      kind: "conversation-turn",
+      at: stamp(from + index),
+      round: 1,
+      node_id: nodeId,
+      status: "completed",
+      reference,
+    })),
+  };
+}
+
+/**
+ * A timeline of the shape that made the old panel unreadable: one node whose
+ * recorded work is `sessions` separate conversations, each with its own turns.
+ */
+export function busyTimeline(sessions: number) {
+  const spans = liveSpans().filter(
+    (span) => !span.id.startsWith("dispatch-worker"),
+  );
+  return {
+    api_version: 1,
+    observed_at: "2026-07-26T12:00:00Z",
+    run_id: LIVE_RUN,
+    spans: [
+      ...spans,
+      ...Array.from({ length: sessions }, (_, index) =>
+        dispatch(
+          `busy-${index}`,
+          `engineer-dashboard-${index}`,
+          "dashboard",
+          200 + index * 2,
+          201 + index * 2,
+          [`busy-${index}-0`],
+        ),
+      ),
+    ],
   };
 }
 

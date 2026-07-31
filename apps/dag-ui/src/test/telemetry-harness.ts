@@ -1,7 +1,15 @@
-import { API_V1_PATHS } from "@ai-orchestrator/dag-model";
+import { API_V1_PATHS, API_V1_QUERY } from "@ai-orchestrator/dag-model";
 import { TelemetryClient } from "@ai-orchestrator/telemetry-client";
 import { vi } from "vitest";
-import { HISTORY_RUN, LIVE_RUN, runDetail, runList } from "./fixtures";
+import {
+  HISTORY_RUN,
+  LIVE_RUN,
+  LONG_SESSION,
+  longConversation,
+  runDetail,
+  runList,
+  runTimeline,
+} from "./fixtures";
 
 /**
  * The browser `EventSource` the telemetry client opens, implemented over a real
@@ -46,16 +54,62 @@ type Responder = (url: URL) => Response | Promise<Response>;
 export const isRunList = (url: URL): boolean =>
   url.pathname === API_V1_PATHS.runs;
 
-/** True for a single run's detail path, whatever run it names. */
+/**
+ * True for a single run's detail path, whatever run it names — the run route itself
+ * and nothing beneath it, so a route added under `/runs/<id>/` is not mistaken for
+ * the detail read.
+ */
 export const isRunDetail = (url: URL): boolean =>
-  url.pathname.startsWith(`${API_V1_PATHS.runs}/`);
+  url.pathname.startsWith(`${API_V1_PATHS.runs}/`) &&
+  !url.pathname.slice(API_V1_PATHS.runs.length + 1).includes("/");
 
-/** The read API a browser would see: list, detail, and the SSE stream. */
+/** True for a run's timeline path, whatever run it names. */
+export const isTimeline = (url: URL): boolean =>
+  url.pathname.endsWith("/timeline");
+
+/** True for one transcript's path, whatever run and conversation it names. */
+export const isConversation = (url: URL): boolean =>
+  url.pathname.includes("/conversations/");
+
+/**
+ * The recorded run whose payloads stand in for the run a `/api/v1/runs/...` path
+ * names. Two runs are recorded, and any other identifier — including one the app
+ * asks for from a stale bookmark — is answered with the live run's shape, exactly
+ * as a server that still holds that run would.
+ */
+export const fixtureRunFor = (url: URL): string =>
+  url.pathname.split("/")[4] === HISTORY_RUN ? HISTORY_RUN : LIVE_RUN;
+
+/**
+ * The read API a browser would see: list, detail, timeline, one transcript, and the
+ * SSE stream. Detail honours `include_conversations` exactly as the server does — it
+ * serves the field empty rather than omitting it — so a client that opts out here is
+ * opting out of the same payload it would opt out of in production.
+ */
 export function defaultResponder(url: URL): Response {
   if (isRunList(url)) return Response.json(runList);
-  const runId = url.pathname.split("/").at(-1);
+  const runId = fixtureRunFor(url);
+  if (isTimeline(url)) return Response.json(runTimeline(runId));
+  if (isConversation(url)) {
+    const wanted = decodeURIComponent(url.pathname.split("/").at(-1) ?? "");
+    if (wanted === LONG_SESSION) return Response.json(longConversation());
+    const found = runDetail(runId).conversations.find(
+      ({ conversation }) => conversation.id === wanted,
+    );
+    return found
+      ? Response.json(found)
+      : Response.json(
+          {
+            error: { code: "conversation_not_found", message: "no transcript" },
+          },
+          { status: 404 },
+        );
+  }
+  const detail = runDetail(runId);
   return Response.json(
-    runDetail(runId === HISTORY_RUN ? HISTORY_RUN : LIVE_RUN),
+    url.searchParams.get(API_V1_QUERY.includeConversations) === "false"
+      ? { ...detail, conversations: [] }
+      : detail,
   );
 }
 
