@@ -2676,6 +2676,60 @@ def test_pre_push_gate_failure_preserves_completed_work_in_execution_checkout(
     assert _has_file(origin, "main", "follow-up.txt")
 
 
+def test_gate_failure_says_so_when_rejected_work_could_not_be_preserved(
+    tmp_path, bare_origin
+) -> None:
+    """A copy the checkout refuses is reported, not silently treated as preserved.
+
+    The copy is deliberately fast-forward only, because a concurrent run told to use
+    the same branch name would otherwise have its own only record overwritten. When
+    it refuses for that reason the work really is still only in run scratch, which is
+    the loss this preservation exists to prevent — so the result has to say the
+    preservation did not happen rather than name a branch that does not carry it.
+    """
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-unpreservable")
+    safety = gitops.clone(origin, tmp_path / "safety-unpreservable")
+    registry = Registry()
+    registry.register(str(canonical), workflow="local")
+    registry.register(str(safety))
+    install_pre_push_hook(safety, "printf 'pre-push: complete gate failed\\n' >&2\nexit 1")
+    branch = "feature/unpreservable-rejected-work"
+    writes = make_writing_dispatch(filename="rejected.txt")
+
+    def writes_while_another_run_claims_the_branch(
+        persona: str, task: str, *, project_dir: str, **kwargs: object
+    ) -> Report:
+        report = writes(persona, task, project_dir=project_dir, **kwargs)
+        # Another run reached the registered checkout first and put its own commit on
+        # this branch name. This run's tip is not a fast-forward of it, so the copy
+        # below has to refuse rather than discard that run's record.
+        tree = git("rev-parse", "origin/main^{tree}", cwd=safety).strip()
+        other = git(
+            "commit-tree", tree, "-p", "origin/main", "-m", "other run", cwd=safety
+        ).strip()
+        git("branch", branch, other, cwd=safety)
+        return report
+
+    result = run_repo_task(
+        str(canonical),
+        "Publish work the registered checkout cannot take back.",
+        "engineer",
+        workspace=Workspace(tmp_path / "unpreservable-worktrees"),
+        execution_checkout=safety,
+        branch=branch,
+        dispatch_fn=writes_while_another_run_claims_the_branch,
+        recorded_gate=["true"],
+    )
+
+    assert result.outcome == "gate-failed"
+    assert "could not preserve rejected work" in result.detail
+    assert branch in result.detail and str(safety) in result.detail
+    # The other run's commit is still the one the checkout carries.
+    assert not _has_file(safety, branch, "rejected.txt")
+    assert not _has_file(origin, "main", "rejected.txt")
+
+
 # A hook that lets the feature branch through and rejects the direct base push, so
 # the *second* gated push — the rebuilt squash publication tree — is the one that
 # fails. Git feeds `<local-ref> <local-sha> <remote-ref> <remote-sha>` on stdin.
