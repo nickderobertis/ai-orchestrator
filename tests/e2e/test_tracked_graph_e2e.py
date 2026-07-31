@@ -2787,7 +2787,9 @@ def test_planner_context_reaches_every_agent_step_of_a_workstream(
     Registry().register(str(canonical), workflow="local")
     runs = tmp_path / "runs"
     prompts = tmp_path / "step-prompts.jsonl"
+    single_prompts = tmp_path / "single-prompts.jsonl"
     note = "CHANGE.txt is already committed on the branch; only the approval remains."
+    single_note = "the base already carries the rename; do not repeat it."
     plan = tmp_path / "workstream-context.json"
     plan.write_text(
         json.dumps(
@@ -2820,7 +2822,17 @@ def test_planner_context_reaches_every_agent_step_of_a_workstream(
                                 "deps": ["polish"],
                             },
                         ],
-                    }
+                    },
+                    {
+                        "id": "single",
+                        "repo": str(canonical),
+                        "branch": "feature/single-context",
+                        "workflow": "local",
+                        "repo_type": "single-owner",
+                        "persona": "engineer",
+                        "task": f"complete-now write-change record-task={single_prompts}",
+                        "context": [single_note],
+                    },
                 ],
             }
         ),
@@ -2856,6 +2868,11 @@ def test_planner_context_reaches_every_agent_step_of_a_workstream(
     assert payload["results"]["workstream"]["human_actions"][0]["task"] == (
         "Approve the prepared change."
     )
+    # A lifecycle node with one task and no steps renders the note into that task,
+    # and publishes with it: the same field, one dispatch instead of several.
+    assert payload["results"]["single"]["outcome"] == "merged"
+    single_delivered = json.loads(single_prompts.read_text(encoding="utf-8").splitlines()[0])
+    assert single_note in single_delivered and "## Planner context" in single_delivered
 
 
 def _context_round(

@@ -797,7 +797,9 @@ def test_planner_context_attached_mid_round_reaches_the_next_round_dispatch(
     base_path = tmp_path / "context-base.yaml"
     base_path.write_text(yaml.safe_dump(base), encoding="utf-8")
     prompts = tmp_path / "prompts.jsonl"
+    unstarted = tmp_path / "unstarted-prompts.jsonl"
     note = "41 commits are on the branch and the gate is green; only llmlint remains."
+    pending_note = "the fixture landed upstream; take it from there rather than rebuilding it."
     plan = tmp_path / "planner-context-plan.json"
     plan.write_text(
         json.dumps(
@@ -824,6 +826,12 @@ def test_planner_context_attached_mid_round_reaches_the_next_round_dispatch(
                             f"live-edit-ready={tmp_path / 'hold.ready'} "
                             f"live-edit-release={tmp_path / 'hold.release'}"
                         ),
+                    },
+                    {
+                        "id": "later",
+                        "persona": "engineer",
+                        "task": f"complete-now record-task={unstarted}",
+                        "deps": ["hold"],
                     },
                 ],
             }
@@ -866,12 +874,25 @@ def test_planner_context_attached_mid_round_reaches_the_next_round_dispatch(
     assert "can still be dispatched" in _rejected(
         run_id, runs, [{"op": "context", "id": "settled", "note": "too late"}]
     )
-    _reply(run_id, runs, [{"op": "context", "id": "work", "note": note}])
+    _reply(
+        run_id,
+        runs,
+        [
+            {"op": "context", "id": "work", "note": note},
+            {"op": "context", "id": "later", "note": pending_note},
+        ],
+    )
 
     (tmp_path / "hold.release").touch()
     _wait_for(run_dir / "round-01" / "result.json", lambda text: bool(text.strip()))
     round_one = json.loads((run_dir / "round-01" / "result.json").read_text(encoding="utf-8"))
     assert round_one["results"]["work"]["status"] == "failed"
+    # `later` was still blocked behind the held node when its note was committed, so
+    # the reconciler installing the edited graph is what put the note in front of it:
+    # this round dispatched it with the note, without waiting for a transition.
+    assert round_one["results"]["later"]["status"] == "done"
+    pending = json.loads(unstarted.read_text(encoding="utf-8").splitlines()[0])
+    assert pending_note in pending and "## Planner context" in pending
 
     # The planner's continuing verdict is what sends the orchestrator into the
     # transition; the carried node runs again there and fails again, by design.
