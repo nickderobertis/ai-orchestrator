@@ -1389,7 +1389,7 @@ def _pause_at_human_step(
         if drafting_failures:
             result.follow_ups = f"pr-author drafting failed: {drafting_failures[0]}"
         backend = github or CliGitHubBackend()
-        pr, created = adopt_or_create_pr(
+        resolution = adopt_or_create_pr(
             backend,
             result.repo,
             head=branch,
@@ -1399,9 +1399,10 @@ def _pause_at_human_step(
             body=pr_body + _stack_body(applicable_stack, result.synthetic_stack_base),
             draft=True,
         )
+        pr = resolution.pr
         # Only the branch that actually opens one records it; resuming reuses the
         # draft an earlier round already journaled.
-        if created:
+        if resolution.created:
             journal.append(
                 "pr-created",
                 detail={

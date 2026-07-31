@@ -64,6 +64,12 @@ MergePolicy = Literal["auto", "direct", "none"]
 MERGE_CONFLICT_RETRY: Literal["merge-conflict-retry"] = "merge-conflict-retry"
 
 
+@dataclass(frozen=True)
+class PullRequestResolution:
+    pr: PullRequest
+    created: bool
+
+
 def adopt_or_create_pr(
     github: GitHubBackend,
     repo: str,
@@ -74,17 +80,17 @@ def adopt_or_create_pr(
     title: str,
     body: str,
     draft: bool = False,
-) -> tuple[PullRequest, bool]:
+) -> PullRequestResolution:
     """Adopt a matching publication when possible, otherwise create one."""
     lookup = getattr(github, "adoptable_pr", None)
     existing = lookup(repo, head=head, base=base, head_sha=head_sha) if lookup else None
     if existing is not None:
-        return existing, False
+        return PullRequestResolution(existing, created=False)
     if draft:
         created = github.create_pr(repo, head=head, base=base, title=title, body=body, draft=True)
     else:
         created = github.create_pr(repo, head=head, base=base, title=title, body=body)
-    return created, True
+    return PullRequestResolution(created, created=True)
 
 
 def classify_push_failure(exc: gitops.GitError) -> LifecycleOutcome:
@@ -315,7 +321,7 @@ class GitHubMergeStrategy:
         if ctx.preverified_pr is not None:
             pr = ctx.preverified_pr
         else:
-            pr, created = adopt_or_create_pr(
+            resolution = adopt_or_create_pr(
                 self._github,
                 ctx.repo_slug,
                 head=ctx.branch,
@@ -324,6 +330,8 @@ class GitHubMergeStrategy:
                 title=ctx.title,
                 body=ctx.body,
             )
+            pr = resolution.pr
+            created = resolution.created
         if created:
             _record(
                 ctx,
