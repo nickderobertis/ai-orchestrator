@@ -157,10 +157,16 @@ if ! : >"$agent_stdout"; then
     echo "oneharness-agent: cannot open the agent stdout record; retry through orchestrator dispatch" >&2
     exit 2
 fi
-# llmlint: ignore[tool_output_is_signal, boundary_inputs_validated] this wrapper is a transparent
-# conduit for that protocol in both directions, exactly as the `exec` pass-throughs above are.
-oneharness run --config "$agent_config" "$@" <&3 \
-    > >(tee "$agent_stdout") 2>"$agent_stderr" &
+stdout_fifo=$status_dir/.agent-stdout-pipe
+if ! mkfifo "$stdout_fifo"; then
+    echo "oneharness-agent: cannot create the agent stdout capture pipe; retry through orchestrator dispatch" >&2
+    exit 2
+fi
+# llmlint: ignore[tool_output_is_signal] tee is the transparent stdout side of the oneharness protocol conduit.
+tee "$agent_stdout" <"$stdout_fifo" &
+tee_pid=$!
+# llmlint: ignore[boundary_inputs_validated] oneharness parses and validates its own protocol input.
+oneharness run --config "$agent_config" "$@" <&3 >"$stdout_fifo" 2>"$agent_stderr" &
 agent_pid=$!
 write_status agent.child.pid "$agent_pid"
 while agent_state=$(ps -o stat= -p "$agent_pid" 2>/dev/null) &&
@@ -173,7 +179,16 @@ done
 set +e
 wait "$agent_pid"
 exit_code=$?
+wait "$tee_pid"
+tee_exit_code=$?
+rm -f "$stdout_fifo"
 set -e
+if [ "$tee_exit_code" -ne 0 ]; then
+    echo "oneharness-agent: agent stdout capture failed with exit $tee_exit_code" >>"$agent_stderr"
+    if [ "$exit_code" -eq 0 ]; then
+        exit_code=2
+    fi
+fi
 # Record the status before replaying the stream: the dispatcher can conclude this
 # worker died the moment the child leaves the process tree, and a large stderr
 # would otherwise let it reach that conclusion before the reason was written down.

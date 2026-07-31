@@ -600,3 +600,51 @@ def test_an_unopenable_stderr_capture_stops_the_turn_before_it_starts(tmp_path: 
     assert proc.returncode == 2
     assert "cannot open the agent stderr record" in proc.stderr
     assert not (status_dir / "agent.done").exists()
+
+
+def test_a_failed_stdout_capture_cannot_publish_success(tmp_path: Path) -> None:
+    """The wrapper joins its real stdout recorder before publishing a terminal marker."""
+    status_dir = tmp_path / "orchestrator-watchdog-stdout" / "agent"
+    status_dir.mkdir(parents=True)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    stub = bin_dir / "oneharness"
+    stub.write_text(
+        "#!/usr/bin/env bash\nprintf '%4096s\\n' output\n",
+        encoding="utf-8",
+    )
+    stub.chmod(0o755)
+
+    with subprocess.Popen(
+        [
+            "bash",
+            "-c",
+            'ulimit -f 1; exec bash "$1" run --prompt task',
+            "capture-limit",
+            str(WRAPPER),
+        ],
+        text=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        env={
+            "PATH": f"{bin_dir}:/usr/bin:/bin",
+            "ORCHESTRATOR_AGENT_STATUS_DIR": str(status_dir),
+            "HOME": str(tmp_path / "home"),
+        },
+    ) as process:
+        try:
+            deadline = time.monotonic() + 30
+            while time.monotonic() < deadline:
+                if (status_dir / "agent.failed").exists():
+                    break
+                assert not (status_dir / "agent.done").exists()
+                time.sleep(0.05)
+            else:
+                raise AssertionError("the wrapper never recorded the capture failure")
+            recorded = (status_dir / "agent.stderr").read_text(encoding="utf-8")
+            exit_code = (status_dir / "agent.exit_code").read_text(encoding="utf-8").strip()
+        finally:
+            process.kill()
+
+    assert exit_code == "2"
+    assert "agent stdout capture failed" in recorded
