@@ -453,14 +453,18 @@ directories. Use
 pattern list and extension point.
 
 Scratch the harness itself produces cannot wait for quiescence: a private `nx`
-install per `bunx nx` invocation, a run directory per pytest session, and an
+install per `bunx nx` invocation, a copy of Nx's ~22 MB native binary per workspace
+root, a run directory per pytest session, and an
 effective-config directory per onejudge dispatch appear *because* dispatches are
 running, at gigabytes per hour. `orchestrator.scratch.UNREFERENCED_FAMILIES` is the
 authoritative family list and extension point for these, and they are swept while
 dispatches run, without the exclusive lock. What replaces quiescence is proven
-non-reference: the sweep reads every live process's argv, working directory, and
-open descriptors, and a candidate any of them names is retained and reported —
-`retained N directories referenced by live processes`. That proof is retaken
+non-reference: the sweep reads every live process's argv, environment, working
+directory, root and executable links, open descriptors, and file-backed memory
+mappings, and a candidate any of them names is retained and reported —
+`retained N directories referenced by live processes`. Mappings are load-bearing
+rather than belt-and-suspenders: Nx `dlopen`s its cached native binary and keeps no
+descriptor, so a running `nx` names that cache nowhere else. That proof is retaken
 against fresh procfs state immediately before removal. A procfs that cannot show
 the sweeping process itself cannot answer the question at all, which is not the
 same as answering "nothing is referenced": these families are then left alone
@@ -471,9 +475,18 @@ governs `THIRD_PARTY_PATTERNS`, which have no such proof behind them.
 `--min-age-hours` can shorten that age but never lengthens it past the family
 default. A name too generic to sweep on is not swept on: an Nx temp install is
 recognized by its shape — one `nx` devDependency, an installed `node_modules`, and
-nothing else — and each family honors its producer's own retention, so pytest keeps
+nothing else — an Nx native cache by its exact `nx-native-file-cache-<7 hex>` name
+holding nothing but `.node` copies, and each family honors its producer's own
+retention, so pytest keeps
 the newest three runs per root, a run whose `.lock` names a live session, and
 whatever `pytest-current` points at.
+
+Every sweep names the families it examined and, separately, the families it could
+not — `swept families: watchdog, nx-install, …` and `skipped families: third-party
+(lifecycle dispatch active)`. Each family appears in exactly one of the two lists,
+so `reclaimed 0 bytes` always means "nothing was reclaimable", never "a family was
+never looked at". A cleanup run that silently skips the family filling the disk
+reads as a clean bill of health, which is worse than no cleanup at all.
 
 ```text
 runs/<run-id>/round-01/plan.json

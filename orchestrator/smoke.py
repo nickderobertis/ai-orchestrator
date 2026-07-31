@@ -12,7 +12,7 @@ import sys
 import tempfile
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import cast
 
@@ -23,12 +23,21 @@ from .telemetry import HistoryRecord, history_session_launch_failure
 
 TASK = "Reply with exactly: smoke-ok"
 TIMEOUT_SECONDS = 120
+#: How many times the paid turn may be launched before the smoke gives up. The
+#: launch is the half of this check a loaded host can break while the launch *path*
+#: is fine; docs/onejudge-integration.md records why that matters here.
+LAUNCH_ATTEMPTS = 3
+#: Seconds before each retry, so a briefly saturated host has a chance to drain
+#: rather than being asked the same question three times at once.
+RETRY_BACKOFF_SECONDS = 2.0
 
 
 @dataclass(frozen=True)
 class SmokeResult:
     harness: str
     cost_usd: int | float | None
+    #: How many real turns this smoke had to launch to record one.
+    attempts: int = 1
 
 
 def _timeout_seconds() -> int:
@@ -175,17 +184,36 @@ def _validate_history(
 
 
 def run_smoke() -> SmokeResult:
-    """Run one real harness turn and validate its isolated history record."""
+    """Run one real harness turn and validate its isolated history record.
+
+    Only the *launch* is retried. What a recorded turn says is this repository's own
+    contract, so a record that violates it is the regression this smoke exists to
+    report — on the first turn, rather than paying for the same verdict three times.
+    """
     smoke_id = str(uuid.uuid4())
+    timeout_seconds = _timeout_seconds()
     with tempfile.TemporaryDirectory(prefix="orchestrator-watchdog-smoke-") as root_name:
         root = Path(root_name)
-        target = root / "target"
-        status_dir = root / "agent"
-        history_dir = root / "history"
-        target.mkdir()
-        status_dir.mkdir()
-        _run_wrapper(target, status_dir, history_dir, smoke_id, _timeout_seconds())
-        return _validate_history(history_dir, smoke_id)
+        for attempt in range(1, LAUNCH_ATTEMPTS + 1):
+            # Each attempt gets its own tree. Reusing one would let the truncated
+            # record a killed turn left behind be validated as though the turn that
+            # finally succeeded had written it. The directory name keeps the
+            # wrapper's own status-directory contract satisfied.
+            attempt_root = root / f"orchestrator-watchdog-smoke-attempt-{attempt}"
+            target = attempt_root / "target"
+            status_dir = attempt_root / "agent"
+            history_dir = attempt_root / "history"
+            target.mkdir(parents=True)
+            status_dir.mkdir()
+            try:
+                _run_wrapper(target, status_dir, history_dir, smoke_id, timeout_seconds)
+            except HistoryError as exc:
+                if attempt == LAUNCH_ATTEMPTS:
+                    raise HistoryError(f"{exc} (after {LAUNCH_ATTEMPTS} attempts)") from exc
+                time.sleep(RETRY_BACKOFF_SECONDS * attempt)
+                continue
+            return replace(_validate_history(history_dir, smoke_id), attempts=attempt)
+    raise AssertionError("unreachable: every attempt either returns or raises")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -213,5 +241,8 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 1
     rendered_cost = f"${result.cost_usd:.6f}" if result.cost_usd is not None else "unreported"
-    print(f"smoke: passed via {result.harness} (recorded cost: {rendered_cost})")
+    # Reported rather than smoothed into an ordinary pass: only the operator can
+    # act on a host that killed a launch.
+    retried = f" after {result.attempts} attempts" if result.attempts > 1 else ""
+    print(f"smoke: passed via {result.harness} (recorded cost: {rendered_cost}){retried}")
     return 0

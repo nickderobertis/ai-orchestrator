@@ -223,6 +223,21 @@ Counters and timings that *are* present are still validated, so a malformed or
 contradictory record still fails. Its quota cost is one real harness invocation;
 the provider may leave dollar cost unreported (Codex does). It is not part of
 `just gate`.
+
+The *launch* — and only the launch — is retried, up to
+`orchestrator.smoke.LAUNCH_ATTEMPTS` times with a short backoff between attempts.
+This is the half of the check the host can break while nothing is wrong with the
+launch path: under a concurrent e2e load, oneharness has reported `fallback harness
+… ran but did not succeed` for a harness that started and then died, and the same
+command passed standalone moments before and after. Since the pre-push hook selects
+this smoke whenever the pushed diff touches `scripts/`, the worker generating that
+load is usually the one whose publication it blocks. Nothing is relaxed by
+retrying: a launch path that is genuinely broken fails every attempt and still
+fails, a recorded turn that violates the contract above fails on the first attempt
+without paying for a second, and a passing run reports how many launches it took.
+`tests/e2e/test_smoke_contention_e2e.py` drives the real recipe under a live load
+of real dispatches, with only the paid provider CLI doubled through oneharness's
+own `ONEHARNESS_BIN_CODEX` seam.
 Pre-push runs it only when the pushed endpoint diff touches `scripts/`,
 `config/oneharness.version`, `config/onejudge.base.yaml`, `oneharness.toml`,
 `oneharness.judge.toml`, or `oneharness.orchestrator.toml`; every other pushed diff
