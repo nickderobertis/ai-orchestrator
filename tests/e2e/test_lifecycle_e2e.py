@@ -4079,6 +4079,58 @@ def test_completed_automatic_resume_drops_its_provisional_incomplete_marker(
     assert not incomplete_commits(canonical, before, result.branch)
 
 
+def test_completed_automatic_resume_keeps_the_marker_that_carries_its_work(
+    tmp_path, bare_origin
+) -> None:
+    """A marker commit that *is* the preserved work is kept, and the run still merges.
+
+    A bounded attempt that stops with a dirty tree has its partial work committed
+    under the incomplete-marker message, so that commit and the preservation are the
+    same object. Dropping it as a superseded marker would destroy exactly what the
+    preservation exists to save — and the refusal to drop it escaped as an `error`,
+    losing the publication of work a later attempt had already carried through the
+    gate.
+    """
+    origin = bare_origin()
+    workspace = _workspace(tmp_path, origin)
+    canonical = _shared_checkout(tmp_path)
+    attempts = 0
+
+    def stops_dirty_then_completes(
+        persona: str, task: str, *, project_dir: str, **_: object
+    ) -> Report:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            # Uncommitted: the lifecycle is what commits this, under the marker message.
+            (Path(project_dir) / "preserved-dirty.txt").write_text("partial\n", encoding="utf-8")
+            return Report(persona, 1, False, False, 2, [], {}, {}, "", max_turns=2)
+        (Path(project_dir) / "finished.txt").write_text("gate is green\n", encoding="utf-8")
+        gitops.add_all(project_dir)
+        gitops.commit(project_dir, "test: finish the continuation")
+        return Report(persona, 0, True, False, 1, [], {}, {}, "")
+
+    result = run_repo_task(
+        str(origin),
+        "Continue work whose first attempt stopped with an uncommitted tree.",
+        "engineer",
+        workspace=workspace,
+        dispatch_fn=stops_dirty_then_completes,
+        recorded_gate=["true"],
+    )
+
+    assert attempts == 2
+    assert result.ok and result.outcome == "merged", result.detail
+    assert _has_file(origin, "main", "preserved-dirty.txt")
+    assert _has_file(origin, "main", "finished.txt")
+    marker = next(
+        commit
+        for commit in gitops.log_messages(canonical, "origin/main", result.branch)
+        if INCOMPLETE_TRAILER in commit.message
+    )
+    assert not gitops.is_empty_commit(canonical, marker.sha)
+
+
 def test_a_stop_short_of_the_cap_is_not_reported_as_hitting_it(tmp_path, bare_origin) -> None:
     """One turn is not twelve, and the settled result has to say so.
 
