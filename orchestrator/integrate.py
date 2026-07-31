@@ -1,8 +1,16 @@
 """Integrate completed workstream branches into a local base branch.
 
 Candidates are first merged with the current base in their own worktrees and
-verified there.  A passing candidate then fast-forwards the base.  Failed
-candidates are restored after conflicts and do not stop the rest of the train.
+verified there.  A passing candidate is then **squash-published**: its verified
+tree becomes one commit on the base, built in a detached scratch worktree that the
+base checkout fast-forwards onto.  Failed candidates are restored after conflicts
+and do not stop the rest of the train.
+
+Squashing rather than fast-forwarding the branch itself is what keeps this verb on
+the same base-history contract as the lifecycle: provenance commits are branch
+state, so a recovered incomplete step reaches the base as an
+`Orchestrator-Recovered-Incomplete:` trailer on that one commit and never as the
+marker and attestation commits themselves.
 """
 
 # llmlint: ignore-file[changed_behavior_has_e2e] Integrate e2e tests drive real
@@ -23,8 +31,9 @@ from typing import Literal
 
 from . import gitops
 from .coordination import git_lock_identity
+from .lifecycle import _default_title
 from .merge_queue import merge_queue_turn
-from .provenance import unattested_incomplete
+from .provenance import attestation_trailers, unattested_incomplete
 from .registry import Registry, RegistryError
 from .verify import comparison_env, run_gate
 
@@ -89,6 +98,41 @@ def _remove_candidate_worktree(repo: Path, path: Path, temporary_parent: Path | 
         return
     gitops.worktree_remove(repo, path)
     temporary_parent.rmdir()
+
+
+def _publication_message(worktree: Path, remote_base: str, branch: str) -> str:
+    """One commit message for the candidate's verified tree.
+
+    The subject is synthesized from the branch's own authored commits, which already
+    excludes provenance; the attestation follows as trailers so squashing does not
+    drop the record that a step was left incomplete and a green gate cleared it.
+    """
+    title = _default_title(worktree, remote_base, f"Integrate {branch}")
+    trailers = attestation_trailers(worktree, remote_base, "HEAD")
+    if not trailers:
+        return title
+    return title + "\n\n" + "\n".join(trailers)
+
+
+def _squash_publish(repo: Path, base: str, branch: str, *, message: str) -> bool:
+    """Land the candidate as one commit on ``base``; False when it adds no content.
+
+    Built detached and fast-forwarded onto the base checkout, so the checkout an
+    operator has open is only ever advanced, never committed into.
+    """
+    parent = Path(tempfile.mkdtemp(prefix="orchestrator-integrate-publish-"))
+    scratch = parent / "worktree"
+    gitops.worktree_add_detached(repo, scratch, base)
+    try:
+        try:
+            gitops.merge_squash(scratch, branch, message=message)
+        except gitops.NothingToCommit:
+            return False
+        gitops.merge_ff_only(repo, gitops.head_sha(scratch))
+        return True
+    finally:
+        gitops.worktree_remove(repo, scratch)
+        parent.rmdir()
 
 
 def _integrate_locked(
@@ -189,19 +233,24 @@ def _integrate_locked(
             if refresh:
                 results.append(BranchResult(branch, "updated"))
                 continue
+            message = _publication_message(worktree, remote_base, branch)
             # Kept deliberately, unlike the lifecycle's own gate runs: the merge path
-            # does not subsume this one. Each candidate fast-forwards the local base
+            # does not subsume this one. Each candidate lands on the local base
             # below, before the single optional push, so without this run unverified
             # commits reach the local base and a later hook rejection can no longer
             # say which branch of the train broke it.
             if not run_gate(worktree, gate_command, env=integration_env).ok:
                 results.append(BranchResult(branch, "skipped", "gate-failed"))
                 continue
-            try:
-                gitops.merge_ff_only(root, branch)
-            except gitops.GitError:
-                gitops.merge_abort(root)
+            # The candidate merged the base in above, so the base is contained in the
+            # verified tree — unless something advanced it since, which is exactly the
+            # state this squash must not silently reconcile: the tree that would land
+            # is not the tree the gate just judged.
+            if not gitops.is_ancestor(root, gitops.head_sha(root), branch):
                 results.append(BranchResult(branch, "skipped", "not-ready"))
+                continue
+            if not _squash_publish(root, base, branch, message=message):
+                results.append(BranchResult(branch, "already-merged"))
                 continue
             results.append(BranchResult(branch, "merged"))
         finally:

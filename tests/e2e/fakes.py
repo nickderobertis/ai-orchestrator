@@ -167,6 +167,15 @@ class FakeGitHub:
                 return pr
         return None
 
+    def published(self, pr: PullRequest | str) -> FakePRState:
+        """The PR as a reader would open it, addressed however the caller holds it.
+
+        A lifecycle result carries the PR URL rather than the backend's object, so a
+        test that only has the published URL can still read what was published.
+        """
+        number = pr.number if isinstance(pr, PullRequest) else int(pr.rsplit("/", 1)[1])
+        return self._prs[number]
+
     def mark_ready(self, pr: PullRequest) -> None:
         self._prs[pr.number].draft = False
 
