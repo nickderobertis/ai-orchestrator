@@ -747,6 +747,22 @@ lock a writer needs, and treats every source as optional. A missing `gh`, an
 unfetched branch, or an absent history store degrades that source to silence
 instead of ending the stream.
 
+All three read-only views take the run id `launch.json` advertises: `just monitor
+RUN_ID`, `just status RUN_ID`, and `just telemetry RUN_ID`. Each resolves it the
+same way — an exact run directory, or a plan name that names exactly one active
+launch. `status`'s positional keeps its original count meaning for a plain
+integer (`just status 5` still lists five recent tasks), so a run whose id is all
+digits is addressed through `just monitor` or `just results` instead. Scoped,
+`status` reports only that run's indicators and the sessions its own scopes
+labelled; `telemetry` reports that run whether or not it has settled, since naming
+it is the request and the settled-run filter exists only to keep the *unscoped*
+index about live work.
+
+An unsettled round has written no `result.json`, so both `telemetry` and the DAG
+read model describe its nodes from the journal itself: a node is `running` only
+until the journal records it settling. A node recorded as `node-failed` reads as
+failed in every read-only view, including while its round is still in flight.
+
 For automation, `just telemetry [--all]` emits one schema-versioned JSON run
 index. It joins phase, typed provider/failure identity, latest progress,
 branch/commit/checkpoint, independent agent/gate/publication-wait timing plus
