@@ -134,11 +134,29 @@ dispatch onejudge.
    correct, never a command to resend.
 
 After `just orchestrate`, the planner uses **only** `just channel-next`, `just
-channel-reply`, and the read-only `just monitor` / `just runs` / `just status`
-views. `channel-reply` carries both legacy verdicts and [versioned live
-edits](docs/orchestration.md#live-graph-edits). The planner never runs `run-plan`
-or `next-round` itself: those commands belong to the orchestrator process, and
-two writers would race the ledger lock.
+channel-reply`, `just stop`, and the read-only `just monitor` / `just runs` /
+`just status` views. `channel-reply` carries both legacy verdicts and [versioned
+live edits](docs/orchestration.md#live-graph-edits). The planner never runs
+`run-plan` or `next-round` itself: those commands belong to the orchestrator
+process, and two writers would race the ledger lock.
+
+**Runs are owned.** Several planners share this host, each supervising its own
+workstreams, so a run belongs to the session that launched it. `just orchestrate`
+records that session automatically and `just runs` shows it per row: `[mine]`, the
+owning session (`[claude-code:3f9a1c2e]`), or `[unknown]`. `just runs --mine` lists
+only yours. Act **only** on runs you launched. A run you cannot attribute belongs to
+another planner until proven otherwise — `unknown` is never yours, and a run
+launched before its session was recorded stays `unknown` forever. Never derive a
+process list from `ps` and signal it: that pattern knows nothing about whose work it
+matched, and it has already interrupted another planner mid-supervision here.
+`just stop <run-id>` is the supported way to stop a run; it refuses another
+planner's run and an unattributable one, naming the owner, and `--force` reports
+that owner before overriding. A stopped run is left reclaimable exactly as an
+interrupted round is (`just run-plan ... --recover`). `complete` is a completion
+verdict on the channel and deliberately does **not** stop scheduling; use `just
+stop` when a run must actually end. `stop` is deliberately **not** in
+`.claude/settings.json`'s allowlist: it ends live work, and `--force` overrides the
+ownership check the incident above is about, so each one is approved on its own.
 
 The orchestrator also surfaces an agent-written, non-blocking per-workstream
 status when its durable planner-update pacemaker becomes due (30 minutes by
@@ -305,6 +323,10 @@ orchestrator onejudge process. The planner launches multi-node work with `just
 orchestrate <plan.json>` and supervises its surfaced boundaries and proposals
 over the [live channel](docs/orchestration.md#the-plannerorchestrator-channel); it
 does not invoke `run-plan` directly. `repo-plan` exists only for compatibility.
+`just runs` lists recorded runs with the session that launched each one, and
+`just runs --mine` narrows that to this session's. `just stop <run-id>` ends a run
+and its whole dispatch tree, subject to the [ownership
+rule](#your-loop-as-planner) above.
 Human completion is never inferred and enters the graph only as an explicit live
 `attest` command (or compatibility `next-round` attestation). Keep operational
 syntax and result contracts in

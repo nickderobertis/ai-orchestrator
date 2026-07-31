@@ -64,6 +64,7 @@ from .launch import (
     LaunchInfo,
     generate_launch_id,
     resolve_launcher_kind,
+    select_launch,
     validate_session_id,
     write_provenance,
 )
@@ -1367,15 +1368,21 @@ def main_orchestrate(argv: list[str] | None = None) -> int:
         "--launcher",
         choices=sorted(LAUNCHER_KINDS),
         default=os.environ.get("ORCHESTRATOR_LAUNCHER"),
-        help="top-level harness running orchestrate (default: $ORCHESTRATOR_LAUNCHER)",
+        help="top-level harness running orchestrate (default: $ORCHESTRATOR_LAUNCHER, "
+        "else the harness detected from this session's environment)",
     )
     parser.add_argument(
         "--launcher-session",
         default=os.environ.get("ORCHESTRATOR_LAUNCHER_SESSION"),
         metavar="SESSION_ID",
-        help="launching session id to group runs by (default: $ORCHESTRATOR_LAUNCHER_SESSION)",
+        help="launching session id to group runs by (default: $ORCHESTRATOR_LAUNCHER_SESSION, "
+        "else this session's own id)",
     )
     args = parser.parse_args(argv)
+    # Detected from the ambient session so the ordinary launch is attributable without
+    # the planner remembering two flags: an unattributable run is one no planner can
+    # tell from another planner's. Explicit values still win; see `select_launch`.
+    selected = select_launch(launcher=args.launcher, session_id=args.launcher_session)
     try:
         skill = {"kind": "command", "command": args.skill_command} if args.skill_command else None
         launched = launch_orchestrator(
@@ -1389,8 +1396,8 @@ def main_orchestrate(argv: list[str] | None = None) -> int:
             acknowledge_concurrent=args.acknowledge_concurrent,
             round_budget=args.round_budget,
             oneharness_mode=args.oneharness_mode,
-            launcher=args.launcher,
-            launcher_session_id=args.launcher_session,
+            launcher=selected.launcher,
+            launcher_session_id=selected.session_id,
         )
         print(
             (args.runs_dir.resolve() / launched / LAUNCH_RECORD_NAME)
