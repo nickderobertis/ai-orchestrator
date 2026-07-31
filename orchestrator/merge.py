@@ -55,12 +55,36 @@ __all__ = [
     "MergeOutcome",
     "MergePolicy",
     "MergeStrategy",
+    "adopt_or_create_pr",
     "assess_blocking_checks",
     "classify_push_failure",
 ]
 
 MergePolicy = Literal["auto", "direct", "none"]
 MERGE_CONFLICT_RETRY: Literal["merge-conflict-retry"] = "merge-conflict-retry"
+
+
+def adopt_or_create_pr(
+    github: GitHubBackend,
+    repo: str,
+    *,
+    head: str,
+    base: str,
+    head_sha: str,
+    title: str,
+    body: str,
+    draft: bool = False,
+) -> tuple[PullRequest, bool]:
+    """Adopt a matching publication when possible, otherwise create one."""
+    lookup = getattr(github, "adoptable_pr", None)
+    existing = lookup(repo, head=head, base=base, head_sha=head_sha) if lookup else None
+    if existing is not None:
+        return existing, False
+    if draft:
+        created = github.create_pr(repo, head=head, base=base, title=title, body=body, draft=True)
+    else:
+        created = github.create_pr(repo, head=head, base=base, title=title, body=body)
+    return created, True
 
 
 def classify_push_failure(exc: gitops.GitError) -> LifecycleOutcome:
@@ -287,23 +311,20 @@ class GitHubMergeStrategy:
         return self._publish_and_merge(ctx)
 
     def _publish_and_merge(self, ctx: MergeContext) -> MergeOutcome:
-        existing = None
-        lookup = getattr(self._github, "adoptable_pr", None)
-        if ctx.preverified_pr is None and ctx.head_sha and lookup is not None:
-            existing = lookup(
+        created = False
+        if ctx.preverified_pr is not None:
+            pr = ctx.preverified_pr
+        else:
+            pr, created = adopt_or_create_pr(
+                self._github,
                 ctx.repo_slug,
                 head=ctx.branch,
                 base=ctx.base,
                 head_sha=ctx.head_sha,
+                title=ctx.title,
+                body=ctx.body,
             )
-        pr = (
-            ctx.preverified_pr
-            or existing
-            or self._github.create_pr(
-                ctx.repo_slug, head=ctx.branch, base=ctx.base, title=ctx.title, body=ctx.body
-            )
-        )
-        if ctx.preverified_pr is None and existing is None:
+        if created:
             _record(
                 ctx,
                 "pr-created",

@@ -4108,6 +4108,40 @@ def test_remote_human_checkpoint_noop_gate_relies_on_required_checks(tmp_path, b
 
 
 # llmlint: ignore[e2e_not_mocked] GitHub decisioning is the suite's documented external seam.
+def test_remote_human_checkpoint_adopts_existing_pr_without_duplicate(
+    tmp_path, bare_origin
+) -> None:
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "registered-existing-human-pr")
+    Registry().register(str(canonical), workflow="remote", repo_type="single-owner")
+
+    class ExistingPRGitHub(FakeGitHub):
+        def adoptable_pr(self, repo, *, head, base, head_sha):
+            if not self._prs:
+                self._n = 1
+                self._prs[1] = FakePRState(head, base, "existing", "existing", draft=True)
+            return super().adoptable_pr(repo, head=head, base=base, head_sha=head_sha)
+
+    github = ExistingPRGitHub(origin)
+    result = run_repo_task(
+        str(canonical),
+        workspace=Workspace(tmp_path / "existing-human-pr-worktrees"),
+        github=github,
+        steps=[
+            Step("prepare", "engineer", "prepare a draft checkpoint"),
+            Step("approve", task="Approve the checkpoint.", kind="human", deps=["prepare"]),
+        ],
+        body="## What\nPrepare a checkpoint.\n\n## Why\nAvoid duplicate PRs.\n",
+        dispatch_fn=_per_step_dispatch(),
+    )
+
+    assert result.outcome == "waiting-human"
+    assert result.pr is not None and result.pr.number == 1
+    assert result.resume is not None and result.resume.pr == result.pr.url
+    assert github._n == 1
+
+
+# llmlint: ignore[e2e_not_mocked] GitHub decisioning is the suite's documented external seam.
 def test_remote_human_checkpoint_drafts_without_a_lifecycle_gate_run(tmp_path, bare_origin) -> None:
     """A red *recorded* identity gate cannot block a draft: nothing runs it."""
     origin = bare_origin()

@@ -49,6 +49,7 @@ from .merge import (
     MergeOutcome,
     MergePolicy,
     MergeStrategy,
+    adopt_or_create_pr,
     assess_blocking_checks,
     classify_push_failure,
 )
@@ -1388,26 +1389,29 @@ def _pause_at_human_step(
         if drafting_failures:
             result.follow_ups = f"pr-author drafting failed: {drafting_failures[0]}"
         backend = github or CliGitHubBackend()
-        pr = backend.create_pr(
+        pr, created = adopt_or_create_pr(
+            backend,
             result.repo,
             head=branch,
             base=pr_base,
+            head_sha=checkpoint,
             title=title or _default_title(worktree, remote_base, lead.task),
             body=pr_body + _stack_body(applicable_stack, result.synthetic_stack_base),
             draft=True,
         )
         # Only the branch that actually opens one records it; resuming reuses the
         # draft an earlier round already journaled.
-        journal.append(
-            "pr-created",
-            detail={
-                "repo": result.repo,
-                "pr": pr.url,
-                "number": pr.number,
-                "base": pr_base,
-                "draft": True,
-            },
-        )
+        if created:
+            journal.append(
+                "pr-created",
+                detail={
+                    "repo": result.repo,
+                    "pr": pr.url,
+                    "number": pr.number,
+                    "base": pr_base,
+                    "draft": True,
+                },
+            )
     result.pr = pr
     return pause(checkpoint, pr.url)
 
