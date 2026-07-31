@@ -14,12 +14,26 @@ record, clipped exactly where the model says they are.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
-from typing import Any
+from collections.abc import Iterable
+from typing import Literal, TypedDict
+
+from orchestrator.journal import Detail, EventKind
+from orchestrator.telemetry import TimingRecord
+
+ClippedCategory = Literal[
+    "gate_seconds",
+    "lock_wait_seconds",
+    "setup_seconds",
+    "scheduling_seconds",
+    "publication_wait_seconds",
+]
 
 #: The order in which `orchestrator.telemetry._timing` hands out the wall clock left
-#: over after model and tool time. A category is clipped by everything before it.
-WATERFALL = (
+#: over after model and tool time, restated here because that function spells it as
+#: straight-line code rather than data. `tests/test_telemetry.py`'s
+#: `test_the_clipping_order_the_contract_helper_states_is_the_one_timing_uses` is the
+#: drift gate that holds the two together.
+WATERFALL: tuple[ClippedCategory, ...] = (
     "gate_seconds",
     "lock_wait_seconds",
     "setup_seconds",
@@ -28,34 +42,38 @@ WATERFALL = (
 )
 
 
-def journalled_seconds(events: Iterable[Mapping[str, Any]], kind: str) -> float:
+class JournalledEvent(TypedDict):
+    """One journal record as a reader gets it back off disk."""
+
+    kind: EventKind
+    detail: Detail
+
+
+def journalled_seconds(events: Iterable[JournalledEvent], kind: EventKind) -> float:
     """Total `seconds` a run journalled under `kind`, read as telemetry reads them."""
     total = 0.0
     for event in events:
-        if event.get("kind") != kind:
+        if event["kind"] != kind:
             continue
-        value = event.get("detail", {}).get("seconds")
+        value = event["detail"].get("seconds")
         if isinstance(value, (int, float)) and not isinstance(value, bool) and value >= 0:
             total += float(value)
     return total
 
 
-def clipped_share_seconds(timing: Mapping[str, Any], category: str, journalled: float) -> float:
+def clipped_share_seconds(
+    timing: TimingRecord, category: ClippedCategory, journalled: float
+) -> float:
     """What `timing` owes `category`: its journalled total, clipped by the wall clock left.
 
-    Derived from the record's own published numbers, so it holds on any host: a run
-    that had the room reports the whole journalled total, and one that did not reports
-    exactly the remainder. A category dropped on the way from the journal to the index
-    still reads as zero against a positive remainder, and still fails.
+    The wall clock still unspent when `category`'s turn came is what the categories
+    behind it, plus the idle remainder, ended up holding — so the budget is read back
+    out of the record's own decomposition rather than by restating which categories
+    came first. A run that had the room reports the whole journalled total; one that
+    did not reports exactly the remainder. A span dropped between the journal and the
+    index reads as zero against a budget that went to idle instead, and still fails.
     """
-    if category not in WATERFALL:
-        raise ValueError(f"{category} is not one of the clipped categories {WATERFALL}")
-    budget = int(timing["wall_ms"]) - sum(
-        int(timing[measured])
-        for measured in ("agent_model_ms", "judge_model_ms", "llmlint_model_ms", "tool_ms")
+    budget = timing["idle_orchestration_ms"] + sum(
+        round(timing[later] * 1000) for later in WATERFALL[WATERFALL.index(category) :]
     )
-    for ahead in WATERFALL:
-        if ahead == category:
-            break
-        budget -= round(float(timing[ahead]) * 1000)
-    return min(max(0, budget), round(journalled * 1000)) / 1000
+    return min(budget, round(journalled * 1000)) / 1000

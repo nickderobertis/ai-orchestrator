@@ -53,18 +53,14 @@ labels="$(uv run orchestrator-history-labels role=llmlint)" || {
   echo "lint-llm-diff: could not derive harness history labels; run 'just bootstrap' and retry" >&2
   exit 1
 }
-# The alphabet is orchestrator/labels.py's, not a narrower one of this script's:
-# that module is the declared trust boundary for the label contract and already
-# exits non-zero on anything it forbids, so a second, stricter opinion here can
-# only reject values it deliberately produced. It did — a hyphen or dot in an
-# inherited key, or a space in an inherited value, are all legal under the
-# oneharness wire contract, and each one failed every `just gate` on this checkout
-# with a remediation that could not have helped. What is left is the check shell
-# actually owes: one line of non-empty, comma-free values it can safely export.
+# The alphabet is orchestrator/labels.py's, which is the declared trust boundary for
+# the label contract: a narrower opinion here could only reject a label that module
+# deliberately passed through, such as an inherited key with a hyphen or a value with
+# a space.
 key='[A-Za-z0-9][A-Za-z0-9._-]{0,63}'
 value='[^,[:cntrl:]]+'
 [[ "$labels" =~ ^${key}=${value}(,${key}=${value})*$ ]] || {
-  echo "lint-llm-diff: harness history labels are not comma-separated key=value pairs; run 'just bootstrap' and retry" >&2
+  echo "lint-llm-diff: harness history labels are not comma-separated key=value pairs: '$labels'; correct or unset ONEHARNESS_HISTORY_LABELS and retry" >&2
   exit 1
 }
 

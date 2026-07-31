@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import get_args
 
 import pytest
+from telemetry_contract import WATERFALL
 
 import orchestrator.telemetry as telemetry_module
 from orchestrator.history import HistorySession, SessionId, SessionRole
@@ -302,6 +303,29 @@ def test_over_budget_buckets_are_clipped_to_exactly_wall_time() -> None:
     assert timing["lock_wait_seconds"] == 0.02
     assert timing["setup_seconds"] == timing["scheduling_seconds"] == 0
     assert timing["publication_wait_seconds"] == 0
+
+
+def test_the_clipping_order_the_contract_helper_states_is_the_one_timing_uses() -> None:
+    """`_timing` spells its allocation order as straight-line code, not as data.
+
+    `tests/telemetry_contract.WATERFALL` restates that order so both suites can say
+    what a category is owed on a run that ran out of wall clock. This is the gate that
+    stops the restatement drifting: each category is starved in turn by giving the run
+    exactly enough milliseconds to pay for everything ahead of it and no more.
+    """
+    journalled = {"gate": 0.001, "lock_wait": 0.001, "setup": 0.001, "scheduling": 0.001}
+    # `wait` is the argument behind `publication_wait_seconds`; the names differ because
+    # the record states the wait it reports and the argument states what was waited on.
+    assert tuple(journalled) + ("wait",) == tuple(
+        category.removesuffix("_seconds").replace("publication_wait", "wait")
+        for category in WATERFALL
+    )
+
+    for affordable, category in enumerate(WATERFALL, start=1):
+        timing = _timing(affordable, [], wait=0.001, **journalled)
+
+        paid = [round(timing[name] * 1000) for name in WATERFALL]
+        assert paid == [1] * affordable + [0] * (len(WATERFALL) - affordable), category
 
 
 def test_schema_v8_field_golden_prevents_cross_layer_drift() -> None:
