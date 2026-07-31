@@ -297,6 +297,7 @@ def test_over_budget_buckets_are_clipped_to_exactly_wall_time() -> None:
     assert timing["publication_wait_seconds"] == 0
 
 
+@pytest.mark.reads_docs
 def test_schema_v8_field_golden_prevents_cross_layer_drift() -> None:
     golden = json.loads(
         (Path(__file__).parent / "golden" / "telemetry-v8-fields.json").read_text(encoding="utf-8")

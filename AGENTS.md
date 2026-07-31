@@ -414,7 +414,14 @@ everything the check reads. The Python targets run from the workspace root over 
 whole tree — pytest reads documentation, recipes, hooks, and app config — so they
 are keyed on it through `nx.json`'s `wholeWorkspace` input. Narrowing one back to a
 subset makes a green suite a claim about a tree that was never run; force a real
-re-run of a single tier with `--skip-nx-cache` on that one invocation instead. See
+re-run of a single tier with `--skip-nx-cache` on that one invocation instead. One
+narrowing earns its keep: only a handful of tests assert on this repository's prose,
+so `orchestrator:test-docs` runs those under the whole-workspace key while
+`orchestrator:test` runs the rest under `codeWorkspace` — the workspace minus
+`docs/**` and `**/*.md` — and a documentation edit stops charging eight minutes. That
+split cannot go stale silently: an undeclared test that opens this checkout's own
+documentation fails in `tests/conftest.py` and is told to carry
+`@pytest.mark.reads_docs`. See
 [When a cached verdict may stand
 in](docs/repo-lifecycle.md#when-a-cached-verdict-may-stand-in-for-a-verdict-on-this-tree).
 
