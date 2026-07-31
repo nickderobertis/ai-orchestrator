@@ -23,7 +23,6 @@ from waits import deadline as e2e_deadline
 
 from orchestrator import REPO_ROOT, gitops
 from orchestrator.coordination import advisory_lock, git_lock_identity, lock_path
-from orchestrator.journal import RunId, open_journal
 from orchestrator.plan import PLAN_SCHEMA_VERSION
 from orchestrator.registry import Registry
 
@@ -2859,12 +2858,12 @@ def test_planner_context_reaches_every_agent_step_of_a_workstream(
     )
 
 
-def _context_ledger(runs: Path, run_id: str, notes: tuple[str, ...]) -> Path:
-    """Record a settled round whose committed edits attached ``notes`` to `work`."""
-    run_dir = runs / run_id
-    round_one = run_dir / "round-01"
-    round_one.mkdir(parents=True)
-    (round_one / "plan.json").write_text(
+def _context_round(
+    tmp_path: Path, runs: Path, run_id: str, base: Path, onejudge_bin: str, prompts: Path
+) -> Path:
+    """Settle one real round whose failing node carries planner context in its plan."""
+    plan = tmp_path / f"{run_id}.json"
+    plan.write_text(
         json.dumps(
             {
                 "schema_version": PLAN_SCHEMA_VERSION,
@@ -2872,76 +2871,62 @@ def _context_ledger(runs: Path, run_id: str, notes: tuple[str, ...]) -> Path:
                     {
                         "id": "work",
                         "persona": "engineer",
-                        "task": "## What\nFinish the sweep",
-                        "context": ["a note from the round before"],
+                        "task": (
+                            "## What\nFinish the sweep.\n\n"
+                            f"should-fail no-assessment record-task={prompts}"
+                        ),
+                        "max_turns": 1,
+                        "context": ["the branch already carries the fixture"],
                     }
                 ],
             }
         ),
         encoding="utf-8",
     )
-    (round_one / "result.json").write_text(
-        json.dumps(
-            {
-                "ok": False,
-                "state": "failed",
-                "started_order": ["work"],
-                "results": {"work": {"status": "failed", "outcome": "not-completed"}},
-            }
-        ),
-        encoding="utf-8",
+    settled = _just(
+        "run-plan",
+        str(plan),
+        "--run",
+        run_id,
+        "--runs-dir",
+        str(runs),
+        "--base",
+        str(base),
+        "--onejudge-bin",
+        onejudge_bin,
+        "--format",
+        "json",
     )
-    journal = open_journal(run_dir, RunId(run_id), 1)
-    for note in notes:
-        journal.append(
-            "edit-committed",
-            detail={
-                "command": {"op": "context", "id": "work", "note": note},
-                "operations": [{"kind": "context-added", "node": "work", "detail": {"note": note}}],
-            },
-        )
-    return run_dir
+    assert settled.returncode == 1, settled.stderr  # `work` fails, so it carries forward
+    return runs / run_id
 
 
-def test_next_round_carries_committed_context_and_yields_to_a_stated_retry(
-    tmp_path: Path,
+def test_next_round_expires_context_unless_the_planner_states_it_again(
+    tmp_path: Path, command_base, onejudge_bin: str
 ) -> None:
-    """The transition command reads the round's committed edits, and the planner wins.
+    """Context is refreshed at every transition, and a stated retry decides it.
 
-    Derivation is the whole subject here, so no dispatch is spent on it: each run
-    below is a recorded round whose journal holds the edits the planner committed
-    while it ran, transitioned through the real `just next-round`.
+    The three runs below settle through the real executor and transition through the
+    real `just next-round`, differing only in the edits the orchestrator hands it —
+    which is the shape of the decision a planner makes after reading a result.
     """
     runs = tmp_path / "runs"
-    notes = ("41 commits are on the branch", "one llmlint finding is open")
-    collected = _context_ledger(runs, "collected-context", notes)
+    base = command_base()
+    prompts = tmp_path / "context-prompts.jsonl"
+    expiring = _context_round(tmp_path, runs, "expiring-context", base, onejudge_bin, prompts)
 
-    derived = _just("next-round", "collected-context", "--runs-dir", str(runs), "--plan-only")
-    assert derived.returncode == 0, derived.stderr
-    carried = json.loads((collected / "round-02" / "plan.json").read_text(encoding="utf-8"))
-    # The round's own notes replace the set the node arrived with, in submission order.
-    assert carried["tasks"][0]["context"] == list(notes)
-
-    # And it travels exactly one transition. Round two commits no edit of its own, so
-    # the node it carries forward has no context at all: what the planner still means
-    # is what the planner attaches again, and stale state cannot pile up.
-    (collected / "round-02" / "result.json").write_text(
-        json.dumps(
-            {
-                "ok": False,
-                "state": "failed",
-                "started_order": ["work"],
-                "results": {"work": {"status": "failed", "outcome": "not-completed"}},
-            }
-        ),
-        encoding="utf-8",
-    )
-    expired = _just("next-round", "collected-context", "--runs-dir", str(runs), "--plan-only")
+    # The note reached the round-one dispatch, and nothing during that round attached
+    # another, so the node is carried forward with no context at all: what the planner
+    # still means is what the planner states again, and stale state cannot pile up.
+    delivered = json.loads(prompts.read_text(encoding="utf-8").splitlines()[0])
+    assert "the branch already carries the fixture" in delivered
+    assert "## Planner context" in delivered
+    expired = _just("next-round", "expiring-context", "--runs-dir", str(runs), "--plan-only")
     assert expired.returncode == 0, expired.stderr
-    third = json.loads((collected / "round-03" / "plan.json").read_text(encoding="utf-8"))
-    assert "context" not in third["tasks"][0]
+    carried = json.loads((expiring / "round-02" / "plan.json").read_text(encoding="utf-8"))
+    assert "context" not in carried["tasks"][0]
 
-    stated = _context_ledger(runs, "stated-context", notes)
+    stated = _context_round(tmp_path, runs, "stated-context", base, onejudge_bin, prompts)
     edits = tmp_path / "stated.json"
     edits.write_text(
         json.dumps({"retry": {"work": {"context": ["the planner's own brief"]}}}), encoding="utf-8"
@@ -2953,7 +2938,7 @@ def test_next_round_carries_committed_context_and_yields_to_a_stated_retry(
     plan = json.loads((stated / "round-02" / "plan.json").read_text(encoding="utf-8"))
     assert plan["tasks"][0]["context"] == ["the planner's own brief"]
 
-    silenced = _context_ledger(runs, "silenced-context", notes)
+    silenced = _context_round(tmp_path, runs, "silenced-context", base, onejudge_bin, prompts)
     empty = tmp_path / "empty.json"
     empty.write_text(json.dumps({"retry": {"work": {"context": []}}}), encoding="utf-8")
     cleared = _just(
@@ -2961,6 +2946,6 @@ def test_next_round_carries_committed_context_and_yields_to_a_stated_retry(
     )
     assert cleared.returncode == 0, cleared.stderr
     quiet = json.loads((silenced / "round-02" / "plan.json").read_text(encoding="utf-8"))
-    # An empty list is a decision the planner made after reading the result: the
-    # collected notes do not come back through the side door.
+    # An empty list is still a decision the planner made after reading the result, so
+    # it is honoured rather than treated as "say nothing" and refilled.
     assert quiet["tasks"][0]["context"] == []
