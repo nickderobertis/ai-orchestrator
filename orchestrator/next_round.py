@@ -230,7 +230,7 @@ def main_runs(argv: list[str] | None = None) -> int:
     concurrent = {
         path.name: indicator
         for path in run_dirs
-        if (indicator := concurrent_indicator(path)) is not None
+        if (indicator := concurrent_indicator(path, args.parked_after)) is not None
     }
     if not rows and not active_launches and not abandoned:
         print("No recorded runs.")

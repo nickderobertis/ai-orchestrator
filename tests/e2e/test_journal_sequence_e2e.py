@@ -15,6 +15,12 @@ live edit, because a planner must never lose control of a run over a journal def
 # fast unless the real adopted onejudge CLI is on PATH, and these journeys drive it as a real
 # subprocess; per the documented suite invariant only the paid model backend is faked via
 # onejudge's own command provider (fake_backend.py), so no model credential is required.
+# llmlint: ignore-file[tests_mirror_real_usage] The one thing written by hand here is the record
+# a *second writer* put in the journal — in the incident, the planner's own `channel-next`
+# running from a newer checkout than the orchestrator it supervised. No command of this build
+# can produce it, because the whole premise is a record this build did not write and, in the
+# first journey, cannot even read. Everything else is real: the executor, its round, every
+# ledger write it makes afterwards, and the `channel-reply` that must still be applied.
 
 from __future__ import annotations
 

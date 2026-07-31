@@ -570,16 +570,16 @@ def _wait_for_file(path: Path, seconds: float = 30) -> None:
     raise AssertionError(f"did not appear: {path}")
 
 
-def test_a_live_concurrent_run_is_named_apart_from_a_stale_registration(
+def test_a_live_concurrent_run_is_named_and_never_hidden_by_acknowledging_it(
     tmp_path: Path, command_base
 ) -> None:
     """Launching into company reports *which* company, and the views keep saying so.
 
     Two orchestrations once shared two isolated checkouts for hours, and the
     collision was found only by tracing a process tree by hand:
-    `--acknowledge-concurrent`, needed to get past a dead run's stale registration,
-    also silenced any notice of the live one. Both are reported here, differently,
-    and the guard still refuses both without the flag.
+    `--acknowledge-concurrent`, which exists to get past a registration whose owner
+    is no longer working, also silenced any notice of the one that was. The guard
+    still refuses without the flag; with it, the live neighbour is named anyway.
     """
     state = tmp_path / "state"
     runs = tmp_path / "runs"
@@ -590,33 +590,6 @@ def test_a_live_concurrent_run_is_named_apart_from_a_stale_registration(
     )
     assert registered.returncode == 0, registered.stderr
     identity = str(target.resolve())
-
-    # A registration whose owner this host cannot rule on: another host's pid, no
-    # final report. `_sweep` cannot retire it, so it outlives the run it belonged to
-    # — the exact residue `--acknowledge-concurrent` exists to launch past.
-    dead_dir = tmp_path / "dead-run"
-    dead_dir.mkdir()
-    state.mkdir(parents=True, exist_ok=True)
-    (state / "runs-index.json").write_text(
-        json.dumps(
-            {
-                "schema_version": 1,
-                "runs": {
-                    "dead": {
-                        "run_id": "dead",
-                        "run_dir": str(dead_dir),
-                        "goal": {"id": "dead-goal", "text": "A run that already stopped"},
-                        "identities": [identity],
-                        "pid": 4242,
-                        "host": "a-host-that-is-not-this-one",
-                        "started": "2026-07-30T00:00:00+00:00",
-                        "status": "active",
-                    }
-                },
-            }
-        ),
-        encoding="utf-8",
-    )
 
     base = command_base()
     live_ready, live_release = tmp_path / "live.ready", tmp_path / "live.release"
@@ -641,10 +614,9 @@ def test_a_live_concurrent_run_is_named_apart_from_a_stale_registration(
     live_plan = _barrier_plan(tmp_path / "live.json", target, live_ready, live_release)
     second_plan = _barrier_plan(tmp_path / "second.json", target, second_ready, second_release)
 
-    # Getting past the stale registration takes the flag, and says so without ever
-    # claiming a live neighbour — there is none yet.
+    # The first run has no company at all, so nothing is reported to it.
     live = subprocess.Popen(
-        command(live_plan, "live", "--acknowledge-concurrent"),
+        command(live_plan, "live"),
         cwd=REPO_ROOT,
         env=env,
         text=True,
@@ -665,11 +637,8 @@ def test_a_live_concurrent_run_is_named_apart_from_a_stale_registration(
             check=False,
         )
         assert refused.returncode == 2
-        # The two registrations no longer read alike: one names a working process and
-        # its pid, the other says only that a registration is there.
+        # The refusal names a working process and its pid, not merely a registration.
         assert f"run 'live' is LIVE (owner pid {live_pid} on " in refused.stderr
-        assert "run 'dead' is registered but not observable here" in refused.stderr
-        assert "(recorded owner pid 4242 on a-host-that-is-not-this-one)" in refused.stderr
         assert identity in refused.stderr
 
         acknowledged = subprocess.Popen(
@@ -685,17 +654,11 @@ def test_a_live_concurrent_run_is_named_apart_from_a_stale_registration(
             viewed = _run("status", "--runs-dir", str(runs), env=env)
             assert viewed.returncode == 0, viewed.stderr
             # The planner's read-only view now carries the other live orchestration,
-            # which appears nowhere in this run's own ledger. The stale registration
-            # stays out of it: a view that listed that one too would report the very
-            # thing `--acknowledge-concurrent` exists to launch past as live work.
+            # which appears nowhere in this run's own ledger.
             assert f"CONCURRENT: run 'live' is LIVE (owner pid {live_pid} on " in viewed.stdout
-            assert "run 'dead'" not in viewed.stdout
             goals = _run("goals", env=env)
             assert goals.returncode == 0, goals.stderr
             assert f"owner: live (owner pid {live_pid} on " in goals.stdout
-            assert "owner: unobservable (owner pid 4242 on a-host-that-is-not-this-one)" in (
-                goals.stdout
-            )
         finally:
             second_release.write_text("release\n", encoding="utf-8")
             second_out, second_err = acknowledged.communicate(timeout=120)

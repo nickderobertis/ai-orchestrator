@@ -30,9 +30,11 @@ observable here`, is a registration whose owner is not working — the residue
 live one: launching past it prints `proceeding alongside a live concurrent run`
 on stderr, `just goals` states each registered owner's observed state, and the
 planner's `just runs` and `just status` views carry a `CONCURRENT:` line naming
-every live run that shares this one's identities. Liveness is observed at read
-time and never stored, because a recorded "this run was alive" is false the
-moment its process exits.
+every live run that shares this one's identities — under the same
+`--parked-after` threshold those views report parked with, so one view cannot
+call a launch parked and a live neighbour in consecutive lines. Liveness is
+observed at read time and never stored, because a recorded "this run was alive"
+is false the moment its process exits.
 
 ## The planner<->orchestrator channel
 

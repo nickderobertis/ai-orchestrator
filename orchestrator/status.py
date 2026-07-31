@@ -264,7 +264,7 @@ def main(argv: list[str] | None = None) -> int:
                 # machine state this view could not previously report: it belongs to
                 # no run dir here, and its effects reach this one as a dirty
                 # publication checkout or a lost push race.
-                if (shared := concurrent_indicator(run_dir)) is not None:
+                if (shared := concurrent_indicator(run_dir, args.parked_after)) is not None:
                     indicators.append(f"{run_dir.name}: {shared}")
                 try:
                     waiting = planner_wait_indicator(run_dir / "channel")

@@ -298,15 +298,19 @@ class ConcurrentRun:
         return f"{subject} goal {self.goal!r}; shared identities: {shared}"
 
 
-def _owner_state(entry: ActiveRun) -> ConcurrentState:
+def _owner_state(entry: ActiveRun, parked_after: float | None = None) -> ConcurrentState:
     """Classify one registered owner from what this host can actually observe.
 
     The entry comes from `_load_active`, which has already validated the owner's
     shape, so this only has to ask what the host can see. A pid it may not signal
     still exists — the same asymmetry `runs.process_may_be_live` keeps — so only a
     pid the kernel says is gone counts as unobservable.
+
+    ``parked_after`` is the caller's own silence threshold, so a view that reports a
+    launch parked cannot in the next line report the same launch as a live
+    neighbour. It defaults to the pacemaker-derived one every other reader uses.
     """
-    from .liveness import observe_launch
+    from .liveness import PARKED_AFTER_SECONDS, observe_launch
 
     if entry["host"] != socket.gethostname():
         return "unobservable"
@@ -322,11 +326,16 @@ def _owner_state(entry: ActiveRun) -> ConcurrentState:
         # owner holding its pid is the whole of the evidence — and it is the same
         # evidence the guard has always refused on.
         return "live"
-    return "parked" if observe_launch(run_dir).parked else "live"
+    threshold = PARKED_AFTER_SECONDS if parked_after is None else parked_after
+    return "parked" if observe_launch(run_dir, parked_after=threshold).parked else "live"
 
 
 def _concurrent(
-    runs: Mapping[str, ActiveRun], *, identities: set[str], exclude_dir: Path
+    runs: Mapping[str, ActiveRun],
+    *,
+    identities: set[str],
+    exclude_dir: Path,
+    parked_after: float | None = None,
 ) -> list[ConcurrentRun]:
     """Every other registered run sharing an identity, classified by observation."""
     found: list[ConcurrentRun] = []
@@ -344,13 +353,13 @@ def _concurrent(
                 identities=overlap,
                 pid=other["pid"],
                 host=other["host"],
-                state=_owner_state(other),
+                state=_owner_state(other, parked_after),
             )
         )
     return sorted(found, key=lambda item: item.run_id)
 
 
-def concurrent_runs(run_dir: Path) -> list[ConcurrentRun]:
+def concurrent_runs(run_dir: Path, parked_after: float | None = None) -> list[ConcurrentRun]:
     """Every other registered run sharing an identity with the run at ``run_dir``.
 
     Read-only, and deliberately unlocked where every other accessor here takes the
@@ -367,10 +376,15 @@ def concurrent_runs(run_dir: Path) -> list[ConcurrentRun]:
     )
     if this is None:
         return []
-    return _concurrent(runs, identities=set(this["identities"]), exclude_dir=absolute)
+    return _concurrent(
+        runs,
+        identities=set(this["identities"]),
+        exclude_dir=absolute,
+        parked_after=parked_after,
+    )
 
 
-def concurrent_indicator(run_dir: Path) -> str | None:
+def concurrent_indicator(run_dir: Path, parked_after: float | None = None) -> str | None:
     """One line naming the live runs sharing this run's identities, if any.
 
     Only live ones: a progress view that also listed unobservable registrations
@@ -378,7 +392,7 @@ def concurrent_indicator(run_dir: Path) -> str | None:
     though it were a second orchestrator at work.
     """
     try:
-        live = [run for run in concurrent_runs(run_dir) if run.live]
+        live = [run for run in concurrent_runs(run_dir, parked_after) if run.live]
     except (ConfigError, OSError):
         return None
     if not live:
