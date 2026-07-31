@@ -63,8 +63,10 @@ from .provenance import (
     INCOMPLETE_TRAILER,
     PR_BASE_TRAILER,
     RECOVERY_TRAILER,
+    attestation_trailers,
     format_preserved_step_metadata,
     incomplete_commits,
+    is_provenance_commit,
     unattested_incomplete,
 )
 from .redaction import redact
@@ -397,7 +399,17 @@ def _format_conventional_subject(parsed: _ParsedSubject) -> str:
 
 
 def _task_description(task: str) -> str:
-    return task.strip().splitlines()[0] if task.strip() else "orchestrated change"
+    """Summarize task prose in one line of the description it actually contains.
+
+    Task prose opens with a `## What` heading, so the literal first line names a
+    section rather than the change; taking it published subjects like
+    `chore: ## What (incomplete step)`. Skip headings and blank lines instead.
+    """
+    for line in task.splitlines():
+        stripped = line.strip()
+        if stripped and not stripped.startswith("#"):
+            return stripped
+    return "orchestrated change"
 
 
 def _fallback_subject(task: str, *, breaking: bool = False) -> str:
@@ -409,11 +421,17 @@ def _fallback_subject(task: str, *, breaking: bool = False) -> str:
 
 
 def _subject_from_messages(messages: list[gitops.CommitMessage], task: str) -> str:
-    """Derive one semantic subject from usable agent-written commit messages."""
-    breaking = any(_has_breaking_signal(commit.message) for commit in messages)
+    """Derive one semantic subject from usable agent-written commit messages.
+
+    Provenance commits are excluded first. A marker and its attestation describe the
+    run rather than the change, and folding them in published subjects that trailed
+    off in a truncated `; ## What (incomple…`.
+    """
+    authored = [commit for commit in messages if not is_provenance_commit(commit.message)]
+    breaking = any(_has_breaking_signal(commit.message) for commit in authored)
     parsed = [
         subject
-        for commit in messages
+        for commit in authored
         if (subject := _parse_conventional_subject(commit.message)) is not None
     ]
     match parsed:
@@ -494,6 +512,17 @@ def _default_body(persona: str, task: str, report: Report | None) -> str:
         f"Dispatched by ai-orchestrator (persona: `{persona}`, {turns} agent turn(s)), "
         "verified locally and driven to green checks before merge.\n"
     )
+
+
+def _attestation_body(repo: Path, base: str, ref: str) -> str:
+    """The trailer block a PR body appends so its squash commit keeps the attestation.
+
+    Empty for the ordinary branch that recovered nothing.
+    """
+    trailers = attestation_trailers(repo, base, ref)
+    if not trailers:
+        return ""
+    return "\n" + "\n".join(trailers) + "\n"
 
 
 def _step_label(step: Step) -> str:
@@ -1915,6 +1944,14 @@ def run_repo_task(
                 journal=log,
                 dispatch_env=workstream_env,
             )
+        # The remote branch already carries any attestation (it is committed above,
+        # before the branch push); the local path commits its own inside
+        # `local_prepare` and reads it back off the branch when it squashes.
+        publication_body = (
+            pr_body
+            + _stack_body(applicable_stack, result.synthetic_stack_base)
+            + _attestation_body(worktree, remote_base, "HEAD")
+        )
 
         # llmlint: ignore[changed_behavior_has_e2e] no blocking external operation exists between
         # the tested post-dispatch checkpoint and this final race-closing check: only local
@@ -1968,7 +2005,7 @@ def run_repo_task(
                 head=branch,
                 base=pr_base,
                 title=title or _default_title(worktree, remote_base, lead.task),
-                body=pr_body + _stack_body(applicable_stack, result.synthetic_stack_base),
+                body=publication_body,
             )
             log.append(
                 "pr-created",
@@ -2074,7 +2111,7 @@ def run_repo_task(
             base=pr_base,
             branch=branch,
             title=title or _default_title(worktree, remote_base, lead.task),
-            body=pr_body + _stack_body(applicable_stack, result.synthetic_stack_base),
+            body=publication_body,
             method=merge_method,
             policy=decision.merge_policy,
             poll_interval=poll_interval,

@@ -776,6 +776,31 @@ to the replacement, and continues authoring on that branch. `repo-recover` is
 different: use it when the preserved commits are already complete and need
 verification and publication, not when the worker needs more turns.
 
+### What the base branch carries for a recovered incomplete step
+
+Provenance commits are branch state, never base-branch history. Lifecycle
+publication squashes the branch, so the `chore: ... (incomplete step)` marker and
+the `chore: attest verified recovery of preserved work` commit that clears it stay
+on the preserved branch; the base branch gets one publication commit, exactly as
+the squash-merge model prescribes. That commit carries the fact forward instead: its
+message ends with one `Orchestrator-Recovered-Incomplete: <marker sha>` trailer per
+marker the branch recovered — in the local squash message, and in the PR body the
+remote path publishes from. Nothing hides that a step was left incomplete; the
+attestation is a trailer on `main` and a commit on the branch.
+
+A published subject therefore describes the change alone. Provenance commits are
+excluded before a subject is synthesized from a branch's commits: a marker's
+subject is a valid Conventional Commit, so including it produced published subjects
+like `feat: adopt the design system; ## What (incomple…` — the marker's own text was
+the task's `## What` heading rather than any description of the work. Both halves
+are fixed: a marker names the first line of task prose that carries content, and no
+provenance commit reaches a subject at all. Where such subjects and provenance
+commits already reached the base branch, they stay: history on the registered base
+is never rewritten. The `integrate` train is the deliberate exception to the shape,
+not to the rule: it fast-forwards a candidate, so an attested branch's provenance
+commits do land on the base — that is what "merge train" means, and it is why it
+rejects a branch whose markers are *un*attested.
+
 ### Complete branch after publication failure
 
 `repo-recover` applies only to a branch with lifecycle-preserved incomplete

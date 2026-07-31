@@ -21,6 +21,7 @@ from .lifecycle import (
     DEFAULT_LIFECYCLE_STEP_MAX_TURNS,
     MAX_MERGE_CONFLICT_RESOLUTIONS,
     DispatchFn,
+    _attestation_body,
     _default_title,
     _effective_publication,
 )
@@ -367,6 +368,7 @@ def recover_repo(
                 "## What\nRecover lifecycle-preserved work through its merge-path gate.\n\n"
                 "## Why\nThe original dispatch did not complete; this branch now carries "
                 "a verified recovery attestation.\n"
+                + _attestation_body(worktree, remote_base, branch)
             ),
             method=merge_method,
             policy=decision.merge_policy,
