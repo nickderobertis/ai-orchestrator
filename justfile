@@ -18,10 +18,14 @@ default:
 
 # Set up from a clean clone: install the toolchain, sync the Python env, and
 # activate the committed git hooks (the pre-push llmlint gate).
+#
+# `--force` is what distinguishes this from the self-heal every `scripts/nx.sh`
+# already performs: bootstrap re-applies the lockfile even when a stale
+# `node_modules` is present, which is exactly what a refreshed lockfile needs.
 # llmlint: ignore[changed_behavior_has_e2e] This provisioning journey is run on every clean-clone bootstrap; recursively bootstrapping from its own e2e would replace the active test environment.
 bootstrap:
     ./scripts/session-setup.sh
-    @log=$(mktemp); trap 'rm -f "$log"' EXIT; bun install --frozen-lockfile >"$log" 2>&1 || { cat "$log" >&2; echo "bootstrap: repair package.json/bun.lock and retry" >&2; exit 1; }
+    ./scripts/workspace-install.sh --force
     ./scripts/nx.sh run-many -t bootstrap
     git config core.hooksPath .githooks
     # Allow local-mode lifecycle pushes into this non-bare checkout.
@@ -36,7 +40,6 @@ bootstrap:
 # followed with `tail -f .logs/check.log` instead of through /proc.
 # llmlint: ignore[changed_behavior_has_e2e] The public recipe is the real deterministic gate invoked by this task and pre-push; its sequencing failures use subprocess doubles to avoid recursively invoking the same full suite.
 check:
-    @if [[ ! -x node_modules/.bin/nx ]]; then source ./scripts/preserved-log.sh; preserved_log_open "{{repo_root}}" check-install; log=$PRESERVED_LOG; bun install --frozen-lockfile 2>&1 | redact_secrets >"$log" || { cat "$log" >&2; echo "check: install locked workspace dependencies and retry (full output: $log)" >&2; exit 1; }; fi
     @source ./scripts/preserved-log.sh; preserved_log_open "{{repo_root}}" check; log=$PRESERVED_LOG; { ./scripts/nx.sh run-many -t format-check,lint,typecheck,test && ./scripts/check-oneharness-ui-contract.sh && python3 ./scripts/check-dag-state-contract.py && ./scripts/check-nx-cache.sh; } 2>&1 | redact_secrets >"$log" || { cat "$log" >&2; echo "check: deterministic checks failed; fix the reported findings and retry (full output: $log)" >&2; exit 1; }; total=$(./scripts/coverage-total.sh "{{repo_root}}"); echo "check: all deterministic checks passed${total:+ (line coverage ${total}%)}"
 
 # Complete pre-push gate: deterministic checks followed by llmlint on this branch.
@@ -96,9 +99,14 @@ format-check:
     ./scripts/nx.sh run-many -t format-check
 
 # Upgrade dependencies, then re-run the full gate; commit the refreshed lockfile.
+#
+# Captured through `scripts/preserved-log.sh` like every other stage that swallows
+# its own output: an upgrade that fails inside `uv lock` or `bun update` leaves this
+# log as the only account of which constraint could not be solved, and a `mktemp`
+# file an EXIT trap removes takes that account with it.
 # llmlint: ignore[changed_behavior_has_e2e] The public recipe's real Bun success/failure paths run in an isolated fixture; uv and Nx are subprocess doubles because recursively running the full upgraded suite from pytest cannot terminate.
 upgrade:
-    @log=$(mktemp); trap 'rm -f "$log"' EXIT; { uv lock --upgrade && uv sync && bun update --latest nx @nx/eslint @nx/eslint-plugin @nx/js eslint typescript@6 typescript-eslint @biomejs/biome && ./scripts/nx.sh run-many -t build,lint,typecheck,test; } >"$log" 2>&1 || { cat "$log" >&2; echo "upgrade: repair dependency constraints or target findings and retry" >&2; exit 1; }; echo "upgrade: dependencies refreshed and targets passed"
+    @source ./scripts/preserved-log.sh; preserved_log_open "{{repo_root}}" upgrade; log=$PRESERVED_LOG; { uv lock --upgrade && uv sync && bun update --latest nx @nx/eslint @nx/eslint-plugin @nx/js eslint typescript@6 typescript-eslint @biomejs/biome && ./scripts/nx.sh run-many -t build,lint,typecheck,test; } 2>&1 | redact_secrets >"$log" || { cat "$log" >&2; echo "upgrade: repair dependency constraints or target findings and retry (full output: $log)" >&2; exit 1; }; echo "upgrade: dependencies refreshed and targets passed"
 
 # Local-first runs no CI, but origin is the shared source of truth: push every
 # change that lands on main. The pre-push hook gates this like any push; if git

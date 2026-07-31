@@ -24,10 +24,10 @@
 #
 # llmlint: ignore-file[robust_shell] This file is sourced, never executed, so
 # `set -euo pipefail` here would silently impose errexit on whatever shell sourced
-# it — a library must not reach into its caller's options. Both callers
-# (`scripts/nx.sh` and the `justfile`, via `set shell := ["bash", "-euo",
-# "pipefail", "-c"]`) already run strict, and every function below checks and
-# reports its own failures rather than relying on errexit.
+# it — a library must not reach into its caller's options. Every caller
+# (`scripts/nx.sh`, `scripts/workspace-install.sh`, and the `justfile`, via
+# `set shell := ["bash", "-euo", "pipefail", "-c"]`) already runs strict, and every
+# function below checks and reports its own failures rather than relying on errexit.
 #
 # shellcheck shell=bash
 
