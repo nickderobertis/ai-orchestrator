@@ -1,5 +1,5 @@
 {
-  "version": 7,
+  "version": 8,
   "state_changing_kinds": [
     "node-added",
     "edge-added",
@@ -76,6 +76,17 @@
       "command"
     ],
     "command": "EditPayload",
-    "command_since": 6
+    "command_since": 6,
+    "operations": [
+      "completion-requested",
+      "context-added",
+      "edge-added",
+      "edge-removed",
+      "human-attested",
+      "node-added",
+      "node-dropped",
+      "reparent",
+      "retry-requested"
+    ]
   }
 }

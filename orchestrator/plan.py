@@ -17,7 +17,7 @@ import json
 import re
 import sys
 import threading
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -37,7 +37,18 @@ class PlanError(Exception):
 #: for backward-compatible plans; ``human`` names action the harness must never
 #: infer or execute.
 NODE_KINDS = ("agent", "human")
-PLAN_SCHEMA_VERSION = 5
+PLAN_SCHEMA_VERSION = 6
+
+#: Heading the planner's carried context is rendered under inside a dispatched task.
+NODE_CONTEXT_HEADING = "## Planner context"
+#: What the worker is told the section is: observed state from the round that
+#: attached it, never a replacement for the criteria the task already states.
+NODE_CONTEXT_PREAMBLE = (
+    "The planner attached this while an earlier dispatch of this node ran. It reports "
+    "state that was observed then — work already finished, findings already open — so "
+    "read it before redoing anything. It adds no acceptance criteria: where it and the "
+    "task above disagree, the task decides."
+)
 
 _CROSS_DAG_DEP = re.compile(r"^run:([A-Za-z0-9][A-Za-z0-9._-]*)#([^#]+)$")
 
@@ -343,6 +354,41 @@ def parse_agent_node(nid: str, t: dict[str, Any]) -> PlanNode:
         done_when=t.get("done_when"),
         expects_no_diff=expects_no_diff,
     )
+
+
+def parse_node_context(nid: str, item: Mapping[str, Any]) -> list[str]:
+    """Validate a node's planner-supplied context notes.
+
+    The field is the planner's, but it is normally written by the harness rather
+    than by hand: a live ``context`` edit appends one note to the running graph, and
+    the round transition carries the notes attached during that round onto the
+    carried-forward node. It is deliberately *not* gated on the plan's declared
+    schema version — a note is attached to a graph mid-round, so refusing it against
+    the version that graph was launched with would make a committed edit unreplayable
+    rather than protect an old plan from a field it never uses.
+    """
+    value = item.get("context")
+    if value is None:
+        return []
+    if not isinstance(value, list) or not all(
+        isinstance(note, str) and note.strip() for note in value
+    ):
+        raise PlanError(f"task {nid!r} 'context' must be a list of non-empty planner notes")
+    return list(value)
+
+
+def compose_task_context(task: str, notes: Sequence[str]) -> str:
+    """Render planner context as a trailing section of the task a worker receives.
+
+    Rendering happens where a node is parsed rather than where it is dispatched, so
+    every dispatch shape — a direct node, a lifecycle node, each agent step of a
+    workstream — delivers the same section without a second rendering path. The
+    stored node keeps the notes as data, so composing twice cannot double them.
+    """
+    if not notes:
+        return task
+    body = "\n\n".join(note.strip() for note in notes)
+    return f"{task.rstrip()}\n\n{NODE_CONTEXT_HEADING}\n\n{NODE_CONTEXT_PREAMBLE}\n\n{body}\n"
 
 
 def _expects_no_diff(nid: str, item: dict[str, Any], *, step: str | None = None) -> bool:
