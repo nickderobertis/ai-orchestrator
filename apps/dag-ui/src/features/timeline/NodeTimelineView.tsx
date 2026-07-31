@@ -142,6 +142,11 @@ export function NodeTimelineView({
         </AccordionItem>
       </Accordion>
 
+      {/* llmlint: ignore[changed_behavior_has_e2e] the detail and the timeline are
+          read from the same strict journal, so no served run fails one and not the
+          other; a browser reaches this only when the whole API is unreachable, and
+          then there is no node view to report it in. App.test.tsx drives it through
+          the real telemetry client. */}
       {timelineError !== undefined ? (
         <Alert className="m-5 w-auto" variant="destructive">
           <TriangleAlert />

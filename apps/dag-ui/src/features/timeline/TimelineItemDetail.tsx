@@ -133,6 +133,7 @@ function Session({
         Loading transcript…
       </div>
     );
+  // llmlint: ignore[changed_behavior_has_e2e] a conforming server cannot produce this state — it names a transcript in a timeline it just served, so a transcript it then refuses only comes from a peer that raced or broke between the two reads. App.test.tsx proves it against the real telemetry client at its browser boundary.
   if (transcript.error !== undefined || transcript.conversation === undefined)
     return (
       <Alert variant="destructive">
@@ -164,6 +165,9 @@ function Session({
           <StatusBadge state={conversation.state} />
         </header>
         <Separator className="my-2.5" />
+        {/* llmlint: ignore[changed_behavior_has_e2e] the same unproducible state as
+            above, from the other side: a served timeline names this turn, so only a
+            history store rewritten between the two reads drops it. */}
         {turns.length === 0 ? (
           <p className="detail-note">
             This turn is no longer part of the recorded transcript.

@@ -145,8 +145,12 @@ the executor's own journal writers, serves it through the actual read API, and
 history store is recorded, through the same `tests/e2e/fake_oneharness.py`
 subprocess the Python e2e suite uses.
 
-The one state the browser tier does not reach is the node whose recorded work is
-hundreds of conversations: writing hundreds of recorded sessions into the shared
-browser fixture would slow every other journey in it to prove one bound. That
-state is covered in the Testing Library tier instead, against a served timeline
-payload the shipped schemas validate (`src/test/fixtures.ts`).
+The fixture's `dag-ui-busy` run is the scale case: one node with two hundred
+recorded sessions, one of them thirty turns long, so the browser tier proves the
+grouped rail and both pagings against a real server rather than a payload written
+by hand. What it cannot reach is a read that fails between the timeline and the
+transcript it names — the run detail and the timeline are projected from the same
+strict journal, so no served run fails one and not the other, and a browser only
+sees the failure with the whole API unreachable. Those branches carry a
+line-scoped `llmlint: ignore[changed_behavior_has_e2e]` naming this reason, and
+are driven through the real telemetry client in `src/app/App.test.tsx`.

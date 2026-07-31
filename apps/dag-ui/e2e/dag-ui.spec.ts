@@ -29,6 +29,7 @@ const runIdsSchema = z.object({
   sibling: z.string().min(1),
   unattributed: z.string().min(1),
   eventless: z.string().min(1),
+  busy: z.string().min(1),
 });
 let cachedRunIds: z.infer<typeof runIdsSchema> | undefined;
 const runs = (): z.infer<typeof runIdsSchema> =>
@@ -283,6 +284,37 @@ test("keeps a node's task, criteria, dependencies and gate reachable", async ({
   ).toBeVisible();
 });
 
+test("keeps a node of hundreds of recorded sessions scannable", async ({
+  page,
+}) => {
+  // The served run really did record hundreds of sessions on this node, which is
+  // the shape that made the old detail panel unreadable.
+  await openObservatory(page, `/?run=${runs().busy}&node=sweep`);
+  const rows = rail(page).getByRole("button");
+  await expect(rows.first()).toBeVisible();
+  const grouped = rail(page).getByRole("button", { name: /× dispatch/ });
+  await expect(grouped).toBeVisible();
+  expect(await rows.count()).toBeLessThan(12);
+
+  // Opening the group hands out a page of it, not every row at once.
+  await grouped.click();
+  await expect(
+    rail(page).getByRole("button", { name: /Show 25 more of \d\d\d/ }),
+  ).toBeVisible();
+  expect(await rows.count()).toBeLessThan(60);
+
+  // And one session's own turns are paged the same way inside the detail region.
+  await rail(page)
+    .getByRole("button", { name: /engineer-sweep-7\b/ })
+    .click();
+  await expect(itemDetail(page)).toContainText("Swept batch 7 (0)");
+  await expect(itemDetail(page)).not.toContainText("Swept batch 7 (29)");
+  await itemDetail(page)
+    .getByRole("button", { name: /Show more of 30 turns/ })
+    .click();
+  await expect(itemDetail(page)).toContainText("Swept batch 7 (29)");
+});
+
 test("reports a node whose recorded work the run has not written yet", async ({
   page,
 }) => {
@@ -400,17 +432,18 @@ test("gathers every run of one launching session under it", async ({
   page,
 }) => {
   await openObservatory(page);
-  // Two of the served runs record the same launch id, as one planner session driving
-  // two graphs does. They belong to one group, not one group each.
+  // Three of the served runs record the same launch id, as one planner session
+  // driving several graphs does. They belong to one group, not one group each.
   const codex = page
     .locator("section")
     .filter({ has: page.getByRole("heading", { name: /Codex session/ }) });
   await expect(
     page.getByRole("heading", { name: /Codex session/ }),
   ).toHaveCount(1);
-  await expect(codex.getByRole("button")).toHaveCount(2);
+  await expect(codex.getByRole("button")).toHaveCount(3);
   await expect(codex).toContainText(runs().live);
   await expect(codex).toContainText(runs().sibling);
+  await expect(codex).toContainText(runs().busy);
 
   // Both are reachable from that one group.
   await codex.getByRole("button", { name: RegExp(runs().sibling) }).click();
@@ -750,7 +783,12 @@ test("falls back to the empty state once no run is left", async ({ page }) => {
   // Every remaining run except one — the journey before this removed the historical
   // one. The empty state means the server serves none, so it must not appear while
   // any run is still there to show, whatever shape that run is.
-  for (const runId of [runs().live, runs().unattributed, runs().eventless]) {
+  for (const runId of [
+    runs().live,
+    runs().unattributed,
+    runs().eventless,
+    runs().busy,
+  ]) {
     changeServedRuns(["--remove-run", runId]);
     await expect(page.getByText("No DAG runs found")).toHaveCount(0);
   }

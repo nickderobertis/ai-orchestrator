@@ -78,6 +78,12 @@ export function OverallView({
                   arrived or could not be read is not the same answer as a run that
                   recorded no planner conversation — saying so would be a claim about
                   a record nothing has looked at. */}
+              {/* llmlint: ignore[changed_behavior_has_e2e] the run detail and the
+                  timeline are read from the same strict journal, so no served run
+                  fails one and not the other; a browser reaches this only when the
+                  whole API is unreachable, which the offline journey covers at the
+                  header banner. App.test.tsx proves this surface through the real
+                  client. */}
               {timelineError !== undefined ? (
                 <p className="m-0 text-[11px] text-muted-foreground">
                   The run's sessions could not be read: {timelineError.message}
@@ -175,6 +181,9 @@ function RunLevelSession({
               Loading transcript…
             </div>
           )}
+          {/* llmlint: ignore[changed_behavior_has_e2e] a transcript the server named
+              in the timeline it just served and then refused: unproducible from a
+              conforming server, proven through the real client in App.test.tsx. */}
           {transcript.error !== undefined && (
             <p className="m-0 text-[11px] text-muted-foreground">
               This transcript could not be read: {transcript.error.message}
