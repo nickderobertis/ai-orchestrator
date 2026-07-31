@@ -40,14 +40,19 @@ fi
 # diagnostic state that is already ignored; the repository root stays clean.
 lock_dir="$repo_root/.logs"
 lock_file="$lock_dir/workspace-install.lock"
-# Opened in two steps on purpose: a redirection that fails on `exec` kills a
-# non-interactive shell outright, so the failure is provoked and reported here,
-# where it can name the path, rather than ending the run without a word.
-if ! { mkdir -p "$lock_dir" && chmod 700 "$lock_dir" && : >>"$lock_file"; }; then
-    echo "workspace-install: cannot open the install lock at '$lock_file'; repair its parent permissions and retry" >&2
+if ! { mkdir -p "$lock_dir" && chmod 700 "$lock_dir"; }; then
+    echo "workspace-install: cannot prepare '$lock_dir' for the install lock; repair its parent permissions and retry" >&2
     exit 1
 fi
-exec 9<"$lock_file"
+# Guarded, not assumed: bash reports a failed `exec` redirection rather than
+# taking the shell down with it, so a lock file that turned unreadable between
+# `mkdir` and here still gets a diagnostic that names the path instead of a
+# silent death. Creation and the descriptor are separate steps because `9<`
+# alone will not create the file.
+if ! : >>"$lock_file" || ! exec 9<"$lock_file"; then
+    echo "workspace-install: cannot open the install lock at '$lock_file'; repair its permissions and retry" >&2
+    exit 1
+fi
 if ! flock 9; then
     echo "workspace-install: cannot serialize the locked install; retry once no other install is running" >&2
     exit 1

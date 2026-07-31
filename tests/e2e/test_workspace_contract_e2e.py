@@ -759,6 +759,70 @@ def test_workspace_install_rejects_arguments_it_does_not_define(
     assert not trace.exists(), "a rejected invocation must not have run Bun"
 
 
+def _sabotage_installer_state(checkout: Path, mode: str) -> None:
+    """Break one of the pieces of its own state the installer has to open."""
+    logs = checkout / ".logs"
+    match mode:
+        case "lock-directory":
+            # A regular file where the directory belongs: `mkdir -p` refuses.
+            logs.write_text("not a directory\n", encoding="utf-8")
+        case "unreadable-lock" | "write-only-lock":
+            logs.mkdir()
+            lock = logs / "workspace-install.lock"
+            lock.touch()
+            lock.chmod(0o000 if mode == "unreadable-lock" else 0o200)
+        case "unacquirable-lock":
+            # The one refusal no permission can produce: `flock` itself failing.
+            flock = checkout / "bin" / "flock"
+            flock.write_text(
+                '#!/usr/bin/env bash\necho "flock: cannot lock this file" >&2\nexit 1\n',
+                encoding="utf-8",
+            )
+            flock.chmod(0o755)
+        case "unopenable-log":
+            logs.mkdir()
+            (logs / "workspace-install.log").mkdir()
+        case _:  # pragma: no cover - guards the parametrization above
+            raise AssertionError(f"unknown installer sabotage {mode!r}")
+
+
+@pytest.mark.parametrize(
+    ("mode", "message"),
+    [
+        ("lock-directory", "cannot prepare"),
+        ("unreadable-lock", "cannot open the install lock at"),
+        ("write-only-lock", "cannot open the install lock at"),
+        ("unacquirable-lock", "cannot serialize the locked install"),
+        ("unopenable-log", "preserved-log: cannot open"),
+    ],
+)
+def test_workspace_install_names_every_piece_of_its_own_state_that_refuses(
+    tmp_path: Path, mode: str, message: str
+) -> None:
+    """Each way the installer's own state can refuse arrives as a diagnostic.
+
+    The descriptor its lock is held on is opened with `exec`, whose redirection
+    failures are exactly the kind a script dies on without a word — and the lock
+    directory, the lock acquisition, and the preserved log can each refuse too.
+    Every one of them has to name what could not be opened and stop before Bun,
+    because an installer that ran anyway would be installing unserialized.
+    """
+    checkout = _nx_wrapper_checkout(tmp_path, f"refusing-{mode}")
+    _add_nx_wrapper_doubles(checkout)
+    _sabotage_installer_state(checkout, mode)
+    trace = tmp_path / "trace"
+
+    result = _run(
+        str(checkout / "scripts" / "workspace-install.sh"),
+        cwd=checkout,
+        env=_nx_wrapper_env(checkout, tmp_path, trace),
+    )
+
+    assert result.returncode == 1
+    assert message in result.stderr
+    assert not trace.exists(), "an installer that never took its lock must not have run Bun"
+
+
 def test_concurrent_workspace_installs_install_once_and_both_succeed(tmp_path: Path) -> None:
     """Two Nx invocations in one fresh worktree must not install over each other.
 

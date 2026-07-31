@@ -31,6 +31,7 @@ from collections.abc import Callable, Iterator
 from pathlib import Path
 
 import pytest
+from fake_codex import provider_environment
 from waits import deadline as e2e_deadline
 from waits import timeout as e2e_timeout
 
@@ -39,7 +40,6 @@ from orchestrator.lifecycle import run_repo_task
 from orchestrator.smoke import LAUNCH_ATTEMPTS
 from orchestrator.workspace import Workspace
 
-FAKE_CODEX = REPO_ROOT / "tests" / "e2e" / "fake_codex.py"
 MP = multiprocessing.get_context("spawn")
 
 
@@ -135,19 +135,6 @@ def concurrent_dispatch_load(
         load.stop()
 
 
-def _smoke_environment(attempts: Path, unavailable: int) -> dict[str, str]:
-    """Point the real `just smoke` at a doubled paid provider and nothing else."""
-    return {
-        **os.environ,
-        # Selected rather than assumed: the fallback chain's first candidate is a
-        # paid Claude subscription, and this journey may never reach one.
-        "ONEHARNESS_HARNESSES": "codex",
-        "ONEHARNESS_BIN_CODEX": str(FAKE_CODEX),
-        "FAKE_CODEX_ATTEMPT_LOG": str(attempts),
-        "FAKE_CODEX_UNAVAILABLE_ATTEMPTS": str(unavailable),
-    }
-
-
 def _run_smoke(environment: dict[str, str]) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         ["just", "smoke"],
@@ -167,7 +154,7 @@ def test_smoke_survives_a_harness_that_refuses_a_launch_under_a_live_load(
     load = concurrent_dispatch_load(3)
     assert load.alive() == 3
 
-    result = _run_smoke(_smoke_environment(attempts, unavailable=1))
+    result = _run_smoke(provider_environment(attempt_log=attempts, unavailable_attempts=1))
 
     # Live for the whole smoke, not merely started before it.
     assert load.alive() == 3, "the concurrent dispatches did not outlive the smoke"
@@ -186,7 +173,9 @@ def test_smoke_still_fails_when_every_launch_under_load_fails(
     attempts = tmp_path / "harness-attempts"
     load = concurrent_dispatch_load(2)
 
-    result = _run_smoke(_smoke_environment(attempts, unavailable=LAUNCH_ATTEMPTS + 1))
+    result = _run_smoke(
+        provider_environment(attempt_log=attempts, unavailable_attempts=LAUNCH_ATTEMPTS + 1)
+    )
 
     assert load.alive() == 2
     assert result.returncode == 1
