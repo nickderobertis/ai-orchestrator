@@ -646,6 +646,16 @@ def test_strict_reader_rejects_unknown_envelope_fields(tmp_path: Path) -> None:
             [_event("node-started", 2, node="a"), _event("node-settled", 3, node="a")],
             "terminal status",
         ),
+        # Detail is persisted JSON, so a status can arrive as a value a bare
+        # membership test would reject with a hashability `TypeError` instead of
+        # with this reader's own error about what it required.
+        (
+            [
+                _event("node-started", 2, node="a"),
+                _event("node-settled", 3, node="a", detail={"status": ["done"]}),
+            ],
+            "terminal status",
+        ),
         ([_event("human-attested", 2, node="a")], "non-empty ref"),
         (
             [

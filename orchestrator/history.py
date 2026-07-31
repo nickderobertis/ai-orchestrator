@@ -105,15 +105,29 @@ class HistorySession:
         )
 
 
-def _run_history(*args: str, oneharness_bin: str = "oneharness") -> Any:
+def _run_history(
+    *args: str, oneharness_bin: str = "oneharness", timeout: float | None = None
+) -> Any:
+    """Read the history store through its real CLI, optionally under a deadline.
+
+    ``timeout`` exists for the *viewing* callers: this is a read of a store that
+    only grows, and a reader with no deadline inherits whatever that read costs —
+    which is how a command whose whole job is to answer "what is happening right
+    now" became one that never answered. A caller that passes one gets a
+    `HistoryError` on expiry, which every reader already treats as this optional
+    source falling silent. Omitting it keeps the unbounded wait.
+    """
     try:
         proc = subprocess.run(
             [oneharness_bin, "history", *args, "--all-projects", "--format", "json"],
             text=True,
             capture_output=True,
+            timeout=timeout,
         )
     except FileNotFoundError as exc:
         raise HistoryError("oneharness not found — run 'just bootstrap'") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise HistoryError(f"oneharness history timed out after {timeout:g}s") from exc
     if proc.returncode:
         detail = proc.stderr.strip() or "unknown error"
         raise HistoryError(f"oneharness history failed: {detail}")
@@ -222,18 +236,22 @@ def _sessions(value: Any) -> list[HistorySession]:
     return [session for item in value if (session := HistorySession.from_value(item))]
 
 
-def worker_sessions(*, oneharness_bin: str = "oneharness") -> list[HistorySession]:
+def worker_sessions(
+    *, oneharness_bin: str = "oneharness", timeout: float | None = None
+) -> list[HistorySession]:
     """Return validated worker sessions, newest first, across every project."""
     return [
         session
-        for session in all_sessions(oneharness_bin=oneharness_bin)
+        for session in all_sessions(oneharness_bin=oneharness_bin, timeout=timeout)
         if session_role(session) == "agent"
     ]
 
 
-def all_sessions(*, oneharness_bin: str = "oneharness") -> list[HistorySession]:
+def all_sessions(
+    *, oneharness_bin: str = "oneharness", timeout: float | None = None
+) -> list[HistorySession]:
     """Return every validated session, newest first, across every project."""
-    return _sessions(_run_history("list", oneharness_bin=oneharness_bin))
+    return _sessions(_run_history("list", oneharness_bin=oneharness_bin, timeout=timeout))
 
 
 class SessionScan:

@@ -34,8 +34,10 @@ from orchestrator.monitor import (
     Monitor,
     MonitorError,
     MonitorEvent,
+    Watchable,
     Writer,
     active_runs,
+    follows,
     journal_events,
     load_snapshot,
     resolve_run,
@@ -846,7 +848,9 @@ def test_the_public_monitor_entrypoint_replays_a_complete_run_in_process(
     if output_format == "text":
         assert lines[0] == HEADER
         assert lines[1].endswith("graph:watch-me/1/api  node-settled status=done ok=yes")
-        assert lines[-1].endswith("watch-me round-01 complete: 1 done")
+        # A completed graph reads the same whichever mode read it: the detail is
+        # about the run, not about how it was being watched.
+        assert lines[-1].endswith("watch-me round-01 complete: graph complete")
     else:
         records = [json.loads(line) for line in lines]
         assert records[0]["id"] == "graph:watch-me/1/api"
@@ -871,6 +875,53 @@ def test_the_public_monitor_entrypoint_reports_resolution_and_argument_errors(
         monitor_main(["--heartbeat", "0", "--runs-dir", str(runs_dir)])
     assert invalid.value.code == 2
     assert "--heartbeat must be a positive number of seconds" in capsys.readouterr().err
+
+    with pytest.raises(SystemExit) as invalid_timeout:
+        monitor_main(["--source-timeout", "0", "--runs-dir", str(runs_dir)])
+    assert invalid_timeout.value.code == 2
+    assert "--source-timeout must be a positive number of seconds" in capsys.readouterr().err
+
+    with pytest.raises(SystemExit) as contradictory:
+        monitor_main(["--once", "--follow", "--runs-dir", str(runs_dir)])
+    assert contradictory.value.code == 2
+    assert "--once and --follow ask for opposite things" in capsys.readouterr().err
+
+
+class _Watched:
+    """A stream that reports whether a person is watching it."""
+
+    def __init__(self, terminal: bool) -> None:
+        self._terminal = terminal
+
+    def isatty(self) -> bool:
+        return self._terminal
+
+
+def _closed() -> io.StringIO:
+    """A stream already closed: `isatty` raises rather than answering."""
+    stream = io.StringIO()
+    stream.close()
+    return stream
+
+
+@pytest.mark.parametrize(
+    ("out", "follow", "expected"),
+    [
+        (_Watched(True), False, True),
+        (_Watched(False), False, False),
+        (_Watched(False), True, True),
+        (io.StringIO(), False, False),
+        (_closed(), False, False),
+    ],
+)
+def test_only_a_watcher_that_can_see_the_stream_follows_it(
+    out: Watchable, follow: bool, expected: bool
+) -> None:
+    """Following is a terminal affordance. Off one — a pipe, a file, a captured
+    planner invocation — the caller sees nothing until the process exits, and the
+    exit contract says only a successful graph ever exits. So the command
+    `launch.json` advertises makes one bounded pass instead, unless asked otherwise."""
+    assert follows(out, follow=follow) is expected
 
 
 def test_the_public_monitor_entrypoint_treats_ctrl_c_as_a_clean_stop(

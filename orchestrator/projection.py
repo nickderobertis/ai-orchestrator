@@ -15,7 +15,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Literal, TypedDict, cast
+from typing import Any, Literal, TypedDict, cast, get_args
 
 from .config import ConfigError
 from .edits import EDIT_PROTOCOL_VERSION, EditError, parse_commands
@@ -45,6 +45,11 @@ class ProjectionError(ValueError):
 # strict-reader view is drift-gated where it matters — round-finished folding rejects any state that
 # disagrees with the recorded result, so a status the executor emits but omits here cannot project.
 NodeState = Literal["running", "done", "failed", "waiting", "cancelled"]
+
+#: The states a node can *settle* in — `NodeState` minus the one that means it has
+#: not. Named here rather than restated at each reader so a strict fold and a
+#: degrading read-only view judge a recorded status against the same domain.
+TERMINAL_NODE_STATES: frozenset[str] = frozenset(get_args(NodeState)) - {"running"}
 
 
 class ProjectedPlan(TypedDict, total=False):
@@ -248,9 +253,15 @@ def project_round(events: list[Event], run_id: RunId, round_number: int) -> Roun
                 if not dropped and builder.states.get(event.node) != "running":
                     raise ProjectionError(f"node {event.node!r} settled without one start")
                 status = "failed" if event.kind == "node-failed" else detail.get("status")
-                if status not in {"done", "failed", "waiting", "cancelled"}:
+                # `detail` is persisted JSON, so this value can be a list or an
+                # object — which a bare membership test would answer with a
+                # `TypeError` about hashability rather than with this reader's own
+                # error about what it required.
+                if not isinstance(status, str) or status not in TERMINAL_NODE_STATES:
                     raise ProjectionError("node-settled requires a terminal status")
-                builder.states[event.node] = status
+                # The membership test above is the check; the cast only tells the type
+                # checker what a `frozenset[str]` cannot, which is that it narrowed.
+                builder.states[event.node] = cast(NodeState, status)
                 _fold_node_result(builder, event)
                 if dropped:
                     if status not in {"done", "cancelled"}:

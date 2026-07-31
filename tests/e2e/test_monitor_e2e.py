@@ -17,8 +17,11 @@ every test calls the same functions `just monitor` calls, or `just monitor` itse
 from __future__ import annotations
 
 import json
+import os
+import pty
 import subprocess
 import sys
+import time
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
@@ -26,13 +29,15 @@ from typing import Any
 
 import pytest
 from fakes import FakeGitHub
+from waits import deadline
 from waits import timeout as e2e_timeout
 
 from orchestrator import REPO_ROOT, gitops
 from orchestrator.github import Check, GitHubError, PRStatus, PullRequest
-from orchestrator.journal import open_journal
+from orchestrator.journal import JournalOperation, open_journal
 from orchestrator.monitor import (
     HEADER,
+    RETURN_BOUND_SECONDS,
     BranchRef,
     DetailSnapshot,
     Monitor,
@@ -528,13 +533,22 @@ def test_a_current_pr_is_streamable_from_its_journal_identity(tmp_path: Path) ->
 # --- the oneharness history source ---------------------------------------------
 
 
-def _oneharness(tmp_path: Path, sessions: list[dict[str, Any]]) -> str:
-    """A real `oneharness`-shaped executable serving the recorded store this test wrote."""
+def _oneharness(
+    tmp_path: Path, sessions: list[dict[str, Any]], *, delay_seconds: float | None = None
+) -> str:
+    """A real `oneharness`-shaped executable serving the recorded store this test wrote.
+
+    ``delay_seconds`` makes the store as slow to read as a real one under load — or,
+    past any deadline, indefinitely slow — which is what a reader that promises to
+    answer within a bound has to survive.
+    """
     store = tmp_path / "history-store.json"
     store.write_text(json.dumps({"sessions": sessions}), encoding="utf-8")
     launcher = tmp_path / "oneharness"
+    delay = "" if delay_seconds is None else f"FAKE_ONEHARNESS_DELAY_SECONDS={delay_seconds:g} "
     launcher.write_text(
-        f'#!/bin/sh\nFAKE_ONEHARNESS_STORE={store} exec {sys.executable} {FAKE_ONEHARNESS} "$@"\n',
+        f"#!/bin/sh\n{delay}FAKE_ONEHARNESS_STORE={store} "
+        f'exec {sys.executable} {FAKE_ONEHARNESS} "$@"\n',
         encoding="utf-8",
     )
     launcher.chmod(0o755)
@@ -732,6 +746,14 @@ def test_the_monitor_command_streams_a_run_and_only_success_exits_zero(tmp_path:
     assert (records[-1]["state"], records[-1]["detail"]) == ("complete", "graph complete")
     assert "id" not in records[-1]
 
+    # A completed graph reads the same however it was watched — followed to, passed
+    # over off a terminal, or asked with `--once` — because that detail describes the
+    # run and not the mode. Only an *unfinished* run reads differently, which is what
+    # `--once` is for.
+    asked = _monitor_cli("--runs-dir", str(runs_dir), "--once", RUN)
+    assert asked.returncode == 0, asked.stderr
+    assert asked.stdout.splitlines()[-1].endswith("watch-me round-01 complete: graph complete")
+
 
 def test_monitor_recovers_from_a_malformed_pending_surface(tmp_path: Path) -> None:
     """A corrupt planner-pending.json is a deterministic reader boundary: the real
@@ -778,14 +800,24 @@ def test_the_monitor_command_reports_a_run_it_cannot_watch_actionably(tmp_path: 
         invalid = _monitor_cli("--runs-dir", str(runs_dir), "--max-poll-interval", invalid_maximum)
         assert invalid.returncode == 2
         assert "--max-poll-interval must be a positive number of seconds" in invalid.stderr
-    for option in ("--heartbeat", "--poll-interval"):
-        for non_finite in ("nan", "inf"):
+    for option in ("--heartbeat", "--poll-interval", "--source-timeout"):
+        for non_finite in ("0", "nan", "inf"):
             invalid = _monitor_cli("--runs-dir", str(runs_dir), option, non_finite)
             assert invalid.returncode == 2
             assert f"{option} must be a positive number of seconds" in invalid.stderr
 
+    # Asking to follow *and* to make one pass is a contradiction, not a precedence
+    # question, so it is refused rather than silently resolved either way.
+    contradictory = _monitor_cli("--runs-dir", str(runs_dir), "--once", "--follow", RUN)
+    assert contradictory.returncode == 2
+    assert "--once and --follow ask for opposite things" in contradictory.stderr
+    assert "Traceback" not in contradictory.stderr
+
 
 def test_monitor_command_backs_off_to_its_bounded_interval(tmp_path: Path) -> None:
+    """`--follow` is what a reader that *does* consume the stream incrementally asks
+    for: this one reads line by line off a pipe, which is exactly the caller the
+    non-terminal default is not for."""
     runs_dir = tmp_path / "runs"
     run_dir = runs_dir / RUN
     open_journal(run_dir, RUN, 1).append("node-started", node=NodeId("api"))
@@ -794,6 +826,7 @@ def test_monitor_command_backs_off_to_its_bounded_interval(tmp_path: Path) -> No
         [
             "just",
             "monitor",
+            "--follow",
             "--runs-dir",
             str(runs_dir),
             "--format",
@@ -820,3 +853,257 @@ def test_monitor_command_backs_off_to_its_bounded_interval(tmp_path: Path) -> No
     intervals = [record["next_poll_seconds"] for record in records if record["type"] == "heartbeat"]
     assert 0.02 in intervals
     assert intervals[-1] == 0.04
+
+
+def test_the_monitor_command_follows_an_unfinished_run_on_a_real_terminal(
+    tmp_path: Path,
+) -> None:
+    """The follow is what a person at a terminal gets, and only they get it.
+
+    Everywhere else this suite drives the command its output is captured, which is
+    now the one-pass case — so the terminal case needs a terminal. A real pty is
+    that: the command's stdout is a tty, nobody passed `--follow`, and the run has
+    not finished, so it keeps heartbeating instead of returning. That is the exact
+    behaviour a captured invocation must *not* get, and asserting it here is what
+    keeps the fix from having simply deleted the follow.
+    """
+    runs_dir = tmp_path / "runs"
+    run_dir = runs_dir / RUN
+    open_journal(run_dir, RUN, 1).append("node-started", node=NodeId("api"))
+    _settle(run_dir, {"api": {"status": "waiting"}}, ok=False, state="waiting")
+
+    reader, writer = pty.openpty()
+    process = subprocess.Popen(
+        [
+            "just",
+            "monitor",
+            "--runs-dir",
+            str(runs_dir),
+            "--heartbeat",
+            "0.01",
+            "--poll-interval",
+            "0.01",
+            "--max-poll-interval",
+            "0.02",
+            RUN,
+        ],
+        cwd=REPO_ROOT,
+        stdout=writer,
+        stderr=subprocess.PIPE,
+    )
+    os.close(writer)
+    try:
+        with os.fdopen(reader, "r", encoding="utf-8", newline="") as stream:
+            seen: list[str] = []
+            guard = deadline(60)
+            # Several heartbeats on an unfinished run: the stream is still open and
+            # still reporting, which a returning one-pass invocation could not do.
+            while len([line for line in seen if "round-01 waiting" in line]) < 3:
+                assert time.monotonic() < guard, seen
+                try:
+                    line = stream.readline()
+                except OSError as exc:
+                    # The pty's other end closed, which here means the command exited.
+                    raise AssertionError(
+                        f"the followed run exited ({process.poll()}) after {seen}"
+                    ) from exc
+                assert line, f"the followed run closed its stream after {seen}"
+                seen.append(line)
+        assert process.poll() is None, "a followed unfinished run must not have exited"
+    finally:
+        process.terminate()
+        process.wait(timeout=e2e_timeout(5))
+    assert seen[0].startswith(HEADER)
+
+
+def _realistic_runs_root(tmp_path: Path) -> tuple[Path, RunId]:
+    """A runs root the size the planner's own is: many runs, one long journal.
+
+    Sized from the host's real root at the time this was written — 51 recorded runs
+    whose largest journal held ~30k events. The watched run is deliberately *not*
+    finished, because that is the case the follow mode never returned from.
+    """
+    runs_dir = tmp_path / "runs"
+    for index in range(50):
+        neighbour = RunId(f"neighbour-{index:02d}")
+        directory = runs_dir / neighbour
+        open_journal(directory, neighbour, 1).append(
+            "node-settled", node=NodeId("api"), detail={"status": "done"}
+        )
+        _settle(directory, {"api": {"status": "done"}}, ok=True, state="complete")
+    run_dir = runs_dir / RUN
+    journal = open_journal(run_dir, RUN, 1)
+    journal.append("node-started", node=NodeId("api"))
+    batch = [
+        JournalOperation(kind="lock-wait", detail={"identity": "merge:local/app", "seconds": 0.5})
+        for _ in range(1000)
+    ]
+    for _ in range(30):
+        journal.append_batch(batch, node=NodeId("api"))
+    _settle(run_dir, {"api": {"status": "waiting"}}, ok=False, state="waiting")
+    return runs_dir, RUN
+
+
+def test_the_monitor_command_returns_within_its_bound_on_a_realistic_runs_root(
+    tmp_path: Path,
+) -> None:
+    """The planner's captured invocation gets a bounded answer, not an endless wait.
+
+    `launch.json` advertises `just monitor <run-id>`, and an automated supervisor
+    runs it with its output captured — where a follow that only ends on success
+    produces nothing and never returns. Off a terminal the command therefore makes
+    one pass, and `RETURN_BOUND_SECONDS` is the bound that pass is held to. The
+    subprocess timeout *is* the assertion: exceeding the budget fails here.
+    """
+    runs_dir, run_id = _realistic_runs_root(tmp_path)
+
+    started = time.monotonic()
+    reported = subprocess.run(
+        ["just", "monitor", run_id, "--runs-dir", str(runs_dir)],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        timeout=RETURN_BOUND_SECONDS,
+    )
+    elapsed = time.monotonic() - started
+
+    assert reported.returncode == 0, reported.stderr
+    assert elapsed < RETURN_BOUND_SECONDS, elapsed
+    lines = reported.stdout.splitlines()
+    assert lines[0] == HEADER
+    # The run has not finished, so a follow would still be waiting: the last line
+    # reports where it stands rather than claiming the graph completed.
+    assert lines[-1].endswith("watch-me round-01 waiting: 1 waiting")
+    assert len(lines) > 30_000
+
+
+def test_a_stalled_external_source_cannot_hold_that_bound_open(tmp_path: Path) -> None:
+    """One pass is only a bound if every source it crosses has one.
+
+    oneharness history is a subprocess over a store that only grows and `gh` is the
+    network; neither had a deadline, so either could hold a pass open indefinitely
+    and no wall-clock promise about the command would mean anything. Here the
+    history binary never answers, and the pass completes anyway — reporting the
+    journal it can read and treating the source it cannot as silent, which is what
+    an absent store already did.
+    """
+    runs_dir = tmp_path / "runs"
+    run_dir = runs_dir / RUN
+    open_journal(run_dir, RUN, 1).append("node-started", node=NodeId("api"))
+    _settle(run_dir, {"api": {"status": "waiting"}}, ok=False, state="waiting")
+    source_timeout = 2.0
+    binary = _oneharness(
+        tmp_path,
+        [_session(tmp_path, "api-20260714T100000Z-1", "engineer", ["running"], run_id=RUN)],
+        delay_seconds=RETURN_BOUND_SECONDS * 10,
+    )
+
+    started = time.monotonic()
+    reported = subprocess.run(
+        [
+            "just",
+            "monitor",
+            RUN,
+            "--runs-dir",
+            str(runs_dir),
+            "--oneharness-bin",
+            binary,
+            "--source-timeout",
+            str(source_timeout),
+        ],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        timeout=RETURN_BOUND_SECONDS,
+    )
+    elapsed = time.monotonic() - started
+
+    assert reported.returncode == 0, reported.stderr
+    # It waited for the source — the deadline is what ended the wait, not a refusal
+    # to ask — and then answered well inside the budget rather than at it.
+    assert source_timeout <= elapsed < RETURN_BOUND_SECONDS, elapsed
+    lines = reported.stdout.splitlines()
+    assert lines[0] == HEADER
+    assert lines[-1].endswith("watch-me round-01 waiting: 1 waiting")
+    assert not [line for line in lines if " oh:" in line]
+    assert "Traceback" not in reported.stderr
+
+
+def _stalled_gh(tmp_path: Path) -> dict[str, str]:
+    """An environment whose `gh` never answers — GitHub unreachable but not absent.
+
+    A real executable on `PATH` rather than an injected backend, because what is
+    under test is the deadline the command puts on that subprocess: an in-process
+    double would prove the bookkeeping and not the thing that hangs.
+    """
+    directory = tmp_path / "bin"
+    directory.mkdir()
+    script = directory / "gh"
+    script.write_text("#!/usr/bin/env python3\nimport time\ntime.sleep(600)\n", encoding="utf-8")
+    script.chmod(0o755)
+    return {**os.environ, "PATH": f"{directory}{os.pathsep}{os.environ['PATH']}"}
+
+
+def test_a_slow_github_costs_the_command_one_budget_not_one_timeout_per_pr(
+    tmp_path: Path,
+) -> None:
+    """The `gh` deadline is the source's, not each call's.
+
+    A run links a PR per lifecycle node, so bounding only the individual call would
+    let an unreachable GitHub cost one full timeout per PR — a command that promises
+    to return would still take as long as the graph is wide. Ten linked PRs and a
+    `gh` that never answers would be ten timeouts; the source spends one budget and
+    stops asking, and every PR it could not reach falls silent exactly as it does
+    when `gh` is absent. The journal it *can* read is reported either way, which is
+    the point: losing this source costs detail, never a transition.
+    """
+    runs_dir = tmp_path / "runs"
+    run_dir = runs_dir / RUN
+    journal = open_journal(run_dir, RUN, 1)
+    journal.append("node-started", node=NodeId("api"))
+    linked = list(range(1, 11))
+    for number in linked:
+        journal.append(
+            "pr-created",
+            node=NodeId("api"),
+            detail={
+                "repo": "acme/app",
+                "pr": f"https://github.com/acme/app/pull/{number}",
+                "base": "main",
+            },
+        )
+    _settle(run_dir, {"api": {"status": "waiting"}}, ok=False, state="waiting")
+
+    source_timeout = 2.0
+    started = time.monotonic()
+    reported = subprocess.run(
+        [
+            "just",
+            "monitor",
+            RUN,
+            "--runs-dir",
+            str(runs_dir),
+            # History is not what this test bounds, so it is absent rather than slow.
+            "--oneharness-bin",
+            str(tmp_path / "absent-oneharness"),
+            "--source-timeout",
+            str(source_timeout),
+        ],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        env=_stalled_gh(tmp_path),
+        timeout=RETURN_BOUND_SECONDS,
+    )
+    elapsed = time.monotonic() - started
+
+    assert reported.returncode == 0, reported.stderr
+    # It did wait on `gh` — one in-flight call plus the budget — and nowhere near the
+    # ten timeouts a per-call-only deadline would have cost.
+    assert source_timeout <= elapsed < source_timeout * len(linked), elapsed
+    lines = reported.stdout.splitlines()
+    assert lines[0] == HEADER
+    # The journal is still reported in full; nothing about GitHub was invented.
+    assert lines[-1].endswith("watch-me round-01 waiting: 1 waiting")
+    assert not [line for line in lines if " pr:" in line]
+    assert "Traceback" not in reported.stderr
