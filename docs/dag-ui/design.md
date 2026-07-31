@@ -400,10 +400,12 @@ described under "Launch and session provenance".
 ## Launch and session provenance
 
 The UI may launch from either a Claude Code or Codex session, but it does not
-trust process ancestry or guess the launcher from model names. The launcher
-creates a random 128-bit `launch_id`, writes a short-lived provenance record
-outside the repository, and passes these validated labels to every top-level
-oneharness invocation:
+trust process ancestry or guess the launcher from model names. It reads what the
+harness itself exports into the session (`launch.detect_launch`), so the ordinary
+`just orchestrate` records provenance with no flags and `--launcher` /
+`--launcher-session` remain an override. The launcher creates a random 128-bit
+`launch_id`, writes a short-lived provenance record outside the repository, and
+passes these validated labels to every top-level oneharness invocation:
 
 ```ts
 interface LaunchProvenance {

@@ -184,10 +184,18 @@ integrate *args:
 next-round *args:
     @uv run orchestrator-next-round "$@"
 
-# List recorded tracked-graph runs and their latest status.
+# List recorded tracked-graph runs, who launched them, and their latest status.
+# `just runs --mine` lists only the runs this session launched.
 # llmlint: ignore[tool_output_is_signal] the requested multi-line run ledger is this viewing command's product.
 runs *args:
     @uv run orchestrator-runs "$@"
+
+# Stop a run this session launched, tree and all: `just stop <run-id>`. Refuses a run
+# another planner launched, or one with no recorded launcher, unless given --force.
+# A stopped run stays reclaimable through `just run-plan ... --recover`.
+# llmlint: ignore[tool_output_is_signal] the ownership refusal and what was stopped are this command's product.
+stop *args:
+    @uv run orchestrator-stop "$@"
 
 # llmlint: ignore[tool_output_is_signal] the requested cross-project goal inventory is this viewing command's product.
 goals *args:
