@@ -210,6 +210,78 @@ def test_a_recorded_direct_node_names_the_stop_it_actually_had(
     assert "hit the turn cap" not in failures["released"]["detail"]
 
 
+def test_reported_blocker_settles_promptly_without_mistaking_repeated_progress(
+    tmp_path: Path, command_base, onejudge_bin: str
+) -> None:
+    """The real dispatch loop distinguishes blocker release, cap, and repeated work."""
+    runs = tmp_path / "runs"
+    plan = tmp_path / "blocker-kinds.json"
+    plan.write_text(
+        json.dumps(
+            {
+                "concurrency": 3,
+                "tasks": [
+                    {
+                        "id": "blocked",
+                        "persona": "engineer",
+                        "task": "terminal-blocker: external dependency cannot be controlled.",
+                        "max_turns": 8,
+                    },
+                    {
+                        "id": "capped",
+                        "persona": "engineer",
+                        "task": "should-fail: keep attempting in-scope work.",
+                        "max_turns": 2,
+                    },
+                    {
+                        "id": "productive",
+                        "persona": "engineer",
+                        "task": "repeat-productive: continue after repeated progress wording.",
+                        "max_turns": 5,
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    settled = _just(
+        "run-plan",
+        str(plan),
+        "--run",
+        "blocker-kinds",
+        "--runs-dir",
+        str(runs),
+        "--base",
+        str(command_base()),
+        "--onejudge-bin",
+        onejudge_bin,
+        "--format",
+        "json",
+    )
+
+    assert settled.returncode == 1, settled.stderr
+    results = json.loads(settled.stdout)["results"]
+    assert results["blocked"]["status"] == "failed"
+    assert results["blocked"]["error"] == (
+        "stopped on a reported blocker: required external service is unavailable"
+    )
+    assert results["capped"]["error"] == "hit the turn cap after 2 turns"
+    assert results["productive"]["status"] == "done"
+    events = [
+        json.loads(line)
+        for line in (runs / "blocker-kinds" / "events.jsonl").read_text().splitlines()
+    ]
+    terminal = {
+        event["node"]: event["detail"]
+        for event in events
+        if event["kind"] in {"node-failed", "node-settled"}
+    }
+    assert terminal["blocked"]["turns"] == 1
+    assert terminal["blocked"]["outcome"] == "reported-blocker"
+    assert terminal["productive"]["turns"] == 3
+
+
 def test_direct_human_pause_attestation_and_release_use_real_onejudge(
     tmp_path: Path, command_base, onejudge_bin: str
 ) -> None:

@@ -11,12 +11,14 @@ import pytest
 from onejudge_sdk import RunResult
 from process_tree import await_reaped, await_recorded_pid, is_running, write_orphaning_tree
 
-from orchestrator import BASE_CONFIG, REPO_ROOT
+from orchestrator import BASE_CONFIG, PERSONA_DIR, REPO_ROOT
 from orchestrator.dispatch import (
     AGENT_ONEHARNESS_BIN,
     DEFAULT_DISPATCH_STALL_TIMEOUT,
     DEFAULT_WORKER_HEARTBEAT_TIMEOUT,
     NO_AGENT_PROGRESS_OUTCOME,
+    REPORTED_BLOCKER_OUTCOME,
+    REPORTED_BLOCKER_PREFIX,
     DispatchError,
     Report,
     _agent_run_context,
@@ -83,7 +85,9 @@ def test_build_report_preserves_usage_assessment_and_real_telemetry_field(monkey
     assert report.telemetry == {"wall_ms": 7}
 
 
-def _sdk_report(*, completed: bool, contents: list[str]) -> RunResult:
+def _sdk_report(
+    *, completed: bool, contents: list[str], verdicts: list[dict[str, object]] | None = None
+) -> RunResult:
     """An SDK-validated report whose assistant turns carry the given content."""
     return RunResult(
         exit_code=0 if completed else 1,
@@ -101,6 +105,7 @@ def _sdk_report(*, completed: bool, contents: list[str]) -> RunResult:
                 ]
             },
             "stopped_early": not completed,
+            "verdicts": verdicts or [],
         },
     )
 
@@ -135,6 +140,59 @@ def test_a_budget_spent_without_agent_progress_is_not_the_agent_hitting_the_cap(
     finished = _build_report("engineer", _sdk_report(completed=True, contents=["done"]))
 
     assert finished.completed and finished.outcome is None
+
+
+def test_a_supervisor_confirmed_terminal_blocker_is_a_distinct_failed_outcome() -> None:
+    """The failed final verdict is the trust boundary, not repeated worker prose."""
+    result = _sdk_report(
+        completed=False,
+        contents=["Terminal blocker: deployment approval is unavailable."],
+        verdicts=[
+            {"verdict": {"value": True, "reason": "an earlier criterion passed"}},
+            {
+                "verdict": {
+                    "value": False,
+                    "reason": "Terminal blocker reported: deployment approval is unavailable",
+                }
+            },
+        ],
+    )
+
+    report = _build_report("engineer", result, max_turns=12)
+
+    assert report.outcome == REPORTED_BLOCKER_OUTCOME
+    assert report.outcome_detail == "deployment approval is unavailable"
+    assert incomplete_detail(report) == (
+        "stopped on a reported blocker: deployment approval is unavailable"
+    )
+
+
+def test_engineer_supervisor_blocker_prefix_cannot_drift_from_dispatch_parser() -> None:
+    persona = (PERSONA_DIR / "engineer.yaml").read_text(encoding="utf-8").lower()
+
+    assert f"`{REPORTED_BLOCKER_PREFIX}`" in persona
+
+
+@pytest.mark.parametrize(
+    "verdicts",
+    [
+        [{"verdict": {"value": False, "reason": "ordinary unmet criterion"}}],
+        [{"verdict": {"value": False, "reason": 42}}],
+        [{"verdict": "malformed"}],
+        [{"verdict": {"value": True, "reason": "terminal blocker reported: not blocked"}}],
+    ],
+)
+def test_repeated_work_is_not_a_reported_blocker_without_the_failed_verdict_contract(
+    verdicts: list[dict[str, object]],
+) -> None:
+    report = _build_report(
+        "engineer",
+        _sdk_report(
+            completed=False, contents=["same progress", "same progress"], verdicts=verdicts
+        ),
+    )
+
+    assert report.outcome is None
 
 
 def test_a_worker_that_died_keeps_its_own_name_over_the_no_progress_one() -> None:
