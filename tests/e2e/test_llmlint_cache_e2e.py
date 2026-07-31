@@ -130,6 +130,18 @@ def _write_version_only_llmlint(directory: Path, version: str) -> Path:
     return directory
 
 
+def _run_fingerprint(workspace: Workspace, **overrides: str) -> subprocess.CompletedProcess[str]:
+    """Run the fingerprint the way an operator diagnosing a cache miss would."""
+    return subprocess.run(
+        [str(workspace.root / "scripts" / "llmlint-fingerprint.sh")],
+        cwd=workspace.root,
+        env={**workspace.env, **overrides},
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+
+
 @pytest.fixture
 def workspace(tmp_path: Path) -> Workspace:
     root = tmp_path / "checkout"
@@ -296,18 +308,33 @@ def test_ambient_judge_bin_does_not_invalidate_the_verdict(workspace: Workspace)
 
 
 def test_ambient_llmlint_path_does_not_invalidate_the_verdict(workspace: Workspace) -> None:
-    """Both fingerprint commands use the same checkout-pinned llmlint as the judge."""
+    """Both fingerprint commands resolve llmlint the way the judge does, not the caller.
+
+    A cache hit alone would not prove that: a fingerprint that *fails* under the
+    caller's llmlint also produces one, because Nx scores a runtime input that
+    exits non-zero as no contribution rather than as an error, and both runs then
+    share the same degraded key. So the fingerprint is read directly too — it has
+    to resolve under each ambient llmlint, and resolve to the same digest, which is
+    what says the checkout's judge configuration is still in the key.
+    """
     base = workspace.head()
     first_bin = _write_version_only_llmlint(workspace.root.parent / "ambient-one", "1.0.0")
     second_bin = _write_version_only_llmlint(workspace.root.parent / "ambient-two", "2.0.0")
+    on_first = {"PATH": f"{first_bin}{os.pathsep}{workspace.env['PATH']}"}
+    on_second = {"PATH": f"{second_bin}{os.pathsep}{workspace.env['PATH']}"}
 
-    first = workspace.lint(base, PATH=f"{first_bin}{os.pathsep}{workspace.env['PATH']}")
-    second = workspace.lint(base, PATH=f"{second_bin}{os.pathsep}{workspace.env['PATH']}")
+    first = workspace.lint(base, **on_first)
+    second = workspace.lint(base, **on_second)
+    first_print = _run_fingerprint(workspace, **on_first)
+    second_print = _run_fingerprint(workspace, **on_second)
 
     assert first.returncode == 0, first.stdout + first.stderr
     assert second.returncode == 0, second.stdout + second.stderr
     assert workspace.judge_runs() == 1
     assert CACHE_HIT in second.stderr
+    assert first_print.returncode == 0, first_print.stdout + first_print.stderr
+    assert second_print.returncode == 0, second_print.stdout + second_print.stderr
+    assert first_print.stdout.strip() == second_print.stdout.strip() != ""
 
 
 def test_an_ambient_llmlint_still_lets_the_judge_configuration_invalidate(
@@ -415,18 +442,6 @@ def _run_target(workspace: Workspace, **overrides: str) -> subprocess.CompletedP
     """Invoke the Nx target the way someone who skipped the recipe would."""
     return subprocess.run(
         ["./scripts/nx.sh", "run", "workspace:lint-llm-diff"],
-        cwd=workspace.root,
-        env={**workspace.env, **overrides},
-        check=False,
-        text=True,
-        capture_output=True,
-    )
-
-
-def _run_fingerprint(workspace: Workspace, **overrides: str) -> subprocess.CompletedProcess[str]:
-    """Run the fingerprint the way an operator diagnosing a cache miss would."""
-    return subprocess.run(
-        [str(workspace.root / "scripts" / "llmlint-fingerprint.sh")],
         cwd=workspace.root,
         env={**workspace.env, **overrides},
         check=False,

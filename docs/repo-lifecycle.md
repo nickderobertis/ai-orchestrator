@@ -341,17 +341,38 @@ answer rather than a second roll of the dice.
 
 That only holds while the key is a function of the judged question alone, so
 `scripts/llmlint-fingerprint.sh` resolves the llmlint version *and* the merged
-config under the same pinned runtime the target judges with — never the caller's
-inherited `PATH` or `LLMLINT_ONEHARNESS_BIN`. Both reach `llmlint config`, so a
-fingerprint that reads the caller's environment fails in two directions at once.
-It splits one judged diff across a key per dispatch, which is the visible symptom:
-the judge re-rolls and a branch collects opposite verdicts on identical content.
-And because Nx scores a runtime input that exits non-zero as *no contribution*
-rather than as an error, a fingerprint the caller's environment can break does not
-fail the tier — it silently shrinks the key to the tree and the base. That failure
-is the quiet one and the worse one: a re-roll only costs a judge call, while a
-degraded key replays a verdict the judge configuration has since moved on from.
-Both directions are held by `tests/e2e/test_llmlint_cache_e2e.py`.
+config through `scripts/llmlint-runtime-env.sh` — the one environment
+`scripts/llmlint-diff.sh` also judges under. One helper, sourced by both ends, is
+the whole mechanism: neither end can read a value the other did not.
+
+`LLMLINT_ONEHARNESS_BIN` is the input that actually varied. `llmlint config`
+renders it into its output as `oneharness.bin`, and it is not one value: a
+dispatched agent inherits `orchestrator/dispatch.py`'s `REPO_ROOT` — the
+orchestrator's own checkout, never the worktree being linted, so the fingerprint's
+`{root}` fold-out cannot strip it — or `scripts/session-setup.sh`'s session path,
+or nothing at all where `dispatch.py` and `watchdog.py` drop it and the config
+renders `"bin": null`. Run the pre-fix fingerprint under those three and it emits
+three different digests for byte-identical content. That is the visible symptom:
+one judged diff hashes to a key per dispatch, the judge re-rolls every round, and
+a branch collects opposite verdicts on the same code.
+
+Reading the caller's environment fails a second, quieter way. Nx scores a runtime
+input that exits non-zero as *no contribution* rather than as an error, so a
+fingerprint the caller can break does not fail the tier — it silently shrinks the
+key to the tree and the base. That is the worse half: a re-roll only costs a judge
+call, while a degraded key replays a verdict the judge configuration has since
+moved on from. Both directions are held by `tests/e2e/test_llmlint_cache_e2e.py`,
+and a cache hit alone is not the proof — a failing fingerprint produces one too,
+so the ambient-`PATH` journey reads the fingerprint itself and requires it to
+resolve, and to the same digest, under either caller llmlint.
+
+One residual is worth knowing when reading that helper: it *prepends*
+`.venv/bin`, but `scripts/setup-llmlint.sh` installs llmlint with `uv tool` into
+`~/.local/bin`, so `llmlint` itself is normally resolved from the inherited
+`PATH` rather than pinned by the checkout. That is not a split-key hazard, because
+the fingerprint and the judge resolve it from the same `PATH` and so can never
+disagree — but it does mean a host that upgrades llmlint invalidates recorded
+verdicts, which is correct invalidation rather than a miss to investigate.
 
 **The recorded verdict for exactly that content, base commit, and judge
 configuration is authoritative, and the worker's gate is where it is paid for.**
