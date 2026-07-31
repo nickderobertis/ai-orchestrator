@@ -375,8 +375,19 @@ function observedChecks(node: NodeView): [string, string][] {
   ]);
 }
 
-/** Every semantic role the contract's closed `agentRole` enum admits. */
-const ROLE_LABELS: Readonly<Record<string, string>> = {
+type Attribution = DagConversation["attribution"];
+type AgentRole = Attribution["agentRole"];
+
+/**
+ * Every semantic role the contract's closed `agentRole` enum admits.
+ *
+ * Keyed by that enum rather than by `string`: the vocabulary is reconciled across
+ * `orchestrator/labels.py`, the `dag-model` enum and the design contract by
+ * `scripts/check-dag-state-contract.py`, so a role added there reaches this record
+ * and fails to compile until it is given a word — rather than rendering as its own
+ * raw identifier.
+ */
+const ROLE_LABELS: Readonly<Record<AgentRole, string>> = {
   worker: "Worker",
   judge: "Judge",
   "check-in": "Check-in",
@@ -384,10 +395,12 @@ const ROLE_LABELS: Readonly<Record<string, string>> = {
   orchestrator: "Orchestrator",
 };
 
-function roleLabel(agentRole: string, transportRole: string): string {
+function roleLabel(
+  agentRole: AgentRole,
+  transportRole: Attribution["transportRole"],
+): string {
   // Nested lint work is grouped under its worker, so its transport is what names it.
-  if (transportRole === "llmlint") return "Lint";
-  return ROLE_LABELS[agentRole] ?? agentRole;
+  return transportRole === "llmlint" ? "Lint" : ROLE_LABELS[agentRole];
 }
 
 function formatValue(value: unknown): string {

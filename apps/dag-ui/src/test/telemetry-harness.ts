@@ -4,6 +4,8 @@ import { vi } from "vitest";
 import {
   HISTORY_RUN,
   LIVE_RUN,
+  LONG_SESSION,
+  longConversation,
   runDetail,
   runList,
   runTimeline,
@@ -82,6 +84,7 @@ export function defaultResponder(url: URL): Response {
   if (isTimeline(url)) return Response.json(runTimeline(runId));
   if (isConversation(url)) {
     const wanted = decodeURIComponent(url.pathname.split("/").at(-1) ?? "");
+    if (wanted === LONG_SESSION) return Response.json(longConversation());
     const found = runDetail(runId).conversations.find(
       ({ conversation }) => conversation.id === wanted,
     );

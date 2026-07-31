@@ -163,9 +163,9 @@ export function App({
                     client={client}
                     node={selectedNode}
                     onBack={() => selection.selectNode(undefined)}
-                    onSelectItem={selection.selectEvent}
+                    onSelectItem={selection.selectItem}
                     runId={selectedRunId}
-                    selectedItemId={selection.eventId}
+                    selectedItemId={selection.itemId}
                     timeline={telemetry.timeline}
                     timelineError={telemetry.timelineError}
                   />

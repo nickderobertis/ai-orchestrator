@@ -298,6 +298,38 @@ export function runTimeline(runId: string = LIVE_RUN) {
   };
 }
 
+/** The settled run's one recorded session, long enough to be read a page at a time. */
+export const LONG_SESSION = "archive-session";
+
+/**
+ * One session whose transcript is longer than a reader is handed at once.
+ *
+ * A real worker session runs to dozens of turns, which is what makes the detail
+ * region page them rather than render the whole conversation on selection.
+ */
+export function longConversation(turns = 30) {
+  const recorded = conversation(
+    LONG_SESSION,
+    "worker",
+    "agent",
+    "archive",
+    CLAUDE_LAUNCH,
+    "claude-code",
+    "Archived the release",
+  );
+  return {
+    ...recorded,
+    conversation: {
+      ...recorded.conversation,
+      turns: Array.from({ length: turns }, (_, index) => ({
+        ...recorded.conversation.turns[0],
+        id: `${LONG_SESSION}-${index}`,
+        assistant: `Archive step ${index}`,
+      })),
+    },
+  };
+}
+
 function historySpans() {
   return [
     {
@@ -324,8 +356,9 @@ function historySpans() {
     },
     // Every recorded session of this run belongs to a node, so it has no run-level
     // planner conversation at all.
-    dispatch("archive-session", "engineer-archive", "archive", 20, 80, [
-      "archive-session-0",
+    dispatch(LONG_SESSION, "engineer-archive", "archive", 20, 80, [
+      `${LONG_SESSION}-0`,
+      `${LONG_SESSION}-1`,
     ]),
   ];
 }

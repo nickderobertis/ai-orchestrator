@@ -8,12 +8,18 @@ import { useCallback, useSyncExternalStore } from "react";
 export interface UrlSelection {
   readonly runId?: string;
   readonly nodeId?: string;
-  /** The timeline span or event opened in the node view, by its recorded id. */
-  readonly eventId?: string;
+  /**
+   * The timeline item opened in the node view, by its recorded id.
+   *
+   * A span is as linkable as an event — a dispatch and one of its turns are both
+   * moments of the node's execution — so this is an item id, not an event id. The
+   * query key stays `event` because that is the shared address already in use.
+   */
+  readonly itemId?: string;
   readonly view: "graph" | "overall";
   readonly selectRun: (runId: string) => void;
   readonly selectNode: (nodeId?: string) => void;
-  readonly selectEvent: (eventId?: string) => void;
+  readonly selectItem: (itemId?: string) => void;
   readonly showOverall: () => void;
 }
 
@@ -22,7 +28,7 @@ export function useUrlSelection(): UrlSelection {
   const params = new URLSearchParams(query);
   const runId = params.get("run") ?? undefined;
   const nodeId = params.get("node") ?? undefined;
-  const eventId = params.get("event") ?? undefined;
+  const itemId = params.get("event") ?? undefined;
   const view = params.get("view") === "overall" ? "overall" : "graph";
 
   const update = useCallback((change: (next: URLSearchParams) => void) => {
@@ -35,7 +41,7 @@ export function useUrlSelection(): UrlSelection {
   return {
     runId,
     nodeId,
-    eventId,
+    itemId,
     view,
     selectRun: (id) =>
       update((next) => {
@@ -53,7 +59,7 @@ export function useUrlSelection(): UrlSelection {
         next.delete("event");
         next.delete("view");
       }),
-    selectEvent: (id) =>
+    selectItem: (id) =>
       update((next) => {
         if (id) next.set("event", id);
         else next.delete("event");

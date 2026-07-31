@@ -12,6 +12,7 @@ import {
   busyTimeline,
   HISTORY_RUN,
   LIVE_RUN,
+  LONG_SESSION,
   runDetail,
   runList,
   runTimeline,
@@ -185,6 +186,68 @@ describe("DAG application", () => {
     expect(paged.length).toBeLessThan(60);
     expect(
       within(rail).getByRole("button", { name: /Show 25 more of 204/ }),
+    ).toBeInTheDocument();
+  });
+
+  test("hands a long session to the reader a page at a time", async () => {
+    window.history.replaceState(
+      null,
+      "",
+      `/?run=${HISTORY_RUN}&node=archive&event=dispatch-${LONG_SESSION}`,
+    );
+    const { client } = telemetryHarness();
+    render(<App client={client} />);
+    await screen.findByRole("region", { name: "Timeline for archive" });
+    // Thirty recorded turns: the reader is shown a page and told what is left,
+    // rather than handed the whole session on selection.
+    expect(await within(detail()).findByText("Archive step 0")).toBeVisible();
+    expect(within(detail()).getByText("Archive step 24")).toBeInTheDocument();
+    expect(within(detail()).queryByText("Archive step 25")).toBeNull();
+
+    await userEvent.click(
+      within(detail()).getByRole("button", { name: /Show more of 30 turns/ }),
+    );
+    expect(
+      await within(detail()).findByText("Archive step 29"),
+    ).toBeInTheDocument();
+  });
+
+  test("reports a transcript the server cannot serve", async () => {
+    window.history.replaceState(
+      null,
+      "",
+      `/?run=${HISTORY_RUN}&node=archive&event=dispatch-${LONG_SESSION}`,
+    );
+    const { client } = telemetryHarness((url) =>
+      isConversation(url)
+        ? Response.json(
+            { error: { code: "unreadable", message: "History store is gone" } },
+            { status: 503 },
+          )
+        : defaultResponder(url),
+    );
+    render(<App client={client} />);
+    // The rail still reads; only the body of the session is missing, and that is
+    // what has to be said rather than an empty card.
+    expect(
+      await screen.findByText("Transcript unavailable"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("History store is gone")).toBeInTheDocument();
+  });
+
+  test("reports a planner transcript the server cannot serve", async () => {
+    window.history.replaceState(null, "", `/?run=${LIVE_RUN}&view=overall`);
+    const { client } = telemetryHarness((url) =>
+      isConversation(url)
+        ? Response.json(
+            { error: { code: "unreadable", message: "History store is gone" } },
+            { status: 503 },
+          )
+        : defaultResponder(url),
+    );
+    render(<App client={client} />);
+    expect(
+      await screen.findByText(/The planner transcript could not be read/),
     ).toBeInTheDocument();
   });
 
