@@ -38,20 +38,21 @@ TURN = (
 )
 
 
-def _refuses_this_launch() -> bool:
-    """Record this launch, and report whether it is one of the failing ones."""
+def record_launch() -> int | None:
+    """Append this launch to the attempt log, returning how many it now holds."""
     log = os.environ.get("FAKE_CODEX_ATTEMPT_LOG")
     if log is None:
-        return False
+        return None
     path = Path(log)
     with path.open("a", encoding="utf-8") as stream:
         stream.write("launch\n")
-    launches = len(path.read_text(encoding="utf-8").splitlines())
-    return launches <= int(os.environ.get("FAKE_CODEX_UNAVAILABLE_ATTEMPTS", "0"))
+    return len(path.read_text(encoding="utf-8").splitlines())
 
 
 def main() -> int:
-    if _refuses_this_launch():
+    launches = record_launch()
+    unavailable = int(os.environ.get("FAKE_CODEX_UNAVAILABLE_ATTEMPTS", "0"))
+    if launches is not None and launches <= unavailable:
         print("fake_codex: the provider started and then failed", file=sys.stderr)
         return 1
     for event in TURN:

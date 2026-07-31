@@ -23,19 +23,12 @@ from .telemetry import HistoryRecord, history_session_launch_failure
 
 TASK = "Reply with exactly: smoke-ok"
 TIMEOUT_SECONDS = 120
-#: How many times the paid turn may be launched before the smoke gives up.
-#:
-#: The launch is the half of this check the host can break without anything being
-#: wrong with the launch *path*: under a concurrent e2e load — which is exactly
-#: what a worker verifying its own change is running when the pre-push hook selects
-#: this — the selected harness has started and died, and the identical command
-#: passed standalone moments later. Reporting that one turn as a launch-path
-#: regression cost a publication that had already passed its gate. A launch path
-#: that is genuinely broken fails every attempt and still fails here, so the only
-#: thing bounded retries buy back is the transient case; nothing is relaxed.
+#: How many times the paid turn may be launched before the smoke gives up. The
+#: launch is the half of this check a loaded host can break while the launch *path*
+#: is fine; docs/onejudge-integration.md records why that matters here.
 LAUNCH_ATTEMPTS = 3
-#: Seconds to wait before each retry, so a host that is briefly saturated has a
-#: chance to drain rather than being asked the same question three times at once.
+#: Seconds before each retry, so a briefly saturated host has a chance to drain
+#: rather than being asked the same question three times at once.
 RETRY_BACKOFF_SECONDS = 2.0
 
 
@@ -43,9 +36,7 @@ RETRY_BACKOFF_SECONDS = 2.0
 class SmokeResult:
     harness: str
     cost_usd: int | float | None
-    #: How many real turns this smoke had to launch to record one. Reported,
-    #: because a smoke that needed two says something about the host that a smoke
-    #: that needed one does not.
+    #: How many real turns this smoke had to launch to record one.
     attempts: int = 1
 
 
@@ -250,9 +241,8 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 1
     rendered_cost = f"${result.cost_usd:.6f}" if result.cost_usd is not None else "unreported"
-    # A smoke that needed a second launch says something about the host the first
-    # one did not, and the operator reading this line is the only one who can act
-    # on it — so it is reported rather than smoothed over into an ordinary pass.
+    # Reported rather than smoothed into an ordinary pass: only the operator can
+    # act on a host that killed a launch.
     retried = f" after {result.attempts} attempts" if result.attempts > 1 else ""
     print(f"smoke: passed via {result.harness} (recorded cost: {rendered_cost}){retried}")
     return 0

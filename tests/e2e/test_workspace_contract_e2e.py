@@ -17,6 +17,7 @@ from pathlib import Path
 
 import pytest
 from nx_workspace import copy_working_tree
+from waits import timeout as e2e_timeout
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -722,6 +723,70 @@ def test_nx_wrapper_names_the_provisioning_it_could_not_complete(tmp_path: Path)
     # Nx is never reached: running it without its modules is what produced the
     # misleading diagnosis this replaces.
     assert trace.read_text().splitlines() == ["bun install --frozen-lockfile"]
+
+
+@pytest.mark.parametrize(
+    ("arguments", "message"),
+    [
+        (["--reinstall"], "unknown argument '--reinstall'"),
+        (["--force", "unexpected"], "expected at most one argument"),
+    ],
+)
+def test_workspace_install_rejects_arguments_it_does_not_define(
+    tmp_path: Path, arguments: list[str], message: str
+) -> None:
+    """An installer that ran on a misread argument would install the wrong thing."""
+    checkout = _nx_wrapper_checkout(tmp_path, "arguments")
+    _add_nx_wrapper_doubles(checkout)
+    trace = tmp_path / "trace"
+
+    result = _run(
+        str(checkout / "scripts" / "workspace-install.sh"),
+        *arguments,
+        cwd=checkout,
+        env=_nx_wrapper_env(checkout, tmp_path, trace),
+    )
+
+    assert result.returncode == 2
+    assert message in result.stderr
+    assert not trace.exists(), "a rejected invocation must not have run Bun"
+
+
+def test_concurrent_workspace_installs_install_once_and_both_succeed(tmp_path: Path) -> None:
+    """Two Nx invocations in one fresh worktree must not install over each other.
+
+    The lock is what makes the self-heal safe to put in front of *every* Nx
+    invocation: `just check` and the suite's own nested `just lint-llm-diff` reach
+    it from the same checkout at once. The loser must wait, see the workspace the
+    winner provisioned, and go on rather than reinstalling on top of it.
+    """
+    checkout = _nx_wrapper_checkout(tmp_path, "concurrent")
+    _add_nx_wrapper_doubles(checkout)
+    # Slow enough that the second caller certainly arrives while the first holds
+    # the lock, which is the interleaving under test.
+    bun = checkout / "bin" / "bun"
+    bun.write_text(
+        bun.read_text().replace("mkdir -p node_modules/.bin", "sleep 2\nmkdir -p node_modules/.bin")
+    )
+    trace = tmp_path / "trace"
+    environment = _nx_wrapper_env(checkout, tmp_path, trace)
+
+    installs = [
+        subprocess.Popen(
+            [str(checkout / "scripts" / "workspace-install.sh")],
+            cwd=checkout,
+            env=environment,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        for _ in range(2)
+    ]
+    outcomes = [install.communicate(timeout=e2e_timeout(60)) for install in installs]
+
+    assert [install.returncode for install in installs] == [0, 0], outcomes
+    assert trace.read_text().splitlines() == ["bun install --frozen-lockfile"]
+    assert (checkout / "node_modules/.bin/nx").is_file()
 
 
 #: One real journey carrying `requires_workspace_install`, run inside the fresh
