@@ -355,6 +355,16 @@ There are no mutation routes, command execution, file paths, arbitrary history
 queries, or user-supplied globbing. Run, conversation, and cursor IDs are
 validated opaque identifiers and resolved beneath configured roots.
 
+Every read but `/healthz` is blocking work — a walk of the runs root plus an
+`oneharness history list` subprocess that reads the whole store — so none of it
+runs on the event loop, and one slow read occupies its own request rather than
+freezing every other connection and live stream. `RunList` costs **one** history
+subprocess however many runs the root holds: that command answers "every session
+there is", so a per-run read bought nothing and made the list degrade by about a
+second per run ever recorded. The read is shared within one scan and never across
+scans — the store is live, so a later request must not be answered from an earlier
+one's sessions.
+
 SSE uses `text/event-stream`, `Cache-Control: no-cache`, and heartbeat comments
 at least every 15 seconds. Each event has journal sequence or server cursor in
 `id`, one of `snapshot`, `run.changed`, `conversation.changed`, or `run.removed`
