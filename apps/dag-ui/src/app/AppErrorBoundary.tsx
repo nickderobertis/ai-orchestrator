@@ -1,3 +1,4 @@
+import { Button } from "@oneharness/ui";
 import { Component, type ErrorInfo, type ReactNode } from "react";
 
 // llmlint: ignore-file[changed_behavior_has_e2e] Reaching this boundary needs a graph
@@ -28,14 +29,15 @@ export class AppErrorBoundary extends Component<
           <p className="eyebrow">Rendering error</p>
           <h1>The DAG view could not be displayed.</h1>
           <p>{this.state.error.message}</p>
-          <button
-            type="button"
+          <Button
             onClick={() =>
               (this.props.onReload ?? (() => window.location.reload()))()
             }
+            type="button"
+            variant="secondary"
           >
             Reload
-          </button>
+          </Button>
         </main>
       );
     }

@@ -14,6 +14,7 @@ import re
 import stat
 import subprocess
 import time
+import tomllib
 from pathlib import Path
 
 from orchestrator import REPO_ROOT
@@ -320,6 +321,44 @@ def test_watchdog_path_forwards_the_task_on_stdin(tmp_path: Path) -> None:
     assert "startup chatter" in (status_dir / "agent.stderr").read_text(encoding="utf-8")
 
 
+def test_the_pid_a_turn_advertises_outlives_the_marker_that_closes_it(tmp_path: Path) -> None:
+    """`agent.pid` is the wrapper's own pid, and `agent.done` names it before it exits.
+
+    The dispatcher's liveness rule reads exactly this ordering: a pid that has left
+    the process tree unnamed by `agent.done` died mid-turn. That is only sound
+    because the advertised pid outlives the marker, so "gone" implies "already
+    marked". `test_dispatch_unit.py`'s onejudge double models the same ordering to
+    exercise the rule; this is the gate that keeps the two from drifting apart.
+    """
+    status_dir = tmp_path / "orchestrator-watchdog-ordering" / "agent"
+    status_dir.mkdir(parents=True)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    stub = bin_dir / "oneharness"
+    stub.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+    stub.chmod(stub.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    proc = subprocess.Popen(
+        ["bash", str(WRAPPER), "run", "--prompt", "task"],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env={
+            "PATH": f"{bin_dir}:/usr/bin:/bin",
+            "ORCHESTRATOR_AGENT_STATUS_DIR": str(status_dir),
+            "HOME": str(tmp_path / "home"),
+        },
+    )
+    _, stderr = proc.communicate(timeout=60)
+    assert proc.returncode == 0, stderr
+
+    advertised = (status_dir / "agent.pid").read_text(encoding="utf-8").strip()
+    assert advertised == str(proc.pid), "the wrapper advertised a pid that is not its own"
+    # Read after the process is gone: the marker was therefore already on disk.
+    assert (status_dir / "agent.done").read_text(encoding="utf-8").strip() == advertised
+    child = (status_dir / "agent.child.pid").read_text(encoding="utf-8").strip()
+    assert child != advertised, "the harness child must be recorded apart from the turn's pid"
+
+
 def test_status_file_contract_has_one_source_the_wrapper_honors() -> None:
     """The dispatcher's status-file names and the wrapper's must not drift apart.
 
@@ -338,6 +377,16 @@ def test_status_file_contract_has_one_source_the_wrapper_honors() -> None:
         f"{WRAPPER.name} writes status files the dispatcher does not know: "
         f"{sorted(written - set(AGENT_STATUS_NAMES))}"
     )
+
+
+def test_quota_diagnostic_harness_matches_worker_primary() -> None:
+    """DRIFT-GATE the diagnostic identity against the configured first candidate."""
+    config = tomllib.loads((REPO_ROOT / "oneharness.toml").read_text(encoding="utf-8"))
+    primary = config["harnesses"][0]
+    script = WRAPPER.read_text(encoding="utf-8")
+
+    assert primary == "claude-code:alternate"
+    assert f"alternate_harness={primary}" in script
 
 
 def test_dead_agent_records_its_exit_status_and_stderr_before_parking(tmp_path: Path) -> None:
@@ -399,7 +448,8 @@ def test_a_failing_agent_harness_records_why_before_awaiting_recovery(tmp_path: 
     stub = bin_dir / "oneharness"
     stub.write_text(
         "#!/usr/bin/env bash\n"
-        'echo "provider error: 429 rate_limit_error quota exhausted" >&2\n'
+        'echo "You\'ve hit your session limit · resets 7pm (UTC)"\n'
+        "echo 'oneharness: fallback harness `claude-code:alternate` ran but did not succeed' >&2\n"
         "exit 7\n",
         encoding="utf-8",
     )
@@ -430,9 +480,13 @@ def test_a_failing_agent_harness_records_why_before_awaiting_recovery(tmp_path: 
             process.kill()
 
     assert reason == "agent harness exited 7"
-    assert "429 rate_limit_error quota exhausted" in recorded
+    assert "out of quota" in recorded
+    assert "resets 7pm (UTC)" in recorded
     assert agent_failure_reason(status_dir) == (
-        "agent harness exited 7: provider error: 429 rate_limit_error quota exhausted"
+        "agent harness exited 7: oneharness: fallback harness `claude-code:alternate` "
+        "ran but did not succeed oneharness-agent: dispatch failure: harness "
+        "claude-code:alternate is out of quota; You've hit your session limit · "
+        "resets 7pm (UTC); configure a usable fallback or retry after the stated reset time"
     )
 
 
@@ -546,3 +600,51 @@ def test_an_unopenable_stderr_capture_stops_the_turn_before_it_starts(tmp_path: 
     assert proc.returncode == 2
     assert "cannot open the agent stderr record" in proc.stderr
     assert not (status_dir / "agent.done").exists()
+
+
+def test_a_failed_stdout_capture_cannot_publish_success(tmp_path: Path) -> None:
+    """The wrapper joins its real stdout recorder before publishing a terminal marker."""
+    status_dir = tmp_path / "orchestrator-watchdog-stdout" / "agent"
+    status_dir.mkdir(parents=True)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    stub = bin_dir / "oneharness"
+    stub.write_text(
+        "#!/usr/bin/env bash\nprintf '%4096s\\n' output\n",
+        encoding="utf-8",
+    )
+    stub.chmod(0o755)
+
+    with subprocess.Popen(
+        [
+            "bash",
+            "-c",
+            'ulimit -f 1; exec bash "$1" run --prompt task',
+            "capture-limit",
+            str(WRAPPER),
+        ],
+        text=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        env={
+            "PATH": f"{bin_dir}:/usr/bin:/bin",
+            "ORCHESTRATOR_AGENT_STATUS_DIR": str(status_dir),
+            "HOME": str(tmp_path / "home"),
+        },
+    ) as process:
+        try:
+            deadline = time.monotonic() + 30
+            while time.monotonic() < deadline:
+                if (status_dir / "agent.failed").exists():
+                    break
+                assert not (status_dir / "agent.done").exists()
+                time.sleep(0.05)
+            else:
+                raise AssertionError("the wrapper never recorded the capture failure")
+            recorded = (status_dir / "agent.stderr").read_text(encoding="utf-8")
+            exit_code = (status_dir / "agent.exit_code").read_text(encoding="utf-8").strip()
+        finally:
+            process.kill()
+
+    assert exit_code == "2"
+    assert "agent stdout capture failed" in recorded

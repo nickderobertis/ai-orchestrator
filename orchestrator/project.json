@@ -16,9 +16,14 @@
       "inputs": ["wholeWorkspace"]
     },
     "test": {
-      "command": "env -u FORCE_COLOR NO_COLOR=1 uv run pytest --cov=orchestrator --cov-report=term-missing",
+      "command": "env -u FORCE_COLOR NO_COLOR=1 uv run pytest -m 'not reads_docs' --cov=orchestrator --cov-report=term-missing",
       "options": { "cwd": "." },
       "outputs": ["{workspaceRoot}/.coverage"],
+      "inputs": ["codeWorkspace"]
+    },
+    "test-docs": {
+      "command": "env -u FORCE_COLOR NO_COLOR=1 uv run pytest -m reads_docs --no-cov",
+      "options": { "cwd": "." },
       "inputs": ["wholeWorkspace"]
     },
     "typecheck": {

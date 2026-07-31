@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import multiprocessing
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -41,6 +42,43 @@ ready.write_text("ready", encoding="utf-8")
 while not release.exists():
     time.sleep(0.02)
 """
+
+
+_LIVE_REFERENCE_HOLDER = """
+import json
+import os
+import sys
+import time
+from pathlib import Path
+
+# argv is one of the three reference channels the sweep reads; the other two
+# arrive over stdin so that this process names each scratch path exactly once.
+named = Path(sys.argv[1])
+plan = json.loads(sys.stdin.readline())
+os.chdir(plan["cwd"])
+handle = open(plan["open"], "rb")
+Path(plan["pidfile"]).write_text(str(os.getpid()), encoding="utf-8")
+release = Path(plan["release"])
+while not release.exists():
+    time.sleep(0.02)
+handle.close()
+assert named
+"""
+
+
+def _write_nx_install(path: Path, *, dependencies: dict[str, str]) -> Path:
+    """Write the throwaway single-`nx` install shape Nx leaves behind per invocation."""
+    (path / "node_modules" / "nx").mkdir(parents=True)
+    (path / "package.json").write_text(
+        json.dumps({"devDependencies": dependencies}), encoding="utf-8"
+    )
+    (path / "bun.lock").write_text("{}", encoding="utf-8")
+    return path
+
+
+def _age(path: Path) -> None:
+    old = time.time() - 48 * 60 * 60
+    os.utime(path, (old, old))
 
 
 def _install_blocking_pre_push_gate(
@@ -270,6 +308,262 @@ def test_third_party_sweep_skips_inflight_lifecycle_then_reclaims(
     assert "removed 1 directories" in after.stdout
 
 
+def test_harness_scratch_is_reclaimed_during_an_active_dispatch_but_never_when_referenced(
+    tmp_path: Path,
+    bare_origin: Callable[..., Path],
+    command_base: Callable[..., Path],
+    personas_dir: Path,
+) -> None:
+    """The families that fill this disk are reclaimed while a real dispatch runs.
+
+    Every fixture here is two days old, so age never explains a survival: what keeps
+    a directory is a live process still naming it, Nx's own pid in the name, pytest's
+    own retention and `.lock`, or a shape that is not a disposable install at all.
+    """
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    third_party = scratch / "visual-inflight"
+    argv_named = _write_nx_install(scratch / "tmp-999999999-argv", dependencies={"nx": "^23.1.0"})
+    working = _write_nx_install(scratch / "tmp-999999999-cwd", dependencies={"nx": "^23.1.0"})
+    opened = _write_nx_install(scratch / "tmp-999999999-open", dependencies={"nx": "^23.1.0"})
+    stale = _write_nx_install(scratch / "tmp-999999999-stale", dependencies={"nx": "^23.1.0"})
+    lookalike = _write_nx_install(
+        scratch / "tmp-999999999-lookalike", dependencies={"nx": "^23.1.0", "eslint": "^9"}
+    )
+    self_named = _write_nx_install(
+        scratch / f"tmp-{os.getpid()}-live", dependencies={"nx": "^23.1.0"}
+    )
+    onejudge_scratch = scratch / "onejudge-python-stale"
+    onejudge_scratch.mkdir()
+    pytest_root = scratch / "pytest-of-e2e"
+    pytest_root.mkdir()
+    runs = {}
+    for number in range(0, 6):
+        run = pytest_root / f"pytest-{number}"
+        run.mkdir()
+        runs[number] = run
+    (pytest_root / "pytest-current").symlink_to(runs[5])
+    # pytest treats a lock it cannot read as proof the run is not deletable.
+    unreadable_lock = runs[0] / ".lock"
+    unreadable_lock.write_text("999999999", encoding="utf-8")
+    unreadable_lock.chmod(0o000)
+
+    holder = subprocess.Popen(
+        [sys.executable, "-c", _LIVE_REFERENCE_HOLDER, str(argv_named)],
+        cwd=tmp_path,
+        text=True,
+        stdin=subprocess.PIPE,
+    )
+    ready = tmp_path / "gate-ready"
+    release = tmp_path / "gate-release"
+    holder_pidfile = tmp_path / "holder.pid"
+    result_path = tmp_path / "lifecycle-result.json"
+    origin = bare_origin()
+    canonical = tmp_path / "canonical"
+    subprocess.run(
+        ["git", "clone", str(origin), str(canonical)],
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    _install_blocking_pre_push_gate(canonical, third_party, ready, release)
+    process = multiprocessing.Process(
+        target=_run_lifecycle_with_blocking_gate,
+        args=(
+            str(origin),
+            str(canonical),
+            str(tmp_path / "worktrees"),
+            str(command_base()),
+            str(personas_dir),
+            str(scratch),
+            str(result_path),
+        ),
+    )
+    process.start()
+    try:
+        assert holder.stdin is not None
+        holder.stdin.write(
+            json.dumps(
+                {
+                    "cwd": str(working),
+                    "open": str(opened / "package.json"),
+                    "pidfile": str(holder_pidfile),
+                    "release": str(release),
+                }
+            )
+            + "\n"
+        )
+        holder.stdin.flush()
+        _wait_for_path(holder_pidfile)
+        # pytest keeps the newest three runs itself and marks a live session with a
+        # `.lock` holding its pid; both conventions are honored rather than fought.
+        (runs[1] / ".lock").write_text(
+            holder_pidfile.read_text(encoding="utf-8").strip(), encoding="utf-8"
+        )
+        for path in (
+            *runs.values(),
+            pytest_root,
+            onejudge_scratch,
+            argv_named,
+            working,
+            opened,
+            stale,
+            lookalike,
+            self_named,
+        ):
+            _age(path)
+        _wait_for_path(ready)
+
+        inspected = subprocess.run(
+            ["just", "sweep-scratch", "--root", str(scratch), "--dry-run"],
+            cwd=REPO_ROOT,
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+        assert str(stale) in inspected.stdout and "would remove" in inspected.stdout
+        assert "reclaimed 0 bytes" in inspected.stdout
+        assert all(path.exists() for path in (stale, onejudge_scratch, runs[2]))
+
+        during = subprocess.run(
+            ["just", "sweep-scratch", "--root", str(scratch)],
+            cwd=REPO_ROOT,
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+    finally:
+        release.write_text("release", encoding="utf-8")
+        holder.communicate(timeout=60)
+        process.join(60)
+        if process.is_alive():
+            process.terminate()
+            process.join(10)
+        unreadable_lock.chmod(0o600)
+
+    assert not stale.exists()
+    assert not onejudge_scratch.exists()
+    assert not runs[2].exists()
+    preserved = [argv_named, working, opened, lookalike, self_named]
+    preserved += [runs[number] for number in (0, 1, 3, 4, 5)]
+    assert [path for path in preserved if not path.exists()] == []
+    referenced = re.search(
+        r"retained (\d+) directories referenced by live processes", during.stdout
+    )
+    assert referenced is not None, during.stdout
+    assert int(referenced.group(1)) >= 3
+    # The dispatch's own third-party scratch still waits for the exclusive lock.
+    assert third_party.exists()
+    assert "third-party sweep skipped: lifecycle dispatch active" in during.stdout
+
+    assert process.exitcode == 0
+    lifecycle_result = json.loads(result_path.read_text(encoding="utf-8"))
+    assert lifecycle_result["ok"] is True, lifecycle_result
+    assert lifecycle_result["outcome"] == "merged"
+
+
+def test_sweep_recipe_leaves_harness_scratch_alone_when_procfs_cannot_answer(
+    tmp_path: Path,
+) -> None:
+    """Without a procfs that can see the sweeper, these families are never removed."""
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    install = _write_nx_install(
+        scratch / "tmp-999999999-unprovable", dependencies={"nx": "^23.1.0"}
+    )
+    onejudge_scratch = scratch / "onejudge-python-unprovable"
+    onejudge_scratch.mkdir()
+    pytest_root = scratch / "pytest-of-unprovable"
+    pytest_root.mkdir()
+    runs = [pytest_root / f"pytest-{number}" for number in range(1, 6)]
+    for run in runs:
+        run.mkdir()
+    dead_watchdog = scratch / "orchestrator-watchdog-dead"
+    dead_watchdog.mkdir()
+    (dead_watchdog / "pid").write_text("999999999\n", encoding="utf-8")
+    for path in (install, onejudge_scratch, pytest_root, *runs):
+        _age(path)
+    blind = tmp_path / "not-procfs"
+    blind.mkdir()
+
+    result = subprocess.run(
+        ["just", "sweep-scratch", "--root", str(scratch)],
+        cwd=REPO_ROOT,
+        env={**os.environ, "AI_ORCHESTRATOR_PROC_ROOT": str(blind)},
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+
+    assert install.exists() and onejudge_scratch.exists()
+    assert [run for run in runs if not run.exists()] == []
+    # The watchdog proof stands on its own lock, so its accounting is unaffected.
+    assert not dead_watchdog.exists()
+    assert "removed 1 directories" in result.stdout
+    assert f"no usable procfs at {blind}" in result.stdout
+
+
+def test_sweep_cli_keeps_visible_references_when_a_process_hides_its_descriptors(
+    tmp_path: Path,
+) -> None:
+    """Readable references still protect a process whose descriptors are hidden."""
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    candidate = scratch / "onejudge-python-unprovable"
+    candidate.mkdir()
+    stale = scratch / "onejudge-python-stale-sibling"
+    stale.mkdir()
+    for path in (candidate, stale):
+        _age(path)
+    ready = tmp_path / "ready"
+    release = tmp_path / "release"
+    holder_script = """
+import ctypes
+import os
+import sys
+import time
+from pathlib import Path
+
+candidate, ready, release = map(Path, sys.argv[1:])
+libc = ctypes.CDLL(None, use_errno=True)
+if libc.prctl(4, 0, 0, 0, 0) != 0:
+    raise OSError(ctypes.get_errno(), os.strerror(ctypes.get_errno()))
+ready.write_text("ready", encoding="utf-8")
+while not release.exists():
+    time.sleep(0.02)
+assert candidate
+"""
+    holder = subprocess.Popen(
+        [
+            "/usr/bin/python3",
+            "-c",
+            holder_script,
+            str(candidate),
+            str(ready),
+            str(release),
+        ]
+    )
+    try:
+        _wait_for_path(ready)
+        with pytest.raises(PermissionError):
+            next(Path(f"/proc/{holder.pid}/fd").iterdir())
+        result = subprocess.run(
+            ["just", "sweep-scratch", "--root", str(scratch)],
+            cwd=REPO_ROOT,
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+    finally:
+        release.touch()
+        holder.wait(timeout=30)
+
+    assert candidate.exists()
+    assert not stale.exists()
+    assert "removed 1 directories" in result.stdout
+    assert "retained 1 directories referenced by live processes" in result.stdout
+
+
 @pytest.mark.parametrize("identifiable", [True, False], ids=["identified", "unidentifiable"])
 def test_concurrent_sweep_preserves_a_dispatch_past_its_worker_exit(
     tmp_path: Path, command_base: Callable[..., Path], onejudge_bin: str, identifiable: bool
@@ -292,12 +586,14 @@ def test_concurrent_sweep_preserves_a_dispatch_past_its_worker_exit(
         blind = tmp_path / "empty-proc"
         blind.mkdir()
         dispatch_env["AI_ORCHESTRATOR_PROC_ROOT"] = str(blind)
+    report_path = tmp_path / "dispatch-report.json"
+    report_stream = report_path.open("w", encoding="utf-8")
     process = subprocess.Popen(
         [
             "just",
             "dispatch",
             "engineer",
-            "complete-now: survive a concurrent scratch sweep",
+            "complete-now large-dispatch-report: survive a concurrent scratch sweep",
             "--base",
             str(command_base()),
             "--project-dir",
@@ -310,7 +606,7 @@ def test_concurrent_sweep_preserves_a_dispatch_past_its_worker_exit(
         cwd=REPO_ROOT,
         env=dispatch_env,
         text=True,
-        stdout=subprocess.PIPE,
+        stdout=report_stream,
         stderr=subprocess.PIPE,
     )
     swept_past_worker_exit: list[Path] = []
@@ -323,9 +619,9 @@ def test_concurrent_sweep_preserves_a_dispatch_past_its_worker_exit(
             ]
             # The unattended sweep this test races is the in-process
             # `sweep_scratch()` call every recorded round transition makes
-            # (orchestrator/graph.py). A `just sweep-scratch` subprocess takes
-            # longer to start than the post-exit window it must land inside, and
-            # the recipe surface is covered by the recipe tests above.
+            # (orchestrator/graph.py). The deliberately large real report keeps
+            # parsing in flight after waitpid reaps the worker, so the sweep
+            # observes that boundary without replacing it.
             # llmlint: ignore[tests_mirror_real_usage] this is the round-transition caller
             result = sweep_scratch(scratch)
             assert result.removed == (), result.removed
@@ -334,13 +630,14 @@ def test_concurrent_sweep_preserves_a_dispatch_past_its_worker_exit(
             )
             time.sleep(0.001)
     finally:
-        stdout, stderr = process.communicate(timeout=120)
+        _, stderr = process.communicate(timeout=120)
+        report_stream.close()
 
     assert process.returncode == 0, stderr
     assert swept_past_worker_exit, "the sweep never observed the post-worker-exit window"
     # The report is parsed out of the swept-past directory, so its survival is the
     # dispatch's own evidence that nothing removed the tree underneath it.
-    report = json.loads(stdout)
+    report = json.loads(report_path.read_text(encoding="utf-8"))
     assert report["schema_version"] == 5
     assert report["stopped_early"] is False
     assert report["transcript"]["messages"]
@@ -504,8 +801,11 @@ def test_sweep_recipe_rejects_nonfinite_or_negative_age(tmp_path: Path) -> None:
 def test_sweep_recipe_custom_age_and_bounded_inspection(tmp_path: Path) -> None:
     eligible = tmp_path / "visual-custom-age"
     eligible.mkdir()
+    harness_eligible = tmp_path / "onejudge-python-custom-age"
+    harness_eligible.mkdir()
     two_hours_old = time.time() - 2 * 60 * 60
-    os.utime(eligible, (two_hours_old, two_hours_old))
+    for path in (eligible, harness_eligible):
+        os.utime(path, (two_hours_old, two_hours_old))
     subprocess.run(
         [
             "just",
@@ -520,7 +820,7 @@ def test_sweep_recipe_custom_age_and_bounded_inspection(tmp_path: Path) -> None:
         capture_output=True,
         check=True,
     )
-    assert not eligible.exists()
+    assert not eligible.exists() and not harness_eligible.exists()
 
     for index in range(22):
         path = tmp_path / f"playwright-old-{index:02d}"

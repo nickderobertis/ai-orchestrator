@@ -41,6 +41,8 @@ FAKE_ONEHARNESS = REPO_ROOT / "tests" / "e2e" / "fake_oneharness.py"
 CODEX_LAUNCH = "c0de" * 8
 CLAUDE_LAUNCH = "c1a0" * 8
 
+FOUNDATION_PR = "https://github.com/example/repo/pull/12"
+
 LIVE_RUN = "dag-ui-live"
 HISTORY_RUN = "dag-ui-history"
 #: A second run of the *same* launch as `LIVE_RUN`: one planner session often drives
@@ -51,6 +53,18 @@ UNATTRIBUTED_RUN = "dag-ui-unattributed"
 #: run looks like for its first moments, and what the served `repo-plan*` runs on an
 #: operator's machine look like permanently. Its `last_event` is null.
 EVENTLESS_RUN = "dag-ui-eventless"
+#: One node whose recorded work is hundreds of sessions, which is what a long-running
+#: node really looks like and what the old detail panel rendered one block at a time.
+BUSY_RUN = "dag-ui-busy"
+BUSY_SESSIONS = 200
+#: One of those sessions ran long enough that its own turns are paged too.
+BUSY_LONG_SESSION = "busy-session-7"
+BUSY_LONG_TURNS = 30
+#: The live run's second run-level session. A run records more than one dispatch at no
+#: node — the orchestrator's own, and one check-in per round — so the overall view has
+#: to disclose each of them separately rather than assume a single planner transcript.
+ROUND_CHECK_IN_SESSION = "round-check-in-session"
+ROUND_CHECK_IN_NAME = f"check-in-{LIVE_RUN}-round-1"
 
 _LIVE_TASKS: list[dict[str, Any]] = [
     {
@@ -169,12 +183,21 @@ def _write_live_run(runs_dir: Path) -> None:
     journal.append("round-started", detail={"plan": plan})
 
     journal.append("node-started", node=NodeId("foundation"), detail={"persona": "engineer"})
+    # Bracketed exactly as the merge path records it, so the timeline folds one
+    # verification span rather than a finish whose start it never saw.
+    journal.append(
+        "verification-started",
+        node=NodeId("foundation"),
+        detail={"label": "branch push ai-orchestrator/engineer/foundation"},
+    )
     journal.append(
         "verification-finished",
         node=NodeId("foundation"),
         detail={
+            "label": "branch push ai-orchestrator/engineer/foundation",
             "ok": True,
             "command": ["just", "gate"],
+            "log_path": "round-01/foundation/gate.log",
             "reused": False,
             "gate_attestation": {
                 "commit": "1" * 40,
@@ -185,6 +208,23 @@ def _write_live_run(runs_dir: Path) -> None:
                 "environment_sha256": "3" * 64,
             },
         },
+    )
+    # A real publication: the PR, the checks observed on it, and the merge that
+    # closed it. The timeline brackets these into one span the node view can open.
+    journal.append(
+        "pr-created",
+        node=NodeId("foundation"),
+        detail={"pr": FOUNDATION_PR, "repo": "local/example"},
+    )
+    journal.append(
+        "pr-checks-observed",
+        node=NodeId("foundation"),
+        detail={"pr": FOUNDATION_PR, "state": "passing", "checks": {"unit": "passed"}},
+    )
+    journal.append(
+        "publication-finished",
+        node=NodeId("foundation"),
+        detail={"pr": FOUNDATION_PR, "status": "merged"},
     )
     journal.append(
         "node-settled",
@@ -197,7 +237,7 @@ def _write_live_run(runs_dir: Path) -> None:
                 "task": "Prepare shared contracts",
                 "repo": "local/example",
                 "branch": "ai-orchestrator/engineer/foundation",
-                "pr": "https://github.com/example/repo/pull/12",
+                "pr": FOUNDATION_PR,
                 "detail": "Gate completed successfully",
                 "telemetry": {"checks": {"unit": "passed"}},
                 "artifacts": {"gate_log": "round-01/foundation/gate.log"},
@@ -268,16 +308,25 @@ def _write_history_run(runs_dir: Path) -> None:
 
 
 def _write_sibling_run(runs_dir: Path) -> None:
-    """A second run recorded under the same launch id as the live run."""
+    """A second run under the live run's launch id, whose executor then stopped.
+
+    Its round is claimed under the executor's own ``round_abandonment_guard`` and left
+    without a result, which is exactly what that guard records when a round ends any
+    way but by finishing: the run reads back as ``stopped``. That makes this the one
+    run here whose state falls outside the vocabulary the UI gives a meaning to, so the
+    navigation has to render the word plainly rather than borrow an outcome it does
+    not have.
+    """
     from orchestrator.journal import NodeId, RunId, open_journal
-    from orchestrator.runs import prepare_round
+    from orchestrator.runs import prepare_round, round_abandonment_guard
 
     run_dir = runs_dir / SIBLING_RUN
-    prepare_round(run_dir, {"tasks": _SIBLING_TASKS})
-    journal = open_journal(run_dir, RunId(SIBLING_RUN), 1)
-    journal.append("node-added", detail={"definition": _SIBLING_TASKS[0]})
-    journal.append("round-started", detail={"plan": {"schema_version": 3, "concurrency": 1}})
-    journal.append("node-started", node=NodeId("sibling"), detail={"persona": "engineer"})
+    _, round_dir = prepare_round(run_dir, {"tasks": _SIBLING_TASKS})
+    with round_abandonment_guard(round_dir):
+        journal = open_journal(run_dir, RunId(SIBLING_RUN), 1)
+        journal.append("node-added", detail={"definition": _SIBLING_TASKS[0]})
+        journal.append("round-started", detail={"plan": {"schema_version": 3, "concurrency": 1}})
+        journal.append("node-started", node=NodeId("sibling"), detail={"persona": "engineer"})
     _record_launch(run_dir, SIBLING_RUN, CODEX_LAUNCH)
 
 
@@ -312,6 +361,38 @@ def _write_eventless_run(runs_dir: Path) -> None:
     prepare_round(runs_dir / EVENTLESS_RUN, {"tasks": _EVENTLESS_TASKS})
 
 
+#: Plan-file JSON like the task lists above, typed the same way and for the same
+#: reason: `orchestrator` owns and validates this shape, per this module's
+#: `modern_domain_modeling` note.
+_BUSY_TASKS: list[dict[str, Any]] = [
+    {
+        "id": "sweep",
+        "persona": "engineer",
+        "task": "Work a node that dispatches many sessions",
+        "done_when": "Every session settles",
+    }
+]
+
+
+def _write_busy_run(runs_dir: Path) -> None:
+    """One in-flight node whose recorded work is hundreds of dispatched sessions.
+
+    This is the shape the node view exists for: a real node records far more sessions
+    than a reader can scan, so the rail has to group them rather than list one row per
+    conversation. Its sessions are written by ``_history_store``.
+    """
+    from orchestrator.journal import NodeId, RunId, open_journal
+    from orchestrator.runs import prepare_round
+
+    run_dir = runs_dir / BUSY_RUN
+    prepare_round(run_dir, {"tasks": _BUSY_TASKS})
+    journal = open_journal(run_dir, RunId(BUSY_RUN), 1)
+    journal.append("node-added", detail={"definition": _BUSY_TASKS[0]})
+    journal.append("round-started", detail={"plan": {"schema_version": 3, "concurrency": 1}})
+    journal.append("node-started", node=NodeId("sweep"), detail={"persona": "engineer"})
+    _record_launch(run_dir, BUSY_RUN, CODEX_LAUNCH)
+
+
 def _session(
     workspace: Path,
     *,
@@ -326,32 +407,40 @@ def _session(
     prompt: str,
     text: str,
     started: str,
+    turns: int = 1,
 ) -> dict[str, Any]:
-    """One recorded harness session plus the JSONL record `oneharness history` serves."""
+    """One recorded harness session plus the JSONL records `oneharness history` serves.
+
+    One record is one turn, which is how a session grows: ``turns`` writes that many,
+    so a fixture can record the long session a real worker actually produces.
+    """
     record = workspace / f"{session_id}.jsonl"
     record.write_text(
-        json.dumps(
-            {
-                "session": session_id,
-                "name": name,
-                "harness": "codex",
-                "model": "gpt-5",
-                "timestamp": started,
-                "prompt": prompt,
-                "text": text,
-                "status": "ok",
-                "session_id": session_id,
-                "usage": {"input_tokens": 1200, "output_tokens": 340},
-                "events": [
-                    {
-                        "kind": "tool_call",
-                        "name": "command_execution",
-                        "input": {"command": "just gate"},
-                    }
-                ],
-            }
-        )
-        + "\n",
+        "".join(
+            json.dumps(
+                {
+                    "session": session_id,
+                    "name": name,
+                    "harness": "codex",
+                    "model": "gpt-5",
+                    "timestamp": started,
+                    "prompt": prompt,
+                    "text": text if turns == 1 else f"{text} ({index})",
+                    "status": "ok",
+                    "session_id": session_id,
+                    "usage": {"input_tokens": 1200, "output_tokens": 340},
+                    "events": [
+                        {
+                            "kind": "tool_call",
+                            "name": "command_execution",
+                            "input": {"command": "just gate"},
+                        }
+                    ],
+                }
+            )
+            + "\n"
+            for index in range(turns)
+        ),
         encoding="utf-8",
     )
     labels = {
@@ -461,6 +550,43 @@ def _history_store(workspace: Path) -> Path:
             started="2026-07-26T10:00:00Z",
         )
     )
+    # A second session recorded at no node: the round's check-in is dispatched for the
+    # whole run, so the overall view lists several run-level sessions rather than one.
+    sessions.append(
+        _session(
+            workspace,
+            session_id=ROUND_CHECK_IN_SESSION,
+            name=ROUND_CHECK_IN_NAME,
+            run_id=LIVE_RUN,
+            node=None,
+            role="agent",
+            agent_role="check-in",
+            launcher="codex",
+            launch_id=CODEX_LAUNCH,
+            prompt="Report progress",
+            text="Round 1 progress reported",
+            started="2026-07-26T10:30:00Z",
+        )
+    )
+    # Hundreds of sessions on one node, one of them long enough to be paged itself.
+    sessions.extend(
+        _session(
+            workspace,
+            session_id=f"busy-session-{index}",
+            name=f"engineer-sweep-{index}",
+            run_id=BUSY_RUN,
+            node="sweep",
+            role="agent",
+            agent_role="worker",
+            launcher="codex",
+            launch_id=CODEX_LAUNCH,
+            prompt="Act as worker",
+            text=f"Swept batch {index}",
+            started=f"2026-07-27T{index // 60:02d}:{index % 60:02d}:00Z",
+            turns=BUSY_LONG_TURNS if f"busy-session-{index}" == BUSY_LONG_SESSION else 1,
+        )
+        for index in range(BUSY_SESSIONS)
+    )
     sessions.append(
         _session(
             workspace,
@@ -517,6 +643,7 @@ def build_fixture(workspace: Path) -> tuple[Path, Path]:
     # Written oldest first: the list view orders by most recent progress, so the live
     # run ends up at the top and is what an operator sees on arrival.
     _write_eventless_run(runs_dir)
+    _write_busy_run(runs_dir)
     _write_unattributed_run(runs_dir)
     _write_history_run(runs_dir)
     _write_sibling_run(runs_dir)
@@ -619,6 +746,7 @@ def serve(workspace: Path, port: int) -> int:
                 "sibling": SIBLING_RUN,
                 "unattributed": UNATTRIBUTED_RUN,
                 "eventless": EVENTLESS_RUN,
+                "busy": BUSY_RUN,
             }
         ),
         encoding="utf-8",

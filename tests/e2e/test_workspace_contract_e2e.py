@@ -17,6 +17,11 @@ from pathlib import Path
 
 import pytest
 
+# The contracts checked here span the whole tree, and documentation is one of the
+# layers they hold together — `docs/dag-ui.md` and `docs/dag-ui/design.md` are
+# inputs, not commentary. The module belongs to the whole-workspace tier.
+pytestmark = pytest.mark.reads_docs
+
 ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -37,13 +42,13 @@ def _run(
     ("recipe", "target"),
     [
         ("bootstrap", "run-many -t bootstrap"),
-        ("check", "run-many -t format-check,lint,typecheck,test"),
-        ("test", "run-many -t test"),
+        ("check", "run-many -t format-check,lint,typecheck,test,test-docs"),
+        ("test", "run-many -t test,test-docs"),
         ("lint", "affected -t lint"),
         ("typecheck", "affected -t typecheck"),
         ("format", "affected -t format"),
         ("format-check", "run-many -t format-check"),
-        ("upgrade", "run-many -t build,lint,typecheck,test"),
+        ("upgrade", "run-many -t build,lint,typecheck,test,test-docs"),
         ("lint-llm-diff", "run workspace:lint-llm-diff"),
     ],
 )
@@ -66,7 +71,7 @@ def test_test_recipe_forces_one_tier_to_re_run_through_the_command_surface() -> 
     result = _run("just", "--dry-run", "test", "--skip-nx-cache")
 
     assert result.returncode == 0, result.stderr
-    assert "./scripts/nx.sh run-many -t test --skip-nx-cache" in result.stderr
+    assert "./scripts/nx.sh run-many -t test,test-docs --skip-nx-cache" in result.stderr
 
 
 def test_orchestrator_lint_target_reports_missing_shellcheck(tmp_path: Path) -> None:
@@ -195,6 +200,7 @@ def _dag_state_contract_checkout(tmp_path: Path) -> Path:
         "orchestrator/launch.py",
         "orchestrator/read_model.py",
         "orchestrator/telemetry.py",
+        "orchestrator/timeline.py",
         "orchestrator/server.py",
         "packages/dag-layout/src/index.ts",
         "packages/dag-model/src/index.ts",
@@ -273,6 +279,40 @@ def test_dag_state_contract_checker_reports_sse_event_drift(tmp_path: Path) -> N
     assert "SSE event vocabulary" in result.stderr
     assert "run.deleted" in result.stderr
     assert "docs/dag-ui/design.md" in result.stderr
+
+
+def test_dag_state_contract_checker_reports_timeline_span_drift(tmp_path: Path) -> None:
+    """A timeline span kind added in Python alone must fail, not ship unparseable."""
+    checkout = _dag_state_contract_checkout(tmp_path)
+    timeline = checkout / "orchestrator/timeline.py"
+    timeline.write_text(
+        timeline.read_text().replace('    "rollup",\n]', '    "rollup",\n    "recovery",\n]')
+    )
+
+    result = _dag_state_contract_run(checkout)
+
+    assert result.returncode != 0
+    assert "TimelineSpanKind vocabulary" in result.stderr
+    assert "recovery" in result.stderr
+    assert "packages/dag-model/src/index.ts timelineSpanKindSchema" in result.stderr
+
+
+def test_dag_state_contract_checker_reports_timeline_payload_drift(tmp_path: Path) -> None:
+    """A timeline field invented server-side must fail against the design contract."""
+    checkout = _dag_state_contract_checkout(tmp_path)
+    timeline = checkout / "orchestrator/timeline.py"
+    timeline.write_text(
+        timeline.read_text().replace(
+            "    kind: TimelineReferenceKind\n    value: str",
+            "    kind: TimelineReferenceKind\n    value: str\n    body: str",
+        )
+    )
+
+    result = _dag_state_contract_run(checkout)
+
+    assert result.returncode != 0
+    assert "TimelineReference declares ['body']" in result.stderr
+    assert "design.md does not" in result.stderr
 
 
 def test_dag_state_contract_checker_reports_dag_ui_proxy_drift(tmp_path: Path) -> None:
@@ -462,7 +502,7 @@ def test_check_recipe_runs_the_combined_public_journey_with_concise_output(
     assert result.returncode == 0, result.stderr
     assert result.stdout == "check: all deterministic checks passed\n"
     assert trace.read_text().splitlines() == [
-        "nx.sh run-many -t format-check,lint,typecheck,test",
+        "nx.sh run-many -t format-check,lint,typecheck,test,test-docs",
         "check-oneharness-ui-contract.sh ",
         "python3 ./scripts/check-dag-state-contract.py",
         "check-nx-cache.sh ",
@@ -478,7 +518,9 @@ def test_check_recipe_preserves_captured_nx_failure(tmp_path: Path) -> None:
     assert result.returncode != 0
     assert "nx.sh: captured failure detail" in result.stderr
     assert "check: deterministic checks failed" in result.stderr
-    assert trace.read_text().splitlines() == ["nx.sh run-many -t format-check,lint,typecheck,test"]
+    assert trace.read_text().splitlines() == [
+        "nx.sh run-many -t format-check,lint,typecheck,test,test-docs"
+    ]
 
 
 def test_check_recipe_leaves_the_failing_run_readable_after_it_exits(tmp_path: Path) -> None:
@@ -753,7 +795,7 @@ def test_upgrade_recipe_runs_bun_and_reports_one_success_line(tmp_path: Path) ->
     assert trace.read_text().splitlines() == [
         "uv lock --upgrade",
         "uv sync",
-        "nx.sh run-many -t build,lint,typecheck,test",
+        "nx.sh run-many -t build,lint,typecheck,test,test-docs",
     ]
 
 
@@ -883,7 +925,7 @@ def test_dag_state_contract_checker_rejects_duplicate_agent_roles(tmp_path: Path
     result = _dag_state_contract_run(checkout)
 
     assert result.returncode != 0
-    assert "agentRoleSchema must contain unique string roles" in result.stderr
+    assert "agentRoleSchema must contain unique string members" in result.stderr
 
 
 def test_dag_state_contract_checker_reports_telemetry_schema_drift(tmp_path: Path) -> None:

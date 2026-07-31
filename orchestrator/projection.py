@@ -82,7 +82,20 @@ class _RoundBuilder:
 
 
 def read_strict_events(path: Path, run_id: RunId) -> list[Event]:
-    """Read a complete authoritative stream, rejecting junk and future events."""
+    """Read a complete authoritative stream, rejecting junk and future events.
+
+    The sequence rule enforces what strictness is actually for: **no authoritative
+    record is missing**. It therefore rejects a gap and a rewind, and tolerates one
+    thing that is neither — a *collision*, where two writers allocated the same
+    number and both records are physically present, in order. Nothing is lost there,
+    and the file's own append order still totally orders the stream.
+
+    That tolerance is not cosmetic. This reader is what `channel-reply` validates a
+    live edit against, so treating a collision as fatal ends a planner's supervision
+    of a run that is otherwise entirely healthy — every drop, retry and attestation
+    refused for the remainder of its life. A journal defect must never be able to do
+    that; `journal.claimed_sequence` is what stops new collisions being written.
+    """
     if not path.exists():
         return []
     raw = path.read_bytes()
@@ -123,13 +136,18 @@ def read_strict_events(path: Path, run_id: RunId) -> list[Event]:
             raise ProjectionError(
                 f"authoritative event at line {line_number} belongs to another run"
             )
-        if event.seq != expected:
+        # A collision is this record repeating the number its predecessor was issued.
+        # Both are here, in order, so nothing is missing — and `expected` stays where
+        # it is, because the writers themselves went on from the shared number.
+        collision = bool(events) and event.seq == expected - 1
+        if not collision and event.seq != expected:
             raise ProjectionError(
                 "authoritative event sequence must be contiguous: "
                 f"expected {expected}, got {event.seq}"
             )
         events.append(event)
-        expected += 1
+        if not collision:
+            expected += 1
     return events
 
 

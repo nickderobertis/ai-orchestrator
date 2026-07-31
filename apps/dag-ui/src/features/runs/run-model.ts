@@ -1,6 +1,5 @@
 import type { DagNodeState } from "@ai-orchestrator/dag-layout";
 import type {
-  DagConversation,
   GraphResultItem,
   NodeTelemetry,
   PlanTask,
@@ -24,7 +23,6 @@ export interface NodeView {
   readonly task: PlanTask;
   readonly telemetry?: NodeTelemetry;
   readonly result?: GraphResultItem;
-  readonly conversations: readonly DagConversation[];
 }
 
 export function latestRound(detail: RunDetail): Round | undefined {
@@ -35,7 +33,6 @@ export function nodeViews(detail: RunDetail): NodeView[] {
   const round = latestRound(detail);
   if (!round) return [];
   const telemetry = new Map(detail.run.nodes.map((node) => [node.node, node]));
-  const conversations = groupConversationsByNode(detail.conversations);
   return round.plan.tasks.map((task) => {
     const rawKind = readString(task, "kind");
     const kind =
@@ -53,42 +50,27 @@ export function nodeViews(detail: RunDetail): NodeView[] {
       task,
       telemetry: telemetry.get(task.id),
       result: round.node_results[task.id],
-      conversations: conversations.get(task.id) ?? [],
     };
   });
 }
 
-/** Bucket the run's flat transcript list by the node each session was labelled with. */
-export function groupConversationsByNode(
-  conversations: readonly DagConversation[],
-): Map<string, DagConversation[]> {
-  const grouped = new Map<string, DagConversation[]>();
-  for (const item of conversations) {
-    const nodeId = item.attribution.nodeId;
-    if (nodeId === undefined) continue;
-    const existing = grouped.get(nodeId);
-    if (existing) existing.push(item);
-    else grouped.set(nodeId, [item]);
-  }
-  return grouped;
-}
-
-export function groupRuns(
-  runs: readonly RunSummary[],
-  details: ReadonlyMap<string, RunDetail>,
-): RunGroup[] {
+/**
+ * Gather the listed runs under the session that launched each one.
+ *
+ * The join is served on the list row itself, so this needs nothing but the list: a
+ * run whose transcripts have been swept, and a run whose detail has not been read
+ * because it is not the one selected, both still group under their own launcher.
+ */
+export function groupRuns(runs: readonly RunSummary[]): RunGroup[] {
   const groups = new Map<string, RunGroup>();
   for (const run of runs) {
-    const attribution = details
-      .get(run.run_id)
-      ?.conversations.find(
-        ({ attribution }) => attribution.launchId,
-      )?.attribution;
-    const id = attribution?.launchId ?? `unknown:${run.run_id}`;
+    // A run that recorded no launch id gets a group of its own rather than sharing
+    // one unknown bucket with every other unattributed run.
+    const id = run.launch?.launch_id ?? `unknown:${run.run_id}`;
     const launcher =
-      attribution?.launcher === "claude-code"
+      run.launch?.launcher === "claude-code"
         ? "Claude"
-        : attribution?.launcher === "codex"
+        : run.launch?.launcher === "codex"
           ? "Codex"
           : "Unknown";
     const existing = groups.get(id);

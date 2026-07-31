@@ -4,11 +4,14 @@ import {
   graphPayloadSchema,
   graphResultItemSchema,
   parseRunList,
+  parseRunTimeline,
   planTaskSchema,
   runDetailSchema,
   runSummarySchema,
   runTelemetrySchema,
   sessionLinkSchema,
+  timelineReferenceSchema,
+  timelineSpanSchema,
 } from "./index.js";
 
 const timing = {
@@ -68,6 +71,40 @@ test("validates and preserves additive run-list fields", () => {
     ],
   });
   expect(parsed.extension).toBe(true);
+});
+
+test("reads the launching session off the list row it is served on", () => {
+  const row = {
+    run_id: "run-1",
+    state: "running",
+    phase: "agent",
+    last_event: "node-started",
+    timing_quality: "complete",
+    linkage_quality: "native",
+    timing,
+    node_counts: { running: 1 },
+  };
+  // The join is served on the row itself, so grouping runs by their launching
+  // session never has to fetch a run's transcripts to recover the same answer.
+  const parsed = parseRunList({
+    api_version: 1,
+    telemetry_schema_version: 8,
+    observed_at: "2026-07-26T12:00:00Z",
+    runs: [
+      { ...row, launch: { launch_id: "c0de".repeat(8), launcher: "codex" } },
+    ],
+  });
+  expect(parsed.runs[0]?.launch?.launcher).toBe("codex");
+  // A run that recorded no launch id is served without the join at all.
+  expect(runSummarySchema.parse(row).launch).toBeUndefined();
+  // The launcher vocabulary is closed: an unrecognized one is a contract failure,
+  // not a run silently grouped under a launcher the server never named.
+  expect(
+    runSummarySchema.safeParse({
+      ...row,
+      launch: { launch_id: "c0de".repeat(8), launcher: "gemini" },
+    }).success,
+  ).toBe(false);
 });
 
 test("accepts a run that has recorded no last event, and still rejects a blank one", () => {
@@ -178,6 +215,92 @@ describe("boundary failures", () => {
       graphPayloadSchema.parse({
         ok: true,
         results: { build: { deferred_cleanup: "not-a-list" } },
+      }),
+    ).toThrow();
+  });
+});
+
+describe("run timeline", () => {
+  const span = {
+    id: "node-1-api",
+    kind: "node",
+    label: "api",
+    started_at: "2026-07-26T12:00:00Z",
+    ended_at: null,
+    events: [
+      {
+        id: "event-4",
+        kind: "pr-created",
+        at: "2026-07-26T12:00:01Z",
+        node_id: "api",
+        round: 1,
+        status: "OPEN",
+        reference: { kind: "pr", value: "https://x/pull/7" },
+      },
+    ],
+  };
+
+  test("accepts an open span, a rollup, and reference-only heavy content", () => {
+    const timeline = parseRunTimeline({
+      api_version: 1,
+      observed_at: "2026-07-26T12:00:00Z",
+      run_id: "demo",
+      spans: [
+        span,
+        {
+          id: "rollup-lock-wait-9",
+          kind: "rollup",
+          label: "lock-wait",
+          started_at: "2026-07-26T12:00:02Z",
+          ended_at: "2026-07-26T12:00:09Z",
+          parent_id: "node-1-api",
+          node_id: "api",
+          count: 1722,
+          total_duration_ms: 430500,
+          events: [],
+        },
+        {
+          id: "dispatch-lint-1",
+          kind: "dispatch",
+          label: "llmlint-diff",
+          started_at: "2026-07-26T12:00:03Z",
+          ended_at: null,
+          parent_id: "dispatch-worker-1",
+          events: [],
+          reference: { kind: "conversation", value: "lint-1" },
+        },
+      ],
+    });
+    // A live run is representable: the node has started and has not finished.
+    expect(timeline.spans[0]?.ended_at).toBeNull();
+    expect(timeline.spans[0]?.events[0]?.reference?.value).toBe(
+      "https://x/pull/7",
+    );
+    expect(timeline.spans[1]?.count).toBe(1722);
+    // Nesting travels as a parent link, so a lint run is not a sibling dispatch.
+    expect(timeline.spans[2]?.parent_id).toBe("dispatch-worker-1");
+  });
+
+  test("rejects an unsupported span kind, reference kind, or negative rollup", () => {
+    expect(() =>
+      timelineSpanSchema.parse({ ...span, kind: "guess" }),
+    ).toThrow();
+    expect(() =>
+      timelineReferenceSchema.parse({ kind: "transcript", value: "x" }),
+    ).toThrow();
+    expect(() =>
+      timelineSpanSchema.parse({ ...span, kind: "rollup", count: -1 }),
+    ).toThrow();
+    // ended_at is nullable, never absent, and never a non-timestamp string.
+    expect(() =>
+      timelineSpanSchema.parse({ ...span, ended_at: "recently" }),
+    ).toThrow();
+    expect(() =>
+      parseRunTimeline({
+        api_version: 2,
+        observed_at: "2026-07-26T12:00:00Z",
+        run_id: "demo",
+        spans: [],
       }),
     ).toThrow();
   });

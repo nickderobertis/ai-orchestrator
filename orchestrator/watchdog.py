@@ -99,6 +99,17 @@ def descendants(root_pid: ProcessId) -> tuple[ProcessId, ...]:
     read doubles the syscalls of a full walk, and a walk that repeats on a timer
     is competing for the same interpreter as whatever it is watching.
     """
+    return descendants_of(frozenset({root_pid}))
+
+
+def descendants_of(root_pids: frozenset[ProcessId]) -> tuple[ProcessId, ...]:
+    """Every live process below any of ``root_pids``, excluding the roots themselves.
+
+    One ``/proc`` scan for the whole set rather than one per root: a caller holding
+    a run's several recorded owners — and everything it has already seen under them —
+    re-walks on a short timer while it terminates them, and repeating the scan per
+    pid would multiply that cost by the size of the tree it is watching.
+    """
     parents: dict[ProcessId, ProcessId] = {}
     for pid in _process_ids():
         try:
@@ -108,7 +119,7 @@ def descendants(root_pid: ProcessId) -> tuple[ProcessId, ...]:
         fields = raw[raw.rfind(")") + 2 :].split()
         if len(fields) >= 2 and fields[0] != "Z":
             parents[pid] = ProcessId(int(fields[1]))
-    found = {root_pid}
+    found = set(root_pids)
     changed = True
     while changed:
         changed = False
@@ -116,7 +127,7 @@ def descendants(root_pid: ProcessId) -> tuple[ProcessId, ...]:
             if parent in found and pid not in found:
                 found.add(pid)
                 changed = True
-    return tuple(sorted(found - {root_pid}))
+    return tuple(sorted(found - set(root_pids)))
 
 
 def process_activity(root_pid: ProcessId) -> ProcessActivity:
@@ -152,7 +163,9 @@ def terminate_tree(root_pid: ProcessId) -> None:
             os.kill(pid, signal.SIGKILL)
 
 
-def terminate_processes(pids: tuple[ProcessId, ...]) -> None:
+def terminate_processes(
+    pids: tuple[ProcessId, ...], *, externally_waited: tuple[ProcessId, ...] = ()
+) -> None:
     """Best-effort termination of a previously observed worker process tree.
 
     Descendants are reparented as soon as their worker exits, so walking from the
@@ -167,7 +180,12 @@ def terminate_processes(pids: tuple[ProcessId, ...]) -> None:
         with suppress(PermissionError, ProcessLookupError):
             os.kill(pid, signal.SIGKILL)
     deadline = time.monotonic() + 1.5
-    pending = set(pids)
+    # asyncio's child watcher owns the direct subprocess it created. Calling
+    # waitpid for that process here races the watcher and makes it fabricate
+    # return code 255 after ChildProcessError, destroying the child's real status
+    # and stderr. Still signal every recorded process, but leave those roots for
+    # their registered waiter while reaping orphaned descendants ourselves.
+    pending = set(pids).difference(externally_waited)
     while pending and time.monotonic() < deadline:
         for pid in tuple(pending):
             try:
@@ -182,7 +200,9 @@ def terminate_processes(pids: tuple[ProcessId, ...]) -> None:
             time.sleep(0.01)
 
 
-def terminate_process_group(group_id: ProcessId) -> None:
+def terminate_process_group(
+    group_id: ProcessId, *, externally_waited: tuple[ProcessId, ...] = ()
+) -> None:
     """Terminate and reap every process in a dispatch-owned process group."""
     with suppress(PermissionError, ProcessLookupError):
         os.killpg(group_id, signal.SIGTERM)
@@ -194,7 +214,7 @@ def terminate_process_group(group_id: ProcessId) -> None:
         for pid in _process_ids()
         if (record := _stat(pid)) is not None and record.process_group == group_id
     ]
-    terminate_processes(tuple(members))
+    terminate_processes(tuple(members), externally_waited=externally_waited)
 
 
 def lead_process_group() -> None:

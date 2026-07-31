@@ -29,6 +29,7 @@ const runIdsSchema = z.object({
   sibling: z.string().min(1),
   unattributed: z.string().min(1),
   eventless: z.string().min(1),
+  busy: z.string().min(1),
 });
 let cachedRunIds: z.infer<typeof runIdsSchema> | undefined;
 const runs = (): z.infer<typeof runIdsSchema> =>
@@ -66,6 +67,33 @@ async function tabTo(
   return false;
 }
 
+async function backgroundColor(locator: Locator): Promise<string> {
+  return locator.evaluate(
+    (element) => getComputedStyle(element).backgroundColor,
+  );
+}
+
+/** The brightest channel of a serialized colour — how a dark surface is told from a light one. */
+function brightestChannel(color: string): number {
+  return Math.max(...(color.match(/\d+/g) ?? ["255"]).slice(0, 3).map(Number));
+}
+
+/**
+ * Painting a throwaway element is what makes a token comparable to a surface: reading
+ * the custom property back gives its declaration text, which is never the `rgb(…)` the
+ * browser reports for a `background-color`, so the two could not be compared directly.
+ */
+async function tokenColor(page: Page, token: string): Promise<string> {
+  return page.evaluate((name) => {
+    const probe = document.createElement("div");
+    probe.style.backgroundColor = `var(${name})`;
+    document.body.append(probe);
+    const computed = getComputedStyle(probe).backgroundColor;
+    probe.remove();
+    return computed;
+  }, token);
+}
+
 /**
  * Change what the server is serving — record progress, or take a run away — through
  * the fixture module that wrote the run directory in the first place.
@@ -85,9 +113,15 @@ function changeServedRuns(args: string[]): void {
   );
 }
 
-test("tracks every node state, node detail, and role transcript of a live run", async ({
-  page,
-}) => {
+/** The node view's master rail, once a node has been opened. */
+const rail = (page: Page): Locator =>
+  page.getByRole("region", { name: "Node timeline" });
+
+/** The node view's detail region: whichever timeline item is open, expanded. */
+const itemDetail = (page: Page): Locator =>
+  page.getByRole("region", { name: "Timeline item detail" });
+
+test("tracks every node state and kind of a live run", async ({ page }) => {
   await openObservatory(page);
 
   await expect(page.locator(".dag-node.state-done")).toContainText(
@@ -105,66 +139,225 @@ test("tracks every node state, node detail, and role transcript of a live run", 
     "obsolete",
   );
 
-  await page.locator(".dag-node.state-running").click();
-  await expect(page.getByText("Build the live dashboard")).toBeVisible();
-  await expect(page.getByText("Users can inspect transcripts")).toBeVisible();
-  for (const role of ["Worker", "Judge", "Check-in", "PR author", "Lint"]) {
-    await expect(page.getByText(role, { exact: true })).toBeVisible();
-  }
-  await expect(page.getByText("Implementing the dashboard now")).toBeVisible();
-  await expect(page.getByText("Drafted the pull request")).toBeVisible();
-
-  await page.getByRole("button", { name: /Close/ }).click();
-  await expect(page.getByText("Build the live dashboard")).toHaveCount(0);
-
-  await page.locator(".dag-node.state-done").click();
-  const section = (name: string) =>
-    page
-      .locator(".detail-section")
-      .filter({ has: page.getByRole("heading", { name }) });
-  await expect(
-    section("Pull request").getByRole("link", {
-      name: /github\.com\/example\/repo\/pull\/12/,
-    }),
-  ).toBeVisible();
-  await expect(section("Logs")).toContainText("Gate completed successfully");
-  // The gate result is the attestation the verification recorded for this node.
-  await expect(page.locator(".facts")).toContainText("comparison_base");
-  await expect(
-    page.getByText("No conversations recorded for this node."),
-  ).toBeVisible();
-
-  // The failed node published nothing, and the panel says so rather than leaving an
-  // empty block that reads as "all clear".
-  await page.locator(".dag-node.state-failed").click();
-  await expect(section("Pull request")).toContainText("Not recorded");
-  await expect(section("Logs")).toContainText("Deploy failed");
-
-  // A human action names work for a person, so the contract forbids it a completion
-  // bar; the panel has to say that rather than render an empty criteria block.
-  await page.locator(".dag-node.state-waiting").click();
-  await expect(page.getByText("Wait for release approval")).toBeVisible();
-  await expect(
-    page.getByText("No completion criteria recorded."),
-  ).toBeVisible();
+  // Each card names the kind of work it stands for, so an operator can tell the two
+  // apart without opening either: agent work runs itself, a human action does not.
+  await expect(page.locator(".dag-node.state-running")).toContainText("agent");
+  await expect(page.locator(".dag-node.state-waiting")).toContainText("human");
 });
 
-test("opens a node from the keyboard-accessible node list", async ({
+test("opens a node's timeline, reads one recorded moment, and returns", async ({
+  page,
+}) => {
+  await openObservatory(page);
+  await page.locator(".dag-node.state-running").click();
+
+  // The node takes the working area: the graph is gone, and a breadcrumb stands
+  // where it was.
+  await expect(
+    page.getByRole("region", { name: "Timeline for dashboard" }),
+  ).toBeVisible();
+  await expect(page.locator(".dag-node")).toHaveCount(0);
+  await expect(
+    page.getByRole("navigation", { name: "Breadcrumb" }),
+  ).toContainText("dashboard");
+  await expect(page.locator(".node-view-facts")).toContainText("running");
+
+  await expect(itemDetail(page)).toContainText(
+    "Select an item in the timeline to read what it recorded.",
+  );
+
+  // Every row of the rail states what was recorded, when, how it ended, and how
+  // long it took — which is the whole reason the transcript dump was unreadable.
+  const worker = rail(page).getByRole("button", { name: /engineer-dashboard/ });
+  await expect(worker).toContainText("dispatch");
+  await expect(worker).toContainText("completed");
+  await expect(worker).toContainText(/\d\d:\d\d:\d\d/);
+  await expect(rail(page).getByRole("button")).not.toHaveCount(0);
+
+  await worker.click();
+  await expect
+    .poll(() => new URL(page.url()).searchParams.get("event"))
+    .toBe("dispatch-worker-session");
+  await expect(itemDetail(page)).toContainText(
+    "Implementing the dashboard now",
+  );
+  await expect(itemDetail(page)).toContainText("Worker");
+  await expect(
+    itemDetail(page).getByRole("article", { name: /^Turn / }),
+  ).toBeVisible();
+  // The detail region is where the reading happens, so it holds the majority of
+  // the width rather than a fixed narrow column.
+  const railWidth = (await rail(page).boundingBox())?.width ?? 0;
+  const detailWidth = (await itemDetail(page).boundingBox())?.width ?? 0;
+  expect(detailWidth).toBeGreaterThan(railWidth);
+
+  // A span contains its events, and opening it discloses them: one turn here.
+  const turn = rail(page).getByRole("button", { name: /conversation-turn/ });
+  await expect(turn.first()).toBeVisible();
+  await turn.first().click();
+  await expect(itemDetail(page)).toContainText(
+    "Implementing the dashboard now",
+  );
+
+  // Escape is the keyboard way back to the graph.
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".dag-node.state-running")).toContainText(
+    "dashboard",
+  );
+});
+
+test("restores a bookmarked moment inside a session from the address alone", async ({
+  page,
+}) => {
+  await openObservatory(page, `/?run=${runs().live}&node=dashboard`);
+  await rail(page)
+    .getByRole("button", { name: /engineer-dashboard/ })
+    .click();
+  const turn = rail(page)
+    .getByRole("button", { name: /conversation-turn/ })
+    .first();
+  await turn.click();
+  const bookmarked = new URL(page.url());
+  expect(bookmarked.searchParams.get("event")).not.toBe(
+    "dispatch-worker-session",
+  );
+
+  // Loading the graph in between is what makes the next load cold: nothing the
+  // clicks left behind can be what reopens the moment, only the address.
+  await openObservatory(page, "/");
+  await openObservatory(page, `${bookmarked.pathname}${bookmarked.search}`);
+  await expect(
+    rail(page)
+      .getByRole("button", { name: /conversation-turn/ })
+      .first(),
+  ).toHaveAttribute("aria-current", "true");
+  await expect(itemDetail(page)).toContainText(
+    "Implementing the dashboard now",
+  );
+});
+
+test("opens a node from the keyboard-accessible node list and walks back", async ({
   page,
 }) => {
   await openObservatory(page);
   // The canvas is a pointer surface, so the list beside it is the keyboard path to
-  // every node; it has to reach the same detail panel a click does.
+  // every node; it has to reach the same node view a click does.
   const node = page
     .getByRole("list", { name: "DAG nodes" })
     .getByRole("button", { name: "dashboard: running" });
   expect(await tabTo(page, node)).toBe(true);
   await page.keyboard.press("Enter");
-  await expect(page.getByText("Build the live dashboard")).toBeVisible();
+  await expect(
+    page.getByRole("region", { name: "Timeline for dashboard" }),
+  ).toBeVisible();
 
-  await page.getByRole("button", { name: /Close/ }).focus();
+  // The way back is in the tab order too, not only under the Escape key.
+  const back = page
+    .getByRole("navigation", { name: "Breadcrumb" })
+    .getByRole("button", { name: /Graph/ });
+  expect(await tabTo(page, back)).toBe(true);
   await page.keyboard.press("Enter");
-  await expect(page.getByText("Build the live dashboard")).toHaveCount(0);
+  await expect(page.locator(".dag-node.state-running")).toContainText(
+    "dashboard",
+  );
+});
+
+test("shows a verification and a publication as the records they are", async ({
+  page,
+}) => {
+  await openObservatory(page, `/?run=${runs().live}&node=foundation`);
+
+  // The verification carries the gate attestation the node recorded, and points at
+  // the preserved log rather than inlining it.
+  await rail(page)
+    .getByRole("button", { name: /branch push/ })
+    .click();
+  await expect(itemDetail(page)).toContainText("Gate attestation");
+  await expect(itemDetail(page)).toContainText("comparison_base");
+  await expect(itemDetail(page)).toContainText("round-01/foundation/gate.log");
+
+  // The publication carries the PR and the checks that were observed on it.
+  await rail(page)
+    .getByRole("button", { name: /local\/example/ })
+    .click();
+  await expect(
+    itemDetail(page).getByRole("link", {
+      name: /github\.com\/example\/repo\/pull\/12/,
+    }),
+  ).toBeVisible();
+  await expect(itemDetail(page)).toContainText("Observed checks");
+  await expect(itemDetail(page)).toContainText("unit");
+
+  // Its own recorded events sit inside it, in the order they happened.
+  const checks = rail(page).getByRole("button", {
+    name: /pr-checks-observed/,
+  });
+  await expect(checks).toContainText("passing");
+  await checks.click();
+  await expect(itemDetail(page)).toContainText("Observed checks");
+});
+
+test("keeps a node's task, criteria, dependencies and gate reachable", async ({
+  page,
+}) => {
+  await openObservatory(page, `/?run=${runs().live}&node=dashboard`);
+  // A compact summary, not a wall of blocks: each part is one disclosure away.
+  await page.getByRole("button", { name: "Task" }).click();
+  await expect(page.getByText("Build the live dashboard")).toBeVisible();
+  await page.getByRole("button", { name: "Completion criteria" }).click();
+  await expect(page.getByText("Users can inspect transcripts")).toBeVisible();
+
+  // A human action names work for a person, so the contract forbids it a completion
+  // bar; the summary has to say that rather than render an empty criteria block.
+  await openObservatory(page, `/?run=${runs().live}&node=approval`);
+  await page.getByRole("button", { name: "Completion criteria" }).click();
+  await expect(
+    page.getByText("No completion criteria recorded."),
+  ).toBeVisible();
+});
+
+test("keeps a node of hundreds of recorded sessions scannable", async ({
+  page,
+}) => {
+  // The served run really did record hundreds of sessions on this node, which is
+  // the shape that made the old detail panel unreadable.
+  await openObservatory(page, `/?run=${runs().busy}&node=sweep`);
+  const rows = rail(page).getByRole("button");
+  await expect(rows.first()).toBeVisible();
+  const grouped = rail(page).getByRole("button", { name: /× dispatch/ });
+  await expect(grouped).toBeVisible();
+  expect(await rows.count()).toBeLessThan(12);
+
+  // Opening the group hands out a page of it, not every row at once.
+  await grouped.click();
+  await expect(
+    rail(page).getByRole("button", { name: /Show 25 more of \d\d\d/ }),
+  ).toBeVisible();
+  expect(await rows.count()).toBeLessThan(60);
+
+  // And one session's own turns are paged the same way inside the detail region.
+  await rail(page)
+    .getByRole("button", { name: /engineer-sweep-7\b/ })
+    .click();
+  await expect(itemDetail(page)).toContainText("Swept batch 7 (0)");
+  await expect(itemDetail(page)).not.toContainText("Swept batch 7 (29)");
+  await itemDetail(page)
+    .getByRole("button", { name: /Show more of 30 turns/ })
+    .click();
+  await expect(itemDetail(page)).toContainText("Swept batch 7 (29)");
+});
+
+test("reports a node whose recorded work the run has not written yet", async ({
+  page,
+}) => {
+  // `queued` never started, so the run recorded no span or event for it at all.
+  // That is a real state of a live graph, and it has to be said rather than shown
+  // as an empty pane that reads like a broken view.
+  await openObservatory(page, `/?run=${runs().live}&node=queued`);
+  await expect(
+    page.getByText("This node has no recorded timeline yet."),
+  ).toBeVisible();
+  await expect(page.getByRole("alert")).toHaveCount(0);
 });
 
 test("zooms and reframes the graph through its canvas controls", async ({
@@ -199,6 +392,7 @@ test("renders a graph whose node depends on another run", async ({ page }) => {
 
   // The prerequisite itself stays visible where the node's dependencies are listed.
   await page.locator(".dag-node.state-running").click();
+  await page.getByRole("button", { name: "Dependencies, PR and gate" }).click();
   await expect(page.locator(".facts")).toContainText(
     `run:${runs().history}#archive`,
   );
@@ -210,6 +404,21 @@ test("navigates historical DAGs grouped by their launching session", async ({
   await openObservatory(page);
   await expect(page.getByText(/Codex session/)).toBeVisible();
   await expect(page.getByText(/Claude session/)).toBeVisible();
+
+  // Every row states the run's own state and whether it is still moving, so the list
+  // is readable without opening a run.
+  const liveRow = page.getByRole("button", { name: RegExp(runs().live) });
+  await expect(liveRow).toContainText("running");
+  await expect(
+    page.getByRole("button", { name: RegExp(runs().history) }),
+  ).toContainText("complete");
+
+  // The live marker is a bare dot, so it carries a name of its own and repeats it on
+  // hover rather than leaving colour to say the only thing that distinguishes it.
+  const liveMarker = liveRow.getByRole("img", { name: "Live" });
+  await expect(liveMarker).toBeVisible();
+  await liveMarker.hover();
+  await expect(page.getByRole("tooltip")).toContainText("Live");
 
   await page.getByRole("button", { name: RegExp(runs().history) }).click();
   await expect(page.locator(".dag-node.state-done")).toContainText("archive");
@@ -231,39 +440,42 @@ test("restores a bookmarked view and refreshes through the read API", async ({
   await expect(metric("Nodes")).toContainText(/[1-9]\d*/);
   await expect(metric("Wall time")).toContainText(/\d+\.\ds/);
   await expect(metric("Turns")).toContainText(/\d+/);
-  await expect(page.getByText("Planner session")).toBeVisible();
+  await expect(page.getByText("Run-level sessions")).toBeVisible();
   await expect(
     page.getByText("Coordinating the execution frontier"),
   ).toBeVisible();
 
   await page.getByRole("button", { name: "Refresh" }).click();
-  await expect(page.getByText("Planner session")).toBeVisible();
+  await expect(page.getByText("Run-level sessions")).toBeVisible();
 
   await page.getByRole("tab", { name: "Graph" }).click();
   await expect(page.locator(".dag-node.state-running")).toContainText(
     "dashboard",
   );
-  await expect(page.getByText("Planner session")).toHaveCount(0);
+  await expect(page.getByText("Run-level sessions")).toHaveCount(0);
 
   await openObservatory(page, `/?run=${runs().live}&node=dashboard`);
-  await expect(page.getByText("Build the live dashboard")).toBeVisible();
+  await expect(
+    page.getByRole("region", { name: "Timeline for dashboard" }),
+  ).toBeVisible();
 });
 
 test("gathers every run of one launching session under it", async ({
   page,
 }) => {
   await openObservatory(page);
-  // Two of the served runs record the same launch id, as one planner session driving
-  // two graphs does. They belong to one group, not one group each.
+  // Three of the served runs record the same launch id, as one planner session
+  // driving several graphs does. They belong to one group, not one group each.
   const codex = page
     .locator("section")
     .filter({ has: page.getByRole("heading", { name: /Codex session/ }) });
   await expect(
     page.getByRole("heading", { name: /Codex session/ }),
   ).toHaveCount(1);
-  await expect(codex.getByRole("button")).toHaveCount(2);
+  await expect(codex.getByRole("button")).toHaveCount(3);
   await expect(codex).toContainText(runs().live);
   await expect(codex).toContainText(runs().sibling);
+  await expect(codex).toContainText(runs().busy);
 
   // Both are reachable from that one group.
   await codex.getByRole("button", { name: RegExp(runs().sibling) }).click();
@@ -321,15 +533,42 @@ test("lists a run that has recorded no event beside the runs that have", async (
   await expect(page.getByRole("alert")).toHaveCount(0);
 });
 
-test("says so when a run recorded no planner conversation", async ({
+test("opens a run-level session other than the one shown on arrival", async ({
+  page,
+}) => {
+  // Which transcripts the browser really asked the server for — counted by session
+  // rather than by request, since a development build mounts every effect twice.
+  const transcripts = new Set<string>();
+  page.on("request", (request) => {
+    const { pathname } = new URL(request.url());
+    if (pathname.includes("/conversations/"))
+      transcripts.add(decodeURIComponent(pathname.split("/").at(-1) ?? ""));
+  });
+
+  // The served run records two sessions at no node: the orchestrator's own, and the
+  // round's check-in beside it. Only the first is open on arrival.
+  await openObservatory(page, `/?run=${runs().live}&view=overall`);
+  await expect(
+    page.getByText("Coordinating the execution frontier"),
+  ).toBeVisible();
+  await expect(page.getByText("Round 1 progress reported")).toHaveCount(0);
+  await expect.poll(() => transcripts.size).toBe(1);
+
+  // Opening the check-in discloses it and reads its own transcript only then.
+  await page.getByRole("button", { name: /check-in-.*round-1/ }).click();
+  await expect(page.getByText("Round 1 progress reported")).toBeVisible();
+  await expect.poll(() => transcripts.size).toBe(2);
+});
+
+test("says so when a run recorded no run-level conversation", async ({
   page,
 }) => {
   // The settled run's history holds a worker session and no orchestrator one, so
   // its overall view has no planner transcript to show.
   await openObservatory(page, `/?run=${runs().history}&view=overall`);
-  await expect(page.getByText("Planner session")).toBeVisible();
+  await expect(page.getByText("Run-level sessions")).toBeVisible();
   await expect(
-    page.getByText("No planner conversation is available."),
+    page.getByText("No run-level conversation is available."),
   ).toBeVisible();
 });
 
@@ -361,14 +600,18 @@ test("reflows navigation, detail, and metrics at a narrow viewport", async ({
   const width = async (locator: Locator): Promise<number | undefined> =>
     (await locator.boundingBox())?.width;
   const navigation = page.getByRole("navigation", { name: "DAG runs" });
-  const panel = page.locator(".detail-panel");
   const metrics = page.locator(".metric");
 
   await page.setViewportSize({ width: 1400, height: 900 });
   await openObservatory(page, `/?run=${runs().live}&node=dashboard`);
   await expect(navigation).toBeVisible();
   expect(await width(navigation)).toBe(280);
-  expect(await width(panel)).toBe(440);
+  // The rail is a fixed reading column; the detail region takes what is left, and
+  // has to keep the majority of it — that is the whole point of the new view.
+  expect(await width(rail(page))).toBe(320);
+  expect(await width(itemDetail(page))).toBeGreaterThan(
+    (await width(rail(page))) ?? 0,
+  );
   // Four metrics across one row while there is room for them.
   await page.getByRole("tab", { name: "Overall" }).click();
   await expect(metrics).toHaveCount(4);
@@ -379,18 +622,147 @@ test("reflows navigation, detail, and metrics at a narrow viewport", async ({
 
   await page.setViewportSize({ width: 800, height: 700 });
   await openObservatory(page, `/?run=${runs().live}&node=dashboard`);
-  // Everything stays on screen: the navigation and the detail panel each give up
-  // width, and the metrics wrap onto a second row instead of being squeezed.
+  // Everything stays on screen: the navigation and the rail each give up width,
+  // and the metrics wrap onto a second row instead of being squeezed.
   await expect(navigation).toBeVisible();
   expect(await width(navigation)).toBe(220);
-  await expect(panel).toBeVisible();
-  expect(await width(panel)).toBe(360);
+  expect(await width(rail(page))).toBe(200);
+  expect(await width(itemDetail(page))).toBeGreaterThan(
+    (await width(rail(page))) ?? 0,
+  );
   await page.getByRole("tab", { name: "Overall" }).click();
   await expect(metrics).toHaveCount(4);
   const narrowRows = await metrics.evaluateAll((tiles) =>
     tiles.map((tile) => tile.getBoundingClientRect().top),
   );
   expect(new Set(narrowRows).size).toBe(2);
+});
+
+test("paints the design system's components in the application's dark palette", async ({
+  page,
+}) => {
+  await openObservatory(page, `/?run=${runs().live}&node=dashboard`);
+
+  // `dark` on the document element is the switch @oneharness/ui's stylesheet selects
+  // its dark tokens with. Without it every component the package ships renders its
+  // light default inside this dark application shell.
+  await expect(page.locator("html")).toHaveClass(/\bdark\b/);
+
+  // The node view's own cards are the package's Card, so their surface proves two
+  // things at once: that the utilities its components are written in are generated
+  // for this app at all, and that they resolve to the dark token rather than white.
+  await rail(page)
+    .getByRole("button", { name: /engineer-dashboard/ })
+    .click();
+  const card = await backgroundColor(
+    itemDetail(page).locator('[data-slot="card"]').first(),
+  );
+  // An opaque `rgb(…)`: a token this build never defined would leave the utility
+  // invalid and the surface transparent, which is the shape this must not accept.
+  expect(card).toMatch(/^rgb\(\d+, \d+, \d+\)$/);
+  expect(card).toBe(await tokenColor(page, "--card"));
+  expect(brightestChannel(card)).toBeLessThan(80);
+
+  // The transcripts the package renders sit on that same surface, which is the
+  // defect an operator saw on every node they opened.
+  const turn = page.getByRole("article", { name: /^Turn / }).first();
+  await expect(turn).toBeVisible();
+  expect(
+    await backgroundColor(
+      turn.locator("xpath=ancestor::*[@data-slot='card'][1]"),
+    ),
+  ).toBe(card);
+
+  // And the application's own chrome is painted from the same token set rather than
+  // a hand-picked palette beside it.
+  const panel = await backgroundColor(rail(page));
+  expect(panel).toMatch(/^rgb\(\d+, \d+, \d+\)$/);
+  expect(panel).toBe(await tokenColor(page, "--sidebar"));
+
+  // The graph canvas scopes its own variables, so it needs its own switch; without
+  // it the minimap and zoom controls stay white inside the dark workspace. It is
+  // reached by leaving the node view, which is the only place the canvas renders.
+  await page.keyboard.press("Escape");
+  expect(
+    brightestChannel(
+      await backgroundColor(page.locator(".react-flow__minimap")),
+    ),
+  ).toBeLessThan(80);
+});
+
+test("tells each outcome apart by the palette's semantic tones", async ({
+  page,
+}) => {
+  await openObservatory(page);
+  // The node view states its node's state in words beside the graph's colour, which
+  // is the only reading of it available to anyone who cannot rely on that colour.
+  // Each reading is checked against its word too, so a selector that drifted onto
+  // one of the view's other badges would fail rather than pass quietly.
+  const stateBadge = page.locator('.node-view-facts > [data-slot="badge"]');
+
+  // Reading a state costs an operator nothing only while the outcomes look different:
+  // settled work green, work that was lost red, work still moving blue. The design
+  // system's own status vocabulary stops at four states and includes none of these
+  // words, so without the app's mapping every one of them paints the same neutral
+  // pill. `toHaveCSS` rather than one reading of the computed style: the badge
+  // transitions its colour, so an immediate read catches it partway between two.
+  for (const { state, token } of [
+    { state: "done", token: "--success" },
+    { state: "cancelled", token: "--destructive" },
+    { state: "failed", token: "--destructive" },
+    { state: "running", token: "--info" },
+  ]) {
+    await page.locator(`.dag-node.state-${state}`).click();
+    await expect(stateBadge).toHaveText(state);
+    await expect(stateBadge).toHaveCSS("color", await tokenColor(page, token));
+    await page.keyboard.press("Escape");
+  }
+
+  // Work that has not started has no outcome to report, so it must not borrow one of
+  // those meanings — which is also what stops the assertions above from passing on a
+  // mapping that simply paints everything.
+  const neutral = await tokenColor(page, "--foreground");
+  for (const state of ["waiting", "pending"]) {
+    await page.locator(`.dag-node.state-${state}`).click();
+    await expect(stateBadge).toHaveText(state);
+    await expect(stateBadge).toHaveCSS("color", neutral);
+    await page.keyboard.press("Escape");
+  }
+
+  // The run list is the other surface that states an outcome, and `complete` is a
+  // state the package's own badge does not know at all.
+  const runBadge = (runId: string): Locator =>
+    page
+      .getByRole("button", { name: RegExp(runId) })
+      .locator('[data-slot="badge"]');
+  await expect(runBadge(runs().history)).toHaveCSS(
+    "color",
+    await tokenColor(page, "--success"),
+  );
+  await expect(runBadge(runs().live)).toHaveCSS(
+    "color",
+    await tokenColor(page, "--info"),
+  );
+  // A run's state is an open string in the read contract, and the sibling run's
+  // executor stopped without recording a result — a real state with no outcome in it.
+  // The list has to say the word and stop there rather than colour it in.
+  await expect(runBadge(runs().sibling)).toHaveText("stopped");
+  await expect(runBadge(runs().sibling)).toHaveCSS("color", neutral);
+
+  // And the canvas says the same things on its own surfaces, out of the same tokens
+  // rather than the hex values it used to carry. `waiting` is blocked work, the one
+  // meaning the cards state and the badges deliberately do not.
+  for (const { state, token } of [
+    { state: "done", token: "--success-surface" },
+    { state: "failed", token: "--destructive-surface" },
+    { state: "running", token: "--info-surface" },
+    { state: "waiting", token: "--warning-surface" },
+  ]) {
+    await expect(page.locator(`.dag-node.state-${state}`)).toHaveCSS(
+      "background-color",
+      await tokenColor(page, token),
+    );
+  }
 });
 
 test("shows the loading view while its first read is still in flight", async ({
@@ -401,6 +773,9 @@ test("shows the loading view while its first read is still in flight", async ({
   // loading view still long enough to look at.
   await page.goto(STALLED_UI_URL);
   await expect(page.getByText("Loading execution history…")).toBeVisible();
+  // Placeholder bars stand where the run will be, so the wait reads as work in
+  // progress rather than as a screen that has finished and found nothing.
+  await expect(page.locator('[data-slot="skeleton"]').first()).toBeVisible();
   await expect(page.getByText("No DAG runs found")).toHaveCount(0);
   await expect(page.getByRole("alert")).toHaveCount(0);
 });
@@ -410,8 +785,19 @@ test("surfaces a telemetry read it cannot complete", async ({ page }) => {
   // EventSource both fail for real, and the operator must be told rather than shown
   // an empty graph that looks like "no runs yet".
   await page.goto(OFFLINE_UI_URL);
-  await expect(page.getByRole("alert")).toContainText("Live telemetry issue");
+  const banner = page.getByRole("alert");
+  await expect(banner).toContainText("Live telemetry issue");
+  // The banner names the failure as well as announcing one: an operator who cannot
+  // see what broke cannot tell a wedged server from a mistyped API address.
+  await expect(
+    banner.locator('[data-slot="alert-description"]'),
+  ).not.toBeEmpty();
   await expect(page.getByText("Awaiting updates")).toBeVisible();
+
+  // The one control that can retry the read stays reachable while the read is
+  // failing, and reporting the failure again is the honest outcome of pressing it.
+  await page.getByRole("button", { name: "Refresh" }).click();
+  await expect(banner).toContainText("Live telemetry issue");
 });
 
 // The remaining journeys change what the server is serving, so they run last and in
@@ -456,7 +842,12 @@ test("falls back to the empty state once no run is left", async ({ page }) => {
   // Every remaining run except one — the journey before this removed the historical
   // one. The empty state means the server serves none, so it must not appear while
   // any run is still there to show, whatever shape that run is.
-  for (const runId of [runs().live, runs().unattributed, runs().eventless]) {
+  for (const runId of [
+    runs().live,
+    runs().unattributed,
+    runs().eventless,
+    runs().busy,
+  ]) {
     changeServedRuns(["--remove-run", runId]);
     await expect(page.getByText("No DAG runs found")).toHaveCount(0);
   }

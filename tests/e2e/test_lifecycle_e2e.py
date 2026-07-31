@@ -4385,6 +4385,80 @@ def test_retry_with_invalid_incomplete_provenance_records_fresh_branch_fallback(
     )
 
 
+def test_a_pinned_retry_resolves_to_the_pinned_branch_or_is_refused(tmp_path, bare_origin) -> None:
+    """A retry that names its branch gets that branch every time, or a stated refusal.
+
+    One change carried two branch names once: the planner submitted a retry pinned to
+    a preserved branch, it resumed, and the *identical* envelope submitted afterwards
+    silently landed on a freshly generated branch instead — because the preserved work
+    was no longer unattested-incomplete by then. Which branch a retry produces has to
+    be a function of the envelope, not of what the repository did in between.
+    """
+    origin = bare_origin()
+    workspace = _workspace(tmp_path, origin)
+    first = run_repo_task(
+        str(origin),
+        "Preserve partial work.",
+        "engineer",
+        workspace=workspace,
+        dispatch_fn=make_writing_dispatch(filename="partial.txt", completed=False),
+        recorded_gate=["true"],
+    )
+    assert first.resume is not None and first.resume.mode == "retry"
+    # The planner's envelope, submitted verbatim below: this change lives on this
+    # branch, continued from this checkpoint.
+    envelope = {"branch": first.branch, "resume": first.resume}
+
+    honoured = run_repo_task(
+        str(origin),
+        "Continue the preserved work.",
+        "engineer",
+        workspace=workspace,
+        dispatch_fn=make_writing_dispatch(filename="more.txt", completed=False),
+        recorded_gate=["true"],
+        **envelope,
+    )
+    assert honoured.branch == first.branch
+    assert honoured.retry_lineage is not None
+    assert honoured.retry_lineage.disposition == "reused"
+
+    # Now the preserved work stops being unattested-incomplete, exactly as it does
+    # once a recovery or an attestation lands on every preserved commit. The envelope
+    # has not changed, and that is the whole point.
+    recovery_worktree = workspace.worktree(
+        normalize_repo(str(origin)), first.branch, base="origin/main"
+    )
+    attested = "\n".join(
+        f"{RECOVERY_TRAILER} {sha}"
+        for sha in sorted(incomplete_commits(recovery_worktree, "origin/main", "HEAD"))
+    )
+    gitops.commit_empty(recovery_worktree, f"test: invalidate retry provenance\n\n{attested}")
+    workspace.remove_worktree(normalize_repo(str(origin)), recovery_worktree)
+
+    refusals = [
+        run_repo_task(
+            str(origin),
+            "Continue the preserved work.",
+            "engineer",
+            workspace=workspace,
+            dispatch_fn=make_writing_dispatch(filename="more.txt", completed=False),
+            recorded_gate=["true"],
+            **envelope,
+        )
+        for _ in range(2)
+    ]
+
+    # Two identical submissions, one branch — the pinned one — and a reason naming
+    # the pin. A generated branch name is random, so before this the two submissions
+    # would not even have agreed with each other.
+    assert [result.branch for result in refusals] == [first.branch, first.branch]
+    for refused in refusals:
+        assert refused.outcome == "resume-failed"
+        assert "does not carry valid unattested incomplete provenance" in refused.detail
+        assert f"pins branch {first.branch!r}" in refused.detail
+        assert refused.retry_lineage is None
+
+
 def test_preserved_retry_is_recovered_through_the_merge_path_gate(tmp_path, bare_origin) -> None:
     origin = bare_origin()
     workspace = _workspace(tmp_path, origin)
@@ -4508,6 +4582,130 @@ def test_clean_committed_partial_work_is_marked_and_recoverable(tmp_path, bare_o
     assert f"Orchestrator-Recovered-Incomplete: {marker_sha}" in attestation[0].message
     assert not gitops.is_ancestor(canonical, attestation[0].sha, "origin/main")
     assert _has_file(origin, "main", "partial.txt")
+
+
+def test_publication_subject_describes_the_change_and_its_body_keeps_the_attestation(
+    tmp_path, bare_origin
+) -> None:
+    """What a recovered incomplete step leaves on the base branch.
+
+    Observed on this repository's own `main`: subjects like
+    `feat: adopt @oneharness/ui as the app's design system; ## What (incomple…`. The
+    marker commit's subject is a valid Conventional Commit, so the subject synthesizer
+    folded it in alongside the real work, and because task prose opens with a `## What`
+    heading the fragment it contributed named a section rather than any change.
+
+    The base branch stays squash-merged — the marker and its attestation are branch
+    state, not `main` history — so the publication commit's trailers are what carry
+    "a step was left incomplete here, and a green gate recovered it" forward.
+    """
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-subject")
+    Registry().register(str(canonical), workflow="local", repo_type="single-owner")
+
+    def committing_dispatch(persona: str, task: str, *, project_dir: str, **_: object) -> Report:
+        worktree = Path(project_dir)
+        (worktree / "design-system.txt").write_text("adopted\n", encoding="utf-8")
+        gitops.add_all(worktree)
+        gitops.commit(worktree, "feat: adopt the shared design system")
+        assert not gitops.is_dirty(worktree)
+        return Report(persona, 1, False, False, 2, [], {}, {}, "", max_turns=2)
+
+    result = run_repo_task(
+        str(canonical),
+        # The structured prose every dispatched task carries, headings included.
+        "## What\nAdopt the shared design system.\n\n## Why\nThe app has no one source"
+        " of visual truth.\n",
+        "engineer",
+        workspace=Workspace(tmp_path / "subject-worktrees"),
+        branch="feature/published-subject",
+        dispatch_fn=committing_dispatch,
+        recorded_gate=["true"],
+    )
+    assert result.outcome == "not-completed" and result.resume is not None
+    base_before = _tip(origin, "main")
+    markers = incomplete_commits(canonical, "origin/main", result.branch)
+    assert len(markers) == 1, sorted(markers)
+    marker_sha = next(iter(markers))
+    marker_subject = gitops.log_messages(canonical, f"{marker_sha}~1", marker_sha)[0].message
+    # The marker names the work it preserved, not the heading above it.
+    assert marker_subject.splitlines()[0] == (
+        "chore: Adopt the shared design system. (incomplete step)"
+    )
+
+    recovered = recover_repo(
+        canonical,
+        result.branch,
+        workspace_root=tmp_path / "subject-recovery-worktrees",
+        recorded_gate=["true"],
+    )
+    assert recovered.ok and recovered.outcome == "merged", recovered.detail
+
+    published = gitops.log_messages(canonical, base_before, "origin/main")
+    # Squash-merged: one publication commit, not the branch's provenance history.
+    assert len(published) == 1, [commit.message.splitlines()[0] for commit in published]
+    subject, _, body = published[0].message.partition("\n")
+    assert subject == "feat: adopt the shared design system"
+    assert "incomplete" not in subject and "##" not in subject and "attest" not in subject
+    # The attestation is preserved: the fact reaches `main`, the commits do not.
+    assert f"{RECOVERY_TRAILER} {marker_sha}" in body
+    assert not gitops.is_ancestor(canonical, marker_sha, "origin/main")
+    assert _has_file(origin, "main", "design-system.txt")
+
+
+def test_a_remote_retry_publishes_its_attestation_in_the_pr_body(tmp_path, bare_origin) -> None:
+    """The remote half of the same contract: GitHub squashes, so the body carries it.
+
+    A remote workstream that resumes a preserved branch attests the marker on the
+    branch, but GitHub collapses that branch into one commit built from the PR title
+    and body. Without the trailers there, `main` would keep no record that a step was
+    left incomplete.
+    """
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-remote-attested")
+    workspace = Workspace(
+        tmp_path / "remote-attested-worktrees",
+        resolver=lambda _spec: canonical,
+        workflow="remote",
+        repo_type="single-owner",
+    )
+    github = FakeGitHub(origin)
+
+    partial = run_repo_task(
+        str(origin),
+        "## What\nPreserve work for a remote retry.\n\n## Why\nIt proves the trailer.\n",
+        "engineer",
+        workspace=workspace,
+        dispatch_fn=make_writing_dispatch(filename="partial.txt", completed=False),
+        recorded_gate=["true"],
+        workflow="remote",
+        repo_type="single-owner",
+        github=github,
+    )
+    assert partial.outcome == "not-completed" and isinstance(partial.resume, Resume)
+    markers = incomplete_commits(canonical, "origin/main", partial.branch)
+    assert len(markers) == 1, sorted(markers)
+    marker_sha = next(iter(markers))
+
+    resumed = run_repo_task(
+        str(origin),
+        "## What\nFinish the preserved remote work.\n\n## Why\nIt proves the trailer.\n",
+        "engineer",
+        workspace=workspace,
+        dispatch_fn=make_writing_dispatch(filename="finished.txt"),
+        recorded_gate=["true"],
+        workflow="remote",
+        repo_type="single-owner",
+        github=github,
+        resume=partial.resume,
+    )
+    assert resumed.outcome == "merged", resumed.detail
+    assert resumed.retry_lineage is not None
+    assert resumed.retry_lineage.disposition == "recovered"
+    assert resumed.pr is not None
+    body = github.published(resumed.pr).body
+    assert f"{RECOVERY_TRAILER} {marker_sha}" in body
+    assert body.startswith("## What\n")
 
 
 def test_a_redispatched_branch_is_not_handed_a_second_incomplete_marker(
@@ -5310,7 +5508,11 @@ def test_resumed_branch_setup_round_trips_through_telemetry_cli(tmp_path, bare_o
     )
     assert indexed.returncode == 0, indexed.stderr
     observed = json.loads(indexed.stdout)["runs"][0]["timing"]
-    assert observed["setup_seconds"] > 0
+    # `setup_seconds` is a millisecond-rounded share of the run's wall clock handed
+    # out after the categories ahead of it, so a positive value is a property of a
+    # fast box. The journal-to-CLI round trip is the contract, and holds either way.
+    journalled = sum(event.detail["seconds"] for event in setup_events)
+    assert observed["setup_seconds"] == round(journalled * 1000) / 1000
 
 
 def test_real_lifecycle_outcomes_round_trip_through_telemetry_cli(tmp_path, bare_origin) -> None:

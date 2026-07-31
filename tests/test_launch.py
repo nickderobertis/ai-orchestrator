@@ -10,12 +10,21 @@ import pytest
 
 from orchestrator.launch import (
     PROVENANCE_SCHEMA_VERSION,
+    UNKNOWN_OWNER,
+    DetectedLaunch,
     LaunchError,
+    LaunchIdentity,
+    RunOwner,
+    caller_identity,
+    detect_launch,
     generate_launch_id,
     provenance_dir,
     provenance_path,
     read_provenance,
+    read_run_owner,
     resolve_launcher_kind,
+    select_launch,
+    session_fingerprint,
     validate_launch_id,
     validate_session_id,
     write_provenance,
@@ -291,3 +300,120 @@ def test_read_provenance_degrades_when_the_state_directory_is_unusable(
     monkeypatch.setenv("HOME", "relative/home")
 
     assert read_provenance(generate_launch_id()) is None
+
+
+def _write_launch_record(run_dir: Path, launch_id: str | None) -> Path:
+    """Leave the run-directory half of the scheme, as `just orchestrate` writes it."""
+    run_dir.mkdir(parents=True, exist_ok=True)
+    record: dict[str, object] = {"schema_version": 2, "run_id": run_dir.name}
+    if launch_id is not None:
+        record["launch"] = {"launch_id": launch_id}
+    (run_dir / "launch.json").write_text(json.dumps(record), encoding="utf-8")
+    return run_dir
+
+
+def test_detect_launch_reads_the_ambient_harness_and_its_session() -> None:
+    assert detect_launch({"CLAUDECODE": "1", "CLAUDE_CODE_SESSION_ID": "s-1"}) == DetectedLaunch(
+        "claude-code", "s-1"
+    )
+    assert detect_launch({"CODEX_THREAD_ID": "t-1"}) == DetectedLaunch("codex", "t-1")
+    # A recognised harness that names no session: the launcher is still known, but
+    # there is nothing to join a provenance record to.
+    assert detect_launch({"CODEX_SANDBOX": "seatbelt"}) == DetectedLaunch("codex", None)
+    # A plain shell stays exactly as unattributable as it has always been.
+    assert detect_launch({"SHELL": "/bin/bash"}) == DetectedLaunch("unknown", None)
+
+
+def test_detect_launch_degrades_an_ambient_session_id_it_cannot_use() -> None:
+    """Nobody typed this value, so an unusable one must not fail a launch."""
+    detected = detect_launch({"CLAUDECODE": "1", "CLAUDE_CODE_SESSION_ID": "two\nlines"})
+    assert detected == DetectedLaunch("claude-code", None)
+
+
+def test_select_launch_prefers_explicit_values_over_the_environment() -> None:
+    ambient = {"CLAUDECODE": "1", "CLAUDE_CODE_SESSION_ID": "detected"}
+    assert select_launch(launcher=None, session_id=None, environ=ambient) == DetectedLaunch(
+        "claude-code", "detected"
+    )
+    assert select_launch(launcher=None, session_id="explicit", environ=ambient) == DetectedLaunch(
+        "claude-code", "explicit"
+    )
+    # A detected session belongs to the harness that was detected. Pairing it with a
+    # different one would join a run to a session that never launched it.
+    assert select_launch(launcher="codex", session_id=None, environ=ambient) == DetectedLaunch(
+        "codex", None
+    )
+    assert select_launch(launcher="codex", session_id="c-1", environ=ambient) == DetectedLaunch(
+        "codex", "c-1"
+    )
+
+
+def test_caller_identity_is_none_without_a_named_session() -> None:
+    assert caller_identity({"SHELL": "/bin/sh"}) is None
+    assert caller_identity({"CODEX_SANDBOX": "seatbelt"}) is None
+    identity = caller_identity({"CLAUDECODE": "1", "CLAUDE_CODE_SESSION_ID": "s-1"})
+    assert identity == LaunchIdentity("claude-code", "s-1")
+    assert identity is not None
+    # The label names the session without printing the session id itself.
+    assert identity.label == f"claude-code:{session_fingerprint('s-1')}"
+    assert "s-1" not in identity.label
+
+
+def test_read_run_owner_resolves_a_recorded_launch(tmp_path: Path) -> None:
+    launch_id = generate_launch_id()
+    write_provenance(
+        launch_id=launch_id,
+        launcher="claude-code",
+        launcher_session_id="s-1",
+        repository_identity="local/app",
+    )
+    run_dir = _write_launch_record(tmp_path / "runs" / "owned", launch_id)
+
+    owner = read_run_owner(run_dir)
+    caller = LaunchIdentity("claude-code", "s-1")
+    assert owner.launcher == "claude-code"
+    assert owner.is_(caller)
+    assert owner.label(caller) == "mine"
+    # Another session of the same harness is still another planner's run.
+    other = LaunchIdentity("claude-code", "s-2")
+    assert not owner.is_(other)
+    assert owner.label(other) == f"claude-code:{session_fingerprint('s-1')}"
+
+
+@pytest.mark.parametrize("launch_id", [None, "not-a-launch-id"])
+def test_a_run_without_a_usable_join_key_belongs_to_nobody(
+    tmp_path: Path, launch_id: str | None
+) -> None:
+    run_dir = _write_launch_record(tmp_path / "runs" / f"run-{launch_id}", launch_id)
+    owner = read_run_owner(run_dir)
+    assert owner == UNKNOWN_OWNER
+    assert owner.label(LaunchIdentity("claude-code", "s-1")) == "unknown"
+
+
+def test_an_expired_or_missing_record_is_never_attributed_to_the_reader(tmp_path: Path) -> None:
+    """Every run that predates provenance lands here, and none of them is mine."""
+    launch_id = generate_launch_id()
+    write_provenance(
+        launch_id=launch_id,
+        launcher="claude-code",
+        launcher_session_id="s-1",
+        repository_identity="local/app",
+        started_at=(datetime.now(UTC) - timedelta(days=30)).isoformat(),
+    )
+    expired = _write_launch_record(tmp_path / "runs" / "expired", launch_id)
+    unrecorded = _write_launch_record(tmp_path / "runs" / "unrecorded", generate_launch_id())
+
+    caller = LaunchIdentity("claude-code", "s-1")
+    for run_dir in (expired, unrecorded, tmp_path / "runs" / "absent"):
+        owner = read_run_owner(run_dir)
+        assert owner == UNKNOWN_OWNER
+        assert not owner.is_(caller)
+        assert owner.label(caller) == "unknown"
+
+
+def test_ownership_needs_both_halves() -> None:
+    """A caller with no session of its own is the owner of nothing."""
+    owner = RunOwner("claude-code", LaunchIdentity("claude-code", "s-1"))
+    assert not owner.is_(None)
+    assert owner.label(None) == f"claude-code:{session_fingerprint('s-1')}"
+    assert not UNKNOWN_OWNER.is_(None)

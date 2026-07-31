@@ -13,7 +13,9 @@ from typing import Any
 from . import gitops, history, runs
 from .channel import ChannelError, due_indicator, planner_wait_indicator
 from .config import ConfigError
+from .goals import concurrent_indicator
 from .liveness import PARKED_AFTER_SECONDS, parked_indicator
+from .monitor import RUN_LABEL
 from .registry import Registry, RegistryError
 from .workspace import IdentityKey, RepositoryType, Workflow
 
@@ -117,11 +119,23 @@ def _ledger_for_branch(runs_dir: Path, branch: str | None) -> LedgerState | None
     return max(matches, default=None, key=lambda item: (item.round, item.run_id))
 
 
-def collect(*, runs_dir: Path, oneharness_bin: str = "oneharness") -> list[TaskStatus]:
-    """Join all validated worker history sessions to their git and ledger state."""
+def collect(
+    *,
+    runs_dir: Path,
+    oneharness_bin: str = "oneharness",
+    run_id: runs.RunId | None = None,
+) -> list[TaskStatus]:
+    """Join all validated worker history sessions to their git and ledger state.
+
+    ``run_id`` narrows the join to the sessions that run's own scopes labelled,
+    which is the same `run_id` label `just monitor` filters history on — so both
+    planner views answer "what is this run doing" from one selection rule.
+    """
     result: list[TaskStatus] = []
     registry = Registry()
     for session in history.worker_sessions(oneharness_bin=oneharness_bin):
+        if run_id is not None and session.labels.get(RUN_LABEL) != run_id:
+            continue
         records = history.session_records(session)
         summary = history.digest(records, session.session_id)
         latest = records[-1] if records else {}
@@ -161,8 +175,10 @@ def collect(*, runs_dir: Path, oneharness_bin: str = "oneharness") -> list[TaskS
     return result
 
 
-def _human(tasks: list[TaskStatus]) -> str:
+def _human(tasks: list[TaskStatus], *, run_id: runs.RunId | None = None) -> str:
     if not tasks:
+        if run_id is not None:
+            return f"No dispatched tasks recorded for run {run_id}."
         return "No running tasks. Pass N or --all to include recent finished tasks."
     lines: list[str] = []
     for task in tasks:
@@ -211,9 +227,37 @@ def _json_value(task: TaskStatus) -> dict[str, Any]:
     return value
 
 
+def _positional(value: str | None) -> tuple[int | None, str | None]:
+    """Split this view's one positional into its count and its run-id readings.
+
+    The count came first and stays exactly as it was, so a plain integer is never
+    read as a run id. Everything else is a run id, which is what `launch.json`
+    advertises and what `just monitor` already accepts — the two planner views
+    that could not be pointed at a run were the outlier, not this argument.
+
+    A run id may itself be all digits (`_RUN_ID` admits one), so this split is a
+    genuine ambiguity rather than a parsing convenience. It resolves toward the
+    older meaning: reading `just status 5` as a run would silently change what a
+    documented invocation shows, while a numeric run id is still reachable by its
+    unambiguous `--runs-dir` path plus `just monitor`/`just results`.
+    """
+    if value is None:
+        return None, None
+    try:
+        return int(value), None
+    except ValueError:
+        return None, value
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Show running and recent dispatched tasks.")
-    parser.add_argument("limit", nargs="?", type=int, metavar="N")
+    parser.add_argument(
+        "target",
+        nargs="?",
+        metavar="N|RUN_ID",
+        help="a count of recent finished tasks to include, or the run id "
+        "`launch.json` advertises (a plan name resolves when it names one active run)",
+    )
     parser.add_argument("--all", action="store_true", help="include recent finished tasks")
     parser.add_argument("--format", choices=("human", "json"), default="human")
     parser.add_argument("--runs-dir", type=Path, default=Path("runs"))
@@ -226,24 +270,38 @@ def main(argv: list[str] | None = None) -> int:
         f"this long as parked (default: {PARKED_AFTER_SECONDS:g})",
     )
     args = parser.parse_args(argv)
-    if args.limit is not None and args.limit <= 0:
+    limit, requested_run = _positional(args.target)
+    if limit is not None and limit <= 0:
         parser.error("N must be a positive integer")
     if not math.isfinite(args.parked_after) or args.parked_after <= 0:
         parser.error("--parked-after must be a positive, finite number of seconds")
+    run_id: runs.RunId | None = None
+    if requested_run is not None:
+        try:
+            run_id = runs.resolve_supervision_run(args.runs_dir, requested_run)
+        except ConfigError as exc:
+            print(f"status: {exc}", file=sys.stderr)
+            return 2
     try:
-        tasks = collect(runs_dir=args.runs_dir)
+        tasks = collect(runs_dir=args.runs_dir, run_id=run_id)
     except (history.HistoryError, RegistryError) as exc:
         print(f"status: {exc}", file=sys.stderr)
         return 2
-    include_recent = args.all or args.limit is not None
+    # Naming a run asks for that run's picture, so its finished tasks are part of
+    # the answer; the unscoped view keeps its running-only default.
+    include_recent = args.all or limit is not None or run_id is not None
     selected = tasks if include_recent else [task for task in tasks if task.running]
-    selected = selected[: args.limit or 15]
+    selected = selected[:limit] if limit is not None else selected[:15]
     if args.format == "json":
         print(json.dumps([_json_value(task) for task in selected]))
     else:
         indicators: list[str] = []
         if args.runs_dir.is_dir():
-            for run_dir in sorted(path for path in args.runs_dir.iterdir() if path.is_dir()):
+            for run_dir in sorted(
+                path
+                for path in args.runs_dir.iterdir()
+                if path.is_dir() and (run_id is None or path.name == run_id)
+            ):
                 # Reported before the channel indicators and independently of them: a
                 # run that lost its round or its orchestrator leaves its last planner
                 # surface in place, so it would otherwise still read as "waiting on me".
@@ -259,6 +317,12 @@ def main(argv: list[str] | None = None) -> int:
                     parked := parked_indicator(run_dir, parked_after=args.parked_after)
                 ) is not None:
                     indicators.append(f"{run_dir.name}: {parked}")
+                # A second live orchestrator on a shared identity is the one piece of
+                # machine state this view could not previously report: it belongs to
+                # no run dir here, and its effects reach this one as a dirty
+                # publication checkout or a lost push race.
+                if (shared := concurrent_indicator(run_dir, args.parked_after)) is not None:
+                    indicators.append(f"{run_dir.name}: {shared}")
                 try:
                     waiting = planner_wait_indicator(run_dir / "channel")
                     indicator = due_indicator(run_dir / "channel")
@@ -268,5 +332,5 @@ def main(argv: list[str] | None = None) -> int:
                     indicators.append(f"{run_dir.name}: {waiting}")
                 if indicator is not None:
                     indicators.append(f"{run_dir.name}: {indicator}")
-        print("\n".join([*indicators, _human(selected)]))
+        print("\n".join([*indicators, _human(selected, run_id=run_id)]))
     return 0

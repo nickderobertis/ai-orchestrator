@@ -16,6 +16,10 @@ Outcome is steered by sentinels in the task (the first user message):
                        this and the cap, which is why a settled result has to say
                        which one it was.
   * "complete-now"  -> the agent completes on its first turn (exit 0).
+  * "terminal-blocker" -> the worker reports an uncontrollable blocker and the
+                          supervisor promptly releases it with a failed verdict.
+  * "repeat-productive" -> the worker repeats its progress phrase but continues
+                           until completing on its third turn.
   * otherwise       -> the unified supervisor completes on the second agent turn,
                        after one push, exercising the two-sided loop (exit 0).
 """
@@ -35,6 +39,7 @@ import time
 from pathlib import Path
 from typing import Literal, NamedTuple, TypedDict, cast
 
+from orchestrator.dispatch import REPORTED_BLOCKER_PREFIX
 from orchestrator.scratch import CAPACITY_ERROR_MARKER, DEFAULT_MIN_FREE_BYTES
 
 
@@ -540,6 +545,12 @@ def main() -> int:
                 # counts the turn it attempted, so the budget drains at a rate no
                 # working agent produces — the shape a failing provider leaves.
                 agent_message = ""
+            elif "terminal-blocker" in task:
+                agent_message = "Terminal blocker: required external service is unavailable."
+            elif "repeat-productive" in task:
+                agent_message = "continuing verified migration work"
+            elif "large-dispatch-report" in task:
+                agent_message = "done " + "x" * 10_000_000
             else:
                 agent_message = "done" if done else "working on it"
             resp = {
@@ -570,9 +581,12 @@ def main() -> int:
                 sys.stderr.write("fake_backend: supervisor task must be a string\n")
                 return 1
             supervisor = cast(SupervisorRequest, req)
-            completion_turn = 13 if "complete-after-13" in task else 2
+            completion_turn = (
+                13 if "complete-after-13" in task else 3 if "repeat-productive" in task else 2
+            )
             complete = (not fail) and (
                 "stop-short" in task
+                or "terminal-blocker" in task
                 or "agent-synthesized planner update" in task
                 or _assistant_turns(messages) >= completion_turn
                 or "resume-after-cap" in task
@@ -593,7 +607,9 @@ def main() -> int:
         case "judge" if req.get("kind") == "boolean":
             # Final evals still use the standalone judge operation. The loop's
             # The adopted version routes the completion decision through `supervisor` above.
-            completion_turn = 13 if "complete-after-13" in task else 2
+            completion_turn = (
+                13 if "complete-after-13" in task else 3 if "repeat-productive" in task else 2
+            )
             value = (
                 (not fail)
                 and "stop-short" not in task
@@ -606,7 +622,9 @@ def main() -> int:
             resp = {
                 "value": value,
                 "reason": (
-                    "the supervisor released it before its criteria were met"
+                    f"{REPORTED_BLOCKER_PREFIX} required external service is unavailable"
+                    if "terminal-blocker" in task
+                    else "the supervisor released it before its criteria were met"
                     if "stop-short" in task
                     else "fake judge verdict"
                 ),

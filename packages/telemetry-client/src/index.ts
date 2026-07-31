@@ -6,8 +6,10 @@ import {
   dagConversationSchema,
   type RunDetail,
   type RunList,
+  type RunTimeline,
   runDetailSchema,
   runListSchema,
+  runTimelineSchema,
   type SseEventName,
   sseEventDataSchema,
   sseEventNameSchema,
@@ -53,6 +55,11 @@ type Fetch = (
   init?: RequestInit,
 ) => Promise<Response>;
 
+export interface RunDetailOptions {
+  /** Omit to accept the server default (`true`). */
+  readonly includeConversations?: boolean;
+}
+
 export interface TelemetryClientOptions {
   readonly fetch?: Fetch;
   readonly eventSource?: EventSourceFactory;
@@ -75,11 +82,36 @@ export class TelemetryClient {
     return this.#request(url, runListSchema.parse);
   }
 
-  async getRun(runId: string): Promise<RunDetail> {
+  /**
+   * One run's detail.
+   *
+   * `includeConversations: false` asks the server for no transcripts, which it
+   * serves as an empty `conversations` array. Prefer it alongside {@link getTimeline}
+   * for a live view: transcripts dominate the payload and are refetched on every
+   * invalidation, while a single conversation stays reachable via
+   * {@link getConversation}.
+   */
+  async getRun(
+    runId: string,
+    options: RunDetailOptions = {},
+  ): Promise<RunDetail> {
+    requireOpaqueId(runId, "run ID");
+    const url = this.#url(API_V1_PATHS.run(runId));
+    if (options.includeConversations !== undefined) {
+      url.searchParams.set(
+        API_V1_QUERY.includeConversations,
+        String(options.includeConversations),
+      );
+    }
+    return this.#request(url, runDetailSchema.parse);
+  }
+
+  /** The whole run's ordered spans and events; filter by `node_id` client-side. */
+  async getTimeline(runId: string): Promise<RunTimeline> {
     requireOpaqueId(runId, "run ID");
     return this.#request(
-      this.#url(API_V1_PATHS.run(runId)),
-      runDetailSchema.parse,
+      this.#url(API_V1_PATHS.timeline(runId)),
+      runTimelineSchema.parse,
     );
   }
 

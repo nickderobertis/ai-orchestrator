@@ -370,6 +370,22 @@ def _parse_line(line: str) -> Event | None:
     return parse_event(record)
 
 
+def claimed_sequence(record: object, run_id: RunId) -> int | None:
+    """The sequence a stored line claims for ``run_id``, whatever this build makes of it.
+
+    Deliberately independent of `parse_event`: a record's *readability* and its
+    *claim on a sequence number* are different questions. A line written by a newer
+    `SCHEMA_VERSION`, or carrying a kind this build has never heard of, is still
+    physically on disk holding its number, so re-issuing that number is a collision
+    even though nothing here can read the record. Only the shape the claim itself
+    rests on is checked: this run's id, and a sequence that could have been issued.
+    """
+    if not isinstance(record, dict) or record.get("run_id") != run_id:
+        return None
+    seq = record.get("seq")
+    return seq if _is_positive_int(seq) else None
+
+
 def _durable_prefix(raw: bytes) -> int:
     """Return the byte length of the longest prefix ending in a complete record.
 
@@ -411,6 +427,15 @@ class Reconciliation:
     re-issues a number that is already on disk, which is exactly the collision the
     sequence exists to prevent.
 
+    It is equally deliberate that this counts every line that *claims* a sequence for
+    this run rather than every line this build can *read*. `records` is the readable
+    set; the high-water mark is not. A long-lived executor reconciling against a
+    journal a newer build appended to — the planner's own `channel-next` runs from
+    whatever checkout is current, while the orchestrator keeps the build it launched
+    with — would otherwise skip that unreadable record and hand its number out a
+    second time, which is how one run's ledger came to hold two events at ``seq``
+    104 and lost the planner every live edit after it.
+
     It is a maximum rather than a running check that each sequence is one greater
     than the last, because concurrent appenders make gaps and ties real: `append`
     allocates from a per-process counter under the write lock, so two `run-plan`
@@ -436,12 +461,14 @@ def reconcile(path: Path, run_id: RunId) -> Reconciliation:
     Nothing else is deleted, and that asymmetry is deliberate. A line this build
     cannot read is not evidence of damage: a reader cannot tell a record written by a
     newer `SCHEMA_VERSION` from a broken one, and truncating on that guess would make
-    every journal lossy across an upgrade. Such lines are instead *excluded* — from
-    ``records``, from ``last_seq``, and from `read_events` — which already denies them
-    any influence on the run. The same holds for another run's id appearing here:
-    it cannot happen through `open_journal` (a journal is opened at the run directory
-    its id names), so it means the file was corrupted or hand-edited, and skipping
-    those records is strictly safer than deleting whatever they turn out to be.
+    every journal lossy across an upgrade. Such lines are instead *excluded from
+    interpretation* — from ``records`` and from `read_events` — which denies them any
+    influence on what the run does. They are **not** excluded from ``last_seq``: a
+    number already on disk is taken whether or not this build can read the record
+    holding it. The same holds for another run's id appearing here: it cannot happen
+    through `open_journal` (a journal is opened at the run directory its id names), so
+    it means the file was corrupted or hand-edited, and skipping those records is
+    strictly safer than deleting whatever they turn out to be.
     """
     if not path.exists():
         return Reconciliation(records=0, last_seq=0)
@@ -450,11 +477,18 @@ def reconcile(path: Path, run_id: RunId) -> Reconciliation:
     _truncate(path, raw, durable)
     records = 0
     last_seq = 0
-    for event in _events_in(raw[:durable]):
-        if event.run_id != run_id:
+    for line in raw[:durable].decode("utf-8", errors="replace").splitlines():
+        if not line.strip():
             continue
-        records += 1
-        last_seq = max(last_seq, event.seq)
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if (claimed := claimed_sequence(record, run_id)) is not None:
+            last_seq = max(last_seq, claimed)
+        event = parse_event(record)
+        if event is not None and event.run_id == run_id:
+            records += 1
     return Reconciliation(records=records, last_seq=last_seq)
 
 
@@ -486,7 +520,15 @@ class Journal:
 
     @property
     def lock_identity(self) -> str:
-        return f"journal:{self.path}"
+        """The one advisory-lock identity for this file, however it was spelled.
+
+        Two writers only exclude each other when they name the same identity, and
+        they reach this journal by different routes: the executor is handed an
+        absolute ``--runs-dir`` while ``channel-next`` defaults to a relative one.
+        Canonicalizing here means a lock is taken on the *file*, not on a spelling
+        of its path, so those two can never both be inside `append_batch` at once.
+        """
+        return f"journal:{self.path.resolve()}"
 
     def append(
         self,

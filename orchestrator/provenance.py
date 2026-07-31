@@ -11,6 +11,7 @@ from . import gitops
 INCOMPLETE_TRAILER = "Orchestrator-Status: incomplete"
 PR_BASE_TRAILER = "Orchestrator-PR-Base:"
 RECOVERY_TRAILER = "Orchestrator-Recovered-Incomplete:"
+ATTESTATION_SUBJECT = "chore: attest verified recovery of preserved work"
 LEGACY_INCOMPLETE_MARKERS = (
     "(incomplete step)",
     "preserved by ai-orchestrator after the dispatch did not complete",
@@ -37,22 +38,64 @@ def parse_preserved_step_metadata(message: str) -> PreservedStepMetadata | None:
     return PreservedStepMetadata(*match.groups())
 
 
+def is_incomplete_marker(message: str) -> bool:
+    """True for a commit that marks a step as having been left incomplete."""
+    return INCOMPLETE_TRAILER in message or any(
+        marker in message for marker in LEGACY_INCOMPLETE_MARKERS
+    )
+
+
+def is_provenance_commit(message: str) -> bool:
+    """True for a marker or its recovery attestation.
+
+    These commits record what happened to the *run* — a step stopped, a later gate
+    recovered it — and never describe the change. A caller summarizing a branch has
+    to skip them: `chore: ... (incomplete step)` is a valid Conventional Commit
+    subject, so a subject synthesizer that reads every commit folds the marker's
+    text into the published subject.
+    """
+    return is_incomplete_marker(message) or RECOVERY_TRAILER in message
+
+
 def incomplete_commits(repo: str | Path, base: str, branch: str) -> set[str]:
     """Return incomplete-provenance commit SHAs in a base-relative history."""
     return {
         commit.sha
         for commit in gitops.log_messages(repo, base, branch)
-        if INCOMPLETE_TRAILER in commit.message
-        or any(marker in commit.message for marker in LEGACY_INCOMPLETE_MARKERS)
+        if is_incomplete_marker(commit.message)
     }
+
+
+def attestation_trailers(repo: str | Path, base: str, branch: str) -> tuple[str, ...]:
+    """Return one trailer per attested incomplete marker in a base-relative history.
+
+    Publication squashes the branch, so these lines are the only thing that can carry
+    "an incomplete step happened here, and a green gate recovered it" onto the base
+    branch. They are derived from the markers rather than copied off the commits that
+    attest them: a branch's messages are agent-written, and a value repeated verbatim
+    into a publication commit would let any line spelled like a trailer claim a
+    recovery that never happened. A trailer naming a commit this history does not mark
+    as incomplete attests nothing and is dropped. Emitted in marker history order,
+    once each.
+    """
+    commits = gitops.log_messages(repo, base, branch)
+    attested = {
+        line.removeprefix(RECOVERY_TRAILER).strip()
+        for commit in commits
+        for line in commit.message.splitlines()
+        if line.startswith(RECOVERY_TRAILER)
+    }
+    return tuple(
+        f"{RECOVERY_TRAILER} {commit.sha}"
+        for commit in commits
+        if commit.sha in attested and is_incomplete_marker(commit.message)
+    )
 
 
 def recorded_pr_base(repo: str | Path, base: str, branch: str) -> str | None:
     """Return the PR base recorded by the newest preserved incomplete commit."""
     for commit in reversed(gitops.log_messages(repo, base, branch)):
-        if INCOMPLETE_TRAILER not in commit.message and not any(
-            marker in commit.message for marker in LEGACY_INCOMPLETE_MARKERS
-        ):
+        if not is_incomplete_marker(commit.message):
             continue
         values = {
             line.removeprefix(PR_BASE_TRAILER).strip()
@@ -70,15 +113,26 @@ def recorded_pr_base(repo: str | Path, base: str, branch: str) -> str | None:
     return None
 
 
+def attest_recovery(repo: str | Path, base: str, ref: str = "HEAD") -> str | None:
+    """Record one attestation covering every unattested marker in this history.
+
+    The commit is made on whatever ``repo`` has checked out, which is the branch the
+    verified recovery ran against. Returns its sha, or ``None`` when the history had
+    nothing left to attest — every caller decides what an already-clean branch means
+    for its own outcome, but none of them writes this commit itself: one attestation
+    shape is what `attestation_trailers` and `unattested_incomplete` both read.
+    """
+    missing = sorted(unattested_incomplete(repo, base, ref))
+    if not missing:
+        return None
+    trailers = "\n".join(f"{RECOVERY_TRAILER} {sha}" for sha in missing)
+    return gitops.commit_empty(repo, f"{ATTESTATION_SUBJECT}\n\n{trailers}")
+
+
 def unattested_incomplete(repo: str | Path, base: str, branch: str) -> set[str]:
     """Return incomplete commits not covered by a lifecycle recovery attestation."""
     commits = gitops.log_messages(repo, base, branch)
-    incomplete = {
-        commit.sha
-        for commit in commits
-        if INCOMPLETE_TRAILER in commit.message
-        or any(marker in commit.message for marker in LEGACY_INCOMPLETE_MARKERS)
-    }
+    incomplete = {commit.sha for commit in commits if is_incomplete_marker(commit.message)}
     recovered = {
         line.removeprefix(RECOVERY_TRAILER).strip()
         for commit in commits

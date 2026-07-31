@@ -6,8 +6,19 @@ Use the telemetry view to answer “where did the time go?” for active runs:
 just telemetry --breakdown
 just telemetry --breakdown --all   # include settled runs
 just telemetry --all               # schema-versioned JSON for analysis
+just telemetry RUN_ID              # one named run, settled or not
 just telemetry --breakdown --all --since 2026-07-01T00:00:00Z --until 2026-08-01T00:00:00Z
 ```
+
+`RUN_ID` is the identifier `launch.json` advertises, resolved exactly as `just
+monitor` and `just status` resolve it — an exact run directory, or a plan name
+that names one active launch. Naming a run is the request, so it is reported
+whether or not it has settled; `--all` only governs the unscoped index.
+
+A round still in flight has written no `result.json`, so its nodes are described
+by the run journal: a node reads `running` only until the journal records it
+settling, and a node recorded as `node-failed` reads `failed` here while the round
+is still going.
 
 The breakdown prints a run row and an indented row for every node. A typical
 enriched row and timeline look like this:

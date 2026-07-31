@@ -178,10 +178,18 @@ def _validate_completions(run_dir: Path, result: dict[str, Any], refs: list[str]
 
 def main_runs(argv: list[str] | None = None) -> int:
     from .channel import ChannelError, planner_wait_indicator
+    from .goals import concurrent_indicator
+    from .launch import UNKNOWN_OWNER, caller_identity, read_run_owner
     from .liveness import PARKED_AFTER_SECONDS, parked_indicator
 
     parser = argparse.ArgumentParser(description="List recorded tracked-graph runs.")
     parser.add_argument("--runs-dir", type=Path, default=Path("runs"))
+    parser.add_argument(
+        "--mine",
+        action="store_true",
+        help="list only runs this session launched; a run with no recorded launcher "
+        "is never one of them",
+    )
     parser.add_argument(
         "--parked-after",
         type=float,
@@ -199,6 +207,14 @@ def main_runs(argv: list[str] | None = None) -> int:
         if args.runs_dir.is_dir()
         else []
     )
+    # Ownership is a column rather than a rule to remember: a planner reads this view
+    # constantly, and every row it renders says whose run it is looking at.
+    caller = caller_identity()
+    owners = {path.name: read_run_owner(path) for path in run_dirs}
+    if args.mine:
+        run_dirs = [path for path in run_dirs if owners[path.name].is_(caller)]
+        rows = [row for row in rows if owners.get(row.run_id, UNKNOWN_OWNER).is_(caller)]
+    ownership = {run_id: owner.label(caller) for run_id, owner in owners.items()}
     active_launches = {
         path.name
         for path in run_dirs
@@ -223,25 +239,36 @@ def main_runs(argv: list[str] | None = None) -> int:
         if (indicator := abandoned_round_indicator(path) or abandoned_launch_indicator(path))
         is not None
     }
+    # A second orchestrator working the same repository identity is machine state the
+    # planner is otherwise blind to: nothing in this run's own ledger mentions it, and
+    # its effects arrive as someone else's dirty checkout or lost push race.
+    concurrent = {
+        path.name: indicator
+        for path in run_dirs
+        if (indicator := concurrent_indicator(path, args.parked_after)) is not None
+    }
     if not rows and not active_launches and not abandoned:
-        print("No recorded runs.")
+        print("No runs launched by this session." if args.mine else "No recorded runs.")
         return 0
     recorded = {row.run_id for row in rows}
     for run_id in sorted((active_launches | abandoned.keys()) - recorded):
+        owner = f"[{ownership.get(run_id, 'unknown')}]"
         # An abandoned round replaces the planner indicator rather than joining it: the
         # surface that run last queued outlives it, so reporting what it is waiting for
         # is exactly the misreading that let a dead run look like live work.
         if run_id in abandoned:
-            print(f"! {run_id}  {abandoned[run_id]}")
+            print(f"! {run_id}  {owner}  {abandoned[run_id]}")
             continue
         if run_id in parked:
-            print(f"! {run_id}  {parked[run_id]}")
+            print(f"! {run_id}  {owner}  {parked[run_id]}")
             continue
         try:
             waiting = planner_wait_indicator(args.runs_dir / run_id / "channel")
         except (ChannelError, ConfigError, OSError):
             waiting = None
-        print(f"* {run_id}  ACTIVE  ({waiting or 'orchestrator running'})")
+        print(f"* {run_id}  {owner}  ACTIVE  ({waiting or 'orchestrator running'})")
+        if run_id in concurrent:
+            print(f"    {concurrent[run_id]}")
     for run_id, number, summary in rows:
         stopped = run_id in abandoned or run_id in parked
         marker = "! " if stopped else "* " if run_id in active_launches else "  "
@@ -255,11 +282,14 @@ def main_runs(argv: list[str] | None = None) -> int:
                 waiting = planner_wait_indicator(args.runs_dir / run_id / "channel")
             except (ChannelError, ConfigError, OSError):
                 waiting = None
-        print(f"{marker}{run_id}  round-{number:02d}  ({waiting or summary})")
+        owner = f"[{ownership.get(run_id, 'unknown')}]"
+        print(f"{marker}{run_id}  {owner}  round-{number:02d}  ({waiting or summary})")
         if run_id in abandoned:
             print(f"    {abandoned[run_id]}")
         if run_id in parked:
             print(f"    {parked[run_id]}")
+        if run_id in concurrent:
+            print(f"    {concurrent[run_id]}")
         print(f"    Results: just results {run_id} --runs-dir {args.runs_dir}")
     return 0
 

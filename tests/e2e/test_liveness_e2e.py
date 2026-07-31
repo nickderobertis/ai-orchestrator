@@ -30,12 +30,15 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+from run_rows import without_ownership
 from waits import deadline
 from waits import timeout as e2e_timeout
 
 from orchestrator import REPO_ROOT
 from orchestrator.channel import create_channel, record_surface
+from orchestrator.goals import register_run
 from orchestrator.journal import open_journal
+from orchestrator.liveness import PARKED_AFTER_SECONDS
 from orchestrator.runs import RunId
 
 #: A process that spawns one child, announces it, and then idles. Its recorded
@@ -224,7 +227,9 @@ def _runs(runs_dir: Path, parked_after: float) -> str:
         check=True,
         timeout=e2e_timeout(60),
     )
-    return listed.stdout
+    # The ownership column is dropped here: it names the launching session, which
+    # differs per developer. tests/e2e/test_run_ownership_e2e.py asserts it directly.
+    return without_ownership(listed.stdout)
 
 
 def _line(output: str, run_id: str) -> str:
@@ -256,6 +261,68 @@ def test_just_runs_reports_a_parked_launch_and_never_a_busy_one(
     # A ledger write is progress, and it clears the report immediately.
     (parked / "events.jsonl").touch()
     assert "PARKED" not in _runs(runs, parked_after=60)
+
+
+def test_the_views_name_a_live_concurrent_run_and_never_a_parked_one(
+    tmp_path: Path, sleeper: list[subprocess.Popen[bytes]], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Company a planner must act on is the working kind, and only that kind.
+
+    Two orchestrations once worked one repository identity for hours, found only by
+    tracing a process tree by hand. Nothing in either run's own ledger mentions the
+    other, so these lines are the only place a planner learns of it — and a run that
+    merely holds a pid is the residue `--acknowledge-concurrent` exists to launch
+    past, so reporting that one as company would put the confusion straight back.
+    """
+    state = tmp_path / "state"
+    monkeypatch.setenv("AI_ORCHESTRATOR_HOME", str(state))
+    runs = tmp_path / "runs"
+    working = {"busy-one": tmp_path / "one.ready", "busy-two": tmp_path / "two.ready"}
+    owners = {name: _busy(sleeper, ready) for name, ready in working.items()}
+    owners["parked-run"] = _idle(sleeper)
+    for run_id, pid in owners.items():
+        # Silent for longer than the pacemaker-derived default too: `just goals` is a
+        # standalone inventory with no threshold flag, so it must reach the same
+        # verdict as the view that was given one.
+        _launch(runs / run_id, pid, idle_for=PARKED_AFTER_SECONDS + 600)
+        # Registered by the production writer every launch registers through, so
+        # what the views read is the index a real launch leaves behind.
+        register_run(
+            run_id=run_id,
+            run_dir=runs / run_id,
+            goal={"id": run_id, "text": f"Goal for {run_id}"},
+            identities=["local/shared"],
+            pid=pid,
+            acknowledge_concurrent=True,
+        )
+
+    listed = _runs(runs, parked_after=60)
+    inventory = subprocess.run(
+        ["just", "goals"],
+        cwd=REPO_ROOT,
+        env={**os.environ, "AI_ORCHESTRATOR_HOME": str(state)},
+        text=True,
+        capture_output=True,
+        check=True,
+        timeout=e2e_timeout(60),
+    ).stdout
+
+    # Each working run is told about the other, by pid, with the identity they share.
+    for run_id, other in (("busy-one", "busy-two"), ("busy-two", "busy-one")):
+        beneath = listed.split(f"* {run_id}  ACTIVE", 1)[1].splitlines()[1]
+        assert beneath.strip() == (
+            f"CONCURRENT: run '{other}' is LIVE (owner pid {owners[other]} on "
+            f"{socket.gethostname()}) goal 'Goal for {other}'; shared identities: local/shared"
+        )
+        assert "parked-run" not in beneath
+    # The parked launch is reported as stopped, and never as a second run at work.
+    assert "PARKED" in _line(listed, "parked-run")
+    assert "CONCURRENT" not in _line(listed, "parked-run")
+
+    # `just goals` states each registered owner for the same reason: a registration
+    # is not a running process, and the two call for opposite decisions.
+    assert f"owner: parked (owner pid {owners['parked-run']} on " in inventory
+    assert f"owner: live (owner pid {owners['busy-one']} on " in inventory
 
 
 def test_just_runs_reports_a_settled_rounds_own_summary_under_a_parked_launch(
