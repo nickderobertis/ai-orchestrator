@@ -19,13 +19,13 @@ import {
   Workflow,
 } from "lucide-react";
 import { useEffect, useMemo } from "react";
-import { NodeDetail } from "../features/detail/NodeDetail";
 import { DagGraph } from "../features/graph/DagGraph";
 import { RunNavigation } from "../features/navigation/RunNavigation";
 import { OverallView } from "../features/overall/OverallView";
 import { groupRuns, nodeViews } from "../features/runs/run-model";
 import { useDagTelemetry } from "../features/runs/useDagTelemetry";
 import { useUrlSelection } from "../features/runs/useUrlSelection";
+import { NodeTimelineView } from "../features/timeline/NodeTimelineView";
 
 const defaultClient = new TelemetryClient(window.location.origin, {
   fetch: window.fetch.bind(window),
@@ -36,20 +36,14 @@ export function App({
 }: {
   readonly client?: TelemetryClient;
 }) {
-  const telemetry = useDagTelemetry(client);
   const selection = useUrlSelection();
+  const telemetry = useDagTelemetry(client, selection.runId);
   const groups = useMemo(
-    () => groupRuns(telemetry.list?.runs ?? [], telemetry.details),
-    [telemetry.list, telemetry.details],
+    () => groupRuns(telemetry.list?.runs ?? []),
+    [telemetry.list],
   );
-  const selectedRunId =
-    selection.runId &&
-    telemetry.list?.runs.some(({ run_id }) => run_id === selection.runId)
-      ? selection.runId
-      : telemetry.list?.runs.at(0)?.run_id;
-  const detail = selectedRunId
-    ? telemetry.details.get(selectedRunId)
-    : undefined;
+  const selectedRunId = telemetry.runId;
+  const detail = telemetry.detail;
   const nodes = useMemo(() => (detail ? nodeViews(detail) : []), [detail]);
   const selectedNode = nodes.find(({ id }) => id === selection.nodeId);
   const liveRunIds = useMemo(
@@ -69,6 +63,7 @@ export function App({
       const params = new URLSearchParams(window.location.search);
       params.set("run", selectedRunId);
       params.delete("node");
+      params.delete("event");
       window.history.replaceState(
         null,
         "",
@@ -154,23 +149,32 @@ export function App({
                   <Skeleton className="h-2 w-32" />
                   Loading execution history…
                 </div>
-              ) : detail ? (
+              ) : detail && selectedRunId ? (
                 selection.view === "overall" ? (
-                  <OverallView detail={detail} />
+                  <OverallView
+                    client={client}
+                    detail={detail}
+                    timeline={telemetry.timeline}
+                  />
+                ) : selectedNode ? (
+                  // Opening a node hands it the whole working area: the graph stays
+                  // one breadcrumb away rather than one narrow column beside it.
+                  <NodeTimelineView
+                    client={client}
+                    node={selectedNode}
+                    onBack={() => selection.selectNode(undefined)}
+                    onSelectItem={selection.selectEvent}
+                    runId={selectedRunId}
+                    selectedItemId={selection.eventId}
+                    timeline={telemetry.timeline}
+                    timelineError={telemetry.timelineError}
+                  />
                 ) : (
-                  <div className="graph-layout">
-                    <DagGraph
-                      nodes={nodes}
-                      selectedNodeId={selectedNode?.id}
-                      onSelectNode={selection.selectNode}
-                    />
-                    {selectedNode && (
-                      <NodeDetail
-                        node={selectedNode}
-                        onClose={() => selection.selectNode(undefined)}
-                      />
-                    )}
-                  </div>
+                  <DagGraph
+                    nodes={nodes}
+                    selectedNodeId={selection.nodeId}
+                    onSelectNode={selection.selectNode}
+                  />
                 )
               ) : (
                 <div className="empty-state">

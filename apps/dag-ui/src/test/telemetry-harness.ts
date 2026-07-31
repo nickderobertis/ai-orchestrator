@@ -1,7 +1,13 @@
-import { API_V1_PATHS } from "@ai-orchestrator/dag-model";
+import { API_V1_PATHS, API_V1_QUERY } from "@ai-orchestrator/dag-model";
 import { TelemetryClient } from "@ai-orchestrator/telemetry-client";
 import { vi } from "vitest";
-import { HISTORY_RUN, LIVE_RUN, runDetail, runList } from "./fixtures";
+import {
+  HISTORY_RUN,
+  LIVE_RUN,
+  runDetail,
+  runList,
+  runTimeline,
+} from "./fixtures";
 
 /**
  * The browser `EventSource` the telemetry client opens, implemented over a real
@@ -48,14 +54,51 @@ export const isRunList = (url: URL): boolean =>
 
 /** True for a single run's detail path, whatever run it names. */
 export const isRunDetail = (url: URL): boolean =>
-  url.pathname.startsWith(`${API_V1_PATHS.runs}/`);
+  url.pathname.startsWith(`${API_V1_PATHS.runs}/`) &&
+  !isTimeline(url) &&
+  !isConversation(url);
 
-/** The read API a browser would see: list, detail, and the SSE stream. */
+/** True for a run's timeline path, whatever run it names. */
+export const isTimeline = (url: URL): boolean =>
+  url.pathname.endsWith("/timeline");
+
+/** True for one transcript's path, whatever run and conversation it names. */
+export const isConversation = (url: URL): boolean =>
+  url.pathname.includes("/conversations/");
+
+/** The run one `/api/v1/runs/...` path names. */
+export const requestedRunId = (url: URL): string =>
+  url.pathname.split("/")[4] === HISTORY_RUN ? HISTORY_RUN : LIVE_RUN;
+
+/**
+ * The read API a browser would see: list, detail, timeline, one transcript, and the
+ * SSE stream. Detail honours `include_conversations` exactly as the server does — it
+ * serves the field empty rather than omitting it — so a client that opts out here is
+ * opting out of the same payload it would opt out of in production.
+ */
 export function defaultResponder(url: URL): Response {
   if (isRunList(url)) return Response.json(runList);
-  const runId = url.pathname.split("/").at(-1);
+  const runId = requestedRunId(url);
+  if (isTimeline(url)) return Response.json(runTimeline(runId));
+  if (isConversation(url)) {
+    const wanted = decodeURIComponent(url.pathname.split("/").at(-1) ?? "");
+    const found = runDetail(runId).conversations.find(
+      ({ conversation }) => conversation.id === wanted,
+    );
+    return found
+      ? Response.json(found)
+      : Response.json(
+          {
+            error: { code: "conversation_not_found", message: "no transcript" },
+          },
+          { status: 404 },
+        );
+  }
+  const detail = runDetail(runId);
   return Response.json(
-    runDetail(runId === HISTORY_RUN ? HISTORY_RUN : LIVE_RUN),
+    url.searchParams.get(API_V1_QUERY.includeConversations) === "false"
+      ? { ...detail, conversations: [] }
+      : detail,
   );
 }
 

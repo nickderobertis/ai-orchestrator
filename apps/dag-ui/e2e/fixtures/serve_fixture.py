@@ -41,6 +41,9 @@ FAKE_ONEHARNESS = REPO_ROOT / "tests" / "e2e" / "fake_oneharness.py"
 CODEX_LAUNCH = "c0de" * 8
 CLAUDE_LAUNCH = "c1a0" * 8
 
+#: The published pull request of the live run's settled lifecycle node.
+FOUNDATION_PR = "https://github.com/example/repo/pull/12"
+
 LIVE_RUN = "dag-ui-live"
 HISTORY_RUN = "dag-ui-history"
 #: A second run of the *same* launch as `LIVE_RUN`: one planner session often drives
@@ -169,12 +172,21 @@ def _write_live_run(runs_dir: Path) -> None:
     journal.append("round-started", detail={"plan": plan})
 
     journal.append("node-started", node=NodeId("foundation"), detail={"persona": "engineer"})
+    # Bracketed exactly as the merge path records it, so the timeline folds one
+    # verification span rather than a finish whose start it never saw.
+    journal.append(
+        "verification-started",
+        node=NodeId("foundation"),
+        detail={"label": "branch push ai-orchestrator/engineer/foundation"},
+    )
     journal.append(
         "verification-finished",
         node=NodeId("foundation"),
         detail={
+            "label": "branch push ai-orchestrator/engineer/foundation",
             "ok": True,
             "command": ["just", "gate"],
+            "log_path": "round-01/foundation/gate.log",
             "reused": False,
             "gate_attestation": {
                 "commit": "1" * 40,
@@ -185,6 +197,23 @@ def _write_live_run(runs_dir: Path) -> None:
                 "environment_sha256": "3" * 64,
             },
         },
+    )
+    # A real publication: the PR, the checks observed on it, and the merge that
+    # closed it. The timeline brackets these into one span the node view can open.
+    journal.append(
+        "pr-created",
+        node=NodeId("foundation"),
+        detail={"pr": FOUNDATION_PR, "repo": "local/example"},
+    )
+    journal.append(
+        "pr-checks-observed",
+        node=NodeId("foundation"),
+        detail={"pr": FOUNDATION_PR, "state": "passing", "checks": {"unit": "passed"}},
+    )
+    journal.append(
+        "publication-finished",
+        node=NodeId("foundation"),
+        detail={"pr": FOUNDATION_PR, "status": "merged"},
     )
     journal.append(
         "node-settled",
@@ -197,7 +226,7 @@ def _write_live_run(runs_dir: Path) -> None:
                 "task": "Prepare shared contracts",
                 "repo": "local/example",
                 "branch": "ai-orchestrator/engineer/foundation",
-                "pr": "https://github.com/example/repo/pull/12",
+                "pr": FOUNDATION_PR,
                 "detail": "Gate completed successfully",
                 "telemetry": {"checks": {"unit": "passed"}},
                 "artifacts": {"gate_log": "round-01/foundation/gate.log"},

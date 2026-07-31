@@ -6,11 +6,31 @@ beforeEach(() => window.history.replaceState(null, "", "/"));
 afterEach(cleanup);
 
 test("reads the selection from the query string", () => {
-  window.history.replaceState(null, "", "/?run=run-1&node=build&view=overall");
+  window.history.replaceState(
+    null,
+    "",
+    "/?run=run-1&node=build&view=overall&event=event-7",
+  );
   const { result } = renderHook(() => useUrlSelection());
   expect(result.current.runId).toBe("run-1");
   expect(result.current.nodeId).toBe("build");
+  expect(result.current.eventId).toBe("event-7");
   expect(result.current.view).toBe("overall");
+});
+
+test("carries the opened moment of a node's execution", () => {
+  window.history.replaceState(null, "", "/?run=run-1&node=build");
+  const { result } = renderHook(() => useUrlSelection());
+  act(() => result.current.selectEvent("dispatch-worker"));
+  expect(window.location.search).toContain("event=dispatch-worker");
+  expect(result.current.eventId).toBe("dispatch-worker");
+  act(() => result.current.selectEvent(undefined));
+  expect(result.current.eventId).toBeUndefined();
+  // Another node recorded different work, so the moment cannot survive the move.
+  act(() => result.current.selectEvent("dispatch-worker"));
+  act(() => result.current.selectNode("ship"));
+  expect(result.current.eventId).toBeUndefined();
+  expect(result.current.nodeId).toBe("ship");
 });
 
 test("selecting a run clears the node and view", () => {
