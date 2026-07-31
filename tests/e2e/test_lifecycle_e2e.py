@@ -2656,6 +2656,25 @@ def test_pre_push_gate_failure_preserves_completed_work_in_execution_checkout(
     assert not gitops.branch_exists(origin, branch)
     assert _tip(origin, "main") == before
 
+    # Preserved has to mean recoverable, not merely present: a later run of the same
+    # branch, once the gate is repaired, must continue the rejected commits rather
+    # than re-cut the branch off a stale base and silently rebuild without them.
+    install_pre_push_hook(safety, "exit 0")
+    resumed = run_repo_task(
+        str(canonical),
+        "Add the follow-up the repaired gate accepts.",
+        "engineer",
+        workspace=Workspace(tmp_path / "gate-repaired-worktrees"),
+        execution_checkout=safety,
+        branch=branch,
+        dispatch_fn=make_writing_dispatch(filename="follow-up.txt"),
+        recorded_gate=["true"],
+    )
+
+    assert resumed.ok and resumed.outcome == "merged", resumed.detail
+    assert _has_file(origin, "main", "rejected.txt")
+    assert _has_file(origin, "main", "follow-up.txt")
+
 
 # A hook that lets the feature branch through and rejects the direct base push, so
 # the *second* gated push — the rebuilt squash publication tree — is the one that

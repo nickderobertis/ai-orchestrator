@@ -76,9 +76,11 @@ def _publication_bases(log: Path) -> list[str]:
 
     A run also hands its branch back to the shared execution checkout
     (`Workspace.mirror_branch`), which is a local copy rather than a publication
-    onto a base and carries no publication base. Those are dropped here — but only
-    those: a publishing push that lost its identity would drop out of this list and
-    shorten it, which is what the assertions below are counting.
+    onto a base; it now fetches from the destination instead of pushing, so it
+    reaches no pre-push hook and records nothing. `<unset>` is dropped anyway,
+    because the thing being asserted is that no push *silently* loses the identity:
+    a publishing push that did would drop out of this list and shorten it, which is
+    what the assertions below are counting.
     """
     recorded = log.read_text(encoding="utf-8").split() if log.exists() else []
     return [base for base in recorded if base != "<unset>"]
