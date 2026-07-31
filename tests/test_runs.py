@@ -6,10 +6,12 @@ import json
 import os
 import signal
 import socket
+from pathlib import Path
 
 import pytest
 
 from orchestrator.config import ConfigError
+from orchestrator.goals import register_run
 from orchestrator.next_round import main, main_runs
 from orchestrator.runs import (
     AbandonedLaunch,
@@ -676,6 +678,57 @@ def test_runs_cli_marks_active_launches_and_what_they_wait_on(tmp_path, capsys) 
     assert "* recorded  round-01  (waiting for planner reply: milestone: round 1 settled)" in out
     assert "* quiet  round-01  (1 done)" in out
     assert "No recorded runs" not in out
+
+
+def test_runs_cli_reports_a_live_concurrent_run_and_omits_a_stale_registration(
+    tmp_path, capsys, monkeypatch
+) -> None:
+    """A second orchestration on a shared identity has to reach the planner's view.
+
+    Two runs once worked one identity for hours, found only by tracing a process tree
+    by hand. Nothing in either run's own ledger mentions the other, so this line is
+    the only place the planner could learn of it. A registration whose owner is not
+    observably running stays out: reporting it would put the residue
+    `--acknowledge-concurrent` exists to launch past back in front of the planner as
+    live work.
+    """
+    monkeypatch.setenv("AI_ORCHESTRATOR_HOME", str(tmp_path / "state"))
+    watched = _launch(tmp_path, "watched")
+    _, watched_round = write_next_plan(watched, PLAN)
+    write_result(watched_round, _result("done"))
+    neighbour = _launch(tmp_path, "neighbour")
+    stale = _launch(tmp_path, "stale")
+    for run_dir, pid, host in (
+        (watched, os.getpid(), socket.gethostname()),
+        (neighbour, os.getpid(), socket.gethostname()),
+        (stale, 4242, "a-host-that-is-not-this-one"),
+    ):
+        register_run(
+            run_id=run_dir.name,
+            run_dir=run_dir,
+            goal={"id": run_dir.name, "text": f"Goal for {run_dir.name}"},
+            identities=["local/shared"],
+            pid=pid,
+            acknowledge_concurrent=True,
+        )
+        # `register_run` keeps the reservation's original owner for a repeat
+        # registration of the same directory, so a distinct owner is written here.
+        _rewrite_index_owner(tmp_path / "state", run_dir.name, pid=pid, host=host)
+
+    assert main_runs(["--runs-dir", str(tmp_path)]) == 0
+
+    out = capsys.readouterr().out
+    assert f"CONCURRENT: run 'neighbour' is LIVE (owner pid {os.getpid()} on " in out
+    assert "'Goal for neighbour'; shared identities: local/shared" in out
+    assert "run 'stale'" not in out
+
+
+def _rewrite_index_owner(state: Path, run_id: str, *, pid: int, host: str) -> None:
+    index = state / "runs-index.json"
+    value = json.loads(index.read_text(encoding="utf-8"))
+    value["runs"][run_id]["pid"] = pid
+    value["runs"][run_id]["host"] = host
+    index.write_text(json.dumps(value), encoding="utf-8")
 
 
 def test_runs_cli_falls_back_when_a_live_channel_cannot_be_read(tmp_path, capsys) -> None:

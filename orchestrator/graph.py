@@ -1230,6 +1230,7 @@ def main(argv: list[str] | None = None) -> int:
                 identities=graph_identities(graph),
                 pid=os.getpid(),
                 acknowledge_concurrent=args.acknowledge_concurrent,
+                report=lambda notice: print(f"run-plan: {notice}", file=sys.stderr),
             )
     except (ConfigError, PlanError) as exc:
         print(f"run-plan: {exc}", file=sys.stderr)
@@ -1517,7 +1518,7 @@ def _run_round(
     if run_dir is not None and round_record is not None:
         number, round_dir = round_record
         try:
-            from .projection import project_run
+            from .projection import ProjectionError, project_run
 
             projected = project_run(run_dir / "events.jsonl", cast(RunId, run_id), number)
             if projected.result is None:  # round-finished above makes this an internal invariant
@@ -1527,7 +1528,12 @@ def _run_round(
             # lifecycle is channel-e2e-covered; goal reservation preservation is unit-proven.
             if not (run_dir / "launch.json").exists():
                 finish_run(run_dir.name, run_dir)
-        except ConfigError as exc:
+        except (ConfigError, ProjectionError) as exc:
+            # A ledger this build must not fold — a line from a newer schema, a record
+            # it cannot read — fails the replay closed, and that is correct. Reporting
+            # it here is what keeps it a *stated* refusal to record: uncaught, a
+            # `ProjectionError` escapes as an EX_SOFTWARE crash, which reads to every
+            # progress view as an orchestrator that died for no stated reason.
             print(f"run-plan: could not record run: {exc}", file=sys.stderr)
             return 2
         print_continuation(run_dir.name, number, round_dir, payload, args.runs_dir)

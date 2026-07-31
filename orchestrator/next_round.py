@@ -178,6 +178,7 @@ def _validate_completions(run_dir: Path, result: dict[str, Any], refs: list[str]
 
 def main_runs(argv: list[str] | None = None) -> int:
     from .channel import ChannelError, planner_wait_indicator
+    from .goals import concurrent_indicator
     from .liveness import PARKED_AFTER_SECONDS, parked_indicator
 
     parser = argparse.ArgumentParser(description="List recorded tracked-graph runs.")
@@ -223,6 +224,14 @@ def main_runs(argv: list[str] | None = None) -> int:
         if (indicator := abandoned_round_indicator(path) or abandoned_launch_indicator(path))
         is not None
     }
+    # A second orchestrator working the same repository identity is machine state the
+    # planner is otherwise blind to: nothing in this run's own ledger mentions it, and
+    # its effects arrive as someone else's dirty checkout or lost push race.
+    concurrent = {
+        path.name: indicator
+        for path in run_dirs
+        if (indicator := concurrent_indicator(path, args.parked_after)) is not None
+    }
     if not rows and not active_launches and not abandoned:
         print("No recorded runs.")
         return 0
@@ -242,6 +251,8 @@ def main_runs(argv: list[str] | None = None) -> int:
         except (ChannelError, ConfigError, OSError):
             waiting = None
         print(f"* {run_id}  ACTIVE  ({waiting or 'orchestrator running'})")
+        if run_id in concurrent:
+            print(f"    {concurrent[run_id]}")
     for run_id, number, summary in rows:
         stopped = run_id in abandoned or run_id in parked
         marker = "! " if stopped else "* " if run_id in active_launches else "  "
@@ -260,6 +271,8 @@ def main_runs(argv: list[str] | None = None) -> int:
             print(f"    {abandoned[run_id]}")
         if run_id in parked:
             print(f"    {parked[run_id]}")
+        if run_id in concurrent:
+            print(f"    {concurrent[run_id]}")
         print(f"    Results: just results {run_id} --runs-dir {args.runs_dir}")
     return 0
 

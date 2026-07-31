@@ -139,12 +139,13 @@ def test_open_journal_truncates_a_torn_trailing_record(tmp_path: Path) -> None:
 def test_reopening_past_unreadable_lines_does_not_reissue_a_stored_sequence(
     tmp_path: Path,
 ) -> None:
-    """The resume point is read from the stored records, never counted off the lines.
+    """The resume point clears every sequence on disk, readable by this build or not.
 
     A journal accumulates lines this build cannot read — junk from a partial disk
     failure, a blank, a record from a newer schema. Counting lines to pick the next
-    sequence hands out a number that is already on disk; reading the sequences does
-    not.
+    sequence hands out a number that is already on disk; so does reading only the
+    records this build understands, because a newer schema's record still holds its
+    number. Only the *claims* are safe to resume from.
     """
     run_dir = tmp_path / "run-c"
     journal = open_journal(run_dir, RunId("run-c"), 1)
@@ -158,9 +159,10 @@ def test_reopening_past_unreadable_lines_does_not_reissue_a_stored_sequence(
     reopened = open_journal(run_dir, RunId("run-c"), 2)
     appended = reopened.append("round-finished")
 
-    # Four lines on disk, but only one readable record: the next sequence is 2, not 5.
-    assert appended.seq == 2
-    assert [e.seq for e in read_events(path)] == [1, 2]
+    # The newer schema's record is unreadable but not invisible: it claimed 99, so the
+    # next sequence is 100. The junk line and the blank claim nothing and move nothing.
+    assert appended.seq == 100
+    assert [e.seq for e in read_events(path)] == [1, 100]
 
 
 def test_reopening_resumes_above_tied_and_out_of_order_sequences(tmp_path: Path) -> None:
