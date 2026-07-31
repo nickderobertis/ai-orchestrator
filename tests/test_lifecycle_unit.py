@@ -72,6 +72,7 @@ def test_resume_and_retry_lineage_payload_contracts_cannot_drift() -> None:
     )
 
 
+@pytest.mark.reads_docs
 def test_documented_llmlint_wrapper_identity_matches_routing_constant() -> None:
     documentation = (Path(__file__).parents[1] / "docs" / "repo-lifecycle.md").read_text(
         encoding="utf-8"
@@ -161,6 +162,7 @@ def test_drafted_body_validation(body, expected) -> None:
     assert _valid_drafted_body(body) is expected
 
 
+@pytest.mark.reads_docs
 def test_pr_author_contract_tracks_checked_in_template_persona_and_docs() -> None:
     """Make intentional contract copies fail together when the template changes."""
     root = Path(__file__).parents[1]
@@ -174,6 +176,7 @@ def test_pr_author_contract_tracks_checked_in_template_persona_and_docs() -> Non
         assert section in docs
 
 
+@pytest.mark.reads_docs
 def test_task_prose_contract_tracks_docs_and_agent_tasks_in_example() -> None:
     root = Path(__file__).parents[1]
     docs = (root / "docs/orchestration.md").read_text(encoding="utf-8")

@@ -28,6 +28,7 @@ DOCUMENTED_TUNABLES = (
 )
 
 
+@pytest.mark.reads_docs
 @pytest.mark.parametrize(("variable", "document"), DOCUMENTED_TUNABLES)
 def test_documentation_names_the_variable_its_constant_declares(
     variable: str, document: str
