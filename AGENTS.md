@@ -387,7 +387,18 @@ rolling the judge again, which is what stops one branch from being blocked by
 opposite verdicts on an identical diff. The key covers the whole workspace, the
 resolved base commit, and `scripts/llmlint-fingerprint.sh` — the installed llmlint
 version plus the effective merged config, so a rule change in a plugin fetched from
-outside this repository still invalidates. Because Nx caches successful tasks only,
+outside this repository still invalidates. That fingerprint resolves both of those
+through `scripts/llmlint-runtime-env.sh` — the one environment the target itself
+judges with — rather than the caller's, so the key always describes the judge
+configuration the run would actually use. `LLMLINT_ONEHARNESS_BIN` is why: `llmlint
+config` renders it as `oneharness.bin`, and a dispatch inherits the orchestrator's
+checkout path, the session's own, or nothing at all, so one judged diff hashed to a
+different key per dispatch and the judge re-rolled every round. Reading the caller
+fails a quieter way too — because Nx scores a runtime input that exits non-zero as
+*no contribution* rather than as an error, a fingerprint the caller's environment
+can break does not fail the tier, it drops the judge configuration out of the key
+and replays a verdict that configuration has moved on from. Because Nx caches
+successful tasks only,
 the target records its verdict — findings and judged status — into its declared
 output and exits 0; `scripts/llmlint-verdict.sh` replays both, so a failure blocks
 `gate` and pre-push identically whether it was just judged or restored from cache.
