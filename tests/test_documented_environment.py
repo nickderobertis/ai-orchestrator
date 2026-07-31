@@ -57,6 +57,7 @@ DOCUMENTED_TRAILERS = (
 )
 
 
+@pytest.mark.reads_docs
 @pytest.mark.parametrize(("trailer", "document"), DOCUMENTED_TRAILERS)
 def test_documentation_names_the_trailer_its_constant_declares(trailer: str, document: str) -> None:
     prose = (REPO_ROOT / document).read_text(encoding="utf-8")
