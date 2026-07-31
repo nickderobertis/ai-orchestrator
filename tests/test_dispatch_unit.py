@@ -974,6 +974,41 @@ def test_watchdog_records_pid_and_executes_command(tmp_path, monkeypatch) -> Non
     assert pid_file.read_text(encoding="utf-8") == str(os.getpid())
 
 
+def test_watchdog_asked_for_its_own_group_leads_one_before_recording_its_pid(
+    tmp_path, monkeypatch
+) -> None:
+    """The flagged wrapper really regroups itself, and keeps the environment it was given.
+
+    The caller here is the test session, which is what the flag exists to spare — so it
+    rejoins the group it came from as soon as the postcondition is read. Rejoining an
+    existing group of the same session is permitted for anything that is not a session
+    leader, and the guard starts every test subprocess in a session of its own, so
+    nothing spawned while this runs can inherit the group either.
+    """
+    pid_file = tmp_path / "watchdog.pid"
+    monkeypatch.delenv("ORCHESTRATOR_WATCHDOG_UNSET_LLMLINT", raising=False)
+    monkeypatch.setenv("LLMLINT_ONEHARNESS_BIN", "oneharness")
+    original = os.getpgrp()
+
+    def execvpe(command: str, args: list[str], env: dict[str, str]) -> None:
+        # Untouched: only the dispatch that asks for it drops the llmlint wrapper, and
+        # a worker that inherited one must still find it.
+        assert env["LLMLINT_ONEHARNESS_BIN"] == "oneharness"
+        raise RuntimeError("exec boundary reached")
+
+    monkeypatch.setattr(os, "execvpe", execvpe)
+    try:
+        with pytest.raises(RuntimeError, match="exec boundary reached"):
+            watchdog_main([OWN_PROCESS_GROUP_FLAG, os.fspath(pid_file), "worker", "--flag"])
+
+        assert os.getpgrp() == os.getpid()
+    finally:
+        os.setpgid(0, original)
+
+    assert os.getpgrp() == original
+    assert pid_file.read_text(encoding="utf-8") == str(os.getpid())
+
+
 def _label_echoing_onejudge(tmp_path) -> str:
     """A stand-in onejudge that reports the labels it was actually handed."""
     onejudge = tmp_path / "onejudge"
