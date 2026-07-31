@@ -44,6 +44,8 @@ from orchestrator.lifecycle import (
 from orchestrator.merge import GitHubMergeStrategy, LocalMergeStrategy
 from orchestrator.plan import PlanError
 from orchestrator.provenance import (
+    INCOMPLETE_TRAILER,
+    RECOVERY_TRAILER,
     PreservedStepMetadata,
     format_preserved_step_metadata,
     parse_preserved_step_metadata,
@@ -334,6 +336,52 @@ def test_incomplete_commit_is_non_releasing_and_preserves_trailers() -> None:
     subject, _, body = message.partition("\n")
     assert subject == "chore: Repair capture. (incomplete step)"
     assert body.endswith("\nOrchestrator-Status: incomplete\nOrchestrator-PR-Base: main")
+
+
+def test_incomplete_commit_names_the_work_not_the_task_heading() -> None:
+    # Task prose always opens with `## What`, so a literal first line named the section.
+    message = _incomplete_commit_message(
+        Step("main", "backend", "## What\nRepair capture.\n\n## Why\nIt drops output.\n"), "main"
+    )
+    assert message.partition("\n")[0] == "chore: Repair capture. (incomplete step)"
+
+
+@pytest.mark.parametrize(
+    "task, expected",
+    [
+        ("## What\nRepair capture.\n", "Repair capture."),
+        ("   \n### Heading\n\n  Repair capture.  \n", "Repair capture."),
+        ("## What\n\n## Why\n", "orchestrated change"),
+        ("", "orchestrated change"),
+    ],
+)
+def test_task_description_skips_headings_and_blank_lines(task: str, expected: str) -> None:
+    assert lc._task_description(task) == expected
+
+
+def test_provenance_commits_never_contribute_to_a_derived_subject() -> None:
+    """A marker and its attestation describe the run, so neither describes the change."""
+    title = _subject_from_messages(
+        _commit_messages(
+            "feat: adopt the shared design system",
+            "chore: Adopt the shared design system. (incomplete step)\n\n"
+            f"{INCOMPLETE_TRAILER}\nOrchestrator-PR-Base: main",
+            f"chore: attest verified recovery of preserved work\n\n{RECOVERY_TRAILER} abc123",
+        ),
+        "irrelevant task prose",
+    )
+    assert title == "feat: adopt the shared design system"
+
+
+def test_a_branch_of_only_provenance_falls_back_to_the_task() -> None:
+    title = _subject_from_messages(
+        _commit_messages(
+            f"chore: Repair capture. (incomplete step)\n\n{INCOMPLETE_TRAILER}",
+            f"chore: attest verified recovery of preserved work\n\n{RECOVERY_TRAILER} abc123",
+        ),
+        "## What\nRecover preserved work.\n",
+    )
+    assert title == "chore: Recover preserved work."
 
 
 def test_default_body_uses_structured_task_what_and_why() -> None:
