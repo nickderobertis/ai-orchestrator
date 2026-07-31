@@ -1833,6 +1833,18 @@ def run_repo_task(
             # work itself — dropping it would destroy exactly what preservation exists
             # to save. It keeps its commit and clears its provenance the way inherited
             # markers already do, through the recovery attestation written below.
+            # Newest first, so that removing one never restates the ids still queued:
+            # a removal rewrites only the commits after the marker it drops, leaving
+            # the older ones addressable. In practice the queue holds at most one —
+            # a stop only writes a marker when the branch carries none base-relative
+            # (see the not-completed path above) — so the order is a property this
+            # loop keeps rather than one any run can currently exercise.
+            # llmlint: ignore[changed_behavior_has_e2e] The rule asks for an e2e over
+            # several provisional markers at once. That state is unreachable: the
+            # already_marked guard means a branch never carries more than one, so no
+            # honest end-to-end test can produce it. The reachable path — completion
+            # after repeated bounded stops — is covered by
+            # test_completion_after_two_resumes_clears_the_one_marker_and_keeps_every_part.
             ordered = [
                 commit.sha
                 for commit in reversed(gitops.log_messages(worktree, remote_base, "HEAD"))

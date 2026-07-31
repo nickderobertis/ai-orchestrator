@@ -4175,6 +4175,60 @@ def test_completed_automatic_resume_drops_a_provisional_marker_left_at_the_tip(
     assert not incomplete_commits(canonical, before, result.branch)
 
 
+def test_completion_after_two_resumes_clears_the_one_marker_and_keeps_every_part(
+    tmp_path, bare_origin
+) -> None:
+    """Two bounded attempts still leave one marker, and completion clears it.
+
+    A branch carries at most one empty marker however many attempts stop on it: the
+    second stop sees the first one base-relative and adds none. So the removal this
+    completion performs stays a single-marker operation no matter how many resumes
+    preceded it, and the work each bounded attempt committed underneath that marker
+    survives the rewrite removing it costs. The one-resume cases above cannot show
+    that, because they never stop twice.
+    """
+    origin = bare_origin()
+    workspace = _workspace(tmp_path, origin)
+    canonical = _shared_checkout(tmp_path)
+    before = _tip(origin, "main")
+    attempts = 0
+
+    def stops_twice_then_completes(
+        persona: str, task: str, *, project_dir: str, **_: object
+    ) -> Report:
+        nonlocal attempts
+        attempts += 1
+        if attempts <= 2:
+            # A clean tree at the stop, so the lifecycle preserves nothing and the
+            # marker it writes is empty — a removal candidate rather than the work.
+            change = Path(project_dir) / f"resumed-part-{attempts}.txt"
+            change.write_text(f"part {attempts}\n", encoding="utf-8")
+            gitops.add_all(project_dir)
+            gitops.commit(project_dir, f"fix: land part {attempts} before the supervisor settles")
+            return Report(persona, 1, False, False, 2, [], {}, {}, "", max_turns=2)
+        return Report(persona, 0, True, False, 1, [], {}, {}, "")
+
+    result = run_repo_task(
+        str(origin),
+        "Finish work that needed both automatic continuations.",
+        "engineer",
+        workspace=workspace,
+        dispatch_fn=stops_twice_then_completes,
+        recorded_gate=["true"],
+    )
+
+    assert attempts == 3
+    assert result.ok and result.outcome == "merged", result.detail
+    # Both bounded attempts' commits survive the rewrite that removing the marker costs.
+    assert _has_file(origin, "main", "resumed-part-1.txt")
+    assert _has_file(origin, "main", "resumed-part-2.txt")
+    assert not incomplete_commits(canonical, before, result.branch)
+    # The stops are no longer part of this result's story: the lineage the first one
+    # recorded is retracted along with the marker, so the run reads as the single
+    # completed workstream the branch now is.
+    assert result.retry_lineage is None
+
+
 def test_a_completed_continuation_keeps_an_inherited_incomplete_marker(
     tmp_path, bare_origin
 ) -> None:
@@ -4291,6 +4345,10 @@ def test_completed_automatic_resume_keeps_the_marker_that_carries_its_work(
         if INCOMPLETE_TRAILER in commit.message
     )
     assert not gitops.is_empty_commit(canonical, marker.sha)
+    # The mirror of the cleared case: the marker stayed, so the lineage that records
+    # the stop stays with it. Retracting it here would claim a branch still carrying
+    # incomplete provenance had never been resumed.
+    assert result.retry_lineage is not None
 
 
 def test_a_stop_short_of_the_cap_is_not_reported_as_hitting_it(tmp_path, bare_origin) -> None:
