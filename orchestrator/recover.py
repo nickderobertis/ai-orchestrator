@@ -21,6 +21,7 @@ from .lifecycle import (
     DEFAULT_LIFECYCLE_STEP_MAX_TURNS,
     MAX_MERGE_CONFLICT_RESOLUTIONS,
     DispatchFn,
+    _attestation_body,
     _default_title,
     _effective_publication,
 )
@@ -35,11 +36,10 @@ from .merge import (
 )
 from .personas import persona_path
 from .provenance import (
-    RECOVERY_TRAILER,
+    attest_recovery,
     incomplete_commits,
     parse_preserved_step_metadata,
     recorded_pr_base,
-    unattested_incomplete,
 )
 from .redaction import redact
 from .registry import Registry, RegistryEntry, RegistryError, Slug, merge_gate_coverage
@@ -278,13 +278,7 @@ def recover_repo(
         def attest_and_push() -> MergeOutcome | None:
             # Recovery always publishes through a push or a PR. The executable
             # pre-push hook / required PR checks are therefore authoritative.
-            missing = sorted(unattested_incomplete(worktree, remote_base, branch))
-            if missing:
-                trailers = "\n".join(f"{RECOVERY_TRAILER} {sha}" for sha in missing)
-                gitops.commit_empty(
-                    worktree,
-                    "chore: attest verified recovery of preserved work\n\n" + trailers,
-                )
+            attest_recovery(worktree, remote_base, branch)
             try:
                 pushed = gitops.push(worktree, branch, env=push_env)
             except gitops.GitError as exc:
@@ -367,6 +361,7 @@ def recover_repo(
                 "## What\nRecover lifecycle-preserved work through its merge-path gate.\n\n"
                 "## Why\nThe original dispatch did not complete; this branch now carries "
                 "a verified recovery attestation.\n"
+                + _attestation_body(worktree, remote_base, branch)
             ),
             method=merge_method,
             policy=decision.merge_policy,

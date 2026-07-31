@@ -31,6 +31,7 @@ from .coordination import GitLockIdentity, git_lock_identity
 from .github import AutoMergeUnavailable, Check, GitHubBackend, PRStatus, PullRequest
 from .merge_queue import merge_queue_turn
 from .outcomes import ALREADY_INTEGRATED_OUTCOME, LifecycleOutcome
+from .provenance import attestation_trailers
 from .redaction import redact
 from .verify import (
     VerifyResult,
@@ -114,6 +115,21 @@ class MergeContext:
     #: otherwise it re-judges a memoized verdict against a base the worker never had.
     #: `None` where a caller has no workstream, which resolves the base as Git would.
     push_env: dict[str, str] | None = None
+
+
+def _publication_message(ctx: MergeContext) -> str:
+    """The squash commit's message: the change's subject, plus what it recovered.
+
+    Squashing collapses the branch, so the `chore: attest verified recovery of
+    preserved work` commit — the record that a step was left incomplete and a green
+    gate recovered it — would never reach the base branch. Its trailers ride on the
+    publication commit instead, which is what keeps the base branch squash-merged
+    and the attestation preserved at the same time.
+    """
+    trailers = attestation_trailers(ctx.clone_dir, f"origin/{ctx.base}", f"origin/{ctx.branch}")
+    if not trailers:
+        return ctx.title
+    return ctx.title + "\n\n" + "\n".join(trailers)
 
 
 @dataclass
@@ -345,7 +361,9 @@ class LocalMergeStrategy:
                 base_sha = gitops.ref_sha(ctx.clone_dir, f"origin/{ctx.base}")
                 gitops.worktree_add_detached(ctx.clone_dir, scratch, f"origin/{ctx.base}")
                 try:
-                    gitops.merge_squash(scratch, f"origin/{ctx.branch}", message=ctx.title)
+                    gitops.merge_squash(
+                        scratch, f"origin/{ctx.branch}", message=_publication_message(ctx)
+                    )
                 except gitops.NothingToCommit:
                     gitops.worktree_remove(ctx.clone_dir, scratch)
                     pr = _local_publication_ref(ctx)
