@@ -315,19 +315,6 @@ class GitHubMergeStrategy:
                     "draft": False,
                 },
             )
-        elif existing is not None:
-            _record(
-                ctx,
-                "pr-created",
-                {
-                    "repo": ctx.repo_slug,
-                    "pr": pr.url,
-                    "number": pr.number,
-                    "base": ctx.base,
-                    "draft": False,
-                    "adopted": True,
-                },
-            )
         if self._github.status(pr).draft:
             self._github.mark_ready(pr)
             _record(

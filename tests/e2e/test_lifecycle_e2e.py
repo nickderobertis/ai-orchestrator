@@ -2208,6 +2208,50 @@ def test_pr_author_failure_does_not_block_human_draft_checkpoint(tmp_path, bare_
     assert "drafting provider unavailable" in result.follow_ups
 
 
+def test_pr_author_successful_retry_publishes_drafted_body(tmp_path, bare_origin) -> None:
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-drafting-recovery")
+    Registry().register(str(canonical), workflow="remote", repo_type="single-owner")
+    attempts = 0
+    writing = make_writing_dispatch()
+
+    def recovering_author(persona, task, *, project_dir, **kwargs):
+        nonlocal attempts
+        if persona != "pr-author":
+            return writing(persona, task, project_dir=project_dir, **kwargs)
+        attempts += 1
+        if attempts == 1:
+            return Report(persona, 1, False, False, 2, [], {}, {}, "transient harness error")
+        output = task.split("Write the final body, and nothing else, to this absolute path:\n", 1)[
+            1
+        ].splitlines()[0]
+        Path(output).write_text(
+            "## What\nRecovered drafted body.\n\n## Why\nThe retry succeeded.\n",
+            encoding="utf-8",
+        )
+        return Report(persona, 0, True, False, 1, [], {}, {}, "")
+
+    github = FakeGitHub(origin)
+    result = run_repo_task(
+        str(canonical),
+        "complete-now write-change",
+        "engineer",
+        workspace=Workspace(tmp_path / "drafting-recovery-worktrees"),
+        github=github,
+        merge_policy="none",
+        branch="drafting-recovery",
+        recorded_gate=["true"],
+        dispatch_fn=recovering_author,
+    )
+
+    assert result.outcome == "pr-open" and attempts == 2
+    assert result.pr is not None
+    assert github._prs[result.pr.number].body == (
+        "## What\nRecovered drafted body.\n\n## Why\nThe retry succeeded.\n"
+    )
+    assert result.follow_ups is None
+
+
 def test_verify_via_ci_iterates_real_dispatch_then_requires_green_branch_ci(
     tmp_path, bare_origin, command_base, personas_dir, monkeypatch, capsys
 ) -> None:

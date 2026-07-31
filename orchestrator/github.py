@@ -21,6 +21,7 @@ import json
 import subprocess
 from collections.abc import Callable
 from dataclasses import dataclass
+from enum import Enum
 from typing import Protocol
 from urllib.parse import quote
 
@@ -62,12 +63,18 @@ class PullRequest:
     base: str
 
 
+class PullRequestState(Enum):
+    OPEN = "OPEN"
+    MERGED = "MERGED"
+    CLOSED = "CLOSED"
+
+
 @dataclass(frozen=True)
 class ExistingPullRequest:
     """A same-head PR discovered before publication, including its frozen head."""
 
     pr: PullRequest
-    state: str
+    state: PullRequestState
     head_sha: str
 
 
@@ -274,17 +281,17 @@ class CliGitHubBackend:
                 candidates.append(
                     ExistingPullRequest(
                         PullRequest(number, url, repo, head, base),
-                        state.upper(),
+                        PullRequestState(state.upper()),
                         candidate_sha,
                     )
                 )
-        except (json.JSONDecodeError, KeyError, TypeError) as exc:
+        except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
             raise GitHubError(f"could not parse PR from gh output: {existing_out!r}") from exc
         for candidate in candidates:
-            if candidate.state == "OPEN":
+            if candidate.state is PullRequestState.OPEN:
                 return candidate.pr
         for candidate in candidates:
-            if candidate.state == "MERGED" and candidate.head_sha == head_sha:
+            if candidate.state is PullRequestState.MERGED and candidate.head_sha == head_sha:
                 return candidate.pr
         return None
 
