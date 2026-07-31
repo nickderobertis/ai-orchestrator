@@ -26,6 +26,7 @@ import subprocess
 import sys
 import threading
 import time
+import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -120,6 +121,10 @@ AGENT_FAILED_NAME = "agent.failed"
 AGENT_EXIT_CODE_NAME = "agent.exit_code"
 AGENT_FAILURE_NAME = "agent.failure"
 AGENT_STDERR_NAME = "agent.stderr"
+# DRIFT-GATE: test_status_file_contract_has_one_source_the_wrapper_honors parses
+# every agent.* path written by scripts/oneharness-agent.sh and rejects names
+# absent from AGENT_STATUS_NAMES.
+AGENT_STDOUT_NAME = "agent.stdout"
 AGENT_STATUS_NAMES = (
     AGENT_PID_NAME,
     AGENT_CHILD_PID_NAME,
@@ -129,6 +134,7 @@ AGENT_STATUS_NAMES = (
     AGENT_EXIT_CODE_NAME,
     AGENT_FAILURE_NAME,
     AGENT_STDERR_NAME,
+    AGENT_STDOUT_NAME,
 )
 #: How much of the dead child's stderr tail a death report carries. The tail is
 #: the part that names the failure; the cap keeps one runaway harness from
@@ -729,6 +735,7 @@ def run_onejudge(
                 previous = (activity, _file_progress(Path(cwd) / ".git"))
                 last_progress = time.monotonic()
                 agent_identity: str | None = None
+                missing_agent_identity: str | None = None
                 last_agent_heartbeat_ns: int | None = None
                 last_agent_heartbeat = time.monotonic()
                 while not run.done():
@@ -786,21 +793,36 @@ def run_onejudge(
                                 if activity.pids:
                                     observed = tuple(dict.fromkeys((*observed, *activity.pids)))
                                     observed_tree = observed
+                                latest_agent = _agent_status(agent_status_dir, "agent.pid")
                                 if (
                                     agent_pid not in activity.pids
+                                    and latest_agent == current_agent
                                     and _agent_status(agent_status_dir, "agent.done")
                                     != current_agent
                                 ):
-                                    return WatchdogSignal(
-                                        "worker-died",
-                                        pid,
-                                        observed,
-                                        detail=(
-                                            agent_failure_reason(agent_status_dir)
-                                            or "the agent harness process vanished mid-turn "
-                                            "without recording an exit"
-                                        ),
-                                    )
+                                    # The wrapper records agent.done after wait(2)
+                                    # observes the child exit. A loaded host can
+                                    # schedule this watcher between those operations
+                                    # for longer than any chosen sleep. Confirm the
+                                    # same unfinished identity against a second,
+                                    # independently sampled tree instead of turning
+                                    # scheduler latency into a death diagnosis.
+                                    if missing_agent_identity == current_agent:
+                                        return WatchdogSignal(
+                                            "worker-died",
+                                            pid,
+                                            observed,
+                                            detail=(
+                                                agent_failure_reason(agent_status_dir)
+                                                or "the agent harness process vanished mid-turn "
+                                                "without recording an exit"
+                                            ),
+                                        )
+                                    missing_agent_identity = current_agent
+                                else:
+                                    missing_agent_identity = None
+                            else:
+                                missing_agent_identity = None
                             child_pid_file = agent_status_dir / "agent.child.pid"
                             if child_pid_file.exists():
                                 try:
@@ -839,6 +861,8 @@ def run_onejudge(
                                         f"{heartbeat_timeout:g}s"
                                     ),
                                 )
+                        else:
+                            missing_agent_identity = None
                     current = (activity, _file_progress(Path(cwd) / ".git"))
                     if current != previous:
                         previous = current
@@ -865,22 +889,30 @@ def run_onejudge(
                 for pending_task in pending:
                     pending_task.cancel()
                 if signal is not None:
-                    terminate_processes(signal.observed_pids)
+                    terminate_processes(signal.observed_pids, externally_waited=(signal.root_pid,))
                 elif pid_file.exists():
-                    terminate_processes(observed_tree)
+                    terminate_processes(
+                        observed_tree,
+                        externally_waited=(_read_watchdog_pid(pid_file),),
+                    )
                 if pid_file.exists():
                     completed_pid = _read_watchdog_pid(pid_file)
-                    terminate_process_group(completed_pid)
+                    terminate_process_group(completed_pid, externally_waited=(completed_pid,))
                     terminate_tree(completed_pid)
                 return await run
             if watcher in done and (signal := await watcher):
-                terminate_processes(signal.observed_pids)
-                terminate_process_group(signal.root_pid)
+                terminate_processes(signal.observed_pids, externally_waited=(signal.root_pid,))
+                terminate_process_group(signal.root_pid, externally_waited=(signal.root_pid,))
                 terminate_tree(signal.root_pid)
                 run.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await run
                 if signal.reason == "worker-died":
+                    worker_detail = _worker_death_detail(
+                        agent_status_dir, signal.root_pid, signal.detail or "worker-died"
+                    )
+                    if "dispatch failure:" in worker_detail:
+                        raise DispatchError(worker_detail)
                     return Report(
                         persona,
                         EXIT_INCOMPLETE,
@@ -890,9 +922,7 @@ def run_onejudge(
                         [],
                         {},
                         None,
-                        _worker_death_detail(
-                            agent_status_dir, signal.root_pid, signal.detail or "worker-died"
-                        ),
+                        worker_detail,
                         outcome="worker-died",
                         outcome_detail=signal.detail,
                         max_turns=turn_cap,
@@ -905,10 +935,13 @@ def run_onejudge(
             run.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await run
-            terminate_processes(observed_tree)
+            terminate_processes(
+                observed_tree,
+                externally_waited=(_read_watchdog_pid(pid_file),) if pid_file.exists() else (),
+            )
             if pid_file.exists():
                 cancelled_pid = _read_watchdog_pid(pid_file)
-                terminate_process_group(cancelled_pid)
+                terminate_process_group(cancelled_pid, externally_waited=(cancelled_pid,))
                 terminate_tree(cancelled_pid)
             return None
 
@@ -1034,7 +1067,7 @@ def dispatch(
     config = build_effective_config(
         base,
         persona_data,
-        session=session if session is not None else f"dispatch-{persona}",
+        session=session if session is not None else f"dispatch-{persona}-{uuid.uuid4().hex}",
         max_turns=max_turns,
         done_when=done_when,
         extra_instructions=extra_instructions,

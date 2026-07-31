@@ -74,8 +74,9 @@ user:
     unavailable, take that skip path and finish rather than requiring OPENAI_API_KEY
   max_turns: 12
 
-# Caller-owned session name, threaded across turns. `dispatch` gives each subtask
-# a distinct session so parallel runs never collide.
+# Fallback for consumers that build this fragment directly. `dispatch` replaces
+# it with a unique per-invocation name unless its caller explicitly supplies the
+# resumable session name.
 session: orchestrated
 
 # Ask the judge to preserve useful adjacent work without expanding this run's scope.
