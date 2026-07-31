@@ -136,6 +136,10 @@ def test_collect_run_joins_ledger_journal_history_and_attestation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     run_dir = _recorded_run(tmp_path)
+    # A run whose whole journal lands inside one millisecond has no wall clock to
+    # divide, so the categories below would report whatever the host had left rather
+    # than what the run journalled.
+    _stretch_recorded_span(run_dir)
     history_path = tmp_path / "history.jsonl"
     history_path.write_text(
         json.dumps(
@@ -192,8 +196,11 @@ def test_collect_run_joins_ledger_journal_history_and_attestation(
     assert record["timing"]["judge_seconds"] == 1.0
     assert record["timing"]["agent_model_ms"] == 0
     assert record["timing"]["unattributed_ms"] > 0
-    assert record["timing"]["lock_wait_seconds"] > 0
-    assert record["timing"]["setup_seconds"] > 0
+    # The exact seconds the journal recorded, not merely a positive share: with the
+    # run's own wall clock spread across its events there is room for every category,
+    # so a dropped span reads as zero here instead of hiding behind a loaded box.
+    assert record["timing"]["lock_wait_seconds"] == 0.001
+    assert record["timing"]["setup_seconds"] == 0.001
     assert record["timing_quality"] == "legacy"
     assert record["linkage_quality"] == "labelled"
     node = record["nodes"][0]

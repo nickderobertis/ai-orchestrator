@@ -19,6 +19,7 @@ from datetime import datetime
 from pathlib import Path
 
 import pytest
+from telemetry_contract import clipped_share_seconds, journalled_seconds
 from waits import deadline as e2e_deadline
 
 from orchestrator import REPO_ROOT, gitops
@@ -1767,8 +1768,14 @@ def test_real_cli_recovers_failed_lifecycle_result(
         check=True,
     )
     observed = json.loads(telemetry.stdout)["runs"][0]["timing"]
-    assert observed["lock_wait_seconds"] > 0.05
-    assert observed["setup_seconds"] > 0
+    # The real waits and setup spans this run journalled, as the index reports them.
+    # They are shares of one wall clock that three concurrent nodes journalled against,
+    # so the model clips them; asserting they stayed positive would assert the box was
+    # never busy enough to spend that wall clock elsewhere.
+    for category, kind in (("lock_wait_seconds", "lock-wait"), ("setup_seconds", "setup-finished")):
+        assert observed[category] == clipped_share_seconds(
+            observed, category, journalled_seconds(records, kind)
+        ), category
     invalid_results = _just("results", "invalid/run", "--runs-dir", str(runs))
     assert invalid_results.returncode == 2
     assert "run id" in invalid_results.stderr

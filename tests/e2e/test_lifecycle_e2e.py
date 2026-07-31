@@ -32,6 +32,7 @@ import pytest
 from conftest import git, install_pre_push_hook
 from fakes import FakeGitHub, make_writing_dispatch
 from git_http import serve_github_origin
+from telemetry_contract import clipped_share_seconds
 from waits import deadline as e2e_deadline
 from waits import timeout as e2e_timeout
 
@@ -5020,9 +5021,10 @@ def test_resumed_branch_setup_round_trips_through_telemetry_cli(tmp_path, bare_o
     observed = json.loads(indexed.stdout)["runs"][0]["timing"]
     # `setup_seconds` is a millisecond-rounded share of the run's wall clock handed
     # out after the categories ahead of it, so a positive value is a property of a
-    # fast box. The journal-to-CLI round trip is the contract, and holds either way.
+    # fast box, and the whole journalled total is a property of one that had the room
+    # left. The journal-to-CLI round trip is the contract, and holds either way.
     journalled = sum(event.detail["seconds"] for event in setup_events)
-    assert observed["setup_seconds"] == round(journalled * 1000) / 1000
+    assert observed["setup_seconds"] == clipped_share_seconds(observed, "setup_seconds", journalled)
 
 
 def test_real_lifecycle_outcomes_round_trip_through_telemetry_cli(tmp_path, bare_origin) -> None:
