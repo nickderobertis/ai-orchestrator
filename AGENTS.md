@@ -103,7 +103,12 @@ dispatch onejudge.
    release, trigger CI, register or change infrastructure, or provide external
    sign-off. It never represents the planner's own review, acceptance,
    validation, or integration decision. The planner reviews each settled node
-   over the live channel and issues `add` / `retry` / `drop` / `split` edits. A
+   over the live channel and issues `add` / `retry` / `drop` / `split` edits.
+   What it learns about a node that keeps running belongs in a `context` edit:
+   that note is the only thing the round transition carries onto the carried-forward
+   node, and it carries exactly one round, so state worth keeping is state attached
+   again. See [Carried planner
+   context](docs/orchestration.md#carried-planner-context). A
    human node the planner would attest itself is a modeling error: keep it only
    if the action is genuinely external; otherwise perform that coordination live
    with no node. See [Node shapes](docs/orchestration.md#node-shapes). Before a

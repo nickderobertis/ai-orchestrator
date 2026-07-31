@@ -89,9 +89,11 @@ from .plan import (
     PlanError,
     PlanNode,
     _topological_order,
+    compose_task_context,
     make_dispatch_runner,
     parse_agent_node,
     parse_cross_dag_dependency,
+    parse_node_context,
     reconcile_dag,
 )
 from .registry import Registry
@@ -169,6 +171,9 @@ _AGENT_NODE_FIELDS = (
     "execution_checkout",
     "stack_bases",
     "resume",
+    # Planner context is addressed to a dispatch. A human node has none, so the
+    # note would reach nobody; it is refused here with the other execution fields.
+    "context",
 )
 
 
@@ -439,8 +444,22 @@ def _parse_node(nid: str, raw: dict[str, Any]) -> GraphNode:
                 "it names action for a person, not work the harness runs"
             )
         return GraphNode(id=nid, kind="human", task=task, deps=list(deps), definition=dict(raw))
+    context = parse_node_context(nid, raw)
     if raw.get("repo") is not None:
         node = parse_repo_node(nid, raw)
+        if context:
+            # A workstream dispatches once per agent step, and the note is about the
+            # node they share, so each of those dispatches receives it. A human step
+            # is prose for a person and is left exactly as the planner wrote it.
+            if node.task:
+                node.task = compose_task_context(node.task, context)
+            if node.steps:
+                node.steps = [
+                    step
+                    if step.human
+                    else replace(step, task=compose_task_context(step.task, context))
+                    for step in node.steps
+                ]
         return GraphNode(
             id=nid,
             kind="agent",
@@ -451,6 +470,7 @@ def _parse_node(nid: str, raw: dict[str, Any]) -> GraphNode:
             definition=dict(raw),
         )
     direct = parse_agent_node(nid, raw)
+    direct.task = compose_task_context(direct.task, context)
     return GraphNode(
         id=nid,
         kind="agent",

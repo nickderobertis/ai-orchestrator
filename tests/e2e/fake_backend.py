@@ -276,6 +276,12 @@ def main() -> int:
             if run_log is not None:
                 with Path(run_log.group(1)).open("a", encoding="utf-8") as stream:
                     stream.write("run\n")
+            # One JSON line per delivered prompt, so a journey can assert on exactly
+            # what the agent side received across several dispatches of one node.
+            task_log = re.search(r"record-task=(\S+)", task)
+            if task_log is not None:
+                with Path(task_log.group(1)).open("a", encoding="utf-8") as stream:
+                    stream.write(json.dumps(task) + "\n")
             if "resume-after-cap" in task:
                 resume_marker.write_text(str(resume_segments + 1), encoding="utf-8")
             if "slow-branch" in task:
@@ -357,6 +363,9 @@ def main() -> int:
                             for sentinel in (
                                 "continuation-channel",
                                 '"name": "live-edit"',
+                                # A round whose carried node fails again by design;
+                                # its non-zero status is the journey's subject.
+                                '"name": "planner-context"',
                                 # Live-edit journeys whose round legitimately settles
                                 # waiting or failed; run-plan's non-zero status is the
                                 # expected outcome, not an orchestrator failure.
@@ -387,6 +396,18 @@ def main() -> int:
                             *forwarded,
                         ],
                         check=True,
+                        capture_output=True,
+                        text=True,
+                    )
+                elif orchestrator_turn == 1 and '"name": "planner-context"' in plan_text:
+                    # The transition an orchestrator drives after the planner's
+                    # continuing verdict: no attestation, no edits file, just the
+                    # next round derived from the round that settled.
+                    run_id = orchestrator_plan.argv[orchestrator_plan.argv.index("--run") + 1]
+                    forwarded = orchestrator_plan.argv[orchestrator_plan.argv.index("--runs-dir") :]
+                    subprocess.run(
+                        ["just", "next-round", run_id, *forwarded],
+                        check=False,
                         capture_output=True,
                         text=True,
                     )

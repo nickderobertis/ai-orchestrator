@@ -426,6 +426,17 @@ def _fold_edit_operation(builder: _RoundBuilder, operation: object) -> None:
             builder.edges = [edge for edge in builder.edges if node not in edge]
             builder.states.pop(node, None)
             builder.results.pop(node, None)
+        case "context-added":
+            note = detail.get("note")
+            if not isinstance(node, str) or node not in builder.node_ids:
+                raise ProjectionError("context-added references an unknown node")
+            if not isinstance(note, str) or not note.strip():
+                raise ProjectionError("context-added requires a non-empty note")
+            definition = next(item for item in builder.nodes if item["id"] == node)
+            existing = definition.get("context")
+            if existing is not None and not isinstance(existing, list):
+                raise ProjectionError("context-added requires a node whose 'context' is a list")
+            definition["context"] = [*(existing or []), note]
         case "human-attested":
             ref = detail.get("ref")
             if not isinstance(ref, str) or ref != node or builder.states.get(ref) != "waiting":

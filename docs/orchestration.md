@@ -8,8 +8,17 @@ the canonical executor for direct onejudge work, full repository lifecycles, and
 explicit actions that only a person can complete. `just repo-plan` is a deprecated
 alias retained so old lifecycle-only plan files keep working.
 
-The current tracked-plan contract is schema version 5 (`"schema_version": 5`).
+The current tracked-plan contract is schema version 6 (`"schema_version": 6`).
 Plans that omit the version retain version-1 behavior for compatibility.
+
+Version 6 adds the optional node `context`: a list of planner notes rendered as a
+trailing `## Planner context` section of every task that node dispatches. Unlike
+the fields below it is not refused on a plan that declares an earlier version,
+because it is attached to a *running* graph — a live `context` edit appends one
+note to a node the round already launched, so gating it on the version that graph
+was launched with would make a committed edit unreplayable rather than protect an
+old plan from a field it never uses. See [Carried planner
+context](#carried-planner-context).
 
 Version 4 adds an optional top-level `goal` mapping with required non-empty
 `text` and optional `id`; when omitted, the id is derived from the text. Active
@@ -207,6 +216,7 @@ The accepted commands are:
 | `retry` | `id`; `node`: full replacement node mapping with a new id | Supersede a running, failed, or cancelled node with a fresh lineage and redirect its direct dependents. |
 | `attest` | `ref` | Complete a currently ready, waiting human action. |
 | `complete` | `reason` | Journal the planner's completion request independently of graph mutation. |
+| `context` | `id`; `note` | Attach one planner note to the node's next dispatch, without cancelling or restarting anything. |
 
 A command-only envelope gets a synthesized continuing verdict. Commands can
 instead accompany either legacy verdict, for example:
@@ -230,7 +240,9 @@ Every delta is validated against the live frontier before commit. The resulting
 graph must still satisfy the normal plan schema: ids and referenced dependencies
 must exist, and dependencies cannot form a cycle or self-edge. `reparent` cannot
 change a started node; `retry` requires a running, failed, or cancelled target and
-a new replacement id; `attest` requires a ready waiting human action. `drop` must
+a new replacement id; `attest` requires a ready waiting human action; `context`
+requires a node that can still be dispatched, so a note aimed at a node that
+already settled `done` is refused rather than accepted into nothing. `drop` must
 state the dependents' fate and cannot remove the last publication anchor while an
 unresolved same-identity dependent remains. Commands are reconciled in
 order. Each accepted delta, including a multi-edge reparent or retry, is appended
@@ -343,6 +355,15 @@ the final assessment and stop rather than wait.
 | Direct agent | `persona`, `task`; no `repo` | Dispatch one real onejudge process in the selected project directory. |
 | Lifecycle agent | `repo`, plus `persona` + `task` or `steps` | Work on an isolated branch/worktree and publish through the repository's merge-path gate and registered policy. Dispatch refuses identities without an executable pre-push hook or required PR checks. |
 | Human | `kind: human`, `task`; no persona or execution fields | Record an action only an external person or outside system can perform. Planner review, acceptance, validation, and integration happen through live channel edits, not a human node. |
+
+An agent or lifecycle node may also carry `context`: a list of planner notes,
+rendered after the task prose as a `## Planner context` section stating that it
+reports observed state and adds no acceptance criteria. A workstream renders it
+into every agent step, since the note is about the node they share, and leaves
+human steps as written. A human node cannot set it — the note is addressed to a
+dispatch, and a human node has none. The planner rarely writes it by hand: it is
+what a live `context` edit attaches and what [the round transition
+carries](#carried-planner-context).
 
 An agent node or lifecycle agent step may instead set `expects_no_diff: true`
 with `task` and no `persona` or `done_when`. This explicitly declares that the
@@ -550,15 +571,20 @@ resume nodes that were running without another start transition, and converge th
 remaining frontier. Schema 1 journals remain readable, but a schema 1 prefix with
 settled nodes cannot be recovered because it predates durable node results.
 
-The journal record contract is schema version 7, pinned by
-`tests/golden/static-round-events-v7.json`; bump both together. Version 6 is
+The journal record contract is schema version 8, pinned by
+`tests/golden/static-round-events-v8.json`; bump both together. Version 6 is
 additive over 5: it adds the `edit-rejected`, `conflict-resolution-started`, and
 `conflict-resolution-finished` kinds, and an optional `command` beside
 `edit-committed`'s `operations`. A v5 journal therefore still replays — its
 committed edits simply carry no command — while a record written at 6 or later
 must carry the command that produced its mutations. Version 7 is additive over 6:
 it adds `publication-failed`, for a publication that ended before any gate could
-rule on it. Every supported version stays readable; a reader skips records from a
+rule on it. Version 8 is additive inside a record rather than in the kind
+vocabulary: an `edit-committed` may compile a `context-added` operation, and the
+golden pins the whole compiled vocabulary because strict replay refuses an
+operation kind it cannot fold — the version is what makes a v8 note skippable to a
+v7 reader instead of corruption in a healthy round. Every supported version stays
+readable; a reader skips records from a
 version it does not know rather than failing the round it is observing.
 
 **A record's readability and its claim on a sequence number are different
@@ -877,7 +903,41 @@ itself — never a decision the planner made after reading the result.
 
 `just replan PREV_PLAN PREV_RESULT [edits.json]` exposes the lower-level pure
 derivation command. Old direct plans, old lifecycle-only repo plans, and recorded
-results without `state` remain readable.
+results without `state` remain readable. It derives from the two files it is given
+and therefore carries no context; `next-round` reads the run's ledger and does.
+
+### Carried planner context
+
+The plan of record for a round is the plan it was launched with, so a node carried
+forward is carried forward as that plan described it. What the planner learned
+while the round ran is not in that file, and restoring the opening brief over it is
+how a worker came to re-derive 41 commits of finished work.
+
+A `context` edit is where that knowledge goes. Each note is appended to the node's
+`context` list on the running graph, rendered as a `## Planner context` section of
+every task the node dispatches, and — because the reconciler installs the edited
+graph immediately — already visible to a dispatch of that node which has not
+started yet, including a `retry` replacement submitted in the same envelope. A
+dispatch already running does not re-read its prompt; the note reaches its next one.
+
+At the transition `next-round` collects the notes each node was given **during**
+the round just finished and sets them on that node in the next plan. What does not
+carry:
+
+- **The previous round's notes.** The set is replaced, not appended. A note reports
+  state observed while one attempt ran, so it is stale as soon as the next attempt
+  moves; a note that still matters is one the planner attaches again against what
+  the new round shows. This is what stops a node accumulating instructions.
+- **Notes on a node that is not carried forward** — done, dropped, or replaced by a
+  split. Context follows a node id, and a live `retry` replacement is a new id, so
+  notes given to the superseded node stay with it.
+- **Everything structural.** An `add`, a `drop`, a `reparent`, and a `retry`
+  replacement change the round's desired graph, not the plan of record; the planner
+  restates the ones it wants as `next-round` edits. A `retry` edit that states
+  `context` itself wins over the collected notes, empty list included.
+
+Branch pins, resume checkpoints, and stack anchors carry exactly as they did
+before: context rides alongside them and changes none of them.
 
 ## Where this lives
 
