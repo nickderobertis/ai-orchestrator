@@ -357,12 +357,18 @@ Session setup and every recorded round transition run this sweep automatically.
 An active lifecycle makes third-party cleanup skip without waiting;
 ownership-proven dead watchdog cleanup still proceeds.
 The families an active dispatch itself produces — the private `nx` install every
-`bunx nx` leaves behind, pytest run directories, onejudge scratch — are the
+`bunx nx` leaves behind, the native-binary cache Nx keys on each worktree's
+workspace root, pytest run directories, onejudge scratch — are the
 volume, so waiting for quiescence never reclaims them. They are swept **during**
 dispatches instead, on proven non-reference: a candidate no live process names in
-its argv, cwd, or open descriptors, past a short age that only covers the gap
-between creating a directory and first naming it. Names too generic to sweep on are
-identified by shape, and each family honors its producer's own retention. See
+its argv, environment, `cwd`/`root`/`exe`, open descriptors, or memory mappings,
+past a short age that only covers the gap
+between creating a directory and first naming it. Mappings are not optional there:
+a `dlopen`ed native binary leaves no descriptor, so for a running `nx` the mapping
+is the only place its cache appears. Names too generic to sweep on are
+identified by shape, and each family honors its producer's own retention. Every
+sweep names the families it examined and the families it could not, so `reclaimed
+0 bytes` never hides an unswept one. See
 [`orchestrator.scratch.UNREFERENCED_FAMILIES`](orchestrator/scratch.py).
 
 `just smoke` spends one real agent-harness turn in a throwaway directory and
