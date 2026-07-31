@@ -154,7 +154,9 @@ planner's run and an unattributable one, naming the owner, and `--force` reports
 that owner before overriding. A stopped run is left reclaimable exactly as an
 interrupted round is (`just run-plan ... --recover`). `complete` is a completion
 verdict on the channel and deliberately does **not** stop scheduling; use `just
-stop` when a run must actually end.
+stop` when a run must actually end. `stop` is deliberately **not** in
+`.claude/settings.json`'s allowlist: it ends live work, and `--force` overrides the
+ownership check the incident above is about, so each one is approved on its own.
 
 The orchestrator also surfaces an agent-written, non-blocking per-workstream
 status when its durable planner-update pacemaker becomes due (30 minutes by

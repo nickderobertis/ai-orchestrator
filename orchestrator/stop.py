@@ -28,6 +28,7 @@ record before anything is escalated.
 from __future__ import annotations
 
 import argparse
+import math
 import os
 import signal
 import socket
@@ -36,6 +37,7 @@ import time
 from collections.abc import Iterable
 from contextlib import suppress
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
 from .config import ConfigError
@@ -72,6 +74,60 @@ class RecordedOwner:
         return self.host == socket.gethostname()
 
 
+#: How much later than its own record a process may have started and still be believed
+#: to be the one that wrote it. A running owner records itself at once, so the honest
+#: order is start-then-record; this only absorbs the clock's granularity and the boot
+#: time's rounding, not a pid that came around again minutes or hours later.
+_START_SKEW_SECONDS = 60.0
+
+
+def process_started_at(pid: ProcessId) -> float | None:
+    """When ``pid`` began, in epoch seconds, or ``None`` when this host cannot say.
+
+    Derived from the kernel's own boot time plus the process's start ticks rather
+    than from anything the process could have written itself, which is what makes it
+    usable as an identity: a recycled pid is a *different* process with a later start.
+    """
+    try:
+        raw = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
+        boot = next(
+            float(line.split()[1])
+            for line in Path("/proc/stat").read_text(encoding="utf-8").splitlines()
+            if line.startswith("btime ")
+        )
+    except (OSError, StopIteration, IndexError, ValueError):
+        return None
+    fields = raw[raw.rfind(")") + 2 :].split()
+    if len(fields) < 20:
+        return None
+    try:
+        return boot + float(fields[19]) / os.sysconf("SC_CLK_TCK")
+    except (ValueError, OSError):
+        return None
+
+
+def _wrote_its_own_record(pid: ProcessId, started: object) -> bool:
+    """Whether ``pid`` can still be the process that recorded itself at ``started``.
+
+    Only a *proven* mismatch answers ``False``: a pid whose process demonstrably began
+    after the record that names it is a recycled number, and signalling it would kill
+    whatever inherited it rather than this run's owner. Everything this host cannot
+    establish — an unparseable stamp, a ``/proc`` it cannot read — answers ``True``,
+    because refusing to stop a run on evidence nobody has would leave the orphan the
+    whole verb exists to end.
+    """
+    if not isinstance(started, str):
+        return True
+    try:
+        recorded = datetime.fromisoformat(started)
+    except ValueError:
+        return True
+    if recorded.tzinfo is None:
+        return True
+    began = process_started_at(pid)
+    return began is None or began <= recorded.timestamp() + _START_SKEW_SECONDS
+
+
 def _recorded_owner(path: Path, source: str) -> RecordedOwner | None:
     """One ``running`` owner from a status record, or ``None`` when there is none.
 
@@ -94,7 +150,10 @@ def _recorded_owner(path: Path, source: str) -> RecordedOwner | None:
         or not host
     ):
         return None
-    return RecordedOwner(ProcessId(pid), source, host)
+    owner = RecordedOwner(ProcessId(pid), source, host)
+    if owner.local and not _wrote_its_own_record(owner.pid, state.get("started")):
+        return None
+    return owner
 
 
 def recorded_owners(run_dir: Path) -> tuple[RecordedOwner, ...]:
@@ -137,21 +196,29 @@ def is_running(pid: ProcessId) -> bool:
 class StopReport:
     """What one stop signalled, and what outlived it."""
 
+    #: The pids a signal was actually delivered to — not everything this stop looked
+    #: at. A tracked process that had already exited, or one this user may not signal,
+    #: never appears here, so the count cannot overstate what the stop did.
     signalled: tuple[ProcessId, ...]
     remaining: tuple[ProcessId, ...]
     escalated: tuple[ProcessId, ...]
 
 
-def _signal(pids: Iterable[ProcessId], number: int) -> None:
-    """Signal deepest-observed first, so a supervisor cannot respawn what just died.
+def _signal(pids: Iterable[ProcessId], number: int) -> set[ProcessId]:
+    """Signal deepest-observed first and report which pids actually took it.
 
     Sorting by pid descending is an approximation of depth that costs nothing and
     needs no second `/proc` walk; a process already gone, or one this user may not
-    signal, is skipped rather than failing the stop.
+    signal, is skipped rather than failing the stop. Those skips are why the
+    delivered set is returned rather than assumed: a report that counted every pid
+    it *intended* to signal would overstate what this stop did.
     """
+    delivered: set[ProcessId] = set()
     for pid in sorted(pids, reverse=True):
         with suppress(PermissionError, ProcessLookupError):
             os.kill(pid, number)
+            delivered.add(pid)
+    return delivered
 
 
 def _live(pids: Iterable[ProcessId]) -> set[ProcessId]:
@@ -174,20 +241,21 @@ def stop_run(
     """
     tracked = run_tree(owners)
     signalled: set[ProcessId] = set()
+    attempted: set[ProcessId] = set()
     # A round owner records its abandonment inside its SIGTERM handler, and that record
     # is what leaves the round reclaimable, so it takes the signal before its own
     # children start dying underneath it.
     rounds_first = {item.pid for item in owners if item.local and item.source != "orchestrator"}
-    _signal(rounds_first, signal.SIGTERM)
-    signalled |= rounds_first
+    signalled |= _signal(rounds_first, signal.SIGTERM)
+    attempted |= rounds_first
     deadline = time.monotonic() + max(0.0, grace)
     while True:
         tracked |= set(descendants_of(frozenset(_live(tracked))))
         alive = _live(tracked)
         if not alive:
             break
-        _signal(alive - signalled, signal.SIGTERM)
-        signalled |= alive
+        signalled |= _signal(alive - attempted, signal.SIGTERM)
+        attempted |= alive
         if time.monotonic() >= deadline:
             break
         time.sleep(poll)
@@ -195,13 +263,13 @@ def stop_run(
     kill_deadline = time.monotonic() + _ESCALATION_SECONDS
     while _live(tracked) and time.monotonic() < kill_deadline:
         tracked |= set(descendants_of(frozenset(_live(tracked))))
-        _signal(_live(tracked), signal.SIGKILL)
+        signalled |= _signal(_live(tracked), signal.SIGKILL)
         time.sleep(poll)
     # Reaping is deliberately not attempted: these are not this process's children —
     # a launched orchestrator is reparented away at launch — so a lingering zombie
     # belongs to whoever is left waiting on it, and `is_running` counts it as gone.
     return StopReport(
-        tuple(sorted(tracked)), tuple(sorted(_live(tracked))), tuple(sorted(escalated))
+        tuple(sorted(signalled)), tuple(sorted(_live(tracked))), tuple(sorted(escalated))
     )
 
 
@@ -249,8 +317,11 @@ def main(argv: list[str] | None = None) -> int:
         f"(default: {DEFAULT_GRACE_SECONDS:g})",
     )
     args = parser.parse_args(argv)
-    if args.grace < 0:
-        parser.error("--grace must not be negative")
+    # `argparse` only promises a float here. A non-finite one is not a long grace
+    # period: `NaN` makes every deadline comparison false and `inf` never expires, so
+    # either would leave a stop polling a live tree forever instead of escalating.
+    if not math.isfinite(args.grace) or args.grace < 0:
+        parser.error("--grace must be a non-negative, finite number of seconds")
     try:
         run_id = validate_run_id(args.run_id)
     except ConfigError as exc:
@@ -278,6 +349,14 @@ def main(argv: list[str] | None = None) -> int:
         _report_targets(run_id, recorded_owners(run_dir))
 
     owners = recorded_owners(run_dir)
+    # Neither state below can be reached through the CLI on one host: a second kernel
+    # hostname cannot be produced, and this process is never inside a run's tree, since
+    # `just orchestrate` detaches its launch into a session of its own. Both run against
+    # real records and real pids in tests/test_stop.py, while every state a real launch
+    # *can* reach — refusal, forced stop, full teardown, reclaim, and the second stop
+    # that finds nothing left — runs through the real recipe in
+    # tests/e2e/test_run_ownership_e2e.py.
+    # llmlint: ignore-block[changed_behavior_has_e2e] see the note above this directive.
     if unreachable := tuple(item for item in owners if not item.local):
         print(
             "stop: leaving "
@@ -297,6 +376,7 @@ def main(argv: list[str] | None = None) -> int:
             file=sys.stderr,
         )
         return 2
+    # llmlint: ignore-end[changed_behavior_has_e2e]
 
     report = stop_run(live_owners, grace=args.grace)
     if (status := report_outcome(run_id, report)) != 0:
@@ -305,6 +385,11 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
+# Reaching the survivor branch needs a process that outlives SIGKILL, which no test can
+# produce and no real launch has ever left behind; the rendering runs against a
+# constructed report in tests/test_stop.py, and the success side runs through the real
+# recipe in tests/e2e/test_run_ownership_e2e.py.
+# llmlint: ignore-block[changed_behavior_has_e2e] see the note above this directive.
 def report_outcome(run_id: str, report: StopReport) -> int:
     """Render what one stop did, and answer whether it finished the job.
 
@@ -325,6 +410,9 @@ def report_outcome(run_id: str, report: StopReport) -> int:
         file=sys.stderr,
     )
     return 1
+
+
+# llmlint: ignore-end[changed_behavior_has_e2e]
 
 
 def _print_state(run_dir: Path, runs_dir: Path) -> None:

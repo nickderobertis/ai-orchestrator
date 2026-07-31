@@ -22,6 +22,7 @@ import subprocess
 import sys
 import time
 from collections.abc import Iterator
+from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
@@ -54,7 +55,9 @@ _LAUNCHER_VARIABLES = (
 )
 
 
-def _session_env(tmp_path: Path, session_id: str | None) -> dict[str, str]:
+def _session_env(
+    tmp_path: Path, session_id: str | None, launcher: str = "claude-code"
+) -> dict[str, str]:
     """The environment one planner session hands the commands it runs.
 
     ``None`` is a plain shell: no harness names it, so everything it launches is
@@ -66,9 +69,11 @@ def _session_env(tmp_path: Path, session_id: str | None) -> dict[str, str]:
         environment.pop(name, None)
     # The protected record belongs to this test, not to the developer's own state.
     environment["XDG_STATE_HOME"] = str(tmp_path / "state")
-    if session_id is not None:
+    if session_id is not None and launcher == "claude-code":
         environment["CLAUDECODE"] = "1"
         environment["CLAUDE_CODE_SESSION_ID"] = session_id
+    elif session_id is not None:
+        environment["CODEX_THREAD_ID"] = session_id
     return environment
 
 
@@ -106,14 +111,14 @@ def _plan(tmp_path: Path, name: str) -> Path:
     return path
 
 
+@dataclass(frozen=True)
 class Launch:
     """One launched run and the session that launched it."""
 
-    def __init__(self, run_id: str, runs: Path, env: dict[str, str], plan: Path) -> None:
-        self.run_id = run_id
-        self.runs = runs
-        self.env = env
-        self.plan = plan
+    run_id: str
+    runs: Path
+    env: dict[str, str]
+    plan: Path
 
     @property
     def run_dir(self) -> Path:
@@ -357,3 +362,161 @@ def test_stopping_a_run_leaves_no_worker_behind_and_the_round_reclaimable(
     assert reclaimed.returncode == 0, reclaimed.stdout + reclaimed.stderr
     result = json.loads((mine.run_dir / "round-01" / "result.json").read_text(encoding="utf-8"))
     assert result["results"]["worker"]["status"] == "done"
+
+
+def test_stop_answers_for_a_run_it_cannot_address_or_has_nothing_left_to_stop(
+    tmp_path: Path, onejudge_bin: str, launches: list[Launch]
+) -> None:
+    """The refusals a planner meets by mistyping, and the second stop that is a no-op.
+
+    Every record read here was written by a real launch and a real stop; nothing is
+    fabricated. Stopping an already-stopped run is the ordinary way a planner reaches
+    the no-live-process path — after an interrupted round, or after a stop it is not
+    sure landed — so it must be a plain success rather than an error.
+    """
+    runs = tmp_path / "runs"
+    planner = _session_env(tmp_path, "session-alpha")
+    mine = _orchestrate(tmp_path, runs, onejudge_bin, "addressed", planner, launches)
+    _await_parked_worker(mine, "addressed", tmp_path)
+
+    def stop(*args: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            ["just", "stop", *args, "--runs-dir", str(runs)],
+            cwd=REPO_ROOT,
+            env=planner,
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=e2e_timeout(180),
+        )
+
+    # A run id that could name a path, and one that names nothing, are both refused
+    # before anything is signalled — the live run above is still running afterwards.
+    escaped = stop("../escape")
+    assert escaped.returncode == 2, escaped.stdout
+    assert "run id" in escaped.stderr
+    absent = stop("no-such-run")
+    assert absent.returncode == 2, absent.stdout
+    assert "no recorded run" in absent.stderr
+    # A grace period that is not a finite number would never expire into escalation.
+    unbounded = stop(mine.run_id, "--grace", "nan")
+    assert unbounded.returncode == 2, unbounded.stdout
+    assert "finite" in unbounded.stderr
+    assert recorded_owners(mine.run_dir), "the refusals must not have stopped the run"
+
+    first = stop(mine.run_id)
+    assert first.returncode == 0, first.stderr
+    assert "signalled" in first.stdout
+
+    # Stopping it again is a success that says there was nothing left, and still
+    # points at the run's own review command.
+    again = stop(mine.run_id)
+    assert again.returncode == 0, again.stderr
+    assert "nothing to stop" in again.stdout
+    assert f"just results {mine.run_id}" in again.stdout
+
+
+def _recorded_provenance(launch: Launch) -> dict[str, object]:
+    """The out-of-repo record this launch joined to, read where the scheme puts it."""
+    launch_id = read_launch_info(launch.run_dir)
+    assert launch_id is not None
+    record = (
+        Path(launch.env["XDG_STATE_HOME"]) / "ai-orchestrator" / "launches" / f"{launch_id}.json"
+    )
+    return dict(json.loads(record.read_text(encoding="utf-8")))
+
+
+def test_orchestrate_records_a_codex_session_and_honours_explicit_overrides(
+    tmp_path: Path, onejudge_bin: str, launches: list[Launch]
+) -> None:
+    """Detection is not hardcoded to one harness, and a typed flag still wins."""
+    runs = tmp_path / "runs"
+    codex = _session_env(tmp_path, "thread-77", launcher="codex")
+    detected = _orchestrate(tmp_path, runs, onejudge_bin, "codex-detected", codex, launches)
+    record = _recorded_provenance(detected)
+    assert record["launcher"] == "codex"
+    assert record["launcher_session_id"] == "thread-77"
+
+    # An explicit pair overrides the ambient session it was launched from, which is
+    # what lets a wrapper attribute a run it starts on someone else's behalf.
+    plan = _plan(tmp_path, "explicit")
+    launched = subprocess.run(
+        [
+            "just",
+            "orchestrate",
+            str(plan),
+            "--runs-dir",
+            str(runs),
+            "--base",
+            str(_base(tmp_path)),
+            "--onejudge-bin",
+            onejudge_bin,
+            "--launcher",
+            "claude-code",
+            "--launcher-session",
+            "declared-session",
+            "--skill-command",
+            sys.executable,
+            str(FAKE_BACKEND),
+        ],
+        cwd=REPO_ROOT,
+        env=codex,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    override = Launch(str(json.loads(launched.stdout)["run_id"]), runs, codex, plan)
+    launches.append(override)
+    overridden = _recorded_provenance(override)
+    assert overridden["launcher"] == "claude-code"
+    assert overridden["launcher_session_id"] == "declared-session"
+
+    # Each run reads as its own session's, and neither as the other's.
+    codex_view = _runs_view(runs, codex)
+    assert f"{detected.run_id}  [mine]" in codex_view
+    assert (
+        f"{override.run_id}  [claude-code:{session_fingerprint('declared-session')}]" in codex_view
+    )
+    assert _runs_view(runs, codex, "--mine").count(override.run_id) == 0
+
+    # A launcher named without a session cannot join anything, and neither can a
+    # session id the scheme cannot carry: both degrade to `unknown` rather than
+    # attaching the run to a session that did not launch it.
+    for name, extra, environment in (
+        ("half-override", ["--launcher", "claude-code"], codex),
+        ("unusable-session", [], _session_env(tmp_path, "two\nlines")),
+    ):
+        partial = _plan(tmp_path, name)
+        started = subprocess.run(
+            [
+                "just",
+                "orchestrate",
+                str(partial),
+                "--runs-dir",
+                str(runs),
+                "--base",
+                str(_base(tmp_path)),
+                "--onejudge-bin",
+                onejudge_bin,
+                *extra,
+                "--skill-command",
+                sys.executable,
+                str(FAKE_BACKEND),
+            ],
+            cwd=REPO_ROOT,
+            env=environment,
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+        degraded = Launch(str(json.loads(started.stdout)["run_id"]), runs, environment, partial)
+        launches.append(degraded)
+        launch_id = read_launch_info(degraded.run_dir)
+        assert launch_id is not None, "the run still records its own join key"
+        assert not (
+            Path(environment["XDG_STATE_HOME"])
+            / "ai-orchestrator"
+            / "launches"
+            / f"{launch_id}.json"
+        ).exists()
+        assert f"{degraded.run_id}  [unknown]" in _runs_view(runs, environment)

@@ -8,12 +8,15 @@ rendering count toward the coverage gate, which a subprocess CLI invocation cann
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
+import signal
 import socket
 import subprocess
 import sys
 import time
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -71,6 +74,7 @@ def _record_run(
     orchestrator_pid: int | None = None,
     round_pid: int | None = None,
     host: str | None = None,
+    started: str | None = None,
 ) -> Path:
     """Leave the records a launched run leaves: its join key and its owners."""
     run_dir = runs / run_id
@@ -87,16 +91,26 @@ def _record_run(
         launch["launch"] = {"launch_id": launch_id}
     (run_dir / "launch.json").write_text(json.dumps(launch), encoding="utf-8")
     recorded_host = host or socket.gethostname()
+    stamp = started or datetime.now(UTC).isoformat()
     if orchestrator_pid is not None:
         (run_dir / "orchestrator" / "status.json").write_text(
-            json.dumps({"status": "running", "pid": orchestrator_pid, "host": recorded_host}),
+            json.dumps(
+                {
+                    "status": "running",
+                    "pid": orchestrator_pid,
+                    "host": recorded_host,
+                    "started": stamp,
+                }
+            ),
             encoding="utf-8",
         )
     if round_pid is not None:
         round_dir = run_dir / "round-01"
         round_dir.mkdir()
         (round_dir / "status.json").write_text(
-            json.dumps({"status": "running", "pid": round_pid, "host": recorded_host}),
+            json.dumps(
+                {"status": "running", "pid": round_pid, "host": recorded_host, "started": stamp}
+            ),
             encoding="utf-8",
         )
     return run_dir
@@ -166,9 +180,12 @@ def test_stop_rejects_a_run_it_cannot_address(tmp_path, capsys) -> None:
     assert "run id" in capsys.readouterr().err
     assert main(["absent", "--runs-dir", str(tmp_path)]) == 2
     assert "no recorded run" in capsys.readouterr().err
-    with pytest.raises(SystemExit) as exit_status:
-        main(["absent", "--runs-dir", str(tmp_path), "--grace", "-1"])
-    assert exit_status.value.code == 2
+    for unusable in ("-1", "nan", "inf"):
+        # A negative grace is nonsense, and a non-finite one never expires into the
+        # escalation that follows it, so neither may reach the teardown.
+        with pytest.raises(SystemExit) as exit_status:
+            main(["absent", "--runs-dir", str(tmp_path), "--grace", unusable])
+        assert exit_status.value.code == 2
 
 
 def test_stop_reports_a_run_with_nothing_left_running(tmp_path, capsys) -> None:
@@ -291,3 +308,35 @@ def test_a_stop_that_left_something_running_is_a_failure_with_a_status(capsys) -
     captured = capsys.readouterr()
     assert "signalled 1 process(es) (1 needed SIGKILL)" in captured.out
     assert f"left 1 process(es) running: {survivor}" in captured.err
+
+
+def test_a_pid_the_record_predates_is_never_signalled(tmp_path, capsys) -> None:
+    """A recycled pid is a different process, and stopping it would kill a stranger.
+
+    The stand-in is this test's own live process tree, recorded by a run that claims to
+    have started long before it did — which is exactly the shape a stale record takes
+    once the kernel's pid numbers come around again.
+    """
+    owner, worker = _spawn_tree(tmp_path, "recycled")
+    runs = tmp_path / "runs"
+    stale = (datetime.now(UTC) - timedelta(hours=6)).isoformat()
+    run_dir = _record_run(
+        runs, "recycled", session="session-mine", orchestrator_pid=owner, started=stale
+    )
+    assert observed_running(owner)
+
+    assert recorded_owners(run_dir) == ()
+    assert main(["recycled", "--runs-dir", str(runs)]) == 0
+
+    assert "nothing to stop" in capsys.readouterr().out
+    # The stranger holding that pid is still running; only the record was discarded.
+    assert observed_running(owner) and observed_running(worker)
+    _terminate(owner, worker)
+
+
+def _terminate(*pids: ProcessId) -> None:
+    """Clean up a tree this test deliberately kept alive."""
+    for pid in reversed(pids):
+        with contextlib.suppress(ProcessLookupError, PermissionError):
+            os.kill(pid, signal.SIGKILL)
+    _await_gone(*pids)
