@@ -180,8 +180,11 @@ def _is_auto_merge_unavailable(message: str) -> bool:
     return "auto-merge is not enabled" in lowered or "auto merge is not allowed" in lowered
 
 
-def _default_run(argv: list[str]) -> str:
-    proc = subprocess.run(["gh", *argv], text=True, capture_output=True)
+def _default_run(argv: list[str], *, timeout: float | None = None) -> str:
+    try:
+        proc = subprocess.run(["gh", *argv], text=True, capture_output=True, timeout=timeout)
+    except subprocess.TimeoutExpired as exc:
+        raise GitHubError(f"gh {' '.join(argv)} timed out after {timeout:g}s") from exc
     if proc.returncode != 0:
         raise GitHubError(
             f"gh {' '.join(argv)} failed (exit {proc.returncode}): "
@@ -191,10 +194,25 @@ def _default_run(argv: list[str]) -> str:
 
 
 class CliGitHubBackend:
-    """`GitHubBackend` backed by the real ``gh`` CLI (the live path)."""
+    """`GitHubBackend` backed by the real ``gh`` CLI (the live path).
 
-    def __init__(self, *, run: Callable[[list[str]], str] | None = None) -> None:
-        self._run = run if run is not None else _default_run
+    ``timeout`` bounds each ``gh`` call, for the readers that must answer within a
+    stated time and already treat this whole source as optional. The lifecycle's
+    own calls leave it unset: a merge waiting on GitHub is doing the work, and
+    abandoning it mid-flight would leave state nobody recorded. An injected ``run``
+    is the whole seam, so it carries whatever deadline its own caller chose.
+    """
+
+    def __init__(
+        self,
+        *,
+        run: Callable[[list[str]], str] | None = None,
+        timeout: float | None = None,
+    ) -> None:
+        def bounded(argv: list[str]) -> str:
+            return _default_run(argv, timeout=timeout)
+
+        self._run = run if run is not None else bounded
 
     def supports_ci(self, repo: str) -> bool:
         """Whether this CLI backend can address the normalized repository."""

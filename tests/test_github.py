@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import os
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -415,3 +417,30 @@ def test_default_run_success_and_failure(monkeypatch) -> None:
     )
     with pytest.raises(GitHubError, match="boom"):
         gh._default_run(["bogus"])
+
+
+def _gh_on_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, body: str) -> None:
+    """Install a real `gh`-shaped executable, since that boundary is what expires."""
+    directory = tmp_path / "bin"
+    directory.mkdir(parents=True)
+    script = directory / "gh"
+    script.write_text(f"#!/usr/bin/env python3\n{body}\n", encoding="utf-8")
+    script.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{directory}{os.pathsep}{os.environ['PATH']}")
+
+
+def test_a_gh_call_that_never_answers_expires_only_for_a_caller_that_asked_for_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`gh` is the network, so a reader on a deadline has to be able to bound it.
+
+    The lifecycle deliberately does not bound it: a merge waiting on GitHub is doing
+    the work, and abandoning it mid-flight would leave state nobody recorded. So the
+    timeout is opt-in, and a backend built without one still waits.
+    """
+    _gh_on_path(tmp_path, monkeypatch, "import time; time.sleep(600)")
+    with pytest.raises(GitHubError, match="timed out after 0.2s"):
+        CliGitHubBackend(timeout=0.2).default_branch("o/r")
+
+    _gh_on_path(tmp_path / "answering", monkeypatch, "print('main')")
+    assert CliGitHubBackend().default_branch("o/r") == "main"

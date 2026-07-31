@@ -726,9 +726,10 @@ poller or bespoke lifecycle watch script. Start with `just monitor`; a targeted
 `gh` query remains appropriate for a one-off detail absent from its stream.
 
 ```sh
-just monitor                      # newest active run, follow until it completes
+just monitor                      # newest active run
 just monitor RUN_ID               # one named run
 just monitor --once               # replay what is known, report state, exit 0
+just monitor --follow             # follow even when output is captured
 just monitor --format jsonl       # one JSON record per line, no header
 just monitor --heartbeat 30 --poll-interval 5
 ```
@@ -739,16 +740,42 @@ initial interval. Silence heartbeats remain independent of polling frequency.
 
 Without `RUN_ID` it picks the **newest active** run — anything that has not
 completed successfully, including one merely waiting on a human, since that is the
-most important state to be watching. If nothing is active it follows the newest
-run, which replays and exits. `--runs-dir` moves the ledger as everywhere else.
+most important state to be watching. If nothing is active it watches the newest
+run. `--runs-dir` moves the ledger as everywhere else.
 
-**Exit contract.** Only a graph that *completed successfully* ends the stream
+**When it follows, and when it returns.** Following is a terminal affordance: the
+stream is flushed line by line and Ctrl-C is how a person ends it. A caller whose
+stdout is a pipe or a file sees none of that — it gets the whole output when the
+process exits — so on a terminal `just monitor` follows, and off one it makes a
+single pass and exits 0, exactly as `--once`. `--follow` asks for the follow
+anyway, for a reader that does consume the stream incrementally. This is not a
+convenience: the planner is an automated supervisor whose invocations are always
+captured, so the command `launch.json` advertises was, for it, one that produced
+nothing and never returned, and every status check was done by reading
+`events.jsonl` and `/proc` by hand instead.
+
+**The bound that pass returns within.** `tests/e2e/test_monitor_e2e.py` holds the
+real command to `orchestrator.monitor.RETURN_BOUND_SECONDS` on a runs root the size
+of the planner's own. Nothing in the command computes that bound; what it enforces
+is `SOURCE_TIMEOUT_SECONDS`, and the bound is derived from it so the two cannot
+drift. The journal, the ledger, the snapshot, and git are local reads; the two
+sources that are not — oneharness history, a subprocess over a store that only
+grows, and `gh`, which is the network — each carry that deadline. `gh` carries it
+twice: per call *and* as a budget for the whole source, so a run with many linked
+PRs cannot spend one timeout per PR. An expired read is the same silence an absent
+`gh` or history store already degrades to. `--source-timeout` moves that deadline;
+a real root answers in about a second, so the bound is the guarantee, not the
+expectation.
+
+**Exit contract.** Only a graph that *completed successfully* ends the *follow*
 (exit 0). Waiting on a human, a failed node, and an executor that died all keep
 heartbeating, because each is a state a person acts on and the run then continues
 — through `next-round`, whose new round directory the next poll picks up. A
 monitor that exited on them would report "finished" for a run that is merely
-stuck. `--once` is the escape hatch and always exits 0 after one pass; only follow
-mode encodes completion in its status. Exit 2 is an unresolvable run or bad input.
+stuck. `--once` — and every non-terminal invocation — always exits 0 after one
+pass; only follow mode encodes completion in its status. A completed graph reads
+the same either way (`graph complete`), because that detail is about the run and
+not about how it was being watched. Exit 2 is an unresolvable run or bad input.
 
 **Output shape.** The text stream's first line is exactly:
 
@@ -801,6 +828,14 @@ An unsettled round has written no `result.json`, so both `telemetry` and the DAG
 read model describe its nodes from the journal itself: a node is `running` only
 until the journal records it settling. A node recorded as `node-failed` reads as
 failed in every read-only view, including while its round is still in flight.
+
+`status` answers the same question from different evidence — a session is running
+while its branch is still a checked-out worktree — and there the journal still
+wins. A failed node can keep its checkout (a direct agent works in one it never had
+to remove), so a session whose node the journal has settled is reported with that
+recorded status, never as running. The rule across all of these is one rule: no
+read-only view calls a node running once the ledger has recorded it settled,
+whatever the filesystem still looks like.
 
 For automation, `just telemetry [--all]` emits one schema-versioned JSON run
 index. It joins phase, typed provider/failure identity, latest progress,

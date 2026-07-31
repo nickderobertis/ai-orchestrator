@@ -244,10 +244,12 @@ history *args:
 history-show *args:
     uv run orchestrator-history-show {{args}}
 
-# Follow one tracked-graph run as one concise event stream, aggregating the run
+# Watch one tracked-graph run as one concise event stream, aggregating the run
 # journal, its labelled oneharness sessions, its lifecycle-branch commits, and its
 # linked PR state. `just monitor [RUN_ID]`; defaults to the newest active run.
-# Only successful graph completion exits 0 — waiting/failed/stopped heartbeat on.
+# Follows on a terminal, where only successful graph completion exits 0 and
+# waiting/failed/stopped heartbeat on. Off one — a pipe, a file, any captured
+# invocation — it makes one bounded pass and exits 0; `--follow` overrides.
 # llmlint: ignore[tool_output_is_signal] the requested continuous event stream is this viewing command's product.
 monitor *args:
     uv run orchestrator-monitor {{args}}
