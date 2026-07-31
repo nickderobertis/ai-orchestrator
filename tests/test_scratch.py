@@ -20,6 +20,7 @@ from orchestrator.scratch import (
     MIN_FREE_BYTES_ENV,
     OWNER_LOCK_NAME,
     PYTEST_RETAINED_RUNS,
+    UNREFERENCED_FAMILIES,
     UNREFERENCED_MIN_AGE_SECONDS,
     ScratchCapacityError,
     configured_min_free_bytes,
@@ -70,13 +71,28 @@ def _fabricate_proc_process(
     cmdline: Sequence[str] = (),
     cwd: Path | None = None,
     open_files: Sequence[Path] = (),
+    environ: Sequence[str] = (),
+    executable: Path | None = None,
+    mapped: Sequence[Path] = (),
 ) -> None:
     """Write one procfs entry naming the paths a live process is using."""
     _fabricate_proc_entry(proc_root, pid, start_token=1)
     entry = proc_root / str(pid)
     (entry / "cmdline").write_bytes("\0".join(cmdline).encode("utf-8"))
+    (entry / "environ").write_bytes("\0".join(environ).encode("utf-8"))
+    # One file-backed mapping per line, in the kernel's own column layout: a `dlopen`ed
+    # binary shows up here and nowhere else, with no descriptor left open.
+    (entry / "maps").write_text(
+        "".join(
+            f"e6{index:04x}000-e6{index:04x}fff r-xp 00000000 fd:01 {index}    {path}\n"
+            for index, path in enumerate(mapped, start=1)
+        ),
+        encoding="utf-8",
+    )
     if cwd is not None:
         (entry / "cwd").symlink_to(cwd)
+    if executable is not None:
+        (entry / "exe").symlink_to(executable)
     descriptors = entry / "fd"
     descriptors.mkdir()
     for number, target in enumerate(open_files):
@@ -163,7 +179,7 @@ def test_active_dispatch_lock_skips_third_party_but_removes_dead_watchdog(
         assert main(["--root", str(tmp_path), "--min-age-hours", "0"]) == 0
 
     output = capsys.readouterr().out
-    assert "third-party sweep skipped: lifecycle dispatch active" in output
+    assert "skipped families: third-party (lifecycle dispatch active)" in output
     assert stale.exists()
     assert not dead.exists()
     assert sweep_scratch(tmp_path, min_age_seconds=0).removed == (stale,)
@@ -390,6 +406,150 @@ def test_nx_temp_installs_are_identified_by_shape_and_lookalikes_are_preserved(
     assert unreadable.exists() and linked.is_symlink()
 
 
+def _make_nx_native_cache(
+    path: Path, *, entries: Sequence[str] = ("23.1.0-nx.linux-arm64-gnu.node",)
+) -> Path:
+    """Write the shape Nx leaves behind: copied native binaries and nothing else."""
+    path.mkdir()
+    for name in entries:
+        (path / name).write_bytes(b"\x7fELF")
+    _age(path, 60 * 60)
+    return path
+
+
+def test_nx_native_caches_are_swept_by_shape_and_lookalikes_are_preserved(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The stranded copy of Nx's 22 MB native binary is the largest family on this host.
+
+    Its key is a digest of a workspace root that no longer exists, so nothing will ever
+    reuse it; only the exact name shape and an all-`.node` content decide.
+    """
+    _fabricate_proc_root(tmp_path, monkeypatch)
+    root = tmp_path / "scratch"
+    root.mkdir()
+    stranded = _make_nx_native_cache(root / "nx-native-file-cache-000d3d4")
+    emptied = _make_nx_native_cache(root / "nx-native-file-cache-abcdef0", entries=())
+    lookalikes = {
+        "short-key": _make_nx_native_cache(root / "nx-native-file-cache-000d3d"),
+        "long-key": _make_nx_native_cache(root / "nx-native-file-cache-000d3d4a"),
+        "non-hex-key": _make_nx_native_cache(root / "nx-native-file-cache-zzzzzzz"),
+        "other-content": _make_nx_native_cache(
+            root / "nx-native-file-cache-0123456",
+            entries=("23.1.0-nx.linux-arm64-gnu.node", "notes.txt"),
+        ),
+    }
+    nested = _make_nx_native_cache(root / "nx-native-file-cache-1234567")
+    (nested / "subdirectory").mkdir()
+    lookalikes["nested-directory"] = nested
+    unreadable = _make_nx_native_cache(root / "nx-native-file-cache-7654321")
+    unreadable.chmod(0o000)
+    linked_binary = _make_nx_native_cache(root / "nx-native-file-cache-89abcde", entries=())
+    (linked_binary / "23.1.0-nx.linux-arm64-gnu.node").symlink_to(
+        stranded / "23.1.0-nx.linux-arm64-gnu.node"
+    )
+    lookalikes["symlinked-binary"] = linked_binary
+    impostor = root / "nx-native-file-cache-fedcba9"
+    impostor.write_text("not a cache directory", encoding="utf-8")
+    linked = root / "nx-native-file-cache-0000000"
+    linked.symlink_to(stranded)
+
+    try:
+        result = sweep_scratch(root)
+    finally:
+        unreadable.chmod(0o755)
+
+    assert set(result.removed) == {stranded, emptied}
+    assert all(path.exists() for path in lookalikes.values()), lookalikes
+    assert unreadable.exists() and impostor.exists() and linked.is_symlink()
+
+
+def test_a_memory_mapped_native_cache_is_never_removed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Nx `dlopen`s its cached binary, so the mapping is the only reference there is.
+
+    The mapped cache below is named in no argv, no environment, no link, and no open
+    descriptor — exactly what a running `nx` looks like. Without the mapping channel
+    the sweep would delete the binary out from under it.
+    """
+    proc_root = _fabricate_proc_root(tmp_path, monkeypatch)
+    root = tmp_path / "scratch"
+    root.mkdir()
+    mapped = _make_nx_native_cache(root / "nx-native-file-cache-02c850c")
+    stranded = _make_nx_native_cache(root / "nx-native-file-cache-000d3d4")
+    _fabricate_proc_process(proc_root, 4242, mapped=[mapped / "23.1.0-nx.linux-arm64-gnu.node"])
+
+    assert main(["--root", str(root)]) == 0
+
+    output = capsys.readouterr().out
+    assert mapped.exists()
+    assert not stranded.exists()
+    assert "removed 1 directories" in output
+    assert "retained 1 directories referenced by live processes" in output
+
+
+def test_environment_and_executable_references_protect_scratch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A path a process was handed or is executing is in use whatever argv says."""
+    proc_root = _fabricate_proc_root(tmp_path, monkeypatch)
+    root = tmp_path / "scratch"
+    root.mkdir()
+    configured, running, stale = (
+        root / "onejudge-python-configured",
+        root / "onejudge-python-running",
+        root / "onejudge-python-stale",
+    )
+    for directory in (configured, running, stale):
+        directory.mkdir()
+        _age(directory, 60 * 60)
+    (running / "harness").write_text("#!/bin/sh\n", encoding="utf-8")
+    _fabricate_proc_process(
+        proc_root,
+        4242,
+        environ=[f"ONEJUDGE_CONFIG={configured}/effective.onejudge.json", "HOME=/home/agent"],
+        executable=running / "harness",
+    )
+
+    result = sweep_scratch(root)
+
+    assert result.removed == (stale,)
+    assert set(result.referenced_retained) == {configured, running}
+
+
+def test_report_names_every_family_it_swept_and_every_one_it_skipped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`reclaimed 0 bytes` must never be able to mean a family was left unswept."""
+    _fabricate_proc_root(tmp_path, monkeypatch)
+    root = tmp_path / "scratch"
+    root.mkdir()
+
+    assert main(["--root", str(root)]) == 0
+    quiescent = capsys.readouterr().out
+    assert "reclaimed 0 bytes" in quiescent
+    for family in ("watchdog", "third-party", *(family.name for family in UNREFERENCED_FAMILIES)):
+        assert family in quiescent.split("swept families: ", 1)[1]
+    assert "skipped families" not in quiescent
+
+    with scratch._scratch_lock(root, exclusive=False):
+        assert main(["--root", str(root)]) == 0
+    during_dispatch = capsys.readouterr().out
+    swept, _, skipped = during_dispatch.partition("; skipped families: ")
+    assert "nx-native-file-cache" in swept
+    assert skipped.startswith("third-party (lifecycle dispatch active)")
+
+    blind = tmp_path / "not-procfs"
+    blind.mkdir()
+    monkeypatch.setenv("AI_ORCHESTRATOR_PROC_ROOT", str(blind))
+    assert main(["--root", str(root)]) == 0
+    unprovable = capsys.readouterr().out
+    _, _, unprovable_skipped = unprovable.partition("; skipped families: ")
+    for family in UNREFERENCED_FAMILIES:
+        assert f"{family.name} (no live process could be proven done with it)" in unprovable_skipped
+
+
 def test_pytest_runs_are_swept_below_pytest_s_own_retention_and_live_lock(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -503,7 +663,7 @@ def test_live_process_references_are_protected_while_a_dispatch_holds_the_scratc
     assert impostor.exists() and linked.is_symlink()
     # The 24h third-party rule and its dispatch-active skip are untouched.
     assert third_party.exists()
-    assert "third-party sweep skipped: lifecycle dispatch active" in output
+    assert "skipped families: third-party (lifecycle dispatch active)" in output
     assert "removed 1 directories" in output
     assert "retained 3 directories referenced by live processes" in output
 
