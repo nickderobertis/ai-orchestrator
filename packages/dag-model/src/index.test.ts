@@ -73,6 +73,40 @@ test("validates and preserves additive run-list fields", () => {
   expect(parsed.extension).toBe(true);
 });
 
+test("reads the launching session off the list row it is served on", () => {
+  const row = {
+    run_id: "run-1",
+    state: "running",
+    phase: "agent",
+    last_event: "node-started",
+    timing_quality: "complete",
+    linkage_quality: "native",
+    timing,
+    node_counts: { running: 1 },
+  };
+  // The join is served on the row itself, so grouping runs by their launching
+  // session never has to fetch a run's transcripts to recover the same answer.
+  const parsed = parseRunList({
+    api_version: 1,
+    telemetry_schema_version: 8,
+    observed_at: "2026-07-26T12:00:00Z",
+    runs: [
+      { ...row, launch: { launch_id: "c0de".repeat(8), launcher: "codex" } },
+    ],
+  });
+  expect(parsed.runs[0]?.launch?.launcher).toBe("codex");
+  // A run that recorded no launch id is served without the join at all.
+  expect(runSummarySchema.parse(row).launch).toBeUndefined();
+  // The launcher vocabulary is closed: an unrecognized one is a contract failure,
+  // not a run silently grouped under a launcher the server never named.
+  expect(
+    runSummarySchema.safeParse({
+      ...row,
+      launch: { launch_id: "c0de".repeat(8), launcher: "gemini" },
+    }).success,
+  ).toBe(false);
+});
+
 test("accepts a run that has recorded no last event, and still rejects a blank one", () => {
   const eventless = {
     run_id: "run-2",

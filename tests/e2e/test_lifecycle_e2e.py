@@ -4094,6 +4094,80 @@ def test_retry_with_invalid_incomplete_provenance_records_fresh_branch_fallback(
     )
 
 
+def test_a_pinned_retry_resolves_to_the_pinned_branch_or_is_refused(tmp_path, bare_origin) -> None:
+    """A retry that names its branch gets that branch every time, or a stated refusal.
+
+    One change carried two branch names once: the planner submitted a retry pinned to
+    a preserved branch, it resumed, and the *identical* envelope submitted afterwards
+    silently landed on a freshly generated branch instead — because the preserved work
+    was no longer unattested-incomplete by then. Which branch a retry produces has to
+    be a function of the envelope, not of what the repository did in between.
+    """
+    origin = bare_origin()
+    workspace = _workspace(tmp_path, origin)
+    first = run_repo_task(
+        str(origin),
+        "Preserve partial work.",
+        "engineer",
+        workspace=workspace,
+        dispatch_fn=make_writing_dispatch(filename="partial.txt", completed=False),
+        recorded_gate=["true"],
+    )
+    assert first.resume is not None and first.resume.mode == "retry"
+    # The planner's envelope, submitted verbatim below: this change lives on this
+    # branch, continued from this checkpoint.
+    envelope = {"branch": first.branch, "resume": first.resume}
+
+    honoured = run_repo_task(
+        str(origin),
+        "Continue the preserved work.",
+        "engineer",
+        workspace=workspace,
+        dispatch_fn=make_writing_dispatch(filename="more.txt", completed=False),
+        recorded_gate=["true"],
+        **envelope,
+    )
+    assert honoured.branch == first.branch
+    assert honoured.retry_lineage is not None
+    assert honoured.retry_lineage.disposition == "reused"
+
+    # Now the preserved work stops being unattested-incomplete, exactly as it does
+    # once a recovery or an attestation lands on every preserved commit. The envelope
+    # has not changed, and that is the whole point.
+    recovery_worktree = workspace.worktree(
+        normalize_repo(str(origin)), first.branch, base="origin/main"
+    )
+    attested = "\n".join(
+        f"{RECOVERY_TRAILER} {sha}"
+        for sha in sorted(incomplete_commits(recovery_worktree, "origin/main", "HEAD"))
+    )
+    gitops.commit_empty(recovery_worktree, f"test: invalidate retry provenance\n\n{attested}")
+    workspace.remove_worktree(normalize_repo(str(origin)), recovery_worktree)
+
+    refusals = [
+        run_repo_task(
+            str(origin),
+            "Continue the preserved work.",
+            "engineer",
+            workspace=workspace,
+            dispatch_fn=make_writing_dispatch(filename="more.txt", completed=False),
+            recorded_gate=["true"],
+            **envelope,
+        )
+        for _ in range(2)
+    ]
+
+    # Two identical submissions, one branch — the pinned one — and a reason naming
+    # the pin. A generated branch name is random, so before this the two submissions
+    # would not even have agreed with each other.
+    assert [result.branch for result in refusals] == [first.branch, first.branch]
+    for refused in refusals:
+        assert refused.outcome == "resume-failed"
+        assert "does not carry valid unattested incomplete provenance" in refused.detail
+        assert f"pins branch {first.branch!r}" in refused.detail
+        assert refused.retry_lineage is None
+
+
 def test_preserved_retry_is_recovered_through_the_merge_path_gate(tmp_path, bare_origin) -> None:
     origin = bare_origin()
     workspace = _workspace(tmp_path, origin)

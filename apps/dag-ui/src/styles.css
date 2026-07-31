@@ -222,15 +222,12 @@ p {
   border-bottom: 1px solid var(--border);
 }
 
-.graph-layout {
-  display: flex;
-  height: 100%;
-}
-
+/* The canvas fills the view region it is given: React Flow measures its parent and
+   renders nothing at all when that parent has no height. */
 .graph-wrap {
   position: relative;
-  flex: 1 1 auto;
   min-width: 0;
+  height: 100%;
 }
 
 .react-flow__pane {
@@ -336,11 +333,237 @@ p {
   background: var(--popover);
 }
 
-.detail-panel {
-  flex: 0 0 440px;
+/*
+ * The node view owns the whole working area: a compact head and summary above, then
+ * master and detail. The rail is a fixed reading column and the detail takes every
+ * remaining pixel, which is the point — a transcript turn is unreadable in a column
+ * sized for a list of timestamps.
+ */
+.node-view {
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  height: 100%;
   min-height: 0;
-  border-left: 1px solid var(--border);
+}
+
+.node-view-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 20px;
+  border-bottom: 1px solid var(--border);
+}
+
+.breadcrumb,
+.node-view-facts,
+.rail-row,
+.rail-summary,
+.detail-link,
+.session-toggle {
+  display: flex;
+  align-items: center;
+}
+
+.breadcrumb {
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+
+.breadcrumb li + li::before {
+  margin-right: 6px;
+  content: "/";
+}
+
+.breadcrumb-node {
+  color: var(--foreground);
+  font-family: var(--font-mono);
+  font-size: 14px;
+}
+
+.node-view-facts {
+  gap: 12px;
+}
+
+.node-view-meta {
+  color: var(--muted-foreground);
+  font-size: 11px;
+}
+
+.node-view-pr,
+.detail-link a {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--primary);
+  font-size: 11px;
+}
+
+.node-summary {
+  padding: 0 20px;
+  border-bottom: 1px solid var(--border);
+}
+
+.node-summary [data-slot="accordion-trigger"] {
+  font-size: 12px;
+}
+
+.node-view-body {
+  display: grid;
+  grid-template-columns: 320px minmax(0, 1fr);
+  min-height: 0;
+}
+
+.timeline-rail {
+  min-height: 0;
+  border-right: 1px solid var(--border);
   background: var(--sidebar);
+}
+
+.timeline-detail {
+  min-width: 0;
+  min-height: 0;
+}
+
+.rail-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.rail-row {
+  gap: 2px;
+  border-radius: 7px;
+}
+
+.rail-row:hover {
+  background: var(--accent);
+}
+
+.rail-chevron {
+  flex: 0 0 auto;
+  color: var(--muted-foreground);
+}
+
+.rail-open {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  flex: 1 1 auto;
+  gap: 4px;
+  padding: 4px 6px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.rail-open[data-selected="true"] {
+  background: var(--accent);
+  box-shadow: inset 2px 0 var(--primary);
+}
+
+.rail-summary {
+  gap: 6px;
+  font-size: 11px;
+}
+
+.rail-kind {
+  color: var(--foreground);
+  font-weight: 600;
+}
+
+.rail-label {
+  overflow: hidden;
+  min-width: 0;
+  flex: 1 1 auto;
+  color: var(--muted-foreground);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rail-time,
+.rail-count,
+.rail-duration {
+  flex: 0 0 auto;
+  color: var(--muted-foreground);
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
+.rail-status {
+  flex: 0 0 auto;
+  padding: 0 4px;
+  font-size: 9px;
+}
+
+.rail-more {
+  width: 100%;
+  justify-content: flex-start;
+  font-size: 11px;
+}
+
+.detail-when {
+  margin: 4px 0 0;
+  color: var(--muted-foreground);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.detail-heading {
+  margin: 18px 0 8px;
+  color: var(--muted-foreground);
+  font-size: 11px;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.detail-note,
+.detail-link {
+  margin: 0;
+  gap: 6px;
+  color: var(--muted-foreground);
+  font-size: 11px;
+}
+
+.detail-reference-kind {
+  padding: 1px 5px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+}
+
+.detail-placeholder,
+.loading-inline {
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+
+.detail-placeholder {
+  padding: 90px 20px;
+}
+
+.session-toggle {
+  gap: 8px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.session-name {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
 }
 
 .detail-title,
@@ -377,19 +600,6 @@ pre {
   font-size: 11px;
   line-height: 1.55;
   white-space: pre-wrap;
-}
-
-.detail-section a {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  color: var(--primary);
-  font-size: 11px;
-}
-
-.detail-section h4 {
-  margin: 14px 0 6px;
-  font-size: 11px;
 }
 
 .facts {
@@ -509,8 +719,10 @@ pre {
     grid-template-columns: 220px minmax(0, 1fr);
   }
 
-  .detail-panel {
-    flex-basis: 360px;
+  /* The rail gives up width first: it lists timestamps, and the detail region is
+     what has to stay readable. */
+  .node-view-body {
+    grid-template-columns: 200px minmax(0, 1fr);
   }
 
   .metric-grid {

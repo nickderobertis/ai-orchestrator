@@ -4,11 +4,10 @@ import { HISTORY_RUN, LIVE_RUN, runDetail, runList } from "../../test/fixtures";
 import { groupRuns, latestRound, nodeViews } from "./run-model";
 
 const live = parseRunDetail(runDetail(LIVE_RUN));
-const historical = parseRunDetail(runDetail(HISTORY_RUN));
 const summaries = parseRunList(runList).runs;
 
 describe("node views", () => {
-  test("classifies kind, projects state, and attaches each node's transcripts", () => {
+  test("classifies kind, projects state, and carries each node's own record", () => {
     const views = nodeViews(live);
     expect(views.map(({ id }) => id)).toEqual([
       "foundation",
@@ -30,21 +29,6 @@ describe("node views", () => {
     expect(byId.get("publish")?.result?.detail).toBe("Deploy failed");
   });
 
-  test("groups the run's flat transcript list by the node each session names", () => {
-    const dashboard = nodeViews(live).find(({ id }) => id === "dashboard");
-    expect(
-      dashboard?.conversations.map(({ attribution }) => attribution.agentRole),
-    ).toEqual(["worker", "judge", "check-in", "pr-author", "worker"]);
-    // The orchestrator session names no node, so it belongs to no node view.
-    expect(
-      nodeViews(live).flatMap(({ conversations }) => conversations),
-    ).not.toContainEqual(
-      expect.objectContaining({
-        attribution: expect.objectContaining({ agentRole: "orchestrator" }),
-      }),
-    );
-  });
-
   test("renders nothing for a detail with no projected round", () => {
     const empty = parseRunDetail({ ...runDetail(LIVE_RUN), rounds: [] });
     expect(latestRound(empty)).toBeUndefined();
@@ -54,13 +38,9 @@ describe("node views", () => {
 
 describe("run grouping", () => {
   test("groups runs under the session that launched them", () => {
-    const groups = groupRuns(
-      summaries,
-      new Map([
-        [LIVE_RUN, live],
-        [HISTORY_RUN, historical],
-      ]),
-    );
+    // The join is on the list rows themselves, so the navigation is complete
+    // before a single run's detail — let alone its transcripts — has been read.
+    const groups = groupRuns(summaries);
     expect(groups.map(({ launcher }) => launcher)).toEqual(["Codex", "Claude"]);
     expect(groups[0]?.label).toMatch(/^Codex session · c0dec0de…$/);
     expect(groups.map(({ runs }) => runs.map(({ run_id }) => run_id))).toEqual([
@@ -69,12 +49,24 @@ describe("run grouping", () => {
     ]);
   });
 
-  test("keeps a run without transcripts visible under an unknown launcher", () => {
-    const groups = groupRuns(summaries, new Map());
+  test("gathers every run of one launch, and keeps an unattributed run apart", () => {
+    const [first, second] = summaries;
+    if (first === undefined || second === undefined) throw new Error("fixture");
+    const groups = groupRuns([
+      first,
+      { ...first, run_id: "sibling" },
+      { ...second, run_id: "orphan", launch: undefined },
+    ]);
     expect(groups.map(({ launcher }) => launcher)).toEqual([
-      "Unknown",
+      "Codex",
       "Unknown",
     ]);
-    expect(groups.map(({ runs }) => runs.length)).toEqual([1, 1]);
+    expect(groups[0]?.runs.map(({ run_id }) => run_id)).toEqual([
+      LIVE_RUN,
+      "sibling",
+    ]);
+    // An unattributed run gets a group of its own rather than being hidden or
+    // pooled with every other run that recorded no launch.
+    expect(groups[1]?.runs.map(({ run_id }) => run_id)).toEqual(["orphan"]);
   });
 });
