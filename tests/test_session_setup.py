@@ -7,6 +7,8 @@ import subprocess
 import tomllib
 from pathlib import Path
 
+import pytest
+
 from orchestrator import REPO_ROOT
 
 ADOPTED_ONEJUDGE_VERSION = (
@@ -244,6 +246,57 @@ def test_alternate_claude_trust_reports_missing_jq(tmp_path: Path) -> None:
 
     assert result.returncode == 1
     assert "jq is unavailable" in result.stderr
+
+
+@pytest.mark.parametrize("failure", ["intermediate-mv", "chmod", "final-mv"])
+def test_alternate_claude_trust_preserves_config_when_replacement_fails(
+    tmp_path: Path, failure: str
+) -> None:
+    config = tmp_path / ".claude.json"
+    original = b'{"theme":"dark"}'
+    config.write_bytes(original)
+    tools = tmp_path / "tools"
+    tools.mkdir()
+    _write_executable(
+        tools / "mv",
+        """#!/bin/sh
+if { [ "$TEST_FAILURE" = intermediate-mv ] && case "$1" in *.next) true;; *) false;; esac; } ||
+   { [ "$TEST_FAILURE" = final-mv ] && [ "$2" = "$TEST_CONFIG" ]; }; then
+  exit 23
+fi
+exec /usr/bin/mv "$@"
+""",
+    )
+    _write_executable(
+        tools / "chmod",
+        """#!/bin/sh
+[ "$TEST_FAILURE" = chmod ] && exit 24
+exec /usr/bin/chmod "$@"
+""",
+    )
+
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            'source "$1"; mark_alternate_claude_trust "$2" /checkout',
+            "test-trust",
+            str(REPO_ROOT / "scripts" / "session-setup.sh"),
+            str(config),
+        ],
+        text=True,
+        capture_output=True,
+        env={
+            "HOME": str(tmp_path),
+            "PATH": f"{tools}:/usr/bin:/bin",
+            "TEST_FAILURE": failure,
+            "TEST_CONFIG": str(config),
+        },
+    )
+
+    assert result.returncode == 1
+    assert config.read_bytes() == original
+    assert list(tmp_path.glob(".claude.json.trust.*")) == []
 
 
 def test_full_setup_trusts_its_dispatch_checkout_and_keeps_failure_nonfatal(

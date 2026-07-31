@@ -67,13 +67,22 @@ mark_alternate_claude_trust() {
       rm -f "$updated" "${updated}.next"
       return 1
     fi
-    mv "${updated}.next" "$updated"
+    if ! mv "${updated}.next" "$updated"; then
+      rm -f "$updated" "${updated}.next"
+      return 1
+    fi
   done
   if cmp -s "$config_path" "$updated"; then
     rm -f "$updated"
   else
-    chmod --reference="$config_path" "$updated"
-    mv "$updated" "$config_path"
+    if ! chmod --reference="$config_path" "$updated"; then
+      rm -f "$updated"
+      return 1
+    fi
+    if ! mv "$updated" "$config_path"; then
+      rm -f "$updated"
+      return 1
+    fi
   fi
 }
 
