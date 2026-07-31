@@ -1,4 +1,10 @@
-"""Public-command integration coverage for persisted launch-smoke contracts."""
+"""Public-command integration coverage for persisted launch-smoke contracts.
+
+llmlint: ignore-file[e2e_not_mocked] The paid agent harness is the one boundary
+this repository fakes. Where a journey below launches for real it does so through
+`tests/e2e/fake_codex.py` at oneharness's own `ONEHARNESS_BIN_CODEX` seam, leaving
+the recipe, the wrapper, oneharness, and the persisted history store real.
+"""
 
 from __future__ import annotations
 
@@ -9,14 +15,17 @@ import uuid
 from pathlib import Path
 
 import pytest
+from fake_codex import provider_environment
 from harness_records import (
     CLAUDE_RECORD,
     CODEX_RECORD,
     reported_usage,
     smoke_history_record,
 )
+from waits import timeout as e2e_timeout
 
 from orchestrator import REPO_ROOT
+from orchestrator.smoke import LAUNCH_ATTEMPTS
 
 
 def _record(
@@ -62,6 +71,45 @@ def _validate(history_dir: Path, smoke_id: str) -> subprocess.CompletedProcess[s
         text=True,
         capture_output=True,
     )
+
+
+def test_smoke_stops_after_one_launch_when_the_recorded_turn_breaks_its_contract(
+    tmp_path: Path,
+) -> None:
+    """A broken record is the regression this smoke exists to report, not weather.
+
+    The launch is retried because a loaded host can kill one while the launch path
+    is fine. What the recorded turn *says* is this repository's own contract, so a
+    turn that violates it must stop the smoke on the first launch rather than
+    buying the same verdict twice more — and that is precisely the behaviour a
+    monkeypatched `_run_wrapper` cannot prove, because the whole claim is about how
+    much real quota gets spent.
+
+    So this drives the real recipe, wrapper, `oneharness`, and history store, and
+    fakes only the paid provider CLI: it returns a turn with no token accounting,
+    which oneharness persists and the launch contract then rejects — a launch that
+    itself succeeded, failing on what it recorded. The attempt log is the evidence:
+    one line, not three.
+    """
+    launches = tmp_path / "paid-launches"
+
+    result = subprocess.run(
+        ["just", "smoke"],
+        cwd=REPO_ROOT,
+        env=provider_environment(attempt_log=launches, omit_usage=True),
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(300),
+    )
+
+    assert result.returncode == 1
+    assert "real harness history reports no input_tokens" in result.stderr
+    assert "rerun 'just smoke'" in result.stderr
+    # Not "(after N attempts)": that suffix is the launch-retry path's, and taking
+    # it here would mean the smoke had paid for two more turns to be told the same
+    # thing.
+    assert f"after {LAUNCH_ATTEMPTS} attempts" not in result.stderr
+    assert launches.read_text(encoding="utf-8").splitlines() == ["launch"]
 
 
 def test_smoke_command_surfaces_real_wrapper_failure_without_a_paid_turn() -> None:

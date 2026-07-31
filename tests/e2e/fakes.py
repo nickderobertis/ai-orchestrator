@@ -40,6 +40,7 @@ class FakePRState:
     closed: bool = False
     auto: bool = False
     direct_requested: bool = False
+    merged_head_sha: str | None = None
 
 
 def _git(*args: str, cwd: str | Path) -> str:
@@ -155,6 +156,17 @@ class FakeGitHub:
             base=base,
         )
 
+    def adoptable_pr(self, repo: str, *, head: str, base: str, head_sha: str) -> PullRequest | None:
+        for number, state in self._prs.items():
+            if state.head != head or state.base != base:
+                continue
+            pr = PullRequest(number, f"https://github.com/{repo}/pull/{number}", repo, head, base)
+            if not state.closed and not state.merged:
+                return pr
+            if state.merged and state.merged_head_sha == head_sha:
+                return pr
+        return None
+
     def published(self, pr: PullRequest | str) -> FakePRState:
         """The PR as a reader would open it, addressed however the caller holds it.
 
@@ -232,3 +244,4 @@ class FakeGitHub:
         # (head was branched from base, so this is always a valid fast-forward).
         _git("update-ref", f"refs/heads/{st.base}", head_sha, cwd=self.origin)
         st.merged = True
+        st.merged_head_sha = head_sha
