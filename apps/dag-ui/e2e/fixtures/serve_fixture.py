@@ -41,7 +41,6 @@ FAKE_ONEHARNESS = REPO_ROOT / "tests" / "e2e" / "fake_oneharness.py"
 CODEX_LAUNCH = "c0de" * 8
 CLAUDE_LAUNCH = "c1a0" * 8
 
-#: The published pull request of the live run's settled lifecycle node.
 FOUNDATION_PR = "https://github.com/example/repo/pull/12"
 
 LIVE_RUN = "dag-ui-live"

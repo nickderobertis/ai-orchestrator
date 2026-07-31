@@ -68,8 +68,13 @@ export const isTimeline = (url: URL): boolean =>
 export const isConversation = (url: URL): boolean =>
   url.pathname.includes("/conversations/");
 
-/** The run one `/api/v1/runs/...` path names. */
-export const requestedRunId = (url: URL): string =>
+/**
+ * The recorded run whose payloads stand in for the run a `/api/v1/runs/...` path
+ * names. Two runs are recorded, and any other identifier — including one the app
+ * asks for from a stale bookmark — is answered with the live run's shape, exactly
+ * as a server that still holds that run would.
+ */
+export const fixtureRunFor = (url: URL): string =>
   url.pathname.split("/")[4] === HISTORY_RUN ? HISTORY_RUN : LIVE_RUN;
 
 /**
@@ -80,7 +85,7 @@ export const requestedRunId = (url: URL): string =>
  */
 export function defaultResponder(url: URL): Response {
   if (isRunList(url)) return Response.json(runList);
-  const runId = requestedRunId(url);
+  const runId = fixtureRunFor(url);
   if (isTimeline(url)) return Response.json(runTimeline(runId));
   if (isConversation(url)) {
     const wanted = decodeURIComponent(url.pathname.split("/").at(-1) ?? "");
