@@ -16,10 +16,12 @@ modes it can be asked for are the two the smoke has to tell apart:
   turn contention kills is not something generating load can decide, so the count
   is what makes "the first launch failed and a later one did not" deterministic
   while every other party stays real.
-* ``FAKE_CODEX_OMIT_USAGE`` — the launch succeeds and returns a turn oneharness
-  cannot fully account for, so no history record is persisted. That is a broken
-  recorded contract rather than weather, and the smoke must stop on it after one
-  paid turn instead of buying the same verdict twice more.
+* ``FAKE_CODEX_OMIT_USAGE`` — the launch succeeds and returns a turn carrying no
+  token accounting. oneharness persists that record with its usage counters
+  unset, and the smoke's launch contract rejects it for reporting no
+  ``input_tokens``. That is a broken recorded contract rather than weather, so
+  the smoke must stop on it after one paid turn instead of buying the same
+  verdict twice more.
 
 Keep this deterministic and stdlib-only — it is spawned as a subprocess.
 """
@@ -31,8 +33,8 @@ import os
 import sys
 from pathlib import Path
 
-#: One complete codex-shaped turn. Token accounting is not decoration here:
-#: without it oneharness declines to persist a history record at all.
+#: One complete codex-shaped turn. Token accounting is not decoration here: a
+#: record persisted without it fails the smoke's launch contract.
 TURN: tuple[dict[str, object], ...] = (
     {"type": "turn.started"},
     {"type": "thread.started", "thread_id": "fake-codex-thread"},
