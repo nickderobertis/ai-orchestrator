@@ -758,20 +758,29 @@ def test_agent_turns_shorter_than_the_poll_interval_are_not_mistaken_for_death(t
     The process tree is sampled before the recorded agent pid is read, so a turn
     that starts or finishes inside that gap is absent from the sample while the
     worker is perfectly alive.
+
+    The double keeps `scripts/oneharness-agent.sh`'s ordering — the pid a turn
+    advertises is the turn's own process, and it records `agent.done` before
+    exiting — because that is the whole reason the gap is survivable: a pid missing
+    from a re-sampled tree has by construction already left its marker. The wrapper
+    owns that contract and
+    `test_oneharness_agent_wrapper.test_the_pid_a_turn_advertises_outlives_the_marker_that_closes_it`
+    gates the two against drifting apart.
     """
     onejudge = tmp_path / "onejudge"
     onejudge.write_text(
         '#!/bin/sh\n[ "$1" = "--version" ] && { echo "onejudge 0.3.4"; exit; }\n'
         'd="$ORCHESTRATOR_AGENT_STATUS_DIR"\ni=0\n'
         "while [ $i -lt 40 ]; do\n"
-        "  sh -c 'sleep 0.12' &\n"
-        "  child=$!\n"
-        '  printf "%s\\n" "$child" >"$d/agent.pid.tmp"; mv "$d/agent.pid.tmp" "$d/agent.pid"\n'
-        '  rm -f "$d/agent.done"\n'
-        '  printf "%s\\n" "$i" >"$d/agent.heartbeat.tmp";'
+        "  sh -c '\n"
+        "    d=$1\n"
+        '    printf "%s\\n" "$$" >"$d/agent.pid.tmp"; mv "$d/agent.pid.tmp" "$d/agent.pid"\n'
+        '    rm -f "$d/agent.done"\n'
+        '    printf "%s\\n" "$$" >"$d/agent.heartbeat.tmp";'
         ' mv "$d/agent.heartbeat.tmp" "$d/agent.heartbeat"\n'
-        "  wait $child\n"
-        '  printf "%s\\n" "$child" >"$d/agent.done.tmp"; mv "$d/agent.done.tmp" "$d/agent.done"\n'
+        "    sleep 0.12\n"
+        '    printf "%s\\n" "$$" >"$d/agent.done.tmp"; mv "$d/agent.done.tmp" "$d/agent.done"\n'
+        '  \' turn "$d"\n'
         "  i=$((i + 1))\n"
         "done\n"
         'printf \'%s\\n\' \'{"schema_version":4,"transcript":{"messages":[]},'

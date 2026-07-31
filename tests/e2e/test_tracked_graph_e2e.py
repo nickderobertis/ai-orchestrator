@@ -22,8 +22,30 @@ import pytest
 from waits import deadline as e2e_deadline
 
 from orchestrator import REPO_ROOT, gitops
-from orchestrator.coordination import advisory_lock, git_lock_identity
+from orchestrator.coordination import advisory_lock, git_lock_identity, lock_path
 from orchestrator.registry import Registry
+
+
+def _lock_has_a_blocked_waiter(identity: str) -> bool:
+    """Whether some process is queued behind ``identity``'s lock right now.
+
+    A dispatch's recorded lock wait starts when it blocks, and nothing it journals
+    before then says it has got there — ``node-started`` is emitted long before the
+    worker reaches the lock, and how long that takes is exactly what load changes.
+    The kernel already knows, so ask it: `/proc/locks` lists a blocked ``flock``
+    request as a ``->`` entry against the held file's device and inode. Waiting on
+    that fact instead of on an interval is what makes a contention journey measure
+    the wait it meant to create rather than the machine it ran on.
+    """
+    try:
+        recorded = os.stat(lock_path(identity))
+    except FileNotFoundError:
+        return False
+    token = f"{os.major(recorded.st_dev):02x}:{os.minor(recorded.st_dev):02x}:{recorded.st_ino}"
+    return any(
+        "->" in line and token in line.split()
+        for line in Path("/proc/locks").read_text(encoding="utf-8").splitlines()
+    )
 
 
 def _just(*args: str) -> subprocess.CompletedProcess[str]:
@@ -1576,7 +1598,12 @@ def test_real_cli_recovers_failed_lifecycle_result(
         "json",
     ]
     events_path = runs / "failed-lifecycle-prefix" / "events.jsonl"
-    held = advisory_lock(git_lock_identity(gitops.common_dir(canonical)))
+    # A public command cannot hold this lock for a controlled window; a second dispatch
+    # would recreate the race this journey removes. The run itself still uses run-plan.
+    # llmlint: ignore[tests_mirror_real_usage] Internal setup creates deterministic contention.
+    git_lock = git_lock_identity(gitops.common_dir(canonical))
+    # llmlint: ignore[tests_mirror_real_usage] Internal setup creates deterministic contention.
+    held = advisory_lock(git_lock)
     held.__enter__()
     try:
         process = subprocess.Popen(
@@ -1589,15 +1616,11 @@ def test_real_cli_recovers_failed_lifecycle_result(
         )
         contention_deadline = e2e_deadline(15)
         while time.monotonic() < contention_deadline:
-            contention_records = (
-                [json.loads(line) for line in events_path.read_text().splitlines()]
-                if events_path.exists()
-                else []
-            )
-            if any(
-                event["kind"] == "node-started" and event.get("node") == "gate-failed-lifecycle"
-                for event in contention_records
-            ):
+            if _lock_has_a_blocked_waiter(git_lock):
+                # Queued behind this lock, so the wait it will record has started
+                # and now accrues in the kernel at wall-clock rate however starved
+                # the box is. Only from here is holding on for a fixed interval a
+                # statement about the wait rather than a guess at when it began.
                 time.sleep(0.1)
                 break
             time.sleep(0.01)
@@ -1616,8 +1639,20 @@ def test_real_cli_recovers_failed_lifecycle_result(
         failed_lifecycles = {
             event.get("node") for event in records if event["kind"] == "node-failed"
         }
-        # Parked, not merely started: the ready file proves in-flight is still inside
-        # its turn, so the round cannot finalize between this check and the kill.
+        # Parked, not merely started: the ready file survives the turn that wrote
+        # it, so only the absence of a terminal event proves in-flight is still
+        # inside one and the round cannot finalize before the kill.
+        in_flight_settled = any(
+            event["kind"] in {"node-settled", "node-failed"} and event.get("node") == "in-flight"
+            for event in records
+        )
+        if in_flight_settled:
+            _kill_round_owner(process)
+            pytest.fail(
+                "the parked in-flight node settled before the round was killed, so "
+                "round-01 finished and this run can no longer observe the mid-round "
+                "recovery boundary it exists to prove"
+            )
         in_flight = in_flight_ready.exists() and any(
             event["kind"] == "node-started" and event.get("node") == "in-flight"
             for event in records
