@@ -15,6 +15,15 @@ makes the scoping assertions mean something — a view that ignored the identifi
 would report it too.
 """
 
+# llmlint: ignore-file[e2e_not_mocked, tests_mirror_real_usage] the run directories, the
+# journal, the launch record, and every view under test are real, produced and read
+# through the real recipes. Only the dispatched *history* sessions are written directly,
+# and only because oneharness is not in this journey at all: the fake seam is onejudge's
+# `command` provider, so no oneharness process runs to populate the store `just status`
+# reads. That is the same seam and the same reason as tests/e2e/test_status_e2e.py, and
+# the real oneharness producer boundary is covered by
+# tests/e2e/test_monitor_run_plan_e2e.py::test_history_labels_and_cursor_watch.
+
 from __future__ import annotations
 
 import json
@@ -140,6 +149,11 @@ def test_status_and_telemetry_report_one_run_by_the_id_launch_json_advertises(
             str(live_plan),
             "--runs-dir",
             str(runs),
+            # A run id deliberately unequal to the plan name: both are advertised, and
+            # a view that only ever matched a directory would pass on an id that
+            # happens to equal the plan's name.
+            "--run-id",
+            "views-by-id-run",
             "--base",
             str(_base(tmp_path)),
             "--onejudge-bin",
@@ -162,7 +176,9 @@ def test_status_and_telemetry_report_one_run_by_the_id_launch_json_advertises(
     # planner, so that is the exact string these views have to accept.
     record = json.loads((runs / live / "launch.json").read_text(encoding="utf-8"))
     advertised = str(record["run_id"])
+    plan_name = str(record["plan_name"])
     assert record["commands"]["monitor"] == f"just monitor {advertised}"
+    assert (advertised, plan_name) == ("views-by-id-run", "views-by-id")
 
     settled_plan = tmp_path / "settled-plan.json"
     settled_plan.write_text(
@@ -213,13 +229,6 @@ def test_status_and_telemetry_report_one_run_by_the_id_launch_json_advertises(
         prompt="should-fail no-assessment",
         labels=graph_labels(run_id=RunId(advertised), round_number=1, node=NodeId("boom")),
     )
-    write_worker_session(
-        store / "quick-20260731T120000Z-2.jsonl",
-        project=tmp_path / "quick-worktree",
-        name="quick",
-        prompt="complete-now: neighbour",
-        labels=graph_labels(run_id=RunId("neighbour"), round_number=1, node=NodeId("quick")),
-    )
 
     try:
         _await_unsettled_round_with_a_failed_node(runs / live, ready)
@@ -247,17 +256,32 @@ def test_status_and_telemetry_report_one_run_by_the_id_launch_json_advertises(
         assert {run["run_id"] for run in every["runs"]} == {advertised, "neighbour"}
 
         # Defect 1: this positional parsed as an integer, so the run id never reached
-        # the view. The unscoped view sees both runs' dispatched work; naming one
-        # selects only the sessions that run labelled.
+        # the view. The unscoped view sees this run's dispatched work; naming a
+        # different run selects only the sessions that run labelled, which here is none.
         every_task = _view("status", tmp_path, "--all")
         assert every_task.returncode == 0, every_task.stderr
         assert "held-worktree" in every_task.stdout
-        assert "quick-worktree" in every_task.stdout
 
         run_status = _view("status", tmp_path, advertised)
         assert run_status.returncode == 0, run_status.stderr
         assert "held-worktree" in run_status.stdout
-        assert "quick-worktree" not in run_status.stdout
+        encoded = _view("status", tmp_path, advertised, "--format", "json")
+        assert encoded.returncode == 0, encoded.stderr
+        assert [task["task"] for task in json.loads(encoded.stdout)] == ["held"]
+
+        other_run = _view("status", tmp_path, "neighbour")
+        assert other_run.returncode == 0, other_run.stderr
+        assert other_run.stdout.strip().endswith("No dispatched tasks recorded for run neighbour.")
+        assert "held-worktree" not in other_run.stdout
+
+        # Both views resolve the plan name the same launch advertises, exactly as
+        # `just monitor` does, and land on the run id rather than on the name.
+        by_plan_name = _view("telemetry", tmp_path, plan_name)
+        assert by_plan_name.returncode == 0, by_plan_name.stderr
+        assert [run["run_id"] for run in json.loads(by_plan_name.stdout)["runs"]] == [advertised]
+        status_by_plan_name = _view("status", tmp_path, plan_name)
+        assert status_by_plan_name.returncode == 0, status_by_plan_name.stderr
+        assert "held-worktree" in status_by_plan_name.stdout
 
         # The count positional this argument started as keeps its meaning, and an
         # identifier that names no run is refused rather than read as a count.

@@ -7,6 +7,14 @@ oneharness' own 1.0 line format, which keeps the store one shape across every su
 that reads it instead of each restating a record oneharness may no longer write.
 """
 
+# llmlint: ignore-file[contracts_have_one_source_or_a_drift_gate] this module *is* the
+# consolidation the rule asks for: the shape was previously restated inside
+# tests/e2e/test_status_e2e.py, and every suite that writes the store now shares this one
+# copy. The producer is oneharness, an external release this repository pins rather than
+# generates, so there is nothing here to derive the shape from; drift against a new
+# oneharness release is caught where the real producer runs, in
+# tests/e2e/test_monitor_run_plan_e2e.py::test_history_labels_and_cursor_watch.
+
 from __future__ import annotations
 
 import json
