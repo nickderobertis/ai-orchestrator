@@ -13,6 +13,7 @@ from typing import Any
 from . import gitops, history, runs
 from .channel import ChannelError, due_indicator, planner_wait_indicator
 from .config import ConfigError
+from .goals import concurrent_indicator
 from .liveness import PARKED_AFTER_SECONDS, parked_indicator
 from .registry import Registry, RegistryError
 from .workspace import IdentityKey, RepositoryType, Workflow
@@ -259,6 +260,12 @@ def main(argv: list[str] | None = None) -> int:
                     parked := parked_indicator(run_dir, parked_after=args.parked_after)
                 ) is not None:
                     indicators.append(f"{run_dir.name}: {parked}")
+                # A second live orchestrator on a shared identity is the one piece of
+                # machine state this view could not previously report: it belongs to
+                # no run dir here, and its effects reach this one as a dirty
+                # publication checkout or a lost push race.
+                if (shared := concurrent_indicator(run_dir)) is not None:
+                    indicators.append(f"{run_dir.name}: {shared}")
                 try:
                     waiting = planner_wait_indicator(run_dir / "channel")
                     indicator = due_indicator(run_dir / "channel")

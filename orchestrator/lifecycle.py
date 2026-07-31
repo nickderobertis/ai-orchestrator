@@ -1460,6 +1460,11 @@ def run_repo_task(
     if not effective_steps:
         raise ConfigError("run_repo_task needs either (persona, task) or a non-empty steps list")
     lead = effective_steps[0]
+    # The caller's own branch pin, kept before the local name is rebound to whichever
+    # branch the run settles on. A pinned retry must resolve to one branch every time
+    # it is submitted, so the fallbacks below have to be able to tell "the planner
+    # named this branch" from "the harness generated one".
+    pinned_branch = branch
 
     ref = workspace.repo_ref(repo)
     result = LifecycleResult(
@@ -1639,6 +1644,21 @@ def run_repo_task(
                 if resume.mode != "retry" or not invalid_provenance:
                     result.outcome = "resume-failed"
                     result.detail = validated
+                    return result
+                if pinned_branch is not None:
+                    # A retry that names its branch is a promise about *which* branch the
+                    # change lives on, and the same envelope must keep that promise every
+                    # time it runs. Minting a fresh one here is how one change came to
+                    # carry two branch names: the first submission resumed the pin, and
+                    # the second — identical — found the preserved work no longer
+                    # unattested and silently moved to a generated branch. Refusing with
+                    # the reason keeps the outcome a function of the envelope alone.
+                    result.outcome = "resume-failed"
+                    result.detail = (
+                        f"{validated}; this retry pins branch {pinned_branch!r}, and a "
+                        "pinned retry is never moved to a different branch — resubmit it "
+                        "without a branch pin to start the work fresh"
+                    )
                     return result
                 abandoned = resume
                 resume = None

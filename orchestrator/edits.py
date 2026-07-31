@@ -258,6 +258,7 @@ def apply_edit(
                 raise EditError("retry replacement requires a non-empty string id")
             if replacement_id in by_id:
                 raise EditError("retry replacement id must be new")
+            _validate_retry_pin(replacement_id, node)
             replacement = dict(node)
             replacement.setdefault("deps", list(by_id[node_id].get("deps", [])))
             direct_dependents = [task for task in tasks if node_id in task.get("deps", [])]
@@ -325,6 +326,27 @@ def apply_edit(
     except PlanError as exc:
         raise EditError(str(exc)) from exc
     return updated, events
+
+
+def _validate_retry_pin(replacement_id: str, node: Mapping[str, Any]) -> None:
+    """Refuse a retry whose branch pin and resume checkpoint name different branches.
+
+    A retry that carries both is answering "which branch does this change live on?"
+    twice, and the lifecycle can only honour one — it resumes the branch the
+    checkpoint belongs to and ignores the pin. Two answers means the branch the
+    planner gets is not the branch it named, so the envelope is refused at
+    submission with the disagreement rather than resolved silently in favour of one.
+    """
+    branch = node.get("branch")
+    resume = node.get("resume")
+    if branch is None or not isinstance(resume, Mapping):
+        return
+    resumed = resume.get("branch")
+    if isinstance(resumed, str) and isinstance(branch, str) and resumed != branch:
+        raise EditError(
+            f"retry replacement {replacement_id!r} pins branch {branch!r} but resumes "
+            f"branch {resumed!r}; a retry may name only one branch"
+        )
 
 
 def _definition(node: Mapping[str, Any]) -> dict[str, Any]:

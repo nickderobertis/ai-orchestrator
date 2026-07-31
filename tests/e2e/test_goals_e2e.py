@@ -517,3 +517,194 @@ def test_goals_rejects_empty_state_root_override() -> None:
 
     assert result.returncode != 0
     assert "AI_ORCHESTRATOR_HOME must not be empty" in result.stderr
+
+
+def _init_target(path: Path) -> Path:
+    subprocess.run(["git", "init", "-b", "main", str(path)], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(path), "config", "user.email", "e2e@example.test"], check=True)
+    subprocess.run(["git", "-C", str(path), "config", "user.name", "E2E"], check=True)
+    subprocess.run(["git", "-C", str(path), "remote", "add", "origin", str(path)], check=True)
+    (path / "README.md").write_text("target\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(path), "add", "README.md"], check=True)
+    subprocess.run(
+        ["git", "-C", str(path), "commit", "-m", "init"], check=True, capture_output=True
+    )
+    return path
+
+
+def _barrier_plan(path: Path, target: Path, ready: Path, release: Path) -> Path:
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": 4,
+                "goal": {"text": f"Work {path.stem} on the shared target"},
+                "tasks": [
+                    {
+                        "id": "hold",
+                        "persona": "engineer",
+                        "task": (
+                            f"complete-now provider-barrier-ready={ready} "
+                            f"provider-barrier-release={release}"
+                        ),
+                    },
+                    {
+                        "id": "target",
+                        "repo": str(target),
+                        "task": "Record the target identity.",
+                        "expects_no_diff": True,
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
+def _wait_for_file(path: Path, seconds: float = 30) -> None:
+    limit = time.monotonic() + seconds
+    while time.monotonic() < limit:
+        if path.exists():
+            return
+        time.sleep(0.02)
+    raise AssertionError(f"did not appear: {path}")
+
+
+def test_a_live_concurrent_run_is_named_apart_from_a_stale_registration(
+    tmp_path: Path, command_base
+) -> None:
+    """Launching into company reports *which* company, and the views keep saying so.
+
+    Two orchestrations once shared two isolated checkouts for hours, and the
+    collision was found only by tracing a process tree by hand:
+    `--acknowledge-concurrent`, needed to get past a dead run's stale registration,
+    also silenced any notice of the live one. Both are reported here, differently,
+    and the guard still refuses both without the flag.
+    """
+    state = tmp_path / "state"
+    runs = tmp_path / "runs"
+    env = {**os.environ, "AI_ORCHESTRATOR_HOME": str(state)}
+    target = _init_target(tmp_path / "target")
+    registered = _run(
+        "register-repo", str(target), "--repo-type", "single-owner", "--gate", "true", env=env
+    )
+    assert registered.returncode == 0, registered.stderr
+    identity = str(target.resolve())
+
+    # A registration whose owner this host cannot rule on: another host's pid, no
+    # final report. `_sweep` cannot retire it, so it outlives the run it belonged to
+    # — the exact residue `--acknowledge-concurrent` exists to launch past.
+    dead_dir = tmp_path / "dead-run"
+    dead_dir.mkdir()
+    state.mkdir(parents=True, exist_ok=True)
+    (state / "runs-index.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "runs": {
+                    "dead": {
+                        "run_id": "dead",
+                        "run_dir": str(dead_dir),
+                        "goal": {"id": "dead-goal", "text": "A run that already stopped"},
+                        "identities": [identity],
+                        "pid": 4242,
+                        "host": "a-host-that-is-not-this-one",
+                        "started": "2026-07-30T00:00:00+00:00",
+                        "status": "active",
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    base = command_base()
+    live_ready, live_release = tmp_path / "live.ready", tmp_path / "live.release"
+    second_ready, second_release = tmp_path / "second.ready", tmp_path / "second.release"
+
+    def command(plan: Path, run: str, *extra: str) -> list[str]:
+        return [
+            "just",
+            "run-plan",
+            str(plan),
+            "--runs-dir",
+            str(runs),
+            "--base",
+            str(base),
+            "--provider",
+            "command",
+            "--run",
+            run,
+            *extra,
+        ]
+
+    live_plan = _barrier_plan(tmp_path / "live.json", target, live_ready, live_release)
+    second_plan = _barrier_plan(tmp_path / "second.json", target, second_ready, second_release)
+
+    # Getting past the stale registration takes the flag, and says so without ever
+    # claiming a live neighbour — there is none yet.
+    live = subprocess.Popen(
+        command(live_plan, "live", "--acknowledge-concurrent"),
+        cwd=REPO_ROOT,
+        env=env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    _wait_for_file(live_ready)
+    index = json.loads((state / "runs-index.json").read_text(encoding="utf-8"))
+    live_pid = index["runs"]["live"]["pid"]
+
+    try:
+        refused = subprocess.run(
+            command(second_plan, "second"),
+            cwd=REPO_ROOT,
+            env=env,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert refused.returncode == 2
+        # The two registrations no longer read alike: one names a working process and
+        # its pid, the other says only that a registration is there.
+        assert f"run 'live' is LIVE (owner pid {live_pid} on " in refused.stderr
+        assert "run 'dead' is registered but not observable here" in refused.stderr
+        assert "(recorded owner pid 4242 on a-host-that-is-not-this-one)" in refused.stderr
+        assert identity in refused.stderr
+
+        acknowledged = subprocess.Popen(
+            command(second_plan, "second", "--acknowledge-concurrent"),
+            cwd=REPO_ROOT,
+            env=env,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        try:
+            _wait_for_file(second_ready)
+            viewed = _run("status", "--runs-dir", str(runs), env=env)
+            assert viewed.returncode == 0, viewed.stderr
+            # The planner's read-only view now carries the other live orchestration,
+            # which appears nowhere in this run's own ledger. The stale registration
+            # stays out of it: a view that listed that one too would report the very
+            # thing `--acknowledge-concurrent` exists to launch past as live work.
+            assert f"CONCURRENT: run 'live' is LIVE (owner pid {live_pid} on " in viewed.stdout
+            assert "run 'dead'" not in viewed.stdout
+            goals = _run("goals", env=env)
+            assert goals.returncode == 0, goals.stderr
+            assert f"owner: live (owner pid {live_pid} on " in goals.stdout
+            assert "owner: unobservable (owner pid 4242 on a-host-that-is-not-this-one)" in (
+                goals.stdout
+            )
+        finally:
+            second_release.write_text("release\n", encoding="utf-8")
+            second_out, second_err = acknowledged.communicate(timeout=120)
+        assert acknowledged.returncode == 0, second_out + second_err
+        # Acknowledging never hides the live neighbour again.
+        assert "proceeding alongside a live concurrent run" in second_err
+        assert f"run 'live' is LIVE (owner pid {live_pid} on " in second_err
+    finally:
+        live_release.write_text("release\n", encoding="utf-8")
+        live_out, live_err = live.communicate(timeout=120)
+    assert live.returncode == 0, live_out + live_err
+    assert "proceeding alongside a live concurrent run" not in live_err

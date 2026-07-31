@@ -5,7 +5,8 @@ from __future__ import annotations
 import argparse
 import os
 import socket
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal, NewType, NotRequired, Protocol, TypedDict
@@ -250,6 +251,141 @@ def _sweep(runs: dict[str, ActiveRun]) -> None:
 # llmlint: ignore-end[changed_behavior_has_e2e]
 
 
+#: How a registered run that shares an identity looks from outside its own process.
+#: `live` and `parked` both mean the recorded owner still holds its pid here; only
+#: `live` means it is doing work. `unobservable` is a registration this host cannot
+#: rule on at all — another host's, or one whose owner is gone without the report
+#: that would have retired it.
+ConcurrentState = Literal["live", "parked", "unobservable"]
+
+
+@dataclass(frozen=True)
+class ConcurrentRun:
+    """Another registered run sharing identities with the one being looked at.
+
+    Liveness is observed here and never stored. A recorded "this run was alive"
+    is false the instant its process exits, and the whole point of this type is to
+    stop a planner reasoning about a machine state that is not the real one.
+    """
+
+    run_id: RunId
+    goal: str
+    identities: tuple[str, ...]
+    pid: int
+    host: str
+    state: ConcurrentState
+
+    @property
+    def live(self) -> bool:
+        return self.state == "live"
+
+    def describe(self) -> str:
+        """One line naming this run, its owner, and what is shared — by state."""
+        shared = ", ".join(self.identities)
+        match self.state:
+            case "live":
+                subject = f"run {self.run_id!r} is LIVE (owner pid {self.pid} on {self.host})"
+            case "parked":
+                subject = (
+                    f"run {self.run_id!r} holds pid {self.pid} on {self.host} but shows no "
+                    "progress (PARKED)"
+                )
+            case _:
+                subject = (
+                    f"run {self.run_id!r} is registered but not observable here "
+                    f"(recorded owner pid {self.pid} on {self.host})"
+                )
+        return f"{subject} goal {self.goal!r}; shared identities: {shared}"
+
+
+def _owner_state(entry: ActiveRun) -> ConcurrentState:
+    """Classify one registered owner from what this host can actually observe.
+
+    The entry comes from `_load_active`, which has already validated the owner's
+    shape, so this only has to ask what the host can see. A pid it may not signal
+    still exists — the same asymmetry `runs.process_may_be_live` keeps — so only a
+    pid the kernel says is gone counts as unobservable.
+    """
+    from .liveness import observe_launch
+
+    if entry["host"] != socket.gethostname():
+        return "unobservable"
+    try:
+        os.kill(entry["pid"], 0)
+    except ProcessLookupError:
+        return "unobservable"
+    except PermissionError:
+        pass
+    run_dir = Path(entry["run_dir"])
+    if not (run_dir / "launch.json").is_file():
+        # A bare `run-plan` has no launch record to observe progress against, so the
+        # owner holding its pid is the whole of the evidence — and it is the same
+        # evidence the guard has always refused on.
+        return "live"
+    return "parked" if observe_launch(run_dir).parked else "live"
+
+
+def _concurrent(
+    runs: Mapping[str, ActiveRun], *, identities: set[str], exclude_dir: Path
+) -> list[ConcurrentRun]:
+    """Every other registered run sharing an identity, classified by observation."""
+    found: list[ConcurrentRun] = []
+    for other_id, other in runs.items():
+        if Path(other["run_dir"]).resolve() == exclude_dir:
+            continue
+        overlap = tuple(sorted(identities & set(other["identities"])))
+        if not overlap:
+            continue
+        goal = other["goal"]
+        found.append(
+            ConcurrentRun(
+                run_id=RunId(other_id),
+                goal=str(goal["text"]) if isinstance(goal, dict) else "(no goal)",
+                identities=overlap,
+                pid=other["pid"],
+                host=other["host"],
+                state=_owner_state(other),
+            )
+        )
+    return sorted(found, key=lambda item: item.run_id)
+
+
+def concurrent_runs(run_dir: Path) -> list[ConcurrentRun]:
+    """Every other registered run sharing an identity with the run at ``run_dir``.
+
+    Read-only, and deliberately unlocked where every other accessor here takes the
+    index lock. Those all *write*; this only reads, and the index is replaced
+    atomically, so a reader already sees one whole version of it. Queueing behind a
+    writer instead would put a bounded wait — up to the lock timeout — inside `just
+    status` and `just runs`, which are the views a planner reaches for precisely
+    when something else is holding things up.
+    """
+    absolute = run_dir.resolve()
+    runs = _load_active()
+    this = next(
+        (entry for entry in runs.values() if Path(entry["run_dir"]).resolve() == absolute), None
+    )
+    if this is None:
+        return []
+    return _concurrent(runs, identities=set(this["identities"]), exclude_dir=absolute)
+
+
+def concurrent_indicator(run_dir: Path) -> str | None:
+    """One line naming the live runs sharing this run's identities, if any.
+
+    Only live ones: a progress view that also listed unobservable registrations
+    would report the very thing `--acknowledge-concurrent` exists to launch past as
+    though it were a second orchestrator at work.
+    """
+    try:
+        live = [run for run in concurrent_runs(run_dir) if run.live]
+    except (ConfigError, OSError):
+        return None
+    if not live:
+        return None
+    return "CONCURRENT: " + "; ".join(run.describe() for run in live)
+
+
 def register_run(
     *,
     run_id: str,
@@ -258,33 +394,37 @@ def register_run(
     identities: list[str],
     pid: int,
     acknowledge_concurrent: bool,
+    report: Callable[[str], None] | None = None,
 ) -> list[ConcurrentAcknowledgement]:
-    """Atomically guard and publish one active run."""
+    """Atomically guard and publish one active run.
+
+    ``report`` receives one notice per genuinely live overlapping run when the
+    launch proceeds anyway. `--acknowledge-concurrent` exists to get past a
+    registration whose owner is gone; it was never meant to make a second
+    orchestrator *at work* on the same identity invisible, which is how two runs
+    came to share two checkouts for hours before a hand-traced process tree found
+    them.
+    """
     absolute_dir = run_dir.resolve()
     with advisory_lock("runs-index"):
         runs = _load_active()
         _sweep(runs)
-        shared: dict[str, list[str]] = {}
-        wanted = set(identities)
-        for other_id, other in runs.items():
-            if Path(other.get("run_dir", "")).resolve() == absolute_dir:
-                continue
-            overlap = sorted(wanted & set(other.get("identities", [])))
-            if overlap:
-                shared[other_id] = overlap
+        concurrent = _concurrent(runs, identities=set(identities), exclude_dir=absolute_dir)
+        shared: dict[str, list[str]] = {
+            str(item.run_id): list(item.identities) for item in concurrent
+        }
         if shared and not acknowledge_concurrent:
-            details = []
-            for other_id, overlap in shared.items():
-                other_goal = runs[other_id].get("goal")
-                label = other_goal.get("text") if isinstance(other_goal, dict) else "(no goal)"
-                details.append(
-                    f"run {other_id!r} goal {label!r}; shared identities: {', '.join(overlap)}"
-                )
             raise ConfigError(
                 "concurrent project work refused: "
-                + "; ".join(details)
+                + "; ".join(item.describe() for item in concurrent)
                 + "; pass --acknowledge-concurrent to proceed"
             )
+        for item in concurrent:
+            if item.live and report is not None:
+                report(
+                    f"proceeding alongside a live concurrent run — {item.describe()}; "
+                    f"inspect it with: just monitor {item.run_id}"
+                )
         now = datetime.now(UTC).isoformat()
         acknowledgements: list[ConcurrentAcknowledgement] = []
         if shared:
@@ -372,7 +512,13 @@ def main(argv: list[str] | None = None) -> int:
         goal = row["goal"]
         label = f"{goal['id']}: {goal['text']}" if goal else "(no goal)"
         identities = ", ".join(row["identities"]) or "(none)"
+        # An index entry is a registration, not a running process. Saying which it is
+        # here is what separates "another run is working this identity" from "a dead
+        # run is still registered" — the two that read identically before.
+        state = _owner_state(row)
+        owner = f"{state} (owner pid {row['pid']} on {row['host']})"
         print(f"{row['run_id']}  {label}")
         print(f"    identities: {identities}")
+        print(f"    owner: {owner}")
         print(f"    run dir: {row['run_dir']}")
     return 0
