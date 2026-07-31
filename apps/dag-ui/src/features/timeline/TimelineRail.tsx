@@ -19,7 +19,7 @@ import {
 /** How many siblings one expanded row shows before the rest are asked for. */
 export const PAGE_SIZE = 25;
 
-/** The key the top level of the rail is paged and revealed under. */
+/** The top level's key in the maps keyed by parent row id; no row has an empty id. */
 const ROOT = "";
 
 /**

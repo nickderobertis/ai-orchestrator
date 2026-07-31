@@ -162,8 +162,6 @@ test("opens a node's timeline, reads one recorded moment, and returns", async ({
   ).toContainText("dashboard");
   await expect(page.locator(".node-view-facts")).toContainText("running");
 
-  // Nothing is selected yet, so the detail region says how to read a record rather
-  // than standing empty beside a full rail.
   await expect(itemDetail(page)).toContainText(
     "Select an item in the timeline to read what it recorded.",
   );
@@ -176,8 +174,6 @@ test("opens a node's timeline, reads one recorded moment, and returns", async ({
   await expect(worker).toContainText(/\d\d:\d\d:\d\d/);
   await expect(rail(page).getByRole("button")).not.toHaveCount(0);
 
-  // Opening a session shows it expanded beside the rail, in the design system's own
-  // turn card, and names the role that ran it.
   await worker.click();
   await expect
     .poll(() => new URL(page.url()).searchParams.get("event"))
@@ -207,6 +203,36 @@ test("opens a node's timeline, reads one recorded moment, and returns", async ({
   await page.keyboard.press("Escape");
   await expect(page.locator(".dag-node.state-running")).toContainText(
     "dashboard",
+  );
+});
+
+test("restores a bookmarked moment inside a session from the address alone", async ({
+  page,
+}) => {
+  await openObservatory(page, `/?run=${runs().live}&node=dashboard`);
+  await rail(page)
+    .getByRole("button", { name: /engineer-dashboard/ })
+    .click();
+  const turn = rail(page)
+    .getByRole("button", { name: /conversation-turn/ })
+    .first();
+  await turn.click();
+  const bookmarked = new URL(page.url());
+  expect(bookmarked.searchParams.get("event")).not.toBe(
+    "dispatch-worker-session",
+  );
+
+  // Loading the graph in between is what makes the next load cold: nothing the
+  // clicks left behind can be what reopens the moment, only the address.
+  await openObservatory(page, "/");
+  await openObservatory(page, `${bookmarked.pathname}${bookmarked.search}`);
+  await expect(
+    rail(page)
+      .getByRole("button", { name: /conversation-turn/ })
+      .first(),
+  ).toHaveAttribute("aria-current", "true");
+  await expect(itemDetail(page)).toContainText(
+    "Implementing the dashboard now",
   );
 });
 

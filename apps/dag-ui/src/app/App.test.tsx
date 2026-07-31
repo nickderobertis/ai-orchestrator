@@ -72,7 +72,6 @@ describe("DAG application", () => {
     expect(worker).toHaveTextContent("11:00:12");
     expect(worker).toHaveTextContent("completed");
     expect(worker).toHaveTextContent("48.0s");
-    // An aggregate says how many records it stands in for.
     expect(railRow(/lock-wait/)).toHaveTextContent("×1240");
 
     await userEvent.click(worker);
