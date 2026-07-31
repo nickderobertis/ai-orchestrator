@@ -40,7 +40,7 @@ import orchestrator.lifecycle as lifecycle_module
 from orchestrator import gitops
 from orchestrator.coordination import LockTimeout, advisory_lock, git_lock_identity
 from orchestrator.dispatch import DispatchError, Report, scoped_session
-from orchestrator.github import GitHubError, PullRequest
+from orchestrator.github import CliGitHubBackend, GitHubError, PullRequest
 from orchestrator.graph import graph_payload, parse_graph, run_graph
 from orchestrator.journal import NodeJournal, NodeSink, open_journal
 from orchestrator.lifecycle import (
@@ -2051,6 +2051,38 @@ def test_registered_remote_identity_keeps_pr_flow(tmp_path, bare_origin) -> None
     assert result.repository_type == "single-owner"
     assert result.merge_policy == "auto"
     assert result.pr_base == "main"
+
+
+def test_cli_github_adopts_only_exact_merged_head_via_all_state_lookup(
+    tmp_path, monkeypatch
+) -> None:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    calls = tmp_path / "gh-calls"
+    fake_gh = bin_dir / "gh"
+    fake_gh.write_text(
+        "#!/bin/sh\n"
+        f"printf '%s\\n' \"$*\" >> {shlex.quote(str(calls))}\n"
+        "printf '%s\\n' "
+        '\'[{"number":17,"url":"https://github.test/o/r/pull/17",'
+        '"state":"MERGED","headRefOid":"published-head"}]\'\n',
+        encoding="utf-8",
+    )
+    fake_gh.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+
+    backend = CliGitHubBackend()
+    adopted = backend.adoptable_pr("o/r", head="feature", base="main", head_sha="published-head")
+    stale = backend.adoptable_pr("o/r", head="feature", base="main", head_sha="new-head")
+
+    assert adopted is not None and adopted.number == 17
+    assert stale is None
+    assert calls.read_text(encoding="utf-8").splitlines() == [
+        "pr list --repo o/r --head feature --base main --state all "
+        "--json number,url,state,headRefOid",
+        "pr list --repo o/r --head feature --base main --state all "
+        "--json number,url,state,headRefOid",
+    ]
 
 
 @pytest.mark.parametrize("existing_state", ["open", "merged", "stale-merged"])
