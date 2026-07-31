@@ -792,8 +792,6 @@ def run_onejudge(
                                     missing_agent_identity = None
                             else:
                                 missing_agent_identity = None
-                        else:
-                            missing_agent_identity = None
                             child_pid_file = agent_status_dir / "agent.child.pid"
                             if child_pid_file.exists():
                                 try:
@@ -832,6 +830,8 @@ def run_onejudge(
                                         f"{heartbeat_timeout:g}s"
                                     ),
                                 )
+                        else:
+                            missing_agent_identity = None
                     current = (activity, _file_progress(Path(cwd) / ".git"))
                     if current != previous:
                         previous = current
