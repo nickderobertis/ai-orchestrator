@@ -44,9 +44,11 @@ live planner rather than a simulated-user model. During a round, the reconciler
 converges the actual frontier toward a desired graph that the planner may edit
 while nodes run. Recorded rounds are checkpoints and labels, not stop-the-world
 adaptation barriers. The orchestrator alone writes the graph, journal, and round
-ledger. After launch the planner uses only the channel and the read-only `just
-monitor` / `just runs` views; running `run-plan` or `next-round` alongside it
-would race the single writer.
+ledger. After launch the planner uses only the channel, `just stop`, and the
+read-only `just monitor` / `just runs` views; running `run-plan` or `next-round`
+alongside it would race the single writer. Runs are owned by the session that
+launched them — see [Who launched a run, and who may stop
+it](#who-launched-a-run-and-who-may-stop-it).
 
 At each round boundary the orchestrator emits JSON in its final assistant message:
 
@@ -611,6 +613,57 @@ write is enough to keep it reported as running. A persisted `last_surface_at` th
 is not a finite number is discarded rather than timed, since a non-finite stamp
 would otherwise make the run look eternally fresh or eternally silent.
 
+### Who launched a run, and who may stop it
+
+Several planners share this host, so every view says whose run it is looking at.
+`just orchestrate` records the launching session automatically: it mints a
+`launch_id` into the run directory and writes the launcher and its session id to a
+short-lived record under `$XDG_STATE_HOME/ai-orchestrator/launches/`, outside every
+repository, because the session id may be sensitive. The launcher is detected from
+the environment the harness exports — never from process ancestry — and
+`--launcher` / `--launcher-session` (or `$ORCHESTRATOR_LAUNCHER` /
+`$ORCHESTRATOR_LAUNCHER_SESSION`) still override it. A launch nothing identifies,
+and every run recorded before this was populated, resolves to `unknown`: missing,
+malformed, and expired records are all read the same way, and none of them is ever
+attributed to the reader. `orchestrator/launch.py` is the single source for the
+scheme.
+
+```sh
+just runs       # * demo   [mine]                     round-02  (2 done)
+                #   other  [claude-code:3f9a1c2e]     round-01  (1 done)
+                #   older  [unknown]                  round-01  (1 done)
+just runs --mine             # only the runs this session launched
+```
+
+`[mine]` is this session; a named session is another planner's, labelled by a
+stable digest rather than by the session id itself; `[unknown]` is a run nobody can
+attribute. A provenance-less run never displays as the caller's.
+
+### Stopping a run
+
+```sh
+just stop <run-id>                       # a run this session launched
+just stop <run-id> --force               # after reporting whose run it is
+just stop <run-id> --grace 30            # SIGTERM budget before SIGKILL (default 10s)
+```
+
+`just stop` refuses a run launched by another session, and refuses an `unknown` one
+by the same rule, naming the owner or the unknown state; `--force` prints who owns
+it and which recorded processes will be stopped before it proceeds. It resolves
+those processes from the run's own `orchestrator/status.json` and `round-NN/status.json`
+records and walks the live tree below them — never from `ps` output, and never as
+one process group, because a dispatched worker leads a group of its own and a
+`killpg` on the recorded pid would leave it running. Round owners take SIGTERM
+first so each records its own abandonment; survivors are escalated to SIGKILL after
+the grace period, and a process that outlives even that is reported by pid with a
+non-zero status rather than hidden under a success.
+
+Stopping records nothing about the run itself: the round is abandoned by its own
+owner, exactly as an interrupted round is, so `just runs` reports
+`round-NN ABANDONED (owner pid N took SIGTERM); reclaim with: just run-plan ... --recover`
+and the work is reclaimable. `complete` on the channel is a completion verdict and
+does not stop scheduling; `just stop` is what ends a run.
+
 ## Monitoring a live run
 
 `just runs` says where a round *ended* and `just history-show` says everything
@@ -693,6 +746,22 @@ The monitor only ever reads: it writes nothing to the ledger or journal, takes n
 lock a writer needs, and treats every source as optional. A missing `gh`, an
 unfetched branch, or an absent history store degrades that source to silence
 instead of ending the stream.
+
+All three read-only views take the run id `launch.json` advertises: `just monitor
+RUN_ID`, `just status RUN_ID`, and `just telemetry RUN_ID`. Each resolves it the
+same way — an exact run directory, or a plan name that names exactly one active
+launch. `status`'s positional keeps its original count meaning for a plain
+integer (`just status 5` still lists five recent tasks), so a run whose id is all
+digits is addressed through `just monitor` or `just results` instead. Scoped,
+`status` reports only that run's indicators and the sessions its own scopes
+labelled; `telemetry` reports that run whether or not it has settled, since naming
+it is the request and the settled-run filter exists only to keep the *unscoped*
+index about live work.
+
+An unsettled round has written no `result.json`, so both `telemetry` and the DAG
+read model describe its nodes from the journal itself: a node is `running` only
+until the journal records it settling. A node recorded as `node-failed` reads as
+failed in every read-only view, including while its round is still in flight.
 
 For automation, `just telemetry [--all]` emits one schema-versioned JSON run
 index. It joins phase, typed provider/failure identity, latest progress,

@@ -2,12 +2,23 @@
 
 from __future__ import annotations
 
+import json
+import os
+import socket
 from pathlib import Path
 
 import pytest
 
 from orchestrator import gitops
-from orchestrator.status import GitState, _git_state, _human, _ledger_for_branch, is_running, main
+from orchestrator.status import (
+    GitState,
+    _git_state,
+    _human,
+    _ledger_for_branch,
+    _positional,
+    is_running,
+    main,
+)
 
 
 def test_running_requires_checked_out_worktree() -> None:
@@ -60,3 +71,47 @@ def test_status_cli_rejects_limit_and_reports_missing_history_tool(monkeypatch, 
     monkeypatch.setenv("PATH", "")
     assert main([]) == 2
     assert "oneharness not found" in capsys.readouterr().err
+
+
+def test_positional_splits_a_count_from_a_run_id() -> None:
+    """The count this argument started as keeps its meaning; anything else is a run.
+
+    Resolved toward the older reading because a run id may itself be all digits, so
+    `just status 5` must not silently change what a documented invocation shows.
+    """
+    assert _positional(None) == (None, None)
+    assert _positional("5") == (5, None)
+    assert _positional("harness-followups") == (None, "harness-followups")
+
+
+def test_status_scopes_its_view_to_one_named_run(tmp_path: Path, monkeypatch, capsys) -> None:
+    """Naming a run selects its sessions and its indicators, and nothing else.
+
+    The real journey is `tests/e2e/test_run_views_by_id_e2e.py`, which points the
+    real `just status` at a live launch's advertised id. This direct call exists so
+    the in-process resolution and rendering count toward the coverage gate, which a
+    subprocess CLI invocation cannot contribute.
+    """
+    runs_dir = tmp_path / "runs"
+    for name in ("mine", "theirs"):
+        round_dir = runs_dir / name / "round-01"
+        round_dir.mkdir(parents=True)
+        (round_dir / "plan.json").write_text("{}\n", encoding="utf-8")
+        (round_dir / "status.json").write_text(
+            json.dumps(
+                {"status": "running", "pid": os.getpid() + 10_000_000, "host": socket.gethostname()}
+            ),
+            encoding="utf-8",
+        )
+
+    history_dir = tmp_path / "history"
+    history_dir.mkdir()
+    monkeypatch.setenv("ONEHARNESS_HISTORY_DIR", str(history_dir))
+    assert main(["mine", "--runs-dir", str(runs_dir)]) == 0
+    shown = capsys.readouterr().out
+    assert "mine: round-01 ABANDONED" in shown
+    assert "theirs" not in shown
+    assert "No dispatched tasks recorded for run mine." in shown
+
+    assert main(["no-such-run", "--runs-dir", str(runs_dir)]) == 2
+    assert "no recorded run 'no-such-run'" in capsys.readouterr().err

@@ -40,7 +40,7 @@ bootstrap:
 # followed with `tail -f .logs/check.log` instead of through /proc.
 # llmlint: ignore[changed_behavior_has_e2e] The public recipe is the real deterministic gate invoked by this task and pre-push; its sequencing failures use subprocess doubles to avoid recursively invoking the same full suite.
 check:
-    @source ./scripts/preserved-log.sh; preserved_log_open "{{repo_root}}" check; log=$PRESERVED_LOG; { ./scripts/nx.sh run-many -t format-check,lint,typecheck,test && ./scripts/check-oneharness-ui-contract.sh && python3 ./scripts/check-dag-state-contract.py && ./scripts/check-nx-cache.sh; } 2>&1 | redact_secrets >"$log" || { cat "$log" >&2; echo "check: deterministic checks failed; fix the reported findings and retry (full output: $log)" >&2; exit 1; }; total=$(./scripts/coverage-total.sh "{{repo_root}}"); echo "check: all deterministic checks passed${total:+ (line coverage ${total}%)}"
+    @source ./scripts/preserved-log.sh; preserved_log_open "{{repo_root}}" check; log=$PRESERVED_LOG; { ./scripts/nx.sh run-many -t format-check,lint,typecheck,test,test-docs && ./scripts/check-oneharness-ui-contract.sh && python3 ./scripts/check-dag-state-contract.py && ./scripts/check-nx-cache.sh; } 2>&1 | redact_secrets >"$log" || { cat "$log" >&2; echo "check: deterministic checks failed; fix the reported findings and retry (full output: $log)" >&2; exit 1; }; total=$(./scripts/coverage-total.sh "{{repo_root}}"); echo "check: all deterministic checks passed${total:+ (line coverage ${total}%)}"
 
 # Complete pre-push gate: deterministic checks followed by llmlint on this branch.
 #
@@ -72,7 +72,7 @@ smoke:
 # A green run says one line, like `check`: the suite's own output is the failure
 # report, and it is streamed in full when there is one.
 test *nx_args:
-    @log=$(mktemp); trap 'rm -f "$log"' EXIT; ./scripts/nx.sh run-many -t test {{nx_args}} >"$log" 2>&1 || { cat "$log" >&2; echo "test: suites failed; fix the reported findings and rerun 'just test'" >&2; exit 1; }; echo "test: all suites passed"
+    @log=$(mktemp); trap 'rm -f "$log"' EXIT; ./scripts/nx.sh run-many -t test,test-docs {{nx_args}} >"$log" 2>&1 || { cat "$log" >&2; echo "test: suites failed; fix the reported findings and rerun 'just test'" >&2; exit 1; }; echo "test: all suites passed"
 
 # The e2e suite alone (real onejudge subprocess boundary) — quick inner loop.
 test-e2e:
@@ -106,7 +106,7 @@ format-check:
 # file an EXIT trap removes takes that account with it.
 # llmlint: ignore[changed_behavior_has_e2e] The public recipe's real Bun success/failure paths run in an isolated fixture; uv and Nx are subprocess doubles because recursively running the full upgraded suite from pytest cannot terminate.
 upgrade:
-    @source ./scripts/preserved-log.sh; preserved_log_open "{{repo_root}}" upgrade; log=$PRESERVED_LOG; { uv lock --upgrade && uv sync && bun update --latest nx @nx/eslint @nx/eslint-plugin @nx/js eslint typescript@6 typescript-eslint @biomejs/biome && ./scripts/nx.sh run-many -t build,lint,typecheck,test; } 2>&1 | redact_secrets >"$log" || { cat "$log" >&2; echo "upgrade: repair dependency constraints or target findings and retry (full output: $log)" >&2; exit 1; }; echo "upgrade: dependencies refreshed and targets passed"
+    @source ./scripts/preserved-log.sh; preserved_log_open "{{repo_root}}" upgrade; log=$PRESERVED_LOG; { uv lock --upgrade && uv sync && bun update --latest nx @nx/eslint @nx/eslint-plugin @nx/js eslint typescript@6 typescript-eslint @biomejs/biome && ./scripts/nx.sh run-many -t build,lint,typecheck,test,test-docs; } 2>&1 | redact_secrets >"$log" || { cat "$log" >&2; echo "upgrade: repair dependency constraints or target findings and retry (full output: $log)" >&2; exit 1; }; echo "upgrade: dependencies refreshed and targets passed"
 
 # Local-first runs no CI, but origin is the shared source of truth: push every
 # change that lands on main. The pre-push hook gates this like any push; if git
@@ -192,10 +192,18 @@ integrate *args:
 next-round *args:
     @uv run orchestrator-next-round "$@"
 
-# List recorded tracked-graph runs and their latest status.
+# List recorded tracked-graph runs, who launched them, and their latest status.
+# `just runs --mine` lists only the runs this session launched.
 # llmlint: ignore[tool_output_is_signal] the requested multi-line run ledger is this viewing command's product.
 runs *args:
     @uv run orchestrator-runs "$@"
+
+# Stop a run this session launched, tree and all: `just stop <run-id>`. Refuses a run
+# another planner launched, or one with no recorded launcher, unless given --force.
+# A stopped run stays reclaimable through `just run-plan ... --recover`.
+# llmlint: ignore[tool_output_is_signal] the ownership refusal and what was stopped are this command's product.
+stop *args:
+    @uv run orchestrator-stop "$@"
 
 # llmlint: ignore[tool_output_is_signal] the requested cross-project goal inventory is this viewing command's product.
 goals *args:
@@ -244,6 +252,8 @@ history-show *args:
 monitor *args:
     uv run orchestrator-monitor {{args}}
 
+# Emit the schema-versioned run telemetry index, or `just telemetry <run-id>` for one
+# named run — settled or not. `--breakdown` renders the operator timing view.
 telemetry *args:
     @uv run orchestrator-telemetry {{args}}
 
@@ -258,7 +268,8 @@ telemetry-server *args:
     uv run orchestrator-telemetry-server {{args}}
 
 # Show running tasks joined with recent output, branch commits, and ledger rounds.
-# Pass N or --all to include recently finished tasks.
+# Pass N or --all to include recently finished tasks, or `just status <run-id>` to
+# scope the view to one run's own indicators and dispatched sessions.
 # llmlint: ignore[tool_output_is_signal] the requested multi-task status report is this viewing command's product.
 status *args:
     @uv run orchestrator-status {{args}}

@@ -22,6 +22,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import NamedTuple
 
 import onejudge_sdk
 import pytest
@@ -646,6 +647,257 @@ def test_dispatch_provider_override(command_base, onejudge_bin) -> None:
         provider="command",  # harmless here (base already command) — exercises the flag
     )
     assert report.completed
+
+
+class SplitHarnessFixture(NamedTuple):
+    target: Path
+    base_path: Path
+    env: dict[str, str]
+    invocation_log: Path
+
+
+class BindingRejection(NamedTuple):
+    process: subprocess.CompletedProcess[str]
+    session: str
+
+
+def test_dispatch_preserves_real_onejudge_failure_status_and_stderr(
+    tmp_path: Path, onejudge_bin: str, oneharness_bin: str
+) -> None:
+    """The binding backend's exact failure must survive watchdog termination."""
+    rejection = _run_real_binding_rejection(tmp_path, onejudge_bin, oneharness_bin)
+
+    assert rejection.process.returncode == 2, (
+        f"operator stderr={rejection.process.stderr!r}\noperator report={rejection.process.stdout}"
+    )
+    assert f"`{rejection.session}-skill` was created on harness `codex`" in rejection.process.stderr
+    assert "cannot be continued on `claude-code`" in rejection.process.stderr
+    assert "exit 255" not in rejection.process.stderr
+    assert "<no stderr>" not in rejection.process.stderr
+
+
+def _split_oneharness_fixture(tmp_path: Path, oneharness_bin: str) -> SplitHarnessFixture:
+    target = tmp_path / "target"
+    target.mkdir()
+    judge = {"kind": "command", "command": [sys.executable, str(FAKE_BACKEND)]}
+    base = yaml.safe_load((REPO_ROOT / "config" / "onejudge.base.yaml").read_text())
+    base["provider"] = {
+        "kind": "split",
+        "skill": {"kind": "oneharness", "bin": "oneharness"},
+        "judge": judge,
+    }
+    base["user"]["max_turns"] = 2
+    base_path = tmp_path / "split.base.yaml"
+    base_path.write_text(yaml.safe_dump(base, sort_keys=False), encoding="utf-8")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "oneharness").symlink_to(MOCK_ONEHARNESS)
+    invocation_log = tmp_path / "invocations.jsonl"
+    env = {
+        **os.environ,
+        "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+        "REAL_ONEHARNESS_BIN": oneharness_bin,
+        "MOCK_HARNESSES": "codex",
+        "ONEHARNESS_HARNESSES": "codex",
+        "MOCK_INVOCATION_LOG": str(invocation_log),
+        "XDG_STATE_HOME": str(tmp_path / "state"),
+    }
+    return SplitHarnessFixture(target, base_path, env, invocation_log)
+
+
+def _dispatch_command(
+    onejudge_bin: str, target: Path, base_path: Path, task: str, *extra: str
+) -> list[str]:
+    source_override = os.environ.get("DISPATCH_E2E_SOURCE_ROOT")
+    executable = [str(Path(onejudge_bin).with_name("orchestrator-dispatch"))]
+    if source_override:
+        executable = [
+            os.environ.get("DISPATCH_E2E_PYTHON", sys.executable),
+            "-c",
+            (
+                "import sys;"
+                f"sys.path.insert(0, {source_override!r});"
+                "from orchestrator.dispatch import main;"
+                "raise SystemExit(main(sys.argv[1:]))"
+            ),
+        ]
+    return [
+        *executable,
+        "engineer",
+        task,
+        "--base",
+        str(base_path),
+        "--cwd",
+        str(target),
+        "--project-dir",
+        str(target),
+        "--onejudge-bin",
+        onejudge_bin,
+        *extra,
+    ]
+
+
+def _recorded_sessions(path: Path) -> list[str]:
+    sessions: list[str] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        argv = json.loads(line)
+        sessions.append(argv[argv.index("--session") + 1])
+    return sessions
+
+
+def test_concurrent_sessionless_dispatches_reach_distinct_real_harness_sessions(
+    tmp_path: Path, onejudge_bin: str, oneharness_bin: str
+) -> None:
+    fixture = _split_oneharness_fixture(tmp_path, oneharness_bin)
+    commands = [
+        _dispatch_command(
+            onejudge_bin,
+            fixture.target,
+            fixture.base_path,
+            f"complete-now: concurrent dispatch {index}",
+        )
+        for index in range(2)
+    ]
+
+    processes = [
+        subprocess.Popen(
+            command,
+            cwd=fixture.target,
+            env=fixture.env,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        for command in commands
+    ]
+    results = [process.communicate(timeout=30) for process in processes]
+
+    assert [process.returncode for process in processes] == [0, 0], results
+    sessions = _recorded_sessions(fixture.invocation_log)
+    assert len(sessions) == 4
+    assert len(set(sessions)) == 2
+    assert all(sessions.count(session) == 2 for session in set(sessions))
+
+
+def test_explicit_session_is_threaded_across_real_harness_turns(
+    tmp_path: Path, onejudge_bin: str, oneharness_bin: str
+) -> None:
+    fixture = _split_oneharness_fixture(tmp_path, oneharness_bin)
+    process = subprocess.run(
+        _dispatch_command(
+            onejudge_bin,
+            fixture.target,
+            fixture.base_path,
+            "finish on the second turn",
+            "--session",
+            "operator-resume",
+        ),
+        cwd=fixture.target,
+        env=fixture.env,
+        text=True,
+        capture_output=True,
+    )
+
+    assert process.returncode == 0, process.stderr
+    sessions = _recorded_sessions(fixture.invocation_log)
+    assert len(sessions) == 2
+    assert sessions == ["operator-resume-skill", "operator-resume-skill"]
+
+
+def _run_real_binding_rejection(
+    tmp_path: Path, onejudge_bin: str, oneharness_bin: str
+) -> BindingRejection:
+    fixture = _split_oneharness_fixture(tmp_path, oneharness_bin)
+    target, base_path, env = fixture.target, fixture.base_path, fixture.env
+    bin_dir = tmp_path / "bin"
+    (bin_dir / "oneharness").unlink()
+    (bin_dir / "oneharness").symlink_to(oneharness_bin)
+    fake_codex = bin_dir / "codex"
+    fake_codex.write_text(
+        """#!/usr/bin/env python3
+import json
+print(json.dumps({"type": "thread.started", "thread_id": "bound-codex"}))
+print(json.dumps({"type": "item.completed", "item": {
+    "type": "agent_message", "text": "bound"
+}}))
+print(json.dumps({"type": "turn.completed", "usage": {
+    "input_tokens": 1, "cached_input_tokens": 0, "output_tokens": 1
+}}))
+""",
+        encoding="utf-8",
+    )
+    fake_codex.chmod(0o755)
+    fake_claude = bin_dir / "claude"
+    fake_claude.write_text(
+        """#!/usr/bin/env python3
+import json
+print(json.dumps({"type": "result", "subtype": "success", "is_error": False,
+                  "result": "wrong harness", "session_id": "claude-session"}))
+""",
+        encoding="utf-8",
+    )
+    fake_claude.chmod(0o755)
+    alternate = tmp_path / "alternate"
+    alternate.mkdir()
+    env["ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR"] = str(alternate)
+    bound_session = "binding-rejection"
+    bound_env = {**env, "ONEHARNESS_HARNESSES": "codex"}
+    bound = subprocess.run(
+        [
+            oneharness_bin,
+            "run",
+            "--config",
+            str(REPO_ROOT / "oneharness.toml"),
+            "--compact",
+            "--prompt",
+            "bind this session",
+            "--cwd",
+            ".",
+            "--session",
+            f"{bound_session}-skill",
+        ],
+        text=True,
+        capture_output=True,
+        cwd=target,
+        env=bound_env,
+    )
+    assert bound.returncode == 0, bound.stderr
+    rejecting_env = {
+        **env,
+        "ONEHARNESS_HARNESSES": "claude-code",
+    }
+
+    process = subprocess.run(
+        _dispatch_command(
+            onejudge_bin,
+            target,
+            base_path,
+            "complete-now: binding must reject",
+            "--session",
+            bound_session,
+            "--format",
+            "json",
+        ),
+        cwd=target,
+        env=rejecting_env,
+        text=True,
+        capture_output=True,
+        timeout=30,
+    )
+    return BindingRejection(process, bound_session)
+
+
+def test_real_session_harness_binding_rejection_names_session_and_both_harnesses(
+    tmp_path: Path, onejudge_bin: str, oneharness_bin: str
+) -> None:
+    rejection = _run_real_binding_rejection(tmp_path, onejudge_bin, oneharness_bin)
+
+    assert rejection.process.returncode == 2
+    detail = rejection.process.stderr
+    assert "session/harness binding rejection" in detail
+    assert f"`{rejection.session}-skill`" in detail
+    assert "`codex`" in detail
+    assert "`claude-code`" in detail
 
 
 def test_dispatch_cli_writes_output_file(command_base, onejudge_bin, tmp_path) -> None:

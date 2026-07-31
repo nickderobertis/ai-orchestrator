@@ -549,6 +549,8 @@ def main() -> int:
                 agent_message = "Terminal blocker: required external service is unavailable."
             elif "repeat-productive" in task:
                 agent_message = "continuing verified migration work"
+            elif "large-dispatch-report" in task:
+                agent_message = "done " + "x" * 10_000_000
             else:
                 agent_message = "done" if done else "working on it"
             resp = {

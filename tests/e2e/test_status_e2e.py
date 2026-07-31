@@ -15,78 +15,14 @@ import json
 import os
 import socket
 import subprocess
-import uuid
 from pathlib import Path
+
+from history_store import write_worker_session as _record
 
 from orchestrator import REPO_ROOT, gitops
 from orchestrator.registry import Registry
 from orchestrator.status import main as status_main
 from orchestrator.workspace import Workspace, normalize_repo
-
-_UUID_NS = uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")
-
-
-def _record(path: Path, *, project: Path, status: str = "ok") -> None:
-    """Write one session in oneharness' 1.0 event-sourced line format.
-
-    A ``type: "event"`` tool-call line plus a ``type: "run"`` line linked by the
-    run's ``history_id``; every 1.0 run status is terminal, so ``status`` picks one
-    of ``ok``/``nonzero`` rather than a live state (the running/recent split is now
-    driven by whether the branch is still a checked-out worktree).
-    """
-    run_id = str(uuid.uuid5(_UUID_NS, f"{path.stem}-status"))
-    event = {
-        "type": "event",
-        "schema_version": "1.0",
-        "run_id": run_id,
-        "harness": "codex",
-        "event": {
-            "kind": "tool_call",
-            "name": "command_execution",
-            "input": {"command": "just check"},
-            "output": "",
-            "index": 0,
-            "tool_call_id": f"{run_id}-c0",
-            "started_at": "2026-07-14T12:00:00.100Z",
-            "finished_at": "2026-07-14T12:00:00.200Z",
-            "duration_ms": 100,
-            "status": "completed",
-        },
-    }
-    run = {
-        "type": "run",
-        "schema_version": "1.0",
-        "history_id": run_id,
-        "session": path.stem,
-        "name": "implement-status-view",
-        "labels": {},
-        "project": str(project),
-        "timestamp": "2026-07-14T12:00:00Z",
-        "harness": "codex",
-        "model": "gpt-5",
-        "prompt": "Implement the unified status view.",
-        "permission_mode": "bypass",
-        "status": status,
-        "exit_code": 0,
-        "duration_ms": 2300,
-        "started_at": "2026-07-14T12:00:00.000Z",
-        "finished_at": "2026-07-14T12:00:02.300Z",
-        "model_ms": 2000,
-        "tool_ms": 100,
-        "time_to_first_token_ms": 40,
-        "text": "Implemented the unified view.",
-        "text_source": "json:codex-agent-message",
-        "usage": {
-            "input_tokens": 120,
-            "output_tokens": 40,
-            "cache_read_tokens": 0,
-            "cache_write_tokens": None,
-            "cost_usd": None,
-        },
-        "session_id": "codex-status-thread",
-        "failure_kind": None,
-    }
-    path.write_text(json.dumps(event) + "\n" + json.dumps(run) + "\n", encoding="utf-8")
 
 
 def _run(

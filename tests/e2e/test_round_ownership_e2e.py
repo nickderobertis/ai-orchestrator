@@ -48,6 +48,7 @@ from collections.abc import Callable, Iterator
 from pathlib import Path
 
 import pytest
+from run_rows import without_ownership
 from waits import deadline as e2e_deadline
 from waits import timeout as e2e_timeout
 
@@ -59,13 +60,25 @@ from orchestrator.runs import TEARDOWN_SIGNALS
 
 
 def _just(*args: str) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
+    completed = subprocess.run(
         ["just", *args],
         cwd=REPO_ROOT,
         text=True,
         capture_output=True,
         check=False,
         timeout=e2e_timeout(180),
+    )
+    if args[:1] != ("runs",):
+        return completed
+    # Every `just runs` row names the session that launched it, and which session
+    # that is depends on who runs the suite. The rows asserted below are about
+    # abandonment, so the column is dropped here; tests/e2e/test_run_ownership_e2e.py
+    # asserts what it says.
+    return subprocess.CompletedProcess(
+        completed.args,
+        completed.returncode,
+        without_ownership(completed.stdout),
+        completed.stderr,
     )
 
 

@@ -134,11 +134,29 @@ dispatch onejudge.
    correct, never a command to resend.
 
 After `just orchestrate`, the planner uses **only** `just channel-next`, `just
-channel-reply`, and the read-only `just monitor` / `just runs` / `just status`
-views. `channel-reply` carries both legacy verdicts and [versioned live
-edits](docs/orchestration.md#live-graph-edits). The planner never runs `run-plan`
-or `next-round` itself: those commands belong to the orchestrator process, and
-two writers would race the ledger lock.
+channel-reply`, `just stop`, and the read-only `just monitor` / `just runs` /
+`just status` views. `channel-reply` carries both legacy verdicts and [versioned
+live edits](docs/orchestration.md#live-graph-edits). The planner never runs
+`run-plan` or `next-round` itself: those commands belong to the orchestrator
+process, and two writers would race the ledger lock.
+
+**Runs are owned.** Several planners share this host, each supervising its own
+workstreams, so a run belongs to the session that launched it. `just orchestrate`
+records that session automatically and `just runs` shows it per row: `[mine]`, the
+owning session (`[claude-code:3f9a1c2e]`), or `[unknown]`. `just runs --mine` lists
+only yours. Act **only** on runs you launched. A run you cannot attribute belongs to
+another planner until proven otherwise — `unknown` is never yours, and a run
+launched before its session was recorded stays `unknown` forever. Never derive a
+process list from `ps` and signal it: that pattern knows nothing about whose work it
+matched, and it has already interrupted another planner mid-supervision here.
+`just stop <run-id>` is the supported way to stop a run; it refuses another
+planner's run and an unattributable one, naming the owner, and `--force` reports
+that owner before overriding. A stopped run is left reclaimable exactly as an
+interrupted round is (`just run-plan ... --recover`). `complete` is a completion
+verdict on the channel and deliberately does **not** stop scheduling; use `just
+stop` when a run must actually end. `stop` is deliberately **not** in
+`.claude/settings.json`'s allowlist: it ends live work, and `--force` overrides the
+ownership check the incident above is about, so each one is approved on its own.
 
 The orchestrator also surfaces an agent-written, non-blocking per-workstream
 status when its durable planner-update pacemaker becomes due (30 minutes by
@@ -305,6 +323,10 @@ orchestrator onejudge process. The planner launches multi-node work with `just
 orchestrate <plan.json>` and supervises its surfaced boundaries and proposals
 over the [live channel](docs/orchestration.md#the-plannerorchestrator-channel); it
 does not invoke `run-plan` directly. `repo-plan` exists only for compatibility.
+`just runs` lists recorded runs with the session that launched each one, and
+`just runs --mine` narrows that to this session's. `just stop <run-id>` ends a run
+and its whole dispatch tree, subject to the [ownership
+rule](#your-loop-as-planner) above.
 Human completion is never inferred and enters the graph only as an explicit live
 `attest` command (or compatibility `next-round` attestation). Keep operational
 syntax and result contracts in
@@ -404,7 +426,14 @@ everything the check reads. The Python targets run from the workspace root over 
 whole tree — pytest reads documentation, recipes, hooks, and app config — so they
 are keyed on it through `nx.json`'s `wholeWorkspace` input. Narrowing one back to a
 subset makes a green suite a claim about a tree that was never run; force a real
-re-run of a single tier with `--skip-nx-cache` on that one invocation instead. See
+re-run of a single tier with `--skip-nx-cache` on that one invocation instead. One
+narrowing earns its keep: only a handful of tests assert on this repository's prose,
+so `orchestrator:test-docs` runs those under the whole-workspace key while
+`orchestrator:test` runs the rest under `codeWorkspace` — the workspace minus
+`docs/**` and `**/*.md` — and a documentation edit stops charging eight minutes. That
+split cannot go stale silently: an undeclared test that opens this checkout's own
+documentation fails in `tests/conftest.py` and is told to carry
+`@pytest.mark.reads_docs`. See
 [When a cached verdict may stand
 in](docs/repo-lifecycle.md#when-a-cached-verdict-may-stand-in-for-a-verdict-on-this-tree).
 
@@ -520,6 +549,20 @@ base branch in sync with its origin, and push every change that reaches it immed
 than leaving verified work only in the local checkout. A dispatched `local` merge
 already pushes to origin; publish a direct commit with `just sync`. The pre-push
 gate guards every push. Never force-push or rewrite history on the registered base.
+
+Squash-merge is what a recovered incomplete step publishes too, so **every** path
+that advances the base — lifecycle publication, `repo-recover`, and the `integrate`
+train — leaves **one** commit on it: the `(incomplete step)` marker and its
+`chore: attest verified recovery of preserved work` are branch state, and merging or
+fast-forwarding the branch's provenance commits onto the base contradicts this
+model. The attestation is not dropped — the publication commit's message ends with one
+`Orchestrator-Recovered-Incomplete: <marker sha>` trailer per marker it recovered,
+so the base still records that a step was left incomplete and a green gate cleared
+it. A published subject names the change only; a marker's text never appears in
+one. See [What the base branch carries for a recovered incomplete
+step](docs/repo-lifecycle.md#what-the-base-branch-carries-for-a-recovered-incomplete-step).
+Provenance commits and marker-fragment subjects that already reached `main` stay
+where they are: that history is never rewritten.
 
 ## After the main task
 
