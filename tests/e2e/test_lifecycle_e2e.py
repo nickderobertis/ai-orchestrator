@@ -2168,6 +2168,7 @@ def test_pr_author_failure_retries_once_and_surfaces_underlying_error(
     assert f"attempt 1: {expected}" in result.follow_ups
     assert f"attempt 2: {expected}" in result.follow_ups
     assert result_payload(result)["follow_ups"] == result.follow_ups
+    assert result.follow_ups in result.summary()
     fallback = next(event for event in journal.events() if event.kind == "pr-drafting-fallback")
     assert fallback.detail["attempts"] == 2
     assert expected in fallback.detail["reason"]
