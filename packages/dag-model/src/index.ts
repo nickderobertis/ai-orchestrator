@@ -157,6 +157,20 @@ export const runTelemetrySchema = openObject({
   lint: counter,
 });
 
+/**
+ * A run's join to its launching session, served on both the list row and the detail.
+ *
+ * It is omitted for a run that recorded no `launch_id`, and `launcher_session_id`
+ * appears only when the server is configured to expose it — so a consumer that wants
+ * to group runs by the session that launched them reads it from the list itself,
+ * without fetching a single run's transcripts to recover the same join.
+ */
+export const runLaunchSchema = openObject({
+  launch_id: z.string().min(1),
+  launcher: z.enum(["claude-code", "codex", "unknown"]),
+  launcher_session_id: z.string().min(1).optional(),
+});
+
 export const runSummarySchema = openObject({
   run_id: z.string().min(1),
   state: z.string().min(1),
@@ -167,6 +181,7 @@ export const runSummarySchema = openObject({
   linkage_quality: linkageQualitySchema,
   timing: timingSchema,
   node_counts: z.record(z.string(), counter),
+  launch: runLaunchSchema.optional(),
 });
 
 export const runListSchema = openObject({
@@ -392,6 +407,7 @@ export const runDetailSchema = openObject({
   run: runTelemetrySchema,
   rounds: z.array(roundSchema),
   conversations: runConversationsSchema,
+  launch: runLaunchSchema.optional(),
 });
 
 export const timelineReferenceKindSchema = z.enum([
@@ -491,6 +507,7 @@ export type Usage = z.infer<typeof usageSchema>;
 export type SessionLink = z.infer<typeof sessionLinkSchema>;
 export type NodeTelemetry = z.infer<typeof nodeTelemetrySchema>;
 export type RunTelemetry = z.infer<typeof runTelemetrySchema>;
+export type RunLaunch = z.infer<typeof runLaunchSchema>;
 export type RunSummary = z.infer<typeof runSummarySchema>;
 export type RunList = z.infer<typeof runListSchema>;
 export type PlanTask = z.infer<typeof planTaskSchema>;
