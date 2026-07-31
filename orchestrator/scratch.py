@@ -27,15 +27,15 @@ OWNER_RECORD_LIMIT = 128
 THIRD_PARTY_PATTERNS = (
     "oneharness-sdk-*",
     "oneharness-counter-*",
-    "nx-native-file-cache-*",
     "visual-*",
     "screencomp-*",
     "playwright*",
 )
 DEFAULT_MIN_AGE_SECONDS = 24 * 60 * 60
 #: The families below are produced *by* an active dispatch — one Nx temp install per
-#: `nx` invocation, one run directory per pytest session, one effective-config
-#: directory per onejudge dispatch — at roughly 8 GB/hour under load. Waiting out
+#: `nx` invocation, one native-binary cache per workspace root, one run directory per
+#: pytest session, one effective-config directory per onejudge dispatch — at roughly
+#: 8 GB/hour under load. Waiting out
 #: `DEFAULT_MIN_AGE_SECONDS` fills the filesystem a day before the first byte becomes
 #: eligible, so age is not what makes removing them safe: proven non-reference is.
 #: The short age that remains guards only the gap between creating such a directory
@@ -64,6 +64,20 @@ NX_INSTALL_ENTRIES = frozenset(
         "pnpm-lock.yaml",
     }
 )
+#: Nx copies its ~22 MB native binary out of `node_modules` into
+#: `<tmp>/nx-native-file-cache-<7 hex>`, where the key is a digest of the *workspace
+#: root*, the Nx version, and the username. Every lifecycle worktree is a fresh
+#: workspace root, so the key never repeats and the copy is stranded the moment the
+#: worktree goes away: 87 GB in two days on this host. Nx does mean to reuse one
+#: directory — per workspace root — so this is not a reuse defect to fix upstream of
+#: the sweep; it is scratch whose owner is gone. The name is specific enough to sweep
+#: on and the shape confirms it: nothing but the `<version>-<binary>.node` copies Nx
+#: writes there.
+NX_NATIVE_CACHE_PREFIX = "nx-native-file-cache-"
+NX_NATIVE_CACHE_PATTERN = f"{NX_NATIVE_CACHE_PREFIX}*"
+NX_NATIVE_CACHE_KEY_LENGTH = 7
+NX_NATIVE_CACHE_KEY_ALPHABET = frozenset("0123456789abcdef")
+NX_NATIVE_CACHE_ENTRY_SUFFIX = ".node"
 PYTEST_ROOT_PATTERN = "pytest-of-*"
 PYTEST_RUN_PREFIX = "pytest-"
 PYTEST_CURRENT_LINK = "pytest-current"
@@ -84,6 +98,31 @@ class ScratchFamilyFinder(Protocol):
     """Find conservatively identified members of one unreferenced scratch family."""
 
     def __call__(self, root: Path) -> Iterator[Path]: ...
+
+
+@dataclass(frozen=True)
+class ScratchFamily:
+    """One reclaimable family, named so the sweep can report that it examined it."""
+
+    name: str
+    find: ScratchFamilyFinder
+
+
+@dataclass(frozen=True)
+class SkippedFamily:
+    """One family the sweep did not examine, and the reason it could not."""
+
+    name: str
+    reason: str
+
+    def render(self) -> str:
+        return f"{self.name} ({self.reason})"
+
+
+WATCHDOG_FAMILY = "watchdog"
+THIRD_PARTY_FAMILY = "third-party"
+THIRD_PARTY_SKIP_REASON = "lifecycle dispatch active"
+REFERENCE_PROOF_SKIP_REASON = "no live process could be proven done with it"
 
 
 SCRATCH_LOCK_NAME = ".orchestrator-scratch.lock"
@@ -112,6 +151,8 @@ class SweepResult:
     watchdog_retained: tuple[Path, ...] = ()
     referenced_retained: tuple[Path, ...] = ()
     reference_proof_unavailable: bool = False
+    swept_families: tuple[str, ...] = ()
+    skipped_families: tuple[SkippedFamily, ...] = ()
 
 
 def _open_lock_file(path: Path, *, create: bool) -> int:
@@ -287,6 +328,40 @@ def _nx_install_candidates(root: Path) -> Iterator[Path]:
             yield path
 
 
+def _is_nx_native_file_cache(path: Path) -> bool:
+    """Return whether this directory holds nothing but Nx's copied native binaries."""
+    key = path.name[len(NX_NATIVE_CACHE_PREFIX) :]
+    if len(key) != NX_NATIVE_CACHE_KEY_LENGTH or not NX_NATIVE_CACHE_KEY_ALPHABET.issuperset(key):
+        return False
+    if path.is_symlink() or not path.is_dir():
+        return False
+    try:
+        entries = list(path.iterdir())
+    except OSError:
+        return False
+    return all(
+        entry.name.endswith(NX_NATIVE_CACHE_ENTRY_SUFFIX)
+        and not entry.is_symlink()
+        and entry.is_file()
+        for entry in entries
+    )
+
+
+def _nx_native_cache_candidates(root: Path) -> Iterator[Path]:
+    """Yield Nx native-binary caches, whose only live reference is a memory mapping.
+
+    Nx `dlopen`s the copy and keeps no descriptor open, so the memory map is the sole
+    channel that names one of these while it is in use — which is why the reference
+    proof reads `maps`. Removing a cache a live process already mapped would in fact
+    be harmless on Linux (the inode outlives the unlink and the next invocation
+    re-copies), but Nx's loader stats the file and *then* loads it, so keeping mapped
+    caches is what shuts that narrow window rather than reasoning about it.
+    """
+    for path in root.glob(NX_NATIVE_CACHE_PATTERN):
+        if _is_nx_native_file_cache(path):
+            yield path
+
+
 def _pytest_session_is_live(path: Path) -> bool:
     """Honor pytest's own in-use marker: the `.lock` it writes its session pid into."""
     try:
@@ -334,21 +409,46 @@ def _onejudge_scratch_candidates(root: Path) -> Iterator[Path]:
 #: dispatch keeps producing. Unlike `THIRD_PARTY_PATTERNS`, these are reclaimed while
 #: dispatches run, so a family is a candidate *finder* rather than a name glob: each
 #: one has to identify its own directories without a pattern wide enough to catch
-#: unrelated trees, and to honor whatever retention its producer already applies.
-UNREFERENCED_FAMILIES: tuple[ScratchFamilyFinder, ...] = (
-    _nx_install_candidates,
-    _pytest_run_candidates,
-    _onejudge_scratch_candidates,
+#: unrelated trees, and to honor whatever retention its producer already applies. The
+#: name is what the sweep reports, so a family that was never examined can never be
+#: mistaken for one that had nothing to reclaim.
+UNREFERENCED_FAMILIES: tuple[ScratchFamily, ...] = (
+    ScratchFamily("nx-install", _nx_install_candidates),
+    ScratchFamily("nx-native-file-cache", _nx_native_cache_candidates),
+    ScratchFamily("pytest-runs", _pytest_run_candidates),
+    ScratchFamily("onejudge-scratch", _onejudge_scratch_candidates),
 )
 
 
+#: The procfs files whose whole contents may name a path: argv, the environment a
+#: process was handed, and its file-backed memory mappings. `maps` is not redundant
+#: with `fd`: a `dlopen`ed library is mapped with no descriptor left behind, so for a
+#: running `nx` the mapping is the *only* place its native-binary cache appears.
+_REFERENCE_CONTENT_FILES = ("cmdline", "environ", "maps")
+#: The procfs links a process resolves to real paths. `cwd` is the only one a real
+#: journey can isolate, and the other two are kept anyway rather than leaned on: the
+#: kernel maps a running process's executable, so `exe` cannot decide an outcome
+#: `maps` has not already decided, and `root` needs a chroot into scratch that this
+#: host cannot create (CAP_SYS_CHROOT, with unprivileged user namespaces disabled).
+#: Each costs one readlink and neither can do anything but retain more, which is the
+#: direction this decision has to fail in — the e2e covers a binary running out of
+#: scratch through the channels that can be isolated.
+# llmlint: ignore[changed_behavior_has_e2e] `exe` is subsumed by `maps`, `root` needs CAP_SYS_CHROOT
+_REFERENCE_LINKS = ("cwd", "root", "exe")
+#: One blob may hold many references — NUL-joined argv and environment entries, one
+#: mapping per line — so a reference ends at whichever separator comes first.
+_REFERENCE_TERMINATORS = ("\0", "\n")
+
+
 def _process_reference_strings(entry: Path) -> tuple[str, ...]:
-    """Return every process reference visible through argv, cwd, and open files."""
+    """Return every process reference visible through argv, environment, links, and maps."""
     references: list[str] = []
-    with suppress(OSError):
-        references.append((entry / "cmdline").read_bytes().decode("utf-8", "replace"))
-    with suppress(OSError):
-        references.append(os.readlink(entry / "cwd"))
+    for name in _REFERENCE_CONTENT_FILES:
+        with suppress(OSError):
+            references.append((entry / name).read_bytes().decode("utf-8", "replace"))
+    for name in _REFERENCE_LINKS:
+        with suppress(OSError):
+            references.append(os.readlink(entry / name))
     try:
         descriptors = sorted((entry / "fd").iterdir())
     except OSError:
@@ -357,6 +457,16 @@ def _process_reference_strings(entry: Path) -> tuple[str, ...]:
         with suppress(OSError):
             references.append(os.readlink(descriptor))
     return tuple(references)
+
+
+def _reference_at(text: str, index: int) -> str:
+    """Return the single path starting at `index`, up to the first separator after it."""
+    end = len(text)
+    for terminator in _REFERENCE_TERMINATORS:
+        stop = text.find(terminator, index)
+        if stop != -1:
+            end = min(end, stop)
+    return text[index:end]
 
 
 def _record_reference(text: str, scratch_root: Path, sink: set[str]) -> None:
@@ -395,10 +505,9 @@ def _referenced_scratch_paths(scratch_root: Path) -> frozenset[str] | None:
         if not entry.name.isdigit():
             continue
         for text in _process_reference_strings(entry):
-            # One argv or one NUL-joined command line may name several paths.
             index = text.find(marker)
             while index != -1:
-                _record_reference(text[index:].split("\0", 1)[0], scratch_root, referenced)
+                _record_reference(_reference_at(text, index), scratch_root, referenced)
                 index = text.find(marker, index + 1)
     return frozenset(referenced)
 
@@ -453,8 +562,8 @@ def sweep_scratch(
     referenced_retained: list[Path] = []
     unreferenced: set[Path] = set()
     if referenced is not None:
-        for family_candidates in UNREFERENCED_FAMILIES:
-            for path in family_candidates(scratch_root):
+        for family in UNREFERENCED_FAMILIES:
+            for path in family.find(scratch_root):
                 if os.fspath(path) in referenced:
                     referenced_retained.append(path)
                 elif _older_than(path, unreferenced_cutoff):
@@ -527,6 +636,21 @@ def sweep_scratch(
                     continue
                 removed.append(path)
                 reclaimed += size
+    # Every family lands in exactly one of these two lists, so a report of zero
+    # reclaimed bytes always says whether a family had nothing to reclaim or was
+    # never examined at all.
+    proof_unavailable = referenced is None or fresh is None
+    swept_families = [WATCHDOG_FAMILY]
+    skipped_families: list[SkippedFamily] = []
+    for family in UNREFERENCED_FAMILIES:
+        if proof_unavailable:
+            skipped_families.append(SkippedFamily(family.name, REFERENCE_PROOF_SKIP_REASON))
+        else:
+            swept_families.append(family.name)
+    if can_sweep_third_party:
+        swept_families.append(THIRD_PARTY_FAMILY)
+    else:
+        skipped_families.append(SkippedFamily(THIRD_PARTY_FAMILY, THIRD_PARTY_SKIP_REASON))
     return SweepResult(
         tuple(removed),
         reclaimed,
@@ -534,7 +658,9 @@ def sweep_scratch(
         third_party_skipped=not can_sweep_third_party,
         watchdog_retained=tuple(sorted(skipped)),
         referenced_retained=tuple(sorted(referenced_retained)),
-        reference_proof_unavailable=referenced is None or fresh is None,
+        reference_proof_unavailable=proof_unavailable,
+        swept_families=tuple(swept_families),
+        skipped_families=tuple(skipped_families),
     )
 
 
@@ -607,8 +733,13 @@ def main(argv: list[str] | None = None) -> int:
         inspection = f"; candidates=[{shown}]"
         if omitted:
             inspection += f" ({omitted} more omitted)"
-    if result.third_party_skipped:
-        inspection += "; third-party sweep skipped: lifecycle dispatch active"
+    # Naming both lists is what keeps a zero honest: whichever list a family is in,
+    # the reader can tell "nothing to reclaim" from "never examined".
+    inspection += f"; swept families: {', '.join(result.swept_families)}"
+    if result.skipped_families:
+        inspection += "; skipped families: " + ", ".join(
+            family.render() for family in result.skipped_families
+        )
     if result.watchdog_retained:
         inspection += (
             f"; retained {len(result.watchdog_retained)} watchdog directories "
