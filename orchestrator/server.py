@@ -7,6 +7,12 @@ copy of the state model. The server never mutates a run, runs a command, accepts
 file path, or globs: run and conversation ids are validated opaque identifiers
 resolved beneath one configured runs root, and the default bind is loopback.
 
+Every read here is blocking work — filesystem walks plus an `oneharness history`
+subprocess — so none of it runs on the event loop: the read routes are plain `def`
+so FastAPI serves them from its threadpool, and the SSE generator defers its own
+reads with `_off_loop`. Only `/healthz` and the request-parsing parts of the stream
+endpoint are coroutines, because they touch no storage.
+
 The contract is `docs/dag-ui/design.md`.
 """
 
@@ -17,11 +23,13 @@ import asyncio
 import hashlib
 import json
 import sys
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Callable, Mapping
 from enum import StrEnum
+from functools import partial
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 
+import anyio.to_thread
 from fastapi import FastAPI, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -109,6 +117,23 @@ def _sse(cursor: int, event: SseEvent, data: Mapping[str, Any]) -> str:
     return f"id: {cursor}\nevent: {event.value}\ndata: {payload}\n\n"
 
 
+_T = TypeVar("_T")
+
+
+async def _off_loop(call: Callable[[], _T]) -> _T:
+    """Await one blocking read on a worker thread rather than on the event loop.
+
+    A coroutine that called these reads directly would hold the loop for the whole
+    read — seconds of subprocess and filesystem work — which stalls *every* other
+    request, every other live stream, and `/healthz` besides, so one slow scan
+    presented as a hung server rather than as one slow response. The route handlers
+    get this by being plain `def`; the stream is a coroutine by nature, so it defers
+    each blocking call here instead. Only the call itself moves: the stream's own
+    cursor and baselines stay on the loop, so nothing crosses threads.
+    """
+    return await anyio.to_thread.run_sync(call)
+
+
 def create_app(
     runs_dir: Path,
     *,
@@ -165,8 +190,12 @@ def create_app(
     # body against it, which is exactly the envelope `_error` exists to keep intact.
     # The payload shapes stay enforced where they are built, in the read model, and
     # reconciled against the contract by `check-dag-state-contract`.
+    #
+    # These four are deliberately `def`, not `async def`: each is blocking storage
+    # work, and FastAPI runs a non-async handler in its threadpool, so one slow read
+    # occupies a worker rather than the loop every other request shares.
     @app.get("/api/v1/runs")
-    async def get_runs(include_settled: bool = False) -> Any:
+    def get_runs(include_settled: bool = False) -> Any:
         try:
             return list_runs(
                 root,
@@ -179,7 +208,7 @@ def create_app(
             return _error(status, code, str(exc))
 
     @app.get("/api/v1/runs/{run_id}")
-    async def get_run(run_id: str, include_conversations: bool = True) -> Any:
+    def get_run(run_id: str, include_conversations: bool = True) -> Any:
         """The run detail; ``include_conversations=false`` serves no transcripts.
 
         The opt-out is a size lever, not a version change: `conversations` stays
@@ -199,7 +228,7 @@ def create_app(
             return _error(status, code, str(exc))
 
     @app.get("/api/v1/runs/{run_id}/timeline")
-    async def get_timeline(run_id: str) -> Any:
+    def get_timeline(run_id: str) -> Any:
         """The whole run's ordered spans and events; a consumer filters by node."""
         try:
             return run_timeline(root, run_id, oneharness_bin=oneharness_bin)
@@ -208,7 +237,7 @@ def create_app(
             return _error(status, code, str(exc))
 
     @app.get("/api/v1/runs/{run_id}/conversations/{conversation_id}")
-    async def get_conversation(run_id: str, conversation_id: str) -> Any:
+    def get_conversation(run_id: str, conversation_id: str) -> Any:
         try:
             return run_conversation(root, run_id, conversation_id, oneharness_bin=oneharness_bin)
         except ReadError as exc:
@@ -329,16 +358,22 @@ async def _event_stream(
     oneharness history rather than under the runs root, so they are polled on their
     own slower interval and only for a single watched run — one subprocess per tick
     is affordable for a detail view, one per run is not.
+
+    Every read here goes through `_off_loop`: the opening snapshot scans the whole
+    root and each conversation poll spawns a subprocess, and running either inline
+    would make one stream's tick stall every other connection the server holds.
     """
     cursor = resume_from if resume_from is not None else 0
-    baseline = _signatures(runs_dir, watched)
-    conversations = _conversation_signature(watched, oneharness_bin)
+    baseline = await _off_loop(partial(_signatures, runs_dir, watched))
+    conversations = await _off_loop(partial(_conversation_signature, watched, oneharness_bin))
     loop = asyncio.get_event_loop()
     cursor += 1
     yield _sse(
         cursor,
         SseEvent.SNAPSHOT,
-        list_runs(runs_dir, include_settled=True, oneharness_bin=oneharness_bin),
+        await _off_loop(
+            partial(list_runs, runs_dir, include_settled=True, oneharness_bin=oneharness_bin)
+        ),
     )
     last_emit = loop.time()
     last_conversation_poll = loop.time()
@@ -346,7 +381,7 @@ async def _event_stream(
         if await request.is_disconnected():
             return
         await asyncio.sleep(poll_interval)
-        current = _signatures(runs_dir, watched)
+        current = await _off_loop(partial(_signatures, runs_dir, watched))
         for name in sorted(current):
             if current[name] != baseline.get(name):
                 cursor += 1
@@ -361,7 +396,7 @@ async def _event_stream(
         now = loop.time()
         if watched is not None and now - last_conversation_poll >= conversation_interval:
             last_conversation_poll = now
-            latest = _conversation_signature(watched, oneharness_bin)
+            latest = await _off_loop(partial(_conversation_signature, watched, oneharness_bin))
             if latest != conversations:
                 conversations = latest
                 cursor += 1
