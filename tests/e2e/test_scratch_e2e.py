@@ -518,11 +518,16 @@ def test_sweep_cli_keeps_visible_references_when_a_process_hides_its_descriptors
     ready = tmp_path / "ready"
     release = tmp_path / "release"
     holder_script = """
+import ctypes
+import os
 import sys
 import time
 from pathlib import Path
 
 candidate, ready, release = map(Path, sys.argv[1:])
+libc = ctypes.CDLL(None, use_errno=True)
+if libc.prctl(4, 0, 0, 0, 0) != 0:
+    raise OSError(ctypes.get_errno(), os.strerror(ctypes.get_errno()))
 ready.write_text("ready", encoding="utf-8")
 while not release.exists():
     time.sleep(0.02)
@@ -530,8 +535,6 @@ assert candidate
 """
     holder = subprocess.Popen(
         [
-            "sudo",
-            "-n",
             "/usr/bin/python3",
             "-c",
             holder_script,
