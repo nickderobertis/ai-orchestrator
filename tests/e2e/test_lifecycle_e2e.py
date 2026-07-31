@@ -2705,9 +2705,7 @@ def test_gate_failure_says_so_when_rejected_work_could_not_be_preserved(
         # this branch name. This run's tip is not a fast-forward of it, so the copy
         # below has to refuse rather than discard that run's record.
         tree = git("rev-parse", "origin/main^{tree}", cwd=safety).strip()
-        other = git(
-            "commit-tree", tree, "-p", "origin/main", "-m", "other run", cwd=safety
-        ).strip()
+        other = git("commit-tree", tree, "-p", "origin/main", "-m", "other run", cwd=safety).strip()
         git("branch", branch, other, cwd=safety)
         return report
 
@@ -4216,7 +4214,9 @@ def test_a_completed_continuation_keeps_an_inherited_incomplete_marker(
 
     attempts = 0
 
-    def stops_once_then_completes(persona: str, task: str, *, project_dir: str, **_: object) -> Report:
+    def stops_once_then_completes(
+        persona: str, task: str, *, project_dir: str, **_: object
+    ) -> Report:
         nonlocal attempts
         attempts += 1
         if attempts == 1:
