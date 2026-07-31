@@ -364,6 +364,19 @@ def test_full_setup_continues_after_alternate_trust_failure(tmp_path: Path) -> N
     assert "bun is required" in result.stderr
 
 
+def test_full_setup_continues_after_alternate_config_resolution_failure(
+    tmp_path: Path,
+) -> None:
+    result = _run_full_setup_without_bun(
+        tmp_path, ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR="relative/config"
+    )
+
+    assert result.returncode == 1
+    assert "alternate Claude config path must be absolute" in result.stderr
+    assert "alternate Claude config resolution failed; continuing" in result.stderr
+    assert "bun is required" in result.stderr
+
+
 def test_full_setup_trusts_distinct_managed_and_worktree_roots(tmp_path: Path) -> None:
     alternate = tmp_path / "alternate"
     alternate.mkdir()
