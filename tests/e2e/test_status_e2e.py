@@ -187,3 +187,41 @@ def test_status_reports_a_run_whose_round_owner_is_gone(tmp_path, monkeypatch, c
     assert "abandoned-run: round-01 ABANDONED" in shown
     assert "--recover" in shown
     assert "abandoned-run: waiting for planner decision: blocker: round 1 dispatched" in shown
+
+
+def test_status_reports_a_queued_surface_no_planner_has_read(tmp_path, monkeypatch, capsys) -> None:
+    """The same unread-surface fact `just runs` reports, in the other view.
+
+    The real journey — a pacemaker queuing this through a live check-in agent, and
+    the report clearing once consumed — is
+    ``tests/e2e/test_channel_e2e.py::test_a_queued_update_nobody_read_is_reported_until_it_is_consumed``.
+    This direct call exists so the rendering counts toward the coverage gate, which a
+    subprocess CLI invocation cannot contribute.
+    """
+    history_dir = tmp_path / "history"
+    history_dir.mkdir()
+    runs_dir = tmp_path / "runs"
+    channel = runs_dir / "unattended" / "channel"
+    channel.mkdir(parents=True)
+    (channel / "heartbeat-surface.json").write_text(
+        json.dumps(
+            {
+                "op": "supervisor",
+                "run_id": "unattended",
+                "round": 1,
+                "surface": {
+                    "kind": "heartbeat",
+                    "message": "worker: still verifying",
+                    "blocking": False,
+                },
+                "messages": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("ONEHARNESS_HISTORY_DIR", str(history_dir))
+    assert status_main(["--runs-dir", str(runs_dir)]) == 0
+    shown = capsys.readouterr().out
+    assert "unattended: 1 planner update waiting, oldest 0s ago" in shown
+    assert f"just channel-next unattended --runs-dir {runs_dir}" in shown

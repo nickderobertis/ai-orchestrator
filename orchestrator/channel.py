@@ -31,7 +31,7 @@ from .config import ConfigError
 from .coordination import advisory_lock, atomic_json
 from .edits import EDIT_PROTOCOL_VERSION, EditCommand, EditError, apply_edit, parse_commands
 from .environment import CHANNEL_ENV_PREFIX
-from .journal import JOURNAL_NAME, JournalSink, NullJournal, open_journal
+from .journal import JOURNAL_NAME, JournalError, JournalSink, NullJournal, open_journal
 from .runs import (
     RunId,
     latest_round,
@@ -222,6 +222,26 @@ def claim_heartbeat(channel_dir: Path) -> bool:
         return True
 
 
+def release_heartbeat_claim(channel_dir: Path) -> None:
+    """Drop the in-flight claim without resetting the clock or the due signal.
+
+    A claim is held from the moment a check-in is dispatched until its update
+    reaches a planner, which is what keeps a second check-in from being dispatched
+    over the first. Discarding a queued update before anyone read it therefore has
+    to release the claim explicitly: the surface it was holding for is gone, and a
+    claim nothing will ever hand back is how an ignored pacemaker goes permanently
+    quiet instead of escalating. The clock and the due bit are deliberately left
+    alone — nobody has been updated, so the staleness the views report keeps
+    growing from the last update the planner actually saw.
+    """
+    with advisory_lock(f"channel-heartbeat:{channel_dir.resolve()}"):
+        state = _load_heartbeat(channel_dir)
+        if state is None or not state["in_flight"]:
+            return
+        state["in_flight"] = False
+        atomic_json(_heartbeat_path(channel_dir), state)
+
+
 def finish_heartbeat_attempt(
     channel_dir: Path, *, succeeded: bool, now: float | None = None
 ) -> None:
@@ -279,6 +299,104 @@ def planner_wait_indicator(channel_dir: Path) -> str | None:
     surface = _validated_persisted_surface(load_mapping(pending))
     action = "planner decision" if surface["blocking"] else "planner reply"
     return f"waiting for {action}: {surface['kind']}: {surface['message']}"
+
+
+@dataclass(frozen=True)
+class PendingSurface:
+    """One surface the channel is holding that no planner has consumed."""
+
+    kind: str
+    message: str
+    queued_at: float
+
+
+#: The durable queue: every file that holds a surface *nobody has read yet*. The
+#: queued check-in update, and the blocker preserved for the next reply-ready relay.
+#: `planner-pending.json` is deliberately not one of them — it outlives delivery,
+#: waiting for a reply, so counting it here would report a surface a planner has
+#: already read as unread. `planner_wait_indicator` is what reports that one.
+QUEUED_SURFACE_FILES = (HEARTBEAT_SURFACE_FILE, "deferred-blocker.json")
+
+
+def _queued_surface(path: Path) -> PendingSurface | None:
+    """Read one queued surface, degrading to its bare existence when unreadable.
+
+    The file existing *is* the queued fact, and this feeds planner-facing views that
+    must not go quiet on damaged state: a surface whose kind and message cannot be
+    read is still a surface nobody has read, so it is reported with what is known
+    rather than dropped. That is the whole failure this reporting exists to prevent.
+    """
+    try:
+        queued_at = path.stat().st_mtime
+    except OSError:
+        return None
+    kind, message = "unknown", "unreadable queued surface"
+    with suppress(ChannelError, ConfigError, OSError):
+        value = load_mapping(path)
+        # A check-in queues the whole wire frame; a deferred blocker queues the
+        # surface alone. Both carry the same surface shape, one level apart.
+        raw = value.get("surface") if isinstance(value.get("surface"), Mapping) else value
+        surface = _validated_persisted_surface(cast(Mapping[str, Any], raw))
+        kind, message = surface["kind"], surface["message"]
+    return PendingSurface(kind, message, queued_at)
+
+
+def pending_surfaces(channel_dir: Path) -> tuple[PendingSurface, ...]:
+    """Every queued, unconsumed planner surface for one run, oldest first."""
+    found = [
+        queued
+        for name in QUEUED_SURFACE_FILES
+        if (queued := _queued_surface(channel_dir / name)) is not None
+    ]
+    return tuple(sorted(found, key=lambda surface: surface.queued_at))
+
+
+def _age(seconds: float) -> str:
+    """One compact, non-negative age: ``45s``, ``12m``, ``3h``."""
+    elapsed = max(0.0, seconds)
+    if elapsed < 60:
+        return f"{int(elapsed)}s"
+    if elapsed < 3600:
+        return f"{int(elapsed // 60)}m"
+    return f"{int(elapsed // 3600)}h"
+
+
+def pending_surface_indicator(run_dir: Path, *, now: float | None = None) -> str | None:
+    """One line naming a run's unread surfaces and the command that reads them.
+
+    This is what a planner who never attached to the channel sees from the commands
+    they already run. Both halves matter: the growing age is the escalation, because
+    the pacemaker deliberately keeps exactly one check-in pending rather than piling
+    up duplicates, so an ignored channel gets *louder* here instead of quieter; and
+    the literal command is what stops the reader reconstructing run state by hand.
+    """
+    queued = pending_surfaces(run_dir / "channel")
+    if not queued:
+        return None
+    age = _age((time.time() if now is None else now) - queued[0].queued_at)
+    noun = "update" if len(queued) == 1 else "updates"
+    them = "it" if len(queued) == 1 else "them"
+    return (
+        f"{len(queued)} planner {noun} waiting, oldest {age} ago; read {them} with: "
+        f"just channel-next {run_dir.name} --runs-dir {run_dir.parent}"
+    )
+
+
+def _queued_detail(
+    surface: Mapping[str, Any], *, source: str, workstream: str | None
+) -> dict[str, Any]:
+    """The ``planner-surface-queued`` payload: what was sent, and where it came from.
+
+    ``workstream`` names the node whose work provoked the surface when one did; a
+    check-in update covers every active workstream at once and names none.
+    """
+    return {
+        "kind": str(surface["kind"]),
+        "message": str(surface["message"]),
+        "blocking": bool(surface.get("blocking", False)),
+        "source": source,
+        "workstream": workstream,
+    }
 
 
 @dataclass(frozen=True)
@@ -1003,6 +1121,15 @@ class ProposalPump:
                     continue
             if surface.get("blocking") is not True:
                 atomic_json(self._channel_dir / "planner-pending.json", surface)
+            # Recorded before the write, not after it: the write blocks until a planner
+            # reads the frame, so a record written after it would only ever describe a
+            # surface that was delivered. This one says the surface was *sent* — and
+            # a journal that cannot take it must not be what stops the sending.
+            with suppress(JournalError, OSError):
+                self._journal.append(
+                    "planner-surface-queued",
+                    detail=_queued_detail(surface, source="proposal", workstream=node),
+                )
             self._reply_received.clear()
             self._awaiting_reply.set()
             while True:
@@ -1172,6 +1299,54 @@ def _finished(run_dir: Path) -> bool:
     return False
 
 
+def next_surface(run_dir: Path, *, timeout: float) -> dict[str, Any]:
+    """Consume this run's next planner surface, or report why there is none.
+
+    The one place a surface is taken off the channel, so `channel-next` and `watch`
+    cannot drift into two different ideas of what "attached" means: the durable
+    check-in queue is drained first, then the live FIFO, and a settled run answers
+    ``{"status": "finished"}`` rather than waiting out the timeout.
+    """
+    heartbeat_surface = run_dir / "channel" / HEARTBEAT_SURFACE_FILE
+    pending_reply = (run_dir / "channel" / "planner-pending.json").is_file()
+    latest = latest_round(run_dir)
+    round_finished = latest is not None and (latest[1] / "result.json").is_file()
+    if pending_reply or round_finished:
+        with suppress(FileNotFoundError):
+            heartbeat_surface.unlink()
+            # The queued update is gone unread, so the claim it was held under has to
+            # go with it. Left set, it suppresses every later check-in for the rest of
+            # the run: the planner who ignored the channel longest would be told least.
+            release_heartbeat_claim(run_dir / "channel")
+    with advisory_lock(f"channel-heartbeat-surface:{heartbeat_surface.resolve()}"):
+        if heartbeat_surface.is_file():
+            if latest is None:
+                raise ChannelError("heartbeat surface has no active round")
+            value = _validated_heartbeat_surface(
+                load_mapping(heartbeat_surface), run_dir.name, latest[0]
+            )
+            heartbeat_surface.unlink()
+            surface = value["surface"]
+            record_surface(run_dir / "channel")
+            open_journal(run_dir, RunId(run_dir.name), int(value["round"])).append(
+                "planner-surfaced",
+                detail={
+                    "kind": "heartbeat",
+                    "message": str(surface["message"]),
+                    "blocking": False,
+                },
+            )
+            return value
+    if not pending_reply and _finished(run_dir):
+        return {"status": "finished"}
+    try:
+        return read_message(run_dir / "channel" / "up.fifo", timeout=timeout)
+    except ChannelTimeout:
+        return (
+            {"status": "finished"} if _finished(run_dir) else {"status": "running", "surface": None}
+        )
+
+
 # llmlint: ignore[changed_behavior_has_e2e] the real bridge timeout/success/reattach journey is e2e;
 # malformed framing and transport failures are deterministic boundary branches exercised in unit.
 def main_next(argv: list[str] | None = None) -> int:
@@ -1185,47 +1360,9 @@ def main_next(argv: list[str] | None = None) -> int:
     except ConfigError as exc:
         print(f"channel-next: {exc}", file=sys.stderr)
         return 2
-    heartbeat_surface = run_dir / "channel" / HEARTBEAT_SURFACE_FILE
-    pending_reply = (run_dir / "channel" / "planner-pending.json").is_file()
-    latest = latest_round(run_dir)
-    round_finished = latest is not None and (latest[1] / "result.json").is_file()
-    if pending_reply or round_finished:
-        with suppress(FileNotFoundError):
-            heartbeat_surface.unlink()
-    with advisory_lock(f"channel-heartbeat-surface:{heartbeat_surface.resolve()}"):
-        if heartbeat_surface.is_file():
-            try:
-                if latest is None:
-                    raise ChannelError("heartbeat surface has no active round")
-                value = _validated_heartbeat_surface(
-                    load_mapping(heartbeat_surface), run_dir.name, latest[0]
-                )
-                heartbeat_surface.unlink()
-            except (ChannelError, ConfigError, OSError) as exc:
-                print(f"channel-next: {exc}", file=sys.stderr)
-                return 2
-            surface = value["surface"]
-            record_surface(run_dir / "channel")
-            open_journal(run_dir, RunId(run_dir.name), int(value["round"])).append(
-                "planner-surfaced",
-                detail={
-                    "kind": "heartbeat",
-                    "message": str(surface["message"]),
-                    "blocking": False,
-                },
-            )
-            print(json.dumps(value))
-            return 0
-    if not pending_reply and _finished(run_dir):
-        print(json.dumps({"status": "finished"}))
-        return 0
     try:
-        value = read_message(run_dir / "channel" / "up.fifo", timeout=args.timeout)
-    except ChannelTimeout:
-        value = (
-            {"status": "finished"} if _finished(run_dir) else {"status": "running", "surface": None}
-        )
-    except (ChannelError, OSError) as exc:
+        value = next_surface(run_dir, timeout=args.timeout)
+    except (ChannelError, ConfigError, OSError) as exc:
         print(f"channel-next: {exc}", file=sys.stderr)
         return 2
     print(json.dumps(value))
@@ -1345,7 +1482,19 @@ def main_surface(argv: list[str] | None = None) -> int:
                 raise ChannelError("a planner surface is already pending")
             if destination.exists():
                 raise ChannelError("a check-in update is already queued")
-            atomic_json(destination, _heartbeat_frame(str(resolved), latest[0], message))
+            frame = _heartbeat_frame(str(resolved), latest[0], message)
+            atomic_json(destination, frame)
+        # Journalled outside the queue lock and only once the update is durable: this
+        # is the record that separates "nobody sent an update" from "an update was
+        # sent and nobody read it". Delivery still appends `planner-surfaced`, which
+        # may never happen — that gap is the evidence, so it is written here rather
+        # than being folded into the delivered record. A journal this cannot write is
+        # not allowed to lose the update itself, per the journal's own contract.
+        with suppress(JournalError, OSError):
+            open_journal(args.runs_dir / resolved, RunId(resolved), latest[0]).append(
+                "planner-surface-queued",
+                detail=_queued_detail(frame["surface"], source="check-in", workstream=None),
+            )
     except (ChannelError, ChannelTimeout, ConfigError, OSError) as exc:
         print(
             f"channel-surface: {exc}; correct the input or channel state, then retry",

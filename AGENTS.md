@@ -133,12 +133,23 @@ dispatch onejudge.
    and every edit it accepts reaches the graph; a non-zero reply is a rejection to
    correct, never a command to resend.
 
-After `just orchestrate`, the planner uses **only** `just channel-next`, `just
-channel-reply`, `just stop`, and the read-only `just monitor` / `just runs` /
-`just status` views. `channel-reply` carries both legacy verdicts and [versioned
-live edits](docs/orchestration.md#live-graph-edits). The planner never runs
-`run-plan` or `next-round` itself: those commands belong to the orchestrator
-process, and two writers would race the ledger lock.
+After `just orchestrate`, the planner uses **only** `just watch`, `just
+channel-next`, `just channel-reply`, `just stop`, and the read-only `just monitor`
+/ `just runs` / `just status` views. `channel-reply` carries both legacy verdicts
+and [versioned live edits](docs/orchestration.md#live-graph-edits). The planner
+never runs `run-plan` or `next-round` itself: those commands belong to the
+orchestrator process, and two writers would race the ledger lock.
+
+`orchestrate` launches detached so several runs can be supervised at once, which
+leaves nobody attached to any of them. **`just watch <run-id>` is how you attach**:
+it blocks, prints each surface beside the node transitions, and returns when the
+run settles — exit 0 only if the graph completed. It reads; a surface needing an
+answer names `just channel-reply`, and `channel-next` still takes exactly one
+surface. Rebuilding run state from `events.jsonl`, `ps`, or `git log` in a run
+clone instead is the omission this prevents: an update nobody read leaves no
+delivery record, and the run keeps reporting `ACTIVE`. `just runs` and `just
+status` name every unread surface, its staleness, and the command that reads it,
+so that omission surfaces from the commands you already run.
 
 **Runs are owned.** Several planners share this host, each supervising its own
 workstreams, so a run belongs to the session that launched it. `just orchestrate`
@@ -323,10 +334,11 @@ orchestrator onejudge process. The planner launches multi-node work with `just
 orchestrate <plan.json>` and supervises its surfaced boundaries and proposals
 over the [live channel](docs/orchestration.md#the-plannerorchestrator-channel); it
 does not invoke `run-plan` directly. `repo-plan` exists only for compatibility.
-`just runs` lists recorded runs with the session that launched each one, and
-`just runs --mine` narrows that to this session's. `just stop <run-id>` ends a run
-and its whole dispatch tree, subject to the [ownership
-rule](#your-loop-as-planner) above.
+`just watch <run-id>` attaches to one launched run and blocks until it settles.
+`just runs` lists recorded runs with the session that launched each one and the
+surfaces each has queued unread; `just runs --mine` narrows that to this session's.
+`just stop <run-id>` ends a run and its whole dispatch tree, subject to the
+[ownership rule](#your-loop-as-planner) above.
 Human completion is never inferred and enters the graph only as an explicit live
 `attest` command (or compatibility `next-round` attestation). Keep operational
 syntax and result contracts in

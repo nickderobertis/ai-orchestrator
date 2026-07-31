@@ -84,6 +84,7 @@ The three planner-facing recipes are:
 
 ```sh
 just orchestrate plan.json --runs-dir /host/path/runs
+just watch RUN --runs-dir /host/path/runs
 just channel-next RUN --runs-dir /host/path/runs
 just channel-reply RUN reply.json --runs-dir /host/path/runs
 just channel-approve RUN --runs-dir /host/path/runs
@@ -91,11 +92,29 @@ just channel-reject RUN "verification failed" --runs-dir /host/path/runs
 just channel-continue RUN "apply the edit and continue" --runs-dir /host/path/runs
 ```
 
+### Attaching to a launched run
+
+`just orchestrate` launches detached and exits, which is what lets one planner
+supervise several runs at once. `just watch RUN` is the one command that attaches
+to one of them: it blocks, consumes each surface exactly as `channel-next` does,
+interleaves them with the node transitions `just monitor` aggregates, and returns
+when the run settles. It exits 0 only when the graph completed; a run that stopped
+without completing — an abandoned round, a dead orchestrator, a failed graph —
+exits 1 and names what stopped it. Watching never answers a surface: a surface that
+holds its sender open is printed as `reply required` beside the literal
+`just channel-reply` command. A run that is legitimately quiet inside one long agent
+step still reports its state once per `--heartbeat` interval (60 seconds by
+default), including when the launch is parked. Ctrl-C detaches without affecting
+the run.
+
+Both `orchestrate`'s launch record and `runs/<run-id>/planner.md` name that command
+first, before `channel-next` and `monitor`.
+
 `orchestrate` prints a JSON launch record containing `run_id`, `channel_id`, and
-literal `commands.channel_next` / `commands.monitor` values, and persists the same
-handoff at `runs/<run-id>/planner.md`. Use that `run_id` for every supervision
-recipe. A plan name is also accepted when it identifies exactly one active launch;
-an ambiguous or stale name fails and lists valid run ids.
+literal `commands.watch` / `commands.channel_next` / `commands.monitor` values, and
+persists the same handoff at `runs/<run-id>/planner.md`. Use that `run_id` for
+every supervision recipe. A plan name is also accepted when it identifies exactly
+one active launch; an ambiguous or stale name fails and lists valid run ids.
 
 Pass `--round-budget SECONDS` to `just orchestrate` to set the outer liveness
 window for each graph round; it defaults to 14400 seconds (four hours). Exceeding
@@ -121,16 +140,27 @@ check-in agent. That read-only actor synthesizes a concise per-workstream update
 from the run journal, status, monitor, telemetry, and labeled history, then sends
 it exactly once with `just channel-surface`. The command queues the non-blocking
 surface without waiting for a planner reply; the reconciler neither authors nor
-relays its content. Only successful consumption through `channel-next` resets the
-clock and appends `planner-surfaced` to `events.jsonl`; an update queued while no
-planner is attached is neither reset nor audited as delivered.
+relays its content.
+
+Sending and delivery are recorded as two different facts. Queuing the update
+appends `planner-surface-queued` to `events.jsonl` — carrying the surface kind and
+message, the `source` that sent it (`check-in` for a pacemaker update, `proposal`
+for a worker's), and the `workstream` node when one provoked it. Successful
+consumption through `channel-next` (or `just watch`) is what resets the clock and
+appends `planner-surfaced`. A reader of the journal can therefore tell "nothing was
+sent" from "updates were sent and nobody read them", which the delivered-only
+record could not express.
 
 The heartbeat record carries an atomic `in_flight` claim so concurrent pacemaker
 ticks cannot dispatch duplicate check-ins. A failed attempt is recorded in
 `channel/check-in.log`, clears its claim, and becomes eligible again at the next
 configured interval without blocking the graph frontier. A successfully queued
-surface retains the claim until delivery, preventing another actor from
-duplicating the pending update.
+surface retains the claim until delivery, so exactly one check-in is ever pending
+and an ignored channel never costs extra agent turns. Being ignored makes the
+harness louder rather than quieter: the clock is not reset by queuing, so the
+staleness reported by `just runs` and `just status` (below) keeps growing, and a
+queued update discarded unread — at a round boundary, or behind a surface awaiting
+a reply — releases the claim so the pacemaker can queue a fresh one.
 
 Every planner-visible update—round boundary, proposal, or delivered heartbeat—
 clears the due signal and restarts the clock. The pacemaker compares wall time
@@ -153,6 +183,24 @@ for planner reply` for informational ones, followed by the surface kind and
 message. A queued, unconsumed heartbeat remains non-blocking and is not reported
 as a reply wait. This distinguishes completed work held at a planner boundary
 from an orchestrator that is actively executing work.
+
+Surfaces nobody has read yet are reported separately, because they are the state a
+planner who never attached is blind to: the row above says only `ACTIVE`, and the
+`planner-surfaced` record they would look for is written on delivery, which has not
+happened. Both views therefore add one line per affected run naming how many
+surfaces are queued, how stale the oldest one is, and the command that reads them:
+
+```
+* harness-fixes-cont  [mine]  ACTIVE  (orchestrator running)
+    1 planner update waiting, oldest 3h ago; read it with: just channel-next harness-fixes-cont --runs-dir runs
+```
+
+The queue is `channel/heartbeat-surface.json` (a check-in update) and
+`channel/deferred-blocker.json` (a blocker preserved for the next reply-ready
+relay). `channel/planner-pending.json` is not part of it: that surface outlives its
+delivery while it waits for an answer, and is reported by the wait above instead. A
+run reported `ABANDONED` or `PARKED` keeps the line saying why it stopped rather
+than an invitation to read updates nothing will follow up on.
 
 That wait describes a *live* launch only. A queued surface outlives the work that
 queued it, so a run reported abandoned or parked never wears it as its `just runs`

@@ -244,6 +244,16 @@ history-show *args:
 monitor *args:
     uv run orchestrator-monitor {{args}}
 
+# Attach to one launched run and stay attached: `just watch RUN`. Prints planner
+# surfaces as they arrive and node transitions as they happen, and returns when the
+# run settles — exit 0 only when the graph completed. `orchestrate` launches detached
+# so several runs can be supervised at once; this is the one command that attaches to
+# one of them, instead of composing `channel-next` with the read-only views. Replies
+# still go through `just channel-reply`.
+# llmlint: ignore[tool_output_is_signal] the requested live surface-and-transition stream is this viewing command's product.
+watch *args:
+    uv run orchestrator-watch {{args}}
+
 # Emit the schema-versioned run telemetry index, or `just telemetry <run-id>` for one
 # named run — settled or not. `--breakdown` renders the operator timing view.
 telemetry *args:

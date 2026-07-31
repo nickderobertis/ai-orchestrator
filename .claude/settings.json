@@ -40,6 +40,7 @@
       "Bash(just next-round:*)",
       "Bash(just runs:*)",
       "Bash(just monitor:*)",
+      "Bash(just watch:*)",
       "Bash(just status:*)",
       "Bash(just channel-next:*)",
       "Bash(just channel-reply:*)",

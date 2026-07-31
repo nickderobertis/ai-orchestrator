@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
+import threading
 import time
 from contextlib import suppress
 from pathlib import Path
@@ -701,6 +703,7 @@ def test_live_channel_runs_real_nested_graph_and_round_trips_guidance(
     run_dir = runs / run_id
     launch = json.loads((run_dir / "launch.json").read_text(encoding="utf-8"))
     assert launch["commands"] == {
+        "watch": f"just watch {run_id}",
         "channel_next": f"just channel-next {run_id}",
         "monitor": f"just monitor {run_id}",
     }
@@ -1423,3 +1426,198 @@ def test_a_launch_that_dies_after_a_recorded_round_is_reported_against_its_row(
     assert f"! {run_id}  round-01  (" in listed, listed
     assert f"    {settled}" in listed, listed
     assert f"{run_id}: {settled}" in reported, reported
+
+
+#: The unread-surface line `just runs` and `just status` grew, as an operator reads it.
+_QUEUED_LINE = re.compile(
+    r"(\d+) planner updates? waiting, oldest (\d+)([smh]) ago; "
+    r"read (?:it|them) with: just channel-next (\S+) --runs-dir (\S+)"
+)
+
+
+def _queued_age(listed: str) -> int:
+    """The reported staleness of the oldest queued surface, in whole seconds."""
+    matched = _QUEUED_LINE.search(listed)
+    assert matched is not None, listed
+    assert matched.group(3) == "s", listed
+    return int(matched.group(2))
+
+
+def test_a_queued_update_nobody_read_is_reported_until_it_is_consumed(
+    tmp_path: Path, onejudge_bin: str
+) -> None:
+    """Supervision that happened, invisibly: the journey a real planner lost hours to.
+
+    A planner who never runs `channel-next` reads `ACTIVE` in `just runs` and a
+    journal with no `planner-surfaced` line, and concludes the orchestrator surfaced
+    nothing. Both readings were accurate and both were wrong, so the queue itself is
+    reported: the count, the growing staleness, the command that reads it, and a
+    journal record written at send time rather than at delivery.
+    """
+    runs = tmp_path / "unread-runs"
+    history = tmp_path / "unread-history"
+    # The worker holds at the real provider boundary until this test releases it, so
+    # the round cannot settle underneath the assertions and discard the queued update
+    # they are about.
+    ready = tmp_path / "unread-worker.ready"
+    release = tmp_path / "unread-worker.release"
+    plan = tmp_path / "unread-surface.json"
+    plan.write_text(
+        json.dumps(
+            {
+                "schema_version": 3,
+                "name": "unread-surface",
+                "tasks": [
+                    {
+                        "id": "active-worker",
+                        "persona": "engineer",
+                        "task": (
+                            "complete-now unread-surface "
+                            f"provider-barrier-ready={ready} provider-barrier-release={release}"
+                        ),
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    run_id = _launch_cli(plan, runs, _base(tmp_path), onejudge_bin, heartbeat_interval=0.5)
+    queued_path = runs / run_id / "channel" / "heartbeat-surface.json"
+    queue_deadline = deadline(120)
+    while not queued_path.is_file() and time.monotonic() < queue_deadline:
+        time.sleep(0.01)
+    assert queued_path.is_file(), "the pacemaker never queued a check-in update"
+    assert ready.is_file(), "the worker never reached the provider barrier"
+
+    listed = _view_cli("runs", runs, history)
+    matched = _QUEUED_LINE.search(listed)
+    assert matched is not None, listed
+    assert matched.group(1) == "1", listed
+    assert (matched.group(4), matched.group(5)) == (run_id, str(runs)), listed
+    assert f"* {run_id}  ACTIVE" in listed, listed
+    reported = _view_cli("status", runs, history)
+    assert f"{run_id}: 1 planner update waiting" in reported, reported
+    assert f"just channel-next {run_id} --runs-dir {runs}" in reported, reported
+
+    # The journal half of the same failure: sent and delivered are now two records,
+    # and only one of them has happened.
+    # llmlint: ignore[tests_mirror_real_usage] The acceptance contract is about the
+    # journal a planner reads directly; no CLI renders these two kinds apart.
+    events = [
+        json.loads(line)
+        for line in (runs / run_id / "events.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    sent = [event for event in events if event["kind"] == "planner-surface-queued"]
+    assert [event["kind"] for event in events].count("planner-surfaced") == 0, events
+    assert len(sent) == 1, events
+    assert sent[0]["detail"]["source"] == "check-in"
+    assert sent[0]["detail"]["workstream"] is None
+    assert sent[0]["detail"]["kind"] == "heartbeat"
+    assert sent[0]["at"] > 0
+
+    # Ignoring the channel makes the harness louder, not quieter: the reported age
+    # keeps growing while exactly one check-in stays pending, so a planner is never
+    # charged extra agent turns for having looked away.
+    first_age = _queued_age(listed)
+    growth_deadline = deadline(60)
+    while time.monotonic() < growth_deadline:
+        if _queued_age(_view_cli("runs", runs, history)) > first_age:
+            break
+        time.sleep(0.5)
+    else:  # pragma: no cover - only reached when the reported staleness stops growing
+        raise AssertionError("the queued surface's reported staleness never grew")
+    # llmlint: ignore[tests_mirror_real_usage] Exact dispatch dedup is observable only
+    # at the paid-provider seam; onejudge, the pacemaker, and the channel stay real.
+    dispatched = (runs / run_id / "channel" / "check-in-dispatches.txt").read_text(encoding="utf-8")
+    assert dispatched.splitlines() == ["success"], dispatched
+
+    # Quiet the pacemaker before consuming, so what the views report afterwards is
+    # this update's absence rather than a race with the next one.
+    _reply_cli(
+        run_id,
+        runs,
+        {
+            "completion": False,
+            "reason": "slow the pacemaker before consuming",
+            "message": "continue",
+            "heartbeat_interval": 3600,
+        },
+    )
+    consumed = _next_cli(run_id, runs)
+    assert consumed["surface"]["kind"] == "heartbeat"
+    after = _view_cli("runs", runs, history)
+    assert _QUEUED_LINE.search(after) is None, after
+    assert f"* {run_id}  ACTIVE" in after, after
+    # llmlint: ignore[tests_mirror_real_usage] Same journal contract as above: the
+    # delivered record must now join the queued one that survives consumption.
+    delivered = [
+        json.loads(line)
+        for line in (runs / run_id / "events.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert [event["kind"] for event in delivered].count("planner-surfaced") == 1, delivered
+    assert [event["kind"] for event in delivered].count("planner-surface-queued") == 1, delivered
+
+    release.write_text("go\n", encoding="utf-8")
+    while True:
+        boundary = _wait_surface(run_id, runs, wait_seconds=120)
+        if boundary["surface"]["kind"] != "heartbeat":
+            break
+    _reply_cli(run_id, runs, {"completion": True, "reason": "verified unread reporting"})
+    _wait_report(runs / run_id / "orchestrator" / "report.json")
+
+
+def _watch_lines(process: subprocess.Popen[str]) -> list[str]:
+    """Collect `just watch` output off-thread so the test can act on it as it lands."""
+    assert process.stdout is not None
+    collected: list[str] = []
+
+    def pump() -> None:
+        for line in process.stdout:  # type: ignore[union-attr]
+            collected.append(line)
+
+    threading.Thread(target=pump, daemon=True).start()
+    return collected
+
+
+def _await_watch_line(collected: list[str], needle: str, *, wait_seconds: float = 60) -> None:
+    line_deadline = deadline(wait_seconds)
+    while time.monotonic() < line_deadline:
+        if any(needle in line for line in collected):
+            return
+        time.sleep(0.05)
+    raise AssertionError(f"just watch never printed {needle!r}: {''.join(collected)}")
+
+
+def test_watch_attaches_to_a_detached_launch_and_returns_when_the_run_settles(
+    tmp_path: Path, onejudge_bin: str
+) -> None:
+    """One command to learn: surfaces and node transitions, until the run settles."""
+    runs = tmp_path / "watch-runs"
+    run_id = _launch_cli(_plan(tmp_path, "surface-milestone"), runs, _base(tmp_path), onejudge_bin)
+    launch = json.loads((runs / run_id / "launch.json").read_text(encoding="utf-8"))
+    assert launch["commands"]["watch"] == f"just watch {run_id}"
+    assert f"just watch {run_id}" in (runs / run_id / "planner.md").read_text(encoding="utf-8")
+
+    watching = subprocess.Popen(
+        ["just", "watch", run_id, "--runs-dir", str(runs), "--poll-interval", "0.5"],
+        cwd=REPO_ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    collected = _watch_lines(watching)
+    try:
+        _await_watch_line(collected, "milestone (reply required)")
+        # Watching reads; it never answers for the planner, so the run only moves on
+        # once the planner replies through the command the surface named.
+        _await_watch_line(collected, f"Reply with: just channel-reply {run_id}")
+        _reply_cli(run_id, runs, {"completion": True, "reason": "verified through watch"})
+        assert watching.wait(timeout=e2e_timeout(60)) == 0
+    finally:
+        if watching.poll() is None:
+            watching.kill()
+            watching.wait(timeout=e2e_timeout(10))
+    watched = "".join(collected)
+    assert f"Watching {run_id}" in watched
+    assert f"graph:{run_id}/1/worker" in watched, watched
+    assert f"{run_id} settled: graph complete" in watched, watched

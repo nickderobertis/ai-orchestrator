@@ -691,6 +691,61 @@ def test_runs_cli_marks_active_launches_and_what_they_wait_on(tmp_path, capsys) 
     assert "No recorded runs" not in out
 
 
+def _queue_surface(run_dir, message: str) -> None:
+    """Queue a check-in update the way `just channel-surface` leaves one."""
+    (run_dir / "channel" / "heartbeat-surface.json").write_text(
+        json.dumps(
+            {
+                "op": "supervisor",
+                "run_id": run_dir.name,
+                "round": 1,
+                "surface": {"kind": "heartbeat", "message": message, "blocking": False},
+                "messages": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def test_runs_cli_reports_surfaces_nobody_read_and_never_on_a_stopped_run(tmp_path, capsys) -> None:
+    """The state a planner who never attached is otherwise blind to.
+
+    The real journey is tests/e2e/test_channel_e2e.py's
+    ``test_a_queued_update_nobody_read_is_reported_until_it_is_consumed``, which
+    queues the update through a real pacemaker and check-in agent. This direct call
+    exists so the rendering counts toward the coverage gate, and to pin the one case
+    a single live run cannot show: the same queued surface on a run that has stopped.
+    """
+    unrecorded = _launch(tmp_path, "unrecorded")
+    _queue_surface(unrecorded, "worker: still verifying")
+    recorded = _launch(tmp_path, "recorded")
+    _queue_surface(recorded, "worker: gate is running")
+    _, round_dir = write_next_plan(recorded, PLAN)
+    write_result(round_dir, _result("done"))
+    stopped = _launch(tmp_path, "stopped")
+    _queue_surface(stopped, "worker: this run is already gone")
+    _, stopped_first = write_next_plan(stopped, PLAN)
+    write_result(stopped_first, _result("done"))
+    _, stopped_round = write_next_plan(stopped, PLAN)
+    _own(stopped_round, pid=os.getpid() + 10_000_000)
+
+    assert main_runs(["--runs-dir", str(tmp_path)]) == 0
+
+    out = capsys.readouterr().out
+    expected = (
+        "1 planner update waiting, oldest 0s ago; read it with: just channel-next "
+        "{run} --runs-dir " + str(tmp_path)
+    )
+    assert "* unrecorded  [unknown]  ACTIVE  (orchestrator running)" in out
+    assert f"    {expected.format(run='unrecorded')}" in out
+    assert f"    {expected.format(run='recorded')}" in out
+    # A queued surface outlives the run that queued it, so the stopped row keeps the
+    # line that says why it stopped and drops the invitation to go read updates.
+    assert "! stopped  [unknown]  round-01  (1 done)" in out
+    assert "round-02 ABANDONED" in out
+    assert expected.format(run="stopped") not in out
+
+
 def test_runs_cli_reports_a_live_concurrent_run_and_omits_a_stale_registration(
     tmp_path, capsys, monkeypatch
 ) -> None:

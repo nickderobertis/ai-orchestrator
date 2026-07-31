@@ -177,7 +177,7 @@ def _validate_completions(run_dir: Path, result: dict[str, Any], refs: list[str]
 
 
 def main_runs(argv: list[str] | None = None) -> int:
-    from .channel import ChannelError, planner_wait_indicator
+    from .channel import ChannelError, pending_surface_indicator, planner_wait_indicator
     from .goals import concurrent_indicator
     from .launch import UNKNOWN_OWNER, caller_identity, read_run_owner
     from .liveness import PARKED_AFTER_SECONDS, parked_indicator
@@ -247,6 +247,15 @@ def main_runs(argv: list[str] | None = None) -> int:
         for path in run_dirs
         if (indicator := concurrent_indicator(path, args.parked_after)) is not None
     }
+    # A planner who never attached reads this view and nothing else, and the row above
+    # says only ACTIVE. Reporting the queue here is what makes an update the
+    # orchestrator sent visible to them at all: the line names how many are waiting,
+    # how stale the oldest has grown, and the literal command that reads them.
+    unread = {
+        path.name: indicator
+        for path in run_dirs
+        if (indicator := pending_surface_indicator(path)) is not None
+    }
     if not rows and not active_launches and not abandoned:
         print("No runs launched by this session." if args.mine else "No recorded runs.")
         return 0
@@ -267,6 +276,8 @@ def main_runs(argv: list[str] | None = None) -> int:
         except (ChannelError, ConfigError, OSError):
             waiting = None
         print(f"* {run_id}  {owner}  ACTIVE  ({waiting or 'orchestrator running'})")
+        if run_id in unread:
+            print(f"    {unread[run_id]}")
         if run_id in concurrent:
             print(f"    {concurrent[run_id]}")
     for run_id, number, summary in rows:
@@ -288,6 +299,11 @@ def main_runs(argv: list[str] | None = None) -> int:
             print(f"    {abandoned[run_id]}")
         if run_id in parked:
             print(f"    {parked[run_id]}")
+        # Same rule the wait above follows: a queued surface outlives the work that
+        # queued it, so a stopped run keeps the line that says why it stopped rather
+        # than one inviting the planner to read updates nothing will follow up on.
+        if run_id in unread and not stopped:
+            print(f"    {unread[run_id]}")
         if run_id in concurrent:
             print(f"    {concurrent[run_id]}")
         print(f"    Results: just results {run_id} --runs-dir {args.runs_dir}")

@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 
 from orchestrator.channel import (
+    HEARTBEAT_SURFACE_FILE,
     ChannelError,
     ChannelTimeout,
     ProposalPump,
@@ -39,10 +40,13 @@ from orchestrator.channel import (
     main_surface,
     mark_heartbeat_due,
     pending_commands,
+    pending_surface_indicator,
+    pending_surfaces,
     read_message,
     record_command_outcome,
     record_surface,
     relay_supervisor,
+    release_heartbeat_claim,
     submit_commands,
     unanswered_commands,
     validate_commands,
@@ -560,6 +564,100 @@ def test_heartbeat_claim_deduplicates_and_failure_retries_next_interval(tmp_path
     settled = _heartbeat(channel)
     assert settled["in_flight"] is False
     assert settled["due"] is False
+
+
+def test_releasing_a_claim_keeps_the_clock_so_an_ignored_pacemaker_stays_due(
+    tmp_path: Path,
+) -> None:
+    """A discarded update must not take the pacemaker down with it.
+
+    The claim exists to keep exactly one check-in pending. Dropping the update it was
+    held for therefore has to drop the claim too — while leaving the clock where it
+    was, because nobody has been updated and the staleness the views report is
+    measured from the last update a planner actually saw.
+    """
+    channel = create_channel(tmp_path / "run", heartbeat_interval=10)
+    initial = _heartbeat(channel)
+    due_at = float(initial["last_surface_at"]) + 11
+    mark_heartbeat_due(channel, now=due_at)
+    assert claim_heartbeat(channel) is True
+
+    release_heartbeat_claim(channel)
+    released = _heartbeat(channel)
+    assert released["in_flight"] is False
+    assert released["due"] is True
+    assert released["last_surface_at"] == initial["last_surface_at"]
+    # Eligible again, exactly once: the next tick may queue one replacement update.
+    assert claim_heartbeat(channel) is True
+    assert claim_heartbeat(channel) is False
+    # Idempotent, and silent for a run that has no pacemaker at all.
+    release_heartbeat_claim(channel)
+    release_heartbeat_claim(channel)
+    assert _heartbeat(channel)["in_flight"] is False
+    release_heartbeat_claim(tmp_path / "no-channel")
+
+
+def test_queued_surfaces_are_reported_with_a_growing_age_and_the_reading_command(
+    tmp_path: Path,
+) -> None:
+    """The state a planner who never attached is otherwise blind to."""
+    run_dir = tmp_path / "runs" / "unattached"
+    channel = create_channel(run_dir)
+    assert pending_surfaces(channel) == ()
+    assert pending_surface_indicator(run_dir) is None
+
+    atomic_json(
+        channel / HEARTBEAT_SURFACE_FILE,
+        {
+            "op": "supervisor",
+            "run_id": "unattached",
+            "round": 1,
+            "surface": {
+                "kind": "heartbeat",
+                "message": "worker still verifying",
+                "blocking": False,
+            },
+            "messages": [],
+        },
+    )
+    queued = pending_surfaces(channel)
+    assert [(item.kind, item.message) for item in queued] == [
+        ("heartbeat", "worker still verifying")
+    ]
+    indicator = pending_surface_indicator(run_dir, now=queued[0].queued_at + 3 * 3600)
+    assert indicator == (
+        "1 planner update waiting, oldest 3h ago; read it with: "
+        f"just channel-next unattached --runs-dir {run_dir.parent}"
+    )
+    # The age is what escalates, so it is reported at the granularity a reader can act
+    # on rather than rounded away.
+    assert "oldest 0s ago" in str(pending_surface_indicator(run_dir))
+    assert "oldest 12m ago" in str(
+        pending_surface_indicator(run_dir, now=queued[0].queued_at + 12 * 60)
+    )
+
+    # A blocker preserved for the next reply-ready relay is queued in the same sense.
+    atomic_json(
+        channel / "deferred-blocker.json",
+        {"kind": "proposal", "message": "worker: dispatch died", "blocking": True},
+    )
+    both = pending_surfaces(channel)
+    assert [item.kind for item in both] == ["heartbeat", "proposal"]
+    assert both[0].queued_at <= both[1].queued_at
+    assert "2 planner updates waiting" in str(pending_surface_indicator(run_dir))
+    assert "read them with:" in str(pending_surface_indicator(run_dir))
+
+
+def test_a_queued_surface_that_cannot_be_read_is_still_reported(tmp_path: Path) -> None:
+    """Damaged state must not restore the silence this reporting exists to break."""
+    run_dir = tmp_path / "runs" / "damaged"
+    channel = create_channel(run_dir)
+    (channel / HEARTBEAT_SURFACE_FILE).write_text("{not json", encoding="utf-8")
+    queued = pending_surfaces(channel)
+    assert [(item.kind, item.message) for item in queued] == [
+        ("unknown", "unreadable queued surface")
+    ]
+    assert "1 planner update waiting" in str(pending_surface_indicator(run_dir))
 
 
 def test_heartbeat_reply_adjusts_or_disables_without_changing_verdict(tmp_path: Path) -> None:

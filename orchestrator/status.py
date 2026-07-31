@@ -11,7 +11,12 @@ from pathlib import Path
 from typing import Any
 
 from . import gitops, history, runs
-from .channel import ChannelError, due_indicator, planner_wait_indicator
+from .channel import (
+    ChannelError,
+    due_indicator,
+    pending_surface_indicator,
+    planner_wait_indicator,
+)
 from .config import ConfigError
 from .goals import concurrent_indicator
 from .liveness import PARKED_AFTER_SECONDS, parked_indicator
@@ -323,6 +328,11 @@ def main(argv: list[str] | None = None) -> int:
                 # publication checkout or a lost push race.
                 if (shared := concurrent_indicator(run_dir, args.parked_after)) is not None:
                     indicators.append(f"{run_dir.name}: {shared}")
+                # Reported here as well as in `just runs`, because the two views are
+                # read interchangeably: a planner who checks only this one must not
+                # have to know that the other is where unread updates are named.
+                if (unread := pending_surface_indicator(run_dir)) is not None:
+                    indicators.append(f"{run_dir.name}: {unread}")
                 try:
                     waiting = planner_wait_indicator(run_dir / "channel")
                     indicator = due_indicator(run_dir / "channel")
