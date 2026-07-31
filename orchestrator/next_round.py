@@ -12,7 +12,7 @@ from .config import ConfigError
 from .detach import run_detached
 from .journal import open_journal
 from .plan import PlanError
-from .replan import next_round
+from .replan import next_round, round_context
 from .runs import (
     NodeId,
     StepId,
@@ -77,7 +77,12 @@ def main(argv: list[str] | None = None) -> int:
         if completed_refs:
             edits = {**edits, "complete_human": completed_refs}
         previous_plan = load_mapping(round_dir / "plan.json")
-        plan = next_round(previous_plan, result, edits)
+        # The plan of record is the one the round was launched with; what the planner
+        # learned *during* it lives in the committed edits, so the two are read
+        # together or the transition restores a brief that predates the round.
+        plan = next_round(
+            previous_plan, result, edits, carried_context=round_context(run_dir, number)
+        )
     except (ConfigError, PlanError) as exc:
         print(f"next-round: {exc}", file=sys.stderr)
         return 2

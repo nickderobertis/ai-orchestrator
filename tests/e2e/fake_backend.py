@@ -276,6 +276,12 @@ def main() -> int:
             if run_log is not None:
                 with Path(run_log.group(1)).open("a", encoding="utf-8") as stream:
                     stream.write("run\n")
+            # One JSON line per delivered prompt, so a journey can assert on exactly
+            # what the agent side received across several dispatches of one node.
+            task_log = re.search(r"record-task=(\S+)", task)
+            if task_log is not None:
+                with Path(task_log.group(1)).open("a", encoding="utf-8") as stream:
+                    stream.write(json.dumps(task) + "\n")
             if "resume-after-cap" in task:
                 resume_marker.write_text(str(resume_segments + 1), encoding="utf-8")
             if "slow-branch" in task:

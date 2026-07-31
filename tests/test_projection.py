@@ -54,6 +54,11 @@ def test_static_event_contract_golden() -> None:
         "optional": [COMMITTED_EDIT_COMMAND_FIELD],
         COMMITTED_EDIT_COMMAND_FIELD: COMMITTED_EDIT_COMMAND_TYPE,
         "command_since": COMMITTED_EDIT_COMMAND_SINCE,
+        # The compiled vocabulary is part of the record contract, not an internal
+        # detail: strict replay refuses an operation kind it cannot fold, so a kind
+        # added here without the version beside it is what a v7 reader meets as a
+        # corrupt round rather than as a record from a version it does not know.
+        COMMITTED_EDIT_OPERATIONS_FIELD: sorted(EDIT_OPERATION_KINDS),
     }
     # One golden per version, and only the current one: a stale file beside it would
     # be a second, unchecked source for the same contract.
@@ -199,6 +204,7 @@ def test_every_compiled_edit_operation_kind_has_a_replay_handler() -> None:
         {"kind": "retry-requested", "node": "a", "detail": {"replacement": "c"}},
         {"kind": "human-attested", "node": "approve", "detail": {"ref": "approve"}},
         {"kind": "completion-requested", "detail": {"reason": "done"}},
+        {"kind": "context-added", "node": "a", "detail": {"note": "the gate is green"}},
         {"kind": "node-dropped", "node": "b", "detail": {"dependents": "drop"}},
     ]
     assert {operation["kind"] for operation in operations} == EDIT_OPERATION_KINDS
@@ -1009,3 +1015,86 @@ def test_a_committed_edit_round_trips_its_command_through_the_journal(tmp_path: 
     assert committed.version == SCHEMA_VERSION
     assert committed.detail["command"] == command
     assert [node["id"] for node in project_round(events, run_id, 1).plan["tasks"]] == ["keep"]
+
+
+def test_committed_context_replays_onto_the_node_it_was_attached_to() -> None:
+    """Replay reconstructs the notes, so a rejected later delta cannot lose them."""
+    events = [
+        _node_added(1, "work"),
+        _event("round-started", 2, detail={"plan": {"schema_version": 3}}),
+        _event(
+            "edit-committed",
+            3,
+            detail={
+                "command": {"op": "context", "id": "work", "note": "41 commits are on the branch"},
+                "operations": [
+                    {
+                        "kind": "context-added",
+                        "node": "work",
+                        "detail": {"note": "41 commits are on the branch"},
+                    }
+                ],
+            },
+        ),
+        _event(
+            "edit-committed",
+            4,
+            detail={
+                "command": {"op": "context", "id": "work", "note": "one llmlint finding is open"},
+                "operations": [
+                    {
+                        "kind": "context-added",
+                        "node": "work",
+                        "detail": {"note": "one llmlint finding is open"},
+                    }
+                ],
+            },
+        ),
+    ]
+    projection = project_round(events, RunId("r"), 1)
+    assert projection.plan["tasks"][0]["context"] == [
+        "41 commits are on the branch",
+        "one llmlint finding is open",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("operation", "message"),
+    [
+        (
+            {"kind": "context-added", "node": "absent", "detail": {"note": "n"}},
+            "unknown node",
+        ),
+        ({"kind": "context-added", "node": "work", "detail": {"note": " "}}, "non-empty note"),
+        (
+            {"kind": "context-added", "node": "work", "detail": {}},
+            "non-empty note",
+        ),
+    ],
+)
+def test_malformed_committed_context_is_refused_and_rolled_back(
+    operation: dict[str, object], message: str
+) -> None:
+    events = [
+        _node_added(1, "work", context=["kept"]),
+        _event("round-started", 2, detail={"plan": {"schema_version": 3}}),
+        _event("edit-committed", 3, detail={"operations": [operation]}),
+    ]
+    with pytest.raises(ProjectionError, match=message):
+        project_round(events, RunId("r"), 1)
+
+
+def test_committed_context_refuses_a_node_whose_context_is_not_a_list() -> None:
+    events = [
+        _node_added(1, "work", context="not a list"),
+        _event("round-started", 2, detail={"plan": {"schema_version": 3}}),
+        _event(
+            "edit-committed",
+            3,
+            detail={
+                "operations": [{"kind": "context-added", "node": "work", "detail": {"note": "n"}}]
+            },
+        ),
+    ]
+    with pytest.raises(ProjectionError, match="'context' is a list"):
+        project_round(events, RunId("r"), 1)

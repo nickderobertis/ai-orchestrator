@@ -23,6 +23,7 @@ from waits import deadline as e2e_deadline
 
 from orchestrator import REPO_ROOT, gitops
 from orchestrator.coordination import advisory_lock, git_lock_identity, lock_path
+from orchestrator.plan import PLAN_SCHEMA_VERSION
 from orchestrator.registry import Registry
 
 
@@ -2442,7 +2443,7 @@ def test_expects_no_diff_contract_is_rejected_at_cli_boundary(tmp_path: Path) ->
         ),
         (
             {"schema_version": 99, "tasks": [{"id": "x", "persona": "p", "task": "x"}]},
-            "current version 5",
+            f"current version {PLAN_SCHEMA_VERSION}",
         ),
         (
             {

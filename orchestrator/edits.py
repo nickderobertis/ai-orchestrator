@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, Any, Literal, TypeAlias, TypedDict, cast, get_
 if TYPE_CHECKING:
     from .graph import Graph
 
-EditOp = Literal["add", "drop", "reparent", "retry", "attest", "complete"]
+EditOp = Literal["add", "drop", "reparent", "retry", "attest", "complete", "context"]
 EDIT_OPS = frozenset(get_args(EditOp))
 # Single source of truth for the down-channel edit envelope version. The parser
 # here and every producer (see channel._reply) reference this so the accepted and
@@ -75,8 +75,22 @@ class CompletePayload(TypedDict):
     reason: str
 
 
+class ContextPayload(TypedDict):
+    """Attach one planner note to a node's next dispatch."""
+
+    op: Literal["context"]
+    id: str
+    note: str
+
+
 EditPayload: TypeAlias = (
-    AddPayload | DropPayload | ReparentPayload | RetryPayload | AttestPayload | CompletePayload
+    AddPayload
+    | DropPayload
+    | ReparentPayload
+    | RetryPayload
+    | AttestPayload
+    | CompletePayload
+    | ContextPayload
 )
 
 
@@ -89,6 +103,7 @@ EditOperationKind = Literal[
     "retry-requested",
     "human-attested",
     "completion-requested",
+    "context-added",
 ]
 EDIT_OPERATION_KINDS = frozenset(get_args(EditOperationKind))
 
@@ -315,6 +330,24 @@ def apply_edit(
             if ref in attestations:
                 raise EditError("human action was already attested")
             events.append({"kind": "human-attested", "node": ref, "detail": {"ref": ref}})
+        case "context":
+            node_id, note = item.get("id"), item.get("note")
+            if not isinstance(node_id, str) or node_id not in by_id:
+                raise EditError("context requires an existing node id")
+            if not isinstance(note, str) or not note.strip():
+                raise EditError("context requires a non-empty note")
+            # A note is read by a *later* dispatch of the node — a retry this round,
+            # or the carried-forward node after the transition. A node that already
+            # settled `done` has neither, so the note could reach nobody and the
+            # planner is told that rather than left believing it landed.
+            if states.get(node_id) == "done":
+                raise EditError("context requires a node that can still be dispatched")
+            target = by_id[node_id]
+            existing = target.get("context")
+            if existing is not None and not isinstance(existing, list):
+                raise EditError("context requires a node whose 'context' is a list")
+            target["context"] = [*(existing or []), note]
+            events.append({"kind": "context-added", "node": node_id, "detail": {"note": note}})
         case "complete":
             reason = item.get("reason")
             if not isinstance(reason, str):

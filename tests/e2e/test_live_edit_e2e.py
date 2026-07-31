@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import time
@@ -19,6 +20,7 @@ from waits import deadline
 from waits import timeout as e2e_timeout
 
 from orchestrator import BASE_CONFIG, REPO_ROOT, gitops
+from orchestrator.channel import CHANNEL_DIR_ENV, CHANNEL_RUN_ID_ENV, create_channel
 from orchestrator.projection import project_run
 from orchestrator.provenance import incomplete_commits
 from orchestrator.registry import Registry
@@ -776,3 +778,118 @@ def test_real_cli_live_drop_preserves_and_recovers_running_lifecycle(
         check=True,
     )
     _wait_for(outer_run / "orchestrator" / "report.json", lambda text: bool(text.strip()))
+
+
+def test_planner_context_attached_mid_round_reaches_the_next_round_dispatch(
+    tmp_path: Path, command_base, onejudge_bin: str
+) -> None:
+    """What the planner learns during a round reaches the node's next dispatch.
+
+    The transition used to restore the plan the round was launched with, so a node
+    carried forward was re-briefed with prose that predated everything the round had
+    just proven — and the worker set about redoing finished work. The note is
+    submitted through the real `channel-reply`, and the prompt the agent side
+    actually receives is recorded by the backend, so this asserts on the delivered
+    text rather than on the plan alone.
+    """
+    runs = tmp_path / "runs"
+    run_dir = runs / "planner-context"
+    channel = create_channel(run_dir)
+    prompts = tmp_path / "prompts.jsonl"
+    ready, release = tmp_path / "hold.ready", tmp_path / "hold.release"
+    note = "41 commits are on the branch and the gate is green; only llmlint remains."
+    plan = tmp_path / "plan.json"
+    plan.write_text(
+        json.dumps(
+            {
+                "schema_version": 6,
+                "tasks": [
+                    {
+                        "id": "work",
+                        "persona": "engineer",
+                        "task": (
+                            "## What\nSweep the harness debt.\n\n"
+                            f"should-fail no-assessment record-task={prompts}"
+                        ),
+                        "max_turns": 1,
+                    },
+                    {
+                        "id": "hold",
+                        "persona": "engineer",
+                        "task": (
+                            f"provider-barrier-ready={ready} provider-barrier-release={release}"
+                        ),
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    common = [
+        "--runs-dir",
+        str(runs),
+        "--base",
+        str(command_base()),
+        "--onejudge-bin",
+        onejudge_bin,
+    ]
+    first = subprocess.Popen(
+        [
+            str(Path(onejudge_bin).with_name("orchestrator-run-plan")),
+            str(plan),
+            "--run",
+            "planner-context",
+            *common,
+        ],
+        cwd=REPO_ROOT,
+        env={**os.environ, CHANNEL_DIR_ENV: str(channel), CHANNEL_RUN_ID_ENV: "planner-context"},
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    events = run_dir / "events.jsonl"
+    # The round has to still be executing when the note is submitted — that is the
+    # case the incident was — so one worker is held at the provider boundary while
+    # the node the note is about has already failed.
+    _wait_for(ready, lambda text: text == "ready\n", LIVE_PROCESS_TIMEOUT)
+    _wait_for_event(events, "node-failed", "work", LIVE_PROCESS_TIMEOUT)
+
+    _reply(str(run_dir.name), runs, [{"op": "context", "id": "work", "note": note}])
+
+    release.touch()
+    first.communicate(timeout=e2e_timeout(LIVE_PROCESS_TIMEOUT))
+    round_one = json.loads((run_dir / "round-01" / "result.json").read_text(encoding="utf-8"))
+    assert round_one["results"]["work"]["status"] == "failed"
+
+    resumed = subprocess.run(
+        ["just", "next-round", "planner-context", *common, "--format", "json"],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+    )
+    assert resumed.returncode == 1, resumed.stderr  # `work` fails again, by design
+
+    carried = json.loads((run_dir / "round-02" / "plan.json").read_text(encoding="utf-8"))
+    work = next(task for task in carried["tasks"] if task["id"] == "work")
+    assert work["context"] == [note]
+    delivered = [json.loads(line) for line in prompts.read_text(encoding="utf-8").splitlines()]
+    assert len(delivered) >= 2
+    # The opening brief was delivered without the note, and the next round's dispatch
+    # received the same brief *plus* it, under the section that says what it is.
+    assert note not in delivered[0]
+    assert note in delivered[-1]
+    assert "## What\nSweep the harness debt." in delivered[-1]
+    assert "## Planner context" in delivered[-1]
+
+    # And it travels exactly one transition: a round that attaches nothing new hands
+    # the node no context at all, so instructions cannot pile up across rounds.
+    quiet = subprocess.run(
+        ["just", "next-round", "planner-context", "--runs-dir", str(runs), "--plan-only"],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    assert "round-03" in quiet.stdout
+    third = json.loads((run_dir / "round-03" / "plan.json").read_text(encoding="utf-8"))
+    assert "context" not in next(task for task in third["tasks"] if task["id"] == "work")
