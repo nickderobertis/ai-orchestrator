@@ -396,13 +396,23 @@ def commit_empty(cwd: str | Path, message: str) -> str:
     return head_sha(cwd)
 
 
+def is_empty_commit(cwd: str | Path, sha: str) -> bool:
+    """Whether ``sha`` is a single-parent commit that changed nothing.
+
+    Asked before dropping a commit, so a merge and a commit that carries a tree
+    change both answer no: neither can be removed without losing something.
+    """
+    parents = _git(["rev-list", "--parents", "-n", "1", sha], cwd=cwd).stdout.split()
+    if len(parents) != 2:
+        return False
+    return _git(["diff-tree", "--quiet", parents[1], sha], cwd=cwd, check=False).returncode == 0
+
+
 def drop_empty_commit(cwd: str | Path, sha: str) -> None:
     """Remove one unpublished empty commit while replaying later branch work."""
     parents = _git(["rev-list", "--parents", "-n", "1", sha], cwd=cwd).stdout.split()
-    if len(parents) != 2:
-        raise GitError(f"refusing to drop non-linear commit {sha}")
-    if _git(["diff-tree", "--quiet", parents[1], sha], cwd=cwd, check=False).returncode != 0:
-        raise GitError(f"refusing to drop non-empty commit {sha}")
+    if not is_empty_commit(cwd, sha):
+        raise GitError(f"refusing to drop commit {sha}: it is a merge or carries work")
     if head_sha(cwd) == sha:
         reset_hard(cwd, parents[1])
     else:

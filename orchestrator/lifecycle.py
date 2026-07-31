@@ -1779,10 +1779,15 @@ def run_repo_task(
             automatic_resumes += 1
         if step_run.status == "done" and automatic_resumes:
             provisional = incomplete_commits(worktree, remote_base, "HEAD") - initial_incomplete
+            # Only the empty ones. A step that stopped with a dirty tree commits its
+            # partial work *under* the marker message, so that commit is the preserved
+            # work itself — dropping it would destroy exactly what preservation exists
+            # to save. It keeps its commit and clears its provenance the way inherited
+            # markers already do, through the recovery attestation written below.
             ordered = [
                 commit.sha
                 for commit in reversed(gitops.log_messages(worktree, remote_base, "HEAD"))
-                if commit.sha in provisional
+                if commit.sha in provisional and gitops.is_empty_commit(worktree, commit.sha)
             ]
             for marker in ordered:
                 gitops.drop_empty_commit(worktree, marker)
