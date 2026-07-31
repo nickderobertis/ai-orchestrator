@@ -65,6 +65,38 @@ handle.close()
 assert named
 """
 
+_POST_REAP_HOLD = """
+import os
+import time
+from pathlib import Path
+
+_real_waitpid = os.waitpid
+
+
+def _held_waitpid(pid, options):
+    result = _real_waitpid(pid, options)
+    if options != 0 or result[0] == 0:
+        return result
+    scratch = Path(os.environ["TMPDIR"])
+    for directory in scratch.glob("orchestrator-watchdog-*"):
+        try:
+            owner = int((directory / "owner.lock").read_text(encoding="utf-8").split()[0])
+            worker = int((directory / "pid").read_text(encoding="utf-8").split()[0])
+        except (OSError, IndexError, ValueError):
+            continue
+        if owner == os.getpid() and worker == pid:
+            ready = Path(os.environ["ORCHESTRATOR_TEST_REAP_READY"])
+            release = Path(os.environ["ORCHESTRATOR_TEST_REAP_RELEASE"])
+            ready.write_text(str(directory), encoding="utf-8")
+            while not release.exists():
+                time.sleep(0.02)
+            break
+    return result
+
+
+os.waitpid = _held_waitpid
+"""
+
 
 def _write_nx_install(path: Path, *, dependencies: dict[str, str]) -> Path:
     """Write the throwaway single-`nx` install shape Nx leaves behind per invocation."""
@@ -581,7 +613,18 @@ def test_concurrent_sweep_preserves_a_dispatch_past_its_worker_exit(
     scratch.mkdir()
     project_dir = tmp_path / "project"
     project_dir.mkdir()
-    dispatch_env = {**os.environ, "TMPDIR": str(scratch)}
+    hook = tmp_path / "post-reap-hook"
+    hook.mkdir()
+    (hook / "sitecustomize.py").write_text(_POST_REAP_HOLD, encoding="utf-8")
+    reap_ready = tmp_path / "reap.ready"
+    reap_release = tmp_path / "reap.release"
+    dispatch_env = {
+        **os.environ,
+        "TMPDIR": str(scratch),
+        "PYTHONPATH": os.pathsep.join(filter(None, (str(hook), os.environ.get("PYTHONPATH", "")))),
+        "ORCHESTRATOR_TEST_REAP_READY": str(reap_ready),
+        "ORCHESTRATOR_TEST_REAP_RELEASE": str(reap_release),
+    }
     if not identifiable:
         blind = tmp_path / "empty-proc"
         blind.mkdir()
@@ -607,31 +650,23 @@ def test_concurrent_sweep_preserves_a_dispatch_past_its_worker_exit(
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
     )
-    swept_past_worker_exit: list[Path] = []
     try:
-        while process.poll() is None:
-            past_exit = [
-                directory
-                for directory in scratch.glob(WATCHDOG_PATTERN)
-                if _worker_pid_is_gone(directory)
-            ]
-            # The unattended sweep this test races is the in-process
-            # `sweep_scratch()` call every recorded round transition makes
-            # (orchestrator/graph.py). A `just sweep-scratch` subprocess takes
-            # longer to start than the post-exit window it must land inside, and
-            # the recipe surface is covered by the recipe tests above.
-            # llmlint: ignore[tests_mirror_real_usage] this is the round-transition caller
-            result = sweep_scratch(scratch)
-            assert result.removed == (), result.removed
-            swept_past_worker_exit.extend(
-                directory for directory in past_exit if directory in result.watchdog_retained
-            )
-            time.sleep(0.001)
+        _wait_for_path(reap_ready)
+        directory = Path(reap_ready.read_text(encoding="utf-8"))
+        assert _worker_pid_is_gone(directory), "fixture paused before the worker was reaped"
+        # The unattended sweep this test races is the in-process `sweep_scratch()`
+        # call every recorded round transition makes (orchestrator/graph.py).
+        # The fixture pauses only after the dispatcher's real waitpid reaps its
+        # worker, making that otherwise tiny production state deterministic.
+        # llmlint: ignore[tests_mirror_real_usage] this is the round-transition caller
+        result = sweep_scratch(scratch)
+        assert result.removed == (), result.removed
+        assert directory in result.watchdog_retained
     finally:
+        reap_release.touch()
         stdout, stderr = process.communicate(timeout=120)
 
     assert process.returncode == 0, stderr
-    assert swept_past_worker_exit, "the sweep never observed the post-worker-exit window"
     # The report is parsed out of the swept-past directory, so its survival is the
     # dispatch's own evidence that nothing removed the tree underneath it.
     report = json.loads(stdout)
