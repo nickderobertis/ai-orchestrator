@@ -72,7 +72,7 @@ export function OverallView({
             <CardContent className="px-[15px]">
               <div className="section-heading">
                 <Activity size={16} />
-                <h3>Planner session</h3>
+                <h3>Run-level sessions</h3>
               </div>
               {/* The sessions are read off the timeline, so a timeline that has not
                   arrived or could not be read is not the same answer as a run that
@@ -91,11 +91,11 @@ export function OverallView({
                 </p>
               ) : sessions.length === 0 ? (
                 <p className="m-0 text-[11px] text-muted-foreground">
-                  No planner conversation is available.
+                  No run-level conversation is available.
                 </p>
               ) : (
                 sessions.map((span, index) => (
-                  <PlannerSession
+                  <RunLevelSession
                     client={client}
                     conversationId={
                       span.reference?.kind === "conversation"
@@ -121,11 +121,13 @@ export function OverallView({
 /**
  * One run-level transcript, read only while it is open.
  *
- * The run detail no longer carries transcripts at all, so this fetches the one
- * session it is showing — the first is open on arrival because that is the planner
- * conversation an operator came to the overall view to read.
+ * Run-level is wider than "the planner": the orchestrator's own session and every
+ * per-round check-in are recorded at no node, and all of them belong here. The run
+ * detail no longer carries transcripts at all, so this fetches the one session it is
+ * showing — the first is open on arrival because that is the planner conversation an
+ * operator came to the overall view to read.
  */
-function PlannerSession({
+function RunLevelSession({
   client,
   runId,
   conversationId,
@@ -151,15 +153,15 @@ function PlannerSession({
       <article>
         <header className="transcript-header">
           <CollapsibleTrigger asChild>
-            <button className="planner-toggle" type="button">
+            <button className="session-toggle" type="button">
               <ChevronRight
                 className={open ? "rotate-90" : ""}
                 size={14}
                 aria-hidden="true"
               />
               <span>
-                <span className="eyebrow">Orchestrator</span>
-                <span className="planner-name">{label}</span>
+                <span className="eyebrow">Run-level</span>
+                <span className="session-name">{label}</span>
               </span>
             </button>
           </CollapsibleTrigger>
@@ -175,8 +177,7 @@ function PlannerSession({
           )}
           {transcript.error !== undefined && (
             <p className="m-0 text-[11px] text-muted-foreground">
-              The planner transcript could not be read:{" "}
-              {transcript.error.message}
+              This transcript could not be read: {transcript.error.message}
             </p>
           )}
           {transcript.conversation?.conversation.turns.map((turn) => (

@@ -376,19 +376,19 @@ test("restores a bookmarked view and refreshes through the read API", async ({
   await expect(metric("Nodes")).toContainText(/[1-9]\d*/);
   await expect(metric("Wall time")).toContainText(/\d+\.\ds/);
   await expect(metric("Turns")).toContainText(/\d+/);
-  await expect(page.getByText("Planner session")).toBeVisible();
+  await expect(page.getByText("Run-level sessions")).toBeVisible();
   await expect(
     page.getByText("Coordinating the execution frontier"),
   ).toBeVisible();
 
   await page.getByRole("button", { name: "Refresh" }).click();
-  await expect(page.getByText("Planner session")).toBeVisible();
+  await expect(page.getByText("Run-level sessions")).toBeVisible();
 
   await page.getByRole("tab", { name: "Graph" }).click();
   await expect(page.locator(".dag-node.state-running")).toContainText(
     "dashboard",
   );
-  await expect(page.getByText("Planner session")).toHaveCount(0);
+  await expect(page.getByText("Run-level sessions")).toHaveCount(0);
 
   await openObservatory(page, `/?run=${runs().live}&node=dashboard`);
   await expect(
@@ -468,15 +468,15 @@ test("lists a run that has recorded no event beside the runs that have", async (
   await expect(page.getByRole("alert")).toHaveCount(0);
 });
 
-test("says so when a run recorded no planner conversation", async ({
+test("says so when a run recorded no run-level conversation", async ({
   page,
 }) => {
   // The settled run's history holds a worker session and no orchestrator one, so
   // its overall view has no planner transcript to show.
   await openObservatory(page, `/?run=${runs().history}&view=overall`);
-  await expect(page.getByText("Planner session")).toBeVisible();
+  await expect(page.getByText("Run-level sessions")).toBeVisible();
   await expect(
-    page.getByText("No planner conversation is available."),
+    page.getByText("No run-level conversation is available."),
   ).toBeVisible();
 });
 

@@ -83,9 +83,11 @@ a run, then:
   failed or were cancelled, and an animated acid highlight marks active work;
 - select a node in the graph or keyboard-accessible node list to open its
   **timeline view** (below);
-- use **Overall** to see whole-run telemetry and the planner/orchestrator
-  conversation. A session the graph placed at no node is run-level work, so that
-  is where the planner's own conversation and the per-round check-ins are read.
+- use **Overall** to see whole-run telemetry and the run's **run-level sessions**.
+  A session the graph placed at no node is run-level work, so that is where the
+  planner's own conversation and the per-round check-ins are read; each is fetched
+  only while it is open, and a timeline that has not arrived or could not be read
+  is reported as such rather than as a run that recorded none.
 
 The selected run, node, view, and opened timeline item are encoded in the URL
 query string, so a specific moment of a node's execution can be bookmarked or

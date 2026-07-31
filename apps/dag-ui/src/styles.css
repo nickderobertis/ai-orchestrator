@@ -360,7 +360,7 @@ p {
 .rail-row,
 .rail-summary,
 .detail-link,
-.planner-toggle {
+.session-toggle {
   display: flex;
   align-items: center;
 }
@@ -551,7 +551,7 @@ p {
   padding: 90px 20px;
 }
 
-.planner-toggle {
+.session-toggle {
   gap: 8px;
   border: 0;
   background: transparent;
@@ -560,7 +560,7 @@ p {
   cursor: pointer;
 }
 
-.planner-name {
+.session-name {
   display: block;
   font-size: 12px;
   font-weight: 600;

@@ -249,12 +249,12 @@ describe("DAG application", () => {
       return defaultResponder(url);
     });
     const view = render(<App client={held.client} />);
-    // "No planner conversation" would be a claim about a record nothing has read.
+    // "No run-level conversation" would be a claim about a record nothing has read.
     expect(
       await screen.findByText("Loading the run's sessions…"),
     ).toBeInTheDocument();
     expect(
-      screen.queryByText("No planner conversation is available."),
+      screen.queryByText("No run-level conversation is available."),
     ).toBeNull();
     release(Response.json(runTimeline(LIVE_RUN)));
     expect(
@@ -334,7 +334,7 @@ describe("DAG application", () => {
     );
     render(<App client={client} />);
     expect(
-      await screen.findByText(/The planner transcript could not be read/),
+      await screen.findByText(/This transcript could not be read/),
     ).toBeInTheDocument();
   });
 
@@ -436,7 +436,7 @@ describe("DAG application", () => {
     );
   });
 
-  test("shows the planner session in the overall view", async () => {
+  test("shows the run-level sessions in the overall view", async () => {
     const { client } = telemetryHarness();
     render(<App client={client} />);
     await screen.findByText("dashboard");
@@ -447,18 +447,18 @@ describe("DAG application", () => {
     await waitFor(() =>
       expect(window.location.search).toContain("view=overall"),
     );
-    expect(await screen.findByText("Planner session")).toBeInTheDocument();
+    expect(await screen.findByText("Run-level sessions")).toBeInTheDocument();
     expect(
       await screen.findByText("Coordinating the execution frontier"),
     ).toBeInTheDocument();
   });
 
-  test("says so when a run recorded no planner conversation", async () => {
+  test("says so when a run recorded no run-level conversation", async () => {
     window.history.replaceState(null, "", `/?run=${HISTORY_RUN}&view=overall`);
     const { client } = telemetryHarness();
     render(<App client={client} />);
     expect(
-      await screen.findByText("No planner conversation is available."),
+      await screen.findByText("No run-level conversation is available."),
     ).toBeInTheDocument();
   });
 
