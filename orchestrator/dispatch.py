@@ -704,6 +704,7 @@ def run_onejudge(
                 previous = (activity, _file_progress(Path(cwd) / ".git"))
                 last_progress = time.monotonic()
                 agent_identity: str | None = None
+                missing_agent_identity: str | None = None
                 last_agent_heartbeat_ns: int | None = None
                 last_agent_heartbeat = time.monotonic()
                 while not run.done():
@@ -761,14 +762,6 @@ def run_onejudge(
                                 if activity.pids:
                                     observed = tuple(dict.fromkeys((*observed, *activity.pids)))
                                     observed_tree = observed
-                                # The wrapper publishes agent.done immediately after
-                                # wait(2) observes the child exit. Under host load,
-                                # this coroutine can run in the valid scheduling gap
-                                # between those two operations. Give the marker
-                                # writer one short turn, then require both the same
-                                # identity and the absent terminal marker before
-                                # diagnosing a vanished agent.
-                                await asyncio.sleep(min(0.05, heartbeat_timeout / 4))
                                 latest_agent = _agent_status(agent_status_dir, "agent.pid")
                                 if (
                                     agent_pid not in activity.pids
@@ -776,16 +769,31 @@ def run_onejudge(
                                     and _agent_status(agent_status_dir, "agent.done")
                                     != current_agent
                                 ):
-                                    return WatchdogSignal(
-                                        "worker-died",
-                                        pid,
-                                        observed,
-                                        detail=(
-                                            agent_failure_reason(agent_status_dir)
-                                            or "the agent harness process vanished mid-turn "
-                                            "without recording an exit"
-                                        ),
-                                    )
+                                    # The wrapper records agent.done after wait(2)
+                                    # observes the child exit. A loaded host can
+                                    # schedule this watcher between those operations
+                                    # for longer than any chosen sleep. Confirm the
+                                    # same unfinished identity against a second,
+                                    # independently sampled tree instead of turning
+                                    # scheduler latency into a death diagnosis.
+                                    if missing_agent_identity == current_agent:
+                                        return WatchdogSignal(
+                                            "worker-died",
+                                            pid,
+                                            observed,
+                                            detail=(
+                                                agent_failure_reason(agent_status_dir)
+                                                or "the agent harness process vanished mid-turn "
+                                                "without recording an exit"
+                                            ),
+                                        )
+                                    missing_agent_identity = current_agent
+                                else:
+                                    missing_agent_identity = None
+                            else:
+                                missing_agent_identity = None
+                        else:
+                            missing_agent_identity = None
                             child_pid_file = agent_status_dir / "agent.child.pid"
                             if child_pid_file.exists():
                                 try:
