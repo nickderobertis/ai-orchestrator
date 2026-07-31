@@ -321,6 +321,44 @@ def test_watchdog_path_forwards_the_task_on_stdin(tmp_path: Path) -> None:
     assert "startup chatter" in (status_dir / "agent.stderr").read_text(encoding="utf-8")
 
 
+def test_the_pid_a_turn_advertises_outlives_the_marker_that_closes_it(tmp_path: Path) -> None:
+    """`agent.pid` is the wrapper's own pid, and `agent.done` names it before it exits.
+
+    The dispatcher's liveness rule reads exactly this ordering: a pid that has left
+    the process tree unnamed by `agent.done` died mid-turn. That is only sound
+    because the advertised pid outlives the marker, so "gone" implies "already
+    marked". `test_dispatch_unit.py`'s onejudge double models the same ordering to
+    exercise the rule; this is the gate that keeps the two from drifting apart.
+    """
+    status_dir = tmp_path / "orchestrator-watchdog-ordering" / "agent"
+    status_dir.mkdir(parents=True)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    stub = bin_dir / "oneharness"
+    stub.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+    stub.chmod(stub.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    proc = subprocess.Popen(
+        ["bash", str(WRAPPER), "run", "--prompt", "task"],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env={
+            "PATH": f"{bin_dir}:/usr/bin:/bin",
+            "ORCHESTRATOR_AGENT_STATUS_DIR": str(status_dir),
+            "HOME": str(tmp_path / "home"),
+        },
+    )
+    _, stderr = proc.communicate(timeout=60)
+    assert proc.returncode == 0, stderr
+
+    advertised = (status_dir / "agent.pid").read_text(encoding="utf-8").strip()
+    assert advertised == str(proc.pid), "the wrapper advertised a pid that is not its own"
+    # Read after the process is gone: the marker was therefore already on disk.
+    assert (status_dir / "agent.done").read_text(encoding="utf-8").strip() == advertised
+    child = (status_dir / "agent.child.pid").read_text(encoding="utf-8").strip()
+    assert child != advertised, "the harness child must be recorded apart from the turn's pid"
+
+
 def test_status_file_contract_has_one_source_the_wrapper_honors() -> None:
     """The dispatcher's status-file names and the wrapper's must not drift apart.
 

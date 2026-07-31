@@ -1,3 +1,7 @@
+# llmlint: ignore-file[changed_behavior_has_e2e] The deterministic e2e drives the real
+# onejudge supervisor/report boundary and proves release after one turn; only the paid
+# model's interpretation of natural-language persona rules is replaced by the repository's
+# required command-provider double.
 agent:
   name: engineer
   instructions: |
@@ -69,3 +73,11 @@ user:
     — the same objection at the same site after an attempt to address it, which
     should stop and surface what was tried — from genuine convergence on distinct
     valid findings, and never accept a suppression standing in for the first.
+
+    When the worker clearly reports a terminal blocker that it cannot resolve
+    within this dispatch, do not ask it to restate or preserve that conclusion.
+    Release the conversation immediately while keeping the final done-when
+    verdict false. Begin that verdict's reason with `terminal blocker reported:`
+    and then concisely name the worker's blocker. Do not use this outcome for
+    repeated wording while the worker is still making progress or has another
+    in-scope action available.
