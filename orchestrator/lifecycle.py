@@ -62,7 +62,7 @@ from .plan import NODE_KINDS, NodeRun, schedule_dag
 from .provenance import (
     INCOMPLETE_TRAILER,
     PR_BASE_TRAILER,
-    RECOVERY_TRAILER,
+    attest_recovery,
     attestation_trailers,
     format_preserved_step_metadata,
     incomplete_commits,
@@ -1877,17 +1877,13 @@ def run_repo_task(
         if preserve_cancelled("before publication"):
             return result
 
-        if not local_publication and (
-            result.retry_lineage and result.retry_lineage.disposition == "reused"
+        if (
+            not local_publication
+            and result.retry_lineage
+            and result.retry_lineage.disposition == "reused"
+            and attest_recovery(worktree, remote_base) is not None
         ):
-            missing = sorted(unattested_incomplete(worktree, remote_base, "HEAD"))
-            if missing:
-                trailers = "\n".join(f"{RECOVERY_TRAILER} {sha}" for sha in missing)
-                gitops.commit_empty(
-                    worktree,
-                    "chore: attest verified recovery of preserved work\n\n" + trailers,
-                )
-                result.retry_lineage.disposition = "recovered"
+            result.retry_lineage.disposition = "recovered"
         if (
             not local_publication
             and result.retry_lineage
@@ -2058,15 +2054,8 @@ def run_repo_task(
                 )
             if preserve_cancelled("before publication"):
                 return MergeOutcome(result.outcome, result.detail)
-            if result.retry_lineage:
-                missing = sorted(unattested_incomplete(worktree, remote_base, "HEAD"))
-                if missing:
-                    trailers = "\n".join(f"{RECOVERY_TRAILER} {sha}" for sha in missing)
-                    gitops.commit_empty(
-                        worktree,
-                        "chore: attest verified recovery of preserved work\n\n" + trailers,
-                    )
-                    result.retry_lineage.disposition = "recovered"
+            if result.retry_lineage and attest_recovery(worktree, remote_base) is not None:
+                result.retry_lineage.disposition = "recovered"
             if result.retry_lineage and unattested_incomplete(worktree, remote_base, "HEAD"):
                 return MergeOutcome(
                     "not-completed",

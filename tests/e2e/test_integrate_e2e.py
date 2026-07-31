@@ -20,7 +20,7 @@ from orchestrator import gitops
 from orchestrator.dispatch import Report
 from orchestrator.integrate import IntegrateError, integrate, main
 from orchestrator.lifecycle import StackBase, run_repo_task
-from orchestrator.provenance import incomplete_commits
+from orchestrator.provenance import attest_recovery, incomplete_commits, unattested_incomplete
 from orchestrator.recover import main as recover_main
 from orchestrator.recover import recover_repo
 from orchestrator.registry import Registry
@@ -394,17 +394,13 @@ def test_integration_train_lands_one_commit_and_no_provenance_on_the_base(
     marker = next(iter(incomplete_commits(canonical, "origin/main", incomplete.branch)))
     assert "(incomplete step)" in _git(canonical, "log", "-1", "--format=%s", marker)
 
+    # The attestation a verified recovery writes, written by the code that owns it —
+    # the same call the lifecycle and `repo-recover` make once a gate has passed.
     attested = tmp_path / "attest-worktree"
     _git(canonical, "worktree", "add", str(attested), incomplete.branch)
-    _git(
-        attested,
-        "commit",
-        "--allow-empty",
-        "-m",
-        f"chore: attest verified recovery of preserved work\n\n"
-        f"Orchestrator-Recovered-Incomplete: {marker}",
-    )
+    assert attest_recovery(attested, "origin/main", incomplete.branch) is not None
     _git(canonical, "worktree", "remove", "--force", str(attested))
+    assert not unattested_incomplete(canonical, "origin/main", incomplete.branch)
 
     result = integrate(canonical, [incomplete.branch], gate_command=["true"], push=True)
 

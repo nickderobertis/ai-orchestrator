@@ -36,11 +36,10 @@ from .merge import (
 )
 from .personas import persona_path
 from .provenance import (
-    RECOVERY_TRAILER,
+    attest_recovery,
     incomplete_commits,
     parse_preserved_step_metadata,
     recorded_pr_base,
-    unattested_incomplete,
 )
 from .redaction import redact
 from .registry import Registry, RegistryEntry, RegistryError, Slug, merge_gate_coverage
@@ -279,13 +278,7 @@ def recover_repo(
         def attest_and_push() -> MergeOutcome | None:
             # Recovery always publishes through a push or a PR. The executable
             # pre-push hook / required PR checks are therefore authoritative.
-            missing = sorted(unattested_incomplete(worktree, remote_base, branch))
-            if missing:
-                trailers = "\n".join(f"{RECOVERY_TRAILER} {sha}" for sha in missing)
-                gitops.commit_empty(
-                    worktree,
-                    "chore: attest verified recovery of preserved work\n\n" + trailers,
-                )
+            attest_recovery(worktree, remote_base, branch)
             try:
                 pushed = gitops.push(worktree, branch, env=push_env)
             except gitops.GitError as exc:

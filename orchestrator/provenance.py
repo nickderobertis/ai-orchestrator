@@ -11,6 +11,7 @@ from . import gitops
 INCOMPLETE_TRAILER = "Orchestrator-Status: incomplete"
 PR_BASE_TRAILER = "Orchestrator-PR-Base:"
 RECOVERY_TRAILER = "Orchestrator-Recovered-Incomplete:"
+ATTESTATION_SUBJECT = "chore: attest verified recovery of preserved work"
 LEGACY_INCOMPLETE_MARKERS = (
     "(incomplete step)",
     "preserved by ai-orchestrator after the dispatch did not complete",
@@ -110,6 +111,22 @@ def recorded_pr_base(repo: str | Path, base: str, branch: str) -> str | None:
             )
         return next(iter(values), None)
     return None
+
+
+def attest_recovery(repo: str | Path, base: str, ref: str = "HEAD") -> str | None:
+    """Record one attestation covering every unattested marker in this history.
+
+    The commit is made on whatever ``repo`` has checked out, which is the branch the
+    verified recovery ran against. Returns its sha, or ``None`` when the history had
+    nothing left to attest — every caller decides what an already-clean branch means
+    for its own outcome, but none of them writes this commit itself: one attestation
+    shape is what `attestation_trailers` and `unattested_incomplete` both read.
+    """
+    missing = sorted(unattested_incomplete(repo, base, ref))
+    if not missing:
+        return None
+    trailers = "\n".join(f"{RECOVERY_TRAILER} {sha}" for sha in missing)
+    return gitops.commit_empty(repo, f"{ATTESTATION_SUBJECT}\n\n{trailers}")
 
 
 def unattested_incomplete(repo: str | Path, base: str, branch: str) -> set[str]:
