@@ -456,17 +456,36 @@ suite reads well past that list — `AGENTS.md`, `docs/`, the `justfile`,
 `llmlint.yml`, `scripts/`, `.githooks/pre-push`, `apps/dag-ui/vite.config.ts` — so
 editing any of them replayed a green verdict on a tree carrying a real regression.
 So the Python targets, which all run from the workspace root over the whole tree,
-now share the `wholeWorkspace` named input in `nx.json` with the llmlint tier and
-are keyed on the whole workspace.
+share the `wholeWorkspace` named input in `nx.json` with the llmlint tier.
 
-That trade is deliberate: a documentation-only or TypeScript-only change now
-re-runs the ~8-minute Python suite that reads documentation and app config. Paying
-that is the point — the alternative is the enumerated list going stale again the
-next time a test learns to read a new file, and a stale list fails *open*.
-`tests/test_nx_cache_scope.py` keeps it from narrowing by checking every repository
-path the suite names against the declared key, and
+#### The one narrowed key, and what earns it
+
+Keyed on the whole workspace, a documentation-only change re-ran the ~8-minute
+suite. Only a handful of tests actually assert on this repository's prose, so the
+suite is split at exactly that seam rather than at a convenient one:
+
+- **`orchestrator:test-docs`** runs the tests marked `@pytest.mark.reads_docs` and
+  keeps the `wholeWorkspace` key. Seconds, not minutes.
+- **`orchestrator:test`** runs everything else, with the coverage floor, keyed on
+  `codeWorkspace` — the whole workspace with `docs/**` and `**/*.md` removed.
+
+A documentation edit now re-runs the prose contracts alone. Every other edit still
+invalidates both, because `codeWorkspace` is narrowed by documentation and by
+nothing else.
+
+That is sound only while the code tier genuinely ignores prose, and "genuinely"
+cannot be a reviewer's recollection — the enumerated list above went stale exactly
+that way, and a stale key fails *open*. So the declaration is enforced where it is
+made: an autouse guard in `tests/conftest.py` fails an undeclared test the moment
+it opens this checkout's own documentation, naming the marker it needs. A read from
+inside a child process is out of that guard's reach, but a journey that hands a real
+tool the whole tree copies the tree first, and copying is itself a read.
+
+`tests/test_nx_cache_scope.py` holds both declarations to their globs — including
+that nothing but documentation falls outside the narrowed key — and
 `tests/e2e/test_nx_cache_scope_e2e.py` drives real Nx over a copy of this checkout
-to prove an edit to `AGENTS.md` re-runs the suite rather than replaying it.
+to prove that editing `AGENTS.md` re-runs `test-docs` while `test` replays, and that
+editing the `justfile` re-runs both.
 
 Two tiers, one answer, and neither is lenient: a recorded llmlint **failure**
 replays as a failure, and a tree the suite would fail can no longer replay a pass.
@@ -826,6 +845,42 @@ lifecycle branch and checkpoint from the run ledger, adds retry-resume metadata
 to the replacement, and continues authoring on that branch. `repo-recover` is
 different: use it when the preserved commits are already complete and need
 verification and publication, not when the worker needs more turns.
+
+### What the base branch carries for a recovered incomplete step
+
+Provenance commits are branch state, never base-branch history. Every path that
+advances the base squashes the branch — lifecycle publication, `repo-recover`, and
+the `integrate` train alike — so the `chore: ... (incomplete step)` marker and the
+`chore: attest verified recovery of preserved work` commit that clears it stay on
+the preserved branch; the base branch gets one publication commit, exactly as the
+squash-merge model prescribes. That commit carries the fact forward instead: its
+message ends with one `Orchestrator-Recovered-Incomplete: <marker sha>` trailer per
+marker the branch recovered — in the local squash message, and in the PR body the
+remote path publishes from. Nothing hides that a step was left incomplete; the
+attestation is a trailer on `main` and a commit on the branch.
+
+A published subject therefore describes the change alone. Provenance commits are
+excluded before a subject is synthesized from a branch's commits: a marker's
+subject is a valid Conventional Commit, so including it produced published subjects
+like `feat: adopt the design system; ## What (incomple…` — the marker's own text was
+the task's `## What` heading rather than any description of the work. Both halves
+are fixed: a marker names the first line of task prose that carries content, and no
+provenance commit reaches a subject at all. Where such subjects and provenance
+commits already reached the base branch, they stay: history on the registered base
+is never rewritten.
+
+The `integrate` train was the hole in this. It fast-forwarded each verified
+candidate, replaying an attested branch's marker and attestation commits onto the
+base — which is what `main` shows today. It squash-publishes now: the verified tree
+becomes one commit built in a detached scratch worktree that the base checkout
+fast-forwards onto, so the checkout an operator has open is still only ever
+advanced. Its skip of a branch with *un*attested markers is unchanged; what changed
+is what an attested one leaves behind. Two consequences follow from squashing:
+a candidate is no longer an ancestor of the base afterwards, so a re-run re-verifies
+it and reports `already-merged` from finding no content to add rather than from
+ancestry; and a base advanced during the candidate's gate run is `not-ready` rather
+than silently reconciled, because the tree that would land is no longer the tree
+the gate judged.
 
 ### Complete branch after publication failure
 

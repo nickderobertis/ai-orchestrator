@@ -9,9 +9,17 @@ key covers everything the check reads, and this suite reads far beyond
 Keyed on a hand-listed subset, a change to any of those replayed a green verdict
 for a tree whose tests would have failed had they run.
 
-This journey drives the real `nx.json`, the real `orchestrator/project.json`
+The suite answers at two scopes, so it is keyed at two. Only a handful of tests
+assert on this repository's prose, and charging every documentation edit eight
+minutes for the rest bought nothing: `orchestrator:test-docs` runs those and keeps
+the whole-workspace key, while `orchestrator:test` runs the remainder and is keyed
+on the workspace minus its documentation. Both halves of that claim are load
+bearing — prose must still invalidate the tier that reads it, and code must still
+invalidate both — so both are proved here.
+
+These journeys drive the real `nx.json`, the real `orchestrator/project.json`
 declarations, and the real `scripts/nx.sh` against a throwaway copy of this
-checkout, and asserts on Nx's own cache accounting.
+checkout, and assert on Nx's own cache accounting.
 
 `PYTEST_ADDOPTS` shortens the suite the target runs to collection only. That is
 faithful rather than convenient: the claim under test is about the *key*, which is
@@ -36,15 +44,22 @@ from nx_workspace import copy_checkout, requires_workspace_install
 
 from orchestrator import REPO_ROOT
 
-pytestmark = requires_workspace_install
+# Copying the whole tree is this journey's premise, and the tree includes its
+# prose: these belong to the whole-workspace tier by construction.
+pytestmark = [requires_workspace_install, pytest.mark.reads_docs]
 
 CACHE_HIT = "read the output from the cache"
 # The suite reads this file directly — tests/test_smoke_selector.py holds its
 # documented launch-path list against scripts/pre-push-smoke-needed.sh — and it
 # lives outside every project root.
-WITNESS = "AGENTS.md"
-WITNESS_TEXT = "`oneharness.orchestrator.toml`; ordinary pushes"
-WITNESS_EDIT = "`oneharness.orchestrator.toml`, `docs/probe.md`; ordinary pushes"
+PROSE_WITNESS = "AGENTS.md"
+PROSE_TEXT = "`oneharness.orchestrator.toml`; ordinary pushes"
+PROSE_EDIT = "`oneharness.orchestrator.toml`, `docs/probe.md`; ordinary pushes"
+# Also read directly, also outside every project root, and deliberately not prose:
+# this is what proves the narrowed key was narrowed by documentation alone.
+CODE_WITNESS = "justfile"
+CODE_TEXT = "# List available recipes."
+CODE_EDIT = "# List the available recipes."
 
 
 @dataclass(frozen=True)
@@ -108,11 +123,37 @@ def test_a_workspace_file_the_suite_reads_invalidates_the_cached_test_verdict(
         "an unchanged tree must replay its recorded verdict rather than re-run"
     )
 
-    checkout.edit(WITNESS, WITNESS_TEXT, WITNESS_EDIT)
+    checkout.edit(CODE_WITNESS, CODE_TEXT, CODE_EDIT)
 
     assert checkout.ran_the_command("orchestrator:test"), (
-        f"changing {WITNESS} must re-run the suite that reads it"
+        f"changing {CODE_WITNESS} must re-run the suite that reads it"
     )
+
+
+def test_editing_prose_re_runs_only_the_tier_that_reads_prose(checkout: Checkout) -> None:
+    """The whole point of the split: prose invalidates the prose tier and nothing else."""
+    assert checkout.ran_the_command("orchestrator:test")
+    assert checkout.ran_the_command("orchestrator:test-docs")
+
+    checkout.edit(PROSE_WITNESS, PROSE_TEXT, PROSE_EDIT)
+
+    assert checkout.ran_the_command("orchestrator:test-docs"), (
+        f"changing {PROSE_WITNESS} must re-run the tests that assert on it"
+    )
+    assert not checkout.ran_the_command("orchestrator:test"), (
+        f"changing {PROSE_WITNESS} must not re-run a tier whose tests cannot read it"
+    )
+
+
+def test_editing_code_re_runs_both_tiers(checkout: Checkout) -> None:
+    """Narrowing one key by documentation must not narrow it by anything else."""
+    assert checkout.ran_the_command("orchestrator:test")
+    assert checkout.ran_the_command("orchestrator:test-docs")
+
+    checkout.edit(CODE_WITNESS, CODE_TEXT, CODE_EDIT)
+
+    assert checkout.ran_the_command("orchestrator:test")
+    assert checkout.ran_the_command("orchestrator:test-docs")
 
 
 def test_skip_nx_cache_forces_one_tier_to_re_run_an_unchanged_tree(checkout: Checkout) -> None:

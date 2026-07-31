@@ -425,7 +425,14 @@ everything the check reads. The Python targets run from the workspace root over 
 whole tree — pytest reads documentation, recipes, hooks, and app config — so they
 are keyed on it through `nx.json`'s `wholeWorkspace` input. Narrowing one back to a
 subset makes a green suite a claim about a tree that was never run; force a real
-re-run of a single tier with `--skip-nx-cache` on that one invocation instead. See
+re-run of a single tier with `--skip-nx-cache` on that one invocation instead. One
+narrowing earns its keep: only a handful of tests assert on this repository's prose,
+so `orchestrator:test-docs` runs those under the whole-workspace key while
+`orchestrator:test` runs the rest under `codeWorkspace` — the workspace minus
+`docs/**` and `**/*.md` — and a documentation edit stops charging eight minutes. That
+split cannot go stale silently: an undeclared test that opens this checkout's own
+documentation fails in `tests/conftest.py` and is told to carry
+`@pytest.mark.reads_docs`. See
 [When a cached verdict may stand
 in](docs/repo-lifecycle.md#when-a-cached-verdict-may-stand-in-for-a-verdict-on-this-tree).
 
@@ -541,6 +548,20 @@ base branch in sync with its origin, and push every change that reaches it immed
 than leaving verified work only in the local checkout. A dispatched `local` merge
 already pushes to origin; publish a direct commit with `just sync`. The pre-push
 gate guards every push. Never force-push or rewrite history on the registered base.
+
+Squash-merge is what a recovered incomplete step publishes too, so **every** path
+that advances the base — lifecycle publication, `repo-recover`, and the `integrate`
+train — leaves **one** commit on it: the `(incomplete step)` marker and its
+`chore: attest verified recovery of preserved work` are branch state, and merging or
+fast-forwarding the branch's provenance commits onto the base contradicts this
+model. The attestation is not dropped — the publication commit's message ends with one
+`Orchestrator-Recovered-Incomplete: <marker sha>` trailer per marker it recovered,
+so the base still records that a step was left incomplete and a green gate cleared
+it. A published subject names the change only; a marker's text never appears in
+one. See [What the base branch carries for a recovered incomplete
+step](docs/repo-lifecycle.md#what-the-base-branch-carries-for-a-recovered-incomplete-step).
+Provenance commits and marker-fragment subjects that already reached `main` stay
+where they are: that history is never rewritten.
 
 ## After the main task
 

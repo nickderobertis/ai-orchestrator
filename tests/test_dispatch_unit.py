@@ -852,6 +852,7 @@ def test_watchdog_pid_file_rejects_invalid_contents(tmp_path, contents: str) -> 
         _read_watchdog_pid(pid_file)
 
 
+@pytest.mark.reads_docs
 def test_dispatch_stall_default_documentation_cannot_drift() -> None:
     documentation = (REPO_ROOT / "docs" / "onejudge-integration.md").read_text(encoding="utf-8")
 
