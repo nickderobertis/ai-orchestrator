@@ -362,10 +362,7 @@ def recover_repo(
             queue_identity=git_lock_identity(gitops.common_dir(clone)),
             base=publication_base,
             branch=branch,
-            # llmlint: ignore[changed_behavior_has_e2e] This supplies the same remote
-            # publication strategy exercised by the real-git adoption E2E; recovery's
-            # existing real-git journeys cover its routing into that shared strategy.
-            head_sha=gitops.head_sha(worktree),
+            adopt_existing=False,
             title=_default_title(worktree, remote_base, f"Recover preserved branch {branch}"),
             body=(
                 "## What\nRecover lifecycle-preserved work through its merge-path gate.\n\n"

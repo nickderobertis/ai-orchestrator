@@ -40,6 +40,7 @@ class FakePRState:
     closed: bool = False
     auto: bool = False
     direct_requested: bool = False
+    merged_head_sha: str | None = None
 
 
 def _git(*args: str, cwd: str | Path) -> str:
@@ -155,17 +156,15 @@ class FakeGitHub:
             base=base,
         )
 
-    def existing_pr(self, repo: str, *, head: str, base: str, head_sha: str) -> PullRequest | None:
+    def adoptable_pr(self, repo: str, *, head: str, base: str, head_sha: str) -> PullRequest | None:
         for number, state in self._prs.items():
             if state.head != head or state.base != base:
                 continue
             pr = PullRequest(number, f"https://github.com/{repo}/pull/{number}", repo, head, base)
             if not state.closed and not state.merged:
                 return pr
-            if state.merged:
-                merged_sha = _git("rev-parse", f"refs/heads/{base}", cwd=self.origin).strip()
-                if merged_sha == head_sha:
-                    return pr
+            if state.merged and state.merged_head_sha == head_sha:
+                return pr
         return None
 
     def mark_ready(self, pr: PullRequest) -> None:
@@ -236,3 +235,4 @@ class FakeGitHub:
         # (head was branched from base, so this is always a valid fast-forward).
         _git("update-ref", f"refs/heads/{st.base}", head_sha, cwd=self.origin)
         st.merged = True
+        st.merged_head_sha = head_sha

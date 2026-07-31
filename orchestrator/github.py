@@ -126,7 +126,7 @@ class GitHubBackend(Protocol):
 
     def required_status_checks(self, repo: str, branch: str) -> tuple[str, ...]: ...
 
-    def existing_pr(
+    def adoptable_pr(
         self, repo: str, *, head: str, base: str, head_sha: str
     ) -> PullRequest | None: ...
 
@@ -233,7 +233,7 @@ class CliGitHubBackend:
             ) from exc
         return tuple(context for context in contexts if context)
 
-    def existing_pr(self, repo: str, *, head: str, base: str, head_sha: str) -> PullRequest | None:
+    def adoptable_pr(self, repo: str, *, head: str, base: str, head_sha: str) -> PullRequest | None:
         """Return an open PR, or a merged PR that contains this exact branch head."""
         existing_out = self._run(
             [

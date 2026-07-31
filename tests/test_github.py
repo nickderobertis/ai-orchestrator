@@ -113,13 +113,13 @@ def test_required_status_checks_rejects_malformed_response(payload: object) -> N
         )
 
 
-def test_existing_pr_reuses_open_pr_for_head() -> None:
+def test_adoptable_pr_reuses_open_pr_for_head() -> None:
     existing = (
         '[{"number": 41, "url": "https://github.com/o/r/pull/41", '
         '"state": "OPEN", "headRefOid": "abc"}]'
     )
     run = RecordingRun([existing])
-    pr = CliGitHubBackend(run=run).existing_pr("o/r", head="f", base="main", head_sha="abc")
+    pr = CliGitHubBackend(run=run).adoptable_pr("o/r", head="f", base="main", head_sha="abc")
     assert pr == PullRequest(41, "https://github.com/o/r/pull/41", "o/r", "f", "main")
     assert run.calls == [
         [
@@ -139,7 +139,7 @@ def test_existing_pr_reuses_open_pr_for_head() -> None:
     ]
 
 
-def test_existing_pr_reuses_only_merged_pr_with_matching_head() -> None:
+def test_adoptable_pr_reuses_only_merged_pr_with_matching_head() -> None:
     existing = json.dumps(
         [
             {
@@ -151,13 +151,13 @@ def test_existing_pr_reuses_only_merged_pr_with_matching_head() -> None:
         ]
     )
     assert (
-        CliGitHubBackend(run=RecordingRun([existing])).existing_pr(
+        CliGitHubBackend(run=RecordingRun([existing])).adoptable_pr(
             "o/r", head="f", base="main", head_sha="abc"
         )
         is not None
     )
     assert (
-        CliGitHubBackend(run=RecordingRun([existing])).existing_pr(
+        CliGitHubBackend(run=RecordingRun([existing])).adoptable_pr(
             "o/r", head="f", base="main", head_sha="newer"
         )
         is None
@@ -202,10 +202,10 @@ def test_create_pr_bad_output_raises() -> None:
         CliGitHubBackend(run=run).create_pr("o/r", head="f", base="main", title="t", body="b")
 
 
-def test_existing_pr_bad_list_output_raises() -> None:
+def test_adoptable_pr_bad_list_output_raises() -> None:
     run = RecordingRun(['{"number": 42}'])
     with pytest.raises(GitHubError, match="could not parse PR from gh output"):
-        CliGitHubBackend(run=run).existing_pr("o/r", head="f", base="main", head_sha="abc")
+        CliGitHubBackend(run=run).adoptable_pr("o/r", head="f", base="main", head_sha="abc")
 
 
 @pytest.mark.parametrize(
@@ -223,10 +223,10 @@ def test_existing_pr_bad_list_output_raises() -> None:
         [{"number": 42, "url": "", "state": "OPEN", "headRefOid": "abc"}],
     ],
 )
-def test_existing_pr_rejects_malformed_fields(existing: list[object]) -> None:
+def test_adoptable_pr_rejects_malformed_fields(existing: list[object]) -> None:
     run = RecordingRun([json.dumps(existing)])
     with pytest.raises(GitHubError, match="could not parse PR from gh output"):
-        CliGitHubBackend(run=run).existing_pr("o/r", head="f", base="main", head_sha="abc")
+        CliGitHubBackend(run=run).adoptable_pr("o/r", head="f", base="main", head_sha="abc")
 
 
 def test_enable_auto_merge_ok() -> None:

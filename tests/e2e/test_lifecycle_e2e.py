@@ -2053,8 +2053,8 @@ def test_registered_remote_identity_keeps_pr_flow(tmp_path, bare_origin) -> None
     assert result.pr_base == "main"
 
 
-@pytest.mark.parametrize("existing_state", ["open", "merged"])
-def test_remote_closeout_adopts_existing_pr_without_duplicate(
+@pytest.mark.parametrize("existing_state", ["open", "merged", "stale-merged"])
+def test_remote_closeout_adopts_adoptable_pr_without_duplicate(
     tmp_path, bare_origin, existing_state
 ) -> None:
     origin = bare_origin()
@@ -2062,14 +2062,16 @@ def test_remote_closeout_adopts_existing_pr_without_duplicate(
     Registry().register(str(canonical), workflow="remote", repo_type="single-owner")
 
     class ExistingPRGitHub(FakeGitHub):
-        def existing_pr(self, repo, *, head, base, head_sha):
+        def adoptable_pr(self, repo, *, head, base, head_sha):
             if not self._prs:
                 self._n = 1
                 self._prs[1] = FakePRState(head, base, "existing", "existing")
                 seeded = PullRequest(1, f"https://github.com/{repo}/pull/1", repo, head, base)
-                if existing_state == "merged":
+                if existing_state in {"merged", "stale-merged"}:
                     self._do_merge(seeded)
-            return super().existing_pr(repo, head=head, base=base, head_sha=head_sha)
+                if existing_state == "stale-merged":
+                    self._prs[1].merged_head_sha = "stale-head"
+            return super().adoptable_pr(repo, head=head, base=base, head_sha=head_sha)
 
     github = ExistingPRGitHub(origin)
     result = run_repo_task(
@@ -2086,10 +2088,11 @@ def test_remote_closeout_adopts_existing_pr_without_duplicate(
         sleep=lambda _: None,
     )
 
-    assert result.pr is not None and result.pr.number == 1
-    assert github._n == 1
+    expected_number = 2 if existing_state == "stale-merged" else 1
+    assert result.pr is not None and result.pr.number == expected_number
+    assert github._n == expected_number
     assert result.outcome == ("pr-open" if existing_state == "open" else "merged")
-    if existing_state == "merged":
+    if existing_state != "open":
         assert _has_file(origin, "main", "CHANGE.txt")
 
 
@@ -2168,6 +2171,40 @@ def test_pr_author_failure_retries_once_and_surfaces_underlying_error(
     fallback = next(event for event in journal.events() if event.kind == "pr-drafting-fallback")
     assert fallback.detail["attempts"] == 2
     assert expected in fallback.detail["reason"]
+
+
+def test_pr_author_failure_does_not_block_human_draft_checkpoint(tmp_path, bare_origin) -> None:
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-human-drafting-retry")
+    Registry().register(str(canonical), workflow="remote", repo_type="single-owner")
+    attempts = 0
+    writing = make_writing_dispatch()
+
+    def failing_author(persona, task, *, project_dir, **kwargs):
+        nonlocal attempts
+        if persona == "pr-author":
+            attempts += 1
+            raise DispatchError("drafting provider unavailable")
+        return writing(persona, task, project_dir=project_dir, **kwargs)
+
+    result = run_repo_task(
+        str(canonical),
+        workspace=Workspace(tmp_path / "human-drafting-retry-worktrees"),
+        github=FakeGitHub(origin),
+        merge_policy="none",
+        branch="human-drafting-retry",
+        recorded_gate=["true"],
+        dispatch_fn=failing_author,
+        steps=[
+            Step("implement", "engineer", "complete-now write-change"),
+            Step("approve", task="Approve publication.", kind="human", deps=["implement"]),
+        ],
+    )
+
+    assert result.outcome == "waiting-human" and result.pr is not None
+    assert attempts == 2
+    assert result.follow_ups is not None
+    assert "drafting provider unavailable" in result.follow_ups
 
 
 def test_verify_via_ci_iterates_real_dispatch_then_requires_green_branch_ci(

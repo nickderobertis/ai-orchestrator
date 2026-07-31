@@ -81,6 +81,7 @@ class MergeContext:
     title: str
     body: str
     head_sha: str = ""
+    adopt_existing: bool = True
     #: What the merge queue serializes on. It has to name the *repository*, not the
     #: clone the merge is built in: every run now builds in a clone of its own, and
     #: a per-run identity would hand each contender its own empty queue. ``None``
@@ -288,8 +289,8 @@ class GitHubMergeStrategy:
 
     def _publish_and_merge(self, ctx: MergeContext) -> MergeOutcome:
         existing = None
-        lookup = getattr(self._github, "existing_pr", None)
-        if ctx.preverified_pr is None and lookup is not None:
+        lookup = getattr(self._github, "adoptable_pr", None)
+        if ctx.preverified_pr is None and ctx.adopt_existing and lookup is not None:
             existing = lookup(
                 ctx.repo_slug,
                 head=ctx.branch,
