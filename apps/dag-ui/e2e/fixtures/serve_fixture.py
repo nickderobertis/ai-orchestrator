@@ -356,6 +356,9 @@ def _write_eventless_run(runs_dir: Path) -> None:
     prepare_round(runs_dir / EVENTLESS_RUN, {"tasks": _EVENTLESS_TASKS})
 
 
+#: Plan-file JSON like the task lists above, typed the same way and for the same
+#: reason: `orchestrator` owns and validates this shape, per this module's
+#: `modern_domain_modeling` note.
 _BUSY_TASKS: list[dict[str, Any]] = [
     {
         "id": "sweep",

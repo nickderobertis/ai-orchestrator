@@ -54,11 +54,14 @@ type Responder = (url: URL) => Response | Promise<Response>;
 export const isRunList = (url: URL): boolean =>
   url.pathname === API_V1_PATHS.runs;
 
-/** True for a single run's detail path, whatever run it names. */
+/**
+ * True for a single run's detail path, whatever run it names — the run route itself
+ * and nothing beneath it, so a route added under `/runs/<id>/` is not mistaken for
+ * the detail read.
+ */
 export const isRunDetail = (url: URL): boolean =>
   url.pathname.startsWith(`${API_V1_PATHS.runs}/`) &&
-  !isTimeline(url) &&
-  !isConversation(url);
+  !url.pathname.slice(API_V1_PATHS.runs.length + 1).includes("/");
 
 /** True for a run's timeline path, whatever run it names. */
 export const isTimeline = (url: URL): boolean =>
