@@ -27,6 +27,8 @@ import json
 import re
 import subprocess
 
+from conftest import READS_DOCS_MARKER
+
 from orchestrator import REPO_ROOT
 
 WHOLE_WORKSPACE = "wholeWorkspace"
@@ -126,6 +128,33 @@ def test_workspace_scoped_targets_are_keyed_on_the_whole_workspace() -> None:
     assert llmlint[0] == WHOLE_WORKSPACE, (
         "the llmlint tier judges the whole workspace diff and shares this one key"
     )
+
+
+def test_the_marker_that_routes_a_test_to_its_tier_means_the_same_thing_everywhere() -> None:
+    """Reconcile the four places the marker name is independently written down.
+
+    `reads_docs` names a routing decision, not a label: pytest registers it,
+    `conftest.py` enforces it, and the two Nx targets select on it. Those four
+    declarations are written separately and nothing else compares them, so a rename
+    that missed one would leave a tier silently selecting nothing — and a `test`
+    tier that ran the prose contracts anyway, keyed on a workspace without prose,
+    is the false green this whole file exists to prevent.
+    """
+    manifest = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    registered = re.findall(r'^\s*"(\w+):', manifest, flags=re.MULTILINE)
+    assert READS_DOCS_MARKER in registered, (
+        f"pytest must register {READS_DOCS_MARKER!r} in [tool.pytest.ini_options] markers"
+    )
+
+    targets = json.loads((REPO_ROOT / "orchestrator/project.json").read_text(encoding="utf-8"))[
+        "targets"
+    ]
+    assert f"-m 'not {READS_DOCS_MARKER}'" in targets[CODE_SCOPED]["command"]
+    assert f"-m {READS_DOCS_MARKER}" in targets["test-docs"]["command"]
+
+    # And the two selectors have to partition: a test is in exactly one tier.
+    marked = re.search(r"-m '?(not )?(\w+)'?", targets["test-docs"]["command"])
+    assert marked is not None and marked.group(1) is None
 
 
 def test_the_code_only_test_key_is_the_workspace_with_its_prose_removed() -> None:

@@ -180,6 +180,11 @@ def _documentation_reads_are_declared(
         return
     opener = builtins.open
 
+    # `Any` throughout because this stands in for `open` itself: its signature is a
+    # stack of overloads whose return type is chosen by the `mode` and `buffering`
+    # arguments, and every caller in the suite must keep the type it already had.
+    # Restating those overloads here would narrow real call sites to satisfy a
+    # wrapper that only inspects the first argument and forwards the rest untouched.
     def guarded(file: Any, *args: Any, **kwargs: Any) -> Any:
         document = _repository_documentation(file)
         if document is not None:
