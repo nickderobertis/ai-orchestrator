@@ -23,6 +23,7 @@ from waits import deadline as e2e_deadline
 
 from orchestrator import REPO_ROOT, gitops
 from orchestrator.coordination import advisory_lock, git_lock_identity, lock_path
+from orchestrator.journal import RunId, open_journal
 from orchestrator.plan import PLAN_SCHEMA_VERSION
 from orchestrator.registry import Registry
 
@@ -2520,6 +2521,20 @@ def test_expects_no_diff_contract_is_rejected_at_cli_boundary(tmp_path: Path) ->
             },
             "verify_via_ci' requires schema_version 3",
         ),
+        (
+            {
+                "schema_version": PLAN_SCHEMA_VERSION,
+                "tasks": [{"id": "x", "persona": "engineer", "task": "x", "context": "a note"}],
+            },
+            "'context' must be a list of non-empty planner notes",
+        ),
+        (
+            {
+                "schema_version": PLAN_SCHEMA_VERSION,
+                "tasks": [{"id": "x", "kind": "human", "task": "Approve", "context": ["a note"]}],
+            },
+            "cannot set 'context'",
+        ),
     )
     for index, (mapping, message) in enumerate(invalid_plans):
         plan = tmp_path / f"invalid-{index}.json"
@@ -2756,3 +2771,177 @@ def test_a_budget_spent_without_agent_progress_reads_apart_from_a_turn_cap(
     # result with one explanation. Only the silent one is told not to retry unchanged.
     assert recorded["capped"]["error"] == "hit the turn cap after 3 turns"
     assert "without the agent producing anything" not in recorded["capped"]["error"]
+
+
+def test_planner_context_reaches_every_agent_step_of_a_workstream(
+    tmp_path: Path, bare_origin, command_base, onejudge_bin: str
+) -> None:
+    """A node-level note is about the branch its steps share, so each one gets it.
+
+    A workstream dispatches once per agent step, and the state a note reports —
+    what is already committed on the branch, which finding is still open — is
+    exactly what each of those dispatches would otherwise re-derive. A human step
+    is prose for a person and is delivered as the planner wrote it.
+    """
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "workstream-context-canonical")
+    Registry().register(str(canonical), workflow="local")
+    runs = tmp_path / "runs"
+    prompts = tmp_path / "step-prompts.jsonl"
+    note = "CHANGE.txt is already committed on the branch; only the approval remains."
+    plan = tmp_path / "workstream-context.json"
+    plan.write_text(
+        json.dumps(
+            {
+                "schema_version": PLAN_SCHEMA_VERSION,
+                "tasks": [
+                    {
+                        "id": "workstream",
+                        "repo": str(canonical),
+                        "branch": "feature/workstream-context",
+                        "workflow": "local",
+                        "repo_type": "single-owner",
+                        "context": [note],
+                        "steps": [
+                            {
+                                "id": "change",
+                                "persona": "engineer",
+                                "task": f"complete-now write-change record-task={prompts}",
+                            },
+                            {
+                                "id": "polish",
+                                "persona": "engineer",
+                                "task": f"complete-now polish the change record-task={prompts}",
+                                "deps": ["change"],
+                            },
+                            {
+                                "id": "approve",
+                                "kind": "human",
+                                "task": "Approve the prepared change.",
+                                "deps": ["polish"],
+                            },
+                        ],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    settled = _just(
+        "run-plan",
+        str(plan),
+        "--run",
+        "workstream-context",
+        "--runs-dir",
+        str(runs),
+        "--workspace",
+        str(tmp_path / "workstream-context-worktrees"),
+        "--base",
+        str(command_base()),
+        "--onejudge-bin",
+        onejudge_bin,
+        "--format",
+        "json",
+    )
+
+    assert settled.returncode == 1, settled.stderr  # waiting on the human step
+    payload = json.loads(settled.stdout)
+    assert payload["results"]["workstream"]["status"] == "waiting"
+    delivered = [json.loads(line) for line in prompts.read_text(encoding="utf-8").splitlines()]
+    assert len(delivered) == 2
+    for prompt, own in zip(delivered, ("write-change", "polish the change"), strict=True):
+        assert own in prompt
+        assert "## Planner context" in prompt
+        assert note in prompt
+    # The human action is recorded with the planner's own words, unrendered.
+    assert payload["results"]["workstream"]["human_actions"][0]["task"] == (
+        "Approve the prepared change."
+    )
+
+
+def _context_ledger(runs: Path, run_id: str, notes: tuple[str, ...]) -> Path:
+    """Record a settled round whose committed edits attached ``notes`` to `work`."""
+    run_dir = runs / run_id
+    round_one = run_dir / "round-01"
+    round_one.mkdir(parents=True)
+    (round_one / "plan.json").write_text(
+        json.dumps(
+            {
+                "schema_version": PLAN_SCHEMA_VERSION,
+                "tasks": [
+                    {
+                        "id": "work",
+                        "persona": "engineer",
+                        "task": "## What\nFinish the sweep",
+                        "context": ["a note from the round before"],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (round_one / "result.json").write_text(
+        json.dumps(
+            {
+                "ok": False,
+                "state": "failed",
+                "started_order": ["work"],
+                "results": {"work": {"status": "failed", "outcome": "not-completed"}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    journal = open_journal(run_dir, RunId(run_id), 1)
+    for note in notes:
+        journal.append(
+            "edit-committed",
+            detail={
+                "command": {"op": "context", "id": "work", "note": note},
+                "operations": [{"kind": "context-added", "node": "work", "detail": {"note": note}}],
+            },
+        )
+    return run_dir
+
+
+def test_next_round_carries_committed_context_and_yields_to_a_stated_retry(
+    tmp_path: Path,
+) -> None:
+    """The transition command reads the round's committed edits, and the planner wins.
+
+    Derivation is the whole subject here, so no dispatch is spent on it: each run
+    below is a recorded round whose journal holds the edits the planner committed
+    while it ran, transitioned through the real `just next-round`.
+    """
+    runs = tmp_path / "runs"
+    notes = ("41 commits are on the branch", "one llmlint finding is open")
+    collected = _context_ledger(runs, "collected-context", notes)
+
+    derived = _just("next-round", "collected-context", "--runs-dir", str(runs), "--plan-only")
+    assert derived.returncode == 0, derived.stderr
+    carried = json.loads((collected / "round-02" / "plan.json").read_text(encoding="utf-8"))
+    # The round's own notes replace the set the node arrived with, in submission order.
+    assert carried["tasks"][0]["context"] == list(notes)
+
+    stated = _context_ledger(runs, "stated-context", notes)
+    edits = tmp_path / "stated.json"
+    edits.write_text(
+        json.dumps({"retry": {"work": {"context": ["the planner's own brief"]}}}), encoding="utf-8"
+    )
+    overridden = _just(
+        "next-round", "stated-context", str(edits), "--runs-dir", str(runs), "--plan-only"
+    )
+    assert overridden.returncode == 0, overridden.stderr
+    plan = json.loads((stated / "round-02" / "plan.json").read_text(encoding="utf-8"))
+    assert plan["tasks"][0]["context"] == ["the planner's own brief"]
+
+    silenced = _context_ledger(runs, "silenced-context", notes)
+    empty = tmp_path / "empty.json"
+    empty.write_text(json.dumps({"retry": {"work": {"context": []}}}), encoding="utf-8")
+    cleared = _just(
+        "next-round", "silenced-context", str(empty), "--runs-dir", str(runs), "--plan-only"
+    )
+    assert cleared.returncode == 0, cleared.stderr
+    quiet = json.loads((silenced / "round-02" / "plan.json").read_text(encoding="utf-8"))
+    # An empty list is a decision the planner made after reading the result: the
+    # collected notes do not come back through the side door.
+    assert quiet["tasks"][0]["context"] == []
