@@ -31,5 +31,11 @@ Conventions for this repo's tests.
   `process_tree.is_running` whether a process is gone rather than looking for
   `/proc/<pid>`.
 - **A test must not leave a background daemon behind.** `NX_DAEMON=false` is set for
-  the whole session; anything else a test starts in the background owes the same.
+  the whole session and `scripts/nx.sh` defaults it off for every caller; anything
+  else a test starts in the background owes the same.
+- **A test that reads this repository's prose declares it.** `orchestrator:test` is
+  keyed on the workspace minus its documentation, so an undeclared read would let a
+  documentation edit replay a stale verdict. The autouse guard in `conftest.py`
+  fails such a test; mark it `@pytest.mark.reads_docs` and it runs in
+  `orchestrator:test-docs`, which keeps the whole-workspace key.
 - Every orchestrator verb needs a real e2e journey here before it is done.

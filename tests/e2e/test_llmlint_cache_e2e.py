@@ -45,6 +45,9 @@ pytestmark = [
         "run 'just setup-llmlint'",
     ),
     requires_workspace_install,
+    # Copying the whole tree is this journey's premise, and the tree includes
+    # its prose: this belongs to the whole-workspace tier by construction.
+    pytest.mark.reads_docs,
 ]
 
 

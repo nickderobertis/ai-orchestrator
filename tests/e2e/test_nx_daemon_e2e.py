@@ -40,7 +40,9 @@ from nx_workspace import copy_checkout, requires_workspace_install
 
 from orchestrator.coordination import proc_root
 
-pytestmark = requires_workspace_install
+# Copying the whole tree is this journey's premise, and the tree includes its
+# prose: these belong to the whole-workspace tier by construction.
+pytestmark = [requires_workspace_install, pytest.mark.reads_docs]
 
 #: The daemon writes its own log here, under the workspace it is rooted at.
 DAEMON_LOG = Path(".nx") / "workspace-data" / "d" / "daemon.log"

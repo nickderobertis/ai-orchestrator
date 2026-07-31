@@ -14,7 +14,9 @@ deterministic double; everything else (the merge, the effective config, the real
 
 from __future__ import annotations
 
+import builtins
 import importlib.metadata
+import io
 import os
 import re
 import shutil
@@ -22,6 +24,7 @@ import subprocess
 import sys
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import pytest
 import yaml
@@ -36,6 +39,11 @@ from orchestrator.config import load_yaml
 from orchestrator.environment import CHANNEL_ENV_PREFIX, COMPARISON_ENV_PREFIX
 
 FAKE_BACKEND = REPO_ROOT / "tests" / "e2e" / "fake_backend.py"
+#: The marker that moves a test from the code-only key to the whole-workspace one.
+#: Its one source is `pyproject.toml`'s marker registration, and `orchestrator`'s
+#: `test` / `test-docs` targets select on it.
+READS_DOCS_MARKER = "reads_docs"
+DOCUMENTATION_DIRECTORY = "docs"
 
 
 def install_pre_push_hook(checkout: Path, body: str = "exit 0") -> Path:
@@ -120,6 +128,72 @@ def _no_nx_daemon(monkeypatch: pytest.MonkeyPatch) -> None:
     loop that does want one runs outside this process.
     """
     monkeypatch.setenv("NX_DAEMON", "false")
+
+
+def _repository_documentation(file: object) -> str | None:
+    """Return the repository-relative prose path ``file`` names, or ``None``.
+
+    Only this checkout's own documentation counts. A throwaway copy of the tree —
+    which is what every workspace journey reads — lives outside `REPO_ROOT` and is
+    not the tree any cache key here describes.
+    """
+    if not isinstance(file, str | os.PathLike):
+        return None
+    try:
+        named = os.fspath(file)
+    except TypeError:
+        return None
+    if isinstance(named, bytes):
+        named = named.decode("utf-8", "replace")
+    # Every open in the suite passes through here, so decide on a substring before
+    # paying for a syscall: prose is a `.md` file or something under `docs/`.
+    if not named.endswith(".md") and "docs" not in named:
+        return None
+    try:
+        relative = Path(named).resolve().relative_to(REPO_ROOT)
+    except (OSError, ValueError):
+        return None
+    if relative.parts[0] == DOCUMENTATION_DIRECTORY or relative.suffix == ".md":
+        return str(relative)
+    return None
+
+
+@pytest.fixture(autouse=True)
+def _documentation_reads_are_declared(
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Hold a test to the cache key its tier is memoized on.
+
+    `orchestrator:test` is keyed on code alone so that editing prose stops charging
+    eight minutes for a suite that would return the same verdict. That key is only
+    sound while the tests it covers genuinely ignore prose, and "genuinely" cannot be
+    a reviewer's recollection: a test that quietly starts asserting on `AGENTS.md`
+    would replay a green verdict for a tree whose tests would have failed.
+
+    So the declaration is enforced where it is made. An undeclared test that opens
+    this checkout's own documentation fails here and is told to join the
+    whole-workspace tier instead, which is the direction this decision has to fail in.
+    A read from inside a child process is out of reach — but a journey that hands a
+    real tool the whole tree copies it first, and copying is itself a read.
+    """
+    if request.node.get_closest_marker(READS_DOCS_MARKER) is not None:
+        return
+    opener = builtins.open
+
+    def guarded(file: Any, *args: Any, **kwargs: Any) -> Any:
+        document = _repository_documentation(file)
+        if document is not None:
+            raise AssertionError(
+                f"{request.node.name} reads {document}, which the code-only test key "
+                f"does not cover; mark it @pytest.mark.{READS_DOCS_MARKER} so it runs "
+                "in the whole-workspace tier"
+            )
+        return opener(file, *args, **kwargs)
+
+    # `pathlib` reaches the same function through the `io` module rather than
+    # `builtins`, so a guard on one alone would miss every `Path.read_text`.
+    monkeypatch.setattr(builtins, "open", guarded)
+    monkeypatch.setattr(io, "open", guarded)
 
 
 @pytest.fixture(autouse=True)
@@ -280,56 +354,3 @@ def command_base(tmp_path: Path) -> Callable[..., Path]:
 @pytest.fixture
 def personas_dir() -> Path:
     return PERSONA_DIR
-
-
-# --- TEMPORARY DISCOVERY (removed before commit) ---
-import builtins as _b  # noqa: E402
-import io as _io  # noqa: E402
-import json as _json  # noqa: E402
-
-_FOUND: dict = {}
-
-
-def _doc_hit(file):
-    if not isinstance(file, (str, os.PathLike)):
-        return None
-    try:
-        text = os.fspath(file)
-    except TypeError:
-        return None
-    if isinstance(text, bytes):
-        text = text.decode("utf-8", "replace")
-    if not (text.endswith(".md") or "docs" in text):
-        return None
-    try:
-        resolved = Path(text).resolve()
-        rel = resolved.relative_to(REPO_ROOT)
-    except (OSError, ValueError):
-        return None
-    if rel.parts[0] == "docs" or rel.suffix == ".md":
-        return str(rel)
-    return None
-
-
-@pytest.fixture(autouse=True)
-def _discover_doc_reads(request):
-    real_b, real_i = _b.open, _io.open
-
-    def guarded(file, *a, **k):
-        hit = _doc_hit(file)
-        if hit:
-            _FOUND.setdefault(request.node.nodeid, set()).add(hit)
-        return real_b(file, *a, **k)
-
-    _b.open = guarded
-    _io.open = guarded
-    try:
-        yield
-    finally:
-        _b.open, _io.open = real_b, real_i
-
-
-def pytest_sessionfinish(session, exitstatus):
-    Path("/tmp/doc-reads.json").write_text(
-        _json.dumps({k: sorted(v) for k, v in _FOUND.items()}, indent=1)
-    )

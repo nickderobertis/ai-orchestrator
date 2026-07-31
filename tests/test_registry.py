@@ -1079,6 +1079,7 @@ def test_default_state_is_isolated_from_the_real_home() -> None:
     assert (Path.home() / ".ai-orchestrator") not in Registry().path.parents
 
 
+@pytest.mark.reads_docs
 def test_documented_registry_schema_version_tracks_contract() -> None:
     root = Path(__file__).parents[1]
     assert f"Schema-v{_REGISTRY_VERSION}" in (root / "AGENTS.md").read_text(encoding="utf-8")

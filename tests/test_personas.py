@@ -30,6 +30,7 @@ def test_template_is_excluded() -> None:
     assert "planner" in names
 
 
+@pytest.mark.reads_docs
 def test_readme_catalog_matches_discovered_personas() -> None:
     readme = (PERSONA_DIR / "README.md").read_text(encoding="utf-8")
     catalog = readme.split("## Catalog\n", 1)[1].split("\n## ", 1)[0]
