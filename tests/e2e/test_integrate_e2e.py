@@ -20,7 +20,7 @@ from orchestrator import gitops
 from orchestrator.dispatch import Report
 from orchestrator.integrate import IntegrateError, integrate, main
 from orchestrator.lifecycle import StackBase, run_repo_task
-from orchestrator.provenance import attest_recovery, incomplete_commits, unattested_incomplete
+from orchestrator.provenance import incomplete_commits, unattested_incomplete
 from orchestrator.recover import main as recover_main
 from orchestrator.recover import recover_repo
 from orchestrator.registry import Registry
@@ -394,13 +394,28 @@ def test_integration_train_lands_one_commit_and_no_provenance_on_the_base(
     marker = next(iter(incomplete_commits(canonical, "origin/main", incomplete.branch)))
     assert "(incomplete step)" in _git(canonical, "log", "-1", "--format=%s", marker)
 
-    # The attestation a verified recovery writes, written by the code that owns it —
-    # the same call the lifecycle and `repo-recover` make once a gate has passed.
-    attested = tmp_path / "attest-worktree"
-    _git(canonical, "worktree", "add", str(attested), incomplete.branch)
-    assert attest_recovery(attested, "origin/main", incomplete.branch) is not None
-    _git(canonical, "worktree", "remove", "--force", str(attested))
+    # A real recovery attests the branch and pushes it, then loses the publication
+    # push — the merge-path hook here accepts the branch and rejects the base. That
+    # is how an attested, unpublished branch reaches an operator's `just integrate`,
+    # and it is the state that put provenance commits on this repository's `main`.
+    install_pre_push_hook(
+        canonical,
+        "while read -r _local_ref _local_sha remote_ref _remote_sha; do\n"
+        '  case "$remote_ref" in refs/heads/main)\n'
+        "    printf 'pre-push gate rejected the base\\n' >&2; exit 1;;\n"
+        "  esac\n"
+        "done",
+    )
+    rejected = recover_repo(
+        canonical,
+        incomplete.branch,
+        workspace_root=tmp_path / "train-recovery-worktrees",
+        recorded_gate=["true"],
+    )
+    assert not rejected.ok, rejected.detail
+    assert _git(origin, "rev-parse", "main") == base_before
     assert not unattested_incomplete(canonical, "origin/main", incomplete.branch)
+    install_pre_push_hook(canonical)
 
     result = integrate(canonical, [incomplete.branch], gate_command=["true"], push=True)
 
