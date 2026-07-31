@@ -17,6 +17,7 @@ from conftest import install_pre_push_hook
 from fakes import FakeGitHub, make_writing_dispatch
 
 from orchestrator import gitops
+from orchestrator.dispatch import Report
 from orchestrator.integrate import IntegrateError, integrate, main
 from orchestrator.lifecycle import StackBase, run_repo_task
 from orchestrator.provenance import incomplete_commits
@@ -354,6 +355,70 @@ def test_remote_incomplete_integration_is_immutable_then_recovers_via_pr(
     # GitHub squashes the branch away, so the PR body is what carries the attestation
     # onto `main`; the branch keeps the commit.
     assert f"Orchestrator-Recovered-Incomplete: {marker}" in github.published(recovered.pr).body
+
+
+def test_integration_train_lands_one_commit_and_no_provenance_on_the_base(
+    tmp_path, bare_origin
+) -> None:
+    """The path that put provenance commits on `main`, held to the base contract.
+
+    A real dispatch leaves the marker, a real recovery attestation clears it, and the
+    train publishes the branch. Fast-forwarding replayed the whole branch — marker and
+    attestation included — onto the base, which is what `main` shows today. The base
+    takes one squashed commit instead, and the attestation survives as its trailer.
+    """
+    origin = bare_origin()
+    canonical = _clone(tmp_path, origin)
+    _allow_local(canonical)
+    base_before = _git(origin, "rev-parse", "main")
+
+    def committing_dispatch(persona: str, task: str, *, project_dir: str, **_: object) -> Report:
+        """Commit real conventional work, leave the tree clean, then run out of turns."""
+        worktree = Path(project_dir)
+        (worktree / "design-system.txt").write_text("adopted\n", encoding="utf-8")
+        gitops.add_all(worktree)
+        gitops.commit(worktree, "feat: adopt the shared design system")
+        return Report(persona, 1, False, False, 2, [], {}, {}, "", max_turns=2)
+
+    incomplete = run_repo_task(
+        str(canonical),
+        "## What\nAdopt the shared design system.\n\n## Why\nThe app has no one source"
+        " of visual truth.\n",
+        "engineer",
+        workspace=Workspace(tmp_path / "train-worktrees", resolver=lambda _spec: canonical),
+        dispatch_fn=committing_dispatch,
+        recorded_gate=["true"],
+        repo_type="single-owner",
+    )
+    assert incomplete.outcome == "not-completed", incomplete.detail
+    marker = next(iter(incomplete_commits(canonical, "origin/main", incomplete.branch)))
+    assert "(incomplete step)" in _git(canonical, "log", "-1", "--format=%s", marker)
+
+    attested = tmp_path / "attest-worktree"
+    _git(canonical, "worktree", "add", str(attested), incomplete.branch)
+    _git(
+        attested,
+        "commit",
+        "--allow-empty",
+        "-m",
+        f"chore: attest verified recovery of preserved work\n\n"
+        f"Orchestrator-Recovered-Incomplete: {marker}",
+    )
+    _git(canonical, "worktree", "remove", "--force", str(attested))
+
+    result = integrate(canonical, [incomplete.branch], gate_command=["true"], push=True)
+
+    assert [item.status for item in result.branches] == ["merged"], result.branches
+    assert result.base_advanced and result.pushed
+    landed = gitops.log_messages(canonical, base_before, "origin/main")
+    assert len(landed) == 1, [commit.message.splitlines()[0] for commit in landed]
+    subject, _, body = landed[0].message.partition("\n")
+    assert subject == "feat: adopt the shared design system"
+    assert f"Orchestrator-Recovered-Incomplete: {marker}" in body
+    # The marker and the attestation stayed on the branch, off the base.
+    assert not gitops.is_ancestor(canonical, marker, "origin/main")
+    assert not incomplete_commits(canonical, base_before, "origin/main")
+    assert _git(origin, "show", "main:design-system.txt") == "adopted"
 
 
 def test_publication_carries_one_trailer_per_marker_and_drops_unbacked_claims(

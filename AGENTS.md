@@ -531,11 +531,12 @@ than leaving verified work only in the local checkout. A dispatched `local` merg
 already pushes to origin; publish a direct commit with `just sync`. The pre-push
 gate guards every push. Never force-push or rewrite history on the registered base.
 
-Squash-merge is what a recovered incomplete step publishes too, so lifecycle
-publication leaves **one** commit on the base for it: the `(incomplete step)` marker
-and its `chore: attest verified recovery of preserved work` are branch state, and
-merging the branch's provenance commits onto the base contradicts this model. The
-attestation is not dropped — the publication commit's message ends with one
+Squash-merge is what a recovered incomplete step publishes too, so **every** path
+that advances the base — lifecycle publication, `repo-recover`, and the `integrate`
+train — leaves **one** commit on it: the `(incomplete step)` marker and its
+`chore: attest verified recovery of preserved work` are branch state, and merging or
+fast-forwarding the branch's provenance commits onto the base contradicts this
+model. The attestation is not dropped — the publication commit's message ends with one
 `Orchestrator-Recovered-Incomplete: <marker sha>` trailer per marker it recovered,
 so the base still records that a step was left incomplete and a green gate cleared
 it. A published subject names the change only; a marker's text never appears in
