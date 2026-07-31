@@ -162,6 +162,12 @@ test("opens a node's timeline, reads one recorded moment, and returns", async ({
   ).toContainText("dashboard");
   await expect(page.locator(".node-view-facts")).toContainText("running");
 
+  // Nothing is selected yet, so the detail region says how to read a record rather
+  // than standing empty beside a full rail.
+  await expect(itemDetail(page)).toContainText(
+    "Select an item in the timeline to read what it recorded.",
+  );
+
   // Every row of the rail states what was recorded, when, how it ended, and how
   // long it took — which is the whole reason the transcript dump was unreadable.
   const worker = rail(page).getByRole("button", { name: /engineer-dashboard/ });

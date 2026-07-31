@@ -339,6 +339,40 @@ describe("DAG application", () => {
     ).toBeInTheDocument();
   });
 
+  test("reports a node timeline still on its way, then invites a selection", async () => {
+    window.history.replaceState(null, "", `/?run=${LIVE_RUN}&node=dashboard`);
+    let release: (response: Response) => void = () => {};
+    const { client } = telemetryHarness((url) => {
+      if (isTimeline(url))
+        return new Promise<Response>((resolve) => {
+          release = resolve;
+        });
+      return defaultResponder(url);
+    });
+    render(<App client={client} />);
+    // The node view opens before its record has arrived. "No recorded timeline"
+    // would be a claim about a journal nothing has read yet.
+    expect(
+      await screen.findByText("Loading the recorded timeline…"),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText("This node has no recorded timeline yet."),
+    ).toBeNull();
+
+    // It arrives with no item named in the address, so the detail region says how
+    // to read one rather than standing empty beside a full rail.
+    release(Response.json(runTimeline(LIVE_RUN)));
+    const region = await screen.findByRole("region", {
+      name: "Timeline item detail",
+    });
+    expect(
+      within(region).getByText(
+        "Select an item in the timeline to read what it recorded.",
+      ),
+    ).toBeInTheDocument();
+    expect(railRow(/engineer-dashboard/)).toBeInTheDocument();
+  });
+
   test("says so when a node has no recorded timeline, and when the read fails", async () => {
     window.history.replaceState(null, "", `/?run=${LIVE_RUN}&node=queued`);
     const { client } = telemetryHarness();
