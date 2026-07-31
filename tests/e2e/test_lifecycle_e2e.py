@@ -4133,6 +4133,114 @@ def test_completed_automatic_resume_drops_its_provisional_incomplete_marker(
     assert not incomplete_commits(canonical, before, result.branch)
 
 
+def test_completed_automatic_resume_drops_a_provisional_marker_left_at_the_tip(
+    tmp_path, bare_origin
+) -> None:
+    """The superseded marker is removed even when nothing was committed after it.
+
+    A continuation that finishes by verifying rather than by writing leaves the
+    provisional marker as the branch tip, so removing it is a reset rather than a
+    replay of later commits. Both are the same contract — the marker does not
+    survive its own supersession — and only the replay half had been driven.
+    """
+    origin = bare_origin()
+    workspace = _workspace(tmp_path, origin)
+    canonical = _shared_checkout(tmp_path)
+    before = _tip(origin, "main")
+    attempts = 0
+
+    def completes_without_committing_again(
+        persona: str, task: str, *, project_dir: str, **_: object
+    ) -> Report:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            (Path(project_dir) / "tip-marker-work.txt").write_text("done\n", encoding="utf-8")
+            gitops.add_all(project_dir)
+            gitops.commit(project_dir, "fix: do the work before the supervisor settles")
+            return Report(persona, 1, False, False, 2, [], {}, {}, "", max_turns=2)
+        # Verified the existing commit and wrote nothing, so the marker is the tip.
+        return Report(persona, 0, True, False, 1, [], {}, {}, "")
+
+    result = run_repo_task(
+        str(origin),
+        "Verify work already committed by the first bounded attempt.",
+        "engineer",
+        workspace=workspace,
+        dispatch_fn=completes_without_committing_again,
+        recorded_gate=["true"],
+    )
+
+    assert attempts == 2
+    assert result.ok and result.outcome == "merged", result.detail
+    assert _has_file(origin, "main", "tip-marker-work.txt")
+    assert not incomplete_commits(canonical, before, result.branch)
+
+
+def test_a_completed_continuation_keeps_an_inherited_incomplete_marker(
+    tmp_path, bare_origin
+) -> None:
+    """Only this lifecycle's own provisional markers are superseded by its completion.
+
+    A marker an earlier run left on the branch is load-bearing `repo-recover`
+    provenance: it says work on this branch was never carried through the gate by the
+    run that wrote it. Completing a *later* dispatch says nothing about that claim, so
+    removing it would silently drop the recovery contract for the earlier work.
+    """
+    origin = bare_origin()
+    workspace = _workspace(tmp_path, origin)
+    remote_base = "origin/main"
+
+    def commits_then_stops(persona: str, task: str, *, project_dir: str, **_: object) -> Report:
+        (Path(project_dir) / "inherited-partial.txt").write_text("partial\n", encoding="utf-8")
+        gitops.add_all(project_dir)
+        gitops.commit(project_dir, "fix: commit partial work before stopping")
+        return Report(persona, 1, False, False, 2, [], {}, {}, "", max_turns=2)
+
+    stopped = run_repo_task(
+        str(origin),
+        "Work an earlier run never finished.",
+        "engineer",
+        workspace=workspace,
+        dispatch_fn=commits_then_stops,
+        recorded_gate=["true"],
+    )
+    assert stopped.outcome == "not-completed"
+    clone = workspace.clone_dir(normalize_repo(str(origin)))
+    inherited = incomplete_commits(clone, remote_base, stopped.branch)
+    # Empty, because that run committed its own work and stopped with a clean tree.
+    # Only an empty marker is a removal candidate at all, so this is the one whose
+    # survival actually turns on it having been inherited rather than provisional.
+    assert len(inherited) == 1
+    assert gitops.is_empty_commit(clone, next(iter(inherited)))
+
+    attempts = 0
+
+    def stops_once_then_completes(persona: str, task: str, *, project_dir: str, **_: object) -> Report:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            (Path(project_dir) / "resumed-work.txt").write_text("more\n", encoding="utf-8")
+            gitops.add_all(project_dir)
+            gitops.commit(project_dir, "fix: continue the inherited branch")
+            return Report(persona, 1, False, False, 2, [], {}, {}, "", max_turns=2)
+        return Report(persona, 0, True, False, 1, [], {}, {}, "")
+
+    resumed = run_repo_task(
+        str(origin),
+        "Continue the branch the earlier run left incomplete.",
+        "engineer",
+        workspace=workspace,
+        branch=stopped.branch,
+        dispatch_fn=stops_once_then_completes,
+        recorded_gate=["true"],
+    )
+
+    assert attempts == 2
+    surviving = incomplete_commits(clone, remote_base, resumed.branch)
+    assert inherited <= surviving, "the earlier run's recovery provenance was dropped"
+
+
 def test_completed_automatic_resume_keeps_the_marker_that_carries_its_work(
     tmp_path, bare_origin
 ) -> None:
