@@ -30,6 +30,17 @@ root="$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)" || {
   echo "llmlint fingerprint: could not locate the repository from this script; reinstall the checkout and retry" >&2
   exit 1
 }
+# shellcheck source=scripts/llmlint-runtime-env.sh
+. "$root/scripts/llmlint-runtime-env.sh" || {
+  echo "llmlint fingerprint: could not load the pinned runtime environment; restore scripts/llmlint-runtime-env.sh and retry" >&2
+  exit 1
+}
+# Resolve both fingerprint inputs under the same runtime environment the target
+# judges under, so the key describes the judge configuration the run would use.
+# A caller's LLMLINT_ONEHARNESS_BIN in particular never reaches the judge, yet
+# `llmlint config` renders it — reading it here split identical verdicts across a
+# cache key per dispatch.
+llmlint_runtime_env "$root"
 version="$(llmlint --version)" || {
   echo "llmlint fingerprint: 'llmlint --version' failed; run 'just setup-llmlint' and retry" >&2
   exit 1
