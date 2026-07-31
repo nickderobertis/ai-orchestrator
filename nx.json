@@ -5,6 +5,11 @@
   "namedInputs": {
     "default": ["{projectRoot}/**/*", "sharedGlobals"],
     "wholeWorkspace": ["{workspaceRoot}/**/*"],
+    "codeWorkspace": [
+      "{workspaceRoot}/**/*",
+      "!{workspaceRoot}/docs/**/*",
+      "!{workspaceRoot}/**/*.md"
+    ],
     "sharedGlobals": [
       "{workspaceRoot}/package.json",
       "{workspaceRoot}/bun.lock",
@@ -28,6 +33,10 @@
     "test": {
       "cache": true,
       "inputs": ["default"]
+    },
+    "test-docs": {
+      "cache": true,
+      "inputs": ["wholeWorkspace"]
     },
     "typecheck": {
       "cache": true,

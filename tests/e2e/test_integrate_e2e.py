@@ -17,8 +17,10 @@ from conftest import install_pre_push_hook
 from fakes import FakeGitHub, make_writing_dispatch
 
 from orchestrator import gitops
+from orchestrator.dispatch import Report
 from orchestrator.integrate import IntegrateError, integrate, main
 from orchestrator.lifecycle import StackBase, run_repo_task
+from orchestrator.provenance import incomplete_commits, unattested_incomplete
 from orchestrator.recover import main as recover_main
 from orchestrator.recover import recover_repo
 from orchestrator.registry import Registry
@@ -336,18 +338,180 @@ def test_remote_incomplete_integration_is_immutable_then_recovers_via_pr(
         != 0
     )
 
+    marker = next(iter(incomplete_commits(canonical, "origin/main", incomplete.branch)))
+    github = FakeGitHub(origin)
     recovered = recover_repo(
         str(canonical),
         incomplete.branch,
         workspace_root=tmp_path / "recovery-worktrees",
         recorded_gate=["true"],
-        github=FakeGitHub(origin),
+        github=github,
     )
     assert recovered.ok and recovered.outcome == "merged"
     assert recovered.pr and recovered.pr.startswith("https://github.com/")
     assert _git(origin, "show", "main:partial.txt").startswith("change by")
     message = _git(canonical, "log", "-1", "--format=%B", incomplete.branch)
-    assert "Orchestrator-Recovered-Incomplete:" in message
+    assert f"Orchestrator-Recovered-Incomplete: {marker}" in message
+    # GitHub squashes the branch away, so the PR body is what carries the attestation
+    # onto `main`; the branch keeps the commit.
+    assert f"Orchestrator-Recovered-Incomplete: {marker}" in github.published(recovered.pr).body
+
+
+def test_integration_train_lands_one_commit_and_no_provenance_on_the_base(
+    tmp_path, bare_origin
+) -> None:
+    """The path that put provenance commits on `main`, held to the base contract.
+
+    A real dispatch leaves the marker, a real recovery attestation clears it, and the
+    train publishes the branch. Fast-forwarding replayed the whole branch — marker and
+    attestation included — onto the base, which is what `main` shows today. The base
+    takes one squashed commit instead, and the attestation survives as its trailer.
+    """
+    origin = bare_origin()
+    canonical = _clone(tmp_path, origin)
+    _allow_local(canonical)
+    base_before = _git(origin, "rev-parse", "main")
+
+    def committing_dispatch(persona: str, task: str, *, project_dir: str, **_: object) -> Report:
+        """Commit real conventional work, leave the tree clean, then run out of turns."""
+        worktree = Path(project_dir)
+        (worktree / "design-system.txt").write_text("adopted\n", encoding="utf-8")
+        gitops.add_all(worktree)
+        gitops.commit(worktree, "feat: adopt the shared design system")
+        return Report(persona, 1, False, False, 2, [], {}, {}, "", max_turns=2)
+
+    incomplete = run_repo_task(
+        str(canonical),
+        "## What\nAdopt the shared design system.\n\n## Why\nThe app has no one source"
+        " of visual truth.\n",
+        "engineer",
+        workspace=Workspace(tmp_path / "train-worktrees", resolver=lambda _spec: canonical),
+        dispatch_fn=committing_dispatch,
+        recorded_gate=["true"],
+        repo_type="single-owner",
+    )
+    assert incomplete.outcome == "not-completed", incomplete.detail
+    marker = next(iter(incomplete_commits(canonical, "origin/main", incomplete.branch)))
+    assert "(incomplete step)" in _git(canonical, "log", "-1", "--format=%s", marker)
+
+    # A real recovery attests the branch and pushes it, then loses the publication
+    # push — the merge-path hook here accepts the branch and rejects the base. That
+    # is how an attested, unpublished branch reaches an operator's `just integrate`,
+    # and it is the state that put provenance commits on this repository's `main`.
+    install_pre_push_hook(
+        canonical,
+        "while read -r _local_ref _local_sha remote_ref _remote_sha; do\n"
+        '  case "$remote_ref" in refs/heads/main)\n'
+        "    printf 'pre-push gate rejected the base\\n' >&2; exit 1;;\n"
+        "  esac\n"
+        "done",
+    )
+    rejected = recover_repo(
+        canonical,
+        incomplete.branch,
+        workspace_root=tmp_path / "train-recovery-worktrees",
+        recorded_gate=["true"],
+    )
+    assert not rejected.ok, rejected.detail
+    assert _git(origin, "rev-parse", "main") == base_before
+    assert not unattested_incomplete(canonical, "origin/main", incomplete.branch)
+    install_pre_push_hook(canonical)
+
+    result = integrate(canonical, [incomplete.branch], gate_command=["true"], push=True)
+
+    assert [item.status for item in result.branches] == ["merged"], result.branches
+    assert result.base_advanced and result.pushed
+    landed = gitops.log_messages(canonical, base_before, "origin/main")
+    assert len(landed) == 1, [commit.message.splitlines()[0] for commit in landed]
+    subject, _, body = landed[0].message.partition("\n")
+    assert subject == "feat: adopt the shared design system"
+    assert f"Orchestrator-Recovered-Incomplete: {marker}" in body
+    # The marker and the attestation stayed on the branch, off the base.
+    assert not gitops.is_ancestor(canonical, marker, "origin/main")
+    assert not incomplete_commits(canonical, base_before, "origin/main")
+    assert _git(origin, "show", "main:design-system.txt") == "adopted"
+
+
+def test_publication_carries_one_trailer_per_marker_and_drops_unbacked_claims(
+    tmp_path, bare_origin
+) -> None:
+    """A twice-preserved branch, published once.
+
+    Two markers, attested across two commits that overlap and that also carry a
+    trailer naming a commit no marker exists for. Branch messages are agent-written,
+    so a trailer copied verbatim onto the base branch would let any well-spelled line
+    claim a recovery that never happened. The publication commit gets one trailer per
+    marker the history actually carries, in marker order, and nothing else.
+    """
+    origin = bare_origin()
+    repo = _clone(tmp_path, origin)
+    _allow_local(repo)
+    base_before = _git(repo, "rev-parse", "main")
+
+    _branch(repo, "claude/twice-preserved", {"first.txt": "first\n"})
+    _git(repo, "checkout", "claude/twice-preserved")
+    _git(repo, "commit", "--amend", "-m", "feat: land the first half")
+    _git(
+        repo,
+        "commit",
+        "--allow-empty",
+        "-m",
+        "chore: first half (incomplete step)\n\nOrchestrator-Status: incomplete",
+    )
+    first_marker = _git(repo, "rev-parse", "HEAD")
+    (repo / "second.txt").write_text("second\n", encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-m", "fix: land the second half")
+    _git(
+        repo,
+        "commit",
+        "--allow-empty",
+        "-m",
+        "chore: second half (incomplete step)\n\nOrchestrator-Status: incomplete",
+    )
+    second_marker = _git(repo, "rev-parse", "HEAD")
+    _git(
+        repo,
+        "commit",
+        "--allow-empty",
+        "-m",
+        "chore: attest verified recovery of preserved work\n\n"
+        f"Orchestrator-Recovered-Incomplete: {first_marker}\n"
+        # No marker carries this sha; it attests nothing.
+        f"Orchestrator-Recovered-Incomplete: {'d' * 40}",
+    )
+    _git(
+        repo,
+        "commit",
+        "--allow-empty",
+        "-m",
+        "chore: attest verified recovery of preserved work\n\n"
+        # Restates the first marker alongside the one it adds.
+        f"Orchestrator-Recovered-Incomplete: {first_marker}\n"
+        f"Orchestrator-Recovered-Incomplete: {second_marker}",
+    )
+    _git(repo, "checkout", "main")
+
+    recovered = recover_repo(
+        repo,
+        "claude/twice-preserved",
+        workspace_root=tmp_path / "twice-preserved-worktrees",
+        recorded_gate=["true"],
+    )
+    assert recovered.ok and recovered.outcome == "merged", recovered.detail
+
+    published = gitops.log_messages(repo, base_before, "origin/main")
+    assert len(published) == 1, [commit.message.splitlines()[0] for commit in published]
+    trailers = [
+        line
+        for line in published[0].message.splitlines()
+        if line.startswith("Orchestrator-Recovered-Incomplete:")
+    ]
+    assert trailers == [
+        f"Orchestrator-Recovered-Incomplete: {first_marker}",
+        f"Orchestrator-Recovered-Incomplete: {second_marker}",
+    ]
+    assert _git(origin, "show", "main:second.txt") == "second"
 
 
 def test_incomplete_history_needs_recovery_attestation_even_after_normal_commit(

@@ -10,9 +10,12 @@ rather than failing the read.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 import secrets
+from collections.abc import Mapping
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import NewType, TypedDict, TypeGuard
@@ -283,4 +286,193 @@ def read_provenance(
         launcher_session_id=session_id,
         started_at=raw["started_at"],
         repository_identity=identity,
+    )
+
+
+@dataclass(frozen=True)
+class _LauncherEnvironment:
+    """How one known harness names itself, and where it puts its session id.
+
+    Environment, never process ancestry: a launch may sit several shells below the
+    harness that started it, and the design fixes attribution on what the harness
+    exports rather than on who happens to be the parent.
+    """
+
+    launcher: str
+    #: Variables whose mere presence identifies this harness.
+    markers: tuple[str, ...]
+    #: Variables carrying the session id, most specific first.
+    session_ids: tuple[str, ...]
+
+
+#: The ambient environment each known launcher leaves for what it runs. Ordered, and
+#: read in order, so a session nested inside another resolves to the first harness
+#: that claims it rather than to whichever variable happened to be scanned first.
+_LAUNCHER_ENVIRONMENTS: tuple[_LauncherEnvironment, ...] = (
+    _LauncherEnvironment(
+        "claude-code",
+        markers=("CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_SESSION_ID"),
+        session_ids=("CLAUDE_CODE_SESSION_ID", "CLAUDE_SESSION_ID"),
+    ),
+    # `CODEX_HOME` is deliberately not a marker: it is ambient configuration a
+    # developer may export in a shell profile, so a plain shell would claim to be
+    # codex. A marker has to be something only a running session sets.
+    _LauncherEnvironment(
+        "codex",
+        markers=("CODEX_THREAD_ID", "CODEX_SESSION_ID", "CODEX_SANDBOX"),
+        session_ids=("CODEX_THREAD_ID", "CODEX_SESSION_ID"),
+    ),
+)
+
+
+#: Every variable the detection above reads, derived from it rather than restated.
+#: A caller that has to neutralise an ambient session — a test isolating the launch it
+#: is exercising from the developer session running it — needs exactly this set, and
+#: deriving it means a marker production learns to read cannot silently keep leaking
+#: into an environment that believes it cleared them all.
+LAUNCHER_ENVIRONMENT_VARIABLES: frozenset[str] = frozenset(
+    name
+    for candidate in _LAUNCHER_ENVIRONMENTS
+    for name in candidate.markers + candidate.session_ids
+)
+
+
+@dataclass(frozen=True)
+class DetectedLaunch:
+    """The launching harness and session the ambient environment identifies."""
+
+    launcher: str
+    #: ``None`` when the harness is recognised but names no session to join on.
+    session_id: str | None
+
+
+def _first_set(environ: Mapping[str, str], names: tuple[str, ...]) -> str | None:
+    return next((value for name in names if (value := environ.get(name))), None)
+
+
+def detect_launch(environ: Mapping[str, str] | None = None) -> DetectedLaunch:
+    """Identify the launching harness and its session from the ambient environment.
+
+    An unrecognised environment is ``unknown`` with no session, exactly as a
+    hand-run launch has always been: this only removes the requirement that a
+    planner remember two flags, it never invents an attribution.
+
+    A session id in a form this scheme cannot carry degrades to ``None`` rather than
+    raising. Nobody typed it, so it must not fail a launch that never asked to be
+    attributed; the run then reads ``unknown``, which is the honest answer for a
+    session that cannot be named.
+    """
+    values = os.environ if environ is None else environ
+    for candidate in _LAUNCHER_ENVIRONMENTS:
+        if not any(values.get(marker) for marker in candidate.markers):
+            continue
+        raw = _first_set(values, candidate.session_ids)
+        try:
+            session_id = validate_session_id(raw)
+        except LaunchError:
+            session_id = None
+        return DetectedLaunch(candidate.launcher, session_id)
+    return DetectedLaunch("unknown", None)
+
+
+def select_launch(
+    *,
+    launcher: str | None,
+    session_id: str | None,
+    environ: Mapping[str, str] | None = None,
+) -> DetectedLaunch:
+    """Combine explicitly requested provenance with what the environment detected.
+
+    An explicit value always wins. A detected session is only paired with a launcher
+    the same detection named: adopting it under a different harness would join a run
+    to a session that never launched it, which is the one error this whole scheme
+    exists to prevent.
+    """
+    detected = detect_launch(environ)
+    chosen = launcher or detected.launcher
+    if session_id:
+        return DetectedLaunch(chosen, session_id)
+    return DetectedLaunch(chosen, detected.session_id if chosen == detected.launcher else None)
+
+
+@dataclass(frozen=True)
+class LaunchIdentity:
+    """One launching session: a known harness plus the session it ran in."""
+
+    launcher: str
+    session_id: str
+
+    @property
+    def label(self) -> str:
+        """How this session is named on an operator's terminal.
+
+        The session id itself is never printed — it is the possibly-sensitive half
+        of the scheme — so a stable, truncated digest stands in for it. That still
+        tells two concurrent planners apart, which is the whole job of the label.
+        """
+        return f"{self.launcher}:{session_fingerprint(self.session_id)}"
+
+
+def session_fingerprint(session_id: str) -> str:
+    """A short, stable, non-reversible label for one launching session."""
+    return hashlib.sha256(session_id.encode("utf-8")).hexdigest()[:8]
+
+
+def caller_identity(environ: Mapping[str, str] | None = None) -> LaunchIdentity | None:
+    """This process's own launching session, or ``None`` when it has none.
+
+    ``None`` is not a failure: a launch from a plain shell has no session to be. It
+    does mean the caller owns nothing, because ownership is a join between two
+    named sessions and there is nothing here to join to.
+    """
+    detected = detect_launch(environ)
+    if detected.launcher not in KNOWN_LAUNCHERS or detected.session_id is None:
+        return None
+    return LaunchIdentity(detected.launcher, detected.session_id)
+
+
+@dataclass(frozen=True)
+class RunOwner:
+    """Who launched one run, as far as this host can establish it."""
+
+    #: A `KNOWN_LAUNCHERS` value, or ``"unknown"`` when no record joins the run.
+    launcher: str
+    #: The launching session, or ``None`` when the run is unattributable.
+    identity: LaunchIdentity | None
+
+    def is_(self, caller: LaunchIdentity | None) -> bool:
+        """Whether ``caller`` launched this run.
+
+        Unknown is never mine. Both halves must be present and equal: a run nobody
+        can attribute belongs to another planner until proven otherwise, and a
+        caller with no session of its own cannot be the owner of anything.
+        """
+        return caller is not None and self.identity == caller
+
+    def label(self, caller: LaunchIdentity | None) -> str:
+        """One short ownership indicator for a planner-facing row."""
+        if self.identity is None:
+            return "unknown"
+        return "mine" if self.is_(caller) else self.identity.label
+
+
+UNKNOWN_OWNER = RunOwner("unknown", None)
+
+
+def read_run_owner(run_dir: Path, *, now: datetime | None = None) -> RunOwner:
+    """Resolve one run's launching session through its recorded ``launch_id``.
+
+    Every degraded state — no ``launch.json``, no join key, a missing, malformed, or
+    expired provenance record — lands on the same `UNKNOWN_OWNER`, so a run this host
+    cannot attribute is reported as nobody's rather than as the reader's own.
+    """
+    launch_id = read_launch_info(run_dir)
+    if launch_id is None:
+        return UNKNOWN_OWNER
+    provenance = read_provenance(launch_id, now=now)
+    if provenance is None:
+        return UNKNOWN_OWNER
+    return RunOwner(
+        provenance["launcher"],
+        LaunchIdentity(provenance["launcher"], provenance["launcher_session_id"]),
     )

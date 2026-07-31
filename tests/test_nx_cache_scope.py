@@ -9,6 +9,16 @@ changing its hash, which is a green verdict for a tree that would have failed.
 assertions keep the declarations that behaviour rests on from narrowing again —
 including as the suite grows new reads, which is how the subset drifted out of
 date in the first place.
+
+The Python suite is keyed at two scopes rather than one, because "keyed on
+everything it reads" and "keyed on the whole workspace" are not the same
+requirement. Only a handful of tests assert on this repository's prose; charging
+every documentation edit eight minutes for the rest bought nothing. `test-docs`
+runs those tests and keeps the whole-workspace key; `test` runs the remainder and
+is keyed on the workspace minus its prose. What keeps that second key honest is
+not this file — a static scan cannot see every read — but `tests/conftest.py`,
+which fails an undeclared test the moment it opens this checkout's own
+documentation.
 """
 
 from __future__ import annotations
@@ -17,14 +27,25 @@ import json
 import re
 import subprocess
 
+from conftest import READS_DOCS_MARKER
+
 from orchestrator import REPO_ROOT
 
 WHOLE_WORKSPACE = "wholeWorkspace"
+CODE_WORKSPACE = "codeWorkspace"
 
 #: Every one of these runs from the workspace root against the whole tree — ruff
 #: over `.`, shellcheck over `scripts/`, persona validation over `personas/`, and
-#: pytest over a suite that reads documentation, recipes, hooks and app config.
-WORKSPACE_SCOPED = ("test", "lint", "typecheck", "format-check")
+#: the prose-contract tests, which exist to read documentation.
+WORKSPACE_SCOPED = ("lint", "typecheck", "format-check", "test-docs")
+#: The one target keyed on less than the whole workspace, and the exact globs that
+#: earn it: the workspace with its documentation removed, and nothing else.
+CODE_SCOPED = "test"
+CODE_WORKSPACE_GLOBS = [
+    "{workspaceRoot}/**/*",
+    "!{workspaceRoot}/docs/**/*",
+    "!{workspaceRoot}/**/*.md",
+]
 
 
 def _tracked() -> frozenset[str]:
@@ -76,12 +97,20 @@ def _effective_inputs(project_root: str, target: str) -> list[str]:
     ]
 
 
+def _matches(glob: str, relative: str) -> bool:
+    pattern = re.escape(glob).replace(r"\*\*/\*", ".*").replace(r"\*", "[^/]*")
+    return re.fullmatch(pattern, relative) is not None
+
+
 def _covers(globs: list[str], relative: str) -> bool:
-    for glob in globs:
-        pattern = re.escape(glob).replace(r"\*\*/\*", ".*").replace(r"\*", "[^/]*")
-        if re.fullmatch(pattern, relative):
-            return True
-    return False
+    """Apply Nx's file-set semantics: a later `!` glob removes what an earlier one added."""
+    included = any(_matches(glob, relative) for glob in globs if not glob.startswith("!"))
+    excluded = any(_matches(glob[1:], relative) for glob in globs if glob.startswith("!"))
+    return included and not excluded
+
+
+def _is_documentation(relative: str) -> bool:
+    return relative.startswith("docs/") or relative.endswith(".md")
 
 
 def test_workspace_scoped_targets_are_keyed_on_the_whole_workspace() -> None:
@@ -101,9 +130,56 @@ def test_workspace_scoped_targets_are_keyed_on_the_whole_workspace() -> None:
     )
 
 
-def test_every_repository_path_the_suite_reads_is_part_of_the_test_key() -> None:
+def test_the_marker_that_routes_a_test_to_its_tier_means_the_same_thing_everywhere() -> None:
+    """Reconcile the four places the marker name is independently written down.
+
+    `reads_docs` names a routing decision, not a label: pytest registers it,
+    `conftest.py` enforces it, and the two Nx targets select on it. Those four
+    declarations are written separately and nothing else compares them, so a rename
+    that missed one would leave a tier silently selecting nothing — and a `test`
+    tier that ran the prose contracts anyway, keyed on a workspace without prose,
+    is the false green this whole file exists to prevent.
+    """
+    manifest = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    registered = re.findall(r'^\s*"(\w+):', manifest, flags=re.MULTILINE)
+    assert READS_DOCS_MARKER in registered, (
+        f"pytest must register {READS_DOCS_MARKER!r} in [tool.pytest.ini_options] markers"
+    )
+
+    targets = json.loads((REPO_ROOT / "orchestrator/project.json").read_text(encoding="utf-8"))[
+        "targets"
+    ]
+    assert f"-m 'not {READS_DOCS_MARKER}'" in targets[CODE_SCOPED]["command"]
+    assert f"-m {READS_DOCS_MARKER}" in targets["test-docs"]["command"]
+
+    # And the two selectors have to partition: a test is in exactly one tier.
+    marked = re.search(r"-m '?(not )?(\w+)'?", targets["test-docs"]["command"])
+    assert marked is not None and marked.group(1) is None
+
+
+def test_the_code_only_test_key_is_the_workspace_with_its_prose_removed() -> None:
+    """The one narrowed key is narrowed by exactly the documentation, and no further."""
+    named = _nx_config()["namedInputs"]
+    assert named[CODE_WORKSPACE] == CODE_WORKSPACE_GLOBS, (
+        "orchestrator:test replays a verdict for every tracked path this key covers, "
+        "so narrowing it past documentation would memoize a claim about code it never read"
+    )
+
+    project = json.loads((REPO_ROOT / "orchestrator/project.json").read_text(encoding="utf-8"))
+    assert project["targets"][CODE_SCOPED]["inputs"] == [CODE_WORKSPACE]
+
+    globs = _effective_inputs("orchestrator", CODE_SCOPED)
+    missed = sorted(path for path in _tracked() if not _covers(globs, path))
+    assert missed and all(_is_documentation(path) for path in missed), (
+        f"only documentation may fall outside the code-only test key: {missed}"
+    )
+    # The prose tier is what covers the rest, so it must actually still exist.
+    assert "test-docs" in project["targets"]
+
+
+def test_every_repository_path_the_suite_reads_is_part_of_a_test_key() -> None:
     """A new test that reads a new path must not be able to replay a stale verdict."""
-    globs = _effective_inputs("orchestrator", "test")
+    globs = _effective_inputs("orchestrator", CODE_SCOPED)
     tracked = _tracked()
     read: set[str] = set()
     for source in sorted(REPO_ROOT.joinpath("tests").rglob("*.py")):
@@ -116,16 +192,31 @@ def test_every_repository_path_the_suite_reads_is_part_of_the_test_key() -> None
     # A guard that found nothing would pass silently forever.
     assert {"AGENTS.md", "justfile", "scripts/session-setup.sh"} <= read, read
     uncovered = sorted(path for path in read if not _covers(globs, path))
-    assert not uncovered, (
+    assert all(_is_documentation(path) for path in uncovered), (
         "orchestrator:test reads these repository paths but is not keyed on them, "
         f"so a change to one replays a stale verdict: {uncovered}"
     )
+    # Prose the suite reads is not exempt, only keyed elsewhere: `test-docs` is
+    # keyed on the whole workspace, so it covers every path in `uncovered`.
+    assert "AGENTS.md" in uncovered, (
+        "the sentinel prose read moved; keep a real one here or this guard stops guarding"
+    )
 
 
-def test_the_e2e_witness_still_names_a_path_outside_the_project_roots() -> None:
-    """The journey's witness must stay a file no project-root glob would cover."""
+def test_the_e2e_witnesses_still_name_paths_outside_the_project_roots() -> None:
+    """Each journey's witness must stay a file no project-root glob would cover.
+
+    One witness per tier, and they have to differ in exactly the way the two keys
+    do: the prose witness proves the whole-workspace tier notices documentation,
+    and the code witness proves the narrowed tier still notices everything else.
+    """
     project_scoped = _resolve(["default"], _nx_config()["namedInputs"])
     globs = [glob.replace("{workspaceRoot}/", "") for glob in project_scoped]
     globs = [glob.replace("{projectRoot}/", "orchestrator/") for glob in globs]
-    assert not _covers(globs, "AGENTS.md")
-    assert (REPO_ROOT / "AGENTS.md").exists()
+    for witness in ("AGENTS.md", "justfile"):
+        assert not _covers(globs, witness)
+        assert (REPO_ROOT / witness).exists()
+
+    code_globs = _effective_inputs("orchestrator", CODE_SCOPED)
+    assert not _covers(code_globs, "AGENTS.md")
+    assert _covers(code_globs, "justfile")

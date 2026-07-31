@@ -22,6 +22,7 @@ ONEJUDGE_VERSION_REFERENCE = re.compile(
 )
 
 
+@pytest.mark.reads_docs
 @pytest.mark.parametrize(
     ("relative_path", "expected_count"), ONEJUDGE_VERSION_REFERENCE_COUNTS.items()
 )
@@ -43,6 +44,7 @@ def test_onejudge_version_references_match_single_source(
     )
 
 
+@pytest.mark.reads_docs
 def test_telemetry_upgrade_boundary_matches_authoritative_versions(
     adopted_onejudge_version: str, adopted_oneharness_version: str
 ) -> None:

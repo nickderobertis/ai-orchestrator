@@ -12,6 +12,11 @@ import pytest
 
 from orchestrator.config import ConfigError
 from orchestrator.goals import register_run
+from orchestrator.launch import (
+    generate_launch_id,
+    session_fingerprint,
+    write_provenance,
+)
 from orchestrator.next_round import main, main_runs
 from orchestrator.runs import (
     AbandonedLaunch,
@@ -485,8 +490,8 @@ def test_runs_cli_reports_an_abandoned_round_beside_a_recorded_one(tmp_path, cap
     assert main_runs(["--runs-dir", str(tmp_path)]) == 0
 
     out = capsys.readouterr().out
-    assert "! unrecorded  round-01 ABANDONED (owner pid 99 took SIGHUP)" in out
-    assert "! dead  round-01  (1 done)" in out
+    assert "! unrecorded  [unknown]  round-01 ABANDONED (owner pid 99 took SIGHUP)" in out
+    assert "! dead  [unknown]  round-01  (1 done)" in out
     assert f"    round-02 ABANDONED (owner pid {os.getpid() + 10_000_000} is gone)" in out
     assert "No recorded runs" not in out
 
@@ -627,7 +632,7 @@ def test_plan_only_and_runs_cli(tmp_path, capsys) -> None:
     assert main(["demo", str(edits), "--runs-dir", str(tmp_path), "--plan-only"]) == 0
     assert json.loads((run / "round-02" / "plan.json").read_text())["tasks"][0]["max_turns"] == 8
     assert main_runs(["--runs-dir", str(tmp_path)]) == 0
-    assert "demo  round-01" in capsys.readouterr().out
+    assert "demo  [unknown]  round-01" in capsys.readouterr().out
 
 
 def test_runs_cli_no_recorded_runs(tmp_path, capsys) -> None:
@@ -674,9 +679,15 @@ def test_runs_cli_marks_active_launches_and_what_they_wait_on(tmp_path, capsys) 
     assert main_runs(["--runs-dir", str(tmp_path)]) == 0
 
     out = capsys.readouterr().out
-    assert "* unrecorded  ACTIVE  (waiting for planner decision: blocker: gate is red)" in out
-    assert "* recorded  round-01  (waiting for planner reply: milestone: round 1 settled)" in out
-    assert "* quiet  round-01  (1 done)" in out
+    assert (
+        "* unrecorded  [unknown]  ACTIVE  (waiting for planner decision: blocker: gate is red)"
+        in out
+    )
+    assert (
+        "* recorded  [unknown]  round-01  (waiting for planner reply: milestone: round 1 settled)"
+        in out
+    )
+    assert "* quiet  [unknown]  round-01  (1 done)" in out
     assert "No recorded runs" not in out
 
 
@@ -741,8 +752,8 @@ def test_runs_cli_falls_back_when_a_live_channel_cannot_be_read(tmp_path, capsys
     assert main_runs(["--runs-dir", str(tmp_path)]) == 0
 
     out = capsys.readouterr().out
-    assert "* unrecorded  ACTIVE  (orchestrator running)" in out
-    assert "* recorded  round-01  (1 done)" in out
+    assert "* unrecorded  [unknown]  ACTIVE  (orchestrator running)" in out
+    assert "* recorded  [unknown]  round-01  (1 done)" in out
 
 
 def test_runs_cli_ignores_a_launch_whose_orchestrator_exited(tmp_path, capsys) -> None:
@@ -755,7 +766,7 @@ def test_runs_cli_ignores_a_launch_whose_orchestrator_exited(tmp_path, capsys) -
     assert main_runs(["--runs-dir", str(tmp_path)]) == 0
 
     out = capsys.readouterr().out
-    assert "  finished  round-01  (1 done)" in out
+    assert "  finished  [unknown]  round-01  (1 done)" in out
     assert "ACTIVE" not in out
 
 
@@ -972,3 +983,59 @@ def test_next_round_reports_completion_record_failure(tmp_path, monkeypatch, cap
     monkeypatch.setattr("orchestrator.next_round.record_completions", fail_record)
     assert main(["demo", "--runs-dir", str(tmp_path), "--complete-human", "h"]) == 2
     assert "disk full" in capsys.readouterr().err
+
+
+def _owned_launch(runs_dir, run_id: str, session: str | None):
+    """Record a launch the way `just orchestrate` does, with its provenance record."""
+    run = _launch(runs_dir, run_id)
+    if session is not None:
+        launch_id = generate_launch_id()
+        write_provenance(
+            launch_id=launch_id,
+            launcher="claude-code",
+            launcher_session_id=session,
+            repository_identity="local/app",
+        )
+        (run / "launch.json").write_text(
+            json.dumps({"schema_version": 2, "run_id": run_id, "launch": {"launch_id": launch_id}}),
+            encoding="utf-8",
+        )
+    _, round_dir = write_next_plan(run, PLAN)
+    write_result(round_dir, _result("done"))
+    return run
+
+
+def test_runs_cli_shows_who_owns_each_run_and_filters_to_mine(tmp_path, capsys, monkeypatch):
+    """The column a planner cannot miss, and the filter that hides everyone else's."""
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    monkeypatch.setenv("CLAUDECODE", "1")
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "session-mine")
+    for name in ("CLAUDE_SESSION_ID", "CODEX_THREAD_ID", "CODEX_SESSION_ID", "CODEX_SANDBOX"):
+        monkeypatch.delenv(name, raising=False)
+    _owned_launch(tmp_path, "mine", "session-mine")
+    _owned_launch(tmp_path, "theirs", "session-theirs")
+    _owned_launch(tmp_path, "nameless", None)
+
+    assert main_runs(["--runs-dir", str(tmp_path)]) == 0
+    everything = capsys.readouterr().out
+    assert "mine  [mine]  round-01" in everything
+    assert f"theirs  [claude-code:{session_fingerprint('session-theirs')}]  round-01" in everything
+    # A run with no provenance is explicitly unknown, never quietly the reader's.
+    assert "nameless  [unknown]  round-01" in everything
+    assert "session-theirs" not in everything
+
+    assert main_runs(["--runs-dir", str(tmp_path), "--mine"]) == 0
+    only_mine = capsys.readouterr().out
+    assert "mine  [mine]  round-01" in only_mine
+    assert "theirs" not in only_mine
+    assert "nameless" not in only_mine
+
+
+def test_runs_cli_says_so_when_this_session_launched_nothing(tmp_path, capsys, monkeypatch):
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    monkeypatch.setenv("CLAUDECODE", "1")
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "session-mine")
+    _owned_launch(tmp_path, "theirs", "session-theirs")
+
+    assert main_runs(["--runs-dir", str(tmp_path), "--mine"]) == 0
+    assert "No runs launched by this session." in capsys.readouterr().out

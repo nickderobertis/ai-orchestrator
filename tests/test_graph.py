@@ -965,6 +965,7 @@ def test_expects_no_diff_direct_node_records_no_changes_without_runner() -> None
     assert result.results["ready"].status == "done"
 
 
+@pytest.mark.reads_docs
 def test_plan_schema_version_documentation_cannot_drift() -> None:
     root = Path(__file__).parents[1]
     docs = (root / "docs" / "orchestration.md").read_text(encoding="utf-8")

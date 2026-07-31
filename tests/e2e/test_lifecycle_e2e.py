@@ -4293,6 +4293,130 @@ def test_clean_committed_partial_work_is_marked_and_recoverable(tmp_path, bare_o
     assert _has_file(origin, "main", "partial.txt")
 
 
+def test_publication_subject_describes_the_change_and_its_body_keeps_the_attestation(
+    tmp_path, bare_origin
+) -> None:
+    """What a recovered incomplete step leaves on the base branch.
+
+    Observed on this repository's own `main`: subjects like
+    `feat: adopt @oneharness/ui as the app's design system; ## What (incomple…`. The
+    marker commit's subject is a valid Conventional Commit, so the subject synthesizer
+    folded it in alongside the real work, and because task prose opens with a `## What`
+    heading the fragment it contributed named a section rather than any change.
+
+    The base branch stays squash-merged — the marker and its attestation are branch
+    state, not `main` history — so the publication commit's trailers are what carry
+    "a step was left incomplete here, and a green gate recovered it" forward.
+    """
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-subject")
+    Registry().register(str(canonical), workflow="local", repo_type="single-owner")
+
+    def committing_dispatch(persona: str, task: str, *, project_dir: str, **_: object) -> Report:
+        worktree = Path(project_dir)
+        (worktree / "design-system.txt").write_text("adopted\n", encoding="utf-8")
+        gitops.add_all(worktree)
+        gitops.commit(worktree, "feat: adopt the shared design system")
+        assert not gitops.is_dirty(worktree)
+        return Report(persona, 1, False, False, 2, [], {}, {}, "", max_turns=2)
+
+    result = run_repo_task(
+        str(canonical),
+        # The structured prose every dispatched task carries, headings included.
+        "## What\nAdopt the shared design system.\n\n## Why\nThe app has no one source"
+        " of visual truth.\n",
+        "engineer",
+        workspace=Workspace(tmp_path / "subject-worktrees"),
+        branch="feature/published-subject",
+        dispatch_fn=committing_dispatch,
+        recorded_gate=["true"],
+    )
+    assert result.outcome == "not-completed" and result.resume is not None
+    base_before = _tip(origin, "main")
+    markers = incomplete_commits(canonical, "origin/main", result.branch)
+    assert len(markers) == 1, sorted(markers)
+    marker_sha = next(iter(markers))
+    marker_subject = gitops.log_messages(canonical, f"{marker_sha}~1", marker_sha)[0].message
+    # The marker names the work it preserved, not the heading above it.
+    assert marker_subject.splitlines()[0] == (
+        "chore: Adopt the shared design system. (incomplete step)"
+    )
+
+    recovered = recover_repo(
+        canonical,
+        result.branch,
+        workspace_root=tmp_path / "subject-recovery-worktrees",
+        recorded_gate=["true"],
+    )
+    assert recovered.ok and recovered.outcome == "merged", recovered.detail
+
+    published = gitops.log_messages(canonical, base_before, "origin/main")
+    # Squash-merged: one publication commit, not the branch's provenance history.
+    assert len(published) == 1, [commit.message.splitlines()[0] for commit in published]
+    subject, _, body = published[0].message.partition("\n")
+    assert subject == "feat: adopt the shared design system"
+    assert "incomplete" not in subject and "##" not in subject and "attest" not in subject
+    # The attestation is preserved: the fact reaches `main`, the commits do not.
+    assert f"{RECOVERY_TRAILER} {marker_sha}" in body
+    assert not gitops.is_ancestor(canonical, marker_sha, "origin/main")
+    assert _has_file(origin, "main", "design-system.txt")
+
+
+def test_a_remote_retry_publishes_its_attestation_in_the_pr_body(tmp_path, bare_origin) -> None:
+    """The remote half of the same contract: GitHub squashes, so the body carries it.
+
+    A remote workstream that resumes a preserved branch attests the marker on the
+    branch, but GitHub collapses that branch into one commit built from the PR title
+    and body. Without the trailers there, `main` would keep no record that a step was
+    left incomplete.
+    """
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-remote-attested")
+    workspace = Workspace(
+        tmp_path / "remote-attested-worktrees",
+        resolver=lambda _spec: canonical,
+        workflow="remote",
+        repo_type="single-owner",
+    )
+    github = FakeGitHub(origin)
+
+    partial = run_repo_task(
+        str(origin),
+        "## What\nPreserve work for a remote retry.\n\n## Why\nIt proves the trailer.\n",
+        "engineer",
+        workspace=workspace,
+        dispatch_fn=make_writing_dispatch(filename="partial.txt", completed=False),
+        recorded_gate=["true"],
+        workflow="remote",
+        repo_type="single-owner",
+        github=github,
+    )
+    assert partial.outcome == "not-completed" and isinstance(partial.resume, Resume)
+    markers = incomplete_commits(canonical, "origin/main", partial.branch)
+    assert len(markers) == 1, sorted(markers)
+    marker_sha = next(iter(markers))
+
+    resumed = run_repo_task(
+        str(origin),
+        "## What\nFinish the preserved remote work.\n\n## Why\nIt proves the trailer.\n",
+        "engineer",
+        workspace=workspace,
+        dispatch_fn=make_writing_dispatch(filename="finished.txt"),
+        recorded_gate=["true"],
+        workflow="remote",
+        repo_type="single-owner",
+        github=github,
+        resume=partial.resume,
+    )
+    assert resumed.outcome == "merged", resumed.detail
+    assert resumed.retry_lineage is not None
+    assert resumed.retry_lineage.disposition == "recovered"
+    assert resumed.pr is not None
+    body = github.published(resumed.pr).body
+    assert f"{RECOVERY_TRAILER} {marker_sha}" in body
+    assert body.startswith("## What\n")
+
+
 def test_a_redispatched_branch_is_not_handed_a_second_incomplete_marker(
     tmp_path, bare_origin
 ) -> None:
