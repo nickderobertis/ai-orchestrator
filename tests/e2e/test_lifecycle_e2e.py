@@ -2208,6 +2208,42 @@ def test_pr_author_failure_does_not_block_human_draft_checkpoint(tmp_path, bare_
     assert "drafting provider unavailable" in result.follow_ups
 
 
+def test_pr_author_failure_preserves_worker_assessment_in_surfaced_output(
+    tmp_path, bare_origin
+) -> None:
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-drafting-assessment")
+    Registry().register(str(canonical), workflow="remote", repo_type="single-owner")
+    writing = make_writing_dispatch()
+
+    def assessed_worker_with_failing_author(persona, task, *, project_dir, **kwargs):
+        if persona == "pr-author":
+            raise DispatchError("drafting provider unavailable")
+        report = writing(persona, task, project_dir=project_dir, **kwargs)
+        report.assessment = "Worker assessment: inspect the migration edge case."
+        return report
+
+    result = run_repo_task(
+        str(canonical),
+        "complete-now write-change",
+        "engineer",
+        workspace=Workspace(tmp_path / "drafting-assessment-worktrees"),
+        github=FakeGitHub(origin),
+        merge_policy="none",
+        branch="drafting-assessment",
+        recorded_gate=["true"],
+        dispatch_fn=assessed_worker_with_failing_author,
+    )
+
+    assert result.outcome == "pr-open" and result.pr is not None
+    surfaced = result_payload(result)["follow_ups"]
+    assert surfaced == (
+        "Worker assessment: inspect the migration edge case.\n"
+        "pr-author drafting failed: attempt 1: drafting error: drafting provider unavailable; "
+        "attempt 2: drafting error: drafting provider unavailable"
+    )
+
+
 def test_pr_author_successful_retry_publishes_drafted_body(tmp_path, bare_origin) -> None:
     origin = bare_origin()
     canonical = gitops.clone(origin, tmp_path / "canonical-drafting-recovery")

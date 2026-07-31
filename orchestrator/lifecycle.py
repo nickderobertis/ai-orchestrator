@@ -3044,7 +3044,7 @@ def result_payload(result: LifecycleResult) -> dict[str, Any]:
         "detail": result.detail,
         **({"artifacts": artifacts} if artifacts else {}),
         **({"deferred_cleanup": result.deferred_cleanup} if result.deferred_cleanup else {}),
-        "follow_ups": result.follow_ups or (result.report.assessment if result.report else None),
+        "follow_ups": _result_follow_ups(result),
         "steps": [
             {
                 "id": s.id,
@@ -3070,6 +3070,14 @@ def result_payload(result: LifecycleResult) -> dict[str, Any]:
 
 
 _result_payload = result_payload
+
+
+def _result_follow_ups(result: LifecycleResult) -> str | None:
+    """Preserve worker and lifecycle diagnostics in the one surfaced field."""
+    assessment = result.report.assessment if result.report else None
+    if assessment and result.follow_ups and assessment != result.follow_ups:
+        return f"{assessment}\n{result.follow_ups}"
+    return result.follow_ups or assessment
 
 
 def retry_lineage_payload(lineage: RetryLineage) -> RetryLineagePayload:
