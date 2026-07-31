@@ -14,6 +14,7 @@ import re
 import stat
 import subprocess
 import time
+import tomllib
 from pathlib import Path
 
 from orchestrator import REPO_ROOT
@@ -378,6 +379,16 @@ def test_status_file_contract_has_one_source_the_wrapper_honors() -> None:
     )
 
 
+def test_quota_diagnostic_harness_matches_worker_primary() -> None:
+    """DRIFT-GATE the diagnostic identity against the configured first candidate."""
+    config = tomllib.loads((REPO_ROOT / "oneharness.toml").read_text(encoding="utf-8"))
+    primary = config["harnesses"][0]
+    script = WRAPPER.read_text(encoding="utf-8")
+
+    assert primary == "claude-code:alternate"
+    assert f"alternate_harness={primary}" in script
+
+
 def test_dead_agent_records_its_exit_status_and_stderr_before_parking(tmp_path: Path) -> None:
     """A failed agent leaves the dispatcher an account of why it died.
 
@@ -437,7 +448,8 @@ def test_a_failing_agent_harness_records_why_before_awaiting_recovery(tmp_path: 
     stub = bin_dir / "oneharness"
     stub.write_text(
         "#!/usr/bin/env bash\n"
-        'echo "provider error: 429 rate_limit_error quota exhausted" >&2\n'
+        'echo "You\'ve hit your session limit · resets 7pm (UTC)"\n'
+        "echo 'oneharness: fallback harness `claude-code:alternate` ran but did not succeed' >&2\n"
         "exit 7\n",
         encoding="utf-8",
     )
@@ -468,9 +480,13 @@ def test_a_failing_agent_harness_records_why_before_awaiting_recovery(tmp_path: 
             process.kill()
 
     assert reason == "agent harness exited 7"
-    assert "429 rate_limit_error quota exhausted" in recorded
+    assert "out of quota" in recorded
+    assert "resets 7pm (UTC)" in recorded
     assert agent_failure_reason(status_dir) == (
-        "agent harness exited 7: provider error: 429 rate_limit_error quota exhausted"
+        "agent harness exited 7: oneharness: fallback harness `claude-code:alternate` "
+        "ran but did not succeed oneharness-agent: dispatch failure: harness "
+        "claude-code:alternate is out of quota; You've hit your session limit · "
+        "resets 7pm (UTC); configure a usable fallback or retry after the stated reset time"
     )
 
 
@@ -584,3 +600,51 @@ def test_an_unopenable_stderr_capture_stops_the_turn_before_it_starts(tmp_path: 
     assert proc.returncode == 2
     assert "cannot open the agent stderr record" in proc.stderr
     assert not (status_dir / "agent.done").exists()
+
+
+def test_a_failed_stdout_capture_cannot_publish_success(tmp_path: Path) -> None:
+    """The wrapper joins its real stdout recorder before publishing a terminal marker."""
+    status_dir = tmp_path / "orchestrator-watchdog-stdout" / "agent"
+    status_dir.mkdir(parents=True)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    stub = bin_dir / "oneharness"
+    stub.write_text(
+        "#!/usr/bin/env bash\nprintf '%4096s\\n' output\n",
+        encoding="utf-8",
+    )
+    stub.chmod(0o755)
+
+    with subprocess.Popen(
+        [
+            "bash",
+            "-c",
+            'ulimit -f 1; exec bash "$1" run --prompt task',
+            "capture-limit",
+            str(WRAPPER),
+        ],
+        text=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        env={
+            "PATH": f"{bin_dir}:/usr/bin:/bin",
+            "ORCHESTRATOR_AGENT_STATUS_DIR": str(status_dir),
+            "HOME": str(tmp_path / "home"),
+        },
+    ) as process:
+        try:
+            deadline = time.monotonic() + 30
+            while time.monotonic() < deadline:
+                if (status_dir / "agent.failed").exists():
+                    break
+                assert not (status_dir / "agent.done").exists()
+                time.sleep(0.05)
+            else:
+                raise AssertionError("the wrapper never recorded the capture failure")
+            recorded = (status_dir / "agent.stderr").read_text(encoding="utf-8")
+            exit_code = (status_dir / "agent.exit_code").read_text(encoding="utf-8").strip()
+        finally:
+            process.kill()
+
+    assert exit_code == "2"
+    assert "agent stdout capture failed" in recorded

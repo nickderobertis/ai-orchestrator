@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
 import tomllib
 from pathlib import Path
+
+import pytest
 
 from orchestrator import REPO_ROOT
 
@@ -154,7 +157,254 @@ chmod +x "$HOME/.local/node/bin/bun"
     )
 
 
-def _run_full_setup_without_bun(tmp_path: Path) -> subprocess.CompletedProcess[str]:
+def test_alternate_claude_trust_is_idempotent_and_preserves_other_config(tmp_path: Path) -> None:
+    config = tmp_path / "alternate" / ".claude.json"
+    config.parent.mkdir()
+    config.write_text(
+        json.dumps(
+            {
+                "theme": "dark",
+                "projects": {"/already": {"hasTrustDialogAccepted": False, "other": "kept"}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    script = REPO_ROOT / "scripts" / "session-setup.sh"
+    roots = (tmp_path / "checkout", tmp_path / "worktrees")
+    command = 'source "$1"; mark_alternate_claude_trust "$2" "$3" "$4"'
+    env = {"HOME": str(tmp_path), "PATH": "/usr/bin:/bin"}
+
+    first = subprocess.run(
+        ["bash", "-c", command, "test-trust", str(script), str(config), *(map(str, roots))],
+        text=True,
+        capture_output=True,
+        env=env,
+    )
+    assert first.returncode == 0, first.stderr
+    first_bytes = config.read_bytes()
+    second = subprocess.run(
+        ["bash", "-c", command, "test-trust", str(script), str(config), *(map(str, roots))],
+        text=True,
+        capture_output=True,
+        env=env,
+    )
+
+    assert second.returncode == 0, second.stderr
+    assert config.read_bytes() == first_bytes
+    data = json.loads(first_bytes)
+    assert data["theme"] == "dark"
+    assert data["projects"]["/already"] == {
+        "hasTrustDialogAccepted": False,
+        "other": "kept",
+    }
+    for root in roots:
+        assert data["projects"][str(root)] == {"hasTrustDialogAccepted": True}
+
+
+def test_alternate_claude_trust_rejects_invalid_json(tmp_path: Path) -> None:
+    config = tmp_path / ".claude.json"
+    config.write_text("{broken", encoding="utf-8")
+    script = REPO_ROOT / "scripts" / "session-setup.sh"
+
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            'source "$1"; mark_alternate_claude_trust "$2" /checkout',
+            "test-trust",
+            str(script),
+            str(config),
+        ],
+        text=True,
+        capture_output=True,
+        env={"HOME": str(tmp_path), "PATH": "/usr/bin:/bin"},
+    )
+
+    assert result.returncode == 1
+    assert "not valid JSON" in result.stderr
+    assert config.read_text(encoding="utf-8") == "{broken"
+
+
+def test_alternate_claude_trust_reports_missing_jq(tmp_path: Path) -> None:
+    config = tmp_path / ".claude.json"
+    config.write_text("{}", encoding="utf-8")
+    script = REPO_ROOT / "scripts" / "session-setup.sh"
+
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            'source "$1"; PATH=/missing; mark_alternate_claude_trust "$2" /checkout',
+            "test-trust",
+            str(script),
+            str(config),
+        ],
+        text=True,
+        capture_output=True,
+        env={"HOME": str(tmp_path), "PATH": "/usr/bin:/bin"},
+    )
+
+    assert result.returncode == 1
+    assert "jq is unavailable" in result.stderr
+
+
+@pytest.mark.parametrize("failure", ["intermediate-mv", "chmod", "final-mv"])
+def test_alternate_claude_trust_preserves_config_when_replacement_fails(
+    tmp_path: Path, failure: str
+) -> None:
+    config = tmp_path / ".claude.json"
+    original = b'{"theme":"dark"}'
+    config.write_bytes(original)
+    tools = tmp_path / "tools"
+    tools.mkdir()
+    _write_executable(
+        tools / "mv",
+        """#!/bin/sh
+if { [ "$TEST_FAILURE" = intermediate-mv ] && case "$1" in *.next) true;; *) false;; esac; } ||
+   { [ "$TEST_FAILURE" = final-mv ] && [ "$2" = "$TEST_CONFIG" ]; }; then
+  exit 23
+fi
+exec /usr/bin/mv "$@"
+""",
+    )
+    _write_executable(
+        tools / "chmod",
+        """#!/bin/sh
+[ "$TEST_FAILURE" = chmod ] && exit 24
+exec /usr/bin/chmod "$@"
+""",
+    )
+
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            'source "$1"; mark_alternate_claude_trust "$2" /checkout',
+            "test-trust",
+            str(REPO_ROOT / "scripts" / "session-setup.sh"),
+            str(config),
+        ],
+        text=True,
+        capture_output=True,
+        env={
+            "HOME": str(tmp_path),
+            "PATH": f"{tools}:/usr/bin:/bin",
+            "TEST_FAILURE": failure,
+            "TEST_CONFIG": str(config),
+        },
+    )
+
+    assert result.returncode == 1
+    assert config.read_bytes() == original
+    assert list(tmp_path.glob(".claude.json.trust.*")) == []
+
+
+def test_full_setup_trusts_its_dispatch_checkout_and_keeps_failure_nonfatal(
+    tmp_path: Path,
+) -> None:
+    alternate = tmp_path / "alternate"
+    alternate.mkdir()
+    config = alternate / ".claude.json"
+    config.write_text('{"theme":"dark"}', encoding="utf-8")
+
+    result = _run_full_setup_without_bun(
+        tmp_path, ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR=str(alternate)
+    )
+
+    # Bun is deliberately absent from this fixture; trust setup still ran and
+    # did not replace the required-tool failure with its own.
+    assert result.returncode == 1
+    data = json.loads(config.read_text(encoding="utf-8"))
+    repo = str(tmp_path / "repo")
+    assert data["theme"] == "dark"
+    assert data["projects"][repo] == {"hasTrustDialogAccepted": True}
+
+
+def test_full_setup_trusts_dispatch_checkout_in_default_alternate_config(
+    tmp_path: Path,
+) -> None:
+    alternate = tmp_path / ".claude-alt"
+    alternate.mkdir()
+    config = alternate / ".claude.json"
+    config.write_text('{"theme":"dark"}', encoding="utf-8")
+
+    result = _run_full_setup_without_bun(tmp_path)
+
+    assert result.returncode == 1
+    data = json.loads(config.read_text(encoding="utf-8"))
+    assert data["theme"] == "dark"
+    assert data["projects"][str(tmp_path / "repo")] == {"hasTrustDialogAccepted": True}
+
+
+def test_full_setup_accepts_absent_alternate_config(tmp_path: Path) -> None:
+    alternate = tmp_path / "alternate"
+    alternate.mkdir()
+
+    result = _run_full_setup_without_bun(
+        tmp_path, ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR=str(alternate)
+    )
+
+    assert result.returncode == 1
+    assert not (alternate / ".claude.json").exists()
+    assert "workspace trust setup failed" not in result.stderr
+
+
+def test_full_setup_continues_after_alternate_trust_failure(tmp_path: Path) -> None:
+    alternate = tmp_path / "alternate"
+    alternate.mkdir()
+    config = alternate / ".claude.json"
+    config.write_text("{broken", encoding="utf-8")
+
+    result = _run_full_setup_without_bun(
+        tmp_path, ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR=str(alternate)
+    )
+
+    assert result.returncode == 1
+    assert "alternate Claude workspace trust setup failed; continuing" in result.stderr
+    assert "bun is required" in result.stderr
+
+
+def test_full_setup_continues_after_alternate_config_resolution_failure(
+    tmp_path: Path,
+) -> None:
+    result = _run_full_setup_without_bun(
+        tmp_path, ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR="relative/config"
+    )
+
+    assert result.returncode == 1
+    assert "alternate Claude config path must be absolute" in result.stderr
+    assert "alternate Claude config resolution failed; continuing" in result.stderr
+    assert "bun is required" in result.stderr
+
+
+def test_full_setup_trusts_distinct_managed_and_worktree_roots(tmp_path: Path) -> None:
+    alternate = tmp_path / "alternate"
+    alternate.mkdir()
+    config = alternate / ".claude.json"
+    config.write_text("{}", encoding="utf-8")
+    managed = tmp_path / "managed"
+    tools = tmp_path / "git-tools"
+    fake_git = tools / "git"
+    _write_executable(
+        fake_git,
+        f"#!/bin/sh\nprintf '%s\\n' '{managed}/.git'\n",
+    )
+
+    result = _run_full_setup_without_bun(
+        tmp_path,
+        ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR=str(alternate),
+        PATH=f"{tools}:/usr/bin:/bin",
+    )
+
+    assert result.returncode == 1
+    projects = json.loads(config.read_text(encoding="utf-8"))["projects"]
+    assert projects[str(managed)] == {"hasTrustDialogAccepted": True}
+    assert projects[str(tmp_path / "repo")] == {"hasTrustDialogAccepted": True}
+
+
+def _run_full_setup_without_bun(
+    tmp_path: Path, **extra_env: str
+) -> subprocess.CompletedProcess[str]:
     test_repo = tmp_path / "repo"
     scripts = test_repo / "scripts"
     config = test_repo / "config"
@@ -163,6 +413,10 @@ def _run_full_setup_without_bun(tmp_path: Path) -> subprocess.CompletedProcess[s
     session_setup = scripts / "session-setup.sh"
     session_setup.write_text(
         (REPO_ROOT / "scripts" / "session-setup.sh").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    (scripts / "claude-alt-config-dir.sh").write_text(
+        (REPO_ROOT / "scripts" / "claude-alt-config-dir.sh").read_text(encoding="utf-8"),
         encoding="utf-8",
     )
     _write_executable(scripts / "setup-llmlint.sh", "#!/bin/sh\nexit 0\n")
@@ -175,7 +429,7 @@ def _run_full_setup_without_bun(tmp_path: Path) -> subprocess.CompletedProcess[s
         ["bash", str(session_setup)],
         text=True,
         capture_output=True,
-        env={"HOME": str(tmp_path), "PATH": "/usr/bin:/bin"},
+        env={"HOME": str(tmp_path), "PATH": "/usr/bin:/bin", **extra_env},
     )
 
 

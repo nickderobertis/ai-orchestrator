@@ -518,11 +518,16 @@ def test_sweep_cli_keeps_visible_references_when_a_process_hides_its_descriptors
     ready = tmp_path / "ready"
     release = tmp_path / "release"
     holder_script = """
+import ctypes
+import os
 import sys
 import time
 from pathlib import Path
 
 candidate, ready, release = map(Path, sys.argv[1:])
+libc = ctypes.CDLL(None, use_errno=True)
+if libc.prctl(4, 0, 0, 0, 0) != 0:
+    raise OSError(ctypes.get_errno(), os.strerror(ctypes.get_errno()))
 ready.write_text("ready", encoding="utf-8")
 while not release.exists():
     time.sleep(0.02)
@@ -530,8 +535,6 @@ assert candidate
 """
     holder = subprocess.Popen(
         [
-            "sudo",
-            "-n",
             "/usr/bin/python3",
             "-c",
             holder_script,
@@ -583,12 +586,14 @@ def test_concurrent_sweep_preserves_a_dispatch_past_its_worker_exit(
         blind = tmp_path / "empty-proc"
         blind.mkdir()
         dispatch_env["AI_ORCHESTRATOR_PROC_ROOT"] = str(blind)
+    report_path = tmp_path / "dispatch-report.json"
+    report_stream = report_path.open("w", encoding="utf-8")
     process = subprocess.Popen(
         [
             "just",
             "dispatch",
             "engineer",
-            "complete-now: survive a concurrent scratch sweep",
+            "complete-now large-dispatch-report: survive a concurrent scratch sweep",
             "--base",
             str(command_base()),
             "--project-dir",
@@ -601,7 +606,7 @@ def test_concurrent_sweep_preserves_a_dispatch_past_its_worker_exit(
         cwd=REPO_ROOT,
         env=dispatch_env,
         text=True,
-        stdout=subprocess.PIPE,
+        stdout=report_stream,
         stderr=subprocess.PIPE,
     )
     swept_past_worker_exit: list[Path] = []
@@ -614,9 +619,9 @@ def test_concurrent_sweep_preserves_a_dispatch_past_its_worker_exit(
             ]
             # The unattended sweep this test races is the in-process
             # `sweep_scratch()` call every recorded round transition makes
-            # (orchestrator/graph.py). A `just sweep-scratch` subprocess takes
-            # longer to start than the post-exit window it must land inside, and
-            # the recipe surface is covered by the recipe tests above.
+            # (orchestrator/graph.py). The deliberately large real report keeps
+            # parsing in flight after waitpid reaps the worker, so the sweep
+            # observes that boundary without replacing it.
             # llmlint: ignore[tests_mirror_real_usage] this is the round-transition caller
             result = sweep_scratch(scratch)
             assert result.removed == (), result.removed
@@ -625,13 +630,14 @@ def test_concurrent_sweep_preserves_a_dispatch_past_its_worker_exit(
             )
             time.sleep(0.001)
     finally:
-        stdout, stderr = process.communicate(timeout=120)
+        _, stderr = process.communicate(timeout=120)
+        report_stream.close()
 
     assert process.returncode == 0, stderr
     assert swept_past_worker_exit, "the sweep never observed the post-worker-exit window"
     # The report is parsed out of the swept-past directory, so its survival is the
     # dispatch's own evidence that nothing removed the tree underneath it.
-    report = json.loads(stdout)
+    report = json.loads(report_path.read_text(encoding="utf-8"))
     assert report["schema_version"] == 5
     assert report["stopped_early"] is False
     assert report["transcript"]["messages"]
