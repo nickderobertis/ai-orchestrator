@@ -70,6 +70,10 @@ class Workspace:
     def judge_runs(self) -> int:
         return len(self.judge_log.read_text().splitlines())
 
+    def judge_labels(self) -> list[str]:
+        """The `ONEHARNESS_HISTORY_LABELS` each judge run was actually handed."""
+        return [line.split("\t", 1)[1] for line in self.judge_log.read_text().splitlines()]
+
     def commit(self, message: str, *, allow_empty: bool = False) -> str:
         empty = ["--allow-empty"] if allow_empty else []
         self._git("add", "-A")
@@ -103,7 +107,10 @@ def _write_fake_judge(directory: Path) -> None:
         'if [[ ${1:-} == "config" ]]; then\n'
         '  exec "$REAL_LLMLINT" "$@"\n'
         "fi\n"
-        'printf "%s\\n" "$*" >>"$FAKE_LLMLINT_LOG"\n'
+        # One line per run, so counting them still counts judge runs; the labels the
+        # recipe handed over ride along on it because they are the other thing a run
+        # of this tier is supposed to carry.
+        'printf "%s\\t%s\\n" "$*" "${ONEHARNESS_HISTORY_LABELS:-}" >>"$FAKE_LLMLINT_LOG"\n'
         "if [[ ${FAKE_LLMLINT_EXIT:-0} != 0 ]]; then\n"
         f'  echo "{FAIL_FINDING}"\n'
         f'  echo "{FAIL_VERDICT}"\n'
@@ -534,6 +541,27 @@ def test_the_recipe_refuses_unusable_harness_history_labels(
     assert result.returncode != 0
     assert expected in result.stderr
     assert workspace.judge_runs() == 0
+
+
+def test_labels_the_tier_only_passes_through_reach_the_judge_unnarrowed(
+    workspace: Workspace,
+) -> None:
+    """A dispatched agent's own gate carries labels this tier did not set.
+
+    `orchestrator/labels.py` is the declared trust boundary for the label contract,
+    and that contract allows a dot or a hyphen in a key and a space in a value. The
+    recipe layers `role=llmlint` over whatever it inherited; a second, narrower
+    opinion of the contract in the recipe failed the whole gate over a label it was
+    only meant to pass along.
+    """
+    base = workspace.head()
+
+    judged = workspace.lint(base, ONEHARNESS_HISTORY_LABELS="ticket-id=ENG 123,agent.role=worker")
+
+    assert judged.returncode == 0, judged.stdout + judged.stderr
+    assert PASS_VERDICT in judged.stdout
+    assert workspace.judge_runs() == 1
+    assert workspace.judge_labels() == ["ticket-id=ENG 123,agent.role=worker,role=llmlint"]
 
 
 def test_an_unresolvable_base_is_rejected_before_the_judge_is_paid(
