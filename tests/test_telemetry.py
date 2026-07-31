@@ -11,6 +11,7 @@ from typing import get_args
 
 import pytest
 
+import orchestrator.history as history_module
 import orchestrator.telemetry as telemetry_module
 from orchestrator.history import HistorySession, SessionId, SessionRole
 from orchestrator.journal import NodeJournal, open_journal
@@ -179,9 +180,7 @@ def test_collect_run_joins_ledger_journal_history_and_attestation(
         judge_history,
         {"run_id": "observed", "role": "judge"},
     )
-    monkeypatch.setattr(
-        telemetry_module, "all_sessions", lambda **_kwargs: [session, judge_session]
-    )
+    monkeypatch.setattr(history_module, "all_sessions", lambda **_kwargs: [session, judge_session])
 
     telemetry = collect_run(run_dir, now=9999999999.0)
     assert telemetry is not None
@@ -442,7 +441,7 @@ def test_native_timing_usage_tools_and_breakdown_are_role_and_node_scoped(
         labelled_lint,
         legacy_lint,
     ]
-    monkeypatch.setattr(telemetry_module, "all_sessions", lambda **_kwargs: sessions)
+    monkeypatch.setattr(history_module, "all_sessions", lambda **_kwargs: sessions)
     telemetry = collect_run(run_dir)
     assert telemetry is not None
     record = telemetry.record()
@@ -522,7 +521,7 @@ def test_breakdown_timeline_orders_turns_and_marks_unfinished_sessions(
             },
         },
     )
-    monkeypatch.setattr(telemetry_module, "all_sessions", lambda **_kwargs: [])
+    monkeypatch.setattr(history_module, "all_sessions", lambda **_kwargs: [])
 
     assert main(["--runs-dir", str(tmp_path / "runs"), "--all", "--breakdown"]) == 0
     breakdown = capsys.readouterr().out
@@ -991,7 +990,7 @@ def test_collect_run_prefers_native_scalars_and_unions_fallback_tool_intervals(
         )
 
     sessions = [history("native", 80, 40, 60), history("b", 20, 50, 90), history("c", 15, 70, 110)]
-    monkeypatch.setattr(telemetry_module, "all_sessions", lambda **_kwargs: sessions)
+    monkeypatch.setattr(history_module, "all_sessions", lambda **_kwargs: sessions)
 
     telemetry = collect_run(run_dir)
     assert telemetry is not None

@@ -236,6 +236,47 @@ def all_sessions(*, oneharness_bin: str = "oneharness") -> list[HistorySession]:
     return _sessions(_run_history("list", oneharness_bin=oneharness_bin))
 
 
+class SessionScan:
+    """One ``oneharness history list`` read shared by everything in a single scan.
+
+    `all_sessions` spawns a subprocess that reads the *whole* store — around a second
+    of work and megabytes of JSON — and it answers "every session there is", not
+    "the sessions of this run". A reader that walks many runs therefore needs the
+    same answer once, but collecting each run independently re-ran that one command
+    per run, so a scan of the runs root cost roughly a second per recorded run and
+    grew without bound as history accumulated.
+
+    A scan is deliberately per-invocation and carries its own ``oneharness_bin``.
+    Sharing one read *within* a scan also makes that scan internally consistent —
+    every run is described against the same store — while a process-global cache
+    would hand a later reader sessions the live store has since moved past. One
+    instance belongs to one caller on one thread; concurrent readers make their own.
+    """
+
+    def __init__(self, *, oneharness_bin: str = "oneharness") -> None:
+        self.oneharness_bin = oneharness_bin
+        self._sessions: list[HistorySession] | None = None
+        self._failure: HistoryError | None = None
+
+    def sessions(self) -> list[HistorySession]:
+        """Every validated session, read on first use and replayed thereafter.
+
+        A failed read is replayed too: callers degrade on `HistoryError` per run, so
+        every run in one scan must see the same outcome, and re-spawning a binary
+        that has just failed would restore the per-run subprocess cost on exactly
+        the path least able to afford it.
+        """
+        if self._failure is not None:
+            raise self._failure
+        if self._sessions is None:
+            try:
+                self._sessions = all_sessions(oneharness_bin=self.oneharness_bin)
+            except HistoryError as exc:
+                self._failure = exc
+                raise
+        return self._sessions
+
+
 # llmlint: ignore[modern_domain_modeling] harness records as dicts, per history.py convention
 def session_records(session: HistorySession) -> list[dict[str, Any]]:
     """Read the normalized records belonging to ``session``."""
