@@ -501,6 +501,33 @@ test("lists a run that has recorded no event beside the runs that have", async (
   await expect(page.getByRole("alert")).toHaveCount(0);
 });
 
+test("opens a run-level session other than the one shown on arrival", async ({
+  page,
+}) => {
+  // Which transcripts the browser really asked the server for — counted by session
+  // rather than by request, since a development build mounts every effect twice.
+  const transcripts = new Set<string>();
+  page.on("request", (request) => {
+    const { pathname } = new URL(request.url());
+    if (pathname.includes("/conversations/"))
+      transcripts.add(decodeURIComponent(pathname.split("/").at(-1) ?? ""));
+  });
+
+  // The served run records two sessions at no node: the orchestrator's own, and the
+  // round's check-in beside it. Only the first is open on arrival.
+  await openObservatory(page, `/?run=${runs().live}&view=overall`);
+  await expect(
+    page.getByText("Coordinating the execution frontier"),
+  ).toBeVisible();
+  await expect(page.getByText("Round 1 progress reported")).toHaveCount(0);
+  await expect.poll(() => transcripts.size).toBe(1);
+
+  // Opening the check-in discloses it and reads its own transcript only then.
+  await page.getByRole("button", { name: /check-in-.*round-1/ }).click();
+  await expect(page.getByText("Round 1 progress reported")).toBeVisible();
+  await expect.poll(() => transcripts.size).toBe(2);
+});
+
 test("says so when a run recorded no run-level conversation", async ({
   page,
 }) => {

@@ -251,6 +251,15 @@ export function runDetail(runId: string = LIVE_RUN) {
         launcher,
         "Coordinating the execution frontier",
       ),
+      conversation(
+        ROUND_CHECK_IN_SESSION,
+        "check-in",
+        "agent",
+        undefined,
+        launchId,
+        launcher,
+        "Round 1 progress reported",
+      ),
     ],
   };
 }
@@ -549,29 +558,50 @@ function liveSpans() {
       status: "waiting",
       events: [],
     },
-    // The planner's own session drives the whole graph, so it names no node.
-    {
-      id: "dispatch-orchestrator-session",
-      kind: "dispatch",
-      label: "orchestrator-dag-ui-live",
-      parent_id: "round-1",
-      round: 1,
-      started_at: stamp(1),
-      ended_at: stamp(200),
-      status: "completed",
-      reference: { kind: "conversation", value: "orchestrator-session" },
-      events: [
-        {
-          id: "orchestrator-session-0",
-          kind: "conversation-turn",
-          at: stamp(1),
-          round: 1,
-          status: "completed",
-          reference: { kind: "conversation", value: "orchestrator-session" },
-        },
-      ],
-    },
+    // Run-level work, recorded at no node: the planner driving the whole graph, and
+    // the round's own check-in dispatched beside it once the round was under way.
+    runLevelDispatch(
+      "orchestrator-session",
+      "orchestrator-dag-ui-live",
+      1,
+      200,
+    ),
+    runLevelDispatch(ROUND_CHECK_IN_SESSION, "check-in-round-1", 160, 170),
   ];
+}
+
+/** The second run-level session: the per-round check-in, recorded at no node. */
+export const ROUND_CHECK_IN_SESSION = "round-check-in-session";
+
+/** One dispatched session the graph placed at the run rather than at any node. */
+function runLevelDispatch(
+  conversationId: string,
+  label: string,
+  from: number,
+  to: number,
+) {
+  const reference = { kind: "conversation", value: conversationId };
+  return {
+    id: `dispatch-${conversationId}`,
+    kind: "dispatch",
+    label,
+    parent_id: "round-1",
+    round: 1,
+    started_at: stamp(from),
+    ended_at: stamp(to),
+    status: "completed",
+    reference,
+    events: [
+      {
+        id: `${conversationId}-0`,
+        kind: "conversation-turn",
+        at: stamp(from),
+        round: 1,
+        status: "completed",
+        reference,
+      },
+    ],
+  };
 }
 
 const PR_URL = "https://github.com/example/repo/pull/12";

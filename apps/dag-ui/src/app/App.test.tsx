@@ -14,6 +14,7 @@ import {
   LIVE_RUN,
   LONG_SESSION,
   longConversation,
+  ROUND_CHECK_IN_SESSION,
   runDetail,
   runList,
   runTimeline,
@@ -451,6 +452,41 @@ describe("DAG application", () => {
     expect(
       await screen.findByText("Coordinating the execution frontier"),
     ).toBeInTheDocument();
+  });
+
+  test("opens a run-level session other than the one shown on arrival", async () => {
+    window.history.replaceState(null, "", `/?run=${LIVE_RUN}&view=overall`);
+    const { client, fetch } = telemetryHarness();
+    render(<App client={client} />);
+    // The run recorded two sessions at no node: the planner's, and the round's own
+    // check-in. Only the first is open on arrival.
+    expect(
+      await screen.findByText("Coordinating the execution frontier"),
+    ).toBeInTheDocument();
+    const transcripts = (): string[] =>
+      fetch.mock.calls
+        .map(
+          (call: unknown[]) => new URL(String(call[0]), window.location.origin),
+        )
+        .filter(isConversation)
+        .map((url: URL) =>
+          decodeURIComponent(url.pathname.split("/").at(-1) ?? ""),
+        );
+    expect(transcripts()).toEqual(["orchestrator-session"]);
+    expect(screen.queryByText("Round 1 progress reported")).toBeNull();
+
+    // Opening the check-in discloses it and reads its own transcript, then — the
+    // whole point of listing them separately rather than stacking every session.
+    await userEvent.click(
+      screen.getByRole("button", { name: /check-in-round-1/ }),
+    );
+    expect(
+      await screen.findByText("Round 1 progress reported"),
+    ).toBeInTheDocument();
+    expect(transcripts()).toEqual([
+      "orchestrator-session",
+      ROUND_CHECK_IN_SESSION,
+    ]);
   });
 
   test("says so when a run recorded no run-level conversation", async () => {

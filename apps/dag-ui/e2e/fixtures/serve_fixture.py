@@ -60,6 +60,11 @@ BUSY_SESSIONS = 200
 #: One of those sessions ran long enough that its own turns are paged too.
 BUSY_LONG_SESSION = "busy-session-7"
 BUSY_LONG_TURNS = 30
+#: The live run's second run-level session. A run records more than one dispatch at no
+#: node — the orchestrator's own, and one check-in per round — so the overall view has
+#: to disclose each of them separately rather than assume a single planner transcript.
+ROUND_CHECK_IN_SESSION = "round-check-in-session"
+ROUND_CHECK_IN_NAME = f"check-in-{LIVE_RUN}-round-1"
 
 _LIVE_TASKS: list[dict[str, Any]] = [
     {
@@ -543,6 +548,24 @@ def _history_store(workspace: Path) -> Path:
             prompt="Drive the graph",
             text="Coordinating the execution frontier",
             started="2026-07-26T10:00:00Z",
+        )
+    )
+    # A second session recorded at no node: the round's check-in is dispatched for the
+    # whole run, so the overall view lists several run-level sessions rather than one.
+    sessions.append(
+        _session(
+            workspace,
+            session_id=ROUND_CHECK_IN_SESSION,
+            name=ROUND_CHECK_IN_NAME,
+            run_id=LIVE_RUN,
+            node=None,
+            role="agent",
+            agent_role="check-in",
+            launcher="codex",
+            launch_id=CODEX_LAUNCH,
+            prompt="Report progress",
+            text="Round 1 progress reported",
+            started="2026-07-26T10:30:00Z",
         )
     )
     # Hundreds of sessions on one node, one of them long enough to be paged itself.
