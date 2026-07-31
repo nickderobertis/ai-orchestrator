@@ -374,6 +374,22 @@ the fingerprint and the judge resolve it from the same `PATH` and so can never
 disagree — but it does mean a host that upgrades llmlint invalidates recorded
 verdicts, which is correct invalidation rather than a miss to investigate.
 
+A second residual sits one layer further out, and it is the other thing that can
+make "the failing rules differed this round" true. The remote plugins in
+`llmlint.yml` are pinned with an `@<version>` suffix, and llmlint caches each one
+at `$XDG_CACHE_HOME/llmlint/plugins/<url-hash>/<version>.yml` and never
+revalidates it: under a fixed pin the rules a host judges by are whatever it
+fetched the first time, even after the publisher edits that version in place. So
+the fingerprint is a function of that cache as well as of the tree — point
+`XDG_CACHE_HOME` at a cold directory and the digest moves, because the merged
+rules genuinely moved with it. On one host that is not a split-key hazard: nothing
+in the lifecycle rewrites `HOME` or `XDG_CACHE_HOME` for a dispatch, and
+`scripts/nx.sh` roots the Nx cache under the same variable, so a memo and the
+plugin content it was judged with can only move together. Across hosts it means
+two machines can be running different judges under identical pins, which the
+fingerprint reports as a miss rather than hides. `rm -rf ~/.cache/llmlint/plugins`
+refetches; expect it to invalidate every recorded verdict.
+
 **The recorded verdict for exactly that content, base commit, and judge
 configuration is authoritative, and the worker's gate is where it is paid for.**
 The merge-path gate — the `pre-push` hook, which is the only verifier the
