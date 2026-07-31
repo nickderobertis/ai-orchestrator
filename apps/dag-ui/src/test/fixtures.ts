@@ -511,6 +511,32 @@ function liveSpans() {
       status: "failed",
       events: [],
     },
+    // The failed node's own attempts: a gate that never reached an attestation, and
+    // a publication that recorded no PR and observed no checks.
+    {
+      id: "verification-12",
+      kind: "verification",
+      label: "branch push ai-orchestrator/engineer/publish",
+      parent_id: "node-1-publish",
+      node_id: "publish",
+      round: 1,
+      started_at: stamp(30),
+      ended_at: stamp(50),
+      status: "failed",
+      events: [],
+    },
+    {
+      id: "publication-13",
+      kind: "publication",
+      label: "publication",
+      parent_id: "node-1-publish",
+      node_id: "publish",
+      round: 1,
+      started_at: stamp(55),
+      ended_at: stamp(70),
+      status: "failed",
+      events: [],
+    },
     {
       id: "human-wait-14",
       kind: "human-wait",

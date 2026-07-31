@@ -20,10 +20,12 @@ export function OverallView({
   client,
   detail,
   timeline,
+  timelineError,
 }: {
   readonly client: TelemetryClient;
   readonly detail: RunDetail;
   readonly timeline?: RunTimeline;
+  readonly timelineError?: Error;
 }) {
   // A session the graph placed at no node is run-level work: the planner driving the
   // whole graph, and the per-round check-ins beside it.
@@ -72,7 +74,22 @@ export function OverallView({
                 <Activity size={16} />
                 <h3>Planner session</h3>
               </div>
-              {sessions.length === 0 ? (
+              {/* The sessions are read off the timeline, so a timeline that has not
+                  arrived or could not be read is not the same answer as a run that
+                  recorded no planner conversation — saying so would be a claim about
+                  a record nothing has looked at. */}
+              {timelineError !== undefined ? (
+                <p className="m-0 text-[11px] text-muted-foreground">
+                  The run's sessions could not be read: {timelineError.message}
+                </p>
+              ) : timeline === undefined ? (
+                <p
+                  aria-live="polite"
+                  className="m-0 text-[11px] text-muted-foreground"
+                >
+                  Loading the run's sessions…
+                </p>
+              ) : sessions.length === 0 ? (
                 <p className="m-0 text-[11px] text-muted-foreground">
                   No planner conversation is available.
                 </p>

@@ -13,6 +13,7 @@ import {
   HISTORY_RUN,
   LIVE_RUN,
   LONG_SESSION,
+  longConversation,
   runDetail,
   runList,
   runTimeline,
@@ -186,6 +187,92 @@ describe("DAG application", () => {
     expect(paged.length).toBeLessThan(60);
     expect(
       within(rail).getByRole("button", { name: /Show 25 more of 204/ }),
+    ).toBeInTheDocument();
+  });
+
+  test("names what a failed node's attempts did not record", async () => {
+    window.history.replaceState(null, "", `/?run=${LIVE_RUN}&node=publish`);
+    const { client } = telemetryHarness();
+    render(<App client={client} />);
+
+    // A gate that never reached an attestation, and a publication with no PR and
+    // no observed checks: each absence is stated rather than left as a blank block
+    // that reads like "all clear".
+    await userEvent.click(
+      await screen.findByRole("button", { name: /branch push/ }),
+    );
+    expect(
+      await within(detail()).findByText(
+        "This verification recorded no gate attestation.",
+      ),
+    ).toBeInTheDocument();
+    expect(within(detail()).getByText("No log was recorded.")).toBeVisible();
+
+    await userEvent.click(railRow(/publication/));
+    expect(
+      await within(detail()).findByText("No pull request was recorded."),
+    ).toBeInTheDocument();
+    expect(
+      within(detail()).getByText("No checks were observed on this node."),
+    ).toBeInTheDocument();
+  });
+
+  test("says so when an opened turn is no longer in its transcript", async () => {
+    window.history.replaceState(
+      null,
+      "",
+      `/?run=${LIVE_RUN}&node=dashboard&event=worker-session-0`,
+    );
+    // The timeline was folded from a history store that has since been rewritten,
+    // so the turn it names is not in the transcript the server serves back.
+    const { client } = telemetryHarness((url) =>
+      isConversation(url)
+        ? Response.json(longConversation())
+        : defaultResponder(url),
+    );
+    render(<App client={client} />);
+    expect(
+      await screen.findByText(
+        "This turn is no longer part of the recorded transcript.",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  test("reports the overall view's sessions as unread rather than absent", async () => {
+    window.history.replaceState(null, "", `/?run=${LIVE_RUN}&view=overall`);
+    let release: (response: Response) => void = () => {};
+    const held = telemetryHarness((url) => {
+      if (isTimeline(url))
+        return new Promise<Response>((resolve) => {
+          release = resolve;
+        });
+      return defaultResponder(url);
+    });
+    const view = render(<App client={held.client} />);
+    // "No planner conversation" would be a claim about a record nothing has read.
+    expect(
+      await screen.findByText("Loading the run's sessions…"),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText("No planner conversation is available."),
+    ).toBeNull();
+    release(Response.json(runTimeline(LIVE_RUN)));
+    expect(
+      await screen.findByText("Coordinating the execution frontier"),
+    ).toBeInTheDocument();
+    view.unmount();
+
+    const failing = telemetryHarness((url) =>
+      isTimeline(url)
+        ? Response.json(
+            { error: { code: "unreadable", message: "Journal is corrupt" } },
+            { status: 500 },
+          )
+        : defaultResponder(url),
+    );
+    render(<App client={failing.client} />);
+    expect(
+      await screen.findByText(/The run's sessions could not be read/),
     ).toBeInTheDocument();
   });
 

@@ -155,6 +155,7 @@ export function App({
                     client={client}
                     detail={detail}
                     timeline={telemetry.timeline}
+                    timelineError={telemetry.timelineError}
                   />
                 ) : selectedNode ? (
                   // Opening a node hands it the whole working area: the graph stays
