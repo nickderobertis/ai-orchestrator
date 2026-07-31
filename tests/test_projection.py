@@ -541,6 +541,68 @@ def test_projection_rejects_out_of_order_authoritative_events(
         project_round(events, RunId("r"), 1)
 
 
+def _line(kind: str, seq: int, *, node: str | None = None) -> str:
+    record: dict[str, object] = {
+        "version": 1,
+        "seq": seq,
+        "at": 0,
+        "kind": kind,
+        "run_id": "r",
+        "round": 1,
+    }
+    if node is not None:
+        record["node"] = node
+    return json.dumps(record) + "\n"
+
+
+def test_strict_reader_reads_through_a_sequence_collision(tmp_path: Path) -> None:
+    """Two records sharing a number lose nothing, so the stream still replays.
+
+    This is the ledger the lost run was left with: a `planner-surfaced` written by one
+    process took the number the executor then took for its own event. Refusing to read
+    it ended the planner's supervision of a run that was otherwise healthy.
+    """
+    path = tmp_path / "events.jsonl"
+    path.write_text(
+        _line("round-started", 1)
+        + _line("node-started", 2, node="a")
+        + _line("planner-surfaced", 2)
+        + _line("node-settled", 3, node="a"),
+        encoding="utf-8",
+    )
+
+    events = read_strict_events(path, RunId("r"))
+
+    assert [(event.kind, event.seq) for event in events] == [
+        ("round-started", 1),
+        ("node-started", 2),
+        ("planner-surfaced", 2),
+        ("node-settled", 3),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("tail", "message"),
+    [
+        # A gap is a *missing* record, which is what the rule exists to catch.
+        (_line("node-settled", 4, node="a"), "expected 3, got 4"),
+        # A rewind past the collision is not one either: nothing here is a repeat of
+        # the number just issued.
+        (_line("node-settled", 1, node="a"), "expected 3, got 1"),
+    ],
+)
+def test_strict_reader_still_rejects_a_gap_or_a_rewind(
+    tmp_path: Path, tail: str, message: str
+) -> None:
+    path = tmp_path / "events.jsonl"
+    path.write_text(
+        _line("round-started", 1) + _line("node-started", 2, node="a") + tail, encoding="utf-8"
+    )
+
+    with pytest.raises(ProjectionError, match=message):
+        read_strict_events(path, RunId("r"))
+
+
 def test_strict_reader_rejects_unknown_envelope_fields(tmp_path: Path) -> None:
     path = tmp_path / "events.jsonl"
     path.write_text(
