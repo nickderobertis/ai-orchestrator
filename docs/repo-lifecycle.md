@@ -339,6 +339,57 @@ keyed on the whole workspace content, the resolved base **commit**, and the judg
 configuration fingerprint. Ask the same question twice and you get the recorded
 answer rather than a second roll of the dice.
 
+That only holds while the key is a function of the judged question alone, so
+`scripts/llmlint-fingerprint.sh` resolves the llmlint version *and* the merged
+config through `scripts/llmlint-runtime-env.sh` — the one environment
+`scripts/llmlint-diff.sh` also judges under. One helper, sourced by both ends, is
+the whole mechanism: neither end can read a value the other did not.
+
+`LLMLINT_ONEHARNESS_BIN` is the input that actually varied. `llmlint config`
+renders it into its output as `oneharness.bin`, and it is not one value: a
+dispatched agent inherits `orchestrator/dispatch.py`'s `REPO_ROOT` — the
+orchestrator's own checkout, never the worktree being linted, so the fingerprint's
+`{root}` fold-out cannot strip it — or `scripts/session-setup.sh`'s session path,
+or nothing at all where `dispatch.py` and `watchdog.py` drop it and the config
+renders `"bin": null`. Run the pre-fix fingerprint under those three and it emits
+three different digests for byte-identical content. That is the visible symptom:
+one judged diff hashes to a key per dispatch, the judge re-rolls every round, and
+a branch collects opposite verdicts on the same code.
+
+Reading the caller's environment fails a second, quieter way. Nx scores a runtime
+input that exits non-zero as *no contribution* rather than as an error, so a
+fingerprint the caller can break does not fail the tier — it silently shrinks the
+key to the tree and the base. That is the worse half: a re-roll only costs a judge
+call, while a degraded key replays a verdict the judge configuration has since
+moved on from. Both directions are held by `tests/e2e/test_llmlint_cache_e2e.py`,
+and a cache hit alone is not the proof — a failing fingerprint produces one too,
+so the ambient-`PATH` journey reads the fingerprint itself and requires it to
+resolve, and to the same digest, under either caller llmlint.
+
+One residual is worth knowing when reading that helper: it *prepends*
+`.venv/bin`, but `scripts/setup-llmlint.sh` installs llmlint with `uv tool` into
+`~/.local/bin`, so `llmlint` itself is normally resolved from the inherited
+`PATH` rather than pinned by the checkout. That is not a split-key hazard, because
+the fingerprint and the judge resolve it from the same `PATH` and so can never
+disagree — but it does mean a host that upgrades llmlint invalidates recorded
+verdicts, which is correct invalidation rather than a miss to investigate.
+
+A second residual sits one layer further out, and it is the other thing that can
+make "the failing rules differed this round" true. The remote plugins in
+`llmlint.yml` are pinned with an `@<version>` suffix, and llmlint caches each one
+at `$XDG_CACHE_HOME/llmlint/plugins/<url-hash>/<version>.yml` and never
+revalidates it: under a fixed pin the rules a host judges by are whatever it
+fetched the first time, even after the publisher edits that version in place. So
+the fingerprint is a function of that cache as well as of the tree — point
+`XDG_CACHE_HOME` at a cold directory and the digest moves, because the merged
+rules genuinely moved with it. On one host that is not a split-key hazard: nothing
+in the lifecycle rewrites `HOME` or `XDG_CACHE_HOME` for a dispatch, and
+`scripts/nx.sh` roots the Nx cache under the same variable, so a memo and the
+plugin content it was judged with can only move together. Across hosts it means
+two machines can be running different judges under identical pins, which the
+fingerprint reports as a miss rather than hides. `rm -rf ~/.cache/llmlint/plugins`
+refetches; expect it to invalidate every recorded verdict.
+
 **The recorded verdict for exactly that content, base commit, and judge
 configuration is authoritative, and the worker's gate is where it is paid for.**
 The merge-path gate — the `pre-push` hook, which is the only verifier the
