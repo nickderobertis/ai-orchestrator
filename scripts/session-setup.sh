@@ -38,6 +38,11 @@ readonly CARGO_BIN="$HOME/.cargo/bin"
 readonly NODE_BIN="$HOME/.local/node/bin"   # npm global prefix (codex lands here)
 readonly PROJECT_VENV_BIN="$REPO_ROOT/.venv/bin"
 export PATH="$PROJECT_VENV_BIN:$BIN_DIR:$CARGO_BIN:$NODE_BIN:$PATH"
+# shellcheck source=scripts/claude-alt-config-dir.sh
+source "$SCRIPT_DIR/claude-alt-config-dir.sh"
+# The shared resolver is also used by fail-fast wrappers and enables `set -e`;
+# session setup deliberately continues after optional setup failures.
+set +e
 # llmlint forces its nested judge into oneharness read-only mode. The wrapper
 # retains that filesystem boundary while granting network capability so codex
 # does not ask bubblewrap to configure loopback in a forbidden namespace.
@@ -305,15 +310,22 @@ fi
 install_bun || toolchain_failed=1
 ensure_codex
 ensure_codex_gate
-alternate_config_path="${ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR:-$HOME/.claude-alt}/.claude.json"
+alternate_config_path=
+if resolve_claude_alt_config_dir session-setup; then
+  alternate_config_path="$ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR/.claude.json"
+else
+  log "alternate Claude config resolution failed; continuing"
+fi
 managed_checkout_root="$(git -C "$REPO_ROOT" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)"
 if [ -n "$managed_checkout_root" ]; then
   managed_checkout_root="$(dirname "$managed_checkout_root")"
 else
   managed_checkout_root="$REPO_ROOT"
 fi
-mark_alternate_claude_trust "$alternate_config_path" "$managed_checkout_root" "$REPO_ROOT" \
-  || log "alternate Claude workspace trust setup failed; continuing"
+if [ -n "$alternate_config_path" ]; then
+  mark_alternate_claude_trust "$alternate_config_path" "$managed_checkout_root" "$REPO_ROOT" \
+    || log "alternate Claude workspace trust setup failed; continuing"
+fi
 persist_session_env
 
 # Install the llmlint LLM-judge tier (llmlint + its bundled oneharness).

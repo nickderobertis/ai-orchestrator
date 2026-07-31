@@ -320,6 +320,22 @@ def test_full_setup_trusts_its_dispatch_checkout_and_keeps_failure_nonfatal(
     assert data["projects"][repo] == {"hasTrustDialogAccepted": True}
 
 
+def test_full_setup_trusts_dispatch_checkout_in_default_alternate_config(
+    tmp_path: Path,
+) -> None:
+    alternate = tmp_path / ".claude-alt"
+    alternate.mkdir()
+    config = alternate / ".claude.json"
+    config.write_text('{"theme":"dark"}', encoding="utf-8")
+
+    result = _run_full_setup_without_bun(tmp_path)
+
+    assert result.returncode == 1
+    data = json.loads(config.read_text(encoding="utf-8"))
+    assert data["theme"] == "dark"
+    assert data["projects"][str(tmp_path / "repo")] == {"hasTrustDialogAccepted": True}
+
+
 def test_full_setup_accepts_absent_alternate_config(tmp_path: Path) -> None:
     alternate = tmp_path / "alternate"
     alternate.mkdir()
@@ -384,6 +400,10 @@ def _run_full_setup_without_bun(
     session_setup = scripts / "session-setup.sh"
     session_setup.write_text(
         (REPO_ROOT / "scripts" / "session-setup.sh").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    (scripts / "claude-alt-config-dir.sh").write_text(
+        (REPO_ROOT / "scripts" / "claude-alt-config-dir.sh").read_text(encoding="utf-8"),
         encoding="utf-8",
     )
     _write_executable(scripts / "setup-llmlint.sh", "#!/bin/sh\nexit 0\n")
