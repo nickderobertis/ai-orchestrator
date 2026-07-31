@@ -877,7 +877,7 @@ def test_live_channel_surfaces_large_round_summary(tmp_path: Path, onejudge_bin:
     run_id = _launch_cli(
         _plan(tmp_path, "surface-large-summary"), runs, _base(tmp_path), onejudge_bin
     )
-    summary = _next_cli(run_id, runs)
+    summary = _wait_surface(run_id, runs)
     message = summary["surface"]["message"]
     assert isinstance(message, str)
     assert message.startswith("tracked round completed ")
