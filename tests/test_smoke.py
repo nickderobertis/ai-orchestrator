@@ -140,6 +140,67 @@ def test_wrapper_surfaces_exit_and_timeout(
         smoke._run_wrapper(tmp_path, status, tmp_path / "history", "smoke-id", timeout)
 
 
+def test_run_smoke_relaunches_a_failed_turn_and_reports_how_many_it_needed(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A host that killed one launch is not a launch path that is broken."""
+    history = tmp_path / "history.jsonl"
+    _record(history)
+    stores: list[Path] = []
+
+    def flaky(_target: Path, _status: Path, history_dir: Path, *_rest: object) -> None:
+        stores.append(history_dir)
+        if len(stores) == 1:
+            raise HistoryError("real harness smoke failed: harness ran but did not succeed")
+
+    monkeypatch.setattr(smoke.uuid, "uuid4", lambda: "smoke-id")
+    monkeypatch.setattr(smoke, "_run_wrapper", flaky)
+    monkeypatch.setattr(smoke.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(smoke, "all_sessions", lambda: [_session(tmp_path, history)])
+
+    result = smoke.run_smoke()
+
+    assert result.attempts == 2
+    # Each launch gets a store of its own, so what a killed turn left behind can
+    # never be read back as the record the surviving turn wrote.
+    assert len(set(stores)) == 2
+
+
+def test_run_smoke_names_the_attempts_it_spent_before_giving_up(monkeypatch) -> None:
+    """A launch path that is genuinely broken still fails, and says how hard it tried."""
+    launches: list[object] = []
+
+    def always_fails(*_args: object) -> None:
+        launches.append(None)
+        raise HistoryError("real harness smoke failed: the harness never started")
+
+    monkeypatch.setattr(smoke, "_run_wrapper", always_fails)
+    monkeypatch.setattr(smoke.time, "sleep", lambda _seconds: None)
+
+    with pytest.raises(HistoryError, match=f"after {smoke.LAUNCH_ATTEMPTS} attempts"):
+        smoke.run_smoke()
+
+    assert len(launches) == smoke.LAUNCH_ATTEMPTS
+
+
+def test_run_smoke_pays_for_one_turn_when_the_recorded_contract_is_broken(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Only the launch is retried: a bad record is the regression, not the weather."""
+    history = tmp_path / "history.jsonl"
+    _record(history, status="error")
+    launches: list[object] = []
+
+    monkeypatch.setattr(smoke.uuid, "uuid4", lambda: "smoke-id")
+    monkeypatch.setattr(smoke, "_run_wrapper", lambda *_args: launches.append(None))
+    monkeypatch.setattr(smoke, "all_sessions", lambda: [_session(tmp_path, history)])
+
+    with pytest.raises(HistoryError, match="records status 'error'"):
+        smoke.run_smoke()
+
+    assert len(launches) == 1
+
+
 def test_run_smoke_rejects_missing_matching_history(monkeypatch) -> None:
     monkeypatch.setattr(smoke, "_run_wrapper", lambda *_args: None)
     monkeypatch.setattr(smoke, "all_sessions", lambda: [])
@@ -194,6 +255,17 @@ def test_main_reports_success_and_failure(monkeypatch, capsys) -> None:
     monkeypatch.setattr(smoke, "run_smoke", fail)
     assert smoke.main([]) == 1
     assert "smoke: broken" in capsys.readouterr().err
+
+
+def test_main_reports_a_smoke_that_needed_more_than_one_launch(monkeypatch, capsys) -> None:
+    """The operator is the only one who can act on a host that killed a launch."""
+    monkeypatch.setattr(smoke, "run_smoke", lambda: smoke.SmokeResult("codex", None, attempts=2))
+
+    assert smoke.main([]) == 0
+    assert (
+        "smoke: passed via codex (recorded cost: unreported) after 2 attempts"
+        in capsys.readouterr().out
+    )
 
 
 def test_timeout_override_is_bounded(monkeypatch) -> None:

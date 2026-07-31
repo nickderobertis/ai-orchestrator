@@ -7,6 +7,7 @@ import multiprocessing
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -22,6 +23,7 @@ from orchestrator.lifecycle import run_repo_task
 from orchestrator.scratch import (
     MIN_FREE_BYTES_ENV,
     OWNER_LOCK_NAME,
+    UNREFERENCED_FAMILIES,
     WATCHDOG_PATTERN,
     sweep_scratch,
 )
@@ -45,18 +47,45 @@ while not release.exists():
 
 
 _LIVE_REFERENCE_HOLDER = """
+import ctypes
 import json
 import os
 import sys
 import time
 from pathlib import Path
 
-# argv is one of the three reference channels the sweep reads; the other two
-# arrive over stdin so that this process names each scratch path exactly once.
+PROT_READ, MAP_PRIVATE = 0x1, 0x02
+
+# argv is one of the reference channels the sweep reads; the rest arrive over stdin
+# so that this process names each scratch path exactly once.
 named = Path(sys.argv[1])
 plan = json.loads(sys.stdin.readline())
 os.chdir(plan["cwd"])
 handle = open(plan["open"], "rb")
+# Nx loads its cached native binary with `dlopen`, which maps the file and keeps no
+# descriptor, so the mapping is the only place the path still appears. `mmap.mmap`
+# would not reproduce that: CPython dups the descriptor and keeps it open. Calling
+# mmap(2) directly and closing the descriptor leaves exactly a loader's footprint.
+libc = ctypes.CDLL(None, use_errno=True)
+libc.mmap.restype = ctypes.c_void_p
+libc.mmap.argtypes = [
+    ctypes.c_void_p,
+    ctypes.c_size_t,
+    ctypes.c_int,
+    ctypes.c_int,
+    ctypes.c_int,
+    ctypes.c_long,
+]
+mapped = Path(plan["mapped"])
+descriptor = os.open(mapped, os.O_RDONLY)
+try:
+    address = libc.mmap(
+        None, mapped.stat().st_size, PROT_READ, MAP_PRIVATE, descriptor, 0
+    )
+    if address in (None, ctypes.c_void_p(-1).value):
+        raise OSError(ctypes.get_errno(), "could not map the cached binary")
+finally:
+    os.close(descriptor)
 Path(plan["pidfile"]).write_text(str(os.getpid()), encoding="utf-8")
 release = Path(plan["release"])
 while not release.exists():
@@ -73,6 +102,14 @@ def _write_nx_install(path: Path, *, dependencies: dict[str, str]) -> Path:
         json.dumps({"devDependencies": dependencies}), encoding="utf-8"
     )
     (path / "bun.lock").write_text("{}", encoding="utf-8")
+    return path
+
+
+def _write_nx_native_cache(path: Path, *, entries: tuple[str, ...]) -> Path:
+    """Write the shape Nx leaves behind per workspace root: copied native binaries."""
+    path.mkdir()
+    for name in entries:
+        (path / name).write_bytes(b"\x7fELF" + b"\0" * 4096)
     return path
 
 
@@ -285,7 +322,7 @@ def test_third_party_sweep_skips_inflight_lifecycle_then_reclaims(
         )
         assert candidate.exists()
         assert not dead_watchdog.exists()
-        assert "third-party sweep skipped: lifecycle dispatch active" in during.stdout
+        assert "skipped families: third-party (lifecycle dispatch active)" in during.stdout
     finally:
         release.write_text("release", encoding="utf-8")
         process.join(60)
@@ -317,8 +354,10 @@ def test_harness_scratch_is_reclaimed_during_an_active_dispatch_but_never_when_r
     """The families that fill this disk are reclaimed while a real dispatch runs.
 
     Every fixture here is two days old, so age never explains a survival: what keeps
-    a directory is a live process still naming it, Nx's own pid in the name, pytest's
-    own retention and `.lock`, or a shape that is not a disposable install at all.
+    a directory is a live process still naming it — in argv, in its working directory,
+    in an open descriptor, or in a memory mapping with no descriptor left at all —
+    Nx's own pid in the name, pytest's own retention and `.lock`, or a shape that is
+    not disposable scratch to begin with.
     """
     scratch = tmp_path / "scratch"
     scratch.mkdir()
@@ -335,6 +374,18 @@ def test_harness_scratch_is_reclaimed_during_an_active_dispatch_but_never_when_r
     )
     onejudge_scratch = scratch / "onejudge-python-stale"
     onejudge_scratch.mkdir()
+    # The largest family on this host: one stranded 22 MB copy of Nx's native binary
+    # per workspace root, and every lifecycle worktree is a new workspace root.
+    binary = "23.1.0-nx.linux-arm64-gnu.node"
+    stale_cache = _write_nx_native_cache(
+        scratch / "nx-native-file-cache-000d3d4", entries=(binary,)
+    )
+    mapped_cache = _write_nx_native_cache(
+        scratch / "nx-native-file-cache-02c850c", entries=(binary,)
+    )
+    lookalike_cache = _write_nx_native_cache(
+        scratch / "nx-native-file-cache-0123456", entries=(binary, "operator-notes.txt")
+    )
     pytest_root = scratch / "pytest-of-e2e"
     pytest_root.mkdir()
     runs = {}
@@ -348,12 +399,23 @@ def test_harness_scratch_is_reclaimed_during_an_active_dispatch_but_never_when_r
     unreadable_lock.write_text("999999999", encoding="utf-8")
     unreadable_lock.chmod(0o000)
 
+    # A path handed to a process in its environment is in use however quiet argv is.
+    env_named = scratch / "onejudge-python-env-named"
+    env_named.mkdir()
     holder = subprocess.Popen(
         [sys.executable, "-c", _LIVE_REFERENCE_HOLDER, str(argv_named)],
         cwd=tmp_path,
+        env={**os.environ, "ONEJUDGE_EFFECTIVE_CONFIG": str(env_named / "effective.json")},
         text=True,
         stdin=subprocess.PIPE,
     )
+    # ...and so is a binary running out of scratch. Launched under a different
+    # `argv[0]`, this one is named by no argv, no cwd, and no descriptor: the kernel
+    # maps its executable, so `exe` and `maps` are what have to keep it.
+    executing = scratch / "onejudge-python-executing"
+    executing.mkdir()
+    relocated = Path(shutil.copy2("/bin/sleep", executing / "held-by-exe"))
+    executor = subprocess.Popen(["a-name-that-is-not-a-path", "600"], executable=relocated)
     ready = tmp_path / "gate-ready"
     release = tmp_path / "gate-release"
     holder_pidfile = tmp_path / "holder.pid"
@@ -387,6 +449,7 @@ def test_harness_scratch_is_reclaimed_during_an_active_dispatch_but_never_when_r
                 {
                     "cwd": str(working),
                     "open": str(opened / "package.json"),
+                    "mapped": str(mapped_cache / binary),
                     "pidfile": str(holder_pidfile),
                     "release": str(release),
                 }
@@ -395,6 +458,21 @@ def test_harness_scratch_is_reclaimed_during_an_active_dispatch_but_never_when_r
         )
         holder.stdin.flush()
         _wait_for_path(holder_pidfile)
+        # The native cache is under test precisely because a loader leaves nothing
+        # else behind: assert the descriptors are clean before relying on that.
+        holder_proc = Path(f"/proc/{holder.pid}")
+        assert not [
+            descriptor
+            for descriptor in (holder_proc / "fd").iterdir()
+            if str(mapped_cache) in os.path.realpath(descriptor)
+        ]
+        assert str(mapped_cache) in (holder_proc / "maps").read_text(encoding="utf-8")
+        # Same isolation for the other two channels: neither directory is named in the
+        # argv, cwd, or descriptors of the process that is using it.
+        assert str(env_named) not in (holder_proc / "cmdline").read_text(encoding="utf-8")
+        executor_proc = Path(f"/proc/{executor.pid}")
+        assert str(executing) not in (executor_proc / "cmdline").read_text(encoding="utf-8")
+        assert Path(os.path.realpath(executor_proc / "exe")) == relocated
         # pytest keeps the newest three runs itself and marks a live session with a
         # `.lock` holding its pid; both conventions are honored rather than fought.
         (runs[1] / ".lock").write_text(
@@ -410,6 +488,11 @@ def test_harness_scratch_is_reclaimed_during_an_active_dispatch_but_never_when_r
             stale,
             lookalike,
             self_named,
+            stale_cache,
+            mapped_cache,
+            lookalike_cache,
+            env_named,
+            executing,
         ):
             _age(path)
         _wait_for_path(ready)
@@ -422,8 +505,14 @@ def test_harness_scratch_is_reclaimed_during_an_active_dispatch_but_never_when_r
             check=True,
         )
         assert str(stale) in inspected.stdout and "would remove" in inspected.stdout
+        assert str(stale_cache) in inspected.stdout
         assert "reclaimed 0 bytes" in inspected.stdout
-        assert all(path.exists() for path in (stale, onejudge_scratch, runs[2]))
+        # A dry run reclaims nothing, so its report has to say which families it
+        # examined before that zero can be read as "nothing to reclaim".
+        swept, _, skipped = inspected.stdout.partition("; skipped families: ")
+        assert "nx-native-file-cache" in swept.split("swept families: ", 1)[1]
+        assert skipped.startswith("third-party (lifecycle dispatch active)")
+        assert all(path.exists() for path in (stale, stale_cache, onejudge_scratch, runs[2]))
 
         during = subprocess.run(
             ["just", "sweep-scratch", "--root", str(scratch)],
@@ -435,6 +524,8 @@ def test_harness_scratch_is_reclaimed_during_an_active_dispatch_but_never_when_r
     finally:
         release.write_text("release", encoding="utf-8")
         holder.communicate(timeout=60)
+        executor.terminate()
+        executor.wait(timeout=30)
         process.join(60)
         if process.is_alive():
             process.terminate()
@@ -442,19 +533,21 @@ def test_harness_scratch_is_reclaimed_during_an_active_dispatch_but_never_when_r
         unreadable_lock.chmod(0o600)
 
     assert not stale.exists()
+    assert not stale_cache.exists()
     assert not onejudge_scratch.exists()
     assert not runs[2].exists()
     preserved = [argv_named, working, opened, lookalike, self_named]
+    preserved += [mapped_cache / binary, lookalike_cache, env_named, relocated]
     preserved += [runs[number] for number in (0, 1, 3, 4, 5)]
     assert [path for path in preserved if not path.exists()] == []
     referenced = re.search(
         r"retained (\d+) directories referenced by live processes", during.stdout
     )
     assert referenced is not None, during.stdout
-    assert int(referenced.group(1)) >= 3
+    assert int(referenced.group(1)) >= 6
     # The dispatch's own third-party scratch still waits for the exclusive lock.
     assert third_party.exists()
-    assert "third-party sweep skipped: lifecycle dispatch active" in during.stdout
+    assert "skipped families: third-party (lifecycle dispatch active)" in during.stdout
 
     assert process.exitcode == 0
     lifecycle_result = json.loads(result_path.read_text(encoding="utf-8"))
@@ -501,6 +594,12 @@ def test_sweep_recipe_leaves_harness_scratch_alone_when_procfs_cannot_answer(
     assert not dead_watchdog.exists()
     assert "removed 1 directories" in result.stdout
     assert f"no usable procfs at {blind}" in result.stdout
+    # Nothing was reclaimed from these families, so the report has to say they were
+    # never examined rather than let one number read as "nothing to reclaim".
+    swept, _, skipped = result.stdout.partition("; skipped families: ")
+    assert "swept families: watchdog, third-party" in swept
+    for family in UNREFERENCED_FAMILIES:
+        assert f"{family.name} (no live process could be proven done with it)" in skipped
 
 
 def test_sweep_cli_keeps_visible_references_when_a_process_hides_its_descriptors(
