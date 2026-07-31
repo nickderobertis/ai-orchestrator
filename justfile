@@ -244,6 +244,8 @@ history-show *args:
 monitor *args:
     uv run orchestrator-monitor {{args}}
 
+# Emit the schema-versioned run telemetry index, or `just telemetry <run-id>` for one
+# named run — settled or not. `--breakdown` renders the operator timing view.
 telemetry *args:
     @uv run orchestrator-telemetry {{args}}
 
@@ -258,7 +260,8 @@ telemetry-server *args:
     uv run orchestrator-telemetry-server {{args}}
 
 # Show running tasks joined with recent output, branch commits, and ledger rounds.
-# Pass N or --all to include recently finished tasks.
+# Pass N or --all to include recently finished tasks, or `just status <run-id>` to
+# scope the view to one run's own indicators and dispatched sessions.
 # llmlint: ignore[tool_output_is_signal] the requested multi-task status report is this viewing command's product.
 status *args:
     @uv run orchestrator-status {{args}}

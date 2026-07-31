@@ -14,7 +14,7 @@ import pytest
 import orchestrator.telemetry as telemetry_module
 from orchestrator.history import HistorySession, SessionId, SessionRole
 from orchestrator.journal import NodeJournal, open_journal
-from orchestrator.runs import NodeId, RunId, prepare_round, write_result
+from orchestrator.runs import NodeId, RunId, StepId, prepare_round, write_result
 from orchestrator.telemetry import (
     SUPPORTED_HISTORY_SCHEMA_VERSIONS,
     TELEMETRY_SCHEMA_VERSION,
@@ -1000,3 +1000,75 @@ def test_collect_run_prefers_native_scalars_and_unions_fallback_tool_intervals(
     assert timing["agent_model_ms"] == 47
     assert timing["tool_ms"] == 67
     assert timing["idle_orchestration_ms"] == 26
+
+
+def test_unsettled_round_reads_node_settlement_out_of_its_own_journal(tmp_path: Path) -> None:
+    """A round with no `result.json` is described by the journal, not by optimism.
+
+    Every node that had ever appeared in the journal was reported `running`, so a
+    node the ledger recorded as `node-failed` still rendered as running — the stale
+    picture a supervisor then trusts. The real journey is
+    `tests/e2e/test_run_views_by_id_e2e.py`, which reads a live run's failed node
+    back through `just telemetry`; this covers what that journey cannot reach
+    in-process: the earlier-round exclusion, a step-scoped wait that settles nothing,
+    and a terminal event whose serialized result is unusable.
+    """
+    run_dir = tmp_path / "runs" / "unsettled"
+    run_id = RunId("unsettled")
+    prepare_round(run_dir, {"tasks": [{"id": "gone", "task": "old"}]})
+    settled = open_journal(run_dir, run_id, 1)
+    settled.append("round-started", detail={"nodes": 1})
+    NodeJournal(settled, NodeId("gone"), run_id, 1).append("node-started", detail={})
+    write_result(
+        run_dir / "round-01",
+        {"ok": True, "state": "complete", "started_order": ["gone"], "results": {}},
+    )
+
+    prepare_round(run_dir, {"tasks": [{"id": "boom", "task": "fail"}]})
+    journal = open_journal(run_dir, run_id, 2)
+    journal.append("round-started", detail={"nodes": 3})
+    boom = NodeJournal(journal, NodeId("boom"), run_id, 2)
+    boom.append("node-started", detail={})
+    boom.append(
+        "node-failed",
+        detail={"outcome": "not-completed", "result": {"status": "failed", "kind": "agent"}},
+    )
+    bare = NodeJournal(journal, NodeId("bare"), run_id, 2)
+    bare.append("node-started", detail={})
+    # A terminal event whose serialized result cannot be validated still proves what
+    # its own kind means, so the node settles rather than reverting to running.
+    bare.append("node-failed", detail={"outcome": "gate-failed", "result": {"status": 7}})
+    held = NodeJournal(journal, NodeId("held"), run_id, 2)
+    held.append("node-started", detail={})
+    held.for_step(StepId("verify")).append("human-waiting", detail={"ref": "held/verify"})
+
+    telemetry = collect_run(run_dir, oneharness_bin="definitely-not-installed")
+    assert telemetry is not None
+    statuses = {node.node: node.status for node in telemetry.nodes}
+    # `gone` belongs to round 1, whose own recorded result already describes it.
+    assert statuses == {"boom": "failed", "bare": "failed", "held": "running"}
+    assert {node.node: node.outcome for node in telemetry.nodes}["bare"] == "gate-failed"
+
+
+def test_naming_a_run_reports_it_settled_or_not_and_refuses_an_unknown_one(
+    tmp_path: Path, capsys
+) -> None:
+    runs_dir = tmp_path / "runs"
+    for name, ok in (("done", True), ("other", True)):
+        _, round_dir = prepare_round(runs_dir / name, {"tasks": [{"id": "api", "task": "ship"}]})
+        journal = open_journal(runs_dir / name, RunId(name), 1)
+        journal.append("round-started", detail={"nodes": 1})
+        NodeJournal(journal, NodeId("api"), RunId(name), 1).append("node-started", detail={})
+        write_result(
+            round_dir,
+            {"ok": ok, "state": "complete", "started_order": ["api"], "results": {}},
+        )
+
+    assert main(["nowhere", "--runs-dir", str(runs_dir)]) == 2
+    assert "no recorded run 'nowhere'" in capsys.readouterr().err
+    # Both runs settled, so the unscoped index is empty without `--all` — naming one
+    # is the request and must not be filtered out by that default.
+    assert main(["--runs-dir", str(runs_dir)]) == 0
+    assert json.loads(capsys.readouterr().out)["runs"] == []
+    assert main(["done", "--runs-dir", str(runs_dir)]) == 0
+    assert [run["run_id"] for run in json.loads(capsys.readouterr().out)["runs"]] == ["done"]
