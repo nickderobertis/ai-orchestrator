@@ -30,7 +30,7 @@ from typing import TypeVar, cast
 
 import pytest
 from conftest import git, install_pre_push_hook
-from fakes import FakeGitHub, make_writing_dispatch
+from fakes import FakeGitHub, FakePRState, make_writing_dispatch
 from git_http import serve_github_origin
 from waits import deadline as e2e_deadline
 from waits import timeout as e2e_timeout
@@ -2051,6 +2051,104 @@ def test_registered_remote_identity_keeps_pr_flow(tmp_path, bare_origin) -> None
     assert result.repository_type == "single-owner"
     assert result.merge_policy == "auto"
     assert result.pr_base == "main"
+
+
+@pytest.mark.parametrize("existing_state", ["open", "merged"])
+def test_remote_closeout_adopts_existing_pr_without_duplicate(
+    tmp_path, bare_origin, existing_state
+) -> None:
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / f"canonical-{existing_state}-existing-pr")
+    Registry().register(str(canonical), workflow="remote", repo_type="single-owner")
+
+    class ExistingPRGitHub(FakeGitHub):
+        def existing_pr(self, repo, *, head, base, head_sha):
+            if not self._prs:
+                self._n = 1
+                self._prs[1] = FakePRState(head, base, "existing", "existing")
+                seeded = PullRequest(1, f"https://github.com/{repo}/pull/1", repo, head, base)
+                if existing_state == "merged":
+                    self._do_merge(seeded)
+            return super().existing_pr(repo, head=head, base=base, head_sha=head_sha)
+
+    github = ExistingPRGitHub(origin)
+    result = run_repo_task(
+        str(canonical),
+        "complete-now publish preserved work",
+        "engineer",
+        workspace=Workspace(tmp_path / f"{existing_state}-existing-pr-worktrees"),
+        github=github,
+        merge_policy="none" if existing_state == "open" else "auto",
+        branch=f"preserved-{existing_state}-pr",
+        recorded_gate=["true"],
+        dispatch_fn=make_writing_dispatch(),
+        body="## What\nPublish preserved work.\n\n## Why\nAvoid duplicate PRs.\n",
+        sleep=lambda _: None,
+    )
+
+    assert result.pr is not None and result.pr.number == 1
+    assert github._n == 1
+    assert result.outcome == ("pr-open" if existing_state == "open" else "merged")
+    if existing_state == "merged":
+        assert _has_file(origin, "main", "CHANGE.txt")
+
+
+def test_pr_author_failure_retries_once_and_surfaces_underlying_error(
+    tmp_path, bare_origin
+) -> None:
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-drafting-retry")
+    Registry().register(str(canonical), workflow="remote", repo_type="single-owner")
+    github = FakeGitHub(origin)
+    attempts = 0
+    writing = make_writing_dispatch()
+
+    def failing_author(persona, task, *, project_dir, **kwargs):
+        nonlocal attempts
+        if persona != "pr-author":
+            return writing(persona, task, project_dir=project_dir, **kwargs)
+        attempts += 1
+        return Report(
+            persona=persona,
+            exit_code=2,
+            completed=False,
+            stopped_early=False,
+            assistant_turns=0,
+            verdicts=[],
+            usage={},
+            raw={},
+            stderr="provider launch failed: subscription unavailable",
+            outcome_detail="harness exited 17: authentication rejected",
+            max_turns=2,
+        )
+
+    journal = open_journal(tmp_path / "drafting-run", RunId("drafting-retry"), 1)
+    result = run_repo_task(
+        str(canonical),
+        "## What\ncomplete-now write-change.\n\n"
+        "## Why\nKeep publication reliable.\n\n"
+        "## Acceptance criteria\n- The change is published.",
+        "engineer",
+        workspace=Workspace(tmp_path / "drafting-retry-worktrees"),
+        github=github,
+        merge_policy="none",
+        branch="drafting-retry",
+        recorded_gate=["true"],
+        dispatch_fn=failing_author,
+        journal=NodeJournal(journal, NodeId("publish"), RunId("drafting-retry"), 1),
+    )
+
+    assert result.outcome == "pr-open" and attempts == 2
+    assert result.pr is not None
+    assert github._prs[result.pr.number].body == (
+        "## What\ncomplete-now write-change.\n\n## Why\nKeep publication reliable.\n"
+    )
+    assert result.follow_ups is not None
+    assert "attempt 1: harness exited 17: authentication rejected" in result.follow_ups
+    assert "attempt 2: harness exited 17: authentication rejected" in result.follow_ups
+    fallback = next(event for event in journal.events() if event.kind == "pr-drafting-fallback")
+    assert fallback.detail["attempts"] == 2
+    assert "harness exited 17: authentication rejected" in fallback.detail["reason"]
 
 
 def test_verify_via_ci_iterates_real_dispatch_then_requires_green_branch_ci(
@@ -5996,7 +6094,7 @@ def test_remote_human_workstream_draft_checkpoint_and_safe_resume(tmp_path, bare
     assert completed.ok and completed.outcome == "merged", completed.detail
     assert completed.pr is not None and completed.pr.number == paused.pr.number
     assert github.created == [paused.pr.number]
-    assert github.reused == [paused.pr.number]
+    assert github.reused == []
     assert github.readied == [paused.pr.number]
     assert not github._prs[paused.pr.number].draft
     assert dispatched == ["prepare", "implement", "finalize"]

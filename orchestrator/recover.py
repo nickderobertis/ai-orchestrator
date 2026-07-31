@@ -362,6 +362,7 @@ def recover_repo(
             queue_identity=git_lock_identity(gitops.common_dir(clone)),
             base=publication_base,
             branch=branch,
+            head_sha=gitops.head_sha(worktree),
             title=_default_title(worktree, remote_base, f"Recover preserved branch {branch}"),
             body=(
                 "## What\nRecover lifecycle-preserved work through its merge-path gate.\n\n"

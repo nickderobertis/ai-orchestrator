@@ -80,6 +80,7 @@ class MergeContext:
     branch: str
     title: str
     body: str
+    head_sha: str = ""
     #: What the merge queue serializes on. It has to name the *repository*, not the
     #: clone the merge is built in: every run now builds in a clone of its own, and
     #: a per-run identity would hand each contender its own empty queue. ``None``
@@ -286,10 +287,23 @@ class GitHubMergeStrategy:
         return self._publish_and_merge(ctx)
 
     def _publish_and_merge(self, ctx: MergeContext) -> MergeOutcome:
-        pr = ctx.preverified_pr or self._github.create_pr(
-            ctx.repo_slug, head=ctx.branch, base=ctx.base, title=ctx.title, body=ctx.body
+        existing = None
+        lookup = getattr(self._github, "existing_pr", None)
+        if ctx.preverified_pr is None and lookup is not None:
+            existing = lookup(
+                ctx.repo_slug,
+                head=ctx.branch,
+                base=ctx.base,
+                head_sha=ctx.head_sha or gitops.head_sha(ctx.clone_dir),
+            )
+        pr = (
+            ctx.preverified_pr
+            or existing
+            or self._github.create_pr(
+                ctx.repo_slug, head=ctx.branch, base=ctx.base, title=ctx.title, body=ctx.body
+            )
         )
-        if ctx.preverified_pr is None:
+        if ctx.preverified_pr is None and existing is None:
             _record(
                 ctx,
                 "pr-created",
@@ -299,6 +313,19 @@ class GitHubMergeStrategy:
                     "number": pr.number,
                     "base": ctx.base,
                     "draft": False,
+                },
+            )
+        elif existing is not None:
+            _record(
+                ctx,
+                "pr-created",
+                {
+                    "repo": ctx.repo_slug,
+                    "pr": pr.url,
+                    "number": pr.number,
+                    "base": ctx.base,
+                    "draft": False,
+                    "adopted": True,
                 },
             )
         if self._github.status(pr).draft:

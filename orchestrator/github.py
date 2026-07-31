@@ -63,6 +63,15 @@ class PullRequest:
 
 
 @dataclass(frozen=True)
+class ExistingPullRequest:
+    """A same-head PR discovered before publication, including its frozen head."""
+
+    pr: PullRequest
+    state: str
+    head_sha: str
+
+
+@dataclass(frozen=True)
 class Check:
     name: str
     state: str  # SUCCESS | FAILURE | PENDING | ERROR | SKIPPED | NEUTRAL | ...
@@ -116,6 +125,10 @@ class GitHubBackend(Protocol):
     def default_branch(self, repo: str) -> str: ...
 
     def required_status_checks(self, repo: str, branch: str) -> tuple[str, ...]: ...
+
+    def existing_pr(
+        self, repo: str, *, head: str, base: str, head_sha: str
+    ) -> PullRequest | None: ...
 
     def create_pr(
         self, repo: str, *, head: str, base: str, title: str, body: str, draft: bool = False
@@ -217,16 +230,8 @@ class CliGitHubBackend:
             ) from exc
         return tuple(context for context in contexts if context)
 
-    def create_pr(
-        self, repo: str, *, head: str, base: str, title: str, body: str, draft: bool = False
-    ) -> PullRequest:
-        """Return the open PR for ``head`` → ``base``, or create one if none exists.
-
-        Reusing the PR lets later orchestration rounds continue work on the same
-        branch without failing cosmetically after their push succeeds. The lookup
-        filters by ``base`` too, so a same-head PR targeting a different base is
-        never mistaken for this one.
-        """
+    def existing_pr(self, repo: str, *, head: str, base: str, head_sha: str) -> PullRequest | None:
+        """Return an open PR, or a merged PR that contains this exact branch head."""
         existing_out = self._run(
             [
                 "pr",
@@ -238,29 +243,52 @@ class CliGitHubBackend:
                 "--base",
                 base,
                 "--state",
-                "open",
+                "all",
                 "--json",
-                "number,url",
+                "number,url,state,headRefOid",
             ]
         )
         try:
-            existing = json.loads(existing_out)
-            if not isinstance(existing, list):
+            payload = json.loads(existing_out)
+            if not isinstance(payload, list):
                 raise TypeError
-            if existing:
-                first = existing[0]
-                if not isinstance(first, dict):
+            candidates: list[ExistingPullRequest] = []
+            for item in payload:
+                if not isinstance(item, dict):
                     raise TypeError
-                number = first["number"]
-                url = first["url"]
-                if not isinstance(number, int) or isinstance(number, bool):
+                number, url = item["number"], item["url"]
+                state, candidate_sha = item["state"], item["headRefOid"]
+                if (
+                    not isinstance(number, int)
+                    or isinstance(number, bool)
+                    or not isinstance(url, str)
+                    or not url
+                    or not isinstance(state, str)
+                    or not isinstance(candidate_sha, str)
+                    or not candidate_sha
+                ):
                     raise TypeError
-                if not isinstance(url, str) or not url:
-                    raise TypeError
-                return PullRequest(number=number, url=url, repo=repo, head=head, base=base)
-        except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+                candidates.append(
+                    ExistingPullRequest(
+                        PullRequest(number, url, repo, head, base),
+                        state.upper(),
+                        candidate_sha,
+                    )
+                )
+        except (json.JSONDecodeError, KeyError, TypeError) as exc:
             raise GitHubError(f"could not parse PR from gh output: {existing_out!r}") from exc
+        for candidate in candidates:
+            if candidate.state == "OPEN":
+                return candidate.pr
+        for candidate in candidates:
+            if candidate.state == "MERGED" and candidate.head_sha == head_sha:
+                return candidate.pr
+        return None
 
+    def create_pr(
+        self, repo: str, *, head: str, base: str, title: str, body: str, draft: bool = False
+    ) -> PullRequest:
+        """Create a PR after the caller has ruled out an adoptable existing PR."""
         out = self._run(
             [
                 "pr",

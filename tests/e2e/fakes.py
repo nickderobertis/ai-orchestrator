@@ -155,6 +155,19 @@ class FakeGitHub:
             base=base,
         )
 
+    def existing_pr(self, repo: str, *, head: str, base: str, head_sha: str) -> PullRequest | None:
+        for number, state in self._prs.items():
+            if state.head != head or state.base != base:
+                continue
+            pr = PullRequest(number, f"https://github.com/{repo}/pull/{number}", repo, head, base)
+            if not state.closed and not state.merged:
+                return pr
+            if state.merged:
+                merged_sha = _git("rev-parse", f"refs/heads/{base}", cwd=self.origin).strip()
+                if merged_sha == head_sha:
+                    return pr
+        return None
+
     def mark_ready(self, pr: PullRequest) -> None:
         self._prs[pr.number].draft = False
 
