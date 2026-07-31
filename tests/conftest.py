@@ -280,3 +280,56 @@ def command_base(tmp_path: Path) -> Callable[..., Path]:
 @pytest.fixture
 def personas_dir() -> Path:
     return PERSONA_DIR
+
+
+# --- TEMPORARY DISCOVERY (removed before commit) ---
+import builtins as _b  # noqa: E402
+import io as _io  # noqa: E402
+import json as _json  # noqa: E402
+
+_FOUND: dict = {}
+
+
+def _doc_hit(file):
+    if not isinstance(file, (str, os.PathLike)):
+        return None
+    try:
+        text = os.fspath(file)
+    except TypeError:
+        return None
+    if isinstance(text, bytes):
+        text = text.decode("utf-8", "replace")
+    if not (text.endswith(".md") or "docs" in text):
+        return None
+    try:
+        resolved = Path(text).resolve()
+        rel = resolved.relative_to(REPO_ROOT)
+    except (OSError, ValueError):
+        return None
+    if rel.parts[0] == "docs" or rel.suffix == ".md":
+        return str(rel)
+    return None
+
+
+@pytest.fixture(autouse=True)
+def _discover_doc_reads(request):
+    real_b, real_i = _b.open, _io.open
+
+    def guarded(file, *a, **k):
+        hit = _doc_hit(file)
+        if hit:
+            _FOUND.setdefault(request.node.nodeid, set()).add(hit)
+        return real_b(file, *a, **k)
+
+    _b.open = guarded
+    _io.open = guarded
+    try:
+        yield
+    finally:
+        _b.open, _io.open = real_b, real_i
+
+
+def pytest_sessionfinish(session, exitstatus):
+    Path("/tmp/doc-reads.json").write_text(
+        _json.dumps({k: sorted(v) for k, v in _FOUND.items()}, indent=1)
+    )
