@@ -2093,8 +2093,9 @@ def test_remote_closeout_adopts_existing_pr_without_duplicate(
         assert _has_file(origin, "main", "CHANGE.txt")
 
 
+@pytest.mark.parametrize("failure_mode", ["incomplete", "invalid", "exception"])
 def test_pr_author_failure_retries_once_and_surfaces_underlying_error(
-    tmp_path, bare_origin
+    tmp_path, bare_origin, failure_mode
 ) -> None:
     origin = bare_origin()
     canonical = gitops.clone(origin, tmp_path / "canonical-drafting-retry")
@@ -2108,6 +2109,14 @@ def test_pr_author_failure_retries_once_and_surfaces_underlying_error(
         if persona != "pr-author":
             return writing(persona, task, project_dir=project_dir, **kwargs)
         attempts += 1
+        if failure_mode == "exception":
+            raise DispatchError("harness exited 17: authentication rejected")
+        if failure_mode == "invalid":
+            output = task.split(
+                "Write the final body, and nothing else, to this absolute path:\n", 1
+            )[1].splitlines()[0]
+            Path(output).write_text("not a template", encoding="utf-8")
+            return Report(persona, 0, True, False, 1, [], {}, {}, "")
         return Report(
             persona=persona,
             exit_code=2,
@@ -2144,11 +2153,21 @@ def test_pr_author_failure_retries_once_and_surfaces_underlying_error(
         "## What\ncomplete-now write-change.\n\n## Why\nKeep publication reliable.\n"
     )
     assert result.follow_ups is not None
-    assert "attempt 1: harness exited 17: authentication rejected" in result.follow_ups
-    assert "attempt 2: harness exited 17: authentication rejected" in result.follow_ups
+    expected = (
+        "invalid or empty body"
+        if failure_mode == "invalid"
+        else (
+            "drafting error: harness exited 17: authentication rejected"
+            if failure_mode == "exception"
+            else "harness exited 17: authentication rejected"
+        )
+    )
+    assert f"attempt 1: {expected}" in result.follow_ups
+    assert f"attempt 2: {expected}" in result.follow_ups
+    assert result_payload(result)["follow_ups"] == result.follow_ups
     fallback = next(event for event in journal.events() if event.kind == "pr-drafting-fallback")
     assert fallback.detail["attempts"] == 2
-    assert "harness exited 17: authentication rejected" in fallback.detail["reason"]
+    assert expected in fallback.detail["reason"]
 
 
 def test_verify_via_ci_iterates_real_dispatch_then_requires_green_branch_ci(

@@ -669,9 +669,9 @@ def _draft_pr_body(
     """Draft a diff-derived body, falling back without blocking publication."""
     journal.append("pr-drafting-started", detail={"base": remote_base})
     reasons: list[str] = []
-    try:
-        with tempfile.TemporaryDirectory(prefix="ai-orchestrator-pr-body-") as temp_dir:
-            for attempt in range(1, 3):
+    with tempfile.TemporaryDirectory(prefix="ai-orchestrator-pr-body-") as temp_dir:
+        for attempt in range(1, 3):
+            try:
                 output_path = Path(temp_dir) / f"body-{attempt}.md"
                 report = dispatch_fn(
                     "pr-author",
@@ -704,8 +704,8 @@ def _draft_pr_body(
                     detail = report.outcome_detail or report.stderr.strip() or report.assessment
                     reason = detail or f"dispatch exited {report.exit_code} without completing"
                 reasons.append(f"attempt {attempt}: {reason}")
-    except Exception as exc:  # Drafting is best-effort and must never block publication.
-        reasons.append(f"attempt {len(reasons) + 1}: drafting error: {exc}")
+            except Exception as exc:  # Drafting is best-effort and must never block publication.
+                reasons.append(f"attempt {attempt}: drafting error: {exc}")
     reason = "; ".join(reasons)
     if failures is not None:
         failures.append(reason)
@@ -1388,13 +1388,7 @@ def _pause_at_human_step(
         if drafting_failures:
             result.follow_ups = f"pr-author drafting failed: {drafting_failures[0]}"
         backend = github or CliGitHubBackend()
-        lookup = getattr(backend, "existing_pr", None)
-        existing = (
-            lookup(result.repo, head=branch, base=pr_base, head_sha=checkpoint)
-            if lookup is not None
-            else None
-        )
-        pr = existing or backend.create_pr(
+        pr = backend.create_pr(
             result.repo,
             head=branch,
             base=pr_base,
@@ -1412,7 +1406,6 @@ def _pause_at_human_step(
                 "number": pr.number,
                 "base": pr_base,
                 "draft": True,
-                "adopted": existing is not None,
             },
         )
     result.pr = pr

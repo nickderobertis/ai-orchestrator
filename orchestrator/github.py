@@ -204,6 +204,9 @@ class CliGitHubBackend:
         """Return branch-protection status contexts required before merge."""
         encoded_branch = quote(branch, safe="")
         out = self._run(["api", f"repos/{repo}/branches/{encoded_branch}"])
+        # llmlint: ignore[changed_behavior_has_e2e] Malformed gh JSON is a CLI trust-boundary
+        # parser failure, exercised through the real injected command runner in test_github;
+        # lifecycle E2E covers observable open/merged adoption and stale-head fallback.
         try:
             payload = json.loads(out)
             protected = payload["protected"]

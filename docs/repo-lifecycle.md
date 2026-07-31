@@ -467,6 +467,10 @@ returns `sync-conflict` and retains the branch for manual recovery.
   direct if the repo disallows it), `direct` (poll and merge ourselves on green
   required checks), `none` (open the PR and stop). Required-vs-optional comes from
   `statusCheckRollup.isRequired`; a failed required check ends at `checks-failed`.
+  Before opening a PR, closeout queries all PR states for the same head and base.
+  It adopts an existing open PR. It also treats a merged PR as authoritative
+  completion when that PR's recorded head SHA equals the branch head being
+  published; a stale merged PR whose branch later advanced is not reused.
 - **`LocalMergeStrategy`** (`workflow: local`) — there is no PR/CI to wait on, so
   it builds the branch-to-base merge in a detached scratch worktree and pushes
   that exact tree through the repository's pre-push gate. The branch lands as one squashed commit whose
@@ -544,8 +548,11 @@ persona. That agent reads the completed diff and writes a terse body following
 lifecycle reads and removes that artifact, then appends stack metadata as usual.
 This costs exactly one extra dispatch per published PR, including workstream and
 draft-checkpoint PRs. An explicit body skips drafting; an explicit title does not.
-A failed, incomplete, or empty drafting result falls back to the legacy
-deterministic body, so description generation never prevents publication.
+A failed, incomplete, or empty drafting result is retried once, then falls back
+to the legacy deterministic body, so description generation never prevents
+publication. Both failed attempts retain their underlying dispatch or harness
+detail in the node journal's drafting-fallback event and in the lifecycle
+follow-up surfaced to the planner.
 
 Run these nodes with `just run-plan`; `just repo-plan` is a deprecated alias that
 accepts old lifecycle-only files unchanged. See
