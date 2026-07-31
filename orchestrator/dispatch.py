@@ -102,10 +102,12 @@ ORCHESTRATOR_ONEHARNESS_BIN = REPO_ROOT / "scripts" / "oneharness-orchestrator.s
 #: at a rate no working agent produces. The accounting is onejudge's and not this
 #: harness's to change; what the harness can stop doing is reporting the result as the
 #: agent running out of room, because that reading is what earns an identical retry.
-DispatchOutcome = Literal["worker-died", "no-agent-progress"]
+DispatchOutcome = Literal["worker-died", "no-agent-progress", "reported-blocker"]
 #: Typed by the union rather than by a literal of its own, so a rename that misses one
 #: of them stops being a spelling both places agree on and starts being a type error.
 NO_AGENT_PROGRESS_OUTCOME: DispatchOutcome = "no-agent-progress"
+REPORTED_BLOCKER_OUTCOME: DispatchOutcome = "reported-blocker"
+REPORTED_BLOCKER_PREFIX = "terminal blocker reported:"
 WatchdogReason = Literal["worker-died", "stalled"]
 #: The status files `scripts/oneharness-agent.sh` writes and this module reads —
 #: the whole IPC contract between the two. `tests/test_oneharness_agent_wrapper.py`
@@ -352,6 +354,9 @@ def incomplete_detail(report: Report) -> str:
                 "producing anything, so retrying it unchanged will spend the next "
                 "budget the same way"
             )
+        case "reported-blocker":
+            blocker = report.outcome_detail or "unspecified blocker"
+            return f"stopped on a reported blocker: {blocker}"
     turns = report.assistant_turns
     plural = "" if turns == 1 else "s"
     cap = report.max_turns
@@ -374,6 +379,26 @@ def _incomplete_reason(report: Report) -> str | None:
         if isinstance(reason, str) and reason.strip():
             return _bounded_note(f"unmet {entry.get('kind')} verdict: {reason}")
     return _bounded_note(report.assessment) or _bounded_note(report.stderr)
+
+
+def _reported_blocker(result: RunResult) -> str | None:
+    """Return the supervisor-confirmed terminal blocker from a failed final verdict.
+
+    The simulated user owns the judgment that a worker's report is both terminal
+    and outside the dispatch's control. Requiring its durable prefix avoids treating
+    repeated prose, ordinary failures, or a worker's unilateral claim as this
+    outcome. The final boolean verdict remains false, so releasing the conversation
+    promptly cannot turn blocked work into successful work.
+    """
+    if result.completed:
+        return None
+    for entry in reversed(result.verdicts):
+        match entry:
+            case {"verdict": {"value": False, "reason": str(reason)}}:
+                prefix, separator, blocker = reason.strip().partition(":")
+                if separator and f"{prefix.lower()}:" == REPORTED_BLOCKER_PREFIX:
+                    return _bounded_note(blocker)
+    return None
 
 
 def _build_report(
@@ -399,6 +424,7 @@ def _build_report(
     raw = dict(result.raw)
     if provenance is not None:
         raw["provenance"] = provenance
+    reported_blocker = _reported_blocker(result)
     return Report(
         persona=persona,
         exit_code=result.exit_code,
@@ -412,10 +438,15 @@ def _build_report(
         assessment=assessment,
         telemetry_data=dict(raw_telemetry) if isinstance(raw_telemetry, dict) else None,
         outcome=(
-            NO_AGENT_PROGRESS_OUTCOME
-            if not result.completed and _agent_produced_nothing(result)
-            else None
+            REPORTED_BLOCKER_OUTCOME
+            if reported_blocker
+            else (
+                NO_AGENT_PROGRESS_OUTCOME
+                if not result.completed and _agent_produced_nothing(result)
+                else None
+            )
         ),
+        outcome_detail=reported_blocker,
         max_turns=max_turns,
     )
 

@@ -20,6 +20,11 @@ Conventions for this repo's tests.
   function as an argument, so scheduling behavior (ordering, parallelism,
   skip-on-failure) is tested without spawning onejudge. Prove parallelism with a
   `threading.Barrier`, not a sleep.
+- **Wait on a fact, and assert one.** A rendezvous that sleeps and then assumes the
+  work has begun measures the machine rather than the code, and so does an assertion
+  that only holds when the box was quick. Wait for an observable state transition,
+  preserve production ordering in protocol doubles, and correlate fields from the
+  same event rather than independent log-wide matches.
 - **Nothing a test starts may outlive it.** `leak_guard.py` is a pytest plugin that
   reaps a test's process trees and fails the test on what it could not. Build a
   realistic tree with `process_tree.write_orphaning_tree`, and ask

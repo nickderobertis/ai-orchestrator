@@ -5018,7 +5018,11 @@ def test_resumed_branch_setup_round_trips_through_telemetry_cli(tmp_path, bare_o
     )
     assert indexed.returncode == 0, indexed.stderr
     observed = json.loads(indexed.stdout)["runs"][0]["timing"]
-    assert observed["setup_seconds"] > 0
+    # `setup_seconds` is a millisecond-rounded share of the run's wall clock handed
+    # out after the categories ahead of it, so a positive value is a property of a
+    # fast box. The journal-to-CLI round trip is the contract, and holds either way.
+    journalled = sum(event.detail["seconds"] for event in setup_events)
+    assert observed["setup_seconds"] == round(journalled * 1000) / 1000
 
 
 def test_real_lifecycle_outcomes_round_trip_through_telemetry_cli(tmp_path, bare_origin) -> None:
