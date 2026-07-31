@@ -1,5 +1,13 @@
+import {
+  ScrollArea,
+  Separator,
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@oneharness/ui";
 import { Activity, Bot, ChevronRight, History } from "lucide-react";
 import type { RunGroup } from "../runs/run-model";
+import { StateBadge } from "../runs/StateBadge";
 
 export function RunNavigation({
   groups,
@@ -13,53 +21,72 @@ export function RunNavigation({
   readonly onSelect: (runId: string) => void;
 }) {
   return (
-    <nav className="run-nav" aria-label="DAG runs">
-      <div className="brand">
-        <div className="brand-mark" aria-hidden="true">
-          <Activity size={20} />
+    <nav aria-label="DAG runs" className="run-nav">
+      <ScrollArea className="h-full">
+        <div className="px-[18px] py-6">
+          <div className="brand">
+            <div aria-hidden="true" className="brand-mark">
+              <Activity size={20} />
+            </div>
+            <div>
+              <p className="eyebrow">Local orchestration</p>
+              <h1>DAG Observatory</h1>
+            </div>
+          </div>
+          <Separator className="my-[22px]" />
+          <div className="run-groups">
+            {groups.map((group) => (
+              <section aria-labelledby={`group-${group.id}`} key={group.id}>
+                <h2 id={`group-${group.id}`}>
+                  <Bot aria-hidden="true" size={14} />
+                  {group.label}
+                </h2>
+                {group.runs.map((run) => {
+                  const active = selectedRunId === run.run_id;
+                  return (
+                    <button
+                      aria-current={active ? "page" : undefined}
+                      className="run-link"
+                      data-active={active}
+                      key={run.run_id}
+                      onClick={() => onSelect(run.run_id)}
+                      type="button"
+                    >
+                      <span className="run-link-main">
+                        {liveRunIds.has(run.run_id) ? (
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              {/* The dot is the only marker of a live run, so it
+                                  keeps a name of its own rather than relying on the
+                                  hover-only tooltip to carry that meaning. */}
+                              <span
+                                aria-label="Live"
+                                className="live-dot"
+                                role="img"
+                              />
+                            </TooltipTrigger>
+                            <TooltipContent>Live</TooltipContent>
+                          </Tooltip>
+                        ) : (
+                          <History aria-label="Historical" size={13} />
+                        )}
+                        <span>{run.run_id}</span>
+                      </span>
+                      {/* This column is the one place a full-size pill would crowd
+                          the run id beside it out of the row. */}
+                      <StateBadge
+                        className="px-[5px] py-px text-[9px]"
+                        state={run.state}
+                      />
+                      <ChevronRight aria-hidden="true" size={14} />
+                    </button>
+                  );
+                })}
+              </section>
+            ))}
+          </div>
         </div>
-        <div>
-          <p className="eyebrow">Local orchestration</p>
-          <h1>DAG Observatory</h1>
-        </div>
-      </div>
-      <div className="run-groups">
-        {groups.map((group) => (
-          <section key={group.id} aria-labelledby={`group-${group.id}`}>
-            <h2 id={`group-${group.id}`}>
-              <Bot size={14} aria-hidden="true" />
-              {group.label}
-            </h2>
-            {group.runs.map((run) => {
-              const active = selectedRunId === run.run_id;
-              const isLive = liveRunIds.has(run.run_id);
-              return (
-                <button
-                  className="run-link"
-                  data-active={active}
-                  key={run.run_id}
-                  type="button"
-                  aria-current={active ? "page" : undefined}
-                  onClick={() => onSelect(run.run_id)}
-                >
-                  <span className="run-link-main">
-                    {isLive ? (
-                      <span className="live-dot" title="Live" />
-                    ) : (
-                      <History size={13} aria-label="Historical" />
-                    )}
-                    <span>{run.run_id}</span>
-                  </span>
-                  <span className={`status status-${run.state}`}>
-                    {run.state}
-                  </span>
-                  <ChevronRight size={14} aria-hidden="true" />
-                </button>
-              );
-            })}
-          </section>
-        ))}
-      </div>
+      </ScrollArea>
     </nav>
   );
 }

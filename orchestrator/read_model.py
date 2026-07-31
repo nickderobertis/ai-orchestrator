@@ -382,9 +382,18 @@ def run_detail(
     *,
     oneharness_bin: str = "oneharness",
     expose_launcher_session_id: bool = False,
+    include_conversations: bool = True,
     now: datetime | None = None,
 ) -> RunDetail:
-    """The full ``RunDetail`` for one run: telemetry, rounds, and conversations."""
+    """The full ``RunDetail`` for one run: telemetry, rounds, and conversations.
+
+    ``include_conversations=False`` serves ``conversations`` as an empty array. It is
+    an opt-out, not a schema change: transcripts dominate this payload — a real run
+    carries megabytes of them across hundreds of sessions — and a client that reads
+    the timeline instead refetches all of it on every live update for nothing. The
+    field stays required and present; the caller simply asked for nothing in it, so
+    ``api_version`` is untouched.
+    """
     try:
         validated = validate_run_id(run_id)
     except ConfigError as exc:
@@ -404,7 +413,11 @@ def run_detail(
         "observed_at": _now(now),
         "run": telemetry.record(),
         "rounds": _rounds(run_dir, validated),
-        "conversations": run_conversations(validated, oneharness_bin=oneharness_bin),
+        "conversations": (
+            run_conversations(validated, oneharness_bin=oneharness_bin)
+            if include_conversations
+            else []
+        ),
         "details": load_snapshot(run_dir).to_record(),
     }
     if logs := read_logs(run_dir):

@@ -322,11 +322,20 @@ turn timeline with `just telemetry`.
 `just telemetry-server` serves the read-only DAG API over a runs root and
 `just dag-ui` serves the browser view against it; both are read-only and mutate
 no run. Operational detail lives in [`docs/dag-ui.md`](docs/dag-ui.md).
-Use `just sweep-scratch --dry-run` to inspect definite dead watchdog scratch and
-conservatively stale known third-party scratch; omit `--dry-run` to reclaim it.
+Use `just sweep-scratch --dry-run` to inspect definite dead watchdog scratch,
+harness scratch no live process still references, and conservatively stale known
+third-party scratch; omit `--dry-run` to reclaim it.
 Session setup and every recorded round transition run this sweep automatically.
 An active lifecycle makes third-party cleanup skip without waiting;
 ownership-proven dead watchdog cleanup still proceeds.
+The families an active dispatch itself produces — the private `nx` install every
+`bunx nx` leaves behind, pytest run directories, onejudge scratch — are the
+volume, so waiting for quiescence never reclaims them. They are swept **during**
+dispatches instead, on proven non-reference: a candidate no live process names in
+its argv, cwd, or open descriptors, past a short age that only covers the gap
+between creating a directory and first naming it. Names too generic to sweep on are
+identified by shape, and each family honors its producer's own retention. See
+[`orchestrator.scratch.UNREFERENCED_FAMILIES`](orchestrator/scratch.py).
 
 `just smoke` spends exactly one real agent-harness turn in a throwaway directory
 and verifies exact prompt delivery plus a successful, fully accounted oneharness
