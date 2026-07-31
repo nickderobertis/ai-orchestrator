@@ -310,6 +310,39 @@ def test_ambient_llmlint_path_does_not_invalidate_the_verdict(workspace: Workspa
     assert CACHE_HIT in second.stderr
 
 
+def test_an_ambient_llmlint_still_lets_the_judge_configuration_invalidate(
+    workspace: Workspace,
+) -> None:
+    """A caller's llmlint must not quietly drop the fingerprint out of the cache key.
+
+    Nx treats a runtime input that exits non-zero as *no contribution* rather than
+    as an error, so a fingerprint the caller's environment can break does not fail
+    the tier — it silently shrinks the key to the tree and the base. That is the
+    worse half of the split-verdict defect: spurious misses only re-roll the judge,
+    but a degraded key replays a verdict the judge configuration has since moved on
+    from. Resolving the fingerprint under the same pinned runtime that judges is
+    what keeps it contributing while an unrelated llmlint sits on PATH.
+    """
+    base = workspace.head()
+    ambient = _write_version_only_llmlint(workspace.root.parent / "ambient-judge", "1.0.0")
+    on_path = {"PATH": f"{ambient}{os.pathsep}{workspace.env['PATH']}"}
+
+    first = workspace.lint(base, **on_path)
+    # The plugin lives outside the checkout, so no file input can see this: the
+    # judge configuration fingerprint is the only thing that can notice the rules
+    # changed, and only if it is still part of the key.
+    workspace.plugin.write_text(
+        workspace.plugin.read_text().replace("operator entry point", "operator entry point twice"),
+        encoding="utf-8",
+    )
+    second = workspace.lint(base, **on_path)
+
+    assert first.returncode == 0, first.stdout + first.stderr
+    assert second.returncode == 0, second.stdout + second.stderr
+    assert workspace.judge_runs() == 2
+    assert CACHE_MISS in second.stderr
+
+
 def test_a_failing_verdict_is_replayed_with_its_findings_and_its_exit(
     workspace: Workspace,
 ) -> None:

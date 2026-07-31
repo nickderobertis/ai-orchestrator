@@ -339,6 +339,20 @@ keyed on the whole workspace content, the resolved base **commit**, and the judg
 configuration fingerprint. Ask the same question twice and you get the recorded
 answer rather than a second roll of the dice.
 
+That only holds while the key is a function of the judged question alone, so
+`scripts/llmlint-fingerprint.sh` resolves the llmlint version *and* the merged
+config under the same pinned runtime the target judges with — never the caller's
+inherited `PATH` or `LLMLINT_ONEHARNESS_BIN`. Both reach `llmlint config`, so a
+fingerprint that reads the caller's environment fails in two directions at once.
+It splits one judged diff across a key per dispatch, which is the visible symptom:
+the judge re-rolls and a branch collects opposite verdicts on identical content.
+And because Nx scores a runtime input that exits non-zero as *no contribution*
+rather than as an error, a fingerprint the caller's environment can break does not
+fail the tier — it silently shrinks the key to the tree and the base. That failure
+is the quiet one and the worse one: a re-roll only costs a judge call, while a
+degraded key replays a verdict the judge configuration has since moved on from.
+Both directions are held by `tests/e2e/test_llmlint_cache_e2e.py`.
+
 **The recorded verdict for exactly that content, base commit, and judge
 configuration is authoritative, and the worker's gate is where it is paid for.**
 The merge-path gate — the `pre-push` hook, which is the only verifier the
