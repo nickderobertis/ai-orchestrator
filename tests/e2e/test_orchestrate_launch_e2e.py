@@ -16,6 +16,14 @@ committed priority itself is held by tests/test_harness_routing.py, and real
 fallback selection by tests/e2e/test_dispatch_e2e.py.
 """
 
+# llmlint: ignore-file[e2e_not_mocked] this journey fakes ONLY the paid agent harness,
+# at the seam oneharness itself exposes for it (`ONEHARNESS_BIN_CODEX`), exactly as
+# AGENTS.md prescribes. The real `just orchestrate` recipe, the real oneharness binary,
+# its config layering, the wrapper, and the approval-mode mapping all run. The stand-in
+# is not a shortcut around the boundary under test — it IS the instrument: recording
+# which harness was spawned, with which flag and environment, is the only way to observe
+# the claim, and a real codex would report none of it.
+
 from __future__ import annotations
 
 import json
