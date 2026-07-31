@@ -21,6 +21,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal, TypedDict, cast
 
+from .config import ConfigError
 from .detail_snapshot import CheckRollup
 from .history import (
     LLMLINT_PROMPT_PREFIXES,
@@ -31,7 +32,13 @@ from .history import (
     session_records,
     session_role,
 )
-from .journal import JOURNAL_NAME, Event, EventKind, read_events
+from .journal import (
+    JOURNAL_NAME,
+    TERMINAL_NODE_RESULT_FIELD,
+    Event,
+    EventKind,
+    read_events,
+)
 from .monitor import DetailSnapshot, load_snapshot, run_state
 from .runs import (
     RETRY_DISPOSITIONS,
@@ -41,6 +48,7 @@ from .runs import (
     as_result_payload,
     latest_round,
     load_mapping,
+    resolve_supervision_run,
     result_state,
     result_state_is_terminal,
 )
@@ -1432,6 +1440,68 @@ def _node_record(
     )
 
 
+#: Journal kinds that record one node's own terminal outcome, and the status each
+#: means when its serialized node result is unusable. `node-settled` carries the
+#: status it settled with, so it has no fixed fallback of its own.
+_SETTLING_KINDS: dict[EventKind, str | None] = {
+    "node-failed": "failed",
+    "node-settled": None,
+    "human-waiting": "waiting",
+}
+
+
+def _settled_item(event: Event, node: str) -> GraphResultItem:
+    """The node result one terminal journal event recorded, validated as recorded.
+
+    Since journal schema 2 these events carry the exact serialized item the eventual
+    `result.json` will expose, so an unsettled round can be read with the same
+    fidelity as a settled one. It is still external input, so it goes through the
+    one recorded-result validator rather than being trusted on sight; anything it
+    rejects degrades to the status the event kind itself proves.
+    """
+    recorded = event.detail.get(TERMINAL_NODE_RESULT_FIELD)
+    if isinstance(recorded, dict):
+        try:
+            payload = as_result_payload(
+                {"ok": False, "started_order": [node], "results": {node: recorded}}
+            )
+        except ConfigError:
+            payload = None
+        if payload is not None:
+            return payload["results"][node]
+    status = _SETTLING_KINDS[event.kind] or str(event.detail.get("status") or "done")
+    outcome = event.detail.get("outcome")
+    return GraphResultItem(
+        status=status,
+        kind="agent",
+        outcome=outcome if isinstance(outcome, str) else "",
+    )
+
+
+def _in_flight_items(events: list[Event], round_number: int) -> dict[str, GraphResultItem]:
+    """Read one unsettled round's node results out of its own journal.
+
+    A round still in flight has written no `result.json`, so the journal is the only
+    record of what its nodes did — and the journal *does* record settlement. Reading
+    every node that ever appeared in it as `running` made this view contradict the
+    authoritative record it was derived from: a node the ledger recorded as
+    `node-failed` still rendered as running, which is precisely the stale picture a
+    supervisor then trusts. Only the round being reported is folded, because earlier
+    rounds settled long ago and their own recorded results are what describe them.
+    """
+    items: dict[str, GraphResultItem] = {}
+    for event in events:
+        if event.node is None or event.round != round_number:
+            continue
+        node = str(event.node)
+        items.setdefault(node, GraphResultItem(status="running", kind="agent"))
+        # A step-scoped wait belongs to a node that is still working through its
+        # lifecycle, so only the node-level locator settles the node itself.
+        if event.kind in _SETTLING_KINDS and event.step is None:
+            items[node] = _settled_item(event, node)
+    return items
+
+
 def collect_run(
     run_dir: Path, *, now: float | None = None, oneharness_bin: str = "oneharness"
 ) -> RunTelemetry | None:
@@ -1446,8 +1516,7 @@ def collect_run(
         items = payload["results"]
     else:
         state = run_state(run_dir, RunId(run_dir.name)).state
-        active_nodes = dict.fromkeys(str(event.node) for event in events if event.node is not None)
-        items = {node: GraphResultItem(status="running", kind="agent") for node in active_nodes}
+        items = _in_flight_items(events, latest[0])
     last = events[-1] if events else None
     providers, summaries = _history_telemetry(RunId(run_dir.name), oneharness_bin)
     native_by_node = {node: _item_native(item) for node, item in items.items()}
@@ -1811,6 +1880,14 @@ def _boundary(value: str | None, name: str) -> datetime | None:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Emit the unified run telemetry index as JSON.")
+    parser.add_argument(
+        "run_id",
+        nargs="?",
+        metavar="RUN_ID",
+        help="report only this run, the identifier `launch.json` advertises (a plan "
+        "name resolves when it names one active run); a named run is reported "
+        "whether or not it has settled",
+    )
     parser.add_argument("--runs-dir", type=Path, default=Path("runs"))
     parser.add_argument("--all", action="store_true", help="include settled runs")
     parser.add_argument("--oneharness-bin", default="oneharness")
@@ -1820,7 +1897,20 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--since", help="include history at or after this ISO-8601 UTC timestamp")
     parser.add_argument("--until", help="exclude history at or after this ISO-8601 UTC timestamp")
     args = parser.parse_args(argv)
-    entries = sorted(args.runs_dir.iterdir()) if args.runs_dir.is_dir() else []
+    requested: RunId | None = None
+    if args.run_id is not None:
+        try:
+            requested = resolve_supervision_run(args.runs_dir, args.run_id)
+        except ConfigError as exc:
+            print(f"telemetry: {exc}", file=sys.stderr)
+            return 2
+    entries = (
+        [args.runs_dir / requested]
+        if requested is not None
+        else sorted(args.runs_dir.iterdir())
+        if args.runs_dir.is_dir()
+        else []
+    )
     try:
         since = _boundary(args.since, "--since")
         until = _boundary(args.until, "--until")
@@ -1831,7 +1921,9 @@ def main(argv: list[str] | None = None) -> int:
             for entry in entries
             if entry.is_dir()
             if (telemetry := collect_run(entry, oneharness_bin=args.oneharness_bin)) is not None
-            and (args.all or not result_state_is_terminal(telemetry.state))
+            # Naming a run is the request; the settled-run filter exists only to keep
+            # the unscoped index about live work, so it must not hide the one asked for.
+            and (requested is not None or args.all or not result_state_is_terminal(telemetry.state))
         ]
         try:
             history_sessions = all_sessions(oneharness_bin=args.oneharness_bin)
