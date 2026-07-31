@@ -40,6 +40,11 @@ root="$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)" || {
   echo "lint-llm-diff: could not locate the repository from this script; reinstall the checkout and retry" >&2
   exit 1
 }
+# shellcheck source=scripts/llmlint-runtime-env.sh
+. "$root/scripts/llmlint-runtime-env.sh" || {
+  echo "lint-llm-diff: could not load the pinned runtime environment; restore scripts/llmlint-runtime-env.sh and retry" >&2
+  exit 1
+}
 base_sha="${LLMLINT_DIFF_BASE_SHA:-}"
 [[ "$base_sha" =~ ^[0-9a-f]{40,64}$ ]] || {
   echo "lint-llm-diff: LLMLINT_DIFF_BASE_SHA must be a resolved commit id; run 'just lint-llm-diff <base>' instead of this target directly" >&2
@@ -58,8 +63,7 @@ labels="$(uv run orchestrator-history-labels role=llmlint)" || {
   exit 1
 }
 
-export PATH="$root/.venv/bin:$PATH"
-export LLMLINT_ONEHARNESS_BIN="$root/scripts/llmlint-oneharness.sh"
+llmlint_runtime_env "$root"
 export ONEHARNESS_HISTORY_LABELS="$labels"
 
 verdict="$root/.nx/llmlint-diff"
