@@ -497,16 +497,29 @@ core at about 3.5% for a quarter of an hour — so its wall clock is latency and
 workers are nearly free. `orchestrator:test`, `orchestrator:test-docs`, and `just
 test-e2e` all run `-n 4 --dist load`.
 
-Both numbers come from measuring this host, not from a default. Against an 843s
-serial baseline: `-n 4` 322s, `-n 6` 386s, `-n 8` 354s, `-n 14` — what `-n auto`
-resolves to here — 345s. The curve is flat past four, because what the run cannot
-beat is its longest single test (about 143s), not its core count; more workers buy
-no wall clock and take cores this host wants for live dispatches. `--dist loadfile`
-measured 331s but raises that floor from the longest *test* to the longest *file*
+Both numbers come from measuring this host, not from a default. One sample each,
+same tier and same selection, taken back to back while a second worktree ran its
+own suite — so they are comparable to each other and pessimistic in absolute
+terms: `-n 4` 322s, `-n 6` 386s, `-n 8` 354s, `-n 14` — what `-n auto` resolves to
+here — 345s, and one serial sample at 843s. That serial figure is a single
+exploratory reading of the code tier alone, not the tier's baseline; the
+pre-parallel median for the whole suite was about seventeen minutes.
+
+The curve is flat past four, because what the run cannot beat is its longest
+single test (about 143s), not its core count; more workers buy no wall clock and
+take cores this host wants for live dispatches. `--dist loadfile` measured 331s but
+raises that floor from the longest *test* to the longest *file*
 (`test_workspace_contract_e2e.py`, 293s), which is nearly the whole measurement —
 it has no headroom left when the box is quiet. `--dist worksteal` measured fastest
 at 280s, but that sample failed a race-window test and the run-to-run spread at a
 fixed configuration is the same size as its lead.
+
+Five consecutive runs of both tiers at the chosen setting settled at a 614.5s
+median (469.5s / 591.6s / 614.5s / 623.6s / 637.8s), each one 2140 passed, 4
+skipped, 125 prose tests, 96.03% coverage. Those totals run the two tiers one after
+the other, which is not the shape anything here actually uses: `just test` runs
+them concurrently through Nx, and forcing both fresh with `--skip-nx-cache`
+measured 311s against the roughly seventeen-minute median the tier cost before.
 
 The tier therefore runs in **two invocations**, and the second is not an
 optimization but a correctness requirement.
