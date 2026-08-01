@@ -839,6 +839,9 @@ print(json.dumps({"type": "result", "subtype": "success", "is_error": False,
     alternate = tmp_path / "alternate"
     alternate.mkdir()
     env["ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR"] = str(alternate)
+    # Pinned rather than inherited: the default derives from the real $HOME, where an
+    # authenticated second subscription would change which candidate this runs.
+    env["ORCHESTRATOR_CLAUDE_ALT2_CONFIG_DIR"] = str(alternate)
     env["ORCHESTRATOR_CODEX_ALT_HOME"] = str(tmp_path / "codex-alternate")
     bound_session = "binding-rejection"
     bound_env = {**env, "ONEHARNESS_HARNESSES": "codex"}
@@ -1026,15 +1029,27 @@ def test_dispatch_cli_applies_ordered_models_to_real_oneharness(
 ROLE_WRAPPERS = {
     "oneharness.toml": REPO_ROOT / "scripts" / "oneharness-agent.sh",
     "oneharness.orchestrator.toml": REPO_ROOT / "scripts" / "oneharness-orchestrator.sh",
+    "oneharness.llmlint.toml": REPO_ROOT / "scripts" / "llmlint-oneharness.sh",
 }
 
 
 @pytest.mark.parametrize(
     ("config_name", "harness_id", "expected_config"),
     [
+        # Every role now names all three Claude identities, so each config has to
+        # route each of them: the two alternate subscriptions into their own config
+        # directories, and the primary one into Claude's default with every
+        # inherited selector masked off.
         ("oneharness.toml", "claude-code:alternate", "alternate"),
+        ("oneharness.toml", "claude-code:alternate2", "alternate2"),
+        ("oneharness.toml", "claude-code:primary", "default"),
+        ("oneharness.judge.toml", "claude-code:alternate", "alternate"),
+        ("oneharness.judge.toml", "claude-code:alternate2", "alternate2"),
         ("oneharness.judge.toml", "claude-code:primary", "default"),
+        ("oneharness.llmlint.toml", "claude-code:alternate", "alternate"),
+        ("oneharness.llmlint.toml", "claude-code:alternate2", "alternate2"),
         ("oneharness.orchestrator.toml", "claude-code:alternate", "alternate"),
+        ("oneharness.orchestrator.toml", "claude-code:alternate2", "alternate2"),
     ],
 )
 def test_claude_variants_isolate_subscription_environment_at_real_oneharness_boundary(
@@ -1051,10 +1066,10 @@ import json
 import os
 
 expected = os.environ["EXPECTED_CONFIG"]
-if expected == "alternate":
-    assert os.environ["CLAUDE_CONFIG_DIR"] == os.environ["EXPECTED_ALT_DIR"]
-else:
+if expected == "default":
     assert "CLAUDE_CONFIG_DIR" not in os.environ
+else:
+    assert os.environ["CLAUDE_CONFIG_DIR"] == os.environ["EXPECTED_%s_DIR" % expected.upper()]
 for name in (
     "ANTHROPIC_API_KEY",
     "ANTHROPIC_AUTH_TOKEN",
@@ -1074,11 +1089,13 @@ print(json.dumps({
     )
     fake_claude.chmod(0o755)
     alternate = tmp_path / ".claude-alt"
+    alternate2 = tmp_path / ".claude-alt2"
     environment = {
         **os.environ,
         "ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR": str(alternate),
-        # The judge and llmlint rows reach oneharness without a wrapper, and every
-        # config now names a Codex variant whose indirection must be set.
+        "ORCHESTRATOR_CLAUDE_ALT2_CONFIG_DIR": str(alternate2),
+        # The judge row reaches oneharness without a wrapper, and every config now
+        # names a Codex variant whose indirection must be set.
         "ORCHESTRATOR_CODEX_ALT_HOME": str(tmp_path / ".codex-alt"),
         "CLAUDE_CONFIG_DIR": str(alternate),
         "ANTHROPIC_API_KEY": "ambient-api-key",
@@ -1086,7 +1103,8 @@ print(json.dumps({
         "CLAUDE_CODE_OAUTH_TOKEN": "ambient-oauth-token",
         "CLAUDE_CODE_OAUTH_REFRESH_TOKEN": "ambient-refresh-token",
         "EXPECTED_CONFIG": expected_config,
-        "EXPECTED_ALT_DIR": str(alternate),
+        "EXPECTED_ALTERNATE_DIR": str(alternate),
+        "EXPECTED_ALTERNATE2_DIR": str(alternate2),
         "ONEHARNESS_HISTORY": "false",
     }
     environment.pop("ORCHESTRATOR_AGENT_STATUS_DIR", None)
@@ -1210,11 +1228,21 @@ print(json.dumps({
 @pytest.mark.parametrize(
     ("config_name", "missing_harness", "fallback_harness", "skipped_between"),
     [
-        ("oneharness.toml", "claude-code:alternate", "codex", ()),
+        # The worker leads with both alternate Claude subscriptions, so an
+        # unusable first one falls through the second before it reaches Codex.
+        (
+            "oneharness.toml",
+            "claude-code:alternate",
+            "codex",
+            ("claude-code:alternate2",),
+        ),
         # `--bin codex=` rebinds only the base id, so the alternate identity still
         # runs the real Codex — against an empty alternate home, which is the `auth`
         # fallthrough the committed chains depend on.
-        ("oneharness.judge.toml", "codex", "claude-code:primary", ("codex:alternate",)),
+        ("oneharness.judge.toml", "codex", "claude-code:alternate", ("codex:alternate",)),
+        # llmlint is no longer Codex-only: past both Codex identities it reaches the
+        # same alternate subscriptions the workers use.
+        ("oneharness.llmlint.toml", "codex", "claude-code:alternate", ("codex:alternate",)),
         # The orchestrator is the reverse of the worker: codex carries the role so a
         # long-lived supervisor never queues in front of workers for their subscription.
         (
@@ -1273,9 +1301,10 @@ print(json.dumps({
     environment = {
         **{key: value for key, value in os.environ.items() if key != "ONEHARNESS_HARNESSES"},
         "ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR": str(tmp_path / "absent-claude-alt"),
-        # Invoked without a wrapper, so nothing else exports the indirection that
-        # `[harness.codex.variant.alternate]` names; oneharness refuses to start
-        # while it is unset.
+        "ORCHESTRATOR_CLAUDE_ALT2_CONFIG_DIR": str(tmp_path / "absent-claude-alt2"),
+        # Invoked without a wrapper, so nothing else exports the indirections that
+        # the codex and claude-code variants name; oneharness refuses to start
+        # while one is unset.
         "ORCHESTRATOR_CODEX_ALT_HOME": str(codex_alt),
         "ONEHARNESS_HISTORY": "false",
     }
@@ -1368,6 +1397,11 @@ print(json.dumps({
             str(REPO_ROOT / "oneharness.toml"),
             "--bin",
             f"claude-code:alternate={fake_claude}",
+            # The second alternate subscription sits between them in the worker
+            # chain, so it is part of the path under test — and binding it keeps a
+            # real `claude` from being spawned against an unauthenticated directory.
+            "--bin",
+            f"claude-code:alternate2={fake_claude}",
             "--bin",
             f"codex={fake_codex}",
             "--mode",
@@ -1380,8 +1414,9 @@ print(json.dumps({
         env={
             **{key: value for key, value in os.environ.items() if key != "ONEHARNESS_HARNESSES"},
             "ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR": str(tmp_path / ".claude-alt"),
+            "ORCHESTRATOR_CLAUDE_ALT2_CONFIG_DIR": str(tmp_path / ".claude-alt2"),
             # No wrapper here, so this invocation must export the alternate-Codex
-            # indirection itself; the chain's last candidate names it.
+            # indirection itself; the chain names it too.
             "ORCHESTRATOR_CODEX_ALT_HOME": str(tmp_path / ".codex-alt"),
             "ONEHARNESS_HISTORY": "false",
         },
@@ -1394,12 +1429,16 @@ print(json.dumps({
     report = json.loads(result.stdout)
     assert [item["harness_id"] for item in report["results"]] == [
         "claude-code:alternate",
+        "claude-code:alternate2",
         "codex",
     ]
-    assert report["results"][0]["status"] == "nonzero"
-    assert report["results"][0]["failure_kind"] == "auth"
-    assert report["results"][1]["status"] == "ok"
-    assert report["results"][1]["text"] == "auth fallback recovered"
+    # An unauthenticated Claude identity is classified `auth` and falls through —
+    # the property that lets the committed chains name a subscription nobody has
+    # logged into yet without hard-failing the whole chain.
+    assert [item["failure_kind"] for item in report["results"][:2]] == ["auth", "auth"]
+    assert all(item["status"] == "nonzero" for item in report["results"][:2])
+    assert report["results"][2]["status"] == "ok"
+    assert report["results"][2]["text"] == "auth fallback recovered"
 
 
 def test_agent_wrapper_validates_alternate_identity_and_recovers_through_real_oneharness(
@@ -1474,6 +1513,7 @@ print(json.dumps({
         env={
             **environment,
             "ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR": str(tmp_path / "absent"),
+            "ORCHESTRATOR_CLAUDE_ALT2_CONFIG_DIR": str(tmp_path / "absent2"),
         },
         text=True,
         capture_output=True,
@@ -1481,9 +1521,14 @@ print(json.dumps({
     )
     assert recovered.returncode == 0, recovered.stderr
     report = json.loads(recovered.stdout)
+    # Both alternate subscriptions are absent here, so the wrapper substitutes a
+    # chain without them and codex — the next configured candidate — carries the
+    # run. Nothing was spawned against a directory nobody has logged into.
     assert [item["harness_id"] for item in report["results"]] == ["codex"]
     assert report["results"][0]["status"] == "ok"
     assert report["results"][0]["text"] == "wrapper fallback recovered"
+    assert not (tmp_path / "absent").exists()
+    assert not (tmp_path / "absent2").exists()
 
 
 @requires_workspace_install

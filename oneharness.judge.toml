@@ -22,11 +22,18 @@ history = true
 history_labels = { role = "judge", agent_role = "judge" }
 
 # The supervisor stays on codex, and a second Codex identity absorbs an exhausted
-# quota before the chain leaves the provider at all. Its last fallback names the
-# primary Claude identity explicitly, so it can never consume the worker's
-# alternate subscription.
+# quota before the chain leaves the provider at all. Past that it now reaches the
+# workers' alternate Claude subscriptions before the primary one — the operator's
+# deliberate trade: a supervisor that can still run beats a supervisor isolated
+# from the workers' quota, since a dispatch is dead without its judge either way.
 # llmlint: ignore[changed_behavior_has_e2e] integration tests exercise real oneharness fallback selection; paid-provider auth rejection cannot be deterministic.
-harnesses = ["codex", "codex:alternate", "claude-code:primary"]
+harnesses = [
+    "codex",
+    "codex:alternate",
+    "claude-code:alternate",
+    "claude-code:alternate2",
+    "claude-code:primary",
+]
 
 # [harness.<id>]: per-harness overrides. Model names differ per provider, so
 # each harness names its own.
@@ -44,7 +51,33 @@ env_from = { CODEX_HOME = "ORCHESTRATOR_CODEX_ALT_HOME" }
 unset_env = ["OPENAI_API_KEY"]
 
 [harness.claude-code]
+# IS_SANDBOX lets claude-code run under root without --dangerously-skip-permissions
+# refusing; harmless on other harnesses.
 env = { IS_SANDBOX = "1" }
+
+# The three Claude identities carry the same routing as every other role's — held
+# byte-identical by tests/test_harness_routing.py — and differ only in `model`:
+# this side stays on the cheaper supervisor tier wherever it lands.
+[harness.claude-code.variant.alternate]
+model = "claude-sonnet-5" # a cheaper supervisor keeps loop overhead down
+env_from = { CLAUDE_CONFIG_DIR = "ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR" }
+# Subscription auth must not be shadowed by ambient API or OAuth credentials.
+unset_env = [
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
+]
+
+[harness.claude-code.variant.alternate2]
+model = "claude-sonnet-5" # a cheaper supervisor keeps loop overhead down
+env_from = { CLAUDE_CONFIG_DIR = "ORCHESTRATOR_CLAUDE_ALT2_CONFIG_DIR" }
+unset_env = [
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
+]
 
 [harness.claude-code.variant.primary]
 model = "claude-sonnet-5" # a cheaper supervisor keeps loop overhead down

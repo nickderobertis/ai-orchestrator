@@ -349,6 +349,75 @@ def test_full_setup_accepts_absent_alternate_config(tmp_path: Path) -> None:
     assert "workspace trust setup failed" not in result.stderr
 
 
+def test_full_setup_trusts_its_dispatch_checkout_in_both_alternate_configs(
+    tmp_path: Path,
+) -> None:
+    """Both alternate subscriptions dispatch here, so both must trust this checkout.
+
+    claude-code prompts for workspace trust on first use in a directory, which a
+    non-interactive dispatch cannot answer — so an untrusted second account would
+    fail exactly when the first one's quota ran out.
+    """
+    first = tmp_path / "alternate"
+    second = tmp_path / "alternate2"
+    first.mkdir()
+    second.mkdir()
+    for alternate in (first, second):
+        (alternate / ".claude.json").write_text('{"theme":"dark"}', encoding="utf-8")
+
+    result = _run_full_setup_without_bun(
+        tmp_path,
+        ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR=str(first),
+        ORCHESTRATOR_CLAUDE_ALT2_CONFIG_DIR=str(second),
+    )
+
+    assert result.returncode == 1
+    repo = str(tmp_path / "repo")
+    for alternate in (first, second):
+        data = json.loads((alternate / ".claude.json").read_text(encoding="utf-8"))
+        assert data["theme"] == "dark"
+        assert data["projects"][repo] == {"hasTrustDialogAccepted": True}
+
+
+def test_full_setup_trusts_the_default_second_alternate_config(tmp_path: Path) -> None:
+    # Nothing exports the indirection on a fresh shell, so the $HOME-derived
+    # default is the path that actually gets used.
+    second = tmp_path / ".claude-alt2"
+    second.mkdir()
+    config = second / ".claude.json"
+    config.write_text("{}", encoding="utf-8")
+
+    result = _run_full_setup_without_bun(tmp_path)
+
+    assert result.returncode == 1
+    data = json.loads(config.read_text(encoding="utf-8"))
+    assert data["projects"][str(tmp_path / "repo")] == {"hasTrustDialogAccepted": True}
+
+
+def test_full_setup_accepts_an_absent_second_alternate_config(tmp_path: Path) -> None:
+    """The second plan is not authenticated yet, so its config file is simply gone.
+
+    Trust marking must skip it silently rather than report a failure the operator
+    cannot act on until they log in.
+    """
+    first = tmp_path / "alternate"
+    second = tmp_path / "alternate2"
+    first.mkdir()
+    (first / ".claude.json").write_text("{}", encoding="utf-8")
+
+    result = _run_full_setup_without_bun(
+        tmp_path,
+        ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR=str(first),
+        ORCHESTRATOR_CLAUDE_ALT2_CONFIG_DIR=str(second),
+    )
+
+    assert result.returncode == 1
+    assert not second.exists()
+    assert "workspace trust setup failed" not in result.stderr
+    data = json.loads((first / ".claude.json").read_text(encoding="utf-8"))
+    assert data["projects"][str(tmp_path / "repo")] == {"hasTrustDialogAccepted": True}
+
+
 def test_full_setup_continues_after_alternate_trust_failure(tmp_path: Path) -> None:
     alternate = tmp_path / "alternate"
     alternate.mkdir()
