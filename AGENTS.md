@@ -103,7 +103,12 @@ dispatch onejudge.
    release, trigger CI, register or change infrastructure, or provide external
    sign-off. It never represents the planner's own review, acceptance,
    validation, or integration decision. The planner reviews each settled node
-   over the live channel and issues `add` / `retry` / `drop` / `split` edits. A
+   over the live channel and issues `add` / `retry` / `drop` / `split` edits.
+   What it learns about a node that keeps running belongs in a `context` edit:
+   that note is the only thing the round transition carries onto the carried-forward
+   node, and it carries exactly one round, so state worth keeping is state attached
+   again. See [Carried planner
+   context](docs/orchestration.md#carried-planner-context). A
    human node the planner would attest itself is a modeling error: keep it only
    if the action is genuinely external; otherwise perform that coordination live
    with no node. See [Node shapes](docs/orchestration.md#node-shapes). Before a
@@ -260,7 +265,7 @@ side lives in oneharness config, not onejudge:
 
 - **Agent side** (does the work) — `oneharness.toml`, discovered from the repo root;
   it prefers `claude-code:alternate` on the alternate subscription and falls back
-  to codex.
+  to codex, then to the second codex identity.
 - **Judge / simulated-user side** (supervises) — `oneharness.judge.toml`, passed
   as the base config's `provider.judge_config`; codex is primary and
   `claude-code:primary` uses only the primary subscription.
@@ -271,11 +276,23 @@ side lives in oneharness config, not onejudge:
   long-lived supervisory process never queues ahead of the workers for the
   subscription they depend on.
 - **LLM lint side** — `oneharness.llmlint.toml`, forced by
-  `scripts/llmlint-oneharness.sh`; it is codex-only.
+  `scripts/llmlint-oneharness.sh`; it is codex-only, so its only backup is the
+  second codex identity below.
 
 Both alternate-subscription wrappers derive `ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR`
 from one source, `scripts/claude-alt-config-dir.sh`, so no role needs it exported
 by hand and the two cannot drift apart.
+
+Every one of those chains then ends in `codex:alternate`, a **second codex
+identity** that absorbs an exhausted quota without changing which subscription a
+role competes for. `scripts/codex-alt-home.sh` is its one source — it derives
+`ORCHESTRATOR_CODEX_ALT_HOME` as `$HOME/.codex-alt` and all three wrappers source
+it, because oneharness refuses to start whenever that indirection is unset.
+Authenticate it with `CODEX_HOME="$HOME/.codex-alt" codex login`; until then the
+candidate costs nothing, since the helper guarantees the directory **exists** and
+an empty codex home falls through as `auth` while an absent one hard-fails. That
+asymmetry is the whole reason the helper creates it — see
+[The second Codex identity](docs/onejudge-integration.md#the-second-codex-identity).
 
 `onejudge init` scaffolds both files plus a starter `onejudge.yaml`. The adopted
 exact oneharness release is declared in `config/oneharness.version`, installed as
@@ -306,8 +323,8 @@ equivalents. `just bootstrap` sets up from a clean clone (installs the toolchain
 activates the git hooks); `just check` is the deterministic tier, while `just gate`
 is the complete pre-push bar: `check` plus the llmlint diff tier. Both report the
 line-coverage total they measured, and every stage that captures its output keeps
-it at `.logs/<label>.log` (`nx`, `check`, `check-install`, `gate-check`,
-`gate-llmlint`) — gitignored, owner-only, credential values redacted, truncated
+it at `.logs/<label>.log` (`nx`, `workspace-install`, `check`, `upgrade`,
+`gate-check`, `gate-llmlint`) — gitignored, owner-only, credential values redacted, truncated
 per run. Each log fills as its own stage runs, so follow the innermost one:
 `.logs/nx.log` while the Nx targets run (the long part), `.logs/check.log` for
 the stages after them. Read a finished run from the same paths, and never read a
@@ -339,6 +356,12 @@ inside each project target remain authoritative, and `format-check` remains a
 format-only verification. Session provisioning and the initial locked Bun
 install precede Nx because they make Nx available; bootstrap then delegates
 project setup through uniform Nx `bootstrap` targets.
+`scripts/workspace-install.sh` is that locked Bun install's one source. A freshly
+created worktree carries no `node_modules`, so every `scripts/nx.sh` runs it first
+and heals itself; `just bootstrap` runs it with `--force`, which reapplies a
+lockfile that moved. Nothing here asks an operator to run Bun by hand, and the e2e
+journeys that drive real Nx provision through the same script rather than skipping
+when a worktree is fresh — a bare `pytest` in one means what the gate means.
 Use `docs/telemetry.md` to inspect session timing, usage, and the agent/judge
 turn timeline with `just telemetry`.
 `just telemetry-server` serves the read-only DAG API over a runs root and
@@ -351,19 +374,31 @@ Session setup and every recorded round transition run this sweep automatically.
 An active lifecycle makes third-party cleanup skip without waiting;
 ownership-proven dead watchdog cleanup still proceeds.
 The families an active dispatch itself produces — the private `nx` install every
-`bunx nx` leaves behind, pytest run directories, onejudge scratch — are the
+`bunx nx` leaves behind, the native-binary cache Nx keys on each worktree's
+workspace root, pytest run directories, onejudge scratch — are the
 volume, so waiting for quiescence never reclaims them. They are swept **during**
 dispatches instead, on proven non-reference: a candidate no live process names in
-its argv, cwd, or open descriptors, past a short age that only covers the gap
-between creating a directory and first naming it. Names too generic to sweep on are
-identified by shape, and each family honors its producer's own retention. See
+its argv, environment, `cwd`/`root`/`exe`, open descriptors, or memory mappings,
+past a short age that only covers the gap
+between creating a directory and first naming it. Mappings are not optional there:
+a `dlopen`ed native binary leaves no descriptor, so for a running `nx` the mapping
+is the only place its cache appears. Names too generic to sweep on are
+identified by shape, and each family honors its producer's own retention. Every
+sweep names the families it examined and the families it could not, so `reclaimed
+0 bytes` never hides an unswept one. See
 [`orchestrator.scratch.UNREFERENCED_FAMILIES`](orchestrator/scratch.py).
 
-`just smoke` spends exactly one real agent-harness turn in a throwaway directory
-and verifies exact prompt delivery plus a successful, fully accounted oneharness
+`just smoke` spends one real agent-harness turn in a throwaway directory and
+verifies exact prompt delivery plus a successful, fully accounted oneharness
 history record. Native per-phase timing is provider-optional, so its absence is a
-telemetry-quality signal rather than a launch failure. It is deliberately outside
-`just gate`. The pre-push hook runs it only when the pushed diff touches `scripts/`,
+telemetry-quality signal rather than a launch failure. The *launch* is relaunched
+up to `orchestrator.smoke.LAUNCH_ATTEMPTS` times, and only the launch: a host under
+concurrent e2e load has started the selected harness and had it die, which reads as
+a launch-path outage and once cost a publication that had already passed its gate.
+A genuinely broken launch path fails every attempt and still fails, and a recorded
+turn that violates the contract fails on the first. A passing run says how many
+launches it took. It is deliberately outside `just gate`. The pre-push hook runs it
+only when the pushed diff touches `scripts/`,
 `config/oneharness.version`, `config/onejudge.base.yaml`, `oneharness.toml`,
 `oneharness.judge.toml`, or `oneharness.orchestrator.toml`; ordinary pushes consume
 no harness quota.
@@ -387,7 +422,18 @@ rolling the judge again, which is what stops one branch from being blocked by
 opposite verdicts on an identical diff. The key covers the whole workspace, the
 resolved base commit, and `scripts/llmlint-fingerprint.sh` — the installed llmlint
 version plus the effective merged config, so a rule change in a plugin fetched from
-outside this repository still invalidates. Because Nx caches successful tasks only,
+outside this repository still invalidates. That fingerprint resolves both of those
+through `scripts/llmlint-runtime-env.sh` — the one environment the target itself
+judges with — rather than the caller's, so the key always describes the judge
+configuration the run would actually use. `LLMLINT_ONEHARNESS_BIN` is why: `llmlint
+config` renders it as `oneharness.bin`, and a dispatch inherits the orchestrator's
+checkout path, the session's own, or nothing at all, so one judged diff hashed to a
+different key per dispatch and the judge re-rolled every round. Reading the caller
+fails a quieter way too — because Nx scores a runtime input that exits non-zero as
+*no contribution* rather than as an error, a fingerprint the caller's environment
+can break does not fail the tier, it drops the judge configuration out of the key
+and replays a verdict that configuration has moved on from. Because Nx caches
+successful tasks only,
 the target records its verdict — findings and judged status — into its declared
 output and exits 0; `scripts/llmlint-verdict.sh` replays both, so a failure blocks
 `gate` and pre-push identically whether it was just judged or restored from cache.

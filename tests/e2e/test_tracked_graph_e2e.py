@@ -24,6 +24,7 @@ from waits import deadline as e2e_deadline
 
 from orchestrator import REPO_ROOT, gitops
 from orchestrator.coordination import advisory_lock, git_lock_identity, lock_path
+from orchestrator.plan import PLAN_SCHEMA_VERSION
 from orchestrator.registry import Registry
 
 
@@ -2449,7 +2450,7 @@ def test_expects_no_diff_contract_is_rejected_at_cli_boundary(tmp_path: Path) ->
         ),
         (
             {"schema_version": 99, "tasks": [{"id": "x", "persona": "p", "task": "x"}]},
-            "current version 5",
+            f"current version {PLAN_SCHEMA_VERSION}",
         ),
         (
             {
@@ -2525,6 +2526,20 @@ def test_expects_no_diff_contract_is_rejected_at_cli_boundary(tmp_path: Path) ->
                 ],
             },
             "verify_via_ci' requires schema_version 3",
+        ),
+        (
+            {
+                "schema_version": PLAN_SCHEMA_VERSION,
+                "tasks": [{"id": "x", "persona": "engineer", "task": "x", "context": "a note"}],
+            },
+            "'context' must be a list of non-empty planner notes",
+        ),
+        (
+            {
+                "schema_version": PLAN_SCHEMA_VERSION,
+                "tasks": [{"id": "x", "kind": "human", "task": "Approve", "context": ["a note"]}],
+            },
+            "cannot set 'context'",
         ),
     )
     for index, (mapping, message) in enumerate(invalid_plans):
@@ -2762,3 +2777,199 @@ def test_a_budget_spent_without_agent_progress_reads_apart_from_a_turn_cap(
     # result with one explanation. Only the silent one is told not to retry unchanged.
     assert recorded["capped"]["error"] == "hit the turn cap after 3 turns"
     assert "without the agent producing anything" not in recorded["capped"]["error"]
+
+
+def test_planner_context_reaches_every_agent_step_of_a_workstream(
+    tmp_path: Path, bare_origin, command_base, onejudge_bin: str
+) -> None:
+    """A node-level note is about the branch its steps share, so each one gets it.
+
+    A workstream dispatches once per agent step, and the state a note reports —
+    what is already committed on the branch, which finding is still open — is
+    exactly what each of those dispatches would otherwise re-derive. A human step
+    is prose for a person and is delivered as the planner wrote it.
+    """
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "workstream-context-canonical")
+    Registry().register(str(canonical), workflow="local")
+    runs = tmp_path / "runs"
+    prompts = tmp_path / "step-prompts.jsonl"
+    single_prompts = tmp_path / "single-prompts.jsonl"
+    note = "CHANGE.txt is already committed on the branch; only the approval remains."
+    single_note = "the base already carries the rename; do not repeat it."
+    plan = tmp_path / "workstream-context.json"
+    plan.write_text(
+        json.dumps(
+            {
+                "schema_version": PLAN_SCHEMA_VERSION,
+                "tasks": [
+                    {
+                        "id": "workstream",
+                        "repo": str(canonical),
+                        "branch": "feature/workstream-context",
+                        "workflow": "local",
+                        "repo_type": "single-owner",
+                        "context": [note],
+                        "steps": [
+                            {
+                                "id": "change",
+                                "persona": "engineer",
+                                "task": f"complete-now write-change record-task={prompts}",
+                            },
+                            {
+                                "id": "polish",
+                                "persona": "engineer",
+                                "task": f"complete-now polish the change record-task={prompts}",
+                                "deps": ["change"],
+                            },
+                            {
+                                "id": "approve",
+                                "kind": "human",
+                                "task": "Approve the prepared change.",
+                                "deps": ["polish"],
+                            },
+                        ],
+                    },
+                    {
+                        "id": "single",
+                        "repo": str(canonical),
+                        "branch": "feature/single-context",
+                        "workflow": "local",
+                        "repo_type": "single-owner",
+                        "persona": "engineer",
+                        "task": f"complete-now write-change record-task={single_prompts}",
+                        "context": [single_note],
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    settled = _just(
+        "run-plan",
+        str(plan),
+        "--run",
+        "workstream-context",
+        "--runs-dir",
+        str(runs),
+        "--workspace",
+        str(tmp_path / "workstream-context-worktrees"),
+        "--base",
+        str(command_base()),
+        "--onejudge-bin",
+        onejudge_bin,
+        "--format",
+        "json",
+    )
+
+    assert settled.returncode == 1, settled.stderr  # waiting on the human step
+    payload = json.loads(settled.stdout)
+    assert payload["results"]["workstream"]["status"] == "waiting"
+    delivered = [json.loads(line) for line in prompts.read_text(encoding="utf-8").splitlines()]
+    assert len(delivered) == 2
+    for prompt, own in zip(delivered, ("write-change", "polish the change"), strict=True):
+        assert own in prompt
+        assert "## Planner context" in prompt
+        assert note in prompt
+    # The human action is recorded with the planner's own words, unrendered.
+    assert payload["results"]["workstream"]["human_actions"][0]["task"] == (
+        "Approve the prepared change."
+    )
+    # A lifecycle node with one task and no steps renders the note into that task,
+    # and publishes with it: the same field, one dispatch instead of several.
+    assert payload["results"]["single"]["outcome"] == "merged"
+    single_delivered = json.loads(single_prompts.read_text(encoding="utf-8").splitlines()[0])
+    assert single_note in single_delivered and "## Planner context" in single_delivered
+
+
+def _context_round(
+    tmp_path: Path, runs: Path, run_id: str, base: Path, onejudge_bin: str, prompts: Path
+) -> Path:
+    """Settle one real round whose failing node carries planner context in its plan."""
+    plan = tmp_path / f"{run_id}.json"
+    plan.write_text(
+        json.dumps(
+            {
+                "schema_version": PLAN_SCHEMA_VERSION,
+                "tasks": [
+                    {
+                        "id": "work",
+                        "persona": "engineer",
+                        "task": (
+                            "## What\nFinish the sweep.\n\n"
+                            f"should-fail no-assessment record-task={prompts}"
+                        ),
+                        "max_turns": 1,
+                        "context": ["the branch already carries the fixture"],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    settled = _just(
+        "run-plan",
+        str(plan),
+        "--run",
+        run_id,
+        "--runs-dir",
+        str(runs),
+        "--base",
+        str(base),
+        "--onejudge-bin",
+        onejudge_bin,
+        "--format",
+        "json",
+    )
+    assert settled.returncode == 1, settled.stderr  # `work` fails, so it carries forward
+    return runs / run_id
+
+
+def test_next_round_expires_context_unless_the_planner_states_it_again(
+    tmp_path: Path, command_base, onejudge_bin: str
+) -> None:
+    """Context is refreshed at every transition, and a stated retry decides it.
+
+    The three runs below settle through the real executor and transition through the
+    real `just next-round`, differing only in the edits the orchestrator hands it —
+    which is the shape of the decision a planner makes after reading a result.
+    """
+    runs = tmp_path / "runs"
+    base = command_base()
+    prompts = tmp_path / "context-prompts.jsonl"
+    expiring = _context_round(tmp_path, runs, "expiring-context", base, onejudge_bin, prompts)
+
+    # The note reached the round-one dispatch, and nothing during that round attached
+    # another, so the node is carried forward with no context at all: what the planner
+    # still means is what the planner states again, and stale state cannot pile up.
+    delivered = json.loads(prompts.read_text(encoding="utf-8").splitlines()[0])
+    assert "the branch already carries the fixture" in delivered
+    assert "## Planner context" in delivered
+    expired = _just("next-round", "expiring-context", "--runs-dir", str(runs), "--plan-only")
+    assert expired.returncode == 0, expired.stderr
+    carried = json.loads((expiring / "round-02" / "plan.json").read_text(encoding="utf-8"))
+    assert "context" not in carried["tasks"][0]
+
+    stated = _context_round(tmp_path, runs, "stated-context", base, onejudge_bin, prompts)
+    edits = tmp_path / "stated.json"
+    edits.write_text(
+        json.dumps({"retry": {"work": {"context": ["the planner's own brief"]}}}), encoding="utf-8"
+    )
+    overridden = _just(
+        "next-round", "stated-context", str(edits), "--runs-dir", str(runs), "--plan-only"
+    )
+    assert overridden.returncode == 0, overridden.stderr
+    plan = json.loads((stated / "round-02" / "plan.json").read_text(encoding="utf-8"))
+    assert plan["tasks"][0]["context"] == ["the planner's own brief"]
+
+    silenced = _context_round(tmp_path, runs, "silenced-context", base, onejudge_bin, prompts)
+    empty = tmp_path / "empty.json"
+    empty.write_text(json.dumps({"retry": {"work": {"context": []}}}), encoding="utf-8")
+    cleared = _just(
+        "next-round", "silenced-context", str(empty), "--runs-dir", str(runs), "--plan-only"
+    )
+    assert cleared.returncode == 0, cleared.stderr
+    quiet = json.loads((silenced / "round-02" / "plan.json").read_text(encoding="utf-8"))
+    # An empty list is still a decision the planner made after reading the result, so
+    # it is honoured rather than treated as "say nothing" and refilled.
+    assert quiet["tasks"][0]["context"] == []

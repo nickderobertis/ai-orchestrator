@@ -21,6 +21,7 @@ import json
 import subprocess
 from collections.abc import Callable
 from dataclasses import dataclass
+from enum import Enum
 from typing import Protocol
 from urllib.parse import quote
 
@@ -60,6 +61,21 @@ class PullRequest:
     repo: str
     head: str
     base: str
+
+
+class PullRequestState(Enum):
+    OPEN = "OPEN"
+    MERGED = "MERGED"
+    CLOSED = "CLOSED"
+
+
+@dataclass(frozen=True)
+class ExistingPullRequest:
+    """A same-head PR discovered before publication, including its frozen head."""
+
+    pr: PullRequest
+    state: PullRequestState
+    head_sha: str
 
 
 @dataclass(frozen=True)
@@ -117,6 +133,10 @@ class GitHubBackend(Protocol):
 
     def required_status_checks(self, repo: str, branch: str) -> tuple[str, ...]: ...
 
+    def adoptable_pr(
+        self, repo: str, *, head: str, base: str, head_sha: str
+    ) -> PullRequest | None: ...
+
     def create_pr(
         self, repo: str, *, head: str, base: str, title: str, body: str, draft: bool = False
     ) -> PullRequest: ...
@@ -160,8 +180,11 @@ def _is_auto_merge_unavailable(message: str) -> bool:
     return "auto-merge is not enabled" in lowered or "auto merge is not allowed" in lowered
 
 
-def _default_run(argv: list[str]) -> str:
-    proc = subprocess.run(["gh", *argv], text=True, capture_output=True)
+def _default_run(argv: list[str], *, timeout: float | None = None) -> str:
+    try:
+        proc = subprocess.run(["gh", *argv], text=True, capture_output=True, timeout=timeout)
+    except subprocess.TimeoutExpired as exc:
+        raise GitHubError(f"gh {' '.join(argv)} timed out after {timeout:g}s") from exc
     if proc.returncode != 0:
         raise GitHubError(
             f"gh {' '.join(argv)} failed (exit {proc.returncode}): "
@@ -171,10 +194,25 @@ def _default_run(argv: list[str]) -> str:
 
 
 class CliGitHubBackend:
-    """`GitHubBackend` backed by the real ``gh`` CLI (the live path)."""
+    """`GitHubBackend` backed by the real ``gh`` CLI (the live path).
 
-    def __init__(self, *, run: Callable[[list[str]], str] | None = None) -> None:
-        self._run = run if run is not None else _default_run
+    ``timeout`` bounds each ``gh`` call, for the readers that must answer within a
+    stated time and already treat this whole source as optional. The lifecycle's
+    own calls leave it unset: a merge waiting on GitHub is doing the work, and
+    abandoning it mid-flight would leave state nobody recorded. An injected ``run``
+    is the whole seam, so it carries whatever deadline its own caller chose.
+    """
+
+    def __init__(
+        self,
+        *,
+        run: Callable[[list[str]], str] | None = None,
+        timeout: float | None = None,
+    ) -> None:
+        def bounded(argv: list[str]) -> str:
+            return _default_run(argv, timeout=timeout)
+
+        self._run = run if run is not None else bounded
 
     def supports_ci(self, repo: str) -> bool:
         """Whether this CLI backend can address the normalized repository."""
@@ -191,6 +229,9 @@ class CliGitHubBackend:
         """Return branch-protection status contexts required before merge."""
         encoded_branch = quote(branch, safe="")
         out = self._run(["api", f"repos/{repo}/branches/{encoded_branch}"])
+        # llmlint: ignore[changed_behavior_has_e2e] Malformed gh JSON is a CLI trust-boundary
+        # parser failure, exercised through the real injected command runner in test_github;
+        # lifecycle E2E covers observable open/merged adoption and stale-head fallback.
         try:
             payload = json.loads(out)
             protected = payload["protected"]
@@ -217,16 +258,8 @@ class CliGitHubBackend:
             ) from exc
         return tuple(context for context in contexts if context)
 
-    def create_pr(
-        self, repo: str, *, head: str, base: str, title: str, body: str, draft: bool = False
-    ) -> PullRequest:
-        """Return the open PR for ``head`` → ``base``, or create one if none exists.
-
-        Reusing the PR lets later orchestration rounds continue work on the same
-        branch without failing cosmetically after their push succeeds. The lookup
-        filters by ``base`` too, so a same-head PR targeting a different base is
-        never mistaken for this one.
-        """
+    def adoptable_pr(self, repo: str, *, head: str, base: str, head_sha: str) -> PullRequest | None:
+        """Return an open PR, or a merged PR that contains this exact branch head."""
         existing_out = self._run(
             [
                 "pr",
@@ -238,29 +271,52 @@ class CliGitHubBackend:
                 "--base",
                 base,
                 "--state",
-                "open",
+                "all",
                 "--json",
-                "number,url",
+                "number,url,state,headRefOid",
             ]
         )
         try:
-            existing = json.loads(existing_out)
-            if not isinstance(existing, list):
+            payload = json.loads(existing_out)
+            if not isinstance(payload, list):
                 raise TypeError
-            if existing:
-                first = existing[0]
-                if not isinstance(first, dict):
+            candidates: list[ExistingPullRequest] = []
+            for item in payload:
+                if not isinstance(item, dict):
                     raise TypeError
-                number = first["number"]
-                url = first["url"]
-                if not isinstance(number, int) or isinstance(number, bool):
+                number, url = item["number"], item["url"]
+                state, candidate_sha = item["state"], item["headRefOid"]
+                if (
+                    not isinstance(number, int)
+                    or isinstance(number, bool)
+                    or not isinstance(url, str)
+                    or not url
+                    or not isinstance(state, str)
+                    or not isinstance(candidate_sha, str)
+                    or not candidate_sha
+                ):
                     raise TypeError
-                if not isinstance(url, str) or not url:
-                    raise TypeError
-                return PullRequest(number=number, url=url, repo=repo, head=head, base=base)
+                candidates.append(
+                    ExistingPullRequest(
+                        PullRequest(number, url, repo, head, base),
+                        PullRequestState(state.upper()),
+                        candidate_sha,
+                    )
+                )
         except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
             raise GitHubError(f"could not parse PR from gh output: {existing_out!r}") from exc
+        for candidate in candidates:
+            if candidate.state is PullRequestState.OPEN:
+                return candidate.pr
+        for candidate in candidates:
+            if candidate.state is PullRequestState.MERGED and candidate.head_sha == head_sha:
+                return candidate.pr
+        return None
 
+    def create_pr(
+        self, repo: str, *, head: str, base: str, title: str, body: str, draft: bool = False
+    ) -> PullRequest:
+        """Create a PR after the caller has ruled out an adoptable existing PR."""
         out = self._run(
             [
                 "pr",

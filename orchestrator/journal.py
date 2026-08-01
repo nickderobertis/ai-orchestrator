@@ -50,8 +50,15 @@ from .runs import NodeId, RunId, StepId
 # v7 is additive too: the `publication-failed` kind joined the vocabulary, for a
 # publication that ended before any gate could rule on it. A v6 reader skips it as
 # unknown, which is exactly the evidence gap it exists to close for a v7 reader.
-SCHEMA_VERSION = 7
-SUPPORTED_SCHEMA_VERSIONS = frozenset({1, 2, 3, 4, 5, 6, SCHEMA_VERSION})
+#
+# v8 is additive inside a record rather than in the kind vocabulary: an
+# `edit-committed` may now compile a `context-added` operation, the planner note a
+# carried-forward node's next dispatch reads. The version is what protects a v7
+# reader from it — strict replay refuses a committed operation it cannot fold, so a
+# note written at v8 must be skippable as an unknown version rather than met as
+# corruption in a round that is otherwise healthy.
+SCHEMA_VERSION = 8
+SUPPORTED_SCHEMA_VERSIONS = frozenset({1, 2, 3, 4, 5, 6, 7, SCHEMA_VERSION})
 
 JOURNAL_NAME = "events.jsonl"
 REQUIRED_EVENT_FIELDS = ("version", "seq", "at", "kind", "run_id", "round")

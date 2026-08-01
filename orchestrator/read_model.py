@@ -33,7 +33,7 @@ from typing import Any, NotRequired, TypedDict
 
 from .config import ConfigError
 from .conversations import DagConversation, run_conversations
-from .history import HistoryError
+from .history import HistoryError, SessionScan
 from .journal import JOURNAL_NAME
 from .launch import LAUNCH_RECORD_NAME, read_launch_info, read_provenance
 from .monitor import load_snapshot, snapshot_path
@@ -323,11 +323,18 @@ def list_runs(
     A run whose telemetry cannot be collected — a corrupt persisted result — is
     skipped rather than failing the whole list, so one bad run never blinds the UI
     to every healthy one.
+
+    Every run is collected against **one** `SessionScan`, so the whole list costs a
+    single `oneharness history` subprocess however many runs the root holds. That
+    read is the dominant cost of a summary, and it returns the same whole-store
+    answer for each of them, so a per-run read made this view degrade by about a
+    second per run recorded — for a view whose job is watching the live ones.
     """
+    scan = SessionScan(oneharness_bin=oneharness_bin)
     summaries: list[RunSummary] = []
     for run_dir in _run_dirs(runs_dir):
         try:
-            telemetry = collect_run(run_dir, oneharness_bin=oneharness_bin)
+            telemetry = collect_run(run_dir, scan=scan)
         except (ConfigError, HistoryError):
             continue
         if telemetry is None:

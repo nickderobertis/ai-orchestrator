@@ -49,6 +49,7 @@ from .merge import (
     MergeOutcome,
     MergePolicy,
     MergeStrategy,
+    adopt_or_create_pr,
     assess_blocking_checks,
     classify_push_failure,
 )
@@ -289,6 +290,7 @@ class LifecycleResult:
     resume: Resume | None = None
     retry_lineage: RetryLineage | None = None
     deferred_cleanup: list[str] = field(default_factory=list)
+    follow_ups: str | None = None
 
     @property
     def ok(self) -> bool:
@@ -325,6 +327,8 @@ class LifecycleResult:
             head += f"\n  - gate: {' '.join(self.verify.command)} failed"
         if self.report is not None and self.report.assessment:
             head += f"\n  - follow-ups: {self.report.assessment}"
+        if self.follow_ups:
+            head += f"\n  - follow-ups: {self.follow_ups}"
         return head
 
 
@@ -689,39 +693,57 @@ def _draft_pr_body(
     persona_dir: str | Path,
     journal: NodeSink,
     dispatch_env: dict[str, str],
+    failures: list[str] | None = None,
     use_llmlint_wrapper: bool = True,
 ) -> str:
     """Draft a diff-derived body, falling back without blocking publication."""
     journal.append("pr-drafting-started", detail={"base": remote_base})
-    try:
-        with tempfile.TemporaryDirectory(prefix="ai-orchestrator-pr-body-") as temp_dir:
-            output_path = Path(temp_dir) / "body.md"
-            report = dispatch_fn(
-                "pr-author",
-                _drafting_task(output_path, remote_base, steps),
-                project_dir=str(worktree),
-                oneharness_mode=oneharness_mode,
-                use_llmlint_wrapper=use_llmlint_wrapper,
-                base_path=base_path,
-                persona_dir=persona_dir,
-                session=scoped_session("pr-author", worktree),
-                labels=journal.labels,
-                env=dispatch_env,
-            )
-            drafted = (
-                output_path.read_text(encoding="utf-8").strip() if output_path.is_file() else ""
-            )
-            if report.completed and _valid_drafted_body(drafted):
-                journal.append(
-                    "pr-drafting-finished",
-                    detail={"completed": True, "body_length": len(drafted)},
+    reasons: list[str] = []
+    with tempfile.TemporaryDirectory(prefix="ai-orchestrator-pr-body-") as temp_dir:
+        for attempt in range(1, 3):
+            try:
+                output_path = Path(temp_dir) / f"body-{attempt}.md"
+                report = dispatch_fn(
+                    "pr-author",
+                    _drafting_task(output_path, remote_base, steps),
+                    project_dir=str(worktree),
+                    oneharness_mode=oneharness_mode,
+                    use_llmlint_wrapper=use_llmlint_wrapper,
+                    base_path=base_path,
+                    persona_dir=persona_dir,
+                    session=scoped_session(f"pr-author-attempt-{attempt}", worktree),
+                    labels=journal.labels,
+                    env=dispatch_env,
                 )
-                return drafted + "\n"
-            reason = "invalid or empty body" if report.completed else "dispatch did not complete"
-    except Exception as exc:  # Drafting is best-effort and must never block publication.
-        reason = f"drafting error: {exc}"
-    journal.append("pr-drafting-finished", detail={"completed": False, "reason": reason})
-    journal.append("pr-drafting-fallback", detail={"reason": reason})
+                drafted = (
+                    output_path.read_text(encoding="utf-8").strip() if output_path.is_file() else ""
+                )
+                if report.completed and _valid_drafted_body(drafted):
+                    journal.append(
+                        "pr-drafting-finished",
+                        detail={
+                            "completed": True,
+                            "body_length": len(drafted),
+                            "attempt": attempt,
+                        },
+                    )
+                    return drafted + "\n"
+                if report.completed:
+                    reason = "invalid or empty body"
+                else:
+                    detail = report.outcome_detail or report.stderr.strip() or report.assessment
+                    reason = detail or f"dispatch exited {report.exit_code} without completing"
+                reasons.append(f"attempt {attempt}: {reason}")
+            except Exception as exc:  # Drafting is best-effort and must never block publication.
+                reasons.append(f"attempt {attempt}: drafting error: {exc}")
+    reason = "; ".join(reasons)
+    if failures is not None:
+        failures.append(reason)
+    journal.append(
+        "pr-drafting-finished",
+        detail={"completed": False, "reason": reason, "attempts": len(reasons)},
+    )
+    journal.append("pr-drafting-fallback", detail={"reason": reason, "attempts": len(reasons)})
     return fallback
 
 
@@ -1376,6 +1398,7 @@ def _pause_at_human_step(
         pr = reused
     else:
         fallback_body = _workstream_body(steps, step_run.results)
+        drafting_failures: list[str] = []
         pr_body = body or fallback_body
         if workflow == "remote" and _should_draft_pr_body(title, body):
             pr_body = _draft_pr_body(
@@ -1390,27 +1413,35 @@ def _pause_at_human_step(
                 persona_dir=persona_dir,
                 journal=journal,
                 dispatch_env=workstream_env,
+                failures=drafting_failures,
             )
-        pr = (github or CliGitHubBackend()).create_pr(
+        if drafting_failures:
+            result.follow_ups = f"pr-author drafting failed: {drafting_failures[0]}"
+        backend = github or CliGitHubBackend()
+        resolution = adopt_or_create_pr(
+            backend,
             result.repo,
             head=branch,
             base=pr_base,
+            head_sha=checkpoint,
             title=title or _default_title(worktree, remote_base, lead.task),
             body=pr_body + _stack_body(applicable_stack, result.synthetic_stack_base),
             draft=True,
         )
+        pr = resolution.pr
         # Only the branch that actually opens one records it; resuming reuses the
         # draft an earlier round already journaled.
-        journal.append(
-            "pr-created",
-            detail={
-                "repo": result.repo,
-                "pr": pr.url,
-                "number": pr.number,
-                "base": pr_base,
-                "draft": True,
-            },
-        )
+        if resolution.created:
+            journal.append(
+                "pr-created",
+                detail={
+                    "repo": result.repo,
+                    "pr": pr.url,
+                    "number": pr.number,
+                    "base": pr_base,
+                    "draft": True,
+                },
+            )
     result.pr = pr
     return pause(checkpoint, pr.url)
 
@@ -1925,6 +1956,7 @@ def run_repo_task(
             return result
 
         fallback_body = _workstream_body(effective_steps, step_run.results)
+        drafting_failures: list[str] = []
         pr_body = body or fallback_body
         if decision.workflow == "remote" and _should_draft_pr_body(title, body):
             pr_body = _draft_pr_body(
@@ -1939,7 +1971,10 @@ def run_repo_task(
                 persona_dir=persona_dir,
                 journal=log,
                 dispatch_env=workstream_env,
+                failures=drafting_failures,
             )
+        if drafting_failures:
+            result.follow_ups = f"pr-author drafting failed: {drafting_failures[0]}"
         # The remote branch already carries any attestation (it is committed above,
         # before the branch push); the local path commits its own inside
         # `local_prepare` and reads it back off the branch when it squashes.
@@ -2099,6 +2134,7 @@ def run_repo_task(
             ),
             base=pr_base,
             branch=branch,
+            head_sha=gitops.head_sha(worktree),
             title=title or _default_title(worktree, remote_base, lead.task),
             body=publication_body,
             method=merge_method,
@@ -3008,7 +3044,7 @@ def result_payload(result: LifecycleResult) -> dict[str, Any]:
         "detail": result.detail,
         **({"artifacts": artifacts} if artifacts else {}),
         **({"deferred_cleanup": result.deferred_cleanup} if result.deferred_cleanup else {}),
-        "follow_ups": result.report.assessment if result.report else None,
+        "follow_ups": _result_follow_ups(result),
         "steps": [
             {
                 "id": s.id,
@@ -3034,6 +3070,14 @@ def result_payload(result: LifecycleResult) -> dict[str, Any]:
 
 
 _result_payload = result_payload
+
+
+def _result_follow_ups(result: LifecycleResult) -> str | None:
+    """Preserve worker and lifecycle diagnostics in the one surfaced field."""
+    assessment = result.report.assessment if result.report else None
+    if assessment and result.follow_ups and assessment != result.follow_ups:
+        return f"{assessment}\n{result.follow_ups}"
+    return result.follow_ups or assessment
 
 
 def retry_lineage_payload(lineage: RetryLineage) -> RetryLineagePayload:

@@ -30,7 +30,7 @@ from typing import TypeVar, cast
 
 import pytest
 from conftest import git, install_pre_push_hook
-from fakes import FakeGitHub, make_writing_dispatch
+from fakes import FakeGitHub, FakePRState, make_writing_dispatch
 from git_http import serve_github_origin
 from telemetry_contract import clipped_share_seconds
 from waits import deadline as e2e_deadline
@@ -41,7 +41,7 @@ import orchestrator.lifecycle as lifecycle_module
 from orchestrator import gitops
 from orchestrator.coordination import LockTimeout, advisory_lock, git_lock_identity
 from orchestrator.dispatch import DispatchError, Report, scoped_session
-from orchestrator.github import GitHubError, PullRequest
+from orchestrator.github import CliGitHubBackend, GitHubError, PullRequest
 from orchestrator.graph import graph_payload, parse_graph, run_graph
 from orchestrator.journal import NodeJournal, NodeSink, open_journal
 from orchestrator.lifecycle import (
@@ -2054,6 +2054,273 @@ def test_registered_remote_identity_keeps_pr_flow(tmp_path, bare_origin) -> None
     assert result.pr_base == "main"
 
 
+def test_cli_github_adopts_only_exact_merged_head_via_all_state_lookup(
+    tmp_path, monkeypatch
+) -> None:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    calls = tmp_path / "gh-calls"
+    fake_gh = bin_dir / "gh"
+    fake_gh.write_text(
+        "#!/bin/sh\n"
+        f"printf '%s\\n' \"$*\" >> {shlex.quote(str(calls))}\n"
+        "printf '%s\\n' "
+        '\'[{"number":17,"url":"https://github.test/o/r/pull/17",'
+        '"state":"MERGED","headRefOid":"published-head"}]\'\n',
+        encoding="utf-8",
+    )
+    fake_gh.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+
+    backend = CliGitHubBackend()
+    adopted = backend.adoptable_pr("o/r", head="feature", base="main", head_sha="published-head")
+    stale = backend.adoptable_pr("o/r", head="feature", base="main", head_sha="new-head")
+
+    assert adopted is not None and adopted.number == 17
+    assert stale is None
+    assert calls.read_text(encoding="utf-8").splitlines() == [
+        "pr list --repo o/r --head feature --base main --state all "
+        "--json number,url,state,headRefOid",
+        "pr list --repo o/r --head feature --base main --state all "
+        "--json number,url,state,headRefOid",
+    ]
+
+
+@pytest.mark.parametrize("existing_state", ["open", "merged", "stale-merged"])
+def test_remote_closeout_adopts_adoptable_pr_without_duplicate(
+    tmp_path, bare_origin, existing_state
+) -> None:
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / f"canonical-{existing_state}-existing-pr")
+    Registry().register(str(canonical), workflow="remote", repo_type="single-owner")
+
+    class ExistingPRGitHub(FakeGitHub):
+        def adoptable_pr(self, repo, *, head, base, head_sha):
+            if not self._prs:
+                self._n = 1
+                self._prs[1] = FakePRState(head, base, "existing", "existing")
+                seeded = PullRequest(1, f"https://github.com/{repo}/pull/1", repo, head, base)
+                if existing_state in {"merged", "stale-merged"}:
+                    self._do_merge(seeded)
+                if existing_state == "stale-merged":
+                    self._prs[1].merged_head_sha = "stale-head"
+            return super().adoptable_pr(repo, head=head, base=base, head_sha=head_sha)
+
+    github = ExistingPRGitHub(origin)
+    result = run_repo_task(
+        str(canonical),
+        "complete-now publish preserved work",
+        "engineer",
+        workspace=Workspace(tmp_path / f"{existing_state}-existing-pr-worktrees"),
+        github=github,
+        merge_policy="none" if existing_state == "open" else "auto",
+        branch=f"preserved-{existing_state}-pr",
+        recorded_gate=["true"],
+        dispatch_fn=make_writing_dispatch(),
+        body="## What\nPublish preserved work.\n\n## Why\nAvoid duplicate PRs.\n",
+        sleep=lambda _: None,
+    )
+
+    expected_number = 2 if existing_state == "stale-merged" else 1
+    assert result.pr is not None and result.pr.number == expected_number
+    assert github._n == expected_number
+    assert result.outcome == ("pr-open" if existing_state == "open" else "merged")
+    if existing_state != "open":
+        assert _has_file(origin, "main", "CHANGE.txt")
+
+
+@pytest.mark.parametrize("failure_mode", ["incomplete", "invalid", "exception"])
+def test_pr_author_failure_retries_once_and_surfaces_underlying_error(
+    tmp_path, bare_origin, failure_mode
+) -> None:
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-drafting-retry")
+    Registry().register(str(canonical), workflow="remote", repo_type="single-owner")
+    github = FakeGitHub(origin)
+    attempts = 0
+    writing = make_writing_dispatch()
+
+    def failing_author(persona, task, *, project_dir, **kwargs):
+        nonlocal attempts
+        if persona != "pr-author":
+            return writing(persona, task, project_dir=project_dir, **kwargs)
+        attempts += 1
+        if failure_mode == "exception":
+            raise DispatchError("harness exited 17: authentication rejected")
+        if failure_mode == "invalid":
+            output = task.split(
+                "Write the final body, and nothing else, to this absolute path:\n", 1
+            )[1].splitlines()[0]
+            Path(output).write_text("not a template", encoding="utf-8")
+            return Report(persona, 0, True, False, 1, [], {}, {}, "")
+        return Report(
+            persona=persona,
+            exit_code=2,
+            completed=False,
+            stopped_early=False,
+            assistant_turns=0,
+            verdicts=[],
+            usage={},
+            raw={},
+            stderr="provider launch failed: subscription unavailable",
+            outcome_detail="harness exited 17: authentication rejected",
+            max_turns=2,
+        )
+
+    journal = open_journal(tmp_path / "drafting-run", RunId("drafting-retry"), 1)
+    result = run_repo_task(
+        str(canonical),
+        "## What\ncomplete-now write-change.\n\n"
+        "## Why\nKeep publication reliable.\n\n"
+        "## Acceptance criteria\n- The change is published.",
+        "engineer",
+        workspace=Workspace(tmp_path / "drafting-retry-worktrees"),
+        github=github,
+        merge_policy="none",
+        branch="drafting-retry",
+        recorded_gate=["true"],
+        dispatch_fn=failing_author,
+        journal=NodeJournal(journal, NodeId("publish"), RunId("drafting-retry"), 1),
+    )
+
+    assert result.outcome == "pr-open" and attempts == 2
+    assert result.pr is not None
+    assert github._prs[result.pr.number].body == (
+        "## What\ncomplete-now write-change.\n\n## Why\nKeep publication reliable.\n"
+    )
+    assert result.follow_ups is not None
+    expected = (
+        "invalid or empty body"
+        if failure_mode == "invalid"
+        else (
+            "drafting error: harness exited 17: authentication rejected"
+            if failure_mode == "exception"
+            else "harness exited 17: authentication rejected"
+        )
+    )
+    assert f"attempt 1: {expected}" in result.follow_ups
+    assert f"attempt 2: {expected}" in result.follow_ups
+    assert result_payload(result)["follow_ups"] == result.follow_ups
+    assert result.follow_ups in result.summary()
+    fallback = next(event for event in journal.events() if event.kind == "pr-drafting-fallback")
+    assert fallback.detail["attempts"] == 2
+    assert expected in fallback.detail["reason"]
+
+
+def test_pr_author_failure_does_not_block_human_draft_checkpoint(tmp_path, bare_origin) -> None:
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-human-drafting-retry")
+    Registry().register(str(canonical), workflow="remote", repo_type="single-owner")
+    attempts = 0
+    writing = make_writing_dispatch()
+
+    def failing_author(persona, task, *, project_dir, **kwargs):
+        nonlocal attempts
+        if persona == "pr-author":
+            attempts += 1
+            raise DispatchError("drafting provider unavailable")
+        return writing(persona, task, project_dir=project_dir, **kwargs)
+
+    result = run_repo_task(
+        str(canonical),
+        workspace=Workspace(tmp_path / "human-drafting-retry-worktrees"),
+        github=FakeGitHub(origin),
+        merge_policy="none",
+        branch="human-drafting-retry",
+        recorded_gate=["true"],
+        dispatch_fn=failing_author,
+        steps=[
+            Step("implement", "engineer", "complete-now write-change"),
+            Step("approve", task="Approve publication.", kind="human", deps=["implement"]),
+        ],
+    )
+
+    assert result.outcome == "waiting-human" and result.pr is not None
+    assert attempts == 2
+    assert result.follow_ups is not None
+    assert "drafting provider unavailable" in result.follow_ups
+
+
+def test_pr_author_failure_preserves_worker_assessment_in_surfaced_output(
+    tmp_path, bare_origin
+) -> None:
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-drafting-assessment")
+    Registry().register(str(canonical), workflow="remote", repo_type="single-owner")
+    writing = make_writing_dispatch()
+
+    def assessed_worker_with_failing_author(persona, task, *, project_dir, **kwargs):
+        if persona == "pr-author":
+            raise DispatchError("drafting provider unavailable")
+        report = writing(persona, task, project_dir=project_dir, **kwargs)
+        report.assessment = "Worker assessment: inspect the migration edge case."
+        return report
+
+    result = run_repo_task(
+        str(canonical),
+        "complete-now write-change",
+        "engineer",
+        workspace=Workspace(tmp_path / "drafting-assessment-worktrees"),
+        github=FakeGitHub(origin),
+        merge_policy="none",
+        branch="drafting-assessment",
+        recorded_gate=["true"],
+        dispatch_fn=assessed_worker_with_failing_author,
+    )
+
+    assert result.outcome == "pr-open" and result.pr is not None
+    surfaced = result_payload(result)["follow_ups"]
+    assert surfaced == (
+        "Worker assessment: inspect the migration edge case.\n"
+        "pr-author drafting failed: attempt 1: drafting error: drafting provider unavailable; "
+        "attempt 2: drafting error: drafting provider unavailable"
+    )
+
+
+def test_pr_author_successful_retry_publishes_drafted_body(tmp_path, bare_origin) -> None:
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-drafting-recovery")
+    Registry().register(str(canonical), workflow="remote", repo_type="single-owner")
+    attempts = 0
+    writing = make_writing_dispatch()
+
+    def recovering_author(persona, task, *, project_dir, **kwargs):
+        nonlocal attempts
+        if persona != "pr-author":
+            return writing(persona, task, project_dir=project_dir, **kwargs)
+        attempts += 1
+        if attempts == 1:
+            return Report(persona, 1, False, False, 2, [], {}, {}, "transient harness error")
+        output = task.split("Write the final body, and nothing else, to this absolute path:\n", 1)[
+            1
+        ].splitlines()[0]
+        Path(output).write_text(
+            "## What\nRecovered drafted body.\n\n## Why\nThe retry succeeded.\n",
+            encoding="utf-8",
+        )
+        return Report(persona, 0, True, False, 1, [], {}, {}, "")
+
+    github = FakeGitHub(origin)
+    result = run_repo_task(
+        str(canonical),
+        "complete-now write-change",
+        "engineer",
+        workspace=Workspace(tmp_path / "drafting-recovery-worktrees"),
+        github=github,
+        merge_policy="none",
+        branch="drafting-recovery",
+        recorded_gate=["true"],
+        dispatch_fn=recovering_author,
+    )
+
+    assert result.outcome == "pr-open" and attempts == 2
+    assert result.pr is not None
+    assert github._prs[result.pr.number].body == (
+        "## What\nRecovered drafted body.\n\n## Why\nThe retry succeeded.\n"
+    )
+    assert result.follow_ups is None
+
+
 def test_verify_via_ci_iterates_real_dispatch_then_requires_green_branch_ci(
     tmp_path, bare_origin, command_base, personas_dir, monkeypatch, capsys
 ) -> None:
@@ -3907,6 +4174,40 @@ def test_remote_human_checkpoint_noop_gate_relies_on_required_checks(tmp_path, b
     )
     assert result.outcome == "waiting-human" and result.pr is not None
     assert "pushed unproven" not in result.detail
+
+
+# llmlint: ignore[e2e_not_mocked] GitHub decisioning is the suite's documented external seam.
+def test_remote_human_checkpoint_adopts_existing_pr_without_duplicate(
+    tmp_path, bare_origin
+) -> None:
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "registered-existing-human-pr")
+    Registry().register(str(canonical), workflow="remote", repo_type="single-owner")
+
+    class ExistingPRGitHub(FakeGitHub):
+        def adoptable_pr(self, repo, *, head, base, head_sha):
+            if not self._prs:
+                self._n = 1
+                self._prs[1] = FakePRState(head, base, "existing", "existing", draft=True)
+            return super().adoptable_pr(repo, head=head, base=base, head_sha=head_sha)
+
+    github = ExistingPRGitHub(origin)
+    result = run_repo_task(
+        str(canonical),
+        workspace=Workspace(tmp_path / "existing-human-pr-worktrees"),
+        github=github,
+        steps=[
+            Step("prepare", "engineer", "prepare a draft checkpoint"),
+            Step("approve", task="Approve the checkpoint.", kind="human", deps=["prepare"]),
+        ],
+        body="## What\nPrepare a checkpoint.\n\n## Why\nAvoid duplicate PRs.\n",
+        dispatch_fn=_per_step_dispatch(),
+    )
+
+    assert result.outcome == "waiting-human"
+    assert result.pr is not None and result.pr.number == 1
+    assert result.resume is not None and result.resume.pr == result.pr.url
+    assert github._n == 1
 
 
 # llmlint: ignore[e2e_not_mocked] GitHub decisioning is the suite's documented external seam.
@@ -6122,7 +6423,7 @@ def test_remote_human_workstream_draft_checkpoint_and_safe_resume(tmp_path, bare
     assert completed.ok and completed.outcome == "merged", completed.detail
     assert completed.pr is not None and completed.pr.number == paused.pr.number
     assert github.created == [paused.pr.number]
-    assert github.reused == [paused.pr.number]
+    assert github.reused == []
     assert github.readied == [paused.pr.number]
     assert not github._prs[paused.pr.number].draft
     assert dispatched == ["prepare", "implement", "finalize"]

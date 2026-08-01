@@ -23,9 +23,11 @@ history_labels = { role = "agent" }
 # The orchestrator is a long-lived supervisory process, not a worker: it must not
 # stand in front of workers for the alternate Claude subscription they depend on.
 # Codex carries the role and the alternate Claude subscription is its backup —
-# deliberately the reverse of oneharness.toml's worker order.
+# deliberately the reverse of oneharness.toml's worker order. A second Codex
+# identity sits between them, so an exhausted Codex quota reaches for another
+# Codex account before it reaches for the workers' subscription at all.
 # llmlint: ignore[changed_behavior_has_e2e] tests/e2e/test_dispatch_e2e.py drives real oneharness fallback selection for this file; paid-provider quota rejection cannot be deterministic.
-harnesses = ["codex", "claude-code:alternate"]
+harnesses = ["codex", "codex:alternate", "claude-code:alternate"]
 
 # [harness.<id>]: per-harness overrides. Model names differ per provider, so
 # each harness names its own.
@@ -33,6 +35,14 @@ harnesses = ["codex", "claude-code:alternate"]
 # cannot drift under us.
 [harness.codex]
 model = "gpt-5.6-sol"
+
+# The second Codex identity; held identical to oneharness.toml's by
+# tests/test_harness_routing.py, since one drifted copy would silently change how
+# a role authenticates. See scripts/codex-alt-home.sh for the indirection.
+[harness.codex.variant.alternate]
+model = "gpt-5.6-sol"
+env_from = { CODEX_HOME = "ORCHESTRATOR_CODEX_ALT_HOME" }
+unset_env = ["OPENAI_API_KEY"]
 
 [harness.claude-code]
 # IS_SANDBOX lets claude-code run under root without --dangerously-skip-permissions

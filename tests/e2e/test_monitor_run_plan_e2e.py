@@ -640,6 +640,11 @@ def test_monitor_backoff_resets_after_real_human_attestation(tmp_path: Path) -> 
         [
             "just",
             "monitor",
+            # This reader consumes the stream line by line off a pipe, which is the
+            # caller `--follow` exists for; without it a non-terminal invocation
+            # makes one bounded pass and exits, and there would be no backoff to
+            # observe resetting.
+            "--follow",
             "backoff-reset",
             "--runs-dir",
             str(runs_dir),
