@@ -16,6 +16,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from leak_guard import REAPER_SCRIPT
 from process_tree import (
     await_orphaned,
     await_reaped,
@@ -28,6 +29,7 @@ from process_tree import (
 from waits import timeout as e2e_timeout
 
 from orchestrator import REPO_ROOT
+from orchestrator.watchdog import ProcessId, process_activity, terminate_processes
 
 TESTS_DIR = REPO_ROOT / "tests"
 
@@ -109,6 +111,14 @@ def _run_session(directory: Path, test_file: Path) -> subprocess.Popen[bytes]:
 
 def _working_directory(pid: int) -> Path:
     return Path(os.readlink(f"/proc/{pid}/cwd"))
+
+
+def _command_line(pid: int) -> str:
+    try:
+        raw = Path(f"/proc/{pid}/cmdline").read_bytes()
+    except OSError:
+        return ""
+    return " ".join(raw.decode("utf-8", errors="replace").split("\0"))
 
 
 def _sweep(*pids: int | None) -> None:
@@ -219,6 +229,54 @@ def test_a_killed_session_reaps_what_it_launched_and_never_had_below_it(tmp_path
         )
         assert await_reaped(launched, timeout=e2e_timeout(20)), (
             f"the launched process of the killed session is still running out of {tmp_path}"
+        )
+    finally:
+        session.kill()
+        session.wait(timeout=e2e_timeout(30))
+        _sweep(worker, launched)
+
+
+def test_a_session_terminated_as_a_whole_tree_still_reaps_what_it_launched(tmp_path) -> None:
+    """How the guard actually failed: the reaper was collected with the session.
+
+    Nothing here kills the session directly. It is terminated the way a stalled
+    dispatch is — `orchestrator.watchdog.terminate_processes` over the tree a walk
+    of it found — because that is what ends a suite run under this harness: a
+    supervisor cancelling a worker, `just stop`, a dispatch that ran out of turns.
+
+    `start_new_session` never covered that. It takes the reaper out of the session's
+    process *group*, and the walk goes by ancestry, so the one process posted to
+    outlive the session was signalled along with it. The escape this proves closed
+    was found live: an `onejudge` and the `orchestrator.channel` below it, still
+    running out of a deleted `pytest-of-nick` temp directory eighteen hours after
+    the session that started them, and still carrying that session's token.
+    """
+    marker = tmp_path / "launched.pid"
+    session = _run_session(tmp_path, _launching_session(tmp_path, marker, hold_seconds=600))
+    launched: int | None = None
+    worker: int | None = None
+    try:
+        launched, worker = await_recorded_pids(marker, timeout=e2e_timeout(60))
+        assert await_orphaned(launched, timeout=e2e_timeout(30))
+        assert _working_directory(worker) == tmp_path
+
+        observed = process_activity(ProcessId(session.pid)).pids
+        # The claim this journey rests on: what production signals no longer names the
+        # reaper. Asserting it here is what keeps a change that reattaches the reaper
+        # from turning the reap below into a test of nothing — the launch would then be
+        # reaped by the session's own teardown, and pass for the wrong reason.
+        walked = {pid: _command_line(pid) for pid in observed}
+        assert not [pid for pid, command in walked.items() if str(REAPER_SCRIPT) in command], (
+            f"the reaper is still in the session's own tree: {walked}"
+        )
+        terminate_processes(observed)
+        session.wait(timeout=e2e_timeout(30))
+
+        assert await_reaped(worker, timeout=e2e_timeout(30)), (
+            f"a launched worker of the terminated session is still running out of {tmp_path}"
+        )
+        assert await_reaped(launched, timeout=e2e_timeout(30)), (
+            f"the launched process of the terminated session is still running out of {tmp_path}"
         )
     finally:
         session.kill()

@@ -27,7 +27,12 @@ Between them they cover what this repository has had to reap by hand: the `oneju
 and `orchestrator.channel` processes found running out of temp directories that had
 been deleted a day earlier.
 
+None of that helps if the reaper dies with the session, which is why it detaches
+before it starts watching — see `_detach_and_watch`.
+
 Usage: ``leak_reaper.py ROOT_PID SESSION_TOKEN``, with the session's pipe on stdin.
+It prints the detached reaper's pid on stdout and exits immediately; that pid is
+what the session excludes from its own sweep and waits for at the end.
 """
 
 from __future__ import annotations
@@ -178,20 +183,57 @@ def watch(
     return reaped
 
 
+def _detach_and_watch(root_pid: int, token: str) -> int:  # pragma: no cover - real fork boundary
+    """Get adopted by init, then watch; report the detached pid to the caller.
+
+    ``start_new_session`` moves a process out of its launcher's *group*, which is
+    what stops a group kill from reaching it. It does not move it out of the
+    launcher's *ancestry*, and ancestry is what actually ends these sessions: a
+    stalled dispatch is terminated by signalling every pid a walk of its tree found
+    (`orchestrator.watchdog.terminate_processes`), and a reaper still hanging off
+    the session under test is in that walk. It died with the session it was posted
+    to outlive, and the launch it had claimed ran for another eighteen hours.
+
+    So the reaper forks and lets the intermediate exit. Once init has adopted it, no
+    walk from the session reaches it, and the only handle anything retains is the
+    pipe — which is the handle whose *closing* is the signal it waits for.
+    """
+    sys.stdout.flush()
+    sys.stderr.flush()
+    child = os.fork()
+    if child != 0:
+        # Printed by the intermediate, because the grandchild's pid is not something
+        # the session could otherwise learn: it is nobody's child by the time it runs.
+        print(child, flush=True)
+        return 0
+    # A session and group of its own, so a kill aimed at the intermediate's group —
+    # which still names the intermediate's now-dead pid — cannot reach this either.
+    os.setsid()
+    # The stdout pipe is how the pid was reported and nothing more; holding it open
+    # would leave the reader waiting on an EOF that only arrives hours later.
+    with open(os.devnull, "wb") as null:
+        os.dup2(null.fileno(), 1)
+    reaped = watch(root_pid, token=token)
+    _report(root_pid, reaped)
+    os._exit(0)
+
+
+def _report(root_pid: int, reaped: tuple[ProcessId, ...]) -> None:
+    if reaped:
+        print(
+            f"leak-reaper: session {root_pid} died leaving {len(reaped)} process(es); "
+            f"terminated {', '.join(str(pid) for pid in reaped)}",
+            file=sys.stderr,
+            flush=True,
+        )
+
+
 def main(argv: list[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
     if len(args) != 2 or not args[0].isdigit() or not args[1]:
         print("usage: leak_reaper.py ROOT_PID SESSION_TOKEN", file=sys.stderr)
         return 2
-    reaped = watch(int(args[0]), token=args[1])
-    if reaped:
-        print(
-            f"leak-reaper: session {args[0]} died leaving {len(reaped)} process(es); "
-            f"terminated {', '.join(str(pid) for pid in reaped)}",
-            file=sys.stderr,
-            flush=True,
-        )
-    return 0
+    return _detach_and_watch(int(args[0]), args[1])
 
 
 if __name__ == "__main__":  # pragma: no cover - real subprocess boundary
