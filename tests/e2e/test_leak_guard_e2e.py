@@ -17,6 +17,7 @@ import sys
 from pathlib import Path
 
 from leak_guard import REAPER_SCRIPT
+from leak_reaper import SESSION_TOKEN_ENV
 from process_tree import (
     await_orphaned,
     await_reaped,
@@ -86,7 +87,7 @@ def _leaky_session(directory: Path, marker: Path, *, hold_seconds: float) -> Pat
     return path
 
 
-def _run_session(directory: Path, test_file: Path) -> subprocess.Popen[bytes]:
+def _run_session(directory: Path, test_file: Path, *extra: str) -> subprocess.Popen[bytes]:
     """Start a real pytest session, in ``directory``, with the real guard plugin."""
     return subprocess.Popen(
         [
@@ -98,6 +99,7 @@ def _run_session(directory: Path, test_file: Path) -> subprocess.Popen[bytes]:
             "-p",
             "no:cacheprovider",
             "-q",
+            *extra,
             str(test_file),
         ],
         # The session's own working directory, so everything it starts inherits it
@@ -119,6 +121,19 @@ def _command_line(pid: int) -> str:
     except OSError:
         return ""
     return " ".join(raw.decode("utf-8", errors="replace").split("\0"))
+
+
+def _session_token(pid: int) -> str:
+    """The leak-guard token ``pid`` inherited, or ``""`` if it carries none."""
+    try:
+        block = Path(f"/proc/{pid}/environ").read_bytes()
+    except OSError:
+        return ""
+    stamp = f"{SESSION_TOKEN_ENV}=".encode()
+    for entry in block.split(b"\0"):
+        if entry.startswith(stamp):
+            return entry[len(stamp) :].decode("utf-8", errors="replace")
+    return ""
 
 
 def _sweep(*pids: int | None) -> None:
@@ -282,6 +297,98 @@ def test_a_session_terminated_as_a_whole_tree_still_reaps_what_it_launched(tmp_p
         session.kill()
         session.wait(timeout=e2e_timeout(30))
         _sweep(worker, launched)
+
+
+#: Two launch-shaped tests in one file, so a two-worker run puts one on each. The suite
+#: runs under xdist, and an xdist worker is a whole process of its own: it loads this
+#: plugin itself, stamps its own token, and posts its own reaper. Nothing about that is
+#: guaranteed by the design — it follows from where `install_session_guard` runs — so it
+#: is asserted rather than assumed.
+_PARALLEL_LAUNCHING_TESTS = '''\
+"""Two tests, each launching a detached process that only then starts its worker."""
+
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+TREE = {tree!r}
+
+
+def _launch(marker):
+    subprocess.Popen([sys.executable, TREE, marker])
+    # Held open until this worker's launch has recorded both pids, so the run never
+    # ends before the processes that have to outlive it exist.
+    deadline = time.monotonic() + 60
+    while time.monotonic() < deadline:
+        path = Path(marker)
+        recorded = path.read_text(encoding="utf-8").split() if path.is_file() else []
+        if len(recorded) == 2:
+            break
+        time.sleep(0.02)
+    time.sleep({hold_seconds})
+
+
+def test_first_worker_launches_a_detached_orchestrator():
+    _launch({first!r})
+
+
+def test_second_worker_launches_a_detached_orchestrator():
+    _launch({second!r})
+'''
+
+
+def test_each_xdist_worker_posts_its_own_token_and_its_own_reaper(tmp_path) -> None:
+    """The suite runs in parallel, so every worker owes what one session owed.
+
+    A worker is a separate process that imports the plugin for itself, which means it
+    stamps a token of its own and posts a reaper of its own — and a reaper's claim is
+    bounded by its token, so two workers sharing one would each be entitled to end the
+    other's launches. Both halves are asserted here: that the tokens genuinely differ,
+    and that killing the whole run still reaps what *both* workers launched.
+
+    Terminated as a tree, as the journey above is, because that is how these runs end
+    and because the controller and its workers are one tree — the reapers are not.
+    """
+    test_file = tmp_path / "test_parallel_launching_session.py"
+    first, second = tmp_path / "first.pid", tmp_path / "second.pid"
+    test_file.write_text(
+        _PARALLEL_LAUNCHING_TESTS.format(
+            tree=str(write_launching_tree(tmp_path)),
+            first=str(first),
+            second=str(second),
+            hold_seconds=600,
+        ),
+        encoding="utf-8",
+    )
+    session = _run_session(tmp_path, test_file, "-n", "2", "--dist", "load")
+    launched: list[int] = []
+    started: list[int] = []
+    try:
+        for marker in (first, second):
+            leader, worker = await_recorded_pids(marker, timeout=e2e_timeout(120))
+            launched.append(leader)
+            started.append(worker)
+        assert all(await_orphaned(pid, timeout=e2e_timeout(30)) for pid in launched)
+
+        tokens = [_session_token(pid) for pid in launched]
+        assert all(tokens), f"a launched process carries no session token: {tokens}"
+        assert tokens[0] != tokens[1], f"both workers stamped the same token {tokens[0]}"
+        # The controller runs no tests, so it installs no guard and stamps nothing; a
+        # token equal to its would mean one worker's reaper is claiming for both.
+        assert _session_token(session.pid) not in tokens
+
+        terminate_processes(process_activity(ProcessId(session.pid)).pids)
+        session.wait(timeout=e2e_timeout(30))
+
+        for pid in (*launched, *started):
+            assert await_reaped(pid, timeout=e2e_timeout(30)), (
+                f"a worker's launch survived the run that started it, out of {tmp_path}"
+            )
+    finally:
+        session.kill()
+        session.wait(timeout=e2e_timeout(30))
+        _sweep(*launched, *started)
 
 
 def test_reaping_one_session_leaves_another_live_sessions_launch_untouched(tmp_path) -> None:

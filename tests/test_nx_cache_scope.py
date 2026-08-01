@@ -149,12 +149,67 @@ def test_the_marker_that_routes_a_test_to_its_tier_means_the_same_thing_everywhe
     targets = json.loads((REPO_ROOT / "orchestrator/project.json").read_text(encoding="utf-8"))[
         "targets"
     ]
-    assert f"-m 'not {READS_DOCS_MARKER}'" in targets[CODE_SCOPED]["command"]
+    # The code tier runs in more than one invocation — the parallel bulk and the
+    # serial `single_threaded` remainder — so every one of its selectors has to
+    # exclude the prose tier, not merely the first one written down.
+    code_selectors = re.findall(r"-m '([^']+)'", targets[CODE_SCOPED]["command"])
+    assert code_selectors, targets[CODE_SCOPED]["command"]
+    assert all(
+        selector.startswith(f"not {READS_DOCS_MARKER}") for selector in code_selectors
+    ), code_selectors
     assert f"-m {READS_DOCS_MARKER}" in targets["test-docs"]["command"]
 
     # And the two selectors have to partition: a test is in exactly one tier.
     marked = re.search(r"-m '?(not )?(\w+)'?", targets["test-docs"]["command"])
     assert marked is not None and marked.group(1) is None
+
+
+def _collected(selector: str) -> set[str]:
+    """Every test id pytest selects for one marker expression, from a real collection.
+
+    No extra ``-q``: the repository's own ``addopts`` already carries one, and a
+    second turns the listing into per-file counts that cannot be compared as sets.
+    """
+    collected = subprocess.run(
+        ["uv", "run", "pytest", "--collect-only", "--no-cov", "-m", selector],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert collected.returncode == 0, collected.stdout + collected.stderr
+    return {line.strip() for line in collected.stdout.splitlines() if "::" in line}
+
+
+def test_the_code_tiers_parallel_and_serial_invocations_partition_it() -> None:
+    """The tier runs in two invocations, so neither may drop a test on the floor.
+
+    `single_threaded` splits the code tier because those tests need a process with
+    no execnet thread in it, and everything else runs across xdist workers. Two
+    commands selecting on one marker is exactly the shape that loses a test in
+    silence: a typo in either expression leaves tests that no invocation collects,
+    and a suite that runs fewer tests reports the same green as one that runs them
+    all. So the partition is derived from the real target and checked against real
+    collections rather than read off the JSON.
+    """
+    command = json.loads((REPO_ROOT / "orchestrator/project.json").read_text(encoding="utf-8"))[
+        "targets"
+    ][CODE_SCOPED]["command"]
+    selectors = re.findall(r"-m '([^']+)'", command)
+    assert len(selectors) == 2, f"the code tier no longer runs two invocations: {command}"
+
+    parts = [_collected(selector) for selector in selectors]
+    assert not parts[0] & parts[1], (
+        f"both code-tier invocations collect {sorted(parts[0] & parts[1])[:5]}"
+    )
+    whole = _collected(f"not {READS_DOCS_MARKER}")
+    assert parts[0] | parts[1] == whole, (
+        "the code tier's invocations no longer cover it: "
+        f"{sorted(whole - (parts[0] | parts[1]))[:5]} is collected by neither"
+    )
+    # Both halves have to be non-empty, or the split is silently doing nothing and
+    # the marker it rests on could have been deleted without anything noticing.
+    assert all(parts), [len(part) for part in parts]
 
 
 def test_the_code_only_test_key_is_the_workspace_with_its_prose_removed() -> None:
