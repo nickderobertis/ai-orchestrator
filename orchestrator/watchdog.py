@@ -159,9 +159,7 @@ _TERMINATION_POLL = 0.005
 
 def _still_running(pids: tuple[ProcessId, ...]) -> tuple[ProcessId, ...]:
     """Which of ``pids`` are still executing, ignoring the ones already reduced to zombies."""
-    return tuple(
-        pid for pid in pids if (record := _stat(pid)) is not None and record.state != "Z"
-    )
+    return tuple(pid for pid in pids if (record := _stat(pid)) is not None and record.state != "Z")
 
 
 def _await_shutdown(pids: tuple[ProcessId, ...]) -> None:

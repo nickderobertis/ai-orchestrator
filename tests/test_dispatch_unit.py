@@ -1014,6 +1014,26 @@ def test_watchdog_process_group_cleanup_is_safe_for_absent_group() -> None:
     assert terminate_process_group(ProcessId(2**31 - 1)) is None
 
 
+def test_watchdog_group_shutdown_waits_out_a_member_that_ignores_sigterm(tmp_path) -> None:
+    """A group's grace period is the group's, not a formality skipped once it looks empty.
+
+    The group teardown asks `process_group_is_running` rather than holding a pid list,
+    and that question has to keep being asked for the whole period: a member that
+    ignores `SIGTERM` is still running when it is first asked, and is killed by the
+    `SIGKILL` behind it rather than left for whoever looks next.
+    """
+    marker = tmp_path / "deaf-group-member.pid"
+    process = subprocess.Popen(
+        [sys.executable, "-c", _SIGTERM_DEAF_SLEEPER, os.fspath(marker)],
+        start_new_session=True,
+    )
+    assert await_recorded_pid(marker) == process.pid
+
+    terminate_process_group(ProcessId(process.pid))
+
+    assert await_reaped(process.pid)
+
+
 def test_watchdog_terminates_live_process_group() -> None:
     process = subprocess.Popen(
         [sys.executable, "-c", "import time; time.sleep(60)"],
