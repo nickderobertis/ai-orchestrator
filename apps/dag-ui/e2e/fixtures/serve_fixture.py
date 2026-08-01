@@ -708,19 +708,30 @@ def remove_run(workspace: Path, run_id: str) -> int:
     return 0
 
 
-def stall(port: int) -> int:
+def stall(port: int, refuse_port: int | None = None) -> int:
     """Accept connections on ``port`` and never answer them.
 
     A read that is in flight is the only way to observe a loading view, and a browser
     reaches that state only while a real request is outstanding. This is a network
     condition, not a stand-in for the API: it serves nothing and answers nothing, so
     the app's own request stays pending exactly as it would against a wedged server.
+
+    ``refuse_port`` is the other network condition a browser journey needs and the one
+    a *free* port cannot supply: a socket bound here but never listened on refuses every
+    connection, and holding it bound for as long as this process lives is what stops a
+    concurrent run's own API server from landing on it.
     """
+    # Never listened on and never closed: the bind is the reservation, and the missing
+    # listener is what turns every connection to it into a refusal.
+    held: list[socket.socket] = []
+    if refuse_port is not None:
+        reservation = socket.socket()
+        reservation.bind(("127.0.0.1", refuse_port))
+        held.append(reservation)
     listener = socket.socket()
     listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     listener.bind(("127.0.0.1", port))
     listener.listen(16)
-    held = []
     while True:
         connection, _ = listener.accept()
         # Held open, never written to and never closed: closing would let the client
@@ -788,10 +799,15 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="accept connections and never answer, so a read stays in flight",
     )
+    parser.add_argument(
+        "--refuse-port",
+        type=int,
+        help="with --stall, hold this port bound but unlistened so it refuses every connection",
+    )
     args = parser.parse_args(argv)
 
     if args.stall:
-        return stall(args.port)
+        return stall(args.port, args.refuse_port)
 
     workspace = args.workspace or Path(tempfile.mkdtemp(prefix="dag-ui-e2e-"))
     # The provenance records this fixture writes are throwaway too, so they must not

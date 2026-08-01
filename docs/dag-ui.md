@@ -145,6 +145,18 @@ the executor's own journal writers, serves it through the actual read API, and
 history store is recorded, through the same `tests/e2e/fake_oneharness.py`
 subprocess the Python e2e suite uses.
 
+Everything that tier does not share with another run of itself is allocated per
+run: `playwright.config.ts` asks the kernel for its ports and makes its own fixture
+directory, records both in the environment its workers are forked with, and
+`e2e/global-teardown.ts` removes the directory afterwards. Concurrent worktrees are
+the normal state on this host, and fixed ports plus one shared fixture path made two
+overlapping runs collide by construction — a `--strictPort` Vite refusing a port the
+other run holds, and a fixture server rebuilding the run directory the other run is
+asserting against. The one port that must *refuse* connections, so the
+unreachable-API journey has a real failure to observe, is held bound but unlistened
+by the stall server (`serve_fixture.py --refuse-port`): leaving it merely free would
+let a concurrent run's own API server take it.
+
 The fixture's `dag-ui-busy` run is the scale case: one node with two hundred
 recorded sessions, one of them thirty turns long, so the browser tier proves the
 grouped rail and both pagings against a real server rather than a payload written
