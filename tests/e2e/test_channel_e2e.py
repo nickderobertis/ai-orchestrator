@@ -10,11 +10,11 @@ import sys
 import time
 from contextlib import suppress
 from pathlib import Path
-from typing import NamedTuple
 
 import pytest
 import yaml
 from process_tree import is_running
+from rendezvous import Rendezvous
 from run_rows import without_ownership
 from waits import deadline
 from waits import timeout as e2e_timeout
@@ -68,31 +68,14 @@ def _plan(tmp_path: Path, sentinel: str) -> Path:
     return path
 
 
-class Rendezvous(NamedTuple):
-    """The pair of paths a journey uses to hold a dispatched agent turn in flight.
-
-    The double announces its arrival by creating `ready` and blocks until the test
-    creates `release`.
-    """
-
-    ready: Path
-    release: Path
-
-    def sentinels(self, name: str) -> str:
-        """Render this rendezvous as the task fragment the double parses."""
-        return f" {name}-ready={self.ready} {name}-release={self.release}"
-
-
 def _proposal_plan(
     tmp_path: Path,
     witness: Path,
-    provider_barrier: Rendezvous | None = None,
-    hold: Rendezvous | None = None,
+    first_turn: Rendezvous | None = None,
+    second_turn: Rendezvous | None = None,
 ) -> Path:
-    barrier_sentinels = (
-        "" if provider_barrier is None else provider_barrier.sentinels("provider-barrier")
-    )
-    hold_sentinels = "" if hold is None else hold.sentinels("hold")
+    barrier_sentinels = "" if first_turn is None else first_turn.sentinels(0)
+    hold_sentinels = "" if second_turn is None else second_turn.sentinels(1)
     path = tmp_path / "plan-mid-run-proposal.json"
     path.write_text(
         json.dumps(
@@ -174,7 +157,7 @@ def test_due_heartbeat_surfaces_during_active_step_and_disabled_run_stays_silent
     witness = tmp_path / "slow-witness"
     # The step stays in flight until this test has seen every heartbeat it asserts
     # on, so the pacemaker is measured against the run rather than against a sleep.
-    hold = Rendezvous(tmp_path / "active-worker.ready", tmp_path / "active-worker.release")
+    hold = Rendezvous.at(tmp_path, "active-worker")
     plan = tmp_path / "heartbeat-channel.json"
     plan.write_text(
         json.dumps(
@@ -186,7 +169,7 @@ def test_due_heartbeat_surfaces_during_active_step_and_disabled_run_stays_silent
                         "id": "active-worker",
                         "persona": "engineer",
                         "task": (
-                            f"slow-branch {witness}{hold.sentinels('hold')} "
+                            f"slow-branch {witness}{hold.sentinels()} "
                             "complete-now heartbeat-channel"
                         ),
                     }
@@ -221,7 +204,7 @@ def test_due_heartbeat_surfaces_during_active_step_and_disabled_run_stays_silent
     retry_not_before = cleared_state["retry_not_before"]
     assert isinstance(retry_not_before, int | float)
     assert retry_not_before > time.time()
-    assert witness.is_file()
+    assert hold.arrived()
     queued_path = runs / run_id / "channel" / "heartbeat-surface.json"
     queue_deadline = deadline(120)
     while not queued_path.is_file() and time.monotonic() < queue_deadline:
@@ -282,7 +265,7 @@ def test_due_heartbeat_surfaces_during_active_step_and_disabled_run_stays_silent
     state = json.loads(heartbeat_path.read_text())
     assert state["last_surface_at"] > initial_state["last_surface_at"]
 
-    hold.release.write_text("release\n", encoding="utf-8")
+    hold.let_go()
     while True:
         boundary = _wait_surface(run_id, runs, wait_seconds=120)
         boundary_surface = boundary["surface"]
@@ -394,7 +377,7 @@ def test_completed_check_in_without_surface_is_logged_and_retried(
     witness = tmp_path / "slow-witness"
     # Held until the skipped surface has been logged and its retry has surfaced,
     # so the step is genuinely active for both check-in dispatches.
-    hold = Rendezvous(tmp_path / "active-worker.ready", tmp_path / "active-worker.release")
+    hold = Rendezvous.at(tmp_path, "active-worker")
     plan = tmp_path / "missing-check-in-surface.json"
     plan.write_text(
         json.dumps(
@@ -405,7 +388,7 @@ def test_completed_check_in_without_surface_is_logged_and_retried(
                     {
                         "id": "active-worker",
                         "persona": "engineer",
-                        "task": f"slow-branch {witness}{hold.sentinels('hold')} complete-now",
+                        "task": f"slow-branch {witness}{hold.sentinels()} complete-now",
                     }
                 ],
             }
@@ -464,9 +447,9 @@ def test_completed_check_in_without_surface_is_logged_and_retried(
         ),
         "blocking": False,
     }
-    assert witness.is_file()
+    assert hold.arrived()
 
-    hold.release.write_text("release\n", encoding="utf-8")
+    hold.let_go()
     while True:
         boundary = _wait_surface(run_id, runs, wait_seconds=120)
         if boundary["surface"]["kind"] != "heartbeat":
@@ -1029,8 +1012,8 @@ def test_reattached_planner_replies_to_mid_run_proposal_without_stopping_graph(
 ) -> None:
     runs = tmp_path / "proposal-runs"
     witness = tmp_path / "unrelated.ticks"
-    barrier = Rendezvous(tmp_path / "unrelated.ready", tmp_path / "unrelated.release")
-    hold = Rendezvous(tmp_path / "unrelated.held-ready", tmp_path / "unrelated.held-release")
+    barrier = Rendezvous.at(tmp_path, "unrelated-first-turn")
+    hold = Rendezvous.at(tmp_path, "unrelated-second-turn")
     run_id = _launch_cli(
         _proposal_plan(
             tmp_path,
@@ -1120,15 +1103,12 @@ def test_reattached_planner_replies_to_mid_run_proposal_without_stopping_graph(
         "heartbeat_interval": 2,
     }
     assert not (runs / run_id / "orchestrator" / "report.json").stat().st_size
-    barrier.release.write_text("release\n", encoding="utf-8")
-    # The released node reports its own progress and waits, so this reads exactly
-    # the turn the graph kept running rather than whatever a sleep left behind.
-    wait_deadline = deadline(15)
-    while not hold.ready.is_file() and time.monotonic() < wait_deadline:
-        time.sleep(0.02)
-    assert hold.ready.is_file()
+    barrier.let_go()
+    # The released node reports its own progress and parks at its next turn, so this
+    # reads exactly the turn the graph kept running rather than what a sleep left.
+    hold.wait(15)
     assert witness.read_text(encoding="utf-8").count("tick") == 2
-    hold.release.write_text("release\n", encoding="utf-8")
+    hold.let_go()
 
     while True:
         boundary = _next_cli(run_id, runs)
@@ -1151,16 +1131,16 @@ def test_unanswered_mid_run_proposal_does_not_compete_with_boundary_verdict(
     witness = tmp_path / "unanswered-unrelated.ticks"
     # The unrelated node holds the round open until the proposal has been read, so
     # the pump is provably still the FIFO's owner when that read happens.
-    hold = Rendezvous(tmp_path / "unanswered.ready", tmp_path / "unanswered.release")
+    hold = Rendezvous.at(tmp_path, "unanswered")
     run_id = _launch_cli(
-        _proposal_plan(tmp_path, witness, hold=hold), runs, _base(tmp_path), onejudge_bin
+        _proposal_plan(tmp_path, witness, first_turn=hold), runs, _base(tmp_path), onejudge_bin
     )
 
     proposal = _next_cli(run_id, runs)
     assert proposal["surface"]["kind"] == "proposal"
     # Deliberately leave the proposal unanswered. The unrelated node still settles,
     # then the pump must relinquish sole FIFO ownership before this boundary appears.
-    hold.release.write_text("release\n", encoding="utf-8")
+    hold.let_go()
     boundary = _next_cli(run_id, runs)
     assert boundary["surface"]["kind"] in {"milestone", "closeout"}
     assert witness.read_text(encoding="utf-8").count("tick") >= 2
@@ -1176,7 +1156,7 @@ def test_continuation_round_proposal_uses_reconciled_round_number(
     witness = tmp_path / "round-two-unrelated.ticks"
     # Round two stays open until its proposal has been read and answered, so the
     # reconciled round number is read from a round that is provably still running.
-    hold = Rendezvous(tmp_path / "round-two.ready", tmp_path / "round-two.release")
+    hold = Rendezvous.at(tmp_path, "round-two")
     plan = tmp_path / "continuation-plan.json"
     plan.write_text(
         json.dumps(
@@ -1195,7 +1175,7 @@ def test_continuation_round_proposal_uses_reconciled_round_number(
                     {
                         "id": "unrelated",
                         "persona": "engineer",
-                        "task": f"slow-branch {witness}{hold.sentinels('hold')}",
+                        "task": f"slow-branch {witness}{hold.sentinels()}",
                         "deps": ["gate"],
                     },
                 ],
@@ -1218,7 +1198,7 @@ def test_continuation_round_proposal_uses_reconciled_round_number(
         runs,
         {"completion": False, "message": "defer", "reason": "next continuation"},
     )
-    hold.release.write_text("release\n", encoding="utf-8")
+    hold.let_go()
     closeout = _next_cli(run_id, runs)
     assert closeout["surface"]["kind"] == "closeout"
     _reply_cli(run_id, runs, {"completion": True, "reason": "round two verified"})

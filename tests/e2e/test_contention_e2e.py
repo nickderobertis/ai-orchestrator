@@ -19,6 +19,7 @@ from multiprocessing.synchronize import Event as MPEvent
 from pathlib import Path
 
 import pytest
+from rendezvous import Rendezvous
 from waits import deadline as e2e_deadline
 from waits import timeout as e2e_timeout
 
@@ -330,13 +331,12 @@ def _same_branch_lifecycle_process(
     state_root: str,
     base_config: str,
     persona_dir: str,
-    ready: str,
-    release: str,
+    hold: Rendezvous,
     results: multiprocessing.Queue[dict[str, object]],
 ) -> None:
-    """Drive a real onejudge dispatch that halts at the provider barrier.
+    """Drive a real onejudge dispatch that halts at its rendezvous.
 
-    The barrier lives inside the faked paid model, so the dispatch itself — the
+    The hold lives inside the faked paid model, so the dispatch itself — the
     onejudge subprocess, its worktree, its git — is entirely real. That is the only
     way to hold two runs inside their agents at one instant without standing in for
     the boundary under test.
@@ -344,8 +344,8 @@ def _same_branch_lifecycle_process(
     os.environ["AI_ORCHESTRATOR_HOME"] = state_root
     result = run_repo_task(
         origin,
-        "complete-now write-unique-change: the same branch name from two runs at once "
-        f"provider-barrier-ready={ready} provider-barrier-release={release}",
+        "complete-now write-unique-change: the same branch name from two runs at once"
+        f"{hold.sentinels()}",
         "engineer",
         workspace=Workspace(root, resolver=lambda _spec: Path(canonical), workflow="local"),
         branch=branch,
@@ -369,8 +369,9 @@ def test_concurrent_lifecycles_share_a_branch_name_without_colliding(
     root = tmp_path / "worktrees-parallel"
     barrier = tmp_path / "barrier"
     barrier.mkdir()
-    release = barrier / "release"
-    readies = [barrier / f"ready-{index}" for index in range(2)]
+    # One release for both dispatches: the journey needs them held at one instant.
+    release = barrier / "shared.release"
+    holds = [Rendezvous(barrier / f"ready-{index}", release) for index in range(2)]
     results: multiprocessing.Queue[dict[str, object]] = MP.Queue()
     processes = [
         MP.Process(
@@ -383,8 +384,7 @@ def test_concurrent_lifecycles_share_a_branch_name_without_colliding(
                 os.environ["AI_ORCHESTRATOR_HOME"],
                 str(command_base()),
                 str(personas_dir),
-                str(readies[index]),
-                str(release),
+                holds[index],
                 results,
             ),
         )
@@ -396,9 +396,9 @@ def test_concurrent_lifecycles_share_a_branch_name_without_colliding(
         # Both real dispatches are inside their agents at the same moment, on the
         # same branch name, before either can reach teardown.
         deadline = e2e_deadline(60)
-        while not all(ready.exists() for ready in readies) and time.monotonic() < deadline:
+        while not all(hold.arrived() for hold in holds) and time.monotonic() < deadline:
             time.sleep(0.05)
-        assert all(ready.exists() for ready in readies), "both dispatches never ran at once"
+        assert all(hold.arrived() for hold in holds), "both dispatches never ran at once"
         # The shared checkout is only an object store here: it registers no
         # worktree, so no run's cleanup can prune another run's tree out of it.
         assert gitops.worktrees(canonical) == {"main": canonical.resolve()}
@@ -407,7 +407,7 @@ def test_concurrent_lifecycles_share_a_branch_name_without_colliding(
         live = sorted(entry for entry in root.rglob(".git") if entry.is_file())
         assert len(live) == 2, live
     finally:
-        release.write_text("go\n", encoding="utf-8")
+        holds[0].let_go()
         settled = [results.get(timeout=e2e_timeout(60)) for _ in processes]
         for process in processes:
             _join(process)

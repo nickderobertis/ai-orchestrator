@@ -32,6 +32,7 @@ import pytest
 from conftest import git, install_pre_push_hook
 from fakes import FakeGitHub, FakePRState, make_writing_dispatch
 from git_http import serve_github_origin
+from rendezvous import Rendezvous
 from telemetry_contract import clipped_share_seconds
 from waits import deadline as e2e_deadline
 from waits import timeout as e2e_timeout
@@ -5377,17 +5378,13 @@ def test_cooperative_real_dispatch_cancellation_preserves_and_recovers_branch(
     witness = tmp_path / "cancelled.ticks"
     # The second agent turn holds instead of sleeping, so cancellation always lands
     # on a dispatch that is genuinely mid-work with partial work already committed.
-    held_ready = tmp_path / "cancelled.ready"
-    held_release = tmp_path / "cancelled.release"
+    held = Rendezvous.at(tmp_path, "cancelled")
 
     with ThreadPoolExecutor(max_workers=1) as pool:
         future = pool.submit(
             run_repo_task,
             str(canonical),
-            (
-                f"slow-branch {witness} hold-ready={held_ready} "
-                f"hold-release={held_release} hold-turn=1 write-change"
-            ),
+            f"slow-branch {witness} write-change{held.sentinels(1)}",
             "engineer",
             workspace=workspace,
             base_path=command_base(),
@@ -5398,9 +5395,10 @@ def test_cooperative_real_dispatch_cancellation_preserves_and_recovers_branch(
         )
         deadline = e2e_deadline(15)
         while time.monotonic() < deadline:
-            ticks = witness.read_text(encoding="utf-8").count("tick") if witness.exists() else 0
             changes = list((tmp_path / "cancelled-worktrees").rglob("CHANGE.txt"))
-            if ticks >= 3 and changes and held_ready.is_file():
+            # The second turn parks before it writes anything, so its arrival is what
+            # says the first turn's partial work is already on disk.
+            if changes and held.arrived():
                 break
             time.sleep(0.02)
         else:

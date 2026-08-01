@@ -19,6 +19,7 @@ from datetime import datetime
 from pathlib import Path
 
 import pytest
+from rendezvous import Rendezvous
 from telemetry_contract import clipped_share_seconds, journalled_seconds
 from waits import deadline as e2e_deadline
 
@@ -1393,8 +1394,7 @@ def test_real_cli_recovers_settled_lifecycle_stack_anchor(
     gitops.checkout(canonical, "main")
 
     runs = tmp_path / "runs"
-    child_ready = tmp_path / "child.ready"
-    child_release = tmp_path / "child.release"
+    child = Rendezvous.at(tmp_path, "child")
     plan = tmp_path / "lifecycle-stack-prefix.json"
     plan.write_text(
         json.dumps(
@@ -1420,10 +1420,7 @@ def test_real_cli_recovers_settled_lifecycle_stack_anchor(
                     {
                         "id": "child",
                         "persona": "engineer",
-                        "task": (
-                            f"should-fail provider-barrier-ready={child_ready} "
-                            f"provider-barrier-release={child_release}"
-                        ),
+                        "task": f"should-fail{child.sentinels()}",
                         "max_turns": 5,
                         "deps": ["parent"],
                     },
@@ -1467,14 +1464,14 @@ def test_real_cli_recovers_settled_lifecycle_stack_anchor(
         parent_settled = any(
             event["kind"] == "node-settled" and event.get("node") == "parent" for event in records
         )
-        if parent_settled and child_ready.is_file():
+        if parent_settled and child.arrived():
             break
         time.sleep(0.01)
     else:
         _kill_round_owner(process)
         pytest.fail("run-plan did not reach the lifecycle stack recovery boundary")
     _kill_round_owner(process)
-    child_release.write_text("release\n", encoding="utf-8")
+    child.let_go()
 
     recovered = subprocess.run(
         [*command, "--recover"], cwd=REPO_ROOT, text=True, capture_output=True, check=False
@@ -1517,8 +1514,7 @@ def test_real_cli_recovers_failed_lifecycle_result(
     runs = tmp_path / "runs"
     # The in-flight node's rendezvous: it announces it is parked mid-turn, and waits
     # for the release this test writes only after the first run-plan is dead.
-    in_flight_ready = tmp_path / "in-flight.ready"
-    in_flight_release = tmp_path / "in-flight.release"
+    in_flight = Rendezvous.at(tmp_path, "in-flight")
     plan = tmp_path / "failed-lifecycle-prefix.json"
     plan.write_text(
         json.dumps(
@@ -1572,9 +1568,8 @@ def test_real_cli_recovers_failed_lifecycle_result(
                         # second node-failed for each and failing the
                         # single-terminal-event assertion for the wrong reason.
                         "task": (
-                            f"should-fail slow-branch {tmp_path / 'in-flight.ticks'} "
-                            f"live-edit-slow live-edit-ready={in_flight_ready} "
-                            f"live-edit-release={in_flight_release}"
+                            f"should-fail slow-branch {tmp_path / 'in-flight.ticks'}"
+                            f"{in_flight.sentinels(1)}"
                         ),
                         "max_turns": 5,
                     },
@@ -1655,11 +1650,11 @@ def test_real_cli_recovers_failed_lifecycle_result(
                 "round-01 finished and this run can no longer observe the mid-round "
                 "recovery boundary it exists to prove"
             )
-        in_flight = in_flight_ready.exists() and any(
+        parked = in_flight.arrived() and any(
             event["kind"] == "node-started" and event.get("node") == "in-flight"
             for event in records
         )
-        if {"failed-lifecycle", "gate-failed-lifecycle"} <= failed_lifecycles and in_flight:
+        if {"failed-lifecycle", "gate-failed-lifecycle"} <= failed_lifecycles and parked:
             break
         time.sleep(0.01)
     else:
@@ -1667,7 +1662,7 @@ def test_real_cli_recovers_failed_lifecycle_result(
         pytest.fail("run-plan did not reach the failed lifecycle recovery boundary")
     _kill_round_owner(process)
     # Only now let in-flight run to completion, so the recovery run below terminates.
-    in_flight_release.write_text("release\n", encoding="utf-8")
+    in_flight.let_go()
 
     recovered = subprocess.run(
         [*command, "--recover"], cwd=REPO_ROOT, text=True, capture_output=True, check=False
@@ -1795,8 +1790,7 @@ def test_real_cli_recovers_waiting_and_no_change_lifecycle_results(
     canonical = gitops.clone(origin, tmp_path / "lifecycle-variants-canonical")
     Registry().register(str(canonical), workflow="local")
     runs = tmp_path / "runs"
-    provider_ready = tmp_path / "in-flight-provider-ready"
-    provider_release = tmp_path / "in-flight-provider-release"
+    provider = Rendezvous.at(tmp_path, "in-flight-provider")
     plan = tmp_path / "lifecycle-variants-prefix.json"
     plan.write_text(
         json.dumps(
@@ -1849,10 +1843,7 @@ def test_real_cli_recovers_waiting_and_no_change_lifecycle_results(
                     {
                         "id": "in-flight",
                         "persona": "engineer",
-                        "task": (
-                            f"should-fail provider-barrier-ready={provider_ready} "
-                            f"provider-barrier-release={provider_release}"
-                        ),
+                        "task": f"should-fail{provider.sentinels()}",
                         "max_turns": 5,
                     },
                 ],
@@ -1893,14 +1884,14 @@ def test_real_cli_recovers_waiting_and_no_change_lifecycle_results(
             else []
         )
         settled = {event.get("node") for event in records if event["kind"] == "node-settled"}
-        if {"waiting-lifecycle", "no-change-lifecycle"} <= settled and provider_ready.exists():
+        if {"waiting-lifecycle", "no-change-lifecycle"} <= settled and provider.arrived():
             break
         time.sleep(0.01)
     else:
         _kill_round_owner(process)
         pytest.fail("run-plan did not reach the waiting lifecycle recovery boundary")
     _kill_round_owner(process)
-    provider_release.write_text("release\n", encoding="utf-8")
+    provider.let_go()
 
     original_events = events_path.read_text()
     invalid_results = (

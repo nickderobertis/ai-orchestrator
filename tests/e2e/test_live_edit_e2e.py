@@ -15,6 +15,7 @@ import time
 from pathlib import Path
 
 import yaml
+from rendezvous import Rendezvous
 from waits import deadline
 from waits import timeout as e2e_timeout
 
@@ -143,18 +144,16 @@ def test_real_cli_mutates_live_frontier_and_replays_atomic_edits(
                         "id": "slow_a",
                         "persona": "engineer",
                         "task": (
-                            f"slow-branch {tmp_path / 'a.ticks'} live-edit-slow "
-                            f"live-edit-ready={tmp_path / 'a.ready'} "
-                            f"live-edit-release={tmp_path / 'a.release'}"
+                            f"slow-branch {tmp_path / 'a.ticks'}"
+                            f"{Rendezvous.at(tmp_path, 'a').sentinels(1)}"
                         ),
                     },
                     {
                         "id": "slow_b",
                         "persona": "engineer",
                         "task": (
-                            f"slow-branch {tmp_path / 'b.ticks'} live-edit-slow "
-                            f"live-edit-ready={tmp_path / 'b.ready'} "
-                            f"live-edit-release={tmp_path / 'b.release'}"
+                            f"slow-branch {tmp_path / 'b.ticks'}"
+                            f"{Rendezvous.at(tmp_path, 'b').sentinels(1)}"
                         ),
                     },
                     {
@@ -231,8 +230,8 @@ def test_real_cli_mutates_live_frontier_and_replays_atomic_edits(
     # can still cancel them. Their ready files do — the backend writes one from
     # inside the turn it then holds until a release this test never writes, so from
     # here they provably cannot settle first however starved the box is.
-    _wait_for(tmp_path / "a.ready", lambda text: text == "ready\n", LIVE_PROCESS_TIMEOUT)
-    _wait_for(tmp_path / "b.ready", lambda text: text == "ready\n", LIVE_PROCESS_TIMEOUT)
+    Rendezvous.at(tmp_path, "a").wait(LIVE_PROCESS_TIMEOUT)
+    Rendezvous.at(tmp_path, "b").wait(LIVE_PROCESS_TIMEOUT)
     _wait_for_event(events, "human-waiting", "approve")
 
     # A command that cannot be applied is refused at submission with the reason,
@@ -429,9 +428,8 @@ def test_real_cli_attest_and_reparent_reach_the_running_graph(
                         "id": "slow",
                         "persona": "engineer",
                         "task": (
-                            f"slow-branch {tmp_path / 'slow.ticks'} live-edit-slow "
-                            f"live-edit-ready={tmp_path / 'slow.ready'} "
-                            f"live-edit-release={tmp_path / 'slow.release'}"
+                            f"slow-branch {tmp_path / 'slow.ticks'}"
+                            f"{Rendezvous.at(tmp_path, 'slow').sentinels(1)}"
                         ),
                     },
                     {"id": "approve", "kind": "human", "task": "Approve the release"},
@@ -476,7 +474,7 @@ def test_real_cli_attest_and_reparent_reach_the_running_graph(
     run_id = str(json.loads(launched.stdout)["run_id"])
     run_dir = runs / run_id
     events = run_dir / "events.jsonl"
-    _wait_for(tmp_path / "slow.ready", lambda text: text == "ready\n", LIVE_PROCESS_TIMEOUT)
+    Rendezvous.at(tmp_path, "slow").wait(LIVE_PROCESS_TIMEOUT)
     _wait_for(events, lambda text: text.count('"kind": "human-waiting"') >= 2)
 
     # `after_approve` and `reparented` are both derived-blocked behind a waiting
@@ -497,8 +495,8 @@ def test_real_cli_attest_and_reparent_reach_the_running_graph(
     )
     # The slow worker is still held: nothing but the edits themselves moved the
     # frontier, and its three free slots were available the whole time.
-    assert not (tmp_path / "slow.release").exists()
-    (tmp_path / "slow.release").write_text("release\n", encoding="utf-8")
+    assert not Rendezvous.at(tmp_path, "slow").release.exists()
+    Rendezvous.at(tmp_path, "slow").let_go()
 
     result_path = run_dir / "round-01" / "result.json"
     _wait_for(result_path, lambda text: bool(text.strip()), LIVE_PROCESS_TIMEOUT)
@@ -555,9 +553,8 @@ def test_real_cli_rejects_an_inapplicable_command_at_submission(
                         "id": "slow",
                         "persona": "engineer",
                         "task": (
-                            f"slow-branch {tmp_path / 'slow.ticks'} live-edit-slow "
-                            f"live-edit-ready={tmp_path / 'slow.ready'} "
-                            f"live-edit-release={tmp_path / 'slow.release'}"
+                            f"slow-branch {tmp_path / 'slow.ticks'}"
+                            f"{Rendezvous.at(tmp_path, 'slow').sentinels(1)}"
                         ),
                     },
                     {"id": "approve", "kind": "human", "task": "Approve the release"},
@@ -589,7 +586,7 @@ def test_real_cli_rejects_an_inapplicable_command_at_submission(
     run_id = str(json.loads(launched.stdout)["run_id"])
     run_dir = runs / run_id
     events = run_dir / "events.jsonl"
-    _wait_for(tmp_path / "slow.ready", lambda text: text == "ready\n", LIVE_PROCESS_TIMEOUT)
+    Rendezvous.at(tmp_path, "slow").wait(LIVE_PROCESS_TIMEOUT)
     _wait_for(events, lambda text: '"kind": "human-waiting"' in text)
 
     before = events.read_text(encoding="utf-8")
@@ -602,7 +599,7 @@ def test_real_cli_rejects_an_inapplicable_command_at_submission(
     assert events.read_text(encoding="utf-8") == before
     assert not (run_dir / "channel" / "commands.jsonl").exists()
 
-    (tmp_path / "slow.release").write_text("release\n", encoding="utf-8")
+    Rendezvous.at(tmp_path, "slow").let_go()
     _wait_for(
         run_dir / "round-01" / "result.json",
         lambda text: bool(text.strip()),
@@ -641,8 +638,7 @@ def test_real_cli_live_drop_preserves_and_recovers_running_lifecycle(
     base_path = tmp_path / "lifecycle-base.yaml"
     base_path.write_text(yaml.safe_dump(base), encoding="utf-8")
     witness = tmp_path / "lifecycle.ticks"
-    provider_ready = tmp_path / "lifecycle.ready"
-    provider_release = tmp_path / "lifecycle.release"
+    provider = Rendezvous.at(tmp_path, "lifecycle")
     branch = "feature/live-cancel"
     plan = tmp_path / "lifecycle-plan.json"
     plan.write_text(
@@ -656,11 +652,7 @@ def test_real_cli_live_drop_preserves_and_recovers_running_lifecycle(
                         "repo": str(canonical),
                         "execution_checkout": str(canonical),
                         "persona": "engineer",
-                        "task": (
-                            f"slow-branch {witness} live-edit-slow write-change "
-                            f"live-edit-ready={provider_ready} "
-                            f"live-edit-release={provider_release}"
-                        ),
+                        "task": f"slow-branch {witness} write-change{provider.sentinels(1)}",
                         "branch": branch,
                         "verify_cmd": ["test", "-f", "CHANGE.txt"],
                     },
@@ -702,9 +694,9 @@ def test_real_cli_live_drop_preserves_and_recovers_running_lifecycle(
     assert nested is not None
     events = nested / "events.jsonl"
     _wait_for(events, lambda text: '"kind": "node-started"' in text)
-    _wait_for(provider_ready, lambda text: text == "ready\n", timeout=LIVE_PROCESS_TIMEOUT)
+    provider.wait(LIVE_PROCESS_TIMEOUT)
     _reply(run_id, runs, [{"op": "drop", "id": "lifecycle", "dependents": "drop"}])
-    provider_release.write_text("release\n", encoding="utf-8")
+    provider.let_go()
     _wait_for(
         events,
         lambda text: '"kind": "node-settled"' in text and '"status": "cancelled"' in text,
@@ -822,9 +814,8 @@ def test_planner_context_attached_mid_round_reaches_the_next_round_dispatch(
                         "id": "hold",
                         "persona": "engineer",
                         "task": (
-                            f"slow-branch {tmp_path / 'hold.ticks'} live-edit-slow "
-                            f"live-edit-ready={tmp_path / 'hold.ready'} "
-                            f"live-edit-release={tmp_path / 'hold.release'}"
+                            f"slow-branch {tmp_path / 'hold.ticks'}"
+                            f"{Rendezvous.at(tmp_path, 'hold').sentinels(1)}"
                         ),
                     },
                     {
@@ -865,7 +856,7 @@ def test_planner_context_attached_mid_round_reaches_the_next_round_dispatch(
     # The round has to still be executing when the note is submitted — that is the
     # case the incident was — so one worker is held inside its turn while the node
     # the note is about has already failed and a third node has already settled.
-    _wait_for(tmp_path / "hold.ready", lambda text: text == "ready\n", LIVE_PROCESS_TIMEOUT)
+    Rendezvous.at(tmp_path, "hold").wait(LIVE_PROCESS_TIMEOUT)
     _wait_for_event(events, "node-failed", "work", LIVE_PROCESS_TIMEOUT)
     _wait_for_event(events, "node-settled", "settled", LIVE_PROCESS_TIMEOUT)
 
@@ -883,7 +874,7 @@ def test_planner_context_attached_mid_round_reaches_the_next_round_dispatch(
         ],
     )
 
-    (tmp_path / "hold.release").touch()
+    Rendezvous.at(tmp_path, "hold").let_go()
     _wait_for(run_dir / "round-01" / "result.json", lambda text: bool(text.strip()))
     round_one = json.loads((run_dir / "round-01" / "result.json").read_text(encoding="utf-8"))
     assert round_one["results"]["work"]["status"] == "failed"

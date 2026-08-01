@@ -11,8 +11,11 @@ from __future__ import annotations
 import ast
 import importlib.util
 import sys
+import threading
+from pathlib import Path
 from types import ModuleType
 
+import pytest
 from conftest import FAKE_BACKEND
 
 from orchestrator.dispatch import REPORTED_BLOCKER_PREFIX
@@ -51,3 +54,36 @@ def test_double_imports_only_the_standard_library() -> None:
         f"{FAKE_BACKEND.name} is spawned once per protocol step; importing {outside} "
         "charges that cost to every step of every real-onejudge journey"
     )
+
+
+def test_the_double_holds_at_the_rendezvous_the_suite_renders(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The one rendezvous convention has two sides, and only one of them is here.
+
+    `tests/e2e/rendezvous.py` renders the sentinels and the double parses them; the
+    double cannot import it, because a spawned protocol step pays for every import.
+    A silent rename on either side would leave every journey that holds a node
+    racing the assertion it exists to make observable, so the shapes are matched
+    against each other here.
+    """
+    monkeypatch.syspath_prepend(str(FAKE_BACKEND.parent))
+    from rendezvous import Rendezvous
+
+    double = _load_double()
+    held = Rendezvous.at(tmp_path, "contract")
+    task = f"complete-now{held.sentinels(2)}"
+
+    assert double._hold_until_released(task, 0) is False, "an unnamed turn must not hold"
+    assert not held.arrived()
+
+    releases: list[bool] = []
+    holding = threading.Thread(target=lambda: releases.append(double._hold_until_released(task, 2)))
+    holding.start()
+    try:
+        held.wait(5)
+        assert holding.is_alive(), "the named turn returned before the test released it"
+    finally:
+        held.let_go()
+        holding.join(timeout=30)
+    assert releases == [True]

@@ -24,11 +24,11 @@ Outcome is steered by sentinels in the task (the first user message):
                        after one push, exercising the two-sided loop (exit 0).
 
 A journey that needs a node observably in flight names its own rendezvous rather
-than timing a sleep: `slow-branch <witness> hold-ready=<path> hold-release=<path>`
-makes the agent turn announce it has arrived and then block until the test creates
-the release path, and `hold-turn=<n>` selects the zero-based agent turn that holds
-(the first by default). A `slow-branch` task that names no rendezvous does not
-delay at all.
+than timing a sleep: `hold-<turn>-ready=<path> hold-<turn>-release=<path>` makes
+that zero-based agent turn announce it has arrived and then block until the test
+creates the release path. One turn holds per named pair, so a journey that needs two
+stops names two turns; a task that names none never delays. `tests/e2e/rendezvous.py`
+renders the fragment and is the only convention there is — no journey needs a second.
 """
 
 # llmlint: ignore-file[boundary_inputs_validated] this deterministic test backend validates the
@@ -107,17 +107,18 @@ def _planner_guidance(messages: list[dict]) -> str | None:
     return None
 
 
-def _hold_until_released(task: str, name: str) -> bool:
-    """Hold this turn at a test-controlled rendezvous, reporting whether it held.
+def _hold_until_released(task: str, turn: int) -> bool:
+    """Hold this agent turn at its rendezvous, reporting whether it held.
 
-    The test names a ready path and a release path in the task; this announces it
-    has arrived and then blocks until the test releases it. Holding on the test's
-    signal keeps the agent in flight exactly as long as the journey needs, where a
-    fixed sleep both costs that time unconditionally and races the assertion it
-    was meant to make observable.
+    The test names a ready path and a release path per turn in the task; this
+    announces it has arrived and then blocks until the test releases it. Holding on
+    the test's signal keeps the agent in flight exactly as long as the journey needs,
+    where a fixed sleep both costs that time unconditionally and races the assertion
+    it was meant to make observable. A turn the task does not name runs straight
+    through, which is what makes one rendezvous enough for every journey.
     """
-    ready = re.search(rf"{name}-ready=(\S+)", task)
-    release = re.search(rf"{name}-release=(\S+)", task)
+    ready = re.search(rf"hold-{turn}-ready=(\S+)", task)
+    release = re.search(rf"hold-{turn}-release=(\S+)", task)
     if ready is None or release is None:
         return False
     Path(ready.group(1)).write_text("ready\n", encoding="utf-8")
@@ -125,12 +126,6 @@ def _hold_until_released(task: str, name: str) -> bool:
     while not released.exists():
         time.sleep(0.01)
     return True
-
-
-def _hold_turn(task: str) -> int:
-    """Return the agent turn a `slow-branch` rendezvous holds at."""
-    match = re.search(r"hold-turn=(\d+)", task)
-    return int(match.group(1)) if match is not None else 0
 
 
 def _commit_and_push_ci_iteration(state: str) -> None:
@@ -257,8 +252,9 @@ def main() -> int:
 
     match op:
         case "respond":
-            # A deterministic real-provider boundary for the crash-recovery tests.
-            _hold_until_released(task, "provider-barrier")
+            # A deterministic real-provider boundary: whatever this turn is about to
+            # do, the journey holding it here decides when it happens.
+            _hold_until_released(task, _assistant_turns(messages))
             if "Check-in command: " in task and "agent-synthesized planner update" in task:
                 channel_dir = Path(task.split("Channel directory: ", 1)[1].splitlines()[0])
                 attempts = channel_dir / "check-in-dispatches.txt"
@@ -317,17 +313,7 @@ def main() -> int:
             if "slow-branch" in task:
                 witness = Path(task.split("slow-branch", 1)[1].strip().split()[0])
                 with witness.open("a", encoding="utf-8") as stream:
-                    stream.write("tick\n")
-                if (
-                    "live-edit-slow" in task
-                    and _assistant_turns(messages) > 0
-                    and not _hold_until_released(task, "live-edit")
-                ):
-                    raise AssertionError("live-edit-slow requires ready and release paths")
-                with witness.open("a", encoding="utf-8") as stream:
-                    stream.write("tick\n")
-                if "live-edit-slow" not in task and _assistant_turns(messages) == _hold_turn(task):
-                    _hold_until_released(task, "hold")
+                    stream.write("tick\ntick\n")
             orchestrator_plan = _orchestrator_command(task)
             infrastructure_failures = {
                 "provider-errors": "fake_backend: provider error",
@@ -597,8 +583,6 @@ def main() -> int:
                 agent_message = "Terminal blocker: required external service is unavailable."
             elif "repeat-productive" in task:
                 agent_message = "continuing verified migration work"
-            elif "large-dispatch-report" in task:
-                agent_message = "done " + "x" * 10_000_000
             else:
                 agent_message = "done" if done else "working on it"
             resp = {

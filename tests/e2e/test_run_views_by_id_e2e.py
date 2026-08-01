@@ -39,6 +39,7 @@ from pathlib import Path
 import pytest
 import yaml
 from history_store import write_worker_session
+from rendezvous import Rendezvous
 from waits import deadline
 from waits import timeout as e2e_timeout
 
@@ -139,8 +140,7 @@ def test_every_read_only_view_reports_one_run_by_the_id_launch_json_advertises(
     tmp_path: Path, launched: list[str], onejudge_bin: str
 ) -> None:
     runs = tmp_path / "runs"
-    ready = tmp_path / "held.ready"
-    release = tmp_path / "held.release"
+    held = Rendezvous.at(tmp_path, "held")
     live_plan = tmp_path / "live-plan.json"
     live_plan.write_text(
         json.dumps(
@@ -152,10 +152,7 @@ def test_every_read_only_view_reports_one_run_by_the_id_launch_json_advertises(
                     {
                         "id": "held",
                         "persona": "engineer",
-                        "task": (
-                            f"slow-branch {tmp_path / 'held.ticks'} live-edit-slow "
-                            f"live-edit-ready={ready} live-edit-release={release}"
-                        ),
+                        "task": f"slow-branch {tmp_path / 'held.ticks'}{held.sentinels(1)}",
                     },
                     {
                         "id": "boom",
@@ -257,7 +254,7 @@ def test_every_read_only_view_reports_one_run_by_the_id_launch_json_advertises(
     )
 
     try:
-        _await_unsettled_round_with_a_failed_node(runs / live, ready)
+        _await_unsettled_round_with_a_failed_node(runs / live, held.ready)
 
         # Defect 2: this positional did not exist, so a run could not be named at all.
         scoped = _view("telemetry", tmp_path, advertised)
@@ -342,4 +339,4 @@ def test_every_read_only_view_reports_one_run_by_the_id_launch_json_advertises(
         assert unknown.returncode == 2
         assert "no recorded run 'no-such-run'" in unknown.stderr
     finally:
-        release.write_text("go\n", encoding="utf-8")
+        held.let_go()

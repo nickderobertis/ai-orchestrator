@@ -29,6 +29,7 @@ import pytest
 import yaml
 from mock_oneharness import BARRIER_DEATH_NOTICE
 from nx_workspace import requires_workspace_install
+from rendezvous import Rendezvous
 
 from orchestrator import PERSONA_DIR, REPO_ROOT
 from orchestrator.channel import (
@@ -396,8 +397,8 @@ def test_real_run_plan_round_budget_surfaces_blocking_proposal(
     runs = tmp_path / "runs"
     run_dir = runs / "round-budget"
     channel = create_channel(run_dir)
-    ready = tmp_path / "ready"
-    release = tmp_path / "never-release"
+    # Never released: the round budget, not the agent, is what ends this run.
+    wedged = Rendezvous(tmp_path / "wedged.ready", tmp_path / "never-release")
     plan = tmp_path / "plan.json"
     plan.write_text(
         json.dumps(
@@ -406,9 +407,7 @@ def test_real_run_plan_round_budget_surfaces_blocking_proposal(
                     {
                         "id": "wedged",
                         "persona": "engineer",
-                        "task": (
-                            f"provider-barrier-ready={ready} provider-barrier-release={release}"
-                        ),
+                        "task": wedged.sentinels().strip(),
                     }
                 ]
             }
@@ -451,7 +450,7 @@ def test_real_run_plan_round_budget_surfaces_blocking_proposal(
         ),
         "blocking": True,
     }
-    release.touch()
+    wedged.let_go()
     write_message(
         channel / "down.fifo",
         {"completion": False, "message": "stop", "reason": "budget exhausted"},
