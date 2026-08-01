@@ -265,7 +265,7 @@ side lives in oneharness config, not onejudge:
 
 - **Agent side** (does the work) — `oneharness.toml`, discovered from the repo root;
   it prefers `claude-code:alternate` on the alternate subscription and falls back
-  to codex.
+  to codex, then to the second codex identity.
 - **Judge / simulated-user side** (supervises) — `oneharness.judge.toml`, passed
   as the base config's `provider.judge_config`; codex is primary and
   `claude-code:primary` uses only the primary subscription.
@@ -276,11 +276,23 @@ side lives in oneharness config, not onejudge:
   long-lived supervisory process never queues ahead of the workers for the
   subscription they depend on.
 - **LLM lint side** — `oneharness.llmlint.toml`, forced by
-  `scripts/llmlint-oneharness.sh`; it is codex-only.
+  `scripts/llmlint-oneharness.sh`; it is codex-only, so its only backup is the
+  second codex identity below.
 
 Both alternate-subscription wrappers derive `ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR`
 from one source, `scripts/claude-alt-config-dir.sh`, so no role needs it exported
 by hand and the two cannot drift apart.
+
+Every one of those chains then ends in `codex:alternate`, a **second codex
+identity** that absorbs an exhausted quota without changing which subscription a
+role competes for. `scripts/codex-alt-home.sh` is its one source — it derives
+`ORCHESTRATOR_CODEX_ALT_HOME` as `$HOME/.codex-alt` and all three wrappers source
+it, because oneharness refuses to start whenever that indirection is unset.
+Authenticate it with `CODEX_HOME="$HOME/.codex-alt" codex login`; until then the
+candidate costs nothing, since the helper guarantees the directory **exists** and
+an empty codex home falls through as `auth` while an absent one hard-fails. That
+asymmetry is the whole reason the helper creates it — see
+[The second Codex identity](docs/onejudge-integration.md#the-second-codex-identity).
 
 `onejudge init` scaffolds both files plus a starter `onejudge.yaml`. The adopted
 exact oneharness release is declared in `config/oneharness.version`, installed as

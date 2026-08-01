@@ -4,7 +4,17 @@
 run_mode = "fallback"
 history = true
 history_labels = { role = "llmlint" }
-harnesses = ["codex"]
+# Both candidates are Codex on purpose: this tier stays off Claude Code entirely,
+# so its only usable backup for an exhausted quota is a second Codex identity.
+harnesses = ["codex", "codex:alternate"]
 
 [harness.codex]
 model = "gpt-5.6-sol"
+
+# The second Codex identity; held identical to oneharness.toml's by
+# tests/test_harness_routing.py, since one drifted copy would silently change how
+# a role authenticates. See scripts/codex-alt-home.sh for the indirection.
+[harness.codex.variant.alternate]
+model = "gpt-5.6-sol"
+env_from = { CODEX_HOME = "ORCHESTRATOR_CODEX_ALT_HOME" }
+unset_env = ["OPENAI_API_KEY"]
