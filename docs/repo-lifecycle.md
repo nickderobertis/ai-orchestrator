@@ -421,6 +421,23 @@ keep that honest rather than silent, a passing `just gate` reports which base
 commit was judged and whether the verdict was judged now or replayed from the
 record — green is always a claim about one specific base commit.
 
+None of that is provable from one checkout, which is where this went wrong once:
+`tests/e2e/test_llmlint_cache_e2e.py` asks twice from the same tree, and
+production never does. `tests/e2e/test_llmlint_two_path_verdict_e2e.py` runs the
+tier's recipe from both callers instead — a worker worktree carrying the
+`LLMLINT_ONEHARNESS_BIN` a dispatch inherits, and a detached scratch worktree
+rebuilt by a squash merge carrying only the comparison identity a publishing push
+does, both cut from one clone — and counts how many times the judge was rolled for
+one content and one base. The answer has to be once. Run it against the fingerprint
+as it stood before `2ba9685` and it is twice, in both directions: the primary
+journey sees the merge path re-judge work that had already been cleared, and the
+failed-gate journey watches a recorded **failure** get overruled by a fresh pass.
+The three invalidations are asserted across the two paths for the same reason,
+because a fix that made them agree by hashing less would replay a verdict for a
+tree nobody judged. The publishing push those verdicts gate is not restaged there;
+`tests/e2e/test_gate_verdict_consistency_e2e.py` already drives it through the real
+lifecycle.
+
 Forcing a real re-judge is deliberately **per tier and per invocation**:
 
 ```sh
