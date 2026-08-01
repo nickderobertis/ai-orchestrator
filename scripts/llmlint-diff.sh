@@ -58,8 +58,17 @@ labels="$(uv run orchestrator-history-labels role=llmlint)" || {
   echo "lint-llm-diff: could not derive harness history labels; run 'just bootstrap' and retry" >&2
   exit 1
 }
-[[ "$labels" =~ ^[A-Za-z0-9_]+=[^,[:space:]]*(,[A-Za-z0-9_]+=[^,[:space:]]*)*$ ]] || {
-  echo "lint-llm-diff: harness history labels are not comma-separated key=value pairs; run 'just bootstrap' and retry" >&2
+# The alphabet is orchestrator/labels.py's, which is the declared trust boundary for
+# the label contract: a narrower opinion here could only reject a label that module
+# deliberately passed through, such as an inherited key with a hyphen or a value with
+# a space. This second opinion is still needed — the renderer above is reached through
+# PATH and can be replaced — so it is held to the first one by the drift gate in
+# tests/test_labels.py, which lifts these two patterns out of this file and sweeps them
+# against that module character by character. Change either side and that gate fails.
+key='[A-Za-z0-9][A-Za-z0-9._-]{0,63}'
+value='[^,[:cntrl:]]+'
+[[ "$labels" =~ ^${key}=${value}(,${key}=${value})*$ ]] || {
+  echo "lint-llm-diff: harness history labels are not comma-separated key=value pairs: '$labels'; correct or unset ONEHARNESS_HISTORY_LABELS and retry" >&2
   exit 1
 }
 
