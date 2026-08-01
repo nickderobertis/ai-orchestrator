@@ -1713,3 +1713,48 @@ def test_a_surface_that_outlives_its_round_is_discarded_and_frees_the_pacemaker(
     assert queued["round"] == 2
     assert next_surface(run_dir, timeout=0.01)["surface"]["message"] == "round two is dispatching"
     capsys.readouterr()
+
+
+def test_the_pacemaker_keeps_firing_while_its_update_sits_unread(tmp_path: Path) -> None:
+    """The wedge, driven through the real pacemaker: no consumer, and it keeps going.
+
+    Two live runs on 2026-08-01 had received exactly one surface each and gone
+    silent for over an hour with the interval lowered to 900s. The claim was held
+    from dispatch until *consumption*, and `record_surface` — which runs only on
+    consumption — was the one thing that released it, so a planner who never read
+    the channel was told least of all. Nothing here is stood in for except the paid
+    check-in agent, and its stand-in queues through the same real `channel-surface`
+    entry point the agent invokes.
+    """
+    runs = tmp_path / "runs"
+    run_dir = runs / "unread"
+    channel = create_channel(run_dir, heartbeat_interval=0.05)
+    (run_dir / "round-01").mkdir()
+    queued: list[str] = []
+
+    def dispatch_check_in() -> None:
+        message = f"update {len(queued) + 1}"
+        assert main_surface(["unread", message, "--runs-dir", str(runs)]) == 0
+        queued.append(message)
+
+    pump = ProposalPump(channel, "unread", 1, dispatch_check_in=dispatch_check_in)
+    surface = channel / HEARTBEAT_SURFACE_FILE
+    try:
+        wait_until = time.monotonic() + 10
+        while len(queued) < 3 and time.monotonic() < wait_until:
+            # Reading the pending surface the way `just monitor` renders it never
+            # consumes it, and must not be what stops the run reporting.
+            assert pending_surface_indicator(run_dir) is None or surface.is_file()
+            time.sleep(0.01)
+    finally:
+        pump.close()
+
+    assert len(queued) >= 3, queued
+    # Exactly one update is ever pending, and it is the newest: the check-in
+    # replaces the snapshot nobody read rather than piling a second one beside it.
+    assert pending_surfaces(channel) == pending_surfaces(channel)[:1]
+    assert json.loads(surface.read_text(encoding="utf-8"))["surface"]["message"] == queued[-1]
+    # The staleness the views report is measured from the last update a planner
+    # actually read, so refreshing the queue entry cannot reset it.
+    state = _heartbeat(channel)
+    assert state["last_surface_at"] < state["last_attempt_at"]
