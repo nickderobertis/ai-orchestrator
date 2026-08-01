@@ -8,7 +8,6 @@ import re
 import signal
 import subprocess
 import sys
-import threading
 import time
 from contextlib import suppress
 from pathlib import Path
@@ -203,9 +202,14 @@ def test_due_heartbeat_surfaces_during_active_step_and_disabled_run_stays_silent
         time.sleep(0.01)
     assert cleared_state is not None
     assert cleared_state["due"] is False
-    retry_not_before = cleared_state["retry_not_before"]
-    assert isinstance(retry_not_before, int | float)
-    assert retry_not_before > time.time()
+    assert cleared_state["claim"] is None
+    # The deferral is a timestamp compared against the *current* interval on every
+    # tick, not a deadline baked from the interval in force when the attempt failed:
+    # that is what lets a planner lowering the interval mid-flight bring the retry
+    # forward, and what stops a stored deadline outliving the setting that produced it.
+    last_attempt = cleared_state["last_attempt_at"]
+    assert isinstance(last_attempt, int | float)
+    assert last_attempt > 0
     assert hold.arrived()
     queued_path = runs / run_id / "channel" / "heartbeat-surface.json"
     queue_deadline = deadline(120)
@@ -235,13 +239,15 @@ def test_due_heartbeat_surfaces_during_active_step_and_disabled_run_stays_silent
     # llmlint: ignore[tests_mirror_real_usage] Required journal audit has no CLI view.
     queued_events = (runs / run_id / "events.jsonl").read_text(encoding="utf-8")
     assert queued_state["last_surface_at"] == initial_state["last_surface_at"]
-    assert queued_state["due"] is True
-    # llmlint: ignore[tests_mirror_real_usage] Acceptance requires proving the
-    # failed attempt's durable in-flight claim clears before its retry succeeds.
-    assert queued_state["in_flight"] is True
+    # llmlint: ignore[tests_mirror_real_usage] Acceptance requires proving the lease a
+    # queued update used to hold for the rest of the run is handed straight back.
+    # The claim covers the *dispatch*, so a queued update holds nothing: held to
+    # consumption, the one check-in nobody read was the last the run ever sent.
+    assert queued_state["in_flight"] is False
+    assert queued_state["claim"] is None
     # llmlint: ignore[tests_mirror_real_usage] Acceptance requires proving retry
     # waits for the next durable heartbeat interval rather than the next tick.
-    assert queued_path.stat().st_mtime >= queued_state["retry_not_before"]
+    assert queued_path.stat().st_mtime >= queued_state["last_attempt_at"]
     assert '"kind":"planner-surfaced"' not in queued_events
     # llmlint: ignore[tests_mirror_real_usage] The deterministic command provider
     # replaces only the paid model and records labels from the real subprocess env.
@@ -710,7 +716,6 @@ def test_live_channel_runs_real_nested_graph_and_round_trips_guidance(
     run_dir = runs / run_id
     launch = json.loads((run_dir / "launch.json").read_text(encoding="utf-8"))
     assert launch["commands"] == {
-        "watch": f"just watch {run_id}",
         "channel_next": f"just channel-next {run_id}",
         "monitor": f"just monitor {run_id}",
     }
@@ -1536,21 +1541,57 @@ def test_a_queued_update_nobody_read_is_reported_until_it_is_consumed(
     assert sent[0]["detail"]["kind"] == "heartbeat"
     assert sent[0]["at"] > 0
 
-    # Ignoring the channel makes the harness louder, not quieter: the reported age
-    # keeps growing while exactly one check-in stays pending, so a planner is never
-    # charged extra agent turns for having looked away.
+    # Ignoring the channel makes the harness louder, not quieter, and in two ways.
+    # The reported staleness keeps growing — measured from the last update a planner
+    # actually read, so a refreshed queue entry cannot reset it — and the pacemaker
+    # keeps firing on its interval instead of falling silent behind an unread update.
+    # This is the wedge the incident was: the claim was held until *consumption*, so
+    # one surface nobody read was the last check-in the run ever dispatched, and no
+    # interval change reached it.
+    # `just monitor` renders the pending surface without consuming it, and it is the
+    # command `planner.md` hands the planner. Running it here is the point: a planner
+    # who follows that advice must not thereby silence the run for good.
+    rendered = subprocess.run(
+        ["just", "monitor", run_id, "--once", "--runs-dir", str(runs)],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    assert "heartbeat" in rendered.stdout, rendered.stdout
+
     first_age = _queued_age(listed)
-    growth_deadline = deadline(60)
-    while time.monotonic() < growth_deadline:
-        if _queued_age(_view_cli("runs", runs, history)) > first_age:
-            break
-        time.sleep(0.5)
-    else:  # pragma: no cover - only reached when the reported staleness stops growing
-        raise AssertionError("the queued surface's reported staleness never grew")
-    # llmlint: ignore[tests_mirror_real_usage] Exact dispatch dedup is observable only
-    # at the paid-provider seam; onejudge, the pacemaker, and the channel stay real.
-    dispatched = (runs / run_id / "channel" / "check-in-dispatches.txt").read_text(encoding="utf-8")
-    assert dispatched.splitlines() == ["success"], dispatched
+    dispatches = runs / run_id / "channel" / "check-in-dispatches.txt"
+    # llmlint: ignore[tests_mirror_real_usage] Required durable clock audit has no CLI view.
+    heartbeat_path = runs / run_id / "channel" / "heartbeat.json"
+    grew = False
+    redispatched = False
+    rearmed = 0
+    was_due = True
+    growth_deadline = deadline(180)
+    while time.monotonic() < growth_deadline and not (grew and redispatched and rearmed >= 2):
+        listing = _view_cli("runs", runs, history)
+        # Exactly one update stays pending however long it is ignored: a fresh
+        # check-in replaces the stale snapshot rather than piling up beside it.
+        still_queued = _QUEUED_LINE.search(listing)
+        assert still_queued is not None and still_queued.group(1) == "1", listing
+        grew = grew or _queued_age(listing) > first_age
+        # llmlint: ignore[tests_mirror_real_usage] Exact dispatch counting is observable
+        # only at the paid-provider seam; onejudge, the pacemaker, and the channel stay real.
+        redispatched = (
+            redispatched or dispatches.read_text(encoding="utf-8").count("success") >= 2
+        )
+        # The clock keeps re-arming behind the unread update: each rising edge of
+        # `due` is one further check-in falling due, which is precisely what the held
+        # claim used to make impossible for the rest of a run's life.
+        state = json.loads(heartbeat_path.read_text(encoding="utf-8"))
+        rearmed += 1 if state["due"] and not was_due else 0
+        was_due = bool(state["due"])
+        time.sleep(0.2)
+    assert grew, "the queued surface's reported staleness never grew"
+    assert redispatched, dispatches.read_text(encoding="utf-8")
+    assert rearmed >= 2, f"the pacemaker fell due {rearmed} further time(s) behind an unread update"
+    assert queued_path.is_file(), "the single pending surface was lost rather than refreshed"
 
     # Quiet the pacemaker before consuming, so what the views report afterwards is
     # this update's absence rather than a race with the next one.
@@ -1587,58 +1628,69 @@ def test_a_queued_update_nobody_read_is_reported_until_it_is_consumed(
     _wait_report(runs / run_id / "orchestrator" / "report.json")
 
 
-def _watch_lines(process: subprocess.Popen[str]) -> list[str]:
-    """Collect `just watch` output off-thread so the test can act on it as it lands."""
-    assert process.stdout is not None
-    collected: list[str] = []
-
-    def pump() -> None:
-        for line in process.stdout:  # type: ignore[union-attr]
-            collected.append(line)
-
-    threading.Thread(target=pump, daemon=True).start()
-    return collected
-
-
-def _await_watch_line(collected: list[str], needle: str, *, wait_seconds: float = 60) -> None:
-    line_deadline = deadline(wait_seconds)
-    while time.monotonic() < line_deadline:
-        if any(needle in line for line in collected):
-            return
-        time.sleep(0.05)
-    raise AssertionError(f"just watch never printed {needle!r}: {''.join(collected)}")
-
-
-def test_watch_attaches_to_a_detached_launch_and_returns_when_the_run_settles(
+def test_lowering_the_interval_mid_flight_brings_the_next_check_in_forward(
     tmp_path: Path, onejudge_bin: str
 ) -> None:
-    """One command to learn: surfaces and node transitions, until the run settles."""
-    runs = tmp_path / "watch-runs"
-    run_id = _launch_cli(_plan(tmp_path, "surface-milestone"), runs, _base(tmp_path), onejudge_bin)
-    launch = json.loads((runs / run_id / "launch.json").read_text(encoding="utf-8"))
-    assert launch["commands"]["watch"] == f"just watch {run_id}"
-    assert f"just watch {run_id}" in (runs / run_id / "planner.md").read_text(encoding="utf-8")
+    """The interval is the only knob, proven against the run that proved it was not.
 
-    watching = subprocess.Popen(
-        ["just", "watch", run_id, "--runs-dir", str(runs), "--poll-interval", "0.5"],
-        cwd=REPO_ROOT,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+    Two live runs sat at `in_flight=True, due=True` for over an hour each with the
+    interval lowered to 900s and nothing happening, which is the diagnostic that
+    separated the wedge from the clock: the claim was held until a planner consumed
+    the one queued update, so no cadence setting could reach the pacemaker. Here the
+    launch interval is long enough that nothing would fire on its own, the planner
+    lowers it through an ordinary `channel-reply` while a worker is held at the real
+    provider boundary, and the check-in that follows is the evidence.
+    """
+    runs = tmp_path / "interval-runs"
+    ready = tmp_path / "interval-worker.ready"
+    release = tmp_path / "interval-worker.release"
+    plan = tmp_path / "interval-knob.json"
+    plan.write_text(
+        json.dumps(
+            {
+                "schema_version": 3,
+                "name": "interval-knob",
+                "tasks": [
+                    {
+                        "id": "held-worker",
+                        "persona": "engineer",
+                        "task": (
+                            "complete-now interval-knob "
+                            f"provider-barrier-ready={ready} provider-barrier-release={release}"
+                        ),
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
     )
-    collected = _watch_lines(watching)
-    try:
-        _await_watch_line(collected, "milestone (reply required)")
-        # Watching reads; it never answers for the planner, so the run only moves on
-        # once the planner replies through the command the surface named.
-        _await_watch_line(collected, f"Reply with: just channel-reply {run_id}")
-        _reply_cli(run_id, runs, {"completion": True, "reason": "verified through watch"})
-        assert watching.wait(timeout=e2e_timeout(60)) == 0
-    finally:
-        if watching.poll() is None:
-            watching.kill()
-            watching.wait(timeout=e2e_timeout(10))
-    watched = "".join(collected)
-    assert f"Watching {run_id}" in watched
-    assert f"graph:{run_id}/1/worker" in watched, watched
-    assert f"{run_id} settled: graph complete" in watched, watched
+    run_id = _launch_cli(plan, runs, _base(tmp_path), onejudge_bin, heartbeat_interval=3600)
+    queued_path = runs / run_id / "channel" / "heartbeat-surface.json"
+    barrier_deadline = deadline(120)
+    while not ready.is_file() and time.monotonic() < barrier_deadline:
+        time.sleep(0.01)
+    assert ready.is_file(), "the worker never reached the provider barrier"
+    assert not queued_path.is_file(), "an hour-long interval queued a check-in immediately"
+
+    _reply_cli(
+        run_id,
+        runs,
+        {
+            "completion": False,
+            "reason": "supervise this run more closely",
+            "message": "continue",
+            "heartbeat_interval": 1,
+        },
+    )
+    lowered_deadline = deadline(120)
+    while not queued_path.is_file() and time.monotonic() < lowered_deadline:
+        time.sleep(0.01)
+    assert queued_path.is_file(), "lowering the interval mid-flight changed nothing"
+
+    release.write_text("go\n", encoding="utf-8")
+    while True:
+        boundary = _wait_surface(run_id, runs, wait_seconds=120)
+        if boundary["surface"]["kind"] != "heartbeat":
+            break
+    _reply_cli(run_id, runs, {"completion": True, "reason": "verified the interval knob"})
+    _wait_report(runs / run_id / "orchestrator" / "report.json")

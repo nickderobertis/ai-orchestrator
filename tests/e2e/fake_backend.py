@@ -379,6 +379,7 @@ def main() -> int:
                                 # A round whose carried node fails again by design;
                                 # its non-zero status is the journey's subject.
                                 '"name": "planner-context"',
+                                '"name": "carried-edits"',
                                 # Live-edit journeys whose round legitimately settles
                                 # waiting or failed; run-plan's non-zero status is the
                                 # expected outcome, not an orchestrator failure.
@@ -412,7 +413,10 @@ def main() -> int:
                         capture_output=True,
                         text=True,
                     )
-                elif orchestrator_turn == 1 and '"name": "planner-context"' in plan_text:
+                elif orchestrator_turn == 1 and any(
+                    name in plan_text
+                    for name in ('"name": "planner-context"', '"name": "carried-edits"')
+                ):
                     # The transition an orchestrator drives after the planner's
                     # continuing verdict: no attestation, no edits file, just the
                     # next round derived from the round that settled.

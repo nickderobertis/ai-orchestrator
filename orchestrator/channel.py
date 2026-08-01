@@ -507,9 +507,13 @@ def discard_surface_from_a_finished_round(run_dir: Path) -> bool:
         # A frame whose round cannot be read is unconsumable for the same reason a
         # stale one is — `channel-next` validates it against the active round — so it
         # is cleared here too rather than left to occupy the run's one pending slot.
-        if isinstance(queued_round, int) and not isinstance(queued_round, bool):
-            if queued_round >= latest[0]:
-                return False
+        current = (
+            isinstance(queued_round, int)
+            and not isinstance(queued_round, bool)
+            and queued_round >= latest[0]
+        )
+        if current:
+            return False
         surface.unlink(missing_ok=True)
     release_heartbeat_claim(run_dir / "channel")
     return True

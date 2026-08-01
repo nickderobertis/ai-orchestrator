@@ -5,6 +5,8 @@ import io
 import json
 import os
 import socket
+import subprocess
+import sys
 import threading
 import time
 from collections.abc import Callable
@@ -12,6 +14,7 @@ from pathlib import Path
 
 import pytest
 
+from orchestrator import REPO_ROOT
 from orchestrator.channel import (
     HEARTBEAT_SURFACE_FILE,
     ChannelError,
@@ -39,6 +42,7 @@ from orchestrator.channel import (
     main_reply,
     main_surface,
     mark_heartbeat_due,
+    next_surface,
     pending_commands,
     pending_surface_indicator,
     pending_surfaces,
@@ -1619,3 +1623,93 @@ def test_a_reply_timeout_that_cannot_bound_the_wait_is_refused(
         assert "timeout must be a positive, finite number" in capsys.readouterr().err
     with pytest.raises(ChannelError, match="finite and non-negative"):
         await_command_outcomes(runs / "orch" / "channel", (1,), timeout=float("nan"))
+
+
+def test_a_claim_whose_holder_died_is_reclaimed_by_the_next_tick(tmp_path: Path) -> None:
+    """A lease outliving its holder must not silence the run.
+
+    The claimant here is a real second process that takes the lease through the real
+    `claim_heartbeat` and then exits without ever reaching `finish_heartbeat_attempt`
+    — exactly what a check-in dispatch killed mid-flight leaves behind. Nothing else
+    in this repository reclaims a claim, and the pacemaker's only release ran on the
+    failure path, so a holder that simply went away held it for the life of the run.
+    The probe is `process_may_be_live`, the same one the abandoned-round path uses.
+    """
+    channel = create_channel(tmp_path / "run", heartbeat_interval=10)
+    initial = _heartbeat(channel)
+    mark_heartbeat_due(channel, now=float(initial["last_surface_at"]) + 11)
+
+    claimant = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys;from pathlib import Path;"
+            "from orchestrator.channel import claim_heartbeat;"
+            "sys.exit(0 if claim_heartbeat(Path(sys.argv[1])) else 1)",
+            str(channel),
+        ],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert claimant.returncode == 0, claimant.stderr
+    held = _heartbeat(channel)
+    assert held["in_flight"] is True
+    assert held["claim"] is not None
+    assert held["claim"]["pid"] > 0 and held["claim"]["pid"] != os.getpid()
+    assert held["claim"]["host"] == socket.gethostname()
+    assert held["due"] is True
+
+    # That process is gone, so the next tick takes the lease rather than deferring to
+    # a holder that can never hand it back.
+    assert claim_heartbeat(channel) is True
+    reclaimed = _heartbeat(channel)
+    assert reclaimed["claim"]["pid"] == os.getpid()
+    # And this holder is alive, so nothing steals it out from under the dispatch.
+    assert claim_heartbeat(channel) is False
+
+
+def test_a_surface_that_outlives_its_round_is_discarded_and_frees_the_pacemaker(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The one wedge with no operator remedy: unconsumable, and still the pending one.
+
+    `channel-next` validates a queued frame against the *active* round, so a surface
+    still queued when the round transitions could never be read — and while it sat
+    there it was the run's one pending update. Observed on a live run at 107 minutes
+    after a planner retry moved it to round 2. Discarded rather than kept consumable:
+    it describes a round that has finished, and the check-in that replaces it
+    describes the round actually running.
+    """
+    runs = tmp_path / "runs"
+    run_dir = runs / "outlived"
+    channel = create_channel(run_dir, heartbeat_interval=10)
+    (run_dir / "round-01").mkdir()
+    initial = _heartbeat(channel)
+    mark_heartbeat_due(channel, now=float(initial["last_surface_at"]) + 11)
+    assert claim_heartbeat(channel)
+    assert main_surface(["outlived", "round one is verifying", "--runs-dir", str(runs)]) == 0
+    finish_heartbeat_attempt(channel, succeeded=True)
+    assert (channel / HEARTBEAT_SURFACE_FILE).is_file()
+
+    # The transition the planner's retry caused: round 2 opens with round 1's update
+    # still queued and unread.
+    (run_dir / "round-02").mkdir()
+    assert pending_surface_indicator(run_dir) is not None
+    assert next_surface(run_dir, timeout=0.01) == {"status": "running", "surface": None}
+    assert not (channel / HEARTBEAT_SURFACE_FILE).is_file()
+    assert pending_surface_indicator(run_dir) is None
+
+    cleared = _heartbeat(channel)
+    assert cleared["in_flight"] is False
+    assert cleared["claim"] is None
+    # The clock is untouched by the discard, so the pacemaker is due again on the
+    # interval measured from the last update a planner actually read.
+    mark_heartbeat_due(channel, now=float(cleared["last_attempt_at"]) + 11)
+    assert claim_heartbeat(channel) is True
+    assert main_surface(["outlived", "round two is dispatching", "--runs-dir", str(runs)]) == 0
+    queued = json.loads((channel / HEARTBEAT_SURFACE_FILE).read_text(encoding="utf-8"))
+    assert queued["round"] == 2
+    assert next_surface(run_dir, timeout=0.01)["surface"]["message"] == "round two is dispatching"
+    capsys.readouterr()

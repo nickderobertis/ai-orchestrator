@@ -64,8 +64,8 @@ def executed_plan(run_dir: Path, round_number: int, launch_plan: dict[str, Any])
     with edits it could not replay is a run whose journal is already refusing to
     project for `run-plan --recover`, which reports it.
     """
-    from .projection import ProjectionError, project_run
     from .journal import JOURNAL_NAME
+    from .projection import ProjectionError, project_run
 
     try:
         projected = project_run(run_dir / JOURNAL_NAME, RunId(run_dir.name), round_number)

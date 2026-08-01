@@ -104,11 +104,15 @@ dispatch onejudge.
    sign-off. It never represents the planner's own review, acceptance,
    validation, or integration decision. The planner reviews each settled node
    over the live channel and issues `add` / `retry` / `drop` / `split` edits.
-   What it learns about a node that keeps running belongs in a `context` edit:
-   that note is the only thing the round transition carries onto the carried-forward
-   node, and it carries exactly one round, so state worth keeping is state attached
-   again. See [Carried planner
-   context](docs/orchestration.md#carried-planner-context). A
+   A live edit the reconciler accepts is carried forward: the plan of record for a
+   transition is [the graph the round
+   executed](docs/orchestration.md#the-plan-of-record-is-the-graph-the-round-executed),
+   folded from the run's own journal rather than re-read from the launch file, so a
+   retry's replacement id, a branch pin, an amended `task`, `done_when`, or
+   `max_turns` all reach the next round. What it learns about a node that keeps
+   running belongs in a `context` edit: that note is the one thing which carries
+   exactly one round, so state worth keeping is state attached again. See [Carried
+   planner context](docs/orchestration.md#carried-planner-context). A
    human node the planner would attest itself is a modeling error: keep it only
    if the action is genuinely external; otherwise perform that coordination live
    with no node. See [Node shapes](docs/orchestration.md#node-shapes). Before a
