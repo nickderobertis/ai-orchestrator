@@ -1065,3 +1065,31 @@ origin, for team open PRs, team/single-owner merged PRs, local direct and
 run-only-open publication, linear and synthetic stacks, conflict safety,
 gate-failure, not-completed, no-changes, checks-failed, and a multi-PR DAG. The
 merge is never mocked; only GitHub's decisioning and the paid model are.
+
+### What a lifecycle journey costs, and which part of it is a choice
+
+Keeping git real sets a floor. One round is a clone, a worktree, a real `onejudge
+run` launch, the recorded gate, a commit, and a push, and the round is the unit
+under test — a journey that proves four branch-selection behaviors across four
+rounds pays for four of them. Measured on this host, that floor is roughly 1.3
+seconds per round, and it is not recoverable by anything short of dropping a case.
+`test_ordinary_next_round_resumes_committed_lifecycle_branch`,
+`test_an_explicit_retry_restores_an_exhausted_preserved_branchs_budget`,
+`test_a_node_that_cannot_finish_settles_instead_of_being_redispatched_forever`,
+and `test_real_lifecycle_dispatch_drafts_pr_bodies_and_preserves_fallbacks` are
+all at that floor; the last is eight full remote publication journeys because it
+asserts eight distinct PR-body outcomes, so its cost *is* its coverage.
+
+What sits on top of the floor is a choice, and it used to be an accidental one. A
+step that never completes spends its whole turn budget and is then automatically
+resumed `MAX_AUTOMATIC_STEP_RESUMES` more times, and every turn is two provider
+processes. At `DEFAULT_LIFECYCLE_STEP_MAX_TURNS` that is 147 provider processes
+and about twelve seconds for a single dispatch whose only job is to reach *a* cap.
+Naming a small explicit cap at those call sites — `EXHAUSTED_STEP_MAX_TURNS` in
+the lifecycle e2e — keeps the exhaustion, the three segments, the preserved
+branch, and the round-level budget exactly as they were, for 15 processes instead
+of 147. The default's own height stays pinned by
+`test_run_repo_task_journals_a_step_that_hit_the_turn_cap` in
+`tests/test_lifecycle_unit.py`, which spends no processes at all. A journey about
+what happens *at* a cap should say which cap it means; inheriting the production
+default there buys no coverage and costs the whole difference.
