@@ -82,10 +82,7 @@ test *nx_args:
 # tests need a process with no execnet thread in it, and `orchestrator:test` runs
 # them in the serial invocation that owns them.
 test-e2e:
-    # llmlint: ignore[tool_output_is_signal] Streaming pytest's own progress *is* this
-    # recipe's signal: it exists to watch one suite run as it goes, and `just test` is
-    # the recipe that reduces a whole green run to a line. Reducing this one too would
-    # leave no way to watch the e2e suite, which is the only thing it was added for.
+    # llmlint: ignore[tool_output_is_signal] Watching one suite run as it goes is the only thing this recipe is for; `just test` is the one that reduces a green run to a line.
     @uv run pytest tests/e2e -m 'not single_threaded' -n 4 --dist load
 
 # Lint Python (ruff) and the shell script (shellcheck); fail on findings.
