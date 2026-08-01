@@ -3,11 +3,11 @@
 `tests/e2e/test_llmlint_cache_e2e.py` proves the memo holds when the same checkout
 asks twice. Production never asks twice from the same checkout. The worker judges
 in a per-branch worktree cut from its run's clone, under the environment
-`orchestrator/dispatch.py` builds; the publication is rebuilt in a detached scratch
-worktree at an unrelated path, under the environment `orchestrator/merge.py` pushes
-with, and judged there by the repository's real `pre-push` hook. Two paths, one
-content, one base — and the memo is only worth having if both reach the same
-recorded answer.
+`orchestrator/dispatch.py` builds; the publication is rebuilt by
+`orchestrator/merge.py` in a detached scratch worktree at an unrelated path, and
+judged there by the repository's own `pre-push` hook on the publishing push. Two
+paths, one content, one base — and the memo is only worth having if both reach the
+same recorded answer.
 
 They did not. On 2026-07-31 a branch cleared its own complete gate at 95.99%
 coverage (`38 rules: 18 passed, 0 failed`) and was rejected seventeen minutes later
@@ -18,25 +18,25 @@ question to different keys. `LLMLINT_ONEHARNESS_BIN` was the input that varied �
 `llmlint config` renders it, the fingerprint read the caller's value, and a
 dispatched agent carries `dispatch.py`'s while a publishing push carries none.
 
-So these journeys run both paths for real, each under the environment its own
-production caller supplies, and assert on the thing the incident produced: how many
-times the judge was rolled. A cache hit on the merge path is the claim; a second
-roll is the defect, whichever way the second roll then lands.
+So these journeys run both callers for real, each under the environment its own
+production builder supplies, and assert on the thing the incident produced: how
+many times the judge was rolled. A cache hit on the merge path is the claim; a
+second roll is the defect, whichever way the second roll then lands.
 
 The three ways the key must still move — the judged content, the base commit, and
 the judge configuration — are proved across the two paths too, because a fix that
 made the merge path agree by hashing less would replay a verdict for a tree nobody
 judged. And a worker whose own gate failed still cannot reach the base: the hook
-replays the recorded failure and rejects the publishing push.
+replays the recorded failure and the publishing push is rejected.
 
 llmlint: ignore-file[e2e_not_mocked] The judge run is this repository's paid model
 boundary, faked here exactly as tests/e2e/fake_backend.py fakes the agent harness,
 and for the same reason as in the sibling journey: the claim under test is that two
 paths reach one verdict, which a non-deterministic judge cannot demonstrate.
 Counting `--diff` invocations is the evidence. Everything else is real — the real
-clone, worktrees and squash merge through `orchestrator.gitops`, the real `pre-push`
-hook Git runs on the publishing push, the real recipe, the real Nx target, and
-llmlint's own config resolution off disk.
+clone and worktrees through `orchestrator.gitops`, the real `LocalMergeStrategy`
+publication, the repository's own `pre-push` hook run by Git on that push, the real
+recipe, the real Nx target, and llmlint's own config resolution off disk.
 """
 
 from __future__ import annotations
@@ -44,16 +44,22 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
-import tempfile
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
-from conftest import git, install_pre_push_hook
+from conftest import git
 from nx_workspace import copy_working_tree, requires_workspace_install
 
 from orchestrator import REPO_ROOT, gitops
+
+# The environment a dispatched agent's gate runs under is this builder's output,
+# read from it rather than restated: the asymmetry between what a dispatch carries
+# and what a publishing push carries is the whole defect, so a copy of it here
+# could drift into agreement and the journey would prove nothing.
+from orchestrator.dispatch import _agent_run_context
+from orchestrator.merge import LocalMergeStrategy, MergeContext
 from orchestrator.verify import comparison_env
 
 BASE_BRANCH = "main"
@@ -63,25 +69,34 @@ FAIL_VERDICT = "fake-judge: 15 passed, 1 failed"
 FAIL_FINDING = "fake-judge finding: robust_shell in scripts/llmlint-diff.sh"
 CACHE_HIT = "replayed the recorded verdict for base"
 CACHE_MISS = "judged this diff against base"
-HOOK_REJECTION = "pre-push: the llmlint tier rejected this tree"
+GATE_LOG_ENV = "MERGE_PATH_GATE_LOG"
 
-#: What `orchestrator/dispatch.py` puts in a dispatched agent's environment. It
-#: names the *orchestrator's* checkout, never the worktree being judged, which is
-#: why the fingerprint's `{root}` fold-out cannot strip it.
-DISPATCH_LLMLINT_BIN = str(REPO_ROOT / "scripts/llmlint-oneharness.sh")
-
-# The merge path is a *different* verifier, so it gets the repository's real
-# pre-push hook rather than a call the test makes itself. Production's hook clears
-# Git's local environment before running anything, or every nested git command in
-# the gate would target the pushing repository instead of its own cwd.
-HOOK = """
-for name in $(git rev-parse --local-env-vars); do unset "$name" || true; done
-comparison=$(./scripts/comparison-base.sh "${1:-origin}" "${ORCHESTRATOR_COMPARISON_BASE:-}")
-if ! just lint-llm-diff "$comparison"; then
-  echo "pre-push: the llmlint tier rejected this tree" >&2
-  exit 1
-fi
-"""
+#: The verifier on the merge path is the repository's own `pre-push` hook, so this
+#: journey runs *that file* rather than a stand-in — with exactly these two
+#: substitutions, each asserted to appear once, so a hook that moves fails here
+#: instead of drifting away from the journey silently.
+REAL_HOOK = REPO_ROOT / ".githooks/pre-push"
+HOOK_SUBSTITUTIONS = (
+    # The complete gate, narrowed to the tier under test: running the whole gate
+    # inside a journey about the gate would recurse. Everything the hook does
+    # before this line — requiring llmlint, clearing Git's local environment,
+    # resolving the comparison base — is what has to be real here, and is.
+    # `tee` keeps the verdict readable to the assertions while it still reaches
+    # Git, which is what classifies a rejection as a gate failure rather than a
+    # transport error.
+    (
+        'just gate "$remote" "$base"',
+        f'just lint-llm-diff "$comparison" 2>&1 | tee -a "${GATE_LOG_ENV}"',
+    ),
+    # One real agent-harness turn, which a test must never spend.
+    (
+        'if "$hook_root/scripts/pre-push-smoke-needed.sh" "$comparison" <"$updates"; then\n'
+        '  echo "pre-push: launch path changed; running one real-harness smoke..." >&2\n'
+        "  just smoke\n"
+        "fi",
+        ": # this journey never spends a real harness turn",
+    ),
+)
 
 pytestmark = [
     pytest.mark.skipif(
@@ -96,12 +111,45 @@ pytestmark = [
 ]
 
 
+def _merge_path_hook() -> str:
+    """This repository's own pre-push hook, narrowed to the tier under test."""
+    body = REAL_HOOK.read_text(encoding="utf-8")
+    for original, replacement in HOOK_SUBSTITUTIONS:
+        assert body.count(original) == 1, (
+            f"{REAL_HOOK} no longer contains exactly one occurrence of:\n{original}\n"
+            "Reconcile this journey with the hook it runs."
+        )
+        body = body.replace(original, replacement)
+    return body
+
+
+def _dispatch_environment() -> dict[str, str]:
+    """What `orchestrator/dispatch.py` puts in a dispatched agent's environment.
+
+    Taken from the builder itself. `LLMLINT_ONEHARNESS_BIN` in particular names the
+    *orchestrator's* checkout rather than the worktree being judged, which is why
+    the fingerprint's `{root}` fold-out cannot strip it, and why a publishing push
+    — which carries no such value — hashed the same question differently.
+    """
+    _, env = _agent_run_context({}, cwd=REPO_ROOT, project_dir=None, oneharness_mode="bypass")
+    assert env.get("LLMLINT_ONEHARNESS_BIN"), (
+        "a bypass-mode dispatch no longer carries LLMLINT_ONEHARNESS_BIN; "
+        "reconcile this journey with orchestrator/dispatch.py"
+    )
+    return env
+
+
 @dataclass(frozen=True)
 class Publication:
-    """What the merge path did with the work: its push output and whether it landed."""
+    """What the merge path did with the work, and what its gate said while doing it."""
 
-    accepted: bool
-    output: str
+    outcome: str
+    detail: str
+    verdict: str
+
+    @property
+    def accepted(self) -> bool:
+        return self.outcome == "merged"
 
 
 @dataclass(frozen=True)
@@ -114,24 +162,23 @@ class TwoPaths:
     worker: Path
     plugin: Path
     judge_log: Path
+    gate_log: Path
     env: dict[str, str]
-    scratch_parent: Path
 
     def judge_runs(self) -> int:
         return len(self.judge_log.read_text().splitlines())
 
     def worker_gate(self, **overrides: str) -> subprocess.CompletedProcess[str]:
-        """The gate a dispatched agent runs before it settles, in its own worktree.
-
-        Under the dispatch environment, `LLMLINT_ONEHARNESS_BIN` included: the
-        asymmetry between this caller and the publishing push is the defect, so
-        removing it here would leave the journey proving nothing.
-        """
-        dispatch_env = {"LLMLINT_ONEHARNESS_BIN": DISPATCH_LLMLINT_BIN}
+        """The gate a dispatched agent runs before it settles, in its own worktree."""
         return subprocess.run(
             ["bash", "-c", 'just lint-llm-diff "$(./scripts/comparison-base.sh)"'],
             cwd=self.worker,
-            env={**self.env, **comparison_env(BASE_BRANCH), **dispatch_env, **overrides},
+            env={
+                **self.env,
+                **comparison_env(BASE_BRANCH),
+                **_dispatch_environment(),
+                **overrides,
+            },
             check=False,
             text=True,
             capture_output=True,
@@ -148,13 +195,7 @@ class TwoPaths:
         state the invariant has to survive — work whose own gate never passed,
         sitting on origin, one merge away from the base.
         """
-        subprocess.run(
-            ["git", "push", "--no-verify", "--force", "origin", FEATURE_BRANCH],
-            cwd=self.worker,
-            check=True,
-            text=True,
-            capture_output=True,
-        )
+        git("push", "--no-verify", "--force", "origin", FEATURE_BRANCH, cwd=self.worker)
 
     def advance_base(self, message: str) -> str:
         """Move `origin/main` without changing any file, isolating the base commit."""
@@ -163,26 +204,33 @@ class TwoPaths:
         return advanced
 
     def publish(self) -> Publication:
-        """Rebuild the work on the merge path and push it, exactly as merge.py does."""
-        gitops.fetch(self.clone)
-        scratch = Path(tempfile.mkdtemp(prefix="orchestrator-merge-", dir=self.scratch_parent))
-        worktree = scratch / "worktree"
-        gitops.worktree_add_detached(self.clone, worktree, f"origin/{BASE_BRANCH}")
-        (worktree / "node_modules").symlink_to(REPO_ROOT / "node_modules", target_is_directory=True)
-        gitops.merge_squash(worktree, f"origin/{FEATURE_BRANCH}", message="publication")
-        # Merged over os.environ by gitops, and deliberately without a
-        # LLMLINT_ONEHARNESS_BIN: a publishing push carries the comparison identity
-        # and nothing else, which is precisely how it differed from the worker.
-        push_env = {**self.env, **comparison_env(BASE_BRANCH)}
-        try:
-            output = gitops.push(worktree, f"HEAD:{BASE_BRANCH}", set_upstream=False, env=push_env)
-            accepted = True
-        except gitops.GitError as exc:
-            output, accepted = exc.output, False
-        finally:
-            # merge.py releases the scratch tree whether or not the push landed.
-            gitops.worktree_remove(self.clone, worktree)
-        return Publication(accepted=accepted, output=output)
+        """Publish the branch the way the lifecycle does: merge.py's own local strategy.
+
+        The push carries the workstream's comparison identity and nothing else — no
+        `LLMLINT_ONEHARNESS_BIN`, exactly as a publishing push differs from the
+        dispatch that judged the work.
+        """
+        self.gate_log.write_text("", encoding="utf-8")
+        outcome = LocalMergeStrategy().publish_and_merge(
+            MergeContext(
+                repo_slug=f"local/{self.origin.stem}",
+                clone_dir=self.clone,
+                base=BASE_BRANCH,
+                branch=FEATURE_BRANCH,
+                title="publication",
+                body="",
+                push_env={
+                    **self.env,
+                    **comparison_env(BASE_BRANCH),
+                    GATE_LOG_ENV: str(self.gate_log),
+                },
+            )
+        )
+        return Publication(
+            outcome=outcome.outcome,
+            detail=outcome.detail,
+            verdict=self.gate_log.read_text(encoding="utf-8"),
+        )
 
     def base_sha(self) -> str:
         return gitops.ref_sha(self.origin, BASE_BRANCH)
@@ -219,6 +267,9 @@ def two_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[TwoPa
     seed = tmp_path / "seed"
     seed.mkdir()
     copy_working_tree(seed)
+    hook = seed / ".githooks/pre-push"
+    hook.write_text(_merge_path_hook(), encoding="utf-8")
+    hook.chmod(0o755)
 
     # A plugin outside the tree: no file input can see it, so only the judge
     # configuration fingerprint can notice when its rules change.
@@ -246,11 +297,13 @@ def two_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[TwoPa
     # The per-run clone the lifecycle cuts every worktree from — both paths' trees
     # come out of this one, which is what makes them two views of one repository.
     clone = gitops.clone_sharing(origin, tmp_path / "clone", origin=str(origin), base=BASE_BRANCH)
-    install_pre_push_hook(clone, HOOK)
-    # Every worktree here borrows this checkout's install through a symlink, and
+    # What `just bootstrap` does, so every worktree cut from this clone is verified
+    # by the tree's own hook rather than by anything this test installs beside it.
+    gitops.set_hooks_path(clone, ".githooks")
+    # The worker worktree borrows this checkout's install through a symlink, and
     # `.gitignore`'s `node_modules/` does not match one. Excluding it in the clone
-    # covers every worktree cut from it, so neither path commits its own plumbing
-    # and the two trees stay byte-identical.
+    # keeps that plumbing out of every commit, so the tree the merge path rebuilds
+    # is byte-identical to the tree the worker judged.
     exclude = gitops.common_dir(clone) / "info" / "exclude"
     exclude.parent.mkdir(parents=True, exist_ok=True)
     exclude.write_text("node_modules\n", encoding="utf-8")
@@ -269,8 +322,6 @@ def two_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[TwoPa
     # The orchestrator process drops this before it pushes (dispatch.py, watchdog.py),
     # so the publishing push must not inherit one from whoever is running the suite.
     monkeypatch.delenv("LLMLINT_ONEHARNESS_BIN", raising=False)
-    scratch_parent = tmp_path / "scratch"
-    scratch_parent.mkdir()
     env = {
         **os.environ,
         "PATH": f"{binaries}{os.pathsep}{os.environ['PATH']}",
@@ -292,8 +343,8 @@ def two_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[TwoPa
         worker=worker,
         plugin=plugin,
         judge_log=judge_log,
+        gate_log=tmp_path / "merge-path-gate.log",
         env=env,
-        scratch_parent=scratch_parent,
     )
     # The lifecycle releases a task worktree when its workstream settles; a linked
     # worktree left behind is a leak the suite's guard fails on, and rightly.
@@ -320,10 +371,10 @@ def test_the_worker_gate_and_the_merge_path_reach_one_verdict(two_paths: TwoPath
     assert f"{CACHE_MISS} {base}" in gate.stderr
     # The whole claim: the merge path asked the same question and got the recorded
     # answer, rather than rolling a non-deterministic judge a second time.
-    assert publication.accepted, publication.output
-    assert f"{CACHE_HIT} {base}" in publication.output
+    assert publication.accepted, publication.detail + publication.verdict
+    assert f"{CACHE_HIT} {base}" in publication.verdict
     assert two_paths.judge_runs() == 1
-    assert gitops.ref_sha(two_paths.origin, BASE_BRANCH) != base
+    assert two_paths.base_sha() != base
 
 
 def test_a_failed_worker_gate_cannot_reach_the_base_through_the_merge_path(
@@ -339,14 +390,14 @@ def test_a_failed_worker_gate_cannot_reach_the_base_through_the_merge_path(
 
     assert gate.returncode != 0, gate.stdout + gate.stderr
     assert FAIL_FINDING in gate.stdout
-    assert not publication.accepted, publication.output
-    assert HOOK_REJECTION in publication.output
+    assert publication.outcome == "gate-failed", publication.detail + publication.verdict
+    assert "pre-push gate rejected the rebuilt local publication" in publication.detail
     # The findings the worker was shown are the findings that rejected the push,
-    # and the base never moved.
-    assert FAIL_FINDING in publication.output
-    assert CACHE_HIT in publication.output
+    # replayed rather than re-rolled, and the base never moved.
+    assert FAIL_FINDING in publication.verdict
+    assert CACHE_HIT in publication.verdict
     assert two_paths.judge_runs() == 1
-    assert gitops.ref_sha(two_paths.origin, BASE_BRANCH) == base
+    assert two_paths.base_sha() == base
 
 
 def test_content_the_worker_never_judged_is_judged_on_the_merge_path(
@@ -354,7 +405,7 @@ def test_content_the_worker_never_judged_is_judged_on_the_merge_path(
 ) -> None:
     """A verdict covers the tree it judged, so later commits do not inherit it."""
     _work(two_paths)
-    two_paths.worker_gate()
+    gate = two_paths.worker_gate()
 
     # The worker settled with one more commit than its gate ever saw. Publishing
     # that must not replay the cleared verdict for the tree it replaced.
@@ -362,8 +413,9 @@ def test_content_the_worker_never_judged_is_judged_on_the_merge_path(
     two_paths.push_branch()
     publication = two_paths.publish()
 
-    assert publication.accepted, publication.output
-    assert CACHE_MISS in publication.output
+    assert gate.returncode == 0, gate.stdout + gate.stderr
+    assert publication.accepted, publication.detail + publication.verdict
+    assert CACHE_MISS in publication.verdict
     assert two_paths.judge_runs() == 2
 
 
@@ -371,7 +423,7 @@ def test_an_advanced_base_is_judged_again_on_the_merge_path(two_paths: TwoPaths)
     """Same tree, different comparison: two different diffs, two judgements."""
     _work(two_paths)
     judged = two_paths.base_sha()
-    two_paths.worker_gate()
+    gate = two_paths.worker_gate()
 
     # Empty, so the published tree stays byte-identical to the judged one and the
     # resolved base commit is the only thing that moved.
@@ -379,9 +431,10 @@ def test_an_advanced_base_is_judged_again_on_the_merge_path(two_paths: TwoPaths)
     two_paths.push_branch()
     publication = two_paths.publish()
 
+    assert gate.returncode == 0, gate.stdout + gate.stderr
     assert advanced != judged
-    assert publication.accepted, publication.output
-    assert f"{CACHE_MISS} {advanced}" in publication.output
+    assert publication.accepted, publication.detail + publication.verdict
+    assert f"{CACHE_MISS} {advanced}" in publication.verdict
     assert two_paths.judge_runs() == 2
 
 
@@ -390,7 +443,7 @@ def test_a_changed_judge_configuration_is_judged_again_on_the_merge_path(
 ) -> None:
     """The rules moved between the two paths, and no file input can see it."""
     _work(two_paths)
-    two_paths.worker_gate()
+    gate = two_paths.worker_gate()
 
     # The plugin lives outside the checkout, so both trees are byte-identical: only
     # the judge configuration fingerprint can notice, and only if it is in the key.
@@ -401,6 +454,7 @@ def test_a_changed_judge_configuration_is_judged_again_on_the_merge_path(
     two_paths.push_branch()
     publication = two_paths.publish()
 
-    assert publication.accepted, publication.output
-    assert CACHE_MISS in publication.output
+    assert gate.returncode == 0, gate.stdout + gate.stderr
+    assert publication.accepted, publication.detail + publication.verdict
+    assert CACHE_MISS in publication.verdict
     assert two_paths.judge_runs() == 2
