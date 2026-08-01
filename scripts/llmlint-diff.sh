@@ -61,7 +61,10 @@ labels="$(uv run orchestrator-history-labels role=llmlint)" || {
 # The alphabet is orchestrator/labels.py's, which is the declared trust boundary for
 # the label contract: a narrower opinion here could only reject a label that module
 # deliberately passed through, such as an inherited key with a hyphen or a value with
-# a space.
+# a space. This second opinion is still needed — the renderer above is reached through
+# PATH and can be replaced — so it is held to the first one by the drift gate in
+# tests/test_labels.py, which lifts these two patterns out of this file and sweeps them
+# against that module character by character. Change either side and that gate fails.
 key='[A-Za-z0-9][A-Za-z0-9._-]{0,63}'
 value='[^,[:cntrl:]]+'
 [[ "$labels" =~ ^${key}=${value}(,${key}=${value})*$ ]] || {
