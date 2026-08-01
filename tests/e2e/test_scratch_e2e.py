@@ -13,10 +13,13 @@ import sys
 import tempfile
 import time
 from collections.abc import Callable
+from contextlib import suppress
 from pathlib import Path
 
 import pytest
 from conftest import install_pre_push_hook
+from rendezvous import Rendezvous
+from waits import timeout as e2e_timeout
 
 from orchestrator import REPO_ROOT
 from orchestrator.lifecycle import run_repo_task
@@ -178,13 +181,37 @@ def _kernel_start_token(pid: int) -> str:
     return fields[19]
 
 
-def _worker_pid_is_gone(directory: Path) -> bool:
-    """Report whether the pid this dispatch recorded for its worker has exited."""
-    try:
-        pid = int((directory / "pid").read_text(encoding="utf-8").split()[0])
-    except (OSError, IndexError, ValueError):
-        return False
-    return not Path(f"/proc/{pid}").exists()
+def _recorded_pid(path: Path) -> int:
+    """Read one pid a dispatch recorded into its scratch directory."""
+    return int(path.read_text(encoding="utf-8").split()[0])
+
+
+def _open_descriptions(pid: int) -> set[str]:
+    """Every open file description a process names, tolerating the ones it closes.
+
+    A live dispatcher opens and closes descriptors while this reads its table, so an
+    entry that vanishes between the listing and the link is that process working, not
+    a failure to report.
+    """
+    descriptions: set[str] = set()
+    for entry in Path(f"/proc/{pid}/fd").iterdir():
+        with suppress(OSError):
+            descriptions.add(os.readlink(entry))
+    return descriptions
+
+
+def _await_reaped(pid: int, what: str) -> None:
+    """Block until a process has been reaped, not merely until it stopped running.
+
+    A process that exited but whose status nobody has collected keeps its procfs
+    entry as a zombie, so the entry's disappearance — and nothing weaker — is the
+    reap itself.
+    """
+    entry = Path(f"/proc/{pid}")
+    guard = time.monotonic() + e2e_timeout(60)
+    while entry.exists():
+        assert time.monotonic() < guard, f"{what} (pid {pid}) was never reaped"
+        time.sleep(0.002)
 
 
 def _wait_for_path(path: Path, timeout: float = 60.0) -> None:
@@ -669,12 +696,27 @@ def test_concurrent_sweep_preserves_a_dispatch_past_its_worker_exit(
 ) -> None:
     """A real dispatch keeps its scratch while a real sweep runs beside it.
 
-    The recorded pid is the onejudge worker, which dies while the dispatcher is
-    still reaping its process tree and parsing the report out of the directory.
-    Sweeping continuously across the whole dispatch guarantees the sweeper meets
-    that window rather than waiting for a lucky interleaving. A dispatcher that
-    cannot read its own procfs identity records no token at all, so the lock has
-    to hold the tree on its own.
+    The vulnerable window is narrow and specific: the recorded pid is the onejudge
+    worker, and it is *reaped* — gone from procfs entirely, not a zombie — while the
+    dispatcher is still parsing the report it wrote. A sweep there deletes a report
+    mid-parse. This enters that window by construction rather than sampling for it.
+
+    The turn holds at its rendezvous, which is the only moment the worker is provably
+    still alive, and the test takes its own writer on the worker's report pipe — the
+    same pipe the dispatcher reads, asserted below. Releasing the turn then runs the
+    worker to its exit and its reap, but `read` cannot report EOF while any writer
+    exists, so the SDK's `communicate()` cannot return and the report cannot be
+    parsed until this test closes that descriptor. That is the leaked pipe holder
+    `run_onejudge`'s own liveness watcher documents, driven deliberately.
+
+    Production bounds this window at `min(5.0, heartbeat_timeout)` seconds — after
+    that the watcher rules the worker died — so it cannot be held open indefinitely
+    by any means that leaves runtime behavior alone. The sweep inside it costs
+    milliseconds against that budget, and overrunning it fails the dispatch loudly
+    rather than passing on a weaker state.
+
+    A dispatcher that cannot read its own procfs identity records no token at all,
+    so the lock has to hold the tree on its own.
     """
     scratch = tmp_path / "scratch"
     scratch.mkdir()
@@ -685,6 +727,7 @@ def test_concurrent_sweep_preserves_a_dispatch_past_its_worker_exit(
         blind = tmp_path / "empty-proc"
         blind.mkdir()
         dispatch_env["AI_ORCHESTRATOR_PROC_ROOT"] = str(blind)
+    held = Rendezvous.at(tmp_path, "dispatch")
     report_path = tmp_path / "dispatch-report.json"
     report_stream = report_path.open("w", encoding="utf-8")
     process = subprocess.Popen(
@@ -692,7 +735,7 @@ def test_concurrent_sweep_preserves_a_dispatch_past_its_worker_exit(
             "just",
             "dispatch",
             "engineer",
-            "complete-now large-dispatch-report: survive a concurrent scratch sweep",
+            f"complete-now: survive a concurrent scratch sweep{held.sentinels()}",
             "--base",
             str(command_base()),
             "--project-dir",
@@ -708,32 +751,54 @@ def test_concurrent_sweep_preserves_a_dispatch_past_its_worker_exit(
         stdout=report_stream,
         stderr=subprocess.PIPE,
     )
-    swept_past_worker_exit: list[Path] = []
+    report_writer: int | None = None
     try:
-        while process.poll() is None:
-            past_exit = [
-                directory
-                for directory in scratch.glob(WATCHDOG_PATTERN)
-                if _worker_pid_is_gone(directory)
-            ]
-            # The unattended sweep this test races is the in-process
-            # `sweep_scratch()` call every recorded round transition makes
-            # (orchestrator/graph.py). The deliberately large real report keeps
-            # parsing in flight after waitpid reaps the worker, so the sweep
-            # observes that boundary without replacing it.
-            # llmlint: ignore[tests_mirror_real_usage] this is the round-transition caller
-            result = sweep_scratch(scratch)
-            assert result.removed == (), result.removed
-            swept_past_worker_exit.extend(
-                directory for directory in past_exit if directory in result.watchdog_retained
-            )
-            time.sleep(0.001)
+        held.wait()
+        (directory,) = scratch.glob(WATCHDOG_PATTERN)
+        # The owner record names the dispatcher; the pid file names the worker whose
+        # death is the whole point. Both are readable only because the turn is held.
+        dispatcher = _recorded_pid(directory / OWNER_LOCK_NAME)
+        worker = _recorded_pid(directory / "pid")
+        report_pipe = os.readlink(f"/proc/{worker}/fd/1")
+        assert report_pipe in _open_descriptions(dispatcher), (
+            f"{report_pipe} is not the pipe the dispatcher reads the report from"
+        )
+        # The dispatch and the sweep are both driven exactly as their callers drive
+        # them; what no command surface can produce is the condition between them.
+        # This is the leaked pipe holder `run_onejudge`'s liveness watcher documents,
+        # and holding it is the only way to observe a reaped worker whose report is
+        # still unparsed — the window the sweep must not reclaim in, which sampling
+        # for it missed often enough to fail two gates.
+        # llmlint: ignore[tests_mirror_real_usage] no user-facing command leaks a pipe
+        report_writer = os.open(f"/proc/{worker}/fd/1", os.O_WRONLY)
+        held.let_go()
+        _await_reaped(worker, "the dispatched worker")
+        # Reaped, and the report still unparsed: the dispatcher cannot leave
+        # `communicate()` while this test holds a writer on that pipe, and it emits
+        # its own report only after that returns.
+        assert report_path.stat().st_size == 0
+
+        # The unattended sweep this races is the in-process `sweep_scratch()` call
+        # every recorded round transition makes (orchestrator/graph.py).
+        # llmlint: ignore[tests_mirror_real_usage] this is the round-transition caller
+        result = sweep_scratch(scratch)
     finally:
-        _, stderr = process.communicate(timeout=120)
+        if report_writer is not None:
+            os.close(report_writer)
+        # Whatever happened above, the turn has to be let go before waiting on the
+        # dispatch: a failure that left it parked would make `communicate` wait out
+        # its own guard on a dispatch this test is the only thing still holding.
+        held.let_go()
+        _, stderr = process.communicate(timeout=e2e_timeout(120))
         report_stream.close()
 
-    assert process.returncode == 0, stderr
-    assert swept_past_worker_exit, "the sweep never observed the post-worker-exit window"
+    assert result.removed == (), result.removed
+    assert directory in result.watchdog_retained, result
+
+    assert process.returncode == 0, (
+        "the dispatch did not survive its held report window: a sweep costing "
+        f"milliseconds overran the bounded post-exit grace `run_onejudge` allows: {stderr}"
+    )
     # The report is parsed out of the swept-past directory, so its survival is the
     # dispatch's own evidence that nothing removed the tree underneath it.
     report = json.loads(report_path.read_text(encoding="utf-8"))

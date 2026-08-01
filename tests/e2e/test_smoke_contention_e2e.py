@@ -32,6 +32,7 @@ from pathlib import Path
 
 import pytest
 from fake_codex import provider_environment
+from rendezvous import Rendezvous
 from waits import deadline as e2e_deadline
 from waits import timeout as e2e_timeout
 
@@ -50,15 +51,14 @@ def _barrier_lifecycle_process(
     state_root: str,
     base_config: str,
     persona_dir: str,
-    ready: str,
-    release: str,
+    hold: Rendezvous,
 ) -> None:
     """Run one real dispatch and park it inside its agent until released."""
     os.environ["AI_ORCHESTRATOR_HOME"] = state_root
     run_repo_task(
         origin,
-        "complete-now write-unique-change: hold this dispatch live while the smoke runs "
-        f"provider-barrier-ready={ready} provider-barrier-release={release}",
+        "complete-now write-unique-change: hold this dispatch live while the smoke runs"
+        f"{hold.sentinels()}",
         "engineer",
         workspace=Workspace(root, resolver=lambda _spec: Path(canonical), workflow="local"),
         base_path=base_config,
@@ -79,7 +79,7 @@ class Load:
         return sum(1 for process in self.processes if process.is_alive())
 
     def stop(self) -> None:
-        self.release.write_text("go\n", encoding="utf-8")
+        self.release.write_text("release\n", encoding="utf-8")
         for process in self.processes:
             process.join(e2e_timeout(60))
 
@@ -100,8 +100,9 @@ def concurrent_dispatch_load(
         canonical = gitops.clone(origin, tmp_path / f"canonical-load-{index}")
         barrier = tmp_path / f"barrier-{index}"
         barrier.mkdir()
-        release = barrier / "release"
-        readies = [barrier / f"ready-{number}" for number in range(count)]
+        # One release for all of them: the journey needs every dispatch held at once.
+        release = barrier / "shared.release"
+        holds = [Rendezvous(barrier / f"ready-{number}", release) for number in range(count)]
         processes: list[multiprocessing.process.BaseProcess] = [
             MP.Process(
                 target=_barrier_lifecycle_process,
@@ -112,20 +113,19 @@ def concurrent_dispatch_load(
                     os.environ["AI_ORCHESTRATOR_HOME"],
                     str(command_base()),
                     str(personas_dir),
-                    str(ready),
-                    str(release),
+                    hold,
                 ),
             )
-            for ready in readies
+            for hold in holds
         ]
         load = Load(processes, release)
         started.append(load)
         for process in processes:
             process.start()
         limit = e2e_deadline(90)
-        while not all(ready.exists() for ready in readies) and time.monotonic() < limit:
+        while not all(hold.arrived() for hold in holds) and time.monotonic() < limit:
             time.sleep(0.05)
-        assert all(ready.exists() for ready in readies), (
+        assert all(hold.arrived() for hold in holds), (
             "the concurrent dispatches never all reached their agents"
         )
         return load

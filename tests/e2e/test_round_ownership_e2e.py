@@ -48,6 +48,7 @@ from collections.abc import Callable, Iterator
 from pathlib import Path
 
 import pytest
+from rendezvous import Rendezvous
 from run_rows import without_ownership
 from waits import deadline as e2e_deadline
 from waits import timeout as e2e_timeout
@@ -224,11 +225,7 @@ class Rounds:
         held: dict[str, object] = {
             "id": "held",
             "persona": "engineer",
-            "task": (
-                "complete-now "
-                f"provider-barrier-ready={self.ready(run_id)} "
-                f"provider-barrier-release={self.release(run_id)}"
-            ),
+            "task": f"complete-now{self.hold(run_id).sentinels()}",
         }
         tasks: list[dict[str, object]] = [held]
         if human_gate:
@@ -245,11 +242,15 @@ class Rounds:
         path.write_text(json.dumps({"tasks": tasks}), encoding="utf-8")
         return path
 
+    def hold(self, run_id: str) -> Rendezvous:
+        """The rendezvous this run's one agent node parks its first turn at."""
+        return Rendezvous.at(self.tmp_path, run_id)
+
     def ready(self, run_id: str) -> Path:
-        return self.tmp_path / f"{run_id}.ready"
+        return self.hold(run_id).ready
 
     def release(self, run_id: str) -> Path:
-        return self.tmp_path / f"{run_id}.release"
+        return self.hold(run_id).release
 
     def _start(
         self, run_id: str, number: int, args: tuple[str, ...]

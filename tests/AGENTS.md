@@ -14,8 +14,9 @@ Conventions for this repo's tests.
   import there charges every step of every journey for onejudge_sdk, jsonschema,
   asyncio, and yaml. A constant it shares with production is restated and held by
   the drift gate in `tests/test_fake_backend_contract.py`. A journey that needs a
-  node in flight names its own `hold-ready=`/`hold-release=` rendezvous in the task
-  rather than asking the double to sleep.
+  node in flight holds it at a `Rendezvous` (`tests/e2e/rendezvous.py`) rather than
+  asking the double to sleep. There is one such mechanism, keyed by agent turn, and
+  a second one is what makes the next test reach for `time.sleep` instead.
 - **A fixture that encodes an external contract gets one home.** `harness_records.py`
   holds the real oneharness provider records, captured from live turns, and both the
   unit and e2e smoke suites derive from it. Modules at `tests/` are importable by
