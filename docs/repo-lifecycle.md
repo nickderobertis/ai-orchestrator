@@ -475,44 +475,61 @@ editing any of them replayed a green verdict on a tree carrying a real regressio
 So the Python targets, which all run from the workspace root over the whole tree,
 share the `wholeWorkspace` named input in `nx.json` with the llmlint tier.
 
-#### The one narrowed key, and what earns it
+#### The narrowed keys, and what earns each
 
 Keyed on the whole workspace, a documentation-only change re-ran the ~8-minute
-suite. Only a handful of tests actually assert on this repository's prose, so the
-suite is split at exactly that seam rather than at a convenient one:
+suite. But "keyed on everything it reads" and "keyed on the whole workspace" are
+not the same requirement, and the suite answers at more than one scope, so it is
+split at those seams rather than at convenient ones:
 
 - **`orchestrator:test-docs`** runs the tests marked `@pytest.mark.reads_docs` and
   keeps the `wholeWorkspace` key. Seconds, not minutes.
+- **`orchestrator:test-recipes`** runs the tests marked `@pytest.mark.reads_recipes`
+  — the journeys that build real worktrees and run real package installs to drive
+  `just` recipes and shell scripts — keyed on `recipeWorkspace`: the `justfile`,
+  `scripts/**`, the root manifests, the fixtures, and the modules that define and
+  collect those tests. They read no prose and no `orchestrator/` at all, and most
+  commits here touch nothing else, so most commits replay them.
 - **`orchestrator:test`** runs everything else, with the coverage floor, keyed on
-  `codeWorkspace` — the whole workspace with `docs/**` and `**/*.md` removed.
+  `codeWorkspace` — the whole workspace with `docs/**`, `**/*.md`, and the
+  `apps/**` and `packages/**` no Python test opens removed.
 
-A documentation edit now re-runs the prose contracts alone. Every other edit still
-invalidates both, because `codeWorkspace` is narrowed by documentation and by
-nothing else.
+`workspace:check-nx-cache` is narrowed on the same principle rather than by tier:
+it builds two linked worktrees out of `tests/fixtures/nx-cache/` and drives the
+real `scripts/nx.sh` in both, so `nxCacheCheck` carries that fixture, those
+scripts, and the root manifest — and nothing else.
 
-That is sound only while the code tier genuinely ignores prose, and "genuinely"
-cannot be a reviewer's recollection — the enumerated list above went stale exactly
-that way, and a stale key fails *open*. So the declaration is enforced where it is
-made: an autouse guard in `tests/conftest.py` fails an undeclared test the moment
-it opens this checkout's own documentation, naming the marker it needs. A read from
-inside a child process is out of that guard's reach, but a journey that hands a real
-tool the whole tree copies the tree first, and copying is itself a read.
+Each half of every one of those claims is load bearing. A key must still invalidate
+on what its tier reads, and must still replay on what it does not; a key that
+covers less than its check reads fails *open*, which is the false green above. That
+is exactly how `nxCacheCheck` first shipped — named on its scripts but not on the
+fixture the check is built from, so editing the fixture replayed a verdict for a
+tree the check had never seen.
 
-`tests/test_nx_cache_scope.py` holds both declarations to their globs — including
-that nothing but documentation falls outside the narrowed key — and
-`tests/e2e/test_nx_cache_scope_e2e.py` drives real Nx over a copy of this checkout
-to prove that editing `AGENTS.md` re-runs `test-docs` while `test` replays, and that
-editing the `justfile` re-runs both.
+Soundness here cannot be a reviewer's recollection — the enumerated list above went
+stale exactly that way. So each declaration is enforced where it is made: autouse
+guards in `tests/conftest.py` fail an undeclared test the moment it opens something
+its own tier's key does not carry, naming the path and the marker it needs. A read
+from inside a child process is out of a guard's reach, but a journey that hands a
+real tool the whole tree copies the tree first, and copying is itself a read.
 
-Two tiers, one answer, and neither is lenient: a recorded llmlint **failure**
+`tests/test_nx_cache_scope.py` holds every declaration to its globs — that nothing
+but documentation and the front end falls outside the code key, that the recipe key
+covers every module routing a test into it and stays inside the code key, and that
+the cache-check key carries every `$root/` path its script names. `tests/e2e/
+test_nx_cache_scope_e2e.py` then proves each one against real Nx over a copy of
+this checkout: for every key, an edit inside it must miss and an edit outside it
+must replay.
+
+Three tiers, one answer, and none of them lenient: a recorded llmlint **failure**
 replays as a failure, and a tree the suite would fail can no longer replay a pass.
 
 #### Four workers, and the one test that cannot have any
 
 The suite waits on subprocesses rather than on compute — a serial run holds one
 core at about 3.5% for a quarter of an hour — so its wall clock is latency and
-workers are nearly free. `orchestrator:test`, `orchestrator:test-docs`, and `just
-test-e2e` all run `-n 4 --dist load`.
+workers are nearly free. `orchestrator:test`, `orchestrator:test-docs`,
+`orchestrator:test-recipes`, and `just test-e2e` all run `-n 4 --dist load`.
 
 Both numbers come from measuring this host, not from a default. One sample each,
 same tier and same selection, taken back to back while a second worktree ran its

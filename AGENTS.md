@@ -460,14 +460,19 @@ everything the check reads. The Python targets run from the workspace root over 
 whole tree — pytest reads documentation, recipes, hooks, and app config — so they
 are keyed on it through `nx.json`'s `wholeWorkspace` input. Narrowing one back to a
 subset makes a green suite a claim about a tree that was never run; force a real
-re-run of a single tier with `--skip-nx-cache` on that one invocation instead. One
-narrowing earns its keep: only a handful of tests assert on this repository's prose,
-so `orchestrator:test-docs` runs those under the whole-workspace key while
-`orchestrator:test` runs the rest under `codeWorkspace` — the workspace minus
-`docs/**` and `**/*.md` — and a documentation edit stops charging eight minutes. That
-split cannot go stale silently: an undeclared test that opens this checkout's own
-documentation fails in `tests/conftest.py` and is told to carry
-`@pytest.mark.reads_docs`. See
+re-run of a single tier with `--skip-nx-cache` on that one invocation instead. The
+narrowings that earn their keep answer at the scope their tests read:
+`orchestrator:test-docs` runs the handful that assert on this repository's prose
+and keeps the whole-workspace key; `orchestrator:test-recipes` runs the journeys
+that drive `just` recipes and shell scripts under `recipeWorkspace`, exactly what
+they drive; `orchestrator:test` runs the rest under `codeWorkspace` — the workspace
+minus `docs/**`, `**/*.md`, and the `apps/**` and `packages/**` no Python test
+opens. `workspace:check-nx-cache` is narrowed the same way, onto the fixture and
+scripts it builds its two worktrees from. A documentation edit stops charging eight
+minutes. No split may go stale silently: an undeclared test that opens this
+checkout's own documentation fails in `tests/conftest.py` and is told to carry
+`@pytest.mark.reads_docs`, and a `@pytest.mark.reads_recipes` test that opens
+anything outside its narrower key fails the same way. See
 [When a cached verdict may stand
 in](docs/repo-lifecycle.md#when-a-cached-verdict-may-stand-in-for-a-verdict-on-this-tree).
 

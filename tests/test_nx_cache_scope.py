@@ -10,42 +10,54 @@ assertions keep the declarations that behaviour rests on from narrowing again �
 including as the suite grows new reads, which is how the subset drifted out of
 date in the first place.
 
-The Python suite is keyed at two scopes rather than one, because "keyed on
+The Python suite is keyed at three scopes rather than one, because "keyed on
 everything it reads" and "keyed on the whole workspace" are not the same
-requirement. Only a handful of tests assert on this repository's prose; charging
-every documentation edit eight minutes for the rest bought nothing. `test-docs`
-runs those tests and keeps the whole-workspace key; `test` runs the remainder and
-is keyed on the workspace minus its prose. What keeps that second key honest is
-not this file — a static scan cannot see every read — but `tests/conftest.py`,
-which fails an undeclared test the moment it opens this checkout's own
-documentation.
+requirement. Only a handful of tests assert on this repository's prose, and the
+two costliest read neither prose nor orchestrator code — they drive `just` recipes
+and shell scripts. `test-docs` runs the prose contracts and keeps the
+whole-workspace key; `test-recipes` runs the recipe journeys under the narrow key
+those journeys actually read; `test` runs the remainder, keyed on the workspace
+minus its prose and minus the front-end projects no Python test opens. What keeps
+the narrowed keys honest is not this file — a static scan cannot see every read —
+but `tests/conftest.py`, which fails a test the moment it opens something its own
+tier's key does not carry.
 """
 
 from __future__ import annotations
 
+import ast
 import json
 import re
 import subprocess
 
-from conftest import READS_DOCS_MARKER
+from conftest import READS_DOCS_MARKER, READS_RECIPES_MARKER
+from nx_inputs import CODE_WORKSPACE, NX_CACHE_CHECK, RECIPE_WORKSPACE, covers, named_input_globs
 
 from orchestrator import REPO_ROOT
 
 WHOLE_WORKSPACE = "wholeWorkspace"
-CODE_WORKSPACE = "codeWorkspace"
 
 #: Every one of these runs from the workspace root against the whole tree — ruff
 #: over `.`, shellcheck over `scripts/`, persona validation over `personas/`, and
 #: the prose-contract tests, which exist to read documentation.
 WORKSPACE_SCOPED = ("lint", "typecheck", "format-check", "test-docs")
-#: The one target keyed on less than the whole workspace, and the exact globs that
-#: earn it: the workspace with its documentation removed, and nothing else.
+#: The tier keyed on less than the whole workspace, and the exact globs that earn
+#: it: the workspace with its documentation and its front-end projects removed,
+#: and nothing else.
 CODE_SCOPED = "test"
 CODE_WORKSPACE_GLOBS = [
     "{workspaceRoot}/**/*",
     "!{workspaceRoot}/docs/**/*",
     "!{workspaceRoot}/**/*.md",
+    "!{workspaceRoot}/apps/**/*",
+    "!{workspaceRoot}/packages/**/*",
 ]
+#: The tier keyed on less again: the recipe journeys read `just` recipes, shell
+#: scripts, and their fixtures, and nothing else of this repository.
+RECIPE_SCOPED = "test-recipes"
+#: The front-end project roots the code key drops. No Python test reads them; the
+#: whole-workspace tier covers the DAG contract checks that do.
+FRONT_END_ROOTS = ("apps/", "packages/")
 
 
 def _tracked() -> frozenset[str]:
@@ -74,12 +86,13 @@ def _resolve(entries: list, named: dict[str, list]) -> list[str]:
     """Expand named inputs into the concrete file globs Nx will hash."""
     globs: list[str] = []
     for entry in entries:
-        if isinstance(entry, dict):
-            continue  # an env/runtime input contributes no file coverage
-        if entry in named:
-            globs.extend(_resolve(named[entry], named))
-        else:
-            globs.append(entry)
+        match entry:
+            case dict():
+                pass  # an env or runtime input contributes no file coverage
+            case _ if entry in named:
+                globs.extend(_resolve(named[entry], named))
+            case _:
+                globs.append(entry)
     return globs
 
 
@@ -97,20 +110,12 @@ def _effective_inputs(project_root: str, target: str) -> list[str]:
     ]
 
 
-def _matches(glob: str, relative: str) -> bool:
-    pattern = re.escape(glob).replace(r"\*\*/\*", ".*").replace(r"\*", "[^/]*")
-    return re.fullmatch(pattern, relative) is not None
-
-
-def _covers(globs: list[str], relative: str) -> bool:
-    """Apply Nx's file-set semantics: a later `!` glob removes what an earlier one added."""
-    included = any(_matches(glob, relative) for glob in globs if not glob.startswith("!"))
-    excluded = any(_matches(glob[1:], relative) for glob in globs if glob.startswith("!"))
-    return included and not excluded
-
-
 def _is_documentation(relative: str) -> bool:
     return relative.startswith("docs/") or relative.endswith(".md")
+
+
+def _is_front_end(relative: str) -> bool:
+    return relative.startswith(FRONT_END_ROOTS)
 
 
 def test_workspace_scoped_targets_are_keyed_on_the_whole_workspace() -> None:
@@ -133,35 +138,36 @@ def test_workspace_scoped_targets_are_keyed_on_the_whole_workspace() -> None:
 def test_the_marker_that_routes_a_test_to_its_tier_means_the_same_thing_everywhere() -> None:
     """Reconcile the four places the marker name is independently written down.
 
-    `reads_docs` names a routing decision, not a label: pytest registers it,
-    `conftest.py` enforces it, and the two Nx targets select on it. Those four
-    declarations are written separately and nothing else compares them, so a rename
-    that missed one would leave a tier silently selecting nothing — and a `test`
-    tier that ran the prose contracts anyway, keyed on a workspace without prose,
-    is the false green this whole file exists to prevent.
+    Each marker names a routing decision, not a label: pytest registers it,
+    `conftest.py` enforces it, and the Nx targets select on it. Those declarations
+    are written separately and nothing else compares them, so a rename that missed
+    one would leave a tier silently selecting nothing — and a `test` tier that ran
+    the prose contracts anyway, keyed on a workspace without prose, is the false
+    green this whole file exists to prevent.
     """
     manifest = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
     registered = re.findall(r'^\s*"(\w+):', manifest, flags=re.MULTILINE)
-    assert READS_DOCS_MARKER in registered, (
-        f"pytest must register {READS_DOCS_MARKER!r} in [tool.pytest.ini_options] markers"
-    )
+    for marker in (READS_DOCS_MARKER, READS_RECIPES_MARKER):
+        assert marker in registered, (
+            f"pytest must register {marker!r} in [tool.pytest.ini_options] markers"
+        )
 
     targets = json.loads((REPO_ROOT / "orchestrator/project.json").read_text(encoding="utf-8"))[
         "targets"
     ]
     # The code tier runs in more than one invocation — the parallel bulk and the
     # serial `single_threaded` remainder — so every one of its selectors has to
-    # exclude the prose tier, not merely the first one written down.
+    # exclude both narrower tiers, not merely the first one written down.
     code_selectors = re.findall(r"-m '([^']+)'", targets[CODE_SCOPED]["command"])
     assert code_selectors, targets[CODE_SCOPED]["command"]
-    assert all(selector.startswith(f"not {READS_DOCS_MARKER}") for selector in code_selectors), (
-        code_selectors
-    )
-    assert f"-m {READS_DOCS_MARKER}" in targets["test-docs"]["command"]
+    excluded = f"not {READS_DOCS_MARKER} and not {READS_RECIPES_MARKER}"
+    assert all(selector.startswith(excluded) for selector in code_selectors), code_selectors
 
-    # And the two selectors have to partition: a test is in exactly one tier.
-    marked = re.search(r"-m '?(not )?(\w+)'?", targets["test-docs"]["command"])
-    assert marked is not None and marked.group(1) is None
+    # And the selectors have to partition: a test is in exactly one tier.
+    for marker, target in ((READS_DOCS_MARKER, "test-docs"), (READS_RECIPES_MARKER, RECIPE_SCOPED)):
+        assert f"-m {marker}" in targets[target]["command"]
+        marked = re.search(r"-m '?(not )?(\w+)'?", targets[target]["command"])
+        assert marked is not None and marked.group(1) is None
 
 
 #: Every place the parallel worker contract is independently written down. It is a
@@ -171,6 +177,7 @@ def test_the_marker_that_routes_a_test_to_its_tier_means_the_same_thing_everywhe
 PARALLEL_SITES = (
     ("orchestrator/project.json", CODE_SCOPED),
     ("orchestrator/project.json", "test-docs"),
+    ("orchestrator/project.json", RECIPE_SCOPED),
     ("justfile", "test-e2e"),
 )
 
@@ -247,7 +254,7 @@ def test_the_code_tiers_parallel_and_serial_invocations_partition_it() -> None:
     assert not parts[0] & parts[1], (
         f"both code-tier invocations collect {sorted(parts[0] & parts[1])[:5]}"
     )
-    whole = _collected(f"not {READS_DOCS_MARKER}")
+    whole = _collected(f"not {READS_DOCS_MARKER} and not {READS_RECIPES_MARKER}")
     assert parts[0] | parts[1] == whole, (
         "the code tier's invocations no longer cover it: "
         f"{sorted(whole - (parts[0] | parts[1]))[:5]} is collected by neither"
@@ -257,23 +264,26 @@ def test_the_code_tiers_parallel_and_serial_invocations_partition_it() -> None:
     assert all(parts), [len(part) for part in parts]
 
 
-def test_the_code_only_test_key_is_the_workspace_with_its_prose_removed() -> None:
-    """The one narrowed key is narrowed by exactly the documentation, and no further."""
+def test_the_code_only_test_key_drops_prose_and_the_front_end_and_nothing_else() -> None:
+    """The narrowed key is narrowed by exactly two things, both of which have a tier."""
     named = _nx_config()["namedInputs"]
     assert named[CODE_WORKSPACE] == CODE_WORKSPACE_GLOBS, (
         "orchestrator:test replays a verdict for every tracked path this key covers, "
-        "so narrowing it past documentation would memoize a claim about code it never read"
+        "so narrowing it further would memoize a claim about code it never read"
     )
 
     project = json.loads((REPO_ROOT / "orchestrator/project.json").read_text(encoding="utf-8"))
     assert project["targets"][CODE_SCOPED]["inputs"] == [CODE_WORKSPACE]
 
     globs = _effective_inputs("orchestrator", CODE_SCOPED)
-    missed = sorted(path for path in _tracked() if not _covers(globs, path))
-    assert missed and all(_is_documentation(path) for path in missed), (
-        f"only documentation may fall outside the code-only test key: {missed}"
+    missed = sorted(path for path in _tracked() if not covers(globs, path))
+    assert missed and all(_is_documentation(path) or _is_front_end(path) for path in missed), (
+        f"only documentation and the front-end projects may fall outside this key: {missed}"
     )
-    # The prose tier is what covers the rest, so it must actually still exist.
+    # Both halves have to be real, or one exclusion is silently doing nothing.
+    assert any(_is_documentation(path) for path in missed)
+    assert any(_is_front_end(path) for path in missed)
+    # The whole-workspace tier is what covers the rest, so it must actually exist.
     assert "test-docs" in project["targets"]
 
 
@@ -284,22 +294,34 @@ def test_every_repository_path_the_suite_reads_is_part_of_a_test_key() -> None:
     read: set[str] = set()
     for source in sorted(REPO_ROOT.joinpath("tests").rglob("*.py")):
         text = source.read_text(encoding="utf-8")
-        for match in re.finditer(r'(?:REPO_ROOT|ROOT)\s*/\s*"([^"]+)"(\s*/\s*"[^"]+")*', text):
-            candidate = "/".join(re.findall(r'"([^"]+)"', match.group(0)))
+        # Two shapes, because a suite names a repository path both ways: joined onto
+        # the root at the call site, and listed as a bare relative literal a helper
+        # joins later. Reading only the first shape missed every path a fixture
+        # copies from a tuple — which is where the front-end reads live.
+        candidates = {
+            "/".join(re.findall(r'"([^"]+)"', match.group(0)))
+            for match in re.finditer(r'(?:REPO_ROOT|ROOT)\s*/\s*"([^"]+)"(\s*/\s*"[^"]+")*', text)
+        }
+        candidates |= {match.group(1) for match in re.finditer(r'"([^"\n]+)"', text)}
+        for candidate in candidates:
             if candidate in tracked or any(path.startswith(f"{candidate}/") for path in tracked):
                 read.add(candidate)
 
     # A guard that found nothing would pass silently forever.
     assert {"AGENTS.md", "justfile", "scripts/session-setup.sh"} <= read, read
-    uncovered = sorted(path for path in read if not _covers(globs, path))
-    assert all(_is_documentation(path) for path in uncovered), (
+    uncovered = sorted(path for path in read if not covers(globs, path))
+    assert all(_is_documentation(path) or _is_front_end(path) for path in uncovered), (
         "orchestrator:test reads these repository paths but is not keyed on them, "
         f"so a change to one replays a stale verdict: {uncovered}"
     )
-    # Prose the suite reads is not exempt, only keyed elsewhere: `test-docs` is
-    # keyed on the whole workspace, so it covers every path in `uncovered`.
+    # What the suite reads outside this key is not exempt, only keyed elsewhere:
+    # `test-docs` is keyed on the whole workspace, so it covers every path here —
+    # and `conftest.py` is what holds each of those reads to that tier.
     assert "AGENTS.md" in uncovered, (
         "the sentinel prose read moved; keep a real one here or this guard stops guarding"
+    )
+    assert "apps/dag-ui/vite.config.ts" in uncovered, (
+        "the sentinel front-end read moved; keep a real one here or this guard stops guarding"
     )
 
 
@@ -314,9 +336,120 @@ def test_the_e2e_witnesses_still_name_paths_outside_the_project_roots() -> None:
     globs = [glob.replace("{workspaceRoot}/", "") for glob in project_scoped]
     globs = [glob.replace("{projectRoot}/", "orchestrator/") for glob in globs]
     for witness in ("AGENTS.md", "justfile"):
-        assert not _covers(globs, witness)
+        assert not covers(globs, witness)
         assert (REPO_ROOT / witness).exists()
 
     code_globs = _effective_inputs("orchestrator", CODE_SCOPED)
-    assert not _covers(code_globs, "AGENTS.md")
-    assert _covers(code_globs, "justfile")
+    assert not covers(code_globs, "AGENTS.md")
+    assert covers(code_globs, "justfile")
+
+
+def _suite_modules() -> dict[str, str]:
+    """Every module under `tests/` by the bare name an import would use."""
+    return {
+        source.stem: str(source.relative_to(REPO_ROOT))
+        for source in sorted(REPO_ROOT.joinpath("tests").rglob("*.py"))
+    }
+
+
+def _imported_suite_modules(relative: str, modules: dict[str, str]) -> set[str]:
+    """The `tests/` modules ``relative`` reaches by import, transitively.
+
+    Imports are how a tier reads code the file-read guard cannot see: `pytest`
+    resolves `from waits import timeout` through the import machinery rather than
+    `open`, so a helper that drifted outside the key would change the tier's answer
+    without changing its hash and nothing at runtime would notice.
+    """
+    reached: set[str] = set()
+    pending = [relative]
+    while pending:
+        current = pending.pop()
+        if current in reached:
+            continue
+        reached.add(current)
+        tree = ast.parse((REPO_ROOT / current).read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            names: list[str] = []
+            if isinstance(node, ast.Import):
+                names = [alias.name.split(".")[0] for alias in node.names]
+            elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
+                names = [node.module.split(".")[0]]
+            pending.extend(modules[name] for name in names if name in modules)
+    return reached - {relative}
+
+
+def test_the_recipe_key_covers_every_module_that_routes_a_test_into_it() -> None:
+    """A recipe-tier test in an unkeyed file would replay a verdict predating it.
+
+    The tier's whole claim is that a commit touching none of `justfile`,
+    `scripts/`, `package.json`, `bun.lock`, or the fixtures may replay its verdict.
+    That is only true while the modules *defining* those tests are in the key too —
+    a marker moved into a file the key does not carry, or a helper imported from
+    one, is a test that can change its own answer without changing its hash.
+    """
+    globs = _effective_inputs("orchestrator", RECIPE_SCOPED)
+    modules = _suite_modules()
+    declaring = sorted(
+        str(source.relative_to(REPO_ROOT))
+        for source in sorted(REPO_ROOT.joinpath("tests").rglob("test_*.py"))
+        if f"pytest.mark.{READS_RECIPES_MARKER}" in source.read_text(encoding="utf-8")
+    )
+    assert declaring, f"nothing declares {READS_RECIPES_MARKER}; the tier would run empty"
+
+    needed = {"tests/conftest.py", *declaring}
+    for module in declaring:
+        needed |= _imported_suite_modules(module, modules)
+    needed |= _imported_suite_modules("tests/conftest.py", modules)
+    uncovered = sorted(path for path in needed if not covers(globs, path))
+    assert not uncovered, (
+        f"orchestrator:{RECIPE_SCOPED} collects these modules but is not keyed on them, "
+        f"so editing one replays a stale verdict: {uncovered}"
+    )
+
+    # And the narrower key must stay inside the wider one, or a recipe test could
+    # read something the code-key guard permits and this tier does not carry.
+    code_globs = named_input_globs(CODE_WORKSPACE)
+    outside = sorted(
+        path
+        for path in _tracked()
+        if covers(named_input_globs(RECIPE_WORKSPACE), path) and not covers(code_globs, path)
+    )
+    assert not outside, f"the recipe key reaches outside the code key: {outside}"
+
+
+def test_the_nx_cache_check_key_covers_every_repository_path_that_check_reads() -> None:
+    """`just check` replays this check, so its key has to carry what it opens.
+
+    The check builds two linked worktrees out of the fixture and drives the real
+    `scripts/nx.sh` in both. Every one of those inputs is named in the script as
+    `$root/<path>`, which is what makes the reconciliation mechanical rather than a
+    reviewer's reading of a shell script.
+    """
+    assert _nx_config()["targetDefaults"]["check-nx-cache"]["inputs"] == [NX_CACHE_CHECK], (
+        "the check has to be keyed on its own named input, or the reconciliation below "
+        "is checking globs the target does not actually hash"
+    )
+
+    script = "scripts/check-nx-cache.sh"
+    text = (REPO_ROOT / script).read_text(encoding="utf-8")
+    named = {match.group(1) for match in re.finditer(r'"\$root/([^"]+)"', text)}
+    assert {"package.json", "scripts/nx.sh", "tests/fixtures/nx-cache"} <= named, named
+
+    tracked = _tracked()
+    read = {script}
+    for candidate in named:
+        if candidate in tracked:
+            read.add(candidate)
+        else:
+            read |= {path for path in tracked if path.startswith(f"{candidate}/")}
+
+    globs = _effective_inputs("", "check-nx-cache")
+    uncovered = sorted(path for path in read if not covers(globs, path))
+    assert not uncovered, (
+        "workspace:check-nx-cache reads these repository paths but is not keyed on "
+        f"them, so a change to one replays a stale verdict: {uncovered}"
+    )
+    # Narrow on purpose: a key that had quietly widened to the whole workspace would
+    # pass the assertion above and replay nothing.
+    assert not covers(globs, "AGENTS.md")
+    assert not covers(globs, "orchestrator/lifecycle.py")

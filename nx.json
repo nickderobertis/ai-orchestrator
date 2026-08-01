@@ -3,12 +3,44 @@
   "cacheDirectory": ".nx/cache",
   "defaultBase": "main",
   "namedInputs": {
-    "default": ["{projectRoot}/**/*", "sharedGlobals"],
-    "wholeWorkspace": ["{workspaceRoot}/**/*"],
+    "default": [
+      "{projectRoot}/**/*",
+      "sharedGlobals"
+    ],
+    "wholeWorkspace": [
+      "{workspaceRoot}/**/*"
+    ],
     "codeWorkspace": [
       "{workspaceRoot}/**/*",
       "!{workspaceRoot}/docs/**/*",
-      "!{workspaceRoot}/**/*.md"
+      "!{workspaceRoot}/**/*.md",
+      "!{workspaceRoot}/apps/**/*",
+      "!{workspaceRoot}/packages/**/*"
+    ],
+    "recipeWorkspace": [
+      "{workspaceRoot}/nx.json",
+      "{workspaceRoot}/pyproject.toml",
+      "{workspaceRoot}/justfile",
+      "{workspaceRoot}/package.json",
+      "{workspaceRoot}/bun.lock",
+      "{workspaceRoot}/scripts/**/*",
+      "{workspaceRoot}/tests/fixtures/**/*",
+      "{workspaceRoot}/tests/conftest.py",
+      "{workspaceRoot}/tests/leak_guard.py",
+      "{workspaceRoot}/tests/leak_reaper.py",
+      "{workspaceRoot}/tests/nx_inputs.py",
+      "{workspaceRoot}/tests/process_tree.py",
+      "{workspaceRoot}/tests/e2e/nx_workspace.py",
+      "{workspaceRoot}/tests/e2e/waits.py",
+      "{workspaceRoot}/tests/e2e/test_workspace_contract_e2e.py"
+    ],
+    "nxCacheCheck": [
+      "{workspaceRoot}/package.json",
+      "{workspaceRoot}/scripts/check-nx-cache.sh",
+      "{workspaceRoot}/scripts/nx.sh",
+      "{workspaceRoot}/scripts/preserved-log.sh",
+      "{workspaceRoot}/scripts/workspace-install.sh",
+      "{workspaceRoot}/tests/fixtures/nx-cache/**/*"
     ],
     "sharedGlobals": [
       "{workspaceRoot}/package.json",
@@ -24,39 +56,69 @@
   "targetDefaults": {
     "build": {
       "cache": true,
-      "inputs": ["default"]
+      "inputs": [
+        "default"
+      ]
     },
     "lint": {
       "cache": true,
-      "inputs": ["default"]
+      "inputs": [
+        "default"
+      ]
     },
     "test": {
       "cache": true,
-      "inputs": ["default"]
+      "inputs": [
+        "default"
+      ]
     },
     "test-docs": {
       "cache": true,
-      "inputs": ["wholeWorkspace"]
+      "inputs": [
+        "wholeWorkspace"
+      ]
+    },
+    "test-recipes": {
+      "cache": true,
+      "inputs": [
+        "recipeWorkspace"
+      ]
+    },
+    "check-nx-cache": {
+      "cache": true,
+      "inputs": [
+        "nxCacheCheck"
+      ]
     },
     "typecheck": {
       "cache": true,
-      "inputs": ["default"]
+      "inputs": [
+        "default"
+      ]
     },
     "format": {
       "cache": false
     },
     "format-check": {
       "cache": true,
-      "inputs": ["default"]
+      "inputs": [
+        "default"
+      ]
     },
     "lint-llm-diff": {
       "cache": true,
       "inputs": [
         "wholeWorkspace",
-        { "env": "LLMLINT_DIFF_BASE_SHA" },
-        { "runtime": "./scripts/llmlint-fingerprint.sh" }
+        {
+          "env": "LLMLINT_DIFF_BASE_SHA"
+        },
+        {
+          "runtime": "./scripts/llmlint-fingerprint.sh"
+        }
       ],
-      "outputs": ["{workspaceRoot}/.nx/llmlint-diff"]
+      "outputs": [
+        "{workspaceRoot}/.nx/llmlint-diff"
+      ]
     },
     "bootstrap": {
       "cache": false

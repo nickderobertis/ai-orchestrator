@@ -9,13 +9,18 @@ key covers everything the check reads, and this suite reads far beyond
 Keyed on a hand-listed subset, a change to any of those replayed a green verdict
 for a tree whose tests would have failed had they run.
 
-The suite answers at two scopes, so it is keyed at two. Only a handful of tests
+The suite answers at three scopes, so it is keyed at three. Only a handful of tests
 assert on this repository's prose, and charging every documentation edit eight
 minutes for the rest bought nothing: `orchestrator:test-docs` runs those and keeps
-the whole-workspace key, while `orchestrator:test` runs the remainder and is keyed
-on the workspace minus its documentation. Both halves of that claim are load
-bearing — prose must still invalidate the tier that reads it, and code must still
-invalidate both — so both are proved here.
+the whole-workspace key. Narrower again, the two costliest journeys in the suite
+build real worktrees and run real package installs to drive `just` recipes and
+shell scripts, and read no prose and no `orchestrator/` at all:
+`orchestrator:test-recipes` runs those under a key of exactly what they drive.
+`orchestrator:test` runs the remainder, keyed on the workspace minus its
+documentation and minus the front-end projects no Python test opens. Every half of
+that claim is load bearing — each key must still invalidate on what its tier reads,
+and must still replay on what it does not — so each is proved here, along with the
+cross-worktree cache check `just check` now replays through Nx as well.
 
 These journeys drive the real `nx.json`, the real `orchestrator/project.json`
 declarations, and the real `scripts/nx.sh` against a throwaway copy of this
@@ -35,6 +40,7 @@ touching the cache key this journey is about.
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -56,10 +62,23 @@ PROSE_WITNESS = "AGENTS.md"
 PROSE_TEXT = "`oneharness.orchestrator.toml`; ordinary pushes"
 PROSE_EDIT = "`oneharness.orchestrator.toml`, `docs/probe.md`; ordinary pushes"
 # Also read directly, also outside every project root, and deliberately not prose:
-# this is what proves the narrowed key was narrowed by documentation alone.
+# this is what proves the narrowed key was narrowed by documentation alone. It is
+# also the recipe tier's own witness, since driving it is what that tier is for.
 CODE_WITNESS = "justfile"
 CODE_TEXT = "# List available recipes."
 CODE_EDIT = "# List the available recipes."
+#: Python the code tier reads and the recipe tier does not: editing it must re-run
+#: one and replay the other, which is the whole reason the recipe key is narrow.
+PYTHON_WITNESS = "orchestrator/lifecycle.py"
+#: A front-end project the Python suite never opens. Its contract is checked by the
+#: whole-workspace tier, so editing it must re-run that tier and replay the code one.
+FRONT_END_WITNESS = "apps/dag-ui/vite.config.ts"
+#: The fixture `scripts/check-nx-cache.sh` builds its two linked worktrees from.
+FIXTURE_WITNESS = "tests/fixtures/nx-cache/src/index.ts"
+#: Where this host publishes the resolved fixture lockfile that check shares. The
+#: journeys below run under an isolated `XDG_CACHE_HOME`, so the resolution is
+#: carried across rather than paid again — sharing a cache is what it is for.
+SHARED_FIXTURE_RESOLUTIONS = Path("ai-orchestrator") / "nx-cache-fixture"
 
 
 @dataclass(frozen=True)
@@ -103,6 +122,17 @@ class Checkout:
         assert old in text, f"{relative} no longer contains the text this journey edits"
         path.write_text(text.replace(old, new, 1), encoding="utf-8")
 
+    def append(self, relative: str, line: str) -> None:
+        """Change a file's content without changing what it means.
+
+        Some witnesses are read by the very checks these journeys run — the Nx
+        cache fixture is typechecked, `vite.config.ts` is held against a contract —
+        so the edit has to move the hash and nothing else.
+        """
+        path = self.root / relative
+        assert path.is_file(), f"{relative} is no longer a file this journey can witness"
+        path.write_text(f"{path.read_text(encoding='utf-8')}{line}\n", encoding="utf-8")
+
 
 @pytest.fixture
 def checkout(tmp_path: Path) -> Checkout:
@@ -111,7 +141,11 @@ def checkout(tmp_path: Path) -> Checkout:
     # Nx resolves its workspace and its ignore rules from git, and scripts/nx.sh
     # derives the shared cache key from the repository identity.
     subprocess.run(["git", "init", "-q"], cwd=root, check=True)
-    return Checkout(root=root, cache=tmp_path / "cache")
+    cache = tmp_path / "cache"
+    host = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache")
+    if (host / SHARED_FIXTURE_RESOLUTIONS).is_dir():
+        shutil.copytree(host / SHARED_FIXTURE_RESOLUTIONS, cache / SHARED_FIXTURE_RESOLUTIONS)
+    return Checkout(root=root, cache=cache)
 
 
 def test_a_workspace_file_the_suite_reads_invalidates_the_cached_test_verdict(
@@ -166,3 +200,84 @@ def test_skip_nx_cache_forces_one_tier_to_re_run_an_unchanged_tree(checkout: Che
     # And only that invocation: the next one replays again, so nothing an operator
     # does to re-run one tier leaves the rest of the workspace re-running forever.
     assert not checkout.ran_the_command("orchestrator:test")
+
+
+def test_editing_a_recipe_input_re_runs_the_recipe_tier(checkout: Checkout) -> None:
+    """The narrow key must still notice everything the recipe journeys drive."""
+    assert checkout.ran_the_command("orchestrator:test-recipes")
+    assert not checkout.ran_the_command("orchestrator:test-recipes"), (
+        "an unchanged tree must replay its recorded verdict rather than re-run"
+    )
+
+    checkout.edit(CODE_WITNESS, CODE_TEXT, CODE_EDIT)
+
+    assert checkout.ran_the_command("orchestrator:test-recipes"), (
+        f"changing {CODE_WITNESS} must re-run the journeys that drive it"
+    )
+
+
+def test_editing_orchestrator_code_replays_only_the_recipe_tier(checkout: Checkout) -> None:
+    """The whole point of the third tier: Python churn stops paying for Bun and Nx.
+
+    The two costliest journeys in this suite build real worktrees and run real
+    package installs, and neither reads a line of `orchestrator/`. Most commits
+    here touch nothing else, so this is the case that has to replay.
+    """
+    assert checkout.ran_the_command("orchestrator:test")
+    assert checkout.ran_the_command("orchestrator:test-recipes")
+
+    checkout.append(PYTHON_WITNESS, "# nx cache scope journey")
+
+    assert checkout.ran_the_command("orchestrator:test"), (
+        f"changing {PYTHON_WITNESS} must re-run the tier keyed on the code"
+    )
+    assert not checkout.ran_the_command("orchestrator:test-recipes"), (
+        f"changing {PYTHON_WITNESS} must not re-run journeys that cannot read it"
+    )
+
+
+def test_editing_a_front_end_project_replays_the_python_code_tier(checkout: Checkout) -> None:
+    """No Python test opens `apps/` or `packages/`, so no Python tier is keyed on them.
+
+    The DAG state contract does read them, and it runs in the whole-workspace tier,
+    which is what keeps this narrowing from dropping the check on the floor.
+    """
+    assert checkout.ran_the_command("orchestrator:test")
+    assert checkout.ran_the_command("orchestrator:test-docs")
+
+    checkout.append(FRONT_END_WITNESS, "// nx cache scope journey")
+
+    assert checkout.ran_the_command("orchestrator:test-docs"), (
+        f"changing {FRONT_END_WITNESS} must re-run the tier that checks its contract"
+    )
+    assert not checkout.ran_the_command("orchestrator:test"), (
+        f"changing {FRONT_END_WITNESS} must not re-run a tier whose tests never open it"
+    )
+
+
+def test_the_cross_worktree_cache_check_replays_until_its_own_fixture_moves(
+    checkout: Checkout,
+) -> None:
+    """`just check` runs this through Nx, so it must replay and it must still miss.
+
+    Two real linked worktrees and two real installs is around forty seconds cold,
+    charged to every commit while it ran as a plain shell line. It reads its
+    fixture, three scripts, and the root manifest — nothing else — so prose has to
+    replay and the fixture has to miss.
+    """
+    assert checkout.ran_the_command("workspace:check-nx-cache")
+    assert not checkout.ran_the_command("workspace:check-nx-cache"), (
+        "an unchanged tree must replay this check rather than rebuild both worktrees"
+    )
+
+    checkout.edit(PROSE_WITNESS, PROSE_TEXT, PROSE_EDIT)
+
+    assert not checkout.ran_the_command("workspace:check-nx-cache"), (
+        f"changing {PROSE_WITNESS} must not rebuild a check that cannot read it"
+    )
+
+    checkout.append(FIXTURE_WITNESS, "// nx cache scope journey")
+
+    assert checkout.ran_the_command("workspace:check-nx-cache"), (
+        f"changing {FIXTURE_WITNESS} must re-run the check built out of it"
+    )

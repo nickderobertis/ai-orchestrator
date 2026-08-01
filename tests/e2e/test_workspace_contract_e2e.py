@@ -8,6 +8,7 @@ cross-worktree Nx cache boundaries run separately.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -19,11 +20,12 @@ import pytest
 from nx_workspace import copy_working_tree
 from waits import timeout as e2e_timeout
 
-# The contracts checked here span the whole tree, and documentation is one of the
-# layers they hold together — `docs/dag-ui.md` and `docs/dag-ui/design.md` are
-# inputs, not commentary. The module belongs to the whole-workspace tier.
-pytestmark = pytest.mark.reads_docs
-
+# Deliberately no module-level tier mark. Some contracts checked here span the
+# whole tree — `docs/dag-ui.md` and `docs/dag-ui/design.md` are inputs to the DAG
+# state contract, not commentary — but most of this file drives `just` recipes and
+# shell scripts that never open this repository's prose, and a blanket declaration
+# charged every documentation edit for all fifty of them. Each test declares what
+# it actually reads, and `tests/conftest.py` fails one that declares wrong.
 ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -44,16 +46,17 @@ def _run(
     ("recipe", "target"),
     [
         ("bootstrap", "run-many -t bootstrap"),
-        ("check", "run-many -t format-check,lint,typecheck,test,test-docs"),
-        ("test", "run-many -t test,test-docs"),
+        ("check", "run-many -t format-check,lint,typecheck,test,test-docs,test-recipes"),
+        ("test", "run-many -t test,test-docs,test-recipes"),
         ("lint", "affected -t lint"),
         ("typecheck", "affected -t typecheck"),
         ("format", "affected -t format"),
         ("format-check", "run-many -t format-check"),
-        ("upgrade", "run-many -t build,lint,typecheck,test,test-docs"),
+        ("upgrade", "run-many -t build,lint,typecheck,test,test-docs,test-recipes"),
         ("lint-llm-diff", "run workspace:lint-llm-diff"),
     ],
 )
+@pytest.mark.reads_recipes
 def test_root_recipe_routes_through_nx(recipe: str, target: str) -> None:
     result = _run("just", "--dry-run", recipe)
 
@@ -61,6 +64,7 @@ def test_root_recipe_routes_through_nx(recipe: str, target: str) -> None:
     assert f"./scripts/nx.sh {target}" in result.stderr
 
 
+@pytest.mark.reads_recipes
 def test_test_recipe_forces_one_tier_to_re_run_through_the_command_surface() -> None:
     """The documented way to re-run a memoized tier is a flag on one invocation.
 
@@ -70,10 +74,12 @@ def test_test_recipe_forces_one_tier_to_re_run_through_the_command_surface() -> 
     every tier from every unrelated command and breaks the checks whose contract
     is cache replay.
     """
+    forwarded = "./scripts/nx.sh run-many -t test,test-docs,test-recipes --skip-nx-cache"
+
     result = _run("just", "--dry-run", "test", "--skip-nx-cache")
 
     assert result.returncode == 0, result.stderr
-    assert "./scripts/nx.sh run-many -t test,test-docs --skip-nx-cache" in result.stderr
+    assert forwarded in result.stderr
 
 
 def test_orchestrator_lint_target_reports_missing_shellcheck(tmp_path: Path) -> None:
@@ -117,6 +123,7 @@ def _contract_run(checkout: Path, source: Path) -> subprocess.CompletedProcess[s
     return _run("bash", "scripts/check-oneharness-ui-contract.sh", cwd=checkout, env=env)
 
 
+@pytest.mark.reads_docs
 def test_contract_checker_accepts_the_exact_pinned_declaration(tmp_path: Path) -> None:
     checkout = _contract_checkout(tmp_path)
     source = checkout / "docs/dag-ui/oneharness-ui-contract.d.ts"
@@ -136,6 +143,7 @@ def test_contract_checker_accepts_the_exact_pinned_declaration(tmp_path: Path) -
         ("design", "synchronize design pin"),
     ],
 )
+@pytest.mark.reads_docs
 def test_contract_checker_reports_actionable_drift(
     tmp_path: Path, mutation: str, message: str
 ) -> None:
@@ -160,6 +168,7 @@ def test_contract_checker_reports_actionable_drift(
     assert message in result.stderr
 
 
+@pytest.mark.reads_docs
 def test_contract_checker_reports_fetch_failure(tmp_path: Path) -> None:
     checkout = _contract_checkout(tmp_path)
 
@@ -169,6 +178,7 @@ def test_contract_checker_reports_fetch_failure(tmp_path: Path) -> None:
     assert "fetch pinned source and retry" in result.stderr
 
 
+@pytest.mark.reads_docs
 def test_contract_checker_rejects_malformed_hash_pin(tmp_path: Path) -> None:
     checkout = _contract_checkout(tmp_path)
     source = tmp_path / "source.ts"
@@ -181,6 +191,7 @@ def test_contract_checker_rejects_malformed_hash_pin(tmp_path: Path) -> None:
     assert "repair invalid SHA-256 pin" in result.stderr
 
 
+@pytest.mark.reads_docs
 def test_contract_checker_rejects_unsupported_source_scheme(tmp_path: Path) -> None:
     checkout = _contract_checkout(tmp_path)
     env = os.environ.copy()
@@ -225,6 +236,7 @@ def _dag_state_contract_run(checkout: Path) -> subprocess.CompletedProcess[str]:
     return _run("python3", "scripts/check-dag-state-contract.py", cwd=checkout)
 
 
+@pytest.mark.reads_docs
 def test_dag_state_contract_checker_accepts_matching_public_states(
     tmp_path: Path,
 ) -> None:
@@ -238,6 +250,7 @@ def test_dag_state_contract_checker_accepts_matching_public_states(
     )
 
 
+@pytest.mark.reads_docs
 def test_dag_state_contract_checker_reports_typescript_drift(tmp_path: Path) -> None:
     checkout = _dag_state_contract_checkout(tmp_path)
     layout = checkout / "packages/dag-layout/src/index.ts"
@@ -251,6 +264,7 @@ def test_dag_state_contract_checker_reports_typescript_drift(tmp_path: Path) -> 
     assert "reconcile the TypeScript list with the Python projection states" in result.stderr
 
 
+@pytest.mark.reads_docs
 def test_dag_state_contract_checker_reports_usage_field_drift(tmp_path: Path) -> None:
     """Renaming a usage field in Python alone must fail, not silently break the UI."""
     checkout = _dag_state_contract_checkout(tmp_path)
@@ -267,6 +281,7 @@ def test_dag_state_contract_checker_reports_usage_field_drift(tmp_path: Path) ->
     assert "reconcile them in one change" in result.stderr
 
 
+@pytest.mark.reads_docs
 def test_dag_state_contract_checker_reports_sse_event_drift(tmp_path: Path) -> None:
     """An SSE event renamed in the server alone must fail against the design contract."""
     checkout = _dag_state_contract_checkout(tmp_path)
@@ -283,6 +298,7 @@ def test_dag_state_contract_checker_reports_sse_event_drift(tmp_path: Path) -> N
     assert "docs/dag-ui/design.md" in result.stderr
 
 
+@pytest.mark.reads_docs
 def test_dag_state_contract_checker_reports_timeline_span_drift(tmp_path: Path) -> None:
     """A timeline span kind added in Python alone must fail, not ship unparseable."""
     checkout = _dag_state_contract_checkout(tmp_path)
@@ -299,6 +315,7 @@ def test_dag_state_contract_checker_reports_timeline_span_drift(tmp_path: Path) 
     assert "packages/dag-model/src/index.ts timelineSpanKindSchema" in result.stderr
 
 
+@pytest.mark.reads_docs
 def test_dag_state_contract_checker_reports_timeline_payload_drift(tmp_path: Path) -> None:
     """A timeline field invented server-side must fail against the design contract."""
     checkout = _dag_state_contract_checkout(tmp_path)
@@ -317,6 +334,7 @@ def test_dag_state_contract_checker_reports_timeline_payload_drift(tmp_path: Pat
     assert "design.md does not" in result.stderr
 
 
+@pytest.mark.reads_docs
 def test_dag_state_contract_checker_reports_dag_ui_proxy_drift(tmp_path: Path) -> None:
     """A UI proxying somewhere the server does not bind must fail before it ships."""
     checkout = _dag_state_contract_checkout(tmp_path)
@@ -330,6 +348,7 @@ def test_dag_state_contract_checker_reports_dag_ui_proxy_drift(tmp_path: Path) -
     assert "apps/dag-ui/vite.config.ts proxy default says 9999" in result.stderr
 
 
+@pytest.mark.reads_docs
 def test_dag_state_contract_checker_reports_dag_ui_documented_port_drift(
     tmp_path: Path,
 ) -> None:
@@ -480,6 +499,7 @@ def _init_repository(checkout: Path) -> None:
         subprocess.run(["git", *args], cwd=checkout, check=True, capture_output=True)
 
 
+@pytest.mark.reads_recipes
 def test_bootstrap_recipe_reinstalls_the_locked_workspace_from_a_clean_clone(
     tmp_path: Path,
 ) -> None:
@@ -499,6 +519,7 @@ def test_bootstrap_recipe_reinstalls_the_locked_workspace_from_a_clean_clone(
     ]
 
 
+@pytest.mark.reads_recipes
 def test_bootstrap_recipe_leaves_the_failing_workspace_install_readable(
     tmp_path: Path,
 ) -> None:
@@ -522,6 +543,7 @@ def test_bootstrap_recipe_leaves_the_failing_workspace_install_readable(
     ]
 
 
+@pytest.mark.reads_recipes
 def test_check_recipe_runs_the_combined_public_journey_with_concise_output(
     tmp_path: Path,
 ) -> None:
@@ -532,13 +554,14 @@ def test_check_recipe_runs_the_combined_public_journey_with_concise_output(
     assert result.returncode == 0, result.stderr
     assert result.stdout == "check: all deterministic checks passed\n"
     assert trace.read_text().splitlines() == [
-        "nx.sh run-many -t format-check,lint,typecheck,test,test-docs",
+        "nx.sh run-many -t format-check,lint,typecheck,test,test-docs,test-recipes",
         "check-oneharness-ui-contract.sh ",
         "python3 ./scripts/check-dag-state-contract.py",
-        "check-nx-cache.sh ",
+        "nx.sh run workspace:check-nx-cache",
     ]
 
 
+@pytest.mark.reads_recipes
 def test_check_recipe_preserves_captured_nx_failure(tmp_path: Path) -> None:
     checkout, trace = _recipe_checkout(tmp_path)
 
@@ -548,10 +571,11 @@ def test_check_recipe_preserves_captured_nx_failure(tmp_path: Path) -> None:
     assert "nx.sh: captured failure detail" in result.stderr
     assert "check: deterministic checks failed" in result.stderr
     assert trace.read_text().splitlines() == [
-        "nx.sh run-many -t format-check,lint,typecheck,test,test-docs"
+        "nx.sh run-many -t format-check,lint,typecheck,test,test-docs,test-recipes"
     ]
 
 
+@pytest.mark.reads_recipes
 def test_check_recipe_leaves_the_failing_run_readable_after_it_exits(tmp_path: Path) -> None:
     """The diagnosis outlives the process: `cat .logs/check.log` still answers."""
     checkout, trace = _recipe_checkout(tmp_path)
@@ -565,6 +589,7 @@ def test_check_recipe_leaves_the_failing_run_readable_after_it_exits(tmp_path: P
     assert oct(log.stat().st_mode & 0o777) == "0o600"
 
 
+@pytest.mark.reads_recipes
 def test_check_recipe_log_is_readable_while_the_recipe_is_still_running(
     tmp_path: Path,
 ) -> None:
@@ -660,6 +685,7 @@ printf 'bunx %s\\n' "$*" >>"$TRACE_FILE"
     bunx.chmod(0o755)
 
 
+@pytest.mark.reads_recipes
 def test_nx_wrapper_provisions_the_locked_workspace_when_nx_is_absent(tmp_path: Path) -> None:
     """A bare Nx invocation in a fresh worktree heals itself instead of failing.
 
@@ -688,6 +714,7 @@ def test_nx_wrapper_provisions_the_locked_workspace_when_nx_is_absent(tmp_path: 
     ]
 
 
+@pytest.mark.reads_recipes
 def test_nx_wrapper_skips_provisioning_once_the_workspace_is_installed(tmp_path: Path) -> None:
     """The heal is a no-op on every ordinary invocation, which is most of them."""
     checkout = _nx_wrapper_checkout(tmp_path, "provisioned")
@@ -707,6 +734,7 @@ def test_nx_wrapper_skips_provisioning_once_the_workspace_is_installed(tmp_path:
     assert trace.read_text().splitlines() == ["bunx nx run cached"]
 
 
+@pytest.mark.reads_recipes
 def test_nx_wrapper_names_the_provisioning_it_could_not_complete(tmp_path: Path) -> None:
     """A failed install stops before Nx and leaves its own reason on disk."""
     checkout = _nx_wrapper_checkout(tmp_path, "unprovisionable")
@@ -739,6 +767,7 @@ def test_nx_wrapper_names_the_provisioning_it_could_not_complete(tmp_path: Path)
         (["--force", "unexpected"], "expected at most one argument"),
     ],
 )
+@pytest.mark.reads_recipes
 def test_workspace_install_rejects_arguments_it_does_not_define(
     tmp_path: Path, arguments: list[str], message: str
 ) -> None:
@@ -796,6 +825,7 @@ def _sabotage_installer_state(checkout: Path, mode: str) -> None:
         ("unopenable-log", "preserved-log: cannot open"),
     ],
 )
+@pytest.mark.reads_recipes
 def test_workspace_install_names_every_piece_of_its_own_state_that_refuses(
     tmp_path: Path, mode: str, message: str
 ) -> None:
@@ -823,6 +853,7 @@ def test_workspace_install_names_every_piece_of_its_own_state_that_refuses(
     assert not trace.exists(), "an installer that never took its lock must not have run Bun"
 
 
+@pytest.mark.reads_recipes
 def test_concurrent_workspace_installs_install_once_and_both_succeed(tmp_path: Path) -> None:
     """Two Nx invocations in one fresh worktree must not install over each other.
 
@@ -869,6 +900,7 @@ FRESH_WORKTREE_JOURNEY = (
 )
 
 
+@pytest.mark.reads_docs
 def test_a_freshly_created_worktree_provisions_itself_for_nx_and_for_pytest(
     tmp_path: Path,
 ) -> None:
@@ -913,6 +945,7 @@ def test_a_freshly_created_worktree_provisions_itself_for_nx_and_for_pytest(
         _run("git", "worktree", "remove", "--force", str(worktree))
 
 
+@pytest.mark.reads_recipes
 def test_a_nested_nx_run_cannot_erase_the_running_one_s_log(tmp_path: Path) -> None:
     """The running check's log survives a nested Nx invocation in the same checkout.
 
@@ -994,6 +1027,7 @@ def test_a_nested_nx_run_cannot_erase_the_running_one_s_log(tmp_path: Path) -> N
     assert "inner nx ran" not in preserved
 
 
+@pytest.mark.reads_recipes
 def test_check_recipe_log_records_the_credential_name_not_its_value(tmp_path: Path) -> None:
     """A preserved log outlives its terminal, so it must never durably hold a token."""
     checkout, trace = _recipe_checkout(tmp_path)
@@ -1016,6 +1050,7 @@ def test_check_recipe_log_records_the_credential_name_not_its_value(tmp_path: Pa
     assert token not in result.stderr
 
 
+@pytest.mark.reads_recipes
 def test_check_recipe_reports_the_coverage_total_it_measured(tmp_path: Path) -> None:
     checkout, trace = _recipe_checkout(tmp_path)
     (checkout / ".coverage").write_text("")
@@ -1026,6 +1061,7 @@ def test_check_recipe_reports_the_coverage_total_it_measured(tmp_path: Path) -> 
     assert result.stdout == "check: all deterministic checks passed (line coverage 96.42%)\n"
 
 
+@pytest.mark.reads_recipes
 def test_check_recipe_stays_green_when_no_coverage_artifact_exists(tmp_path: Path) -> None:
     """A missing artifact reports nothing; it must never turn a green tier red."""
     checkout, trace = _recipe_checkout(tmp_path)
@@ -1037,6 +1073,7 @@ def test_check_recipe_stays_green_when_no_coverage_artifact_exists(tmp_path: Pat
     assert not (checkout / ".coverage").exists()
 
 
+@pytest.mark.reads_recipes
 def test_check_recipe_stays_green_when_the_coverage_total_is_unusable(tmp_path: Path) -> None:
     """An unavailable or malformed total is dropped, not reported and not fatal."""
     checkout, trace = _recipe_checkout(tmp_path)
@@ -1049,6 +1086,7 @@ def test_check_recipe_stays_green_when_the_coverage_total_is_unusable(tmp_path: 
     assert "uv run coverage report --format=total" in trace.read_text()
 
 
+@pytest.mark.reads_recipes
 def test_check_recipe_reports_a_total_that_coverage_exited_nonzero_to_report(
     tmp_path: Path,
 ) -> None:
@@ -1068,6 +1106,7 @@ def test_check_recipe_reports_a_total_that_coverage_exited_nonzero_to_report(
     assert result.stdout == "check: all deterministic checks passed (line coverage 94.13%)\n"
 
 
+@pytest.mark.reads_recipes
 def test_gate_recipe_reports_the_coverage_total_it_measured(tmp_path: Path) -> None:
     checkout, trace = _gate_checkout(tmp_path)
     (checkout / ".coverage").write_text("")
@@ -1082,6 +1121,7 @@ def test_gate_recipe_reports_the_coverage_total_it_measured(tmp_path: Path) -> N
     assert not [line for line in result.stderr.splitlines() if line.startswith("gate: ")]
 
 
+@pytest.mark.reads_recipes
 def test_gate_recipe_leaves_the_failing_llmlint_run_readable(tmp_path: Path) -> None:
     checkout, trace = _gate_checkout(tmp_path)
 
@@ -1095,10 +1135,62 @@ def test_gate_recipe_leaves_the_failing_llmlint_run_readable(tmp_path: Path) -> 
     assert "llmlint-verdict.sh: captured failure detail" in log.read_text()
 
 
+UPGRADE_MANIFEST = ("package.json", "bun.lock")
+
+
+def _upgrade_manifest_cache() -> Path:
+    """Where this host keeps the resolution `bun update --latest` last produced.
+
+    Alongside the shared fixture lockfile `scripts/check-nx-cache.sh` publishes,
+    and for the same reason: what costs real time against this registry is
+    resolving a dependency tree, not installing one.
+    """
+    root = os.environ.get("XDG_CACHE_HOME") or str(Path.home() / ".cache")
+    seed = b"".join((ROOT / name).read_bytes() for name in UPGRADE_MANIFEST)
+    key = hashlib.sha256(seed).hexdigest()[:16]
+    return Path(root) / "ai-orchestrator" / "upgrade-manifest" / key
+
+
+def _seed_upgrade_manifest(checkout: Path, cache: Path) -> None:
+    """Give the checkout a real manifest, already resolved if this host has one.
+
+    `bun update --latest` re-resolves the whole tree from the registry whenever it
+    finds something to move, and ~380 serialized manifest round-trips is where the
+    140 seconds this journey charged every commit went — the install itself
+    hardlinks out of a warm package cache in about two seconds. Seeding the
+    resolution the last successful run produced leaves Bun with nothing to move and
+    nothing to ask, so the real recipe still runs the real `bun update --latest`
+    into a real `node_modules`, against a manifest that is this repository's own.
+    """
+    for name in UPGRADE_MANIFEST:
+        source = cache / name if (cache / name).is_file() else ROOT / name
+        shutil.copy2(source, checkout / name)
+
+
+def _publish_upgrade_manifest(checkout: Path, cache: Path) -> None:
+    """Record what Bun just resolved, so the next run has nothing left to resolve.
+
+    Published per file by rename rather than as a pair, because the pair only ever
+    costs time: a reader that catches a new manifest beside an older lockfile hands
+    Bun something to move and pays one resolution, which is exactly what it would
+    have paid without this cache at all. That is what keeps the cache self-healing
+    once upstream publishes a release the recorded resolution predates.
+    """
+    cache.mkdir(parents=True, exist_ok=True)
+    for name in UPGRADE_MANIFEST:
+        resolved = (checkout / name).read_bytes()
+        if (cache / name).is_file() and (cache / name).read_bytes() == resolved:
+            continue
+        staged = cache / f"{name}.{os.getpid()}"
+        staged.write_bytes(resolved)
+        staged.replace(cache / name)
+
+
+@pytest.mark.reads_recipes
 def test_upgrade_recipe_runs_bun_and_reports_one_success_line(tmp_path: Path) -> None:
     checkout, trace = _recipe_checkout(tmp_path)
-    shutil.copy2(ROOT / "package.json", checkout / "package.json")
-    shutil.copy2(ROOT / "bun.lock", checkout / "bun.lock")
+    cache = _upgrade_manifest_cache()
+    _seed_upgrade_manifest(checkout, cache)
 
     result = _recipe_run(checkout, trace, "upgrade")
 
@@ -1107,10 +1199,15 @@ def test_upgrade_recipe_runs_bun_and_reports_one_success_line(tmp_path: Path) ->
     assert trace.read_text().splitlines() == [
         "uv lock --upgrade",
         "uv sync",
-        "nx.sh run-many -t build,lint,typecheck,test,test-docs",
+        "nx.sh run-many -t build,lint,typecheck,test,test-docs,test-recipes",
     ]
+    # Bun really ran: it is the only thing in this recipe that is not a double, and
+    # a `node_modules` it linked is the evidence the doubles cannot manufacture.
+    assert (checkout / "node_modules" / ".bin" / "nx").exists()
+    _publish_upgrade_manifest(checkout, cache)
 
 
+@pytest.mark.reads_recipes
 def test_upgrade_recipe_preserves_bun_failure_and_stops(tmp_path: Path) -> None:
     """A real Bun failure, and the log that outlives the process which reported it.
 
@@ -1136,6 +1233,7 @@ def test_upgrade_recipe_preserves_bun_failure_and_stops(tmp_path: Path) -> None:
     ]
 
 
+@pytest.mark.reads_recipes
 def test_real_cache_check_drives_both_linked_worktrees() -> None:
     """Two real worktrees, a real cache hit and miss, and the failing run's own log.
 
@@ -1153,6 +1251,109 @@ def test_real_cache_check_drives_both_linked_worktrees() -> None:
     )
 
 
+def _shared_resolution_entry() -> tuple[str, str]:
+    """The cache entry name this host's check would use, and the manifest behind it.
+
+    Deliberately restated from `scripts/check-nx-cache.sh` rather than imported:
+    the association between a cached resolution and the manifest it came from is
+    the contract under test, so a test that asked the script for the answer could
+    not detect the script agreeing with itself. If the derivation there changes,
+    the accepted case below stops being accepted and says so.
+    """
+    root = json.loads((ROOT / "package.json").read_text(encoding="utf-8"))
+    fixture = json.loads(
+        (ROOT / "tests/fixtures/nx-cache/package.json").read_text(encoding="utf-8")
+    )
+    fixture["devDependencies"] = {
+        "nx": root["devDependencies"]["nx"],
+        "typescript": root["devDependencies"]["typescript"],
+    }
+    manifest = json.dumps(fixture, indent=2) + "\n"
+    bun_version = _run("bun", "--version").stdout.strip()
+    key = hashlib.sha256(manifest.encode() + bun_version.encode()).hexdigest()[:16]
+    return key, manifest
+
+
+#: A real, complete Bun lockfile. This repository's own is the honest fixture: it
+#: is a different tree, but the check's question is whether the file parses whole
+#: and carries what Bun needs, not which packages it resolved.
+COMPLETE_LOCKFILE = (ROOT / "bun.lock").read_text(encoding="utf-8")
+#: The same file cut off mid-write, which is what a publish interrupted by a kill
+#: or a full disk leaves behind. It keeps its opening bytes, so it is exactly the
+#: entry a prefix check would wave through.
+TRUNCATED_LOCKFILE = COMPLETE_LOCKFILE[:400]
+RESOLUTION_REFUSED = "resolve the fixture dependency tree"
+
+
+@pytest.mark.parametrize(
+    ("stored_lockfile", "stored_manifest", "resolves_again"),
+    [
+        pytest.param(COMPLETE_LOCKFILE, None, True, id="no-manifest-beside-it"),
+        pytest.param(
+            COMPLETE_LOCKFILE, '{"name": "something-else"}\n', True, id="manifest-of-another-tree"
+        ),
+        pytest.param(TRUNCATED_LOCKFILE, "", True, id="lockfile-cut-off-mid-write"),
+        pytest.param(COMPLETE_LOCKFILE, "", False, id="complete-and-vouched-for"),
+    ],
+)
+@pytest.mark.reads_recipes
+def test_cache_check_seeds_only_a_resolution_it_can_vouch_for(
+    tmp_path: Path, stored_lockfile: str, stored_manifest: str | None, resolves_again: bool
+) -> None:
+    """A shared resolution is trusted for its provenance, not for being readable.
+
+    The cache lives outside the repository under a key any process can write to,
+    so an entry in it is an untrusted input however it got there — a truncated
+    publish, a restored backup, an entry left by an older layout. Seeding one
+    unchecked would not fail here; it would surface much later as an unrelated
+    `--frozen-lockfile` error inside a worktree the check builds.
+
+    The registry is pointed somewhere nothing is listening, which makes the
+    decision observable in a second rather than the two minutes a real resolution
+    costs: re-resolving at all is the proof the entry was refused, and getting
+    past resolution is the proof it was accepted. Everything here is real — the
+    script, `bun`, and a connection that genuinely cannot be made.
+    """
+    key, manifest = _shared_resolution_entry()
+    entries = tmp_path / "cache" / "ai-orchestrator" / "nx-cache-fixture"
+    entries.mkdir(parents=True)
+    (entries / f"{key}.lock").write_text(stored_lockfile, encoding="utf-8")
+    if stored_manifest is not None:
+        (entries / f"{key}.manifest").write_text(stored_manifest or manifest, encoding="utf-8")
+
+    env = os.environ.copy()
+    env["XDG_CACHE_HOME"] = str(tmp_path / "cache")
+    env["npm_config_registry"] = "http://127.0.0.1:1/"
+
+    result = _run("bash", "scripts/check-nx-cache.sh", env=env)
+
+    assert result.returncode != 0, "an unreachable registry must not produce a passing check"
+    assert (RESOLUTION_REFUSED in result.stderr) is resolves_again, result.stderr
+
+
+@pytest.mark.parametrize(
+    "cache_home", ["", "relative/cache", "."], ids=["empty", "relative", "current-directory"]
+)
+@pytest.mark.reads_recipes
+def test_cache_check_refuses_a_cache_directory_it_cannot_place(cache_home: str) -> None:
+    """Where the shared cache lives is an input too, and a relative one is not usable.
+
+    This is the failure that would not announce itself: a relative or empty value
+    resolves against whatever directory the check happens to run in, so entries
+    land somewhere no later run looks. Nothing errors — every commit just quietly
+    pays a full resolution again while the cache appears to be working.
+    """
+    env = os.environ.copy()
+    env["XDG_CACHE_HOME"] = cache_home
+    env.pop("HOME", None)
+
+    result = _run("bash", "scripts/check-nx-cache.sh", env=env)
+
+    assert result.returncode != 0
+    assert "must name an absolute directory" in result.stderr
+
+
+@pytest.mark.reads_docs
 def test_dag_state_contract_checker_reports_an_invented_payload_field(tmp_path: Path) -> None:
     """A Python field no contract declares would be served to a client expecting none."""
     checkout = _dag_state_contract_checkout(tmp_path)
@@ -1170,6 +1371,7 @@ def test_dag_state_contract_checker_reports_an_invented_payload_field(tmp_path: 
     assert "add it to the contract or drop it" in result.stderr
 
 
+@pytest.mark.reads_docs
 def test_dag_state_contract_checker_reports_a_dropped_required_field(tmp_path: Path) -> None:
     """A required contract field the server stops serving leaves a documented gap."""
     checkout = _dag_state_contract_checkout(tmp_path)
@@ -1183,6 +1385,7 @@ def test_dag_state_contract_checker_reports_a_dropped_required_field(tmp_path: P
     assert "canContinue" in result.stderr
 
 
+@pytest.mark.reads_docs
 def test_dag_state_contract_checker_reports_network_default_drift(tmp_path: Path) -> None:
     """A default changed in the server alone leaves the documented one wrong."""
     checkout = _dag_state_contract_checkout(tmp_path)
@@ -1197,6 +1400,7 @@ def test_dag_state_contract_checker_reports_network_default_drift(tmp_path: Path
     assert "design.md says 8787" in result.stderr
 
 
+@pytest.mark.reads_docs
 def test_dag_state_contract_checker_reports_heartbeat_drift(tmp_path: Path) -> None:
     """The documented 15-second SSE heartbeat and the server constant stay together."""
     checkout = _dag_state_contract_checkout(tmp_path)
@@ -1214,6 +1418,7 @@ def test_dag_state_contract_checker_reports_heartbeat_drift(tmp_path: Path) -> N
     assert "reconcile them in one change" in result.stderr
 
 
+@pytest.mark.reads_docs
 def test_dag_state_contract_checker_reports_agent_role_drift(tmp_path: Path) -> None:
     checkout = _dag_state_contract_checkout(tmp_path)
     model = checkout / "packages/dag-model/src/index.ts"
@@ -1225,6 +1430,7 @@ def test_dag_state_contract_checker_reports_agent_role_drift(tmp_path: Path) -> 
     assert "semantic agent roles disagree" in result.stderr
 
 
+@pytest.mark.reads_docs
 def test_dag_state_contract_checker_reports_judge_config_role_drift(tmp_path: Path) -> None:
     checkout = _dag_state_contract_checkout(tmp_path)
     judge_config = checkout / "oneharness.judge.toml"
@@ -1239,6 +1445,7 @@ def test_dag_state_contract_checker_reports_judge_config_role_drift(tmp_path: Pa
     assert 'restore `agent_role = "judge"`' in result.stderr
 
 
+@pytest.mark.reads_docs
 def test_dag_state_contract_checker_rejects_duplicate_agent_roles(tmp_path: Path) -> None:
     checkout = _dag_state_contract_checkout(tmp_path)
     model = checkout / "packages/dag-model/src/index.ts"
@@ -1250,6 +1457,7 @@ def test_dag_state_contract_checker_rejects_duplicate_agent_roles(tmp_path: Path
     assert "agentRoleSchema must contain unique string members" in result.stderr
 
 
+@pytest.mark.reads_docs
 def test_dag_state_contract_checker_reports_telemetry_schema_drift(tmp_path: Path) -> None:
     """The base bumped this 7 -> 8 while the contract still said 7; gate it."""
     checkout = _dag_state_contract_checkout(tmp_path)
@@ -1268,6 +1476,7 @@ def test_dag_state_contract_checker_reports_telemetry_schema_drift(tmp_path: Pat
     assert "reconcile them in one change" in result.stderr
 
 
+@pytest.mark.reads_docs
 def test_dag_state_contract_checker_reports_provenance_record_drift(tmp_path: Path) -> None:
     """The out-of-repo record's shape is documented; renaming a field alone must fail."""
     checkout = _dag_state_contract_checkout(tmp_path)
@@ -1282,6 +1491,7 @@ def test_dag_state_contract_checker_reports_provenance_record_drift(tmp_path: Pa
     assert "LaunchProvenance declares ['renamed_session']" in result.stderr
 
 
+@pytest.mark.reads_docs
 def test_dag_state_contract_checker_reports_provenance_version_drift(tmp_path: Path) -> None:
     """Bumping the record's schema version without the contract must fail."""
     checkout = _dag_state_contract_checkout(tmp_path)

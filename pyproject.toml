@@ -86,6 +86,7 @@ addopts = "-q"
 tmp_path_retention_count = 3
 markers = [
     "reads_docs: asserts on this repository's own prose, so it belongs to the whole-workspace test tier rather than the code-only one",
+    "reads_recipes: drives this repository's own recipes and scripts and reads nothing else of it, so it belongs to the recipe-scoped test tier rather than the code-only one",
     "single_threaded: asserts on a process-directed signal, so it needs a process whose every thread it controls; xdist workers carry execnet's receiver thread, so these run in their own serial invocation",
 ]
 
