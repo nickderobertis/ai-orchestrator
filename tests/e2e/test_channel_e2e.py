@@ -237,17 +237,25 @@ def test_due_heartbeat_surfaces_during_active_step_and_disabled_run_stays_silent
     # while this update sits unread, so further successes may already have landed.
     # What this asserts is the ordering — the failed attempt, then its retry.
     assert attempts[:2] == ["failed", "success"], attempts
-    # llmlint: ignore[tests_mirror_real_usage] Required pre-consumption audit has no CLI view.
-    queued_state = json.loads(heartbeat_path.read_text(encoding="utf-8"))
-    # llmlint: ignore[tests_mirror_real_usage] Required journal audit has no CLI view.
-    queued_events = (runs / run_id / "events.jsonl").read_text(encoding="utf-8")
-    assert queued_state["last_surface_at"] == initial_state["last_surface_at"]
     # llmlint: ignore[tests_mirror_real_usage] Acceptance requires proving the lease a
     # queued update used to hold for the rest of the run is handed straight back.
     # The claim covers the *dispatch*, so a queued update holds nothing: held to
-    # consumption, the one check-in nobody read was the last the run ever sent.
+    # consumption, the one check-in nobody read was the last the run ever sent. The
+    # agent writes its update *inside* the dispatch the lease covers, so the queued
+    # file appearing is not yet the release — this waits for the dispatch to settle
+    # rather than sampling the state in the window between the two.
+    release_deadline = deadline(60)
+    while time.monotonic() < release_deadline:
+        # llmlint: ignore[tests_mirror_real_usage] Required pre-consumption audit has no CLI view.
+        queued_state = json.loads(heartbeat_path.read_text(encoding="utf-8"))
+        if queued_state["in_flight"] is False:
+            break
+        time.sleep(0.02)
     assert queued_state["in_flight"] is False
     assert queued_state["claim"] is None
+    # llmlint: ignore[tests_mirror_real_usage] Required journal audit has no CLI view.
+    queued_events = (runs / run_id / "events.jsonl").read_text(encoding="utf-8")
+    assert queued_state["last_surface_at"] == initial_state["last_surface_at"]
     # llmlint: ignore[tests_mirror_real_usage] Acceptance requires proving retry
     # waits for the next durable heartbeat interval rather than the next tick.
     assert queued_state["last_attempt_at"] >= float(last_attempt) + float(
