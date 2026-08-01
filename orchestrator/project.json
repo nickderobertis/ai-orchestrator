@@ -16,13 +16,13 @@
       "inputs": ["wholeWorkspace"]
     },
     "test": {
-      "command": "env -u FORCE_COLOR NO_COLOR=1 uv run coverage run -m pytest -m 'not reads_docs and single_threaded' --no-cov && env -u FORCE_COLOR NO_COLOR=1 uv run pytest -m 'not reads_docs and not single_threaded' -n 6 --dist worksteal --cov=orchestrator --cov-append --cov-report=term-missing",
+      "command": "env -u FORCE_COLOR NO_COLOR=1 uv run coverage run -m pytest -m 'not reads_docs and single_threaded' --no-cov && env -u FORCE_COLOR NO_COLOR=1 uv run pytest -m 'not reads_docs and not single_threaded' -n 4 --dist load --cov=orchestrator --cov-append --cov-report=term-missing",
       "options": { "cwd": "." },
       "outputs": ["{workspaceRoot}/.coverage"],
       "inputs": ["codeWorkspace"]
     },
     "test-docs": {
-      "command": "env -u FORCE_COLOR NO_COLOR=1 uv run pytest -m reads_docs --no-cov -n 4 --dist worksteal",
+      "command": "env -u FORCE_COLOR NO_COLOR=1 uv run pytest -m reads_docs --no-cov -n 4 --dist load",
       "options": { "cwd": "." },
       "inputs": ["wholeWorkspace"]
     },

@@ -82,7 +82,7 @@ test *nx_args:
 # tests need a process with no execnet thread in it, and `orchestrator:test` runs
 # them in the serial invocation that owns them.
 test-e2e:
-    uv run pytest tests/e2e -m 'not single_threaded' -n 6 --dist worksteal
+    uv run pytest tests/e2e -m 'not single_threaded' -n 4 --dist load
 
 # Lint Python (ruff) and the shell script (shellcheck); fail on findings.
 lint:
