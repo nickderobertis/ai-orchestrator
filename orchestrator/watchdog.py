@@ -151,13 +151,46 @@ def process_activity(root_pid: ProcessId) -> ProcessActivity:
     )
 
 
+#: How long a signalled process may take to shut down before it is killed outright.
+TERMINATION_GRACE = 0.05
+#: How often that grace period asks whether it is still owed.
+_TERMINATION_POLL = 0.005
+
+
+def _still_running(pids: tuple[ProcessId, ...]) -> tuple[ProcessId, ...]:
+    """Which of ``pids`` are still executing, ignoring the ones already reduced to zombies."""
+    return tuple(
+        pid for pid in pids if (record := _stat(pid)) is not None and record.state != "Z"
+    )
+
+
+def _await_shutdown(pids: tuple[ProcessId, ...]) -> None:
+    """Give every signalled process in ``pids`` its grace period, and not a moment more.
+
+    ``kill`` returns as soon as the signal is queued, so the ``SIGKILL`` behind it has
+    to be held back long enough for a harness that installs a shutdown handler to use
+    it. Sleeping that period out unconditionally charges it to the overwhelmingly
+    common case instead: a dispatch that finished on its own has no process left to be
+    graceful toward, and every teardown on that path paid the full grace anyway. The
+    ceiling is unchanged for anything actually still running — this only stops waiting
+    once there is nothing left to wait for. Zombies are excluded because they are not
+    running: they are exit statuses waiting to be collected, which the reaping loops
+    below do.
+    """
+    deadline = time.monotonic() + TERMINATION_GRACE
+    remaining = _still_running(pids)
+    while remaining and time.monotonic() < deadline:
+        time.sleep(_TERMINATION_POLL)
+        remaining = _still_running(remaining)
+
+
 def terminate_tree(root_pid: ProcessId) -> None:
     """Best-effort termination of a stalled dispatch and all its descendants."""
     pids = tuple(reversed(process_activity(root_pid).pids))
     for pid in pids:
         with suppress(PermissionError, ProcessLookupError):
             os.kill(pid, signal.SIGTERM)
-    time.sleep(0.05)
+    _await_shutdown(pids)
     for pid in pids:
         with suppress(PermissionError, ProcessLookupError):
             os.kill(pid, signal.SIGKILL)
@@ -175,7 +208,7 @@ def terminate_processes(
     for pid in reversed(pids):
         with suppress(PermissionError, ProcessLookupError):
             os.kill(pid, signal.SIGTERM)
-    time.sleep(0.05)
+    _await_shutdown(pids)
     for pid in reversed(pids):
         with suppress(PermissionError, ProcessLookupError):
             os.kill(pid, signal.SIGKILL)
@@ -206,7 +239,12 @@ def terminate_process_group(
     """Terminate and reap every process in a dispatch-owned process group."""
     with suppress(PermissionError, ProcessLookupError):
         os.killpg(group_id, signal.SIGTERM)
-    time.sleep(0.05)
+    # The same grace `_await_shutdown` gives a known pid tuple, asked of the group:
+    # its membership is the thing being terminated, so nothing here has a list to
+    # poll and `process_group_is_running` is the whole answer.
+    group_deadline = time.monotonic() + TERMINATION_GRACE
+    while process_group_is_running(group_id) and time.monotonic() < group_deadline:
+        time.sleep(_TERMINATION_POLL)
     with suppress(PermissionError, ProcessLookupError):
         os.killpg(group_id, signal.SIGKILL)
     members = [

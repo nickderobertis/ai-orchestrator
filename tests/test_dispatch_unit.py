@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -38,6 +39,7 @@ from orchestrator.plan import PlanNode, PlanResult, TaskResult, _render
 from orchestrator.plan import main as plan_main
 from orchestrator.watchdog import (
     OWN_PROCESS_GROUP_FLAG,
+    TERMINATION_GRACE,
     ProcessId,
     _parse_stat,
     process_activity,
@@ -931,6 +933,72 @@ def test_watchdog_waits_for_a_killed_process_to_actually_be_reaped(tmp_path) -> 
     # collected it: this session is the parent and has not waited on it yet.
     assert not Path(f"/proc/{process.pid}").exists()
     assert process.wait(timeout=1) is not None
+
+
+#: A worker that shuts *itself* down on `SIGTERM`, which is the whole reason a grace
+#: period sits between the signal and the `SIGKILL`. Its shutdown work comes before
+#: the record of having done it, so the record exists only if the process was still
+#: alive some way into that period — termination reaps the process itself, so the file
+#: is the evidence and the exit status is not available to be one.
+_GRACEFUL_SHUTDOWN_WORK = 0.02
+_GRACEFUL_SLEEPER = f"""
+import os, signal, sys, time
+
+def shutdown(signum, frame):
+    time.sleep({_GRACEFUL_SHUTDOWN_WORK})
+    with open(sys.argv[2], "w", encoding="utf-8") as handle:
+        handle.write("shut down on SIGTERM")
+    os._exit(0)
+
+signal.signal(signal.SIGTERM, shutdown)
+with open(sys.argv[1], "w", encoding="utf-8") as handle:
+    handle.write(str(os.getpid()))
+time.sleep(60)
+"""
+
+
+def test_watchdog_lets_a_signalled_worker_shut_itself_down(tmp_path) -> None:
+    """The `SIGKILL` is still held back long enough for a harness to handle `SIGTERM`.
+
+    Termination stops waiting as soon as nothing it signalled is running, which is what
+    keeps a finished dispatch from paying for a grace period it is not owed. The period
+    itself is not a formality: a worker that is still running gets the whole of it, and
+    a worker killed before it finished shutting down leaves no record of having.
+    """
+    marker = tmp_path / "graceful-worker.pid"
+    shutdown = tmp_path / "graceful-worker.shutdown"
+    process = subprocess.Popen(
+        [sys.executable, "-c", _GRACEFUL_SLEEPER, os.fspath(marker), os.fspath(shutdown)]
+    )
+    assert await_recorded_pid(marker) == process.pid
+
+    terminate_processes((ProcessId(process.pid),))
+
+    assert shutdown.read_text(encoding="utf-8") == "shut down on SIGTERM"
+    assert not is_running(process.pid)
+
+
+def test_watchdog_teardown_of_a_finished_dispatch_pays_no_grace_period(tmp_path) -> None:
+    """Tearing down a dispatch that already exited costs nothing but the `/proc` walks.
+
+    Every completed dispatch runs this cleanup, and every one of them used to sleep out
+    the full `SIGTERM`-to-`SIGKILL` grace once per call — four times over, at a point
+    where the tree it is being graceful toward has already gone. Across a suite that
+    dispatches hundreds of times that was the single largest cost in the lifecycle e2e.
+    """
+    process = subprocess.Popen([sys.executable, "-c", ""], start_new_session=True)
+    assert process.wait(timeout=5) == 0
+    finished = ProcessId(process.pid)
+
+    start = time.monotonic()
+    terminate_processes((finished,))
+    terminate_process_group(finished)
+    terminate_tree(finished)
+    elapsed = time.monotonic() - start
+
+    # Those three calls sleep four grace periods between them when the grace is
+    # unconditional; the bound is under that and above the `/proc` walks that remain.
+    assert elapsed < 3 * TERMINATION_GRACE, elapsed
 
 
 def test_watchdog_terminates_live_process_tree() -> None:
