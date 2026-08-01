@@ -22,6 +22,13 @@ Outcome is steered by sentinels in the task (the first user message):
                            until completing on its third turn.
   * otherwise       -> the unified supervisor completes on the second agent turn,
                        after one push, exercising the two-sided loop (exit 0).
+
+A journey that needs a node observably in flight names its own rendezvous rather
+than timing a sleep: `slow-branch <witness> hold-ready=<path> hold-release=<path>`
+makes the agent turn announce it has arrived and then block until the test creates
+the release path, and `hold-turn=<n>` selects the zero-based agent turn that holds
+(the first by default). A `slow-branch` task that names no rendezvous does not
+delay at all.
 """
 
 # llmlint: ignore-file[boundary_inputs_validated] this deterministic test backend validates the
@@ -39,8 +46,15 @@ import time
 from pathlib import Path
 from typing import Literal, NamedTuple, TypedDict, cast
 
-from orchestrator.dispatch import REPORTED_BLOCKER_PREFIX
-from orchestrator.scratch import CAPACITY_ERROR_MARKER, DEFAULT_MIN_FREE_BYTES
+# onejudge spawns this file once per protocol step — six times for a default
+# two-turn dispatch — so every import is paid on every step. Importing the three
+# constants below from `orchestrator` transitively loaded onejudge_sdk (and
+# jsonschema), asyncio, and yaml, which cost more than half of a fake dispatch's
+# wall clock. They are restated here instead, and
+# `tests/test_fake_backend_contract.py` fails when either side drifts.
+REPORTED_BLOCKER_PREFIX = "terminal blocker reported:"  # orchestrator.dispatch
+CAPACITY_ERROR_MARKER = "scratch-capacity-preflight:"  # orchestrator.scratch
+DEFAULT_MIN_FREE_BYTES = 5 * 1024**3  # orchestrator.scratch
 
 
 class SupervisorRequest(TypedDict):
@@ -93,15 +107,30 @@ def _planner_guidance(messages: list[dict]) -> str | None:
     return None
 
 
-def _wait_at_provider_barrier(task: str) -> None:
-    """Expose a deterministic real-provider boundary for crash-recovery tests."""
-    match = re.search(r"provider-barrier-ready=(\S+) provider-barrier-release=(\S+)", task)
-    if match is None:
-        return
-    ready, release = (Path(value) for value in match.groups())
-    ready.write_text("ready\n", encoding="utf-8")
-    while not release.exists():
+def _hold_until_released(task: str, name: str) -> bool:
+    """Hold this turn at a test-controlled rendezvous, reporting whether it held.
+
+    The test names a ready path and a release path in the task; this announces it
+    has arrived and then blocks until the test releases it. Holding on the test's
+    signal keeps the agent in flight exactly as long as the journey needs, where a
+    fixed sleep both costs that time unconditionally and races the assertion it
+    was meant to make observable.
+    """
+    ready = re.search(rf"{name}-ready=(\S+)", task)
+    release = re.search(rf"{name}-release=(\S+)", task)
+    if ready is None or release is None:
+        return False
+    Path(ready.group(1)).write_text("ready\n", encoding="utf-8")
+    released = Path(release.group(1))
+    while not released.exists():
         time.sleep(0.01)
+    return True
+
+
+def _hold_turn(task: str) -> int:
+    """Return the agent turn a `slow-branch` rendezvous holds at."""
+    match = re.search(r"hold-turn=(\d+)", task)
+    return int(match.group(1)) if match is not None else 0
 
 
 def _commit_and_push_ci_iteration(state: str) -> None:
@@ -228,7 +257,8 @@ def main() -> int:
 
     match op:
         case "respond":
-            _wait_at_provider_barrier(task)
+            # A deterministic real-provider boundary for the crash-recovery tests.
+            _hold_until_released(task, "provider-barrier")
             if "Check-in command: " in task and "agent-synthesized planner update" in task:
                 channel_dir = Path(task.split("Channel directory: ", 1)[1].splitlines()[0])
                 attempts = channel_dir / "check-in-dispatches.txt"
@@ -288,19 +318,16 @@ def main() -> int:
                 witness = Path(task.split("slow-branch", 1)[1].strip().split()[0])
                 with witness.open("a", encoding="utf-8") as stream:
                     stream.write("tick\n")
-                if "live-edit-slow" in task and _assistant_turns(messages) > 0:
-                    ready_match = re.search(r"live-edit-ready=(\S+)", task)
-                    release_match = re.search(r"live-edit-release=(\S+)", task)
-                    if ready_match is None or release_match is None:
-                        raise AssertionError("live-edit-slow requires ready and release paths")
-                    Path(ready_match.group(1)).write_text("ready\n", encoding="utf-8")
-                    release = Path(release_match.group(1))
-                    while not release.exists():
-                        time.sleep(0.02)
-                elif "live-edit-slow" not in task:
-                    time.sleep(30 if "pacemaker-slow" in task else 0.8)
+                if (
+                    "live-edit-slow" in task
+                    and _assistant_turns(messages) > 0
+                    and not _hold_until_released(task, "live-edit")
+                ):
+                    raise AssertionError("live-edit-slow requires ready and release paths")
                 with witness.open("a", encoding="utf-8") as stream:
                     stream.write("tick\n")
+                if "live-edit-slow" not in task and _assistant_turns(messages) == _hold_turn(task):
+                    _hold_until_released(task, "hold")
             orchestrator_plan = _orchestrator_command(task)
             infrastructure_failures = {
                 "provider-errors": "fake_backend: provider error",
