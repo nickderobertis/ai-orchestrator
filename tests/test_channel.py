@@ -626,13 +626,13 @@ def test_queued_surfaces_are_reported_with_a_growing_age_and_the_reading_command
     ]
     indicator = pending_surface_indicator(run_dir, now=queued[0].queued_at + 3 * 3600)
     assert indicator == (
-        "1 planner update waiting, oldest 3h ago; read it with: "
+        "1 planner update waiting, unread for 3h; read it with: "
         f"just channel-next unattached --runs-dir {run_dir.parent}"
     )
     # The age is what escalates, so it is reported at the granularity a reader can act
     # on rather than rounded away.
-    assert "oldest 0s ago" in str(pending_surface_indicator(run_dir))
-    assert "oldest 12m ago" in str(
+    assert "unread for 0s" in str(pending_surface_indicator(run_dir))
+    assert "unread for 12m" in str(
         pending_surface_indicator(run_dir, now=queued[0].queued_at + 12 * 60)
     )
 
@@ -722,8 +722,11 @@ def test_nonblocking_surface_cli_queues_claimed_update_until_consumed(
     }
     assert _heartbeat(channel)["due"] is True
     assert _heartbeat(channel)["in_flight"] is True
-    assert main_surface(["orch", "duplicate", "--runs-dir", str(runs)]) == 2
-    assert "already queued" in capsys.readouterr().err
+    # The next interval's check-in replaces a snapshot nobody read rather than being
+    # refused by it. Exactly one update stays queued, and it is the current one.
+    assert main_surface(["orch", "worker still verifying", "--runs-dir", str(runs)]) == 0
+    queued = json.loads((channel / "heartbeat-surface.json").read_text())
+    assert queued["surface"]["message"] == "worker still verifying"
     assert main_surface(["orch", " ", "--runs-dir", str(runs)]) == 2
     assert "non-empty" in capsys.readouterr().err
     assert main_surface(["orch", "update", "--runs-dir", str(runs), "--timeout", "0"]) == 2

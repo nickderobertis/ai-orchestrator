@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import math
 import sys
+from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
@@ -12,7 +13,7 @@ from .config import ConfigError
 from .detach import run_detached
 from .journal import open_journal
 from .plan import PlanError
-from .replan import next_round, round_context
+from .replan import executed_plan, next_round, round_context, round_supersessions
 from .runs import (
     NodeId,
     StepId,
@@ -76,12 +77,19 @@ def main(argv: list[str] | None = None) -> int:
         _validate_completions(run_dir, result, completed_refs)
         if completed_refs:
             edits = {**edits, "complete_human": completed_refs}
-        previous_plan = load_mapping(round_dir / "plan.json")
-        # The plan of record is the one the round was launched with; what the planner
-        # learned *during* it lives in the committed edits, so the two are read
-        # together or the transition restores a brief that predates the round.
+        # The plan of record is the graph the round *executed*, not the file it was
+        # launched with. `round-NN/plan.json` is the launch record and the reconciler
+        # never rewrites it, so deriving the next round from it discarded every live
+        # edit the planner committed — and with a retry's replacement id gone, the
+        # merged replacement stopped being recognised as done and its superseded
+        # original was carried forward and dispatched again.
+        previous_plan = executed_plan(run_dir, number, load_mapping(round_dir / "plan.json"))
         plan = next_round(
-            previous_plan, result, edits, carried_context=round_context(run_dir, number)
+            previous_plan,
+            result,
+            edits,
+            carried_context=round_context(run_dir, number),
+            superseded=round_supersessions(run_dir, number),
         )
     except (ConfigError, PlanError) as exc:
         print(f"next-round: {exc}", file=sys.stderr)
@@ -123,6 +131,14 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     next_number, next_dir = write_next_plan(run_dir, plan)
+    # A check-in queued for the round that just ended names that round, and
+    # `channel-next` validates a surface against the active one — so left here it is
+    # both unconsumable and still the run's one pending update. Clearing it at the
+    # transition is what keeps the next check-in's slot free.
+    from .channel import ChannelError, discard_surface_from_a_finished_round
+
+    with suppress(ChannelError, ConfigError, OSError):
+        discard_surface_from_a_finished_round(run_dir)
     plan_path = next_dir / "plan.json"
     if args.plan_only:
         print(f"Round {next_number:02d} plan written -> {plan_path}")

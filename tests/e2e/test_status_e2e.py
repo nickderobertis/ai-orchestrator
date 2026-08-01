@@ -226,7 +226,7 @@ def test_status_reports_a_queued_surface_no_planner_has_read(tmp_path, monkeypat
     monkeypatch.setenv("ONEHARNESS_HISTORY_DIR", str(history_dir))
     assert status_main(["--runs-dir", str(runs_dir)]) == 0
     shown = capsys.readouterr().out
-    assert "unattended: 1 planner update waiting, oldest 0s ago" in shown
+    assert "unattended: 1 planner update waiting, unread for 0s" in shown
     assert f"just channel-next unattended --runs-dir {runs_dir}" in shown
 
 

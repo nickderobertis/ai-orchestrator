@@ -13,12 +13,27 @@ dependency on a merged node is dropped as *satisfied* (its predecessor is on the
 base branch now). Unresolved nodes are carried forward to retry unless dropped or
 replaced by a split. The produced plan is validated, so a bad edit fails loudly.
 
-A carried-forward node keeps its branch pin and resume checkpoint, and — since
-`round_context` — the planner context attached to it while the round ran. Nothing
-else the round learned crosses the boundary: the plan of record is the one the
-round was launched with, so structural live edits (an `add`, a `drop`, a `retry`
-replacement's new id) are round-scoped and the planner restates the ones it wants
-as `next-round` edits.
+A carried-forward node keeps its branch pin and resume checkpoint, and the planner
+context attached to it while the round ran.
+
+**The plan of record is the graph the round executed, not the file it was launched
+with.** `executed_plan` reads it back from the run's own authoritative journal, so
+every live edit the reconciler committed — an `add`, a `drop`, a `retry`
+replacement and its new id, an amended `task`, `done_when` or `max_turns`, a branch
+pin — is what the next round is derived from. Only edits the reconciler *rejected*
+are absent, and their submitter was told so synchronously.
+
+That replaces an earlier round-scoped rule, and the two guarantees above are why.
+Under it the transition re-read the launch file, so a `retry` replacement's new id
+never reached the next round: the merged replacement was not recognised as done and
+its superseded original was carried forward and re-run, and a retry pinned to a
+preserved branch was re-cut fresh from the base with its verified work orphaned.
+Neither is separable from the rule — both *are* the divergence between the launch
+file and the graph that ran. From a planner's side the rule was also indistinguishable
+from a dropped edit: `channel-reply` reported the edit applied, and it was, with a
+one-round expiry nothing surfaced. `round_supersessions` is the one place the new
+rule needs care — a live `retry` leaves the node it replaced in the executed graph,
+cancelled, and that node is removed here rather than carried forward twice.
 """
 
 from __future__ import annotations
@@ -33,9 +48,63 @@ from typing import Any
 from .config import ConfigError, load_yaml
 from .lifecycle import MAX_AUTOMATIC_STEP_RESUMES
 from .outcomes import INFRASTRUCTURE_FAILURE_OUTCOME
-from .runs import StackBasePayload
+from .runs import RunId, StackBasePayload
 
-__all__ = ["next_round", "round_context"]
+__all__ = ["executed_plan", "next_round", "round_context", "round_supersessions"]
+
+
+def executed_plan(run_dir: Path, round_number: int, launch_plan: dict[str, Any]) -> dict[str, Any]:
+    """The graph a round actually ran, folded from its authoritative journal.
+
+    ``launch_plan`` is what the round was *asked* to do — `round-NN/plan.json`, which
+    the reconciler never rewrites. It is returned unchanged when the journal cannot
+    be folded strictly, which covers a ledger recorded before this contract and a
+    stream a reader must not silently reinterpret. That fallback is safe rather than
+    silent: a round with no committed edit projects to the same tasks anyway, and one
+    with edits it could not replay is a run whose journal is already refusing to
+    project for `run-plan --recover`, which reports it.
+    """
+    from .projection import ProjectionError, project_run
+    from .journal import JOURNAL_NAME
+
+    try:
+        projected = project_run(run_dir / JOURNAL_NAME, RunId(run_dir.name), round_number)
+    except (ProjectionError, ConfigError, OSError):
+        return launch_plan
+    return dict(projected.plan)
+
+
+def round_supersessions(run_dir: Path, round_number: int) -> dict[str, str]:
+    """Nodes a live ``retry`` replaced during one round, mapped to their replacement.
+
+    A live retry does not edit the node in place the way a `next-round` retry does:
+    it cancels the original and adds a differently-identified replacement, rewiring
+    every dependent onto it. Both therefore appear in the executed graph, and without
+    this the superseded original — cancelled, never done — would be carried forward
+    and dispatched again beside the replacement that already did its work.
+
+    Read tolerantly from the journal, like every other observer of it: a round with
+    no live retry reports nothing, which is what a transition that has always carried
+    none should keep doing.
+    """
+    from .journal import JOURNAL_NAME, read_events
+
+    replaced: dict[str, str] = {}
+    for event in read_events(run_dir / JOURNAL_NAME):
+        if event.round != round_number or event.kind != "edit-committed":
+            continue
+        operations = event.detail.get("operations")
+        if not isinstance(operations, list):
+            continue
+        for operation in operations:
+            if not isinstance(operation, Mapping) or operation.get("kind") != "retry-requested":
+                continue
+            nid = operation.get("node")
+            detail = operation.get("detail")
+            replacement = detail.get("replacement") if isinstance(detail, Mapping) else None
+            if isinstance(nid, str) and isinstance(replacement, str) and replacement:
+                replaced[nid] = replacement
+    return replaced
 
 
 def round_context(run_dir: Path, round_number: int) -> dict[str, list[str]]:
@@ -77,15 +146,19 @@ def next_round(
     edits: dict[str, Any] | None = None,
     *,
     carried_context: Mapping[str, list[str]] | None = None,
+    superseded: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     """Compute the next round's tracked-graph mapping.
 
-    ``prev_plan``: the prior tracked-graph mapping. ``prev_result``: the ``--format
-    json`` output of ``run-plan``. ``edits``: ``{retry: {id: {overrides}},
-    split: {id: [nodes]}, add: [nodes], drop: [ids], complete_human: [refs]}``.
-    ``carried_context``: notes attached to nodes during the round that just ran, as
-    `round_context` collects them. The result is validated via the canonical graph
-    parser.
+    ``prev_plan``: the tracked-graph mapping the round *executed* — `executed_plan`,
+    not the launch file. ``prev_result``: the ``--format json`` output of
+    ``run-plan``. ``edits``: ``{retry: {id: {overrides}}, split: {id: [nodes]}, add:
+    [nodes], drop: [ids], complete_human: [refs]}``. ``carried_context``: notes
+    attached to nodes during the round that just ran, as `round_context` collects
+    them. ``superseded``: nodes a live ``retry`` replaced, as `round_supersessions`
+    collects them; they leave the graph exactly as an explicit ``drop`` would,
+    because their replacement is already carrying their work. The result is validated
+    via the canonical graph parser.
     """
     from .graph import parse_graph
     from .plan import PlanError
@@ -129,7 +202,10 @@ def next_round(
         if isinstance(result, dict) and result.get("outcome") == INFRASTRUCTURE_FAILURE_OUTCOME
     )
     done_ids.update(ref for ref in completed_humans if "/" not in ref)
-    removed = drop | set(split)  # split replaces a node → its id goes away
+    # A split replaces a node, and so does a live retry: in both the id goes away and
+    # the replacement carries the work. The retry's replacement is already in
+    # ``prev_plan`` because that plan is the graph the round executed.
+    removed = drop | set(split) | set(superseded or {})
     prior_tasks: dict[str, Any] = {}
     for task in prev_plan.get("tasks") or []:
         if isinstance(task, dict) and isinstance((tid := task.get("id")), str):

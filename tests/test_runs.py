@@ -741,7 +741,7 @@ def test_runs_cli_reports_surfaces_nobody_read_and_never_on_a_stopped_run(tmp_pa
 
     out = capsys.readouterr().out
     expected = (
-        "1 planner update waiting, oldest 0s ago; read it with: just channel-next "
+        "1 planner update waiting, unread for 0s; read it with: just channel-next "
         "{run} --runs-dir " + str(tmp_path)
     )
     assert "* unrecorded  [unknown]  ACTIVE  (orchestrator running)" in out

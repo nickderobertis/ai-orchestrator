@@ -187,7 +187,7 @@ surfaces are queued, how stale the oldest one is, and the command that reads the
 
 ```
 * harness-fixes-cont  [mine]  ACTIVE  (orchestrator running)
-    1 planner update waiting, oldest 3h ago; read it with: just channel-next harness-fixes-cont --runs-dir runs
+    1 planner update waiting, unread for 3h; read it with: just channel-next harness-fixes-cont --runs-dir runs
 ```
 
 The queue is `channel/heartbeat-surface.json` (a check-in update) and

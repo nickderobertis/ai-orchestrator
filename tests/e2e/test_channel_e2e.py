@@ -1451,7 +1451,7 @@ def test_a_launch_that_dies_after_a_recorded_round_is_reported_against_its_row(
 
 #: The unread-surface line `just runs` and `just status` grew, as an operator reads it.
 _QUEUED_LINE = re.compile(
-    r"(\d+) planner updates? waiting, oldest (\d+)([smh]) ago; "
+    r"(\d+) planner updates? waiting, unread for (\d+)([smh]); "
     r"read (?:it|them) with: just channel-next (\S+) --runs-dir (\S+)"
 )
 
