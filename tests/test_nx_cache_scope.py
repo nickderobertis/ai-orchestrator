@@ -154,9 +154,9 @@ def test_the_marker_that_routes_a_test_to_its_tier_means_the_same_thing_everywhe
     # exclude the prose tier, not merely the first one written down.
     code_selectors = re.findall(r"-m '([^']+)'", targets[CODE_SCOPED]["command"])
     assert code_selectors, targets[CODE_SCOPED]["command"]
-    assert all(
-        selector.startswith(f"not {READS_DOCS_MARKER}") for selector in code_selectors
-    ), code_selectors
+    assert all(selector.startswith(f"not {READS_DOCS_MARKER}") for selector in code_selectors), (
+        code_selectors
+    )
     assert f"-m {READS_DOCS_MARKER}" in targets["test-docs"]["command"]
 
     # And the two selectors have to partition: a test is in exactly one tier.
