@@ -5375,12 +5375,19 @@ def test_cooperative_real_dispatch_cancellation_preserves_and_recovers_branch(
     workspace = Workspace(tmp_path / "cancelled-worktrees")
     cancel = threading.Event()
     witness = tmp_path / "cancelled.ticks"
+    # The second agent turn holds instead of sleeping, so cancellation always lands
+    # on a dispatch that is genuinely mid-work with partial work already committed.
+    held_ready = tmp_path / "cancelled.ready"
+    held_release = tmp_path / "cancelled.release"
 
     with ThreadPoolExecutor(max_workers=1) as pool:
         future = pool.submit(
             run_repo_task,
             str(canonical),
-            f"slow-branch {witness} write-change",
+            (
+                f"slow-branch {witness} hold-ready={held_ready} "
+                f"hold-release={held_release} hold-turn=1 write-change"
+            ),
             "engineer",
             workspace=workspace,
             base_path=command_base(),
@@ -5393,7 +5400,7 @@ def test_cooperative_real_dispatch_cancellation_preserves_and_recovers_branch(
         while time.monotonic() < deadline:
             ticks = witness.read_text(encoding="utf-8").count("tick") if witness.exists() else 0
             changes = list((tmp_path / "cancelled-worktrees").rglob("CHANGE.txt"))
-            if ticks >= 3 and changes:
+            if ticks >= 3 and changes and held_ready.is_file():
                 break
             time.sleep(0.02)
         else:
