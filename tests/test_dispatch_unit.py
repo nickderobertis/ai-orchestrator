@@ -896,6 +896,43 @@ def test_watchdog_reaps_previously_observed_process() -> None:
     assert process.returncode is not None
 
 
+#: A worker that survives the `SIGTERM` ahead of the `SIGKILL`, which is what puts a
+#: process in the "killed but not yet reaped" state the reaping loop exists for. A
+#: harness that installs its own shutdown handler is the real case; ignoring the signal
+#: outright is the same thing without the shutdown work, and it records its pid only
+#: once the handler is in place so the termination below cannot race the install.
+_SIGTERM_DEAF_SLEEPER = """
+import os, signal, sys, time
+signal.signal(signal.SIGTERM, signal.SIG_IGN)
+with open(sys.argv[1], "w", encoding="utf-8") as handle:
+    handle.write(str(os.getpid()))
+time.sleep(60)
+"""
+
+
+def test_watchdog_waits_for_a_killed_process_to_actually_be_reaped(tmp_path) -> None:
+    """Termination returns once the kernel has collected the process, not once it signalled.
+
+    ``kill`` returns as soon as the signal is queued, so a process that was still
+    running when the ``SIGKILL`` arrived has not died yet when the first
+    ``waitpid(WNOHANG)`` pass asks: there is nothing to collect, and the loop has to
+    come back for it. Treating that pass as a successful reap would leave the process
+    a zombie — still holding the pid a later ``/proc`` walk resolves through, and still
+    counted by anything that asks the kernel what is left of a dispatch.
+    """
+    marker = tmp_path / "deaf-worker.pid"
+    process = subprocess.Popen([sys.executable, "-c", _SIGTERM_DEAF_SLEEPER, os.fspath(marker)])
+    assert await_recorded_pid(marker) == process.pid
+
+    terminate_processes((ProcessId(process.pid),))
+
+    # A zombie keeps its `/proc` entry until someone waits on it, so this says the
+    # process was *reaped* rather than merely killed. Nothing else here can have
+    # collected it: this session is the parent and has not waited on it yet.
+    assert not Path(f"/proc/{process.pid}").exists()
+    assert process.wait(timeout=1) is not None
+
+
 def test_watchdog_terminates_live_process_tree() -> None:
     process = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
 
@@ -993,6 +1030,41 @@ def test_watchdog_records_pid_and_executes_command(tmp_path, monkeypatch) -> Non
     with pytest.raises(RuntimeError, match="exec boundary reached"):
         watchdog_main([os.fspath(pid_file), "worker", "--flag"])
 
+    assert pid_file.read_text(encoding="utf-8") == str(os.getpid())
+
+
+def test_watchdog_asked_for_its_own_group_leads_one_before_recording_its_pid(
+    tmp_path, monkeypatch
+) -> None:
+    """The flagged wrapper really regroups itself, and keeps the environment it was given.
+
+    The caller here is the test session, which is what the flag exists to spare — so it
+    rejoins the group it came from as soon as the postcondition is read. Rejoining an
+    existing group of the same session is permitted for anything that is not a session
+    leader, and the guard starts every test subprocess in a session of its own, so
+    nothing spawned while this runs can inherit the group either.
+    """
+    pid_file = tmp_path / "watchdog.pid"
+    monkeypatch.delenv("ORCHESTRATOR_WATCHDOG_UNSET_LLMLINT", raising=False)
+    monkeypatch.setenv("LLMLINT_ONEHARNESS_BIN", "oneharness")
+    original = os.getpgrp()
+
+    def execvpe(command: str, args: list[str], env: dict[str, str]) -> None:
+        # Untouched: only the dispatch that asks for it drops the llmlint wrapper, and
+        # a worker that inherited one must still find it.
+        assert env["LLMLINT_ONEHARNESS_BIN"] == "oneharness"
+        raise RuntimeError("exec boundary reached")
+
+    monkeypatch.setattr(os, "execvpe", execvpe)
+    try:
+        with pytest.raises(RuntimeError, match="exec boundary reached"):
+            watchdog_main([OWN_PROCESS_GROUP_FLAG, os.fspath(pid_file), "worker", "--flag"])
+
+        assert os.getpgrp() == os.getpid()
+    finally:
+        os.setpgid(0, original)
+
+    assert os.getpgrp() == original
     assert pid_file.read_text(encoding="utf-8") == str(os.getpid())
 
 
