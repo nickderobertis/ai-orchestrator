@@ -5,6 +5,13 @@ plugin; it starts a real process tree out of its own temp directory; and then th
 session ends — normally in one journey, under the SIGKILL of a cancellation in the
 others. Nothing about the guard is stubbed, and the only thing standing in for a
 dispatch is the shape of the tree.
+
+llmlint: ignore-file[tests_mirror_real_usage] The two tree-termination journeys call
+`watchdog.process_activity` / `terminate_processes` because those *are* the production
+actor: `just stop` and the dispatch watchdog end a run by walking its tree and
+signalling what they found, and no operator command takes a bare pytest session as its
+subject. Reaching for a command surface here would replace the real killer with a
+weaker one and stop reproducing the escape these journeys exist for.
 """
 
 from __future__ import annotations
@@ -16,6 +23,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from leak_guard import REAPER_SCRIPT
+from leak_reaper import SESSION_TOKEN_ENV
 from process_tree import (
     await_orphaned,
     await_reaped,
@@ -28,6 +37,7 @@ from process_tree import (
 from waits import timeout as e2e_timeout
 
 from orchestrator import REPO_ROOT
+from orchestrator.watchdog import ProcessId, process_activity, terminate_processes
 
 TESTS_DIR = REPO_ROOT / "tests"
 
@@ -84,7 +94,7 @@ def _leaky_session(directory: Path, marker: Path, *, hold_seconds: float) -> Pat
     return path
 
 
-def _run_session(directory: Path, test_file: Path) -> subprocess.Popen[bytes]:
+def _run_session(directory: Path, test_file: Path, *extra: str) -> subprocess.Popen[bytes]:
     """Start a real pytest session, in ``directory``, with the real guard plugin."""
     return subprocess.Popen(
         [
@@ -96,6 +106,7 @@ def _run_session(directory: Path, test_file: Path) -> subprocess.Popen[bytes]:
             "-p",
             "no:cacheprovider",
             "-q",
+            *extra,
             str(test_file),
         ],
         # The session's own working directory, so everything it starts inherits it
@@ -109,6 +120,27 @@ def _run_session(directory: Path, test_file: Path) -> subprocess.Popen[bytes]:
 
 def _working_directory(pid: int) -> Path:
     return Path(os.readlink(f"/proc/{pid}/cwd"))
+
+
+def _command_line(pid: int) -> str:
+    try:
+        raw = Path(f"/proc/{pid}/cmdline").read_bytes()
+    except OSError:
+        return ""
+    return " ".join(raw.decode("utf-8", errors="replace").split("\0"))
+
+
+def _session_token(pid: int) -> str:
+    """The leak-guard token ``pid`` inherited, or ``""`` if it carries none."""
+    try:
+        block = Path(f"/proc/{pid}/environ").read_bytes()
+    except OSError:
+        return ""
+    stamp = f"{SESSION_TOKEN_ENV}=".encode()
+    for entry in block.split(b"\0"):
+        if entry.startswith(stamp):
+            return entry[len(stamp) :].decode("utf-8", errors="replace")
+    return ""
 
 
 def _sweep(*pids: int | None) -> None:
@@ -224,6 +256,146 @@ def test_a_killed_session_reaps_what_it_launched_and_never_had_below_it(tmp_path
         session.kill()
         session.wait(timeout=e2e_timeout(30))
         _sweep(worker, launched)
+
+
+def test_a_session_terminated_as_a_whole_tree_still_reaps_what_it_launched(tmp_path) -> None:
+    """How the guard actually failed: the reaper was collected with the session.
+
+    Nothing here kills the session directly. It is terminated the way a stalled
+    dispatch is — `orchestrator.watchdog.terminate_processes` over the tree a walk
+    of it found — because that is what ends a suite run under this harness: a
+    supervisor cancelling a worker, `just stop`, a dispatch that ran out of turns.
+
+    `start_new_session` never covered that. It takes the reaper out of the session's
+    process *group*, and the walk goes by ancestry, so the one process posted to
+    outlive the session was signalled along with it. The escape this proves closed
+    was found live: an `onejudge` and the `orchestrator.channel` below it, still
+    running out of a deleted `pytest-of-nick` temp directory eighteen hours after
+    the session that started them, and still carrying that session's token.
+    """
+    marker = tmp_path / "launched.pid"
+    session = _run_session(tmp_path, _launching_session(tmp_path, marker, hold_seconds=600))
+    launched: int | None = None
+    worker: int | None = None
+    try:
+        launched, worker = await_recorded_pids(marker, timeout=e2e_timeout(60))
+        assert await_orphaned(launched, timeout=e2e_timeout(30))
+        assert _working_directory(worker) == tmp_path
+
+        observed = process_activity(ProcessId(session.pid)).pids
+        # The claim this journey rests on: what production signals no longer names the
+        # reaper. Asserting it here is what keeps a change that reattaches the reaper
+        # from turning the reap below into a test of nothing — the launch would then be
+        # reaped by the session's own teardown, and pass for the wrong reason.
+        walked = {pid: _command_line(pid) for pid in observed}
+        assert not [pid for pid, command in walked.items() if str(REAPER_SCRIPT) in command], (
+            f"the reaper is still in the session's own tree: {walked}"
+        )
+        terminate_processes(observed)
+        session.wait(timeout=e2e_timeout(30))
+
+        assert await_reaped(worker, timeout=e2e_timeout(30)), (
+            f"a launched worker of the terminated session is still running out of {tmp_path}"
+        )
+        assert await_reaped(launched, timeout=e2e_timeout(30)), (
+            f"the launched process of the terminated session is still running out of {tmp_path}"
+        )
+    finally:
+        session.kill()
+        session.wait(timeout=e2e_timeout(30))
+        _sweep(worker, launched)
+
+
+#: Two launch-shaped tests in one file, so a two-worker run puts one on each. The suite
+#: runs under xdist, and an xdist worker is a whole process of its own: it loads this
+#: plugin itself, stamps its own token, and posts its own reaper. Nothing about that is
+#: guaranteed by the design — it follows from where `install_session_guard` runs — so it
+#: is asserted rather than assumed.
+_PARALLEL_LAUNCHING_TESTS = '''\
+"""Two tests, each launching a detached process that only then starts its worker."""
+
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+TREE = {tree!r}
+
+
+def _launch(marker):
+    subprocess.Popen([sys.executable, TREE, marker])
+    # Held open until this worker's launch has recorded both pids, so the run never
+    # ends before the processes that have to outlive it exist.
+    deadline = time.monotonic() + 60
+    while time.monotonic() < deadline:
+        path = Path(marker)
+        recorded = path.read_text(encoding="utf-8").split() if path.is_file() else []
+        if len(recorded) == 2:
+            break
+        time.sleep(0.02)
+    time.sleep({hold_seconds})
+
+
+def test_first_worker_launches_a_detached_orchestrator():
+    _launch({first!r})
+
+
+def test_second_worker_launches_a_detached_orchestrator():
+    _launch({second!r})
+'''
+
+
+def test_each_xdist_worker_posts_its_own_token_and_its_own_reaper(tmp_path) -> None:
+    """The suite runs in parallel, so every worker owes what one session owed.
+
+    A worker is a separate process that imports the plugin for itself, which means it
+    stamps a token of its own and posts a reaper of its own — and a reaper's claim is
+    bounded by its token, so two workers sharing one would each be entitled to end the
+    other's launches. Both halves are asserted here: that the tokens genuinely differ,
+    and that killing the whole run still reaps what *both* workers launched.
+
+    Terminated as a tree, as the journey above is, because that is how these runs end
+    and because the controller and its workers are one tree — the reapers are not.
+    """
+    test_file = tmp_path / "test_parallel_launching_session.py"
+    first, second = tmp_path / "first.pid", tmp_path / "second.pid"
+    test_file.write_text(
+        _PARALLEL_LAUNCHING_TESTS.format(
+            tree=str(write_launching_tree(tmp_path)),
+            first=str(first),
+            second=str(second),
+            hold_seconds=600,
+        ),
+        encoding="utf-8",
+    )
+    session = _run_session(tmp_path, test_file, "-n", "2", "--dist", "load")
+    launched: list[int] = []
+    started: list[int] = []
+    try:
+        for marker in (first, second):
+            leader, worker = await_recorded_pids(marker, timeout=e2e_timeout(120))
+            launched.append(leader)
+            started.append(worker)
+        assert all(await_orphaned(pid, timeout=e2e_timeout(30)) for pid in launched)
+
+        tokens = [_session_token(pid) for pid in launched]
+        assert all(tokens), f"a launched process carries no session token: {tokens}"
+        assert tokens[0] != tokens[1], f"both workers stamped the same token {tokens[0]}"
+        # The controller runs no tests, so it installs no guard and stamps nothing; a
+        # token equal to its would mean one worker's reaper is claiming for both.
+        assert _session_token(session.pid) not in tokens
+
+        terminate_processes(process_activity(ProcessId(session.pid)).pids)
+        session.wait(timeout=e2e_timeout(30))
+
+        for pid in (*launched, *started):
+            assert await_reaped(pid, timeout=e2e_timeout(30)), (
+                f"a worker's launch survived the run that started it, out of {tmp_path}"
+            )
+    finally:
+        session.kill()
+        session.wait(timeout=e2e_timeout(30))
+        _sweep(*launched, *started)
 
 
 def test_reaping_one_session_leaves_another_live_sessions_launch_untouched(tmp_path) -> None:

@@ -75,8 +75,15 @@ test *nx_args:
     @log=$(mktemp); trap 'rm -f "$log"' EXIT; ./scripts/nx.sh run-many -t test,test-docs {{nx_args}} >"$log" 2>&1 || { cat "$log" >&2; echo "test: suites failed; fix the reported findings and rerun 'just test'" >&2; exit 1; }; echo "test: all suites passed"
 
 # The e2e suite alone (real onejudge subprocess boundary) — quick inner loop.
+#
+# Same worker count and distribution as the `test` tier, for the same reason: the
+# journeys wait on subprocesses rather than compute, so the wall clock is latency
+# and the workers are nearly free. `single_threaded` is deselected here too — those
+# tests need a process with no execnet thread in it, and `orchestrator:test` runs
+# them in the serial invocation that owns them.
 test-e2e:
-    uv run pytest tests/e2e
+    # llmlint: ignore[tool_output_is_signal] Watching one suite run as it goes is the only thing this recipe is for; `just test` is the one that reduces a green run to a line.
+    @uv run pytest tests/e2e -m 'not single_threaded' -n 4 --dist load
 
 # Lint Python (ruff) and the shell script (shellcheck); fail on findings.
 lint:

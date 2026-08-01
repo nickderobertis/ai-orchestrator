@@ -536,7 +536,17 @@ How this polyglot monorepo was built up from the create-repo reference pieces:
   `pyproject.toml` is the floor's one source — `fail_under` sets it and
   `precision` decides it, because pytest-cov compares the total *after* rounding
   at that precision. `tests/test_coverage_gate.py` holds that combination to one
-  that can actually fail the build.
+  that can actually fail the build. The tier runs in two invocations — a serial
+  one under `coverage run` for the `single_threaded` tests and the parallel bulk
+  appending to it — and only the second reports, so the floor is still evaluated
+  once against the combined total and no `--cov-fail-under` overrides it.
+- **The suite runs across four xdist workers** (`-n 4 --dist load`), chosen from
+  measurement rather than from `auto`: it is latency-bound, its floor is its
+  longest single test, and the curve is flat past four while this host also runs
+  live dispatches. A test whose subject is a process-wide or machine-wide
+  resource declares that as a scheduling constraint — `single_threaded` today —
+  never as a loosened assertion. See [Four workers, and the one test that cannot
+  have any](docs/repo-lifecycle.md#four-workers-and-the-one-test-that-cannot-have-any).
 - **Tests are realistic, not mocked.** The e2e suite drives the *real* `onejudge`
   CLI as a subprocess through the same `dispatch`/`run-plan` code the orchestrator
   uses. Only the paid model/harness is faked — via onejudge's own `command`
