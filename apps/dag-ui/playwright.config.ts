@@ -15,11 +15,11 @@ import { z } from "zod";
  * port the first is holding, and its fixture server rebuilds, from scratch, the very
  * run directory the first run is asserting against.
  *
- * The allocation happens once per *run* rather than once per process: Playwright
- * loads this file again in every worker it forks, and a worker that allocated ports
- * of its own would drive servers nobody started. Workers are forked with the runner's
- * environment, so the runner records what it allocated there and every later process —
- * worker, teardown — reads that back instead of allocating again.
+ * The choice is made once per *run* rather than once per process: Playwright loads this
+ * file again in every worker it forks, and a worker that chose ports of its own would
+ * drive servers nobody started. Workers are forked with the runner's environment, so
+ * the runner records what it chose there and every later process — worker, teardown —
+ * reads that back instead of choosing again.
  */
 const port = z.number().int().min(1).max(65535);
 const sessionSchema = z.object({
@@ -34,11 +34,15 @@ const sessionSchema = z.object({
 type Session = z.infer<typeof sessionSchema>;
 
 /**
- * Ask the kernel for ports nothing else holds, all bound at once so they are distinct,
- * and released together. Choosing them by arithmetic from a base would only move the
- * collision; only the kernel knows which ports are free.
+ * Ask the kernel which ports are free, binding all six at once so they are distinct and
+ * releasing them together — nothing here reserves them, because a port has to be free
+ * for a server to take it. So this is the kernel's answer to "what is free right now",
+ * and a run that chooses at the same instant could in principle be handed the same
+ * number; what that produces is a `--strictPort` Vite or a stall server refusing to
+ * start, never a run quietly attached to another run's server. Choosing by arithmetic
+ * from a base would not even give that: only the kernel knows what is free.
  */
-const ALLOCATE_PORTS = `
+const FREE_PORTS = `
 import json, socket
 held = [socket.socket() for _ in range(6)]
 for sock in held:
@@ -48,12 +52,12 @@ for sock in held:
     sock.close()
 `;
 
-function allocate(): Session {
+function chooseSession(): Session {
   const [api, ui, offlineApi, offlineUi, stalledApi, stalledUi] = z
     .tuple([port, port, port, port, port, port])
     .parse(
       JSON.parse(
-        execFileSync("python3", ["-c", ALLOCATE_PORTS], { encoding: "utf8" }),
+        execFileSync("python3", ["-c", FREE_PORTS], { encoding: "utf8" }),
       ),
     );
   return {
@@ -72,9 +76,9 @@ function currentSession(): Session {
   if (recorded !== undefined) {
     return sessionSchema.parse(JSON.parse(recorded));
   }
-  const allocated = allocate();
-  process.env.DAG_UI_E2E_SESSION = JSON.stringify(allocated);
-  return allocated;
+  const chosen = chooseSession();
+  process.env.DAG_UI_E2E_SESSION = JSON.stringify(chosen);
+  return chosen;
 }
 
 const session = currentSession();

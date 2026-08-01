@@ -145,7 +145,7 @@ the executor's own journal writers, serves it through the actual read API, and
 history store is recorded, through the same `tests/e2e/fake_oneharness.py`
 subprocess the Python e2e suite uses.
 
-Everything that tier does not share with another run of itself is allocated per
+Everything that tier does not share with another run of itself is chosen per
 run: `playwright.config.ts` asks the kernel for its ports and makes its own fixture
 directory, records both in the environment its workers are forked with, and
 `e2e/global-teardown.ts` removes the directory afterwards. Concurrent worktrees are
@@ -157,12 +157,12 @@ unreachable-API journey has a real failure to observe, is held bound but unliste
 by the stall server (`serve_fixture.py --refuse-port`): leaving it merely free would
 let a concurrent run's own API server take it.
 
-Every ordinary run exercises that allocation; only two overlapping runs exercise what
+Every ordinary run exercises that choice; only two overlapping runs exercise what
 it is for, so `isolation.config.ts` is one more Playwright run that starts no server
 of its own and launches two real runs of the tier at once, asserting each built and
 removed a fixture directory of its own. It is a separate config deliberately: a spec
 under the tier's own `testDir` would inherit the environment recording that run's
-allocation, and the runs it launched would reuse it rather than allocate.
+choice, and the runs it launched would reuse it rather than choose their own.
 
 The fixture's `dag-ui-busy` run is the scale case: one node with two hundred
 recorded sessions, one of them thirty turns long, so the browser tier proves the

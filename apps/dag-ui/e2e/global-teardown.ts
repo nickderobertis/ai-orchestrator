@@ -2,7 +2,7 @@ import { rmSync } from "node:fs";
 import { FIXTURE_WORKSPACE } from "../playwright.config";
 
 /**
- * Remove the fixture directory this run allocated for itself, and say which one.
+ * Remove the fixture directory this run made for itself, and say which one.
  *
  * A per-run directory is what keeps two concurrent runs from rebuilding each other's
  * served fixture; without this it would also be what leaves one behind per run. The
