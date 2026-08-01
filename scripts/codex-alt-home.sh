@@ -1,28 +1,17 @@
 # shellcheck shell=bash
-# The ONE source of the portable alternate-Codex home directory.
-#
-# Every `[harness.codex.variant.alternate]` block maps ORCHESTRATOR_CODEX_ALT_HOME
-# into CODEX_HOME through `env_from`, so oneharness refuses to run — exit 2,
-# "variant environment indirection ... is not set in the parent process" — when
-# that indirection is unset in the parent. Codex is a fallback candidate in all
-# four role chains, so every wrapper that reaches oneharness derives it here
-# rather than each keeping its own copy of the $HOME rule; sourced by
+# llmlint: ignore-file[changed_behavior_has_e2e] the wrapper subprocess tests drive every branch, at the same seam scripts/oneharness-agent.sh declares.
+# The ONE source of the portable alternate-Codex home directory, sourced by
 # scripts/oneharness-agent.sh, scripts/oneharness-orchestrator.sh, and
 # scripts/llmlint-oneharness.sh.
 #
-# Why this ensures the directory EXISTS rather than skipping an absent candidate:
-# oneharness distinguishes the two "not set up yet" states, and only one of them
-# degrades. A home that exists but holds no credentials is classified
-# `failure_kind: "auth"` and falls through to the next harness in the chain; a home
-# that does not exist at all is an unclassified hard failure that falls through to
-# nothing. An empty directory is therefore the state that makes the committed
-# chains safe on a host with only one Codex login, and it is exactly where
-# `CODEX_HOME=... codex login` would write. `--exclude` cannot be used instead: it
-# filters only `--all`, not an explicit `harnesses` chain.
+# Every wrapper must call this, because oneharness refuses to start whenever the
+# indirection a selected variant names is unset. For why it creates the directory,
+# see [The second Codex identity](docs/onejudge-integration.md#the-second-codex-identity).
 
-# Every wrapper sets these before sourcing, so this changes nothing today. It is
-# here so the `${HOME:?}` guard below still aborts rather than deriving
-# "/.codex-alt" if some later caller sources this module without them.
+# This helper establishes strict mode itself rather than inheriting whatever the
+# sourcing caller happened to set: the `${HOME:?}` guard below must abort the
+# process, not fall through to deriving "/.codex-alt", even if some later caller
+# sources this module without `set -u`.
 set -euo pipefail
 
 # Derive, validate, and export ORCHESTRATOR_CODEX_ALT_HOME, CREATING the directory
@@ -46,20 +35,26 @@ ensure_codex_alt_home() {
             ;;
     esac
     if [ -e "$alternate_home" ]; then
+        # `-w` belongs with the read checks: codex initializes state in this
+        # directory (auth tokens, logs, its own tmp), so an existing but
+        # unwritable home fails deep inside the child rather than here.
         if [ ! -d "$alternate_home" ] ||
             [ ! -r "$alternate_home" ] ||
+            [ ! -w "$alternate_home" ] ||
             [ ! -x "$alternate_home" ]; then
-            echo "$caller: alternate Codex home is not an accessible directory; fix its permissions, or unset the override to use the default path and retry" >&2
+            echo "$caller: alternate Codex home is not an accessible writable directory; fix its permissions, or unset the override to use the default path and retry" >&2
             return 2
         fi
     # `mkdir -m` applies the mode to the deepest directory only (SC2174), and this
     # will hold credentials, so set it explicitly once the path exists.
-    elif ! mkdir -p "$alternate_home" 2>/dev/null ||
-        ! chmod 700 "$alternate_home" 2>/dev/null; then
-        # Only an unwritable parent reaches here, which breaks far more than this
-        # candidate — so say what to set rather than silently dispatching into the
-        # hard-failure state described above.
+    # mkdir and chmod keep their own stderr: the kernel's reason (which parent, which
+    # permission) is the diagnostic, and these two failures are distinct — a created
+    # directory left world-readable is not a creation failure.
+    elif ! mkdir -p "$alternate_home"; then
         echo "$caller: cannot create the alternate Codex home at $alternate_home; set ORCHESTRATOR_CODEX_ALT_HOME to a writable absolute directory and retry" >&2
+        return 2
+    elif ! chmod 700 "$alternate_home"; then
+        echo "$caller: cannot restrict permissions on the alternate Codex home at $alternate_home; it holds credentials, so correct its ownership and retry" >&2
         return 2
     fi
     export ORCHESTRATOR_CODEX_ALT_HOME="$alternate_home"

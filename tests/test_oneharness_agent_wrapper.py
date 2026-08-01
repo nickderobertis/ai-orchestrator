@@ -153,8 +153,31 @@ def test_agent_side_rejects_an_existing_non_directory_codex_home(tmp_path: Path)
         codex_alt_home=invalid,
     )
     assert proc.returncode == 2
-    assert "alternate Codex home is not an accessible directory" in proc.stderr
+    assert "alternate Codex home is not an accessible writable directory" in proc.stderr
     assert argv == []
+
+
+def test_agent_side_rejects_a_read_only_alternate_codex_home(tmp_path: Path) -> None:
+    """A readable home codex cannot write to must fail here, not inside the child.
+
+    Codex initializes state in CODEX_HOME — auth tokens, logs, its own tmp — so a
+    directory that satisfies the read checks but denies writes would pass this
+    boundary and fail deep in the harness, where the message names neither the
+    directory nor the variable that selects it.
+    """
+    read_only = tmp_path / "read-only-codex-home"
+    read_only.mkdir(mode=0o500)
+    try:
+        proc, argv = _run_wrapper(
+            tmp_path,
+            ["run", "--compact", "--prompt", "probe"],
+            codex_alt_home=read_only,
+        )
+        assert proc.returncode == 2
+        assert "alternate Codex home is not an accessible writable directory" in proc.stderr
+        assert argv == []
+    finally:
+        read_only.chmod(0o700)
 
 
 def test_agent_side_reports_an_uncreatable_alternate_codex_home(tmp_path: Path) -> None:

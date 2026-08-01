@@ -8,13 +8,15 @@ ran, with which approval flag, and with which environment.
 
 Codex is the whole proof here, and deliberately so: it is this role's primary, so
 if routing resolved the worker order instead, codex would never record and the
-wait below fails. There is no matching negative assertion about claude-code, but
-the reason is no longer that one cannot be written: the adopted oneharness spawns
-that harness as a CLI and honors `ONEHARNESS_BIN_CLAUDE_CODE`, so a stand-in
-would observe it. Adding one is a live follow-up, not an impossibility. The
-committed priority itself is held by tests/test_harness_routing.py, and real
-fallback selection by tests/e2e/test_dispatch_e2e.py.
+wait below fails. This module asserts only that positive: the committed priority
+itself is held by tests/test_harness_routing.py, and real fallback selection by
+tests/e2e/test_dispatch_e2e.py.
 """
+
+# llmlint: ignore-file[e2e_not_mocked] This drives the real `just orchestrate` recipe and the
+# real oneharness CLI; only the paid Codex model subprocess is a deterministic protocol double,
+# the same explicit external-boundary exception tests/e2e/test_dispatch_e2e.py declares and
+# AGENTS.md documents for this e2e suite.
 
 from __future__ import annotations
 

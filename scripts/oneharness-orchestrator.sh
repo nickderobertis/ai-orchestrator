@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# llmlint: ignore-file[changed_behavior_has_e2e] subprocess tests drive every wrapper branch, at the same seam scripts/oneharness-agent.sh declares.
 # Force the orchestrator's own agent config, and make its process self-sufficient.
 #
 # `launch_orchestrator` pins this wrapper as the launched onejudge process's

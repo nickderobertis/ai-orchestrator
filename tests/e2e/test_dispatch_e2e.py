@@ -1126,6 +1126,89 @@ print(json.dumps({
 
 
 @pytest.mark.parametrize(
+    "config_name",
+    [
+        "oneharness.toml",
+        "oneharness.judge.toml",
+        "oneharness.llmlint.toml",
+        "oneharness.orchestrator.toml",
+    ],
+)
+def test_alternate_codex_identity_routes_its_home_and_masks_an_ambient_api_key(
+    tmp_path: Path, oneharness_bin: str, config_name: str
+) -> None:
+    """Run the alternate identity for real and read back the child's environment.
+
+    The sibling test above proves this for the Claude variants; the fallthrough
+    tests only ever SKIP `codex:alternate` via a missing executable, so nothing
+    else exercises the routing that makes a second Codex account a distinct
+    identity. Both halves matter: `env_from` must map the portable indirection
+    into CODEX_HOME, and `OPENAI_API_KEY` must be gone, because `codex login`
+    writes ChatGPT tokens into that home and an ambient key would outrank them
+    and silently bill the wrong account.
+    """
+    codex_alt = tmp_path / "codex-alt"
+    codex_alt.mkdir()
+    fake_codex = tmp_path / "codex"
+    fake_codex.write_text(
+        """#!/usr/bin/env python3
+import json
+import os
+
+assert os.environ["CODEX_HOME"] == os.environ["EXPECTED_CODEX_HOME"], os.environ["CODEX_HOME"]
+assert "OPENAI_API_KEY" not in os.environ
+print(json.dumps({"type": "thread.started", "thread_id": "codex-variant"}))
+print(json.dumps({
+    "type": "item.completed",
+    "item": {"type": "agent_message", "text": "codex identity isolated"},
+}))
+print(json.dumps({
+    "type": "turn.completed",
+    "usage": {"input_tokens": 1, "cached_input_tokens": 0, "output_tokens": 1},
+}))
+""",
+        encoding="utf-8",
+    )
+    fake_codex.chmod(0o755)
+
+    result = subprocess.run(
+        [
+            oneharness_bin,
+            "run",
+            "--config",
+            str(REPO_ROOT / config_name),
+            "--harness",
+            "codex:alternate",
+            "--bin",
+            f"codex:alternate={fake_codex}",
+            "--mode",
+            "default",
+            "--prompt",
+            "prove codex child environment",
+            "--compact",
+        ],
+        cwd=REPO_ROOT,
+        env={
+            **{k: v for k, v in os.environ.items() if k != "ONEHARNESS_HARNESSES"},
+            "ORCHESTRATOR_CODEX_ALT_HOME": str(codex_alt),
+            "EXPECTED_CODEX_HOME": str(codex_alt),
+            # The value the variant's `unset_env` must strip from the child.
+            "OPENAI_API_KEY": "ambient-openai-key",
+            "ONEHARNESS_HISTORY": "false",
+        },
+        text=True,
+        capture_output=True,
+        timeout=60,
+    )
+
+    assert result.returncode == 0, result.stderr
+    report = json.loads(result.stdout)
+    assert report["results"][0]["harness_id"] == "codex:alternate"
+    assert report["results"][0]["status"] == "ok"
+    assert report["results"][0]["text"] == "codex identity isolated"
+
+
+@pytest.mark.parametrize(
     ("config_name", "missing_harness", "fallback_harness", "skipped_between"),
     [
         ("oneharness.toml", "claude-code:alternate", "codex", ()),
