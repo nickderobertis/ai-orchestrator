@@ -16,6 +16,7 @@ from pathlib import Path
 import pytest
 import yaml
 from process_tree import is_running
+from rendezvous import Rendezvous
 from run_rows import without_ownership
 from waits import deadline
 from waits import timeout as e2e_timeout
@@ -72,14 +73,11 @@ def _plan(tmp_path: Path, sentinel: str) -> Path:
 def _proposal_plan(
     tmp_path: Path,
     witness: Path,
-    provider_barrier: tuple[Path, Path] | None = None,
+    first_turn: Rendezvous | None = None,
+    second_turn: Rendezvous | None = None,
 ) -> Path:
-    barrier = (
-        ""
-        if provider_barrier is None
-        else f" provider-barrier-ready={provider_barrier[0]} "
-        f"provider-barrier-release={provider_barrier[1]}"
-    )
+    barrier_sentinels = "" if first_turn is None else first_turn.sentinels(0)
+    hold_sentinels = "" if second_turn is None else second_turn.sentinels(1)
     path = tmp_path / "plan-mid-run-proposal.json"
     path.write_text(
         json.dumps(
@@ -96,7 +94,7 @@ def _proposal_plan(
                     {
                         "id": "unrelated",
                         "persona": "engineer",
-                        "task": f"slow-branch {witness}{barrier}",
+                        "task": f"slow-branch {witness}{barrier_sentinels}{hold_sentinels}",
                     },
                 ],
             }
@@ -159,6 +157,9 @@ def test_due_heartbeat_surfaces_during_active_step_and_disabled_run_stays_silent
 ) -> None:
     runs = tmp_path / "runs"
     witness = tmp_path / "slow-witness"
+    # The step stays in flight until this test has seen every heartbeat it asserts
+    # on, so the pacemaker is measured against the run rather than against a sleep.
+    hold = Rendezvous.at(tmp_path, "active-worker")
     plan = tmp_path / "heartbeat-channel.json"
     plan.write_text(
         json.dumps(
@@ -170,7 +171,8 @@ def test_due_heartbeat_surfaces_during_active_step_and_disabled_run_stays_silent
                         "id": "active-worker",
                         "persona": "engineer",
                         "task": (
-                            f"slow-branch {witness} pacemaker-slow complete-now heartbeat-channel"
+                            f"slow-branch {witness}{hold.sentinels()} "
+                            "complete-now heartbeat-channel"
                         ),
                     }
                 ],
@@ -204,7 +206,7 @@ def test_due_heartbeat_surfaces_during_active_step_and_disabled_run_stays_silent
     retry_not_before = cleared_state["retry_not_before"]
     assert isinstance(retry_not_before, int | float)
     assert retry_not_before > time.time()
-    assert witness.is_file()
+    assert hold.arrived()
     queued_path = runs / run_id / "channel" / "heartbeat-surface.json"
     queue_deadline = deadline(120)
     while not queued_path.is_file() and time.monotonic() < queue_deadline:
@@ -265,6 +267,7 @@ def test_due_heartbeat_surfaces_during_active_step_and_disabled_run_stays_silent
     state = json.loads(heartbeat_path.read_text())
     assert state["last_surface_at"] > initial_state["last_surface_at"]
 
+    hold.let_go()
     while True:
         boundary = _wait_surface(run_id, runs, wait_seconds=120)
         boundary_surface = boundary["surface"]
@@ -374,6 +377,9 @@ def test_completed_check_in_without_surface_is_logged_and_retried(
 ) -> None:
     runs = tmp_path / "runs"
     witness = tmp_path / "slow-witness"
+    # Held until the skipped surface has been logged and its retry has surfaced,
+    # so the step is genuinely active for both check-in dispatches.
+    hold = Rendezvous.at(tmp_path, "active-worker")
     plan = tmp_path / "missing-check-in-surface.json"
     plan.write_text(
         json.dumps(
@@ -384,7 +390,7 @@ def test_completed_check_in_without_surface_is_logged_and_retried(
                     {
                         "id": "active-worker",
                         "persona": "engineer",
-                        "task": f"slow-branch {witness} pacemaker-slow complete-now",
+                        "task": f"slow-branch {witness}{hold.sentinels()} complete-now",
                     }
                 ],
             }
@@ -443,8 +449,9 @@ def test_completed_check_in_without_surface_is_logged_and_retried(
         ),
         "blocking": False,
     }
-    assert witness.is_file()
+    assert hold.arrived()
 
+    hold.let_go()
     while True:
         boundary = _wait_surface(run_id, runs, wait_seconds=120)
         if boundary["surface"]["kind"] != "heartbeat":
@@ -1008,10 +1015,15 @@ def test_reattached_planner_replies_to_mid_run_proposal_without_stopping_graph(
 ) -> None:
     runs = tmp_path / "proposal-runs"
     witness = tmp_path / "unrelated.ticks"
-    provider_ready = tmp_path / "unrelated.ready"
-    provider_release = tmp_path / "unrelated.release"
+    barrier = Rendezvous.at(tmp_path, "unrelated-first-turn")
+    hold = Rendezvous.at(tmp_path, "unrelated-second-turn")
     run_id = _launch_cli(
-        _proposal_plan(tmp_path, witness, (provider_ready, provider_release)),
+        _proposal_plan(
+            tmp_path,
+            witness,
+            barrier,
+            hold,
+        ),
         runs,
         _base(tmp_path),
         onejudge_bin,
@@ -1066,7 +1078,7 @@ def test_reattached_planner_replies_to_mid_run_proposal_without_stopping_graph(
         check=True,
     )
     assert f"{run_id}: {expected_wait}" in status.stdout
-    assert provider_ready.read_text(encoding="utf-8") == "ready\n"
+    assert barrier.ready.read_text(encoding="utf-8") == "ready\n"
     _reply_cli(
         run_id,
         runs,
@@ -1094,13 +1106,12 @@ def test_reattached_planner_replies_to_mid_run_proposal_without_stopping_graph(
         "heartbeat_interval": 2,
     }
     assert not (runs / run_id / "orchestrator" / "report.json").stat().st_size
-    provider_release.write_text("release\n", encoding="utf-8")
-    wait_deadline = deadline(5)
-    while time.monotonic() < wait_deadline:
-        if witness.is_file() and witness.read_text(encoding="utf-8").count("tick") == 2:
-            break
-        time.sleep(0.02)
+    barrier.let_go()
+    # The released node reports its own progress and parks at its next turn, so this
+    # reads exactly the turn the graph kept running rather than what a sleep left.
+    hold.wait(15)
     assert witness.read_text(encoding="utf-8").count("tick") == 2
+    hold.let_go()
 
     while True:
         boundary = _next_cli(run_id, runs)
@@ -1121,12 +1132,18 @@ def test_unanswered_mid_run_proposal_does_not_compete_with_boundary_verdict(
 ) -> None:
     runs = tmp_path / "unanswered-proposal-runs"
     witness = tmp_path / "unanswered-unrelated.ticks"
-    run_id = _launch_cli(_proposal_plan(tmp_path, witness), runs, _base(tmp_path), onejudge_bin)
+    # The unrelated node holds the round open until the proposal has been read, so
+    # the pump is provably still the FIFO's owner when that read happens.
+    hold = Rendezvous.at(tmp_path, "unanswered")
+    run_id = _launch_cli(
+        _proposal_plan(tmp_path, witness, first_turn=hold), runs, _base(tmp_path), onejudge_bin
+    )
 
     proposal = _next_cli(run_id, runs)
     assert proposal["surface"]["kind"] == "proposal"
     # Deliberately leave the proposal unanswered. The unrelated node still settles,
     # then the pump must relinquish sole FIFO ownership before this boundary appears.
+    hold.let_go()
     boundary = _next_cli(run_id, runs)
     assert boundary["surface"]["kind"] in {"milestone", "closeout"}
     assert witness.read_text(encoding="utf-8").count("tick") >= 2
@@ -1140,6 +1157,9 @@ def test_continuation_round_proposal_uses_reconciled_round_number(
 ) -> None:
     runs = tmp_path / "continuation-runs"
     witness = tmp_path / "round-two-unrelated.ticks"
+    # Round two stays open until its proposal has been read and answered, so the
+    # reconciled round number is read from a round that is provably still running.
+    hold = Rendezvous.at(tmp_path, "round-two")
     plan = tmp_path / "continuation-plan.json"
     plan.write_text(
         json.dumps(
@@ -1158,7 +1178,7 @@ def test_continuation_round_proposal_uses_reconciled_round_number(
                     {
                         "id": "unrelated",
                         "persona": "engineer",
-                        "task": f"slow-branch {witness}",
+                        "task": f"slow-branch {witness}{hold.sentinels()}",
                         "deps": ["gate"],
                     },
                 ],
@@ -1181,6 +1201,7 @@ def test_continuation_round_proposal_uses_reconciled_round_number(
         runs,
         {"completion": False, "message": "defer", "reason": "next continuation"},
     )
+    hold.let_go()
     closeout = _next_cli(run_id, runs)
     assert closeout["surface"]["kind"] == "closeout"
     _reply_cli(run_id, runs, {"completion": True, "reason": "round two verified"})

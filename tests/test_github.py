@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import os
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -113,10 +115,13 @@ def test_required_status_checks_rejects_malformed_response(payload: object) -> N
         )
 
 
-def test_create_pr_reuses_open_pr_for_head() -> None:
-    existing = '[{"number": 41, "url": "https://github.com/o/r/pull/41"}]'
+def test_adoptable_pr_reuses_open_pr_for_head() -> None:
+    existing = (
+        '[{"number": 41, "url": "https://github.com/o/r/pull/41", '
+        '"state": "OPEN", "headRefOid": "abc"}]'
+    )
     run = RecordingRun([existing])
-    pr = CliGitHubBackend(run=run).create_pr("o/r", head="f", base="main", title="t", body="b")
+    pr = CliGitHubBackend(run=run).adoptable_pr("o/r", head="f", base="main", head_sha="abc")
     assert pr == PullRequest(41, "https://github.com/o/r/pull/41", "o/r", "f", "main")
     assert run.calls == [
         [
@@ -129,33 +134,44 @@ def test_create_pr_reuses_open_pr_for_head() -> None:
             "--base",
             "main",
             "--state",
-            "open",
+            "all",
             "--json",
-            "number,url",
+            "number,url,state,headRefOid",
         ]
     ]
 
 
+def test_adoptable_pr_reuses_only_merged_pr_with_matching_head() -> None:
+    existing = json.dumps(
+        [
+            {
+                "number": 41,
+                "url": "https://github.com/o/r/pull/41",
+                "state": "MERGED",
+                "headRefOid": "abc",
+            }
+        ]
+    )
+    assert (
+        CliGitHubBackend(run=RecordingRun([existing])).adoptable_pr(
+            "o/r", head="f", base="main", head_sha="abc"
+        )
+        is not None
+    )
+    assert (
+        CliGitHubBackend(run=RecordingRun([existing])).adoptable_pr(
+            "o/r", head="f", base="main", head_sha="newer"
+        )
+        is None
+    )
+
+
 def test_create_pr_creates_when_head_has_no_open_pr() -> None:
-    run = RecordingRun(["[]", "Warning: ...\nhttps://github.com/o/r/pull/42\n"])
+    run = RecordingRun(["Warning: ...\nhttps://github.com/o/r/pull/42\n"])
     pr = CliGitHubBackend(run=run).create_pr("o/r", head="f", base="main", title="t", body="b")
     assert pr.number == 42
     assert pr.repo == "o/r"
     assert run.calls == [
-        [
-            "pr",
-            "list",
-            "--repo",
-            "o/r",
-            "--head",
-            "f",
-            "--base",
-            "main",
-            "--state",
-            "open",
-            "--json",
-            "number,url",
-        ],
         [
             "pr",
             "create",
@@ -174,38 +190,45 @@ def test_create_pr_creates_when_head_has_no_open_pr() -> None:
 
 
 def test_create_pr_can_create_draft() -> None:
-    run = RecordingRun(["[]", "https://github.com/o/r/pull/43\n"])
+    run = RecordingRun(["https://github.com/o/r/pull/43\n"])
     pr = CliGitHubBackend(run=run).create_pr(
         "o/r", head="f", base="main", title="t", body="b", draft=True
     )
     assert pr.number == 43
-    assert "--draft" in run.calls[1]
+    assert "--draft" in run.calls[0]
 
 
 def test_create_pr_bad_output_raises() -> None:
-    run = RecordingRun(["[]", "not a url"])
+    run = RecordingRun(["not a url"])
     with pytest.raises(GitHubError, match="could not parse PR number"):
         CliGitHubBackend(run=run).create_pr("o/r", head="f", base="main", title="t", body="b")
 
 
-def test_create_pr_bad_list_output_raises() -> None:
+def test_adoptable_pr_bad_list_output_raises() -> None:
     run = RecordingRun(['{"number": 42}'])
     with pytest.raises(GitHubError, match="could not parse PR from gh output"):
-        CliGitHubBackend(run=run).create_pr("o/r", head="f", base="main", title="t", body="b")
+        CliGitHubBackend(run=run).adoptable_pr("o/r", head="f", base="main", head_sha="abc")
 
 
 @pytest.mark.parametrize(
     "existing",
     [
         ["not an object"],
-        [{"number": True, "url": "https://github.com/o/r/pull/42"}],
-        [{"number": 42, "url": ""}],
+        [
+            {
+                "number": True,
+                "url": "https://github.com/o/r/pull/42",
+                "state": "OPEN",
+                "headRefOid": "abc",
+            }
+        ],
+        [{"number": 42, "url": "", "state": "OPEN", "headRefOid": "abc"}],
     ],
 )
-def test_create_pr_rejects_malformed_existing_pr_fields(existing: list[object]) -> None:
+def test_adoptable_pr_rejects_malformed_fields(existing: list[object]) -> None:
     run = RecordingRun([json.dumps(existing)])
     with pytest.raises(GitHubError, match="could not parse PR from gh output"):
-        CliGitHubBackend(run=run).create_pr("o/r", head="f", base="main", title="t", body="b")
+        CliGitHubBackend(run=run).adoptable_pr("o/r", head="f", base="main", head_sha="abc")
 
 
 def test_enable_auto_merge_ok() -> None:
@@ -394,3 +417,30 @@ def test_default_run_success_and_failure(monkeypatch) -> None:
     )
     with pytest.raises(GitHubError, match="boom"):
         gh._default_run(["bogus"])
+
+
+def _gh_on_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, body: str) -> None:
+    """Install a real `gh`-shaped executable, since that boundary is what expires."""
+    directory = tmp_path / "bin"
+    directory.mkdir(parents=True)
+    script = directory / "gh"
+    script.write_text(f"#!/usr/bin/env python3\n{body}\n", encoding="utf-8")
+    script.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{directory}{os.pathsep}{os.environ['PATH']}")
+
+
+def test_a_gh_call_that_never_answers_expires_only_for_a_caller_that_asked_for_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`gh` is the network, so a reader on a deadline has to be able to bound it.
+
+    The lifecycle deliberately does not bound it: a merge waiting on GitHub is doing
+    the work, and abandoning it mid-flight would leave state nobody recorded. So the
+    timeout is opt-in, and a backend built without one still waits.
+    """
+    _gh_on_path(tmp_path, monkeypatch, "import time; time.sleep(600)")
+    with pytest.raises(GitHubError, match="timed out after 0.2s"):
+        CliGitHubBackend(timeout=0.2).default_branch("o/r")
+
+    _gh_on_path(tmp_path / "answering", monkeypatch, "print('main')")
+    assert CliGitHubBackend().default_branch("o/r") == "main"

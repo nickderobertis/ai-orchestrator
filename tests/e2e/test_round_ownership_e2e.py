@@ -48,6 +48,7 @@ from collections.abc import Callable, Iterator
 from pathlib import Path
 
 import pytest
+from rendezvous import Rendezvous
 from run_rows import without_ownership
 from waits import deadline as e2e_deadline
 from waits import timeout as e2e_timeout
@@ -57,6 +58,7 @@ from orchestrator.channel import create_channel
 from orchestrator.coordination import advisory_lock
 from orchestrator.detach import CRASHED
 from orchestrator.runs import TEARDOWN_SIGNALS
+from orchestrator.watchdog import ProcessId, process_group_is_running
 
 
 def _just(*args: str) -> subprocess.CompletedProcess[str]:
@@ -223,11 +225,7 @@ class Rounds:
         held: dict[str, object] = {
             "id": "held",
             "persona": "engineer",
-            "task": (
-                "complete-now "
-                f"provider-barrier-ready={self.ready(run_id)} "
-                f"provider-barrier-release={self.release(run_id)}"
-            ),
+            "task": f"complete-now{self.hold(run_id).sentinels()}",
         }
         tasks: list[dict[str, object]] = [held]
         if human_gate:
@@ -244,11 +242,15 @@ class Rounds:
         path.write_text(json.dumps({"tasks": tasks}), encoding="utf-8")
         return path
 
+    def hold(self, run_id: str) -> Rendezvous:
+        """The rendezvous this run's one agent node parks its first turn at."""
+        return Rendezvous.at(self.tmp_path, run_id)
+
     def ready(self, run_id: str) -> Path:
-        return self.tmp_path / f"{run_id}.ready"
+        return self.hold(run_id).ready
 
     def release(self, run_id: str) -> Path:
-        return self.tmp_path / f"{run_id}.release"
+        return self.hold(run_id).release
 
     def _start(
         self, run_id: str, number: int, args: tuple[str, ...]
@@ -328,11 +330,28 @@ def rounds(
     launcher.reap()
 
 
+def _await_group_exit(group: int) -> bool:
+    """Wait for a torn-down process group to finish emptying, and say whether it did.
+
+    A group is empty only once every escalation aimed at it has run its course, so this
+    is what "the teardown is over" actually consists of. Zombies do not count, which is
+    what `process_group_is_running` is careful about: `just` is waited for by the test
+    and the rest by init, so a group holding only uncollected statuses is finished.
+    """
+    deadline = e2e_deadline(60)
+    while process_group_is_running(ProcessId(group)) and time.monotonic() < deadline:
+        time.sleep(0.05)
+    return not process_group_is_running(ProcessId(group))
+
+
 def _assert_outlived_the_turn(launch: Launch, group: int) -> None:
-    # An explicit settle window, because what is under test is the *absence* of a
-    # death: the teardown escalates, with `uv run` forwarding SIGTERM to its own direct
-    # child and following it with SIGKILL about two seconds later.
-    time.sleep(e2e_timeout(2.0))
+    # Waited on rather than slept through, because what is under test is the *absence*
+    # of a death: the teardown escalates, with `uv run` forwarding SIGTERM to its own
+    # direct child and following it with SIGKILL about two seconds later. Emptying is
+    # the fact that ends that escalation, and asserting it is strictly stronger than
+    # sleeping past it — a window can expire with the escalation still pending, and it
+    # charged all seven of these journeys for the slowest box imaginable every run.
+    assert _await_group_exit(group), "the launching turn's own process group never finished dying"
     assert _alive(launch.owner), "the executor died with the turn that launched it"
     # Why it survived, asserted rather than assumed: neither the group teardown nor
     # `uv run`'s forwarding to its own direct child can reach a round that is neither.

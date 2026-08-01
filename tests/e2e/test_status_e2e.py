@@ -20,7 +20,10 @@ from pathlib import Path
 from history_store import write_worker_session as _record
 
 from orchestrator import REPO_ROOT, gitops
+from orchestrator.journal import open_journal
+from orchestrator.labels import graph_labels
 from orchestrator.registry import Registry
+from orchestrator.runs import NodeId, RunId
 from orchestrator.status import main as status_main
 from orchestrator.workspace import Workspace, normalize_repo
 
@@ -225,3 +228,87 @@ def test_status_reports_a_queued_surface_no_planner_has_read(tmp_path, monkeypat
     shown = capsys.readouterr().out
     assert "unattended: 1 planner update waiting, oldest 0s ago" in shown
     assert f"just channel-next unattended --runs-dir {runs_dir}" in shown
+
+
+def _settled_run(runs_dir: Path, run_id: str, outcomes: dict[str, str]) -> None:
+    """Journal one in-flight round in which every named node has already settled.
+
+    Written through the real `Journal`, and deliberately with no `result.json`: a
+    round still in flight has recorded none, and that is exactly when this view is
+    asked what is happening — so the journal is the only record of these outcomes.
+    """
+    journal = open_journal(runs_dir / run_id, RunId(run_id), 1)
+    for node, status in outcomes.items():
+        journal.append("node-started", node=NodeId(node))
+        if status == "failed":
+            journal.append("node-failed", node=NodeId(node), detail={"status": "failed"})
+        else:
+            journal.append("node-settled", node=NodeId(node), detail={"status": status})
+
+
+def test_status_reports_every_settled_node_as_the_journal_recorded_it(
+    tmp_path: Path, bare_origin
+) -> None:
+    """The journal outranks the worktree for every outcome, not only for a failure.
+
+    `just status` recognises a running workstream by its still-present worktree, and
+    every session here has one — a real checkout with its branch checked out, which
+    is the state the filesystem calls "running". The run's own journal has already
+    settled each of these nodes, so none of them may read as running, and each reads
+    as what was recorded. A status outside the domain a node can settle in still
+    settles the node, because the event kind proves that much on its own; and a
+    dispatch whose labels name no node the journal recorded keeps the worktree's
+    answer, because nothing overrides it.
+    """
+    origin = bare_origin()
+    workspace_root = tmp_path / ".ai-orchestrator" / "workspaces"
+    workspace = Workspace(workspace_root, resolver=lambda _: gitops.clone(origin, tmp_path / "c"))
+    ref = normalize_repo(str(origin))
+    workspace.ensure_clone(ref)
+
+    runs_dir = tmp_path / "runs"
+    outcomes = {"win": "done", "lose": "failed", "held": "waiting", "dropped": "cancelled"}
+    _settled_run(runs_dir, "settled-run", {**outcomes, "odd": "in-orbit"})
+
+    history_dir = tmp_path / "history"
+    store = history_dir / "settled-project"
+    store.mkdir(parents=True)
+    labelled = {**outcomes, "odd": "done"}
+    worktrees: list[Path] = []
+    for index, node in enumerate([*labelled, "unjournalled"]):
+        worktrees.append(workspace.worktree(ref, f"agent/{node}", base="origin/main"))
+        _record(
+            store / f"{node}-20260714T12000{index}Z-{index}.jsonl",
+            project=worktrees[-1],
+            name=node,
+            labels=graph_labels(run_id=RunId("settled-run"), round_number=1, node=NodeId(node)),
+        )
+    # A dispatch whose round label is not a round the journal could have recorded
+    # names no node, so it is never matched against one.
+    worktrees.append(workspace.worktree(ref, "agent/mislabelled", base="origin/main"))
+    _record(
+        store / "mislabelled-20260714T120009Z-9.jsonl",
+        project=worktrees[-1],
+        name="mislabelled",
+        labels={"run_id": "settled-run", "round": "not-a-round", "node": "win"},
+    )
+
+    try:
+        shown = _run(history_dir, workspace_root, runs_dir, "settled-run", "--format", "json")
+        assert shown.returncode == 0, shown.stderr
+        reported = {task["task"]: task for task in json.loads(shown.stdout)}
+        assert {node: reported[node]["node_state"] for node in labelled} == labelled
+        assert not any(reported[node]["running"] for node in labelled)
+        # Neither names a node the journal settled, so the worktree still answers.
+        for unmatched in ("unjournalled", "mislabelled"):
+            assert reported[unmatched]["node_state"] is None
+            assert reported[unmatched]["running"] is True
+
+        human = _run(history_dir, workspace_root, runs_dir, "settled-run")
+        assert human.returncode == 0, human.stderr
+        for node, status in labelled.items():
+            assert f"  {node}  " in human.stdout
+            assert f"({status};" in human.stdout
+    finally:
+        for worktree in worktrees:
+            workspace.remove_worktree(ref, worktree)

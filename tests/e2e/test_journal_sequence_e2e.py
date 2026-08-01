@@ -32,6 +32,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 import yaml
+from rendezvous import Rendezvous
 from waits import deadline
 from waits import timeout as e2e_timeout
 
@@ -51,8 +52,14 @@ def _base(tmp_path: Path) -> Path:
     return path
 
 
+def _held(tmp_path: Path) -> Rendezvous:
+    """The rendezvous the plan's `held` node parks its second turn at."""
+    return Rendezvous.at(tmp_path, "held")
+
+
 def _plan(tmp_path: Path) -> Path:
     """One node held inside its turn, one node queued behind it."""
+    held = _held(tmp_path)
     path = tmp_path / "plan.json"
     path.write_text(
         json.dumps(
@@ -64,11 +71,7 @@ def _plan(tmp_path: Path) -> Path:
                     {
                         "id": "held",
                         "persona": "engineer",
-                        "task": (
-                            f"slow-branch {tmp_path / 'held.ticks'} live-edit-slow "
-                            f"live-edit-ready={tmp_path / 'held.ready'} "
-                            f"live-edit-release={tmp_path / 'held.release'}"
-                        ),
+                        "task": f"slow-branch {tmp_path / 'held.ticks'}{held.sentinels(1)}",
                     },
                     {
                         "id": "queued",
@@ -203,12 +206,12 @@ def _started_run(tmp_path: Path, onejudge_bin: str) -> tuple[str, Path, Path]:
     events = runs / run_id / "events.jsonl"
     # The ready file, not `node-started`: the backend writes it from inside the turn
     # it then holds, so from here the round provably cannot settle on its own.
-    _wait_for(tmp_path / "held.ready", lambda text: text == "ready\n", LIVE_PROCESS_TIMEOUT)
+    _held(tmp_path).wait(LIVE_PROCESS_TIMEOUT)
     return run_id, runs, events
 
 
 def _release(tmp_path: Path, run_id: str, runs: Path) -> dict:
-    (tmp_path / "held.release").write_text("go\n", encoding="utf-8")
+    _held(tmp_path).let_go()
     return json.loads(
         _wait_for(
             runs / run_id / "round-01" / "result.json",
@@ -235,7 +238,7 @@ def test_a_record_this_build_cannot_read_still_holds_its_sequence(
     record a result folded without it — and says so, rather than crashing.
     """
     runs = tmp_path / "runs"
-    ready, release = tmp_path / "hold.ready", tmp_path / "hold.release"
+    held = Rendezvous.at(tmp_path, "hold")
     plan = tmp_path / "plan.json"
     plan.write_text(
         json.dumps(
@@ -246,10 +249,7 @@ def test_a_record_this_build_cannot_read_still_holds_its_sequence(
                     {
                         "id": "held",
                         "persona": "engineer",
-                        "task": (
-                            f"complete-now provider-barrier-ready={ready} "
-                            f"provider-barrier-release={release}"
-                        ),
+                        "task": f"complete-now{held.sentinels()}",
                     },
                     {
                         "id": "queued",
@@ -285,7 +285,7 @@ def test_a_record_this_build_cannot_read_still_holds_its_sequence(
     try:
         # The backend writes the ready file from inside the turn it then holds, so the
         # executor is provably mid-round — its Journal open and its sequence in hand.
-        _wait_for(ready, lambda text: text == "ready\n", LIVE_PROCESS_TIMEOUT)
+        held.wait(LIVE_PROCESS_TIMEOUT)
         before = _records(events)
         foreign = _append_as_a_second_writer(
             events,
@@ -304,7 +304,7 @@ def test_a_record_this_build_cannot_read_still_holds_its_sequence(
             },
         )
     finally:
-        release.write_text("go\n", encoding="utf-8")
+        held.let_go()
     stdout, stderr = executor.communicate(timeout=e2e_timeout(LIVE_PROCESS_TIMEOUT))
 
     after = _records(events)

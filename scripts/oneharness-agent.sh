@@ -25,6 +25,18 @@ fi
 . "$alt_config_helper"
 resolve_claude_alt_config_dir oneharness-agent || exit $?
 alternate_config_dir=$ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR
+# The worker chain's last candidate is a second Codex identity, whose variant maps
+# this portable value into CODEX_HOME. oneharness refuses to run when the
+# indirection is unset, so it must be exported even on a host that never
+# authenticated one; see the fallthrough note in the helper.
+codex_alt_helper="$script_dir/codex-alt-home.sh"
+if [ ! -f "$codex_alt_helper" ] || [ ! -r "$codex_alt_helper" ]; then
+    echo "oneharness-agent: required helper is not a readable regular file: $codex_alt_helper; restore it from the repository or run 'just bootstrap', then retry" >&2
+    exit 2
+fi
+# shellcheck source=scripts/codex-alt-home.sh
+. "$codex_alt_helper"
+ensure_codex_alt_home oneharness-agent || exit $?
 alternate_harness=claude-code:alternate
 agent_config="$repo_root/oneharness.toml"
 
@@ -93,8 +105,10 @@ if [ ! -f "$agent_config" ] || [ ! -r "$agent_config" ]; then
 fi
 if [ ! -e "$alternate_config_dir" ] && [ -z "${ONEHARNESS_HARNESSES-}" ]; then
     # A host with only its primary Claude identity must not fail before fallback:
-    # skip the absent alternate candidate and dispatch directly through Codex.
-    export ONEHARNESS_HARNESSES=codex
+    # skip the absent alternate candidate and dispatch directly through Codex. The
+    # remaining chain keeps both Codex identities, since dropping the alternate here
+    # would cost the worker its last candidate when the first Codex quota is gone.
+    export ONEHARNESS_HARNESSES=codex,codex:alternate
 fi
 
 if [ -z "${ORCHESTRATOR_AGENT_STATUS_DIR-}" ]; then

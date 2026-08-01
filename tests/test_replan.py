@@ -784,3 +784,124 @@ def test_main_bad_edit_exit_2(tmp_path, capsys) -> None:
     edits = _write(tmp_path, "edits.json", {"add": [A]})
     rc = main([prev, res, edits])
     assert rc == 2 and "replan:" in capsys.readouterr().err
+
+
+def test_planner_context_crosses_the_transition_beside_the_branch_pin() -> None:
+    """The knowledge the round produced survives with the state that already did."""
+    work = {
+        "id": "work",
+        "repo": "o/r",
+        "persona": "engineer",
+        "task": "## What\nFinish the sweep",
+        "branch": "feature/preserved",
+    }
+    attached = {"work": ["41 commits are on the branch", "one llmlint finding is open"]}
+
+    carried = next_round(
+        _plan(work),
+        _preserved_failure(_PRESERVED_RESUME),
+        carried_context=attached,
+    )
+
+    node = carried["tasks"][0]
+    assert node["context"] == attached["work"]
+    # The pin still routes the continuation, and the task prose is untouched: the
+    # notes are data, rendered into the dispatched task where the node is parsed.
+    assert node["branch"] == "feature/preserved"
+    assert node["task"] == work["task"]
+
+
+def test_carried_context_is_replaced_each_round_rather_than_accumulated() -> None:
+    """A note travels exactly one transition, so stale state cannot pile up."""
+    work = {"id": "work", "persona": "engineer", "task": "Work"}
+
+    first = next_round(_plan(work), _result(work="failed"), carried_context={"work": ["round one"]})
+    assert first["tasks"][0]["context"] == ["round one"]
+
+    second = next_round(first, _result(work="failed"), carried_context={"work": ["round two"]})
+    assert second["tasks"][0]["context"] == ["round two"]
+
+    quiet = next_round(second, _result(work="failed"))
+    assert "context" not in quiet["tasks"][0]
+
+
+def test_context_for_a_node_that_leaves_the_round_reaches_nothing() -> None:
+    """Notes follow a node id; a dropped or replaced id takes its notes with it."""
+    dropped = next_round(
+        _plan(A, B),
+        _result(a="failed", b="failed"),
+        {"drop": ["a"]},
+        carried_context={"a": ["only about a"], "b": ["about b"]},
+    )
+
+    assert [task["id"] for task in dropped["tasks"]] == ["b"]
+    assert dropped["tasks"][0]["context"] == ["about b"]
+
+    split = next_round(
+        _plan(A),
+        _result(a="failed"),
+        {"split": {"a": [{"id": "a1", "repo": "o/r", "persona": "engineer", "task": "A1"}]}},
+        carried_context={"a": ["only about a"]},
+    )
+    assert [task["id"] for task in split["tasks"]] == ["a1"]
+    assert "context" not in split["tasks"][0]
+
+
+def test_a_retry_that_states_context_overrules_what_the_round_attached() -> None:
+    """A decision made after reading the result beats collection, empty included."""
+    work = {"id": "work", "persona": "engineer", "task": "Work", "context": ["stale"]}
+
+    stated = next_round(
+        _plan(work),
+        _result(work="failed"),
+        {"retry": {"work": {"context": ["the planner's own brief"]}}},
+        carried_context={"work": ["collected"]},
+    )
+    assert stated["tasks"][0]["context"] == ["the planner's own brief"]
+
+    cleared = next_round(
+        _plan(work),
+        _result(work="failed"),
+        {"retry": {"work": {"context": []}}},
+        carried_context={"work": ["collected"]},
+    )
+    assert cleared["tasks"][0]["context"] == []
+
+
+def test_round_context_collects_only_the_notes_that_round_committed(tmp_path) -> None:
+    """Read from the round's committed edits, which is what bounds accumulation."""
+    from orchestrator.journal import NodeId, RunId, open_journal
+    from orchestrator.replan import round_context
+
+    run_dir = tmp_path / "run"
+    first = open_journal(run_dir, RunId("run"), 1)
+    first.append(
+        "edit-committed",
+        detail={
+            "command": {"op": "context", "id": "work", "note": "from round one"},
+            "operations": [
+                {"kind": "context-added", "node": "work", "detail": {"note": "from round one"}}
+            ],
+        },
+    )
+    second = open_journal(run_dir, RunId("run"), 2)
+    second.append(
+        "edit-committed",
+        detail={
+            "operations": [
+                {"kind": "context-added", "node": "work", "detail": {"note": "from round two"}},
+                {"kind": "context-added", "node": "other", "detail": {"note": "for other"}},
+            ]
+        },
+    )
+    # Neither a differently shaped edit nor an unrelated event contributes a note.
+    second.append(
+        "edit-committed",
+        detail={"operations": [{"kind": "completion-requested", "detail": {"reason": "done"}}]},
+    )
+    second.append("node-started", node=NodeId("work"), detail={"node_kind": "direct"})
+
+    assert round_context(run_dir, 1) == {"work": ["from round one"]}
+    assert round_context(run_dir, 2) == {"work": ["from round two"], "other": ["for other"]}
+    assert round_context(run_dir, 3) == {}
+    assert round_context(tmp_path / "absent", 1) == {}

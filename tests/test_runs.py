@@ -171,6 +171,7 @@ def _own(round_dir, **overrides) -> None:
     (round_dir / "status.json").write_text(json.dumps(record), encoding="utf-8")
 
 
+@pytest.mark.single_threaded
 def test_a_signalled_round_records_its_abandonment_and_stops_being_live(tmp_path) -> None:
     """The real signalled journey is tests/e2e/test_round_ownership_e2e.py.
 
@@ -178,6 +179,13 @@ def test_a_signalled_round_records_its_abandonment_and_stops_being_live(tmp_path
     final self-signal stays pending; setting the disposition to `SIG_IGN` before
     unblocking discards that pending signal so the test process survives what a round
     owner would not.
+
+    Blocking is per *thread*, and the handler's self-signal is process-directed, so
+    that only holds in a process this test is the only thread of. It is why the test
+    is marked `single_threaded`: an xdist worker carries execnet's receiver thread,
+    which blocks nothing, so the kernel delivers the pending SIGTERM there under the
+    `SIG_DFL` the handler just restored and the worker dies mid-test. The constraint
+    is the process, not the load — it happens at `-n 1` too.
     """
     run_dir = tmp_path / "run"
     _, round_dir = prepare_round(run_dir, PLAN)

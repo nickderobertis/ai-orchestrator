@@ -50,6 +50,21 @@ if [[ $read_only == true ]]; then
     args+=(-- -c 'sandbox_permissions=["disk-full-read-access","network-full-access"]')
 fi
 
+# This tier's only backup for an exhausted quota is a second Codex identity, whose
+# variant maps this portable value into CODEX_HOME. oneharness refuses to run when
+# the indirection is unset, so export it even on a host that never authenticated
+# one; an empty home is the state that falls through rather than hard-failing.
+# Resolved here, past the argument checks above, so a rejected invocation and the
+# `--version` probe never touch the filesystem.
+codex_alt_helper="$script_dir/codex-alt-home.sh"
+if [ ! -f "$codex_alt_helper" ] || [ ! -r "$codex_alt_helper" ]; then
+    echo "llmlint oneharness wrapper: required helper is not a readable regular file: $codex_alt_helper; restore it from the repository or run 'just bootstrap', then retry" >&2
+    exit 2
+fi
+# shellcheck source=scripts/codex-alt-home.sh
+. "$codex_alt_helper"
+ensure_codex_alt_home "llmlint oneharness wrapper" || exit $?
+
 if oneharness "${args[@]:0:1}" --config "$llmlint_config" "${args[@]:1}"; then
     exit 0
 else

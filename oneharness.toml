@@ -29,9 +29,10 @@ history_labels = { role = "agent" }
 
 # The alternate Claude subscription is preferred. If that identity is absent or
 # out of quota, fallback reaches codex, so a host with only one Claude login can
-# still dispatch after authenticating codex.
+# still dispatch after authenticating codex. A second Codex identity backs that
+# up in turn, so an exhausted Codex quota still leaves the worker a candidate.
 # llmlint: ignore[changed_behavior_has_e2e] integration tests exercise real oneharness fallback selection; paid-provider quota rejection cannot be deterministic.
-harnesses = ["claude-code:alternate", "codex"]
+harnesses = ["claude-code:alternate", "codex", "codex:alternate"]
 
 # [harness.<id>]: per-harness overrides. Model names differ per provider, so
 # each harness names its own.
@@ -39,6 +40,21 @@ harnesses = ["claude-code:alternate", "codex"]
 # aliases to it, but name it explicitly so the tier can't drift under us.
 [harness.codex]
 model = "gpt-5.6-sol"
+
+# The second Codex identity, reached only after the first one's quota is gone.
+# scripts/codex-alt-home.sh derives this non-secret path from HOME for every
+# dispatch and guarantees the directory exists; env_from maps it to CODEX_HOME in
+# only this child, so — unlike a literal /home/... value — the committed config is
+# machine-independent. A host that never authenticated a second Codex account
+# leaves that directory empty, which oneharness classifies as `auth` and falls
+# through, so this candidate costs nothing until it is logged in.
+[harness.codex.variant.alternate]
+model = "gpt-5.6-sol"
+env_from = { CODEX_HOME = "ORCHESTRATOR_CODEX_ALT_HOME" }
+# Subscription auth must not be shadowed by an ambient API key: `codex login`
+# writes ChatGPT tokens into the alternate home, and OPENAI_API_KEY would outrank
+# them and silently bill the wrong account.
+unset_env = ["OPENAI_API_KEY"]
 
 [harness.claude-code]
 # IS_SANDBOX lets claude-code run under root without --dangerously-skip-permissions

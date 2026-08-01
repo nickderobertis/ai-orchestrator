@@ -30,8 +30,10 @@ from typing import TypeVar, cast
 
 import pytest
 from conftest import git, install_pre_push_hook
-from fakes import FakeGitHub, make_writing_dispatch
+from fakes import FakeGitHub, FakePRState, make_writing_dispatch
 from git_http import serve_github_origin
+from rendezvous import Rendezvous
+from telemetry_contract import clipped_share_seconds
 from waits import deadline as e2e_deadline
 from waits import timeout as e2e_timeout
 
@@ -40,7 +42,7 @@ import orchestrator.lifecycle as lifecycle_module
 from orchestrator import gitops
 from orchestrator.coordination import LockTimeout, advisory_lock, git_lock_identity
 from orchestrator.dispatch import DispatchError, Report, scoped_session
-from orchestrator.github import GitHubError, PullRequest
+from orchestrator.github import CliGitHubBackend, GitHubError, PullRequest
 from orchestrator.graph import graph_payload, parse_graph, run_graph
 from orchestrator.journal import NodeJournal, NodeSink, open_journal
 from orchestrator.lifecycle import (
@@ -75,6 +77,25 @@ from orchestrator.runs import NodeId, RunId, prepare_round, write_result
 from orchestrator.workspace import IdentityKey, Workspace, normalize_repo
 
 _T = TypeVar("_T")
+
+# The cap a journey names when it needs a step that *exhausts* its budget.
+#
+# A `should-fail` step never completes, so it spends every turn it is given and is
+# then automatically resumed `MAX_AUTOMATIC_STEP_RESUMES` more times. Each turn is
+# two provider processes (respond, then supervisor) and each segment ends in one
+# `assess`, so one such dispatch spawns `3 * (2 * cap + 1)` of them. At the
+# lifecycle default of `DEFAULT_LIFECYCLE_STEP_MAX_TURNS` (24) that is 147
+# processes and roughly twelve measured seconds — per dispatch, and these journeys
+# drive up to four each.
+#
+# None of them is about how *high* the cap is; they need a step that reaches
+# whatever cap it was given. The default's own height is pinned for free by
+# `test_run_repo_task_journals_a_step_that_hit_the_turn_cap` in
+# `tests/test_lifecycle_unit.py`, against an injected dispatch function. So name
+# the smallest cap that still runs both sides of the loop — the agent takes a
+# turn, the supervisor declines to release it, the agent takes its last — and the
+# same 3-segment exhaustion costs 15 processes instead of 147.
+EXHAUSTED_STEP_MAX_TURNS = 2
 
 
 def _workspace(tmp_path: Path, *origins: Path, workflow: str = "local") -> Workspace:
@@ -460,6 +481,7 @@ def test_lifecycle_failure_survives_simultaneous_deferred_teardown(
         base_path=command_base(),
         persona_dir=personas_dir,
         recorded_gate=["true"],
+        max_turns=EXHAUSTED_STEP_MAX_TURNS,
     )
 
     assert result.outcome == "not-completed"
@@ -1119,6 +1141,7 @@ def test_repo_plan_ledger_and_guided_next_round(
                 "repo": str(canonical),
                 "persona": "engineer",
                 "task": "should-fail write-change: preserve this partial attempt",
+                "max_turns": EXHAUSTED_STEP_MAX_TURNS,
                 "recorded_gate": ["true"],
                 "workflow": "local",
                 "repo_type": "single-owner",
@@ -1253,6 +1276,7 @@ def test_a_node_that_cannot_finish_settles_instead_of_being_redispatched_forever
                         # Writes real work every round, so every attempt earns a
                         # marker: the growth is bounded by bounding the attempts.
                         "task": "should-fail write-unique-change: never finishes",
+                        "max_turns": EXHAUSTED_STEP_MAX_TURNS,
                         "verify_cmd": ["true"],
                         "workflow": "local",
                         "repo_type": "single-owner",
@@ -1366,6 +1390,7 @@ def test_an_explicit_retry_restores_an_exhausted_preserved_branchs_budget(
                         "repo": str(canonical),
                         "persona": "engineer",
                         "task": "should-fail write-unique-change: never finishes",
+                        "max_turns": EXHAUSTED_STEP_MAX_TURNS,
                         "verify_cmd": ["true"],
                         "workflow": "local",
                         "repo_type": "single-owner",
@@ -1430,6 +1455,7 @@ def test_ordinary_next_round_resumes_committed_lifecycle_branch(
                         "repo": str(canonical),
                         "persona": "engineer",
                         "task": "should-fail write-change: preserve across ordinary rounds",
+                        "max_turns": EXHAUSTED_STEP_MAX_TURNS,
                         "verify_cmd": ["true"],
                         "workflow": "local",
                         "repo_type": "single-owner",
@@ -2051,6 +2077,273 @@ def test_registered_remote_identity_keeps_pr_flow(tmp_path, bare_origin) -> None
     assert result.repository_type == "single-owner"
     assert result.merge_policy == "auto"
     assert result.pr_base == "main"
+
+
+def test_cli_github_adopts_only_exact_merged_head_via_all_state_lookup(
+    tmp_path, monkeypatch
+) -> None:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    calls = tmp_path / "gh-calls"
+    fake_gh = bin_dir / "gh"
+    fake_gh.write_text(
+        "#!/bin/sh\n"
+        f"printf '%s\\n' \"$*\" >> {shlex.quote(str(calls))}\n"
+        "printf '%s\\n' "
+        '\'[{"number":17,"url":"https://github.test/o/r/pull/17",'
+        '"state":"MERGED","headRefOid":"published-head"}]\'\n',
+        encoding="utf-8",
+    )
+    fake_gh.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+
+    backend = CliGitHubBackend()
+    adopted = backend.adoptable_pr("o/r", head="feature", base="main", head_sha="published-head")
+    stale = backend.adoptable_pr("o/r", head="feature", base="main", head_sha="new-head")
+
+    assert adopted is not None and adopted.number == 17
+    assert stale is None
+    assert calls.read_text(encoding="utf-8").splitlines() == [
+        "pr list --repo o/r --head feature --base main --state all "
+        "--json number,url,state,headRefOid",
+        "pr list --repo o/r --head feature --base main --state all "
+        "--json number,url,state,headRefOid",
+    ]
+
+
+@pytest.mark.parametrize("existing_state", ["open", "merged", "stale-merged"])
+def test_remote_closeout_adopts_adoptable_pr_without_duplicate(
+    tmp_path, bare_origin, existing_state
+) -> None:
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / f"canonical-{existing_state}-existing-pr")
+    Registry().register(str(canonical), workflow="remote", repo_type="single-owner")
+
+    class ExistingPRGitHub(FakeGitHub):
+        def adoptable_pr(self, repo, *, head, base, head_sha):
+            if not self._prs:
+                self._n = 1
+                self._prs[1] = FakePRState(head, base, "existing", "existing")
+                seeded = PullRequest(1, f"https://github.com/{repo}/pull/1", repo, head, base)
+                if existing_state in {"merged", "stale-merged"}:
+                    self._do_merge(seeded)
+                if existing_state == "stale-merged":
+                    self._prs[1].merged_head_sha = "stale-head"
+            return super().adoptable_pr(repo, head=head, base=base, head_sha=head_sha)
+
+    github = ExistingPRGitHub(origin)
+    result = run_repo_task(
+        str(canonical),
+        "complete-now publish preserved work",
+        "engineer",
+        workspace=Workspace(tmp_path / f"{existing_state}-existing-pr-worktrees"),
+        github=github,
+        merge_policy="none" if existing_state == "open" else "auto",
+        branch=f"preserved-{existing_state}-pr",
+        recorded_gate=["true"],
+        dispatch_fn=make_writing_dispatch(),
+        body="## What\nPublish preserved work.\n\n## Why\nAvoid duplicate PRs.\n",
+        sleep=lambda _: None,
+    )
+
+    expected_number = 2 if existing_state == "stale-merged" else 1
+    assert result.pr is not None and result.pr.number == expected_number
+    assert github._n == expected_number
+    assert result.outcome == ("pr-open" if existing_state == "open" else "merged")
+    if existing_state != "open":
+        assert _has_file(origin, "main", "CHANGE.txt")
+
+
+@pytest.mark.parametrize("failure_mode", ["incomplete", "invalid", "exception"])
+def test_pr_author_failure_retries_once_and_surfaces_underlying_error(
+    tmp_path, bare_origin, failure_mode
+) -> None:
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-drafting-retry")
+    Registry().register(str(canonical), workflow="remote", repo_type="single-owner")
+    github = FakeGitHub(origin)
+    attempts = 0
+    writing = make_writing_dispatch()
+
+    def failing_author(persona, task, *, project_dir, **kwargs):
+        nonlocal attempts
+        if persona != "pr-author":
+            return writing(persona, task, project_dir=project_dir, **kwargs)
+        attempts += 1
+        if failure_mode == "exception":
+            raise DispatchError("harness exited 17: authentication rejected")
+        if failure_mode == "invalid":
+            output = task.split(
+                "Write the final body, and nothing else, to this absolute path:\n", 1
+            )[1].splitlines()[0]
+            Path(output).write_text("not a template", encoding="utf-8")
+            return Report(persona, 0, True, False, 1, [], {}, {}, "")
+        return Report(
+            persona=persona,
+            exit_code=2,
+            completed=False,
+            stopped_early=False,
+            assistant_turns=0,
+            verdicts=[],
+            usage={},
+            raw={},
+            stderr="provider launch failed: subscription unavailable",
+            outcome_detail="harness exited 17: authentication rejected",
+            max_turns=2,
+        )
+
+    journal = open_journal(tmp_path / "drafting-run", RunId("drafting-retry"), 1)
+    result = run_repo_task(
+        str(canonical),
+        "## What\ncomplete-now write-change.\n\n"
+        "## Why\nKeep publication reliable.\n\n"
+        "## Acceptance criteria\n- The change is published.",
+        "engineer",
+        workspace=Workspace(tmp_path / "drafting-retry-worktrees"),
+        github=github,
+        merge_policy="none",
+        branch="drafting-retry",
+        recorded_gate=["true"],
+        dispatch_fn=failing_author,
+        journal=NodeJournal(journal, NodeId("publish"), RunId("drafting-retry"), 1),
+    )
+
+    assert result.outcome == "pr-open" and attempts == 2
+    assert result.pr is not None
+    assert github._prs[result.pr.number].body == (
+        "## What\ncomplete-now write-change.\n\n## Why\nKeep publication reliable.\n"
+    )
+    assert result.follow_ups is not None
+    expected = (
+        "invalid or empty body"
+        if failure_mode == "invalid"
+        else (
+            "drafting error: harness exited 17: authentication rejected"
+            if failure_mode == "exception"
+            else "harness exited 17: authentication rejected"
+        )
+    )
+    assert f"attempt 1: {expected}" in result.follow_ups
+    assert f"attempt 2: {expected}" in result.follow_ups
+    assert result_payload(result)["follow_ups"] == result.follow_ups
+    assert result.follow_ups in result.summary()
+    fallback = next(event for event in journal.events() if event.kind == "pr-drafting-fallback")
+    assert fallback.detail["attempts"] == 2
+    assert expected in fallback.detail["reason"]
+
+
+def test_pr_author_failure_does_not_block_human_draft_checkpoint(tmp_path, bare_origin) -> None:
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-human-drafting-retry")
+    Registry().register(str(canonical), workflow="remote", repo_type="single-owner")
+    attempts = 0
+    writing = make_writing_dispatch()
+
+    def failing_author(persona, task, *, project_dir, **kwargs):
+        nonlocal attempts
+        if persona == "pr-author":
+            attempts += 1
+            raise DispatchError("drafting provider unavailable")
+        return writing(persona, task, project_dir=project_dir, **kwargs)
+
+    result = run_repo_task(
+        str(canonical),
+        workspace=Workspace(tmp_path / "human-drafting-retry-worktrees"),
+        github=FakeGitHub(origin),
+        merge_policy="none",
+        branch="human-drafting-retry",
+        recorded_gate=["true"],
+        dispatch_fn=failing_author,
+        steps=[
+            Step("implement", "engineer", "complete-now write-change"),
+            Step("approve", task="Approve publication.", kind="human", deps=["implement"]),
+        ],
+    )
+
+    assert result.outcome == "waiting-human" and result.pr is not None
+    assert attempts == 2
+    assert result.follow_ups is not None
+    assert "drafting provider unavailable" in result.follow_ups
+
+
+def test_pr_author_failure_preserves_worker_assessment_in_surfaced_output(
+    tmp_path, bare_origin
+) -> None:
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-drafting-assessment")
+    Registry().register(str(canonical), workflow="remote", repo_type="single-owner")
+    writing = make_writing_dispatch()
+
+    def assessed_worker_with_failing_author(persona, task, *, project_dir, **kwargs):
+        if persona == "pr-author":
+            raise DispatchError("drafting provider unavailable")
+        report = writing(persona, task, project_dir=project_dir, **kwargs)
+        report.assessment = "Worker assessment: inspect the migration edge case."
+        return report
+
+    result = run_repo_task(
+        str(canonical),
+        "complete-now write-change",
+        "engineer",
+        workspace=Workspace(tmp_path / "drafting-assessment-worktrees"),
+        github=FakeGitHub(origin),
+        merge_policy="none",
+        branch="drafting-assessment",
+        recorded_gate=["true"],
+        dispatch_fn=assessed_worker_with_failing_author,
+    )
+
+    assert result.outcome == "pr-open" and result.pr is not None
+    surfaced = result_payload(result)["follow_ups"]
+    assert surfaced == (
+        "Worker assessment: inspect the migration edge case.\n"
+        "pr-author drafting failed: attempt 1: drafting error: drafting provider unavailable; "
+        "attempt 2: drafting error: drafting provider unavailable"
+    )
+
+
+def test_pr_author_successful_retry_publishes_drafted_body(tmp_path, bare_origin) -> None:
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-drafting-recovery")
+    Registry().register(str(canonical), workflow="remote", repo_type="single-owner")
+    attempts = 0
+    writing = make_writing_dispatch()
+
+    def recovering_author(persona, task, *, project_dir, **kwargs):
+        nonlocal attempts
+        if persona != "pr-author":
+            return writing(persona, task, project_dir=project_dir, **kwargs)
+        attempts += 1
+        if attempts == 1:
+            return Report(persona, 1, False, False, 2, [], {}, {}, "transient harness error")
+        output = task.split("Write the final body, and nothing else, to this absolute path:\n", 1)[
+            1
+        ].splitlines()[0]
+        Path(output).write_text(
+            "## What\nRecovered drafted body.\n\n## Why\nThe retry succeeded.\n",
+            encoding="utf-8",
+        )
+        return Report(persona, 0, True, False, 1, [], {}, {}, "")
+
+    github = FakeGitHub(origin)
+    result = run_repo_task(
+        str(canonical),
+        "complete-now write-change",
+        "engineer",
+        workspace=Workspace(tmp_path / "drafting-recovery-worktrees"),
+        github=github,
+        merge_policy="none",
+        branch="drafting-recovery",
+        recorded_gate=["true"],
+        dispatch_fn=recovering_author,
+    )
+
+    assert result.outcome == "pr-open" and attempts == 2
+    assert result.pr is not None
+    assert github._prs[result.pr.number].body == (
+        "## What\nRecovered drafted body.\n\n## Why\nThe retry succeeded.\n"
+    )
+    assert result.follow_ups is None
 
 
 def test_verify_via_ci_iterates_real_dispatch_then_requires_green_branch_ci(
@@ -3909,6 +4202,40 @@ def test_remote_human_checkpoint_noop_gate_relies_on_required_checks(tmp_path, b
 
 
 # llmlint: ignore[e2e_not_mocked] GitHub decisioning is the suite's documented external seam.
+def test_remote_human_checkpoint_adopts_existing_pr_without_duplicate(
+    tmp_path, bare_origin
+) -> None:
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "registered-existing-human-pr")
+    Registry().register(str(canonical), workflow="remote", repo_type="single-owner")
+
+    class ExistingPRGitHub(FakeGitHub):
+        def adoptable_pr(self, repo, *, head, base, head_sha):
+            if not self._prs:
+                self._n = 1
+                self._prs[1] = FakePRState(head, base, "existing", "existing", draft=True)
+            return super().adoptable_pr(repo, head=head, base=base, head_sha=head_sha)
+
+    github = ExistingPRGitHub(origin)
+    result = run_repo_task(
+        str(canonical),
+        workspace=Workspace(tmp_path / "existing-human-pr-worktrees"),
+        github=github,
+        steps=[
+            Step("prepare", "engineer", "prepare a draft checkpoint"),
+            Step("approve", task="Approve the checkpoint.", kind="human", deps=["prepare"]),
+        ],
+        body="## What\nPrepare a checkpoint.\n\n## Why\nAvoid duplicate PRs.\n",
+        dispatch_fn=_per_step_dispatch(),
+    )
+
+    assert result.outcome == "waiting-human"
+    assert result.pr is not None and result.pr.number == 1
+    assert result.resume is not None and result.resume.pr == result.pr.url
+    assert github._n == 1
+
+
+# llmlint: ignore[e2e_not_mocked] GitHub decisioning is the suite's documented external seam.
 def test_remote_human_checkpoint_drafts_without_a_lifecycle_gate_run(tmp_path, bare_origin) -> None:
     """A red *recorded* identity gate cannot block a draft: nothing runs it."""
     origin = bare_origin()
@@ -5049,12 +5376,15 @@ def test_cooperative_real_dispatch_cancellation_preserves_and_recovers_branch(
     workspace = Workspace(tmp_path / "cancelled-worktrees")
     cancel = threading.Event()
     witness = tmp_path / "cancelled.ticks"
+    # The second agent turn holds instead of sleeping, so cancellation always lands
+    # on a dispatch that is genuinely mid-work with partial work already committed.
+    held = Rendezvous.at(tmp_path, "cancelled")
 
     with ThreadPoolExecutor(max_workers=1) as pool:
         future = pool.submit(
             run_repo_task,
             str(canonical),
-            f"slow-branch {witness} write-change",
+            f"slow-branch {witness} write-change{held.sentinels(1)}",
             "engineer",
             workspace=workspace,
             base_path=command_base(),
@@ -5065,9 +5395,10 @@ def test_cooperative_real_dispatch_cancellation_preserves_and_recovers_branch(
         )
         deadline = e2e_deadline(15)
         while time.monotonic() < deadline:
-            ticks = witness.read_text(encoding="utf-8").count("tick") if witness.exists() else 0
             changes = list((tmp_path / "cancelled-worktrees").rglob("CHANGE.txt"))
-            if ticks >= 3 and changes:
+            # The second turn parks before it writes anything, so its arrival is what
+            # says the first turn's partial work is already on disk.
+            if changes and held.arrived():
                 break
             time.sleep(0.02)
         else:
@@ -5218,9 +5549,10 @@ def test_resumed_branch_setup_round_trips_through_telemetry_cli(tmp_path, bare_o
     observed = json.loads(indexed.stdout)["runs"][0]["timing"]
     # `setup_seconds` is a millisecond-rounded share of the run's wall clock handed
     # out after the categories ahead of it, so a positive value is a property of a
-    # fast box. The journal-to-CLI round trip is the contract, and holds either way.
+    # fast box, and the whole journalled total is a property of one that had the room
+    # left. The journal-to-CLI round trip is the contract, and holds either way.
     journalled = sum(event.detail["seconds"] for event in setup_events)
-    assert observed["setup_seconds"] == round(journalled * 1000) / 1000
+    assert observed["setup_seconds"] == clipped_share_seconds(observed, "setup_seconds", journalled)
 
 
 def test_real_lifecycle_outcomes_round_trip_through_telemetry_cli(tmp_path, bare_origin) -> None:
@@ -6120,7 +6452,7 @@ def test_remote_human_workstream_draft_checkpoint_and_safe_resume(tmp_path, bare
     assert completed.ok and completed.outcome == "merged", completed.detail
     assert completed.pr is not None and completed.pr.number == paused.pr.number
     assert github.created == [paused.pr.number]
-    assert github.reused == [paused.pr.number]
+    assert github.reused == []
     assert github.readied == [paused.pr.number]
     assert not github._prs[paused.pr.number].draft
     assert dispatched == ["prepare", "implement", "finalize"]

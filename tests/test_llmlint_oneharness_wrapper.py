@@ -17,13 +17,25 @@ def _run(tmp_path: Path, *args: str) -> list[str]:
     bin_dir.mkdir()
     output = tmp_path / "args"
     oneharness = bin_dir / "oneharness"
-    oneharness.write_text('#!/bin/sh\nprintf \'%s\\n\' "$@" >"$WRAPPER_ARGS"\n', encoding="utf-8")
+    oneharness.write_text(
+        '#!/bin/sh\nprintf \'%s\\n\' "$@" >"$WRAPPER_ARGS"\n'
+        'printf \'%s\\n\' "${ORCHESTRATOR_CODEX_ALT_HOME-}" >"$WRAPPER_CODEX_HOME"\n',
+        encoding="utf-8",
+    )
     oneharness.chmod(0o755)
     proc = subprocess.run(
         [WRAPPER, *args],
         text=True,
         capture_output=True,
-        env={**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}", "WRAPPER_ARGS": str(output)},
+        env={
+            **os.environ,
+            "PATH": f"{bin_dir}:{os.environ['PATH']}",
+            "WRAPPER_ARGS": str(output),
+            "WRAPPER_CODEX_HOME": str(tmp_path / "codex-home-export"),
+            # Pin the alternate-Codex home into the test's own tree: the wrapper
+            # creates it when absent, and the default derives from the real $HOME.
+            "ORCHESTRATOR_CODEX_ALT_HOME": str(tmp_path / "codex-alt"),
+        },
     )
     assert proc.returncode == 0, proc.stderr
     return output.read_text(encoding="utf-8").splitlines()
@@ -41,6 +53,45 @@ def test_read_only_judge_keeps_filesystem_sandbox_and_grants_network(tmp_path: P
         "-c",
         'sandbox_permissions=["disk-full-read-access","network-full-access"]',
     ]
+
+
+def test_alternate_codex_home_is_exported_and_created_for_the_fallback(tmp_path: Path) -> None:
+    """This tier's second candidate is a second Codex identity, so it needs both.
+
+    `[harness.codex.variant.alternate]` maps this indirection into CODEX_HOME, and
+    oneharness refuses to run at all when it is unset in the parent. The directory
+    must also exist, because the two "not set up yet" states differ: an empty home
+    is classified `auth` and falls through to the next candidate, while a missing
+    one is an unclassified hard failure that falls through to nothing.
+    """
+    _run(tmp_path, "run", "--mode", "read-only")
+    exported = (tmp_path / "codex-home-export").read_text(encoding="utf-8").strip()
+    assert exported == str(tmp_path / "codex-alt")
+    assert (tmp_path / "codex-alt").is_dir()
+
+
+def test_version_probe_touches_no_filesystem_state(tmp_path: Path) -> None:
+    # The probe exits before the run path, so it must not create a Codex home.
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    oneharness = bin_dir / "oneharness"
+    oneharness.write_text('#!/bin/sh\nprintf "oneharness probe\\n"\n', encoding="utf-8")
+    oneharness.chmod(0o755)
+    codex_alt = tmp_path / "codex-alt"
+
+    proc = subprocess.run(
+        [WRAPPER, "--version"],
+        text=True,
+        capture_output=True,
+        env={
+            **os.environ,
+            "PATH": f"{bin_dir}:{os.environ['PATH']}",
+            "ORCHESTRATOR_CODEX_ALT_HOME": str(codex_alt),
+        },
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    assert not codex_alt.exists()
 
 
 def test_other_modes_and_arguments_are_unchanged(tmp_path: Path) -> None:
@@ -97,7 +148,12 @@ print(json.dumps({"type": "item.completed", "item": {"type": "agent_message", "t
         ],
         text=True,
         capture_output=True,
-        env={**os.environ, "TARGET_FILE": str(target)},
+        env={
+            **os.environ,
+            "TARGET_FILE": str(target),
+            # Keep the wrapper's alternate-Codex home inside the test's own tree.
+            "ORCHESTRATOR_CODEX_ALT_HOME": str(tmp_path / "codex-alt"),
+        },
     )
 
     assert proc.returncode == 0, proc.stderr
@@ -120,7 +176,11 @@ def test_oneharness_failure_output_and_status_are_propagated(tmp_path: Path) -> 
         [WRAPPER, "run", "--mode", "read-only"],
         text=True,
         capture_output=True,
-        env={**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}"},
+        env={
+            **os.environ,
+            "PATH": f"{bin_dir}:{os.environ['PATH']}",
+            "ORCHESTRATOR_CODEX_ALT_HOME": str(tmp_path / "codex-alt"),
+        },
     )
 
     assert proc.returncode == 42

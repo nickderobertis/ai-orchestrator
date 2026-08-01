@@ -25,7 +25,7 @@ from collections.abc import Iterator
 from contextlib import suppress
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Protocol
+from typing import IO, Any, Protocol
 
 import pytest
 from leak_reaper import POLL_SECONDS, SESSION_TOKEN_ENV, TreeSampler
@@ -37,6 +37,40 @@ REAPER_SCRIPT = Path(__file__).with_name("leak_reaper.py")
 
 class ResourceLeak(AssertionError):
     """A test left one of its own registered resources alive."""
+
+
+@dataclass
+class ReaperHandle:
+    """The detached reaper: the pid to leave alone, and the pipe that ends it.
+
+    Not a ``Popen``, because the reaper is deliberately not this session's child —
+    it double-forks so init adopts it, which is what keeps a walk of this session's
+    tree from collecting it. What is left is a pid nothing can ``wait`` for and the
+    write end of the pipe whose closing tells it the session is over.
+    """
+
+    pid: ProcessId
+    pipe: IO[bytes]
+
+    def close(self, *, timeout: float = 10.0) -> None:
+        """Release the pipe and wait for the reap, then insist if it does not come."""
+        with suppress(OSError):
+            self.pipe.close()
+        deadline = time.monotonic() + timeout
+        while _is_running(self.pid) and time.monotonic() < deadline:
+            time.sleep(0.02)
+        if _is_running(self.pid):  # pragma: no cover - the reaper always exits on EOF
+            with suppress(ProcessLookupError, PermissionError):
+                os.kill(self.pid, signal.SIGKILL)
+
+
+def _is_running(pid: ProcessId) -> bool:
+    """Whether ``pid`` is executing, counting a zombie as gone."""
+    try:
+        raw = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
+    except OSError:
+        return False
+    return raw[raw.rfind(")") + 2 :].split(" ", 1)[0] != "Z"
 
 
 @dataclass
@@ -53,7 +87,7 @@ class SessionGuard:
 
     root_pid: int
     sampler: TreeSampler
-    reaper: subprocess.Popen[bytes] | None
+    reaper: ReaperHandle | None
     #: This session's environment stamp, which the reaper scans for once the session
     #: is over. It is what covers a launch: `dispatch.launch_orchestrator` starts its
     #: process detached and returns without waiting, so everything that process goes
@@ -95,7 +129,7 @@ class SessionGuard:
 
     def excluded(self) -> frozenset[ProcessId]:
         """Processes the per-test sweep must never claim as a test's leak."""
-        return frozenset() if self.reaper is None else frozenset({ProcessId(self.reaper.pid)})
+        return frozenset() if self.reaper is None else frozenset({self.reaper.pid})
 
     def close(self) -> None:
         """Stop watching, then release the reaper's pipe so it reaps and exits."""
@@ -105,14 +139,7 @@ class SessionGuard:
             self._watcher = None
         if self.reaper is None:
             return
-        if self.reaper.stdin is not None:
-            with suppress(OSError):
-                self.reaper.stdin.close()
-        with suppress(subprocess.TimeoutExpired):
-            self.reaper.wait(timeout=10)
-        if self.reaper.poll() is None:  # pragma: no cover - the reaper always exits on EOF
-            with suppress(ProcessLookupError, PermissionError):
-                os.killpg(self.reaper.pid, signal.SIGKILL)
+        self.reaper.close()
         self.reaper = None
 
 
@@ -143,17 +170,38 @@ def install_session_guard() -> SessionGuard:
     if _SESSION is None:
         token = f"{os.getpid()}-{uuid.uuid4().hex}"
         os.environ[SESSION_TOKEN_ENV] = token
-        reaper = subprocess.Popen(
-            [sys.executable, str(REAPER_SCRIPT), str(os.getpid()), token],
-            stdin=subprocess.PIPE,
-            stdout=subprocess.DEVNULL,
-            # A session of its own: a group kill aimed at this test session must not
-            # reach the one process whose whole job is to survive it.
-            start_new_session=True,
-        )
-        _SESSION = SessionGuard(os.getpid(), TreeSampler(os.getpid()), reaper, token)
+        _SESSION = SessionGuard(os.getpid(), TreeSampler(os.getpid()), _post_reaper(token), token)
         _SESSION.start()
     return _SESSION
+
+
+def _post_reaper(token: str) -> ReaperHandle:
+    """Start the reaper and wait for it to report the pid init has adopted.
+
+    The intermediate is this session's child and exits at once; the reaper itself is
+    a grandchild nothing here can wait for, and that is the point — see
+    `leak_reaper._detach_and_watch`. Its pid comes back over stdout because there is
+    no other way to learn it, and it is needed twice: to keep the per-test sweep off
+    it, and to know when the reap is finished at the end of the session.
+    """
+    intermediate = subprocess.Popen(
+        [sys.executable, str(REAPER_SCRIPT), str(os.getpid()), token],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        # A session of its own: a group kill aimed at this test session must not
+        # reach the one process whose whole job is to survive it.
+        start_new_session=True,
+    )
+    assert intermediate.stdin is not None and intermediate.stdout is not None
+    reported = intermediate.stdout.readline()
+    intermediate.stdout.close()
+    intermediate.wait(timeout=30)
+    if not reported.strip().isdigit():
+        # Loud, because a session that quietly ran without one is exactly the state
+        # this guard exists to make impossible.
+        intermediate.stdin.close()
+        raise ResourceLeak(f"the leak reaper did not report a pid; it said {reported!r}")
+    return ReaperHandle(ProcessId(int(reported)), intermediate.stdin)
 
 
 def remove_session_guard() -> None:

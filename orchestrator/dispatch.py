@@ -1316,11 +1316,6 @@ def launch_orchestrator(
         "plan_name": plan_name,
         "goal": goal,
         "commands": {
-            # `watch` leads: this launch is detached by design, so the record has to
-            # name the one command that attaches to it. A planner who reads no
-            # further than this line is still attached rather than reconstructing
-            # the run from process tables while queued updates sit unread.
-            "watch": f"just watch {run_dir.name}",
             "channel_next": f"just channel-next {run_dir.name}",
             "monitor": f"just monitor {run_dir.name}",
         },
@@ -1333,7 +1328,6 @@ def launch_orchestrator(
         "# Planner launch\n\n"
         f"- Run id: `{run_dir.name}`\n"
         f"- Channel id: `{run_dir.name}`\n"
-        f"- Attach and stay attached: `just watch {run_dir.name}`\n"
         f"- Next surface: `just channel-next {run_dir.name}`\n"
         f"- Monitor: `just monitor {run_dir.name}`\n",
         encoding="utf-8",

@@ -22,6 +22,7 @@ from orchestrator.dispatch import AGENT_STATUS_NAMES, agent_failure_reason
 
 WRAPPER = REPO_ROOT / "scripts" / "oneharness-agent.sh"
 ALT_CONFIG_LIBRARY = REPO_ROOT / "scripts" / "claude-alt-config-dir.sh"
+CODEX_ALT_LIBRARY = REPO_ROOT / "scripts" / "codex-alt-home.sh"
 
 
 def _run_wrapper(
@@ -29,6 +30,7 @@ def _run_wrapper(
     argv: list[str],
     *,
     alternate_config_dir: Path | None = None,
+    codex_alt_home: Path | None = None,
     include_home: bool = True,
 ) -> tuple[subprocess.CompletedProcess[str], list[str]]:
     """Run the wrapper with a stub ``oneharness`` on PATH; return (proc, recorded argv)."""
@@ -40,7 +42,8 @@ def _run_wrapper(
         "#!/usr/bin/env bash\n"
         'printf \'%s\\n\' "$@" > "$ONEHARNESS_ARGS_FILE"\n'
         'printf \'%s\\n\' "$ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR" > "$ONEHARNESS_ENV_FILE"\n'
-        'printf \'%s\\n\' "${ONEHARNESS_HARNESSES-}" > "$ONEHARNESS_SELECTION_FILE"\n',
+        'printf \'%s\\n\' "${ONEHARNESS_HARNESSES-}" > "$ONEHARNESS_SELECTION_FILE"\n'
+        'printf \'%s\\n\' "${ORCHESTRATOR_CODEX_ALT_HOME-}" > "$ONEHARNESS_CODEX_ENV_FILE"\n',
         encoding="utf-8",
     )
     stub.chmod(stub.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
@@ -53,10 +56,16 @@ def _run_wrapper(
             "ONEHARNESS_ARGS_FILE": str(args_file),
             "ONEHARNESS_ENV_FILE": str(tmp_path / "oneharness-env"),
             "ONEHARNESS_SELECTION_FILE": str(tmp_path / "oneharness-selection"),
+            "ONEHARNESS_CODEX_ENV_FILE": str(tmp_path / "oneharness-codex-env"),
             **({"HOME": str(tmp_path / "home")} if include_home else {}),
             **(
                 {"ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR": str(alternate_config_dir)}
                 if alternate_config_dir is not None
+                else {}
+            ),
+            **(
+                {"ORCHESTRATOR_CODEX_ALT_HOME": str(codex_alt_home)}
+                if codex_alt_home is not None
                 else {}
             ),
         },
@@ -77,7 +86,15 @@ def test_agent_side_forces_the_orchestrator_config(tmp_path: Path) -> None:
     assert (tmp_path / "oneharness-env").read_text(encoding="utf-8").strip() == str(
         tmp_path / "home" / ".claude-alt"
     )
-    assert (tmp_path / "oneharness-selection").read_text(encoding="utf-8").strip() == "codex"
+    # The absent-Claude degradation keeps BOTH Codex identities: dropping the
+    # alternate here would cost the worker its last candidate once the first
+    # Codex quota is gone.
+    assert (tmp_path / "oneharness-selection").read_text(
+        encoding="utf-8"
+    ).strip() == "codex,codex:alternate"
+    assert (tmp_path / "oneharness-codex-env").read_text(encoding="utf-8").strip() == str(
+        tmp_path / "home" / ".codex-alt"
+    )
 
 
 def test_agent_side_preserves_explicit_alternate_config_dir(tmp_path: Path) -> None:
@@ -93,17 +110,111 @@ def test_agent_side_preserves_explicit_alternate_config_dir(tmp_path: Path) -> N
     assert not (tmp_path / "oneharness-selection").read_text(encoding="utf-8").strip()
 
 
-def test_explicit_alternate_config_dir_does_not_require_home(tmp_path: Path) -> None:
+def test_explicit_alternate_identities_do_not_require_home(tmp_path: Path) -> None:
+    # HOME is only needed to DERIVE the defaults; a caller that named both alternate
+    # identities outright must dispatch on a shell that never exported it.
     explicit = tmp_path / "second-account"
     explicit.mkdir()
+    codex_alt = tmp_path / "second-codex"
+    codex_alt.mkdir()
     proc, _ = _run_wrapper(
         tmp_path,
         ["run", "--compact", "--prompt", "probe"],
         alternate_config_dir=explicit,
+        codex_alt_home=codex_alt,
         include_home=False,
     )
     assert proc.returncode == 0, proc.stderr
     assert (tmp_path / "oneharness-env").read_text(encoding="utf-8").strip() == str(explicit)
+    assert (tmp_path / "oneharness-codex-env").read_text(encoding="utf-8").strip() == str(codex_alt)
+
+
+def test_agent_side_creates_an_absent_alternate_codex_home(tmp_path: Path) -> None:
+    """An empty home is the state that falls through; an absent one hard-fails.
+
+    oneharness classifies a `CODEX_HOME` holding no credentials as `auth` and moves
+    to the next candidate, but a `CODEX_HOME` that does not exist is an unclassified
+    failure that falls through to nothing. Creating it is what makes the committed
+    chain safe on a host with only one Codex login.
+    """
+    proc, _ = _run_wrapper(tmp_path, ["run", "--compact", "--prompt", "probe"])
+    assert proc.returncode == 0, proc.stderr
+    created = tmp_path / "home" / ".codex-alt"
+    assert created.is_dir()
+    assert (tmp_path / "oneharness-codex-env").read_text(encoding="utf-8").strip() == str(created)
+
+
+def test_agent_side_rejects_an_existing_non_directory_codex_home(tmp_path: Path) -> None:
+    invalid = tmp_path / "codex-not-a-directory"
+    invalid.write_text("invalid\n", encoding="utf-8")
+    proc, argv = _run_wrapper(
+        tmp_path,
+        ["run", "--compact", "--prompt", "probe"],
+        codex_alt_home=invalid,
+    )
+    assert proc.returncode == 2
+    assert "alternate Codex home is not an accessible writable directory" in proc.stderr
+    assert argv == []
+
+
+def test_agent_side_rejects_a_read_only_alternate_codex_home(tmp_path: Path) -> None:
+    """A readable home codex cannot write to must fail here, not inside the child.
+
+    Codex initializes state in CODEX_HOME — auth tokens, logs, its own tmp — so a
+    directory that satisfies the read checks but denies writes would pass this
+    boundary and fail deep in the harness, where the message names neither the
+    directory nor the variable that selects it.
+    """
+    read_only = tmp_path / "read-only-codex-home"
+    read_only.mkdir(mode=0o500)
+    try:
+        proc, argv = _run_wrapper(
+            tmp_path,
+            ["run", "--compact", "--prompt", "probe"],
+            codex_alt_home=read_only,
+        )
+        assert proc.returncode == 2
+        assert "alternate Codex home is not an accessible writable directory" in proc.stderr
+        assert argv == []
+    finally:
+        read_only.chmod(0o700)
+
+
+def test_agent_side_reports_an_uncreatable_alternate_codex_home(tmp_path: Path) -> None:
+    """An unwritable parent must name the fix rather than dispatch into a hard failure.
+
+    The helper creates the home precisely so an unauthenticated one degrades as
+    `auth`; if it cannot, dispatching anyway would leave the chain in the missing
+    state that falls through to nothing. Fail loudly with the variable to set.
+    """
+    blocked = tmp_path / "unwritable"
+    blocked.mkdir(mode=0o500)
+    try:
+        proc, argv = _run_wrapper(
+            tmp_path,
+            ["run", "--compact", "--prompt", "probe"],
+            codex_alt_home=blocked / "codex-alt",
+        )
+        assert proc.returncode == 2
+        assert "cannot create the alternate Codex home" in proc.stderr
+        assert "ORCHESTRATOR_CODEX_ALT_HOME" in proc.stderr  # the concrete way back
+        assert argv == []
+    finally:
+        # Restore write permission so pytest can clean the directory up.
+        blocked.chmod(0o700)
+
+
+def test_agent_side_rejects_a_relative_codex_home(tmp_path: Path) -> None:
+    # env_from hands this straight to the child as CODEX_HOME, where a relative path
+    # would resolve against whatever directory that child happened to start in.
+    proc, argv = _run_wrapper(
+        tmp_path,
+        ["run", "--compact", "--prompt", "probe"],
+        codex_alt_home=Path("relative/codex-home"),
+    )
+    assert proc.returncode == 2
+    assert "alternate Codex home must be absolute" in proc.stderr
+    assert argv == []
 
 
 def test_agent_side_rejects_existing_non_directory_alternate_config(tmp_path: Path) -> None:
@@ -223,9 +334,11 @@ def test_missing_agent_config_is_rejected_before_invoking_oneharness(tmp_path: P
     copied_wrapper = scripts / WRAPPER.name
     copied_wrapper.write_bytes(WRAPPER.read_bytes())
     copied_wrapper.chmod(0o755)
-    # The wrapper sources its alternate-config derivation from a sibling; copy it so
-    # the missing *agent config* guard below is what fails, not the helper lookup.
+    # The wrapper sources both alternate-identity derivations from siblings; copy
+    # them so the missing *agent config* guard below is what fails, not a helper
+    # lookup.
     (scripts / ALT_CONFIG_LIBRARY.name).write_bytes(ALT_CONFIG_LIBRARY.read_bytes())
+    (scripts / CODEX_ALT_LIBRARY.name).write_bytes(CODEX_ALT_LIBRARY.read_bytes())
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     marker = tmp_path / "invoked"

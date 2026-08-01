@@ -21,10 +21,12 @@ history = true
 # node" a filter rather than a guess from the session name (`JUDGE_PREFIXES`).
 history_labels = { role = "judge", agent_role = "judge" }
 
-# The supervisor stays on codex. Its fallback names the primary Claude identity
-# explicitly, so it can never consume the worker's alternate subscription.
+# The supervisor stays on codex, and a second Codex identity absorbs an exhausted
+# quota before the chain leaves the provider at all. Its last fallback names the
+# primary Claude identity explicitly, so it can never consume the worker's
+# alternate subscription.
 # llmlint: ignore[changed_behavior_has_e2e] integration tests exercise real oneharness fallback selection; paid-provider auth rejection cannot be deterministic.
-harnesses = ["codex", "claude-code:primary"]
+harnesses = ["codex", "codex:alternate", "claude-code:primary"]
 
 # [harness.<id>]: per-harness overrides. Model names differ per provider, so
 # each harness names its own.
@@ -32,6 +34,14 @@ harnesses = ["codex", "claude-code:primary"]
 # cheaper-supervisor intent lives in the claude-code fallback (sonnet-5 vs opus) below.
 [harness.codex]
 model = "gpt-5.6-sol"
+
+# The second Codex identity; held identical to oneharness.toml's by
+# tests/test_harness_routing.py, since one drifted copy would silently change how
+# a role authenticates. See scripts/codex-alt-home.sh for the indirection.
+[harness.codex.variant.alternate]
+model = "gpt-5.6-sol"
+env_from = { CODEX_HOME = "ORCHESTRATOR_CODEX_ALT_HOME" }
+unset_env = ["OPENAI_API_KEY"]
 
 [harness.claude-code]
 env = { IS_SANDBOX = "1" }

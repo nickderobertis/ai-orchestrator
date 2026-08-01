@@ -421,6 +421,23 @@ keep that honest rather than silent, a passing `just gate` reports which base
 commit was judged and whether the verdict was judged now or replayed from the
 record — green is always a claim about one specific base commit.
 
+None of that is provable from one checkout, which is where this went wrong once:
+`tests/e2e/test_llmlint_cache_e2e.py` asks twice from the same tree, and
+production never does. `tests/e2e/test_llmlint_two_path_verdict_e2e.py` runs the
+tier's recipe from both callers instead — a worker worktree carrying the
+`LLMLINT_ONEHARNESS_BIN` a dispatch inherits, and a detached scratch worktree
+rebuilt by a squash merge carrying only the comparison identity a publishing push
+does, both cut from one clone — and counts how many times the judge was rolled for
+one content and one base. The answer has to be once. Run it against the fingerprint
+as it stood before `2ba9685` and it is twice, in both directions: the primary
+journey sees the merge path re-judge work that had already been cleared, and the
+failed-gate journey watches a recorded **failure** get overruled by a fresh pass.
+The three invalidations are asserted across the two paths for the same reason,
+because a fix that made them agree by hashing less would replay a verdict for a
+tree nobody judged. The publishing push those verdicts gate is not restaged there;
+`tests/e2e/test_gate_verdict_consistency_e2e.py` already drives it through the real
+lifecycle.
+
 Forcing a real re-judge is deliberately **per tier and per invocation**:
 
 ```sh
@@ -458,37 +475,106 @@ editing any of them replayed a green verdict on a tree carrying a real regressio
 So the Python targets, which all run from the workspace root over the whole tree,
 share the `wholeWorkspace` named input in `nx.json` with the llmlint tier.
 
-#### The one narrowed key, and what earns it
+#### The narrowed keys, and what earns each
 
 Keyed on the whole workspace, a documentation-only change re-ran the ~8-minute
-suite. Only a handful of tests actually assert on this repository's prose, so the
-suite is split at exactly that seam rather than at a convenient one:
+suite. But "keyed on everything it reads" and "keyed on the whole workspace" are
+not the same requirement, and the suite answers at more than one scope, so it is
+split at those seams rather than at convenient ones:
 
 - **`orchestrator:test-docs`** runs the tests marked `@pytest.mark.reads_docs` and
   keeps the `wholeWorkspace` key. Seconds, not minutes.
+- **`orchestrator:test-recipes`** runs the tests marked `@pytest.mark.reads_recipes`
+  — the journeys that build real worktrees and run real package installs to drive
+  `just` recipes and shell scripts — keyed on `recipeWorkspace`: the `justfile`,
+  `scripts/**`, the root manifests, the fixtures, and the modules that define and
+  collect those tests. They read no prose and no `orchestrator/` at all, and most
+  commits here touch nothing else, so most commits replay them.
 - **`orchestrator:test`** runs everything else, with the coverage floor, keyed on
-  `codeWorkspace` — the whole workspace with `docs/**` and `**/*.md` removed.
+  `codeWorkspace` — the whole workspace with `docs/**`, `**/*.md`, and the
+  `apps/**` and `packages/**` no Python test opens removed.
 
-A documentation edit now re-runs the prose contracts alone. Every other edit still
-invalidates both, because `codeWorkspace` is narrowed by documentation and by
-nothing else.
+`workspace:check-nx-cache` is narrowed on the same principle rather than by tier:
+it builds two linked worktrees out of `tests/fixtures/nx-cache/` and drives the
+real `scripts/nx.sh` in both, so `nxCacheCheck` carries that fixture, those
+scripts, and the root manifest — and nothing else.
 
-That is sound only while the code tier genuinely ignores prose, and "genuinely"
-cannot be a reviewer's recollection — the enumerated list above went stale exactly
-that way, and a stale key fails *open*. So the declaration is enforced where it is
-made: an autouse guard in `tests/conftest.py` fails an undeclared test the moment
-it opens this checkout's own documentation, naming the marker it needs. A read from
-inside a child process is out of that guard's reach, but a journey that hands a real
-tool the whole tree copies the tree first, and copying is itself a read.
+Each half of every one of those claims is load bearing. A key must still invalidate
+on what its tier reads, and must still replay on what it does not; a key that
+covers less than its check reads fails *open*, which is the false green above. That
+is exactly how `nxCacheCheck` first shipped — named on its scripts but not on the
+fixture the check is built from, so editing the fixture replayed a verdict for a
+tree the check had never seen.
 
-`tests/test_nx_cache_scope.py` holds both declarations to their globs — including
-that nothing but documentation falls outside the narrowed key — and
-`tests/e2e/test_nx_cache_scope_e2e.py` drives real Nx over a copy of this checkout
-to prove that editing `AGENTS.md` re-runs `test-docs` while `test` replays, and that
-editing the `justfile` re-runs both.
+Soundness here cannot be a reviewer's recollection — the enumerated list above went
+stale exactly that way. So each declaration is enforced where it is made: autouse
+guards in `tests/conftest.py` fail an undeclared test the moment it opens something
+its own tier's key does not carry, naming the path and the marker it needs. A read
+from inside a child process is out of a guard's reach, but a journey that hands a
+real tool the whole tree copies the tree first, and copying is itself a read.
 
-Two tiers, one answer, and neither is lenient: a recorded llmlint **failure**
+`tests/test_nx_cache_scope.py` holds every declaration to its globs — that nothing
+but documentation and the front end falls outside the code key, that the recipe key
+covers every module routing a test into it and stays inside the code key, and that
+the cache-check key carries every `$root/` path its script names. `tests/e2e/
+test_nx_cache_scope_e2e.py` then proves each one against real Nx over a copy of
+this checkout: for every key, an edit inside it must miss and an edit outside it
+must replay.
+
+Three tiers, one answer, and none of them lenient: a recorded llmlint **failure**
 replays as a failure, and a tree the suite would fail can no longer replay a pass.
+
+#### Four workers, and the one test that cannot have any
+
+The suite waits on subprocesses rather than on compute — a serial run holds one
+core at about 3.5% for a quarter of an hour — so its wall clock is latency and
+workers are nearly free. `orchestrator:test`, `orchestrator:test-docs`,
+`orchestrator:test-recipes`, and `just test-e2e` all run `-n 4 --dist load`.
+
+Both numbers come from measuring this host, not from a default. One sample each,
+same tier and same selection, taken back to back while a second worktree ran its
+own suite — so they are comparable to each other and pessimistic in absolute
+terms: `-n 4` 322s, `-n 6` 386s, `-n 8` 354s, `-n 14` — what `-n auto` resolves to
+here — 345s, and one serial sample at 843s. That serial figure is a single
+exploratory reading of the code tier alone, not the tier's baseline; the
+pre-parallel median for the whole suite was about seventeen minutes.
+
+The curve is flat past four, because what the run cannot beat is its longest
+single test (about 143s), not its core count; more workers buy no wall clock and
+take cores this host wants for live dispatches. `--dist loadfile` measured 331s but
+raises that floor from the longest *test* to the longest *file*
+(`test_workspace_contract_e2e.py`, 293s), which is nearly the whole measurement —
+it has no headroom left when the box is quiet. `--dist worksteal` measured fastest
+at 280s, but that sample failed a race-window test and the run-to-run spread at a
+fixed configuration is the same size as its lead.
+
+Five consecutive runs of both tiers at the chosen setting settled at a 614.5s
+median (469.5s / 591.6s / 614.5s / 623.6s / 637.8s), each one 2140 passed, 4
+skipped, 125 prose tests, 96.03% coverage. Those totals run the two tiers one after
+the other, which is not the shape anything here actually uses: `just test` runs
+them concurrently through Nx, and forcing both fresh with `--skip-nx-cache`
+measured 311s against the roughly seventeen-minute median the tier cost before.
+
+The tier therefore runs in **two invocations**, and the second is not an
+optimization but a correctness requirement.
+`tests/test_runs.py::test_a_signalled_round_records_its_abandonment_and_stops_being_live`
+blocks SIGTERM on its own thread and then calls a handler that re-raises that
+signal at the whole process. Blocking is per thread, so this only survives in a
+process the test is the only thread of — and an xdist worker always carries
+execnet's receiver thread, which blocks nothing and dies of the default
+disposition the handler just restored. It fails at `-n 1` too: the constraint is
+the process, not the load. So it is marked `single_threaded` and scheduled into a
+serial invocation rather than rewritten to survive a worker.
+
+Coverage still combines across that split, and the floor stays in one place. The
+serial invocation measures under `coverage run`, which writes `.coverage` and
+enforces nothing; the parallel one appends to it and reports. Only the second
+invocation evaluates `[tool.coverage.report] fail_under`, against the combined
+total, so no `--cov-fail-under` appears anywhere and `pyproject.toml` remains the
+floor's single source. `tests/test_nx_cache_scope.py` holds the two invocations to
+a real partition — collecting each selector for real and requiring their union to
+equal the tier — because two commands selecting on one marker is exactly the shape
+that drops tests in silence.
 
 ## Merge strategies (where the change lands)
 
@@ -537,6 +623,10 @@ returns `sync-conflict` and retains the branch for manual recovery.
   direct if the repo disallows it), `direct` (poll and merge ourselves on green
   required checks), `none` (open the PR and stop). Required-vs-optional comes from
   `statusCheckRollup.isRequired`; a failed required check ends at `checks-failed`.
+  Before opening a PR, closeout queries all PR states for the same head and base.
+  It adopts an existing open PR. It also treats a merged PR as authoritative
+  completion when that PR's recorded head SHA equals the branch head being
+  published; a stale merged PR whose branch later advanced is not reused.
 - **`LocalMergeStrategy`** (`workflow: local`) — there is no PR/CI to wait on, so
   it builds the branch-to-base merge in a detached scratch worktree and pushes
   that exact tree through the repository's pre-push gate. The branch lands as one squashed commit whose
@@ -614,8 +704,11 @@ persona. That agent reads the completed diff and writes a terse body following
 lifecycle reads and removes that artifact, then appends stack metadata as usual.
 This costs exactly one extra dispatch per published PR, including workstream and
 draft-checkpoint PRs. An explicit body skips drafting; an explicit title does not.
-A failed, incomplete, or empty drafting result falls back to the legacy
-deterministic body, so description generation never prevents publication.
+A failed, incomplete, or empty drafting result is retried once, then falls back
+to the legacy deterministic body, so description generation never prevents
+publication. Both failed attempts retain their underlying dispatch or harness
+detail in the node journal's drafting-fallback event and in the lifecycle
+follow-up surfaced to the planner.
 
 Run these nodes with `just run-plan`; `just repo-plan` is a deprecated alias that
 accepts old lifecycle-only files unchanged. See
@@ -1006,3 +1099,70 @@ origin, for team open PRs, team/single-owner merged PRs, local direct and
 run-only-open publication, linear and synthetic stacks, conflict safety,
 gate-failure, not-completed, no-changes, checks-failed, and a multi-PR DAG. The
 merge is never mocked; only GitHub's decisioning and the paid model are.
+
+### What a lifecycle journey costs, and which part of it is a choice
+
+**Where the time is.** Not in git. Instrumenting every subprocess and every
+lifecycle phase of the slowest journeys puts essentially the whole of each one
+inside `run_repo_task` → `dispatch` → the real `onejudge` subprocess: in
+`test_real_lifecycle_dispatch_drafts_pr_bodies_and_preserves_fallbacks`, the 771
+synchronous subprocesses it runs — almost all of them git — account for about one
+second of the eighteen its twelve `run_repo_task` calls take. The
+clone, the worktree, the commit and the push are not the cost and never were; the
+**dispatch count** is. Read a journey's price as its number of dispatches times the
+price of one, and optimise only those two numbers.
+
+**What one dispatch costs.** A step that completes on its first turn costs about
+0.4s, and that figure is flat in the turn cap — a cap it never reaches charges
+nothing. A step that *exhausts* its budget costs about 1.0s at a cap of one and
+about 0.5s more per additional turn of cap, because it is dispatched
+`MAX_AUTOMATIC_STEP_RESUMES + 1` times and every turn of every segment is two
+provider processes. Those numbers are what make the two paragraphs below the only
+levers: the cap on an exhausting step, and the fixed cost every dispatch pays.
+
+**The fixed cost, and the part of it that was waste.** Every dispatch tears down
+its worker tree through `terminate_processes`, `terminate_process_group` and
+`terminate_tree`, and each of those holds a `SIGKILL` back from its `SIGTERM` for
+a grace period. That grace exists so a harness with a shutdown handler can use it.
+It was slept out unconditionally, including on the overwhelmingly common path
+where the dispatch had already finished and there was nothing left to be graceful
+toward — four grace periods, 200ms, per dispatch, which was 2.49s of a 9.04s
+`test_ordinary_next_round_resumes_committed_lifecycle_branch`. `_await_shutdown`
+in `orchestrator/watchdog.py` now waits on the processes rather than on the clock:
+same ceiling for anything still running, nothing for anything already gone. It is
+a per-dispatch saving, so it applies to every journey in the suite. It is also a
+*latency* saving — the waits it removes consumed no CPU, so it shows up in full on
+a quiet host and is progressively masked when this host is already oversubscribed
+by concurrent dispatches.
+
+**What is left is the round, and the round is the unit under test.** A journey
+that proves four branch-selection behaviors across four rounds pays for four
+rounds; one that asserts twelve distinct PR-body outcomes pays for twelve
+publication journeys. Of the six slowest journeys in the lifecycle e2e:
+
+| Journey | Why it costs what it does |
+| --- | --- |
+| `..._drafts_pr_bodies_and_preserves_fallbacks` | 35 dispatches, every one of them a first-turn completion at the 0.4s floor, for twelve asserted PR-body and title outcomes. Cost *is* coverage. |
+| `test_ordinary_next_round_resumes_committed_lifecycle_branch` | Four rounds for four branch-selection behaviors — first attempt, ordinary resume, explicit fresh branch, explicit pin — each needing a node that commits and then fails. |
+| `test_a_node_that_cannot_finish_settles_instead_of_being_redispatched_forever` | Its subject *is* `MAX_AUTOMATIC_ROUND_RESUMES`. Every round it drives is the bound being exercised. |
+| `test_an_explicit_retry_restores_an_exhausted_preserved_branchs_budget` | Needs the same exhausted budget as a precondition, and the ledger it asserts against is written by real rounds. Cheaper only by fabricating the state the `retry` is supposed to act on. |
+| `test_lifecycle_failure_survives_simultaneous_deferred_teardown` | Exactly one not-completed dispatch. That is the floor for its outcome. |
+| `test_repo_plan_ledger_and_guided_next_round` | Three dispatches, plus about a third of its time in real `just telemetry` and `just runs` invocations — the CLI boundary it exists to prove. |
+
+None of them is reducible by dropping work it does not need; each is reducible
+only by dropping a case it asserts. What remains after the cap below and the
+teardown above is the `onejudge` launch and the provider processes underneath it.
+
+What sits on top of the floor is a choice, and it used to be an accidental one. A
+step that never completes spends its whole turn budget and is then automatically
+resumed `MAX_AUTOMATIC_STEP_RESUMES` more times, and every turn is two provider
+processes. At `DEFAULT_LIFECYCLE_STEP_MAX_TURNS` that is 147 provider processes
+and about twelve seconds for a single dispatch whose only job is to reach *a* cap.
+Naming a small explicit cap at those call sites — `EXHAUSTED_STEP_MAX_TURNS` in
+the lifecycle e2e — keeps the exhaustion, the three segments, the preserved
+branch, and the round-level budget exactly as they were, for 15 processes instead
+of 147. The default's own height stays pinned by
+`test_run_repo_task_journals_a_step_that_hit_the_turn_cap` in
+`tests/test_lifecycle_unit.py`, which spends no processes at all. A journey about
+what happens *at* a cap should say which cap it means; inheriting the production
+default there buys no coverage and costs the whole difference.

@@ -1833,3 +1833,69 @@ def test_recorded_round_translates_scratch_sweep_failure(
     error = capsys.readouterr().err
     assert "scratch sweep failed before claiming the round" in error
     assert "just sweep-scratch --dry-run" in error
+
+
+def test_planner_context_reaches_every_dispatch_the_node_makes() -> None:
+    """One node-level note, rendered into each task the node hands to a worker."""
+    graph = parse_graph(
+        {
+            "schema_version": PLAN_SCHEMA_VERSION,
+            "tasks": [
+                {
+                    "id": "direct",
+                    "persona": "engineer",
+                    "task": "## What\nSweep the harness",
+                    "context": ["41 commits are on the branch", "one llmlint finding is open"],
+                },
+                {
+                    "id": "workstream",
+                    "repo": "o/r",
+                    "context": ["the gate is green"],
+                    "steps": [
+                        {"id": "fix", "persona": "engineer", "task": "Fix"},
+                        {"id": "approve", "kind": "human", "task": "Approve", "deps": ["fix"]},
+                    ],
+                },
+                {
+                    "id": "single",
+                    "repo": "o/r",
+                    "persona": "engineer",
+                    "task": "Publish",
+                    "context": ["the branch is already pushed"],
+                },
+            ],
+        }
+    )
+    direct = graph.tasks[0].direct
+    assert direct is not None
+    assert direct.task.startswith("## What\nSweep the harness\n\n## Planner context")
+    assert "41 commits are on the branch\n\none llmlint finding is open" in direct.task
+    # The node keeps the notes as data, so the next render composes from them
+    # rather than from prose that already contains the section.
+    assert graph.tasks[0].definition["context"] == [
+        "41 commits are on the branch",
+        "one llmlint finding is open",
+    ]
+
+    workstream = graph.tasks[1].lifecycle
+    assert workstream is not None and workstream.steps is not None
+    agent_step, human_step = workstream.steps
+    assert "## Planner context" in agent_step.task and "the gate is green" in agent_step.task
+    # A human step is prose for a person, left exactly as the planner wrote it.
+    assert human_step.task == "Approve"
+
+    single = graph.tasks[2].lifecycle
+    assert single is not None and single.task is not None
+    assert single.task.startswith("Publish\n\n## Planner context")
+
+
+def test_planner_context_is_validated_and_refused_where_no_worker_reads_it() -> None:
+    with pytest.raises(PlanError, match="'context' must be a list of non-empty planner notes"):
+        parse_graph({"tasks": [{"id": "a", "persona": "p", "task": "t", "context": "a note"}]})
+    with pytest.raises(PlanError, match="'context' must be a list of non-empty planner notes"):
+        parse_graph({"tasks": [{"id": "a", "persona": "p", "task": "t", "context": [" "]}]})
+    with pytest.raises(PlanError, match="cannot set 'context'"):
+        parse_graph({"tasks": [{"id": "h", "kind": "human", "task": "Approve", "context": ["n"]}]})
+    # An omitted list changes nothing about the task a worker receives.
+    unchanged = parse_graph({"tasks": [{"id": "a", "persona": "p", "task": "t"}]}).tasks[0]
+    assert unchanged.direct is not None and unchanged.direct.task == "t"

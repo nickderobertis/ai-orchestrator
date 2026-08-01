@@ -51,12 +51,19 @@ from .runs import NodeId, RunId, StepId
 # publication that ended before any gate could rule on it. A v6 reader skips it as
 # unknown, which is exactly the evidence gap it exists to close for a v7 reader.
 #
-# v8 is additive as well: `planner-surface-queued` joined the vocabulary, recorded
-# when a surface is *sent* rather than when it is delivered. A v7 reader skips it and
-# sees exactly what it saw before — which is the gap it closes, because until v8 an
+# v8 is additive inside a record rather than in the kind vocabulary: an
+# `edit-committed` may now compile a `context-added` operation, the planner note a
+# carried-forward node's next dispatch reads. The version is what protects a v7
+# reader from it — strict replay refuses a committed operation it cannot fold, so a
+# note written at v8 must be skippable as an unknown version rather than met as
+# corruption in a round that is otherwise healthy.
+#
+# v9 is additive as well: `planner-surface-queued` joined the vocabulary, recorded
+# when a surface is *sent* rather than when it is delivered. A v8 reader skips it and
+# sees exactly what it saw before — which is the gap it closes, because until v9 an
 # update nobody read was indistinguishable from an update nobody sent.
-SCHEMA_VERSION = 8
-SUPPORTED_SCHEMA_VERSIONS = frozenset({1, 2, 3, 4, 5, 6, 7, SCHEMA_VERSION})
+SCHEMA_VERSION = 9
+SUPPORTED_SCHEMA_VERSIONS = frozenset({1, 2, 3, 4, 5, 6, 7, 8, SCHEMA_VERSION})
 
 JOURNAL_NAME = "events.jsonl"
 REQUIRED_EVENT_FIELDS = ("version", "seq", "at", "kind", "run_id", "round")

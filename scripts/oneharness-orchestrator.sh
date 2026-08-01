@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# llmlint: ignore-file[changed_behavior_has_e2e] subprocess tests drive every wrapper branch, at the same seam scripts/oneharness-agent.sh declares.
 # Force the orchestrator's own agent config, and make its process self-sufficient.
 #
 # `launch_orchestrator` pins this wrapper as the launched onejudge process's
@@ -23,6 +24,17 @@ fi
 # shellcheck source=scripts/claude-alt-config-dir.sh
 . "$alt_config_helper"
 resolve_claude_alt_config_dir oneharness-orchestrator || exit $?
+# This chain's middle candidate is a second Codex identity, whose variant maps this
+# portable value into CODEX_HOME; oneharness refuses to run when the indirection is
+# unset, so it must be exported even on a host that never authenticated one.
+codex_alt_helper="$script_dir/codex-alt-home.sh"
+if [ ! -f "$codex_alt_helper" ] || [ ! -r "$codex_alt_helper" ]; then
+    echo "oneharness-orchestrator: required helper is not a readable regular file: $codex_alt_helper; restore it from the repository or run 'just bootstrap', then retry" >&2
+    exit 2
+fi
+# shellcheck source=scripts/codex-alt-home.sh
+. "$codex_alt_helper"
+ensure_codex_alt_home oneharness-orchestrator || exit $?
 orchestrator_config="$repo_root/oneharness.orchestrator.toml"
 
 if [ "${1-}" != "run" ]; then

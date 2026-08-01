@@ -29,6 +29,7 @@ import pytest
 import yaml
 from mock_oneharness import BARRIER_DEATH_NOTICE
 from nx_workspace import requires_workspace_install
+from rendezvous import Rendezvous
 
 from orchestrator import PERSONA_DIR, REPO_ROOT
 from orchestrator.channel import (
@@ -396,8 +397,8 @@ def test_real_run_plan_round_budget_surfaces_blocking_proposal(
     runs = tmp_path / "runs"
     run_dir = runs / "round-budget"
     channel = create_channel(run_dir)
-    ready = tmp_path / "ready"
-    release = tmp_path / "never-release"
+    # Never released: the round budget, not the agent, is what ends this run.
+    wedged = Rendezvous(tmp_path / "wedged.ready", tmp_path / "never-release")
     plan = tmp_path / "plan.json"
     plan.write_text(
         json.dumps(
@@ -406,9 +407,7 @@ def test_real_run_plan_round_budget_surfaces_blocking_proposal(
                     {
                         "id": "wedged",
                         "persona": "engineer",
-                        "task": (
-                            f"provider-barrier-ready={ready} provider-barrier-release={release}"
-                        ),
+                        "task": wedged.sentinels().strip(),
                     }
                 ]
             }
@@ -451,7 +450,7 @@ def test_real_run_plan_round_budget_surfaces_blocking_proposal(
         ),
         "blocking": True,
     }
-    release.touch()
+    wedged.let_go()
     write_message(
         channel / "down.fifo",
         {"completion": False, "message": "stop", "reason": "budget exhausted"},
@@ -840,6 +839,7 @@ print(json.dumps({"type": "result", "subtype": "success", "is_error": False,
     alternate = tmp_path / "alternate"
     alternate.mkdir()
     env["ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR"] = str(alternate)
+    env["ORCHESTRATOR_CODEX_ALT_HOME"] = str(tmp_path / "codex-alternate")
     bound_session = "binding-rejection"
     bound_env = {**env, "ONEHARNESS_HARNESSES": "codex"}
     bound = subprocess.run(
@@ -1077,6 +1077,9 @@ print(json.dumps({
     environment = {
         **os.environ,
         "ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR": str(alternate),
+        # The judge and llmlint rows reach oneharness without a wrapper, and every
+        # config now names a Codex variant whose indirection must be set.
+        "ORCHESTRATOR_CODEX_ALT_HOME": str(tmp_path / ".codex-alt"),
         "CLAUDE_CONFIG_DIR": str(alternate),
         "ANTHROPIC_API_KEY": "ambient-api-key",
         "ANTHROPIC_AUTH_TOKEN": "ambient-auth-token",
@@ -1122,13 +1125,104 @@ print(json.dumps({
 
 
 @pytest.mark.parametrize(
-    ("config_name", "missing_harness", "fallback_harness"),
+    "config_name",
     [
-        ("oneharness.toml", "claude-code:alternate", "codex"),
-        ("oneharness.judge.toml", "codex", "claude-code:primary"),
+        "oneharness.toml",
+        "oneharness.judge.toml",
+        "oneharness.llmlint.toml",
+        "oneharness.orchestrator.toml",
+    ],
+)
+def test_alternate_codex_identity_routes_its_home_and_masks_an_ambient_api_key(
+    tmp_path: Path, oneharness_bin: str, config_name: str
+) -> None:
+    """Run the alternate identity for real and read back the child's environment.
+
+    The sibling test above proves this for the Claude variants; the fallthrough
+    tests only ever SKIP `codex:alternate` via a missing executable, so nothing
+    else exercises the routing that makes a second Codex account a distinct
+    identity. Both halves matter: `env_from` must map the portable indirection
+    into CODEX_HOME, and `OPENAI_API_KEY` must be gone, because `codex login`
+    writes ChatGPT tokens into that home and an ambient key would outrank them
+    and silently bill the wrong account.
+    """
+    codex_alt = tmp_path / "codex-alt"
+    codex_alt.mkdir()
+    fake_codex = tmp_path / "codex"
+    fake_codex.write_text(
+        """#!/usr/bin/env python3
+import json
+import os
+
+assert os.environ["CODEX_HOME"] == os.environ["EXPECTED_CODEX_HOME"], os.environ["CODEX_HOME"]
+assert "OPENAI_API_KEY" not in os.environ
+print(json.dumps({"type": "thread.started", "thread_id": "codex-variant"}))
+print(json.dumps({
+    "type": "item.completed",
+    "item": {"type": "agent_message", "text": "codex identity isolated"},
+}))
+print(json.dumps({
+    "type": "turn.completed",
+    "usage": {"input_tokens": 1, "cached_input_tokens": 0, "output_tokens": 1},
+}))
+""",
+        encoding="utf-8",
+    )
+    fake_codex.chmod(0o755)
+
+    result = subprocess.run(
+        [
+            oneharness_bin,
+            "run",
+            "--config",
+            str(REPO_ROOT / config_name),
+            "--harness",
+            "codex:alternate",
+            "--bin",
+            f"codex:alternate={fake_codex}",
+            "--mode",
+            "default",
+            "--prompt",
+            "prove codex child environment",
+            "--compact",
+        ],
+        cwd=REPO_ROOT,
+        env={
+            **{k: v for k, v in os.environ.items() if k != "ONEHARNESS_HARNESSES"},
+            "ORCHESTRATOR_CODEX_ALT_HOME": str(codex_alt),
+            "EXPECTED_CODEX_HOME": str(codex_alt),
+            # The value the variant's `unset_env` must strip from the child.
+            "OPENAI_API_KEY": "ambient-openai-key",
+            "ONEHARNESS_HISTORY": "false",
+        },
+        text=True,
+        capture_output=True,
+        timeout=60,
+    )
+
+    assert result.returncode == 0, result.stderr
+    report = json.loads(result.stdout)
+    assert report["results"][0]["harness_id"] == "codex:alternate"
+    assert report["results"][0]["status"] == "ok"
+    assert report["results"][0]["text"] == "codex identity isolated"
+
+
+@pytest.mark.parametrize(
+    ("config_name", "missing_harness", "fallback_harness", "skipped_between"),
+    [
+        ("oneharness.toml", "claude-code:alternate", "codex", ()),
+        # `--bin codex=` rebinds only the base id, so the alternate identity still
+        # runs the real Codex — against an empty alternate home, which is the `auth`
+        # fallthrough the committed chains depend on.
+        ("oneharness.judge.toml", "codex", "claude-code:primary", ("codex:alternate",)),
         # The orchestrator is the reverse of the worker: codex carries the role so a
         # long-lived supervisor never queues in front of workers for their subscription.
-        ("oneharness.orchestrator.toml", "codex", "claude-code:alternate"),
+        (
+            "oneharness.orchestrator.toml",
+            "codex",
+            "claude-code:alternate",
+            ("codex:alternate",),
+        ),
     ],
 )
 def test_configured_harness_fallbacks_recover_when_preferred_executable_is_unavailable(
@@ -1137,6 +1231,7 @@ def test_configured_harness_fallbacks_recover_when_preferred_executable_is_unava
     config_name: str,
     missing_harness: str,
     fallback_harness: str,
+    skipped_between: tuple[str, ...],
 ) -> None:
     fake_codex = tmp_path / "codex"
     fake_codex.write_text(
@@ -1173,11 +1268,26 @@ print(json.dumps({
     )
     fake_claude.chmod(0o755)
     fallback_bin = fake_codex if fallback_harness == "codex" else fake_claude
+    codex_alt = tmp_path / "codex-alt"
+    codex_alt.mkdir()
     environment = {
         **{key: value for key, value in os.environ.items() if key != "ONEHARNESS_HARNESSES"},
         "ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR": str(tmp_path / "absent-claude-alt"),
+        # Invoked without a wrapper, so nothing else exports the indirection that
+        # `[harness.codex.variant.alternate]` names; oneharness refuses to start
+        # while it is unset.
+        "ORCHESTRATOR_CODEX_ALT_HOME": str(codex_alt),
         "ONEHARNESS_HISTORY": "false",
     }
+    # `--bin` binds a base id only, so each intermediate variant needs its own.
+    # Without this the alternate identity runs the REAL Codex against a fresh
+    # CODEX_HOME, which bootstraps that home by cloning the plugin repository in
+    # the background — work that outlives the test and trips the leak guard.
+    skipped_bins = [
+        argument
+        for harness_id in skipped_between
+        for argument in ("--bin", f"{harness_id}={tmp_path / 'missing-executable'}")
+    ]
 
     result = subprocess.run(
         [
@@ -1187,6 +1297,7 @@ print(json.dumps({
             str(REPO_ROOT / config_name),
             "--bin",
             f"{missing_harness}={tmp_path / 'missing-executable'}",
+            *skipped_bins,
             "--bin",
             f"{fallback_harness}={fallback_bin}",
             "--mode",
@@ -1206,11 +1317,19 @@ print(json.dumps({
     report = json.loads(result.stdout)
     assert [item["harness_id"] for item in report["results"]] == [
         missing_harness,
+        *skipped_between,
         fallback_harness,
     ]
-    assert report["results"][0]["status"] == "skipped"
-    assert report["results"][1]["status"] == "ok"
-    assert report["results"][1]["text"] == "fallback recovered"
+    # Every candidate ahead of the fallback must be classified as a fallthrough, or
+    # the chain would stop at it instead of recovering.
+    assert all(item["status"] == "skipped" for item in report["results"][:-1])
+    assert [entry["harness"] for entry in report["fallback"]["fell_through"]] == [
+        missing_harness,
+        *skipped_between,
+    ]
+    assert report["fallback"]["ran"] == fallback_harness
+    assert report["results"][-1]["status"] == "ok"
+    assert report["results"][-1]["text"] == "fallback recovered"
 
 
 def test_agent_config_falls_back_to_codex_after_claude_auth_rejection(
@@ -1261,6 +1380,9 @@ print(json.dumps({
         env={
             **{key: value for key, value in os.environ.items() if key != "ONEHARNESS_HARNESSES"},
             "ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR": str(tmp_path / ".claude-alt"),
+            # No wrapper here, so this invocation must export the alternate-Codex
+            # indirection itself; the chain's last candidate names it.
+            "ORCHESTRATOR_CODEX_ALT_HOME": str(tmp_path / ".codex-alt"),
             "ONEHARNESS_HISTORY": "false",
         },
         text=True,

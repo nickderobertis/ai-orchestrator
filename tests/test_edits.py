@@ -195,6 +195,8 @@ def test_attestation_and_command_boundary_rejections() -> None:
             "running, failed, or cancelled",
         ),
         (EditCommand("complete", {"op": "complete", "reason": 1}), "string reason"),
+        (EditCommand("context", {"op": "context", "id": "missing", "note": "n"}), "existing"),
+        (EditCommand("context", {"op": "context", "id": "leaf", "note": "  "}), "non-empty note"),
     ],
 )
 def test_malformed_delta_variants_are_rejected(command: EditCommand, message: str) -> None:
@@ -345,3 +347,52 @@ def test_drop_cascade_visits_each_reachable_dependent_once() -> None:
     # it exactly once rather than emitting a duplicate node-dropped event.
     dropped = [event["node"] for event in events if event["kind"] == "node-dropped"]
     assert sorted(dropped) == ["left", "right", "root", "sink"]
+
+
+def test_context_reaches_the_live_node_and_accumulates_within_the_round() -> None:
+    """A note is data on the node and prose in the task the next dispatch receives."""
+    graph, events = apply_edit(
+        _graph(),
+        EditCommand("context", {"op": "context", "id": "leaf", "note": "the gate is green"}),
+        states={"leaf": "failed"},
+        attestations=(),
+    )
+    assert events == [
+        {"kind": "context-added", "node": "leaf", "detail": {"note": "the gate is green"}}
+    ]
+    leaf = next(node for node in graph.tasks if node.id == "leaf")
+    assert leaf.definition["context"] == ["the gate is green"]
+    assert leaf.direct is not None
+    assert leaf.direct.task.startswith("Leaf\n\n## Planner context")
+    assert "the gate is green" in leaf.direct.task
+
+    graph, _ = apply_edit(
+        graph,
+        EditCommand("context", {"op": "context", "id": "leaf", "note": "one finding is open"}),
+        states={"leaf": "failed"},
+        attestations=(),
+    )
+    leaf = next(node for node in graph.tasks if node.id == "leaf")
+    assert leaf.definition["context"] == ["the gate is green", "one finding is open"]
+    # Composing a second time renders both notes once: the stored notes are the
+    # source, never the already-rendered task text.
+    assert leaf.direct is not None
+    assert leaf.direct.task.count("## Planner context") == 1
+
+
+def test_context_is_refused_where_no_dispatch_can_ever_read_it() -> None:
+    """A settled-done node leaves the round, and a human node has no dispatch."""
+    with pytest.raises(EditError, match="can still be dispatched"):
+        apply_edit(
+            _graph(),
+            EditCommand("context", {"op": "context", "id": "leaf", "note": "too late"}),
+            states={"leaf": "done"},
+            attestations=(),
+        )
+    with pytest.raises(EditError, match="cannot set 'context'"):
+        apply_edit(
+            _graph(),
+            EditCommand("context", {"op": "context", "id": "approve", "note": "for a person"}),
+            states={"approve": "waiting"},
+            attestations=(),
+        )
