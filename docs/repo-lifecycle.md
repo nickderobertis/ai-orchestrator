@@ -1068,17 +1068,56 @@ merge is never mocked; only GitHub's decisioning and the paid model are.
 
 ### What a lifecycle journey costs, and which part of it is a choice
 
-Keeping git real sets a floor. One round is a clone, a worktree, a real `onejudge
-run` launch, the recorded gate, a commit, and a push, and the round is the unit
-under test — a journey that proves four branch-selection behaviors across four
-rounds pays for four of them. Measured on this host, that floor is roughly 1.3
-seconds per round, and it is not recoverable by anything short of dropping a case.
-`test_ordinary_next_round_resumes_committed_lifecycle_branch`,
-`test_an_explicit_retry_restores_an_exhausted_preserved_branchs_budget`,
-`test_a_node_that_cannot_finish_settles_instead_of_being_redispatched_forever`,
-and `test_real_lifecycle_dispatch_drafts_pr_bodies_and_preserves_fallbacks` are
-all at that floor; the last is eight full remote publication journeys because it
-asserts eight distinct PR-body outcomes, so its cost *is* its coverage.
+**Where the time is.** Not in git. Instrumenting every subprocess and every
+lifecycle phase of the slowest journeys puts essentially the whole of each one
+inside `run_repo_task` → `dispatch` → the real `onejudge` subprocess: in
+`test_real_lifecycle_dispatch_drafts_pr_bodies_and_preserves_fallbacks`, the 771
+synchronous subprocesses it runs — almost all of them git — account for about one
+second of the eighteen its twelve `run_repo_task` calls take. The
+clone, the worktree, the commit and the push are not the cost and never were; the
+**dispatch count** is. Read a journey's price as its number of dispatches times the
+price of one, and optimise only those two numbers.
+
+**What one dispatch costs.** A step that completes on its first turn costs about
+0.4s, and that figure is flat in the turn cap — a cap it never reaches charges
+nothing. A step that *exhausts* its budget costs about 1.0s at a cap of one and
+about 0.5s more per additional turn of cap, because it is dispatched
+`MAX_AUTOMATIC_STEP_RESUMES + 1` times and every turn of every segment is two
+provider processes. Those numbers are what make the two paragraphs below the only
+levers: the cap on an exhausting step, and the fixed cost every dispatch pays.
+
+**The fixed cost, and the part of it that was waste.** Every dispatch tears down
+its worker tree through `terminate_processes`, `terminate_process_group` and
+`terminate_tree`, and each of those holds a `SIGKILL` back from its `SIGTERM` for
+a grace period. That grace exists so a harness with a shutdown handler can use it.
+It was slept out unconditionally, including on the overwhelmingly common path
+where the dispatch had already finished and there was nothing left to be graceful
+toward — four grace periods, 200ms, per dispatch, which was 2.49s of a 9.04s
+`test_ordinary_next_round_resumes_committed_lifecycle_branch`. `_await_shutdown`
+in `orchestrator/watchdog.py` now waits on the processes rather than on the clock:
+same ceiling for anything still running, nothing for anything already gone. It is
+a per-dispatch saving, so it applies to every journey in the suite. It is also a
+*latency* saving — the waits it removes consumed no CPU, so it shows up in full on
+a quiet host and is progressively masked when this host is already oversubscribed
+by concurrent dispatches.
+
+**What is left is the round, and the round is the unit under test.** A journey
+that proves four branch-selection behaviors across four rounds pays for four
+rounds; one that asserts twelve distinct PR-body outcomes pays for twelve
+publication journeys. Of the six slowest journeys in the lifecycle e2e:
+
+| Journey | Why it costs what it does |
+| --- | --- |
+| `..._drafts_pr_bodies_and_preserves_fallbacks` | 35 dispatches, every one of them a first-turn completion at the 0.4s floor, for twelve asserted PR-body and title outcomes. Cost *is* coverage. |
+| `test_ordinary_next_round_resumes_committed_lifecycle_branch` | Four rounds for four branch-selection behaviors — first attempt, ordinary resume, explicit fresh branch, explicit pin — each needing a node that commits and then fails. |
+| `test_a_node_that_cannot_finish_settles_instead_of_being_redispatched_forever` | Its subject *is* `MAX_AUTOMATIC_ROUND_RESUMES`. Every round it drives is the bound being exercised. |
+| `test_an_explicit_retry_restores_an_exhausted_preserved_branchs_budget` | Needs the same exhausted budget as a precondition, and the ledger it asserts against is written by real rounds. Cheaper only by fabricating the state the `retry` is supposed to act on. |
+| `test_lifecycle_failure_survives_simultaneous_deferred_teardown` | Exactly one not-completed dispatch. That is the floor for its outcome. |
+| `test_repo_plan_ledger_and_guided_next_round` | Three dispatches, plus about a third of its time in real `just telemetry` and `just runs` invocations — the CLI boundary it exists to prove. |
+
+None of them is reducible by dropping work it does not need; each is reducible
+only by dropping a case it asserts. What remains after the cap below and the
+teardown above is the `onejudge` launch and the provider processes underneath it.
 
 What sits on top of the floor is a choice, and it used to be an accidental one. A
 step that never completes spends its whole turn budget and is then automatically
