@@ -5,9 +5,9 @@
 # `launch_orchestrator` pins this wrapper as the launched onejudge process's
 # oneharness binary. Without it that process resolves `oneharness.toml` by upward
 # discovery from the repo root — the worker chain, which puts this supervisory
-# role in front of workers for the alternate Claude subscription — and dies before
-# its first turn because nothing exported the alternate config directory that the
-# claude-code variant's `env_from` indirection names.
+# role in front of workers for the alternate Claude subscriptions — and dies before
+# its first turn because nothing exported the alternate config directories that the
+# claude-code variants' `env_from` indirections name.
 #
 # The orchestrator's judge side is the planner channel (a command provider), so
 # only agent turns reach here; a caller that already chose a `--config` is still
