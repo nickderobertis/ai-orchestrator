@@ -71,6 +71,7 @@ def _proposal_plan(
     tmp_path: Path,
     witness: Path,
     provider_barrier: tuple[Path, Path] | None = None,
+    hold: tuple[Path, Path] | None = None,
 ) -> Path:
     barrier = (
         ""
@@ -78,6 +79,7 @@ def _proposal_plan(
         else f" provider-barrier-ready={provider_barrier[0]} "
         f"provider-barrier-release={provider_barrier[1]}"
     )
+    held = "" if hold is None else f" hold-ready={hold[0]} hold-release={hold[1]}"
     path = tmp_path / "plan-mid-run-proposal.json"
     path.write_text(
         json.dumps(
@@ -94,7 +96,7 @@ def _proposal_plan(
                     {
                         "id": "unrelated",
                         "persona": "engineer",
-                        "task": f"slow-branch {witness}{barrier}",
+                        "task": f"slow-branch {witness}{barrier}{held}",
                     },
                 ],
             }
@@ -157,6 +159,10 @@ def test_due_heartbeat_surfaces_during_active_step_and_disabled_run_stays_silent
 ) -> None:
     runs = tmp_path / "runs"
     witness = tmp_path / "slow-witness"
+    # The step stays in flight until this test has seen every heartbeat it asserts
+    # on, so the pacemaker is measured against the run rather than against a sleep.
+    held_ready = tmp_path / "active-worker.ready"
+    held_release = tmp_path / "active-worker.release"
     plan = tmp_path / "heartbeat-channel.json"
     plan.write_text(
         json.dumps(
@@ -168,7 +174,8 @@ def test_due_heartbeat_surfaces_during_active_step_and_disabled_run_stays_silent
                         "id": "active-worker",
                         "persona": "engineer",
                         "task": (
-                            f"slow-branch {witness} pacemaker-slow complete-now heartbeat-channel"
+                            f"slow-branch {witness} hold-ready={held_ready} "
+                            f"hold-release={held_release} complete-now heartbeat-channel"
                         ),
                     }
                 ],
@@ -263,6 +270,7 @@ def test_due_heartbeat_surfaces_during_active_step_and_disabled_run_stays_silent
     state = json.loads(heartbeat_path.read_text())
     assert state["last_surface_at"] > initial_state["last_surface_at"]
 
+    held_release.write_text("release\n", encoding="utf-8")
     while True:
         boundary = _wait_surface(run_id, runs, wait_seconds=120)
         boundary_surface = boundary["surface"]
@@ -372,6 +380,10 @@ def test_completed_check_in_without_surface_is_logged_and_retried(
 ) -> None:
     runs = tmp_path / "runs"
     witness = tmp_path / "slow-witness"
+    # Held until the skipped surface has been logged and its retry has surfaced,
+    # so the step is genuinely active for both check-in dispatches.
+    held_ready = tmp_path / "active-worker.ready"
+    held_release = tmp_path / "active-worker.release"
     plan = tmp_path / "missing-check-in-surface.json"
     plan.write_text(
         json.dumps(
@@ -382,7 +394,10 @@ def test_completed_check_in_without_surface_is_logged_and_retried(
                     {
                         "id": "active-worker",
                         "persona": "engineer",
-                        "task": f"slow-branch {witness} pacemaker-slow complete-now",
+                        "task": (
+                            f"slow-branch {witness} hold-ready={held_ready} "
+                            f"hold-release={held_release} complete-now"
+                        ),
                     }
                 ],
             }
@@ -443,6 +458,7 @@ def test_completed_check_in_without_surface_is_logged_and_retried(
     }
     assert witness.is_file()
 
+    held_release.write_text("release\n", encoding="utf-8")
     while True:
         boundary = _wait_surface(run_id, runs, wait_seconds=120)
         if boundary["surface"]["kind"] != "heartbeat":
@@ -1007,8 +1023,15 @@ def test_reattached_planner_replies_to_mid_run_proposal_without_stopping_graph(
     witness = tmp_path / "unrelated.ticks"
     provider_ready = tmp_path / "unrelated.ready"
     provider_release = tmp_path / "unrelated.release"
+    held_ready = tmp_path / "unrelated.held-ready"
+    held_release = tmp_path / "unrelated.held-release"
     run_id = _launch_cli(
-        _proposal_plan(tmp_path, witness, (provider_ready, provider_release)),
+        _proposal_plan(
+            tmp_path,
+            witness,
+            (provider_ready, provider_release),
+            (held_ready, held_release),
+        ),
         runs,
         _base(tmp_path),
         onejudge_bin,
@@ -1092,12 +1115,14 @@ def test_reattached_planner_replies_to_mid_run_proposal_without_stopping_graph(
     }
     assert not (runs / run_id / "orchestrator" / "report.json").stat().st_size
     provider_release.write_text("release\n", encoding="utf-8")
-    wait_deadline = deadline(5)
-    while time.monotonic() < wait_deadline:
-        if witness.is_file() and witness.read_text(encoding="utf-8").count("tick") == 2:
-            break
+    # The released node reports its own progress and waits, so this reads exactly
+    # the turn the graph kept running rather than whatever a sleep left behind.
+    wait_deadline = deadline(15)
+    while not held_ready.is_file() and time.monotonic() < wait_deadline:
         time.sleep(0.02)
+    assert held_ready.is_file()
     assert witness.read_text(encoding="utf-8").count("tick") == 2
+    held_release.write_text("release\n", encoding="utf-8")
 
     while True:
         boundary = _next_cli(run_id, runs)
