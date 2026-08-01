@@ -310,9 +310,15 @@ fi
 install_bun || toolchain_failed=1
 ensure_codex
 ensure_codex_gate
-alternate_config_path=
+alternate_config_paths=()
 if resolve_claude_alt_config_dir session-setup; then
-  alternate_config_path="$ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR/.claude.json"
+  # Both alternate subscriptions are dispatch identities, so both need this
+  # checkout marked trusted; `mark_alternate_claude_trust` tolerates a config
+  # that is not there yet, which is the state of one nobody has logged into.
+  alternate_config_paths=(
+    "$ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR/.claude.json"
+    "$ORCHESTRATOR_CLAUDE_ALT2_CONFIG_DIR/.claude.json"
+  )
 else
   log "alternate Claude config resolution failed; continuing"
 fi
@@ -322,10 +328,10 @@ if [ -n "$managed_checkout_root" ]; then
 else
   managed_checkout_root="$REPO_ROOT"
 fi
-if [ -n "$alternate_config_path" ]; then
+for alternate_config_path in ${alternate_config_paths[@]+"${alternate_config_paths[@]}"}; do
   mark_alternate_claude_trust "$alternate_config_path" "$managed_checkout_root" "$REPO_ROOT" \
     || log "alternate Claude workspace trust setup failed; continuing"
-fi
+done
 persist_session_env
 
 # Install the llmlint LLM-judge tier (llmlint + its bundled oneharness).

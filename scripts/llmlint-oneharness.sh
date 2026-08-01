@@ -28,34 +28,22 @@ if [[ $1 != run ]]; then
     exit 2
 fi
 
-args=()
-read_only=false
-while (( $# > 0 )); do
-    if [[ $1 == --mode && ${2-} == read-only ]]; then
-        args+=(--mode read-only)
-        read_only=true
-        shift 2
-    else
-        args+=("$1")
-        shift
-    fi
-done
+# The Codex sandbox grant this wrapper used to append as a trailing
+# `-- -c 'sandbox_permissions=[...]'` now lives in `[harness.codex] args` in
+# oneharness.llmlint.toml. oneharness appends a trailing HARNESS_ARG to WHICHEVER
+# harness fallback selects, and this tier's chain now reaches Claude Code, where
+# `-c` is claude's `--continue` boolean: the permission string would be taken as a
+# positional prompt and silently replace the lint prompt rather than fail. The
+# per-harness entry cannot reach a non-Codex candidate at all, so the caller's
+# arguments are forwarded verbatim from here.
 
-# Codex's read-only filesystem sandbox is usable on this host, but its default
-# network isolation asks bubblewrap to configure loopback in a namespace that the
-# outer container forbids. Grant network only: Codex retains its OS-enforced
-# read-only filesystem while avoiding that unsupported namespace operation.
-if [[ $read_only == true ]]; then
-    # llmlint: ignore[least_privilege_grants] Codex exposes only coarse disk/network grants; llmlint needs repository reads and its model endpoint, with the outer container as boundary.
-    args+=(-- -c 'sandbox_permissions=["disk-full-read-access","network-full-access"]')
-fi
-
-# This tier's only backup for an exhausted quota is a second Codex identity, whose
-# variant maps this portable value into CODEX_HOME. oneharness refuses to run when
-# the indirection is unset, so export it even on a host that never authenticated
-# one; an empty home is the state that falls through rather than hard-failing.
-# Resolved here, past the argument checks above, so a rejected invocation and the
-# `--version` probe never touch the filesystem.
+# Every candidate in this tier's chain names a portable indirection its variant
+# maps into the child (CODEX_HOME for the second Codex identity, CLAUDE_CONFIG_DIR
+# for each alternate Claude subscription), and oneharness refuses to run while one
+# is unset — so export them even on a host that authenticated none of them; an
+# unauthenticated identity falls through rather than hard-failing. Resolved here,
+# past the argument checks above, so a rejected invocation and the `--version`
+# probe never touch the filesystem.
 codex_alt_helper="$script_dir/codex-alt-home.sh"
 if [ ! -f "$codex_alt_helper" ] || [ ! -r "$codex_alt_helper" ]; then
     echo "llmlint oneharness wrapper: required helper is not a readable regular file: $codex_alt_helper; restore it from the repository or run 'just bootstrap', then retry" >&2
@@ -64,8 +52,16 @@ fi
 # shellcheck source=scripts/codex-alt-home.sh
 . "$codex_alt_helper"
 ensure_codex_alt_home "llmlint oneharness wrapper" || exit $?
+alt_config_helper="$script_dir/claude-alt-config-dir.sh"
+if [ ! -f "$alt_config_helper" ] || [ ! -r "$alt_config_helper" ]; then
+    echo "llmlint oneharness wrapper: required helper is not a readable regular file: $alt_config_helper; restore it from the repository or run 'just bootstrap', then retry" >&2
+    exit 2
+fi
+# shellcheck source=scripts/claude-alt-config-dir.sh
+. "$alt_config_helper"
+resolve_claude_alt_config_dir "llmlint oneharness wrapper" || exit $?
 
-if oneharness "${args[@]:0:1}" --config "$llmlint_config" "${args[@]:1}"; then
+if oneharness "$1" --config "$llmlint_config" "${@:2}"; then
     exit 0
 else
     status=$?

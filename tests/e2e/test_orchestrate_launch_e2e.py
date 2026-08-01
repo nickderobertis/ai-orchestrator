@@ -51,7 +51,14 @@ from pathlib import Path
 
 Path(os.environ["ORCHESTRATE_CODEX_ARGV"]).write_text("\\n".join(sys.argv[1:]), encoding="utf-8")
 Path(os.environ["ORCHESTRATE_CODEX_ALT_DIR"]).write_text(
-    os.environ.get("ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR", "<unset>"), encoding="utf-8"
+    "\\n".join(
+        os.environ.get(name, "<unset>")
+        for name in (
+            "ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR",
+            "ORCHESTRATOR_CLAUDE_ALT2_CONFIG_DIR",
+        )
+    ),
+    encoding="utf-8",
 )
 print(json.dumps({"type": "thread.started", "thread_id": "orchestrate-launch"}))
 print(json.dumps({
@@ -148,6 +155,7 @@ def _launch_environment(tmp_path: Path, codex_argv: Path, codex_alt_dir: Path) -
     # outer orchestrator run — happened to set.
     for inherited in (
         "ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR",
+        "ORCHESTRATOR_CLAUDE_ALT2_CONFIG_DIR",
         "ONEHARNESS_MODE",
         "ONEHARNESS_HARNESSES",
         "ONEHARNESS_MODELS",
@@ -199,7 +207,7 @@ def test_orchestrate_launch_carries_bypass_mode_and_orchestrator_routing(
     run_dir = runs / json.loads(launched.stdout)["run_id"]
     try:
         argv = _wait_text(codex_argv, run_dir).splitlines()
-        alternate = _wait_text(codex_alt_dir, run_dir).strip()
+        alternates = _wait_text(codex_alt_dir, run_dir).strip().splitlines()
     finally:
         _stop(run_dir)
 
@@ -209,9 +217,13 @@ def test_orchestrate_launch_carries_bypass_mode_and_orchestrator_routing(
     assert argv[argv.index("--model") + 1] == "gpt-5.6-sol"
     # Its own approval mode: bypass, without the launcher exporting anything.
     assert CODEX_BYPASS_FLAG in argv
-    # And the alternate-Claude indirection the fallback variant names is derived
-    # from HOME, so nothing dies before the first turn on a fresh shell.
-    assert alternate == f"{os.environ['HOME']}/.claude-alt"
+    # And BOTH alternate-Claude indirections the fallback variants name are derived
+    # from HOME, so nothing dies before the first turn on a fresh shell: oneharness
+    # refuses to start while a named variant's `env_from` source is unset.
+    assert alternates == [
+        f"{os.environ['HOME']}/.claude-alt",
+        f"{os.environ['HOME']}/.claude-alt2",
+    ]
 
 
 def _view(command: str, runs: Path, history: Path) -> str:

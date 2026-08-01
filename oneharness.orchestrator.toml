@@ -20,14 +20,21 @@ history = true
 # is what lets telemetry and `just history` treat it as one.
 history_labels = { role = "agent" }
 
-# The orchestrator is a long-lived supervisory process, not a worker: it must not
-# stand in front of workers for the alternate Claude subscription they depend on.
-# Codex carries the role and the alternate Claude subscription is its backup —
-# deliberately the reverse of oneharness.toml's worker order. A second Codex
-# identity sits between them, so an exhausted Codex quota reaches for another
-# Codex account before it reaches for the workers' subscription at all.
+# The orchestrator is a long-lived supervisory process, not a worker, so both
+# Codex identities carry the role first — deliberately the reverse of
+# oneharness.toml's worker order. Only once Codex is exhausted does it reach the
+# workers' alternate Claude subscriptions, in the same relative order the worker
+# uses, with the primary Claude identity last. Reaching them at all is a
+# deliberate trade the operator accepts: contending for the workers' Claude quota
+# beats stalling a supervisory process that every workstream waits on.
 # llmlint: ignore[changed_behavior_has_e2e] tests/e2e/test_dispatch_e2e.py drives real oneharness fallback selection for this file; paid-provider quota rejection cannot be deterministic.
-harnesses = ["codex", "codex:alternate", "claude-code:alternate"]
+harnesses = [
+    "codex",
+    "codex:alternate",
+    "claude-code:alternate",
+    "claude-code:alternate2",
+    "claude-code:primary",
+]
 
 # [harness.<id>]: per-harness overrides. Model names differ per provider, so
 # each harness names its own.
@@ -49,14 +56,36 @@ unset_env = ["OPENAI_API_KEY"]
 # refusing; harmless on other harnesses.
 env = { IS_SANDBOX = "1" }
 
-# The fallback identity is the same alternate subscription the worker uses, with
-# the same portable indirection and credential masking;
-# tests/test_harness_routing.py holds this variant identical to oneharness.toml's.
+# The Claude fallbacks are the same three identities the worker uses, with the
+# same portable indirections and credential masking;
+# tests/test_harness_routing.py holds each variant identical to oneharness.toml's.
 [harness.claude-code.variant.alternate]
 model = "claude-opus-5"
 env_from = { CLAUDE_CONFIG_DIR = "ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR" }
 # Subscription auth must not be shadowed by ambient API or OAuth credentials.
 unset_env = [
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
+]
+
+[harness.claude-code.variant.alternate2]
+model = "claude-opus-5"
+env_from = { CLAUDE_CONFIG_DIR = "ORCHESTRATOR_CLAUDE_ALT2_CONFIG_DIR" }
+unset_env = [
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
+]
+
+# The last resort: Claude's default config directory, with every higher-precedence
+# credential selector and any inherited alternate directory masked off.
+[harness.claude-code.variant.primary]
+model = "claude-opus-5"
+unset_env = [
+    "CLAUDE_CONFIG_DIR",
     "ANTHROPIC_API_KEY",
     "ANTHROPIC_AUTH_TOKEN",
     "CLAUDE_CODE_OAUTH_TOKEN",
