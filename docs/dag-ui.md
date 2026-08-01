@@ -157,6 +157,13 @@ unreachable-API journey has a real failure to observe, is held bound but unliste
 by the stall server (`serve_fixture.py --refuse-port`): leaving it merely free would
 let a concurrent run's own API server take it.
 
+Every ordinary run exercises that allocation; only two overlapping runs exercise what
+it is for, so `isolation.config.ts` is one more Playwright run that starts no server
+of its own and launches two real runs of the tier at once, asserting each built and
+removed a fixture directory of its own. It is a separate config deliberately: a spec
+under the tier's own `testDir` would inherit the environment recording that run's
+allocation, and the runs it launched would reuse it rather than allocate.
+
 The fixture's `dag-ui-busy` run is the scale case: one node with two hundred
 recorded sessions, one of them thirty turns long, so the browser tier proves the
 grouped rail and both pagings against a real server rather than a payload written
