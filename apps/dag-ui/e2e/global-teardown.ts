@@ -9,7 +9,7 @@ import { FIXTURE_WORKSPACE } from "../playwright.config";
  * line names the directory because a run that ends badly enough to skip this is a run
  * whose leftovers someone has to recognise.
  */
-export default function removeFixtureWorkspace(): void {
+export default function removeAndReportFixtureWorkspace(): void {
   rmSync(FIXTURE_WORKSPACE, { recursive: true, force: true });
   process.stdout.write(
     `dag-ui e2e: removed fixture workspace ${FIXTURE_WORKSPACE}\n`,
