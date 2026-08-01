@@ -102,16 +102,20 @@ class TwoPaths:
     def judge_runs(self) -> int:
         return len(self.judge_log.read_text().splitlines())
 
-    def worker_gate(self, **overrides: str) -> subprocess.CompletedProcess[str]:
-        """The gate a dispatched agent runs before it settles, in its own worktree."""
-        return self._gate(
+    def worker_llmlint_tier(self, **overrides: str) -> subprocess.CompletedProcess[str]:
+        """The llmlint tier of a dispatched agent's gate, run in its own worktree.
+
+        Only that tier: the rest of the gate has nothing to do with the recorded
+        verdict these journeys are about.
+        """
+        return self._llmlint_tier(
             self.worker,
             {"LLMLINT_ONEHARNESS_BIN": DISPATCH_AMBIENT_BIN},
             overrides,
         )
 
-    def merge_path_gate(self, **overrides: str) -> subprocess.CompletedProcess[str]:
-        """The same gate, where the publication is rebuilt: a detached scratch worktree.
+    def merge_path_llmlint_tier(self, **overrides: str) -> subprocess.CompletedProcess[str]:
+        """The same tier, where the publication is rebuilt: a detached scratch worktree.
 
         Cut from the same clone at an unrelated path and carrying the workstream's
         comparison identity and nothing else, exactly as the lifecycle rebuilds and
@@ -124,14 +128,14 @@ class TwoPaths:
         (scratch / "node_modules").symlink_to(REPO_ROOT / "node_modules", target_is_directory=True)
         gitops.merge_squash(scratch, f"origin/{FEATURE_BRANCH}", message="publication")
         try:
-            return self._gate(scratch, {}, overrides)
+            return self._llmlint_tier(scratch, {}, overrides)
         finally:
             gitops.worktree_remove(self.clone, scratch)
 
-    def _gate(
+    def _llmlint_tier(
         self, cwd: Path, caller: dict[str, str], overrides: dict[str, str]
     ) -> subprocess.CompletedProcess[str]:
-        """Run the tier the way its operators do, resolving the base as they do."""
+        """Run `lint-llm-diff` the way its operators do, resolving the base as they do."""
         return subprocess.run(
             ["bash", "-c", 'just lint-llm-diff "$(./scripts/comparison-base.sh)"'],
             cwd=cwd,
@@ -286,13 +290,13 @@ def test_the_worker_gate_and_the_merge_path_reach_one_verdict(two_paths: TwoPath
     _work(two_paths)
     base = two_paths.base_sha()
 
-    gate = two_paths.worker_gate()
+    worker_run = two_paths.worker_llmlint_tier()
     two_paths.push_branch()
-    rebuilt = two_paths.merge_path_gate()
+    rebuilt = two_paths.merge_path_llmlint_tier()
 
-    assert gate.returncode == 0, gate.stdout + gate.stderr
-    assert PASS_VERDICT in gate.stdout
-    assert f"{CACHE_MISS} {base}" in gate.stderr
+    assert worker_run.returncode == 0, worker_run.stdout + worker_run.stderr
+    assert PASS_VERDICT in worker_run.stdout
+    assert f"{CACHE_MISS} {base}" in worker_run.stderr
     # The whole claim: the merge path asked the same question and got the recorded
     # answer, rather than rolling a non-deterministic judge a second time.
     assert rebuilt.returncode == 0, rebuilt.stdout + rebuilt.stderr
@@ -307,12 +311,12 @@ def test_a_failed_worker_gate_is_replayed_as_a_failure_on_the_merge_path(
     """Replay is not leniency, which is what keeps unclearable work off the base."""
     _work(two_paths)
 
-    gate = two_paths.worker_gate(FAKE_LLMLINT_EXIT="1")
+    worker_run = two_paths.worker_llmlint_tier(FAKE_LLMLINT_EXIT="1")
     two_paths.push_branch()
-    rebuilt = two_paths.merge_path_gate()
+    rebuilt = two_paths.merge_path_llmlint_tier()
 
-    assert gate.returncode != 0, gate.stdout + gate.stderr
-    assert FAIL_FINDING in gate.stdout
+    assert worker_run.returncode != 0, worker_run.stdout + worker_run.stderr
+    assert FAIL_FINDING in worker_run.stdout
     # The findings the worker was shown are the findings the merge path reports,
     # replayed rather than re-rolled — so the push this verdict gates is rejected
     # even where a fresh roll would have passed.
@@ -327,15 +331,15 @@ def test_content_the_worker_never_judged_is_judged_on_the_merge_path(
 ) -> None:
     """A verdict covers the tree it judged, so later commits do not inherit it."""
     _work(two_paths)
-    gate = two_paths.worker_gate()
+    worker_run = two_paths.worker_llmlint_tier()
 
     # The worker settled with one more commit than its gate ever saw. Publishing
     # that must not replay the cleared verdict for the tree it replaced.
     _work(two_paths, "a change the worker's gate never saw")
     two_paths.push_branch()
-    rebuilt = two_paths.merge_path_gate()
+    rebuilt = two_paths.merge_path_llmlint_tier()
 
-    assert gate.returncode == 0, gate.stdout + gate.stderr
+    assert worker_run.returncode == 0, worker_run.stdout + worker_run.stderr
     assert rebuilt.returncode == 0, rebuilt.stdout + rebuilt.stderr
     assert CACHE_MISS in rebuilt.stderr
     assert two_paths.judge_runs() == 2
@@ -345,15 +349,15 @@ def test_an_advanced_base_is_judged_again_on_the_merge_path(two_paths: TwoPaths)
     """Same tree, different comparison: two different diffs, two judgements."""
     _work(two_paths)
     judged = two_paths.base_sha()
-    gate = two_paths.worker_gate()
+    worker_run = two_paths.worker_llmlint_tier()
 
     # Empty, so the published tree stays byte-identical to the judged one and the
     # resolved base commit is the only thing that moved.
     advanced = two_paths.advance_base("advance the base under the settled branch")
     two_paths.push_branch()
-    rebuilt = two_paths.merge_path_gate()
+    rebuilt = two_paths.merge_path_llmlint_tier()
 
-    assert gate.returncode == 0, gate.stdout + gate.stderr
+    assert worker_run.returncode == 0, worker_run.stdout + worker_run.stderr
     assert advanced != judged
     assert rebuilt.returncode == 0, rebuilt.stdout + rebuilt.stderr
     assert f"{CACHE_MISS} {advanced}" in rebuilt.stderr
@@ -365,7 +369,7 @@ def test_a_changed_judge_configuration_is_judged_again_on_the_merge_path(
 ) -> None:
     """The rules moved between the two paths, and no file input can see it."""
     _work(two_paths)
-    gate = two_paths.worker_gate()
+    worker_run = two_paths.worker_llmlint_tier()
 
     # The plugin lives outside the checkout, so both trees are byte-identical: only
     # the judge configuration fingerprint can notice, and only if it is in the key.
@@ -374,9 +378,9 @@ def test_a_changed_judge_configuration_is_judged_again_on_the_merge_path(
         encoding="utf-8",
     )
     two_paths.push_branch()
-    rebuilt = two_paths.merge_path_gate()
+    rebuilt = two_paths.merge_path_llmlint_tier()
 
-    assert gate.returncode == 0, gate.stdout + gate.stderr
+    assert worker_run.returncode == 0, worker_run.stdout + worker_run.stderr
     assert rebuilt.returncode == 0, rebuilt.stdout + rebuilt.stderr
     assert CACHE_MISS in rebuilt.stderr
     assert two_paths.judge_runs() == 2
