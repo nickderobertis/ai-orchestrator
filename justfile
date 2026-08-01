@@ -76,6 +76,11 @@ test *nx_args:
 
 # The e2e suite alone (real onejudge subprocess boundary) — quick inner loop.
 #
+# llmlint: ignore[tool_output_is_signal] Streaming pytest's own progress *is* this
+# recipe's signal: it exists to watch one suite run, and `just test` is the recipe
+# that reduces a whole green run to a line. Reducing this one too would leave no
+# way to watch the e2e suite, which is what it was added for.
+#
 # Same worker count and distribution as the `test` tier, for the same reason: the
 # journeys wait on subprocesses rather than compute, so the wall clock is latency
 # and the workers are nearly free. `single_threaded` is deselected here too — those

@@ -5,6 +5,13 @@ plugin; it starts a real process tree out of its own temp directory; and then th
 session ends — normally in one journey, under the SIGKILL of a cancellation in the
 others. Nothing about the guard is stubbed, and the only thing standing in for a
 dispatch is the shape of the tree.
+
+llmlint: ignore-file[tests_mirror_real_usage] The two tree-termination journeys call
+`watchdog.process_activity` / `terminate_processes` because those *are* the production
+actor: `just stop` and the dispatch watchdog end a run by walking its tree and
+signalling what they found, and no operator command takes a bare pytest session as its
+subject. Reaching for a command surface here would replace the real killer with a
+weaker one and stop reproducing the escape these journeys exist for.
 """
 
 from __future__ import annotations

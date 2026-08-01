@@ -164,6 +164,51 @@ def test_the_marker_that_routes_a_test_to_its_tier_means_the_same_thing_everywhe
     assert marked is not None and marked.group(1) is None
 
 
+#: Every place the parallel worker contract is independently written down. It is a
+#: contract because the number was chosen by measurement against this host — see
+#: `docs/repo-lifecycle.md` — and a recipe that quietly drifted to a different one
+#: would stop being evidence for the tier the gate actually runs.
+PARALLEL_SITES = (
+    ("orchestrator/project.json", CODE_SCOPED),
+    ("orchestrator/project.json", "test-docs"),
+    ("justfile", "test-e2e"),
+)
+
+
+def _worker_contracts(path: str, target: str) -> list[tuple[str, str]]:
+    """Every ``-n N --dist MODE`` pair one declaration carries."""
+    if path.endswith(".json"):
+        text = json.loads((REPO_ROOT / path).read_text(encoding="utf-8"))["targets"][target][
+            "command"
+        ]
+    else:
+        recipe = re.search(
+            rf"^{re.escape(target)}:\n((?:[ \t]+.*\n?)+)",
+            (REPO_ROOT / path).read_text(encoding="utf-8"),
+            flags=re.MULTILINE,
+        )
+        assert recipe is not None, f"no {target} recipe in {path}"
+        text = recipe.group(1)
+    return re.findall(r"-n (\d+) --dist (\w+)", text)
+
+
+def test_every_parallel_declaration_names_the_same_worker_contract() -> None:
+    """The worker count and distribution are one contract, written in three places.
+
+    Nothing derives them from a shared value — pytest takes them as command-line
+    flags and Nx targets are literal commands — so the reconciliation has to be a
+    gate rather than a definition. Without it `just test-e2e` could drift to a
+    different count than the tier `just gate` runs, and the inner loop would stop
+    being evidence about the thing the gate judges.
+    """
+    found = {site: _worker_contracts(*site) for site in PARALLEL_SITES}
+    empty = [site for site, pairs in found.items() if not pairs]
+    assert not empty, f"these declarations carry no '-n N --dist MODE': {empty}"
+
+    contracts = {pair for pairs in found.values() for pair in pairs}
+    assert len(contracts) == 1, f"the parallel worker contract has drifted apart: {found}"
+
+
 def _collected(selector: str) -> set[str]:
     """Every test id pytest selects for one marker expression, from a real collection.
 
