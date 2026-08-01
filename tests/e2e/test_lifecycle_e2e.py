@@ -77,6 +77,25 @@ from orchestrator.workspace import IdentityKey, Workspace, normalize_repo
 
 _T = TypeVar("_T")
 
+# The cap a journey names when it needs a step that *exhausts* its budget.
+#
+# A `should-fail` step never completes, so it spends every turn it is given and is
+# then automatically resumed `MAX_AUTOMATIC_STEP_RESUMES` more times. Each turn is
+# two provider processes (respond, then supervisor) and each segment ends in one
+# `assess`, so one such dispatch spawns `3 * (2 * cap + 1)` of them. At the
+# lifecycle default of `DEFAULT_LIFECYCLE_STEP_MAX_TURNS` (24) that is 147
+# processes and roughly twelve measured seconds — per dispatch, and these journeys
+# drive up to four each.
+#
+# None of them is about how *high* the cap is; they need a step that reaches
+# whatever cap it was given. The default's own height is pinned for free by
+# `test_run_repo_task_journals_a_step_that_hit_the_turn_cap` in
+# `tests/test_lifecycle_unit.py`, against an injected dispatch function. So name
+# the smallest cap that still runs both sides of the loop — the agent takes a
+# turn, the supervisor declines to release it, the agent takes its last — and the
+# same 3-segment exhaustion costs 15 processes instead of 147.
+EXHAUSTED_STEP_MAX_TURNS = 2
+
 
 def _workspace(tmp_path: Path, *origins: Path, workflow: str = "local") -> Workspace:
     """Build a registry-like resolver over real canonical test checkouts."""
@@ -461,6 +480,7 @@ def test_lifecycle_failure_survives_simultaneous_deferred_teardown(
         base_path=command_base(),
         persona_dir=personas_dir,
         recorded_gate=["true"],
+        max_turns=EXHAUSTED_STEP_MAX_TURNS,
     )
 
     assert result.outcome == "not-completed"
@@ -1120,6 +1140,7 @@ def test_repo_plan_ledger_and_guided_next_round(
                 "repo": str(canonical),
                 "persona": "engineer",
                 "task": "should-fail write-change: preserve this partial attempt",
+                "max_turns": EXHAUSTED_STEP_MAX_TURNS,
                 "recorded_gate": ["true"],
                 "workflow": "local",
                 "repo_type": "single-owner",
@@ -1254,6 +1275,7 @@ def test_a_node_that_cannot_finish_settles_instead_of_being_redispatched_forever
                         # Writes real work every round, so every attempt earns a
                         # marker: the growth is bounded by bounding the attempts.
                         "task": "should-fail write-unique-change: never finishes",
+                        "max_turns": EXHAUSTED_STEP_MAX_TURNS,
                         "verify_cmd": ["true"],
                         "workflow": "local",
                         "repo_type": "single-owner",
@@ -1367,6 +1389,7 @@ def test_an_explicit_retry_restores_an_exhausted_preserved_branchs_budget(
                         "repo": str(canonical),
                         "persona": "engineer",
                         "task": "should-fail write-unique-change: never finishes",
+                        "max_turns": EXHAUSTED_STEP_MAX_TURNS,
                         "verify_cmd": ["true"],
                         "workflow": "local",
                         "repo_type": "single-owner",
@@ -1431,6 +1454,7 @@ def test_ordinary_next_round_resumes_committed_lifecycle_branch(
                         "repo": str(canonical),
                         "persona": "engineer",
                         "task": "should-fail write-change: preserve across ordinary rounds",
+                        "max_turns": EXHAUSTED_STEP_MAX_TURNS,
                         "verify_cmd": ["true"],
                         "workflow": "local",
                         "repo_type": "single-owner",
