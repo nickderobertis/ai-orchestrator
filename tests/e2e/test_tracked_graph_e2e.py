@@ -24,9 +24,17 @@ from telemetry_contract import clipped_share_seconds, journalled_seconds
 from waits import deadline as e2e_deadline
 
 from orchestrator import REPO_ROOT, gitops
+from orchestrator.channel import (
+    claim_heartbeat,
+    create_channel,
+    heartbeat_state,
+    mark_heartbeat_due,
+)
 from orchestrator.coordination import advisory_lock, git_lock_identity, lock_path
+from orchestrator.journal import open_journal
 from orchestrator.plan import PLAN_SCHEMA_VERSION
 from orchestrator.registry import Registry
+from orchestrator.runs import RunId
 
 
 def _lock_has_a_blocked_waiter(identity: str) -> bool:
@@ -283,6 +291,203 @@ def test_reported_blocker_settles_promptly_without_mistaking_repeated_progress(
     assert terminal["blocked"]["turns"] == 1
     assert terminal["blocked"]["outcome"] == "reported-blocker"
     assert terminal["productive"]["turns"] == 3
+
+
+def _pacemaker_ready_for_a_check_in(run_dir: Path) -> Path:
+    """Advance one run's pacemaker clock until a check-in dispatch is claimed.
+
+    An operator reaches this state by letting the interval elapse under a live
+    orchestrator, which a journey cannot spend. Only the clock is moved here; the
+    subject — the transition — and every observable step of it run through the CLI.
+    """
+    # llmlint: ignore[tests_mirror_real_usage] clock precondition, not the subject
+    channel = create_channel(run_dir, heartbeat_interval=10)
+    # llmlint: ignore[tests_mirror_real_usage] clock precondition, not the subject
+    started = heartbeat_state(channel)
+    assert started is not None
+    # llmlint: ignore[tests_mirror_real_usage] clock precondition, not the subject
+    mark_heartbeat_due(channel, now=float(started["last_surface_at"]) + 11)
+    # llmlint: ignore[tests_mirror_real_usage] clock precondition, not the subject
+    assert claim_heartbeat(channel)
+    return channel
+
+
+def test_a_transition_frees_a_check_in_its_round_left_unreadable(
+    tmp_path: Path, command_base, onejudge_bin: str
+) -> None:
+    """`just next-round` clears an update the finished round left queued.
+
+    `channel-next` validates a surface against the *active* round, so one still
+    queued when the round transitions can never be read — and while it sits there it
+    is the run's one pending update, which no later check-in can replace. The
+    transition is where an operator can act on that, so the transition is where it is
+    cleared: the surface goes, its lease is freed, and the next check-in queues and
+    reads normally.
+    """
+    runs = tmp_path / "runs"
+    plan = tmp_path / "stranded-surface.json"
+    plan.write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "tasks": [
+                    {"id": "settle", "persona": "engineer", "task": "complete-now: settle."},
+                    {
+                        "id": "iterate",
+                        "persona": "engineer",
+                        "task": "should-fail",
+                        "max_turns": 1,
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    common = (
+        "--runs-dir",
+        str(runs),
+        "--base",
+        str(command_base()),
+        "--onejudge-bin",
+        onejudge_bin,
+        "--format",
+        "json",
+    )
+    paused = _just("run-plan", str(plan), "--run", "stranded", *common)
+    assert paused.returncode == 1, paused.stderr
+
+    channel = _pacemaker_ready_for_a_check_in(runs / "stranded")
+    surfaced = _just(
+        "channel-surface", "stranded", "round one is verifying", "--runs-dir", str(runs)
+    )
+    assert surfaced.returncode == 0, surfaced.stderr
+    queued = runs / "stranded" / "channel" / "heartbeat-surface.json"
+    assert queued.is_file()
+
+    # Read as this run's own indicator rather than as a substring of the whole view.
+    # `just status` renders the host's dispatch history beside the ledger it was
+    # pointed at, so a bare `in`/`not in` over its output answers about every run on
+    # the machine — including one whose task prose merely quotes the phrase.
+    def _stranded_pending(reported: str) -> list[str]:
+        return [
+            line
+            for line in reported.splitlines()
+            if line.startswith("stranded: ") and "planner update waiting" in line
+        ]
+
+    pending = _just("status", "--runs-dir", str(runs))
+    assert len(_stranded_pending(pending.stdout)) == 1, pending.stdout
+    assert f"just channel-next stranded --runs-dir {runs}" in pending.stdout, pending.stdout
+
+    resumed = _just("next-round", "stranded", "--plan-only", *common)
+    assert resumed.returncode == 0, resumed.stderr
+    assert (runs / "stranded" / "round-02" / "plan.json").is_file(), resumed.stdout
+
+    # Discarded rather than kept readable: it describes a round that has finished.
+    assert not queued.is_file()
+    cleared = _just("status", "--runs-dir", str(runs))
+    assert _stranded_pending(cleared.stdout) == [], cleared.stdout
+
+    # The lease came back with the discard, so the next tick can claim a check-in at
+    # all — under the old behaviour this returned False for the life of the run.
+    freed = heartbeat_state(channel)
+    assert freed is not None and freed["in_flight"] is False
+    mark_heartbeat_due(channel, now=float(freed["last_attempt_at"]) + 11)
+    assert claim_heartbeat(channel)
+
+    # And the freed slot takes a round-2 update the planner can actually consume.
+    again = _just(
+        "channel-surface", "stranded", "round two is dispatching", "--runs-dir", str(runs)
+    )
+    assert again.returncode == 0, again.stderr
+    read = _just("channel-next", "stranded", "--runs-dir", str(runs), "--timeout", "5")
+    assert read.returncode == 0, read.stderr
+    assert json.loads(read.stdout)["surface"]["message"] == "round two is dispatching"
+
+
+def test_a_transition_survives_a_journal_it_cannot_fold(
+    tmp_path: Path, command_base, onejudge_bin: str
+) -> None:
+    """The executed graph is folded from the journal, so an unfoldable one must not
+    take the transition down with it.
+
+    Deriving the next round from the journal made `next-round` depend on a file it
+    previously never read, and a ledger written before that contract — or one whose
+    stream the strict reader refuses — would otherwise fail the transition outright.
+    It falls back to the round's launch record, which is what a round carrying no
+    committed edit projects to anyway.
+    """
+    runs = tmp_path / "runs"
+    plan = tmp_path / "unfoldable.json"
+    plan.write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "tasks": [
+                    {"id": "settle", "persona": "engineer", "task": "complete-now: settle."},
+                    {
+                        "id": "iterate",
+                        "persona": "engineer",
+                        "task": "should-fail",
+                        "max_turns": 1,
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    common = (
+        "--runs-dir",
+        str(runs),
+        "--base",
+        str(command_base()),
+        "--onejudge-bin",
+        onejudge_bin,
+        "--format",
+        "json",
+    )
+    ran = _just("run-plan", str(plan), "--run", "unfoldable", *common)
+    assert ran.returncode == 1, ran.stderr
+
+    # A stream the strict reader will not fold: the ledger and the launch record are
+    # both intact, so only the journal-derived half of the transition is in question.
+    # llmlint: ignore[tests_mirror_real_usage] There is no operator command that
+    # damages a journal — that is the point of the state under test, a fail-closed
+    # boundary no public interface can produce. Only the corruption is written here;
+    # the round that produced the ledger and the transition being judged are the real
+    # `just run-plan` and `just next-round` above and below.
+    journal = runs / "unfoldable" / "events.jsonl"
+    assert journal.is_file()
+    # llmlint: ignore[tests_mirror_real_usage] no operator command damages a journal;
+    # that fail-closed stream is the state under test.
+    journal.write_text('{"not": "an event"}\n', encoding="utf-8")
+    # A retry the *supersession* reader can still fold, on a stream the strict plan
+    # reader cannot. That combination is the trap: the fallback plan predates the
+    # replacement, so removing the superseded original against it would take the node
+    # out of the graph with nothing left carrying its work.
+    # llmlint: ignore[tests_mirror_real_usage] `channel-reply` cannot commit an edit onto
+    # a journal already unreadable, which is exactly the combination under test.
+    open_journal(runs / "unfoldable", RunId("unfoldable"), 1).append(
+        "edit-committed",
+        detail={
+            "operations": [
+                {
+                    "kind": "retry-requested",
+                    "node": "iterate",
+                    "detail": {"replacement": "iterate-corrected"},
+                }
+            ]
+        },
+    )
+
+    resumed = _just("next-round", "unfoldable", "--plan-only", *common)
+    assert resumed.returncode == 0, resumed.stderr
+    carried = json.loads(
+        (runs / "unfoldable" / "round-02" / "plan.json").read_text(encoding="utf-8")
+    )
+    # The launch record's own carry-forward: the failed node retries, the done one is
+    # carried out. Degraded rather than lost, and never a failed transition.
+    assert [task["id"] for task in carried["tasks"]] == ["iterate"], carried
 
 
 def test_direct_human_pause_attestation_and_release_use_real_onejudge(

@@ -54,7 +54,7 @@ from waits import deadline as e2e_deadline
 from waits import timeout as e2e_timeout
 
 from orchestrator import REPO_ROOT
-from orchestrator.channel import create_channel
+from orchestrator.channel import claim_heartbeat, create_channel, mark_heartbeat_due
 from orchestrator.coordination import advisory_lock
 from orchestrator.detach import CRASHED
 from orchestrator.runs import TEARDOWN_SIGNALS
@@ -743,7 +743,45 @@ def test_status_reports_a_dead_round_beside_the_surface_it_left_pending(
     # turns on every run of this suite. Everything the journey actually asserts —
     # queuing a surface, the round dying under it, and what `just status` then prints —
     # runs through the real `orchestrator-relay-supervisor` and `just status` below.
-    channel_dir = create_channel(launch.runs / run_id)
+    channel_dir = create_channel(launch.runs / run_id, heartbeat_interval=10)
+    # A check-in this run queued and nobody read, still on disk when it dies. Its own
+    # reporting line must not survive the run: both views would otherwise invite a
+    # planner to `channel-next` a surface nothing will ever follow up on. Queued
+    # through `just channel-surface`, the same command the check-in agent invokes,
+    # against a claim taken the way the pacemaker takes one — only the paid agent that
+    # would author the message is left out. It goes first because the production guard
+    # is real: a check-in is refused while a planner surface awaits a reply, and the
+    # relay below raises one that never gets answered.
+    # llmlint: ignore[tests_mirror_real_usage] The same exemption the channel directory
+    # above takes, for the same reason and no further: reaching a *due, claimed*
+    # check-in through the CLI alone needs a live orchestrator to wait out a real
+    # interval and a paid check-in agent to answer it, on every run of this suite.
+    # These three lines are the pacemaker tick that would have done it; the surface
+    # itself is queued through the real `just channel-surface` below, and everything
+    # the journey asserts is what the real `just runs` and `just status` print.
+    due_at = float(json.loads((channel_dir / "heartbeat.json").read_text())["last_surface_at"])
+    # llmlint: ignore[tests_mirror_real_usage] the pacemaker's own clock advance.
+    mark_heartbeat_due(channel_dir, now=due_at + 11)
+    # llmlint: ignore[tests_mirror_real_usage] the pacemaker's own claim, and the last
+    # step before the real `just channel-surface` below can be accepted at all.
+    assert claim_heartbeat(channel_dir), "the pacemaker had no check-in to claim"
+    queued = subprocess.run(
+        [
+            "just",
+            "channel-surface",
+            run_id,
+            "worker: still verifying",
+            "--runs-dir",
+            str(rounds.runs),
+        ],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=e2e_timeout(180),
+    )
+    assert queued.returncode == 0, queued.stderr
+    assert (channel_dir / "heartbeat-surface.json").is_file()
     relay = subprocess.Popen(
         [
             "uv",
@@ -772,6 +810,14 @@ def test_status_reports_a_dead_round_beside_the_surface_it_left_pending(
         _await_exit(launch.owner)
 
         reported = _status(rounds.runs, tmp_path / "empty-history")
+        listed = subprocess.run(
+            ["just", "runs", "--runs-dir", str(rounds.runs)],
+            cwd=REPO_ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=e2e_timeout(180),
+        )
     finally:
         with contextlib.suppress(PermissionError, ProcessLookupError):
             os.killpg(os.getpgid(relay.pid), signal.SIGKILL)
@@ -790,6 +836,24 @@ def test_status_reports_a_dead_round_beside_the_surface_it_left_pending(
     assert dead in lines, reported.stdout
     assert stale in lines, reported.stdout
     assert lines.index(dead) + 1 == lines.index(stale), reported.stdout
+
+    # The queued check-in is still on disk, and neither view offers to read it: a run
+    # that stopped keeps the line saying why, not an invitation to supervise it. The
+    # two views are read interchangeably, so they must not disagree about this.
+    assert (channel_dir / "heartbeat-surface.json").is_file()
+    assert listed.returncode == 0, listed.stderr
+    assert f"! {run_id}" in listed.stdout, listed.stdout
+    # Asserted as this run's own indicator, never as a substring of the whole view:
+    # both commands render text they were not pointed at — a sibling row, the host's
+    # dispatch history — and one of them quoting the phrase must not answer for this
+    # run. `just runs` names it on an indented continuation of the run's row; `just
+    # status` prefixes it with the run id.
+    assert not [
+        line for line in listed.stdout.splitlines() if line.strip().startswith("1 planner update")
+    ], listed.stdout
+    assert not [
+        line for line in reported.stdout.splitlines() if line.startswith(f"{run_id}: 1 planner ")
+    ], reported.stdout
 
 
 def test_a_recovery_that_refuses_the_journal_abandons_the_round_it_claimed(

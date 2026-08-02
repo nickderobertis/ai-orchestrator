@@ -47,7 +47,10 @@ from orchestrator.graph import graph_payload, parse_graph, run_graph
 from orchestrator.journal import NodeJournal, NodeSink, open_journal
 from orchestrator.lifecycle import (
     AI_ORCHESTRATOR_IDENTITY,
+    MAX_AUTOMATIC_STEP_RESUMES,
+    MAX_EMPTY_DEATH_RELAUNCHES,
     MAX_MERGE_CONFLICT_RESOLUTIONS,
+    RELAUNCH_BACKOFF_SECONDS,
     RepoPlan,
     RepoPlanNode,
     Resume,
@@ -549,6 +552,302 @@ def test_turn_cap_auto_resumes_preserved_branch_without_rerunning_completed_step
     assert _has_file(origin, "main", ".fake-turn-cap-preserved")
     assert result.retry_lineage is not None
     assert result.retry_lineage.disposition == "recovered"
+
+
+def _launch_death(persona: str) -> Report:
+    """The report a dispatch that died before its first turn actually produces.
+
+    The wrapper parks the child's exit disposition and stderr, the watchdog sees an
+    empty process tree, and `dispatch` reports `worker-died` with nothing else: no
+    turns, no verdicts, no usage. Provider throttling, an out-of-quota harness, and
+    an OOM kill all reach the lifecycle in exactly this shape.
+    """
+    return Report(
+        persona,
+        1,
+        False,
+        True,
+        0,
+        [],
+        {},
+        None,
+        "worker-died (watchdog pid 0, agent exit status 1): tracked worker exited "
+        "or stopped heartbeating: agent harness exited 1: HTTP 429 You have hit "
+        "your session limit - resets 1pm",
+        outcome="worker-died",
+        # The harness exited of its own accord rather than being signalled, which is
+        # what the wrapper records for a refusal to start.
+        agent_exit_status=1,
+    )
+
+
+def test_a_dispatch_that_died_before_its_work_is_relaunched_and_publishes(
+    tmp_path, bare_origin
+) -> None:
+    """A launch that never reached the task is retried, not counted against it.
+
+    The old loop only continued when the branch already carried committed work, so
+    a launch failure on a fresh branch failed the node on its first death — with
+    nothing about the task having been attempted, let alone failed.
+    """
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-relaunched")
+    Registry().register(str(canonical), workflow="local", repo_type="single-owner")
+    launches: list[str] = []
+
+    def dying_then_working(persona: str, task: str, *, project_dir: str, **_: object) -> Report:
+        launches.append(persona)
+        if len(launches) == 1:
+            return _launch_death(persona)
+        worktree = Path(project_dir)
+        (worktree / "cost-report.txt").write_text("measured\n", encoding="utf-8")
+        gitops.add_all(worktree)
+        gitops.commit(worktree, "feat: report lifecycle cost")
+        return Report(persona, 0, True, False, 2, [], {}, {}, "")
+
+    waits: list[float] = []
+    result = run_repo_task(
+        str(canonical),
+        "## What\nReport lifecycle cost.\n\n## Why\nNobody can see what a run spends.\n",
+        "engineer",
+        workspace=Workspace(tmp_path / "relaunched-worktrees"),
+        branch="feature/relaunched-after-launch-death",
+        dispatch_fn=dying_then_working,
+        recorded_gate=["true"],
+        sleep=waits.append,
+    )
+
+    assert result.outcome == "merged", result.detail
+    assert launches == ["engineer", "engineer"]
+    # The relaunch waited rather than asking the same refusing provider at once.
+    assert waits == [RELAUNCH_BACKOFF_SECONDS]
+    assert _has_file(origin, "main", "cost-report.txt")
+
+
+def test_an_empty_death_after_committed_work_relaunches_onto_the_preserved_branch(
+    tmp_path, bare_origin
+) -> None:
+    """The death that lands mid-workstream, not on its first dispatch.
+
+    By then the branch carries committed work, so the relaunch has something to
+    orphan if it cuts a fresh branch — and something to finish if it does not. This
+    is the shape that lost roughly ten minutes of committed work to a provider
+    outage: the earlier attempt's commits must still be on the branch the next
+    launch resumes, and must reach the base with it.
+    """
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-death-mid-workstream")
+    Registry().register(str(canonical), workflow="local", repo_type="single-owner")
+    launches: list[str] = []
+    waits: list[float] = []
+
+    def working_then_dying_then_finishing(
+        persona: str, task: str, *, project_dir: str, **_: object
+    ) -> Report:
+        launches.append(persona)
+        worktree = Path(project_dir)
+        if len(launches) == 1:
+            (worktree / "partial.txt").write_text("measured so far\n", encoding="utf-8")
+            gitops.add_all(worktree)
+            gitops.commit(worktree, "chore: measure part of the lifecycle cost")
+            return Report(persona, 1, False, False, 2, [], {}, {}, "", max_turns=2)
+        if len(launches) == 2:
+            return _launch_death(persona)
+        (worktree / "finished.txt").write_text("measured\n", encoding="utf-8")
+        gitops.add_all(worktree)
+        gitops.commit(worktree, "feat: finish measuring the lifecycle cost")
+        return Report(persona, 0, True, False, 2, [], {}, {}, "")
+
+    result = run_repo_task(
+        str(canonical),
+        "## What\nMeasure lifecycle cost.\n\n## Why\nA run's spend is invisible.\n",
+        "engineer",
+        workspace=Workspace(tmp_path / "death-mid-workstream-worktrees"),
+        branch="feature/death-after-committed-work",
+        dispatch_fn=working_then_dying_then_finishing,
+        recorded_gate=["true"],
+        sleep=waits.append,
+    )
+
+    assert result.outcome == "merged", result.detail
+    assert launches == ["engineer"] * 3, launches
+    # One relaunch, on the launch budget — the work stop before it took its own.
+    assert waits == [RELAUNCH_BACKOFF_SECONDS]
+    # The relaunch continued the preserved branch rather than cutting a fresh one, so
+    # nothing the earlier attempt committed was orphaned by the death: both its work
+    # and the work that finished afterwards reach the base together.
+    assert _has_file(origin, "main", "partial.txt")
+    assert _has_file(origin, "main", "finished.txt")
+
+
+@pytest.mark.parametrize(
+    ("exit_status", "relaunched"),
+    [(1, True), (137, False), (None, False)],
+    ids=["exited", "killed-by-signal", "unrecorded"],
+)
+def test_only_a_harness_that_exited_on_its_own_earns_a_relaunch(
+    tmp_path, bare_origin, exit_status: int | None, relaunched: bool
+) -> None:
+    """A worker terminated after it was running is not a launch that never happened.
+
+    The agent wrapper reads its child's wait status exactly this way — above 128 is
+    "killed by signal N", at or below is "exited N" — so a watchdog kill, a round
+    cancellation and an OOM are all signalled, while a harness refusing to start
+    exits of its own accord. An unrecorded status earns nothing: the relaunch is
+    positively earned, never assumed.
+    """
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / f"canonical-disposition-{exit_status}")
+    Registry().register(str(canonical), workflow="local", repo_type="single-owner")
+    launches: list[str] = []
+
+    def dying_with_recorded_disposition(persona: str, task: str, **_: object) -> Report:
+        launches.append(persona)
+        return replace(_launch_death(persona), agent_exit_status=exit_status)
+
+    result = run_repo_task(
+        str(canonical),
+        "## What\nTier the workspace.\n\n## Why\nThe suite reruns work it proved.\n",
+        "engineer",
+        workspace=Workspace(tmp_path / f"disposition-worktrees-{exit_status}"),
+        branch=f"feature/disposition-{exit_status}",
+        dispatch_fn=dying_with_recorded_disposition,
+        recorded_gate=["true"],
+        sleep=lambda _seconds: None,
+    )
+
+    assert result.outcome == "not-completed"
+    expected = 1 + MAX_EMPTY_DEATH_RELAUNCHES if relaunched else 1
+    assert len(launches) == expected, launches
+    assert ("just smoke" in result.detail) is relaunched, result.detail
+
+
+def test_launch_deaths_do_not_spend_the_budget_that_carries_work_forward(
+    tmp_path, bare_origin
+) -> None:
+    """The reported harm: an outage consumed the resume budget in under a minute.
+
+    A launch death and a work stop are answered from separate budgets, so a node
+    whose first dispatch never reached the provider still gets every automatic
+    resume its *work* is entitled to — here one initial attempt plus
+    `MAX_AUTOMATIC_STEP_RESUMES`, on top of the relaunch.
+    """
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-separate-budgets")
+    Registry().register(str(canonical), workflow="local", repo_type="single-owner")
+    launches: list[str] = []
+
+    def dying_then_failing_at_work(
+        persona: str, task: str, *, project_dir: str, **_: object
+    ) -> Report:
+        launches.append(persona)
+        if len(launches) == 1:
+            return _launch_death(persona)
+        worktree = Path(project_dir)
+        (worktree / f"attempt-{len(launches)}.txt").write_text("partial\n", encoding="utf-8")
+        gitops.add_all(worktree)
+        gitops.commit(worktree, f"chore: partial attempt {len(launches)}")
+        return Report(persona, 1, False, False, 2, [], {}, {}, "", max_turns=2)
+
+    result = run_repo_task(
+        str(canonical),
+        "## What\nMeasure lifecycle cost.\n\n## Why\nA run's spend is invisible.\n",
+        "engineer",
+        workspace=Workspace(tmp_path / "separate-budget-worktrees"),
+        branch="feature/separate-launch-and-work-budgets",
+        dispatch_fn=dying_then_failing_at_work,
+        recorded_gate=["true"],
+        sleep=lambda _seconds: None,
+    )
+
+    assert result.outcome == "not-completed", result.detail
+    assert len(launches) == 1 + 1 + MAX_AUTOMATIC_STEP_RESUMES, launches
+    # The work that did get committed is preserved for a retry, as it always was.
+    assert result.resume is not None
+    assert incomplete_commits(canonical, "origin/main", result.branch)
+    # This one failed at its work, so it is reported as work — not as the launch.
+    assert "just smoke" not in result.detail
+
+
+def test_a_workstream_whose_relaunches_all_die_names_the_launch_path(tmp_path, bare_origin) -> None:
+    """Relaunching is bounded, and what it reports sends the reader to the probe.
+
+    "workstream did not complete" alone sends a planner looking for a fault in a
+    task that was never attempted. The detail says so and names `just smoke`, which
+    is the cheap probe for the other explanation.
+    """
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-launch-outage")
+    Registry().register(str(canonical), workflow="local", repo_type="single-owner")
+    launches: list[str] = []
+
+    waits: list[float] = []
+
+    def always_dying(persona: str, task: str, **_: object) -> Report:
+        launches.append(persona)
+        return _launch_death(persona)
+
+    result = run_repo_task(
+        str(canonical),
+        "## What\nTier the workspace.\n\n## Why\nThe suite reruns work it proved.\n",
+        "engineer",
+        workspace=Workspace(tmp_path / "launch-outage-worktrees"),
+        branch="feature/launch-outage",
+        dispatch_fn=always_dying,
+        recorded_gate=["true"],
+        sleep=waits.append,
+    )
+
+    assert result.outcome == "not-completed"
+    assert len(launches) == 1 + MAX_EMPTY_DEATH_RELAUNCHES, launches
+    # Each relaunch waits longer than the last, rather than at a flat cadence.
+    assert waits == [RELAUNCH_BACKOFF_SECONDS * n for n in range(1, MAX_EMPTY_DEATH_RELAUNCHES + 1)]
+    assert "died leaving no work behind" in result.detail
+    assert "just smoke" in result.detail
+
+
+def test_a_cancelled_round_does_not_wait_out_a_relaunch_backoff(tmp_path, bare_origin) -> None:
+    """The round is already closing; the backoff must not hold the branch hostage.
+
+    Under a round the cancellation event *is* the sleep, so a cancel that lands
+    mid-backoff wakes it. Waiting the whole interval out first would delay the one
+    thing a cancelled workstream still owes: preserving what sits on the branch.
+    """
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-cancelled-backoff")
+    Registry().register(str(canonical), workflow="local", repo_type="single-owner")
+    cancel = threading.Event()
+    launches: list[str] = []
+
+    def dying_under_cancellation(persona: str, task: str, **_: object) -> Report:
+        launches.append(persona)
+        # Cancellation lands while the backoff below is already waiting, which is
+        # the window the event has to be able to interrupt.
+        threading.Timer(0.05, cancel.set).start()
+        return _launch_death(persona)
+
+    started = time.monotonic()
+    result = run_repo_task(
+        str(canonical),
+        "## What\nTier the workspace.\n\n## Why\nThe suite reruns work it proved.\n",
+        "engineer",
+        workspace=Workspace(tmp_path / "cancelled-backoff-worktrees"),
+        branch="feature/cancelled-during-backoff",
+        dispatch_fn=dying_under_cancellation,
+        recorded_gate=["true"],
+        cancel=cancel,
+    )
+    elapsed = time.monotonic() - started
+
+    assert result.outcome == "not-completed", result.detail
+    # Woken, not expired: the full backoff was never spent.
+    assert elapsed < RELAUNCH_BACKOFF_SECONDS, elapsed
+    # And the cancelled round did not launch one more dispatch on the way out.
+    assert launches == ["engineer"]
+    # The round decided this stop, so it is reported as the cancellation it was —
+    # its relaunches were cut short, not spent, and the launch path is not accused.
+    assert result.detail.startswith("cancelled cooperatively")
+    assert "just smoke" not in result.detail
 
 
 def test_real_git_teardown_refusal_is_deferred_after_publication(tmp_path, bare_origin) -> None:

@@ -106,6 +106,11 @@ handoff at `runs/<run-id>/planner.md`. Use that `run_id` for every supervision
 recipe. A plan name is also accepted when it identifies exactly one active launch;
 an ambiguous or stale name fails and lists valid run ids.
 
+`just monitor RUN` is the attach path: it follows the run and renders a pending
+planner surface without consuming it. Rendering is not reading — `channel-next`
+is the only consumer, so the [pacemaker](#the-planner-update-pacemaker) must not
+depend on consumption to keep ticking.
+
 Pass `--round-budget SECONDS` to `just orchestrate` to set the outer liveness
 window for each graph round; it defaults to 14400 seconds (four hours). Exceeding
 the window cooperatively cancels in-flight workers and emits a blocking
@@ -130,22 +135,61 @@ check-in agent. That read-only actor synthesizes a concise per-workstream update
 from the run journal, status, monitor, telemetry, and labeled history, then sends
 it exactly once with `just channel-surface`. The command queues the non-blocking
 surface without waiting for a planner reply; the reconciler neither authors nor
-relays its content. Only successful consumption through `channel-next` resets the
-clock and appends `planner-surfaced` to `events.jsonl`; an update queued while no
-planner is attached is neither reset nor audited as delivered.
+relays its content.
+
+Sending and delivery are recorded as two different facts. Queuing the update
+appends `planner-surface-queued` to `events.jsonl` — carrying the surface kind and
+message, the `source` that sent it (`check-in` for a pacemaker update, `proposal`
+for a worker's), and the `workstream` node when one provoked it. Successful
+consumption through `channel-next` is what resets the clock and
+appends `planner-surfaced`. A reader of the journal can therefore tell "nothing was
+sent" from "updates were sent and nobody read them", which the delivered-only
+record could not express.
+
+#### The claim is a lease on the dispatch, not a lock held until someone reads
 
 The heartbeat record carries an atomic `in_flight` claim so concurrent pacemaker
-ticks cannot dispatch duplicate check-ins. A failed attempt is recorded in
-`channel/check-in.log`, clears its claim, and becomes eligible again at the next
-configured interval without blocking the graph frontier. A successfully queued
-surface retains the claim until delivery, preventing another actor from
-duplicating the pending update.
+ticks cannot dispatch duplicate check-ins. It covers the **dispatch**: taken when a
+due check-in is claimed, handed back when that dispatch settles either way, and
+recorded with the pid and host that took it so a later tick can reclaim a lease
+whose holder is provably gone (`process_may_be_live`, the same probe the
+abandoned-round path uses). A failed attempt is recorded in `channel/check-in.log`
+and becomes eligible again after the next interval without blocking the graph
+frontier.
+
+Held instead until *delivery*, it silenced runs: `record_surface` was the only
+thing that released it and that runs on consumption, so one update nobody read left
+`due=True, in_flight=True` for the life of the run and no later check-in could ever
+be claimed. Two live runs sat that way for over an hour each on 2026-08-01 with the
+interval lowered to 900s, which is the diagnostic that separates this from a clock
+problem — the wedge was the claim, so no cadence change reached it. `just monitor`
+renders a pending surface without consuming it, and `runs/<id>/planner.md` names it
+as the way to follow a run, so the documented way to watch a run was the way to
+wedge it. Rendering is not reading; only `channel-next` consumes.
+
+Exactly one check-in is ever pending, and it is kept current rather than kept
+still: the next interval's check-in **replaces** the queued update instead of being
+blocked by it. Being ignored therefore makes the harness louder rather than
+quieter. The clock is not reset by queuing, so the staleness `just runs` and `just
+status` report (below) is measured from the last update a planner actually read and
+keeps growing while the queued content stays fresh. A queued update discarded
+unread — behind a surface awaiting a reply, or at a round boundary — releases the
+lease with it.
+
+A surface names the round it was written for and `channel-next` validates it
+against the active one, so one that outlives its round is **discarded**, not kept
+consumable: it describes work in a round that has finished, and the check-in that
+replaces it describes the round actually running. Both the round transition and the
+next `channel-next` clear it, so the state has an operator remedy from either side.
 
 Every planner-visible update—round boundary, proposal, or delivered heartbeat—
-clears the due signal and restarts the clock. The pacemaker compares wall time
-directly with the persisted `last_surface_at`, so a new round or restarted process
-continues the same durable countdown rather than starting a fresh interval. To
-adjust the cadence, add
+clears the due signal and restarts the clock. The next check-in falls due one
+interval after the later of the last update a planner read (`last_surface_at`) and
+the last check-in attempt that settled (`last_attempt_at`); both are persisted, so a
+new round or restarted process continues the same durable countdown rather than
+starting a fresh interval. That comparison is made against the *current* interval on
+every tick rather than baked into a stored deadline, which is what keeps the interval
+the only knob that changes cadence. To adjust it, add
 `"heartbeat_interval": SECONDS` to an otherwise normal `channel-reply`; use
 `"heartbeat_interval": false` to disable it. Values must be positive finite
 seconds. This pacemaker is independent of the reader-side `just monitor
@@ -162,6 +206,24 @@ for planner reply` for informational ones, followed by the surface kind and
 message. A queued, unconsumed heartbeat remains non-blocking and is not reported
 as a reply wait. This distinguishes completed work held at a planner boundary
 from an orchestrator that is actively executing work.
+
+Surfaces nobody has read yet are reported separately, because they are the state a
+planner who never attached is blind to: the row above says only `ACTIVE`, and the
+`planner-surfaced` record they would look for is written on delivery, which has not
+happened. Both views therefore add one line per affected run naming how many
+surfaces are queued, how stale the oldest one is, and the command that reads them:
+
+```
+* harness-fixes-cont  [mine]  ACTIVE  (orchestrator running)
+    1 planner update waiting, unread for 3h; read it with: just channel-next harness-fixes-cont --runs-dir runs
+```
+
+The queue is `channel/heartbeat-surface.json` (a check-in update) and
+`channel/deferred-blocker.json` (a blocker preserved for the next reply-ready
+relay). `channel/planner-pending.json` is not part of it: that surface outlives its
+delivery while it waits for an answer, and is reported by the wait above instead. A
+run reported `ABANDONED` or `PARKED` keeps the line saying why it stopped rather
+than an invitation to read updates nothing will follow up on.
 
 That wait describes a *live* launch only. A queued surface outlives the work that
 queued it, so a run reported abandoned or parked never wears it as its `just runs`
@@ -929,12 +991,46 @@ derivation command. Old direct plans, old lifecycle-only repo plans, and recorde
 results without `state` remain readable. It derives from the two files it is given
 and therefore carries no context; `next-round` reads the run's ledger and does.
 
+### The plan of record is the graph the round executed
+
+`round-NN/plan.json` is the round's **launch record** and the reconciler never
+rewrites it. `next-round` therefore does not derive the next round from it: it folds
+the round's own authoritative journal (`orchestrator/projection.py`, the same strict
+reader `run-plan --recover` replays with) and derives from the graph the round
+actually ran. Every live edit the reconciler committed is in that graph — an `add`,
+a `drop`, a `reparent`, a `retry` replacement and its new id, an amended `task`,
+`done_when` or `max_turns`, a branch pin. Only edits the reconciler *rejected* are
+absent, and their submitter was told so synchronously. A journal that cannot be
+folded strictly falls back to the launch record, which is the same state that makes
+`run-plan --recover` report rather than guess.
+
+This replaced an earlier rule under which the transition re-read the launch file and
+structural live edits were round-scoped. Two failures are not separable from that
+rule, and both were observed twice on real runs:
+
+- **A merged node was rescheduled to redo its work.** A live `retry` gives the
+  replacement a new id, so a transition reading the launch file saw only the
+  original. The merged replacement was not recognised as done, and the superseded
+  original was carried forward and dispatched again — `suite-false-failures-final`
+  settled `merged` at 16:19:17Z and started again at 16:47:37Z.
+- **A pinned retry was re-cut fresh.** A retry pinned to a preserved branch reached
+  the graph but not the next round's plan, so the node dispatched `resumed=false` on
+  a new branch cut from the base, orphaning verified work.
+
+From the planner's side the rule was also indistinguishable from a dropped edit:
+`channel-reply` reported the edit applied — and it was — with a one-round expiry
+nothing surfaced. That is worse than a rejection, which is at least reported.
+
+One case needs care and is handled explicitly: a live `retry` leaves the node it
+replaced in the executed graph, cancelled, so `round_supersessions` removes it at the
+transition exactly as an explicit `drop` would. A node recorded `done` — including
+`merged` — is never rescheduled; there is no case that reschedules one.
+
 ### Carried planner context
 
-The plan of record for a round is the plan it was launched with, so a node carried
-forward is carried forward as that plan described it. What the planner learned
-while the round ran is not in that file, and restoring the opening brief over it is
-how a worker came to re-derive 41 commits of finished work.
+What the planner learned while the round ran is not in the launch record, and
+restoring the opening brief over it is how a worker came to re-derive 41 commits of
+finished work.
 
 A `context` edit is where that knowledge goes. Each note is appended to the node's
 `context` list on the running graph, rendered as a `## Planner context` section of
@@ -951,13 +1047,14 @@ carry:
   state observed while one attempt ran, so it is stale as soon as the next attempt
   moves; a note that still matters is one the planner attaches again against what
   the new round shows. This is what stops a node accumulating instructions.
-- **Notes on a node that is not carried forward** — done, dropped, or replaced by a
-  split. Context follows a node id, and a live `retry` replacement is a new id, so
-  notes given to the superseded node stay with it.
-- **Everything structural.** An `add`, a `drop`, a `reparent`, and a `retry`
-  replacement change the round's desired graph, not the plan of record; the planner
-  restates the ones it wants as `next-round` edits. A `retry` edit that states
-  `context` itself wins over the collected notes, empty list included.
+- **Notes on a node that is not carried forward** — done, dropped, replaced by a
+  split, or superseded by a live `retry`. Context follows a node id, and a retry
+  replacement is a new id, so notes given to the superseded node stay with it.
+
+A `next-round` `retry` edit that states `context` itself wins over the collected
+notes, empty list included. Everything *structural* now carries, because the plan of
+record is [the graph the round
+executed](#the-plan-of-record-is-the-graph-the-round-executed).
 
 Branch pins, resume checkpoints, and stack anchors carry exactly as they did
 before: context rides alongside them and changes none of them.

@@ -905,3 +905,119 @@ def test_round_context_collects_only_the_notes_that_round_committed(tmp_path) ->
     assert round_context(run_dir, 2) == {"work": ["from round two"], "other": ["for other"]}
     assert round_context(run_dir, 3) == {}
     assert round_context(tmp_path / "absent", 1) == {}
+
+
+def _committed_retry(journal, node: str, replacement: dict) -> None:
+    """Journal one live `retry` exactly as the reconciler compiles and records it."""
+    journal.append(
+        "edit-committed",
+        detail={
+            "command": {"op": "retry", "id": node, "node": replacement},
+            "operations": [
+                {
+                    "kind": "retry-requested",
+                    "node": node,
+                    "detail": {"replacement": replacement["id"], "reset": []},
+                },
+                {"kind": "node-added", "detail": {"definition": replacement}},
+            ],
+        },
+    )
+
+
+def test_a_retry_pinned_to_a_preserved_branch_reaches_the_next_round(tmp_path) -> None:
+    """The branch pin, the new id, and the superseded original, at the transition.
+
+    Drives the real journal, the real strict projection, and the real `next_round`.
+    The regression it guards: the transition re-read the launch file, so a pinned
+    retry dispatched on a fresh branch cut from the base and orphaned the verified
+    work on the preserved one.
+    """
+    from orchestrator.graph import parse_graph
+    from orchestrator.journal import NodeId, RunId, open_journal
+    from orchestrator.replan import executed_plan, next_round, round_supersessions
+
+    run_dir = tmp_path / "run"
+    launch = {
+        "schema_version": 6,
+        "concurrency": 4,
+        "tasks": [
+            {"id": "sweep", "repo": "local/thing", "persona": "engineer", "task": "sweep it"},
+        ],
+    }
+    replacement = {
+        "id": "sweep-retry",
+        "repo": "local/thing",
+        "persona": "engineer",
+        "task": "continue on the preserved branch",
+        "branch": "ai-orchestrator/engineer/preserved-1234",
+        "max_turns": 140,
+        "done_when": "the preserved branch's gate is green",
+    }
+    journal = open_journal(run_dir, RunId("run"), 1)
+    for task in launch["tasks"]:
+        journal.append("node-added", detail={"definition": task})
+    journal.append(
+        "round-started",
+        detail={"nodes": 1, "concurrency": 4, "plan": {"schema_version": 6, "concurrency": 4}},
+    )
+    journal.append("node-started", node=NodeId("sweep"))
+    _committed_retry(journal, "sweep", replacement)
+
+    executed = executed_plan(run_dir, 1, launch)
+    # The graph the round ran, not the file it was launched with.
+    assert {task["id"] for task in executed["tasks"]} == {"sweep", "sweep-retry"}
+    parse_graph(dict(executed))
+    superseded = round_supersessions(run_dir, 1)
+    assert superseded == {"sweep": "sweep-retry"}
+
+    result = {
+        "ok": False,
+        "state": "incomplete",
+        "started_order": ["sweep", "sweep-retry"],
+        "results": {
+            "sweep": {"status": "cancelled", "task": "sweep it"},
+            "sweep-retry": {
+                "status": "failed",
+                "task": "continue on the preserved branch",
+                "outcome": "not-completed",
+                "branch": "ai-orchestrator/engineer/preserved-1234",
+            },
+        },
+    }
+    plan = next_round(executed, result, {}, superseded=superseded)
+    carried = {task["id"]: task for task in plan["tasks"]}
+    # The superseded original is gone; the replacement carries its own identity, its
+    # pin, and the budget and judge bar the planner attached at submission.
+    assert set(carried) == {"sweep-retry"}
+    assert carried["sweep-retry"]["branch"] == "ai-orchestrator/engineer/preserved-1234"
+    assert carried["sweep-retry"]["max_turns"] == 140
+    assert carried["sweep-retry"]["done_when"] == "the preserved branch's gate is green"
+
+    # A merged replacement is carried *out*, and its superseded original is not put
+    # back in its place — the pairing that had a run redo work it had already landed.
+    merged = {
+        "ok": True,
+        "state": "complete",
+        "started_order": ["sweep", "sweep-retry"],
+        "results": {
+            "sweep": {"status": "cancelled", "task": "sweep it"},
+            "sweep-retry": {"status": "done", "outcome": "merged", "task": "continue"},
+        },
+    }
+    assert next_round(executed, merged, {}, superseded=superseded)["tasks"] == []
+
+
+def test_an_unfoldable_journal_falls_back_to_the_round_s_launch_record(tmp_path) -> None:
+    """A stream the strict reader refuses must not take the transition with it."""
+    from orchestrator.replan import executed_plan, round_supersessions
+
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    launch = {"concurrency": 4, "tasks": [{"id": "only", "task": "no diff"}]}
+    # No journal at all — a ledger recorded before this contract existed.
+    assert executed_plan(run_dir, 1, launch) == launch
+    assert round_supersessions(run_dir, 1) == {}
+    # And one the strict reader cannot fold.
+    (run_dir / "events.jsonl").write_text('{"not": "an event"}\n', encoding="utf-8")
+    assert executed_plan(run_dir, 1, launch) == launch

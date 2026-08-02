@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import math
 import sys
+from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
@@ -12,7 +13,7 @@ from .config import ConfigError
 from .detach import run_detached
 from .journal import open_journal
 from .plan import PlanError
-from .replan import next_round, round_context
+from .replan import executed_plan, next_round, round_context, round_supersessions
 from .runs import (
     NodeId,
     StepId,
@@ -76,12 +77,16 @@ def main(argv: list[str] | None = None) -> int:
         _validate_completions(run_dir, result, completed_refs)
         if completed_refs:
             edits = {**edits, "complete_human": completed_refs}
-        previous_plan = load_mapping(round_dir / "plan.json")
-        # The plan of record is the one the round was launched with; what the planner
-        # learned *during* it lives in the committed edits, so the two are read
-        # together or the transition restores a brief that predates the round.
+        # The plan of record is the graph the round *executed*. `round-NN/plan.json`
+        # is only the launch record — the reconciler never rewrites it — so deriving
+        # the next round from it discards every live edit the planner committed.
+        previous_plan = executed_plan(run_dir, number, load_mapping(round_dir / "plan.json"))
         plan = next_round(
-            previous_plan, result, edits, carried_context=round_context(run_dir, number)
+            previous_plan,
+            result,
+            edits,
+            carried_context=round_context(run_dir, number),
+            superseded=round_supersessions(run_dir, number),
         )
     except (ConfigError, PlanError) as exc:
         print(f"next-round: {exc}", file=sys.stderr)
@@ -123,6 +128,13 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     next_number, next_dir = write_next_plan(run_dir, plan)
+    # `channel-next` validates a queued surface against the active round, so one the
+    # finished round left behind is unconsumable and still the run's one pending
+    # update. Cleared once the new round exists, which is what makes it stale.
+    from .channel import ChannelError, discard_surface_from_a_finished_round
+
+    with suppress(ChannelError, ConfigError, OSError):
+        discard_surface_from_a_finished_round(run_dir)
     plan_path = next_dir / "plan.json"
     if args.plan_only:
         print(f"Round {next_number:02d} plan written -> {plan_path}")
@@ -182,7 +194,7 @@ def _validate_completions(run_dir: Path, result: dict[str, Any], refs: list[str]
 
 
 def main_runs(argv: list[str] | None = None) -> int:
-    from .channel import ChannelError, planner_wait_indicator
+    from .channel import ChannelError, pending_surface_indicator, planner_wait_indicator
     from .goals import concurrent_indicator
     from .launch import UNKNOWN_OWNER, caller_identity, read_run_owner
     from .liveness import PARKED_AFTER_SECONDS, parked_indicator
@@ -252,6 +264,15 @@ def main_runs(argv: list[str] | None = None) -> int:
         for path in run_dirs
         if (indicator := concurrent_indicator(path, args.parked_after)) is not None
     }
+    # A planner who never attached reads this view and nothing else, and the row above
+    # says only ACTIVE. Reporting the queue here is what makes an update the
+    # orchestrator sent visible to them at all: the line names how many are waiting,
+    # how stale the oldest has grown, and the literal command that reads them.
+    unread = {
+        path.name: indicator
+        for path in run_dirs
+        if (indicator := pending_surface_indicator(path)) is not None
+    }
     if not rows and not active_launches and not abandoned:
         print("No runs launched by this session." if args.mine else "No recorded runs.")
         return 0
@@ -272,6 +293,8 @@ def main_runs(argv: list[str] | None = None) -> int:
         except (ChannelError, ConfigError, OSError):
             waiting = None
         print(f"* {run_id}  {owner}  ACTIVE  ({waiting or 'orchestrator running'})")
+        if run_id in unread:
+            print(f"    {unread[run_id]}")
         if run_id in concurrent:
             print(f"    {concurrent[run_id]}")
     for run_id, number, summary in rows:
@@ -293,6 +316,11 @@ def main_runs(argv: list[str] | None = None) -> int:
             print(f"    {abandoned[run_id]}")
         if run_id in parked:
             print(f"    {parked[run_id]}")
+        # Same rule the wait above follows: a queued surface outlives the work that
+        # queued it, so a stopped run keeps the line that says why it stopped rather
+        # than one inviting the planner to read updates nothing will follow up on.
+        if run_id in unread and not stopped:
+            print(f"    {unread[run_id]}")
         if run_id in concurrent:
             print(f"    {concurrent[run_id]}")
         print(f"    Results: just results {run_id} --runs-dir {args.runs_dir}")

@@ -57,8 +57,13 @@ from .runs import NodeId, RunId, StepId
 # reader from it — strict replay refuses a committed operation it cannot fold, so a
 # note written at v8 must be skippable as an unknown version rather than met as
 # corruption in a round that is otherwise healthy.
-SCHEMA_VERSION = 8
-SUPPORTED_SCHEMA_VERSIONS = frozenset({1, 2, 3, 4, 5, 6, 7, SCHEMA_VERSION})
+#
+# v9 is additive as well: `planner-surface-queued` joined the vocabulary, recorded
+# when a surface is *sent* rather than when it is delivered. A v8 reader skips it and
+# sees exactly what it saw before — which is the gap it closes, because until v9 an
+# update nobody read was indistinguishable from an update nobody sent.
+SCHEMA_VERSION = 9
+SUPPORTED_SCHEMA_VERSIONS = frozenset({1, 2, 3, 4, 5, 6, 7, 8, SCHEMA_VERSION})
 
 JOURNAL_NAME = "events.jsonl"
 REQUIRED_EVENT_FIELDS = ("version", "seq", "at", "kind", "run_id", "round")
@@ -95,6 +100,12 @@ EventKind = Literal[
     "completion-requested",
     "round-started",
     "round-finished",
+    # Sent, and delivered, are two different facts about one surface. `planner-surfaced`
+    # is appended only when a planner consumes a surface, so a queue nobody reads leaves
+    # no trace at all: a reader of `events.jsonl` cannot tell "nothing was sent" from
+    # "two updates were sent and nobody read them". The queued record is what separates
+    # them, and it is written at send time whether or not delivery ever happens.
+    "planner-surface-queued",
     "planner-surfaced",
     "node-started",
     "node-settled",
@@ -170,6 +181,7 @@ ROUND_EVENT_KINDS: frozenset[EventKind] = frozenset(
         "round-finished",
         "completion-requested",
         "concurrent-acknowledged",
+        "planner-surface-queued",
         "planner-surfaced",
     }
 )

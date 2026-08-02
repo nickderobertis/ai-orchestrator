@@ -920,3 +920,204 @@ def test_planner_context_attached_mid_round_reaches_the_next_round_dispatch(
         capture_output=True,
         check=False,
     )
+
+
+def test_edits_committed_during_a_round_are_what_the_next_round_is_derived_from(
+    tmp_path: Path, onejudge_bin: str
+) -> None:
+    """A transition derived from `round-NN/plan.json` discarded every live edit.
+
+    The launch record is never rewritten, so a retry's replacement id, its branch
+    pin, and its amended controls all evaporated at the boundary — after
+    `channel-reply` had told the planner they were applied. All four are asserted on
+    the plan the transition wrote, because they are carried by one mechanism: the
+    next round is derived from the node the executed graph holds, whatever keys the
+    planner put on it.
+
+    The journey is the operator's own throughout: `just orchestrate` launches, the
+    edits go through `just channel-reply` while nodes run, and the assertion is on
+    the plan the orchestrator's own transition wrote.
+    """
+    runs = tmp_path / "runs"
+    base = yaml.safe_load(BASE_CONFIG.read_text(encoding="utf-8"))
+    base["provider"] = {"kind": "command", "command": [sys.executable, str(FAKE_BACKEND)]}
+    base_path = tmp_path / "carried-base.yaml"
+    base_path.write_text(yaml.safe_dump(base), encoding="utf-8")
+    retried_prompts = tmp_path / "retried-prompts.jsonl"
+    amended = (
+        "## What\nRe-run the sweep against the corrected fixture.\n\n"
+        "## Acceptance criteria\nThe corrected fixture is the one under test."
+    )
+    plan = tmp_path / "carried-edit-plan.json"
+    plan.write_text(
+        json.dumps(
+            {
+                "schema_version": 6,
+                "name": "carried-edits",
+                "concurrency": 4,
+                "tasks": [
+                    # Fails, is retried live, and its replacement fails too — so the
+                    # replacement is what the next round has to carry, with the
+                    # amended brief the planner attached to it.
+                    {"id": "sweep", "persona": "engineer", "task": "should-fail", "max_turns": 1},
+                    # Fails, is retried live, and its replacement *succeeds*. Neither
+                    # id may appear in the next round: the replacement did the work,
+                    # and re-running the original is the incident.
+                    {
+                        "id": "verdicts",
+                        "persona": "engineer",
+                        "task": "should-fail",
+                        "max_turns": 1,
+                    },
+                    {
+                        "id": "hold",
+                        "persona": "engineer",
+                        "task": (
+                            f"slow-branch {tmp_path / 'hold.ticks'}"
+                            f"{Rendezvous.at(tmp_path, 'carried').sentinels(1)}"
+                        ),
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    launched = subprocess.run(
+        [
+            "just",
+            "orchestrate",
+            str(plan),
+            "--runs-dir",
+            str(runs),
+            "--base",
+            str(base_path),
+            "--onejudge-bin",
+            onejudge_bin,
+            "--skill-command",
+            sys.executable,
+            str(FAKE_BACKEND),
+        ],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    run_id = str(json.loads(launched.stdout)["run_id"])
+    run_dir = runs / run_id
+    events = run_dir / "events.jsonl"
+    _wait_for(events, lambda text: bool(text.strip()), LIVE_PROCESS_TIMEOUT)
+    # The round has to still be executing when the edits are submitted, which is the
+    # case the incident was, so one worker is held inside its turn.
+    Rendezvous.at(tmp_path, "carried").wait(LIVE_PROCESS_TIMEOUT)
+    _wait_for_event(events, "node-failed", "sweep", LIVE_PROCESS_TIMEOUT)
+    _wait_for_event(events, "node-failed", "verdicts", LIVE_PROCESS_TIMEOUT)
+
+    _reply(
+        run_id,
+        runs,
+        [
+            {
+                "op": "retry",
+                "id": "sweep",
+                "node": {
+                    "id": "sweep-corrected",
+                    "persona": "engineer",
+                    "task": f"{amended}\n\nshould-fail record-task={retried_prompts}",
+                    "done_when": "the corrected fixture is exercised and the gate is green",
+                    "max_turns": 2,
+                    # The pin is the edit with the worst failure mode: lost at the
+                    # boundary, the retry cuts a fresh branch from the base and the
+                    # verified work on the preserved one is orphaned. It is carried
+                    # here as one more key on the node the transition derives from,
+                    # which is why proving it beside the others is the whole test.
+                    "branch": "ai-orchestrator/engineer/preserved-sweep",
+                },
+            },
+            {
+                "op": "retry",
+                "id": "verdicts",
+                "node": {
+                    "id": "verdicts-corrected",
+                    "persona": "engineer",
+                    "task": "complete-now verdicts-corrected",
+                },
+            },
+            {
+                "op": "add",
+                "node": {
+                    "id": "followup",
+                    "persona": "engineer",
+                    "task": "should-fail",
+                    "max_turns": 1,
+                },
+            },
+        ],
+    )
+    _wait_for_event(events, "node-failed", "sweep-corrected", LIVE_PROCESS_TIMEOUT)
+
+    Rendezvous.at(tmp_path, "carried").let_go()
+    _wait_for(run_dir / "round-01" / "result.json", lambda text: bool(text.strip()), 120)
+    round_one = json.loads((run_dir / "round-01" / "result.json").read_text(encoding="utf-8"))
+    assert round_one["results"]["verdicts-corrected"]["status"] == "done"
+    assert round_one["results"]["sweep-corrected"]["status"] == "failed"
+    # The launch record itself is untouched — that is exactly why reading it back at
+    # the boundary lost everything the planner had committed.
+    launch_plan = json.loads((run_dir / "round-01" / "plan.json").read_text(encoding="utf-8"))
+    assert {task["id"] for task in launch_plan["tasks"]} == {"sweep", "verdicts", "hold"}
+
+    # Every settled node leaves a proposal ahead of the boundary, so the planner
+    # answers whatever arrives until the orchestrator's own transition has written
+    # the next round. That transition is the subject of this test.
+    next_plan = run_dir / "round-02" / "plan.json"
+    transition_deadline = deadline(300)
+    while time.monotonic() < transition_deadline and not next_plan.is_file():
+        boundary = _next_surface(run_id, runs, 10)
+        if boundary.get("status") == "finished":
+            break
+        if boundary.get("surface") is None:
+            continue
+        # A run that settled between the read and the reply refuses it, and that is a
+        # finished run rather than a failure of this journey — round-02's plan below
+        # is the evidence either way.
+        subprocess.run(
+            ["just", "channel-reply", run_id, "--runs-dir", str(runs)],
+            cwd=REPO_ROOT,
+            input=json.dumps({"completion": False, "message": "continue", "reason": "observed"}),
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=e2e_timeout(30),
+        )
+    _wait_for(next_plan, lambda text: bool(text.strip()), 120)
+
+    carried = json.loads((run_dir / "round-02" / "plan.json").read_text(encoding="utf-8"))
+    by_id = {task["id"]: task for task in carried["tasks"]}
+    # The retry's own identity survived, with the brief, the judge bar and the turn
+    # budget the planner attached to it.
+    assert by_id["sweep-corrected"]["done_when"].startswith("the corrected fixture")
+    assert by_id["sweep-corrected"]["max_turns"] == 2
+    assert amended in by_id["sweep-corrected"]["task"]
+    assert by_id["sweep-corrected"]["branch"] == "ai-orchestrator/engineer/preserved-sweep"
+    # The node it replaced is gone rather than carried forward beside it, and the
+    # replacement that finished its work is carried *out* rather than redone.
+    assert "sweep" not in by_id, sorted(by_id)
+    assert "verdicts" not in by_id, sorted(by_id)
+    assert "verdicts-corrected" not in by_id, sorted(by_id)
+    # An added node is the round's work too, and reaches the next round like any other.
+    assert "followup" in by_id, sorted(by_id)
+
+    _wait_for(run_dir / "round-02" / "result.json", lambda text: bool(text.strip()), 180)
+    delivered = [
+        json.loads(line) for line in retried_prompts.read_text(encoding="utf-8").splitlines()
+    ]
+    # The next round dispatched the amended brief, not the one the run was launched with.
+    assert len(delivered) >= 2, delivered
+    assert "Re-run the sweep against the corrected fixture." in delivered[-1]
+
+    subprocess.run(
+        ["just", "stop", run_id, "--runs-dir", str(runs)],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )

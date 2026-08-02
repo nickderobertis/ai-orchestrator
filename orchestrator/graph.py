@@ -1443,7 +1443,20 @@ def _run_round(
             print(f"run-plan: invalid proposal channel: {exc}", file=sys.stderr)
             return 2
 
+        def _surface_written_at() -> int | None:
+            """When the queued check-in was last written, or ``None`` for no queue."""
+            try:
+                return (resolved_channel / HEARTBEAT_SURFACE_FILE).stat().st_mtime_ns
+            except OSError:
+                return None
+
         def dispatch_check_in() -> None:
+            # The check-in *replaces* whatever is queued rather than being blocked by
+            # it, so the queue existing afterwards no longer proves this agent wrote
+            # anything: a dispatch that surfaced nothing would otherwise be recorded a
+            # success behind a predecessor's update and hand the planner a stale
+            # snapshot as a fresh one. The write itself is what has to be observed.
+            before = _surface_written_at()
             task = (
                 "Read the durable evidence for this run and send exactly one concise, "
                 "agent-synthesized planner update with the supplied command. Cover every "
@@ -1478,7 +1491,8 @@ def _run_round(
                 max_turns=1,
                 timeout=dispatch_timeout,
             )
-            if not report.completed or not (resolved_channel / HEARTBEAT_SURFACE_FILE).is_file():
+            written = _surface_written_at()
+            if not report.completed or written is None or written == before:
                 raise RuntimeError("check-in agent did not surface a completed status update")
 
         proposal_pump = ProposalPump(

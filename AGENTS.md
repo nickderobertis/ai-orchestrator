@@ -104,11 +104,15 @@ dispatch onejudge.
    sign-off. It never represents the planner's own review, acceptance,
    validation, or integration decision. The planner reviews each settled node
    over the live channel and issues `add` / `retry` / `drop` / `split` edits.
-   What it learns about a node that keeps running belongs in a `context` edit:
-   that note is the only thing the round transition carries onto the carried-forward
-   node, and it carries exactly one round, so state worth keeping is state attached
-   again. See [Carried planner
-   context](docs/orchestration.md#carried-planner-context). A
+   A live edit the reconciler accepts is carried forward: the plan of record for a
+   transition is [the graph the round
+   executed](docs/orchestration.md#the-plan-of-record-is-the-graph-the-round-executed),
+   folded from the run's own journal rather than re-read from the launch file, so a
+   retry's replacement id, a branch pin, an amended `task`, `done_when`, or
+   `max_turns` all reach the next round. What it learns about a node that keeps
+   running belongs in a `context` edit: that note is the one thing which carries
+   exactly one round, so state worth keeping is state attached again. See [Carried
+   planner context](docs/orchestration.md#carried-planner-context). A
    human node the planner would attest itself is a modeling error: keep it only
    if the action is genuinely external; otherwise perform that coordination live
    with no node. See [Node shapes](docs/orchestration.md#node-shapes). Before a
@@ -144,6 +148,14 @@ channel-reply`, `just stop`, and the read-only `just monitor` / `just runs` /
 live edits](docs/orchestration.md#live-graph-edits). The planner never runs
 `run-plan` or `next-round` itself: those commands belong to the orchestrator
 process, and two writers would race the ledger lock.
+
+`orchestrate` launches detached so several runs can be supervised at once, and
+`just monitor <run-id>` is how you attach to one of them. Rebuilding run state
+from `events.jsonl`, `ps`, or `git log` in a run clone instead is the omission
+the read-only views now prevent: `just runs` and `just status` name every unread
+surface, how stale it is, and the `just channel-next` that reads it, so an update
+nobody read can no longer hide behind a row that says only `ACTIVE`. Rendering a
+surface in `monitor` is not reading it — only `channel-next` consumes one.
 
 **Runs are owned.** Several planners share this host, each supervising its own
 workstreams, so a run belongs to the session that launched it. `just orchestrate`
@@ -360,10 +372,10 @@ orchestrator onejudge process. The planner launches multi-node work with `just
 orchestrate <plan.json>` and supervises its surfaced boundaries and proposals
 over the [live channel](docs/orchestration.md#the-plannerorchestrator-channel); it
 does not invoke `run-plan` directly. `repo-plan` exists only for compatibility.
-`just runs` lists recorded runs with the session that launched each one, and
-`just runs --mine` narrows that to this session's. `just stop <run-id>` ends a run
-and its whole dispatch tree, subject to the [ownership
-rule](#your-loop-as-planner) above.
+`just runs` lists recorded runs with the session that launched each one and the
+surfaces each has queued unread; `just runs --mine` narrows that to this session's.
+`just stop <run-id>` ends a run and its whole dispatch tree, subject to the
+[ownership rule](#your-loop-as-planner) above.
 Human completion is never inferred and enters the graph only as an explicit live
 `attest` command (or compatibility `next-round` attestation). Keep operational
 syntax and result contracts in

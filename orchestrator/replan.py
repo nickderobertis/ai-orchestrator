@@ -13,12 +13,15 @@ dependency on a merged node is dropped as *satisfied* (its predecessor is on the
 base branch now). Unresolved nodes are carried forward to retry unless dropped or
 replaced by a split. The produced plan is validated, so a bad edit fails loudly.
 
-A carried-forward node keeps its branch pin and resume checkpoint, and — since
-`round_context` — the planner context attached to it while the round ran. Nothing
-else the round learned crosses the boundary: the plan of record is the one the
-round was launched with, so structural live edits (an `add`, a `drop`, a `retry`
-replacement's new id) are round-scoped and the planner restates the ones it wants
-as `next-round` edits.
+A carried-forward node keeps its branch pin and resume checkpoint, and the planner
+context attached to it while the round ran.
+
+**The plan of record is the graph the round executed, not the file it was launched
+with**, so `executed_plan` folds it from the run's journal rather than re-reading
+`round-NN/plan.json`. The two guarantees above are why this replaced an earlier
+round-scoped rule: a `retry` replacement's id exists only in the executed graph, so
+the launch file can neither recognise the merged replacement as done nor keep the
+branch pin it carried. docs/orchestration.md has the planner-facing account.
 """
 
 from __future__ import annotations
@@ -33,9 +36,65 @@ from typing import Any
 from .config import ConfigError, load_yaml
 from .lifecycle import MAX_AUTOMATIC_STEP_RESUMES
 from .outcomes import INFRASTRUCTURE_FAILURE_OUTCOME
-from .runs import StackBasePayload
+from .runs import NodeId, RunId, StackBasePayload
 
-__all__ = ["next_round", "round_context"]
+__all__ = ["executed_plan", "next_round", "round_context", "round_supersessions"]
+
+
+def executed_plan(run_dir: Path, round_number: int, launch_plan: dict[str, Any]) -> dict[str, Any]:
+    """The graph a round actually ran, folded from its authoritative journal.
+
+    ``launch_plan`` is what the round was *asked* to do — `round-NN/plan.json`, which
+    the reconciler never rewrites. It is returned unchanged when the journal cannot be
+    folded strictly. That fallback loses nothing a reader would not already be told
+    about: a round with no committed edit projects to the same tasks, and one whose
+    edits cannot be replayed has a journal that already refuses `run-plan --recover`.
+    """
+    from .journal import JOURNAL_NAME
+    from .projection import ProjectionError, project_run
+
+    try:
+        projected = project_run(run_dir / JOURNAL_NAME, RunId(run_dir.name), round_number)
+    except (ProjectionError, ConfigError, OSError):
+        return launch_plan
+    return dict(projected.plan)
+
+
+def round_supersessions(run_dir: Path, round_number: int) -> dict[NodeId, NodeId]:
+    """Nodes a live ``retry`` replaced during one round, mapped to their replacement.
+
+    A live retry does not edit the node in place the way a `next-round` retry does:
+    it cancels the original and adds a differently-identified replacement, rewiring
+    every dependent onto it. Both therefore appear in the executed graph, and without
+    this the superseded original — cancelled, never done — would be carried forward
+    and dispatched again beside the replacement that already did its work.
+
+    Read tolerantly, like every other observer of the journal: `read_events` already
+    skips junk lines and a torn tail, and an unreadable file reports no supersession
+    — which is what a transition that carried none has always done.
+    """
+    from .journal import JOURNAL_NAME, read_events
+
+    try:
+        events = read_events(run_dir / JOURNAL_NAME)
+    except OSError:
+        return {}
+    replaced: dict[NodeId, NodeId] = {}
+    for event in events:
+        if event.round != round_number or event.kind != "edit-committed":
+            continue
+        operations = event.detail.get("operations")
+        if not isinstance(operations, list):
+            continue
+        for operation in operations:
+            if not isinstance(operation, Mapping) or operation.get("kind") != "retry-requested":
+                continue
+            nid = operation.get("node")
+            detail = operation.get("detail")
+            replacement = detail.get("replacement") if isinstance(detail, Mapping) else None
+            if isinstance(nid, str) and isinstance(replacement, str) and replacement:
+                replaced[NodeId(nid)] = NodeId(replacement)
+    return replaced
 
 
 def round_context(run_dir: Path, round_number: int) -> dict[str, list[str]]:
@@ -77,15 +136,19 @@ def next_round(
     edits: dict[str, Any] | None = None,
     *,
     carried_context: Mapping[str, list[str]] | None = None,
+    superseded: Mapping[NodeId, NodeId] | None = None,
 ) -> dict[str, Any]:
     """Compute the next round's tracked-graph mapping.
 
-    ``prev_plan``: the prior tracked-graph mapping. ``prev_result``: the ``--format
-    json`` output of ``run-plan``. ``edits``: ``{retry: {id: {overrides}},
-    split: {id: [nodes]}, add: [nodes], drop: [ids], complete_human: [refs]}``.
-    ``carried_context``: notes attached to nodes during the round that just ran, as
-    `round_context` collects them. The result is validated via the canonical graph
-    parser.
+    ``prev_plan``: the tracked-graph mapping the round *executed* — `executed_plan`,
+    not the launch file. ``prev_result``: the ``--format json`` output of
+    ``run-plan``. ``edits``: ``{retry: {id: {overrides}}, split: {id: [nodes]}, add:
+    [nodes], drop: [ids], complete_human: [refs]}``. ``carried_context``: notes
+    attached to nodes during the round that just ran, as `round_context` collects
+    them. ``superseded``: nodes a live ``retry`` replaced, as `round_supersessions`
+    collects them; one leaves the graph exactly as an explicit ``drop`` would, but only
+    when its replacement is present to carry the work — see the note at the removal.
+    The result is validated via the canonical graph parser.
     """
     from .graph import parse_graph
     from .plan import PlanError
@@ -129,11 +192,21 @@ def next_round(
         if isinstance(result, dict) and result.get("outcome") == INFRASTRUCTURE_FAILURE_OUTCOME
     )
     done_ids.update(ref for ref in completed_humans if "/" not in ref)
-    removed = drop | set(split)  # split replaces a node → its id goes away
     prior_tasks: dict[str, Any] = {}
     for task in prev_plan.get("tasks") or []:
         if isinstance(task, dict) and isinstance((tid := task.get("id")), str):
             prior_tasks[tid] = task
+    # A split replaces a node, and so does a live retry: in both the id goes away and
+    # the replacement carries the work. A supersession is honoured only when that
+    # replacement is actually here to carry it — normally it is, because ``prev_plan``
+    # is the graph the round executed, but `executed_plan` falls back to the launch
+    # record for a journal it cannot fold and that record predates the replacement.
+    # Removing the original against it would drop the node with nothing carrying it.
+    removed = (
+        drop
+        | set(split)
+        | {nid for nid, replacement in (superseded or {}).items() if replacement in prior_tasks}
+    )
     _validate_completed_humans(prior_tasks, results, completed_humans)
 
     def _anchor(nid: str) -> StackBasePayload | None:

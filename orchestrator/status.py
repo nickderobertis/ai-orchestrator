@@ -12,7 +12,12 @@ from pathlib import Path
 from typing import Any, cast
 
 from . import gitops, history, runs
-from .channel import ChannelError, due_indicator, planner_wait_indicator
+from .channel import (
+    ChannelError,
+    due_indicator,
+    pending_surface_indicator,
+    planner_wait_indicator,
+)
 from .config import ConfigError
 from .goals import concurrent_indicator
 from .journal import JOURNAL_NAME, EventKind, read_events
@@ -407,16 +412,24 @@ def main(argv: list[str] | None = None) -> int:
                 # Reported for the same reason, one layer up: a launch that keeps its
                 # pid while nothing progresses is not running work, and its stale
                 # planner surface would otherwise read as live supervision.
-                if (
-                    parked := parked_indicator(run_dir, parked_after=args.parked_after)
-                ) is not None:
+                parked = parked_indicator(run_dir, parked_after=args.parked_after)
+                if parked is not None:
                     indicators.append(f"{run_dir.name}: {parked}")
+                stopped = dead is not None or parked is not None
                 # A second live orchestrator on a shared identity is the one piece of
                 # machine state this view could not previously report: it belongs to
                 # no run dir here, and its effects reach this one as a dirty
                 # publication checkout or a lost push race.
                 if (shared := concurrent_indicator(run_dir, args.parked_after)) is not None:
                     indicators.append(f"{run_dir.name}: {shared}")
+                # Reported here as well as in `just runs`, because the two views are
+                # read interchangeably: a planner who checks only this one must not
+                # have to know that the other is where unread updates are named. Under
+                # the same rule that view applies, though — a run reported abandoned or
+                # parked keeps the line saying why it stopped, not an invitation to read
+                # updates nothing will follow up on.
+                if not stopped and (unread := pending_surface_indicator(run_dir)) is not None:
+                    indicators.append(f"{run_dir.name}: {unread}")
                 try:
                     waiting = planner_wait_indicator(run_dir / "channel")
                     indicator = due_indicator(run_dir / "channel")

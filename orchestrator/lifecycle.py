@@ -1089,6 +1089,13 @@ class StepRun:
     results: list[StepResult]
     detail: str = ""
     waiting: list[str] = field(default_factory=list)
+    #: True when the step that failed the workstream left no work behind: it reported
+    #: ``worker-died``, spent no assistant turn, ended itself rather than being
+    #: signalled, and left the worktree as it found it — no commit, no dirty tree,
+    #: nothing to resume. All four are required. It says what the dispatch *left*,
+    #: not how far it got: a worker that read and reasoned before dying qualifies,
+    #: while a death that reports a turn, or that a signal ended, does not.
+    died_leaving_no_work: bool = False
 
 
 # Lifecycle work commonly includes repository orientation, implementation, and a
@@ -1099,6 +1106,45 @@ class StepRun:
 DEFAULT_LIFECYCLE_STEP_MAX_TURNS = 24
 MAX_AUTOMATIC_STEP_RESUMES = 2
 MAX_MERGE_CONFLICT_RESOLUTIONS = 2
+#: Relaunches allowed after a death that left no work. Kept apart from
+#: ``MAX_AUTOMATIC_STEP_RESUMES``, which is the budget for carrying *work* forward;
+#: see docs/repo-lifecycle.md for why the two must not share one.
+MAX_EMPTY_DEATH_RELAUNCHES = 2
+#: Backoff before each relaunch, multiplied by the relaunch number, matching
+#: ``smoke.RETRY_BACKOFF_SECONDS``.
+RELAUNCH_BACKOFF_SECONDS = 2.0
+
+
+def _exited_rather_than_being_killed(report: Report) -> bool:
+    """Whether the harness ended itself, as opposed to being terminated.
+
+    The agent wrapper records its child's wait status and reads it exactly this way
+    — above 128 is "killed by signal N", at or below is "exited N". A harness that
+    refuses to start exits of its own accord with an ordinary non-zero code; a
+    worker terminated after it was running (the watchdog, an operator, the round's
+    cancellation, an OOM kill) is signalled. Only the first is a launch that never
+    happened, so only the first is relaunched.
+
+    An unrecorded status is not treated as a launch failure: the relaunch has to be
+    positively earned, and a marker nobody wrote proves nothing.
+    """
+    return report.agent_exit_status is not None and report.agent_exit_status <= 128
+
+
+def _await_relaunch(
+    seconds: float, cancel: threading.Event | None, sleep: Callable[[float], None]
+) -> None:
+    """Wait out a relaunch backoff, returning early when the round cancels.
+
+    Under a round the cancellation event is the sleep, so a cancel does not have to
+    outlast a backoff before the branch is preserved. Standing alone there is
+    nothing to wake for, and the wait goes through the workstream's own injected
+    ``sleep``.
+    """
+    if cancel is None:
+        sleep(seconds)
+        return
+    cancel.wait(seconds)
 
 
 def persist_report_artifacts(journal: NodeSink, report: Report, *, session: str) -> None:
@@ -1155,6 +1201,7 @@ def _run_steps(
     by_id = {s.id: s for s in steps}
     deps = {s.id: s.deps for s in steps}
     reports: dict[str, Report] = {}
+    deaths_leaving_no_work: set[str] = set()
 
     def run_step(sid: str) -> NodeRun:
         step = by_id[sid]
@@ -1207,6 +1254,20 @@ def _run_steps(
                 if report.outcome
                 else incomplete_detail(report)
             )
+            # Asked before anything below commits, which is the only point at which
+            # "the worktree is as this dispatch found it" is still answerable. Turns
+            # count too: a death that reports turns reached its work, whatever the
+            # tree shows — a worker can spend a segment re-deriving what is already
+            # committed and leave nothing new behind, and that is a work stop rather
+            # than a launch that never happened. `dispatch` reports no turns for a
+            # worker the watchdog killed, which is the case this is for.
+            if (
+                report.outcome == "worker-died"
+                and report.assistant_turns == 0
+                and _exited_rather_than_being_killed(report)
+                and not (gitops.is_dirty(worktree) or gitops.head_sha(worktree) != dispatch_head)
+            ):
+                deaths_leaving_no_work.add(sid)
             preserved = False
             if gitops.is_dirty(worktree):
                 gitops.add_all(worktree)
@@ -1278,6 +1339,15 @@ def _run_steps(
             results=results,
             detail=runs[bad.id].error or f"step {bad.id!r} {bad.status}",
             waiting=waiting,
+            # Scoped to this attempt, not to the step: `deaths_leaving_no_work` is a
+            # local rebuilt on every `_run_steps` call, the resume loop calls it
+            # afresh per attempt, and `schedule_dag` runs each step once within one.
+            # An empty death followed by an attempt that commits work therefore
+            # reports the work, which
+            # `test_launch_deaths_do_not_spend_the_budget_that_carries_work_forward`
+            # drives end to end.
+            # llmlint: ignore[names_match_behavior] see the scoping note above
+            died_leaving_no_work=bad.id in deaths_leaving_no_work,
         )
     if waiting:
         return StepRun(
@@ -1870,6 +1940,7 @@ def run_repo_task(
         completed_step_ids = set(resume.completed_steps) if resume else set()
         prior_step_results: dict[str, StepResult] = {}
         automatic_resumes = 0
+        relaunches = 0
         workstream_start_head = gitops.head_sha(worktree)
         initial_incomplete = incomplete_commits(worktree, remote_base, "HEAD")
         while True:
@@ -1896,11 +1967,30 @@ def run_repo_task(
                 prior_step_results[step_result.id] = step_result
                 if step_result.status == "done":
                     completed_step_ids.add(step_result.id)
+            if step_run.status != "not-completed" or (cancel is not None and cancel.is_set()):
+                break
+            if step_run.died_leaving_no_work:
+                # Nothing was produced, so the resume budget — which exists to carry
+                # work forward — has nothing to spend itself on here. Relaunch on the
+                # separate budget instead, unlike the work path without requiring the
+                # branch to carry commits. docs/repo-lifecycle.md records why.
+                if relaunches >= MAX_EMPTY_DEATH_RELAUNCHES:
+                    break
+                relaunches += 1
+                _await_relaunch(RELAUNCH_BACKOFF_SECONDS * relaunches, cancel, sleep)
+                if cancel is not None and cancel.is_set():
+                    break
+                if result.retry_lineage is None and incomplete_commits(
+                    worktree, remote_base, "HEAD"
+                ):
+                    result.retry_lineage = RetryLineage(
+                        branch,
+                        gitops.head_sha(worktree),
+                        "reused",
+                    )
+                continue
             if (
-                step_run.status != "not-completed"
-                or cancel is not None
-                and cancel.is_set()
-                or not incomplete_commits(worktree, remote_base, "HEAD")
+                not incomplete_commits(worktree, remote_base, "HEAD")
                 or automatic_resumes >= MAX_AUTOMATIC_STEP_RESUMES
             ):
                 break
@@ -1952,6 +2042,14 @@ def run_repo_task(
                 if prefix is not None
                 else f"workstream did not complete: {step_run.detail}"
             )
+            # A cancelled workstream is excluded: the round decided that stop, and
+            # its relaunches were cut short rather than spent.
+            if step_run.died_leaving_no_work and prefix is None:
+                result.detail += (
+                    f"; the dispatch died leaving no work behind, and {relaunches} "
+                    "relaunch(es) did the same, so nothing of the task was attempted "
+                    "— probe the launch path with 'just smoke' before redispatching"
+                )
             if incomplete_commits(worktree, remote_base, "HEAD"):
                 result.resume = Resume(
                     branch=branch,

@@ -5,6 +5,8 @@ import io
 import json
 import os
 import socket
+import subprocess
+import sys
 import threading
 import time
 from collections.abc import Callable
@@ -12,7 +14,9 @@ from pathlib import Path
 
 import pytest
 
+from orchestrator import REPO_ROOT
 from orchestrator.channel import (
+    HEARTBEAT_SURFACE_FILE,
     ChannelError,
     ChannelTimeout,
     ProposalPump,
@@ -38,11 +42,15 @@ from orchestrator.channel import (
     main_reply,
     main_surface,
     mark_heartbeat_due,
+    next_surface,
     pending_commands,
+    pending_surface_indicator,
+    pending_surfaces,
     read_message,
     record_command_outcome,
     record_surface,
     relay_supervisor,
+    release_heartbeat_claim,
     submit_commands,
     unanswered_commands,
     validate_commands,
@@ -547,7 +555,7 @@ def test_heartbeat_claim_deduplicates_and_failure_retries_next_interval(tmp_path
     assert claim_heartbeat(channel) is False
     assert _heartbeat(channel)["in_flight"] is True
 
-    finish_heartbeat_attempt(channel, succeeded=False, now=due_at)
+    finish_heartbeat_attempt(channel, now=due_at)
     failed = _heartbeat(channel)
     assert failed["in_flight"] is False
     assert failed["due"] is False
@@ -560,6 +568,100 @@ def test_heartbeat_claim_deduplicates_and_failure_retries_next_interval(tmp_path
     settled = _heartbeat(channel)
     assert settled["in_flight"] is False
     assert settled["due"] is False
+
+
+def test_releasing_a_claim_keeps_the_clock_so_an_ignored_pacemaker_stays_due(
+    tmp_path: Path,
+) -> None:
+    """A discarded update must not take the pacemaker down with it.
+
+    The claim exists to keep exactly one check-in pending. Dropping the update it was
+    held for therefore has to drop the claim too — while leaving the clock where it
+    was, because nobody has been updated and the staleness the views report is
+    measured from the last update a planner actually saw.
+    """
+    channel = create_channel(tmp_path / "run", heartbeat_interval=10)
+    initial = _heartbeat(channel)
+    due_at = float(initial["last_surface_at"]) + 11
+    mark_heartbeat_due(channel, now=due_at)
+    assert claim_heartbeat(channel) is True
+
+    release_heartbeat_claim(channel)
+    released = _heartbeat(channel)
+    assert released["in_flight"] is False
+    assert released["due"] is True
+    assert released["last_surface_at"] == initial["last_surface_at"]
+    # Eligible again, exactly once: the next tick may queue one replacement update.
+    assert claim_heartbeat(channel) is True
+    assert claim_heartbeat(channel) is False
+    # Idempotent, and silent for a run that has no pacemaker at all.
+    release_heartbeat_claim(channel)
+    release_heartbeat_claim(channel)
+    assert _heartbeat(channel)["in_flight"] is False
+    release_heartbeat_claim(tmp_path / "no-channel")
+
+
+def test_queued_surfaces_are_reported_with_a_growing_age_and_the_reading_command(
+    tmp_path: Path,
+) -> None:
+    """The state a planner who never attached is otherwise blind to."""
+    run_dir = tmp_path / "runs" / "unattached"
+    channel = create_channel(run_dir)
+    assert pending_surfaces(channel) == ()
+    assert pending_surface_indicator(run_dir) is None
+
+    atomic_json(
+        channel / HEARTBEAT_SURFACE_FILE,
+        {
+            "op": "supervisor",
+            "run_id": "unattached",
+            "round": 1,
+            "surface": {
+                "kind": "heartbeat",
+                "message": "worker still verifying",
+                "blocking": False,
+            },
+            "messages": [],
+        },
+    )
+    queued = pending_surfaces(channel)
+    assert [(item.kind, item.message) for item in queued] == [
+        ("heartbeat", "worker still verifying")
+    ]
+    indicator = pending_surface_indicator(run_dir, now=queued[0].queued_at + 3 * 3600)
+    assert indicator == (
+        "1 planner update waiting, unread for 3h; read it with: "
+        f"just channel-next unattached --runs-dir {run_dir.parent}"
+    )
+    # The age is what escalates, so it is reported at the granularity a reader can act
+    # on rather than rounded away.
+    assert "unread for 0s" in str(pending_surface_indicator(run_dir))
+    assert "unread for 12m" in str(
+        pending_surface_indicator(run_dir, now=queued[0].queued_at + 12 * 60)
+    )
+
+    # A blocker preserved for the next reply-ready relay is queued in the same sense.
+    atomic_json(
+        channel / "deferred-blocker.json",
+        {"kind": "proposal", "message": "worker: dispatch died", "blocking": True},
+    )
+    both = pending_surfaces(channel)
+    assert [item.kind for item in both] == ["heartbeat", "proposal"]
+    assert both[0].queued_at <= both[1].queued_at
+    assert "2 planner updates waiting" in str(pending_surface_indicator(run_dir))
+    assert "read them with:" in str(pending_surface_indicator(run_dir))
+
+
+def test_a_queued_surface_that_cannot_be_read_is_still_reported(tmp_path: Path) -> None:
+    """Damaged state must not restore the silence this reporting exists to break."""
+    run_dir = tmp_path / "runs" / "damaged"
+    channel = create_channel(run_dir)
+    (channel / HEARTBEAT_SURFACE_FILE).write_text("{not json", encoding="utf-8")
+    queued = pending_surfaces(channel)
+    assert [(item.kind, item.message) for item in queued] == [
+        ("unknown", "unreadable queued surface")
+    ]
+    assert "1 planner update waiting" in str(pending_surface_indicator(run_dir))
 
 
 def test_heartbeat_reply_adjusts_or_disables_without_changing_verdict(tmp_path: Path) -> None:
@@ -624,8 +726,11 @@ def test_nonblocking_surface_cli_queues_claimed_update_until_consumed(
     }
     assert _heartbeat(channel)["due"] is True
     assert _heartbeat(channel)["in_flight"] is True
-    assert main_surface(["orch", "duplicate", "--runs-dir", str(runs)]) == 2
-    assert "already queued" in capsys.readouterr().err
+    # The next interval's check-in replaces a snapshot nobody read rather than being
+    # refused by it. Exactly one update stays queued, and it is the current one.
+    assert main_surface(["orch", "worker still verifying", "--runs-dir", str(runs)]) == 0
+    queued = json.loads((channel / "heartbeat-surface.json").read_text())
+    assert queued["surface"]["message"] == "worker still verifying"
     assert main_surface(["orch", " ", "--runs-dir", str(runs)]) == 2
     assert "non-empty" in capsys.readouterr().err
     assert main_surface(["orch", "update", "--runs-dir", str(runs), "--timeout", "0"]) == 2
@@ -1518,3 +1623,172 @@ def test_a_reply_timeout_that_cannot_bound_the_wait_is_refused(
         assert "timeout must be a positive, finite number" in capsys.readouterr().err
     with pytest.raises(ChannelError, match="finite and non-negative"):
         await_command_outcomes(runs / "orch" / "channel", (1,), timeout=float("nan"))
+
+
+def test_a_claim_whose_holder_died_is_reclaimed_by_the_next_tick(tmp_path: Path) -> None:
+    """A lease outliving its holder must not silence the run.
+
+    The claimant here is a real second process that takes the lease through the real
+    `claim_heartbeat` and then exits without ever reaching `finish_heartbeat_attempt`
+    — exactly what a check-in dispatch killed mid-flight leaves behind. Nothing else
+    in this repository reclaims a claim, and the pacemaker's only release ran on the
+    failure path, so a holder that simply went away held it for the life of the run.
+    The probe is `process_may_be_live`, the same one the abandoned-round path uses.
+    """
+    channel = create_channel(tmp_path / "run", heartbeat_interval=10)
+    initial = _heartbeat(channel)
+    mark_heartbeat_due(channel, now=float(initial["last_surface_at"]) + 11)
+
+    claimant = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys;from pathlib import Path;"
+            "from orchestrator.channel import claim_heartbeat;"
+            "sys.exit(0 if claim_heartbeat(Path(sys.argv[1])) else 1)",
+            str(channel),
+        ],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert claimant.returncode == 0, claimant.stderr
+    held = _heartbeat(channel)
+    assert held["in_flight"] is True
+    assert held["claim"] is not None
+    assert held["claim"]["pid"] > 0 and held["claim"]["pid"] != os.getpid()
+    assert held["claim"]["host"] == socket.gethostname()
+    assert held["due"] is True
+
+    # That process is gone, so the next tick takes the lease rather than deferring to
+    # a holder that can never hand it back.
+    assert claim_heartbeat(channel) is True
+    reclaimed = _heartbeat(channel)
+    assert reclaimed["claim"]["pid"] == os.getpid()
+    # And this holder is alive, so nothing steals it out from under the dispatch.
+    assert claim_heartbeat(channel) is False
+
+
+@pytest.mark.parametrize(
+    "host",
+    [None, 42, "", {"name": "somewhere"}, ["somewhere"]],
+    ids=["absent", "number", "empty", "mapping", "list"],
+)
+def test_a_claim_with_unreadable_host_metadata_does_not_hold_the_lease(
+    tmp_path: Path, host: object
+) -> None:
+    """The wedge reachable through the claim's *other* field.
+
+    ``process_may_be_live`` answers "may be live" for anything that is not this
+    host — correctly, since a claimant on another machine cannot be probed from
+    here. That makes a malformed host indistinguishable from a foreign one, so a
+    claim carrying one would be deferred to forever and silence the run, which is
+    precisely what a lease exists to prevent. A claimant writes
+    ``socket.gethostname()``; anything else is metadata nobody can read, and the
+    documented policy for unreadable owner metadata is "not a live holder".
+    """
+    channel = create_channel(tmp_path / "run", heartbeat_interval=10)
+    initial = _heartbeat(channel)
+    mark_heartbeat_due(channel, now=float(initial["last_surface_at"]) + 11)
+    assert claim_heartbeat(channel)
+
+    # A live pid this process could genuinely probe, so only the host is in question.
+    state = _heartbeat(channel)
+    claim = dict(state["claim"])
+    if host is None:
+        claim.pop("host")
+    else:
+        claim["host"] = host
+    state["claim"] = claim
+    (channel / "heartbeat.json").write_text(json.dumps(state), encoding="utf-8")
+
+    assert claim_heartbeat(channel) is True
+    assert _heartbeat(channel)["claim"]["host"] == socket.gethostname()
+
+
+def test_a_surface_that_outlives_its_round_is_discarded_and_frees_the_pacemaker(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The one wedge with no operator remedy: unconsumable, and still the pending one.
+
+    `channel-next` validates a queued frame against the *active* round, so a surface
+    still queued when the round transitions could never be read — and while it sat
+    there it was the run's one pending update, so no later check-in could replace it.
+    Discarded rather than kept consumable:
+    it describes a round that has finished, and the check-in that replaces it
+    describes the round actually running.
+    """
+    runs = tmp_path / "runs"
+    run_dir = runs / "outlived"
+    channel = create_channel(run_dir, heartbeat_interval=10)
+    (run_dir / "round-01").mkdir()
+    initial = _heartbeat(channel)
+    mark_heartbeat_due(channel, now=float(initial["last_surface_at"]) + 11)
+    assert claim_heartbeat(channel)
+    assert main_surface(["outlived", "round one is verifying", "--runs-dir", str(runs)]) == 0
+    finish_heartbeat_attempt(channel)
+    assert (channel / HEARTBEAT_SURFACE_FILE).is_file()
+
+    # The transition the planner's retry caused: round 2 opens with round 1's update
+    # still queued and unread.
+    (run_dir / "round-02").mkdir()
+    assert pending_surface_indicator(run_dir) is not None
+    assert next_surface(run_dir, timeout=0.01) == {"status": "running", "surface": None}
+    assert not (channel / HEARTBEAT_SURFACE_FILE).is_file()
+    assert pending_surface_indicator(run_dir) is None
+
+    cleared = _heartbeat(channel)
+    assert cleared["in_flight"] is False
+    assert cleared["claim"] is None
+    # The clock is untouched by the discard, so the pacemaker is due again on the
+    # interval measured from the last update a planner actually read.
+    mark_heartbeat_due(channel, now=float(cleared["last_attempt_at"]) + 11)
+    assert claim_heartbeat(channel) is True
+    assert main_surface(["outlived", "round two is dispatching", "--runs-dir", str(runs)]) == 0
+    queued = json.loads((channel / HEARTBEAT_SURFACE_FILE).read_text(encoding="utf-8"))
+    assert queued["round"] == 2
+    assert next_surface(run_dir, timeout=0.01)["surface"]["message"] == "round two is dispatching"
+    capsys.readouterr()
+
+
+def test_the_pacemaker_keeps_firing_while_its_update_sits_unread(tmp_path: Path) -> None:
+    """The pacemaker keeps firing behind an update nobody reads.
+
+    Driven through the real `ProposalPump`; only the paid check-in agent is stood in
+    for, and its stand-in queues through the same `channel-surface` entry point the
+    agent invokes. The regression it guards: the claim was released only on
+    consumption, so a run whose planner never read the channel was told least of all.
+    """
+    runs = tmp_path / "runs"
+    run_dir = runs / "unread"
+    channel = create_channel(run_dir, heartbeat_interval=0.05)
+    (run_dir / "round-01").mkdir()
+    queued: list[str] = []
+
+    def dispatch_check_in() -> None:
+        message = f"update {len(queued) + 1}"
+        assert main_surface(["unread", message, "--runs-dir", str(runs)]) == 0
+        queued.append(message)
+
+    pump = ProposalPump(channel, "unread", 1, dispatch_check_in=dispatch_check_in)
+    surface = channel / HEARTBEAT_SURFACE_FILE
+    try:
+        wait_until = time.monotonic() + 10
+        while len(queued) < 3 and time.monotonic() < wait_until:
+            # Reading the pending surface the way `just monitor` renders it never
+            # consumes it, and must not be what stops the run reporting.
+            assert pending_surface_indicator(run_dir) is None or surface.is_file()
+            time.sleep(0.01)
+    finally:
+        pump.close()
+
+    assert len(queued) >= 3, queued
+    # Exactly one update is ever pending, and it is the newest: the check-in
+    # replaces the snapshot nobody read rather than piling a second one beside it.
+    assert pending_surfaces(channel) == pending_surfaces(channel)[:1]
+    assert json.loads(surface.read_text(encoding="utf-8"))["surface"]["message"] == queued[-1]
+    # The staleness the views report is measured from the last update a planner
+    # actually read, so refreshing the queue entry cannot reset it.
+    state = _heartbeat(channel)
+    assert state["last_surface_at"] < state["last_attempt_at"]

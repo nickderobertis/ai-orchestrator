@@ -53,6 +53,39 @@ the dispatcher's account of the death — the watchdog pid, the agent child's ex
 status, and the tail of its stderr — because a worker that dies before its first
 turn leaves no report, transcript, or verdict to read instead.
 
+### A death that left no work is not charged to the work budget
+
+`MAX_AUTOMATIC_STEP_RESUMES` is the budget for carrying *work* forward across a
+stop, so a dispatch with no work to carry must not spend it. A dispatch that
+reports `worker-died` having left the worktree exactly as it found it — no commit,
+no dirty tree — produced nothing, and provider throttling, an out-of-quota
+harness, and an OOM kill all arrive in that shape. Charging those to the resume
+budget turned a transient provider outage into a failed node in thirty-four
+seconds, three deaths deep, with the task never attempted once. And because the
+work path only continued when the branch already carried commits, such a death on
+a fresh branch failed the node on its *first* death, with no retry at all.
+
+`StepRun.died_leaving_no_work` records that condition — all of it, since a death
+that reports a turn or that a signal ended is a work stop whatever the tree shows —
+and the workstream answers it
+from `MAX_EMPTY_DEATH_RELAUNCHES`, waiting `RELAUNCH_BACKOFF_SECONDS` times the
+relaunch number first — the "only the launch is retried" shape
+`orchestrator/smoke.py` already uses. Unlike the work path it does not require the
+branch to carry commits. Under a round the cancellation event is that wait, so a
+cancel does not have to outlast a backoff before the branch is preserved; a
+cancelled workstream is reported as the cancellation it was.
+
+The predicate proves the worktree is unchanged, not that the harness never
+started, so a worker that reads and reasons before dying is relaunched too. That
+is the same right answer: a workstream with nothing to resume has nothing to be
+charged for. When the relaunches are spent, the settlement says the dispatch died
+leaving no work behind and names `just smoke`, the cheap probe for the launch path.
+
+The harness's *own* diagnosis still wins where it has one: the agent wrapper
+recognizes a quota refusal on the child's stdout and marks it `dispatch failure:`,
+which `dispatch` raises rather than returning, so an outage with a stated reset
+time settles as an infrastructure failure instead of being relaunched into.
+
 Each agent step names its conversation for the branch **and** the worktree it
 runs in (`dispatch.scoped_session`), and so does the PR-author dispatch. Steps and
 automatic continuations within one run share that worktree and therefore one
