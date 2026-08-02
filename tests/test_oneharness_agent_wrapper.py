@@ -111,6 +111,38 @@ def test_agent_side_forces_the_orchestrator_config(tmp_path: Path) -> None:
     )
 
 
+def test_agent_side_records_its_tool_transcript_exactly_once(tmp_path: Path) -> None:
+    """`--events` is a run flag, so this wrapper is where the agent side adopts it.
+
+    The views already read what it records — `just status`'s "Commands:" line and
+    `just history-show`'s detail are built from each history record's `events` — but
+    claude-code, the workers' primary harness, carries no tool transcript in its
+    default output format, so those lines were empty for every claude-code dispatch.
+
+    Exactly once is the other half: oneharness refuses a repeated `--events`, so a
+    caller that already asked for it must not have a second one appended.
+    """
+    proc, argv = _run_wrapper(tmp_path, ["run", "--compact", "--prompt", "probe"])
+    assert proc.returncode == 0, proc.stderr
+    assert argv.count("--events") == 1
+
+    already, asked = _run_wrapper(
+        tmp_path, ["run", "--compact", "--events", "--prompt", "probe"]
+    )
+    assert already.returncode == 0, already.stderr
+    assert asked.count("--events") == 1
+
+    # The judge side passes its own config and is executed untouched: it supervises
+    # a transcript rather than producing one, and its own config decides its format.
+    judge_config = tmp_path / "judge.toml"
+    judge_config.write_text("history = true\n", encoding="utf-8")
+    judged, judge_argv = _run_wrapper(
+        tmp_path, ["run", "--config", str(judge_config), "--prompt", "supervise"]
+    )
+    assert judged.returncode == 0, judged.stderr
+    assert "--events" not in judge_argv
+
+
 def test_agent_side_keeps_the_second_alternate_when_only_the_first_is_absent(
     tmp_path: Path,
 ) -> None:

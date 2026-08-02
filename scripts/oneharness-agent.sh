@@ -40,6 +40,27 @@ fi
 ensure_codex_alt_home oneharness-agent || exit $?
 alternate_harness=claude-code:alternate
 agent_config="$repo_root/oneharness.toml"
+# Record the normalized tool-call transcript for every agent turn. It is a `run`
+# flag, not a config key, so this wrapper is the only place the agent side can
+# adopt it -- and it is the agent side alone, because the judge and the
+# orchestrator pass through the `exec`s above with their own configs.
+#
+# What it buys is what the planner-visible views already know how to read:
+# `history.digest` builds `just status`'s "Commands:" line and `just history-show`'s
+# detail from each record's `events`, and claude-code -- the workers' primary
+# harness -- carries no tool transcript in its default output format, so those
+# lines were empty for every claude-code dispatch while codex's were populated.
+# `--events` selects that harness's events-capable format; harnesses whose default
+# already carries a transcript are unaffected.
+#
+# Deliberately `--events` and not `--stream`: `--stream` is refused under
+# `run_mode = "fallback"`, and that fallback chain is what keeps dispatching when
+# one subscription returns 429.
+#
+# Injected only when the caller has not asked for it already, exactly as `--config`
+# is: oneharness refuses a repeated `--events` outright, so an onejudge release that
+# started selecting it would otherwise kill every dispatch at spawn.
+agent_events=(--events)
 
 if [ "${1-}" != "run" ]; then
     echo "oneharness-agent: expected the 'run' subcommand; invoke through onejudge dispatch or retry as 'scripts/oneharness-agent.sh run ...'" >&2
@@ -69,6 +90,9 @@ for arg in "$@"; do
             fi
             caller_config=true
             expect_config_value=true
+            ;;
+        --events)
+            agent_events=()
             ;;
         --config=*)
             if [[ $caller_config == true ]]; then
@@ -152,7 +176,7 @@ if [ -z "${ONEHARNESS_HARNESSES-}" ]; then
 fi
 
 if [ -z "${ORCHESTRATOR_AGENT_STATUS_DIR-}" ]; then
-    exec oneharness run --config "$agent_config" "$@"
+    exec oneharness run --config "$agent_config" "${agent_events[@]}" "$@"
 fi
 
 status_dir=$ORCHESTRATOR_AGENT_STATUS_DIR
@@ -220,7 +244,7 @@ fi
 tee "$agent_stdout" <"$stdout_fifo" &
 tee_pid=$!
 # llmlint: ignore[boundary_inputs_validated] oneharness parses and validates its own protocol input.
-oneharness run --config "$agent_config" "$@" <&3 >"$stdout_fifo" 2>"$agent_stderr" &
+oneharness run --config "$agent_config" "${agent_events[@]}" "$@" <&3 >"$stdout_fifo" 2>"$agent_stderr" &
 agent_pid=$!
 write_status agent.child.pid "$agent_pid"
 while agent_state=$(ps -o stat= -p "$agent_pid" 2>/dev/null) &&

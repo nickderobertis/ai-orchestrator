@@ -47,9 +47,14 @@ is false the moment its process exits.
 
 ## The planner<->orchestrator channel
 
-`just orchestrate <plan.json>` starts a detached orchestrator onejudge run and
-prints its run id. The orchestrator is the graph executor; its supervisor is the
-live planner rather than a simulated-user model. During a round, the reconciler
+`just orchestrate <plan.json>` starts an orchestrator onejudge run, prints its run
+id, and then **stays attached**: it streams the same aggregated view `just monitor`
+prints and returns when the run [settles](#when-an-attach-returns). `--detach`
+returns at the launch record instead, for a run that should go unattended. The
+launched process leads its own session either way, so neither the end of the
+launching turn nor Ctrl-C stops it — see [A round outlives the turn that launched
+it](#a-round-outlives-the-turn-that-launched-it). The orchestrator is the graph executor; its
+supervisor is the live planner rather than a simulated-user model. During a round, the reconciler
 converges the actual frontier toward a desired graph that the planner may edit
 while nodes run. Recorded rounds are checkpoints and labels, not stop-the-world
 adaptation barriers. The orchestrator alone writes the graph, journal, and round
@@ -616,6 +621,17 @@ nodes is still a successful results lookup; only an invalid invocation exits
 non-zero. `just status` gives the same next step when a worker maps to a ledger
 round.
 
+`just status <run-id>` reports a dispatch that has finished no turn yet. oneharness
+writes one history record per *completed* turn and dispatches here routinely spend
+twenty minutes on their first, so a view built from history alone answered "No
+dispatched tasks recorded" for a step that had been working for half an hour —
+which reads as *nothing is running*, the opposite of the truth. The run's own
+journal knows a node or step started, so the two are joined: the empty state now
+names each in-flight dispatch, how long it has been running, and that no turn has
+completed; a run whose journal really shows no dispatch still says so. It is
+computed only for a named run, because the unscoped view would have to read every
+recorded run's whole journal to answer the same question.
+
 Each recorded schema-v4 node result carries its own `artifacts` paths. Lifecycle
 step payloads carry their step-specific raw onejudge report and stable
 oneharness-session pointer. Local gate failures surface from `git push`; the
@@ -696,6 +712,16 @@ only that parent. `orchestrator/detach.py` holds the full reasoning; the practic
 consequence is that Ctrl-C reaches the relaying parent rather than the round, so the
 round announces the pid to signal when you do want it stopped.
 
+`just orchestrate` reaches the same place by the other route, and the two compose
+rather than layer: it starts the orchestrator as a *child program* with
+`start_new_session=True`, so the launching turn's group teardown misses it and uv's
+forward-by-pid reaches only `orchestrate` itself. The round that process later
+starts forks as above. That is what makes the foreground default purely additive —
+what owns the run does not depend on whether anything is waiting, so `--detach`
+decides only whether this command waits, and Ctrl-C ends the attachment, not the
+run. Inside the run, `run-plan` still forks: the orchestrator agent surfaces an
+update and ends its turn, and the round must survive that.
+
 The round's own exit statuses cross that fork unchanged — 0 complete, 1 unfinished, 2
 rejected input, 128+N signalled. An exception escaping the round is the exception: it
 ends the round there, prints its traceback, and exits **70**, so a crash is never read
@@ -729,8 +755,9 @@ while doing nothing — no child process, no planner surface, and no ledger
 write — is *parked*, and `just runs`, `just status`, and `just monitor` report it
 as `PARKED (...)` rather than as running. All three signals must be absent past
 the threshold, which defaults to 1800 seconds (the default planner-update
-interval) and is overridable with `--parked-after SECONDS` on `just runs` and
-`just status`. Every unreadable input resolves toward "still working", so a busy
+interval) and is overridable with `--parked-after SECONDS` on `just runs`, `just
+status`, `just monitor`, and `just orchestrate` — one flag, one meaning, and one
+refusal wherever a planner types it. Every unreadable input resolves toward "still working", so a busy
 orchestrator is never misreported as parked: one live descendant of the launch or
 of its round owner, one fresh surface, or one journal, plan, status, or result
 write is enough to keep it reported as running. A persisted `last_surface_at` that
@@ -815,6 +842,7 @@ just monitor                      # newest active run
 just monitor RUN_ID               # one named run
 just monitor --once               # replay what is known, report state, exit 0
 just monitor --follow             # follow even when output is captured
+just monitor --until-settled      # follow either way, return when the run settles
 just monitor --format jsonl       # one JSON record per line, no header
 just monitor --heartbeat 30 --poll-interval 5
 ```
@@ -861,6 +889,37 @@ stuck. `--once` — and every non-terminal invocation — always exits 0 after o
 pass; only follow mode encodes completion in its status. A completed graph reads
 the same either way (`graph complete`), because that detail is about the run and
 not about how it was being watched. Exit 2 is an unresolvable run or bad input.
+
+### When an attach returns
+
+`--until-settled` is the third ending, and the one the foreground `just
+orchestrate` waits on. **Settled** is a property of the run: it is no longer
+advancing on its own, so the next move is the planner's. It is deliberately
+neither of the two readings that are easy to reach for. *The round finished*
+returns while the orchestrator is still scheduling, abandoning a graph that is
+about to start round two; *the orchestrator exited* never returns on the ordinary
+case, because that process stays alive holding a question nobody is answering.
+
+Three conditions say it, and nothing else does:
+
+| Settlement | What it means | Exit |
+| --- | --- | --- |
+| `complete` | the graph completed successfully | 0 |
+| `awaiting-planner` | a **blocking** planner surface is pending: the run will not move until `just channel-reply` answers it | 0 |
+| `unattended` | nothing is driving the run — parked, an abandoned round, or an executor that is gone with the graph unfinished | 3 |
+
+A *non-blocking* surface is deliberately not `awaiting-planner`: the orchestrator
+continues past a heartbeat update without waiting for a reply, so returning there
+would walk away from a working run. `unattended` exits non-zero because it is the
+state a planner must intervene in, and because a launch that parked reads exactly
+like one that is merely quiet to anyone who is not watching the stream.
+
+`--until-settled` follows on a terminal and off one alike: the one-pass default
+exists for a caller that could neither observe nor end a follow, and this mode
+ends itself. It composes with `--format jsonl`, where the final heartbeat record
+carries a `settlement` field naming which of the three it was. `--once` and
+`--until-settled` ask opposite things and are refused together; without either
+flag, nothing about the follow or the one-pass default changes.
 
 **Output shape.** The text stream's first line is exactly:
 

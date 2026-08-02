@@ -6,7 +6,8 @@ import argparse
 import json
 import math
 import sys
-from collections.abc import Mapping
+import time
+from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, cast
@@ -144,6 +145,83 @@ def _settled_nodes(runs_dir: Path, run_id: str) -> dict[tuple[str, str], NodeSta
     return settled
 
 
+@dataclass(frozen=True)
+class InFlightDispatch:
+    """One dispatch the run's journal started and never recorded settling.
+
+    This is the half of the picture oneharness history cannot supply. A history
+    record is written per *completed turn*, so a dispatch whose first turn has been
+    running for half an hour has produced none — and a view built only from history
+    rendered that as "No dispatched tasks recorded", which reads as *nothing is
+    running* when the truth is *nothing has finished a turn yet*. Those are opposite
+    conclusions for a supervising planner. The journal already knew; it was simply
+    never joined.
+    """
+
+    round: int
+    node: str
+    step: str | None
+    persona: str | None
+    started_at: float
+
+    def describe(self, *, now: float) -> str:
+        where = f"{self.node}[{self.step}]" if self.step else self.node
+        elapsed = max(0, int(now - self.started_at))
+        persona = f" {self.persona}" if self.persona else ""
+        return (
+            f"round-{self.round:02d} {where}{persona} — "
+            f"in flight for {elapsed // 60}m{elapsed % 60:02d}s, no completed turn yet"
+        )
+
+
+def _persona(detail: Mapping[str, Any]) -> str | None:
+    value = detail.get("persona")
+    return value if isinstance(value, str) and value else None
+
+
+def in_flight_dispatches(runs_dir: Path, run_id: str) -> list[InFlightDispatch]:
+    """Every dispatch this run's journal shows started and not settled, in order.
+
+    Node-level and step-level starts collapse onto one entry per node, because they
+    describe the same running node at two depths: a lifecycle node reports the step
+    it is on, and reverts to the node itself once that step settles. Reporting both
+    would count one dispatch twice.
+    """
+    try:
+        events = read_events(runs_dir / runs.validate_run_id(run_id) / JOURNAL_NAME)
+    except (ConfigError, OSError):
+        return []
+    started: dict[tuple[int, str], InFlightDispatch] = {}
+    for event in events:
+        if event.node is None:
+            continue
+        key = (event.round, str(event.node))
+        match event.kind:
+            case "node-started":
+                started[key] = InFlightDispatch(
+                    event.round, str(event.node), None, _persona(event.detail), event.at
+                )
+            case "step-started":
+                started[key] = InFlightDispatch(
+                    event.round,
+                    str(event.node),
+                    str(event.step) if event.step else None,
+                    _persona(event.detail),
+                    event.at,
+                )
+            case "step-settled" if (running := started.get(key)) is not None:
+                # The step is over and the node is not: keep it listed, timed from
+                # here, because the next step's dispatch is what it is now doing.
+                started[key] = InFlightDispatch(
+                    running.round, running.node, None, None, event.at
+                )
+            case "node-settled" | "node-failed":
+                started.pop(key, None)
+            case _:
+                continue
+    return sorted(started.values(), key=lambda item: (item.round, item.node))
+
+
 def _labelled_locator(labels: Mapping[str, str]) -> tuple[str, str] | None:
     """The ``(round, node)`` a dispatch's history labels name, if they name one.
 
@@ -272,12 +350,31 @@ def collect(
     return result
 
 
-def _human(tasks: list[TaskStatus], *, run_id: runs.RunId | None = None) -> str:
+def _human(
+    tasks: list[TaskStatus],
+    *,
+    run_id: runs.RunId | None = None,
+    in_flight: Sequence[InFlightDispatch] = (),
+    now: float | None = None,
+) -> str:
+    at = time.time() if now is None else now
+    running = [dispatch.describe(now=at) for dispatch in in_flight]
     if not tasks:
+        if run_id is not None and running:
+            # The honest empty state: history has nothing *because* nothing has
+            # finished a turn, which is the opposite of nothing running.
+            return "\n".join(
+                [
+                    f"No completed harness turns recorded for run {run_id} yet, and "
+                    f"{len(running)} dispatch(es) in flight — a history record is written "
+                    "per finished turn:",
+                    *(f"  {line}" for line in running),
+                ]
+            )
         if run_id is not None:
             return f"No dispatched tasks recorded for run {run_id}."
         return "No running tasks. Pass N or --all to include recent finished tasks."
-    lines: list[str] = []
+    lines: list[str] = [f"In flight: {line}" for line in running]
     for task in tasks:
         # The journal's own word for the node, when it has one, rather than the
         # worktree's: "recent" would read as a finished task for a node that failed.
@@ -391,6 +488,12 @@ def main(argv: list[str] | None = None) -> int:
     include_recent = args.all or limit is not None or run_id is not None
     selected = tasks if include_recent else [task for task in tasks if task.running]
     selected = selected[:limit] if limit is not None else selected[:15]
+    # Only for a named run: the unscoped view would have to read every recorded
+    # run's whole journal to answer the same question, and those journals reach tens
+    # of thousands of events. `just status <run-id>` is the invocation that asked.
+    running_dispatches = (
+        in_flight_dispatches(args.runs_dir, run_id) if run_id is not None else []
+    )
     if args.format == "json":
         print(json.dumps([_json_value(task) for task in selected]))
     else:
@@ -439,5 +542,9 @@ def main(argv: list[str] | None = None) -> int:
                     indicators.append(f"{run_dir.name}: {waiting}")
                 if indicator is not None:
                     indicators.append(f"{run_dir.name}: {indicator}")
-        print("\n".join([*indicators, _human(selected, run_id=run_id)]))
+        print(
+            "\n".join(
+                [*indicators, _human(selected, run_id=run_id, in_flight=running_dispatches)]
+            )
+        )
     return 0

@@ -130,6 +130,7 @@ dispatch onejudge.
    bar in `personas/`. Prefer precise task prose plus per-node `done_when` over
    encoding subtask details in a new persona.
 3. **Launch and supervise.** Start the graph with `just orchestrate <plan.json>`,
+   which stays attached and hands the run back when it settles (see below),
    then review each structured boundary and mid-run proposal surfaced by the
    orchestrator. Issue valid live edits when the running frontier should change;
    workers propose but never edit. Triage follow-ups, keep the user informed at
@@ -149,8 +150,15 @@ live edits](docs/orchestration.md#live-graph-edits). The planner never runs
 `run-plan` or `next-round` itself: those commands belong to the orchestrator
 process, and two writers would race the ledger lock.
 
-`orchestrate` launches detached so several runs can be supervised at once, and
-`just monitor <run-id>` is how you attach to one of them. Rebuilding run state
+`orchestrate` **stays attached by default**: it prints the launch record, streams
+exactly what `just monitor` streams, and returns when the run **settles** — the
+graph completed, a blocking planner surface is waiting on you, or nothing is
+driving the run any more (exit 3, and the state to intervene in). Ctrl-C detaches
+without stopping the run. Pass `--detach` when a run should go unattended — several
+runs supervised at once, where you launch each one and come back to it — and
+`just monitor <run-id>` re-attaches to any of them, with `--until-settled` for the
+same return contract. Do **not** background a launch by hand to watch it; that is
+what the foreground default replaced. Rebuilding run state
 from `events.jsonl`, `ps`, or `git log` in a run clone instead is the omission
 the read-only views now prevent: `just runs` and `just status` name every unread
 surface, how stale it is, and the `just channel-next` that reads it, so an update
@@ -283,7 +291,15 @@ exists to prevent. The primary Claude identity is last everywhere:
 
 - **Agent side** (does the work) — `oneharness.toml`, discovered from the repo root;
   it prefers both alternate Claude subscriptions, in order, because the personas
-  are tuned against that model tier, and only then falls back to codex.
+  are tuned against that model tier, and only then falls back to codex. Every agent
+  turn also runs with **`--events`**, injected by `scripts/oneharness-agent.sh`
+  because it is a `run` flag with no config key: the planner-visible views already
+  build `just status`'s `Commands:` line and `just history-show`'s detail from each
+  record's `events`, and claude-code's default output format carries no tool
+  transcript at all, so those were empty for every claude-code dispatch. It is
+  injected only when the caller did not already pass it — oneharness refuses a
+  repeated `--events`. Deliberately not `--stream`, which is refused under
+  `run_mode = "fallback"`, and that chain is what keeps dispatching through a 429.
 - **Judge / simulated-user side** (supervises) — `oneharness.judge.toml`, passed
   as the base config's `provider.judge_config`; codex first, then the alternate
   Claude subscriptions. It keeps its cheaper-supervisor intent through `model`
