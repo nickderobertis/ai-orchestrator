@@ -31,8 +31,10 @@ from orchestrator.channel import (
     mark_heartbeat_due,
 )
 from orchestrator.coordination import advisory_lock, git_lock_identity, lock_path
+from orchestrator.journal import open_journal
 from orchestrator.plan import PLAN_SCHEMA_VERSION
 from orchestrator.registry import Registry
+from orchestrator.runs import RunId
 
 
 def _lock_has_a_blocked_waiter(identity: str) -> bool:
@@ -439,6 +441,22 @@ def test_a_transition_survives_a_journal_it_cannot_fold(
     journal = runs / "unfoldable" / "events.jsonl"
     assert journal.is_file()
     journal.write_text('{"not": "an event"}\n', encoding="utf-8")
+    # A retry the *supersession* reader can still fold, on a stream the strict plan
+    # reader cannot. That combination is the trap: the fallback plan predates the
+    # replacement, so removing the superseded original against it would take the node
+    # out of the graph with nothing left carrying its work.
+    open_journal(runs / "unfoldable", RunId("unfoldable"), 1).append(
+        "edit-committed",
+        detail={
+            "operations": [
+                {
+                    "kind": "retry-requested",
+                    "node": "iterate",
+                    "detail": {"replacement": "iterate-corrected"},
+                }
+            ]
+        },
+    )
 
     resumed = _just("next-round", "unfoldable", "--plan-only", *common)
     assert resumed.returncode == 0, resumed.stderr

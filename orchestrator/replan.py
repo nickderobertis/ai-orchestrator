@@ -146,9 +146,9 @@ def next_round(
     [nodes], drop: [ids], complete_human: [refs]}``. ``carried_context``: notes
     attached to nodes during the round that just ran, as `round_context` collects
     them. ``superseded``: nodes a live ``retry`` replaced, as `round_supersessions`
-    collects them; they leave the graph exactly as an explicit ``drop`` would,
-    because their replacement is already carrying their work. The result is validated
-    via the canonical graph parser.
+    collects them; one leaves the graph exactly as an explicit ``drop`` would, but only
+    when its replacement is present to carry the work — see the note at the removal.
+    The result is validated via the canonical graph parser.
     """
     from .graph import parse_graph
     from .plan import PlanError
@@ -192,14 +192,21 @@ def next_round(
         if isinstance(result, dict) and result.get("outcome") == INFRASTRUCTURE_FAILURE_OUTCOME
     )
     done_ids.update(ref for ref in completed_humans if "/" not in ref)
-    # A split replaces a node, and so does a live retry: in both the id goes away and
-    # the replacement carries the work. The retry's replacement is already in
-    # ``prev_plan`` because that plan is the graph the round executed.
-    removed = drop | set(split) | set(superseded or {})
     prior_tasks: dict[str, Any] = {}
     for task in prev_plan.get("tasks") or []:
         if isinstance(task, dict) and isinstance((tid := task.get("id")), str):
             prior_tasks[tid] = task
+    # A split replaces a node, and so does a live retry: in both the id goes away and
+    # the replacement carries the work. A supersession is honoured only when that
+    # replacement is actually here to carry it — normally it is, because ``prev_plan``
+    # is the graph the round executed, but `executed_plan` falls back to the launch
+    # record for a journal it cannot fold and that record predates the replacement.
+    # Removing the original against it would drop the node with nothing carrying it.
+    removed = (
+        drop
+        | set(split)
+        | {nid for nid, replacement in (superseded or {}).items() if replacement in prior_tasks}
+    )
     _validate_completed_humans(prior_tasks, results, completed_humans)
 
     def _anchor(nid: str) -> StackBasePayload | None:
