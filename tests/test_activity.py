@@ -32,12 +32,14 @@ from orchestrator.activity import (
     NodeActivity,
     live_activity,
 )
+from orchestrator.dispatch import AGENT_STDOUT_NAME
 from orchestrator.labels import graph_labels, semantic_agent_labels
 from orchestrator.runs import NodeId, RunId, StepId
 from orchestrator.scratch import (
     AGENT_ACTIVITY_NAME,
     AGENT_STATUS_DIR_NAME,
     OWNER_LOCK_NAME,
+    WATCHDOG_PATTERN,
     WATCHDOG_PREFIX,
     _OwnerIdentity,
     owned_scratch_directory,
@@ -373,3 +375,24 @@ def test_a_round_longer_than_a_label_can_be_is_refused_before_it_is_converted(
     _write(_live_dispatch(dispatch_scratch_root), _summary(node="n" * 8000))
 
     assert live_activity("live-run", root=tmp_path, now=NOW) == {}
+
+
+def test_the_filters_status_directory_contract_matches_the_one_scratch_declares() -> None:
+    """DRIFT-GATE the directory shape and file names the filter restates.
+
+    `scripts/oneharness-stream.py` is stdlib-only — the wrapper runs it with whatever
+    interpreter is available and it cannot import `orchestrator` — so it spells the
+    scratch contract itself. Renaming any part of it here would not break the filter
+    loudly; it would make the filter refuse every path a dispatch hands it, and every
+    streamed turn would fail its capture instead.
+    """
+    source = (REPO_ROOT / "scripts" / "oneharness-stream.py").read_text(encoding="utf-8")
+    restated = dict(re.findall(r'^([A-Z_]+) = "([^"]+)"$', source, re.MULTILINE))
+
+    assert restated["WATCHDOG_PREFIX"] == WATCHDOG_PREFIX
+    assert restated["STATUS_DIR_NAME"] == AGENT_STATUS_DIR_NAME
+    assert restated["ACTIVITY_NAME"] == AGENT_ACTIVITY_NAME
+    assert restated["RECORD_NAME"] == AGENT_STDOUT_NAME
+    # And the pattern the reader globs with is that same prefix, so the two ends
+    # cannot agree on a name the scan would never reach.
+    assert f"{WATCHDOG_PREFIX}*" == WATCHDOG_PATTERN
