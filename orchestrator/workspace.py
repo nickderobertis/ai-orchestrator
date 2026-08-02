@@ -727,7 +727,7 @@ class Workspace:
             gitops.fetch(checkout)
             gitops.merge_ff_only(checkout, f"origin/{branch}")
 
-    def mirror_branch(self, repo: RepoRef, branch: str) -> None:
+    def mirror_branch(self, repo: RepoRef, branch: str) -> bool:
         """Copy this run's branch into the shared execution checkout.
 
         A run's clone is disposable and invisible to everything outside the run. The
@@ -743,11 +743,12 @@ class Workspace:
         clone = self._clones.get(repo.dir_key)
         checkout = self._checkouts.get(repo.dir_key)
         if clone is None or checkout is None or not gitops.branch_exists(clone, branch):
-            return
+            return False
         with advisory_lock(git_lock_identity(gitops.common_dir(checkout))):
             copied = gitops.copy_branch(clone, checkout, branch)
         if copied:
             self._mirrored.setdefault(repo.dir_key, {})[branch] = gitops.ref_sha(clone, branch)
+        return copied
 
     def _mirror_worktree_branch(self, repo: RepoRef, clone: Path, path: Path) -> None:
         branch = next(

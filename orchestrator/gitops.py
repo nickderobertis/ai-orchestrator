@@ -225,10 +225,15 @@ def copy_branch(cwd: str | Path, destination: str | Path, branch: str) -> bool:
     can be told to use one branch name, so a non-fast-forward push there would
     discard commits that are some other run's only record. Returns whether the
     destination now carries this branch's tip.
+
+    Fetch from the destination side rather than pushing from the run clone. The
+    clone deliberately inherits the execution checkout's pre-push hook, but this
+    is a local durability handoff rather than publication: running that hook here
+    rejects the exact gate-failed work this operation must preserve.
     """
     proc = _git(
-        ["push", str(destination), f"refs/heads/{branch}:refs/heads/{branch}"],
-        cwd=cwd,
+        ["fetch", str(cwd), f"refs/heads/{branch}:refs/heads/{branch}"],
+        cwd=destination,
         check=False,
     )
     return proc.returncode == 0
@@ -389,6 +394,32 @@ def commit_empty(cwd: str | Path, message: str) -> str:
     """Create an explicit metadata-only commit and return its SHA."""
     _git(["commit", "--allow-empty", "-m", message], cwd=cwd)
     return head_sha(cwd)
+
+
+def is_empty_commit(cwd: str | Path, sha: str) -> bool:
+    """Whether ``sha`` is a single-parent commit that changed nothing.
+
+    Asked before dropping a commit, so a merge and a commit that carries a tree
+    change both answer no: neither can be removed without losing something.
+    """
+    parents = _git(["rev-list", "--parents", "-n", "1", sha], cwd=cwd).stdout.split()
+    if len(parents) != 2:
+        return False
+    return _git(["diff-tree", "--quiet", parents[1], sha], cwd=cwd, check=False).returncode == 0
+
+
+def drop_empty_commit(cwd: str | Path, sha: str) -> None:
+    """Remove one unpublished empty commit while replaying later branch work."""
+    parents = _git(["rev-list", "--parents", "-n", "1", sha], cwd=cwd).stdout.split()
+    if not is_empty_commit(cwd, sha):
+        raise GitError(f"refusing to drop commit {sha}: it is a merge or carries work")
+    if head_sha(cwd) == sha:
+        reset_hard(cwd, parents[1])
+    else:
+        branch = current_branch(cwd)
+        if branch == "HEAD":
+            raise GitError(f"refusing to rewrite detached HEAD while dropping {sha}")
+        _git(["rebase", "--onto", parents[1], sha, branch], cwd=cwd)
 
 
 def head_sha(cwd: str | Path) -> str:

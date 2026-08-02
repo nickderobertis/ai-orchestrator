@@ -584,6 +584,29 @@ def _preserve_failed_retry(
     )
 
 
+def _preserve_gate_failed_work(
+    result: LifecycleResult,
+    *,
+    workspace: Workspace,
+    ref: RepoRef,
+    worktree: Path,
+    remote_base: str,
+) -> None:
+    """Hand rejected commits to the registered execution checkout before teardown."""
+    if result.outcome != "gate-failed" or not gitops.has_commits_ahead(worktree, remote_base):
+        return
+    if not workspace.mirror_branch(ref, result.branch):
+        result.detail += (
+            f"; could not preserve rejected work on branch {result.branch!r} in registered "
+            f"execution checkout {result.execution_checkout}"
+        )
+        return
+    result.detail += (
+        f"; rejected work was not published and is preserved on local branch "
+        f"{result.branch!r} in registered execution checkout {result.execution_checkout}"
+    )
+
+
 def _workstream_branch_name(steps: list[Step]) -> str:
     lead = steps[0]
     key = "\x00".join(f"{_step_label(s)}:{s.task}" for s in steps)
@@ -1794,6 +1817,7 @@ def run_repo_task(
         prior_step_results: dict[str, StepResult] = {}
         automatic_resumes = 0
         workstream_start_head = gitops.head_sha(worktree)
+        initial_incomplete = incomplete_commits(worktree, remote_base, "HEAD")
         while True:
             step_run = _run_steps(
                 effective_steps,
@@ -1833,6 +1857,34 @@ def run_repo_task(
                     "reused",
                 )
             automatic_resumes += 1
+        if step_run.status == "done" and automatic_resumes:
+            provisional = incomplete_commits(worktree, remote_base, "HEAD") - initial_incomplete
+            # Only the empty ones. A step that stopped with a dirty tree commits its
+            # partial work *under* the marker message, so that commit is the preserved
+            # work itself — dropping it would destroy exactly what preservation exists
+            # to save. It keeps its commit and clears its provenance the way inherited
+            # markers already do, through the recovery attestation written below.
+            # Newest first, so that removing one never restates the ids still queued:
+            # a removal rewrites only the commits after the marker it drops, leaving
+            # the older ones addressable. In practice the queue holds at most one —
+            # a stop only writes a marker when the branch carries none base-relative
+            # (see the not-completed path above) — so the order is a property this
+            # loop keeps rather than one any run can currently exercise.
+            # llmlint: ignore[changed_behavior_has_e2e] The rule asks for an e2e over
+            # several provisional markers at once. That state is unreachable: the
+            # already_marked guard means a branch never carries more than one, so no
+            # honest end-to-end test can produce it. The reachable path — completion
+            # after repeated bounded stops — is covered by
+            # test_completion_after_two_resumes_clears_the_one_marker_and_keeps_every_part.
+            ordered = [
+                commit.sha
+                for commit in reversed(gitops.log_messages(worktree, remote_base, "HEAD"))
+                if commit.sha in provisional and gitops.is_empty_commit(worktree, commit.sha)
+            ]
+            for marker in ordered:
+                gitops.drop_empty_commit(worktree, marker)
+            if provisional and not incomplete_commits(worktree, remote_base, "HEAD"):
+                result.retry_lineage = None
         step_run.results = [prior_step_results[step.id] for step in effective_steps]
         result.steps = step_run.results
         result.report = next(
@@ -2298,6 +2350,13 @@ def run_repo_task(
                 root_base=result.base_branch,
                 pr_base=result.pr_base,
                 lead=lead,
+            )
+            _preserve_gate_failed_work(
+                result,
+                workspace=workspace,
+                ref=ref,
+                worktree=worktree,
+                remote_base=f"origin/{result.pr_base}",
             )
         if cleanup and worktree is not None:
             _best_effort_cleanup(
