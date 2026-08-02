@@ -188,9 +188,15 @@ def _report_text(line: str) -> str:
 def _translate(record: Any, activity_path: str, locator: Locator) -> None:
     """Pump the child's stdout, recording, publishing and unwrapping as it goes.
 
-    The three cases are the stream protocol's own: an event to publish, the terminal
-    result to unwrap, and everything else — which is forwarded rather than swallowed,
-    so a run that answered with something this does not model still reaches onejudge.
+    Exactly one thing may reach stdout: the report. onejudge parses this process's
+    stdout as a single JSON document, so a second line put in front of it fails a
+    turn that otherwise succeeded — which makes forwarding the safe-looking choice
+    the harmful one. Nothing is lost by declining: every line is already in the raw
+    record above, where the wrapper's diagnostics and the dispatcher read it.
+
+    The one line with no ``type`` is the exception, and the reason this is a match
+    rather than a filter on the two known envelopes: a bare report is what a run
+    that did *not* stream answers with, and it is onejudge's document already.
     """
     events = 0
     for line in sys.stdin:
@@ -217,18 +223,24 @@ def _translate(record: Any, activity_path: str, locator: Locator) -> None:
                         "events": events,
                     },
                 )
-            case {"type": "event"}:
-                # An event envelope carrying no event object: nothing to publish and
-                # nothing onejudge could do with it either.
-                continue
             case {"type": "result", "report": dict()}:
                 # The one document onejudge parses, forwarded as the exact text
                 # oneharness wrote rather than re-serialized from the parse — so what
                 # onejudge reads is oneharness's own report, not this filter's
                 # rendering of it.
                 _forward(_report_text(line) + "\n")
-            case _:
+            case {"type": _}:
+                # A stream envelope this build does not model — an event carrying no
+                # event object, or a shape a later protocol added. It is not part of
+                # onejudge's document, and passing it on would corrupt one.
+                continue
+            case dict():
+                # No discriminator at all: the bare report a non-streaming run writes.
                 _forward(line)
+            case _:
+                # Not JSON, or JSON that is not an object: a harness that printed over
+                # the protocol channel. The record above is where that belongs.
+                continue
 
 
 def _status_directory(path: str, expected_name: str) -> str | None:

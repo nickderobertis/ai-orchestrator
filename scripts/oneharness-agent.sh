@@ -48,18 +48,11 @@ fi
 ensure_codex_alt_home oneharness-agent || exit $?
 alternate_harness=claude-code:alternate
 agent_config="$repo_root/oneharness.toml"
-# The tool transcript `just status` and `just history-show` render: a `run` flag
-# with no config key, so this is the only place the agent side can adopt it, and
-# claude-code carries none without it. Emptied below when the caller already asked
-# for it -- oneharness refuses a repeated `--events`.
-#
-# `--events` is a FORMAT switch: it guarantees the single end-of-turn report carries
-# the normalized tool transcript, and says nothing about when that arrives. A node
-# is therefore invisible until its turn ends, and turns here routinely run 600-2000
-# seconds. `--stream` delivers those same normalized events as they occur, then a
-# final result line, and implies `--events`' format selection -- so it is the only
-# flag that can make a running node visible. It is selected below, and `--events`
-# stays as the degrade path for every dispatch that cannot stream.
+# Both are `run` flags with no config key, so this wrapper is the only place the
+# agent side can adopt either, and neither may be repeated -- hence two arrays
+# rather than one string, each emptied where the caller already asked for it. The
+# selection between them is made below; why it exists is in
+# docs/onejudge-integration.md, "Streaming the agent side".
 agent_events=(--events)
 agent_stream=()
 # The filter that reconciles a streamed turn with onejudge, which parses this
@@ -317,23 +310,12 @@ heartbeat_sequence=0
 write_status agent.heartbeat "$heartbeat_sequence"
 agent_activity=$status_dir/agent.activity
 
-# Ask oneharness whether THIS config's chain, with THIS invocation's flags, can be
-# streamed — and take `--events` for an answer.
-#
-# `--print-command` renders what the run would spawn and spawns nothing: it applies
-# the same up-front validation a real run applies (`--stream` against the config's
-# `run_mode`, its harness chain, an `ONEHARNESS_HARNESSES`/`ONEHARNESS_MODELS`
-# selection, a caller's `--schema` or batch prompts), writes no history record, and
-# returns in single-digit milliseconds against turns measured in minutes. A CLI too
-# old to know `--stream` at all rejects the argument the same way, so one probe
-# covers every reason a dispatch might not be able to stream.
-#
-# The caller's own arguments go in verbatim so the answer describes the real
-# invocation rather than a simplified stand-in, with stdin closed so a `--prompt-file
-# -` cannot consume the task the agent turn is about to be given.
-#
-# Degrading is never a dispatch failure: a probe that says no, or cannot run at all,
-# leaves `--events` in place and the turn proceeds exactly as it did before.
+# Ask oneharness itself whether this invocation can be streamed, rather than
+# predicting it here: `--print-command` applies a real run's validation and spawns
+# nothing, so one question covers every reason the answer might be no. The caller's
+# arguments go in verbatim so it describes the real invocation, and stdin is closed
+# so a `--prompt-file -` cannot eat the task this turn is about to be given.
+# See docs/onejudge-integration.md, "Streaming the agent side".
 stream_supported() {
     oneharness run --config "$agent_config" --stream --print-command "$@" \
         >/dev/null 2>&1 </dev/null

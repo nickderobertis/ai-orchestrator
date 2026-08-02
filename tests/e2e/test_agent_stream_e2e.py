@@ -96,6 +96,12 @@ TRANSCRIPT = (
     },
     {"type": "result", "result": "the streamed turn finished"},
 )
+#: Publications the reader must refuse, each named for the way it is unusable. Their
+#: nodes are still dispatched and unfinished, so the journal reports every one of them.
+REJECTED_NODES = ("nobodys", "bloated", "ancient", "ahead", "unreal", "numbered")
+#: A credential-shaped value this journey puts in a tool input and in the environment,
+#: which is where `orchestrator.redaction` looks for the values it removes.
+SECRET = "gho_notarealtokenbutlongenoughtoberedacted"
 
 
 @pytest.fixture
@@ -234,8 +240,6 @@ def test_the_agent_side_streams_its_turn_over_the_real_fallback_chain(
             # other way to learn which node it describes.
             assert mid_turn["run_id"] == "stream-run"
             assert (mid_turn["round"], mid_turn["node"]) == ("1", "ship")
-            # A later event replaced the earlier one rather than accumulating: the
-            # summary says what the node is doing now.
             assert observed[1]["events"] == 2
             assert observed[1]["name"] == "Read"
 
@@ -423,7 +427,7 @@ def test_status_reports_only_the_publication_it_can_stand_behind(
     runs_dir = tmp_path / "runs"
     # llmlint: ignore[tests_mirror_real_usage] the journal is this view's own input
     journal = open_journal(runs_dir / "picky-run", RunId("picky-run"), 1)
-    for node in ("ship", "nobodys", "bloated", "ancient", "ahead", "unreal", "numbered"):
+    for node in (*REJECTED_NODES, "ship", "secretive", "miscounted", "retried"):
         # llmlint: ignore[tests_mirror_real_usage] the recorded transition, via its own API
         journal.append("node-started", node=NodeId(node), detail={"persona": "engineer"})
 
@@ -469,6 +473,25 @@ def test_status_reports_only_the_publication_it_can_stand_behind(
     (_status_dir(dispatch_scratch) / "agent.activity").write_text(
         summary("numbered", round="9" * 8000), encoding="utf-8"
     )
+    # Three that ARE reported, and whose reported form is the point. A tool input can
+    # carry a credential, and this view is where it would be printed.
+    (_status_dir(dispatch_scratch) / "agent.activity").write_text(
+        summary("secretive", detail=f"gh auth login --with-token {SECRET}"), encoding="utf-8"
+    )
+    # A count a subprocess wrote, printed as an authoritative statement about how much
+    # work a node has done.
+    (_status_dir(dispatch_scratch) / "agent.activity").write_text(
+        summary("miscounted", events=-4), encoding="utf-8"
+    )
+    # One node, two live dispatch directories: a retry's replacement runs beside the
+    # attempt it replaced until the sweep reclaims it, and only one of them is what
+    # the node is doing now.
+    (_status_dir(dispatch_scratch) / "agent.activity").write_text(
+        summary("retried", at=time.time() - 30, detail="just stale"), encoding="utf-8"
+    )
+    (_status_dir(dispatch_scratch) / "agent.activity").write_text(
+        summary("retried", detail="just current"), encoding="utf-8"
+    )
 
     shown = subprocess.run(
         [
@@ -483,6 +506,9 @@ def test_status_reports_only_the_publication_it_can_stand_behind(
             **os.environ,
             "TMPDIR": str(tmp_path / "scratch"),
             "ONEHARNESS_HISTORY_DIR": str(tmp_path / "history"),
+            # The credential is named in the environment, which is where the redaction
+            # this asserts finds the values it removes.
+            "GH_TOKEN": SECRET,
         },
         timeout=timeout(60),
     )
@@ -490,10 +516,19 @@ def test_status_reports_only_the_publication_it_can_stand_behind(
     assert shown.returncode == 0, shown.stderr
     # Every node is still reported as dispatched and unfinished — that guarantee is
     # the journal's and none of this can touch it.
-    for node in ("ship", "nobodys", "bloated", "ancient", "ahead", "unreal", "numbered"):
+    for node in (*REJECTED_NODES, "ship", "secretive", "miscounted", "retried"):
         assert f"round-01 {node} engineer" in shown.stdout
-    # Exactly one of them says what it is doing.
     assert "now Bash just ship" in shown.stdout
-    assert shown.stdout.count("event(s),") == 1
-    for rejected in ("just nobodys", "just bloated", "just ancient", "just ahead", "just numbered"):
-        assert rejected not in shown.stdout
+    # Nothing a rejected publication claimed is printed, and no rejection cost the
+    # four believable ones their line.
+    for node in REJECTED_NODES:
+        assert f"just {node}" not in shown.stdout
+    assert shown.stdout.count("event(s),") == 4
+    # The credential never reaches the terminal, and what surrounds it still does.
+    assert SECRET not in shown.stdout
+    assert "gh auth login --with-token" in shown.stdout
+    # A count outside its domain is reported as none rather than as what was written.
+    assert "just miscounted (0 event(s)" in shown.stdout
+    # And the newer of one node's two live publications is the one that is reported.
+    assert "just current" in shown.stdout
+    assert "just stale" not in shown.stdout

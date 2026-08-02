@@ -1358,13 +1358,15 @@ def test_a_stream_capture_that_refuses_its_paths_records_its_own_reason(tmp_path
 
 
 def test_a_streamed_turn_forwards_output_the_filter_cannot_read(tmp_path: Path) -> None:
-    """Whatever the child said reaches onejudge, recognized or not.
+    """A turn survives output this build does not model, and onejudge still gets one.
 
     The stream filter sits between oneharness and onejudge on the one channel a
-    turn's answer travels, so anything it drops is an answer that never arrives — a
-    dispatch failure caused by the observability change rather than by the work. A
-    later protocol's envelope, a harness that printed over the protocol, and an
-    event envelope carrying no event are all shapes this build does not model.
+    turn's answer travels, and onejudge parses that channel as a *single* JSON
+    document — so passing an unmodelled line along would fail a turn that otherwise
+    succeeded, which is the failure this whole arrangement exists to avoid. A later
+    protocol's envelope, an event envelope carrying no event, and a harness that
+    printed over the protocol are all kept in the raw record and kept out of the
+    document.
     """
     unmodelled = (
         '{"type":"notice","message":"a shape from a later protocol"}',
@@ -1399,13 +1401,12 @@ def test_a_streamed_turn_forwards_output_the_filter_cannot_read(tmp_path: Path) 
     )
 
     assert proc.returncode == 0, proc.stderr
-    # Everything unrecognized, verbatim and in order, then the unwrapped report.
-    assert proc.stdout.strip().splitlines() == [
-        '{"type":"notice","message":"a shape from a later protocol"}',
-        "oneharness: warning: something happened",
-        _REPORT,
-    ]
-    # The raw record keeps every line the child wrote, recognized or not.
+    # Exactly the report, and nothing in front of it: onejudge parses this as one
+    # document, so a surviving notice or warning would be the thing that broke it.
+    assert proc.stdout.strip().splitlines() == [_REPORT]
+    assert json.loads(proc.stdout) == json.loads(_REPORT)
+    # The raw record keeps every line the child wrote, recognized or not — nothing
+    # was dropped, only kept out of a channel that could not carry it.
     assert (status_dir / "agent.stdout").read_text(encoding="utf-8").splitlines() == list(
         unmodelled
     )
@@ -1413,3 +1414,39 @@ def test_a_streamed_turn_forwards_output_the_filter_cannot_read(tmp_path: Path) 
     published = json.loads((status_dir / "agent.activity").read_text(encoding="utf-8"))
     assert published["events"] == 1
     assert published["detail"] == "just check"
+
+
+def test_a_streamed_turn_still_carries_a_bare_report_through(tmp_path: Path) -> None:
+    """The one unmodelled line that IS onejudge's document, and must reach it.
+
+    A report with no stream discriminator is what a run that did not stream answers
+    with. Dropping it alongside the noise would turn a turn that produced an answer
+    into a turn that produced nothing — the degrade path failing exactly where it is
+    supposed to hold.
+    """
+    status_dir = tmp_path / "orchestrator-watchdog-bare" / "agent"
+    status_dir.mkdir(parents=True)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    stub = _stream_capable_stub(bin_dir, streamable=True)
+    stub.write_text(
+        "#!/usr/bin/env bash\n"
+        'for arg in "$@"; do [ "$arg" = "--print-command" ] && exit 0; done\n'
+        f"printf '%s\\n' {shlex.quote(_REPORT)}\n",
+        encoding="utf-8",
+    )
+
+    proc = subprocess.run(
+        ["bash", str(WRAPPER), "run", "--compact", "--prompt", "probe"],
+        text=True,
+        capture_output=True,
+        stdin=subprocess.DEVNULL,
+        env={
+            "PATH": f"{bin_dir}:/usr/bin:/bin",
+            "HOME": str(tmp_path / "home"),
+            "ORCHESTRATOR_AGENT_STATUS_DIR": str(status_dir),
+        },
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.strip() == _REPORT
