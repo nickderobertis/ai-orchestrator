@@ -2918,29 +2918,54 @@ def test_multi_commit_branch_publishes_a_subject_that_names_the_change(
     assert "explain how" not in subject and "retain the captured" not in subject
 
 
-def test_descriptions_over_the_limit_publish_the_task_name_not_an_elision(
-    tmp_path, bare_origin
+_OVERLONG_COMMITS = (
+    "feat: expose every captured session's output through a public reader API "
+    "that operators can call directly",
+    "fix: retain the captured output of a session that failed before it produced "
+    "its very first turn of work",
+)
+_FITTING_TASK = "## What\nExpose captured session output.\n\n## Why\nOperators cannot read it.\n"
+_OVERLONG_TASK = (
+    "## What\nExpose every captured session's output through a public reader API that "
+    "operators can call directly.\n\n## Why\nOperators cannot read it.\n"
+)
+
+
+@pytest.mark.parametrize(
+    "messages, task, expected",
+    [
+        # The type still carries the branch's release semantics; only the description moved.
+        (_OVERLONG_COMMITS, _FITTING_TASK, "feat: Expose captured session output."),
+        (_OVERLONG_COMMITS, _OVERLONG_TASK, "feat: orchestrated change"),
+        (
+            (f"fix({'session-capture-' * 2}reader): retain a failed session's output",),
+            _FITTING_TASK,
+            "fix: retain a failed session's output",
+        ),
+    ],
+    ids=["task-name", "generic", "scope-dropped"],
+)
+def test_descriptions_over_the_limit_publish_a_whole_name_not_an_elision(
+    tmp_path, bare_origin, messages: tuple[str, ...], task: str, expected: str
 ) -> None:
-    """No commit description fits, so the planner's own name for the change publishes."""
+    """What reaches the base branch when a description cannot fit: never a cut one.
+
+    A scope is optional, so it is dropped before a description that fits without it; a
+    description that cannot fit at all yields to the task's name, then to a generic one.
+    """
     origin = bare_origin()
     result = run_repo_task(
         str(origin),
-        "## What\nExpose captured session output.\n\n## Why\nOperators cannot read it.\n",
+        task,
         "engineer",
         workspace=_workspace(tmp_path, origin),
-        dispatch_fn=_multi_commit_dispatch(
-            "feat: expose every captured session's output through a public reader API "
-            "that operators can call directly",
-            "fix: retain the captured output of a session that failed before it produced "
-            "its very first turn of work",
-        ),
+        dispatch_fn=_multi_commit_dispatch(*messages),
         recorded_gate=["true"],
     )
 
     assert result.ok, result.detail
     subject = _subject(origin, "main")
-    # The type still carries the branch's release semantics; only the description moved.
-    assert subject == "feat: Expose captured session output."
+    assert subject == expected
     assert "…" not in subject and len(subject) <= lifecycle_module._SUBJECT_LIMIT
 
 
@@ -3269,6 +3294,48 @@ def test_recovery_publishes_a_branch_only_the_execution_checkout_has(tmp_path, b
     # Fetching the ref in is allowed; working in the publication checkout is not.
     assert gitops.current_branch(canonical) == "main"
     assert not gitops.is_dirty(canonical)
+
+
+def test_preserved_work_survives_task_prose_too_long_for_a_subject(tmp_path, bare_origin) -> None:
+    """A marker names the work from task prose, but must never fail on prose that overruns.
+
+    The marker keeps its `(incomplete step)` text through that fallback — a marker whose
+    trailer is missing is still recognized by it — and the recovery still publishes.
+    """
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-long-prose")
+    Registry().register(str(canonical), workflow="local", repo_type="single-owner")
+
+    preserved = run_repo_task(
+        str(canonical),
+        _OVERLONG_TASK,
+        "engineer",
+        workspace=Workspace(tmp_path / "long-prose-worktrees"),
+        branch="feature/long-prose",
+        dispatch_fn=make_writing_dispatch(filename="preserved.txt", completed=False),
+        recorded_gate=["true"],
+    )
+    assert preserved.outcome == "not-completed"
+    assert _subject(canonical, preserved.branch) == "chore: orchestrated change (incomplete step)"
+    assert incomplete_commits(canonical, "main", preserved.branch)
+
+    recovered = recover_repo(
+        canonical,
+        preserved.branch,
+        workspace_root=tmp_path / "long-prose-recovery",
+        recorded_gate=["true"],
+    )
+
+    assert recovered.ok and recovered.outcome == "merged", recovered.detail
+    assert _has_file(origin, "main", "preserved.txt")
+    published = subprocess.run(
+        ["git", "-C", str(origin), "log", "-1", "--format=%B", "main"],
+        check=True,
+        text=True,
+        capture_output=True,
+    ).stdout
+    assert "…" not in published.splitlines()[0]
+    assert RECOVERY_TRAILER in published  # the incomplete step is still on the record
 
 
 def test_recovery_accepts_an_execution_checkout_the_identity_does_not_know(
