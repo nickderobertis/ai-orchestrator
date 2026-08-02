@@ -30,14 +30,17 @@ import time
 from pathlib import Path
 
 from mock_oneharness import main as _mock_oneharness_main
+from scratch_ownership import hold_owner_lock
 from waits import deadline, timeout
 
 from orchestrator import REPO_ROOT
 from orchestrator.journal import open_journal
 from orchestrator.runs import NodeId, RunId
-from orchestrator.scratch import OWNER_LOCK_NAME, _OwnerIdentity
 
 MOCK_ONEHARNESS = Path(_mock_oneharness_main.__globals__["__file__"]).resolve()
+#: Owner locks these journeys hold on behalf of the dispatcher they stand in for.
+#: They are released when the process ends, which is after every journey here.
+_HELD_LOCKS: list[int] = []
 #: How long the mocked harness waits between the lines of its transcript. Long
 #: enough that a poll can observe the turn while it is still running — which is the
 #: whole claim — and short enough that the journey stays a few seconds.
@@ -93,16 +96,14 @@ def _status_dir(root: Path, name: str) -> Path:
     """Create a watchdog status directory, owned, as a live dispatch's own would be.
 
     `orchestrator.scratch.owned_scratch_directory` creates this tree for a real
-    dispatch and records the owning dispatcher in it; the reader believes nothing
-    under the shared scratch root without that evidence. This test process stands in
-    for the dispatcher, and is live for as long as the journeys below need it to be.
+    dispatch and *holds* its owner lock for the dispatch's whole scope; the reader
+    believes nothing under the shared scratch root without that. This test process
+    stands in for the dispatcher and holds the lock until the test session ends.
     """
     watchdog = root / f"orchestrator-watchdog-{name}"
     status_dir = watchdog / "agent"
     status_dir.mkdir(parents=True)
-    owner = _OwnerIdentity.current(os.getpid())
-    assert owner is not None, "this process has no readable start identity"
-    (watchdog / OWNER_LOCK_NAME).write_text(owner.render(), encoding="utf-8")
+    _HELD_LOCKS.append(hold_owner_lock(watchdog))
     return status_dir
 
 

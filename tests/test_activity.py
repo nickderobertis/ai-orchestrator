@@ -15,8 +15,12 @@ import os
 import re
 import tempfile
 import time
+from collections.abc import Iterator
 from dataclasses import fields
 from pathlib import Path
+
+import pytest
+from scratch_ownership import hold_owner_lock
 
 from orchestrator import REPO_ROOT
 from orchestrator.activity import (
@@ -42,20 +46,37 @@ from orchestrator.scratch import (
 NOW = 1_800_000_000.0
 
 
+#: Owner-lock descriptors held for the duration of one test, released by `held_locks`.
+#: `flock` conflicts between separate open file descriptions even inside one process,
+#: so holding one here is the same evidence a live dispatcher's hold is.
+@pytest.fixture(autouse=True)
+def held_locks() -> Iterator[list[int]]:
+    """Release every owner lock a test took, whatever the test did."""
+    descriptors: list[int] = []
+    _HELD.append(descriptors)
+    try:
+        yield descriptors
+    finally:
+        _HELD.pop()
+        for descriptor in descriptors:
+            os.close(descriptor)
+
+
+_HELD: list[list[int]] = []
+
+
 def _publish(root: Path, name: str, payload: object, *, owned: bool = True) -> Path:
     """Write one summary into a watchdog directory, with real ownership evidence.
 
-    ``owned`` records this live test process as the directory's owner, which is what
-    `orchestrator.scratch.owned_scratch_directory` records for a live dispatch and
-    what the reader requires before it believes anything under the shared root.
+    ``owned`` takes and holds the directory's owner lock, which is exactly what
+    `orchestrator.scratch.owned_scratch_directory` does for a live dispatch, and the
+    only thing the reader accepts before believing anything under the shared root.
     """
     watchdog = root / f"orchestrator-watchdog-{name}"
     status_dir = watchdog / "agent"
     status_dir.mkdir(parents=True, exist_ok=True)
     if owned:
-        identity = _OwnerIdentity.current(os.getpid())
-        assert identity is not None, "this process has no readable start identity"
-        (watchdog / OWNER_LOCK_NAME).write_text(identity.render(), encoding="utf-8")
+        _HELD[-1].append(hold_owner_lock(watchdog))
     path = status_dir / "agent.activity"
     path.write_text(payload if isinstance(payload, str) else json.dumps(payload), encoding="utf-8")
     return path
@@ -268,24 +289,26 @@ def test_an_oversized_file_is_rejected_rather_than_read_as_its_prefix(tmp_path: 
     assert live_activity("live-run", root=tmp_path, now=NOW) == {}
 
 
-def test_a_publication_no_live_dispatcher_owns_is_not_believed(tmp_path: Path) -> None:
+def test_a_publication_no_live_dispatcher_holds_is_not_believed(
+    tmp_path: Path, held_locks: list[int]
+) -> None:
     """A watchdog-shaped directory under a shared root is a shape, not a claim.
 
     Anything on this host can create one, and a finished dispatch's own directory
-    survives until the sweep reclaims it. The owner lock is what separates a running
-    dispatch's publication from both — so a summary without one is not reported, and
-    that is the reader's answer for every uncertainty about the lock as well.
+    survives until the sweep reclaims it. Only a *held* owner lock separates a running
+    dispatch's publication from both: a lock file that merely exists names a process
+    that is not holding it, and one whose holder has gone is a turn that is over.
     """
-    _publish(tmp_path, "unowned", _summary(node="nobodys"), owned=False)
-    _publish(tmp_path, "unreadable", _summary(node="torn-lock"))
-    (tmp_path / "orchestrator-watchdog-unreadable" / OWNER_LOCK_NAME).write_text(
-        "not an identity", encoding="utf-8"
-    )
-    _publish(tmp_path, "departed", _summary(node="gone"))
-    # A pid that cannot be running: the recorded owner is no longer live.
-    (tmp_path / "orchestrator-watchdog-departed" / OWNER_LOCK_NAME).write_text(
-        "2147483646 1", encoding="utf-8"
-    )
+    _publish(tmp_path, "unlocked", _summary(node="nobodys"), owned=False)
+    # A lock file recording this very process — live, and demonstrably not holding it.
+    unheld = tmp_path / "orchestrator-watchdog-unheld"
+    _publish(tmp_path, "unheld", _summary(node="named-only"), owned=False)
+    identity = _OwnerIdentity.current(os.getpid())
+    assert identity is not None
+    (unheld / OWNER_LOCK_NAME).write_text(identity.render(), encoding="utf-8")
+    # And a dispatch that has since finished: its lock was held and then released.
+    _publish(tmp_path, "finished", _summary(node="over"))
+    os.close(held_locks.pop())
 
     assert live_activity("live-run", root=tmp_path, now=NOW) == {}
 
