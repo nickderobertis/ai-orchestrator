@@ -760,6 +760,108 @@ def test_persist_session_env_writes_worker_sandbox_environment_once(tmp_path: Pa
     assert lines[1] == f"export LLMLINT_ONEHARNESS_BIN={REPO_ROOT}/scripts/llmlint-oneharness.sh"
 
 
+def test_persist_session_env_creates_the_first_sessions_absent_parent(tmp_path: Path) -> None:
+    """The state a freshly authenticated config directory is in on its first session.
+
+    Claude Code names `<config-dir>/session-env/<session-id>/sessionstart-hook-0.sh`,
+    and on that first session neither directory exists yet, so the appends used to
+    fail with a raw shell redirect error and the session lost its toolchain PATH.
+    """
+    env_file = tmp_path / ".claude-alt2" / "session-env" / "a-session-id" / "sessionstart-hook-0.sh"
+
+    proc = subprocess.run(
+        [
+            "bash",
+            "-c",
+            'source "$1"; persist_session_env',
+            "test-persist",
+            str(REPO_ROOT / "scripts" / "session-setup.sh"),
+        ],
+        text=True,
+        capture_output=True,
+        env={
+            "HOME": str(tmp_path),
+            "PATH": f"{tmp_path}/.local/node/bin:/usr/bin:/bin",
+            "CLAUDE_ENV_FILE": str(env_file),
+        },
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stderr == "", "the absent parent must not leak a raw shell redirect error"
+    lines = env_file.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 2
+    assert lines[0].startswith("export PATH=")
+    assert f"{tmp_path}/.local/node/bin" in lines[0]
+    assert lines[1] == f"export LLMLINT_ONEHARNESS_BIN={REPO_ROOT}/scripts/llmlint-oneharness.sh"
+
+
+def test_persist_session_env_reports_an_unwritable_env_file_without_shell_noise(
+    tmp_path: Path,
+) -> None:
+    """Persistence stays optional: an append it cannot make is this script's own log."""
+    # A directory in the file's place is unwritable regardless of privilege, and
+    # `mkdir -p` on its parent still succeeds, so this reaches the append itself.
+    env_file = tmp_path / "session-env" / "a-session-id" / "sessionstart-hook-0.sh"
+    env_file.mkdir(parents=True)
+
+    proc = subprocess.run(
+        [
+            "bash",
+            "-c",
+            'source "$1"; persist_session_env; echo "rc=$?"',
+            "test-persist",
+            str(REPO_ROOT / "scripts" / "session-setup.sh"),
+        ],
+        text=True,
+        capture_output=True,
+        env={
+            "HOME": str(tmp_path),
+            "PATH": f"{tmp_path}/.local/node/bin:/usr/bin:/bin",
+            "CLAUDE_ENV_FILE": str(env_file),
+        },
+    )
+
+    assert proc.stdout == "rc=0\n", proc.stderr
+    assert "No such file or directory" not in proc.stderr
+    assert "Is a directory" not in proc.stderr
+    assert (
+        f"session-setup: cannot persist the session environment: {env_file} is not writable"
+        in proc.stderr
+    )
+    assert list(env_file.iterdir()) == []
+
+
+def test_persist_session_env_reports_a_parent_it_cannot_create(tmp_path: Path) -> None:
+    """Creating the parent is best effort; failing to must not fail session setup."""
+    # A regular file where `session-env` belongs makes `mkdir -p` fail for any uid.
+    (tmp_path / "session-env").write_text("not a directory", encoding="utf-8")
+    env_file = tmp_path / "session-env" / "a-session-id" / "sessionstart-hook-0.sh"
+
+    proc = subprocess.run(
+        [
+            "bash",
+            "-c",
+            'source "$1"; persist_session_env; echo "rc=$?"',
+            "test-persist",
+            str(REPO_ROOT / "scripts" / "session-setup.sh"),
+        ],
+        text=True,
+        capture_output=True,
+        env={
+            "HOME": str(tmp_path),
+            "PATH": f"{tmp_path}/.local/node/bin:/usr/bin:/bin",
+            "CLAUDE_ENV_FILE": str(env_file),
+        },
+    )
+
+    assert proc.stdout == "rc=0\n", proc.stderr
+    assert (
+        "session-setup: cannot persist the session environment: "
+        f"{env_file.parent} could not be created" in proc.stderr
+    )
+    assert not env_file.exists()
+
+
 def test_persist_session_env_adds_wrapper_when_path_was_already_saved(tmp_path: Path) -> None:
     env_file = tmp_path / "claude-env"
     saved_path = f"{tmp_path}/.local/node/bin:/usr/bin:/bin"
