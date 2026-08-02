@@ -376,6 +376,11 @@ if ! mkfifo "$stdout_fifo"; then
     echo "oneharness-agent: cannot create the agent stdout capture pipe; retry through orchestrator dispatch" >&2
     exit 2
 fi
+# Both readers say nothing unless the capture itself fails, and that account goes
+# into the same durable record the child's own stderr does — appended, so the child
+# truncating it at open cannot take the reader's reason with it. Left on the
+# wrapper's own stderr it would vanish with the process tree the dispatcher tears
+# down, which is the one place a failure explains itself.
 if [ "$stream_events" = true ]; then
     # The streamed conduit: the same transparent stdout capture, plus the live
     # activity publication and the unwrapping onejudge's single-document parse
@@ -383,10 +388,10 @@ if [ "$stream_events" = true ]; then
     # reads the raw record back — the quota diagnostic below, the dispatcher —
     # cannot tell which one ran.
     # llmlint: ignore[tool_output_is_signal] the stream filter is the transparent stdout side of the oneharness protocol conduit.
-    "$(repo_interpreter)" "$stream_filter" "$agent_stdout" "$agent_activity" <"$stdout_fifo" &
+    "$(repo_interpreter)" "$stream_filter" "$agent_stdout" "$agent_activity" <"$stdout_fifo" 2>>"$agent_stderr" &
 else
     # llmlint: ignore[tool_output_is_signal] tee is the transparent stdout side of the oneharness protocol conduit.
-    tee "$agent_stdout" <"$stdout_fifo" &
+    tee "$agent_stdout" <"$stdout_fifo" 2>>"$agent_stderr" &
 fi
 capture_pid=$!
 # llmlint: ignore[boundary_inputs_validated] oneharness parses and validates its own protocol input.

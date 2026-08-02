@@ -1307,3 +1307,51 @@ def test_an_undispatched_turn_keeps_events_because_nothing_is_watching(tmp_path:
     assert proc.returncode == 0, proc.stderr
     assert "--stream" not in recorded
     assert recorded.count("--events") == 1
+
+
+def test_a_stream_capture_that_refuses_its_paths_records_its_own_reason(tmp_path: Path) -> None:
+    """The reader's account of a failed capture has to survive the process tree.
+
+    A capture that stops working must never read as "the harness said nothing", and
+    the wrapper's failure line says where the reason is — so the reader's stderr goes
+    into that same durable record rather than onto a wrapper stderr that vanishes
+    with the tree the dispatcher tears down.
+
+    The refusal itself is the filter resolving its paths rather than reading their
+    spelling: this status directory has the shape the wrapper requires, and resolves
+    somewhere with no dispatch behind it at all.
+    """
+    actual = tmp_path / "elsewhere" / "agent"
+    actual.mkdir(parents=True)
+    (tmp_path / "orchestrator-watchdog-sneaky").symlink_to(tmp_path / "elsewhere")
+    status_dir = tmp_path / "orchestrator-watchdog-sneaky" / "agent"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    _stream_capable_stub(bin_dir, streamable=True)
+
+    with subprocess.Popen(
+        ["bash", str(WRAPPER), "run", "--compact", "--prompt", "probe"],
+        text=True,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        env={
+            "PATH": f"{bin_dir}:/usr/bin:/bin",
+            "HOME": str(tmp_path / "home"),
+            "ONEHARNESS_ARGS_FILE": str(tmp_path / "argv-sneaky"),
+            "ORCHESTRATOR_AGENT_STATUS_DIR": str(status_dir),
+        },
+    ) as process:
+        try:
+            limit = time.monotonic() + 30
+            while time.monotonic() < limit and not (status_dir / "agent.failed").exists():
+                time.sleep(0.05)
+            assert (status_dir / "agent.failed").exists(), "the wrapper never recorded the failure"
+            recorded = (status_dir / "agent.stderr").read_text(encoding="utf-8")
+        finally:
+            process.kill()
+
+    # The reader's own reason, in the record the wrapper's failure line points at.
+    assert "in one dispatch status directory" in recorded
+    assert "agent stdout capture failed" in recorded
+    assert str(status_dir / "agent.stderr") in recorded
