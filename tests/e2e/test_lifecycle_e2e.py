@@ -224,6 +224,15 @@ def _tip(origin: Path, ref: str) -> str:
     ).stdout.strip()
 
 
+def _subject(repo: Path, ref: str) -> str:
+    return subprocess.run(
+        ["git", "-C", str(repo), "log", "-1", "--format=%s", ref],
+        check=True,
+        text=True,
+        capture_output=True,
+    ).stdout.strip()
+
+
 def _run_while_merge_turn_is_held(
     canonical: Path, operation: Callable[[], _T], *, should_wait: bool
 ) -> _T:
@@ -2862,6 +2871,77 @@ def test_local_repo_direct_merge(tmp_path, bare_origin) -> None:
     )
     assert landed not in branch_commits
     assert branch_commits.isdisjoint(base_commits)
+
+
+def _multi_commit_dispatch(*messages: str):
+    """A dispatch that lands one real commit per message in the worktree."""
+
+    def dispatch_fn(persona: str, task: str, *, project_dir: str, **_: object) -> Report:
+        worktree = Path(project_dir)
+        for index, message in enumerate(messages):
+            (worktree / f"change{index}.txt").write_text(f"{index}\n", encoding="utf-8")
+            gitops.add_all(worktree)
+            gitops.commit(worktree, message)
+        return Report(persona, 0, True, False, 1, [], {}, {}, "")
+
+    return dispatch_fn
+
+
+def test_multi_commit_branch_publishes_a_subject_that_names_the_change(
+    tmp_path, bare_origin
+) -> None:
+    """One squash commit reaches the base, so its subject names the change it made.
+
+    Concatenating every description is what published `feat: ...; read the r…` — the
+    branch's steps do not fit in one subject, and its own history already records them.
+    """
+    origin = bare_origin()
+    named = "feat: expose the captured session output through a public reader"
+    result = run_repo_task(
+        str(origin),
+        "## What\nExpose captured session output.\n\n## Why\nOperators cannot read it.\n",
+        "engineer",
+        workspace=_workspace(tmp_path, origin),
+        dispatch_fn=_multi_commit_dispatch(
+            "docs: explain how a failed session's captured output is retained across a later retry",
+            named,
+            "fix: retain the captured output of a session that failed before its very first turn",
+        ),
+        recorded_gate=["true"],
+    )
+
+    assert result.ok, result.detail
+    assert result.outcome == "merged"
+    subject = _subject(origin, "main")
+    assert subject == named
+    assert "…" not in subject and "; " not in subject
+    assert "explain how" not in subject and "retain the captured" not in subject
+
+
+def test_descriptions_over_the_limit_publish_the_task_name_not_an_elision(
+    tmp_path, bare_origin
+) -> None:
+    """No commit description fits, so the planner's own name for the change publishes."""
+    origin = bare_origin()
+    result = run_repo_task(
+        str(origin),
+        "## What\nExpose captured session output.\n\n## Why\nOperators cannot read it.\n",
+        "engineer",
+        workspace=_workspace(tmp_path, origin),
+        dispatch_fn=_multi_commit_dispatch(
+            "feat: expose every captured session's output through a public reader API "
+            "that operators can call directly",
+            "fix: retain the captured output of a session that failed before it produced "
+            "its very first turn of work",
+        ),
+        recorded_gate=["true"],
+    )
+
+    assert result.ok, result.detail
+    subject = _subject(origin, "main")
+    # The type still carries the branch's release semantics; only the description moved.
+    assert subject == "feat: Expose captured session output."
+    assert "…" not in subject and len(subject) <= lifecycle_module._SUBJECT_LIMIT
 
 
 def test_covered_lifecycle_uses_push_gate_without_orchestrator_gate_run(

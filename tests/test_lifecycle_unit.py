@@ -215,7 +215,8 @@ def test_single_commit_subject_becomes_default_title() -> None:
     assert title == "fix(capture): preserve failed session output"
 
 
-def test_multiple_commit_subjects_use_most_significant_type() -> None:
+def test_multiple_commit_subjects_name_the_most_significant_change_alone() -> None:
+    """A squash subject names the change; the branch's own history keeps its steps."""
     title = _subject_from_messages(
         _commit_messages(
             "docs: explain session capture",
@@ -225,8 +226,8 @@ def test_multiple_commit_subjects_use_most_significant_type() -> None:
         ),
         "irrelevant task prose",
     )
-    assert title.startswith("feat: expose captured sessions")
-    assert "explain session capture" in title
+    assert title == "feat: expose captured sessions"
+    assert "explain session capture" not in title and "retain failed output" not in title
 
 
 def test_breaking_commit_signal_survives_synthesis() -> None:
@@ -261,12 +262,52 @@ def test_breaking_footer_on_invalid_subject_marks_mixed_history() -> None:
     assert title == "fix!: retain output"
 
 
-def test_long_subject_truncates_only_description() -> None:
+def test_a_description_too_long_for_the_limit_falls_back_to_the_task_name() -> None:
+    """A description is published whole or not at all — never cut to fit."""
     title = _subject_from_messages(
-        _commit_messages(f"fix(capture): {'x' * 200}"), "irrelevant task prose"
+        _commit_messages(f"fix(capture): {'x' * 200}"), "## What\nRetain failed session output.\n"
     )
-    assert title.startswith("fix(capture): ") and title.endswith("…")
+    assert title == "fix(capture): Retain failed session output."
+    assert "x" * 20 not in title
+
+
+def test_an_overlong_scope_is_dropped_before_the_description_it_crowds_out() -> None:
+    """The scope is the optional part, so it goes first — the description names the change."""
+    title = _subject_from_messages(
+        _commit_messages(f"fix({'s' * 40}): retain the captured output of a failed session"),
+        "irrelevant task prose",
+    )
+    assert title == "fix: retain the captured output of a failed session"
+
+
+def test_a_branch_with_no_fitting_description_publishes_a_generic_subject() -> None:
+    """Neither the commit nor the task prose fits, so the subject says only that much."""
+    title = _subject_from_messages(
+        _commit_messages(f"fix(capture): {'x' * 200}"), f"## What\n{'y' * 200}\n"
+    )
+    assert title == "fix(capture): orchestrated change"
+
+
+@pytest.mark.parametrize(
+    "messages, task",
+    [
+        ((f"feat: {'x' * 200}", f"fix: {'y' * 200}"), f"## What\n{'z' * 200}\n"),
+        ((f"feat(scope): {'x' * 200}",), "## What\nA task line that comfortably fits.\n"),
+        ((), f"## What\n{'z' * 200}\n"),
+    ],
+)
+def test_no_derived_subject_is_ever_elided(messages: tuple[str, ...], task: str) -> None:
+    title = _subject_from_messages(_commit_messages(*messages), task)
+    assert "…" not in title and "..." not in title
     assert len(title) <= lc._SUBJECT_LIMIT
+    assert lc._parse_conventional_subject(title) is not None
+
+
+def test_a_subject_the_limit_cannot_hold_at_all_is_rejected() -> None:
+    # No description fits behind a prefix this long, so there is nothing to publish and
+    # the caller hears so rather than receiving a subject without a description.
+    with pytest.raises(ConfigError):
+        lc._format_conventional_subject(lc._ParsedSubject("t" * 70, None, False, "a change"))
 
 
 @pytest.mark.parametrize(
@@ -344,6 +385,15 @@ def test_incomplete_commit_names_the_work_not_the_task_heading() -> None:
         Step("main", "backend", "## What\nRepair capture.\n\n## Why\nIt drops output.\n"), "main"
     )
     assert message.partition("\n")[0] == "chore: Repair capture. (incomplete step)"
+
+
+def test_incomplete_marker_survives_task_prose_too_long_for_a_subject() -> None:
+    # Preserving partial work must never fail, and a marker is still recognized by this
+    # text when its trailer is missing, so the fallback keeps it rather than the prose.
+    message = _incomplete_commit_message(Step("main", "backend", f"## What\n{'x' * 200}\n"), "main")
+    subject = message.partition("\n")[0]
+    assert subject == "chore: orchestrated change (incomplete step)"
+    assert lc.is_provenance_commit(message)
 
 
 @pytest.mark.parametrize(

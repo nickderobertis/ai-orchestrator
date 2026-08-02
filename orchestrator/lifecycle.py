@@ -28,7 +28,7 @@ import threading
 import time
 import uuid
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Protocol, cast
 
@@ -133,6 +133,10 @@ _CONVENTIONAL_SUBJECT = re.compile(
 )
 _BREAKING_FOOTER = re.compile(r"(?m)^BREAKING(?: |-)CHANGE:\s*\S")
 _TYPE_PRIORITY = {"feat": 0, "fix": 1, "perf": 2, "refactor": 3}
+# The description of last resort: what a subject says when neither the branch's commits
+# nor the task prose offers one that fits the limit whole. It names no change, which is
+# honest — the alternative was a real description cut off mid-word.
+_GENERIC_DESCRIPTION = "orchestrated change"
 
 # This is the executable PR-body contract. A unit drift gate reconciles it with
 # the checked-in template, pr-author persona, and lifecycle documentation.
@@ -378,28 +382,46 @@ def _parse_conventional_subject(message: str) -> _ParsedSubject | None:
     )
 
 
-def _format_conventional_subject(parsed: _ParsedSubject) -> str:
-    """Format and guard one Conventional Commit subject without truncating its prefix."""
+def _fit_conventional_subject(parsed: _ParsedSubject) -> str | None:
+    """Format and guard one Conventional Commit subject the limit can hold, else `None`.
+
+    A description is carried whole or not at all. Cutting one to length published
+    subjects that broke off mid-word behind an ellipsis, which names no change and
+    reads as corruption, so a description too long for the limit makes this *not* a
+    subject the caller can publish rather than a subject to shorten.
+    """
     scope = f"({parsed.scope})" if parsed.scope else ""
     prefix = f"{parsed.type}{scope}{'!' if parsed.breaking else ''}: "
-    if len(prefix) >= _SUBJECT_LIMIT and parsed.scope is not None:
-        # A scope is optional. Drop an exceptionally long one rather than corrupting
-        # the type/breaking prefix or emitting a subject without a description.
-        prefix = f"{parsed.type}{'!' if parsed.breaking else ''}: "
-    available = _SUBJECT_LIMIT - len(prefix)
     description = " ".join(parsed.description.split())
-    if available < 1 or not description:
-        raise ConfigError("cannot format a valid Conventional Commit subject")
-    if len(description) > available:
-        description = description[: max(available - 1, 0)].rstrip() + "…"
     subject = prefix + description
-    if (
-        len(subject) > _SUBJECT_LIMIT
-        or (validated := _parse_conventional_subject(subject)) is None
-        or validated.breaking != parsed.breaking
-    ):
-        raise ConfigError(f"generated invalid Conventional Commit subject: {subject!r}")
-    return subject
+    if not description or len(subject) > _SUBJECT_LIMIT:
+        return None
+    if (validated := _parse_conventional_subject(subject)) is None:
+        return None
+    return subject if validated.breaking == parsed.breaking else None
+
+
+def _format_conventional_subject(parsed: _ParsedSubject, *fallbacks: str) -> str:
+    """Format the first offered description that fits the limit whole.
+
+    Each candidate is text someone actually wrote — a commit description, then the
+    caller's fallbacks (the task's own name for the change) — and the last is generic
+    but short enough to fit by construction, so a branch whose descriptions all
+    overflow still publishes a subject that reads as one rather than an elided one.
+
+    A scope is the one optional part, so a scope that is itself what crowds a real
+    description out is dropped before that description is given up: the type, the
+    breaking marker, and the description are what name the change.
+    """
+    scopes = (parsed.scope, None) if parsed.scope is not None else (None,)
+    for description in (parsed.description, *fallbacks, _GENERIC_DESCRIPTION):
+        for scope in scopes:
+            subject = _fit_conventional_subject(
+                replace(parsed, scope=scope, description=description)
+            )
+            if subject is not None:
+                return subject
+    raise ConfigError("cannot format a valid Conventional Commit subject")
 
 
 def _task_description(task: str) -> str:
@@ -413,7 +435,7 @@ def _task_description(task: str) -> str:
         stripped = line.strip()
         if stripped and not stripped.startswith("#"):
             return stripped
-    return "orchestrated change"
+    return _GENERIC_DESCRIPTION
 
 
 def _fallback_subject(task: str, *, breaking: bool = False) -> str:
@@ -427,6 +449,12 @@ def _fallback_subject(task: str, *, breaking: bool = False) -> str:
 def _subject_from_messages(messages: list[gitops.CommitMessage], task: str) -> str:
     """Derive one semantic subject from usable agent-written commit messages.
 
+    Publication squashes a branch into one commit, so its subject *names* the change:
+    the most significant commit supplies the description and the branch keeps the rest
+    of its history. Joining every description instead is what overran the limit and
+    published `feat: ...; read the r…` onto the base branch — a subject that describes
+    a branch's steps is already too long to survive as one.
+
     Provenance commits are excluded first. A marker and its attestation describe the
     run rather than the change, and folding them in published subjects that trailed
     off in a truncated `; ## What (incomple…`.
@@ -438,30 +466,23 @@ def _subject_from_messages(messages: list[gitops.CommitMessage], task: str) -> s
         for commit in authored
         if (subject := _parse_conventional_subject(commit.message)) is not None
     ]
-    match parsed:
-        case []:
-            return _fallback_subject(task, breaking=breaking)
-        case [subject]:
-            return _format_conventional_subject(
-                _ParsedSubject(subject.type, subject.scope, breaking, subject.description)
-            )
-        case _:
-            pass
-
-    breaking_subjects = [subject for subject in parsed if subject.breaking]
-    candidates = breaking_subjects or parsed
-    primary = min(candidates, key=lambda subject: _TYPE_PRIORITY.get(subject.type, 4))
+    if not parsed:
+        return _fallback_subject(task, breaking=breaking)
+    primary = min(
+        [subject for subject in parsed if subject.breaking] or parsed,
+        key=lambda subject: _TYPE_PRIORITY.get(subject.type, 4),
+    )
+    # Type and breaking marker carry the branch's release semantics, so they describe the
+    # whole branch even though the description names one commit. A scope does too: keep it
+    # only when every commit shares it, or the subject would claim a narrower change.
     common_scope = (
         primary.scope if all(subject.scope == primary.scope for subject in parsed) else None
     )
-    descriptions = [primary.description]
-    descriptions.extend(
-        subject.description
-        for subject in parsed
-        if subject is not primary and subject.description not in descriptions
-    )
     return _format_conventional_subject(
-        _ParsedSubject(primary.type, common_scope, breaking, "; ".join(descriptions))
+        _ParsedSubject(primary.type, common_scope, breaking, primary.description),
+        # The planner's own one-line name for the whole change, for a commit description
+        # that cannot fit. It describes the branch at least as well as any commit on it.
+        _task_description(task),
     )
 
 
@@ -543,7 +564,10 @@ def _step_commit_message(step: Step, worktree: Path, dispatch_head: str) -> str:
 
 def _incomplete_commit_message(step: Step, pr_base: str) -> str:
     subject = _format_conventional_subject(
-        _ParsedSubject("chore", None, False, f"{_task_description(step.task)} (incomplete step)")
+        _ParsedSubject("chore", None, False, f"{_task_description(step.task)} (incomplete step)"),
+        # Preserving work must never fail on long task prose, and the marker text is what
+        # a message without the trailer is still recognized by, so it survives the fallback.
+        f"{_GENERIC_DESCRIPTION} (incomplete step)",
     )
     return (
         f"{subject}\n\n"

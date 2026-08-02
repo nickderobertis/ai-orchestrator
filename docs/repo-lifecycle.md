@@ -668,9 +668,11 @@ dependency failed is skipped. Cross-repository dependencies only schedule. A
 successful same-identity dependency not landed on the root base becomes a stack
 prerequisite:
 
-The default PR title is derived from Conventional Commit subjects on the branch,
-with a non-releasing `chore:` fallback when none is usable. An explicit `title`
-must itself be a Conventional Commit subject of at most 72 characters.
+The default PR title is derived from the most significant Conventional Commit
+subject on the branch, with a non-releasing `chore:` fallback when none is usable
+— see [A subject names the change, whole](#a-subject-names-the-change-whole). An
+explicit `title` must itself be a Conventional Commit subject of at most 72
+characters.
 
 All explicit task, base, anchor, and recovery branch names pass Git's literal
 branch validator before any Git command; a plan that explicitly combines
@@ -988,6 +990,40 @@ it and reports `already-merged` from finding no content to add rather than from
 ancestry; and a base advanced during the candidate's gate run is `not-ready` rather
 than silently reconciled, because the tree that would land is no longer the tree
 the gate judged.
+
+### A subject names the change, whole
+
+Publication squashes a branch, so one subject reaches the base branch for all of
+its commits. That subject **names the change**: the most significant commit (the
+breaking ones first, then by type priority) supplies the description, and the
+branch's own history keeps the remaining steps. Its type and breaking marker still
+describe the whole branch — they are its release semantics — and its scope is kept
+only when every usable commit shares one, since a narrower scope would misdescribe
+what landed.
+
+Synthesizing the subject by joining every description and cutting the result to 72
+characters is what published `feat: make orchestration-run ownership visible and
+enforced; read the r…` onto `main`. A cut description names nothing, breaks
+mid-word, and reads as corruption, so **a description is published whole or not at
+all**. One that does not fit is not shortened; the next candidate is offered
+instead:
+
+1. the most significant commit's description;
+2. the first line of task prose that carries content — the planner's own one-line
+   name for the whole change, which describes the branch at least as well as any
+   commit on it;
+3. `orchestrated change`, which fits by construction and claims nothing. Naming no
+   change is honest where naming half of one is not.
+
+The type and breaking marker are unchanged by that fall-through, so a branch whose
+`feat:` description overflows still publishes a releasing `feat:`. The scope is the
+one optional part, so a scope that is itself what crowds a description out is
+dropped before that description is: `fix(a-very-long-scope): <description>` becomes
+`fix: <description>`. Only a prefix so long that no description could follow it has
+nothing to publish, and that raises rather than emitting a subject without one. An
+`(incomplete step)` marker keeps its own suffix through the same fall-through:
+preserving partial work must never fail on long task prose, and a marker missing
+its trailer is still recognized by that text.
 
 ### Complete branch after publication failure
 
