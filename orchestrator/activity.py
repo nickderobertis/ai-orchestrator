@@ -52,6 +52,10 @@ STALE_AFTER_SECONDS = 900.0
 #: is thousands of events at the very outside, so anything past this says only "a
 #: great many", and is reported as that rather than as a number nobody measured.
 MAX_REPORTED_EVENTS = 1_000_000
+#: How large a published summary may be. It is one short JSON line whose every field
+#: the publisher already bounds, so this is generous by an order of magnitude — and
+#: a file past it is not a summary at all, whatever its first bytes look like.
+MAX_SUMMARY_BYTES = 8192
 
 
 @dataclass(frozen=True)
@@ -152,10 +156,16 @@ def live_activity(
         path = status_dir / AGENT_ACTIVITY_NAME
         try:
             # Bounded because this is a foreign file under a shared root: a summary
-            # is one short line, and anything longer is not one.
+            # is one short line, and anything longer is not one. One byte past the
+            # cap is read so that an oversized file is *rejected* rather than
+            # truncated into a prefix that happens to parse — a reader that accepted
+            # the prefix would report whatever the first summary-shaped bytes of some
+            # much larger document said.
             with path.open("rb") as handle:
-                raw = handle.read(8192)
+                raw = handle.read(MAX_SUMMARY_BYTES + 1)
         except OSError:
+            continue
+        if len(raw) > MAX_SUMMARY_BYTES:
             continue
         try:
             payload = json.loads(raw.decode("utf-8", errors="replace"))

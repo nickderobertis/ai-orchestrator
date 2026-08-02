@@ -14,13 +14,16 @@ import json
 import re
 import tempfile
 import time
+from dataclasses import fields
 from pathlib import Path
 
 from orchestrator import REPO_ROOT
 from orchestrator.activity import (
     MAX_REPORTED_EVENTS,
+    MAX_SUMMARY_BYTES,
     STALE_AFTER_SECONDS,
     SUMMARY_CHARS,
+    NodeActivity,
     live_activity,
 )
 from orchestrator.labels import graph_labels, semantic_agent_labels
@@ -211,3 +214,34 @@ def test_the_publishers_locator_keys_are_ones_a_dispatch_can_actually_carry() ->
     assert keys <= stampable, f"the filter joins on labels no dispatch stamps: {keys - stampable}"
     # The join key itself, which the reader requires of every summary it accepts.
     assert {"run_id", "round", "node"} <= keys
+
+
+def test_every_field_the_reader_reads_is_one_the_publisher_declares() -> None:
+    """DRIFT-GATE the record itself, not only its locator.
+
+    `Summary` in the stream filter and `NodeActivity` here are the two ends of one
+    cross-process record, and nothing links them at run time either: renaming
+    `detail` on one side would not fail to parse, it would just make the view report
+    an empty phrase for every streaming node — a silent return to reporting elapsed
+    time and nothing else.
+    """
+    filter_source = (REPO_ROOT / "scripts" / "oneharness-stream.py").read_text(encoding="utf-8")
+    published = set(re.findall(r"^    (\w+): (?:str|float|int)$", filter_source, re.MULTILINE))
+    read = {field.name for field in fields(NodeActivity)}
+
+    assert read <= published, f"the reader reads fields nothing publishes: {read - published}"
+
+
+def test_an_oversized_file_is_rejected_rather_than_read_as_its_prefix(tmp_path: Path) -> None:
+    """A valid prefix of some much larger document is not a summary.
+
+    The read is bounded because this file is foreign, and a bound that truncated
+    instead of refusing would report whatever the first summary-shaped bytes of a
+    log, a heap dump or a planted file happened to say.
+    """
+    padded = _summary(detail="x" * MAX_SUMMARY_BYTES)
+    # Valid JSON well past the cap, whose first bytes parse as a complete summary
+    # once truncated: `{...}` followed by filler the reader never reaches.
+    _publish(tmp_path, "oversized", json.dumps(_summary()) + "\n" + json.dumps(padded))
+
+    assert live_activity("live-run", root=tmp_path, now=NOW) == {}

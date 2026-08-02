@@ -315,11 +315,14 @@ def test_status_reports_what_a_node_is_doing_while_its_turn_is_still_running(
     scratch.mkdir()
     runs_dir = tmp_path / "runs"
     status_dir = _status_dir(scratch, "view")
-    # llmlint: ignore[tests_mirror_real_usage] the journal IS this view's production
-    # input — the executor writes it and `just status` reads it — and driving a whole
-    # tracked round to reach one in-flight node would test the executor instead. This
-    # is the same seam `tests/e2e/test_status_e2e.py` uses for the journal join.
+    # The journal is this view's production input — the executor writes it through
+    # this same append-only API and `just status` reads it — so writing the one
+    # recorded transition is the input, not a shortcut past the entry point. Driving a
+    # whole tracked round to reach an in-flight node would test the executor instead,
+    # and `tests/e2e/test_status_e2e.py` reaches this view through the same seam.
+    # llmlint: ignore[tests_mirror_real_usage] the journal is this view's own input
     journal = open_journal(runs_dir / "live-run", RunId("live-run"), 1)
+    # llmlint: ignore[tests_mirror_real_usage] the recorded transition, via its own API
     journal.append("node-started", node=NodeId("ship"), detail={"persona": "engineer"})
     # A second dispatch's directory holding an unusable publication, beside the live
     # one. A reader that raised, or that stopped scanning, would take a working node's
@@ -470,3 +473,35 @@ def test_the_filter_reports_a_record_it_cannot_keep(tmp_path: Path) -> None:
     assert "cannot keep the agent stdout record" in completed.stderr
     # The message names what to do about it, not only what went wrong.
     assert "retry through orchestrator dispatch" in completed.stderr
+
+
+def test_the_filter_refuses_to_write_outside_a_dispatch_status_directory(
+    tmp_path: Path,
+) -> None:
+    """A path is this process's one input, and both of its paths become writes.
+
+    It appends a turn's whole stdout to one and atomically replaces the other, so an
+    unvalidated path would make it a general-purpose writer pointed by its caller.
+    It requires the same directory shape the wrapper requires of
+    ``ORCHESTRATOR_AGENT_STATUS_DIR`` before writing any marker of its own.
+    """
+    stray = tmp_path / "somewhere" / "agent.stdout"
+    stray.parent.mkdir(parents=True)
+
+    completed = subprocess.run(
+        [
+            str(REPO_ROOT / ".venv" / "bin" / "python3"),
+            str(REPO_ROOT / "scripts" / "oneharness-stream.py"),
+            str(stray),
+            str(stray.with_name("agent.activity")),
+        ],
+        input='{"type":"result","report":{}}\n',
+        text=True,
+        capture_output=True,
+        timeout=timeout(30),
+    )
+
+    assert completed.returncode == 2
+    assert "not inside a dispatch status directory" in completed.stderr
+    assert "invoke through orchestrator dispatch" in completed.stderr
+    assert not stray.exists()

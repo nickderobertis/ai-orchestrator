@@ -56,6 +56,11 @@ LABEL_ENV = "ONEHARNESS_HISTORY_LABELS"
 #: The locator keys a planner view joins on. Everything else oneharness was told to
 #: stamp stays out: this file is read by a view, not by the history store.
 LOCATOR_KEYS = ("run_id", "round", "node", "step", "persona")
+#: The shape of the directory this process is allowed to write into — the same one
+#: `scripts/oneharness-agent.sh` requires of ``ORCHESTRATOR_AGENT_STATUS_DIR``, and
+#: the same one `orchestrator.scratch` creates and sweeps.
+WATCHDOG_PREFIX = "orchestrator-watchdog-"
+STATUS_DIR_NAME = "agent"
 
 
 class Locator(TypedDict, total=False):
@@ -222,11 +227,38 @@ def _translate(record: Any, activity_path: str, locator: Locator) -> None:
                 _forward(line)
 
 
+def _in_status_directory(path: str) -> bool:
+    """Whether this path names a file inside one dispatch's own status directory.
+
+    Both arguments become writes — an append and an atomic replace — so they are
+    checked against the same shape `scripts/oneharness-agent.sh` checks
+    ``ORCHESTRATOR_AGENT_STATUS_DIR`` against before it writes a marker of its own.
+    The wrapper is the only caller, but a path is the one input this process takes,
+    and a filter that would append a turn's whole stdout wherever it was pointed is
+    not one to hand an unvalidated one.
+    """
+    parent = os.path.dirname(os.path.abspath(path))
+    grandparent, watchdog = os.path.split(os.path.dirname(parent))
+    return (
+        os.path.basename(parent) == STATUS_DIR_NAME
+        and watchdog.startswith(WATCHDOG_PREFIX)
+        and os.path.isabs(grandparent)
+    )
+
+
 def main(argv: list[str]) -> int:
     if len(argv) != 2:
         print("oneharness-stream: expected <stdout-record> <activity-file>", file=sys.stderr)
         return 2
     record_path, activity_path = argv
+    for path in (record_path, activity_path):
+        if not _in_status_directory(path):
+            print(
+                f"oneharness-stream: {path} is not inside a dispatch status directory; "
+                "invoke through orchestrator dispatch, which creates and owns it",
+                file=sys.stderr,
+            )
+            return 2
     try:
         with open(record_path, "a", encoding="utf-8") as record:
             _translate(record, activity_path, _locator(os.environ.get(LABEL_ENV)))

@@ -408,7 +408,7 @@ capture_exit_code=$?
 rm -f "$stdout_fifo"
 set -e
 if [ "$capture_exit_code" -ne 0 ]; then
-    echo "oneharness-agent: agent stdout capture failed with exit $capture_exit_code" >>"$agent_stderr"
+    echo "oneharness-agent: agent stdout capture failed with exit $capture_exit_code; the turn's own output above this line is all that was kept, and the reader's reason is at $agent_stderr — retry through orchestrator dispatch, which creates the status directory the capture writes into" >>"$agent_stderr"
     if [ "$exit_code" -eq 0 ]; then
         exit_code=2
     fi
