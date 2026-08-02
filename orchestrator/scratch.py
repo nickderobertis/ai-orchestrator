@@ -19,9 +19,22 @@ from pathlib import Path, PurePosixPath
 from typing import ParamSpec, Protocol, TypeVar
 
 from .coordination import ProcessStart, proc_root, process_start_identity
+from .watchdog import ProcessId, terminate_processes
 
 WATCHDOG_PREFIX = "orchestrator-watchdog-"
 WATCHDOG_PATTERN = f"{WATCHDOG_PREFIX}*"
+#: The variable every dispatch exports into the environment of everything it starts,
+#: naming the agent status directory inside its own watchdog scratch tree. The kernel
+#: fixes an environment at ``exec`` and a process cannot shed it, so this is the one
+#: piece of ownership evidence that survives being reparented to init — which is what
+#: the harness's own leavings look like once their dispatcher is gone. `dispatch.py`
+#: writes it; the sweep below reads it back out of ``/proc/<pid>/environ``.
+AGENT_STATUS_DIR_ENV = "ORCHESTRATOR_AGENT_STATUS_DIR"
+#: The one directory a dispatch stamps that variable with, inside its watchdog tree.
+#: The sweep requires the stamp to name exactly this child of exactly one watchdog
+#: directory, so a value that merely lands somewhere under the swept root proves
+#: nothing and claims nothing.
+AGENT_STATUS_DIR_NAME = "agent"
 OWNER_LOCK_NAME = "owner.lock"
 OWNER_RECORD_LIMIT = 128
 THIRD_PARTY_PATTERNS = (
@@ -121,8 +134,10 @@ class SkippedFamily:
 
 WATCHDOG_FAMILY = "watchdog"
 THIRD_PARTY_FAMILY = "third-party"
+ORPHAN_FAMILY = "dispatch-orphans"
 THIRD_PARTY_SKIP_REASON = "lifecycle dispatch active"
 REFERENCE_PROOF_SKIP_REASON = "no live process could be proven done with it"
+ORPHAN_PROOF_SKIP_REASON = "no usable procfs to prove what a finished dispatch left running"
 
 
 SCRATCH_LOCK_NAME = ".orchestrator-scratch.lock"
@@ -153,6 +168,8 @@ class SweepResult:
     reference_proof_unavailable: bool = False
     swept_families: tuple[str, ...] = ()
     skipped_families: tuple[SkippedFamily, ...] = ()
+    orphan_candidates: tuple[ProcessId, ...] = ()
+    reaped_processes: tuple[ProcessId, ...] = ()
 
 
 def _open_lock_file(path: Path, *, create: bool) -> int:
@@ -283,6 +300,119 @@ def _watchdog_is_reclaimable(path: Path) -> bool:
         os.close(fd)
     owner = _OwnerIdentity.parse(record)
     return owner is None or not owner.is_live()
+
+
+def _dispatch_is_finished(directory: Path) -> bool:
+    """Whether the dispatch that owned this watchdog scratch directory is over.
+
+    Two proofs, and the sweep needs either. An *absent* directory is the stronger
+    one: `owned_scratch_directory` removes the tree only when its whole scope exits,
+    so a name that is gone belonged to a dispatch that ran to completion. A directory
+    that is still there is judged by exactly the ownership proof the watchdog family
+    already uses, so a dispatcher that is merely slow — or one whose worker exited
+    while it was still parsing a report — keeps everything it started.
+    """
+    if directory.is_symlink():
+        return False
+    if not directory.exists():
+        return True
+    return directory.is_dir() and _watchdog_is_reclaimable(directory)
+
+
+def _stamped_watchdog_directory(environ: bytes, scratch_root: Path) -> Path | None:
+    """The watchdog scratch directory a process's inherited environment names.
+
+    Read as whole NUL-delimited entries rather than as a substring, so a value that
+    merely contains the variable's name cannot be mistaken for the variable. The value
+    then has to be the exact path a dispatch writes — ``<root>/<watchdog dir>/agent``,
+    a shape only `owned_scratch_directory` and `run_onejudge` between them produce.
+    Anything else under the swept root is somebody's, but there is no evidence it is
+    this harness's, and evidence is the whole basis for acting on it.
+    """
+    stamp = AGENT_STATUS_DIR_ENV.encode("utf-8") + b"="
+    for entry in environ.split(b"\0"):
+        if not entry.startswith(stamp):
+            continue
+        named = PurePosixPath(entry[len(stamp) :].decode("utf-8", "replace"))
+        try:
+            relative = named.relative_to(PurePosixPath(scratch_root))
+        except ValueError:
+            continue
+        parts = relative.parts
+        if len(parts) != 2 or parts[1] != AGENT_STATUS_DIR_NAME:
+            continue
+        if parts[0].startswith(WATCHDOG_PREFIX) and parts[0] != WATCHDOG_PREFIX:
+            return scratch_root / parts[0]
+    return None
+
+
+def _self_and_ancestors(root: Path) -> frozenset[ProcessId]:
+    """This process and everything above it, which no sweep may ever signal.
+
+    Belt and braces: a sweep running inside a live dispatch already carries that
+    dispatch's stamp, and its directory is owned, so the ownership proof retains it.
+    Naming the chain outright means a proof that somehow went wrong still cannot make
+    the sweep kill the run it is part of.
+    """
+    chain: set[ProcessId] = set()
+    pid = ProcessId(os.getpid())
+    while pid > 1 and pid not in chain:
+        chain.add(pid)
+        try:
+            raw = (root / str(pid) / "stat").read_text(encoding="utf-8")
+        except OSError:
+            break
+        fields = raw[raw.rfind(")") + 2 :].split()
+        if len(fields) < 2 or not fields[1].isdigit():
+            break
+        pid = ProcessId(int(fields[1]))
+    return frozenset(chain)
+
+
+def orphaned_dispatch_processes(scratch_root: Path) -> tuple[ProcessId, ...] | None:
+    """Every live process a *finished* dispatch left behind, by its environment stamp.
+
+    Parentage cannot answer this. Once a dispatcher dies its descendants are adopted
+    by init, and the walk the rest of this harness terminates trees with has nothing
+    left to walk — which is how a `scripts/oneharness-agent.sh` came to be resident for
+    two days and twenty hours with no way to recognise it as ours. The environment the
+    kernel fixed at ``exec`` does survive that, so a stamp naming a watchdog scratch
+    directory is ownership evidence, and the same directory's ownership lock is what
+    says whether the dispatch behind it is over.
+
+    ``None`` means the question could not be asked — the same distinction
+    `_referenced_scratch_paths` draws, and for the same reason: a procfs that cannot
+    show this very process is not one any claim may be built on.
+    """
+    root = proc_root()
+    if not (root / str(os.getpid())).is_dir():
+        return None
+    protected = _self_and_ancestors(root)
+    finished: dict[Path, bool] = {}
+    orphans: set[ProcessId] = set()
+    try:
+        entries = sorted(root.iterdir())
+    except OSError:  # pragma: no cover - unreadable between the self probe and here
+        return None
+    for entry in entries:
+        if not entry.name.isdigit():
+            continue
+        pid = ProcessId(int(entry.name))
+        if pid in protected:
+            continue
+        try:
+            environ = (entry / "environ").read_bytes()
+        except OSError:
+            # Gone, or another user's — either way not something this sweep may claim.
+            continue
+        directory = _stamped_watchdog_directory(environ, scratch_root)
+        if directory is None:
+            continue
+        if directory not in finished:
+            finished[directory] = _dispatch_is_finished(directory)
+        if finished[directory]:
+            orphans.add(pid)
+    return tuple(sorted(orphans))
 
 
 def _names_a_live_process(name: str) -> bool:
@@ -558,6 +688,15 @@ def sweep_scratch(
         else:
             skipped.append(path)
 
+    # Reaped before the reference proof is taken, so a directory whose only remaining
+    # claimant was one of these leavings is reclaimable in this same pass rather than
+    # protected by the very process the sweep just ended.
+    orphans = orphaned_dispatch_processes(scratch_root)
+    reaped: tuple[ProcessId, ...] = ()
+    if orphans and not dry_run:
+        terminate_processes(orphans)
+        reaped = orphans
+
     referenced = _referenced_scratch_paths(scratch_root)
     referenced_retained: list[Path] = []
     unreferenced: set[Path] = set()
@@ -647,6 +786,10 @@ def sweep_scratch(
             skipped_families.append(SkippedFamily(family.name, REFERENCE_PROOF_SKIP_REASON))
         else:
             swept_families.append(family.name)
+    if orphans is None:
+        skipped_families.append(SkippedFamily(ORPHAN_FAMILY, ORPHAN_PROOF_SKIP_REASON))
+    else:
+        swept_families.append(ORPHAN_FAMILY)
     if can_sweep_third_party:
         swept_families.append(THIRD_PARTY_FAMILY)
     else:
@@ -661,6 +804,8 @@ def sweep_scratch(
         reference_proof_unavailable=proof_unavailable,
         swept_families=tuple(swept_families),
         skipped_families=tuple(skipped_families),
+        orphan_candidates=orphans or (),
+        reaped_processes=reaped,
     )
 
 
@@ -739,6 +884,13 @@ def main(argv: list[str] | None = None) -> int:
     if result.skipped_families:
         inspection += "; skipped families: " + ", ".join(
             family.render() for family in result.skipped_families
+        )
+    processes = result.orphan_candidates if args.dry_run else result.reaped_processes
+    if processes:
+        verb = "would reap" if args.dry_run else "reaped"
+        inspection += (
+            f"; {verb} {len(processes)} process(es) left running by a finished dispatch: "
+            + ", ".join(str(pid) for pid in processes[:MAX_INSPECTED_PATHS])
         )
     if result.watchdog_retained:
         inspection += (

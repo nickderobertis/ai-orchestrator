@@ -5,19 +5,25 @@ from __future__ import annotations
 import fcntl
 import json
 import os
+import subprocess
+import sys
 import tempfile
 import time
 import tomllib
 from collections.abc import Sequence
+from contextlib import suppress
 from pathlib import Path
 
 import pytest
+from process_tree import await_orphaned, await_reaped, await_recorded_pid, write_reparented_leaving
 
 import orchestrator.scratch as scratch
 from orchestrator import REPO_ROOT
 from orchestrator.scratch import (
+    AGENT_STATUS_DIR_ENV,
     DEFAULT_MIN_FREE_BYTES,
     MIN_FREE_BYTES_ENV,
+    ORPHAN_FAMILY,
     OWNER_LOCK_NAME,
     PYTEST_RETAINED_RUNS,
     UNREFERENCED_FAMILIES,
@@ -25,6 +31,7 @@ from orchestrator.scratch import (
     ScratchCapacityError,
     configured_min_free_bytes,
     main,
+    orphaned_dispatch_processes,
     owned_scratch_directory,
     require_scratch_capacity,
     sweep_scratch,
@@ -803,3 +810,156 @@ def test_cli_translates_unexpected_filesystem_failure(
     )
     assert main(["--root", str(tmp_path)]) == 1
     assert "check path permissions" in capsys.readouterr().err
+
+
+def _fabricate_stamped_process(proc_root: Path, pid: int, status_dir: Path | None) -> None:
+    """Write a procfs entry for a process carrying (or lacking) a dispatch stamp."""
+    stamp = () if status_dir is None else (f"{AGENT_STATUS_DIR_ENV}={status_dir}",)
+    _fabricate_proc_process(proc_root, pid, environ=("PATH=/usr/bin", *stamp, "TERM=dumb"))
+
+
+def test_only_a_stamp_naming_a_finished_dispatch_claims_a_reparented_process(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every way the stamp can fail to prove ownership, decided without signalling anyone.
+
+    `orphaned_dispatch_processes` is asked directly rather than through `sweep_scratch`
+    so these fabricated pid numbers are only ever *classified*. A unit test that let
+    the sweep signal them would be aiming real signals at whatever process on this host
+    happened to hold the number.
+    """
+    proc_root = _fabricate_proc_root(tmp_path, monkeypatch)
+    root = tmp_path / "scratch"
+    root.mkdir()
+    finished = root / "orchestrator-watchdog-finished"
+    (finished / "agent").mkdir(parents=True)
+    (finished / OWNER_LOCK_NAME).write_text("999999999 1", encoding="utf-8")
+    owned = root / "orchestrator-watchdog-owned"
+    (owned / "agent").mkdir(parents=True)
+    (owned / OWNER_LOCK_NAME).write_text(f"{os.getpid()} 7", encoding="utf-8")
+    linked = root / "orchestrator-watchdog-linked"
+    linked.symlink_to(finished)
+    outside = tmp_path / "elsewhere" / "orchestrator-watchdog-other-root"
+    outside.mkdir(parents=True)
+
+    _fabricate_stamped_process(proc_root, 4242, finished / "agent")
+    # A dispatch whose whole scratch tree is gone ran to completion.
+    _fabricate_stamped_process(proc_root, 4243, root / "orchestrator-watchdog-vanished" / "agent")
+    _fabricate_stamped_process(proc_root, 4244, owned / "agent")
+    _fabricate_stamped_process(proc_root, 4245, None)
+    _fabricate_stamped_process(proc_root, 4246, outside / "agent")
+    # A name under the swept root that no `owned_scratch_directory` could have made.
+    _fabricate_stamped_process(proc_root, 4247, root / "someone-elses-tree" / "agent")
+    # The prefix alone is not a directory this harness created.
+    _fabricate_stamped_process(proc_root, 4248, root / "orchestrator-watchdog-" / "agent")
+    # Neither is a path that merely lands somewhere inside a watchdog tree.
+    _fabricate_stamped_process(proc_root, 4251, finished / "agent" / "deeper")
+    _fabricate_stamped_process(proc_root, 4252, finished)
+    # A lock reachable only through a symlink never authorizes anything.
+    _fabricate_stamped_process(proc_root, 4249, linked / "agent")
+    # The stamp is read as a whole entry, so a value that merely contains its name is not it.
+    _fabricate_proc_process(proc_root, 4250, environ=(f"NOTES=see {AGENT_STATUS_DIR_ENV}=x",))
+
+    assert orphaned_dispatch_processes(root) == (4242, 4243)
+
+
+def test_the_sweeping_process_and_its_own_ancestry_are_never_candidates(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A sweep running inside a dispatch cannot reach the run it is part of."""
+    proc_root = _fabricate_proc_root(tmp_path, monkeypatch)
+    root = tmp_path / "scratch"
+    root.mkdir()
+    finished = root / "orchestrator-watchdog-finished"
+    (finished / "agent").mkdir(parents=True)
+    (finished / OWNER_LOCK_NAME).write_text("999999999 1", encoding="utf-8")
+    # Give this process a parent that is itself stamped for that finished dispatch,
+    # then stamp this process too: neither may be claimed however the proof reads.
+    parent = 4300
+    _fabricate_stamped_process(proc_root, parent, finished / "agent")
+    entry = proc_root / str(os.getpid())
+    (entry / "environ").write_bytes(f"{AGENT_STATUS_DIR_ENV}={finished / 'agent'}".encode())
+    (entry / "stat").write_text(
+        f"{os.getpid()} (self) S {parent} 1 " + " ".join(["0"] * 16) + " 7\n", encoding="utf-8"
+    )
+
+    assert orphaned_dispatch_processes(root) == ()
+
+
+def test_an_ancestry_walk_stops_at_whatever_procfs_can_no_longer_tell_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A vanished or unparseable stat record ends the walk rather than the sweep."""
+    proc_root = _fabricate_proc_root(tmp_path, monkeypatch)
+    root = tmp_path / "scratch"
+    root.mkdir()
+    entry = proc_root / str(os.getpid())
+    (entry / "stat").unlink()
+    assert orphaned_dispatch_processes(root) == ()
+    (entry / "stat").write_text("1 (truncated)\n", encoding="utf-8")
+    assert orphaned_dispatch_processes(root) == ()
+
+
+def test_an_unreadable_environment_leaves_a_process_unclaimed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Another user's process answers nothing, so it is nothing this sweep may act on."""
+    proc_root = _fabricate_proc_root(tmp_path, monkeypatch)
+    root = tmp_path / "scratch"
+    root.mkdir()
+    _fabricate_proc_entry(proc_root, 4400, start_token=1)
+
+    assert orphaned_dispatch_processes(root) == ()
+
+
+def test_the_orphan_family_is_reported_swept_or_skipped_with_its_reason(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`reaped 0` must never be able to mean the question was never asked."""
+    _fabricate_proc_root(tmp_path, monkeypatch)
+    root = tmp_path / "scratch"
+    root.mkdir()
+
+    assert main(["--root", str(root)]) == 0
+    assert ORPHAN_FAMILY in capsys.readouterr().out.partition("swept families: ")[2]
+
+    blind = tmp_path / "not-procfs"
+    blind.mkdir()
+    monkeypatch.setenv("AI_ORCHESTRATOR_PROC_ROOT", str(blind))
+    assert main(["--root", str(root)]) == 0
+    skipped = capsys.readouterr().out.partition("; skipped families: ")[2]
+    assert f"{ORPHAN_FAMILY} (no usable procfs" in skipped
+
+
+def test_a_finished_dispatchs_leaving_is_terminated_where_no_parentage_remains(
+    tmp_path: Path,
+) -> None:
+    """The reap itself, against a process init has already adopted.
+
+    Real procfs and a real process rather than a fabricated root: the point of the
+    whole mechanism is that it acts on something the kernel actually reports, and a
+    fabricated pid number is one this host may have handed to a stranger.
+    """
+    root = tmp_path / "scratch"
+    root.mkdir()
+    finished = root / "orchestrator-watchdog-finished"
+    (finished / "agent").mkdir(parents=True)
+    (finished / OWNER_LOCK_NAME).write_text("999999999 1", encoding="utf-8")
+    marker = tmp_path / "leaving.pid"
+    intermediate = subprocess.Popen(
+        [sys.executable, str(write_reparented_leaving(tmp_path)), str(marker)],
+        env={**os.environ, AGENT_STATUS_DIR_ENV: os.fspath(finished / "agent")},
+    )
+    assert intermediate.wait(timeout=60) == 0
+    leaving = await_recorded_pid(marker)
+    assert await_orphaned(leaving)
+
+    try:
+        result = sweep_scratch(root)
+    finally:
+        with suppress(ProcessLookupError):
+            os.kill(leaving, 9)
+
+    assert result.reaped_processes == (leaving,)
+    assert ORPHAN_FAMILY in result.swept_families
+    assert await_reaped(leaving)

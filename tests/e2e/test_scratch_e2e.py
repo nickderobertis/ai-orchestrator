@@ -18,13 +18,23 @@ from pathlib import Path
 
 import pytest
 from conftest import install_pre_push_hook
+from process_tree import (
+    await_orphaned,
+    await_reaped,
+    await_recorded_pid,
+    is_running,
+    write_reparented_leaving,
+)
 from rendezvous import Rendezvous
 from waits import timeout as e2e_timeout
 
 from orchestrator import REPO_ROOT
 from orchestrator.lifecycle import run_repo_task
 from orchestrator.scratch import (
+    AGENT_STATUS_DIR_ENV,
     MIN_FREE_BYTES_ENV,
+    ORPHAN_FAMILY,
+    ORPHAN_PROOF_SKIP_REASON,
     OWNER_LOCK_NAME,
     UNREFERENCED_FAMILIES,
     WATCHDOG_PATTERN,
@@ -96,6 +106,22 @@ while not release.exists():
 handle.close()
 assert named
 """
+
+
+def _spawn_reparented_leaving(script: Path, marker: Path, status_dir: Path | None) -> int:
+    """Start a real init-adopted process stamped for ``status_dir``; return its pid.
+
+    The stamp is set the only way it reaches a process in production: in the
+    environment it is `exec`ed with, which is what the kernel then fixes for good.
+    """
+    environment = {key: value for key, value in os.environ.items() if key != AGENT_STATUS_DIR_ENV}
+    if status_dir is not None:
+        environment[AGENT_STATUS_DIR_ENV] = os.fspath(status_dir)
+    intermediate = subprocess.Popen([sys.executable, str(script), str(marker)], env=environment)
+    assert intermediate.wait(timeout=e2e_timeout(60)) == 0
+    pid = await_recorded_pid(marker, timeout=e2e_timeout(30))
+    assert await_orphaned(pid, timeout=e2e_timeout(30)), f"pid {pid} was never reparented to init"
+    return pid
 
 
 def _write_nx_install(path: Path, *, dependencies: dict[str, str]) -> Path:
@@ -299,6 +325,79 @@ def test_sweep_recipe_reclaims_orphans_and_preserves_live_scratch(tmp_path: Path
     )
     assert f"reclaimed {reclaimed} bytes" in result.stdout
     assert "retained 5 watchdog directories not proven reclaimable" in result.stdout
+
+
+def test_sweep_recipe_reaps_a_finished_dispatchs_reparented_leavings(tmp_path: Path) -> None:
+    """Reclaim what the harness started and lost, and nothing else that is running.
+
+    Every one of these processes is genuinely adopted by init, so parentage — the
+    proof every other reap in this repository is built on — can say nothing about any
+    of them. What separates them is the environment stamp each carries and whether the
+    dispatch that stamped it is over.
+    """
+    finished = tmp_path / "orchestrator-watchdog-finished"
+    (finished / "agent").mkdir(parents=True)
+    (finished / OWNER_LOCK_NAME).write_text("999999999 1", encoding="utf-8")
+    working = tmp_path / "orchestrator-watchdog-working"
+    (working / "agent").mkdir(parents=True)
+    (working / OWNER_LOCK_NAME).write_text(
+        f"{os.getpid()} {_kernel_start_token(os.getpid())}", encoding="utf-8"
+    )
+    # A dispatch that ran to completion removes its whole scratch tree, so an absent
+    # directory is the strongest statement available that its owner is gone.
+    vanished = tmp_path / "orchestrator-watchdog-vanished"
+    elsewhere = tmp_path / "beyond" / "orchestrator-watchdog-other-root"
+    (elsewhere / "agent").mkdir(parents=True)
+
+    script = write_reparented_leaving(tmp_path)
+    leavings = {
+        name: _spawn_reparented_leaving(script, tmp_path / f"m-{name}", status_dir)
+        for name, status_dir in (
+            ("finished", finished / "agent"),
+            ("vanished", vanished / "agent"),
+            ("working", working / "agent"),
+            ("unstamped", None),
+            ("elsewhere", elsewhere / "agent"),
+        )
+    }
+    reapable = (leavings["finished"], leavings["vanished"])
+    try:
+        inspected = subprocess.run(
+            ["just", "sweep-scratch", "--root", str(tmp_path), "--dry-run"],
+            cwd=REPO_ROOT,
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+        assert all(is_running(pid) for pid in leavings.values())
+
+        result = subprocess.run(
+            ["just", "sweep-scratch", "--root", str(tmp_path)],
+            cwd=REPO_ROOT,
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+
+        for name in ("finished", "vanished"):
+            assert await_reaped(leavings[name], timeout=e2e_timeout(60)), (
+                f"the {name} dispatch's leaving was never reaped"
+            )
+        # Ownership the sweep cannot prove is ownership it never acts on: a live
+        # dispatch's worker, a process carrying no stamp at all, and one stamped for a
+        # directory outside the root being swept are all still running.
+        for name in ("working", "unstamped", "elsewhere"):
+            assert is_running(leavings[name]), f"the {name} process was reaped unproven"
+    finally:
+        for pid in leavings.values():
+            with suppress(ProcessLookupError):
+                os.kill(pid, 9)
+
+    assert "would reap 2 process(es) left running by a finished dispatch" in inspected.stdout
+    assert all(str(pid) in inspected.stdout for pid in reapable)
+    assert "reaped 2 process(es) left running by a finished dispatch" in result.stdout
+    assert all(str(pid) in result.stdout for pid in reapable)
+    assert ORPHAN_FAMILY in result.stdout.partition("swept families:")[2]
 
 
 def test_third_party_sweep_skips_inflight_lifecycle_then_reclaims(
@@ -603,23 +702,37 @@ def test_sweep_recipe_leaves_harness_scratch_alone_when_procfs_cannot_answer(
     (dead_watchdog / "pid").write_text("999999999\n", encoding="utf-8")
     for path in (install, onejudge_scratch, pytest_root, *runs):
         _age(path)
+    # A leaving that *would* be reaped if procfs could be read, so the same run shows
+    # that an unanswerable question retains a process exactly as it retains a tree.
+    finished = scratch / "orchestrator-watchdog-finished"
+    (finished / "agent").mkdir(parents=True)
+    (finished / OWNER_LOCK_NAME).write_text("999999999 1", encoding="utf-8")
+    leaving = _spawn_reparented_leaving(
+        write_reparented_leaving(tmp_path), tmp_path / "m-blind", finished / "agent"
+    )
     blind = tmp_path / "not-procfs"
     blind.mkdir()
 
-    result = subprocess.run(
-        ["just", "sweep-scratch", "--root", str(scratch)],
-        cwd=REPO_ROOT,
-        env={**os.environ, "AI_ORCHESTRATOR_PROC_ROOT": str(blind)},
-        text=True,
-        capture_output=True,
-        check=True,
-    )
+    try:
+        result = subprocess.run(
+            ["just", "sweep-scratch", "--root", str(scratch)],
+            cwd=REPO_ROOT,
+            env={**os.environ, "AI_ORCHESTRATOR_PROC_ROOT": str(blind)},
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+        assert is_running(leaving), "a leaving was reaped on a proof that was never taken"
+    finally:
+        with suppress(ProcessLookupError):
+            os.kill(leaving, 9)
 
     assert install.exists() and onejudge_scratch.exists()
     assert [run for run in runs if not run.exists()] == []
-    # The watchdog proof stands on its own lock, so its accounting is unaffected.
-    assert not dead_watchdog.exists()
-    assert "removed 1 directories" in result.stdout
+    # The watchdog proof stands on its own lock, so its accounting is unaffected —
+    # both the legacy-pid orphan and the finished dispatch's tree still go.
+    assert not dead_watchdog.exists() and not finished.exists()
+    assert "removed 2 directories" in result.stdout
     assert f"no usable procfs at {blind}" in result.stdout
     # Nothing was reclaimed from these families, so the report has to say they were
     # never examined rather than let one number read as "nothing to reclaim".
@@ -627,6 +740,7 @@ def test_sweep_recipe_leaves_harness_scratch_alone_when_procfs_cannot_answer(
     assert "swept families: watchdog, third-party" in swept
     for family in UNREFERENCED_FAMILIES:
         assert f"{family.name} (no live process could be proven done with it)" in skipped
+    assert f"{ORPHAN_FAMILY} ({ORPHAN_PROOF_SKIP_REASON})" in skipped
 
 
 def test_sweep_cli_keeps_visible_references_when_a_process_hides_its_descriptors(
