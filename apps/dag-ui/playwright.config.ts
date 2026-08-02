@@ -34,15 +34,18 @@ const sessionSchema = z.object({
 type Session = z.infer<typeof sessionSchema>;
 
 /**
- * Ask the kernel which ports are free, binding all six at once so they are distinct and
- * releasing them together — nothing here reserves them, because a port has to be free
- * for a server to take it. So this is the kernel's answer to "what is free right now",
- * and a run that chooses at the same instant could in principle be handed the same
- * number; what that produces is a `--strictPort` Vite or a stall server refusing to
- * start, never a run quietly attached to another run's server. Choosing by arithmetic
- * from a base would not even give that: only the kernel knows what is free.
+ * The Python program that asks the kernel which ports are free; running it is what
+ * produces the six numbers.
+ *
+ * It binds all six at once so they come back distinct, then releases them together —
+ * nothing here reserves anything, because a port has to be free for a server to take
+ * it. So the answer is "what was free at that instant", and a run choosing at the same
+ * instant could in principle be handed the same number; what that produces is a
+ * `--strictPort` Vite or the stall server refusing to start, never a run quietly
+ * attached to another run's server. Choosing by arithmetic from a base would not even
+ * give that: only the kernel knows what is free.
  */
-const FREE_PORTS = `
+const FREE_PORTS_SCRIPT = `
 import json, socket
 held = [socket.socket() for _ in range(6)]
 for sock in held:
@@ -57,7 +60,9 @@ function chooseSession(): Session {
     .tuple([port, port, port, port, port, port])
     .parse(
       JSON.parse(
-        execFileSync("python3", ["-c", FREE_PORTS], { encoding: "utf8" }),
+        execFileSync("python3", ["-c", FREE_PORTS_SCRIPT], {
+          encoding: "utf8",
+        }),
       ),
     );
   return {
