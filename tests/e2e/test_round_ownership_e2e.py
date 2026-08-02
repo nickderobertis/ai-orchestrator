@@ -760,7 +760,10 @@ def test_status_reports_a_dead_round_beside_the_surface_it_left_pending(
     # itself is queued through the real `just channel-surface` below, and everything
     # the journey asserts is what the real `just runs` and `just status` print.
     due_at = float(json.loads((channel_dir / "heartbeat.json").read_text())["last_surface_at"])
+    # llmlint: ignore[tests_mirror_real_usage] the pacemaker's own clock advance.
     mark_heartbeat_due(channel_dir, now=due_at + 11)
+    # llmlint: ignore[tests_mirror_real_usage] the pacemaker's own claim, and the last
+    # step before the real `just channel-surface` below can be accepted at all.
     assert claim_heartbeat(channel_dir), "the pacemaker had no check-in to claim"
     queued = subprocess.run(
         [

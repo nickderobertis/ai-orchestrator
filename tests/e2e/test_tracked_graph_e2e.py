@@ -458,11 +458,15 @@ def test_a_transition_survives_a_journal_it_cannot_fold(
     # `just run-plan` and `just next-round` above and below.
     journal = runs / "unfoldable" / "events.jsonl"
     assert journal.is_file()
+    # llmlint: ignore[tests_mirror_real_usage] no operator command damages a journal;
+    # that fail-closed stream is the state under test.
     journal.write_text('{"not": "an event"}\n', encoding="utf-8")
     # A retry the *supersession* reader can still fold, on a stream the strict plan
     # reader cannot. That combination is the trap: the fallback plan predates the
     # replacement, so removing the superseded original against it would take the node
     # out of the graph with nothing left carrying its work.
+    # llmlint: ignore[tests_mirror_real_usage] `channel-reply` cannot commit an edit onto
+    # a journal already unreadable, which is exactly the combination under test.
     open_journal(runs / "unfoldable", RunId("unfoldable"), 1).append(
         "edit-committed",
         detail={
