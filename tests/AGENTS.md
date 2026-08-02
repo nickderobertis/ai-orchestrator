@@ -44,4 +44,10 @@ Conventions for this repo's tests.
   documentation edit replay a stale verdict. The autouse guard in `conftest.py`
   fails such a test; mark it `@pytest.mark.reads_docs` and it runs in
   `orchestrator:test-docs`, which keeps the whole-workspace key.
+- **A test whose subject is the process itself declares that, not a weaker
+  assertion.** An xdist worker always carries execnet's receiver thread, so a test
+  that blocks or re-raises a process-directed signal cannot survive one at any
+  worker count. Mark it `@pytest.mark.single_threaded` and it runs in
+  `orchestrator:test-serial`, a tier of its own that blocks nothing and measures
+  coverage into its own data file.
 - Every orchestrator verb needs a real e2e journey here before it is done.

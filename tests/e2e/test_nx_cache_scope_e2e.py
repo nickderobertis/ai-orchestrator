@@ -16,11 +16,15 @@ the whole-workspace key. Narrower again, the two costliest journeys in the suite
 build real worktrees and run real package installs to drive `just` recipes and
 shell scripts, and read no prose and no `orchestrator/` at all:
 `orchestrator:test-recipes` runs those under a key of exactly what they drive.
-`orchestrator:test` runs the remainder, keyed on the workspace minus its
-documentation and minus the front-end projects no Python test opens. Every half of
+`orchestrator:test` and `orchestrator:test-serial` run the remainder, keyed on the
+workspace minus its documentation and minus the front-end projects no Python test
+opens — one scope split into two tasks so the serial invocation the
+`single_threaded` tests need blocks nothing. Every half of
 that claim is load bearing — each key must still invalidate on what its tier reads,
 and must still replay on what it does not — so each is proved here, along with the
-cross-worktree cache check `just check` now replays through Nx as well.
+cross-worktree cache check `just check` now replays through Nx as well, and the
+uncached `orchestrator:coverage` step that turns what those tiers measured into
+the one comparison against the floor.
 
 These journeys drive the real `nx.json`, the real `orchestrator/project.json`
 declarations, and the real `scripts/nx.sh` against a throwaway copy of this
@@ -39,6 +43,7 @@ touching the cache key this journey is about.
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -46,6 +51,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
+from nx_inputs import CODE_SCOPED, COVERAGE_SCOPED, SERIAL_SCOPED
 from nx_workspace import copy_checkout, requires_workspace_install
 
 from orchestrator import REPO_ROOT
@@ -75,6 +81,12 @@ PYTHON_WITNESS = "orchestrator/lifecycle.py"
 FRONT_END_WITNESS = "apps/dag-ui/vite.config.ts"
 #: The fixture `scripts/check-nx-cache.sh` builds its two linked worktrees from.
 FIXTURE_WITNESS = "tests/fixtures/nx-cache/src/index.ts"
+#: The project every Python tier belongs to, and the two tiers the code suite runs
+#: in. They share `codeWorkspace` and are separate Nx tasks, so neither waits for
+#: the other and each has to notice everything the suite reads on its own.
+PROJECT = "orchestrator"
+CODE_TIER = f"{PROJECT}:{CODE_SCOPED}"
+SERIAL_TIER = f"{PROJECT}:{SERIAL_SCOPED}"
 #: Where this host publishes the resolved fixture lockfile that check shares. The
 #: journeys below run under an isolated `XDG_CACHE_HOME`, so the resolution is
 #: carried across rather than paid again — sharing a cache is what it is for.
@@ -115,6 +127,31 @@ class Checkout:
         )
         assert result.returncode == 0, result.stdout + result.stderr
         return CACHE_HIT not in result.stdout
+
+    def resolved_target(self, target: str) -> dict:
+        """Ask Nx itself how one target resolves, defaults and all.
+
+        `project.json` states part of a target and `nx.json`'s `targetDefaults`
+        states the rest, and only Nx merges them. A `targetDefaults` key that no
+        longer matches a target name is silently inert — the target simply falls
+        back to Nx's own defaults, which for `cache` means *not caching*, and for a
+        tier meant to be cached that is a quiet loss rather than an error.
+        """
+        result = subprocess.run(
+            ["./scripts/nx.sh", "show", "project", PROJECT, "--json"],
+            cwd=self.root,
+            env={
+                **os.environ,
+                "XDG_CACHE_HOME": str(self.cache),
+                "AI_ORCHESTRATOR_NX_SHOW_OUTPUT": "1",
+            },
+            check=False,
+            text=True,
+            capture_output=True,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        rendered = next(line for line in result.stdout.splitlines() if line.startswith("{"))
+        return json.loads(rendered)["targets"][target]
 
     def edit(self, relative: str, old: str, new: str) -> None:
         path = self.root / relative
@@ -200,6 +237,76 @@ def test_skip_nx_cache_forces_one_tier_to_re_run_an_unchanged_tree(checkout: Che
     # And only that invocation: the next one replays again, so nothing an operator
     # does to re-run one tier leaves the rest of the workspace re-running forever.
     assert not checkout.ran_the_command("orchestrator:test")
+
+
+def test_the_serial_tier_is_keyed_on_the_same_tree_as_the_bulk_it_left(
+    checkout: Checkout,
+) -> None:
+    """Splitting the code suite in two split its cache key claim in two with it.
+
+    `single_threaded` tests read the same tree as the bulk they were split out of —
+    the split is about the process they need, not about what they open — so this
+    tier gets the same `codeWorkspace` key and has to behave the same way at both
+    edges: prose it cannot read replays, Python it can read misses.
+    """
+    assert checkout.ran_the_command(SERIAL_TIER)
+    assert not checkout.ran_the_command(SERIAL_TIER), (
+        "an unchanged tree must replay its recorded verdict rather than re-run"
+    )
+
+    checkout.edit(PROSE_WITNESS, PROSE_TEXT, PROSE_EDIT)
+
+    assert not checkout.ran_the_command(SERIAL_TIER), (
+        f"changing {PROSE_WITNESS} must not re-run a tier whose tests cannot read it"
+    )
+
+    checkout.append(PYTHON_WITNESS, "# nx cache scope journey")
+
+    assert checkout.ran_the_command(SERIAL_TIER), (
+        f"changing {PYTHON_WITNESS} must re-run the tier keyed on the code"
+    )
+
+
+def test_neither_half_of_the_code_suite_waits_for_the_other(checkout: Checkout) -> None:
+    """The point of the split: running one tier must not consume the other.
+
+    The two invocations used to be chained by `&&` inside one target, so a serial
+    failure meant the parallel half never reported at all and re-running the
+    one-second serial test dragged three minutes of parallel suite with it. As
+    separate tasks neither is the other's dependency, which is exactly what running
+    one and finding the other still cold demonstrates.
+    """
+    assert checkout.ran_the_command(SERIAL_TIER)
+
+    assert checkout.ran_the_command(CODE_TIER), (
+        f"{CODE_TIER} replayed a verdict it never recorded, so {SERIAL_TIER} ran it"
+    )
+
+
+def test_the_coverage_tier_resolves_as_an_unmemoized_step_after_both(
+    checkout: Checkout,
+) -> None:
+    """The floor is enforced by a task Nx will never replay, once both tiers exist.
+
+    Its inputs are two files on disk rather than the tree, so a cached verdict here
+    would be a claim about coverage data Nx does not hash. It is seconds of work;
+    it re-runs. And it must wait on every tier that measures, or the combined total
+    it judges is a total the whole suite never produced.
+    """
+    resolved = checkout.resolved_target(COVERAGE_SCOPED)
+
+    assert resolved.get("cache") is False, resolved
+    assert sorted(resolved["dependsOn"]) == sorted([CODE_SCOPED, SERIAL_SCOPED]), resolved
+    for tier in (CODE_SCOPED, SERIAL_SCOPED):
+        measuring = checkout.resolved_target(tier)
+        assert measuring.get("cache") is True, (
+            f"{tier} measures into a file the coverage tier needs restored on a cache "
+            f"hit, so it has to be cached with that file as its output: {measuring}"
+        )
+        data_file = measuring["outputs"][0].removeprefix("{workspaceRoot}/")
+        assert data_file in resolved["options"]["command"], (
+            f"{tier} writes {data_file} and the coverage tier never reads it: {resolved}"
+        )
 
 
 def test_editing_a_recipe_input_re_runs_the_recipe_tier(checkout: Checkout) -> None:

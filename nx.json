@@ -72,6 +72,15 @@
         "default"
       ]
     },
+    "test-serial": {
+      "cache": true,
+      "inputs": [
+        "default"
+      ]
+    },
+    "coverage": {
+      "cache": false
+    },
     "test-docs": {
       "cache": true,
       "inputs": [

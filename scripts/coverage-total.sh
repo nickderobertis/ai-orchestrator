@@ -3,8 +3,9 @@
 #
 # `just check` and `just gate` measure coverage and then used to print only a
 # success line, so reading the number meant opening the `.coverage` artifact by
-# hand. This reads that same artifact — a declared Nx output of the `test`
-# target, so it is restored with a cache hit too — at the floor's own precision.
+# hand. This reads that same artifact — written by the uncached `coverage` target,
+# which combines every measuring tier's data on every run, so it is present and
+# current whether those tiers ran or replayed — at the floor's own precision.
 #
 # Every step that can legitimately have nothing to report exits 0 explicitly: a
 # missing artifact, an unavailable interpreter, or a total below the floor (which

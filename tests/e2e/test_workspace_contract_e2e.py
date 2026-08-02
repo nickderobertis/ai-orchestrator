@@ -27,6 +27,13 @@ from waits import timeout as e2e_timeout
 # charged every documentation edit for all fifty of them. Each test declares what
 # it actually reads, and `tests/conftest.py` fails one that declares wrong.
 ROOT = Path(__file__).resolve().parents[2]
+#: The Nx target lists the root quality recipes route through, restated here
+#: rather than read from the `justfile` — this suite exists to catch one of them
+#: drifting. `coverage` is last in each: it waits on both measuring tiers and
+#: enforces the floor on their combined data.
+CHECK_TARGETS = "format-check,lint,typecheck,test,test-serial,test-docs,test-recipes,coverage"
+TEST_TARGETS = "test,test-serial,test-docs,test-recipes,coverage"
+UPGRADE_TARGETS = "build,lint,typecheck,test,test-serial,test-docs,test-recipes,coverage"
 
 
 def _run(
@@ -46,13 +53,19 @@ def _run(
     ("recipe", "target"),
     [
         ("bootstrap", "run-many -t bootstrap"),
-        ("check", "run-many -t format-check,lint,typecheck,test,test-docs,test-recipes"),
-        ("test", "run-many -t test,test-docs,test-recipes"),
+        (
+            "check",
+            f"run-many -t {CHECK_TARGETS}",
+        ),
+        ("test", f"run-many -t {TEST_TARGETS}"),
         ("lint", "affected -t lint"),
         ("typecheck", "affected -t typecheck"),
         ("format", "affected -t format"),
         ("format-check", "run-many -t format-check"),
-        ("upgrade", "run-many -t build,lint,typecheck,test,test-docs,test-recipes"),
+        (
+            "upgrade",
+            f"run-many -t {UPGRADE_TARGETS}",
+        ),
         ("lint-llm-diff", "run workspace:lint-llm-diff"),
     ],
 )
@@ -74,7 +87,7 @@ def test_test_recipe_forces_one_tier_to_re_run_through_the_command_surface() -> 
     every tier from every unrelated command and breaks the checks whose contract
     is cache replay.
     """
-    forwarded = "./scripts/nx.sh run-many -t test,test-docs,test-recipes --skip-nx-cache"
+    forwarded = f"./scripts/nx.sh run-many -t {TEST_TARGETS} --skip-nx-cache"
 
     result = _run("just", "--dry-run", "test", "--skip-nx-cache")
 
@@ -554,7 +567,7 @@ def test_check_recipe_runs_the_combined_public_journey_with_concise_output(
     assert result.returncode == 0, result.stderr
     assert result.stdout == "check: all deterministic checks passed\n"
     assert trace.read_text().splitlines() == [
-        "nx.sh run-many -t format-check,lint,typecheck,test,test-docs,test-recipes",
+        f"nx.sh run-many -t {CHECK_TARGETS}",
         "check-oneharness-ui-contract.sh ",
         "python3 ./scripts/check-dag-state-contract.py",
         "nx.sh run workspace:check-nx-cache",
@@ -570,9 +583,7 @@ def test_check_recipe_preserves_captured_nx_failure(tmp_path: Path) -> None:
     assert result.returncode != 0
     assert "nx.sh: captured failure detail" in result.stderr
     assert "check: deterministic checks failed" in result.stderr
-    assert trace.read_text().splitlines() == [
-        "nx.sh run-many -t format-check,lint,typecheck,test,test-docs,test-recipes"
-    ]
+    assert trace.read_text().splitlines() == [f"nx.sh run-many -t {CHECK_TARGETS}"]
 
 
 @pytest.mark.reads_recipes
@@ -1093,7 +1104,8 @@ def test_check_recipe_reports_a_total_that_coverage_exited_nonzero_to_report(
     """`coverage report` exits 2 below the floor and still prints the number.
 
     Dropping it there would hide the total in exactly the situation an operator
-    most wants it; the floor is the `test` target's to enforce, not this readout's.
+    most wants it; the floor is the `coverage` target's to enforce, not this
+    readout's.
     """
     checkout, trace = _recipe_checkout(tmp_path)
     (checkout / ".coverage").write_text("")
@@ -1199,7 +1211,7 @@ def test_upgrade_recipe_runs_bun_and_reports_one_success_line(tmp_path: Path) ->
     assert trace.read_text().splitlines() == [
         "uv lock --upgrade",
         "uv sync",
-        "nx.sh run-many -t build,lint,typecheck,test,test-docs,test-recipes",
+        f"nx.sh run-many -t {UPGRADE_TARGETS}",
     ]
     # Bun really ran: it is the only thing in this recipe that is not a double, and
     # a `node_modules` it linked is the evidence the doubles cannot manufacture.
