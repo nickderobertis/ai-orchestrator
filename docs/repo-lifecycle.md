@@ -918,6 +918,20 @@ the publication checkout is still never worked in) and, when the work was done
 somewhere the identity does not know about, accepts `--execution-checkout PATH`.
 A branch found nowhere names every checkout that was searched.
 
+A merge-path gate rejection still does not publish the work, but it does not
+discard it either. Before removing the run worktree, the lifecycle copies the
+rejected branch into the registered execution checkout and names both that
+checkout and branch in the `gate-failed` result. An operator can inspect the local
+branch there or retry it by that branch name without reaching into run scratch.
+Because the dispatch itself completed, this preservation does not add incomplete
+provenance; genuine stopped dispatches retain the marker contract above.
+
+An automatic continuation may temporarily add that provenance when its first
+bounded attempt stops after committing work. If a later attempt in the same
+lifecycle completes, the provisional empty marker is removed from the unpublished
+branch while any later commits are replayed. Markers inherited from an earlier
+run are not provisional and still require `repo-recover` attestation.
+
 Recovery retains the source branch on failure. It refuses an identity whose merge
 path has no coverage, exactly as dispatch does, then uses an isolated worktree,
 infers a recorded stack/PR base from new preserved commits, fetches and merges

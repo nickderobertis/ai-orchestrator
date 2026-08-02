@@ -3094,32 +3094,39 @@ done""",
     assert result.verify is not None and result.verify.ok
     assert result.verify.command == ["false"]
     gated = hook_log.read_text(encoding="utf-8").splitlines()
-    # The feature branch (pushed, then mirrored into the shared checkout) and the
-    # squashed publication onto base. Every push this lifecycle makes is gated, and
-    # the orchestrator adds none of its own.
+    # The feature branch and the squashed publication onto base are gated. Mirroring
+    # the branch into the registered execution checkout is a local durability copy,
+    # not publication, so it deliberately does not invoke the pre-push hook.
     assert gated == [
-        f"refs/heads/{result.branch}",
         f"refs/heads/{result.branch}",
         "refs/heads/main",
     ], gated
     assert _has_file(origin, "main", "covered.txt")
 
 
-def test_pre_push_gate_failure_is_recorded_as_gate_failure(tmp_path, bare_origin) -> None:
+def test_pre_push_gate_failure_preserves_completed_work_in_execution_checkout(
+    tmp_path, bare_origin
+) -> None:
     origin = bare_origin()
-    workspace = _workspace(tmp_path, origin)
-    canonical = _shared_checkout(tmp_path)
+    canonical = gitops.clone(origin, tmp_path / "canonical-gate-rejection")
+    safety = gitops.clone(origin, tmp_path / "safety-gate-rejection")
+    registry = Registry()
+    registry.register(str(canonical), workflow="local")
+    registry.register(str(safety))
     install_pre_push_hook(
-        canonical,
+        safety,
         "printf 'pre-push: complete gate failed\\n' >&2\nexit 1",
     )
     before = _tip(origin, "main")
+    branch = "feature/recover-rejected-complete-work"
 
     result = run_repo_task(
-        str(origin),
+        str(canonical),
         "Publish work rejected by the merge-path gate.",
         "engineer",
-        workspace=workspace,
+        workspace=Workspace(tmp_path / "gate-rejection-worktrees"),
+        execution_checkout=safety,
+        branch=branch,
         dispatch_fn=make_writing_dispatch(filename="rejected.txt"),
         recorded_gate=["true"],
     )
@@ -3127,7 +3134,89 @@ def test_pre_push_gate_failure_is_recorded_as_gate_failure(tmp_path, bare_origin
     assert result.outcome == "gate-failed"
     assert "repository pre-push gate rejected publication" in result.detail
     assert "complete gate failed" in result.detail
+    assert str(safety) in result.detail and branch in result.detail
+    assert gitops.branch_exists(safety, branch)
+    preserved = subprocess.run(
+        ["git", "-C", str(safety), "show", f"{branch}:rejected.txt"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert preserved.stdout == "change by engineer\n"
+    assert not incomplete_commits(safety, "origin/main", branch)
+    assert not gitops.branch_exists(origin, branch)
     assert _tip(origin, "main") == before
+
+    # Preserved has to mean recoverable, not merely present: a later run of the same
+    # branch, once the gate is repaired, must continue the rejected commits rather
+    # than re-cut the branch off a stale base and silently rebuild without them.
+    install_pre_push_hook(safety, "exit 0")
+    resumed = run_repo_task(
+        str(canonical),
+        "Add the follow-up the repaired gate accepts.",
+        "engineer",
+        workspace=Workspace(tmp_path / "gate-repaired-worktrees"),
+        execution_checkout=safety,
+        branch=branch,
+        dispatch_fn=make_writing_dispatch(filename="follow-up.txt"),
+        recorded_gate=["true"],
+    )
+
+    assert resumed.ok and resumed.outcome == "merged", resumed.detail
+    assert _has_file(origin, "main", "rejected.txt")
+    assert _has_file(origin, "main", "follow-up.txt")
+
+
+def test_gate_failure_says_so_when_rejected_work_could_not_be_preserved(
+    tmp_path, bare_origin
+) -> None:
+    """A copy the checkout refuses is reported, not silently treated as preserved.
+
+    The copy is deliberately fast-forward only, because a concurrent run told to use
+    the same branch name would otherwise have its own only record overwritten. When
+    it refuses for that reason the work really is still only in run scratch, which is
+    the loss this preservation exists to prevent — so the result has to say the
+    preservation did not happen rather than name a branch that does not carry it.
+    """
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-unpreservable")
+    safety = gitops.clone(origin, tmp_path / "safety-unpreservable")
+    registry = Registry()
+    registry.register(str(canonical), workflow="local")
+    registry.register(str(safety))
+    install_pre_push_hook(safety, "printf 'pre-push: complete gate failed\\n' >&2\nexit 1")
+    branch = "feature/unpreservable-rejected-work"
+    writes = make_writing_dispatch(filename="rejected.txt")
+
+    def writes_while_another_run_claims_the_branch(
+        persona: str, task: str, *, project_dir: str, **kwargs: object
+    ) -> Report:
+        report = writes(persona, task, project_dir=project_dir, **kwargs)
+        # Another run reached the registered checkout first and put its own commit on
+        # this branch name. This run's tip is not a fast-forward of it, so the copy
+        # below has to refuse rather than discard that run's record.
+        tree = git("rev-parse", "origin/main^{tree}", cwd=safety).strip()
+        other = git("commit-tree", tree, "-p", "origin/main", "-m", "other run", cwd=safety).strip()
+        git("branch", branch, other, cwd=safety)
+        return report
+
+    result = run_repo_task(
+        str(canonical),
+        "Publish work the registered checkout cannot take back.",
+        "engineer",
+        workspace=Workspace(tmp_path / "unpreservable-worktrees"),
+        execution_checkout=safety,
+        branch=branch,
+        dispatch_fn=writes_while_another_run_claims_the_branch,
+        recorded_gate=["true"],
+    )
+
+    assert result.outcome == "gate-failed"
+    assert "could not preserve rejected work" in result.detail
+    assert branch in result.detail and str(safety) in result.detail
+    # The other run's commit is still the one the checkout carries.
+    assert not _has_file(safety, branch, "rejected.txt")
+    assert not _has_file(origin, "main", "rejected.txt")
 
 
 # A hook that lets the feature branch through and rejects the direct base push, so
@@ -4524,6 +4613,267 @@ def test_agent_not_completed_stops_early(tmp_path, bare_origin) -> None:
     assert subject.startswith("chore:") and "incomplete step" in subject
     assert not _has_file(origin, "main", "partial.txt")
     assert not _has_file(origin, result.branch, "partial.txt")  # incomplete work is not pushed
+
+
+def test_completed_automatic_resume_drops_its_provisional_incomplete_marker(
+    tmp_path, bare_origin
+) -> None:
+    """A later green completion supersedes the marker from its first bounded attempt."""
+    origin = bare_origin()
+    workspace = _workspace(tmp_path, origin)
+    canonical = _shared_checkout(tmp_path)
+    before = _tip(origin, "main")
+    attempts = 0
+
+    def completes_after_resume(persona: str, task: str, *, project_dir: str, **_: object) -> Report:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            change = Path(project_dir) / "completed-after-resume.txt"
+            change.write_text("finished work\n", encoding="utf-8")
+            gitops.add_all(project_dir)
+            gitops.commit(project_dir, "fix: finish work before the supervisor settles")
+            return Report(persona, 1, False, False, 2, [], {}, {}, "", max_turns=2)
+        verification = Path(project_dir) / "verified-after-resume.txt"
+        verification.write_text("gate is green\n", encoding="utf-8")
+        gitops.add_all(project_dir)
+        gitops.commit(project_dir, "test: record the completed continuation")
+        return Report(persona, 0, True, False, 1, [], {}, {}, "")
+
+    result = run_repo_task(
+        str(origin),
+        "Finish and verify work across one automatic continuation.",
+        "engineer",
+        workspace=workspace,
+        dispatch_fn=completes_after_resume,
+        recorded_gate=["true"],
+    )
+
+    assert attempts == 2
+    assert result.ok and result.outcome == "merged", result.detail
+    assert _has_file(origin, "main", "completed-after-resume.txt")
+    assert _has_file(origin, "main", "verified-after-resume.txt")
+    assert not incomplete_commits(canonical, before, result.branch)
+
+
+def test_completed_automatic_resume_drops_a_provisional_marker_left_at_the_tip(
+    tmp_path, bare_origin
+) -> None:
+    """The superseded marker is removed even when nothing was committed after it.
+
+    A continuation that finishes by verifying rather than by writing leaves the
+    provisional marker as the branch tip, so removing it is a reset rather than a
+    replay of later commits. Both are the same contract — the marker does not
+    survive its own supersession — and only the replay half had been driven.
+    """
+    origin = bare_origin()
+    workspace = _workspace(tmp_path, origin)
+    canonical = _shared_checkout(tmp_path)
+    before = _tip(origin, "main")
+    attempts = 0
+
+    def completes_without_committing_again(
+        persona: str, task: str, *, project_dir: str, **_: object
+    ) -> Report:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            (Path(project_dir) / "tip-marker-work.txt").write_text("done\n", encoding="utf-8")
+            gitops.add_all(project_dir)
+            gitops.commit(project_dir, "fix: do the work before the supervisor settles")
+            return Report(persona, 1, False, False, 2, [], {}, {}, "", max_turns=2)
+        # Verified the existing commit and wrote nothing, so the marker is the tip.
+        return Report(persona, 0, True, False, 1, [], {}, {}, "")
+
+    result = run_repo_task(
+        str(origin),
+        "Verify work already committed by the first bounded attempt.",
+        "engineer",
+        workspace=workspace,
+        dispatch_fn=completes_without_committing_again,
+        recorded_gate=["true"],
+    )
+
+    assert attempts == 2
+    assert result.ok and result.outcome == "merged", result.detail
+    assert _has_file(origin, "main", "tip-marker-work.txt")
+    assert not incomplete_commits(canonical, before, result.branch)
+
+
+def test_completion_after_two_resumes_clears_the_one_marker_and_keeps_every_part(
+    tmp_path, bare_origin
+) -> None:
+    """Two bounded attempts still leave one marker, and completion clears it.
+
+    A branch carries at most one empty marker however many attempts stop on it: the
+    second stop sees the first one base-relative and adds none. So the removal this
+    completion performs stays a single-marker operation no matter how many resumes
+    preceded it, and the work each bounded attempt committed underneath that marker
+    survives the rewrite removing it costs. The one-resume cases above cannot show
+    that, because they never stop twice.
+    """
+    origin = bare_origin()
+    workspace = _workspace(tmp_path, origin)
+    canonical = _shared_checkout(tmp_path)
+    before = _tip(origin, "main")
+    attempts = 0
+
+    def stops_twice_then_completes(
+        persona: str, task: str, *, project_dir: str, **_: object
+    ) -> Report:
+        nonlocal attempts
+        attempts += 1
+        if attempts <= 2:
+            # A clean tree at the stop, so the lifecycle preserves nothing and the
+            # marker it writes is empty — a removal candidate rather than the work.
+            change = Path(project_dir) / f"resumed-part-{attempts}.txt"
+            change.write_text(f"part {attempts}\n", encoding="utf-8")
+            gitops.add_all(project_dir)
+            gitops.commit(project_dir, f"fix: land part {attempts} before the supervisor settles")
+            return Report(persona, 1, False, False, 2, [], {}, {}, "", max_turns=2)
+        return Report(persona, 0, True, False, 1, [], {}, {}, "")
+
+    result = run_repo_task(
+        str(origin),
+        "Finish work that needed both automatic continuations.",
+        "engineer",
+        workspace=workspace,
+        dispatch_fn=stops_twice_then_completes,
+        recorded_gate=["true"],
+    )
+
+    assert attempts == 3
+    assert result.ok and result.outcome == "merged", result.detail
+    # Both bounded attempts' commits survive the rewrite that removing the marker costs.
+    assert _has_file(origin, "main", "resumed-part-1.txt")
+    assert _has_file(origin, "main", "resumed-part-2.txt")
+    assert not incomplete_commits(canonical, before, result.branch)
+    # The stops are no longer part of this result's story: the lineage the first one
+    # recorded is retracted along with the marker, so the run reads as the single
+    # completed workstream the branch now is.
+    assert result.retry_lineage is None
+
+
+def test_a_completed_continuation_keeps_an_inherited_incomplete_marker(
+    tmp_path, bare_origin
+) -> None:
+    """Only this lifecycle's own provisional markers are superseded by its completion.
+
+    A marker an earlier run left on the branch is load-bearing `repo-recover`
+    provenance: it says work on this branch was never carried through the gate by the
+    run that wrote it. Completing a *later* dispatch says nothing about that claim, so
+    removing it would silently drop the recovery contract for the earlier work.
+    """
+    origin = bare_origin()
+    workspace = _workspace(tmp_path, origin)
+    remote_base = "origin/main"
+
+    def commits_then_stops(persona: str, task: str, *, project_dir: str, **_: object) -> Report:
+        (Path(project_dir) / "inherited-partial.txt").write_text("partial\n", encoding="utf-8")
+        gitops.add_all(project_dir)
+        gitops.commit(project_dir, "fix: commit partial work before stopping")
+        return Report(persona, 1, False, False, 2, [], {}, {}, "", max_turns=2)
+
+    stopped = run_repo_task(
+        str(origin),
+        "Work an earlier run never finished.",
+        "engineer",
+        workspace=workspace,
+        dispatch_fn=commits_then_stops,
+        recorded_gate=["true"],
+    )
+    assert stopped.outcome == "not-completed"
+    clone = workspace.clone_dir(normalize_repo(str(origin)))
+    inherited = incomplete_commits(clone, remote_base, stopped.branch)
+    # Empty, because that run committed its own work and stopped with a clean tree.
+    # Only an empty marker is a removal candidate at all, so this is the one whose
+    # survival actually turns on it having been inherited rather than provisional.
+    assert len(inherited) == 1
+    assert gitops.is_empty_commit(clone, next(iter(inherited)))
+
+    attempts = 0
+
+    def stops_once_then_completes(
+        persona: str, task: str, *, project_dir: str, **_: object
+    ) -> Report:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            (Path(project_dir) / "resumed-work.txt").write_text("more\n", encoding="utf-8")
+            gitops.add_all(project_dir)
+            gitops.commit(project_dir, "fix: continue the inherited branch")
+            return Report(persona, 1, False, False, 2, [], {}, {}, "", max_turns=2)
+        return Report(persona, 0, True, False, 1, [], {}, {}, "")
+
+    resumed = run_repo_task(
+        str(origin),
+        "Continue the branch the earlier run left incomplete.",
+        "engineer",
+        workspace=workspace,
+        branch=stopped.branch,
+        dispatch_fn=stops_once_then_completes,
+        recorded_gate=["true"],
+    )
+
+    assert attempts == 2
+    surviving = incomplete_commits(clone, remote_base, resumed.branch)
+    assert inherited <= surviving, "the earlier run's recovery provenance was dropped"
+
+
+def test_completed_automatic_resume_keeps_the_marker_that_carries_its_work(
+    tmp_path, bare_origin
+) -> None:
+    """A marker commit that *is* the preserved work is kept, and the run still merges.
+
+    A bounded attempt that stops with a dirty tree has its partial work committed
+    under the incomplete-marker message, so that commit and the preservation are the
+    same object. Dropping it as a superseded marker would destroy exactly what the
+    preservation exists to save — and the refusal to drop it escaped as an `error`,
+    losing the publication of work a later attempt had already carried through the
+    gate.
+    """
+    origin = bare_origin()
+    workspace = _workspace(tmp_path, origin)
+    canonical = _shared_checkout(tmp_path)
+    attempts = 0
+
+    def stops_dirty_then_completes(
+        persona: str, task: str, *, project_dir: str, **_: object
+    ) -> Report:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            # Uncommitted: the lifecycle is what commits this, under the marker message.
+            (Path(project_dir) / "preserved-dirty.txt").write_text("partial\n", encoding="utf-8")
+            return Report(persona, 1, False, False, 2, [], {}, {}, "", max_turns=2)
+        (Path(project_dir) / "finished.txt").write_text("gate is green\n", encoding="utf-8")
+        gitops.add_all(project_dir)
+        gitops.commit(project_dir, "test: finish the continuation")
+        return Report(persona, 0, True, False, 1, [], {}, {}, "")
+
+    result = run_repo_task(
+        str(origin),
+        "Continue work whose first attempt stopped with an uncommitted tree.",
+        "engineer",
+        workspace=workspace,
+        dispatch_fn=stops_dirty_then_completes,
+        recorded_gate=["true"],
+    )
+
+    assert attempts == 2
+    assert result.ok and result.outcome == "merged", result.detail
+    assert _has_file(origin, "main", "preserved-dirty.txt")
+    assert _has_file(origin, "main", "finished.txt")
+    marker = next(
+        commit
+        for commit in gitops.log_messages(canonical, "origin/main", result.branch)
+        if INCOMPLETE_TRAILER in commit.message
+    )
+    assert not gitops.is_empty_commit(canonical, marker.sha)
+    # The mirror of the cleared case: the marker stayed, so the lineage that records
+    # the stop stays with it. Retracting it here would claim a branch still carrying
+    # incomplete provenance had never been resumed.
+    assert result.retry_lineage is not None
 
 
 def test_a_stop_short_of_the_cap_is_not_reported_as_hitting_it(tmp_path, bare_origin) -> None:
