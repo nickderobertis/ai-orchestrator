@@ -17,7 +17,13 @@ import pytest
 
 from orchestrator import REPO_ROOT
 from orchestrator.coordination import LOCK_TIMEOUT_ENV
-from orchestrator.gitops import GIT_HOOK_TIMEOUT_ENV, GIT_TIMEOUT_ENV, HOOK_RUNNING_COMMANDS
+from orchestrator.gitops import (
+    DEFAULT_HOOK_TIMEOUT_SECONDS,
+    DEFAULT_TIMEOUT_SECONDS,
+    GIT_HOOK_TIMEOUT_ENV,
+    GIT_TIMEOUT_ENV,
+    HOOK_RUNNING_COMMANDS,
+)
 from orchestrator.provenance import INCOMPLETE_TRAILER, RECOVERY_TRAILER
 from orchestrator.scratch import MIN_FREE_BYTES_ENV
 
@@ -95,4 +101,28 @@ def test_documentation_lists_exactly_the_hook_running_commands_the_code_classifi
     assert documented == set(HOOK_RUNNING_COMMANDS), (
         f"{_HOOK_COMMAND_DOCUMENT} lists {sorted(documented)} but gitops classifies "
         f"{sorted(HOOK_RUNNING_COMMANDS)}; update both in the same change"
+    )
+
+
+#: A documented default is a number an operator plans around, so a stale one is a
+#: false claim rather than a stale label: it tells them a wedged push will be cut
+#: loose at a moment the code has since moved. Each entry derives its literal from
+#: the constant, so changing the constant alone fails here.
+DOCUMENTED_DEFAULTS = (
+    (GIT_TIMEOUT_ENV, DEFAULT_TIMEOUT_SECONDS, "docs/repo-lifecycle.md"),
+    (GIT_HOOK_TIMEOUT_ENV, DEFAULT_HOOK_TIMEOUT_SECONDS, "docs/repo-lifecycle.md"),
+)
+
+
+@pytest.mark.reads_docs
+@pytest.mark.parametrize(("variable", "default", "document"), DOCUMENTED_DEFAULTS)
+def test_documentation_states_the_default_its_constant_declares(
+    variable: str, default: float, document: str
+) -> None:
+    prose = (REPO_ROOT / document).read_text(encoding="utf-8")
+    stated = f"`{variable}` (default **{default:g}s**)"
+
+    assert stated in prose, (
+        f"{document} does not state {stated}; update it in the same change that "
+        "moved the constant, or stop documenting the default"
     )

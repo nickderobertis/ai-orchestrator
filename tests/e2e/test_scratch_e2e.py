@@ -34,6 +34,7 @@ from orchestrator.scratch import (
     AGENT_STATUS_DIR_ENV,
     MIN_FREE_BYTES_ENV,
     ORPHAN_FAMILY,
+    ORPHAN_PROOF_SKIP_REASON,
     OWNER_LOCK_NAME,
     UNREFERENCED_FAMILIES,
     WATCHDOG_PATTERN,
@@ -701,23 +702,37 @@ def test_sweep_recipe_leaves_harness_scratch_alone_when_procfs_cannot_answer(
     (dead_watchdog / "pid").write_text("999999999\n", encoding="utf-8")
     for path in (install, onejudge_scratch, pytest_root, *runs):
         _age(path)
+    # A leaving that *would* be reaped if procfs could be read, so the same run shows
+    # that an unanswerable question retains a process exactly as it retains a tree.
+    finished = scratch / "orchestrator-watchdog-finished"
+    (finished / "agent").mkdir(parents=True)
+    (finished / OWNER_LOCK_NAME).write_text("999999999 1", encoding="utf-8")
+    leaving = _spawn_reparented_leaving(
+        write_reparented_leaving(tmp_path), tmp_path / "m-blind", finished / "agent"
+    )
     blind = tmp_path / "not-procfs"
     blind.mkdir()
 
-    result = subprocess.run(
-        ["just", "sweep-scratch", "--root", str(scratch)],
-        cwd=REPO_ROOT,
-        env={**os.environ, "AI_ORCHESTRATOR_PROC_ROOT": str(blind)},
-        text=True,
-        capture_output=True,
-        check=True,
-    )
+    try:
+        result = subprocess.run(
+            ["just", "sweep-scratch", "--root", str(scratch)],
+            cwd=REPO_ROOT,
+            env={**os.environ, "AI_ORCHESTRATOR_PROC_ROOT": str(blind)},
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+        assert is_running(leaving), "a leaving was reaped on a proof that was never taken"
+    finally:
+        with suppress(ProcessLookupError):
+            os.kill(leaving, 9)
 
     assert install.exists() and onejudge_scratch.exists()
     assert [run for run in runs if not run.exists()] == []
-    # The watchdog proof stands on its own lock, so its accounting is unaffected.
-    assert not dead_watchdog.exists()
-    assert "removed 1 directories" in result.stdout
+    # The watchdog proof stands on its own lock, so its accounting is unaffected —
+    # both the legacy-pid orphan and the finished dispatch's tree still go.
+    assert not dead_watchdog.exists() and not finished.exists()
+    assert "removed 2 directories" in result.stdout
     assert f"no usable procfs at {blind}" in result.stdout
     # Nothing was reclaimed from these families, so the report has to say they were
     # never examined rather than let one number read as "nothing to reclaim".
@@ -725,6 +740,7 @@ def test_sweep_recipe_leaves_harness_scratch_alone_when_procfs_cannot_answer(
     assert "swept families: watchdog, third-party" in swept
     for family in UNREFERENCED_FAMILIES:
         assert f"{family.name} (no live process could be proven done with it)" in skipped
+    assert f"{ORPHAN_FAMILY} ({ORPHAN_PROOF_SKIP_REASON})" in skipped
 
 
 def test_sweep_cli_keeps_visible_references_when_a_process_hides_its_descriptors(
