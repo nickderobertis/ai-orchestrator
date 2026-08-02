@@ -736,6 +736,10 @@ def test_a_cancelled_round_does_not_wait_out_a_relaunch_backoff(tmp_path, bare_o
     assert elapsed < LAUNCH_RELAUNCH_BACKOFF_SECONDS, elapsed
     # And the cancelled round did not launch one more dispatch on the way out.
     assert launches == ["engineer"]
+    # The round decided this stop, so it is reported as the cancellation it was —
+    # its relaunches were cut short, not spent, and the launch path is not accused.
+    assert result.detail.startswith("cancelled cooperatively")
+    assert "just smoke" not in result.detail
 
 
 def test_real_git_teardown_refusal_is_deferred_after_publication(tmp_path, bare_origin) -> None:

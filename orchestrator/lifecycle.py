@@ -1912,10 +1912,12 @@ def run_repo_task(
                 if prefix is not None
                 else f"workstream did not complete: {step_run.detail}"
             )
-            if step_run.launch_failed:
+            if step_run.launch_failed and prefix is None:
                 # Named so the reader does not go looking for a fault in the task.
                 # `just smoke` is the cheap probe for the other explanation, and it
                 # is the one a planner can act on before redispatching this node.
+                # A cancelled workstream is excluded: the round decided that stop,
+                # and its relaunches were cut short rather than spent.
                 result.detail += (
                     f"; the dispatch died before producing any work and {relaunches} "
                     "relaunch(es) did the same, so this is the launch path rather "
