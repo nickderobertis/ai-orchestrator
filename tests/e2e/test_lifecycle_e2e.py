@@ -2950,8 +2950,21 @@ _OVERLONG_TASK = (
         ),
         # No usable commit subject at all, and task prose that cannot fit either.
         (("Update the reader",), _OVERLONG_TASK, "chore: orchestrated change"),
+        # The same, with the branch's only breaking signal in a footer: it still lands.
+        (
+            ("Update the reader\n\nBREAKING CHANGE: the old reader is gone",),
+            _OVERLONG_TASK,
+            "chore!: orchestrated change",
+        ),
     ],
-    ids=["task-name", "generic", "scope-dropped", "breaking-preserved", "no-usable-commit"],
+    ids=[
+        "task-name",
+        "generic",
+        "scope-dropped",
+        "breaking-preserved",
+        "no-usable-commit",
+        "breaking-footer-only",
+    ],
 )
 def test_descriptions_over_the_limit_publish_a_whole_name_not_an_elision(
     tmp_path, bare_origin, messages: tuple[str, ...], task: str, expected: str
