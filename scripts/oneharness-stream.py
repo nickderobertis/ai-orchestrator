@@ -13,10 +13,10 @@ here at all:
 * every line the child wrote is appended verbatim to the stdout record, so the raw
   transcript is preserved exactly as `tee` preserved it before;
 * each ``event`` line republishes a small, bounded activity summary the planner's
-  views read *while the turn is still running* (`orchestrator/liveness.py` reads it
+  views read *while the turn is still running* (`orchestrator/activity.py` reads it
   back and `just status` renders it);
-* the terminal ``result`` line's ``report`` is unwrapped onto stdout, which is
-  byte-for-byte the document a non-streaming run would have produced.
+* the terminal ``result`` line's ``report`` is unwrapped onto stdout as the exact
+  text oneharness wrote, so what onejudge parses is oneharness's own report.
 
 Anything it does not recognize is forwarded verbatim rather than swallowed: a
 degraded run that answered with a bare report still reaches onejudge intact, which
@@ -36,7 +36,7 @@ import json
 import os
 import sys
 import time
-from typing import Any
+from typing import Any, TypedDict, cast
 
 #: How much of one event's rendered input the activity summary keeps. The summary
 #: exists to say what a node is doing right now, which the head of a command or a
@@ -58,7 +58,39 @@ LABEL_ENV = "ONEHARNESS_HISTORY_LABELS"
 LOCATOR_KEYS = ("run_id", "round", "node", "step", "persona")
 
 
-def _locator(raw: str | None) -> dict[str, str]:
+class Locator(TypedDict, total=False):
+    """Where in the tracked graph the turn publishing these summaries is running.
+
+    Every key is optional because a bare `just dispatch` has no graph position at
+    all, and `orchestrator.labels` omits rather than empties the ones it has none
+    for. `tests/test_activity.py` drift-gates this against the labels that module
+    can actually produce, since the two sides of this contract are written in
+    different languages in different processes.
+    """
+
+    run_id: str
+    round: str
+    node: str
+    step: str
+    persona: str
+
+
+class Summary(Locator, total=False):
+    """One published activity record: the locator, plus what is happening there.
+
+    `orchestrator.activity.NodeActivity` is the reader's side of this record. It
+    validates every field again rather than trusting these types, because between
+    the two is a file under a shared scratch root that anything could have written.
+    """
+
+    at: float
+    kind: str
+    name: str
+    detail: str
+    events: int
+
+
+def _locator(raw: str | None) -> Locator:
     """Parse the graph locator out of the inherited history-label value.
 
     The wire format is ``key=value`` pairs separated by commas, with no escape — so
@@ -72,7 +104,7 @@ def _locator(raw: str | None) -> dict[str, str]:
         key, value = key.strip(), value.strip()
         if separator and key in LOCATOR_KEYS and value:
             located[key] = value[:DETAIL_CHARS]
-    return located
+    return cast(Locator, located)
 
 
 def _collapse(value: str) -> str:
@@ -82,19 +114,20 @@ def _collapse(value: str) -> str:
 
 def _detail(event: dict[str, Any]) -> str:
     """Render what this event is doing, as far as its shape allows."""
-    payload = event.get("input")
-    if isinstance(payload, str):
-        return _collapse(payload)
-    if not isinstance(payload, dict):
-        return ""
-    for key in DETAIL_KEYS:
-        value = payload.get(key)
-        if isinstance(value, str) and value.strip():
-            return _collapse(value)
-    return ""
+    match event.get("input"):
+        case str() as text:
+            return _collapse(text)
+        case dict() as payload:
+            for key in DETAIL_KEYS:
+                value = payload.get(key)
+                if isinstance(value, str) and value.strip():
+                    return _collapse(value)
+            return ""
+        case _:
+            return ""
 
 
-def _publish(activity_path: str, summary: dict[str, Any]) -> None:
+def _publish(activity_path: str, summary: Summary) -> None:
     """Replace the activity file atomically, or give up on it silently.
 
     A reader must never see a half-written summary, and this must never be able to
@@ -143,8 +176,13 @@ def _report_text(line: str) -> str:
     return json.dumps(json.loads(line)["report"])
 
 
-def _translate(record: Any, activity_path: str, locator: dict[str, Any]) -> None:
-    """Pump the child's stdout, recording, publishing and unwrapping as it goes."""
+def _translate(record: Any, activity_path: str, locator: Locator) -> None:
+    """Pump the child's stdout, recording, publishing and unwrapping as it goes.
+
+    The three cases are the stream protocol's own: an event to publish, the terminal
+    result to unwrap, and everything else — which is forwarded rather than swallowed,
+    so a run that answered with something this does not model still reaches onejudge.
+    """
     events = 0
     for line in sys.stdin:
         # The raw record first and always: it is the only account of a child that
@@ -156,34 +194,32 @@ def _translate(record: Any, activity_path: str, locator: dict[str, Any]) -> None
             envelope = json.loads(line)
         except ValueError:
             envelope = None
-        if not isinstance(envelope, dict):
-            _forward(line)
-            continue
-        kind = envelope.get("type")
-        if kind == "event":
-            event = envelope.get("event")
-            if not isinstance(event, dict):
+        match envelope:
+            case {"type": "event", "event": dict() as event}:
+                events += 1
+                _publish(
+                    activity_path,
+                    {
+                        **locator,
+                        "at": time.time(),
+                        "kind": str(event.get("kind") or "event")[:DETAIL_CHARS],
+                        "name": str(event.get("name") or "")[:DETAIL_CHARS],
+                        "detail": _detail(event),
+                        "events": events,
+                    },
+                )
+            case {"type": "event"}:
+                # An event envelope carrying no event object: nothing to publish and
+                # nothing onejudge could do with it either.
                 continue
-            events += 1
-            _publish(
-                activity_path,
-                {
-                    **locator,
-                    "at": time.time(),
-                    "kind": str(event.get("kind") or "event")[:DETAIL_CHARS],
-                    "name": str(event.get("name") or "")[:DETAIL_CHARS],
-                    "detail": _detail(event),
-                    "events": events,
-                },
-            )
-            continue
-        if kind == "result" and isinstance(envelope.get("report"), dict):
-            # The one document onejudge parses, forwarded as the exact text oneharness
-            # wrote rather than re-serialized from the parse — so what onejudge reads
-            # is oneharness's own report and not this filter's rendering of it.
-            _forward(_report_text(line) + "\n")
-            continue
-        _forward(line)
+            case {"type": "result", "report": dict()}:
+                # The one document onejudge parses, forwarded as the exact text
+                # oneharness wrote rather than re-serialized from the parse — so what
+                # onejudge reads is oneharness's own report, not this filter's
+                # rendering of it.
+                _forward(_report_text(line) + "\n")
+            case _:
+                _forward(line)
 
 
 def main(argv: list[str]) -> int:
@@ -198,7 +234,12 @@ def main(argv: list[str]) -> int:
         # The same fate `tee` met here before: a stdout record that cannot be kept
         # fails the capture, and the wrapper turns that into a failed turn rather
         # than into a turn whose transcript quietly went missing.
-        print(f"oneharness-stream: stdout record unusable: {error}", file=sys.stderr)
+        print(
+            f"oneharness-stream: cannot keep the agent stdout record at {record_path}: "
+            f"{error}; retry through orchestrator dispatch, which creates and owns the "
+            "status directory this writes into",
+            file=sys.stderr,
+        )
         return 2
     return 0
 

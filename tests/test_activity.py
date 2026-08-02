@@ -11,11 +11,20 @@ that has moved on, or carrying a credential.
 from __future__ import annotations
 
 import json
+import re
 import tempfile
 import time
 from pathlib import Path
 
-from orchestrator.activity import STALE_AFTER_SECONDS, SUMMARY_CHARS, live_activity
+from orchestrator import REPO_ROOT
+from orchestrator.activity import (
+    MAX_REPORTED_EVENTS,
+    STALE_AFTER_SECONDS,
+    SUMMARY_CHARS,
+    live_activity,
+)
+from orchestrator.labels import graph_labels, semantic_agent_labels
+from orchestrator.runs import NodeId, RunId, StepId
 
 NOW = 1_800_000_000.0
 
@@ -146,3 +155,59 @@ def test_the_reader_defaults_to_the_hosts_scratch_root(tmp_path: Path, monkeypat
     _publish(tmp_path, "default", _summary(at=time.time()))
 
     assert set(live_activity("live-run")) == {("1", "ship")}
+
+
+def test_a_non_finite_timestamp_never_reaches_the_view(tmp_path: Path) -> None:
+    """`NaN` and the infinities are JSON numbers Python parses and comparisons pass.
+
+    Every age check answers false for them rather than true, so one would sail
+    through and raise inside `describe`, taking down a read-only view whose whole
+    contract is that it degrades instead.
+    """
+    for name, literal in (("nan", "NaN"), ("inf", "Infinity"), ("ninf", "-Infinity")):
+        _publish(
+            tmp_path, name, f'{{"run_id":"live-run","round":"1","node":"{name}","at":{literal}}}'
+        )
+
+    assert live_activity("live-run", root=tmp_path, now=NOW) == {}
+
+
+def test_the_event_count_is_bounded_into_its_own_domain(tmp_path: Path) -> None:
+    """It prints as an authoritative statement about how much work a node has done."""
+    _publish(tmp_path, "negative", _summary(node="back", events=-5))
+    _publish(tmp_path, "huge", _summary(node="many", events=MAX_REPORTED_EVENTS * 99))
+    _publish(tmp_path, "text", _summary(node="worded", events="lots"))
+
+    found = live_activity("live-run", root=tmp_path, now=NOW)
+
+    assert found[("1", "back")].events == 0
+    assert found[("1", "many")].events == MAX_REPORTED_EVENTS
+    assert found[("1", "worded")].events == 0
+
+
+def test_the_publishers_locator_keys_are_ones_a_dispatch_can_actually_carry() -> None:
+    """DRIFT-GATE the two sides of one contract, written in two languages.
+
+    `orchestrator.labels` decides what a dispatch stamps its history labels with, and
+    `scripts/oneharness-stream.py` parses that value back out of its environment to
+    say which node a summary describes. Nothing links them at run time: a key renamed
+    on either side would simply stop being joined, and the view would quietly go back
+    to reporting elapsed time and nothing else.
+    """
+    declared = re.search(
+        r"^LOCATOR_KEYS = \(([^)]*)\)",
+        (REPO_ROOT / "scripts" / "oneharness-stream.py").read_text(encoding="utf-8"),
+        re.MULTILINE,
+    )
+    assert declared is not None, "the stream filter no longer declares LOCATOR_KEYS"
+    keys = set(re.findall(r'"([^"]+)"', declared.group(1)))
+
+    stampable = set(
+        graph_labels(
+            run_id=RunId("a-run"), round_number=1, node=NodeId("a-node"), step=StepId("a-step")
+        )
+    ) | set(semantic_agent_labels("engineer"))
+
+    assert keys <= stampable, f"the filter joins on labels no dispatch stamps: {keys - stampable}"
+    # The join key itself, which the reader requires of every summary it accepts.
+    assert {"run_id", "round", "node"} <= keys

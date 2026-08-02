@@ -315,8 +315,17 @@ def test_status_reports_what_a_node_is_doing_while_its_turn_is_still_running(
     scratch.mkdir()
     runs_dir = tmp_path / "runs"
     status_dir = _status_dir(scratch, "view")
+    # llmlint: ignore[tests_mirror_real_usage] the journal IS this view's production
+    # input — the executor writes it and `just status` reads it — and driving a whole
+    # tracked round to reach one in-flight node would test the executor instead. This
+    # is the same seam `tests/e2e/test_status_e2e.py` uses for the journal join.
     journal = open_journal(runs_dir / "live-run", RunId("live-run"), 1)
     journal.append("node-started", node=NodeId("ship"), detail={"persona": "engineer"})
+    # A second dispatch's directory holding an unusable publication, beside the live
+    # one. A reader that raised, or that stopped scanning, would take a working node's
+    # visibility down with it — so the view must report the good one regardless.
+    torn = _status_dir(scratch, "torn") / "agent.activity"
+    torn.write_text('{"run_id": "live-run", "round": "1", "node": "gh', encoding="utf-8")
 
     environment = _wrapper_environment(
         tmp_path,
@@ -374,3 +383,90 @@ def test_status_reports_what_a_node_is_doing_while_its_turn_is_still_running(
     # And the part only a streamed turn can answer.
     assert "now Bash just check" in shown.stdout
     assert "event(s)," in shown.stdout
+
+
+def test_the_filter_forwards_output_it_does_not_recognize(tmp_path: Path) -> None:
+    """Whatever the child said reaches onejudge, even when this filter cannot read it.
+
+    The filter sits between oneharness and onejudge on the one channel a turn's
+    answer travels, so anything it drops is an answer that never arrives — a
+    dispatch failure caused by the observability change rather than by the work. It
+    is driven here at its real interface, the one the wrapper gives it: the child's
+    stdout on stdin, onejudge's stdin on stdout, and the two files it writes.
+    """
+    status_dir = _status_dir(tmp_path / "scratch", "forwarded")
+    record = status_dir / "agent.stdout"
+    record.touch()
+    activity = status_dir / "agent.activity"
+    report = '{"schema_version":"0.3","results":[]}'
+    stream = "\n".join(
+        (
+            # An envelope shape this build does not model — a later oneharness may
+            # add one, and a turn must not die because of it.
+            '{"type":"notice","message":"a shape from a later protocol"}',
+            # An event envelope with no event in it: nothing to publish, and nothing
+            # onejudge could do with it either.
+            '{"type":"event"}',
+            # Not JSON at all, which is what a harness that printed over the protocol
+            # looks like.
+            "oneharness: warning: something happened",
+            '{"type":"event","event":{"kind":"tool_call","name":"Bash",'
+            '"input":{"command":"just check"}}}',
+            '{"type":"result","report":' + report + "}",
+        )
+    )
+
+    completed = subprocess.run(
+        [
+            str(REPO_ROOT / ".venv" / "bin" / "python3"),
+            str(REPO_ROOT / "scripts" / "oneharness-stream.py"),
+            str(record),
+            str(activity),
+        ],
+        input=stream + "\n",
+        text=True,
+        capture_output=True,
+        env={**os.environ, "ONEHARNESS_HISTORY_LABELS": "run_id=r,round=1,node=n"},
+        timeout=timeout(30),
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    forwarded = completed.stdout.strip().splitlines()
+    # Everything unrecognized, verbatim and in order, then the unwrapped report.
+    assert forwarded == [
+        '{"type":"notice","message":"a shape from a later protocol"}',
+        "oneharness: warning: something happened",
+        report,
+    ]
+    # The raw record keeps every line the child wrote, recognized or not.
+    assert record.read_text(encoding="utf-8").strip().splitlines() == stream.splitlines()
+    # And the one real event still published, counted as the only one.
+    assert json.loads(activity.read_text(encoding="utf-8"))["events"] == 1
+
+
+def test_the_filter_reports_a_record_it_cannot_keep(tmp_path: Path) -> None:
+    """`tee` failed the capture here before, and the wrapper still turns that into a
+    failed turn — the one thing that must not happen is a turn whose transcript
+    quietly went missing being reported as a turn nobody had anything to say about.
+    """
+    status_dir = _status_dir(tmp_path / "scratch", "unwritable")
+    # A directory where the record goes is unopenable regardless of privilege.
+    (status_dir / "agent.stdout").mkdir()
+
+    completed = subprocess.run(
+        [
+            str(REPO_ROOT / ".venv" / "bin" / "python3"),
+            str(REPO_ROOT / "scripts" / "oneharness-stream.py"),
+            str(status_dir / "agent.stdout"),
+            str(status_dir / "agent.activity"),
+        ],
+        input='{"type":"result","report":{}}\n',
+        text=True,
+        capture_output=True,
+        timeout=timeout(30),
+    )
+
+    assert completed.returncode == 2
+    assert "cannot keep the agent stdout record" in completed.stderr
+    # The message names what to do about it, not only what went wrong.
+    assert "retry through orchestrator dispatch" in completed.stderr

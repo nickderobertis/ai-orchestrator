@@ -28,6 +28,7 @@ Three properties make it usable rather than decorative:
 from __future__ import annotations
 
 import json
+import math
 import tempfile
 import time
 from dataclasses import dataclass
@@ -47,6 +48,10 @@ SUMMARY_CHARS = 120
 #: two tool calls in a working turn, and far shorter than the in-flight times this
 #: exists to explain.
 STALE_AFTER_SECONDS = 900.0
+#: The ceiling on the running event count a summary may claim. A turn's transcript
+#: is thousands of events at the very outside, so anything past this says only "a
+#: great many", and is reported as that rather than as a number nobody measured.
+MAX_REPORTED_EVENTS = 1_000_000
 
 
 @dataclass(frozen=True)
@@ -75,6 +80,18 @@ def _bounded(value: Any) -> str:
     return " ".join(redact(value).split())[:SUMMARY_CHARS]
 
 
+def _counted(value: Any) -> int:
+    """Bound the published event count into what a turn can actually have observed.
+
+    It is a running total a subprocess wrote, so its domain is non-negative and, at
+    this cap, already far past any turn's real transcript. A negative or absurd count
+    would print as an authoritative statement about how much work a node has done.
+    """
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        return 0
+    return min(value, MAX_REPORTED_EVENTS)
+
+
 def _summary(payload: object, run_id: str, *, now: float) -> NodeActivity | None:
     """Validate one published summary, or reject it.
 
@@ -91,13 +108,16 @@ def _summary(payload: object, run_id: str, *, now: float) -> NodeActivity | None
     if not isinstance(node, str) or not node:
         return None
     at = payload.get("at")
-    if not isinstance(at, (int, float)) or isinstance(at, bool):
+    # `NaN` and the infinities are valid JSON numbers to Python's parser and pass
+    # every comparison below by silently answering false, so a summary carrying one
+    # would reach `describe`, where `int(now - at)` raises and takes the whole
+    # read-only view down. This boundary fails closed instead.
+    if not isinstance(at, (int, float)) or isinstance(at, bool) or not math.isfinite(at):
         return None
     # A future timestamp is a clock the reader cannot reason about; an old one
     # describes a turn that has moved on. Both are dropped rather than aged.
     if at > now + STALE_AFTER_SECONDS or now - at > STALE_AFTER_SECONDS:
         return None
-    events = payload.get("events")
     return NodeActivity(
         # Normalized through `int` so a zero-padded label and the journal's own
         # integer round cannot spell the same round two ways.
@@ -107,7 +127,7 @@ def _summary(payload: object, run_id: str, *, now: float) -> NodeActivity | None
         kind=_bounded(payload.get("kind")) or "event",
         name=_bounded(payload.get("name")),
         detail=_bounded(payload.get("detail")),
-        events=events if isinstance(events, int) and not isinstance(events, bool) else 0,
+        events=_counted(payload.get("events")),
     )
 
 
