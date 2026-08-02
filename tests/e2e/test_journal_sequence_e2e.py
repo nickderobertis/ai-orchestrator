@@ -186,6 +186,7 @@ def _started_run(tmp_path: Path, onejudge_bin: str) -> tuple[str, Path, Path]:
         [
             "just",
             "orchestrate",
+            "--detach",
             str(_plan(tmp_path)),
             "--runs-dir",
             str(runs),

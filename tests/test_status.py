@@ -20,6 +20,7 @@ from orchestrator.status import (
     _ledger_for_branch,
     _positional,
     _settled_nodes,
+    in_flight_dispatches,
     is_running,
     main,
 )
@@ -183,3 +184,54 @@ def test_status_scopes_its_view_to_one_named_run(tmp_path: Path, monkeypatch, ca
 
     assert main(["no-such-run", "--runs-dir", str(runs_dir)]) == 2
     assert "no recorded run 'no-such-run'" in capsys.readouterr().err
+
+
+def test_a_dispatch_with_no_finished_turn_is_reported_rather_than_read_as_none(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """History records finished turns; the journal records starts. Both are needed.
+
+    A first turn here routinely runs for twenty minutes, so "no history" and "no
+    dispatch" look identical from history alone — and the view chose the wrong one
+    of those two opposite readings. The in-process assertions below are what carry
+    this rendering path through the coverage gate; the real CLI journey is in
+    tests/e2e/test_status_e2e.py.
+    """
+    runs_dir = tmp_path / "runs"
+    journal = open_journal(runs_dir / "live", RunId("live"), 1)
+    journal.append("node-started", node=NodeId("build"), detail={"persona": "engineer"})
+    journal.append(
+        "step-started", node=NodeId("build"), step=StepId("verify"), detail={"persona": "engineer"}
+    )
+    journal.append("node-started", node=NodeId("over"))
+    journal.append("node-failed", node=NodeId("over"), detail={"status": "failed"})
+
+    running = in_flight_dispatches(runs_dir, "live")
+    assert [(item.node, item.step, item.persona) for item in running] == [
+        ("build", "verify", "engineer")
+    ]
+    assert "round-01 build[verify] engineer" in running[0].describe(now=running[0].started_at + 95)
+    assert "in flight for 1m35s" in running[0].describe(now=running[0].started_at + 95)
+
+    # A settled step leaves its node listed — it is between dispatches, not done.
+    journal.append(
+        "step-settled", node=NodeId("build"), step=StepId("verify"), detail={"status": "done"}
+    )
+    between = in_flight_dispatches(runs_dir, "live")
+    assert [(item.node, item.step) for item in between] == [("build", None)]
+
+    # An unreadable or absent journal degrades to silence, as every reader here does.
+    assert in_flight_dispatches(runs_dir, "never-recorded") == []
+
+    history_dir = tmp_path / "history"
+    history_dir.mkdir()
+    monkeypatch.setenv("ONEHARNESS_HISTORY_DIR", str(history_dir))
+    assert main(["live", "--runs-dir", str(runs_dir)]) == 0
+    shown = capsys.readouterr().out
+    assert "No dispatched tasks recorded" not in shown
+    assert "No completed harness turns recorded for run live yet" in shown
+    assert "1 dispatch(es) in flight" in shown
+
+    journal.append("node-settled", node=NodeId("build"), detail={"status": "done"})
+    assert main(["live", "--runs-dir", str(runs_dir)]) == 0
+    assert "No dispatched tasks recorded for run live." in capsys.readouterr().out

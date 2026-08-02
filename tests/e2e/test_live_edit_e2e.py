@@ -198,6 +198,7 @@ def test_real_cli_mutates_live_frontier_and_replays_atomic_edits(
         [
             "just",
             "orchestrate",
+            "--detach",
             str(plan),
             "--runs-dir",
             str(runs),
@@ -455,6 +456,7 @@ def test_real_cli_attest_and_reparent_reach_the_running_graph(
         [
             "just",
             "orchestrate",
+            "--detach",
             str(plan),
             "--runs-dir",
             str(runs),
@@ -567,6 +569,7 @@ def test_real_cli_rejects_an_inapplicable_command_at_submission(
         [
             "just",
             "orchestrate",
+            "--detach",
             str(plan),
             "--runs-dir",
             str(runs),
@@ -666,6 +669,7 @@ def test_real_cli_live_drop_preserves_and_recovers_running_lifecycle(
         [
             "just",
             "orchestrate",
+            "--detach",
             str(plan),
             "--runs-dir",
             str(runs),
@@ -833,6 +837,7 @@ def test_planner_context_attached_mid_round_reaches_the_next_round_dispatch(
         [
             "just",
             "orchestrate",
+            "--detach",
             str(plan),
             "--runs-dir",
             str(runs),
@@ -986,6 +991,7 @@ def test_edits_committed_during_a_round_are_what_the_next_round_is_derived_from(
         [
             "just",
             "orchestrate",
+            "--detach",
             str(plan),
             "--runs-dir",
             str(runs),

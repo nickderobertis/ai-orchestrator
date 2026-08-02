@@ -68,9 +68,11 @@ from .launch import (
     validate_session_id,
     write_provenance,
 )
+from .liveness import PARKED_AFTER_SECONDS
+from .monitor import attach
 from .personas import persona_path
 from .redaction import redact
-from .runs import ArtifactPaths, resolve_run_dir, slugify
+from .runs import ArtifactPaths, resolve_run_dir, slugify, validate_run_id
 from .scratch import AGENT_STATUS_DIR_ENV, AGENT_STATUS_DIR_NAME, owned_scratch_directory
 from .watchdog import (
     OWN_PROCESS_GROUP_FLAG,
@@ -1148,7 +1150,15 @@ def launch_orchestrator(
     launcher: str | None = None,
     launcher_session_id: str | None = None,
 ) -> str:
-    """Launch a detached live-supervised orchestrator and return its run id.
+    """Start a live-supervised orchestrator in its own session and return its run id.
+
+    The launched process always outlives the turn that started it, whether or not
+    the caller then attaches to it: `start_new_session=True` puts it outside the
+    launching turn's process group, and it is a *child program* rather than this
+    process continuing, so `uv run`'s forward-by-pid — the second killer
+    `orchestrator.detach` exists for — reaches only `orchestrate` itself. That is
+    what lets the foreground default be purely additive: `main_orchestrate` decides
+    whether anything waits here, and neither answer changes what owns the run.
 
     ``oneharness_mode`` is forwarded to the launched process as ``ONEHARNESS_MODE``
     and defaults to ``bypass`` for the same reason `just repo-task` does: the
@@ -1358,13 +1368,30 @@ def launch_orchestrator(
 
 
 def main_orchestrate(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Launch a live-supervised orchestrator")
+    parser = argparse.ArgumentParser(
+        description="Launch a live-supervised orchestrator and watch it until it settles"
+    )
     parser.add_argument("plan", type=Path)
     parser.add_argument("--runs-dir", type=Path, default=Path("runs"))
     parser.add_argument("--run-id")
     parser.add_argument("--base", type=Path, default=BASE_CONFIG)
     parser.add_argument("--onejudge-bin", default="onejudge")
     parser.add_argument("--acknowledge-concurrent", action="store_true")
+    parser.add_argument(
+        "--detach",
+        action="store_true",
+        help="print the launch record and return immediately, leaving the run unattended; "
+        "without it this command stays attached, streaming what `just monitor` streams, "
+        "and returns when the run settles",
+    )
+    parser.add_argument(
+        "--parked-after",
+        type=float,
+        default=PARKED_AFTER_SECONDS,
+        metavar="SECONDS",
+        help="while attached, treat a launch with no child process, planner surface, or "
+        f"ledger write for this long as parked (default: {PARKED_AFTER_SECONDS:g})",
+    )
     parser.add_argument(
         "--heartbeat-interval",
         type=float,
@@ -1401,6 +1428,8 @@ def main_orchestrate(argv: list[str] | None = None) -> int:
         "else this session's own id)",
     )
     args = parser.parse_args(argv)
+    if not math.isfinite(args.parked_after) or args.parked_after <= 0:
+        parser.error("--parked-after must be a positive, finite number of seconds")
     # Detected from the ambient session so the ordinary launch is attributable without
     # the planner remembering two flags: an unattributable run is one no planner can
     # tell from another planner's. Explicit values still win; see `select_launch`.
@@ -1432,7 +1461,23 @@ def main_orchestrate(argv: list[str] | None = None) -> int:
         # a crash, so it exits 2 with a message rather than a traceback.
         print(f"orchestrate: {exc}", file=sys.stderr)
         return EXIT_CONFIG_ERROR
-    return 0
+    if args.detach:
+        return 0
+    # The record is on stdout above and this is on stderr, for the same reason the
+    # concurrency notice is: what follows on stdout is the monitor stream, and a
+    # planner needs to know before it starts that leaving is free.
+    print(
+        f"orchestrate: attached to {launched}; Ctrl-C detaches without stopping the run "
+        f"(`just stop {launched}` ends it, `just monitor {launched}` re-attaches).",
+        file=sys.stderr,
+        flush=True,
+    )
+    return attach(
+        validate_run_id(launched),
+        runs_dir=args.runs_dir,
+        until_settled=True,
+        parked_after=args.parked_after,
+    )
 
 
 def _read_task(value: str | None) -> str:

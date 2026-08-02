@@ -129,6 +129,7 @@ def _launch_cli(
         [
             "just",
             "orchestrate",
+            "--detach",
             str(plan),
             "--runs-dir",
             str(runs),

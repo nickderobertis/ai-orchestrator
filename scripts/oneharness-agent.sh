@@ -40,6 +40,12 @@ fi
 ensure_codex_alt_home oneharness-agent || exit $?
 alternate_harness=claude-code:alternate
 agent_config="$repo_root/oneharness.toml"
+# The tool transcript `just status` and `just history-show` render: a `run` flag
+# with no config key, so this is the only place the agent side can adopt it, and
+# claude-code carries none without it. Emptied below when the caller already asked
+# for it -- oneharness refuses a repeated `--events`. See AGENTS.md for why not
+# `--stream`.
+agent_events=(--events)
 
 if [ "${1-}" != "run" ]; then
     echo "oneharness-agent: expected the 'run' subcommand; invoke through onejudge dispatch or retry as 'scripts/oneharness-agent.sh run ...'" >&2
@@ -69,6 +75,9 @@ for arg in "$@"; do
             fi
             caller_config=true
             expect_config_value=true
+            ;;
+        --events)
+            agent_events=()
             ;;
         --config=*)
             if [[ $caller_config == true ]]; then
@@ -152,7 +161,7 @@ if [ -z "${ONEHARNESS_HARNESSES-}" ]; then
 fi
 
 if [ -z "${ORCHESTRATOR_AGENT_STATUS_DIR-}" ]; then
-    exec oneharness run --config "$agent_config" "$@"
+    exec oneharness run --config "$agent_config" "${agent_events[@]}" "$@"
 fi
 
 status_dir=$ORCHESTRATOR_AGENT_STATUS_DIR
@@ -220,7 +229,7 @@ fi
 tee "$agent_stdout" <"$stdout_fifo" &
 tee_pid=$!
 # llmlint: ignore[boundary_inputs_validated] oneharness parses and validates its own protocol input.
-oneharness run --config "$agent_config" "$@" <&3 >"$stdout_fifo" 2>"$agent_stderr" &
+oneharness run --config "$agent_config" "${agent_events[@]}" "$@" <&3 >"$stdout_fifo" 2>"$agent_stderr" &
 agent_pid=$!
 write_status agent.child.pid "$agent_pid"
 while agent_state=$(ps -o stat= -p "$agent_pid" 2>/dev/null) &&

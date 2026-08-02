@@ -166,6 +166,7 @@ def _orchestrate(
         [
             "just",
             "orchestrate",
+            "--detach",
             str(plan),
             "--runs-dir",
             str(runs),
@@ -566,6 +567,7 @@ def test_orchestrate_records_a_codex_session_and_honours_explicit_overrides(
         [
             "just",
             "orchestrate",
+            "--detach",
             str(plan),
             "--runs-dir",
             str(runs),
@@ -613,6 +615,7 @@ def test_orchestrate_records_a_codex_session_and_honours_explicit_overrides(
             [
                 "just",
                 "orchestrate",
+                "--detach",
                 str(partial),
                 "--runs-dir",
                 str(runs),

@@ -11,7 +11,10 @@ the three things the harness can honestly observe from outside the process:
 
 * a live descendant of the launched orchestrator or of the round owner it started
   — every process either of them spawns is this run's work, so one existing is
-  what a dispatch, a gate, or a git operation in flight looks like from outside;
+  what a dispatch, a gate, or a git operation in flight looks like from outside.
+  *Live*, not merely present: a wedged orchestrator's last act is to leave the
+  provider it was talking to unreaped, so the un-collected zombie underneath one is
+  the parked launch itself rather than evidence against it (`_parent_map`);
 * a planner surface — the durable ``last_surface_at`` the channel pacemaker keeps;
 * a ledger write — the run's journal, round status, plan, or recorded result.
 
@@ -71,8 +74,27 @@ class LaunchLiveness:
         )
 
 
+#: The one process state that is an exit rather than work; see `_parent_map`.
+_ZOMBIE = "Z"
+
+
 def _parent_map() -> dict[int, int] | None:
-    """Every readable live pid mapped to its parent, or ``None`` without ``/proc``."""
+    """Every readable *live* pid mapped to its parent, or ``None`` without ``/proc``.
+
+    A zombie is excluded, and that exclusion is what lets this module see the launch
+    it was written for. A zombie has already exited; the only thing keeping its entry
+    in ``/proc`` is that its parent has not collected it — so an orchestrator wedged
+    mid-turn leaves exactly one, a dead provider under a process that will never
+    reap it, and counting that as work in flight reports the parked launch as busy
+    forever. It is not "a dispatch, a gate, or a git operation in flight" by any
+    reading; it is the absence of one.
+
+    The asymmetry holds, because it is about inputs this host cannot read: only a
+    state this host read *as* ``Z`` is dropped, and a missing or unparsable one
+    still counts toward "still working". Nothing is lost by dropping them either —
+    a process is orphaned onto init the moment its parent exits, so no live process
+    has a zombie ancestor for this walk to reach it through.
+    """
     if not _PROC.is_dir():
         return None
     parents: dict[int, int] = {}
@@ -87,20 +109,27 @@ def _parent_map() -> dict[int, int] | None:
             status = (entry / "status").read_text(encoding="utf-8", errors="replace")
         except OSError:
             continue  # the process exited between the scan and the read
+        parent: int | None = None
+        state = ""
         for line in status.splitlines():
             if line.startswith("PPid:"):
                 _, _, raw = line.partition(":")
                 if raw.strip().isdigit():
-                    parents[int(entry.name)] = int(raw.strip())
-                break
+                    parent = int(raw.strip())
+            elif line.startswith("State:"):
+                state = next(iter(line.split()[1:2]), "")
+        if parent is not None and state != _ZOMBIE:
+            parents[int(entry.name)] = parent
     return parents
 
 
 # llmlint: ignore[changed_behavior_has_e2e] the descendant/no-descendant journeys both run
-# through the real `just runs` against real processes in tests/e2e/test_liveness_e2e.py. Only
-# the absent-`/proc` fallback is unit-only, and necessarily: the e2e drives real CLI
-# subprocesses on this host, which cannot run without the ``/proc`` this branch requires to be
-# missing. The corrupt-record fallbacks beside it do run through that same real journey.
+# through the real `just runs` against real processes in tests/e2e/test_liveness_e2e.py, and the
+# uncollected-child one through a whole wedged `just orchestrate` launch in
+# tests/e2e/test_attach_settles_e2e.py. Only the absent-`/proc` fallback is unit-only, and
+# necessarily: the e2e drives real CLI subprocesses on this host, which cannot run without the
+# ``/proc`` this branch requires to be missing. The corrupt-record fallbacks beside it do run
+# through that same real journey.
 def has_live_descendant(pids: frozenset[int]) -> bool:
     """Whether any live process on this host descends from one of ``pids``.
 

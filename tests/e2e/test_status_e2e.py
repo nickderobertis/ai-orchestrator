@@ -312,3 +312,64 @@ def test_status_reports_every_settled_node_as_the_journal_recorded_it(
     finally:
         for worktree in worktrees:
             workspace.remove_worktree(ref, worktree)
+
+
+def test_status_tells_a_dispatch_mid_first_turn_from_no_dispatch_at_all(tmp_path: Path) -> None:
+    """The empty history state is two opposite facts, and this view now says which.
+
+    A history record is written per *finished* turn, and dispatches here routinely
+    spend twenty minutes on their first one. So `just status <run>` answered "No
+    dispatched tasks recorded" for a lifecycle step that had been working for half
+    an hour — which reads as nothing is running. The run's own journal knew all
+    along; this is the join. The history store is real and genuinely empty, exactly
+    as it is while a first turn is still going.
+    """
+    runs_dir = tmp_path / "runs"
+    history_dir = tmp_path / "history"
+    history_dir.mkdir()
+    workspace_root = tmp_path / "workspaces"
+    workspace_root.mkdir()
+
+    journal = open_journal(runs_dir / "mid-turn", RunId("mid-turn"), 1)
+    journal.append("node-started", node=NodeId("ship"), detail={"persona": "engineer"})
+    journal.append(
+        "step-started", node=NodeId("ship"), step="implement", detail={"persona": "engineer"}
+    )
+    journal.append("node-started", node=NodeId("done-early"), detail={"persona": "engineer"})
+    journal.append("node-settled", node=NodeId("done-early"), detail={"status": "done"})
+
+    working = _run(history_dir, workspace_root, runs_dir, "mid-turn")
+    assert working.returncode == 0, working.stderr
+    assert "No dispatched tasks recorded" not in working.stdout
+    assert "No completed harness turns recorded for run mid-turn yet" in working.stdout
+    assert "1 dispatch(es) in flight" in working.stdout
+    assert "round-01 ship[implement] engineer" in working.stdout
+    assert "no completed turn yet" in working.stdout
+    # A node the journal settled is not in flight, and never joins the list.
+    assert "done-early" not in working.stdout
+
+    # The mixed picture, which is what the view usually shows: one dispatch has
+    # finished a turn and another has not. The finished one keeps its whole row,
+    # and the one still working is reported above it rather than by its absence.
+    store = history_dir / "mid-turn-project"
+    store.mkdir()
+    _record(
+        store / "done-early-20260714T120000Z-0.jsonl",
+        project=tmp_path / "gone-worktree",
+        name="done-early",
+        labels=graph_labels(run_id=RunId("mid-turn"), round_number=1, node=NodeId("done-early")),
+    )
+    mixed = _run(history_dir, workspace_root, runs_dir, "mid-turn")
+    assert mixed.returncode == 0, mixed.stderr
+    assert "In flight: round-01 ship[implement] engineer" in mixed.stdout
+    assert "  done-early  " in mixed.stdout
+    assert "No completed harness turns recorded" not in mixed.stdout
+
+    # The other fact, unchanged: a run whose journal shows nothing started really
+    # has no dispatch, and must keep saying so.
+    open_journal(runs_dir / "untouched", RunId("untouched"), 1).append(
+        "round-started", detail={"nodes": 0, "concurrency": 1, "plan": {}}
+    )
+    idle = _run(history_dir, workspace_root, runs_dir, "untouched")
+    assert idle.returncode == 0, idle.stderr
+    assert "No dispatched tasks recorded for run untouched." in idle.stdout
