@@ -403,7 +403,15 @@ past a short age that only covers the gap
 between creating a directory and first naming it. Mappings are not optional there:
 a `dlopen`ed native binary leaves no descriptor, so for a running `nx` the mapping
 is the only place its cache appears. Names too generic to sweep on are
-identified by shape, and each family honors its producer's own retention. Every
+identified by shape, and each family honors its producer's own retention. The sweep
+also reaps *processes* a finished dispatch left running. Once a dispatcher dies its
+tree is adopted by init, so every walk this harness terminates trees with starts
+from a parent that no longer exists; what survives that is the environment the
+kernel fixed at `exec`, and `ORCHESTRATOR_AGENT_STATUS_DIR` names the dispatch's own
+watchdog scratch directory. A stamp for a dispatch that is over — its directory gone,
+or its ownership lock free — is proof; a live dispatch's worker, an unstamped
+process, one stamped for another root, and the sweeping process's own ancestry are
+left running. Every
 sweep names the families it examined and the families it could not, so `reclaimed
 0 bytes` never hides an unswept one. See
 [`orchestrator.scratch.UNREFERENCED_FAMILIES`](orchestrator/scratch.py).
