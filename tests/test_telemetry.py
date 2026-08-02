@@ -195,7 +195,11 @@ def test_collect_run_joins_ledger_journal_history_and_attestation(
     assert record["timing"]["agent_seconds"] == 2.5
     assert record["timing"]["judge_seconds"] == 1.0
     assert record["timing"]["agent_model_ms"] == 0
-    assert record["timing"]["unattributed_ms"] > 0
+    # Every session here is a legacy one — no validated native fields — so none of the
+    # idle share is attributable to any of them and all of it is unattributed. That is
+    # the contract; "unattributed is positive" was a claim about how much wall clock the
+    # host had left over, which a busy box can legitimately report as none.
+    assert record["timing"]["unattributed_ms"] == record["timing"]["idle_orchestration_ms"]
     # The exact seconds the journal recorded, not merely a positive share: with the
     # run's own wall clock spread across its events there is room for every category,
     # so a dropped span reads as zero here instead of hiding behind a loaded box.

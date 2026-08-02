@@ -17,7 +17,7 @@
       "command": "bunx biome check apps/dag-ui && bunx eslint apps/dag-ui"
     },
     "test": {
-      "command": "cd apps/dag-ui && bunx vitest run --config vite.config.ts && bunx playwright test --config playwright.config.ts",
+      "command": "cd apps/dag-ui && bunx vitest run --config vite.config.ts && bunx playwright test --config playwright.config.ts && bunx playwright test --config isolation.config.ts",
       "inputs": [
         "default",
         "{workspaceRoot}/orchestrator/**/*",

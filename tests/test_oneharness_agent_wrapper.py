@@ -30,6 +30,7 @@ def _run_wrapper(
     argv: list[str],
     *,
     alternate_config_dir: Path | None = None,
+    alternate2_config_dir: Path | None = None,
     codex_alt_home: Path | None = None,
     include_home: bool = True,
 ) -> tuple[subprocess.CompletedProcess[str], list[str]]:
@@ -42,6 +43,7 @@ def _run_wrapper(
         "#!/usr/bin/env bash\n"
         'printf \'%s\\n\' "$@" > "$ONEHARNESS_ARGS_FILE"\n'
         'printf \'%s\\n\' "$ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR" > "$ONEHARNESS_ENV_FILE"\n'
+        'printf \'%s\\n\' "$ORCHESTRATOR_CLAUDE_ALT2_CONFIG_DIR" > "$ONEHARNESS_ENV2_FILE"\n'
         'printf \'%s\\n\' "${ONEHARNESS_HARNESSES-}" > "$ONEHARNESS_SELECTION_FILE"\n'
         'printf \'%s\\n\' "${ORCHESTRATOR_CODEX_ALT_HOME-}" > "$ONEHARNESS_CODEX_ENV_FILE"\n',
         encoding="utf-8",
@@ -55,12 +57,18 @@ def _run_wrapper(
             "PATH": f"{bin_dir}:/usr/bin:/bin",
             "ONEHARNESS_ARGS_FILE": str(args_file),
             "ONEHARNESS_ENV_FILE": str(tmp_path / "oneharness-env"),
+            "ONEHARNESS_ENV2_FILE": str(tmp_path / "oneharness-env2"),
             "ONEHARNESS_SELECTION_FILE": str(tmp_path / "oneharness-selection"),
             "ONEHARNESS_CODEX_ENV_FILE": str(tmp_path / "oneharness-codex-env"),
             **({"HOME": str(tmp_path / "home")} if include_home else {}),
             **(
                 {"ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR": str(alternate_config_dir)}
                 if alternate_config_dir is not None
+                else {}
+            ),
+            **(
+                {"ORCHESTRATOR_CLAUDE_ALT2_CONFIG_DIR": str(alternate2_config_dir)}
+                if alternate2_config_dir is not None
                 else {}
             ),
             **(
@@ -72,6 +80,10 @@ def _run_wrapper(
     )
     recorded = args_file.read_text(encoding="utf-8").splitlines() if args_file.exists() else []
     return proc, recorded
+
+
+def _selection(tmp_path: Path) -> str:
+    return (tmp_path / "oneharness-selection").read_text(encoding="utf-8").strip()
 
 
 def test_agent_side_forces_the_orchestrator_config(tmp_path: Path) -> None:
@@ -86,15 +98,92 @@ def test_agent_side_forces_the_orchestrator_config(tmp_path: Path) -> None:
     assert (tmp_path / "oneharness-env").read_text(encoding="utf-8").strip() == str(
         tmp_path / "home" / ".claude-alt"
     )
-    # The absent-Claude degradation keeps BOTH Codex identities: dropping the
-    # alternate here would cost the worker its last candidate once the first
-    # Codex quota is gone.
-    assert (tmp_path / "oneharness-selection").read_text(
-        encoding="utf-8"
-    ).strip() == "codex,codex:alternate"
+    assert (tmp_path / "oneharness-env2").read_text(encoding="utf-8").strip() == str(
+        tmp_path / "home" / ".claude-alt2"
+    )
+    # Neither alternate Claude directory exists in this fixture, so both are dropped
+    # — and nothing else is: both Codex identities and the primary Claude one keep
+    # their configured relative order, since dropping any of them would cost the
+    # worker a candidate it can still authenticate.
+    assert _selection(tmp_path) == "codex,codex:alternate,claude-code:primary"
     assert (tmp_path / "oneharness-codex-env").read_text(encoding="utf-8").strip() == str(
         tmp_path / "home" / ".codex-alt"
     )
+
+
+def test_agent_side_keeps_the_second_alternate_when_only_the_first_is_absent(
+    tmp_path: Path,
+) -> None:
+    """One absent subscription must not cost the worker the other one.
+
+    These are two separate Claude accounts: a host that has logged into only the
+    second must still dispatch through it, in the position the config gives it.
+    """
+    present = tmp_path / "second-account"
+    present.mkdir()
+    proc, _ = _run_wrapper(
+        tmp_path, ["run", "--compact", "--prompt", "probe"], alternate2_config_dir=present
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert _selection(tmp_path) == (
+        "claude-code:alternate2,codex,codex:alternate,claude-code:primary"
+    )
+
+
+def test_agent_side_keeps_the_first_alternate_when_only_the_second_is_absent(
+    tmp_path: Path,
+) -> None:
+    present = tmp_path / "first-account"
+    present.mkdir()
+    proc, _ = _run_wrapper(
+        tmp_path, ["run", "--compact", "--prompt", "probe"], alternate_config_dir=present
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert _selection(tmp_path) == (
+        "claude-code:alternate,codex,codex:alternate,claude-code:primary"
+    )
+
+
+def test_agent_side_substitutes_no_chain_when_both_alternates_are_present(
+    tmp_path: Path,
+) -> None:
+    # Nothing to drop, so the configured chain must reach oneharness untouched
+    # rather than through a restatement that could drift from it.
+    first = tmp_path / "first-account"
+    second = tmp_path / "second-account"
+    first.mkdir()
+    second.mkdir()
+    proc, _ = _run_wrapper(
+        tmp_path,
+        ["run", "--compact", "--prompt", "probe"],
+        alternate_config_dir=first,
+        alternate2_config_dir=second,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert _selection(tmp_path) == ""
+
+
+def test_agent_side_substituted_chain_is_a_subsequence_of_the_committed_one(
+    tmp_path: Path,
+) -> None:
+    """The degraded chain is read from the config, so it can only ever be a subset.
+
+    A chain restated in the wrapper would silently stop matching oneharness.toml
+    the next time the committed order changed — and the substitution overrides that
+    order for every dispatch on a host with one Claude login.
+    """
+    configured = tomllib.loads((REPO_ROOT / "oneharness.toml").read_text(encoding="utf-8"))
+    proc, _ = _run_wrapper(tmp_path, ["run", "--compact", "--prompt", "probe"])
+    assert proc.returncode == 0, proc.stderr
+    substituted = _selection(tmp_path).split(",")
+    remaining = list(configured["harnesses"])
+    for candidate in substituted:
+        assert candidate in remaining, f"{candidate} is not in the committed chain"
+        remaining = remaining[remaining.index(candidate) + 1 :]
+    assert set(configured["harnesses"]) - set(substituted) == {
+        "claude-code:alternate",
+        "claude-code:alternate2",
+    }
 
 
 def test_agent_side_preserves_explicit_alternate_config_dir(tmp_path: Path) -> None:
@@ -107,26 +196,84 @@ def test_agent_side_preserves_explicit_alternate_config_dir(tmp_path: Path) -> N
     )
     assert proc.returncode == 0, proc.stderr
     assert (tmp_path / "oneharness-env").read_text(encoding="utf-8").strip() == str(explicit)
-    assert not (tmp_path / "oneharness-selection").read_text(encoding="utf-8").strip()
+    # An override selects the directory; it must not also change the default the
+    # OTHER identity derives from HOME.
+    assert (tmp_path / "oneharness-env2").read_text(encoding="utf-8").strip() == str(
+        tmp_path / "home" / ".claude-alt2"
+    )
 
 
 def test_explicit_alternate_identities_do_not_require_home(tmp_path: Path) -> None:
-    # HOME is only needed to DERIVE the defaults; a caller that named both alternate
-    # identities outright must dispatch on a shell that never exported it.
+    # HOME is only needed to DERIVE the defaults; a caller that named every alternate
+    # identity outright must dispatch on a shell that never exported it.
     explicit = tmp_path / "second-account"
     explicit.mkdir()
+    explicit2 = tmp_path / "third-account"
+    explicit2.mkdir()
     codex_alt = tmp_path / "second-codex"
     codex_alt.mkdir()
     proc, _ = _run_wrapper(
         tmp_path,
         ["run", "--compact", "--prompt", "probe"],
         alternate_config_dir=explicit,
+        alternate2_config_dir=explicit2,
         codex_alt_home=codex_alt,
         include_home=False,
     )
     assert proc.returncode == 0, proc.stderr
     assert (tmp_path / "oneharness-env").read_text(encoding="utf-8").strip() == str(explicit)
+    assert (tmp_path / "oneharness-env2").read_text(encoding="utf-8").strip() == str(explicit2)
     assert (tmp_path / "oneharness-codex-env").read_text(encoding="utf-8").strip() == str(codex_alt)
+
+
+def test_agent_side_rejects_an_inaccessible_second_alternate_config_directory(
+    tmp_path: Path,
+) -> None:
+    """The second subscription's directory gets the first one's guards, by name.
+
+    Both come from one helper, so a diagnostic that named only "alternate Claude
+    config" would send the operator to the wrong directory.
+    """
+    invalid = tmp_path / "not-a-directory"
+    invalid.write_text("invalid\n", encoding="utf-8")
+    proc, argv = _run_wrapper(
+        tmp_path,
+        ["run", "--compact", "--prompt", "probe"],
+        alternate2_config_dir=invalid,
+    )
+    assert proc.returncode == 2
+    assert "second alternate Claude config path is not an accessible directory" in proc.stderr
+    assert argv == []
+
+
+def test_agent_side_rejects_a_relative_second_alternate_config_directory(
+    tmp_path: Path,
+) -> None:
+    # env_from hands this straight to the child as CLAUDE_CONFIG_DIR, where a
+    # relative path would resolve against whatever directory that child started in.
+    proc, argv = _run_wrapper(
+        tmp_path,
+        ["run", "--compact", "--prompt", "probe"],
+        alternate2_config_dir=Path("relative/config"),
+    )
+    assert proc.returncode == 2
+    assert "second alternate Claude config path must be absolute" in proc.stderr
+    assert "ORCHESTRATOR_CLAUDE_ALT2_CONFIG_DIR" in proc.stderr  # the concrete way back
+    assert argv == []
+
+
+def test_agent_side_creates_neither_alternate_claude_config_directory(tmp_path: Path) -> None:
+    """The Claude helper must stay side-effect free, unlike the Codex one.
+
+    claude-code classifies an absent CLAUDE_CONFIG_DIR exactly as it classifies an
+    empty one — `auth`, which falls through — and creates the directory itself when
+    it runs, so there is nothing for the helper to pre-create. Creating one anyway
+    would put a config directory on disk for an account nobody has logged into.
+    """
+    proc, _ = _run_wrapper(tmp_path, ["run", "--compact", "--prompt", "probe"])
+    assert proc.returncode == 0, proc.stderr
+    assert not (tmp_path / "home" / ".claude-alt").exists()
+    assert not (tmp_path / "home" / ".claude-alt2").exists()
 
 
 def test_agent_side_creates_an_absent_alternate_codex_home(tmp_path: Path) -> None:

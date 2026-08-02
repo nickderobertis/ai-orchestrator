@@ -113,6 +113,16 @@ def test_smoke_stops_after_one_launch_when_the_recorded_turn_breaks_its_contract
 
 
 def test_smoke_command_surfaces_real_wrapper_failure_without_a_paid_turn() -> None:
+    """A launch path that cannot start is reported, and finding that out costs nothing.
+
+    Narrowing the selection is what makes it cost nothing, and it is the only thing that
+    can: this used to also point `ONEHARNESS_BIN_CLAUDE_CODE` at nothing, as a second
+    guard against the committed chain's first candidate spending a turn. That variable
+    does not reach a *variant* — `claude-code:alternate` resolves the real `claude`
+    whatever it is set to — so it guarded nothing, and dropping the narrowing spends a
+    real turn and passes the smoke. The second half of this test's name is therefore
+    asserted rather than assumed, in oneharness' own words for having run nothing.
+    """
     result = subprocess.run(
         ["just", "smoke"],
         cwd=REPO_ROOT,
@@ -120,15 +130,17 @@ def test_smoke_command_surfaces_real_wrapper_failure_without_a_paid_turn() -> No
             **os.environ,
             "ONEHARNESS_HARNESSES": "codex",
             "ONEHARNESS_BIN_CODEX": "/does/not/exist/codex",
-            "ONEHARNESS_BIN_CLAUDE_CODE": "/does/not/exist/claude",
         },
         text=True,
         capture_output=True,
+        timeout=e2e_timeout(300),
     )
 
     assert result.returncode == 1
     assert "real harness smoke failed" in result.stderr
     assert "rerun 'just smoke'" in result.stderr
+    assert "all 1 fallback candidate(s) failed to start (codex [not-installed])" in result.stderr
+    assert "nothing executed" in result.stderr
 
 
 @pytest.mark.parametrize("timeout", ["bad", "0", "121"])

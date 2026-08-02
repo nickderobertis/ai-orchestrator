@@ -275,27 +275,47 @@ real CLI. onejudge drives a
 two-party conversation, and harness/model selection for each
 side lives in oneharness config, not onejudge:
 
+**Every role names the same five identities** — `claude-code:alternate`,
+`claude-code:alternate2`, `codex`, `codex:alternate`, `claude-code:primary` — and
+they differ only in order. A role that omitted one would lose that quota entirely
+once everything ahead of it was exhausted, which is the failure this arrangement
+exists to prevent. The primary Claude identity is last everywhere:
+
 - **Agent side** (does the work) — `oneharness.toml`, discovered from the repo root;
-  it prefers `claude-code:alternate` on the alternate subscription and falls back
-  to codex, then to the second codex identity.
+  it prefers both alternate Claude subscriptions, in order, because the personas
+  are tuned against that model tier, and only then falls back to codex.
 - **Judge / simulated-user side** (supervises) — `oneharness.judge.toml`, passed
-  as the base config's `provider.judge_config`; codex is primary and
-  `claude-code:primary` uses only the primary subscription.
+  as the base config's `provider.judge_config`; codex first, then the alternate
+  Claude subscriptions. It keeps its cheaper-supervisor intent through `model`
+  (`claude-sonnet-5` for all three of its Claude variants) rather than by staying
+  off those subscriptions.
 - **Orchestrator side** (drives a tracked graph) — `oneharness.orchestrator.toml`,
   forced by `scripts/oneharness-orchestrator.sh`, which `just orchestrate` pins as
   the launched process's oneharness binary. Deliberately the reverse of the worker
-  order: codex is primary and `claude-code:alternate` is its fallback, so this
-  long-lived supervisory process never queues ahead of the workers for the
-  subscription they depend on.
+  order: both codex identities carry the role first, so this long-lived
+  supervisory process does not queue ahead of the workers while Codex can still
+  run it.
 - **LLM lint side** — `oneharness.llmlint.toml`, forced by
-  `scripts/llmlint-oneharness.sh`; it is codex-only, so its only backup is the
-  second codex identity below.
+  `scripts/llmlint-oneharness.sh`; the same supervisory order. It is **no longer
+  codex-only**.
 
-Both alternate-subscription wrappers derive `ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR`
-from one source, `scripts/claude-alt-config-dir.sh`, so no role needs it exported
-by hand and the two cannot drift apart.
+The judge and llmlint reaching the workers' subscriptions at all is the operator's
+deliberate trade: those tiers can now contend for that Claude quota, and that is
+accepted because a supervisory tier that can still run beats one isolated from the
+quota that is left. Do not reorder these to restore the old isolation.
 
-Every one of those chains then ends in `codex:alternate`, a **second codex
+`scripts/claude-alt-config-dir.sh` is the one source of **both** alternate config
+directories (`ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR` → `$HOME/.claude-alt`,
+`ORCHESTRATOR_CLAUDE_ALT2_CONFIG_DIR` → `$HOME/.claude-alt2`), and all three
+wrappers source it, so no role needs either exported by hand and no two can drift
+apart. Authenticate the second plan with `CLAUDE_CONFIG_DIR="$HOME/.claude-alt2"
+claude`; until then it costs nothing, because claude-code classifies an absent
+config directory exactly as it classifies an empty one — `auth`, which falls
+through — so unlike the codex helper this one creates nothing. See
+[The second alternate Claude
+subscription](docs/onejudge-integration.md#the-second-alternate-claude-subscription).
+
+Every one of those chains also names `codex:alternate`, a **second codex
 identity** that absorbs an exhausted quota without changing which subscription a
 role competes for. `scripts/codex-alt-home.sh` is its one source — it derives
 `ORCHESTRATOR_CODEX_ALT_HOME` as `$HOME/.codex-alt` and all three wrappers source
