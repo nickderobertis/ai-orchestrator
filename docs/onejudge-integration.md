@@ -38,8 +38,11 @@ config, `oneharness.orchestrator.toml`, forced by
 `scripts/oneharness-orchestrator.sh`.
 
 Edit those files (or use oneharness's `ONEHARNESS_*` env overrides) to change
-the harness or model on a side. `config/onejudge.base.yaml` carries only the
-loop's own concerns (persona defaults, session), never harness/model selection.
+the harness or model on a side for every run on this host. One dispatch changes
+it for itself with `--worker-harness` / `--judge-harness`, the only way to give
+the two sides *different* providers; that pair is specified under Harnesses and
+the live path below. `config/onejudge.base.yaml` carries only the loop's own
+concerns (persona defaults, session), never harness/model selection.
 
 ## Provider wiring
 
@@ -262,6 +265,64 @@ verdict on the wrong input rather than an error. The grant now lives in
 `[harness.codex] args` in `oneharness.llmlint.toml`, where it reaches both Codex
 identities and no Claude one. `tests/test_llmlint_oneharness_wrapper.py` proves
 that at the real oneharness boundary.
+
+### Choosing a harness per side
+
+The two sides are different jobs, and the providers are not equally good at them —
+one can be the stronger author while another is the stronger reviewer. Say so per
+dispatch:
+
+```sh
+just dispatch engineer "…" --worker-harness codex --judge-harness claude-code:alternate
+just repo-task <repo> engineer "…" --worker-harness codex:alternate --judge-harness codex
+just orchestrate plan.json --worker-harness codex --judge-harness claude-code:alternate2
+```
+
+Both flags take an identity exactly as a config's `harnesses` chain writes one,
+comma-separated for a fallback chain of the operator's own. `just run-plan` and
+`just repo-plan` take them too, since they share the lifecycle option group.
+
+Neither flag is oneharness's `ONEHARNESS_HARNESSES`, and that is the whole point:
+that variable is process-wide **and beats config**, so exporting it to move the
+worker onto codex silently moves the judge there as well.
+
+```
+$ printf 'harnesses = ["claude-code:alternate2"]\n' > /tmp/prec.toml
+$ ONEHARNESS_HARNESSES=codex oneharness run --config /tmp/prec.toml --print-command --prompt hi
+  selected: codex
+```
+
+Each flag instead sets its own variable — `ORCHESTRATOR_WORKER_HARNESSES` or
+`ORCHESTRATOR_JUDGE_HARNESSES` — and `scripts/oneharness-agent.sh` resolves them
+per branch: the agent turn (no `--config` in its args) reads the worker one, the
+judge turn (already carrying `--config <judge_config>`) reads the judge one, and
+each is applied to only that branch's own `exec`. A side carrying an explicit value
+therefore never inherits the other side's, nor an ambient process-wide one the
+parent exported. `just orchestrate` carries the pair in the launched process's
+environment, so every round's workers and judges inherit the same choice.
+
+`orchestrator/harnesses.py` validates each value against **that side's** config
+before anything is dispatched, and names every selectable identity when it refuses:
+
+```
+$ just dispatch engineer "…" --worker-harness opencode
+dispatch: --worker-harness 'opencode': 'opencode' is not a harness oneharness.toml
+configures; select from claude-code:alternate, claude-code:alternate2, codex,
+codex:alternate, claude-code:primary
+```
+
+A run that quietly used a different provider than it was told to is worse than one
+that refused to start — which is also why an override is taken **verbatim**: the
+absent-alternate substitution above narrows a chain nobody chose, but dropping an
+identity an operator named would run a provider they did not ask for. An
+unauthenticated one falls through, or fails the dispatch when it is the only
+candidate, and either way says so.
+
+With neither flag set nothing changes: each side resolves its own config chain, and
+the agent branch still substitutes a chain without an absent alternate Claude
+identity. The other two roles are out of scope — `oneharness.orchestrator.toml` and
+`oneharness.llmlint.toml` keep resolving through their own wrappers, untouched by
+either variable.
 
 To address an identity explicitly in a diagnostic run, use the composed id:
 

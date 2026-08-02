@@ -124,12 +124,21 @@ sync branch="" remote="origin":
 
 # --- orchestrator verbs ---------------------------------------------------
 
-# Dispatch one subtask: `just dispatch <persona> "<task>"`.
+# Dispatch one subtask: `just dispatch <persona> "<task>"`. `--worker-harness` and
+# `--judge-harness` name the identity each side of the conversation runs on; see
+# docs/onejudge-integration.md#choosing-a-harness-per-side.
+#
+# The summary is a `[doc]` attribute rather than the comment because `just --list`
+# renders only the LAST comment line — which on these recipes is a wrapped fragment,
+# or an llmlint directive that has to stay next to the recipe it silences.
+[doc('Dispatch one subtask: `just dispatch <persona> "<task>"`; --worker-harness / --judge-harness pick the provider for each side of the conversation.')]
 dispatch *args:
     @uv run orchestrator-dispatch "$@"
 
 # Run the canonical tracked graph: direct agents, lifecycle agents, and humans.
-# `just run-plan <plan.json>`.
+# `just run-plan <plan.json>`. `--worker-harness` / `--judge-harness` pick the
+# provider each dispatch of the graph uses for its worker and its judge.
+[doc('Run the canonical tracked graph of direct agents, lifecycle agents, and humans: `just run-plan <plan.json>`; --worker-harness / --judge-harness pick the provider for each side of every dispatch it makes.')]
 run-plan *args:
     @uv run orchestrator-run-plan "$@"
 
@@ -138,8 +147,10 @@ run-plan *args:
 # settles — the graph completed, a blocking planner surface is waiting, or nothing
 # is driving the run (exit 3). `--detach` returns at the launch record instead,
 # for a long unattended run. Either way the run leads its own session, so Ctrl-C
-# detaches rather than stopping it.
+# detaches rather than stopping it. `--worker-harness` / `--judge-harness` pick the
+# provider each dispatch of the run uses for its worker and its judge.
 # llmlint: ignore[tool_output_is_signal] orchestrate reports validated launch failures and the caller can retry after correcting the named input.
+[doc('Launch the orchestrator on a live planner channel and stay attached until the run settles (`--detach` returns at the launch record); --worker-harness / --judge-harness pick the provider for each side of every dispatch it makes.')]
 orchestrate *args:
     @uv run orchestrator-orchestrate "$@"
 
@@ -167,6 +178,9 @@ channel-continue *args:
 # Drive one subtask through a repo's full lifecycle (clone→gate→PR/merge):
 # `just repo-task <repo> <persona> "<task>"`. `<repo>` is a GitHub name/slug/URL
 # or a local path; direct base merge requires an explicit registered local workflow.
+# `--worker-harness` / `--judge-harness` name the identity each side of every step's
+# conversation runs on.
+[doc('Drive one subtask through a repo lifecycle (clone→gate→PR/merge); --worker-harness / --judge-harness pick the provider for each side of the conversation.')]
 repo-task *args:
     @uv run orchestrator-repo-task "$@"
 

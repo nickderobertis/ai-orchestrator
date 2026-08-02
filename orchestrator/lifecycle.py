@@ -39,6 +39,7 @@ from .coordination import LockTimeout, advisory_lock, atomic_json, git_lock_iden
 from .dispatch import Report, dispatch, incomplete_detail, scoped_session
 from .github import CliGitHubBackend, GitHubBackend, GitHubError, PullRequest
 from .gitops import GitError
+from .harnesses import JUDGE_SIDE, WORKER_SIDE, harness_option_help, harness_override_env
 from .ids import GraphId
 from .journal import NodeSink, NullNodeJournal
 from .merge import (
@@ -1616,6 +1617,8 @@ def run_repo_task(
     merge_policy: MergePolicy | None = None,
     merge_method: str = "squash",
     oneharness_mode: str | None = "bypass",
+    worker_harness: str | None = None,
+    judge_harness: str | None = None,
     dispatch_fn: DispatchFn = dispatch,
     base_path: str | Path = BASE_CONFIG,
     persona_dir: str | Path = PERSONA_DIR,
@@ -1656,8 +1659,14 @@ def run_repo_task(
     against it as they happen, and every dispatch it makes is labelled with the
     same coordinates. It defaults to a no-op, because a bare ``just repo-task``
     belongs to no graph — and because observation must never decide an outcome.
+
+    ``worker_harness`` / ``judge_harness`` select each conversation side's provider
+    for every step of this workstream (see `orchestrator.harnesses`). They are
+    validated before the worktree is cut, so a value naming an identity this
+    repository has not configured costs nothing but the message that says so.
     """
     log: NodeSink = journal if journal is not None else NullNodeJournal()
+    harness_env = harness_override_env(worker=worker_harness, judge=judge_harness)
     require_scratch_capacity()
     effective_steps = steps or (
         [Step("main", persona, task, max_turns=max_turns, done_when=done_when)]
@@ -1805,8 +1814,10 @@ def run_repo_task(
         result.pr_base = pr_base
         # One environment for every dispatch and every gate run of this workstream:
         # its shared build cache plus its comparison identity, so a worker's own
-        # gate and the publication rebuild judge the same base.
-        workstream_env = {**cache_env, **comparison_env(pr_base)}
+        # gate and the publication rebuild judge the same base. Each side's harness
+        # selection rides along here too, so every step of the workstream — and any
+        # relaunch of one — supervises and works on the providers it was given.
+        workstream_env = {**cache_env, **comparison_env(pr_base), **harness_env}
         gate_template = selection.gate
         if recorded_gate is not None:
             resolved_recorded_gate = recorded_gate
@@ -3098,6 +3109,8 @@ def make_repo_runner(
     merge_policy: MergePolicy | None,
     merge_method: str,
     oneharness_mode: str | None,
+    worker_harness: str | None = None,
+    judge_harness: str | None = None,
     verify_via_ci: bool = False,
     poll_interval: float,
     timeout: float,
@@ -3130,6 +3143,8 @@ def make_repo_runner(
             merge_policy=(node.merge_policy if node.merge_policy is not None else merge_policy),
             merge_method=merge_method,
             oneharness_mode=oneharness_mode,
+            worker_harness=worker_harness,
+            judge_harness=judge_harness,
             base_path=base_path,
             persona_dir=persona_dir,
             max_turns=node.max_turns,
@@ -3181,6 +3196,12 @@ def add_lifecycle_args(parser: argparse.ArgumentParser) -> None:
         choices=list(ONEHARNESS_MODES),
         help="approval/sandbox mode for the harness (default: bypass — the "
         "no-approval mode; the container is the sandbox)",
+    )
+    parser.add_argument(
+        WORKER_SIDE.option, default=None, metavar="ID", help=harness_option_help(WORKER_SIDE)
+    )
+    parser.add_argument(
+        JUDGE_SIDE.option, default=None, metavar="ID", help=harness_option_help(JUDGE_SIDE)
     )
     parser.add_argument(
         "--verify-via-ci",
@@ -3355,7 +3376,10 @@ def main_task(argv: list[str] | None = None) -> int:
         registry.repo_ref(args.repo)
         if args.execution_checkout is not None:
             registry.checkout_path(args.execution_checkout)
-    except RegistryError as exc:
+        # Refuse an unconfigured harness here, where it is a usage error the
+        # operator can correct, rather than after a worktree has been cut.
+        harness_override_env(worker=args.worker_harness, judge=args.judge_harness)
+    except (RegistryError, ConfigError) as exc:
         parser.error(str(exc))
 
     result = run_repo_task(
@@ -3373,6 +3397,8 @@ def main_task(argv: list[str] | None = None) -> int:
         merge_policy=args.merge_policy,
         merge_method=args.merge_method,
         oneharness_mode=args.oneharness_mode,
+        worker_harness=args.worker_harness,
+        judge_harness=args.judge_harness,
         base_path=args.base_config,
         persona_dir=args.persona_dir,
         max_turns=args.max_turns,
@@ -3433,6 +3459,8 @@ def main_plan(argv: list[str] | None = None) -> int:
         merge_policy=args.merge_policy,
         merge_method=args.merge_method,
         oneharness_mode=args.oneharness_mode,
+        worker_harness=args.worker_harness,
+        judge_harness=args.judge_harness,
         verify_via_ci=args.verify_via_ci,
         poll_interval=args.poll_interval,
         timeout=args.timeout,

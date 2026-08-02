@@ -1670,6 +1670,20 @@ def test_run_plan_cli_invalid_input_exits_2(tmp_path, capsys) -> None:
     assert "run-plan:" in capsys.readouterr().err
 
 
+def test_run_plan_cli_unconfigured_side_selection_exits_2(tmp_path, capsys) -> None:
+    """Refused before the round is claimed, not once per node that fails on it."""
+    plan = tmp_path / "plan.json"
+    plan.write_text(
+        json.dumps({"tasks": [{"id": "review", "kind": "human", "task": "Approve"}]}),
+        encoding="utf-8",
+    )
+
+    assert main([str(plan), "--judge-harness", "opencode", "--no-record"]) == 2
+    stderr = capsys.readouterr().err
+    assert "run-plan: --judge-harness 'opencode'" in stderr
+    assert "oneharness.judge.toml" in stderr
+
+
 def test_run_plan_cli_invalid_concurrency_override_exits_2(tmp_path, capsys) -> None:
     plan = tmp_path / "plan.json"
     plan.write_text(
