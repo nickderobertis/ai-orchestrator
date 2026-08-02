@@ -8,11 +8,12 @@ import math
 import sys
 import time
 from collections.abc import Mapping, Sequence
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any, cast
 
 from . import gitops, history, runs
+from .activity import NodeActivity, live_activity
 from .channel import (
     ChannelError,
     due_indicator,
@@ -152,6 +153,11 @@ class InFlightDispatch:
     History records completed turns, and a first turn here can run for half an
     hour, so history alone cannot tell *no dispatch* from *no finished turn* —
     opposite conclusions for a supervising planner. The journal knows the start.
+
+    That is the guarantee, and it stands on the journal alone. ``activity`` only
+    ever *adds* to it: when the dispatch is streaming, it says what the node is
+    doing right now instead of leaving the reader to infer it from elapsed time.
+    A node with none is reported exactly as it was before streaming existed.
     """
 
     round: int
@@ -159,14 +165,16 @@ class InFlightDispatch:
     step: str | None
     persona: str | None
     started_at: float
+    activity: NodeActivity | None = None
 
     def describe(self, *, now: float) -> str:
         where = f"{self.node}[{self.step}]" if self.step else self.node
         elapsed = max(0, int(now - self.started_at))
         persona = f" {self.persona}" if self.persona else ""
+        doing = f"; {self.activity.describe(now=now)}" if self.activity else ""
         return (
             f"round-{self.round:02d} {where}{persona} — "
-            f"in flight for {elapsed // 60}m{elapsed % 60:02d}s, no completed turn yet"
+            f"in flight for {elapsed // 60}m{elapsed % 60:02d}s, no completed turn yet{doing}"
         )
 
 
@@ -175,18 +183,29 @@ def _persona(detail: Mapping[str, Any]) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
-def in_flight_dispatches(runs_dir: Path, run_id: str) -> list[InFlightDispatch]:
+def in_flight_dispatches(
+    runs_dir: Path,
+    run_id: str,
+    *,
+    activity: Mapping[tuple[str, str], NodeActivity] | None = None,
+) -> list[InFlightDispatch]:
     """Every dispatch this run's journal shows started and not settled, in order.
 
     Node-level and step-level starts collapse onto one entry per node, because they
     describe the same running node at two depths: a lifecycle node reports the step
     it is on, and reverts to the node itself once that step settles. Reporting both
     would count one dispatch twice.
+
+    ``activity`` is what the run's live dispatches are publishing, keyed the same way
+    `_settled_nodes` keys its answer. It is supplied by the caller rather than read
+    here so this stays a pure function of the journal — and so a view can be told to
+    read no scratch at all without changing what it proves.
     """
     try:
         events = read_events(runs_dir / runs.validate_run_id(run_id) / JOURNAL_NAME)
     except (ConfigError, OSError):
         return []
+    live = activity or {}
     started: dict[tuple[int, str], InFlightDispatch] = {}
     for event in events:
         if event.node is None:
@@ -213,7 +232,13 @@ def in_flight_dispatches(runs_dir: Path, run_id: str) -> list[InFlightDispatch]:
                 started.pop(key, None)
             case _:
                 continue
-    return sorted(started.values(), key=lambda item: (item.round, item.node))
+    return sorted(
+        (
+            replace(dispatch, activity=live.get((str(dispatch.round), dispatch.node)))
+            for dispatch in started.values()
+        ),
+        key=lambda item: (item.round, item.node),
+    )
 
 
 def _labelled_locator(labels: Mapping[str, str]) -> tuple[str, str] | None:
@@ -485,7 +510,11 @@ def main(argv: list[str] | None = None) -> int:
     # Only for a named run: the unscoped view would have to read every recorded
     # run's whole journal to answer the same question, and those journals reach tens
     # of thousands of events. `just status <run-id>` is the invocation that asked.
-    running_dispatches = in_flight_dispatches(args.runs_dir, run_id) if run_id is not None else []
+    running_dispatches = (
+        in_flight_dispatches(args.runs_dir, run_id, activity=live_activity(run_id))
+        if run_id is not None
+        else []
+    )
     if args.format == "json":
         print(json.dumps([_json_value(task) for task in selected]))
     else:

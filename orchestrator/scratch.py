@@ -35,6 +35,13 @@ AGENT_STATUS_DIR_ENV = "ORCHESTRATOR_AGENT_STATUS_DIR"
 #: directory, so a value that merely lands somewhere under the swept root proves
 #: nothing and claims nothing.
 AGENT_STATUS_DIR_NAME = "agent"
+#: The file a streamed agent turn republishes on every observed event, inside that
+#: same directory. It is declared here, beside the directory it lives in, because it
+#: has two readers that must not drift: `orchestrator.dispatch` names it in the
+#: status-file contract the wrapper is drift-gated against, and
+#: `orchestrator.activity` reads it back out of this scratch root for the planner
+#: views. Neither of those imports the other.
+AGENT_ACTIVITY_NAME = "agent.activity"
 OWNER_LOCK_NAME = "owner.lock"
 OWNER_RECORD_LIMIT = 128
 THIRD_PARTY_PATTERNS = (

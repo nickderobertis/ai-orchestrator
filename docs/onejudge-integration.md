@@ -123,9 +123,13 @@ release binary needs a newer glibc than the host provides, and the crates.io bui
 lags behind the 0.3.x releases that added `init`. The **PyPI `oneharness-cli`
 wheel** (a manylinux build) is the one that both runs on the host's glibc and
 carries `init`, so `scripts/session-setup.sh` installs the exact
-`config/oneharness.version` release and rejects a stale binary. Version 0.6.3 is
-the adopted release; it contains auth variants shipped in 0.5.6 and succeeds
-0.3.24, the first release to carry the
+`config/oneharness.version` release and rejects a stale binary. Version 0.6.5 is
+the adopted release; it is the first published one to carry
+[oneharness PR #1213](https://github.com/nickderobertis/oneharness/pull/1213),
+which lifted the rejection that made `--stream` and `run_mode = "fallback"`
+mutually exclusive — the floor for [streaming the agent
+side](#streaming-the-agent-side) without giving up the chain. It contains auth
+variants shipped in 0.5.6 and succeeds 0.3.24, the first release to carry the
 process-tree timeout and partial telemetry fix from
 [oneharness PR #1147](https://github.com/nickderobertis/oneharness/pull/1147),
 so that fix stays in effect. It is also the floor for **quota fallthrough on

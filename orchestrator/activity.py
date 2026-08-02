@@ -1,0 +1,154 @@
+"""What a dispatched node is doing *right now*, read back from live dispatches.
+
+Every other planner-visible source answers after the fact. A oneharness history
+record is written when a turn *finishes*, and the run journal records a node
+*starting* and *settling* — so between those two the honest best a view could do was
+"in flight for 23m, no completed turn yet". On this host a first turn routinely runs
+600-2000 seconds, and that gap is where a healthy working node has twice been
+reported as possibly dead.
+
+`scripts/oneharness-agent.sh` closes it by streaming the agent turn: each normalized
+event republishes a small summary into the dispatch's own watchdog scratch
+directory, carrying the graph locator it was dispatched with. This module is the
+reader for that publication.
+
+Three properties make it usable rather than decorative:
+
+* **It never blocks and never fails a view.** Every read degrades to "no activity
+  known", which is exactly the picture a view had before streaming existed. The
+  journal join stays the guarantee; this only ever adds to it.
+* **It is a trust boundary.** These files live under a world-writable scratch root
+  and are written by a subprocess, so every field is validated against its own
+  domain, bounded, and redacted before it can reach a planner's terminal.
+* **It is scoped to one run.** A shared host runs several planners' dispatches at
+  once, so a summary is matched to the run whose id it carries and ignored
+  otherwise.
+"""
+
+from __future__ import annotations
+
+import json
+import tempfile
+import time
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+from .redaction import redact
+from .scratch import AGENT_ACTIVITY_NAME, AGENT_STATUS_DIR_NAME, WATCHDOG_PATTERN
+
+#: How much of one summary field survives to a planner's terminal. The publisher
+#: already bounds what it writes; this is the reader's own bound on a value it did
+#: not write, applied after redaction so a credential cannot be split across the cut.
+SUMMARY_CHARS = 120
+#: Beyond this, a summary describes a turn that has since moved on or a dispatch
+#: whose stream stopped, so reporting it as what the node is doing now would be a
+#: fresher-looking lie than saying nothing. Comfortably longer than the gap between
+#: two tool calls in a working turn, and far shorter than the in-flight times this
+#: exists to explain.
+STALE_AFTER_SECONDS = 900.0
+
+
+@dataclass(frozen=True)
+class NodeActivity:
+    """The most recent event a live dispatch published for one graph node."""
+
+    round: str
+    node: str
+    at: float
+    kind: str
+    name: str
+    detail: str
+    events: int
+
+    def describe(self, *, now: float) -> str:
+        """One short phrase naming what this node is doing, and how long ago."""
+        what = " ".join(part for part in (self.name, self.detail) if part) or self.kind
+        ago = max(0, int(now - self.at))
+        return f"now {what} ({self.events} event(s), {ago}s ago)"
+
+
+def _bounded(value: Any) -> str:
+    """Collapse, redact and bound one field a subprocess wrote."""
+    if not isinstance(value, str):
+        return ""
+    return " ".join(redact(value).split())[:SUMMARY_CHARS]
+
+
+def _summary(payload: object, run_id: str, *, now: float) -> NodeActivity | None:
+    """Validate one published summary, or reject it.
+
+    Every field is checked against the domain the journal records rather than
+    trusted on sight: ``round`` and ``node`` become a join key, ``at`` becomes an
+    age, and the rest becomes text a planner reads. A payload that fails any of it
+    is not this run's, or is not usable, and is dropped.
+    """
+    if not isinstance(payload, dict) or payload.get("run_id") != run_id:
+        return None
+    recorded_round, node = payload.get("round"), payload.get("node")
+    if not isinstance(recorded_round, str) or not recorded_round.isdigit():
+        return None
+    if not isinstance(node, str) or not node:
+        return None
+    at = payload.get("at")
+    if not isinstance(at, (int, float)) or isinstance(at, bool):
+        return None
+    # A future timestamp is a clock the reader cannot reason about; an old one
+    # describes a turn that has moved on. Both are dropped rather than aged.
+    if at > now + STALE_AFTER_SECONDS or now - at > STALE_AFTER_SECONDS:
+        return None
+    events = payload.get("events")
+    return NodeActivity(
+        # Normalized through `int` so a zero-padded label and the journal's own
+        # integer round cannot spell the same round two ways.
+        round=str(int(recorded_round)),
+        node=node,
+        at=float(at),
+        kind=_bounded(payload.get("kind")) or "event",
+        name=_bounded(payload.get("name")),
+        detail=_bounded(payload.get("detail")),
+        events=events if isinstance(events, int) and not isinstance(events, bool) else 0,
+    )
+
+
+def live_activity(
+    run_id: str, *, root: Path | None = None, now: float | None = None
+) -> dict[tuple[str, str], NodeActivity]:
+    """The latest activity each of this run's live dispatches published, by locator.
+
+    Scans the same scratch root `orchestrator.scratch` sweeps, because that is where
+    a dispatch's watchdog directory is: the run directory never learns the path, and
+    a dispatch never learns the run directory. A reader whose ``TMPDIR`` differs from
+    the dispatcher's finds nothing and the view degrades to the journal alone.
+    """
+    at = time.time() if now is None else now
+    scratch_root = (root or Path(tempfile.gettempdir())).resolve()
+    latest: dict[tuple[str, str], NodeActivity] = {}
+    try:
+        candidates = sorted(scratch_root.glob(f"{WATCHDOG_PATTERN}/{AGENT_STATUS_DIR_NAME}"))
+    except OSError:
+        return latest
+    for status_dir in candidates:
+        path = status_dir / AGENT_ACTIVITY_NAME
+        try:
+            # Bounded because this is a foreign file under a shared root: a summary
+            # is one short line, and anything longer is not one.
+            with path.open("rb") as handle:
+                raw = handle.read(8192)
+        except OSError:
+            continue
+        try:
+            payload = json.loads(raw.decode("utf-8", errors="replace"))
+        except ValueError:
+            continue
+        summary = _summary(payload, run_id, now=at)
+        if summary is None:
+            continue
+        key = (summary.round, summary.node)
+        # A retried node can leave a finished dispatch's directory beside its
+        # replacement's for as long as the reaper takes; the newer publication is
+        # the one describing what is running.
+        previous = latest.get(key)
+        if previous is None or summary.at > previous.at:
+            latest[key] = summary
+    return latest

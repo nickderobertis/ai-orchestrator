@@ -51,9 +51,20 @@ agent_config="$repo_root/oneharness.toml"
 # The tool transcript `just status` and `just history-show` render: a `run` flag
 # with no config key, so this is the only place the agent side can adopt it, and
 # claude-code carries none without it. Emptied below when the caller already asked
-# for it -- oneharness refuses a repeated `--events`. See AGENTS.md for why not
-# `--stream`.
+# for it -- oneharness refuses a repeated `--events`.
+#
+# `--events` is a FORMAT switch: it guarantees the single end-of-turn report carries
+# the normalized tool transcript, and says nothing about when that arrives. A node
+# is therefore invisible until its turn ends, and turns here routinely run 600-2000
+# seconds. `--stream` delivers those same normalized events as they occur, then a
+# final result line, and implies `--events`' format selection -- so it is the only
+# flag that can make a running node visible. It is selected below, and `--events`
+# stays as the degrade path for every dispatch that cannot stream.
 agent_events=(--events)
+agent_stream=()
+# The filter that reconciles a streamed turn with onejudge, which parses this
+# process's stdout as exactly one JSON document. See the script for what it does.
+stream_filter="$script_dir/oneharness-stream.py"
 
 # Emit the identities a config's `harnesses` chain names, in order, one per line;
 # emit nothing when it declares none, and fail non-zero when the file cannot be
@@ -68,9 +79,21 @@ agent_events=(--events)
 # the same question — one that could take an identity quoted inside a comment for a
 # configured one, or miss one a valid file wrote differently. The interpreter is
 # this repository's own where it exists, so both readers run the same tomllib.
+
+# This repository's own interpreter where it exists, so every python helper here
+# runs the same one the rest of the harness does; a worktree with no virtualenv yet
+# still resolves the system `python3`.
+repo_interpreter() {
+    if [ -x "$repo_root/.venv/bin/python3" ]; then
+        printf '%s\n' "$repo_root/.venv/bin/python3"
+    else
+        printf '%s\n' python3
+    fi
+}
+
 config_harness_chain() {
-    local interpreter=python3
-    [ -x "$repo_root/.venv/bin/python3" ] && interpreter="$repo_root/.venv/bin/python3"
+    local interpreter
+    interpreter=$(repo_interpreter)
     "$interpreter" -c '
 import sys, tomllib
 
@@ -131,6 +154,7 @@ shift
 
 caller_config=false
 caller_config_path=
+caller_stream=false
 expect_config_value=false
 # llmlint: ignore[boundary_inputs_validated] this repository's dispatch layer is the only caller and passes exactly one --config; oneharness honors the last value, which this wrapper validates.
 for arg in "$@"; do
@@ -154,6 +178,12 @@ for arg in "$@"; do
             ;;
         --events)
             agent_events=()
+            ;;
+        --stream)
+            # A caller that streams owns its own stdout shape, so this wrapper adds
+            # neither a second `--stream` (oneharness refuses the repeat) nor the
+            # filter that would rewrite the stream into a buffered report.
+            caller_stream=true
             ;;
         --config=*)
             if [[ $caller_config == true ]]; then
@@ -248,6 +278,10 @@ elif [ -z "${ONEHARNESS_HARNESSES-}" ]; then
 fi
 
 if [ -z "${ORCHESTRATOR_AGENT_STATUS_DIR-}" ]; then
+    # No status directory means no dispatch is watching, so a streamed turn would
+    # have nowhere to publish and nobody to read it. `--events` carries the identical
+    # transcript in the end-of-turn report, with one fewer moving part and without
+    # replacing this `exec` with a filtered pipeline.
     exec oneharness run --config "$agent_config" "${agent_events[@]}" "$@"
 fi
 
@@ -281,6 +315,36 @@ if ! rm -f "$status_dir/agent.done" "$status_dir/agent.failed" "$status_dir/agen
 fi
 heartbeat_sequence=0
 write_status agent.heartbeat "$heartbeat_sequence"
+agent_activity=$status_dir/agent.activity
+
+# Ask oneharness whether THIS config's chain, with THIS invocation's flags, can be
+# streamed — and take `--events` for an answer.
+#
+# `--print-command` renders what the run would spawn and spawns nothing: it applies
+# the same up-front validation a real run applies (`--stream` against the config's
+# `run_mode`, its harness chain, an `ONEHARNESS_HARNESSES`/`ONEHARNESS_MODELS`
+# selection, a caller's `--schema` or batch prompts), writes no history record, and
+# returns in single-digit milliseconds against turns measured in minutes. A CLI too
+# old to know `--stream` at all rejects the argument the same way, so one probe
+# covers every reason a dispatch might not be able to stream.
+#
+# The caller's own arguments go in verbatim so the answer describes the real
+# invocation rather than a simplified stand-in, with stdin closed so a `--prompt-file
+# -` cannot consume the task the agent turn is about to be given.
+#
+# Degrading is never a dispatch failure: a probe that says no, or cannot run at all,
+# leaves `--events` in place and the turn proceeds exactly as it did before.
+stream_supported() {
+    oneharness run --config "$agent_config" --stream --print-command "$@" \
+        >/dev/null 2>&1 </dev/null
+}
+
+stream_events=false
+if [ "$caller_stream" = false ] && [ -f "$stream_filter" ] && [ -r "$stream_filter" ] &&
+    stream_supported "$@"; then
+    stream_events=true
+    agent_stream=(--stream)
+fi
 
 # onejudge hands the agent its task on stdin, but a non-interactive shell assigns /dev/null to
 # an asynchronous list's stdin before any explicit redirection, so the backgrounded agent below
@@ -312,11 +376,21 @@ if ! mkfifo "$stdout_fifo"; then
     echo "oneharness-agent: cannot create the agent stdout capture pipe; retry through orchestrator dispatch" >&2
     exit 2
 fi
-# llmlint: ignore[tool_output_is_signal] tee is the transparent stdout side of the oneharness protocol conduit.
-tee "$agent_stdout" <"$stdout_fifo" &
-tee_pid=$!
+if [ "$stream_events" = true ]; then
+    # The streamed conduit: the same transparent stdout capture, plus the live
+    # activity publication and the unwrapping onejudge's single-document parse
+    # needs. Both readers write `$agent_stdout` byte for byte, so everything that
+    # reads the raw record back — the quota diagnostic below, the dispatcher —
+    # cannot tell which one ran.
+    # llmlint: ignore[tool_output_is_signal] the stream filter is the transparent stdout side of the oneharness protocol conduit.
+    "$(repo_interpreter)" "$stream_filter" "$agent_stdout" "$agent_activity" <"$stdout_fifo" &
+else
+    # llmlint: ignore[tool_output_is_signal] tee is the transparent stdout side of the oneharness protocol conduit.
+    tee "$agent_stdout" <"$stdout_fifo" &
+fi
+capture_pid=$!
 # llmlint: ignore[boundary_inputs_validated] oneharness parses and validates its own protocol input.
-oneharness run --config "$agent_config" "${agent_events[@]}" "$@" <&3 >"$stdout_fifo" 2>"$agent_stderr" &
+oneharness run --config "$agent_config" "${agent_stream[@]}" "${agent_events[@]}" "$@" <&3 >"$stdout_fifo" 2>"$agent_stderr" &
 agent_pid=$!
 write_status agent.child.pid "$agent_pid"
 while agent_state=$(ps -o stat= -p "$agent_pid" 2>/dev/null) &&
@@ -329,12 +403,12 @@ done
 set +e
 wait "$agent_pid"
 exit_code=$?
-wait "$tee_pid"
-tee_exit_code=$?
+wait "$capture_pid"
+capture_exit_code=$?
 rm -f "$stdout_fifo"
 set -e
-if [ "$tee_exit_code" -ne 0 ]; then
-    echo "oneharness-agent: agent stdout capture failed with exit $tee_exit_code" >>"$agent_stderr"
+if [ "$capture_exit_code" -ne 0 ]; then
+    echo "oneharness-agent: agent stdout capture failed with exit $capture_exit_code" >>"$agent_stderr"
     if [ "$exit_code" -eq 0 ]; then
         exit_code=2
     fi
