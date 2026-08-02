@@ -44,6 +44,7 @@ from nx_inputs import (
 from orchestrator import BASE_CONFIG, PERSONA_DIR, REPO_ROOT, gitops
 from orchestrator.config import load_yaml
 from orchestrator.environment import CHANNEL_ENV_PREFIX, COMPARISON_ENV_PREFIX
+from orchestrator.harnesses import JUDGE_HARNESS_ENV, WORKER_HARNESS_ENV
 
 FAKE_BACKEND = REPO_ROOT / "tests" / "e2e" / "fake_backend.py"
 WORKSPACE_INSTALL = REPO_ROOT / "scripts" / "workspace-install.sh"
@@ -140,6 +141,20 @@ def _isolate_gate_comparison_identity(monkeypatch: pytest.MonkeyPatch) -> None:
     for key in tuple(os.environ):
         if key.startswith(COMPARISON_ENV_PREFIX):
             monkeypatch.delenv(key)
+
+
+@pytest.fixture(autouse=True)
+def _isolate_harness_selection(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep an enclosing dispatch's per-side harness choice out of this suite.
+
+    A dispatch launched with `--worker-harness` / `--judge-harness` exports the
+    selection to everything it runs, including the worker's own gate — which is
+    this suite. The journeys that assert what a side selects would then be reading
+    the outer run's choice instead of their own, exactly as with the comparison
+    identity above: a test's environment is the test's to state.
+    """
+    for key in (WORKER_HARNESS_ENV, JUDGE_HARNESS_ENV):
+        monkeypatch.delenv(key, raising=False)
 
 
 def git(*args: str, cwd: str | Path | None = None) -> str:

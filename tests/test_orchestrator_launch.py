@@ -10,12 +10,14 @@ import yaml
 
 from orchestrator import REPO_ROOT
 from orchestrator.cli_contract import ROUND_BUDGET_OPTION
+from orchestrator.config import ConfigError
 from orchestrator.dispatch import (
     ORCHESTRATOR_ONEHARNESS_BIN,
     DispatchError,
     launch_orchestrator,
     main_orchestrate,
 )
+from orchestrator.harnesses import JUDGE_HARNESS_ENV, WORKER_HARNESS_ENV
 from orchestrator.labels import LABEL_ENV, parse_labels
 from orchestrator.launch import (
     LAUNCH_RECORD_NAME,
@@ -136,6 +138,42 @@ def test_launch_rejects_an_unknown_oneharness_mode(tmp_path: Path) -> None:
     )
     with pytest.raises(DispatchError, match="oneharness mode must be one of"):
         launch_orchestrator(plan, runs_dir=tmp_path / "runs", oneharness_mode="bypasss")
+
+
+def test_launch_carries_each_sides_selection_to_every_dispatch_of_the_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The run's dispatches are grandchildren, so the launch environment is the seam.
+
+    `just orchestrate` never dispatches a worker itself: rounds do, from processes
+    that inherit this environment. Setting the pair here is what makes one launch
+    choice reach every worker and every judge of the run.
+    """
+    _, default_env, _ = _capture_launch_env(monkeypatch, tmp_path)
+    assert WORKER_HARNESS_ENV not in default_env
+    assert JUDGE_HARNESS_ENV not in default_env
+
+    _, chosen_env, _ = _capture_launch_env(
+        monkeypatch,
+        tmp_path / "chosen",
+        worker_harness="codex",
+        judge_harness="claude-code:alternate",
+    )
+    assert chosen_env[WORKER_HARNESS_ENV] == "codex"
+    assert chosen_env[JUDGE_HARNESS_ENV] == "claude-code:alternate"
+
+
+def test_launch_rejects_an_unconfigured_side_selection(tmp_path: Path) -> None:
+    plan = tmp_path / "plan.json"
+    plan.write_text(
+        '{"schema_version":3,"tasks":[{"id":"approval","kind":"human","task":"approve"}]}',
+        encoding="utf-8",
+    )
+    # Before the run is registered: a run that would dispatch every round onto a
+    # provider nobody configured must not exist at all.
+    with pytest.raises(ConfigError, match="--worker-harness"):
+        launch_orchestrator(plan, runs_dir=tmp_path / "runs", worker_harness="opencode")
+    assert not (tmp_path / "runs").exists()
 
 
 def test_launch_pins_the_orchestrator_harness_wrapper(
@@ -386,6 +424,23 @@ def test_orchestrate_cli_prints_run_id(
         [str(plan), "--detach", "--runs-dir", str(tmp_path / "runs"), "--oneharness-mode", "auto"]
     )
     assert received["oneharness_mode"] == "auto"
+    # The same pair every other dispatching entry point offers, defaulted to the
+    # chains the configs already declare.
+    assert received["worker_harness"] is None
+    assert received["judge_harness"] is None
+    main_orchestrate(
+        [
+            str(plan),
+            "--runs-dir",
+            str(tmp_path / "runs"),
+            "--worker-harness",
+            "codex",
+            "--judge-harness",
+            "claude-code:alternate",
+        ]
+    )
+    assert received["worker_harness"] == "codex"
+    assert received["judge_harness"] == "claude-code:alternate"
 
 
 def test_orchestrate_cli_reports_launch_error(

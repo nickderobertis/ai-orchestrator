@@ -40,10 +40,12 @@ from waits import timeout as e2e_timeout
 import orchestrator.graph as graph_module
 import orchestrator.lifecycle as lifecycle_module
 from orchestrator import gitops
+from orchestrator.config import ConfigError
 from orchestrator.coordination import LockTimeout, advisory_lock, git_lock_identity
 from orchestrator.dispatch import DispatchError, Report, scoped_session
 from orchestrator.github import CliGitHubBackend, GitHubError, PullRequest
 from orchestrator.graph import graph_payload, parse_graph, run_graph
+from orchestrator.harnesses import JUDGE_HARNESS_ENV, WORKER_HARNESS_ENV
 from orchestrator.journal import NodeJournal, NodeSink, open_journal
 from orchestrator.lifecycle import (
     AI_ORCHESTRATOR_IDENTITY,
@@ -2167,6 +2169,129 @@ def test_lifecycle_scopes_llmlint_wrapper_from_resolved_repository_identity(
     # handed the same comparison identity, so nothing it runs can resolve a
     # different base than the publication rebuild judges.
     assert comparisons == [("engineer", "origin", "main"), ("pr-author", "origin", "main")]
+
+
+def test_every_dispatch_of_a_workstream_carries_the_side_selection_it_was_given(
+    tmp_path, bare_origin
+) -> None:
+    """One `just repo-task` choice has to reach every dispatch the workstream makes.
+
+    A worker whose judge moved between its own turn and the PR-author's would be
+    supervised by a provider the operator never chose, which is the same failure as
+    the two sides sharing one process-wide value.
+    """
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical")
+    selections: list[tuple[str, str | None, str | None]] = []
+
+    def writing_dispatch(persona, task, *, project_dir, env, **_):
+        selections.append((persona, env.get(WORKER_HARNESS_ENV), env.get(JUDGE_HARNESS_ENV)))
+        if persona == "pr-author":
+            output = task.split(
+                "Write the final body, and nothing else, to this absolute path:\n", 1
+            )[1].splitlines()[0]
+            Path(output).write_text(
+                "## What\nPairs two providers.\n\n## Why\nOne authors, one reviews.\n",
+                encoding="utf-8",
+            )
+            return Report(persona, 0, True, False, 1, [], {}, {}, "")
+        Path(project_dir, "change.txt").write_text("change\n", encoding="utf-8")
+        return Report(persona, 0, True, False, 1, [], {}, {}, "")
+
+    result = run_repo_task(
+        "acme/widget",
+        "pair a strong author with a strong reviewer",
+        "engineer",
+        workspace=Workspace(
+            tmp_path / "worktrees",
+            resolver=lambda _spec: canonical,
+            workflow="remote",
+            repo_type="single-owner",
+        ),
+        url=str(origin),
+        workflow="remote",
+        repo_type="single-owner",
+        merge_policy="none",
+        github=FakeGitHub(origin),
+        recorded_gate=["true"],
+        dispatch_fn=writing_dispatch,
+        worker_harness="codex",
+        judge_harness="claude-code:alternate",
+    )
+
+    assert result.outcome == "pr-open", result.detail
+    assert selections == [
+        ("engineer", "codex", "claude-code:alternate"),
+        ("pr-author", "codex", "claude-code:alternate"),
+    ]
+
+
+def test_a_workstream_given_no_selection_carries_neither_variable(tmp_path, bare_origin) -> None:
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical")
+    selections: list[tuple[str | None, str | None]] = []
+
+    def writing_dispatch(persona, task, *, project_dir, env, **_):
+        selections.append((env.get(WORKER_HARNESS_ENV), env.get(JUDGE_HARNESS_ENV)))
+        Path(project_dir, "change.txt").write_text("change\n", encoding="utf-8")
+        return Report(persona, 0, True, False, 1, [], {}, {}, "")
+
+    result = run_repo_task(
+        str(canonical),
+        "leave both sides to their configured chains",
+        "engineer",
+        workspace=Workspace(tmp_path / "worktrees", resolver=lambda _spec: canonical),
+        workflow="local",
+        repo_type="single-owner",
+        recorded_gate=["true"],
+        dispatch_fn=writing_dispatch,
+    )
+
+    assert result.ok, result.detail
+    assert selections == [(None, None)]
+
+
+def test_an_unconfigured_selection_refuses_the_workstream_before_it_cuts_a_worktree(
+    tmp_path, bare_origin
+) -> None:
+    """The refusal has to come before any side effect, so nothing needs cleaning up."""
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical")
+    worktrees = tmp_path / "worktrees"
+
+    def never_dispatch(*_args, **_kwargs):  # pragma: no cover - must never run
+        raise AssertionError("a refused selection must not dispatch")
+
+    with pytest.raises(ConfigError) as excinfo:
+        run_repo_task(
+            str(canonical),
+            "must not start",
+            "engineer",
+            workspace=Workspace(worktrees, resolver=lambda _spec: canonical),
+            workflow="local",
+            recorded_gate=["true"],
+            dispatch_fn=never_dispatch,
+            judge_harness="opencode",
+        )
+
+    assert "--judge-harness" in str(excinfo.value)
+    assert "oneharness.judge.toml" in str(excinfo.value)
+    assert not worktrees.exists()
+
+
+def test_repo_task_cli_reports_an_unconfigured_selection_as_a_usage_error(
+    tmp_path, bare_origin, capsys
+) -> None:
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical")
+
+    with pytest.raises(SystemExit) as excinfo:
+        main_task([str(canonical), "engineer", "task", "--worker-harness", "opencode"])
+
+    assert excinfo.value.code == 2
+    stderr = capsys.readouterr().err
+    assert "--worker-harness 'opencode'" in stderr
+    assert "oneharness.toml" in stderr
 
 
 def test_registered_aliases_drive_real_lifecycle_without_a_stray_clone(

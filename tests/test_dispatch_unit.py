@@ -35,6 +35,7 @@ from orchestrator.dispatch import (
 )
 from orchestrator.dispatch import main as dispatch_main
 from orchestrator.graph import DEFAULT_ROUND_BUDGET
+from orchestrator.harnesses import JUDGE_HARNESS_ENV
 from orchestrator.labels import parse_labels
 from orchestrator.plan import PlanNode, PlanResult, TaskResult, _render
 from orchestrator.plan import main as plan_main
@@ -382,6 +383,28 @@ def test_agent_run_context_keeps_absolute_judge_config() -> None:
     cfg: dict = {"provider": {"judge_config": "/abs/oneharness.judge.toml"}}
     _agent_run_context(cfg, cwd="/repo", project_dir="/work", oneharness_mode=None)
     assert cfg["provider"]["judge_config"] == "/abs/oneharness.judge.toml"
+
+
+def test_agent_run_context_pins_the_wrapper_for_a_side_selection_without_a_project_dir() -> None:
+    """Only that wrapper resolves a side, so a selection has to pin it.
+
+    Without a `--project-dir` the provider bin stays whatever the config named, and
+    oneharness discovers the repo config by walking up from the run cwd — a path
+    that never reads either per-side variable. A selection would be silently
+    ignored, which is the one outcome this seam exists to prevent.
+    """
+    cfg: dict = {"provider": {"kind": "oneharness", "judge_config": "oneharness.judge.toml"}}
+    run_cwd, env = _agent_run_context(
+        cfg,
+        cwd="/repo",
+        project_dir=None,
+        oneharness_mode=None,
+        judge_harness="claude-code:primary",
+    )
+    assert run_cwd == "/repo"
+    assert cfg["provider"]["bin"] == str(AGENT_ONEHARNESS_BIN)
+    assert cfg["provider"]["judge_config"] == str((REPO_ROOT / "oneharness.judge.toml").resolve())
+    assert env == {JUDGE_HARNESS_ENV: "claude-code:primary"}
 
 
 def test_agent_run_context_pins_split_skill_harness() -> None:

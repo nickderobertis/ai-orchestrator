@@ -320,6 +320,16 @@ deliberate trade: those tiers can now contend for that Claude quota, and that is
 accepted because a supervisory tier that can still run beats one isolated from the
 quota that is left. Do not reorder these to restore the old isolation.
 
+Those files decide every run on this host, so pair the two sides differently for
+**one** dispatch with `--worker-harness` / `--judge-harness` rather than by editing
+a config concurrent runs also read. `just dispatch`, `just repo-task`, `just
+run-plan`, and `just orchestrate` all take them; each side is validated against its
+own config and refused by name when it is not one this repo configures, and with
+neither flag set nothing changes. oneharness's own `ONEHARNESS_HARNESSES` cannot
+express this: it is process-wide and beats config, so it moves both sides at once.
+See [Choosing a harness per
+side](docs/onejudge-integration.md#choosing-a-harness-per-side).
+
 `scripts/claude-alt-config-dir.sh` is the one source of **both** alternate config
 directories (`ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR` → `$HOME/.claude-alt`,
 `ORCHESTRATOR_CLAUDE_ALT2_CONFIG_DIR` → `$HOME/.claude-alt2`), and all three
