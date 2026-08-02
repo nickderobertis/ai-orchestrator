@@ -317,6 +317,11 @@ def watchdog_has_a_live_owner(path: Path) -> bool:
         # record because losing a live owner would cost it real work; a view that
         # believes the wrong one costs a supervisor a wrong picture instead.
         return True
+    except OSError:
+        # Every other way locking can fail — a filesystem with no lock support, a
+        # kernel out of lock records — says nothing about who owns this tree, and
+        # this answers no to anything it cannot establish.
+        return False
     finally:
         os.close(fd)
     return False

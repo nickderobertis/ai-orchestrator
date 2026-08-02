@@ -37,6 +37,7 @@ from mock_oneharness import main as _mock_oneharness_main
 from waits import deadline, timeout
 
 from orchestrator import REPO_ROOT
+from orchestrator.activity import MAX_SUMMARY_BYTES, STALE_AFTER_SECONDS
 from orchestrator.journal import open_journal
 from orchestrator.runs import NodeId, RunId
 from orchestrator.scratch import AGENT_STATUS_DIR_NAME, owned_scratch_directory
@@ -521,3 +522,88 @@ def test_the_filter_refuses_to_write_outside_a_dispatch_status_directory(
     assert "in one dispatch status directory" in completed.stderr
     assert "invoke through orchestrator dispatch" in completed.stderr
     assert not stray.exists()
+
+
+def test_status_reports_only_the_publication_it_can_stand_behind(
+    tmp_path: Path, dispatch_scratch: ExitStack
+) -> None:
+    """Every rejection the reader makes, through the command a planner actually runs.
+
+    These files sit under a scratch root shared with every other dispatch on the
+    host, and what they carry is printed as a statement about what a node is doing
+    *now*. Each one below is a way that statement could be wrong rather than merely
+    missing — and the failure mode they share is silence: a view that accepted one
+    would look exactly as authoritative as this one does.
+    """
+    runs_dir = tmp_path / "runs"
+    # llmlint: ignore[tests_mirror_real_usage] the journal is this view's own input
+    journal = open_journal(runs_dir / "picky-run", RunId("picky-run"), 1)
+    for node in ("ship", "nobodys", "bloated", "ancient", "ahead", "unreal"):
+        # llmlint: ignore[tests_mirror_real_usage] the recorded transition, via its own API
+        journal.append("node-started", node=NodeId(node), detail={"persona": "engineer"})
+
+    def summary(node: str, **overrides: object) -> str:
+        return json.dumps(
+            {
+                "run_id": "picky-run",
+                "round": "1",
+                "node": node,
+                "at": time.time(),
+                "kind": "tool_call",
+                "name": "Bash",
+                "detail": f"just {node}",
+                "events": 3,
+                **overrides,
+            }
+        )
+
+    # The one a live dispatcher is behind.
+    (_status_dir(dispatch_scratch) / "agent.activity").write_text(summary("ship"), encoding="utf-8")
+    # A watchdog-shaped directory nothing is dispatching into: no owner lock at all.
+    unowned = tmp_path / "scratch" / "orchestrator-watchdog-nobodys" / "agent"
+    unowned.mkdir(parents=True)
+    (unowned / "agent.activity").write_text(summary("nobodys"), encoding="utf-8")
+    # A file far past what a summary can be, whose first bytes would have parsed.
+    (_status_dir(dispatch_scratch) / "agent.activity").write_text(
+        summary("bloated") + "\n" + " " * MAX_SUMMARY_BYTES, encoding="utf-8"
+    )
+    # A turn that has long since moved on, and a clock this reader cannot reason about.
+    (_status_dir(dispatch_scratch) / "agent.activity").write_text(
+        summary("ancient", at=time.time() - STALE_AFTER_SECONDS - 60), encoding="utf-8"
+    )
+    (_status_dir(dispatch_scratch) / "agent.activity").write_text(
+        summary("ahead", at=time.time() + STALE_AFTER_SECONDS + 60), encoding="utf-8"
+    )
+    # A JSON number Python parses and every age comparison silently passes.
+    (_status_dir(dispatch_scratch) / "agent.activity").write_text(
+        '{"run_id":"picky-run","round":"1","node":"unreal","at":NaN,"name":"Bash"}',
+        encoding="utf-8",
+    )
+
+    shown = subprocess.run(
+        [
+            str(REPO_ROOT / ".venv" / "bin" / "orchestrator-status"),
+            "picky-run",
+            "--runs-dir",
+            str(runs_dir),
+        ],
+        text=True,
+        capture_output=True,
+        env={
+            **os.environ,
+            "TMPDIR": str(tmp_path / "scratch"),
+            "ONEHARNESS_HISTORY_DIR": str(tmp_path / "history"),
+        },
+        timeout=timeout(60),
+    )
+
+    assert shown.returncode == 0, shown.stderr
+    # Every node is still reported as dispatched and unfinished — that guarantee is
+    # the journal's and none of this can touch it.
+    for node in ("ship", "nobodys", "bloated", "ancient", "ahead", "unreal"):
+        assert f"round-01 {node} engineer" in shown.stdout
+    # Exactly one of them says what it is doing.
+    assert "now Bash just ship" in shown.stdout
+    assert shown.stdout.count("event(s),") == 1
+    for rejected in ("just nobodys", "just bloated", "just ancient", "just ahead"):
+        assert rejected not in shown.stdout
