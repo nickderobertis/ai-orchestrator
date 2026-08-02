@@ -54,8 +54,8 @@ from waits import deadline as e2e_deadline
 from waits import timeout as e2e_timeout
 
 from orchestrator import REPO_ROOT
-from orchestrator.channel import create_channel
-from orchestrator.coordination import advisory_lock, atomic_json
+from orchestrator.channel import claim_heartbeat, create_channel, mark_heartbeat_due
+from orchestrator.coordination import advisory_lock
 from orchestrator.detach import CRASHED
 from orchestrator.runs import TEARDOWN_SIGNALS
 from orchestrator.watchdog import ProcessId, process_group_is_running
@@ -743,7 +743,35 @@ def test_status_reports_a_dead_round_beside_the_surface_it_left_pending(
     # turns on every run of this suite. Everything the journey actually asserts —
     # queuing a surface, the round dying under it, and what `just status` then prints —
     # runs through the real `orchestrator-relay-supervisor` and `just status` below.
-    channel_dir = create_channel(launch.runs / run_id)
+    channel_dir = create_channel(launch.runs / run_id, heartbeat_interval=10)
+    # A check-in this run queued and nobody read, still on disk when it dies. Its own
+    # reporting line must not survive the run: both views would otherwise invite a
+    # planner to `channel-next` a surface nothing will ever follow up on. Queued
+    # through `just channel-surface`, the same command the check-in agent invokes,
+    # against a claim taken the way the pacemaker takes one — only the paid agent that
+    # would author the message is left out. It goes first because the production guard
+    # is real: a check-in is refused while a planner surface awaits a reply, and the
+    # relay below raises one that never gets answered.
+    due_at = float(json.loads((channel_dir / "heartbeat.json").read_text())["last_surface_at"])
+    mark_heartbeat_due(channel_dir, now=due_at + 11)
+    assert claim_heartbeat(channel_dir), "the pacemaker had no check-in to claim"
+    queued = subprocess.run(
+        [
+            "just",
+            "channel-surface",
+            run_id,
+            "worker: still verifying",
+            "--runs-dir",
+            str(rounds.runs),
+        ],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=e2e_timeout(180),
+    )
+    assert queued.returncode == 0, queued.stderr
+    assert (channel_dir / "heartbeat-surface.json").is_file()
     relay = subprocess.Popen(
         [
             "uv",
@@ -767,27 +795,6 @@ def test_status_reports_a_dead_round_beside_the_surface_it_left_pending(
         relay.stdin.write(json.dumps({"op": "supervisor", "kind": "blocker", "message": "held"}))
         relay.stdin.close()
         _await(channel_dir / "planner-pending.json", "the queued planner surface")
-        # A check-in this run queued and nobody read, still on disk when it dies. Its
-        # own reporting line must not survive the run: both views would otherwise
-        # invite a planner to `channel-next` a surface nothing will ever follow up on.
-        # llmlint: ignore[tests_mirror_real_usage] Queuing this through the pacemaker
-        # would spend real harness turns on a check-in agent whose content this journey
-        # never reads; what it asserts is what the views print, through the real
-        # `just runs` and `just status` below.
-        atomic_json(
-            channel_dir / "heartbeat-surface.json",
-            {
-                "op": "supervisor",
-                "run_id": run_id,
-                "round": 1,
-                "surface": {
-                    "kind": "heartbeat",
-                    "message": "worker: still verifying",
-                    "blocking": False,
-                },
-                "messages": [],
-            },
-        )
 
         os.kill(launch.owner, signal.SIGKILL)
         _await_exit(launch.owner)
