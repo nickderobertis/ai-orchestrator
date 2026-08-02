@@ -612,6 +612,62 @@ def test_a_dispatch_that_died_before_its_work_is_relaunched_and_publishes(
     assert _has_file(origin, "main", "cost-report.txt")
 
 
+def test_an_empty_death_after_committed_work_relaunches_onto_the_preserved_branch(
+    tmp_path, bare_origin
+) -> None:
+    """The death that lands mid-workstream, not on its first dispatch.
+
+    By then the branch carries committed work, so the relaunch has something to
+    orphan if it cuts a fresh branch — and something to finish if it does not. This
+    is the shape that lost roughly ten minutes of committed work to a provider
+    outage: the earlier attempt's commits must still be on the branch the next
+    launch resumes, and must reach the base with it.
+    """
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / "canonical-death-mid-workstream")
+    Registry().register(str(canonical), workflow="local", repo_type="single-owner")
+    launches: list[str] = []
+    waits: list[float] = []
+
+    def working_then_dying_then_finishing(
+        persona: str, task: str, *, project_dir: str, **_: object
+    ) -> Report:
+        launches.append(persona)
+        worktree = Path(project_dir)
+        if len(launches) == 1:
+            (worktree / "partial.txt").write_text("measured so far\n", encoding="utf-8")
+            gitops.add_all(worktree)
+            gitops.commit(worktree, "chore: measure part of the lifecycle cost")
+            return Report(persona, 1, False, False, 2, [], {}, {}, "", max_turns=2)
+        if len(launches) == 2:
+            return _launch_death(persona)
+        (worktree / "finished.txt").write_text("measured\n", encoding="utf-8")
+        gitops.add_all(worktree)
+        gitops.commit(worktree, "feat: finish measuring the lifecycle cost")
+        return Report(persona, 0, True, False, 2, [], {}, {}, "")
+
+    result = run_repo_task(
+        str(canonical),
+        "## What\nMeasure lifecycle cost.\n\n## Why\nA run's spend is invisible.\n",
+        "engineer",
+        workspace=Workspace(tmp_path / "death-mid-workstream-worktrees"),
+        branch="feature/death-after-committed-work",
+        dispatch_fn=working_then_dying_then_finishing,
+        recorded_gate=["true"],
+        sleep=waits.append,
+    )
+
+    assert result.outcome == "merged", result.detail
+    assert launches == ["engineer"] * 3, launches
+    # One relaunch, on the launch budget — the work stop before it took its own.
+    assert waits == [RELAUNCH_BACKOFF_SECONDS]
+    # The relaunch continued the preserved branch rather than cutting a fresh one, so
+    # nothing the earlier attempt committed was orphaned by the death: both its work
+    # and the work that finished afterwards reach the base together.
+    assert _has_file(origin, "main", "partial.txt")
+    assert _has_file(origin, "main", "finished.txt")
+
+
 def test_launch_deaths_do_not_spend_the_budget_that_carries_work_forward(
     tmp_path, bare_origin
 ) -> None:
