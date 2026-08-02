@@ -1089,12 +1089,13 @@ class StepRun:
     results: list[StepResult]
     detail: str = ""
     waiting: list[str] = field(default_factory=list)
-    #: True when the step that failed the workstream never reached its work: it
-    #: reported ``worker-died``, spent no assistant turn, ended itself rather than
-    #: being signalled, and left the worktree as it found it — no commit, no dirty
-    #: tree, nothing to resume. Every one of those is required; a death that reports
-    #: turns, or that a signal ended, reached its work whatever the tree shows.
-    died_before_its_work: bool = False
+    #: True when the step that failed the workstream left no work behind: it reported
+    #: ``worker-died``, spent no assistant turn, ended itself rather than being
+    #: signalled, and left the worktree as it found it — no commit, no dirty tree,
+    #: nothing to resume. All four are required. It says what the dispatch *left*,
+    #: not how far it got: a worker that read and reasoned before dying qualifies,
+    #: while a death that reports a turn, or that a signal ended, does not.
+    died_leaving_no_work: bool = False
 
 
 # Lifecycle work commonly includes repository orientation, implementation, and a
@@ -1200,7 +1201,7 @@ def _run_steps(
     by_id = {s.id: s for s in steps}
     deps = {s.id: s.deps for s in steps}
     reports: dict[str, Report] = {}
-    deaths_before_work: set[str] = set()
+    deaths_leaving_no_work: set[str] = set()
 
     def run_step(sid: str) -> NodeRun:
         step = by_id[sid]
@@ -1266,7 +1267,7 @@ def _run_steps(
                 and _exited_rather_than_being_killed(report)
                 and not (gitops.is_dirty(worktree) or gitops.head_sha(worktree) != dispatch_head)
             ):
-                deaths_before_work.add(sid)
+                deaths_leaving_no_work.add(sid)
             preserved = False
             if gitops.is_dirty(worktree):
                 gitops.add_all(worktree)
@@ -1338,7 +1339,7 @@ def _run_steps(
             results=results,
             detail=runs[bad.id].error or f"step {bad.id!r} {bad.status}",
             waiting=waiting,
-            # Scoped to this attempt, not to the step: `deaths_before_work` is a
+            # Scoped to this attempt, not to the step: `deaths_leaving_no_work` is a
             # local rebuilt on every `_run_steps` call, the resume loop calls it
             # afresh per attempt, and `schedule_dag` runs each step once within one.
             # An empty death followed by an attempt that commits work therefore
@@ -1346,7 +1347,7 @@ def _run_steps(
             # `test_launch_deaths_do_not_spend_the_budget_that_carries_work_forward`
             # drives end to end.
             # llmlint: ignore[names_match_behavior] see the scoping note above
-            died_before_its_work=bad.id in deaths_before_work,
+            died_leaving_no_work=bad.id in deaths_leaving_no_work,
         )
     if waiting:
         return StepRun(
@@ -1968,7 +1969,7 @@ def run_repo_task(
                     completed_step_ids.add(step_result.id)
             if step_run.status != "not-completed" or (cancel is not None and cancel.is_set()):
                 break
-            if step_run.died_before_its_work:
+            if step_run.died_leaving_no_work:
                 # Nothing was produced, so the resume budget — which exists to carry
                 # work forward — has nothing to spend itself on here. Relaunch on the
                 # separate budget instead, unlike the work path without requiring the
@@ -2043,7 +2044,7 @@ def run_repo_task(
             )
             # A cancelled workstream is excluded: the round decided that stop, and
             # its relaunches were cut short rather than spent.
-            if step_run.died_before_its_work and prefix is None:
+            if step_run.died_leaving_no_work and prefix is None:
                 result.detail += (
                     f"; the dispatch died leaving no work behind, and {relaunches} "
                     "relaunch(es) did the same, so nothing of the task was attempted "

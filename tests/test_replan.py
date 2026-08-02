@@ -928,12 +928,10 @@ def _committed_retry(journal, node: str, replacement: dict) -> None:
 def test_a_retry_pinned_to_a_preserved_branch_reaches_the_next_round(tmp_path) -> None:
     """The branch pin, the new id, and the superseded original, at the transition.
 
-    A retry pinned to a preserved branch reached the running graph and then not the
-    next round's plan, so the node dispatched `resumed=false` on a fresh branch cut
-    from the base and the verified work on the preserved one was orphaned. Twice, in
-    `optimize-e2e-suite`. The cause was the transition re-reading `round-NN/plan.json`
-    — the launch record, which the reconciler never rewrites — so this drives the real
-    journal, the real strict projection, and the real `next_round`.
+    Drives the real journal, the real strict projection, and the real `next_round`.
+    The regression it guards: the transition re-read the launch file, so a pinned
+    retry dispatched on a fresh branch cut from the base and orphaned the verified
+    work on the preserved one.
     """
     from orchestrator.graph import parse_graph
     from orchestrator.journal import NodeId, RunId, open_journal

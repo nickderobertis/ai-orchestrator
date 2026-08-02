@@ -1714,8 +1714,8 @@ def test_a_surface_that_outlives_its_round_is_discarded_and_frees_the_pacemaker(
 
     `channel-next` validates a queued frame against the *active* round, so a surface
     still queued when the round transitions could never be read — and while it sat
-    there it was the run's one pending update. Observed on a live run at 107 minutes
-    after a planner retry moved it to round 2. Discarded rather than kept consumable:
+    there it was the run's one pending update, so no later check-in could replace it.
+    Discarded rather than kept consumable:
     it describes a round that has finished, and the check-in that replaces it
     describes the round actually running.
     """
@@ -1753,15 +1753,12 @@ def test_a_surface_that_outlives_its_round_is_discarded_and_frees_the_pacemaker(
 
 
 def test_the_pacemaker_keeps_firing_while_its_update_sits_unread(tmp_path: Path) -> None:
-    """The wedge, driven through the real pacemaker: no consumer, and it keeps going.
+    """The pacemaker keeps firing behind an update nobody reads.
 
-    Two live runs on 2026-08-01 had received exactly one surface each and gone
-    silent for over an hour with the interval lowered to 900s. The claim was held
-    from dispatch until *consumption*, and `record_surface` — which runs only on
-    consumption — was the one thing that released it, so a planner who never read
-    the channel was told least of all. Nothing here is stood in for except the paid
-    check-in agent, and its stand-in queues through the same real `channel-surface`
-    entry point the agent invokes.
+    Driven through the real `ProposalPump`; only the paid check-in agent is stood in
+    for, and its stand-in queues through the same `channel-surface` entry point the
+    agent invokes. The regression it guards: the claim was released only on
+    consumption, so a run whose planner never read the channel was told least of all.
     """
     runs = tmp_path / "runs"
     run_dir = runs / "unread"

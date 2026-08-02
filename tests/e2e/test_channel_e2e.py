@@ -1732,15 +1732,12 @@ def test_a_queued_update_nobody_read_is_reported_until_it_is_consumed(
 def test_lowering_the_interval_mid_flight_brings_the_next_check_in_forward(
     tmp_path: Path, onejudge_bin: str
 ) -> None:
-    """The interval is the only knob, proven against the run that proved it was not.
+    """The interval is the only knob that changes cadence.
 
-    Two live runs sat at `in_flight=True, due=True` for over an hour each with the
-    interval lowered to 900s and nothing happening, which is the diagnostic that
-    separated the wedge from the clock: the claim was held until a planner consumed
-    the one queued update, so no cadence setting could reach the pacemaker. Here the
-    launch interval is long enough that nothing would fire on its own, the planner
-    lowers it through an ordinary `channel-reply` while a worker is held at the real
-    provider boundary, and the check-in that follows is the evidence.
+    A launch interval long enough that nothing fires on its own, lowered mid-flight
+    through an ordinary `channel-reply` while a worker is held; the check-in that
+    follows is the evidence. The regression it guards: a held claim made every
+    cadence setting unreachable, so lowering the interval changed nothing.
     """
     runs = tmp_path / "interval-runs"
     held = Rendezvous.at(tmp_path, "interval-worker")
