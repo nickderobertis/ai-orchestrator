@@ -937,9 +937,6 @@ def test_the_public_monitor_entrypoint_treats_ctrl_c_as_a_clean_stop(
     assert monitor_main(["--runs-dir", str(runs_dir), str(RUN)]) == 0
 
 
-# --- what settled means --------------------------------------------------------
-
-
 def _launched(run_dir: Path, pid: int, *, reported: bool = False) -> None:
     """Record a launch the way `just orchestrate` leaves one, owned by ``pid``."""
     (run_dir / "orchestrator").mkdir(parents=True, exist_ok=True)
@@ -976,7 +973,7 @@ def test_a_launch_that_still_claims_a_live_owner_is_never_settled(tmp_path: Path
     _launched(run_dir, os.getpid())
 
     assert monitor_module.nothing_is_driving(run_dir) is False
-    assert run_state(run_dir, RUN).settlement == ""
+    assert run_state(run_dir, RUN).settlement is None
     assert run_state(run_dir, RUN).settled is False
 
 
@@ -996,7 +993,7 @@ def test_a_run_nothing_ever_launched_is_not_reported_as_abandoned(tmp_path: Path
     run_dir = tmp_path / RUN
     run_dir.mkdir(parents=True)
     assert monitor_module.nothing_is_driving(run_dir) is False
-    assert run_state(run_dir, RUN).settlement == ""
+    assert run_state(run_dir, RUN).settlement is None
 
 
 def test_a_launch_that_died_before_its_first_round_is_settled_unattended(tmp_path: Path) -> None:
@@ -1015,7 +1012,7 @@ def test_only_a_blocking_surface_settles_a_run_on_the_planner(tmp_path: Path) ->
     _pending(run_dir, blocking=False)
     informational = run_state(run_dir, RUN)
     assert informational.state == "blocked"
-    assert informational.settlement == ""
+    assert informational.settlement is None
 
     _pending(run_dir, blocking=True)
     waiting = run_state(run_dir, RUN)
@@ -1157,7 +1154,7 @@ def test_an_unsettled_state_renders_its_own_detail(tmp_path: Path) -> None:
     _settle(run_dir, {"api": {"status": "waiting"}}, ok=False, state="waiting")
     _launched(run_dir, os.getpid())
     state = run_state(run_dir, RUN)
-    assert state.settlement == ""
+    assert state.settlement is None
     assert monitor_module.settled_detail(state) == state.detail == "1 waiting"
 
 

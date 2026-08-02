@@ -62,7 +62,7 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Literal, Protocol
+from typing import Any, Literal, Protocol, TextIO
 
 from . import gitops
 from .channel import ChannelError, due_indicator
@@ -149,8 +149,6 @@ Source = Literal["journal", "history", "git", "pr"]
 # states a person acts on and then the run continues.
 COMPLETE_STATE = "complete"
 
-# --- what "settled" means ------------------------------------------------------
-#
 # A settle-terminating attach has to end at exactly the right moment, and the
 # obvious readings are all wrong in a way that costs a planner the run:
 #
@@ -163,26 +161,28 @@ COMPLETE_STATE = "complete"
 # no longer advancing on its own, and the next move belongs to the planner. Three
 # conditions say that, and nothing else does.
 
+Settlement = Literal["complete", "awaiting-planner", "unattended"]
+
 #: The graph completed successfully. Nothing is left to watch.
-SETTLED_COMPLETE = "complete"
+SETTLED_COMPLETE: Settlement = "complete"
 
 #: A *blocking* planner surface is pending: the orchestrator has asked a question
 #: and will not move until `just channel-reply` answers it. A non-blocking surface
 #: is deliberately not this — the orchestrator continues without waiting for a
 #: reply to a heartbeat, so returning there would abandon a working run.
-SETTLED_AWAITING_PLANNER = "awaiting-planner"
+SETTLED_AWAITING_PLANNER: Settlement = "awaiting-planner"
 
 #: Nothing is driving the run any more: its launch is parked, its round was
 #: abandoned, or its executor is gone with the graph unfinished. All of them are
 #: states a planner must act on, and all of them look like a stream that has simply
 #: gone quiet — which is the picture this whole mode exists to replace.
-SETTLED_UNATTENDED = "unattended"
+SETTLED_UNATTENDED: Settlement = "unattended"
 
 #: Every settlement, and the exit status the attach reports it with. Zero for the
 #: two a planner *expects* to reach; non-zero for the one that means intervene,
 #: so a scripted launch fails loudly rather than reporting a run nobody is driving
 #: as a clean finish.
-SETTLEMENTS: dict[str, int] = {
+SETTLEMENTS: Mapping[Settlement, int] = {
     SETTLED_COMPLETE: 0,
     SETTLED_AWAITING_PLANNER: 0,
     SETTLED_UNATTENDED: 3,
@@ -283,9 +283,9 @@ class Heartbeat:
     current_blocker: str = ""
     next_poll_seconds: float = 0.0
     #: The settlement this beat reports, when it is the last one of a settle-
-    #: terminating attach. Empty on every other beat, so a consumer can tell "this
+    #: terminating attach. Absent on every other beat, so a consumer can tell "this
     #: is where it stands" from "this is where it stopped".
-    settlement: str = ""
+    settlement: Settlement | None = None
 
     def text(self) -> str:
         stamp = datetime.fromtimestamp(self.at, UTC).strftime("%H:%M:%S")
@@ -301,7 +301,7 @@ class Heartbeat:
             "state": self.state,
             "detail": self.detail,
         }
-        if self.settlement:
+        if self.settlement is not None:
             record["settlement"] = self.settlement
         if self.last_completed_check:
             record["last_completed_check"] = self.last_completed_check
@@ -1052,11 +1052,11 @@ class RunState:
     ok: bool
     executor_live: bool
     detail: str
-    #: Which of `SETTLEMENTS` this run has reached, or ``""`` while it is still
+    #: Which of `SETTLEMENTS` this run has reached, or ``None`` while it is still
     #: advancing on its own. Carried on the state rather than recomputed per caller
     #: so the foreground `orchestrate` and `just monitor --until-settled` cannot
     #: disagree about when a run is done with them.
-    settlement: str = ""
+    settlement: Settlement | None = None
 
     @property
     def finished(self) -> bool:
@@ -1066,7 +1066,7 @@ class RunState:
     @property
     def settled(self) -> bool:
         """Whether the run has stopped advancing on its own; see `SETTLEMENTS`."""
-        return bool(self.settlement)
+        return self.settlement is not None
 
 
 def nothing_is_driving(run_dir: Path) -> bool:
@@ -1139,11 +1139,11 @@ def run_state(
                 False,
                 True,
                 summarize(f"{required}: {kind}: {message}"),
-                SETTLED_AWAITING_PLANNER if blocking else "",
+                SETTLED_AWAITING_PLANNER if blocking else None,
             )
         except (ConfigError, OSError):
             pass
-    unattended = SETTLED_UNATTENDED if nothing_is_driving(run_dir) else ""
+    unattended = SETTLED_UNATTENDED if nothing_is_driving(run_dir) else None
     latest = latest_round(run_dir)
     if latest is None:
         return RunState(run_id, None, "unknown", False, False, "no recorded rounds yet", unattended)
@@ -1419,22 +1419,24 @@ def stream(
         # not which mode happened to be reading it. Only the *unfinished* case
         # differs, and that difference is the whole point of `once` — it says "here
         # is where it stands" where the follow would keep waiting.
-        settlement = state.settlement if until_settled else ""
-        if state.finished or settlement or once:
+        settlement = state.settlement if until_settled else None
+        if state.finished or settlement is not None or once:
             writer.heartbeat(
                 Heartbeat(
                     monitor.clock(),
                     state.run_id,
                     state.round,
                     state.state,
-                    settled_detail(state) if state.finished or settlement else state.detail,
+                    settled_detail(state)
+                    if state.finished or settlement is not None
+                    else state.detail,
                     rollup.last_completed_check,
                     rollup.current_blocker,
                     delay,
                     settlement,
                 )
             )
-            return SETTLEMENTS.get(settlement, 0)
+            return 0 if settlement is None else SETTLEMENTS[settlement]
         now = monitor.clock()
         if now - last >= heartbeat:
             writer.heartbeat(
@@ -1491,7 +1493,7 @@ def attach(
     run_id: RunId,
     *,
     runs_dir: Path = DEFAULT_RUNS_DIR,
-    out: Any = None,
+    out: TextIO | None = None,
     fmt: str = "text",
     once: bool = False,
     until_settled: bool = False,

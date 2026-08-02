@@ -161,9 +161,6 @@ def _monitor(runs: Path, run_id: str, *extra: str) -> subprocess.CompletedProces
     )
 
 
-# --- the foreground launch -----------------------------------------------------
-
-
 def test_orchestrate_stays_attached_and_returns_when_the_run_needs_the_planner(
     tmp_path: Path, onejudge_bin: str, reaped: list[Path]
 ) -> None:
@@ -249,9 +246,6 @@ def test_the_foreground_launch_returns_when_nothing_is_left_driving_the_run(
     _, _, followed = attached.stdout.partition(f"{HEADER}\n")
     assert "settled, nothing is driving this run" in followed.splitlines()[-1]
     assert not _alive(_owner_pid(run_dir))
-
-
-# --- the same endings through `just monitor` -----------------------------------
 
 
 def _channel(recipe: str, run_id: str, runs: Path, payload: str | None = None) -> str:
