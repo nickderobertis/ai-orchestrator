@@ -2948,8 +2948,10 @@ _OVERLONG_TASK = (
             _FITTING_TASK,
             "feat!: Expose captured session output.",
         ),
+        # No usable commit subject at all, and task prose that cannot fit either.
+        (("Update the reader",), _OVERLONG_TASK, "chore: orchestrated change"),
     ],
-    ids=["task-name", "generic", "scope-dropped", "breaking-preserved"],
+    ids=["task-name", "generic", "scope-dropped", "breaking-preserved", "no-usable-commit"],
 )
 def test_descriptions_over_the_limit_publish_a_whole_name_not_an_elision(
     tmp_path, bare_origin, messages: tuple[str, ...], task: str, expected: str
