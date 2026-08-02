@@ -149,39 +149,23 @@ Source = Literal["journal", "history", "git", "pr"]
 # states a person acts on and then the run continues.
 COMPLETE_STATE = "complete"
 
-# A settle-terminating attach has to end at exactly the right moment, and the
-# obvious readings are all wrong in a way that costs a planner the run:
-#
-# * *the round finished* returns while the orchestrator is still scheduling — the
-#   caller walks away from a graph that is about to start round two;
-# * *the orchestrator exited* never returns on the ordinary case, because the
-#   process stays alive holding a question nobody is answering.
-#
-# So settled is a property of the **run**, not of a round or a process: the run is
-# no longer advancing on its own, and the next move belongs to the planner. Three
-# conditions say that, and nothing else does.
-
+# Settled is a property of the *run*, not of a round or a process: it is no longer
+# advancing on its own. Neither near miss works — the round finishing returns while
+# the orchestrator is still scheduling, and the orchestrator exiting never happens
+# in the ordinary case, where it stays alive holding a question.
 Settlement = Literal["complete", "awaiting-planner", "unattended"]
 
-#: The graph completed successfully. Nothing is left to watch.
 SETTLED_COMPLETE: Settlement = "complete"
 
-#: A *blocking* planner surface is pending: the orchestrator has asked a question
-#: and will not move until `just channel-reply` answers it. A non-blocking surface
-#: is deliberately not this — the orchestrator continues without waiting for a
-#: reply to a heartbeat, so returning there would abandon a working run.
+#: A *blocking* surface only: the orchestrator continues past a heartbeat without
+#: waiting for a reply, so settling on one would abandon a working run.
 SETTLED_AWAITING_PLANNER: Settlement = "awaiting-planner"
 
-#: Nothing is driving the run any more: its launch is parked, its round was
-#: abandoned, or its executor is gone with the graph unfinished. All of them are
-#: states a planner must act on, and all of them look like a stream that has simply
-#: gone quiet — which is the picture this whole mode exists to replace.
+#: Parked, an abandoned round, or an executor gone with the graph unfinished.
 SETTLED_UNATTENDED: Settlement = "unattended"
 
-#: Every settlement, and the exit status the attach reports it with. Zero for the
-#: two a planner *expects* to reach; non-zero for the one that means intervene,
-#: so a scripted launch fails loudly rather than reporting a run nobody is driving
-#: as a clean finish.
+#: Non-zero for the settlement that means intervene, so a scripted launch fails
+#: loudly rather than reporting a run nobody is driving as a clean finish.
 SETTLEMENTS: Mapping[Settlement, int] = {
     SETTLED_COMPLETE: 0,
     SETTLED_AWAITING_PLANNER: 0,

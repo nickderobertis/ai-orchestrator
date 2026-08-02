@@ -149,13 +149,9 @@ def _settled_nodes(runs_dir: Path, run_id: str) -> dict[tuple[str, str], NodeSta
 class InFlightDispatch:
     """One dispatch the run's journal started and never recorded settling.
 
-    This is the half of the picture oneharness history cannot supply. A history
-    record is written per *completed turn*, so a dispatch whose first turn has been
-    running for half an hour has produced none — and a view built only from history
-    rendered that as "No dispatched tasks recorded", which reads as *nothing is
-    running* when the truth is *nothing has finished a turn yet*. Those are opposite
-    conclusions for a supervising planner. The journal already knew; it was simply
-    never joined.
+    History records completed turns, and a first turn here can run for half an
+    hour, so history alone cannot tell *no dispatch* from *no finished turn* —
+    opposite conclusions for a supervising planner. The journal knows the start.
     """
 
     round: int

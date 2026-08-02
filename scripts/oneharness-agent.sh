@@ -40,26 +40,11 @@ fi
 ensure_codex_alt_home oneharness-agent || exit $?
 alternate_harness=claude-code:alternate
 agent_config="$repo_root/oneharness.toml"
-# Record the normalized tool-call transcript for every agent turn. It is a `run`
-# flag, not a config key, so this wrapper is the only place the agent side can
-# adopt it -- and it is the agent side alone, because the judge and the
-# orchestrator pass through the `exec`s above with their own configs.
-#
-# What it buys is what the planner-visible views already know how to read:
-# `history.digest` builds `just status`'s "Commands:" line and `just history-show`'s
-# detail from each record's `events`, and claude-code -- the workers' primary
-# harness -- carries no tool transcript in its default output format, so those
-# lines were empty for every claude-code dispatch while codex's were populated.
-# `--events` selects that harness's events-capable format; harnesses whose default
-# already carries a transcript are unaffected.
-#
-# Deliberately `--events` and not `--stream`: `--stream` is refused under
-# `run_mode = "fallback"`, and that fallback chain is what keeps dispatching when
-# one subscription returns 429.
-#
-# Injected only when the caller has not asked for it already, exactly as `--config`
-# is: oneharness refuses a repeated `--events` outright, so an onejudge release that
-# started selecting it would otherwise kill every dispatch at spawn.
+# The tool transcript `just status` and `just history-show` render: a `run` flag
+# with no config key, so this is the only place the agent side can adopt it, and
+# claude-code carries none without it. Emptied below when the caller already asked
+# for it -- oneharness refuses a repeated `--events`. See AGENTS.md for why not
+# `--stream`.
 agent_events=(--events)
 
 if [ "${1-}" != "run" ]; then
