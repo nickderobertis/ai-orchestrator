@@ -1355,3 +1355,61 @@ def test_a_stream_capture_that_refuses_its_paths_records_its_own_reason(tmp_path
     assert "in one dispatch status directory" in recorded
     assert "agent stdout capture failed" in recorded
     assert str(status_dir / "agent.stderr") in recorded
+
+
+def test_a_streamed_turn_forwards_output_the_filter_cannot_read(tmp_path: Path) -> None:
+    """Whatever the child said reaches onejudge, recognized or not.
+
+    The stream filter sits between oneharness and onejudge on the one channel a
+    turn's answer travels, so anything it drops is an answer that never arrives — a
+    dispatch failure caused by the observability change rather than by the work. A
+    later protocol's envelope, a harness that printed over the protocol, and an
+    event envelope carrying no event are all shapes this build does not model.
+    """
+    unmodelled = (
+        '{"type":"notice","message":"a shape from a later protocol"}',
+        '{"type":"event"}',
+        "oneharness: warning: something happened",
+        '{"type":"event","event":{"kind":"tool_call","name":"Bash",'
+        '"input":{"command":"just check"}}}',
+        '{"type":"result","report":' + _REPORT + "}",
+    )
+    status_dir = tmp_path / "orchestrator-watchdog-mixed" / "agent"
+    status_dir.mkdir(parents=True)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    stub = _stream_capable_stub(bin_dir, streamable=True)
+    stub.write_text(
+        "#!/usr/bin/env bash\n"
+        'for arg in "$@"; do [ "$arg" = "--print-command" ] && exit 0; done\n'
+        f"printf '%s\\n' {' '.join(shlex.quote(line) for line in unmodelled)}\n",
+        encoding="utf-8",
+    )
+
+    proc = subprocess.run(
+        ["bash", str(WRAPPER), "run", "--compact", "--prompt", "probe"],
+        text=True,
+        capture_output=True,
+        stdin=subprocess.DEVNULL,
+        env={
+            "PATH": f"{bin_dir}:/usr/bin:/bin",
+            "HOME": str(tmp_path / "home"),
+            "ORCHESTRATOR_AGENT_STATUS_DIR": str(status_dir),
+        },
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    # Everything unrecognized, verbatim and in order, then the unwrapped report.
+    assert proc.stdout.strip().splitlines() == [
+        '{"type":"notice","message":"a shape from a later protocol"}',
+        "oneharness: warning: something happened",
+        _REPORT,
+    ]
+    # The raw record keeps every line the child wrote, recognized or not.
+    assert (status_dir / "agent.stdout").read_text(encoding="utf-8").splitlines() == list(
+        unmodelled
+    )
+    # And the one real event still published, counted as the only one.
+    published = json.loads((status_dir / "agent.activity").read_text(encoding="utf-8"))
+    assert published["events"] == 1
+    assert published["detail"] == "just check"

@@ -67,6 +67,13 @@ MAX_REPORTED_EVENTS = 1_000_000
 #: the publisher already bounds, so this is generous by an order of magnitude — and
 #: a file past it is not a summary at all, whatever its first bytes look like.
 MAX_SUMMARY_BYTES = 8192
+#: How far ahead of the reader a publication's clock may be. Publisher and reader
+#: share this host's wall clock, so a summary from the future is not skew — with one
+#: exception this has to allow: the scan's `now` is taken before it walks the
+#: directories, and a live turn can publish while that walk is in progress. That gap
+#: is milliseconds; anything past a few seconds is a clock this reader cannot reason
+#: about, and reporting it as "now" would be a statement nobody measured.
+FUTURE_TOLERANCE_SECONDS = 5.0
 
 
 @dataclass(frozen=True)
@@ -138,7 +145,7 @@ def _summary(payload: object, run_id: str, *, now: float) -> NodeActivity | None
         return None
     # A future timestamp is a clock the reader cannot reason about; an old one
     # describes a turn that has moved on. Both are dropped rather than aged.
-    if at > now + STALE_AFTER_SECONDS or now - at > STALE_AFTER_SECONDS:
+    if at > now + FUTURE_TOLERANCE_SECONDS or now - at > STALE_AFTER_SECONDS:
         return None
     return NodeActivity(
         # Normalized through `int` so a zero-padded label and the journal's own

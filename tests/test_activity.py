@@ -24,6 +24,7 @@ import pytest
 
 from orchestrator import REPO_ROOT
 from orchestrator.activity import (
+    FUTURE_TOLERANCE_SECONDS,
     MAX_REPORTED_EVENTS,
     MAX_SUMMARY_BYTES,
     STALE_AFTER_SECONDS,
@@ -177,7 +178,7 @@ def test_a_stale_or_future_summary_is_dropped_rather_than_aged(
     _write(_live_dispatch(dispatch_scratch_root), _summary(at=NOW - STALE_AFTER_SECONDS - 1))
     _write(
         _live_dispatch(dispatch_scratch_root),
-        _summary(node="skewed", at=NOW + STALE_AFTER_SECONDS + 1),
+        _summary(node="skewed", at=NOW + FUTURE_TOLERANCE_SECONDS + 1),
     )
 
     assert live_activity("live-run", root=tmp_path, now=NOW) == {}

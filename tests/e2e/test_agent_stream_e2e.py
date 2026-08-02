@@ -37,7 +37,11 @@ from mock_oneharness import main as _mock_oneharness_main
 from waits import deadline, timeout
 
 from orchestrator import REPO_ROOT
-from orchestrator.activity import MAX_SUMMARY_BYTES, STALE_AFTER_SECONDS
+from orchestrator.activity import (
+    FUTURE_TOLERANCE_SECONDS,
+    MAX_SUMMARY_BYTES,
+    STALE_AFTER_SECONDS,
+)
 from orchestrator.journal import open_journal
 from orchestrator.runs import NodeId, RunId
 from orchestrator.scratch import AGENT_STATUS_DIR_NAME, owned_scratch_directory
@@ -405,125 +409,6 @@ def test_status_reports_what_a_node_is_doing_while_its_turn_is_still_running(
     assert "event(s)," in shown.stdout
 
 
-def test_the_filter_forwards_output_it_does_not_recognize(dispatch_scratch: ExitStack) -> None:
-    """Whatever the child said reaches onejudge, even when this filter cannot read it.
-
-    The filter sits between oneharness and onejudge on the one channel a turn's
-    answer travels, so anything it drops is an answer that never arrives — a
-    dispatch failure caused by the observability change rather than by the work. It
-    is driven here at its real interface, the one the wrapper gives it: the child's
-    stdout on stdin, onejudge's stdin on stdout, and the two files it writes.
-    """
-    status_dir = _status_dir(dispatch_scratch)
-    record = status_dir / "agent.stdout"
-    record.touch()
-    activity = status_dir / "agent.activity"
-    report = '{"schema_version":"0.3","results":[]}'
-    stream = "\n".join(
-        (
-            # An envelope shape this build does not model — a later oneharness may
-            # add one, and a turn must not die because of it.
-            '{"type":"notice","message":"a shape from a later protocol"}',
-            # An event envelope with no event in it: nothing to publish, and nothing
-            # onejudge could do with it either.
-            '{"type":"event"}',
-            # Not JSON at all, which is what a harness that printed over the protocol
-            # looks like.
-            "oneharness: warning: something happened",
-            '{"type":"event","event":{"kind":"tool_call","name":"Bash",'
-            '"input":{"command":"just check"}}}',
-            '{"type":"result","report":' + report + "}",
-        )
-    )
-
-    completed = subprocess.run(
-        [
-            str(REPO_ROOT / ".venv" / "bin" / "python3"),
-            str(REPO_ROOT / "scripts" / "oneharness-stream.py"),
-            str(record),
-            str(activity),
-        ],
-        input=stream + "\n",
-        text=True,
-        capture_output=True,
-        env={**os.environ, "ONEHARNESS_HISTORY_LABELS": "run_id=r,round=1,node=n"},
-        timeout=timeout(30),
-    )
-
-    assert completed.returncode == 0, completed.stderr
-    forwarded = completed.stdout.strip().splitlines()
-    # Everything unrecognized, verbatim and in order, then the unwrapped report.
-    assert forwarded == [
-        '{"type":"notice","message":"a shape from a later protocol"}',
-        "oneharness: warning: something happened",
-        report,
-    ]
-    # The raw record keeps every line the child wrote, recognized or not.
-    assert record.read_text(encoding="utf-8").strip().splitlines() == stream.splitlines()
-    # And the one real event still published, counted as the only one.
-    assert json.loads(activity.read_text(encoding="utf-8"))["events"] == 1
-
-
-def test_the_filter_reports_a_record_it_cannot_keep(dispatch_scratch: ExitStack) -> None:
-    """`tee` failed the capture here before, and the wrapper still turns that into a
-    failed turn — the one thing that must not happen is a turn whose transcript
-    quietly went missing being reported as a turn nobody had anything to say about.
-    """
-    status_dir = _status_dir(dispatch_scratch)
-    # A directory where the record goes is unopenable regardless of privilege.
-    (status_dir / "agent.stdout").mkdir()
-
-    completed = subprocess.run(
-        [
-            str(REPO_ROOT / ".venv" / "bin" / "python3"),
-            str(REPO_ROOT / "scripts" / "oneharness-stream.py"),
-            str(status_dir / "agent.stdout"),
-            str(status_dir / "agent.activity"),
-        ],
-        input='{"type":"result","report":{}}\n',
-        text=True,
-        capture_output=True,
-        timeout=timeout(30),
-    )
-
-    assert completed.returncode == 2
-    assert "cannot keep the agent stdout record" in completed.stderr
-    # The message names what to do about it, not only what went wrong.
-    assert "retry through orchestrator dispatch" in completed.stderr
-
-
-def test_the_filter_refuses_to_write_outside_a_dispatch_status_directory(
-    tmp_path: Path,
-) -> None:
-    """A path is this process's one input, and both of its paths become writes.
-
-    It appends a turn's whole stdout to one and atomically replaces the other, so an
-    unvalidated path would make it a general-purpose writer pointed by its caller.
-    It requires the same directory shape the wrapper requires of
-    ``ORCHESTRATOR_AGENT_STATUS_DIR`` before writing any marker of its own.
-    """
-    stray = tmp_path / "somewhere" / "agent.stdout"
-    stray.parent.mkdir(parents=True)
-
-    completed = subprocess.run(
-        [
-            str(REPO_ROOT / ".venv" / "bin" / "python3"),
-            str(REPO_ROOT / "scripts" / "oneharness-stream.py"),
-            str(stray),
-            str(stray.with_name("agent.activity")),
-        ],
-        input='{"type":"result","report":{}}\n',
-        text=True,
-        capture_output=True,
-        timeout=timeout(30),
-    )
-
-    assert completed.returncode == 2
-    assert "in one dispatch status directory" in completed.stderr
-    assert "invoke through orchestrator dispatch" in completed.stderr
-    assert not stray.exists()
-
-
 def test_status_reports_only_the_publication_it_can_stand_behind(
     tmp_path: Path, dispatch_scratch: ExitStack
 ) -> None:
@@ -572,7 +457,7 @@ def test_status_reports_only_the_publication_it_can_stand_behind(
         summary("ancient", at=time.time() - STALE_AFTER_SECONDS - 60), encoding="utf-8"
     )
     (_status_dir(dispatch_scratch) / "agent.activity").write_text(
-        summary("ahead", at=time.time() + STALE_AFTER_SECONDS + 60), encoding="utf-8"
+        summary("ahead", at=time.time() + FUTURE_TOLERANCE_SECONDS + 60), encoding="utf-8"
     )
     # A JSON number Python parses and every age comparison silently passes.
     (_status_dir(dispatch_scratch) / "agent.activity").write_text(
