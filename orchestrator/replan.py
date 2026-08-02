@@ -36,7 +36,7 @@ from typing import Any
 from .config import ConfigError, load_yaml
 from .lifecycle import MAX_AUTOMATIC_STEP_RESUMES
 from .outcomes import INFRASTRUCTURE_FAILURE_OUTCOME
-from .runs import RunId, StackBasePayload
+from .runs import NodeId, RunId, StackBasePayload
 
 __all__ = ["executed_plan", "next_round", "round_context", "round_supersessions"]
 
@@ -60,7 +60,7 @@ def executed_plan(run_dir: Path, round_number: int, launch_plan: dict[str, Any])
     return dict(projected.plan)
 
 
-def round_supersessions(run_dir: Path, round_number: int) -> dict[str, str]:
+def round_supersessions(run_dir: Path, round_number: int) -> dict[NodeId, NodeId]:
     """Nodes a live ``retry`` replaced during one round, mapped to their replacement.
 
     A live retry does not edit the node in place the way a `next-round` retry does:
@@ -79,7 +79,7 @@ def round_supersessions(run_dir: Path, round_number: int) -> dict[str, str]:
         events = read_events(run_dir / JOURNAL_NAME)
     except OSError:
         return {}
-    replaced: dict[str, str] = {}
+    replaced: dict[NodeId, NodeId] = {}
     for event in events:
         if event.round != round_number or event.kind != "edit-committed":
             continue
@@ -93,7 +93,7 @@ def round_supersessions(run_dir: Path, round_number: int) -> dict[str, str]:
             detail = operation.get("detail")
             replacement = detail.get("replacement") if isinstance(detail, Mapping) else None
             if isinstance(nid, str) and isinstance(replacement, str) and replacement:
-                replaced[nid] = replacement
+                replaced[NodeId(nid)] = NodeId(replacement)
     return replaced
 
 
@@ -136,7 +136,7 @@ def next_round(
     edits: dict[str, Any] | None = None,
     *,
     carried_context: Mapping[str, list[str]] | None = None,
-    superseded: Mapping[str, str] | None = None,
+    superseded: Mapping[NodeId, NodeId] | None = None,
 ) -> dict[str, Any]:
     """Compute the next round's tracked-graph mapping.
 

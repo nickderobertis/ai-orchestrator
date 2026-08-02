@@ -337,11 +337,6 @@ def finish_heartbeat_attempt(channel_dir: Path, *, now: float | None = None) -> 
         atomic_json(_heartbeat_path(channel_dir), state)
 
 
-def fail_heartbeat_claim(channel_dir: Path, *, now: float | None = None) -> None:
-    """Release a failed synthesis claim until its next retry interval."""
-    finish_heartbeat_attempt(channel_dir, now=now)
-
-
 def apply_heartbeat_reply(channel_dir: Path, response: Mapping[str, Any]) -> None:
     """Apply an optional live interval update without changing verdict semantics."""
     if "heartbeat_interval" not in response:
@@ -1238,7 +1233,7 @@ class ProposalPump:
             # nobody read was the last the run ever sent.
             finish_heartbeat_attempt(self._channel_dir)
         except Exception as exc:
-            fail_heartbeat_claim(self._channel_dir)
+            finish_heartbeat_attempt(self._channel_dir)
             with (
                 advisory_lock(f"channel-check-in-log:{self._channel_dir.resolve()}"),
                 (self._channel_dir / "check-in.log").open("a", encoding="utf-8") as stream,

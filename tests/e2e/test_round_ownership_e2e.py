@@ -55,7 +55,7 @@ from waits import timeout as e2e_timeout
 
 from orchestrator import REPO_ROOT
 from orchestrator.channel import create_channel
-from orchestrator.coordination import advisory_lock
+from orchestrator.coordination import advisory_lock, atomic_json
 from orchestrator.detach import CRASHED
 from orchestrator.runs import TEARDOWN_SIGNALS
 from orchestrator.watchdog import ProcessId, process_group_is_running
@@ -767,11 +767,40 @@ def test_status_reports_a_dead_round_beside_the_surface_it_left_pending(
         relay.stdin.write(json.dumps({"op": "supervisor", "kind": "blocker", "message": "held"}))
         relay.stdin.close()
         _await(channel_dir / "planner-pending.json", "the queued planner surface")
+        # A check-in this run queued and nobody read, still on disk when it dies. Its
+        # own reporting line must not survive the run: both views would otherwise
+        # invite a planner to `channel-next` a surface nothing will ever follow up on.
+        # llmlint: ignore[tests_mirror_real_usage] Queuing this through the pacemaker
+        # would spend real harness turns on a check-in agent whose content this journey
+        # never reads; what it asserts is what the views print, through the real
+        # `just runs` and `just status` below.
+        atomic_json(
+            channel_dir / "heartbeat-surface.json",
+            {
+                "op": "supervisor",
+                "run_id": run_id,
+                "round": 1,
+                "surface": {
+                    "kind": "heartbeat",
+                    "message": "worker: still verifying",
+                    "blocking": False,
+                },
+                "messages": [],
+            },
+        )
 
         os.kill(launch.owner, signal.SIGKILL)
         _await_exit(launch.owner)
 
         reported = _status(rounds.runs, tmp_path / "empty-history")
+        listed = subprocess.run(
+            ["just", "runs", "--runs-dir", str(rounds.runs)],
+            cwd=REPO_ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=e2e_timeout(180),
+        )
     finally:
         with contextlib.suppress(PermissionError, ProcessLookupError):
             os.killpg(os.getpgid(relay.pid), signal.SIGKILL)
@@ -790,6 +819,15 @@ def test_status_reports_a_dead_round_beside_the_surface_it_left_pending(
     assert dead in lines, reported.stdout
     assert stale in lines, reported.stdout
     assert lines.index(dead) + 1 == lines.index(stale), reported.stdout
+
+    # The queued check-in is still on disk, and neither view offers to read it: a run
+    # that stopped keeps the line saying why, not an invitation to supervise it. The
+    # two views are read interchangeably, so they must not disagree about this.
+    assert (channel_dir / "heartbeat-surface.json").is_file()
+    assert listed.returncode == 0, listed.stderr
+    assert f"! {run_id}" in listed.stdout, listed.stdout
+    assert "planner update waiting" not in listed.stdout, listed.stdout
+    assert "planner update waiting" not in reported.stdout, reported.stdout
 
 
 def test_a_recovery_that_refuses_the_journal_abandons_the_round_it_claimed(
