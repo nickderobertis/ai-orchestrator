@@ -74,7 +74,12 @@ from .monitor import attach
 from .personas import persona_path
 from .redaction import redact
 from .runs import ArtifactPaths, resolve_run_dir, slugify, validate_run_id
-from .scratch import AGENT_STATUS_DIR_ENV, AGENT_STATUS_DIR_NAME, owned_scratch_directory
+from .scratch import (
+    AGENT_ACTIVITY_NAME,
+    AGENT_STATUS_DIR_ENV,
+    AGENT_STATUS_DIR_NAME,
+    owned_scratch_directory,
+)
 from .watchdog import (
     OWN_PROCESS_GROUP_FLAG,
     ProcessId,
@@ -139,6 +144,12 @@ AGENT_STATUS_NAMES = (
     AGENT_FAILURE_NAME,
     AGENT_STDERR_NAME,
     AGENT_STDOUT_NAME,
+    # Unlike every other name here, this one is not read by *this* module: it is a
+    # streamed turn's live publication, and its reader is `orchestrator.activity`
+    # on behalf of the planner views. It belongs in the contract regardless,
+    # because the contract is what the wrapper is allowed to write into the
+    # directory this module owns.
+    AGENT_ACTIVITY_NAME,
 )
 #: How much of the dead child's stderr tail a death report carries. The tail is
 #: the part that names the failure; the cap keeps one runaway harness from

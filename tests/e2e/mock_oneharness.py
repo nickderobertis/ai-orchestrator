@@ -58,6 +58,16 @@ def main(argv: list[str]) -> int:
     if not argv or argv[0] != "run":
         print(f"mock_oneharness: unsupported invocation {argv}", file=sys.stderr)
         return 2
+    harnesses = tuple(filter(None, os.environ.get("MOCK_HARNESSES", "codex").split(",")))
+    if "--print-command" in argv:
+        # The wrapper's streaming-capability probe. The real CLI answers it by
+        # validating the invocation and rendering what it *would* spawn — it starts
+        # no harness, writes no history and does no work — so this must delegate
+        # straight to it. Answering from the mock's own body instead would count as
+        # a run wherever runs are counted, and would sit down at the barrier below
+        # that only a real turn is meant to reach.
+        probe = mock_run_command(oneharness_bin, *argv[1:], harnesses=harnesses)
+        return subprocess.run(probe).returncode
     invocation_log = os.environ.get("MOCK_INVOCATION_LOG")
     if invocation_log:
         with Path(invocation_log).open("a", encoding="utf-8") as stream:
@@ -79,7 +89,6 @@ def main(argv: list[str]) -> int:
         Path(barrier).write_text(str(descendant.pid), encoding="utf-8")
         while True:
             time.sleep(0.05)
-    harnesses = tuple(filter(None, os.environ.get("MOCK_HARNESSES", "codex").split(",")))
     completed = subprocess.run(mock_run_command(oneharness_bin, *argv[1:], harnesses=harnesses))
     return completed.returncode
 

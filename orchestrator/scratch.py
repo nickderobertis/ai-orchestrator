@@ -35,6 +35,13 @@ AGENT_STATUS_DIR_ENV = "ORCHESTRATOR_AGENT_STATUS_DIR"
 #: directory, so a value that merely lands somewhere under the swept root proves
 #: nothing and claims nothing.
 AGENT_STATUS_DIR_NAME = "agent"
+#: The file a streamed agent turn republishes on every observed event, inside that
+#: same directory. It is declared here, beside the directory it lives in, because it
+#: has two readers that must not drift: `orchestrator.dispatch` names it in the
+#: status-file contract the wrapper is drift-gated against, and
+#: `orchestrator.activity` reads it back out of this scratch root for the planner
+#: views. Neither of those imports the other.
+AGENT_ACTIVITY_NAME = "agent.activity"
 OWNER_LOCK_NAME = "owner.lock"
 OWNER_RECORD_LIMIT = 128
 THIRD_PARTY_PATTERNS = (
@@ -278,6 +285,46 @@ def _legacy_watchdog_is_reclaimable(path: Path) -> bool:
     except (OSError, ValueError):
         return False
     return process_start_identity(pid) is None
+
+
+def watchdog_has_a_live_owner(path: Path) -> bool:
+    """Whether a dispatcher demonstrably still holds this watchdog directory.
+
+    `_watchdog_is_reclaimable` below asks a related question for the sweeper, which
+    decides what it may *delete* — so every uncertainty there resolves toward "keep
+    it", down to trusting the identity recorded in an unheld lock. This decides what
+    a read-only view may *believe*, so every uncertainty here resolves the other way,
+    and only a held lock qualifies. It is deliberately not the negation of that
+    function, and the two must not be collapsed into one.
+
+    A filesystem that does not honor ``flock`` therefore answers no for every live
+    dispatch, and the views fall back to the journal alone — which is the picture
+    they had before any of this existed. See `orchestrator.activity`.
+    """
+    try:
+        fd = _open_lock_file(path / OWNER_LOCK_NAME, create=False)
+    except OSError:
+        return False
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        # The lock is held, which is the kernel's own answer and the only one this
+        # accepts: `owned_scratch_directory` holds it for a dispatch's whole scope.
+        # The identity recorded *inside* the file is deliberately not consulted —
+        # a live process named by a lock it does not hold is not the owner of this
+        # tree, and treating it as one would let a stale record from a reused pid
+        # qualify a directory nothing is dispatching into. The sweeper reads that
+        # record because losing a live owner would cost it real work; a view that
+        # believes the wrong one costs a supervisor a wrong picture instead.
+        return True
+    except OSError:
+        # Every other way locking can fail — a filesystem with no lock support, a
+        # kernel out of lock records — says nothing about who owns this tree, and
+        # this answers no to anything it cannot establish.
+        return False
+    finally:
+        os.close(fd)
+    return False
 
 
 def _watchdog_is_reclaimable(path: Path) -> bool:

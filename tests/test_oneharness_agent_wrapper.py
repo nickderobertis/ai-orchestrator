@@ -10,7 +10,9 @@ faked, mirroring how the e2e suite fakes just the paid harness.
 
 from __future__ import annotations
 
+import json
 import re
+import shlex
 import stat
 import subprocess
 import time
@@ -1045,6 +1047,11 @@ def test_an_unusable_stderr_capture_is_reported_not_assumed_away(tmp_path: Path)
     # privilege, while the copy already holding the old handle keeps running.
     stub.write_text(
         "#!/usr/bin/env bash\n"
+        # The wrapper asks whether this invocation can stream before it runs the
+        # turn, and the real CLI answers `--print-command` by rendering what it
+        # would spawn and spawning nothing. A stub that ran its whole body for that
+        # question would model a binary oneharness is not.
+        'for arg in "$@"; do [ "$arg" = "--print-command" ] && exit 0; done\n'
         'echo "provider error: 429 rate_limit_error" >&2\n'
         'rm -f "$ORCHESTRATOR_AGENT_STATUS_DIR/agent.stderr"\n'
         'mkdir "$ORCHESTRATOR_AGENT_STATUS_DIR/agent.stderr"\n'
@@ -1156,3 +1163,290 @@ def test_a_failed_stdout_capture_cannot_publish_success(tmp_path: Path) -> None:
 
     assert exit_code == "2"
     assert "agent stdout capture failed" in recorded
+
+
+#: The one report shape onejudge accepts: a single bare JSON document on stdout.
+#: `oneharness run --stream` writes something else entirely, so these tests pin what
+#: the wrapper hands onejudge in each of the three selections below.
+_REPORT = '{"schema_version":"0.3","results":[{"harness_id":"claude-code","status":"ok"}]}'
+_STREAMED = (
+    '{"type":"event","event":{"kind":"tool_call","name":"Bash",'
+    '"input":{"command":"just check"}}}\n'
+    '{"type":"result","report":' + _REPORT + "}"
+)
+
+
+def _stream_capable_stub(bin_dir: Path, *, streamable: bool) -> Path:
+    """A stub oneharness that answers the capability probe and then the run.
+
+    ``--print-command`` is the wrapper's probe: the real CLI renders what it would
+    spawn, validates `--stream` against the config and this invocation's flags, and
+    spawns nothing. ``streamable`` is that answer. The run itself then emits whichever
+    shape the flags it was actually given call for, exactly as the real CLI does.
+    """
+    stub = bin_dir / "oneharness"
+    stub.write_text(
+        "#!/usr/bin/env bash\n"
+        'printf "%s\\n" "$*" >> "$ONEHARNESS_ARGS_FILE"\n'
+        "probe=false; streaming=false\n"
+        'for arg in "$@"; do\n'
+        '    [ "$arg" = "--print-command" ] && probe=true\n'
+        '    [ "$arg" = "--stream" ] && streaming=true\n'
+        "done\n"
+        f"[ {str(streamable).lower()} = false ] && [ $streaming = true ] && exit 2\n"
+        "[ $probe = true ] && exit 0\n"
+        f'if [ $streaming = true ]; then printf "%s\\n" {shlex.quote(_STREAMED)};\n'
+        f'else printf "%s\\n" {shlex.quote(_REPORT)}; fi\n',
+        encoding="utf-8",
+    )
+    stub.chmod(stub.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    return stub
+
+
+def _run_streaming_wrapper(
+    tmp_path: Path, argv: list[str], *, streamable: bool = True, name: str = "stream"
+) -> tuple[subprocess.CompletedProcess[str], list[str], Path]:
+    """Drive the wrapper's dispatched path; return (proc, every recorded argv, status dir)."""
+    status_dir = tmp_path / f"orchestrator-watchdog-{name}" / "agent"
+    status_dir.mkdir(parents=True)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    _stream_capable_stub(bin_dir, streamable=streamable)
+    args_file = tmp_path / f"argv-{name}"
+    proc = subprocess.run(
+        ["bash", str(WRAPPER), *argv],
+        text=True,
+        capture_output=True,
+        stdin=subprocess.DEVNULL,
+        env={
+            "PATH": f"{bin_dir}:/usr/bin:/bin",
+            "HOME": str(tmp_path / "home"),
+            "ONEHARNESS_ARGS_FILE": str(args_file),
+            "ORCHESTRATOR_AGENT_STATUS_DIR": str(status_dir),
+        },
+    )
+    recorded = args_file.read_text(encoding="utf-8").splitlines() if args_file.exists() else []
+    return proc, recorded, status_dir
+
+
+def test_a_dispatched_turn_streams_and_still_hands_onejudge_one_report(tmp_path: Path) -> None:
+    """The whole point, and the constraint it had to be reconciled with.
+
+    `--events` only guarantees the transcript is in the report at the *end* of a
+    turn, so a node was invisible for the 600-2000 seconds one takes here. `--stream`
+    delivers the same normalized events as they occur — but onejudge parses this
+    process's stdout as exactly one JSON document, so the stream cannot simply be
+    handed through.
+    """
+    proc, recorded, status_dir = _run_streaming_wrapper(
+        tmp_path, ["run", "--compact", "--events", "--prompt", "probe"]
+    )
+    assert proc.returncode == 0, proc.stderr
+
+    probe, run = recorded
+    # The probe asks about this exact invocation rather than a simplified stand-in.
+    assert "--print-command" in probe and "--stream" in probe and "--compact" in probe
+    # oneharness refuses a repeated flag, so each appears exactly once on the run.
+    assert run.split().count("--stream") == 1
+    assert run.split().count("--events") == 1
+
+    assert proc.stdout.strip() == _REPORT
+    # The raw record keeps every line the child wrote, as `tee` did before.
+    assert (status_dir / "agent.stdout").read_text(encoding="utf-8").strip() == _STREAMED
+    published = json.loads((status_dir / "agent.activity").read_text(encoding="utf-8"))
+    assert (published["name"], published["detail"], published["events"]) == (
+        "Bash",
+        "just check",
+        1,
+    )
+
+
+def test_an_invocation_that_cannot_stream_falls_back_to_events(tmp_path: Path) -> None:
+    """Degrading is never a dispatch failure, and never costs the transcript.
+
+    The probe is one question — can *this* config's chain, with *these* flags, be
+    streamed — and an older CLI that does not know `--stream` at all answers it the
+    same way a mode outside the supported set does.
+    """
+    proc, recorded, status_dir = _run_streaming_wrapper(
+        tmp_path, ["run", "--compact", "--prompt", "probe"], streamable=False, name="degraded"
+    )
+    assert proc.returncode == 0, proc.stderr
+
+    probe, run = recorded
+    assert "--stream" in probe
+    assert "--stream" not in run.split()
+    # `--events` is the degrade path: the transcript still reaches the report.
+    assert run.split().count("--events") == 1
+    assert proc.stdout.strip() == _REPORT
+    assert not (status_dir / "agent.activity").exists()
+
+
+def test_a_caller_that_streams_already_keeps_its_own_stream(tmp_path: Path) -> None:
+    """Nothing is added to, or rewritten for, a caller that asked for the stream.
+
+    oneharness refuses a repeated `--stream`, and a consumer that asked for events as
+    they occur is not asking for them to be buffered back into one report.
+    """
+    proc, recorded, status_dir = _run_streaming_wrapper(
+        tmp_path, ["run", "--compact", "--stream", "--prompt", "probe"], name="caller"
+    )
+    assert proc.returncode == 0, proc.stderr
+
+    # No probe: there is nothing to decide.
+    assert len(recorded) == 1
+    assert recorded[0].split().count("--stream") == 1
+    assert proc.stdout.strip() == _STREAMED
+    assert not (status_dir / "agent.activity").exists()
+
+
+def test_an_undispatched_turn_keeps_events_because_nothing_is_watching(tmp_path: Path) -> None:
+    """No status directory means no dispatch, so a stream would have no consumer."""
+    proc, recorded = _run_wrapper(tmp_path, ["run", "--compact", "--prompt", "probe"])
+
+    assert proc.returncode == 0, proc.stderr
+    assert "--stream" not in recorded
+    assert recorded.count("--events") == 1
+
+
+def test_a_stream_capture_that_refuses_its_paths_records_its_own_reason(tmp_path: Path) -> None:
+    """The reader's account of a failed capture has to survive the process tree.
+
+    A capture that stops working must never read as "the harness said nothing", and
+    the wrapper's failure line says where the reason is — so the reader's stderr goes
+    into that same durable record rather than onto a wrapper stderr that vanishes
+    with the tree the dispatcher tears down.
+
+    The refusal itself is the filter resolving its paths rather than reading their
+    spelling: this status directory has the shape the wrapper requires, and resolves
+    somewhere with no dispatch behind it at all.
+    """
+    actual = tmp_path / "elsewhere" / "agent"
+    actual.mkdir(parents=True)
+    (tmp_path / "orchestrator-watchdog-sneaky").symlink_to(tmp_path / "elsewhere")
+    status_dir = tmp_path / "orchestrator-watchdog-sneaky" / "agent"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    _stream_capable_stub(bin_dir, streamable=True)
+
+    with subprocess.Popen(
+        ["bash", str(WRAPPER), "run", "--compact", "--prompt", "probe"],
+        text=True,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        env={
+            "PATH": f"{bin_dir}:/usr/bin:/bin",
+            "HOME": str(tmp_path / "home"),
+            "ONEHARNESS_ARGS_FILE": str(tmp_path / "argv-sneaky"),
+            "ORCHESTRATOR_AGENT_STATUS_DIR": str(status_dir),
+        },
+    ) as process:
+        try:
+            limit = time.monotonic() + 30
+            while time.monotonic() < limit and not (status_dir / "agent.failed").exists():
+                time.sleep(0.05)
+            assert (status_dir / "agent.failed").exists(), "the wrapper never recorded the failure"
+            recorded = (status_dir / "agent.stderr").read_text(encoding="utf-8")
+        finally:
+            process.kill()
+
+    # The reader's own reason, in the record the wrapper's failure line points at.
+    assert "in one dispatch status directory" in recorded
+    assert "agent stdout capture failed" in recorded
+    assert str(status_dir / "agent.stderr") in recorded
+
+
+def test_a_streamed_turn_forwards_output_the_filter_cannot_read(tmp_path: Path) -> None:
+    """A turn survives output this build does not model, and onejudge still gets one.
+
+    The stream filter sits between oneharness and onejudge on the one channel a
+    turn's answer travels, and onejudge parses that channel as a *single* JSON
+    document — so passing an unmodelled line along would fail a turn that otherwise
+    succeeded, which is the failure this whole arrangement exists to avoid. A later
+    protocol's envelope, an event envelope carrying no event, and a harness that
+    printed over the protocol are all kept in the raw record and kept out of the
+    document.
+    """
+    unmodelled = (
+        '{"type":"notice","message":"a shape from a later protocol"}',
+        '{"type":"event"}',
+        "oneharness: warning: something happened",
+        '{"type":"event","event":{"kind":"tool_call","name":"Bash",'
+        '"input":{"command":"just check"}}}',
+        '{"type":"result","report":' + _REPORT + "}",
+    )
+    status_dir = tmp_path / "orchestrator-watchdog-mixed" / "agent"
+    status_dir.mkdir(parents=True)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    stub = _stream_capable_stub(bin_dir, streamable=True)
+    stub.write_text(
+        "#!/usr/bin/env bash\n"
+        'for arg in "$@"; do [ "$arg" = "--print-command" ] && exit 0; done\n'
+        f"printf '%s\\n' {' '.join(shlex.quote(line) for line in unmodelled)}\n",
+        encoding="utf-8",
+    )
+
+    proc = subprocess.run(
+        ["bash", str(WRAPPER), "run", "--compact", "--prompt", "probe"],
+        text=True,
+        capture_output=True,
+        stdin=subprocess.DEVNULL,
+        env={
+            "PATH": f"{bin_dir}:/usr/bin:/bin",
+            "HOME": str(tmp_path / "home"),
+            "ORCHESTRATOR_AGENT_STATUS_DIR": str(status_dir),
+        },
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    # Exactly the report, and nothing in front of it: onejudge parses this as one
+    # document, so a surviving notice or warning would be the thing that broke it.
+    assert proc.stdout.strip().splitlines() == [_REPORT]
+    assert json.loads(proc.stdout) == json.loads(_REPORT)
+    # The raw record keeps every line the child wrote, recognized or not — nothing
+    # was dropped, only kept out of a channel that could not carry it.
+    assert (status_dir / "agent.stdout").read_text(encoding="utf-8").splitlines() == list(
+        unmodelled
+    )
+    # And the one real event still published, counted as the only one.
+    published = json.loads((status_dir / "agent.activity").read_text(encoding="utf-8"))
+    assert published["events"] == 1
+    assert published["detail"] == "just check"
+
+
+def test_a_streamed_turn_still_carries_a_bare_report_through(tmp_path: Path) -> None:
+    """The one unmodelled line that IS onejudge's document, and must reach it.
+
+    A report with no stream discriminator is what a run that did not stream answers
+    with. Dropping it alongside the noise would turn a turn that produced an answer
+    into a turn that produced nothing — the degrade path failing exactly where it is
+    supposed to hold.
+    """
+    status_dir = tmp_path / "orchestrator-watchdog-bare" / "agent"
+    status_dir.mkdir(parents=True)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    stub = _stream_capable_stub(bin_dir, streamable=True)
+    stub.write_text(
+        "#!/usr/bin/env bash\n"
+        'for arg in "$@"; do [ "$arg" = "--print-command" ] && exit 0; done\n'
+        f"printf '%s\\n' {shlex.quote(_REPORT)}\n",
+        encoding="utf-8",
+    )
+
+    proc = subprocess.run(
+        ["bash", str(WRAPPER), "run", "--compact", "--prompt", "probe"],
+        text=True,
+        capture_output=True,
+        stdin=subprocess.DEVNULL,
+        env={
+            "PATH": f"{bin_dir}:/usr/bin:/bin",
+            "HOME": str(tmp_path / "home"),
+            "ORCHESTRATOR_AGENT_STATUS_DIR": str(status_dir),
+        },
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.strip() == _REPORT
