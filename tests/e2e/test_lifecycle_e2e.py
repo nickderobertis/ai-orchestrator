@@ -2942,8 +2942,14 @@ _OVERLONG_TASK = (
             _FITTING_TASK,
             "fix: retain a failed session's output",
         ),
+        # The release-facing marker describes the branch, so it outlives the description.
+        (
+            (f"feat!: {_OVERLONG_COMMITS[0].partition(': ')[2]}",),
+            _FITTING_TASK,
+            "feat!: Expose captured session output.",
+        ),
     ],
-    ids=["task-name", "generic", "scope-dropped"],
+    ids=["task-name", "generic", "scope-dropped", "breaking-preserved"],
 )
 def test_descriptions_over_the_limit_publish_a_whole_name_not_an_elision(
     tmp_path, bare_origin, messages: tuple[str, ...], task: str, expected: str
