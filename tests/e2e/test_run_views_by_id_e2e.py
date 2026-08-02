@@ -1,11 +1,13 @@
 """Real journey: pointing the planner's read-only views at one run by its id.
 
-`launch.json` advertises a run id as the handle for a run, and `just monitor`
-already accepts it — but `just status` parsed that positional as an integer and
-`just telemetry` accepted no positional at all, so for two days the only way to
-inspect a named run was to read `events.jsonl` and `/proc` by hand. The same
-launch proves the third defect the manual reading hid: telemetry rendered a node
-the journal had recorded as `node-failed` as still `running`.
+`launch.json` advertises a run id as the handle for a run, but `just status`
+parsed that positional as an integer, `just telemetry` accepted no positional at
+all, and `just monitor` — which did accept it — never returned when its output
+was captured, which is every automated planner invocation. So for two days the
+only way to inspect a named run was to read `events.jsonl` and `/proc` by hand.
+The same launch proves the third defect the manual reading hid: a node the journal
+had recorded as `node-failed` still rendered as `running`, in telemetry from the
+in-flight journal and in `status` from the worktree that outlived it.
 
 One real `just orchestrate` launch produces all three: it writes the `launch.json`
 this test reads the identifier out of, its round fails one node immediately, and
@@ -37,11 +39,13 @@ from pathlib import Path
 import pytest
 import yaml
 from history_store import write_worker_session
+from rendezvous import Rendezvous
 from waits import deadline
 from waits import timeout as e2e_timeout
 
 from orchestrator import BASE_CONFIG, REPO_ROOT
 from orchestrator.labels import graph_labels
+from orchestrator.monitor import RETURN_BOUND_SECONDS
 from orchestrator.runs import NodeId, RunId
 
 FAKE_BACKEND = REPO_ROOT / "tests" / "e2e" / "fake_backend.py"
@@ -90,8 +94,31 @@ def _view(command: str, tmp_path: Path, *args: str) -> subprocess.CompletedProce
         text=True,
         capture_output=True,
         check=False,
-        timeout=e2e_timeout(180),
+        # `just monitor` promises to return within its own stated bound off a
+        # terminal, so that budget is this view's guard rather than a hang guard:
+        # exceeding it is the defect, not a slow host.
+        timeout=RETURN_BOUND_SECONDS if command == "monitor" else e2e_timeout(180),
     )
+
+
+def _checked_out_worktree(tmp_path: Path) -> Path:
+    """A real checkout whose branch is checked out — evidence of a live dispatch.
+
+    `just status` recognises a still-running workstream by exactly this: a session
+    whose project is still a checked-out worktree. A failed node keeps one (a direct
+    agent works in the checkout itself and has none of its own to remove), so this is
+    the state in which the filesystem says "running" and the journal says "failed".
+    """
+    worktree = tmp_path / "boom-worktree"
+    worktree.mkdir()
+    for argv in (
+        ["git", "init", "-b", "main", "."],
+        ["git", "config", "user.email", "views@example.com"],
+        ["git", "config", "user.name", "Views"],
+        ["git", "commit", "--allow-empty", "-m", "seed"],
+    ):
+        subprocess.run(argv, cwd=worktree, check=True, capture_output=True, text=True)
+    return worktree
 
 
 def _await_unsettled_round_with_a_failed_node(run_dir: Path, ready: Path) -> None:
@@ -109,12 +136,11 @@ def _await_unsettled_round_with_a_failed_node(run_dir: Path, ready: Path) -> Non
     raise AssertionError(f"the run never reached a failed node beside a held one: {detail}")
 
 
-def test_status_and_telemetry_report_one_run_by_the_id_launch_json_advertises(
+def test_every_read_only_view_reports_one_run_by_the_id_launch_json_advertises(
     tmp_path: Path, launched: list[str], onejudge_bin: str
 ) -> None:
     runs = tmp_path / "runs"
-    ready = tmp_path / "held.ready"
-    release = tmp_path / "held.release"
+    held = Rendezvous.at(tmp_path, "held")
     live_plan = tmp_path / "live-plan.json"
     live_plan.write_text(
         json.dumps(
@@ -126,10 +152,7 @@ def test_status_and_telemetry_report_one_run_by_the_id_launch_json_advertises(
                     {
                         "id": "held",
                         "persona": "engineer",
-                        "task": (
-                            f"slow-branch {tmp_path / 'held.ticks'} live-edit-slow "
-                            f"live-edit-ready={ready} live-edit-release={release}"
-                        ),
+                        "task": f"slow-branch {tmp_path / 'held.ticks'}{held.sentinels(1)}",
                     },
                     {
                         "id": "boom",
@@ -224,14 +247,14 @@ def test_status_and_telemetry_report_one_run_by_the_id_launch_json_advertises(
     store.mkdir(parents=True)
     write_worker_session(
         store / "held-20260731T120000Z-1.jsonl",
-        project=tmp_path / "held-worktree",
+        project=_checked_out_worktree(tmp_path),
         name="held",
         prompt="should-fail no-assessment",
         labels=graph_labels(run_id=RunId(advertised), round_number=1, node=NodeId("boom")),
     )
 
     try:
-        _await_unsettled_round_with_a_failed_node(runs / live, ready)
+        _await_unsettled_round_with_a_failed_node(runs / live, held.ready)
 
         # Defect 2: this positional did not exist, so a run could not be named at all.
         scoped = _view("telemetry", tmp_path, advertised)
@@ -260,28 +283,52 @@ def test_status_and_telemetry_report_one_run_by_the_id_launch_json_advertises(
         # different run selects only the sessions that run labelled, which here is none.
         every_task = _view("status", tmp_path, "--all")
         assert every_task.returncode == 0, every_task.stderr
-        assert "held-worktree" in every_task.stdout
+        assert "boom-worktree" in every_task.stdout
 
         run_status = _view("status", tmp_path, advertised)
         assert run_status.returncode == 0, run_status.stderr
-        assert "held-worktree" in run_status.stdout
+        assert "boom-worktree" in run_status.stdout
         encoded = _view("status", tmp_path, advertised, "--format", "json")
         assert encoded.returncode == 0, encoded.stderr
         assert [task["task"] for task in json.loads(encoded.stdout)] == ["held"]
 
+        # Defect 3 again, in the view whose evidence is the filesystem: this
+        # session's worktree is still checked out, which is the whole basis on which
+        # `status` calls a workstream running. The journal has already recorded its
+        # node as failed, and the journal wins.
+        [reported_task] = json.loads(encoded.stdout)
+        assert (reported_task["running"], reported_task["node_state"]) == (False, "failed")
+        assert "(failed;" in run_status.stdout
+        assert "(running;" not in run_status.stdout
+
+        # Defect 2: `just monitor <run-id>` is what `launch.json` advertises, and a
+        # captured invocation of it never returned — so the planner read the journal
+        # by hand instead. It returns here, within its own stated bound, and the
+        # `_view` timeout above is what enforces that.
+        watched = _view("monitor", tmp_path, advertised)
+        assert watched.returncode == 0, watched.stderr
+        assert f"graph:{advertised}/1/boom  node-failed" in watched.stdout
+        assert f"graph:{advertised}/1/held  node-failed" not in watched.stdout
+        watched_by_plan_name = _view("monitor", tmp_path, plan_name)
+        assert watched_by_plan_name.returncode == 0, watched_by_plan_name.stderr
+        assert f"graph:{advertised}/1/boom  node-failed" in watched_by_plan_name.stdout
+        unwatchable = _view("monitor", tmp_path, "no-such-run")
+        assert unwatchable.returncode == 2
+        assert "no recorded run 'no-such-run'" in unwatchable.stderr
+
         other_run = _view("status", tmp_path, "neighbour")
         assert other_run.returncode == 0, other_run.stderr
         assert other_run.stdout.strip().endswith("No dispatched tasks recorded for run neighbour.")
-        assert "held-worktree" not in other_run.stdout
+        assert "boom-worktree" not in other_run.stdout
 
-        # Both views resolve the plan name the same launch advertises, exactly as
-        # `just monitor` does, and land on the run id rather than on the name.
+        # Each view also resolves the plan name the same launch advertises, and
+        # lands on the run id rather than on the name.
         by_plan_name = _view("telemetry", tmp_path, plan_name)
         assert by_plan_name.returncode == 0, by_plan_name.stderr
         assert [run["run_id"] for run in json.loads(by_plan_name.stdout)["runs"]] == [advertised]
         status_by_plan_name = _view("status", tmp_path, plan_name)
         assert status_by_plan_name.returncode == 0, status_by_plan_name.stderr
-        assert "held-worktree" in status_by_plan_name.stdout
+        assert "boom-worktree" in status_by_plan_name.stdout
 
         # The count positional this argument started as keeps its meaning, and an
         # identifier that names no run is refused rather than read as a count.
@@ -292,4 +339,4 @@ def test_status_and_telemetry_report_one_run_by_the_id_launch_json_advertises(
         assert unknown.returncode == 2
         assert "no recorded run 'no-such-run'" in unknown.stderr
     finally:
-        release.write_text("go\n", encoding="utf-8")
+        held.let_go()

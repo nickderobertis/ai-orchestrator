@@ -40,7 +40,7 @@ bootstrap:
 # followed with `tail -f .logs/check.log` instead of through /proc.
 # llmlint: ignore[changed_behavior_has_e2e] The public recipe is the real deterministic gate invoked by this task and pre-push; its sequencing failures use subprocess doubles to avoid recursively invoking the same full suite.
 check:
-    @source ./scripts/preserved-log.sh; preserved_log_open "{{repo_root}}" check; log=$PRESERVED_LOG; { ./scripts/nx.sh run-many -t format-check,lint,typecheck,test,test-docs && ./scripts/check-oneharness-ui-contract.sh && python3 ./scripts/check-dag-state-contract.py && ./scripts/check-nx-cache.sh; } 2>&1 | redact_secrets >"$log" || { cat "$log" >&2; echo "check: deterministic checks failed; fix the reported findings and retry (full output: $log)" >&2; exit 1; }; total=$(./scripts/coverage-total.sh "{{repo_root}}"); echo "check: all deterministic checks passed${total:+ (line coverage ${total}%)}"
+    @source ./scripts/preserved-log.sh; preserved_log_open "{{repo_root}}" check; log=$PRESERVED_LOG; { ./scripts/nx.sh run-many -t format-check,lint,typecheck,test,test-docs,test-recipes && ./scripts/check-oneharness-ui-contract.sh && python3 ./scripts/check-dag-state-contract.py && ./scripts/nx.sh run workspace:check-nx-cache; } 2>&1 | redact_secrets >"$log" || { cat "$log" >&2; echo "check: deterministic checks failed; fix the reported findings and retry (full output: $log)" >&2; exit 1; }; total=$(./scripts/coverage-total.sh "{{repo_root}}"); echo "check: all deterministic checks passed${total:+ (line coverage ${total}%)}"
 
 # Complete pre-push gate: deterministic checks followed by llmlint on this branch.
 #
@@ -72,11 +72,18 @@ smoke:
 # A green run says one line, like `check`: the suite's own output is the failure
 # report, and it is streamed in full when there is one.
 test *nx_args:
-    @log=$(mktemp); trap 'rm -f "$log"' EXIT; ./scripts/nx.sh run-many -t test,test-docs {{nx_args}} >"$log" 2>&1 || { cat "$log" >&2; echo "test: suites failed; fix the reported findings and rerun 'just test'" >&2; exit 1; }; echo "test: all suites passed"
+    @log=$(mktemp); trap 'rm -f "$log"' EXIT; ./scripts/nx.sh run-many -t test,test-docs,test-recipes {{nx_args}} >"$log" 2>&1 || { cat "$log" >&2; echo "test: suites failed; fix the reported findings and rerun 'just test'" >&2; exit 1; }; echo "test: all suites passed"
 
 # The e2e suite alone (real onejudge subprocess boundary) — quick inner loop.
+#
+# Same worker count and distribution as the `test` tier, for the same reason: the
+# journeys wait on subprocesses rather than compute, so the wall clock is latency
+# and the workers are nearly free. `single_threaded` is deselected here too — those
+# tests need a process with no execnet thread in it, and `orchestrator:test` runs
+# them in the serial invocation that owns them.
 test-e2e:
-    uv run pytest tests/e2e
+    # llmlint: ignore[tool_output_is_signal] Watching one suite run as it goes is the only thing this recipe is for; `just test` is the one that reduces a green run to a line.
+    @uv run pytest tests/e2e -m 'not single_threaded' -n 4 --dist load
 
 # Lint Python (ruff) and the shell script (shellcheck); fail on findings.
 lint:
@@ -106,7 +113,7 @@ format-check:
 # file an EXIT trap removes takes that account with it.
 # llmlint: ignore[changed_behavior_has_e2e] The public recipe's real Bun success/failure paths run in an isolated fixture; uv and Nx are subprocess doubles because recursively running the full upgraded suite from pytest cannot terminate.
 upgrade:
-    @source ./scripts/preserved-log.sh; preserved_log_open "{{repo_root}}" upgrade; log=$PRESERVED_LOG; { uv lock --upgrade && uv sync && bun update --latest nx @nx/eslint @nx/eslint-plugin @nx/js eslint typescript@6 typescript-eslint @biomejs/biome && ./scripts/nx.sh run-many -t build,lint,typecheck,test,test-docs; } 2>&1 | redact_secrets >"$log" || { cat "$log" >&2; echo "upgrade: repair dependency constraints or target findings and retry (full output: $log)" >&2; exit 1; }; echo "upgrade: dependencies refreshed and targets passed"
+    @source ./scripts/preserved-log.sh; preserved_log_open "{{repo_root}}" upgrade; log=$PRESERVED_LOG; { uv lock --upgrade && uv sync && bun update --latest nx @nx/eslint @nx/eslint-plugin @nx/js eslint typescript@6 typescript-eslint @biomejs/biome && ./scripts/nx.sh run-many -t build,lint,typecheck,test,test-docs,test-recipes; } 2>&1 | redact_secrets >"$log" || { cat "$log" >&2; echo "upgrade: repair dependency constraints or target findings and retry (full output: $log)" >&2; exit 1; }; echo "upgrade: dependencies refreshed and targets passed"
 
 # Local-first runs no CI, but origin is the shared source of truth: push every
 # change that lands on main. The pre-push hook gates this like any push; if git
@@ -244,10 +251,12 @@ history *args:
 history-show *args:
     uv run orchestrator-history-show {{args}}
 
-# Follow one tracked-graph run as one concise event stream, aggregating the run
+# Watch one tracked-graph run as one concise event stream, aggregating the run
 # journal, its labelled oneharness sessions, its lifecycle-branch commits, and its
 # linked PR state. `just monitor [RUN_ID]`; defaults to the newest active run.
-# Only successful graph completion exits 0 — waiting/failed/stopped heartbeat on.
+# Follows on a terminal, where only successful graph completion exits 0 and
+# waiting/failed/stopped heartbeat on. Off one — a pipe, a file, any captured
+# invocation — it makes one bounded pass and exits 0; `--follow` overrides.
 # llmlint: ignore[tool_output_is_signal] the requested continuous event stream is this viewing command's product.
 monitor *args:
     uv run orchestrator-monitor {{args}}

@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Local orchestration harness: drive many onejudge processes to complete a task DAG in parallel."
 requires-python = ">=3.11"
 dependencies = [
-    "oneharness-cli==0.5.10",
+    "oneharness-cli==0.6.3",
     "onejudge==0.3.4",
     "pyyaml>=6.0",
     "fastapi>=0.115",
@@ -53,6 +53,7 @@ orchestrator-sweep-scratch = "orchestrator.scratch:main"
 dev = [
     "pytest>=8.0",
     "pytest-cov>=5.0",
+    "pytest-xdist>=3.6",
     "ruff>=0.6",
     "mypy>=1.11",
     "types-PyYAML>=6.0",
@@ -85,6 +86,8 @@ addopts = "-q"
 tmp_path_retention_count = 3
 markers = [
     "reads_docs: asserts on this repository's own prose, so it belongs to the whole-workspace test tier rather than the code-only one",
+    "reads_recipes: drives this repository's own recipes and scripts and reads nothing else of it, so it belongs to the recipe-scoped test tier rather than the code-only one",
+    "single_threaded: asserts on a process-directed signal, so it needs a process whose every thread it controls; xdist workers carry execnet's receiver thread, so these run in their own serial invocation",
 ]
 
 [tool.coverage.run]

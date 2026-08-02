@@ -1,10 +1,88 @@
-# llmlint: ignore-file[changed_behavior_has_e2e] config parsing plus the real wrapper boundary prove this Codex-only list without spending another paid model invocation.
-# LLM lint is a third, independent side of the harness. Keep it on Codex even
-# when the worker's discovered oneharness.toml prefers Claude Code.
+# llmlint: ignore-file[changed_behavior_has_e2e] config parsing plus the real wrapper boundary prove this chain without spending another paid model invocation.
+# LLM lint is a third, independent side of the harness, with its own priority
+# order — it keeps that order even though the worker's discovered oneharness.toml
+# prefers Claude Code.
 run_mode = "fallback"
 history = true
 history_labels = { role = "llmlint" }
-harnesses = ["codex"]
+# Codex carries this tier, and a second Codex identity absorbs an exhausted quota
+# before the chain leaves the provider. Past that it now reaches the workers'
+# alternate Claude subscriptions before the primary one — this tier is no longer
+# Codex-only. That is the operator's deliberate trade: a blocking pre-push check
+# that can still be judged beats one isolated from the workers' Claude quota.
+harnesses = [
+    "codex",
+    "codex:alternate",
+    "claude-code:alternate",
+    "claude-code:alternate2",
+    "claude-code:primary",
+]
 
 [harness.codex]
 model = "gpt-5.6-sol"
+# Codex's read-only filesystem sandbox is usable on this host, but its default
+# network isolation asks bubblewrap to configure loopback in a namespace that the
+# outer container forbids. Grant network only: Codex retains its OS-enforced
+# read-only filesystem while avoiding that unsupported namespace operation.
+#
+# This lives here, per harness, rather than as the `-- <HARNESS_ARG>` passthrough
+# scripts/llmlint-oneharness.sh used to append: oneharness appends those trailing
+# arguments to WHICHEVER harness fallback selects, and now that this chain reaches
+# Claude Code, `-c` there is claude's `--continue` boolean — so the permission
+# string would be swallowed as a positional prompt, silently replacing the lint
+# prompt with junk instead of failing. A `[harness.codex]` entry cannot reach a
+# non-Codex candidate at all, and both Codex identities inherit it. It is only
+# consulted when Codex actually sandboxes (this tier forces oneharness
+# `--mode read-only`); with the sandbox bypassed there is no policy to widen.
+# llmlint: ignore[least_privilege_grants] Codex exposes only coarse disk/network grants; llmlint needs repository reads and its model endpoint, with the outer container as boundary.
+args = ["-c", 'sandbox_permissions=["disk-full-read-access","network-full-access"]']
+
+# The second Codex identity; held identical to oneharness.toml's by
+# tests/test_harness_routing.py, since one drifted copy would silently change how
+# a role authenticates. See scripts/codex-alt-home.sh for the indirection.
+[harness.codex.variant.alternate]
+model = "gpt-5.6-sol"
+env_from = { CODEX_HOME = "ORCHESTRATOR_CODEX_ALT_HOME" }
+unset_env = ["OPENAI_API_KEY"]
+
+[harness.claude-code]
+# IS_SANDBOX lets claude-code run under root without --dangerously-skip-permissions
+# refusing; harmless on other harnesses.
+env = { IS_SANDBOX = "1" }
+
+# The three Claude identities carry the same routing as every other role's, held
+# byte-identical by tests/test_harness_routing.py. scripts/llmlint-oneharness.sh
+# exports both alternate indirections, because oneharness refuses to start when a
+# named variant's `env_from` source is unset in the parent.
+[harness.claude-code.variant.alternate]
+model = "claude-opus-5"
+env_from = { CLAUDE_CONFIG_DIR = "ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR" }
+# Subscription auth must not be shadowed by ambient API or OAuth credentials.
+unset_env = [
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
+]
+
+[harness.claude-code.variant.alternate2]
+model = "claude-opus-5"
+env_from = { CLAUDE_CONFIG_DIR = "ORCHESTRATOR_CLAUDE_ALT2_CONFIG_DIR" }
+unset_env = [
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
+]
+
+# The last resort: Claude's default config directory, with every higher-precedence
+# credential selector and any inherited alternate directory masked off.
+[harness.claude-code.variant.primary]
+model = "claude-opus-5"
+unset_env = [
+    "CLAUDE_CONFIG_DIR",
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
+]

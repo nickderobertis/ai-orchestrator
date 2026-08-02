@@ -6,16 +6,19 @@ import argparse
 import json
 import math
 import sys
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from . import gitops, history, runs
 from .channel import ChannelError, due_indicator, planner_wait_indicator
 from .config import ConfigError
 from .goals import concurrent_indicator
+from .journal import JOURNAL_NAME, EventKind, read_events
 from .liveness import PARKED_AFTER_SECONDS, parked_indicator
 from .monitor import RUN_LABEL
+from .projection import TERMINAL_NODE_STATES, NodeState
 from .registry import Registry, RegistryError
 from .workspace import IdentityKey, RepositoryType, Workflow
 
@@ -51,6 +54,11 @@ class TaskStatus:
     harness: str
     model: str
     status: str
+    #: The terminal status the run journal recorded for the graph node this session
+    #: was dispatched for, or ``None`` when the journal has recorded none — either
+    #: because the node is genuinely still in flight or because the dispatch carries
+    #: no graph labels at all.
+    node_state: NodeState | None
     running: bool
     turns: int
     elapsed_ms: int
@@ -67,14 +75,86 @@ class TaskStatus:
     ledger: LedgerState | None
 
 
-def is_running(git: GitState | None) -> bool:
-    """True while a session's branch is still a checked-out worktree.
+def is_running(git: GitState | None, node_state: NodeState | None = None) -> bool:
+    """True while a session's branch is still a checked-out worktree and unsettled.
 
     Under oneharness' 1.0 history every recorded turn is already terminal, so a
     live workstream can only be recognised by its still-present worktree — the
     orchestrator removes it once the branch integrates.
+
+    The worktree alone is not enough, because it is *evidence* and the journal is
+    the record. A node whose dispatch failed can keep its worktree — a direct agent
+    never had one of its own to remove — and reporting that as running is the
+    stale picture a supervisor then acts on. So a node the journal has already
+    recorded as settled is never running here, whatever its checkout still looks
+    like; the journal wins over the filesystem in every read-only view.
     """
-    return bool(git and git.checked_out)
+    return bool(git and git.checked_out) and node_state is None
+
+
+#: Journal kinds that settle a *dispatched* node, and the status each proves on its
+#: own. `node-settled` carries the status it settled with, so it has none of its own.
+#: Node-level `human-waiting` is deliberately absent: the executor emits it only for
+#: a `kind: human` node, which runs no agent, so no history session this view reports
+#: can ever carry that node's label. A lifecycle step awaiting a human is step-scoped
+#: and excluded below, because its node is still working.
+_SETTLING_KINDS: dict[EventKind, str | None] = {
+    "node-failed": "failed",
+    "node-settled": None,
+}
+
+
+def _settled_nodes(runs_dir: Path, run_id: str) -> dict[tuple[str, str], NodeState]:
+    """The terminal status this run's journal recorded for each ``(round, node)``.
+
+    Read straight from the journal rather than from `result.json`, because a round
+    still in flight has written no result and that in-flight round is exactly when
+    this view is asked what is happening.
+
+    That makes the journal a trust boundary, so both values crossing it are checked
+    against their own domain: ``run_id`` arrives as a history *label* a subprocess
+    wrote and becomes a path component, and a recorded status is validated against
+    the terminal states a node can settle in. This view degrades rather than raising
+    on either — a status it cannot recognize falls back to what the event kind
+    itself proves, which for `node-settled` is only that the node is no longer
+    running.
+    """
+    try:
+        events = read_events(runs_dir / runs.validate_run_id(run_id) / JOURNAL_NAME)
+    except (ConfigError, OSError):
+        return {}
+    settled: dict[tuple[str, str], NodeState] = {}
+    for event in events:
+        # A step-scoped wait belongs to a node still working through its lifecycle;
+        # only the node-level locator settles the node itself.
+        if event.node is None or event.step is not None or event.kind not in _SETTLING_KINDS:
+            continue
+        recorded = _SETTLING_KINDS[event.kind] or event.detail.get("status")
+        # `detail` is persisted JSON, so this can be a list or an object: the type
+        # check comes first because membership alone would raise about hashability
+        # rather than degrade, which is the one thing this view must not do.
+        known = isinstance(recorded, str) and recorded in TERMINAL_NODE_STATES
+        status = cast(NodeState, recorded) if known else "done"
+        settled[(str(event.round), str(event.node))] = status
+    return settled
+
+
+def _labelled_locator(labels: Mapping[str, str]) -> tuple[str, str] | None:
+    """The ``(round, node)`` a dispatch's history labels name, if they name one.
+
+    These are values a subprocess wrote, so they are checked against the domain the
+    journal records rather than used as a key on sight: `graph_labels` stamps a
+    round counting from 1 and a non-empty node id, and `Event` admits nothing else.
+    Anything outside that names no node this run journalled, and a run-scoped
+    dispatch with no node — an orchestrator's own session — legitimately has none.
+    """
+    node = labels.get("node", "")
+    recorded_round = labels.get("round", "")
+    if not node or not recorded_round.isdigit() or int(recorded_round) < 1:
+        return None
+    # Normalized through `int` so a zero-padded label and the journal's own integer
+    # round cannot spell the same round two ways.
+    return str(int(recorded_round)), node
 
 
 def _git_state(project: Path) -> GitState | None:
@@ -133,6 +213,10 @@ def collect(
     """
     result: list[TaskStatus] = []
     registry = Registry()
+    # One journal read per run named by a session label, shared across that run's
+    # sessions: a run with twenty dispatches must not re-read its journal twenty
+    # times to answer the same question about it.
+    settled: dict[str, dict[tuple[str, str], NodeState]] = {}
     for session in history.worker_sessions(oneharness_bin=oneharness_bin):
         if run_id is not None and session.labels.get(RUN_LABEL) != run_id:
             continue
@@ -142,6 +226,13 @@ def collect(
         git = _git_state(session.project)
         branch = git.branch if git else None
         publication = registry.identity_for_checkout(session.project)
+        session_run = session.labels.get(RUN_LABEL)
+        locator = _labelled_locator(session.labels)
+        node_state: NodeState | None = None
+        if session_run is not None and locator is not None:
+            if session_run not in settled:
+                settled[session_run] = _settled_nodes(runs_dir, session_run)
+            node_state = settled[session_run].get(locator)
         result.append(
             TaskStatus(
                 session_id=session.session_id,
@@ -150,7 +241,8 @@ def collect(
                 harness=str(latest.get("harness", "?")),
                 model=str(latest.get("model", "?")),
                 status=summary.status,
-                running=is_running(git),
+                node_state=node_state,
+                running=is_running(git, node_state),
                 turns=summary.turns,
                 elapsed_ms=sum(
                     record.get("duration_ms", 0)
@@ -182,7 +274,9 @@ def _human(tasks: list[TaskStatus], *, run_id: runs.RunId | None = None) -> str:
         return "No running tasks. Pass N or --all to include recent finished tasks."
     lines: list[str] = []
     for task in tasks:
-        state = "running" if task.running else "recent"
+        # The journal's own word for the node, when it has one, rather than the
+        # worktree's: "recent" would read as a finished task for a node that failed.
+        state = "running" if task.running else task.node_state or "recent"
         elapsed = task.elapsed_ms / 1000
         lines.append(
             f"{task.session_id[-14:]}  {Path(task.project).name or '?'}  {task.task}  "

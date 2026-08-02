@@ -8,8 +8,17 @@ the canonical executor for direct onejudge work, full repository lifecycles, and
 explicit actions that only a person can complete. `just repo-plan` is a deprecated
 alias retained so old lifecycle-only plan files keep working.
 
-The current tracked-plan contract is schema version 5 (`"schema_version": 5`).
+The current tracked-plan contract is schema version 6 (`"schema_version": 6`).
 Plans that omit the version retain version-1 behavior for compatibility.
+
+Version 6 adds the optional node `context`: a list of planner notes rendered as a
+trailing `## Planner context` section of every task that node dispatches. Unlike
+the fields below it is not refused on a plan that declares an earlier version,
+because it is attached to a *running* graph — a live `context` edit appends one
+note to a node the round already launched, so gating it on the version that graph
+was launched with would make a committed edit unreplayable rather than protect an
+old plan from a field it never uses. See [Carried planner
+context](#carried-planner-context).
 
 Version 4 adds an optional top-level `goal` mapping with required non-empty
 `text` and optional `id`; when omitted, the id is derived from the text. Active
@@ -207,6 +216,7 @@ The accepted commands are:
 | `retry` | `id`; `node`: full replacement node mapping with a new id | Supersede a running, failed, or cancelled node with a fresh lineage and redirect its direct dependents. |
 | `attest` | `ref` | Complete a currently ready, waiting human action. |
 | `complete` | `reason` | Journal the planner's completion request independently of graph mutation. |
+| `context` | `id`; `note` | Attach one planner note to the node's next dispatch, without cancelling or restarting anything. |
 
 A command-only envelope gets a synthesized continuing verdict. Commands can
 instead accompany either legacy verdict, for example:
@@ -230,7 +240,9 @@ Every delta is validated against the live frontier before commit. The resulting
 graph must still satisfy the normal plan schema: ids and referenced dependencies
 must exist, and dependencies cannot form a cycle or self-edge. `reparent` cannot
 change a started node; `retry` requires a running, failed, or cancelled target and
-a new replacement id; `attest` requires a ready waiting human action. `drop` must
+a new replacement id; `attest` requires a ready waiting human action; `context`
+requires a node that can still be dispatched, so a note aimed at a node that
+already settled `done` is refused rather than accepted into nothing. `drop` must
 state the dependents' fate and cannot remove the last publication anchor while an
 unresolved same-identity dependent remains. Commands are reconciled in
 order. Each accepted delta, including a multi-edge reparent or retry, is appended
@@ -343,6 +355,15 @@ the final assessment and stop rather than wait.
 | Direct agent | `persona`, `task`; no `repo` | Dispatch one real onejudge process in the selected project directory. |
 | Lifecycle agent | `repo`, plus `persona` + `task` or `steps` | Work on an isolated branch/worktree and publish through the repository's merge-path gate and registered policy. Dispatch refuses identities without an executable pre-push hook or required PR checks. |
 | Human | `kind: human`, `task`; no persona or execution fields | Record an action only an external person or outside system can perform. Planner review, acceptance, validation, and integration happen through live channel edits, not a human node. |
+
+An agent or lifecycle node may also carry `context`: a list of planner notes,
+rendered after the task prose as a `## Planner context` section stating that it
+reports observed state and adds no acceptance criteria. A workstream renders it
+into every agent step, since the note is about the node they share, and leaves
+human steps as written. A human node cannot set it — the note is addressed to a
+dispatch, and a human node has none. The planner rarely writes it by hand: it is
+what a live `context` edit attaches and what [the round transition
+carries](#carried-planner-context).
 
 An agent node or lifecycle agent step may instead set `expects_no_diff: true`
 with `task` and no `persona` or `done_when`. This explicitly declares that the
@@ -550,15 +571,20 @@ resume nodes that were running without another start transition, and converge th
 remaining frontier. Schema 1 journals remain readable, but a schema 1 prefix with
 settled nodes cannot be recovered because it predates durable node results.
 
-The journal record contract is schema version 7, pinned by
-`tests/golden/static-round-events-v7.json`; bump both together. Version 6 is
+The journal record contract is schema version 8, pinned by
+`tests/golden/static-round-events-v8.json`; bump both together. Version 6 is
 additive over 5: it adds the `edit-rejected`, `conflict-resolution-started`, and
 `conflict-resolution-finished` kinds, and an optional `command` beside
 `edit-committed`'s `operations`. A v5 journal therefore still replays — its
 committed edits simply carry no command — while a record written at 6 or later
 must carry the command that produced its mutations. Version 7 is additive over 6:
 it adds `publication-failed`, for a publication that ended before any gate could
-rule on it. Every supported version stays readable; a reader skips records from a
+rule on it. Version 8 is additive inside a record rather than in the kind
+vocabulary: an `edit-committed` may compile a `context-added` operation, and the
+golden pins the whole compiled vocabulary because strict replay refuses an
+operation kind it cannot fold — the version is what makes a v8 note skippable to a
+v7 reader instead of corruption in a healthy round. Every supported version stays
+readable; a reader skips records from a
 version it does not know rather than failing the round it is observing.
 
 **A record's readability and its claim on a sequence number are different
@@ -700,9 +726,10 @@ poller or bespoke lifecycle watch script. Start with `just monitor`; a targeted
 `gh` query remains appropriate for a one-off detail absent from its stream.
 
 ```sh
-just monitor                      # newest active run, follow until it completes
+just monitor                      # newest active run
 just monitor RUN_ID               # one named run
 just monitor --once               # replay what is known, report state, exit 0
+just monitor --follow             # follow even when output is captured
 just monitor --format jsonl       # one JSON record per line, no header
 just monitor --heartbeat 30 --poll-interval 5
 ```
@@ -713,16 +740,42 @@ initial interval. Silence heartbeats remain independent of polling frequency.
 
 Without `RUN_ID` it picks the **newest active** run — anything that has not
 completed successfully, including one merely waiting on a human, since that is the
-most important state to be watching. If nothing is active it follows the newest
-run, which replays and exits. `--runs-dir` moves the ledger as everywhere else.
+most important state to be watching. If nothing is active it watches the newest
+run. `--runs-dir` moves the ledger as everywhere else.
 
-**Exit contract.** Only a graph that *completed successfully* ends the stream
+**When it follows, and when it returns.** Following is a terminal affordance: the
+stream is flushed line by line and Ctrl-C is how a person ends it. A caller whose
+stdout is a pipe or a file sees none of that — it gets the whole output when the
+process exits — so on a terminal `just monitor` follows, and off one it makes a
+single pass and exits 0, exactly as `--once`. `--follow` asks for the follow
+anyway, for a reader that does consume the stream incrementally. This is not a
+convenience: the planner is an automated supervisor whose invocations are always
+captured, so the command `launch.json` advertises was, for it, one that produced
+nothing and never returned, and every status check was done by reading
+`events.jsonl` and `/proc` by hand instead.
+
+**The bound that pass returns within.** `tests/e2e/test_monitor_e2e.py` holds the
+real command to `orchestrator.monitor.RETURN_BOUND_SECONDS` on a runs root the size
+of the planner's own. Nothing in the command computes that bound; what it enforces
+is `SOURCE_TIMEOUT_SECONDS`, and the bound is derived from it so the two cannot
+drift. The journal, the ledger, the snapshot, and git are local reads; the two
+sources that are not — oneharness history, a subprocess over a store that only
+grows, and `gh`, which is the network — each carry that deadline. `gh` carries it
+twice: per call *and* as a budget for the whole source, so a run with many linked
+PRs cannot spend one timeout per PR. An expired read is the same silence an absent
+`gh` or history store already degrades to. `--source-timeout` moves that deadline;
+a real root answers in about a second, so the bound is the guarantee, not the
+expectation.
+
+**Exit contract.** Only a graph that *completed successfully* ends the *follow*
 (exit 0). Waiting on a human, a failed node, and an executor that died all keep
 heartbeating, because each is a state a person acts on and the run then continues
 — through `next-round`, whose new round directory the next poll picks up. A
 monitor that exited on them would report "finished" for a run that is merely
-stuck. `--once` is the escape hatch and always exits 0 after one pass; only follow
-mode encodes completion in its status. Exit 2 is an unresolvable run or bad input.
+stuck. `--once` — and every non-terminal invocation — always exits 0 after one
+pass; only follow mode encodes completion in its status. A completed graph reads
+the same either way (`graph complete`), because that detail is about the run and
+not about how it was being watched. Exit 2 is an unresolvable run or bad input.
 
 **Output shape.** The text stream's first line is exactly:
 
@@ -775,6 +828,14 @@ An unsettled round has written no `result.json`, so both `telemetry` and the DAG
 read model describe its nodes from the journal itself: a node is `running` only
 until the journal records it settling. A node recorded as `node-failed` reads as
 failed in every read-only view, including while its round is still in flight.
+
+`status` answers the same question from different evidence — a session is running
+while its branch is still a checked-out worktree — and there the journal still
+wins. A failed node can keep its checkout (a direct agent works in one it never had
+to remove), so a session whose node the journal has settled is reported with that
+recorded status, never as running. The rule across all of these is one rule: no
+read-only view calls a node running once the ledger has recorded it settled,
+whatever the filesystem still looks like.
 
 For automation, `just telemetry [--all]` emits one schema-versioned JSON run
 index. It joins phase, typed provider/failure identity, latest progress,
@@ -842,7 +903,41 @@ itself — never a decision the planner made after reading the result.
 
 `just replan PREV_PLAN PREV_RESULT [edits.json]` exposes the lower-level pure
 derivation command. Old direct plans, old lifecycle-only repo plans, and recorded
-results without `state` remain readable.
+results without `state` remain readable. It derives from the two files it is given
+and therefore carries no context; `next-round` reads the run's ledger and does.
+
+### Carried planner context
+
+The plan of record for a round is the plan it was launched with, so a node carried
+forward is carried forward as that plan described it. What the planner learned
+while the round ran is not in that file, and restoring the opening brief over it is
+how a worker came to re-derive 41 commits of finished work.
+
+A `context` edit is where that knowledge goes. Each note is appended to the node's
+`context` list on the running graph, rendered as a `## Planner context` section of
+every task the node dispatches, and — because the reconciler installs the edited
+graph immediately — already visible to a dispatch of that node which has not
+started yet, including a `retry` replacement submitted in the same envelope. A
+dispatch already running does not re-read its prompt; the note reaches its next one.
+
+At the transition `next-round` collects the notes each node was given **during**
+the round just finished and sets them on that node in the next plan. What does not
+carry:
+
+- **The previous round's notes.** The set is replaced, not appended. A note reports
+  state observed while one attempt ran, so it is stale as soon as the next attempt
+  moves; a note that still matters is one the planner attaches again against what
+  the new round shows. This is what stops a node accumulating instructions.
+- **Notes on a node that is not carried forward** — done, dropped, or replaced by a
+  split. Context follows a node id, and a live `retry` replacement is a new id, so
+  notes given to the superseded node stay with it.
+- **Everything structural.** An `add`, a `drop`, a `reparent`, and a `retry`
+  replacement change the round's desired graph, not the plan of record; the planner
+  restates the ones it wants as `next-round` edits. A `retry` edit that states
+  `context` itself wins over the collected notes, empty list included.
+
+Branch pins, resume checkpoints, and stack anchors carry exactly as they did
+before: context rides alongside them and changes none of them.
 
 ## Where this lives
 

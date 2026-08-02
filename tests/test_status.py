@@ -10,12 +10,16 @@ from pathlib import Path
 import pytest
 
 from orchestrator import gitops
+from orchestrator.journal import open_journal
+from orchestrator.runs import NodeId, RunId, StepId
 from orchestrator.status import (
     GitState,
     _git_state,
     _human,
+    _labelled_locator,
     _ledger_for_branch,
     _positional,
+    _settled_nodes,
     is_running,
     main,
 )
@@ -25,6 +29,70 @@ def test_running_requires_checked_out_worktree() -> None:
     assert is_running(GitState("feature", "origin/main", [], True))
     assert not is_running(GitState("feature", "origin/main", [], False))
     assert not is_running(None)
+
+
+def test_a_settled_node_outranks_the_worktree_that_outlived_it() -> None:
+    """The worktree is evidence; the journal is the record.
+
+    A failed node can keep its checkout — a direct agent works in one it never had
+    to remove — and calling that running is the stale picture a supervisor then acts
+    on for twenty minutes before checking by hand.
+    """
+    checked_out = GitState("feature", "origin/main", [], True)
+    assert not is_running(checked_out, "failed")
+    assert not is_running(checked_out, "done")
+    assert is_running(checked_out, None)
+
+
+def test_only_a_node_level_settlement_settles_the_node(tmp_path: Path) -> None:
+    """A step-scoped wait belongs to a node still working through its lifecycle."""
+    run_dir = tmp_path / "run-1"
+    journal = open_journal(run_dir, RunId("run-1"), 1)
+    journal.append("node-started", node=NodeId("api"))
+    journal.append("human-waiting", node=NodeId("api"), step=StepId("review"), detail={"ref": "x"})
+    journal.append("node-failed", node=NodeId("web"), detail={"status": "failed"})
+    journal.append("node-settled", node=NodeId("db"), detail={"status": "done"})
+    # A status outside the domain a node can settle in is not passed through: the
+    # kind still proves the node is no longer running, and that is all it reports.
+    journal.append("node-settled", node=NodeId("odd"), detail={"status": "in-orbit"})
+    # Detail is persisted JSON, so a status can arrive as a value that is not even a
+    # string. This view degrades on it rather than raising about hashability.
+    journal.append("node-settled", node=NodeId("junk"), detail={"status": ["in", "orbit"]})
+
+    assert _settled_nodes(tmp_path, "run-1") == {
+        ("1", "web"): "failed",
+        ("1", "db"): "done",
+        ("1", "odd"): "done",
+        ("1", "junk"): "done",
+    }
+    # A run with no journal at all is simply a run this view knows nothing about.
+    assert _settled_nodes(tmp_path, "never-ran") == {}
+    # The run id arrives as a history label a subprocess wrote, and becomes a path
+    # component, so it is validated rather than trusted.
+    assert _settled_nodes(tmp_path, "../run-1") == {}
+
+
+@pytest.mark.parametrize(
+    ("labels", "expected"),
+    [
+        ({"round": "1", "node": "api"}, ("1", "api")),
+        # Zero padding is the same round the journal recorded as the integer 1.
+        ({"round": "01", "node": "api"}, ("1", "api")),
+        ({"round": "0", "node": "api"}, None),
+        ({"round": "-1", "node": "api"}, None),
+        ({"round": "one", "node": "api"}, None),
+        ({"round": "1", "node": ""}, None),
+        # An orchestrator's own dispatch is run-scoped and names no node.
+        ({"round": "1"}, None),
+        ({}, None),
+    ],
+)
+def test_a_dispatch_label_names_a_node_only_inside_the_domain_the_journal_records(
+    labels: dict[str, str], expected: tuple[str, str] | None
+) -> None:
+    """History labels are values a subprocess wrote, so they are checked before they
+    are used as a locator rather than trusted as they arrived."""
+    assert _labelled_locator(labels) == expected
 
 
 def test_no_running_tasks_message() -> None:

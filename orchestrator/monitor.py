@@ -34,6 +34,13 @@ Every emitted line carries exactly one strict typed id from `ids`, which is
 precisely the argument `just history-show` resolves. That is the whole contract
 between this concise view and the full one: the monitor never tries to *be* the
 detail, it tells you the id to ask for.
+
+A third property makes it usable by the planner rather than only by a person:
+**it returns.** Following is a terminal affordance — flushed line by line, ended
+with Ctrl-C — so off a terminal this command makes one bounded pass and exits
+(`follows`), and every external source it crosses to carries a deadline
+(`SOURCE_TIMEOUT_SECONDS`). Without both, the command `launch.json` advertises
+was one an automated supervisor could not use at all.
 """
 
 from __future__ import annotations
@@ -50,7 +57,7 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, Protocol
 
 from . import gitops
 from .channel import ChannelError, due_indicator
@@ -92,6 +99,19 @@ DEFAULT_RUNS_DIR = Path("runs")
 DEFAULT_HEARTBEAT = 60.0
 DEFAULT_POLL_INTERVAL = 2.0
 DEFAULT_MAX_POLL_INTERVAL = 30.0
+
+#: How long one poll may wait on a single external source before giving up on it.
+#: The two that are not local files — oneharness history, a subprocess, and `gh`,
+#: the network — had no deadline, so either could hold a pass open indefinitely.
+#: Both already degrade to silence when absent; an expired read is that silence.
+SOURCE_TIMEOUT_SECONDS = 30.0
+
+#: What a non-following invocation is held to end to end, derived from the deadlines
+#: above rather than picked: history once, `gh` at worst an in-flight call plus its
+#: whole-source budget, and slack for the local reads. Nothing here enforces it —
+#: `tests/e2e/test_monitor_e2e.py` does, on a runs root of realistic size — so it
+#: lives beside the deadlines it is derived from and moves only when they do.
+RETURN_BOUND_SECONDS = 3 * SOURCE_TIMEOUT_SECONDS + 30.0
 
 # A summary is a *scan target*, not prose: it sits beside a typed id that already
 # leads to the full record, so it is capped hard enough to stay one terminal line
@@ -572,7 +592,9 @@ def journal_events(run_id: RunId, run_dir: Path) -> list[MonitorEvent]:
     return found
 
 
-def run_sessions(run_id: RunId, *, oneharness_bin: str = "oneharness") -> list[HistorySession]:
+def run_sessions(
+    run_id: RunId, *, oneharness_bin: str = "oneharness", timeout: float | None = None
+) -> list[HistorySession]:
     """The dispatched worker sessions labelled as belonging to ``run_id``.
 
     This is the label filter the whole history source rests on: a dispatch is
@@ -582,22 +604,26 @@ def run_sessions(run_id: RunId, *, oneharness_bin: str = "oneharness") -> list[H
     """
     return [
         session
-        for session in worker_sessions(oneharness_bin=oneharness_bin)
+        for session in worker_sessions(oneharness_bin=oneharness_bin, timeout=timeout)
         if session.labels.get(RUN_LABEL) == run_id
     ]
 
 
 def history_events(
-    run_id: RunId, *, now: float, oneharness_bin: str = "oneharness"
+    run_id: RunId,
+    *,
+    now: float,
+    oneharness_bin: str = "oneharness",
+    timeout: float | None = None,
 ) -> list[MonitorEvent]:
     """Watch oneharness history for sessions labelled with this run.
 
-    A missing or failing history store degrades to silence: the journal already
-    reports the node that dispatched the session, so losing this source costs
-    detail rather than the transition itself.
+    A missing, failing, or too-slow history store degrades to silence: the journal
+    already reports the node that dispatched the session, so losing this source
+    costs detail rather than the transition itself.
     """
     try:
-        sessions = run_sessions(run_id, oneharness_bin=oneharness_bin)
+        sessions = run_sessions(run_id, oneharness_bin=oneharness_bin, timeout=timeout)
     except HistoryError:
         return []
     found: list[MonitorEvent] = []
@@ -814,14 +840,21 @@ def pr_events(
     now: float,
     github: GitHubBackend | None = None,
     replay: bool = True,
+    timeout: float | None = None,
 ) -> list[MonitorEvent]:
     """The current state of each PR the lifecycle linked.
 
     PR lifecycle state and individual checks have separate durable signatures. That
     keeps an optional-only check transition visible and lets every check summary say
     whether it gates the merge, without making the PR-state line unbounded.
+
+    ``timeout`` bounds this whole source rather than only each call: it caps each
+    `gh` call *and* stops asking once the source has spent that budget, because a
+    run with many linked PRs would otherwise cost one timeout per PR. Either way
+    the answer is the persisted state, exactly as an absent `gh` already gives.
     """
-    backend = github if github is not None else CliGitHubBackend()
+    backend = github if github is not None else CliGitHubBackend(timeout=timeout)
+    deadline = None if timeout is None else time.monotonic() + timeout
     found: list[MonitorEvent] = []
     for ref in prs:
         if ref.identity.startswith(LOCAL_IDENTITY_PREFIX):
@@ -836,12 +869,18 @@ def pr_events(
             number=ref.number, url=ref.url, repo=ref.identity, head="", base=ref.base
         )
         try:
+            # A spent budget is raised rather than branched on, because "GitHub did
+            # not answer for this PR" is one outcome with one handling however it
+            # came about, and splitting it would let the two drift.
+            if deadline is not None and time.monotonic() >= deadline:
+                raise GitHubError(f"pr source exhausted its {timeout:g}s budget")
             status = backend.status(pull)
         except (GitHubError, json.JSONDecodeError, OSError):
-            # No `gh`, no auth, or no network. Fall back to the state a previous pass
-            # persisted, so replaying a finished run still shows the PR it reported
-            # live. With nothing persisted either, this source degrades to silence
-            # rather than ending a stream whose journal still has the transitions.
+            # No `gh`, no auth, no network, or no time left. Fall back to the state a
+            # previous pass persisted, so replaying a finished run still shows the PR
+            # it reported live. With nothing persisted either, this source degrades to
+            # silence rather than ending a stream whose journal still has the
+            # transitions.
             fallback = persisted_status(snapshot, pr_ref)
             if fallback is None:
                 continue
@@ -1114,6 +1153,7 @@ class Monitor:
     run_dir: Path
     oneharness_bin: str = "oneharness"
     github: GitHubBackend | None = None
+    source_timeout: float | None = SOURCE_TIMEOUT_SECONDS
     clock: Callable[[], float] = time.time
     seen: set[str] = field(default_factory=set)
     snapshot: DetailSnapshot = field(default_factory=DetailSnapshot)
@@ -1140,7 +1180,12 @@ class Monitor:
         mine = [event for event in events if event.run_id == self.run_id]
         ledgers = _round_ledgers(self.run_dir)
         found = journal_events(self.run_id, self.run_dir)
-        found += history_events(self.run_id, now=now, oneharness_bin=self.oneharness_bin)
+        found += history_events(
+            self.run_id,
+            now=now,
+            oneharness_bin=self.oneharness_bin,
+            timeout=self.source_timeout,
+        )
         # The registry is the fallback; a recorded execution checkout wins, because it
         # is where the branch's commits are when the two differ.
         checkouts = {**self.checkouts(), **ledger_checkouts(ledgers)}
@@ -1151,6 +1196,7 @@ class Monitor:
             now=now,
             github=self.github,
             replay=not self._polled,
+            timeout=self.source_timeout,
         )
         self._polled = True
         fresh = [event for event in found if event.key not in self.seen]
@@ -1216,6 +1262,10 @@ def stream(
     up — so each of them keeps heartbeating instead of exiting. A monitor that
     exited on them would report "finished" for a run that is merely stuck, which is
     the one lie a watching command must not tell.
+
+    That contract governs the *follow*, and `follows` decides who gets one: a
+    caller that cannot watch the stream incrementally gets ``once`` instead, where
+    a single bounded pass replaces a wait it could never observe or end.
     """
     writer.header()
     shown_due = False
@@ -1236,28 +1286,18 @@ def stream(
         state = monitor.state()
 
         rollup = monitor.snapshot.check_rollup
-        if once:
+        # A completed graph reads the same either way: the detail describes the run,
+        # not which mode happened to be reading it. Only the *unfinished* case
+        # differs, and that difference is the whole point of `once` — it says "here
+        # is where it stands" where the follow would keep waiting.
+        if state.finished or once:
             writer.heartbeat(
                 Heartbeat(
                     monitor.clock(),
                     state.run_id,
                     state.round,
                     state.state,
-                    state.detail,
-                    rollup.last_completed_check,
-                    rollup.current_blocker,
-                    delay,
-                )
-            )
-            return 0
-        if state.finished:
-            writer.heartbeat(
-                Heartbeat(
-                    monitor.clock(),
-                    state.run_id,
-                    state.round,
-                    state.state,
-                    "graph complete",
+                    "graph complete" if state.finished else state.detail,
                     rollup.last_completed_check,
                     rollup.current_blocker,
                     delay,
@@ -1288,6 +1328,34 @@ def _positive(parser: argparse.ArgumentParser, name: str, value: float) -> float
     return value
 
 
+class Watchable(Protocol):
+    """The one thing this decision needs of an output stream."""
+
+    def isatty(self) -> bool: ...
+
+
+def follows(out: Watchable, *, follow: bool) -> bool:
+    """Whether this invocation should follow the run rather than make one pass.
+
+    Following is for a person watching a terminal: the stream is flushed line by
+    line and Ctrl-C is how it ends. A caller whose stdout is a pipe or a file sees
+    none of that — it gets the whole output when the process exits, and the exit
+    contract says only a *successful* graph ever exits. So the command a run's own
+    `launch.json` advertises was, for every automated planner, a command that
+    produced nothing and never returned; the planner read `events.jsonl` and
+    `/proc` by hand instead. Off a terminal the default is therefore one pass,
+    which is a bounded answer to the same question. ``--follow`` asks for the
+    follow anyway, for a caller that does consume the stream incrementally.
+    """
+    if follow:
+        return True
+    try:
+        return bool(out.isatty())
+    except ValueError:
+        # A stream already closed cannot answer, and is not one a person is watching.
+        return False
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=(
@@ -1300,6 +1368,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("run_id", nargs="?", metavar="RUN_ID")
     parser.add_argument(
         "--once", action="store_true", help="replay known events, report state, and exit 0"
+    )
+    parser.add_argument(
+        "--follow",
+        action="store_true",
+        help="follow the run even when output is not a terminal (the default on a "
+        "terminal); without it, a redirected or captured stream makes one pass and exits",
     )
     parser.add_argument("--format", choices=("text", "jsonl"), default="text")
     parser.add_argument(
@@ -1327,25 +1401,49 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     parser.add_argument("--runs-dir", type=Path, default=DEFAULT_RUNS_DIR)
+    parser.add_argument(
+        "--oneharness-bin",
+        default="oneharness",
+        help="the binary the history source reads through (default: oneharness)",
+    )
+    parser.add_argument(
+        "--source-timeout",
+        type=float,
+        default=SOURCE_TIMEOUT_SECONDS,
+        metavar="SECONDS",
+        help=(
+            "seconds one poll may wait on a single external source before treating it "
+            f"as silent (default: {SOURCE_TIMEOUT_SECONDS:g})"
+        ),
+    )
     args = parser.parse_args(argv)
     _positive(parser, "--heartbeat", args.heartbeat)
     _positive(parser, "--poll-interval", args.poll_interval)
     _positive(parser, "--max-poll-interval", args.max_poll_interval)
+    _positive(parser, "--source-timeout", args.source_timeout)
     if args.max_poll_interval < args.poll_interval:
         parser.error("--max-poll-interval must be at least --poll-interval")
+    if args.once and args.follow:
+        parser.error("--once and --follow ask for opposite things")
     try:
         run_id = resolve_run(args.runs_dir, args.run_id)
     except MonitorError as exc:
         print(f"monitor: {exc}", file=sys.stderr)
         return 2
     run_dir = args.runs_dir / run_id
-    monitor = Monitor(run_id=run_id, run_dir=run_dir, snapshot=load_snapshot(run_dir))
+    monitor = Monitor(
+        run_id=run_id,
+        run_dir=run_dir,
+        snapshot=load_snapshot(run_dir),
+        oneharness_bin=args.oneharness_bin,
+        source_timeout=args.source_timeout,
+    )
     writer = Writer(args.format, sys.stdout)
     try:
         return stream(
             monitor,
             writer,
-            once=args.once,
+            once=args.once or not follows(sys.stdout, follow=args.follow),
             heartbeat=args.heartbeat,
             poll_interval=args.poll_interval,
             max_poll_interval=args.max_poll_interval,

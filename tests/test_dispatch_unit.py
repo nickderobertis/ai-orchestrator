@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -38,6 +39,7 @@ from orchestrator.plan import PlanNode, PlanResult, TaskResult, _render
 from orchestrator.plan import main as plan_main
 from orchestrator.watchdog import (
     OWN_PROCESS_GROUP_FLAG,
+    TERMINATION_GRACE,
     ProcessId,
     _parse_stat,
     process_activity,
@@ -896,6 +898,109 @@ def test_watchdog_reaps_previously_observed_process() -> None:
     assert process.returncode is not None
 
 
+#: A worker that survives the `SIGTERM` ahead of the `SIGKILL`, which is what puts a
+#: process in the "killed but not yet reaped" state the reaping loop exists for. A
+#: harness that installs its own shutdown handler is the real case; ignoring the signal
+#: outright is the same thing without the shutdown work, and it records its pid only
+#: once the handler is in place so the termination below cannot race the install.
+_SIGTERM_DEAF_SLEEPER = """
+import os, signal, sys, time
+signal.signal(signal.SIGTERM, signal.SIG_IGN)
+with open(sys.argv[1], "w", encoding="utf-8") as handle:
+    handle.write(str(os.getpid()))
+time.sleep(60)
+"""
+
+
+def test_watchdog_waits_for_a_killed_process_to_actually_be_reaped(tmp_path) -> None:
+    """Termination returns once the kernel has collected the process, not once it signalled.
+
+    ``kill`` returns as soon as the signal is queued, so a process that was still
+    running when the ``SIGKILL`` arrived has not died yet when the first
+    ``waitpid(WNOHANG)`` pass asks: there is nothing to collect, and the loop has to
+    come back for it. Treating that pass as a successful reap would leave the process
+    a zombie — still holding the pid a later ``/proc`` walk resolves through, and still
+    counted by anything that asks the kernel what is left of a dispatch.
+    """
+    marker = tmp_path / "deaf-worker.pid"
+    process = subprocess.Popen([sys.executable, "-c", _SIGTERM_DEAF_SLEEPER, os.fspath(marker)])
+    assert await_recorded_pid(marker) == process.pid
+
+    terminate_processes((ProcessId(process.pid),))
+
+    # A zombie keeps its `/proc` entry until someone waits on it, so this says the
+    # process was *reaped* rather than merely killed. Nothing else here can have
+    # collected it: this session is the parent and has not waited on it yet.
+    assert not Path(f"/proc/{process.pid}").exists()
+    assert process.wait(timeout=1) is not None
+
+
+#: A worker that shuts *itself* down on `SIGTERM`, which is the whole reason a grace
+#: period sits between the signal and the `SIGKILL`. Its shutdown work comes before
+#: the record of having done it, so the record exists only if the process was still
+#: alive some way into that period — termination reaps the process itself, so the file
+#: is the evidence and the exit status is not available to be one.
+_GRACEFUL_SHUTDOWN_WORK = 0.02
+_GRACEFUL_SLEEPER = f"""
+import os, signal, sys, time
+
+def shutdown(signum, frame):
+    time.sleep({_GRACEFUL_SHUTDOWN_WORK})
+    with open(sys.argv[2], "w", encoding="utf-8") as handle:
+        handle.write("shut down on SIGTERM")
+    os._exit(0)
+
+signal.signal(signal.SIGTERM, shutdown)
+with open(sys.argv[1], "w", encoding="utf-8") as handle:
+    handle.write(str(os.getpid()))
+time.sleep(60)
+"""
+
+
+def test_watchdog_lets_a_signalled_worker_shut_itself_down(tmp_path) -> None:
+    """The `SIGKILL` is still held back long enough for a harness to handle `SIGTERM`.
+
+    Termination stops waiting as soon as nothing it signalled is running, which is what
+    keeps a finished dispatch from paying for a grace period it is not owed. The period
+    itself is not a formality: a worker that is still running gets the whole of it, and
+    a worker killed before it finished shutting down leaves no record of having.
+    """
+    marker = tmp_path / "graceful-worker.pid"
+    shutdown = tmp_path / "graceful-worker.shutdown"
+    process = subprocess.Popen(
+        [sys.executable, "-c", _GRACEFUL_SLEEPER, os.fspath(marker), os.fspath(shutdown)]
+    )
+    assert await_recorded_pid(marker) == process.pid
+
+    terminate_processes((ProcessId(process.pid),))
+
+    assert shutdown.read_text(encoding="utf-8") == "shut down on SIGTERM"
+    assert not is_running(process.pid)
+
+
+def test_watchdog_teardown_of_a_finished_dispatch_pays_no_grace_period(tmp_path) -> None:
+    """Tearing down a dispatch that already exited costs nothing but the `/proc` walks.
+
+    Every completed dispatch runs this cleanup, and every one of them used to sleep out
+    the full `SIGTERM`-to-`SIGKILL` grace once per call — four times over, at a point
+    where the tree it is being graceful toward has already gone. Across a suite that
+    dispatches hundreds of times that was the single largest cost in the lifecycle e2e.
+    """
+    process = subprocess.Popen([sys.executable, "-c", ""], start_new_session=True)
+    assert process.wait(timeout=5) == 0
+    finished = ProcessId(process.pid)
+
+    start = time.monotonic()
+    terminate_processes((finished,))
+    terminate_process_group(finished)
+    terminate_tree(finished)
+    elapsed = time.monotonic() - start
+
+    # Those three calls sleep four grace periods between them when the grace is
+    # unconditional; the bound is under that and above the `/proc` walks that remain.
+    assert elapsed < 3 * TERMINATION_GRACE, elapsed
+
+
 def test_watchdog_terminates_live_process_tree() -> None:
     process = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
 
@@ -907,6 +1012,26 @@ def test_watchdog_terminates_live_process_tree() -> None:
 
 def test_watchdog_process_group_cleanup_is_safe_for_absent_group() -> None:
     assert terminate_process_group(ProcessId(2**31 - 1)) is None
+
+
+def test_watchdog_group_shutdown_waits_out_a_member_that_ignores_sigterm(tmp_path) -> None:
+    """A group's grace period is the group's, not a formality skipped once it looks empty.
+
+    The group teardown asks `process_group_is_running` rather than holding a pid list,
+    and that question has to keep being asked for the whole period: a member that
+    ignores `SIGTERM` is still running when it is first asked, and is killed by the
+    `SIGKILL` behind it rather than left for whoever looks next.
+    """
+    marker = tmp_path / "deaf-group-member.pid"
+    process = subprocess.Popen(
+        [sys.executable, "-c", _SIGTERM_DEAF_SLEEPER, os.fspath(marker)],
+        start_new_session=True,
+    )
+    assert await_recorded_pid(marker) == process.pid
+
+    terminate_process_group(ProcessId(process.pid))
+
+    assert await_reaped(process.pid)
 
 
 def test_watchdog_terminates_live_process_group() -> None:
@@ -993,6 +1118,41 @@ def test_watchdog_records_pid_and_executes_command(tmp_path, monkeypatch) -> Non
     with pytest.raises(RuntimeError, match="exec boundary reached"):
         watchdog_main([os.fspath(pid_file), "worker", "--flag"])
 
+    assert pid_file.read_text(encoding="utf-8") == str(os.getpid())
+
+
+def test_watchdog_asked_for_its_own_group_leads_one_before_recording_its_pid(
+    tmp_path, monkeypatch
+) -> None:
+    """The flagged wrapper really regroups itself, and keeps the environment it was given.
+
+    The caller here is the test session, which is what the flag exists to spare — so it
+    rejoins the group it came from as soon as the postcondition is read. Rejoining an
+    existing group of the same session is permitted for anything that is not a session
+    leader, and the guard starts every test subprocess in a session of its own, so
+    nothing spawned while this runs can inherit the group either.
+    """
+    pid_file = tmp_path / "watchdog.pid"
+    monkeypatch.delenv("ORCHESTRATOR_WATCHDOG_UNSET_LLMLINT", raising=False)
+    monkeypatch.setenv("LLMLINT_ONEHARNESS_BIN", "oneharness")
+    original = os.getpgrp()
+
+    def execvpe(command: str, args: list[str], env: dict[str, str]) -> None:
+        # Untouched: only the dispatch that asks for it drops the llmlint wrapper, and
+        # a worker that inherited one must still find it.
+        assert env["LLMLINT_ONEHARNESS_BIN"] == "oneharness"
+        raise RuntimeError("exec boundary reached")
+
+    monkeypatch.setattr(os, "execvpe", execvpe)
+    try:
+        with pytest.raises(RuntimeError, match="exec boundary reached"):
+            watchdog_main([OWN_PROCESS_GROUP_FLAG, os.fspath(pid_file), "worker", "--flag"])
+
+        assert os.getpgrp() == os.getpid()
+    finally:
+        os.setpgid(0, original)
+
+    assert os.getpgrp() == original
     assert pid_file.read_text(encoding="utf-8") == str(os.getpid())
 
 

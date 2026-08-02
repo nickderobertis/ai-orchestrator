@@ -955,6 +955,245 @@ def test_conversation_polling_survives_a_failing_history_subprocess(tmp_path: Pa
             assert all(frame.get("event") != "conversation.changed" for frame in changed)
 
 
+def test_a_run_list_reads_history_once_however_many_runs_it_serves(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One scan of the runs root crosses the history boundary exactly once.
+
+    `oneharness history list` answers "every session there is", not "this run's
+    sessions", so its answer is the same for every run a list serves — but it costs
+    about a second and megabytes of JSON. Collecting each run against its own read
+    made the run list degrade by roughly that second per recorded run, forever. The
+    count is taken at the real subprocess boundary rather than from an in-process
+    counter, because sharing the read is only true if no *process* is spawned.
+    """
+    runs = tmp_path / "runs"
+    served = ("alpha", "beta", "gamma", "delta")
+    for name in served:
+        _active_run(runs, name)
+    monkeypatch.setenv("FAKE_ONEHARNESS_STORE", str(_history_store(tmp_path, "alpha")))
+    invocations = tmp_path / "history-invocations.log"
+    monkeypatch.setenv("FAKE_ONEHARNESS_INVOCATION_LOG", str(invocations))
+    app = create_app(runs, oneharness_bin=str(_oneharness_bin(tmp_path)))
+
+    with _serve(app) as base:
+        listed = httpx.get(f"{base}/api/v1/runs", timeout=60).json()
+
+    assert {row["run_id"] for row in listed["runs"]} == set(served)
+    assert invocations.read_text(encoding="utf-8").splitlines() == [
+        "history list --all-projects --format json"
+    ]
+
+
+def test_a_failing_history_read_is_not_retried_once_per_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A store that cannot be read costs one subprocess for the scan, not one per run.
+
+    `list_runs` degrades a run whose telemetry will not collect, so an unreadable
+    history store empties the list rather than failing it. Re-reading a store that
+    just failed would restore the entire per-run subprocess cost on the path least
+    able to afford it — and within one scan there is nothing to re-read for: a store
+    broken for the first run has not recovered by the third.
+    """
+    runs = tmp_path / "runs"
+    for name in ("alpha", "beta", "gamma"):
+        _active_run(runs, name)
+    invocations = tmp_path / "history-invocations.log"
+    monkeypatch.setenv("FAKE_ONEHARNESS_INVOCATION_LOG", str(invocations))
+    broken = tmp_path / "oneharness"
+    broken.write_text(
+        '#!/bin/sh\necho "$@" >> "$FAKE_ONEHARNESS_INVOCATION_LOG"\n'
+        "echo 'history backend exploded' >&2\nexit 3\n",
+        encoding="utf-8",
+    )
+    broken.chmod(0o755)
+    app = create_app(runs, oneharness_bin=str(broken))
+
+    with _serve(app) as base:
+        listed = httpx.get(f"{base}/api/v1/runs", timeout=60).json()
+
+    assert listed["runs"] == []
+    assert invocations.read_text(encoding="utf-8").splitlines() == [
+        "history list --all-projects --format json"
+    ]
+
+
+def _healthz_latencies_while(pending: threading.Thread, base: str) -> list[float]:
+    """Time `/healthz` repeatedly for as long as ``pending`` has no answer yet.
+
+    Sampling is bounded by the slow request itself rather than by a clock, so every
+    measurement provably overlaps it: a liveness probe that only ran once the slow
+    read had finished would prove nothing about whether it blocked.
+    """
+    latencies: list[float] = []
+    while pending.is_alive():
+        start = time.monotonic()
+        assert httpx.get(f"{base}/healthz", timeout=60).json() == {"status": "ok"}
+        latencies.append(time.monotonic() - start)
+        time.sleep(0.05)
+    return latencies
+
+
+def _assert_stayed_responsive(latencies: list[float], what: str) -> None:
+    """Liveness was answered promptly, and often enough for that to mean something."""
+    assert len(latencies) >= 3, (what, latencies)
+    assert max(latencies) < 0.5, (what, latencies)
+
+
+def _while_in_flight(base: str, path: str) -> tuple[httpx.Response, list[float]]:
+    """Issue one slow read, timing `/healthz` until it is answered."""
+    served: list[httpx.Response] = []
+    slow = threading.Thread(target=lambda: served.append(httpx.get(f"{base}{path}", timeout=60)))
+    slow.start()
+    try:
+        latencies = _healthz_latencies_while(slow, base)
+    finally:
+        slow.join(timeout=60)
+    return served[0], latencies
+
+
+def test_a_slow_history_read_stalls_neither_other_requests_nor_a_live_stream(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A read that takes seconds occupies its own request, not the whole server.
+
+    Every read this API serves is blocking filesystem and subprocess work. Run on
+    the event loop it froze every other connection — the other routes, `/healthz`,
+    and each live SSE stream — so an initial page load, its stream, and a reload
+    serialized into minutes and the UI read as a crashed app. A deliberately slow
+    history binary makes each read here take seconds: the stream's opening scan,
+    then every blocking route in turn, each measured for liveness only while it is
+    genuinely still in flight, and all of it with the stream's own slow conversation
+    polls running underneath. Finally the watched run changes while a run-list scan
+    is *unanswered*, and the already-open stream must deliver that invalidation
+    without waiting for the scan to finish.
+    """
+    runs = tmp_path / "runs"
+    run_dir = _active_run(runs, "demo")
+    monkeypatch.setenv("FAKE_ONEHARNESS_STORE", str(_history_store(tmp_path, "demo")))
+    monkeypatch.setenv("FAKE_ONEHARNESS_DELAY_SECONDS", "1.5")
+    app = create_app(
+        runs,
+        oneharness_bin=str(_oneharness_bin(tmp_path)),
+        poll_interval=0.05,
+        heartbeat_interval=30.0,
+        conversation_interval=0.05,
+    )
+
+    with _serve(app) as base:
+        conversation_id = httpx.get(f"{base}/api/v1/runs/demo", timeout=60).json()["conversations"][
+            0
+        ]["conversation"]["id"]
+        client = httpx.Client(base_url=base, timeout=60)
+        with client.stream("GET", "/api/v1/events?run_id=demo") as response:
+            lines = response.iter_lines()
+            opened: list[dict[str, str]] = []
+            opener = threading.Thread(
+                target=lambda: opened.extend(_read_frames(lines, until="snapshot"))
+            )
+            opener.start()
+            # Opening a stream scans the whole root, reads conversations, and builds
+            # the snapshot before a byte is emitted — seconds of blocking work.
+            try:
+                _assert_stayed_responsive(_healthz_latencies_while(opener, base), "snapshot")
+            finally:
+                opener.join(timeout=60)
+            assert opened[-1]["event"] == "snapshot"
+
+            for path in (
+                "/api/v1/runs?include_settled=true",
+                "/api/v1/runs/demo",
+                "/api/v1/runs/demo/timeline",
+                f"/api/v1/runs/demo/conversations/{conversation_id}",
+            ):
+                served, latencies = _while_in_flight(base, path)
+                assert served.status_code == 200, path
+                _assert_stayed_responsive(latencies, path)
+
+            # The stream stayed live through all of it and still invalidates. That it
+            # invalidates *during* a scan rather than after one is proved separately,
+            # by the test below, where the stream's own polls are not also slow.
+            _settle(run_dir, "demo")
+            changed = _read_frames(lines, until="run.changed")
+            assert json.loads(changed[-1]["data"])["run_id"] == "demo"
+
+
+def _wait_for_a_new_history_read(log: Path, seen: int) -> None:
+    """Block until ``log`` records an invocation past ``seen``, then return.
+
+    The recorded binary appends before it stalls, so a new line means the server is
+    *inside* that blocking read and will be for the whole configured delay — which
+    is what makes "while a scan is in flight" an observation rather than a guess.
+    A client-side view cannot say this: a request is outstanding from the moment it
+    is sent, including while it merely waits for a busy server to pick it up.
+    """
+    deadline = time.monotonic() + 60
+    while time.monotonic() < deadline:
+        if len(log.read_text(encoding="utf-8").splitlines()) > seen:
+            return
+        time.sleep(0.01)
+    raise AssertionError("no history read ever started")  # pragma: no cover - safety valve
+
+
+def test_a_live_stream_invalidates_before_a_scan_in_flight_is_answered(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An open stream delivers a change while a run-list scan is still unanswered.
+
+    The stream is what the UI watches live, so "the scan finished, then the stream
+    caught up" is the failure this guards: on the event loop a `RunList` scan held
+    every connection for its whole duration, and a watcher saw nothing until it was
+    done. The ordering is asserted against the scan itself rather than a clock — the
+    scan's history subprocess is observed starting, the watched run changes, and no
+    scan may have been *answered* by the time the invalidation arrives.
+
+    Conversations are polled on their default slow cadence here so the stream's own
+    ticks stay cheap; that they are equally off the loop is covered above.
+    """
+    runs = tmp_path / "runs"
+    run_dir = _active_run(runs, "demo")
+    monkeypatch.setenv("FAKE_ONEHARNESS_STORE", str(_history_store(tmp_path, "demo")))
+    monkeypatch.setenv("FAKE_ONEHARNESS_DELAY_SECONDS", "1.5")
+    invocations = tmp_path / "history-invocations.log"
+    monkeypatch.setenv("FAKE_ONEHARNESS_INVOCATION_LOG", str(invocations))
+    app = create_app(
+        runs,
+        oneharness_bin=str(_oneharness_bin(tmp_path)),
+        poll_interval=0.05,
+        heartbeat_interval=30.0,
+        conversation_interval=60.0,
+    )
+
+    with _serve(app) as base:
+        client = httpx.Client(base_url=base, timeout=60)
+        with client.stream("GET", "/api/v1/events?run_id=demo") as response:
+            lines = response.iter_lines()
+            assert _read_frames(lines, until="snapshot")[-1]["event"] == "snapshot"
+
+            answered: list[int] = []
+            opened_reads = len(invocations.read_text(encoding="utf-8").splitlines())
+            scanner = threading.Thread(
+                target=lambda: answered.append(
+                    httpx.get(
+                        f"{base}/api/v1/runs", params={"include_settled": "true"}, timeout=60
+                    ).status_code
+                )
+            )
+            scanner.start()
+            try:
+                _wait_for_a_new_history_read(invocations, opened_reads)
+                _settle(run_dir, "demo")
+                changed = _read_frames(lines, until="run.changed")
+                answered_first = list(answered)
+            finally:
+                scanner.join(timeout=60)
+
+            assert json.loads(changed[-1]["data"])["run_id"] == "demo"
+            assert answered_first == [], "the invalidation waited for the scan to be answered"
+            assert answered == [200]
+
+
 def test_a_directory_with_no_recorded_round_is_not_a_run(tmp_path: Path) -> None:
     """An empty or unrelated directory under the root reads as absent, not as a run."""
     runs = tmp_path / "runs"

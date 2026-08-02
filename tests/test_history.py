@@ -408,6 +408,21 @@ def test_a_missing_oneharness_points_at_bootstrap(tmp_path: Path) -> None:
         recent_runs(5, oneharness_bin=str(tmp_path / "absent-oneharness"))
 
 
+def test_a_history_read_that_never_answers_expires_for_a_caller_that_set_a_deadline(
+    tmp_path: Path,
+) -> None:
+    """A reader that promises to answer within a bound needs this read to have one.
+
+    The store only grows and the command that reads it is a subprocess, so without a
+    deadline a viewing command inherits whatever that read costs. An expiry is a
+    `HistoryError` — the same thing an absent store raises — because every reader
+    already treats this source as optional.
+    """
+    binary = _oneharness_script(tmp_path / "stalled", "import time; time.sleep(600)")
+    with pytest.raises(HistoryError, match="timed out after 0.2s"):
+        all_sessions(oneharness_bin=str(binary), timeout=0.2)
+
+
 @pytest.mark.parametrize(
     ("payload", "expected"),
     [

@@ -15,7 +15,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Literal, TypedDict, cast
+from typing import Any, Literal, TypedDict, cast, get_args
 
 from .config import ConfigError
 from .edits import EDIT_PROTOCOL_VERSION, EditError, parse_commands
@@ -45,6 +45,11 @@ class ProjectionError(ValueError):
 # strict-reader view is drift-gated where it matters — round-finished folding rejects any state that
 # disagrees with the recorded result, so a status the executor emits but omits here cannot project.
 NodeState = Literal["running", "done", "failed", "waiting", "cancelled"]
+
+#: The states a node can *settle* in — `NodeState` minus the one that means it has
+#: not. Named here rather than restated at each reader so a strict fold and a
+#: degrading read-only view judge a recorded status against the same domain.
+TERMINAL_NODE_STATES: frozenset[str] = frozenset(get_args(NodeState)) - {"running"}
 
 
 class ProjectedPlan(TypedDict, total=False):
@@ -248,9 +253,15 @@ def project_round(events: list[Event], run_id: RunId, round_number: int) -> Roun
                 if not dropped and builder.states.get(event.node) != "running":
                     raise ProjectionError(f"node {event.node!r} settled without one start")
                 status = "failed" if event.kind == "node-failed" else detail.get("status")
-                if status not in {"done", "failed", "waiting", "cancelled"}:
+                # `detail` is persisted JSON, so this value can be a list or an
+                # object — which a bare membership test would answer with a
+                # `TypeError` about hashability rather than with this reader's own
+                # error about what it required.
+                if not isinstance(status, str) or status not in TERMINAL_NODE_STATES:
                     raise ProjectionError("node-settled requires a terminal status")
-                builder.states[event.node] = status
+                # The membership test above is the check; the cast only tells the type
+                # checker what a `frozenset[str]` cannot, which is that it narrowed.
+                builder.states[event.node] = cast(NodeState, status)
                 _fold_node_result(builder, event)
                 if dropped:
                     if status not in {"done", "cancelled"}:
@@ -415,6 +426,17 @@ def _fold_edit_operation(builder: _RoundBuilder, operation: object) -> None:
             builder.edges = [edge for edge in builder.edges if node not in edge]
             builder.states.pop(node, None)
             builder.results.pop(node, None)
+        case "context-added":
+            note = detail.get("note")
+            if not isinstance(node, str) or node not in builder.node_ids:
+                raise ProjectionError("context-added references an unknown node")
+            if not isinstance(note, str) or not note.strip():
+                raise ProjectionError("context-added requires a non-empty note")
+            definition = next(item for item in builder.nodes if item["id"] == node)
+            existing = definition.get("context")
+            if existing is not None and not isinstance(existing, list):
+                raise ProjectionError("context-added requires a node whose 'context' is a list")
+            definition["context"] = [*(existing or []), note]
         case "human-attested":
             ref = detail.get("ref")
             if not isinstance(ref, str) or ref != node or builder.states.get(ref) != "waiting":

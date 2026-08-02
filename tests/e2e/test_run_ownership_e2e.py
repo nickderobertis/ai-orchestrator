@@ -33,6 +33,7 @@ from pathlib import Path
 import pytest
 import yaml
 from process_tree import is_running
+from rendezvous import Rendezvous
 from waits import deadline
 from waits import timeout as e2e_timeout
 
@@ -109,9 +110,8 @@ def _plan(tmp_path: Path, name: str) -> Path:
                         "id": "worker",
                         "persona": "engineer",
                         "task": (
-                            f"slow-branch {tmp_path / f'{name}.ticks'} live-edit-slow "
-                            f"live-edit-ready={tmp_path / f'{name}.ready'} "
-                            f"live-edit-release={tmp_path / f'{name}.release'}"
+                            f"slow-branch {tmp_path / f'{name}.ticks'}"
+                            f"{Rendezvous.at(tmp_path, name).sentinels(1)}"
                         ),
                     }
                 ],
@@ -216,7 +216,7 @@ def _stop(launch: Launch, env: dict[str, str], *extra: str) -> subprocess.Comple
 
 def _await_parked_worker(launch: Launch, name: str, tmp_path: Path) -> tuple[RecordedOwner, ...]:
     """Wait until the run has a real dispatch tree sitting at the worker's barrier."""
-    ready = tmp_path / f"{name}.ready"
+    ready = Rendezvous.at(tmp_path, name).ready
     wait = deadline(180)
     while time.monotonic() < wait:
         owners = recorded_owners(launch.run_dir)
@@ -458,7 +458,7 @@ def test_stopping_a_run_leaves_no_worker_behind_and_the_round_reclaimable(
     assert "--recover" in view
 
     # And the reclaim is real: released from its barrier, the same round finishes.
-    (tmp_path / "reclaimed.release").write_text("go\n", encoding="utf-8")
+    Rendezvous.at(tmp_path, "reclaimed").let_go()
     reclaimed = subprocess.run(
         [
             "just",

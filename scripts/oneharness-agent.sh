@@ -13,9 +13,9 @@ set -euo pipefail
 
 script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 repo_root=$(dirname -- "$script_dir")
-# The worker config maps this portable, non-secret parent value into
-# CLAUDE_CONFIG_DIR only for its alternate-subscription child; the derivation is
-# shared with the orchestrator wrapper so the two roles cannot drift apart.
+# The worker config maps these portable, non-secret parent values into
+# CLAUDE_CONFIG_DIR for its two alternate-subscription children; the derivation is
+# shared with the other wrappers so the roles cannot drift apart.
 alt_config_helper="$script_dir/claude-alt-config-dir.sh"
 if [ ! -f "$alt_config_helper" ] || [ ! -r "$alt_config_helper" ]; then
     echo "oneharness-agent: required helper is not a readable regular file: $alt_config_helper; restore it from the repository or run 'just bootstrap', then retry" >&2
@@ -25,6 +25,19 @@ fi
 . "$alt_config_helper"
 resolve_claude_alt_config_dir oneharness-agent || exit $?
 alternate_config_dir=$ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR
+alternate2_config_dir=$ORCHESTRATOR_CLAUDE_ALT2_CONFIG_DIR
+# The worker chain's last candidate is a second Codex identity, whose variant maps
+# this portable value into CODEX_HOME. oneharness refuses to run when the
+# indirection is unset, so it must be exported even on a host that never
+# authenticated one; see the fallthrough note in the helper.
+codex_alt_helper="$script_dir/codex-alt-home.sh"
+if [ ! -f "$codex_alt_helper" ] || [ ! -r "$codex_alt_helper" ]; then
+    echo "oneharness-agent: required helper is not a readable regular file: $codex_alt_helper; restore it from the repository or run 'just bootstrap', then retry" >&2
+    exit 2
+fi
+# shellcheck source=scripts/codex-alt-home.sh
+. "$codex_alt_helper"
+ensure_codex_alt_home oneharness-agent || exit $?
 alternate_harness=claude-code:alternate
 agent_config="$repo_root/oneharness.toml"
 
@@ -91,10 +104,51 @@ if [ ! -f "$agent_config" ] || [ ! -r "$agent_config" ]; then
     echo "oneharness-agent: required agent config is not a readable regular file: $agent_config; restore it from the repository or run 'just bootstrap', then retry" >&2
     exit 2
 fi
-if [ ! -e "$alternate_config_dir" ] && [ -z "${ONEHARNESS_HARNESSES-}" ]; then
-    # A host with only its primary Claude identity must not fail before fallback:
-    # skip the absent alternate candidate and dispatch directly through Codex.
-    export ONEHARNESS_HARNESSES=codex
+if [ -z "${ONEHARNESS_HARNESSES-}" ]; then
+    # An alternate Claude subscription whose config directory does not exist is a
+    # candidate this host has never set up. claude-code would still start, create
+    # that directory, and report `auth` — so the chain recovers either way, but
+    # substituting a filtered one keeps the dispatch from writing a config
+    # directory for an account nobody has logged into.
+    #
+    # Only those absent candidates are dropped: every other identity keeps its
+    # configured relative order, including the OTHER alternate subscription when
+    # just one is missing, both Codex identities, and the primary Claude one. The
+    # chain is read from the config rather than restated here, so this can only
+    # ever be a subsequence of what oneharness would have selected.
+    # Space-delimited on BOTH sides, so `claude-code:alternate` cannot match the
+    # `claude-code:alternate2` entry by prefix and drop a candidate that is present.
+    absent_alternates=" "
+    [ -e "$alternate_config_dir" ] || absent_alternates="${absent_alternates}claude-code:alternate "
+    [ -e "$alternate2_config_dir" ] || absent_alternates="${absent_alternates}claude-code:alternate2 "
+    if [ "$absent_alternates" != " " ]; then
+        substituted=
+        while read -r candidate; do
+            case "$absent_alternates" in
+                *" $candidate "*) continue ;;
+            esac
+            substituted="${substituted:+$substituted,}$candidate"
+        done < <(
+            # `harnesses = [...]` spans lines, so read from the key to the closing
+            # bracket and emit every quoted element in order.
+            awk '
+                /^harnesses[[:space:]]*=/ { collecting = 1 }
+                collecting {
+                    rest = $0
+                    while (match(rest, /"[^"]*"/)) {
+                        print substr(rest, RSTART + 1, RLENGTH - 2)
+                        rest = substr(rest, RSTART + RLENGTH)
+                    }
+                    if (index($0, "]")) { exit }
+                }
+            ' "$agent_config"
+        )
+        # An empty result means the config was not in the expected shape; leave the
+        # selection alone rather than narrowing the chain on a guess.
+        if [ -n "$substituted" ]; then
+            export ONEHARNESS_HARNESSES="$substituted"
+        fi
+    fi
 fi
 
 if [ -z "${ORCHESTRATOR_AGENT_STATUS_DIR-}" ]; then

@@ -12,6 +12,13 @@ Already-merged nodes are **carried out** (done, not re-run); a new/retried node'
 dependency on a merged node is dropped as *satisfied* (its predecessor is on the
 base branch now). Unresolved nodes are carried forward to retry unless dropped or
 replaced by a split. The produced plan is validated, so a bad edit fails loudly.
+
+A carried-forward node keeps its branch pin and resume checkpoint, and — since
+`round_context` — the planner context attached to it while the round ran. Nothing
+else the round learned crosses the boundary: the plan of record is the one the
+round was launched with, so structural live edits (an `add`, a `drop`, a `retry`
+replacement's new id) are round-scoped and the planner restates the ones it wants
+as `next-round` edits.
 """
 
 from __future__ import annotations
@@ -19,6 +26,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -27,20 +35,57 @@ from .lifecycle import MAX_AUTOMATIC_STEP_RESUMES
 from .outcomes import INFRASTRUCTURE_FAILURE_OUTCOME
 from .runs import StackBasePayload
 
-__all__ = ["next_round"]
+__all__ = ["next_round", "round_context"]
+
+
+def round_context(run_dir: Path, round_number: int) -> dict[str, list[str]]:
+    """Planner notes committed onto nodes during one round, in submission order.
+
+    Read from the round's committed edits rather than from the live graph's nodes,
+    and that is what bounds the accumulation: a note already carried into this
+    round's plan was not attached *during* it, so it is not collected again. One
+    round's notes therefore travel exactly one transition unless the planner
+    attaches them again against what the next round actually shows.
+
+    The journal is read tolerantly, the way every other observer reads it. A round
+    that ran without any live edit — or a ledger written before this contract
+    existed — simply reports no context, which is what a transition that has always
+    carried none should keep doing.
+    """
+    from .journal import JOURNAL_NAME, read_events
+
+    collected: dict[str, list[str]] = {}
+    for event in read_events(run_dir / JOURNAL_NAME):
+        if event.round != round_number or event.kind != "edit-committed":
+            continue
+        operations = event.detail.get("operations")
+        if not isinstance(operations, list):
+            continue
+        for operation in operations:
+            if not isinstance(operation, Mapping) or operation.get("kind") != "context-added":
+                continue
+            nid, detail = operation.get("node"), operation.get("detail")
+            note = detail.get("note") if isinstance(detail, Mapping) else None
+            if isinstance(nid, str) and isinstance(note, str) and note.strip():
+                collected.setdefault(nid, []).append(note)
+    return collected
 
 
 def next_round(
     prev_plan: dict[str, Any],
     prev_result: dict[str, Any],
     edits: dict[str, Any] | None = None,
+    *,
+    carried_context: Mapping[str, list[str]] | None = None,
 ) -> dict[str, Any]:
     """Compute the next round's tracked-graph mapping.
 
     ``prev_plan``: the prior tracked-graph mapping. ``prev_result``: the ``--format
     json`` output of ``run-plan``. ``edits``: ``{retry: {id: {overrides}},
     split: {id: [nodes]}, add: [nodes], drop: [ids], complete_human: [refs]}``.
-    The result is validated via the canonical graph parser.
+    ``carried_context``: notes attached to nodes during the round that just ran, as
+    `round_context` collects them. The result is validated via the canonical graph
+    parser.
     """
     from .graph import parse_graph
     from .plan import PlanError
@@ -162,6 +207,12 @@ def next_round(
         node = dict(task)
         if tid in retry:
             node.update(retry[tid])
+        _carry_context(
+            node,
+            tid,
+            carried_context or {},
+            stated=tid in retry and "context" in retry[tid],
+        )
         if not _apply_lifecycle_resume(
             node,
             results,
@@ -204,6 +255,31 @@ def next_round(
     if next_tasks:
         parse_graph(plan)  # bad edits (duplicate ids, cycles, missing fields) fail loudly
     return plan
+
+
+def _carry_context(
+    node: dict[str, Any], nid: object, attached: Mapping[str, list[str]], *, stated: bool
+) -> None:
+    """Replace a carried node's planner context with what this round attached.
+
+    Replace, never append. The notes report state the planner observed while a
+    particular round ran — what was already finished, which finding was still open —
+    and that reading is stale the moment the next attempt moves. Accumulating them
+    would hand round five a stack of four obsolete descriptions of the same node and
+    ask a worker to reconcile them; carrying only the newest set means a note the
+    planner still means is a note the planner attached again.
+
+    A ``retry`` override that states ``context`` wins, including an empty list: the
+    planner writing the field at the boundary is a decision made after reading the
+    result, and collection must not overrule it.
+    """
+    if stated:
+        return
+    notes = attached.get(nid) if isinstance(nid, str) else None
+    if notes:
+        node["context"] = list(notes)
+    else:
+        node.pop("context", None)
 
 
 def _mapping_edit(edits: dict[str, Any], field: str) -> dict[Any, Any]:

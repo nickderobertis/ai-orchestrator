@@ -103,7 +103,12 @@ dispatch onejudge.
    release, trigger CI, register or change infrastructure, or provide external
    sign-off. It never represents the planner's own review, acceptance,
    validation, or integration decision. The planner reviews each settled node
-   over the live channel and issues `add` / `retry` / `drop` / `split` edits. A
+   over the live channel and issues `add` / `retry` / `drop` / `split` edits.
+   What it learns about a node that keeps running belongs in a `context` edit:
+   that note is the only thing the round transition carries onto the carried-forward
+   node, and it carries exactly one round, so state worth keeping is state attached
+   again. See [Carried planner
+   context](docs/orchestration.md#carried-planner-context). A
    human node the planner would attest itself is a modeling error: keep it only
    if the action is genuinely external; otherwise perform that coordination live
    with no node. See [Node shapes](docs/orchestration.md#node-shapes). Before a
@@ -258,24 +263,56 @@ real CLI. onejudge drives a
 two-party conversation, and harness/model selection for each
 side lives in oneharness config, not onejudge:
 
+**Every role names the same five identities** — `claude-code:alternate`,
+`claude-code:alternate2`, `codex`, `codex:alternate`, `claude-code:primary` — and
+they differ only in order. A role that omitted one would lose that quota entirely
+once everything ahead of it was exhausted, which is the failure this arrangement
+exists to prevent. The primary Claude identity is last everywhere:
+
 - **Agent side** (does the work) — `oneharness.toml`, discovered from the repo root;
-  it prefers `claude-code:alternate` on the alternate subscription and falls back
-  to codex.
+  it prefers both alternate Claude subscriptions, in order, because the personas
+  are tuned against that model tier, and only then falls back to codex.
 - **Judge / simulated-user side** (supervises) — `oneharness.judge.toml`, passed
-  as the base config's `provider.judge_config`; codex is primary and
-  `claude-code:primary` uses only the primary subscription.
+  as the base config's `provider.judge_config`; codex first, then the alternate
+  Claude subscriptions. It keeps its cheaper-supervisor intent through `model`
+  (`claude-sonnet-5` for all three of its Claude variants) rather than by staying
+  off those subscriptions.
 - **Orchestrator side** (drives a tracked graph) — `oneharness.orchestrator.toml`,
   forced by `scripts/oneharness-orchestrator.sh`, which `just orchestrate` pins as
   the launched process's oneharness binary. Deliberately the reverse of the worker
-  order: codex is primary and `claude-code:alternate` is its fallback, so this
-  long-lived supervisory process never queues ahead of the workers for the
-  subscription they depend on.
+  order: both codex identities carry the role first, so this long-lived
+  supervisory process does not queue ahead of the workers while Codex can still
+  run it.
 - **LLM lint side** — `oneharness.llmlint.toml`, forced by
-  `scripts/llmlint-oneharness.sh`; it is codex-only.
+  `scripts/llmlint-oneharness.sh`; the same supervisory order. It is **no longer
+  codex-only**.
 
-Both alternate-subscription wrappers derive `ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR`
-from one source, `scripts/claude-alt-config-dir.sh`, so no role needs it exported
-by hand and the two cannot drift apart.
+The judge and llmlint reaching the workers' subscriptions at all is the operator's
+deliberate trade: those tiers can now contend for that Claude quota, and that is
+accepted because a supervisory tier that can still run beats one isolated from the
+quota that is left. Do not reorder these to restore the old isolation.
+
+`scripts/claude-alt-config-dir.sh` is the one source of **both** alternate config
+directories (`ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR` → `$HOME/.claude-alt`,
+`ORCHESTRATOR_CLAUDE_ALT2_CONFIG_DIR` → `$HOME/.claude-alt2`), and all three
+wrappers source it, so no role needs either exported by hand and no two can drift
+apart. Authenticate the second plan with `CLAUDE_CONFIG_DIR="$HOME/.claude-alt2"
+claude`; until then it costs nothing, because claude-code classifies an absent
+config directory exactly as it classifies an empty one — `auth`, which falls
+through — so unlike the codex helper this one creates nothing. See
+[The second alternate Claude
+subscription](docs/onejudge-integration.md#the-second-alternate-claude-subscription).
+
+Every one of those chains also names `codex:alternate`, a **second codex
+identity** that absorbs an exhausted quota without changing which subscription a
+role competes for. `scripts/codex-alt-home.sh` is its one source — it derives
+`ORCHESTRATOR_CODEX_ALT_HOME` as `$HOME/.codex-alt` and all three wrappers source
+it, because oneharness refuses to start whenever that indirection is unset.
+Authenticate it with `CODEX_HOME="$HOME/.codex-alt" codex login`; until then the
+candidate costs nothing, since the helper guarantees the directory **exists** and
+an empty codex home falls through as `auth` while an absent one hard-fails. That
+asymmetry is the whole reason the helper creates it — see
+[The second Codex identity](docs/onejudge-integration.md#the-second-codex-identity).
 
 `onejudge init` scaffolds both files plus a starter `onejudge.yaml`. The adopted
 exact oneharness release is declared in `config/oneharness.version`, installed as
@@ -443,14 +480,19 @@ everything the check reads. The Python targets run from the workspace root over 
 whole tree — pytest reads documentation, recipes, hooks, and app config — so they
 are keyed on it through `nx.json`'s `wholeWorkspace` input. Narrowing one back to a
 subset makes a green suite a claim about a tree that was never run; force a real
-re-run of a single tier with `--skip-nx-cache` on that one invocation instead. One
-narrowing earns its keep: only a handful of tests assert on this repository's prose,
-so `orchestrator:test-docs` runs those under the whole-workspace key while
-`orchestrator:test` runs the rest under `codeWorkspace` — the workspace minus
-`docs/**` and `**/*.md` — and a documentation edit stops charging eight minutes. That
-split cannot go stale silently: an undeclared test that opens this checkout's own
-documentation fails in `tests/conftest.py` and is told to carry
-`@pytest.mark.reads_docs`. See
+re-run of a single tier with `--skip-nx-cache` on that one invocation instead. The
+narrowings that earn their keep answer at the scope their tests read:
+`orchestrator:test-docs` runs the handful that assert on this repository's prose
+and keeps the whole-workspace key; `orchestrator:test-recipes` runs the journeys
+that drive `just` recipes and shell scripts under `recipeWorkspace`, exactly what
+they drive; `orchestrator:test` runs the rest under `codeWorkspace` — the workspace
+minus `docs/**`, `**/*.md`, and the `apps/**` and `packages/**` no Python test
+opens. `workspace:check-nx-cache` is narrowed the same way, onto the fixture and
+scripts it builds its two worktrees from. A documentation edit stops charging eight
+minutes. No split may go stale silently: an undeclared test that opens this
+checkout's own documentation fails in `tests/conftest.py` and is told to carry
+`@pytest.mark.reads_docs`, and a `@pytest.mark.reads_recipes` test that opens
+anything outside its narrower key fails the same way. See
 [When a cached verdict may stand
 in](docs/repo-lifecycle.md#when-a-cached-verdict-may-stand-in-for-a-verdict-on-this-tree).
 
@@ -519,7 +561,17 @@ How this polyglot monorepo was built up from the create-repo reference pieces:
   `pyproject.toml` is the floor's one source — `fail_under` sets it and
   `precision` decides it, because pytest-cov compares the total *after* rounding
   at that precision. `tests/test_coverage_gate.py` holds that combination to one
-  that can actually fail the build.
+  that can actually fail the build. The tier runs in two invocations — a serial
+  one under `coverage run` for the `single_threaded` tests and the parallel bulk
+  appending to it — and only the second reports, so the floor is still evaluated
+  once against the combined total and no `--cov-fail-under` overrides it.
+- **The suite runs across four xdist workers** (`-n 4 --dist load`), chosen from
+  measurement rather than from `auto`: it is latency-bound, its floor is its
+  longest single test, and the curve is flat past four while this host also runs
+  live dispatches. A test whose subject is a process-wide or machine-wide
+  resource declares that as a scheduling constraint — `single_threaded` today —
+  never as a loosened assertion. See [Four workers, and the one test that cannot
+  have any](docs/repo-lifecycle.md#four-workers-and-the-one-test-that-cannot-have-any).
 - **Tests are realistic, not mocked.** The e2e suite drives the *real* `onejudge`
   CLI as a subprocess through the same `dispatch`/`run-plan` code the orchestrator
   uses. Only the paid model/harness is faked — via onejudge's own `command`

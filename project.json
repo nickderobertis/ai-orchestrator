@@ -7,6 +7,10 @@
     "lint-llm-diff": {
       "command": "./scripts/llmlint-diff.sh",
       "options": { "cwd": "." }
+    },
+    "check-nx-cache": {
+      "command": "./scripts/check-nx-cache.sh",
+      "options": { "cwd": "." }
     }
   }
 }

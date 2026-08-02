@@ -120,12 +120,19 @@ release binary needs a newer glibc than the host provides, and the crates.io bui
 lags behind the 0.3.x releases that added `init`. The **PyPI `oneharness-cli`
 wheel** (a manylinux build) is the one that both runs on the host's glibc and
 carries `init`, so `scripts/session-setup.sh` installs the exact
-`config/oneharness.version` release and rejects a stale binary. Version 0.5.10 is
+`config/oneharness.version` release and rejects a stale binary. Version 0.6.3 is
 the adopted release; it contains auth variants shipped in 0.5.6 and succeeds
 0.3.24, the first release to carry the
 process-tree timeout and partial telemetry fix from
 [oneharness PR #1147](https://github.com/nickderobertis/oneharness/pull/1147),
-so that fix stays in effect.
+so that fix stays in effect. It is also the floor for **quota fallthrough on
+Codex**: before
+[oneharness PR #1208](https://github.com/nickderobertis/oneharness/pull/1208),
+Codex declared an exhausted account as a `turn.failed` event on stdout that no
+classifier read, so `failure_kind` stayed unset and a chain stopped dead at the
+exhausted identity instead of reaching the next one — the `codex:alternate`
+fallback below was unreachable exactly when it was needed. v0.6.2 had fixed only
+the Claude side of the same gap.
 
 **Watch for a stale cargo oneharness.** An earlier `cargo install oneharness`
 leaves a 0.2.x binary in `~/.cargo/bin`; its `run` lacks `--mode`, which onejudge's
@@ -136,39 +143,125 @@ the wheel is installed; keep `~/.local/bin` ahead of `~/.cargo/bin` regardless.
 
 ## Harnesses and the live path
 
-Live dispatch drives a real harness, chosen by `oneharness.toml`'s fallback chain
-(`claude-code:alternate` primary, `codex` secondary). A variant is a named
-per-harness preset selected as `<harness>:<variant>`; it composes the base harness
-settings with child-only model, environment, and credential routing.
-`scripts/oneharness-agent.sh` derives
-`ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR` as `$HOME/.claude-alt` unless the caller
-overrides it — through `scripts/claude-alt-config-dir.sh`, the one source both
-alternate-subscription wrappers share. The variant maps that portable path to
-`CLAUDE_CONFIG_DIR` only
-inside the alternate worker process and masks ambient Anthropic API/OAuth
-credentials so they cannot outrank subscription auth. If that directory is absent,
-unauthenticated, or quota-limited, fallback proceeds to Codex; a host with only its
+Live dispatch drives a real harness, chosen by `oneharness.toml`'s fallback chain.
+**Every role names the same five identities** — `claude-code:alternate`,
+`claude-code:alternate2`, `codex`, `codex:alternate`, `claude-code:primary` — and
+the roles differ only in the order they try them. The worker order is that list as
+written: both alternate Claude subscriptions first, because the personas are tuned
+against that model tier, then Codex, then the primary Claude identity as the last
+resort. A variant is a named per-harness preset selected as `<harness>:<variant>`;
+it composes the base harness settings with child-only model, environment, and
+credential routing.
+`scripts/claude-alt-config-dir.sh` is the one source of BOTH alternate config
+directories: it derives `ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR` as `$HOME/.claude-alt`
+and `ORCHESTRATOR_CLAUDE_ALT2_CONFIG_DIR` as `$HOME/.claude-alt2` unless the caller
+overrides them, and every wrapper — agent, orchestrator, and llmlint — sources it,
+because oneharness refuses to start whenever a named variant's `env_from` source is
+unset in the parent. Each variant maps its portable path to `CLAUDE_CONFIG_DIR`
+only inside its own child and masks ambient Anthropic API/OAuth credentials so they
+cannot outrank subscription auth. If one directory is absent, unauthenticated, or
+quota-limited, fallback proceeds to the next candidate; a host with only its
 primary Claude identity therefore still dispatches through an authenticated Codex.
 
-The **orchestrator** reverses that order. It is a long-lived supervisory process,
-not a worker, so `oneharness.orchestrator.toml` selects `codex` first and keeps
-`claude-code:alternate` as its fallback: it never stands in front of the workers
-for the alternate subscription they depend on.
+### The second Codex identity
+
+Every role's chain names `codex:alternate`, a second Codex account that absorbs
+an exhausted quota without changing which subscription that role competes for.
+`scripts/codex-alt-home.sh` is its one source, the counterpart of the Claude helper
+above: it derives `ORCHESTRATOR_CODEX_ALT_HOME` as `$HOME/.codex-alt` unless the
+caller overrides it, and all three wrappers — agent, orchestrator, and llmlint —
+source it. The variant maps that portable path to `CODEX_HOME` only inside the
+alternate child and unsets `OPENAI_API_KEY`, which would otherwise outrank the
+ChatGPT tokens `codex login` writes there and silently bill the wrong account.
+
+Authenticate the second account with `CODEX_HOME="$HOME/.codex-alt" codex login`
+(check it with `codex login status` under the same variable). Until then the
+candidate simply costs nothing, because the helper guarantees the **directory
+exists**: oneharness distinguishes the two "not set up yet" states, and only one
+degrades. A `CODEX_HOME` that exists but holds no credentials is classified
+`failure_kind: "auth"` and falls through to the next harness; a `CODEX_HOME` that
+does not exist at all is an unclassified hard failure that falls through to
+nothing. An empty directory is therefore what makes the committed chains safe on a
+host with one Codex login, and it is exactly where the login above writes.
+`--exclude` cannot stand in for this — it filters only `--all`, never an explicit
+`harnesses` chain — and oneharness refuses to start whenever the indirection is
+unset in the parent, which is why every wrapper exports it rather than only the
+roles that expect to reach the candidate.
+
+### The second alternate Claude subscription
+
+`claude-code:alternate2` is a second Claude *subscription*, credentialed from its
+own `$HOME/.claude-alt2` config directory. It exists for quota headroom: when the
+first alternate plan hits its usage limit mid-run, the worker reaches a second
+Claude account rather than degrading to Codex, so output stays on the tier the
+personas were tuned against. Authenticate it with `CLAUDE_CONFIG_DIR="$HOME/.claude-alt2" claude`
+and `/login` inside that session.
+
+Unlike `codex:alternate`, this candidate needs **no directory to be created for
+it**, and the helper deliberately creates none. Probed on this host against both
+states — an absent directory and an empty one — claude-code reported the same
+thing:
+
+```
+"text": "Not logged in · Please run /login",
+"failure_kind": "auth",
+oneharness: no selected harness could be run — all 1 fallback candidate(s) failed
+to start (claude-code:alternate2 [auth]); nothing executed
+```
+
+`auth` is the classification that falls through to the next candidate, so an
+unauthenticated second plan is safe and free in every committed chain exactly as an
+unauthenticated `codex:alternate` is. (claude-code also creates its config
+directory itself on first run, which is why there is nothing to pre-create — and
+why `scripts/oneharness-agent.sh` still substitutes a chain without the absent
+alternates: dropping them keeps a dispatch from leaving a config directory on disk
+for an account nobody has logged into. It drops **only** those candidates, reading
+the rest from `oneharness.toml` so the degraded chain is always a subsequence of
+the committed one.)
+
+The **orchestrator** reverses the worker's order. It is a long-lived supervisory
+process, not a worker, so `oneharness.orchestrator.toml` selects both Codex
+identities first: it does not stand in front of the workers for the subscriptions
+they depend on while Codex can still carry the role. Past that it does reach them,
+in the worker's own relative order, and the operator accepts that trade —
+contending for the workers' Claude quota beats stalling a supervisory process every
+workstream waits on.
 `launch_orchestrator` pins `scripts/oneharness-orchestrator.sh` as the launched
 process's oneharness binary, which forces that config (upward discovery from the
 repo root would find the worker chain) and exports the same shared
-`ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR` default — so `just orchestrate` launches on a
+`ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR` and `ORCHESTRATOR_CLAUDE_ALT2_CONFIG_DIR`
+defaults — so `just orchestrate` launches on a
 fresh shell with nothing exported by hand. That launch also forwards
 `--oneharness-mode` (default `bypass`) as `ONEHARNESS_MODE`, like every other
 dispatch entry point; without it the orchestrator runs at claude-code's
 non-interactive default, which denies outright every command outside
 `.claude/settings.json` — including the `just monitor` its own persona mandates.
 
-The judge's Codex primary is independent. Its `claude-code:primary` fallback
-removes `CLAUDE_CONFIG_DIR` and higher-precedence Anthropic credentials, selecting
-Claude's default `$HOME/.claude` identity and never the alternate worker account.
-llmlint uses `oneharness.llmlint.toml` through
-`scripts/llmlint-oneharness.sh`, which selects Codex only.
+The **judge** leads with Codex for the same reason and, past both Codex
+identities, now reaches the workers' alternate subscriptions before
+`claude-code:primary`. It keeps its cheaper-supervisor intent through `model`
+rather than through isolation: all three of its Claude variants are
+`claude-sonnet-5`, where every other role uses `claude-opus-5`. The
+`claude-code:primary` variant removes `CLAUDE_CONFIG_DIR` and higher-precedence
+Anthropic credentials, selecting Claude's default `$HOME/.claude` identity and
+never an alternate account.
+
+**llmlint** uses `oneharness.llmlint.toml` through
+`scripts/llmlint-oneharness.sh`, and is **no longer Codex-only**: it carries the
+same five identities in the same supervisory order. That trade is deliberate — a
+blocking pre-push check that can still be judged beats one isolated from the Claude
+quota that is left. It does mean this tier can contend for the workers'
+subscriptions once both Codex accounts are exhausted.
+
+One thing had to move for that. The wrapper used to append Codex's sandbox grant as
+a trailing `-- -c 'sandbox_permissions=[...]'`, and oneharness appends a trailing
+`HARNESS_ARG` to **whichever** harness fallback selects. On claude-code, `-c` is
+`--continue` — a boolean — so the permission string would be swallowed as a
+positional prompt and silently replace the lint prompt, producing a confident
+verdict on the wrong input rather than an error. The grant now lives in
+`[harness.codex] args` in `oneharness.llmlint.toml`, where it reaches both Codex
+identities and no Claude one. `tests/test_llmlint_oneharness_wrapper.py` proves
+that at the real oneharness boundary.
 
 To address an identity explicitly in a diagnostic run, use the composed id:
 
@@ -176,9 +269,25 @@ To address an identity explicitly in a diagnostic run, use the composed id:
 ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR="$HOME/.claude-alt" \
   oneharness run --config oneharness.toml \
   --harness claude-code:alternate --prompt "Reply with OK"
+ORCHESTRATOR_CLAUDE_ALT2_CONFIG_DIR="$HOME/.claude-alt2" \
+  oneharness run --config oneharness.toml \
+  --harness claude-code:alternate2 --prompt "Reply with OK"
 oneharness run --config oneharness.judge.toml \
   --harness claude-code:primary --prompt "Reply with OK"
+ORCHESTRATOR_CODEX_ALT_HOME="$HOME/.codex-alt" \
+  oneharness run --config oneharness.toml \
+  --harness codex:alternate --prompt "Reply with OK"
 ```
+
+A `codex:alternate` or `claude-code:alternate2` probe that reports `fell_through:
+[{"harness": "...", "reason": "auth"}]` is the unauthenticated state, not a broken
+config; run the `codex login` above, or for the second Claude plan:
+
+```sh
+CLAUDE_CONFIG_DIR="$HOME/.claude-alt2" claude
+```
+
+then `/login` in that session.
 
 The offline gate needs neither identity; the
 timeout e2e gate drives the adopted oneharness with a local fixture, and each live

@@ -276,22 +276,49 @@ ensure_codex_gate() {
   fi
 }
 
+append_session_env() {
+  # `2>/dev/null` precedes the append deliberately: bash performs redirections left
+  # to right, so a failing `>>` on a later one still writes its raw "No such file or
+  # directory" to the stderr in effect at that point. Suppressing first is what turns
+  # a failed append into this function's own diagnostic instead of shell noise.
+  if ! printf '%s\n' "$1" 2>/dev/null >>"$CLAUDE_ENV_FILE"; then
+    log "cannot persist the session environment: $CLAUDE_ENV_FILE is not writable"
+    return 1
+  fi
+}
+
 persist_session_env() {
   [ -n "${CLAUDE_ENV_FILE:-}" ] || return 0
-  local env_export has_path=0 has_llmlint_bin=0
-  while IFS= read -r env_export; do
-    case "$env_export" in
-      "export PATH="*"$NODE_BIN"*) has_path=1 ;;
-      "export LLMLINT_ONEHARNESS_BIN="*) has_llmlint_bin=1 ;;
-    esac
-  done <"$CLAUDE_ENV_FILE" 2>/dev/null
+  local env_dir env_export has_path=0 has_llmlint_bin=0
+  env_dir="$(dirname "$CLAUDE_ENV_FILE")"
+  # On the FIRST session inside a freshly created config directory — a new machine,
+  # or a newly authenticated subscription — the parent of the file Claude Code names
+  # does not exist yet. Create it rather than skipping: it is the directory of the
+  # harness's own path, and skipping would cost that session its toolchain PATH for
+  # good. Best effort either way, and never the script's exit status; a lost export
+  # costs only PATH, since scripts/llmlint-runtime-env.sh re-derives
+  # LLMLINT_ONEHARNESS_BIN for both ends of the llmlint tier.
+  if ! mkdir -p "$env_dir"; then
+    log "cannot persist the session environment: $env_dir could not be created"
+    return 0
+  fi
+  # Being the first writer is the normal case, and reading an absent or unreadable
+  # file would leak the same raw redirect error the appends used to.
+  if [ -f "$CLAUDE_ENV_FILE" ] && [ -r "$CLAUDE_ENV_FILE" ]; then
+    while IFS= read -r env_export; do
+      case "$env_export" in
+        "export PATH="*"$NODE_BIN"*) has_path=1 ;;
+        "export LLMLINT_ONEHARNESS_BIN="*) has_llmlint_bin=1 ;;
+      esac
+    done <"$CLAUDE_ENV_FILE"
+  fi
   if [ "$has_path" -eq 0 ]; then
     printf -v env_export 'export PATH=%q' "$PATH"
-    printf '%s\n' "$env_export" >>"$CLAUDE_ENV_FILE"
+    append_session_env "$env_export" || return 0
   fi
   if [ "$has_llmlint_bin" -eq 0 ]; then
     printf -v env_export 'export LLMLINT_ONEHARNESS_BIN=%q' "$LLMLINT_ONEHARNESS_BIN"
-    printf '%s\n' "$env_export" >>"$CLAUDE_ENV_FILE"
+    append_session_env "$env_export" || return 0
   fi
 }
 
@@ -310,9 +337,15 @@ fi
 install_bun || toolchain_failed=1
 ensure_codex
 ensure_codex_gate
-alternate_config_path=
+alternate_config_paths=()
 if resolve_claude_alt_config_dir session-setup; then
-  alternate_config_path="$ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR/.claude.json"
+  # Both alternate subscriptions are dispatch identities, so both need this
+  # checkout marked trusted; `mark_alternate_claude_trust` tolerates a config
+  # that is not there yet, which is the state of one nobody has logged into.
+  alternate_config_paths=(
+    "$ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR/.claude.json"
+    "$ORCHESTRATOR_CLAUDE_ALT2_CONFIG_DIR/.claude.json"
+  )
 else
   log "alternate Claude config resolution failed; continuing"
 fi
@@ -322,10 +355,10 @@ if [ -n "$managed_checkout_root" ]; then
 else
   managed_checkout_root="$REPO_ROOT"
 fi
-if [ -n "$alternate_config_path" ]; then
+for alternate_config_path in ${alternate_config_paths[@]+"${alternate_config_paths[@]}"}; do
   mark_alternate_claude_trust "$alternate_config_path" "$managed_checkout_root" "$REPO_ROOT" \
     || log "alternate Claude workspace trust setup failed; continuing"
-fi
+done
 persist_session_env
 
 # Install the llmlint LLM-judge tier (llmlint + its bundled oneharness).

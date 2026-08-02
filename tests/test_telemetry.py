@@ -10,7 +10,9 @@ from pathlib import Path
 from typing import get_args
 
 import pytest
+from telemetry_contract import WATERFALL
 
+import orchestrator.history as history_module
 import orchestrator.telemetry as telemetry_module
 from orchestrator.history import HistorySession, SessionId, SessionRole
 from orchestrator.journal import NodeJournal, open_journal
@@ -136,6 +138,10 @@ def test_collect_run_joins_ledger_journal_history_and_attestation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     run_dir = _recorded_run(tmp_path)
+    # A run whose whole journal lands inside one millisecond has no wall clock to
+    # divide, so the categories below would report whatever the host had left rather
+    # than what the run journalled.
+    _stretch_recorded_span(run_dir)
     history_path = tmp_path / "history.jsonl"
     history_path.write_text(
         json.dumps(
@@ -179,9 +185,7 @@ def test_collect_run_joins_ledger_journal_history_and_attestation(
         judge_history,
         {"run_id": "observed", "role": "judge"},
     )
-    monkeypatch.setattr(
-        telemetry_module, "all_sessions", lambda **_kwargs: [session, judge_session]
-    )
+    monkeypatch.setattr(history_module, "all_sessions", lambda **_kwargs: [session, judge_session])
 
     telemetry = collect_run(run_dir, now=9999999999.0)
     assert telemetry is not None
@@ -191,9 +195,16 @@ def test_collect_run_joins_ledger_journal_history_and_attestation(
     assert record["timing"]["agent_seconds"] == 2.5
     assert record["timing"]["judge_seconds"] == 1.0
     assert record["timing"]["agent_model_ms"] == 0
-    assert record["timing"]["unattributed_ms"] > 0
-    assert record["timing"]["lock_wait_seconds"] > 0
-    assert record["timing"]["setup_seconds"] > 0
+    # Every session here is a legacy one — no validated native fields — so none of the
+    # idle share is attributable to any of them and all of it is unattributed. That is
+    # the contract; "unattributed is positive" was a claim about how much wall clock the
+    # host had left over, which a busy box can legitimately report as none.
+    assert record["timing"]["unattributed_ms"] == record["timing"]["idle_orchestration_ms"]
+    # The exact seconds the journal recorded, not merely a positive share: with the
+    # run's own wall clock spread across its events there is room for every category,
+    # so a dropped span reads as zero here instead of hiding behind a loaded box.
+    assert record["timing"]["lock_wait_seconds"] == 0.001
+    assert record["timing"]["setup_seconds"] == 0.001
     assert record["timing_quality"] == "legacy"
     assert record["linkage_quality"] == "labelled"
     node = record["nodes"][0]
@@ -295,6 +306,29 @@ def test_over_budget_buckets_are_clipped_to_exactly_wall_time() -> None:
     assert timing["lock_wait_seconds"] == 0.02
     assert timing["setup_seconds"] == timing["scheduling_seconds"] == 0
     assert timing["publication_wait_seconds"] == 0
+
+
+def test_the_clipping_order_the_contract_helper_states_is_the_one_timing_uses() -> None:
+    """`_timing` spells its allocation order as straight-line code, not as data.
+
+    `tests/telemetry_contract.WATERFALL` restates that order so both suites can say
+    what a category is owed on a run that ran out of wall clock. This is the gate that
+    stops the restatement drifting: each category is starved in turn by giving the run
+    exactly enough milliseconds to pay for everything ahead of it and no more.
+    """
+    journalled = {"gate": 0.001, "lock_wait": 0.001, "setup": 0.001, "scheduling": 0.001}
+    # `wait` is the argument behind `publication_wait_seconds`; the names differ because
+    # the record states the wait it reports and the argument states what was waited on.
+    assert tuple(journalled) + ("wait",) == tuple(
+        category.removesuffix("_seconds").replace("publication_wait", "wait")
+        for category in WATERFALL
+    )
+
+    for affordable, category in enumerate(WATERFALL, start=1):
+        timing = _timing(affordable, [], wait=0.001, **journalled)
+
+        paid = [round(timing[name] * 1000) for name in WATERFALL]
+        assert paid == [1] * affordable + [0] * (len(WATERFALL) - affordable), category
 
 
 @pytest.mark.reads_docs
@@ -442,7 +476,7 @@ def test_native_timing_usage_tools_and_breakdown_are_role_and_node_scoped(
         labelled_lint,
         legacy_lint,
     ]
-    monkeypatch.setattr(telemetry_module, "all_sessions", lambda **_kwargs: sessions)
+    monkeypatch.setattr(history_module, "all_sessions", lambda **_kwargs: sessions)
     telemetry = collect_run(run_dir)
     assert telemetry is not None
     record = telemetry.record()
@@ -522,7 +556,7 @@ def test_breakdown_timeline_orders_turns_and_marks_unfinished_sessions(
             },
         },
     )
-    monkeypatch.setattr(telemetry_module, "all_sessions", lambda **_kwargs: [])
+    monkeypatch.setattr(history_module, "all_sessions", lambda **_kwargs: [])
 
     assert main(["--runs-dir", str(tmp_path / "runs"), "--all", "--breakdown"]) == 0
     breakdown = capsys.readouterr().out
@@ -991,7 +1025,7 @@ def test_collect_run_prefers_native_scalars_and_unions_fallback_tool_intervals(
         )
 
     sessions = [history("native", 80, 40, 60), history("b", 20, 50, 90), history("c", 15, 70, 110)]
-    monkeypatch.setattr(telemetry_module, "all_sessions", lambda **_kwargs: sessions)
+    monkeypatch.setattr(history_module, "all_sessions", lambda **_kwargs: sessions)
 
     telemetry = collect_run(run_dir)
     assert telemetry is not None

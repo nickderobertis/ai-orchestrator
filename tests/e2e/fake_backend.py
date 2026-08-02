@@ -22,6 +22,13 @@ Outcome is steered by sentinels in the task (the first user message):
                            until completing on its third turn.
   * otherwise       -> the unified supervisor completes on the second agent turn,
                        after one push, exercising the two-sided loop (exit 0).
+
+A journey that needs a node observably in flight names its own rendezvous rather
+than timing a sleep: `hold-<turn>-ready=<path> hold-<turn>-release=<path>` makes
+that zero-based agent turn announce it has arrived and then block until the test
+creates the release path. One turn holds per named pair, so a journey that needs two
+stops names two turns; a task that names none never delays. `tests/e2e/rendezvous.py`
+renders the fragment and is the only convention there is — no journey needs a second.
 """
 
 # llmlint: ignore-file[boundary_inputs_validated] this deterministic test backend validates the
@@ -39,8 +46,15 @@ import time
 from pathlib import Path
 from typing import Literal, NamedTuple, TypedDict, cast
 
-from orchestrator.dispatch import REPORTED_BLOCKER_PREFIX
-from orchestrator.scratch import CAPACITY_ERROR_MARKER, DEFAULT_MIN_FREE_BYTES
+# onejudge spawns this file once per protocol step — six times for a default
+# two-turn dispatch — so every import is paid on every step. Importing the three
+# constants below from `orchestrator` transitively loaded onejudge_sdk (and
+# jsonschema), asyncio, and yaml, which cost more than half of a fake dispatch's
+# wall clock. They are restated here instead, and
+# `tests/test_fake_backend_contract.py` fails when either side drifts.
+REPORTED_BLOCKER_PREFIX = "terminal blocker reported:"  # orchestrator.dispatch
+CAPACITY_ERROR_MARKER = "scratch-capacity-preflight:"  # orchestrator.scratch
+DEFAULT_MIN_FREE_BYTES = 5 * 1024**3  # orchestrator.scratch
 
 
 class SupervisorRequest(TypedDict):
@@ -93,15 +107,25 @@ def _planner_guidance(messages: list[dict]) -> str | None:
     return None
 
 
-def _wait_at_provider_barrier(task: str) -> None:
-    """Expose a deterministic real-provider boundary for crash-recovery tests."""
-    match = re.search(r"provider-barrier-ready=(\S+) provider-barrier-release=(\S+)", task)
-    if match is None:
-        return
-    ready, release = (Path(value) for value in match.groups())
-    ready.write_text("ready\n", encoding="utf-8")
-    while not release.exists():
+def _hold_until_released(task: str, turn: int) -> bool:
+    """Hold this agent turn at its rendezvous, reporting whether it held.
+
+    The test names a ready path and a release path per turn in the task; this
+    announces it has arrived and then blocks until the test releases it. Holding on
+    the test's signal keeps the agent in flight exactly as long as the journey needs,
+    where a fixed sleep both costs that time unconditionally and races the assertion
+    it was meant to make observable. A turn the task does not name runs straight
+    through, which is what makes one rendezvous enough for every journey.
+    """
+    ready = re.search(rf"hold-{turn}-ready=(\S+)", task)
+    release = re.search(rf"hold-{turn}-release=(\S+)", task)
+    if ready is None or release is None:
+        return False
+    Path(ready.group(1)).write_text("ready\n", encoding="utf-8")
+    released = Path(release.group(1))
+    while not released.exists():
         time.sleep(0.01)
+    return True
 
 
 def _commit_and_push_ci_iteration(state: str) -> None:
@@ -228,7 +252,9 @@ def main() -> int:
 
     match op:
         case "respond":
-            _wait_at_provider_barrier(task)
+            # A deterministic real-provider boundary: whatever this turn is about to
+            # do, the journey holding it here decides when it happens.
+            _hold_until_released(task, _assistant_turns(messages))
             if "Check-in command: " in task and "agent-synthesized planner update" in task:
                 channel_dir = Path(task.split("Channel directory: ", 1)[1].splitlines()[0])
                 attempts = channel_dir / "check-in-dispatches.txt"
@@ -276,25 +302,18 @@ def main() -> int:
             if run_log is not None:
                 with Path(run_log.group(1)).open("a", encoding="utf-8") as stream:
                     stream.write("run\n")
+            # One JSON line per delivered prompt, so a journey can assert on exactly
+            # what the agent side received across several dispatches of one node.
+            task_log = re.search(r"record-task=(\S+)", task)
+            if task_log is not None:
+                with Path(task_log.group(1)).open("a", encoding="utf-8") as stream:
+                    stream.write(json.dumps(task) + "\n")
             if "resume-after-cap" in task:
                 resume_marker.write_text(str(resume_segments + 1), encoding="utf-8")
             if "slow-branch" in task:
                 witness = Path(task.split("slow-branch", 1)[1].strip().split()[0])
                 with witness.open("a", encoding="utf-8") as stream:
-                    stream.write("tick\n")
-                if "live-edit-slow" in task and _assistant_turns(messages) > 0:
-                    ready_match = re.search(r"live-edit-ready=(\S+)", task)
-                    release_match = re.search(r"live-edit-release=(\S+)", task)
-                    if ready_match is None or release_match is None:
-                        raise AssertionError("live-edit-slow requires ready and release paths")
-                    Path(ready_match.group(1)).write_text("ready\n", encoding="utf-8")
-                    release = Path(release_match.group(1))
-                    while not release.exists():
-                        time.sleep(0.02)
-                elif "live-edit-slow" not in task:
-                    time.sleep(30 if "pacemaker-slow" in task else 0.8)
-                with witness.open("a", encoding="utf-8") as stream:
-                    stream.write("tick\n")
+                    stream.write("tick\ntick\n")
             orchestrator_plan = _orchestrator_command(task)
             infrastructure_failures = {
                 "provider-errors": "fake_backend: provider error",
@@ -357,6 +376,9 @@ def main() -> int:
                             for sentinel in (
                                 "continuation-channel",
                                 '"name": "live-edit"',
+                                # A round whose carried node fails again by design;
+                                # its non-zero status is the journey's subject.
+                                '"name": "planner-context"',
                                 # Live-edit journeys whose round legitimately settles
                                 # waiting or failed; run-plan's non-zero status is the
                                 # expected outcome, not an orchestrator failure.
@@ -387,6 +409,18 @@ def main() -> int:
                             *forwarded,
                         ],
                         check=True,
+                        capture_output=True,
+                        text=True,
+                    )
+                elif orchestrator_turn == 1 and '"name": "planner-context"' in plan_text:
+                    # The transition an orchestrator drives after the planner's
+                    # continuing verdict: no attestation, no edits file, just the
+                    # next round derived from the round that settled.
+                    run_id = orchestrator_plan.argv[orchestrator_plan.argv.index("--run") + 1]
+                    forwarded = orchestrator_plan.argv[orchestrator_plan.argv.index("--runs-dir") :]
+                    subprocess.run(
+                        ["just", "next-round", run_id, *forwarded],
+                        check=False,
                         capture_output=True,
                         text=True,
                     )
@@ -549,8 +583,6 @@ def main() -> int:
                 agent_message = "Terminal blocker: required external service is unavailable."
             elif "repeat-productive" in task:
                 agent_message = "continuing verified migration work"
-            elif "large-dispatch-report" in task:
-                agent_message = "done " + "x" * 10_000_000
             else:
                 agent_message = "done" if done else "working on it"
             resp = {

@@ -32,6 +32,8 @@ import pytest
 from conftest import git, install_pre_push_hook
 from fakes import FakeGitHub, FakePRState, make_writing_dispatch
 from git_http import serve_github_origin
+from rendezvous import Rendezvous
+from telemetry_contract import clipped_share_seconds
 from waits import deadline as e2e_deadline
 from waits import timeout as e2e_timeout
 
@@ -40,7 +42,7 @@ import orchestrator.lifecycle as lifecycle_module
 from orchestrator import gitops
 from orchestrator.coordination import LockTimeout, advisory_lock, git_lock_identity
 from orchestrator.dispatch import DispatchError, Report, scoped_session
-from orchestrator.github import GitHubError, PullRequest
+from orchestrator.github import CliGitHubBackend, GitHubError, PullRequest
 from orchestrator.graph import graph_payload, parse_graph, run_graph
 from orchestrator.journal import NodeJournal, NodeSink, open_journal
 from orchestrator.lifecycle import (
@@ -75,6 +77,25 @@ from orchestrator.runs import NodeId, RunId, prepare_round, write_result
 from orchestrator.workspace import IdentityKey, Workspace, normalize_repo
 
 _T = TypeVar("_T")
+
+# The cap a journey names when it needs a step that *exhausts* its budget.
+#
+# A `should-fail` step never completes, so it spends every turn it is given and is
+# then automatically resumed `MAX_AUTOMATIC_STEP_RESUMES` more times. Each turn is
+# two provider processes (respond, then supervisor) and each segment ends in one
+# `assess`, so one such dispatch spawns `3 * (2 * cap + 1)` of them. At the
+# lifecycle default of `DEFAULT_LIFECYCLE_STEP_MAX_TURNS` (24) that is 147
+# processes and roughly twelve measured seconds — per dispatch, and these journeys
+# drive up to four each.
+#
+# None of them is about how *high* the cap is; they need a step that reaches
+# whatever cap it was given. The default's own height is pinned for free by
+# `test_run_repo_task_journals_a_step_that_hit_the_turn_cap` in
+# `tests/test_lifecycle_unit.py`, against an injected dispatch function. So name
+# the smallest cap that still runs both sides of the loop — the agent takes a
+# turn, the supervisor declines to release it, the agent takes its last — and the
+# same 3-segment exhaustion costs 15 processes instead of 147.
+EXHAUSTED_STEP_MAX_TURNS = 2
 
 
 def _workspace(tmp_path: Path, *origins: Path, workflow: str = "local") -> Workspace:
@@ -460,6 +481,7 @@ def test_lifecycle_failure_survives_simultaneous_deferred_teardown(
         base_path=command_base(),
         persona_dir=personas_dir,
         recorded_gate=["true"],
+        max_turns=EXHAUSTED_STEP_MAX_TURNS,
     )
 
     assert result.outcome == "not-completed"
@@ -1119,6 +1141,7 @@ def test_repo_plan_ledger_and_guided_next_round(
                 "repo": str(canonical),
                 "persona": "engineer",
                 "task": "should-fail write-change: preserve this partial attempt",
+                "max_turns": EXHAUSTED_STEP_MAX_TURNS,
                 "recorded_gate": ["true"],
                 "workflow": "local",
                 "repo_type": "single-owner",
@@ -1253,6 +1276,7 @@ def test_a_node_that_cannot_finish_settles_instead_of_being_redispatched_forever
                         # Writes real work every round, so every attempt earns a
                         # marker: the growth is bounded by bounding the attempts.
                         "task": "should-fail write-unique-change: never finishes",
+                        "max_turns": EXHAUSTED_STEP_MAX_TURNS,
                         "verify_cmd": ["true"],
                         "workflow": "local",
                         "repo_type": "single-owner",
@@ -1366,6 +1390,7 @@ def test_an_explicit_retry_restores_an_exhausted_preserved_branchs_budget(
                         "repo": str(canonical),
                         "persona": "engineer",
                         "task": "should-fail write-unique-change: never finishes",
+                        "max_turns": EXHAUSTED_STEP_MAX_TURNS,
                         "verify_cmd": ["true"],
                         "workflow": "local",
                         "repo_type": "single-owner",
@@ -1430,6 +1455,7 @@ def test_ordinary_next_round_resumes_committed_lifecycle_branch(
                         "repo": str(canonical),
                         "persona": "engineer",
                         "task": "should-fail write-change: preserve across ordinary rounds",
+                        "max_turns": EXHAUSTED_STEP_MAX_TURNS,
                         "verify_cmd": ["true"],
                         "workflow": "local",
                         "repo_type": "single-owner",
@@ -2051,6 +2077,38 @@ def test_registered_remote_identity_keeps_pr_flow(tmp_path, bare_origin) -> None
     assert result.repository_type == "single-owner"
     assert result.merge_policy == "auto"
     assert result.pr_base == "main"
+
+
+def test_cli_github_adopts_only_exact_merged_head_via_all_state_lookup(
+    tmp_path, monkeypatch
+) -> None:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    calls = tmp_path / "gh-calls"
+    fake_gh = bin_dir / "gh"
+    fake_gh.write_text(
+        "#!/bin/sh\n"
+        f"printf '%s\\n' \"$*\" >> {shlex.quote(str(calls))}\n"
+        "printf '%s\\n' "
+        '\'[{"number":17,"url":"https://github.test/o/r/pull/17",'
+        '"state":"MERGED","headRefOid":"published-head"}]\'\n',
+        encoding="utf-8",
+    )
+    fake_gh.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+
+    backend = CliGitHubBackend()
+    adopted = backend.adoptable_pr("o/r", head="feature", base="main", head_sha="published-head")
+    stale = backend.adoptable_pr("o/r", head="feature", base="main", head_sha="new-head")
+
+    assert adopted is not None and adopted.number == 17
+    assert stale is None
+    assert calls.read_text(encoding="utf-8").splitlines() == [
+        "pr list --repo o/r --head feature --base main --state all "
+        "--json number,url,state,headRefOid",
+        "pr list --repo o/r --head feature --base main --state all "
+        "--json number,url,state,headRefOid",
+    ]
 
 
 @pytest.mark.parametrize("existing_state", ["open", "merged", "stale-merged"])
@@ -5668,12 +5726,15 @@ def test_cooperative_real_dispatch_cancellation_preserves_and_recovers_branch(
     workspace = Workspace(tmp_path / "cancelled-worktrees")
     cancel = threading.Event()
     witness = tmp_path / "cancelled.ticks"
+    # The second agent turn holds instead of sleeping, so cancellation always lands
+    # on a dispatch that is genuinely mid-work with partial work already committed.
+    held = Rendezvous.at(tmp_path, "cancelled")
 
     with ThreadPoolExecutor(max_workers=1) as pool:
         future = pool.submit(
             run_repo_task,
             str(canonical),
-            f"slow-branch {witness} write-change",
+            f"slow-branch {witness} write-change{held.sentinels(1)}",
             "engineer",
             workspace=workspace,
             base_path=command_base(),
@@ -5684,9 +5745,10 @@ def test_cooperative_real_dispatch_cancellation_preserves_and_recovers_branch(
         )
         deadline = e2e_deadline(15)
         while time.monotonic() < deadline:
-            ticks = witness.read_text(encoding="utf-8").count("tick") if witness.exists() else 0
             changes = list((tmp_path / "cancelled-worktrees").rglob("CHANGE.txt"))
-            if ticks >= 3 and changes:
+            # The second turn parks before it writes anything, so its arrival is what
+            # says the first turn's partial work is already on disk.
+            if changes and held.arrived():
                 break
             time.sleep(0.02)
         else:
@@ -5837,9 +5899,10 @@ def test_resumed_branch_setup_round_trips_through_telemetry_cli(tmp_path, bare_o
     observed = json.loads(indexed.stdout)["runs"][0]["timing"]
     # `setup_seconds` is a millisecond-rounded share of the run's wall clock handed
     # out after the categories ahead of it, so a positive value is a property of a
-    # fast box. The journal-to-CLI round trip is the contract, and holds either way.
+    # fast box, and the whole journalled total is a property of one that had the room
+    # left. The journal-to-CLI round trip is the contract, and holds either way.
     journalled = sum(event.detail["seconds"] for event in setup_events)
-    assert observed["setup_seconds"] == round(journalled * 1000) / 1000
+    assert observed["setup_seconds"] == clipped_share_seconds(observed, "setup_seconds", journalled)
 
 
 def test_real_lifecycle_outcomes_round_trip_through_telemetry_cli(tmp_path, bare_origin) -> None:

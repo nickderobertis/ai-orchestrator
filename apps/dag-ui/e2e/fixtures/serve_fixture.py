@@ -23,6 +23,7 @@ import shutil
 import socket
 import sys
 import tempfile
+from contextlib import ExitStack
 from pathlib import Path
 from typing import Any, NamedTuple
 
@@ -708,6 +709,19 @@ def remove_run(workspace: Path, run_id: str) -> int:
     return 0
 
 
+def reserve_refusal(port: int) -> socket.socket:
+    """Bind ``port`` without listening on it, so every connection to it is refused.
+
+    The other network condition a browser journey needs, and the one a merely *free*
+    port cannot supply: with nothing listening, the kernel refuses each connection, and
+    the bind holds the port for as long as the returned socket is open — which is what
+    stops a concurrent run's own API server from landing on it.
+    """
+    reservation = socket.socket()
+    reservation.bind(("127.0.0.1", port))
+    return reservation
+
+
 def stall(port: int) -> int:
     """Accept connections on ``port`` and never answer them.
 
@@ -716,11 +730,11 @@ def stall(port: int) -> int:
     condition, not a stand-in for the API: it serves nothing and answers nothing, so
     the app's own request stays pending exactly as it would against a wedged server.
     """
+    held: list[socket.socket] = []
     listener = socket.socket()
     listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     listener.bind(("127.0.0.1", port))
     listener.listen(16)
-    held = []
     while True:
         connection, _ = listener.accept()
         # Held open, never written to and never closed: closing would let the client
@@ -788,10 +802,19 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="accept connections and never answer, so a read stays in flight",
     )
+    parser.add_argument(
+        "--refuse-port",
+        type=int,
+        help="with --stall, hold this port bound but unlistened so it refuses every connection",
+    )
     args = parser.parse_args(argv)
 
     if args.stall:
-        return stall(args.port)
+        with ExitStack() as reserved:
+            if args.refuse_port is not None:
+                # Held for as long as this process lives; `stall` never returns.
+                reserved.enter_context(reserve_refusal(args.refuse_port))
+            return stall(args.port)
 
     workspace = args.workspace or Path(tempfile.mkdtemp(prefix="dag-ui-e2e-"))
     # The provenance records this fixture writes are throwaway too, so they must not

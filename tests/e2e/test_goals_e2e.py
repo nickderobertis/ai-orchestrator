@@ -9,6 +9,7 @@ import time
 from pathlib import Path
 
 import pytest
+from rendezvous import Rendezvous
 
 from orchestrator import REPO_ROOT
 
@@ -39,8 +40,7 @@ def test_overlapping_goals_require_and_record_acknowledgement(tmp_path: Path, co
     )
     assert registered.returncode == 0, registered.stderr
 
-    ready = tmp_path / "provider.ready"
-    release = tmp_path / "provider.release"
+    provider = Rendezvous.at(tmp_path, "provider")
     plan = tmp_path / "plan.json"
     plan.write_text(
         json.dumps(
@@ -51,10 +51,7 @@ def test_overlapping_goals_require_and_record_acknowledgement(tmp_path: Path, co
                     {
                         "id": "hold",
                         "persona": "engineer",
-                        "task": (
-                            f"complete-now provider-barrier-ready={ready} "
-                            f"provider-barrier-release={release}"
-                        ),
+                        "task": f"complete-now{provider.sentinels()}",
                     },
                     {
                         "id": "target",
@@ -131,7 +128,7 @@ def test_overlapping_goals_require_and_record_acknowledgement(tmp_path: Path, co
             break
         time.sleep(0.02)
     else:
-        release.write_text("release\n", encoding="utf-8")
+        provider.let_go()
         first.communicate(timeout=10)
         acknowledged.communicate(timeout=10)
         raise AssertionError("acknowledged run did not register in the goals index")
@@ -143,7 +140,7 @@ def test_overlapping_goals_require_and_record_acknowledgement(tmp_path: Path, co
     assert str((tmp_path / "runs" / "first").resolve()) in goals.stdout
     assert str(target.resolve()) in goals.stdout
 
-    release.write_text("release\n", encoding="utf-8")
+    provider.let_go()
     first_out, first_err = first.communicate(timeout=10)
     second_out, second_err = acknowledged.communicate(timeout=10)
     assert first.returncode == 0, first_out + first_err
@@ -163,10 +160,10 @@ def test_cross_dag_dependency_waits_then_reports_upstream_modification(
     state = tmp_path / "state"
     runs = tmp_path / "runs"
     env = {**os.environ, "AI_ORCHESTRATOR_HOME": str(state)}
-    producer_ready, producer_release = tmp_path / "producer.ready", tmp_path / "producer.release"
-    amend_ready, amend_release = tmp_path / "amend.ready", tmp_path / "amend.release"
-    hold_ready, hold_release = tmp_path / "hold.ready", tmp_path / "hold.release"
-    fail_ready, fail_release = tmp_path / "fail.ready", tmp_path / "fail.release"
+    producer = Rendezvous.at(tmp_path, "producer")
+    amend = Rendezvous.at(tmp_path, "amend")
+    hold = Rendezvous.at(tmp_path, "hold")
+    fail = Rendezvous.at(tmp_path, "fail")
     plan_a = tmp_path / "a.json"
     plan_a.write_text(
         json.dumps(
@@ -176,35 +173,23 @@ def test_cross_dag_dependency_waits_then_reports_upstream_modification(
                     {
                         "id": "produce",
                         "persona": "engineer",
-                        "task": (
-                            f"complete-now provider-barrier-ready={producer_ready} "
-                            f"provider-barrier-release={producer_release}"
-                        ),
+                        "task": f"complete-now{producer.sentinels()}",
                     },
                     {
                         "id": "amend",
                         "persona": "engineer",
-                        "task": (
-                            f"complete-now provider-barrier-ready={amend_ready} "
-                            f"provider-barrier-release={amend_release}"
-                        ),
+                        "task": f"complete-now{amend.sentinels()}",
                         "deps": ["produce"],
                     },
                     {
                         "id": "hold",
                         "persona": "engineer",
-                        "task": (
-                            f"complete-now provider-barrier-ready={hold_ready} "
-                            f"provider-barrier-release={hold_release}"
-                        ),
+                        "task": f"complete-now{hold.sentinels()}",
                     },
                     {
                         "id": "fail",
                         "persona": "engineer",
-                        "task": (
-                            f"should-fail provider-barrier-ready={fail_ready} "
-                            f"provider-barrier-release={fail_release}"
-                        ),
+                        "task": f"should-fail{fail.sentinels()}",
                     },
                 ],
             }
@@ -250,10 +235,10 @@ def test_cross_dag_dependency_waits_then_reports_upstream_modification(
     )
     deadline = time.monotonic() + 10
     while time.monotonic() < deadline and not (
-        producer_ready.exists() and hold_ready.exists() and fail_ready.exists()
+        producer.arrived() and hold.arrived() and fail.arrived()
     ):
         time.sleep(0.02)
-    assert producer_ready.exists() and hold_ready.exists() and fail_ready.exists()
+    assert producer.arrived() and hold.arrived() and fail.arrived()
 
     blocked = subprocess.run(
         ["just", "run-plan", str(plan_b), "--run", "B-blocked", *common],
@@ -270,7 +255,7 @@ def test_cross_dag_dependency_waits_then_reports_upstream_modification(
     failed_mapping = json.loads(plan_b.read_text(encoding="utf-8"))
     failed_mapping["tasks"][0]["deps"] = ["run:A#fail"]
     failed_plan.write_text(json.dumps(failed_mapping), encoding="utf-8")
-    fail_release.write_text("release\n", encoding="utf-8")
+    fail.let_go()
     deadline = time.monotonic() + 10
     upstream_events = runs / "A" / "events.jsonl"
     while time.monotonic() < deadline:
@@ -290,11 +275,11 @@ def test_cross_dag_dependency_waits_then_reports_upstream_modification(
     assert failed.returncode == 1, failed.stderr
     assert json.loads(failed.stdout)["results"]["consume"]["status"] == "blocked"
 
-    producer_release.write_text("release\n", encoding="utf-8")
+    producer.let_go()
     deadline = time.monotonic() + 10
-    while time.monotonic() < deadline and not amend_ready.exists():
+    while time.monotonic() < deadline and not amend.arrived():
         time.sleep(0.02)
-    assert amend_ready.exists()
+    assert amend.arrived()
     restart_plan = tmp_path / "restart.json"
     restart_plan.write_text(
         json.dumps(
@@ -329,7 +314,7 @@ def test_cross_dag_dependency_waits_then_reports_upstream_modification(
     assert snapshotted.returncode == 1, snapshotted.stderr
     assert json.loads(snapshotted.stdout)["results"]["consume"]["status"] == "done"
 
-    amend_release.write_text("release\n", encoding="utf-8")
+    amend.let_go()
     deadline = time.monotonic() + 10
     while time.monotonic() < deadline:
         upstream_records = [
@@ -353,7 +338,7 @@ def test_cross_dag_dependency_waits_then_reports_upstream_modification(
     events = runs / "B" / "events.jsonl"
     assert "upstream-modified" in events.read_text(encoding="utf-8")
 
-    hold_release.write_text("release\n", encoding="utf-8")
+    hold.let_go()
     upstream_out, upstream_err = upstream.communicate(timeout=10)
     assert upstream.returncode == 1, upstream_out + upstream_err
     assert json.loads(upstream_out)["results"]["fail"]["status"] == "failed"
@@ -532,7 +517,7 @@ def _init_target(path: Path) -> Path:
     return path
 
 
-def _barrier_plan(path: Path, target: Path, ready: Path, release: Path) -> Path:
+def _barrier_plan(path: Path, target: Path, hold: Rendezvous) -> Path:
     path.write_text(
         json.dumps(
             {
@@ -542,10 +527,7 @@ def _barrier_plan(path: Path, target: Path, ready: Path, release: Path) -> Path:
                     {
                         "id": "hold",
                         "persona": "engineer",
-                        "task": (
-                            f"complete-now provider-barrier-ready={ready} "
-                            f"provider-barrier-release={release}"
-                        ),
+                        "task": f"complete-now{hold.sentinels()}",
                     },
                     {
                         "id": "target",
@@ -559,15 +541,6 @@ def _barrier_plan(path: Path, target: Path, ready: Path, release: Path) -> Path:
         encoding="utf-8",
     )
     return path
-
-
-def _wait_for_file(path: Path, seconds: float = 30) -> None:
-    limit = time.monotonic() + seconds
-    while time.monotonic() < limit:
-        if path.exists():
-            return
-        time.sleep(0.02)
-    raise AssertionError(f"did not appear: {path}")
 
 
 def test_a_live_concurrent_run_is_named_and_never_hidden_by_acknowledging_it(
@@ -592,8 +565,8 @@ def test_a_live_concurrent_run_is_named_and_never_hidden_by_acknowledging_it(
     identity = str(target.resolve())
 
     base = command_base()
-    live_ready, live_release = tmp_path / "live.ready", tmp_path / "live.release"
-    second_ready, second_release = tmp_path / "second.ready", tmp_path / "second.release"
+    live_hold = Rendezvous.at(tmp_path, "live")
+    second_hold = Rendezvous.at(tmp_path, "second")
 
     def command(plan: Path, run: str, *extra: str) -> list[str]:
         return [
@@ -611,8 +584,8 @@ def test_a_live_concurrent_run_is_named_and_never_hidden_by_acknowledging_it(
             *extra,
         ]
 
-    live_plan = _barrier_plan(tmp_path / "live.json", target, live_ready, live_release)
-    second_plan = _barrier_plan(tmp_path / "second.json", target, second_ready, second_release)
+    live_plan = _barrier_plan(tmp_path / "live.json", target, live_hold)
+    second_plan = _barrier_plan(tmp_path / "second.json", target, second_hold)
 
     # The first run has no company at all, so nothing is reported to it.
     live = subprocess.Popen(
@@ -623,7 +596,7 @@ def test_a_live_concurrent_run_is_named_and_never_hidden_by_acknowledging_it(
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
     )
-    _wait_for_file(live_ready)
+    live_hold.wait()
     index = json.loads((state / "runs-index.json").read_text(encoding="utf-8"))
     live_pid = index["runs"]["live"]["pid"]
 
@@ -650,7 +623,7 @@ def test_a_live_concurrent_run_is_named_and_never_hidden_by_acknowledging_it(
             stderr=subprocess.PIPE,
         )
         try:
-            _wait_for_file(second_ready)
+            second_hold.wait()
             viewed = _run("status", "--runs-dir", str(runs), env=env)
             assert viewed.returncode == 0, viewed.stderr
             # The planner's read-only view now carries the other live orchestration,
@@ -660,14 +633,14 @@ def test_a_live_concurrent_run_is_named_and_never_hidden_by_acknowledging_it(
             assert goals.returncode == 0, goals.stderr
             assert f"owner: live (owner pid {live_pid} on " in goals.stdout
         finally:
-            second_release.write_text("release\n", encoding="utf-8")
+            second_hold.let_go()
             second_out, second_err = acknowledged.communicate(timeout=120)
         assert acknowledged.returncode == 0, second_out + second_err
         # Acknowledging never hides the live neighbour again.
         assert "proceeding alongside a live concurrent run" in second_err
         assert f"run 'live' is LIVE (owner pid {live_pid} on " in second_err
     finally:
-        live_release.write_text("release\n", encoding="utf-8")
+        live_hold.let_go()
         live_out, live_err = live.communicate(timeout=120)
     assert live.returncode == 0, live_out + live_err
     assert "proceeding alongside a live concurrent run" not in live_err

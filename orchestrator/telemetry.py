@@ -28,7 +28,7 @@ from .history import (
     HistoryError,
     HistorySession,
     SessionRole,
-    all_sessions,
+    SessionScan,
     session_records,
     session_role,
 )
@@ -1272,12 +1272,12 @@ def _run_timing(
 
 
 def _history_telemetry(
-    run_id: RunId, oneharness_bin: str
+    run_id: RunId, scan: SessionScan
 ) -> tuple[list[Provider], list[_SessionSummary]]:
     found: list[Provider] = []
     summaries: list[_SessionSummary] = []
     try:
-        sessions = all_sessions(oneharness_bin=oneharness_bin)
+        sessions = scan.sessions()
     except HistoryError as exc:
         if str(exc).startswith("oneharness not found"):
             return found, summaries
@@ -1503,8 +1503,18 @@ def _in_flight_items(events: list[Event], round_number: int) -> dict[str, GraphR
 
 
 def collect_run(
-    run_dir: Path, *, now: float | None = None, oneharness_bin: str = "oneharness"
+    run_dir: Path,
+    *,
+    now: float | None = None,
+    oneharness_bin: str = "oneharness",
+    scan: SessionScan | None = None,
 ) -> RunTelemetry | None:
+    """Assemble one run's telemetry from its journal, results, and history sessions.
+
+    ``scan`` shares a single history read across a caller that collects many runs;
+    it carries its own binary, so passing it supersedes ``oneharness_bin``. Omitting
+    it collects this run against a fresh read of its own.
+    """
     latest = latest_round(run_dir)
     if latest is None:
         return None
@@ -1518,7 +1528,9 @@ def collect_run(
         state = run_state(run_dir, RunId(run_dir.name)).state
         items = _in_flight_items(events, latest[0])
     last = events[-1] if events else None
-    providers, summaries = _history_telemetry(RunId(run_dir.name), oneharness_bin)
+    providers, summaries = _history_telemetry(
+        RunId(run_dir.name), scan or SessionScan(oneharness_bin=oneharness_bin)
+    )
     native_by_node = {node: _item_native(item) for node, item in items.items()}
     native_links = [
         link
@@ -1916,17 +1928,21 @@ def main(argv: list[str] | None = None) -> int:
         until = _boundary(args.until, "--until")
         if since is not None and until is not None and since >= until:
             parser.error("--since must be earlier than --until")
+        # One history read for the whole index, and for the retry metrics below it:
+        # this view walks every recorded run, and reading the store per run made it
+        # cost a subprocess per run for an answer that never varies between them.
+        scan = SessionScan(oneharness_bin=args.oneharness_bin)
         records = [
             telemetry
             for entry in entries
             if entry.is_dir()
-            if (telemetry := collect_run(entry, oneharness_bin=args.oneharness_bin)) is not None
+            if (telemetry := collect_run(entry, scan=scan)) is not None
             # Naming a run is the request; the settled-run filter exists only to keep
             # the unscoped index about live work, so it must not hide the one asked for.
             and (requested is not None or args.all or not result_state_is_terminal(telemetry.state))
         ]
         try:
-            history_sessions = all_sessions(oneharness_bin=args.oneharness_bin)
+            history_sessions = scan.sessions()
         except HistoryError as exc:
             if not str(exc).startswith("oneharness not found"):
                 raise

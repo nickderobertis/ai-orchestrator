@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import functools
 import os
 import shutil
 import subprocess
@@ -11,6 +12,28 @@ from orchestrator import REPO_ROOT
 
 ONEJUDGE_VERSION = (REPO_ROOT / "config" / "onejudge.version").read_text().strip()
 ONEHARNESS_VERSION = (REPO_ROOT / "config" / "oneharness.version").read_text().strip()
+
+
+@functools.cache
+def _shared_uv_cache() -> str | None:
+    """This host's real uv download cache, or `None` when uv cannot name one.
+
+    Every test here points `HOME` at its own `tmp_path`, which is what keeps the
+    isolation honest — session setup writes into `$HOME` and must not touch the
+    developer's. But uv derives its download cache from `HOME` too, so each of the
+    nine tests re-downloaded every wheel of a locked environment it had just
+    downloaded, and the file cost about seventy-five seconds an invocation for
+    answers already on disk. The cache is content-addressed and safe to share, and
+    `uv sync` stays entirely real: sharing it changes where the wheels come from,
+    not whether the sync resolves, builds, and installs them.
+
+    Resolved once, from the ambient PATH, before any test narrows it.
+    """
+    uv = shutil.which("uv")
+    if uv is None:  # pragma: no cover - the suite cannot run without uv on PATH
+        return None
+    located = subprocess.run([uv, "cache", "dir"], text=True, capture_output=True, check=False)
+    return located.stdout.strip() or None if located.returncode == 0 else None
 
 
 def _setup_repo(
@@ -62,6 +85,7 @@ def _run_setup(
         capture_output=True,
         check=True,
     ).stdout.strip()
+    shared_cache = _shared_uv_cache()
     return subprocess.run(
         ["bash", str(repo / "scripts" / "session-setup.sh")],
         text=True,
@@ -72,11 +96,32 @@ def _run_setup(
             "ASDF_DATA_DIR": os.environ.get("ASDF_DATA_DIR", str(Path.home() / ".asdf")),
             "HOME": str(tmp_path),
             "PATH": path or os.environ["PATH"],
+            # A shared cache and a suite that corrupts what it installed cannot both
+            # be hardlinks. uv installs by linking out of its cache, so the test
+            # below that rewrites an installed `METADATA` to prove version drift is
+            # detected rewrote the cache entry — and every other environment on this
+            # host linked to the same inode — turning one deliberate corruption into
+            # a real broken toolchain. Copying is the difference between sharing
+            # downloads and sharing files; it costs a fraction of one download.
+            "UV_LINK_MODE": "copy",
+            **({"UV_CACHE_DIR": shared_cache} if shared_cache else {}),
         },
     )
 
 
 def _path_without_uv(tmp_path: Path) -> str:
+    """A real PATH with `uv` genuinely absent — nothing here is a double.
+
+    Every executable this returns is the host's own: `bun` is a symlink to the
+    real binary `which` just resolved, and `/usr/bin:/bin` are the real system
+    directories. What the narrowing removes is `uv`, because the journeys below
+    prove what `session-setup.sh` does when `uv` is not installed, and the only
+    faithful way to test that is for `uv` to actually not be on PATH.
+
+    So this substitutes no behaviour and stubs no interface: the script still
+    crosses every real process boundary it would cross in a session, and still
+    fails for the real reason rather than a simulated one.
+    """
     bun = shutil.which("bun")
     assert bun is not None
     tools = tmp_path / "real-tools"
