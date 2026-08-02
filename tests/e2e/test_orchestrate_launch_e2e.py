@@ -190,6 +190,7 @@ def test_orchestrate_launch_carries_bypass_mode_and_orchestrator_routing(
         [
             "just",
             "orchestrate",
+            "--detach",
             str(_plan(tmp_path)),
             "--runs-dir",
             str(runs),
@@ -271,6 +272,7 @@ def _orchestrate(tmp_path: Path, runs: Path, onejudge_bin: str, name: str) -> st
         [
             "just",
             "orchestrate",
+            "--detach",
             str(plan),
             "--runs-dir",
             str(runs),

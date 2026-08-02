@@ -133,7 +133,12 @@ dispatch *args:
 run-plan *args:
     @uv run orchestrator-run-plan "$@"
 
-# Launch the dedicated orchestrator with a host-visible live planner channel.
+# Launch the dedicated orchestrator with a host-visible live planner channel, then
+# stay attached: it streams what `just monitor` streams and returns when the run
+# settles — the graph completed, a blocking planner surface is waiting, or nothing
+# is driving the run (exit 3). `--detach` returns at the launch record instead,
+# for a long unattended run. Either way the run leads its own session, so Ctrl-C
+# detaches rather than stopping it.
 # llmlint: ignore[tool_output_is_signal] orchestrate reports validated launch failures and the caller can retry after correcting the named input.
 orchestrate *args:
     @uv run orchestrator-orchestrate "$@"
@@ -258,6 +263,8 @@ history-show *args:
 # Follows on a terminal, where only successful graph completion exits 0 and
 # waiting/failed/stopped heartbeat on. Off one — a pipe, a file, any captured
 # invocation — it makes one bounded pass and exits 0; `--follow` overrides.
+# `--until-settled` follows either way and returns when the run settles: complete,
+# a blocking planner surface waiting on you, or nothing driving it (exit 3).
 # llmlint: ignore[tool_output_is_signal] the requested continuous event stream is this viewing command's product.
 monitor *args:
     uv run orchestrator-monitor {{args}}

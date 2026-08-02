@@ -351,6 +351,7 @@ def test_orchestrate_cli_prints_run_id(
         main_orchestrate(
             [
                 str(plan),
+                "--detach",
                 "--runs-dir",
                 str(tmp_path / "runs"),
                 "--run-id",
@@ -381,7 +382,9 @@ def test_orchestrate_cli_prints_run_id(
     # `just orchestrate` offers the same option as dispatch/run-plan/repo-task and,
     # like repo-task, defaults it to the container-appropriate no-approval mode.
     assert received["oneharness_mode"] == "bypass"
-    main_orchestrate([str(plan), "--runs-dir", str(tmp_path / "runs"), "--oneharness-mode", "auto"])
+    main_orchestrate(
+        [str(plan), "--detach", "--runs-dir", str(tmp_path / "runs"), "--oneharness-mode", "auto"]
+    )
     assert received["oneharness_mode"] == "auto"
 
 

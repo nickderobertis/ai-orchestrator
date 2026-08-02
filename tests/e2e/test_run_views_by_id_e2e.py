@@ -169,6 +169,7 @@ def test_every_read_only_view_reports_one_run_by_the_id_launch_json_advertises(
         [
             "just",
             "orchestrate",
+            "--detach",
             str(live_plan),
             "--runs-dir",
             str(runs),

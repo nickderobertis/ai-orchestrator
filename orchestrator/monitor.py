@@ -41,6 +41,11 @@ with Ctrl-C — so off a terminal this command makes one bounded pass and exits
 (`follows`), and every external source it crosses to carries a deadline
 (`SOURCE_TIMEOUT_SECONDS`). Without both, the command `launch.json` advertises
 was one an automated supervisor could not use at all.
+
+`--until-settled` is the third way it can end, and the one a foreground `just
+orchestrate` waits on: attach, stream, and return **when the run settles** — see
+`SETTLEMENTS` for what that word means here and why it is neither "the round
+finished" nor "the orchestrator exited".
 """
 
 from __future__ import annotations
@@ -80,8 +85,11 @@ from .runs import (
     GraphPayload,
     GraphResultItem,
     RunId,
+    abandoned_launch,
+    abandoned_round,
     as_result_payload,
     latest_round,
+    launch_claims_a_live_owner,
     load_mapping,
     resolve_supervision_run,
     result_state,
@@ -140,6 +148,45 @@ Source = Literal["journal", "history", "git", "pr"]
 # without recording anything — keeps the stream open, because all of them are
 # states a person acts on and then the run continues.
 COMPLETE_STATE = "complete"
+
+# --- what "settled" means ------------------------------------------------------
+#
+# A settle-terminating attach has to end at exactly the right moment, and the
+# obvious readings are all wrong in a way that costs a planner the run:
+#
+# * *the round finished* returns while the orchestrator is still scheduling — the
+#   caller walks away from a graph that is about to start round two;
+# * *the orchestrator exited* never returns on the ordinary case, because the
+#   process stays alive holding a question nobody is answering.
+#
+# So settled is a property of the **run**, not of a round or a process: the run is
+# no longer advancing on its own, and the next move belongs to the planner. Three
+# conditions say that, and nothing else does.
+
+#: The graph completed successfully. Nothing is left to watch.
+SETTLED_COMPLETE = "complete"
+
+#: A *blocking* planner surface is pending: the orchestrator has asked a question
+#: and will not move until `just channel-reply` answers it. A non-blocking surface
+#: is deliberately not this — the orchestrator continues without waiting for a
+#: reply to a heartbeat, so returning there would abandon a working run.
+SETTLED_AWAITING_PLANNER = "awaiting-planner"
+
+#: Nothing is driving the run any more: its launch is parked, its round was
+#: abandoned, or its executor is gone with the graph unfinished. All of them are
+#: states a planner must act on, and all of them look like a stream that has simply
+#: gone quiet — which is the picture this whole mode exists to replace.
+SETTLED_UNATTENDED = "unattended"
+
+#: Every settlement, and the exit status the attach reports it with. Zero for the
+#: two a planner *expects* to reach; non-zero for the one that means intervene,
+#: so a scripted launch fails loudly rather than reporting a run nobody is driving
+#: as a clean finish.
+SETTLEMENTS: dict[str, int] = {
+    SETTLED_COMPLETE: 0,
+    SETTLED_AWAITING_PLANNER: 0,
+    SETTLED_UNATTENDED: 3,
+}
 
 
 class MonitorError(Exception):
@@ -235,6 +282,10 @@ class Heartbeat:
     last_completed_check: str = ""
     current_blocker: str = ""
     next_poll_seconds: float = 0.0
+    #: The settlement this beat reports, when it is the last one of a settle-
+    #: terminating attach. Empty on every other beat, so a consumer can tell "this
+    #: is where it stands" from "this is where it stopped".
+    settlement: str = ""
 
     def text(self) -> str:
         stamp = datetime.fromtimestamp(self.at, UTC).strftime("%H:%M:%S")
@@ -250,6 +301,8 @@ class Heartbeat:
             "state": self.state,
             "detail": self.detail,
         }
+        if self.settlement:
+            record["settlement"] = self.settlement
         if self.last_completed_check:
             record["last_completed_check"] = self.last_completed_check
         if self.current_blocker:
@@ -999,11 +1052,48 @@ class RunState:
     ok: bool
     executor_live: bool
     detail: str
+    #: Which of `SETTLEMENTS` this run has reached, or ``""`` while it is still
+    #: advancing on its own. Carried on the state rather than recomputed per caller
+    #: so the foreground `orchestrate` and `just monitor --until-settled` cannot
+    #: disagree about when a run is done with them.
+    settlement: str = ""
 
     @property
     def finished(self) -> bool:
         """Whether the graph completed successfully and nothing is left to watch."""
         return self.state == COMPLETE_STATE and self.ok
+
+    @property
+    def settled(self) -> bool:
+        """Whether the run has stopped advancing on its own; see `SETTLEMENTS`."""
+        return bool(self.settlement)
+
+
+def nothing_is_driving(run_dir: Path) -> bool:
+    """Whether no process is left that could advance this run without a planner.
+
+    The three recorded shapes of "gone" are asked in the order that keeps a working
+    run working: a self-recorded abandonment or an owner this host proved dead
+    settle it outright, and otherwise a launch that still claims a live owner is
+    taken at its word — it may simply be between rounds, which is the moment a
+    naive "the round finished" reading would have returned on.
+
+    Past that, the answer is the executor's: a run whose newest round is not in
+    flight — or which has no round at all — has nothing running that could record
+    the next one. That covers the `run-plan` case too, where there is no launch to
+    claim anything and the round *is* the executor.
+    """
+    if abandoned_round(run_dir) is not None or abandoned_launch(run_dir) is not None:
+        return True
+    if launch_claims_a_live_owner(run_dir):
+        return False
+    latest = latest_round(run_dir)
+    if latest is None:
+        # No round was ever claimed, so only a launch could still claim one. Without
+        # a launch record this is a run directory nothing has started yet — a state
+        # a reader must not call abandoned.
+        return (run_dir / "launch.json").is_file()
+    return not round_appears_in_flight(latest[1])
 
 
 # llmlint: ignore[changed_behavior_has_e2e] real blocking and informational pending surfaces run
@@ -1021,7 +1111,13 @@ def run_state(
     if (parked := parked_indicator(run_dir, parked_after=parked_after)) is not None:
         parked_round = latest_round(run_dir)
         return RunState(
-            run_id, parked_round[0] if parked_round else None, "parked", False, False, parked
+            run_id,
+            parked_round[0] if parked_round else None,
+            "parked",
+            False,
+            False,
+            parked,
+            SETTLED_UNATTENDED,
         )
     pending = run_dir / "channel" / "planner-pending.json"
     if pending.is_file():
@@ -1043,12 +1139,16 @@ def run_state(
                 False,
                 True,
                 summarize(f"{required}: {kind}: {message}"),
+                SETTLED_AWAITING_PLANNER if blocking else "",
             )
         except (ConfigError, OSError):
             pass
+    unattended = SETTLED_UNATTENDED if nothing_is_driving(run_dir) else ""
     latest = latest_round(run_dir)
     if latest is None:
-        return RunState(run_id, None, "unknown", False, False, "no recorded rounds yet")
+        return RunState(
+            run_id, None, "unknown", False, False, "no recorded rounds yet", unattended
+        )
     number, round_dir = latest
     result_path = round_dir / "result.json"
     if not result_path.exists():
@@ -1060,11 +1160,14 @@ def run_state(
             False,
             live,
             "round in progress" if live else "executor stopped without recording a result",
+            unattended,
         )
     try:
         payload = as_result_payload(load_mapping(result_path))
     except (ConfigError, OSError) as exc:
-        return RunState(run_id, number, "unknown", False, False, f"unreadable result: {exc}")
+        return RunState(
+            run_id, number, "unknown", False, False, f"unreadable result: {exc}", unattended
+        )
     state = result_state(payload)
     ok = bool(payload.get("ok"))
     counts = ", ".join(
@@ -1072,7 +1175,16 @@ def run_state(
         for status in ("done", "waiting", "blocked", "failed", "skipped")
         if any(item.get("status") == status for item in payload["results"].values())
     )
-    return RunState(run_id, number, state, ok, False, counts or "no nodes recorded")
+    complete = state == COMPLETE_STATE and ok
+    return RunState(
+        run_id,
+        number,
+        state,
+        ok,
+        False,
+        counts or "no nodes recorded",
+        SETTLED_COMPLETE if complete else unattended,
+    )
 
 
 def active_runs(runs_dir: Path) -> list[RunId]:
@@ -1154,6 +1266,7 @@ class Monitor:
     oneharness_bin: str = "oneharness"
     github: GitHubBackend | None = None
     source_timeout: float | None = SOURCE_TIMEOUT_SECONDS
+    parked_after: float = PARKED_AFTER_SECONDS
     clock: Callable[[], float] = time.time
     seen: set[str] = field(default_factory=set)
     snapshot: DetailSnapshot = field(default_factory=DetailSnapshot)
@@ -1206,7 +1319,7 @@ class Monitor:
         return sorted(fresh, key=lambda event: event.at)
 
     def state(self) -> RunState:
-        return run_state(self.run_dir, self.run_id)
+        return run_state(self.run_dir, self.run_id, parked_after=self.parked_after)
 
 
 class Writer:
@@ -1243,11 +1356,23 @@ class Writer:
         print(line, file=self._out, flush=True)
 
 
+def settled_detail(state: RunState) -> str:
+    """One line saying why the stream is ending, in the run's own terms."""
+    if state.finished:
+        return "graph complete"
+    if state.settlement == SETTLED_AWAITING_PLANNER:
+        return summarize(f"settled, awaiting the planner: {state.detail}")
+    if state.settlement == SETTLED_UNATTENDED:
+        return summarize(f"settled, nothing is driving this run: {state.detail}")
+    return state.detail
+
+
 def stream(
     monitor: Monitor,
     writer: Writer,
     *,
     once: bool = False,
+    until_settled: bool = False,
     heartbeat: float = DEFAULT_HEARTBEAT,
     poll_interval: float = DEFAULT_POLL_INTERVAL,
     max_poll_interval: float = DEFAULT_MAX_POLL_INTERVAL,
@@ -1266,6 +1391,12 @@ def stream(
     That contract governs the *follow*, and `follows` decides who gets one: a
     caller that cannot watch the stream incrementally gets ``once`` instead, where
     a single bounded pass replaces a wait it could never observe or end.
+
+    ``until_settled`` widens the ending rather than replacing it: the same follow,
+    ending at any of `SETTLEMENTS` — which still includes a completed graph, and
+    adds the two endings a caller who *is* the planner has to be handed back at.
+    It exits with that settlement's status, so "the run needs you" and "nothing is
+    driving this run" are distinguishable without parsing the stream.
     """
     writer.header()
     shown_due = False
@@ -1290,20 +1421,22 @@ def stream(
         # not which mode happened to be reading it. Only the *unfinished* case
         # differs, and that difference is the whole point of `once` — it says "here
         # is where it stands" where the follow would keep waiting.
-        if state.finished or once:
+        settlement = state.settlement if until_settled else ""
+        if state.finished or settlement or once:
             writer.heartbeat(
                 Heartbeat(
                     monitor.clock(),
                     state.run_id,
                     state.round,
                     state.state,
-                    "graph complete" if state.finished else state.detail,
+                    settled_detail(state) if state.finished or settlement else state.detail,
                     rollup.last_completed_check,
                     rollup.current_blocker,
                     delay,
+                    settlement,
                 )
             )
-            return 0
+            return SETTLEMENTS.get(settlement, 0)
         now = monitor.clock()
         if now - last >= heartbeat:
             writer.heartbeat(
@@ -1356,6 +1489,57 @@ def follows(out: Watchable, *, follow: bool) -> bool:
         return False
 
 
+def attach(
+    run_id: RunId,
+    *,
+    runs_dir: Path = DEFAULT_RUNS_DIR,
+    out: Any = None,
+    fmt: str = "text",
+    once: bool = False,
+    until_settled: bool = False,
+    heartbeat: float = DEFAULT_HEARTBEAT,
+    poll_interval: float = DEFAULT_POLL_INTERVAL,
+    max_poll_interval: float = DEFAULT_MAX_POLL_INTERVAL,
+    oneharness_bin: str = "oneharness",
+    source_timeout: float | None = SOURCE_TIMEOUT_SECONDS,
+    parked_after: float = PARKED_AFTER_SECONDS,
+) -> int:
+    """Watch one run and return its exit status: the whole of what "attach" means.
+
+    Both attaching commands enter here — `just monitor` and the foreground `just
+    orchestrate`, which passes ``until_settled=True``. That is deliberate and it is
+    the whole reason `orchestrate` has no stream of its own: a second renderer would
+    be a second answer to "what is happening right now", and the two would drift on
+    the first source that changed.
+    """
+    run_dir = runs_dir / run_id
+    monitor = Monitor(
+        run_id=run_id,
+        run_dir=run_dir,
+        snapshot=load_snapshot(run_dir),
+        oneharness_bin=oneharness_bin,
+        source_timeout=source_timeout,
+        parked_after=parked_after,
+    )
+    writer = Writer(fmt, sys.stdout if out is None else out)
+    try:
+        return stream(
+            monitor,
+            writer,
+            once=once,
+            until_settled=until_settled,
+            heartbeat=heartbeat,
+            poll_interval=poll_interval,
+            max_poll_interval=max_poll_interval,
+        )
+    except (ChannelError, KeyboardInterrupt):
+        # Ctrl-C is how a person ends a follow that is working as designed, so it is
+        # a clean stop rather than a traceback. It ends the *attachment* only: the
+        # run leads its own session and keeps working, which is why the foreground
+        # `orchestrate` says so before it starts streaming.
+        return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=(
@@ -1374,6 +1558,13 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="follow the run even when output is not a terminal (the default on a "
         "terminal); without it, a redirected or captured stream makes one pass and exits",
+    )
+    parser.add_argument(
+        "--until-settled",
+        action="store_true",
+        help="follow the run (terminal or not) and return when it settles: the graph "
+        "completed, a blocking planner surface is waiting on you, or nothing is driving "
+        "the run any more (exit 3)",
     )
     parser.add_argument("--format", choices=("text", "jsonl"), default="text")
     parser.add_argument(
@@ -1416,39 +1607,47 @@ def main(argv: list[str] | None = None) -> int:
             f"as silent (default: {SOURCE_TIMEOUT_SECONDS:g})"
         ),
     )
+    parser.add_argument(
+        "--parked-after",
+        type=float,
+        default=PARKED_AFTER_SECONDS,
+        metavar="SECONDS",
+        help="report a launch with no child process, planner surface, or ledger write for "
+        f"this long as parked (default: {PARKED_AFTER_SECONDS:g})",
+    )
     args = parser.parse_args(argv)
     _positive(parser, "--heartbeat", args.heartbeat)
     _positive(parser, "--poll-interval", args.poll_interval)
     _positive(parser, "--max-poll-interval", args.max_poll_interval)
     _positive(parser, "--source-timeout", args.source_timeout)
+    if not math.isfinite(args.parked_after) or args.parked_after <= 0:
+        # Worded as `just runs`, `just status`, and `just orchestrate` word it: one
+        # flag, one meaning, one refusal, wherever a planner types it.
+        parser.error("--parked-after must be a positive, finite number of seconds")
     if args.max_poll_interval < args.poll_interval:
         parser.error("--max-poll-interval must be at least --poll-interval")
     if args.once and args.follow:
         parser.error("--once and --follow ask for opposite things")
+    if args.once and args.until_settled:
+        parser.error("--once and --until-settled ask for opposite things")
     try:
         run_id = resolve_run(args.runs_dir, args.run_id)
     except MonitorError as exc:
         print(f"monitor: {exc}", file=sys.stderr)
         return 2
-    run_dir = args.runs_dir / run_id
-    monitor = Monitor(
-        run_id=run_id,
-        run_dir=run_dir,
-        snapshot=load_snapshot(run_dir),
+    return attach(
+        run_id,
+        runs_dir=args.runs_dir,
+        fmt=args.format,
+        # `--until-settled` has its own ending, so it follows wherever it is run:
+        # the one-pass default off a terminal exists because such a caller cannot
+        # observe or end a follow, and this one ends itself.
+        once=args.once or not (args.until_settled or follows(sys.stdout, follow=args.follow)),
+        until_settled=args.until_settled,
+        heartbeat=args.heartbeat,
+        poll_interval=args.poll_interval,
+        max_poll_interval=args.max_poll_interval,
         oneharness_bin=args.oneharness_bin,
         source_timeout=args.source_timeout,
+        parked_after=args.parked_after,
     )
-    writer = Writer(args.format, sys.stdout)
-    try:
-        return stream(
-            monitor,
-            writer,
-            once=args.once or not follows(sys.stdout, follow=args.follow),
-            heartbeat=args.heartbeat,
-            poll_interval=args.poll_interval,
-            max_poll_interval=args.max_poll_interval,
-        )
-    except (ChannelError, KeyboardInterrupt):
-        # Ctrl-C is how a person ends a follow that is working as designed, so it is
-        # a clean stop rather than a traceback.
-        return 0

@@ -417,7 +417,7 @@ def _monitor(runs: Path, run_id: str) -> subprocess.CompletedProcess[str]:
 def test_just_monitor_reports_a_parked_launch_over_its_stale_blocking_surface(
     tmp_path: Path, sleeper: list[subprocess.Popen[bytes]], relays: list[subprocess.Popen[str]]
 ) -> None:
-    """The default threshold, not an override: `just monitor` takes no flag.
+    """The default threshold, not an override: this invocation passes no flag.
 
     Both launches carry the same real unanswered blocking surface, so the surface
     is genuinely competing to be reported and the only difference between them is
@@ -447,6 +447,73 @@ def test_just_monitor_reports_a_parked_launch_over_its_stale_blocking_surface(
     assert f"round-01 blocked: ACK REQUIRED: blocker: {SURFACE}" in working.stdout
 
 
+def test_a_settle_terminating_attach_returns_on_a_parked_launch(
+    tmp_path: Path, sleeper: list[subprocess.Popen[bytes]], relays: list[subprocess.Popen[str]]
+) -> None:
+    """Parked is a settlement: `--until-settled` hands a parked run back, non-zero.
+
+    This is the state the whole attach mode exists for. A parked launch keeps its
+    pid, so a follow would wait on it forever and read exactly like a run that is
+    merely quiet — which is how one went unattended for hours. Returning 3 is what
+    makes the difference reach a caller that is not watching the stream.
+
+    The busy launch is the control, and it settles too — but at the surface it is
+    genuinely blocked on, with the status that says a planner reply is all it
+    wants. Same silence, same surface, one live child, two different answers.
+    """
+    runs = tmp_path / "runs"
+    parked = runs / "parked-run"
+    busy = runs / "busy-run"
+    _launch(parked, _idle(sleeper), idle_for=3600)
+    _launch(busy, _busy(sleeper, tmp_path / "busy.ready"), idle_for=3600)
+    _queue_blocking_surface(parked, relays)
+    _queue_blocking_surface(busy, relays)
+
+    stalled = subprocess.run(
+        ["just", "monitor", "parked-run", "--until-settled", "--runs-dir", str(runs)],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(120),
+    )
+    assert stalled.returncode == 3, stalled.stdout + stalled.stderr
+    assert "settled, nothing is driving this run" in stalled.stdout.splitlines()[-1]
+    assert "PARKED (alive with no child process" in stalled.stdout
+
+    waiting = subprocess.run(
+        ["just", "monitor", "busy-run", "--until-settled", "--runs-dir", str(runs)],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(120),
+    )
+    assert waiting.returncode == 0, waiting.stdout + waiting.stderr
+    assert "settled, awaiting the planner" in waiting.stdout.splitlines()[-1]
+    assert SURFACE in waiting.stdout
+
+    # The threshold is what made the first one settle, and it is honoured here as
+    # everywhere else: under a longer one that same launch is simply quiet, so the
+    # attach keeps following it and the surface it is holding is what settles it.
+    patient = subprocess.run(
+        [
+            "just",
+            "monitor",
+            "parked-run",
+            "--until-settled",
+            "--runs-dir",
+            str(runs),
+            "--parked-after",
+            "100000",
+        ],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(120),
+    )
+    assert patient.returncode == 0, patient.stdout + patient.stderr
+    assert "settled, awaiting the planner" in patient.stdout.splitlines()[-1]
+
+
 def test_the_progress_views_reject_an_unusable_parked_threshold(tmp_path: Path) -> None:
     """The threshold is the claim's whole meaning, so an unusable one fails loudly."""
     runs = tmp_path / "runs"
@@ -456,6 +523,12 @@ def test_the_progress_views_reject_an_unusable_parked_threshold(tmp_path: Path) 
         ["just", "runs", "--runs-dir", str(runs), "--parked-after", "inf"],
         ["just", "status", "--runs-dir", str(runs), "--parked-after", "-5"],
         ["just", "status", "--runs-dir", str(runs), "--parked-after", "nan"],
+        # The two attaching commands take the same flag, so they owe the same
+        # refusal: a threshold this view cannot use is one no view may guess at.
+        ["just", "monitor", "--runs-dir", str(runs), "--parked-after", "inf"],
+        ["just", "monitor", "--runs-dir", str(runs), "--parked-after", "0"],
+        ["just", "orchestrate", "plan.json", "--parked-after", "nan"],
+        ["just", "orchestrate", "plan.json", "--parked-after", "-5"],
     ):
         refused = subprocess.run(
             command, cwd=REPO_ROOT, text=True, capture_output=True, timeout=e2e_timeout(60)
