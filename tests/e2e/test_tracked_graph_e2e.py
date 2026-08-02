@@ -363,8 +363,21 @@ def test_a_transition_frees_a_check_in_its_round_left_unreadable(
     assert surfaced.returncode == 0, surfaced.stderr
     queued = runs / "stranded" / "channel" / "heartbeat-surface.json"
     assert queued.is_file()
+
+    # Read as this run's own indicator rather than as a substring of the whole view.
+    # `just status` renders the host's dispatch history beside the ledger it was
+    # pointed at, so a bare `in`/`not in` over its output answers about every run on
+    # the machine — including one whose task prose merely quotes the phrase.
+    def _stranded_pending(reported: str) -> list[str]:
+        return [
+            line
+            for line in reported.splitlines()
+            if line.startswith("stranded: ") and "planner update waiting" in line
+        ]
+
     pending = _just("status", "--runs-dir", str(runs))
-    assert "1 planner update waiting" in pending.stdout, pending.stdout
+    assert len(_stranded_pending(pending.stdout)) == 1, pending.stdout
+    assert f"just channel-next stranded --runs-dir {runs}" in pending.stdout, pending.stdout
 
     resumed = _just("next-round", "stranded", "--plan-only", *common)
     assert resumed.returncode == 0, resumed.stderr
@@ -373,7 +386,7 @@ def test_a_transition_frees_a_check_in_its_round_left_unreadable(
     # Discarded rather than kept readable: it describes a round that has finished.
     assert not queued.is_file()
     cleared = _just("status", "--runs-dir", str(runs))
-    assert "planner update waiting" not in cleared.stdout, cleared.stdout
+    assert _stranded_pending(cleared.stdout) == [], cleared.stdout
 
     # The lease came back with the discard, so the next tick can claim a check-in at
     # all — under the old behaviour this returned False for the life of the run.

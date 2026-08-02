@@ -826,8 +826,17 @@ def test_status_reports_a_dead_round_beside_the_surface_it_left_pending(
     assert (channel_dir / "heartbeat-surface.json").is_file()
     assert listed.returncode == 0, listed.stderr
     assert f"! {run_id}" in listed.stdout, listed.stdout
-    assert "planner update waiting" not in listed.stdout, listed.stdout
-    assert "planner update waiting" not in reported.stdout, reported.stdout
+    # Asserted as this run's own indicator, never as a substring of the whole view:
+    # both commands render text they were not pointed at — a sibling row, the host's
+    # dispatch history — and one of them quoting the phrase must not answer for this
+    # run. `just runs` names it on an indented continuation of the run's row; `just
+    # status` prefixes it with the run id.
+    assert not [
+        line for line in listed.stdout.splitlines() if line.strip().startswith("1 planner update")
+    ], listed.stdout
+    assert not [
+        line for line in reported.stdout.splitlines() if line.startswith(f"{run_id}: 1 planner ")
+    ], reported.stdout
 
 
 def test_a_recovery_that_refuses_the_journal_abandons_the_round_it_claimed(
