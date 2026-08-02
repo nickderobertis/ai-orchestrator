@@ -263,7 +263,12 @@ def _recorded_run(runs: Path, run_id: RunId, *, ok: bool, state: str, status: st
     claimed = prepare_round(run_dir, {"tasks": [{"id": "api", "persona": "engineer", "task": "x"}]})
     write_result(
         claimed.directory,
-        {"ok": ok, "state": state, "started_order": ["api"], "results": {"api": {"status": status}}},
+        {
+            "ok": ok,
+            "state": state,
+            "started_order": ["api"],
+            "results": {"api": {"status": status}},
+        },
     )
     return run_dir
 
@@ -315,7 +320,9 @@ def test_monitor_until_settled_keeps_following_a_surface_the_run_does_not_wait_o
     actually blocked on replaces it.
     """
     runs = tmp_path / "runs"
-    run_dir = _recorded_run(runs, RunId("still-working"), ok=False, state="waiting", status="waiting")
+    run_dir = _recorded_run(
+        runs, RunId("still-working"), ok=False, state="waiting", status="waiting"
+    )
     pending = run_dir / "channel" / "planner-pending.json"
     pending.parent.mkdir(parents=True, exist_ok=True)
     pending.write_text(

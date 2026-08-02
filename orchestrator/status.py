@@ -212,9 +212,7 @@ def in_flight_dispatches(runs_dir: Path, run_id: str) -> list[InFlightDispatch]:
             case "step-settled" if (running := started.get(key)) is not None:
                 # The step is over and the node is not: keep it listed, timed from
                 # here, because the next step's dispatch is what it is now doing.
-                started[key] = InFlightDispatch(
-                    running.round, running.node, None, None, event.at
-                )
+                started[key] = InFlightDispatch(running.round, running.node, None, None, event.at)
             case "node-settled" | "node-failed":
                 started.pop(key, None)
             case _:
@@ -491,9 +489,7 @@ def main(argv: list[str] | None = None) -> int:
     # Only for a named run: the unscoped view would have to read every recorded
     # run's whole journal to answer the same question, and those journals reach tens
     # of thousands of events. `just status <run-id>` is the invocation that asked.
-    running_dispatches = (
-        in_flight_dispatches(args.runs_dir, run_id) if run_id is not None else []
-    )
+    running_dispatches = in_flight_dispatches(args.runs_dir, run_id) if run_id is not None else []
     if args.format == "json":
         print(json.dumps([_json_value(task) for task in selected]))
     else:
@@ -543,8 +539,6 @@ def main(argv: list[str] | None = None) -> int:
                 if indicator is not None:
                     indicators.append(f"{run_dir.name}: {indicator}")
         print(
-            "\n".join(
-                [*indicators, _human(selected, run_id=run_id, in_flight=running_dispatches)]
-            )
+            "\n".join([*indicators, _human(selected, run_id=run_id, in_flight=running_dispatches)])
         )
     return 0

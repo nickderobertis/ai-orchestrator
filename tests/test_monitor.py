@@ -935,3 +935,227 @@ def test_the_public_monitor_entrypoint_treats_ctrl_c_as_a_clean_stop(
 
     monkeypatch.setattr(monitor_module, "stream", interrupted)
     assert monitor_main(["--runs-dir", str(runs_dir), str(RUN)]) == 0
+
+
+# --- what settled means --------------------------------------------------------
+
+
+def _launched(run_dir: Path, pid: int, *, reported: bool = False) -> None:
+    """Record a launch the way `just orchestrate` leaves one, owned by ``pid``."""
+    (run_dir / "orchestrator").mkdir(parents=True, exist_ok=True)
+    (run_dir / "launch.json").write_text(
+        json.dumps({"schema_version": 2, "run_id": run_dir.name}), encoding="utf-8"
+    )
+    (run_dir / "orchestrator" / "status.json").write_text(
+        json.dumps({"status": "running", "pid": pid, "host": socket.gethostname()}),
+        encoding="utf-8",
+    )
+    (run_dir / "orchestrator" / "report.json").write_text(
+        '{"ok": true}' if reported else "", encoding="utf-8"
+    )
+
+
+def _pending(run_dir: Path, *, blocking: bool) -> None:
+    channel = run_dir / "channel"
+    channel.mkdir(parents=True, exist_ok=True)
+    (channel / "planner-pending.json").write_text(
+        json.dumps({"kind": "blocker", "message": "decide", "blocking": blocking}),
+        encoding="utf-8",
+    )
+
+
+def test_a_launch_that_still_claims_a_live_owner_is_never_settled(tmp_path: Path) -> None:
+    """Between rounds is the case a "the round finished" reading would return on.
+
+    The round has a result, nothing is pending, and the orchestrator is alive and
+    about to open round two. Anything that called this settled would hand the
+    planner back a graph that is still executing.
+    """
+    run_dir = tmp_path / RUN
+    _settle(run_dir, {"api": {"status": "waiting"}}, ok=False, state="waiting")
+    _launched(run_dir, os.getpid())
+
+    assert monitor_module.nothing_is_driving(run_dir) is False
+    assert run_state(run_dir, RUN).settlement == ""
+    assert run_state(run_dir, RUN).settled is False
+
+
+def test_a_launch_that_has_written_its_report_is_settled_unattended(tmp_path: Path) -> None:
+    """A report is the launch saying it is done; nothing will record another round."""
+    run_dir = tmp_path / RUN
+    _settle(run_dir, {"api": {"status": "failed"}}, ok=False, state="failed")
+    _launched(run_dir, os.getpid(), reported=True)
+
+    state = run_state(run_dir, RUN)
+    assert state.settlement == monitor_module.SETTLED_UNATTENDED
+    assert monitor_module.settled_detail(state).startswith("settled, nothing is driving this run")
+
+
+def test_a_run_nothing_ever_launched_is_not_reported_as_abandoned(tmp_path: Path) -> None:
+    """No launch record and no round is a run that has not started, not one that died."""
+    run_dir = tmp_path / RUN
+    run_dir.mkdir(parents=True)
+    assert monitor_module.nothing_is_driving(run_dir) is False
+    assert run_state(run_dir, RUN).settlement == ""
+
+
+def test_a_launch_that_died_before_its_first_round_is_settled_unattended(tmp_path: Path) -> None:
+    run_dir = tmp_path / RUN
+    run_dir.mkdir(parents=True)
+    _launched(run_dir, os.getpid(), reported=True)
+    assert monitor_module.nothing_is_driving(run_dir) is True
+    assert run_state(run_dir, RUN).settlement == monitor_module.SETTLED_UNATTENDED
+
+
+def test_only_a_blocking_surface_settles_a_run_on_the_planner(tmp_path: Path) -> None:
+    run_dir = tmp_path / RUN
+    _settle(run_dir, {"api": {"status": "waiting"}}, ok=False, state="waiting")
+    _launched(run_dir, os.getpid())
+
+    _pending(run_dir, blocking=False)
+    informational = run_state(run_dir, RUN)
+    assert informational.state == "blocked"
+    assert informational.settlement == ""
+
+    _pending(run_dir, blocking=True)
+    waiting = run_state(run_dir, RUN)
+    assert waiting.settlement == monitor_module.SETTLED_AWAITING_PLANNER
+    assert monitor_module.settled_detail(waiting) == (
+        "settled, awaiting the planner: ACK REQUIRED: blocker: decide"
+    )
+
+
+def test_a_settle_terminating_follow_returns_with_the_settlements_own_status(
+    tmp_path: Path, no_oneharness: str
+) -> None:
+    """The status is the contract for a caller that is not reading the stream."""
+    run_dir = tmp_path / RUN
+    open_journal(run_dir, RUN, 1).append("node-started", node=NodeId("api"))
+    _settle(run_dir, {"api": {"status": "waiting"}}, ok=False, state="waiting")
+    _launched(run_dir, os.getpid())
+    _pending(run_dir, blocking=True)
+
+    out = io.StringIO()
+    ticker = _Ticker(stop_after=1)
+    code = stream(
+        _monitor(run_dir, no_oneharness, clock=ticker.clock),
+        Writer("jsonl", out),
+        until_settled=True,
+        sleep=ticker.sleep,
+    )
+    assert code == 0
+    assert ticker.slept == 0
+    beat = json.loads(out.getvalue().splitlines()[-1])
+    assert beat["settlement"] == "awaiting-planner"
+
+    # The same run with nothing driving it: same command, non-zero status.
+    _launched(run_dir, os.getpid(), reported=True)
+    (run_dir / "channel" / "planner-pending.json").unlink()
+    gone = io.StringIO()
+    assert (
+        stream(
+            _monitor(run_dir, no_oneharness, clock=ticker.clock),
+            Writer("jsonl", gone),
+            until_settled=True,
+            sleep=ticker.sleep,
+        )
+        == 3
+    )
+    assert json.loads(gone.getvalue().splitlines()[-1])["settlement"] == "unattended"
+
+
+def test_a_follow_without_the_flag_keeps_every_ending_it_had(
+    tmp_path: Path, no_oneharness: str
+) -> None:
+    """The settle mode widens the ending; it must not change the one that was there."""
+    run_dir = tmp_path / RUN
+    _settle(run_dir, {"api": {"status": "waiting"}}, ok=False, state="waiting")
+    _launched(run_dir, os.getpid(), reported=True)  # settled, but nobody asked
+
+    ticker = _Ticker(stop_after=2)
+    with pytest.raises(KeyboardInterrupt):
+        stream(
+            _monitor(run_dir, no_oneharness, clock=ticker.clock),
+            Writer("jsonl", io.StringIO()),
+            heartbeat=100.0,
+            poll_interval=1.0,
+            sleep=ticker.sleep,
+        )
+
+
+def test_the_settle_terminating_entrypoint_follows_off_a_terminal_too(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Off a terminal the default is one pass, because such a caller could neither
+    observe nor end a follow. `--until-settled` ends itself, so it follows anyway —
+    and that is the mode the foreground `just orchestrate` runs in."""
+    runs_dir = tmp_path / "runs"
+    run_dir = runs_dir / RUN
+    _settle(run_dir, {"api": {"status": "done"}}, ok=True, state="complete")
+
+    assert monitor_main(["--runs-dir", str(runs_dir), "--until-settled", str(RUN)]) == 0
+    assert "graph complete" in capsys.readouterr().out
+
+    with pytest.raises(SystemExit) as contradictory:
+        monitor_main(["--once", "--until-settled", "--runs-dir", str(runs_dir)])
+    assert contradictory.value.code == 2
+    assert "--once and --until-settled ask for opposite things" in capsys.readouterr().err
+
+    with pytest.raises(SystemExit) as unusable:
+        monitor_main(["--parked-after", "nan", "--runs-dir", str(runs_dir)])
+    assert unusable.value.code == 2
+    assert "--parked-after must be a positive, finite number of seconds" in capsys.readouterr().err
+
+
+def test_the_attach_entrypoint_is_the_one_both_commands_stream_through(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], no_oneharness: str
+) -> None:
+    """`just monitor` and the foreground `just orchestrate` share this, deliberately.
+
+    A second renderer would be a second answer to "what is happening right now", and
+    the two would drift on the first source that changed — so the launch path calls
+    exactly this, with `until_settled` set.
+    """
+    runs_dir = tmp_path / "runs"
+    run_dir = runs_dir / RUN
+    open_journal(run_dir, RUN, 1).append("node-settled", node=NodeId("api"))
+    _settle(run_dir, {"api": {"status": "done"}}, ok=True, state="complete")
+
+    assert (
+        monitor_module.attach(
+            RUN, runs_dir=runs_dir, until_settled=True, oneharness_bin=no_oneharness
+        )
+        == 0
+    )
+    printed = capsys.readouterr().out
+    assert printed.splitlines()[0] == HEADER
+    assert "graph complete" in printed
+
+
+def test_an_attach_a_person_ends_is_a_clean_stop_not_a_stopped_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, no_oneharness: str
+) -> None:
+    """Ctrl-C ends the attachment; the run leads its own session and keeps working."""
+    runs_dir = tmp_path / "runs"
+    _settle(runs_dir / RUN, {"api": {"status": "waiting"}}, ok=False, state="waiting")
+
+    def interrupted(*_args: Any, **_kwargs: Any) -> int:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(monitor_module, "stream", interrupted)
+    assert (
+        monitor_module.attach(
+            RUN, runs_dir=runs_dir, until_settled=True, oneharness_bin=no_oneharness
+        )
+        == 0
+    )
+
+
+def test_an_unsettled_state_renders_its_own_detail(tmp_path: Path) -> None:
+    """`settled_detail` describes a settlement; without one it changes nothing."""
+    run_dir = tmp_path / RUN
+    _settle(run_dir, {"api": {"status": "waiting"}}, ok=False, state="waiting")
+    _launched(run_dir, os.getpid())
+    state = run_state(run_dir, RUN)
+    assert state.settlement == ""
+    assert monitor_module.settled_detail(state) == state.detail == "1 waiting"

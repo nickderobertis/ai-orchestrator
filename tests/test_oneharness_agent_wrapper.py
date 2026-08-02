@@ -126,9 +126,7 @@ def test_agent_side_records_its_tool_transcript_exactly_once(tmp_path: Path) -> 
     assert proc.returncode == 0, proc.stderr
     assert argv.count("--events") == 1
 
-    already, asked = _run_wrapper(
-        tmp_path, ["run", "--compact", "--events", "--prompt", "probe"]
-    )
+    already, asked = _run_wrapper(tmp_path, ["run", "--compact", "--events", "--prompt", "probe"])
     assert already.returncode == 0, already.stderr
     assert asked.count("--events") == 1
 

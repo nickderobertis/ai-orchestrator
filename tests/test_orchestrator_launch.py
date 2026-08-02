@@ -416,3 +416,75 @@ def test_bridge_recipes_reference_declared_console_scripts() -> None:
     ):
         assert command in scripts
         assert f"uv run {command}" in justfile
+
+
+def test_orchestrate_attaches_by_default_and_reports_the_settlement_status(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The launch record still comes first, and then this command *waits*.
+
+    Detaching by default is what sent a planner to `tail`, `pgrep`, and `git log`;
+    the fix is that the launch is the attach. What it waits with is `monitor.attach`
+    — one streaming implementation, called with `until_settled` — and the status it
+    returns is that settlement's, so a run nothing is driving fails loudly rather
+    than reading as a clean launch.
+    """
+    plan = tmp_path / "plan.json"
+    plan.write_text("{}", encoding="utf-8")
+    runs_dir = tmp_path / "runs"
+    attached: dict[str, object] = {}
+
+    def fake_launch(_path: Path, **_kwargs: object) -> str:
+        run = runs_dir / "watched"
+        run.mkdir(parents=True, exist_ok=True)
+        (run / "launch.json").write_text('{"run_id":"watched"}', encoding="utf-8")
+        return "watched"
+
+    def fake_attach(run_id: str, **kwargs: object) -> int:
+        attached.update({"run_id": run_id, **kwargs})
+        return 3
+
+    monkeypatch.setattr("orchestrator.dispatch.launch_orchestrator", fake_launch)
+    monkeypatch.setattr("orchestrator.dispatch.attach", fake_attach)
+    assert main_orchestrate([str(plan), "--runs-dir", str(runs_dir), "--parked-after", "42"]) == 3
+    reported = capsys.readouterr()
+    assert json.loads(reported.out) == {"run_id": "watched"}
+    assert "attached to watched" in reported.err
+    assert "Ctrl-C detaches without stopping the run" in reported.err
+    assert attached == {
+        "run_id": "watched",
+        "runs_dir": runs_dir,
+        "until_settled": True,
+        "parked_after": 42.0,
+    }
+
+    # `--detach` is the previous behaviour exactly: the record, and nothing waits.
+    attached.clear()
+    detached_runs = tmp_path / "detached-runs"
+
+    def fake_detached_launch(_path: Path, **_kwargs: object) -> str:
+        run = detached_runs / "unwatched"
+        run.mkdir(parents=True, exist_ok=True)
+        (run / "launch.json").write_text('{"run_id":"unwatched"}', encoding="utf-8")
+        return "unwatched"
+
+    monkeypatch.setattr("orchestrator.dispatch.launch_orchestrator", fake_detached_launch)
+    assert main_orchestrate([str(plan), "--detach", "--runs-dir", str(detached_runs)]) == 0
+    left = capsys.readouterr()
+    assert json.loads(left.out) == {"run_id": "unwatched"}
+    assert left.err == ""
+    assert attached == {}
+
+
+def test_orchestrate_refuses_a_parked_threshold_it_cannot_use(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    plan = tmp_path / "plan.json"
+    plan.write_text("{}", encoding="utf-8")
+    for unusable in ("0", "-5", "nan", "inf"):
+        with pytest.raises(SystemExit) as refused:
+            main_orchestrate([str(plan), "--parked-after", unusable])
+        assert refused.value.code == 2
+        assert (
+            "--parked-after must be a positive, finite number of seconds" in capsys.readouterr().err
+        )

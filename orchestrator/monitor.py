@@ -1146,9 +1146,7 @@ def run_state(
     unattended = SETTLED_UNATTENDED if nothing_is_driving(run_dir) else ""
     latest = latest_round(run_dir)
     if latest is None:
-        return RunState(
-            run_id, None, "unknown", False, False, "no recorded rounds yet", unattended
-        )
+        return RunState(run_id, None, "unknown", False, False, "no recorded rounds yet", unattended)
     number, round_dir = latest
     result_path = round_dir / "result.json"
     if not result_path.exists():
