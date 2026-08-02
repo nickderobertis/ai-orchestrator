@@ -528,9 +528,13 @@ split at those seams rather than at convenient ones:
   `scripts/**`, the root manifests, the fixtures, and the modules that define and
   collect those tests. They read no prose and no `orchestrator/` at all, and most
   commits here touch nothing else, so most commits replay them.
-- **`orchestrator:test`** runs everything else, with the coverage floor, keyed on
-  `codeWorkspace` — the whole workspace with `docs/**`, `**/*.md`, and the
-  `apps/**` and `packages/**` no Python test opens removed.
+- **`orchestrator:test`** runs everything else that can share a process with
+  execnet's receiver thread, keyed on `codeWorkspace` — the whole workspace with
+  `docs/**`, `**/*.md`, and the `apps/**` and `packages/**` no Python test opens
+  removed.
+- **`orchestrator:test-serial`** runs the `single_threaded` remainder under the
+  same `codeWorkspace` key. Same tree, same reads; a different process shape is
+  not a different scope, so this is a task boundary rather than a key boundary.
 
 `workspace:check-nx-cache` is narrowed on the same principle rather than by tier:
 it builds two linked worktrees out of `tests/fixtures/nx-cache/` and drives the
@@ -593,7 +597,7 @@ the other, which is not the shape anything here actually uses: `just test` runs
 them concurrently through Nx, and forcing both fresh with `--skip-nx-cache`
 measured 311s against the roughly seventeen-minute median the tier cost before.
 
-The tier therefore runs in **two invocations**, and the second is not an
+The code suite therefore runs in **two invocations**, and the second is not an
 optimization but a correctness requirement.
 `tests/test_runs.py::test_a_signalled_round_records_its_abandonment_and_stops_being_live`
 blocks SIGTERM on its own thread and then calls a handler that re-raises that
@@ -604,15 +608,66 @@ disposition the handler just restored. It fails at `-n 1` too: the constraint is
 the process, not the load. So it is marked `single_threaded` and scheduled into a
 serial invocation rather than rewritten to survive a worker.
 
-Coverage still combines across that split, and the floor stays in one place. The
-serial invocation measures under `coverage run`, which writes `.coverage` and
-enforces nothing; the parallel one appends to it and reports. Only the second
-invocation evaluates `[tool.coverage.report] fail_under`, against the combined
-total, so no `--cov-fail-under` appears anywhere and `pyproject.toml` remains the
-floor's single source. `tests/test_nx_cache_scope.py` holds the two invocations to
-a real partition — collecting each selector for real and requiring their union to
-equal the tier — because two commands selecting on one marker is exactly the shape
-that drops tests in silence.
+#### Two invocations, two tasks, one floor
+
+Those two invocations were chained inside one Nx target by `&&`, which bought
+three costs for one line: the four workers idled through the serial run, one
+change invalidated both halves, and a serial failure meant the parallel half never
+reported at all. They are now `orchestrator:test` and `orchestrator:test-serial` —
+separate tasks, neither depending on the other, keyed identically because they
+read one tree.
+
+The `&&` was not really about ordering, though; it was about `--cov-append`. The
+serial run wrote `.coverage` and the parallel one appended to it, and only the
+second reported, which is what kept `[tool.coverage.report] fail_under` evaluated
+once against a combined total. Splitting the tasks splits that data, so each tier
+now **measures and judges nothing**: `orchestrator:test-serial` measures under
+`coverage run` into `.coverage.serial`, `orchestrator:test` measures under
+pytest-cov — which is what carries coverage into the xdist workers — into
+`.coverage.parallel`, and the uncached `orchestrator:coverage` waits on both,
+combines them into `.coverage`, and reports.
+
+`coverage report` is what compares the total to the declared floor, so the floor
+still has exactly one source and is still evaluated exactly once. The parallel
+tier carries a `--cov-fail-under=0` because pytest-cov otherwise adopts
+`fail_under` from the config and would fail every run on its own share; that zero
+is the tier declining to judge, not a second floor, and
+`tests/test_coverage_gate.py` holds every target to it — no target may name a
+non-zero floor, and none but `coverage` may report. That module also drives the
+whole shape for real, over a generated package whose total lands in the rounding
+band the floor once forgave, and proves the combined total exceeds what either
+tier measured alone.
+
+Two more things follow from the split, and both are declarations rather than
+conventions. The combine names each tier's data file, so a tier whose data never
+arrived fails the command instead of quietly lowering the total the floor is
+judged against. And `orchestrator:coverage` is **uncached**: its inputs are two
+files on disk rather than the tree, it costs seconds, and a floor that always runs
+is one no replay can skip.
+
+`tests/test_nx_cache_scope.py` holds the two tiers to a real partition —
+collecting each selector for real and requiring their union to equal the suite —
+because two commands selecting on one marker is exactly the shape that drops tests
+in silence, and separate targets make that easier to get wrong rather than harder.
+
+**The wall clock is a wash, and the measurement says so.** Three interleaved
+samples of each shape on this host: chained 191.8s / 163.1s / 119.0s, split
+126.8s / 130.8s / 117.1s. The medians look like a 36s win, but the spread inside
+one shape is larger than the gap between them — this box also runs live
+dispatches — and the structural difference cannot be that big. Head-of-line
+blocking is bounded by the serial invocation's own runtime, and that tier is a
+single test: 0.9s. The parallel tier stops rendering its own terminal report and
+`orchestrator:coverage` renders it instead, measured at 0.9s. Those cancel.
+
+So the split is not a speed-up, and the third cost the `&&` carried is the one
+worth having. Chained, a serial-tier failure meant the parallel half never ran, so
+a cycle reported one failure where the suite had several; and re-running the
+one-second serial test meant re-running three minutes of parallel suite with it.
+Split, both halves report in one cycle and
+`nx run orchestrator:test-serial --skip-nx-cache` re-runs a second's work alone.
+The two still share `codeWorkspace`, so an edit still invalidates both — that is
+correct, because both read the same tree — but they are separate cache entries and
+either can be forced on its own.
 
 ## Merge strategies (where the change lands)
 

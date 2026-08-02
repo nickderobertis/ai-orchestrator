@@ -493,9 +493,13 @@ narrowings that earn their keep answer at the scope their tests read:
 `orchestrator:test-docs` runs the handful that assert on this repository's prose
 and keeps the whole-workspace key; `orchestrator:test-recipes` runs the journeys
 that drive `just` recipes and shell scripts under `recipeWorkspace`, exactly what
-they drive; `orchestrator:test` runs the rest under `codeWorkspace` — the workspace
+they drive; `orchestrator:test` and `orchestrator:test-serial` run the rest under
+`codeWorkspace` — the workspace
 minus `docs/**`, `**/*.md`, and the `apps/**` and `packages/**` no Python test
-opens. `workspace:check-nx-cache` is narrowed the same way, onto the fixture and
+opens. Those two share one key because they read one tree; they are separate tasks
+so each half reports its own failures and the one-second serial tier can be forced
+to re-run without the three-minute bulk.
+`workspace:check-nx-cache` is narrowed the same way, onto the fixture and
 scripts it builds its two worktrees from. A documentation edit stops charging eight
 minutes. No split may go stale silently: an undeclared test that opens this
 checkout's own documentation fails in `tests/conftest.py` and is told to carry
@@ -569,10 +573,13 @@ How this polyglot monorepo was built up from the create-repo reference pieces:
   `pyproject.toml` is the floor's one source — `fail_under` sets it and
   `precision` decides it, because pytest-cov compares the total *after* rounding
   at that precision. `tests/test_coverage_gate.py` holds that combination to one
-  that can actually fail the build. The tier runs in two invocations — a serial
-  one under `coverage run` for the `single_threaded` tests and the parallel bulk
-  appending to it — and only the second reports, so the floor is still evaluated
-  once against the combined total and no `--cov-fail-under` overrides it.
+  that can actually fail the build. Two tiers measure and neither judges —
+  `orchestrator:test-serial` under `coverage run` for the `single_threaded` tests
+  and `orchestrator:test` across the workers for the rest, each writing its own
+  data file — and the uncached `orchestrator:coverage` combines them and compares
+  that one total to the declared floor. Nothing else may name a floor, and a
+  measuring tier that did not write its data fails the combine rather than
+  lowering the total silently.
 - **The suite runs across four xdist workers** (`-n 4 --dist load`), chosen from
   measurement rather than from `auto`: it is latency-bound, its floor is its
   longest single test, and the curve is flat past four while this host also runs

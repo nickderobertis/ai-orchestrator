@@ -1,10 +1,15 @@
-"""The file sets Nx hashes, read from the one place they are declared.
+"""The tiers Nx memoizes and the file sets it hashes, from one declaration each.
 
 A cache key is a claim, and two places state it: `nx.json` declares the globs Nx
 hashes, and this suite enforces that the tests keyed on them read nothing else.
 Restating the globs on the enforcing side would let the claim and the key drift
 apart silently — a guard permitting a read the key does not cover is exactly the
 false green the keys exist to prevent — so both sides resolve them from here.
+
+The tier names live here for the same reason. A tier is named by
+`orchestrator/project.json`, by the recipes that run it, by the guards that hold
+it to its key, and by the journeys that prove that key against real Nx; a rename
+that missed one of those would leave a guard checking a target nobody runs.
 """
 
 from __future__ import annotations
@@ -15,14 +20,29 @@ from pathlib import Path
 
 from orchestrator import REPO_ROOT
 
-#: The key `orchestrator:test` is memoized on: the workspace minus its prose and
-#: minus the front-end projects no Python test reads.
+#: The key `orchestrator:test` and `orchestrator:test-serial` are memoized on: the
+#: workspace minus its prose and minus the front-end projects no Python test reads.
 CODE_WORKSPACE = "codeWorkspace"
 #: The key `orchestrator:test-recipes` is memoized on: what the recipe journeys
 #: drive, plus the modules that define and collect them.
 RECIPE_WORKSPACE = "recipeWorkspace"
 #: The key `workspace:check-nx-cache` is memoized on: what that script reads.
 NX_CACHE_CHECK = "nxCacheCheck"
+
+#: The tier that runs the bulk of the Python suite across xdist workers.
+CODE_SCOPED = "test"
+#: The tier that runs the `single_threaded` tests, in a process carrying no execnet
+#: receiver thread. Split out of `test` so it blocks nothing, and keyed on the same
+#: `codeWorkspace`: a different process shape, not a different tree.
+SERIAL_SCOPED = "test-serial"
+#: The tier that runs the tests asserting on this repository's own prose.
+DOCS_SCOPED = "test-docs"
+#: The tier that drives this repository's `just` recipes and shell scripts.
+RECIPE_SCOPED = "test-recipes"
+#: The uncached tier that combines every measuring tier's coverage data and
+#: enforces the declared floor against the combined total. Deliberately unmemoized:
+#: it is seconds of work, and a floor that always runs is one no replay can skip.
+COVERAGE_SCOPED = "coverage"
 
 
 def nx_config() -> dict:
