@@ -291,14 +291,21 @@ def test_reported_blocker_settles_promptly_without_mistaking_repeated_progress(
     assert terminal["productive"]["turns"] == 3
 
 
-# llmlint: ignore[tests_mirror_real_usage] an operator reaches this by waiting an
-# interval out, which a journey cannot spend; every observable step is the real CLI.
 def _pacemaker_ready_for_a_check_in(run_dir: Path) -> Path:
-    """Advance one run's pacemaker clock until a check-in dispatch is claimed."""
+    """Advance one run's pacemaker clock until a check-in dispatch is claimed.
+
+    An operator reaches this state by letting the interval elapse under a live
+    orchestrator, which a journey cannot spend. Only the clock is moved here; the
+    subject — the transition — and every observable step of it run through the CLI.
+    """
+    # llmlint: ignore[tests_mirror_real_usage] clock precondition, not the subject
     channel = create_channel(run_dir, heartbeat_interval=10)
+    # llmlint: ignore[tests_mirror_real_usage] clock precondition, not the subject
     started = heartbeat_state(channel)
     assert started is not None
+    # llmlint: ignore[tests_mirror_real_usage] clock precondition, not the subject
     mark_heartbeat_due(channel, now=float(started["last_surface_at"]) + 11)
+    # llmlint: ignore[tests_mirror_real_usage] clock precondition, not the subject
     assert claim_heartbeat(channel)
     return channel
 
