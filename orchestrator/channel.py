@@ -172,7 +172,14 @@ def _claim_holder(value: object) -> dict[str, Any] | None:
     pid = value.get("pid")
     if not isinstance(pid, int) or isinstance(pid, bool) or pid < 1:
         return None
-    return {"pid": pid, "host": value.get("host"), "at": value.get("at")}
+    # The host decides whether the pid is even probeable, and anything that is not
+    # this host reads as "may be live" — so a malformed one is indistinguishable from
+    # a claim taken on another machine, and would hold the lease forever. A claimant
+    # writes `socket.gethostname()`; anything else is metadata nobody can read.
+    host = value.get("host")
+    if not isinstance(host, str) or not host:
+        return None
+    return {"pid": pid, "host": host, "at": value.get("at")}
 
 
 def _claim_may_be_held(state: Mapping[str, Any]) -> bool:

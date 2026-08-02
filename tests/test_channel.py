@@ -1670,6 +1670,43 @@ def test_a_claim_whose_holder_died_is_reclaimed_by_the_next_tick(tmp_path: Path)
     assert claim_heartbeat(channel) is False
 
 
+@pytest.mark.parametrize(
+    "host",
+    [None, 42, "", {"name": "somewhere"}, ["somewhere"]],
+    ids=["absent", "number", "empty", "mapping", "list"],
+)
+def test_a_claim_with_unreadable_host_metadata_does_not_hold_the_lease(
+    tmp_path: Path, host: object
+) -> None:
+    """The wedge reachable through the claim's *other* field.
+
+    ``process_may_be_live`` answers "may be live" for anything that is not this
+    host — correctly, since a claimant on another machine cannot be probed from
+    here. That makes a malformed host indistinguishable from a foreign one, so a
+    claim carrying one would be deferred to forever and silence the run, which is
+    precisely what a lease exists to prevent. A claimant writes
+    ``socket.gethostname()``; anything else is metadata nobody can read, and the
+    documented policy for unreadable owner metadata is "not a live holder".
+    """
+    channel = create_channel(tmp_path / "run", heartbeat_interval=10)
+    initial = _heartbeat(channel)
+    mark_heartbeat_due(channel, now=float(initial["last_surface_at"]) + 11)
+    assert claim_heartbeat(channel)
+
+    # A live pid this process could genuinely probe, so only the host is in question.
+    state = _heartbeat(channel)
+    claim = dict(state["claim"])
+    if host is None:
+        claim.pop("host")
+    else:
+        claim["host"] = host
+    state["claim"] = claim
+    (channel / "heartbeat.json").write_text(json.dumps(state), encoding="utf-8")
+
+    assert claim_heartbeat(channel) is True
+    assert _heartbeat(channel)["claim"]["host"] == socket.gethostname()
+
+
 def test_a_surface_that_outlives_its_round_is_discarded_and_frees_the_pacemaker(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

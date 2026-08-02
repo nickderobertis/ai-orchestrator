@@ -291,10 +291,8 @@ def test_reported_blocker_settles_promptly_without_mistaking_repeated_progress(
     assert terminal["productive"]["turns"] == 3
 
 
-# llmlint: ignore[tests_mirror_real_usage] An operator reaches this state by waiting
-# an interval out, which a journey cannot spend; the subject below is the transition
-# and every observable step of it — the queue, `just status`, the discard, the read —
-# runs through the real CLI.
+# llmlint: ignore[tests_mirror_real_usage] an operator reaches this by waiting an
+# interval out, which a journey cannot spend; every observable step is the real CLI.
 def _pacemaker_ready_for_a_check_in(run_dir: Path) -> Path:
     """Advance one run's pacemaker clock until a check-in dispatch is claimed."""
     channel = create_channel(run_dir, heartbeat_interval=10)
