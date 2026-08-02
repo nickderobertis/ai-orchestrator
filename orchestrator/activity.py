@@ -40,6 +40,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .labels import MAX_VALUE_CODEPOINTS
 from .redaction import redact
 from .scratch import (
     AGENT_ACTIVITY_NAME,
@@ -117,9 +118,16 @@ def _summary(payload: object, run_id: str, *, now: float) -> NodeActivity | None
     if not isinstance(payload, dict) or payload.get("run_id") != run_id:
         return None
     recorded_round, node = payload.get("round"), payload.get("node")
-    if not isinstance(recorded_round, str) or not recorded_round.isdigit():
+    # Both reach the publisher as history labels, so the label contract is their
+    # domain and its length limit is theirs too. That bound is load-bearing rather
+    # than tidy: `int` refuses a string past CPython's digit limit by *raising*, so a
+    # summary claiming a round of several thousand digits would pass `isdigit` and
+    # then take down the view below. Length is checked first for the same reason.
+    if not isinstance(recorded_round, str) or len(recorded_round) > MAX_VALUE_CODEPOINTS:
         return None
-    if not isinstance(node, str) or not node:
+    if not recorded_round.isdigit():
+        return None
+    if not isinstance(node, str) or not node or len(node) > MAX_VALUE_CODEPOINTS:
         return None
     at = payload.get("at")
     # `NaN` and the infinities are valid JSON numbers to Python's parser and pass

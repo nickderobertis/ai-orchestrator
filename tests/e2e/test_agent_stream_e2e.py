@@ -538,7 +538,7 @@ def test_status_reports_only_the_publication_it_can_stand_behind(
     runs_dir = tmp_path / "runs"
     # llmlint: ignore[tests_mirror_real_usage] the journal is this view's own input
     journal = open_journal(runs_dir / "picky-run", RunId("picky-run"), 1)
-    for node in ("ship", "nobodys", "bloated", "ancient", "ahead", "unreal"):
+    for node in ("ship", "nobodys", "bloated", "ancient", "ahead", "unreal", "numbered"):
         # llmlint: ignore[tests_mirror_real_usage] the recorded transition, via its own API
         journal.append("node-started", node=NodeId(node), detail={"persona": "engineer"})
 
@@ -579,6 +579,11 @@ def test_status_reports_only_the_publication_it_can_stand_behind(
         '{"run_id":"picky-run","round":"1","node":"unreal","at":NaN,"name":"Bash"}',
         encoding="utf-8",
     )
+    # A round of digits alone, past the length `int` will convert: `isdigit` says yes
+    # and the conversion raises, which is a crash rather than a wrong answer.
+    (_status_dir(dispatch_scratch) / "agent.activity").write_text(
+        summary("numbered", round="9" * 8000), encoding="utf-8"
+    )
 
     shown = subprocess.run(
         [
@@ -600,10 +605,10 @@ def test_status_reports_only_the_publication_it_can_stand_behind(
     assert shown.returncode == 0, shown.stderr
     # Every node is still reported as dispatched and unfinished — that guarantee is
     # the journal's and none of this can touch it.
-    for node in ("ship", "nobodys", "bloated", "ancient", "ahead", "unreal"):
+    for node in ("ship", "nobodys", "bloated", "ancient", "ahead", "unreal", "numbered"):
         assert f"round-01 {node} engineer" in shown.stdout
     # Exactly one of them says what it is doing.
     assert "now Bash just ship" in shown.stdout
     assert shown.stdout.count("event(s),") == 1
-    for rejected in ("just nobodys", "just bloated", "just ancient", "just ahead"):
+    for rejected in ("just nobodys", "just bloated", "just ancient", "just ahead", "just numbered"):
         assert rejected not in shown.stdout

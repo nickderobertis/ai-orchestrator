@@ -357,3 +357,18 @@ def test_a_publication_no_live_dispatcher_holds_is_not_believed(
     finished.close()
 
     assert live_activity("live-run", root=tmp_path, now=NOW) == {}
+
+
+def test_a_round_longer_than_a_label_can_be_is_refused_before_it_is_converted(
+    tmp_path: Path, dispatch_scratch_root: ExitStack
+) -> None:
+    """`isdigit` says yes and `int` raises, so the length check has to come first.
+
+    CPython refuses to convert a decimal string past its digit limit — by raising —
+    and this value arrives from a subprocess. The domain is the history-label
+    contract it was published from, which is far below that limit.
+    """
+    _write(_live_dispatch(dispatch_scratch_root), _summary(round="9" * 8000))
+    _write(_live_dispatch(dispatch_scratch_root), _summary(node="n" * 8000))
+
+    assert live_activity("live-run", root=tmp_path, now=NOW) == {}
