@@ -335,9 +335,10 @@ def test_a_transition_frees_a_check_in_its_round_left_unreadable(
     paused = _just("run-plan", str(plan), "--run", "stranded", *common)
     assert paused.returncode == 1, paused.stderr
 
-    # The pacemaker becoming due and claiming its dispatch, through its own functions
-    # rather than by waiting an interval out; the update below is then queued by the
-    # real `channel-surface` the check-in agent invokes, for a round 1 that has ended.
+    # llmlint: ignore[tests_mirror_real_usage] The subject is the transition, and it
+    # runs through `just next-round` below; this is the clock precondition an operator
+    # reaches by waiting an interval out, which a journey cannot spend. Everything
+    # observable — the queue, `just status`, the discard, the read — is the real CLI.
     channel = create_channel(runs / "stranded", heartbeat_interval=10)
     started = heartbeat_state(channel)
     assert started is not None

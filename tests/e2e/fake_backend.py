@@ -262,6 +262,15 @@ def main() -> int:
                 fail_once = Path(fail_once_value) if fail_once_value else None
                 skip_surface_value = os.environ.get("FAKE_CHECK_IN_SKIP_SURFACE_ONCE")
                 skip_surface = Path(skip_surface_value) if skip_surface_value else None
+                # Leave a predecessor's queued update untouched exactly once: the
+                # check-in "completed" but this agent surfaced nothing.
+                stale_value = os.environ.get("FAKE_CHECK_IN_STALE_SURFACE_ONCE")
+                stale = Path(stale_value) if stale_value else None
+                leave_stale = (
+                    stale is not None
+                    and not stale.exists()
+                    and (channel_dir / "heartbeat-surface.json").is_file()
+                )
                 if fail_once is not None and not fail_once.exists():
                     fail_once.write_text("failed\n", encoding="utf-8")
                     with attempts.open("a", encoding="utf-8") as stream:
@@ -272,7 +281,8 @@ def main() -> int:
                     with attempts.open("a", encoding="utf-8") as stream:
                         stream.write(
                             "missing-surface\n"
-                            if skip_surface is not None and not skip_surface.exists()
+                            if (skip_surface is not None and not skip_surface.exists())
+                            or leave_stale
                             else "success\n"
                         )
                     (channel_dir / "check-in-labels.txt").write_text(
@@ -284,7 +294,10 @@ def main() -> int:
                         "evidence: node-started is recorded and node-settled is absent; "
                         "follow-ups: none"
                     )
-                    if skip_surface is not None and not skip_surface.exists():
+                    if leave_stale:
+                        assert stale is not None
+                        stale.write_text("left-stale\n", encoding="utf-8")
+                    elif skip_surface is not None and not skip_surface.exists():
                         skip_surface.write_text("skipped\n", encoding="utf-8")
                     else:
                         command = shlex.split(

@@ -391,6 +391,76 @@ def test_due_heartbeat_surfaces_during_active_step_and_disabled_run_stays_silent
     assert "planner update due" not in corrupt_status.stdout
 
 
+def test_a_check_in_that_leaves_a_predecessors_update_in_place_is_not_a_success(
+    tmp_path: Path, onejudge_bin: str
+) -> None:
+    """A pending update is refreshed, so its existence no longer proves a fresh one.
+
+    Before refresh, "the queue is non-empty" was a sound success test for a check-in
+    dispatch: nothing else could have put it there. Now a predecessor's update sits
+    there until it is replaced, and an agent that surfaced nothing would be recorded
+    a success behind it — handing the planner a stale snapshot as a current one. The
+    dispatch observes the surface *write* instead.
+    """
+    runs = tmp_path / "runs"
+    witness = tmp_path / "stale-witness"
+    hold = Rendezvous.at(tmp_path, "active-worker")
+    plan = tmp_path / "stale-check-in-surface.json"
+    plan.write_text(
+        json.dumps(
+            {
+                "schema_version": 3,
+                "name": "stale-check-in-surface",
+                "tasks": [
+                    {
+                        "id": "active-worker",
+                        "persona": "engineer",
+                        "task": f"slow-branch {witness}{hold.sentinels()} complete-now",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    left_stale = tmp_path / "left-stale-check-in-surface"
+    run_id = _launch_cli(
+        plan,
+        runs,
+        _base(tmp_path),
+        onejudge_bin,
+        heartbeat_interval=0.5,
+        env={"FAKE_CHECK_IN_STALE_SURFACE_ONCE": str(left_stale)},
+    )
+    channel = runs / run_id / "channel"
+    # llmlint: ignore[tests_mirror_real_usage] The acceptance contract is the durable
+    # missing-surface diagnostic, which deliberately has no operator CLI.
+    failure_log = channel / "check-in.log"
+    failure_deadline = deadline(120)
+    failure: dict[str, object] | None = None
+    while time.monotonic() < failure_deadline:
+        if failure_log.is_file():
+            records = [
+                json.loads(line) for line in failure_log.read_text(encoding="utf-8").splitlines()
+            ]
+            if records:
+                failure = records[0]
+                break
+        time.sleep(0.01)
+    assert left_stale.read_text(encoding="utf-8") == "left-stale\n"
+    assert failure is not None
+    assert failure["succeeded"] is False
+    assert failure["detail"] == (
+        "RuntimeError: check-in agent did not surface a completed status update"
+    )
+    # The first dispatch queued an update; the second completed behind it and was
+    # still recorded a miss, so the run is not left reporting a snapshot as current.
+    # llmlint: ignore[tests_mirror_real_usage] Exact dispatch/retry dedup is
+    # observable only at the paid-provider seam; onejudge and orchestration stay real.
+    attempts = (channel / "check-in-dispatches.txt").read_text().splitlines()
+    assert attempts[:2] == ["success", "missing-surface"], attempts
+    hold.let_go()
+
+
 def test_completed_check_in_without_surface_is_logged_and_retried(
     tmp_path: Path, onejudge_bin: str
 ) -> None:
