@@ -17,20 +17,11 @@ A carried-forward node keeps its branch pin and resume checkpoint, and the plann
 context attached to it while the round ran.
 
 **The plan of record is the graph the round executed, not the file it was launched
-with.** `executed_plan` reads it back from the run's own authoritative journal, so
-every live edit the reconciler committed — an `add`, a `drop`, a `retry`
-replacement and its new id, an amended `task`, `done_when` or `max_turns`, a branch
-pin — is what the next round is derived from. Only edits the reconciler *rejected*
-are absent, and their submitter was told so synchronously.
-
-That replaces an earlier round-scoped rule, and the two guarantees above are why: a
-`retry` replacement's new id exists only in the executed graph, so re-reading the
-launch file could not recognise the merged replacement as done or keep the branch
-pin it carried. Neither guarantee is separable from the rule — both *are* the
-divergence between the launch file and the graph that ran. docs/orchestration.md
-has the planner-facing account. `round_supersessions` is the one place the new rule
-needs care: a live `retry` leaves the node it replaced in the executed graph,
-cancelled, and that node is removed here rather than carried forward twice.
+with**, so `executed_plan` folds it from the run's journal rather than re-reading
+`round-NN/plan.json`. The two guarantees above are why this replaced an earlier
+round-scoped rule: a `retry` replacement's id exists only in the executed graph, so
+the launch file can neither recognise the merged replacement as done nor keep the
+branch pin it carried. docs/orchestration.md has the planner-facing account.
 """
 
 from __future__ import annotations
@@ -78,14 +69,18 @@ def round_supersessions(run_dir: Path, round_number: int) -> dict[str, str]:
     this the superseded original — cancelled, never done — would be carried forward
     and dispatched again beside the replacement that already did its work.
 
-    Read tolerantly from the journal, like every other observer of it: a round with
-    no live retry reports nothing, which is what a transition that has always carried
-    none should keep doing.
+    Read tolerantly, like every other observer of the journal: `read_events` already
+    skips junk lines and a torn tail, and an unreadable file reports no supersession
+    — which is what a transition that carried none has always done.
     """
     from .journal import JOURNAL_NAME, read_events
 
+    try:
+        events = read_events(run_dir / JOURNAL_NAME)
+    except OSError:
+        return {}
     replaced: dict[str, str] = {}
-    for event in read_events(run_dir / JOURNAL_NAME):
+    for event in events:
         if event.round != round_number or event.kind != "edit-committed":
             continue
         operations = event.detail.get("operations")

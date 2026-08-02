@@ -1439,9 +1439,7 @@ def _finished(run_dir: Path) -> bool:
 def next_surface(run_dir: Path, *, timeout: float) -> dict[str, Any]:
     """Consume this run's next planner surface, or report why there is none.
 
-    The one place a surface is taken off the channel, so `channel-next` and `watch`
-    cannot drift into two different ideas of what "attached" means: the durable
-    check-in queue is drained first, then the live FIFO, and a settled run answers
+    The durable check-in queue drains before the live FIFO, and a settled run answers
     ``{"status": "finished"}`` rather than waiting out the timeout.
     """
     discard_surface_from_a_finished_round(run_dir)
@@ -1452,9 +1450,8 @@ def next_surface(run_dir: Path, *, timeout: float) -> dict[str, Any]:
     if pending_reply or round_finished:
         with suppress(FileNotFoundError):
             heartbeat_surface.unlink()
-            # The queued update is gone unread, so the claim it was held under has to
-            # go with it. Left set, it suppresses every later check-in for the rest of
-            # the run: the planner who ignored the channel longest would be told least.
+            # The update is gone unread, so its claim goes with it; left set, it
+            # suppresses every later check-in for the rest of the run.
             release_heartbeat_claim(run_dir / "channel")
     with advisory_lock(f"channel-heartbeat-surface:{heartbeat_surface.resolve()}"):
         if heartbeat_surface.is_file():

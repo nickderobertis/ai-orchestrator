@@ -291,6 +291,20 @@ def test_reported_blocker_settles_promptly_without_mistaking_repeated_progress(
     assert terminal["productive"]["turns"] == 3
 
 
+# llmlint: ignore[tests_mirror_real_usage] An operator reaches this state by waiting
+# an interval out, which a journey cannot spend; the subject below is the transition
+# and every observable step of it — the queue, `just status`, the discard, the read —
+# runs through the real CLI.
+def _pacemaker_ready_for_a_check_in(run_dir: Path) -> Path:
+    """Advance one run's pacemaker clock until a check-in dispatch is claimed."""
+    channel = create_channel(run_dir, heartbeat_interval=10)
+    started = heartbeat_state(channel)
+    assert started is not None
+    mark_heartbeat_due(channel, now=float(started["last_surface_at"]) + 11)
+    assert claim_heartbeat(channel)
+    return channel
+
+
 def test_a_transition_frees_a_check_in_its_round_left_unreadable(
     tmp_path: Path, command_base, onejudge_bin: str
 ) -> None:
@@ -335,15 +349,7 @@ def test_a_transition_frees_a_check_in_its_round_left_unreadable(
     paused = _just("run-plan", str(plan), "--run", "stranded", *common)
     assert paused.returncode == 1, paused.stderr
 
-    # llmlint: ignore[tests_mirror_real_usage] The subject is the transition, and it
-    # runs through `just next-round` below; this is the clock precondition an operator
-    # reaches by waiting an interval out, which a journey cannot spend. Everything
-    # observable — the queue, `just status`, the discard, the read — is the real CLI.
-    channel = create_channel(runs / "stranded", heartbeat_interval=10)
-    started = heartbeat_state(channel)
-    assert started is not None
-    mark_heartbeat_due(channel, now=float(started["last_surface_at"]) + 11)
-    assert claim_heartbeat(channel)
+    channel = _pacemaker_ready_for_a_check_in(runs / "stranded")
     surfaced = _just(
         "channel-surface", "stranded", "round one is verifying", "--runs-dir", str(runs)
     )
