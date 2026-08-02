@@ -752,6 +752,13 @@ def test_status_reports_a_dead_round_beside_the_surface_it_left_pending(
     # would author the message is left out. It goes first because the production guard
     # is real: a check-in is refused while a planner surface awaits a reply, and the
     # relay below raises one that never gets answered.
+    # llmlint: ignore[tests_mirror_real_usage] The same exemption the channel directory
+    # above takes, for the same reason and no further: reaching a *due, claimed*
+    # check-in through the CLI alone needs a live orchestrator to wait out a real
+    # interval and a paid check-in agent to answer it, on every run of this suite.
+    # These three lines are the pacemaker tick that would have done it; the surface
+    # itself is queued through the real `just channel-surface` below, and everything
+    # the journey asserts is what the real `just runs` and `just status` print.
     due_at = float(json.loads((channel_dir / "heartbeat.json").read_text())["last_surface_at"])
     mark_heartbeat_due(channel_dir, now=due_at + 11)
     assert claim_heartbeat(channel_dir), "the pacemaker had no check-in to claim"
