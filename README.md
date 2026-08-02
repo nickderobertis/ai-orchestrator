@@ -13,6 +13,10 @@ the config, personas, and deterministic scripts to do the mechanical parts.
 
 ## Quick start
 
+On a brand-new machine, do the manual one-time steps in
+[`docs/host-setup.md`](docs/host-setup.md) first — harness logins, workspace trust,
+and the per-machine repository registry are not in this repository.
+
 ```sh
 just bootstrap          # install the adopted onejudge SDK/CLI + sync the Python env
 just check              # deterministic gate (format, lint, types, personas, tests)
@@ -52,7 +56,7 @@ just migrate-repo-type local/ai-orchestrator --repo-type single-owner
 | `personas/` | Per-persona onejudge deltas (roles). See [`personas/README.md`](personas/README.md). |
 | `oneharness.toml` / `oneharness.judge.toml` | The two conversation sides (agent / judge) — harness + model selection. |
 | `orchestrator/` | The mechanics: base⊕persona merge, tracked mixed-graph scheduling, lifecycle publication, and run ledger. |
-| `docs/` | [Tracked graph model](docs/orchestration.md) · [repository lifecycle](docs/repo-lifecycle.md) · [onejudge integration](docs/onejudge-integration.md) · [DAG Observatory](docs/dag-ui.md) |
+| `docs/` | [Host setup](docs/host-setup.md) · [tracked graph model](docs/orchestration.md) · [repository lifecycle](docs/repo-lifecycle.md) · [onejudge integration](docs/onejudge-integration.md) · [DAG Observatory](docs/dag-ui.md) |
 
 ## DAG Observatory
 
