@@ -1159,3 +1159,22 @@ def test_an_unsettled_state_renders_its_own_detail(tmp_path: Path) -> None:
     state = run_state(run_dir, RUN)
     assert state.settlement == ""
     assert monitor_module.settled_detail(state) == state.detail == "1 waiting"
+
+
+def test_every_settlement_and_the_status_it_reports_are_pinned_here() -> None:
+    """The one place these values are asserted, and the gate against them drifting.
+
+    A settlement's exit status is a contract a scripted launch reads without
+    parsing the stream: zero for the two endings a planner expects to reach, and
+    non-zero for the one that means intervene. `tests/e2e/test_attach_settles_e2e.py`
+    reads the mapping rather than restating a number, so this assertion is what
+    would fail if one moved.
+    """
+    assert monitor_module.SETTLEMENTS == {
+        "complete": 0,
+        "awaiting-planner": 0,
+        "unattended": 3,
+    }
+    assert monitor_module.SETTLED_COMPLETE == "complete"
+    assert monitor_module.SETTLED_AWAITING_PLANNER == "awaiting-planner"
+    assert monitor_module.SETTLED_UNATTENDED == "unattended"

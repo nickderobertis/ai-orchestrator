@@ -9,9 +9,10 @@ run reaches its planner surface anyway.
 
 The settlements themselves are `monitor.SETTLEMENTS`, and both commands reach them
 through one function (`monitor.attach`), so each one is driven here through the
-command a planner would type. Two of them are cheap to build honestly — a graph
-that completed, and a round whose owner this host can prove is gone — and the
-blocking-surface one comes from a real orchestrator asking a real question.
+commands a planner would type and nothing else: `just orchestrate` launches, `just
+channel-next` and `just channel-reply` answer, `just stop` ends. No run state here
+is manufactured — every ledger, journal, and channel record these journeys read was
+written by the run itself.
 
 Parked is the one settlement no journey here can reach through `just orchestrate`,
 and not for want of trying: the run it attaches to is the one it just created, and
@@ -41,16 +42,15 @@ from waits import deadline
 from waits import timeout as e2e_timeout
 
 from orchestrator import BASE_CONFIG, REPO_ROOT
-from orchestrator.journal import open_journal
-from orchestrator.monitor import HEADER
-from orchestrator.runs import NodeId, RunId, prepare_round, write_result
+from orchestrator.monitor import HEADER, SETTLED_UNATTENDED, SETTLEMENTS
 
 FAKE_BACKEND = REPO_ROOT / "tests" / "e2e" / "fake_backend.py"
 
-#: What `SETTLED_UNATTENDED` exits with. Spelled out rather than imported, because
-#: the status is the contract a scripted launch reads and a test that imported the
-#: number could not notice it changing.
-UNATTENDED_STATUS = 3
+#: What `SETTLED_UNATTENDED` exits with. Read from the mapping that defines it;
+#: `tests/test_monitor.py` is where that mapping's values are pinned, so the status
+#: a scripted launch reads has one source and one drift gate rather than a literal
+#: restated here.
+UNATTENDED_STATUS = SETTLEMENTS[SETTLED_UNATTENDED]
 
 
 def _base(tmp_path: Path) -> Path:
@@ -254,123 +254,115 @@ def test_the_foreground_launch_returns_when_nothing_is_left_driving_the_run(
 # --- the same endings through `just monitor` -----------------------------------
 
 
-def _recorded_run(runs: Path, run_id: RunId, *, ok: bool, state: str, status: str) -> Path:
-    """One real recorded round, settled through the ledger's own writers."""
-    run_dir = runs / run_id
-    journal = open_journal(run_dir, run_id, 1)
-    journal.append("node-started", node=NodeId("api"), detail={"persona": "engineer"})
-    journal.append("node-settled", node=NodeId("api"), detail={"status": status})
-    claimed = prepare_round(run_dir, {"tasks": [{"id": "api", "persona": "engineer", "task": "x"}]})
-    write_result(
-        claimed.directory,
-        {
-            "ok": ok,
-            "state": state,
-            "started_order": ["api"],
-            "results": {"api": {"status": status}},
-        },
+def _channel(recipe: str, run_id: str, runs: Path, payload: str | None = None) -> str:
+    result = subprocess.run(
+        ["just", recipe, run_id, "--runs-dir", str(runs)],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        input=payload,
+        timeout=e2e_timeout(120),
     )
-    return run_dir
+    assert result.returncode == 0, result.stderr
+    return result.stdout
 
 
-def test_monitor_until_settled_returns_on_a_run_that_is_already_complete(
-    tmp_path: Path,
+def _answer_until_the_run_is_over(run_id: str, runs: Path) -> None:
+    """Reply to every surface the orchestrator raises until it writes its report.
+
+    The planner's own loop, run through the planner's own commands: this is how a
+    graph reaches `complete` here, and it is the only way to reach it without
+    manufacturing a ledger the executor should have written.
+    """
+    report = runs / run_id / "orchestrator" / "report.json"
+    wait = deadline(240)
+    while time.monotonic() < wait:
+        if report.is_file() and report.stat().st_size:
+            return
+        surface = json.loads(_channel("channel-next", run_id, runs) or "{}")
+        if surface.get("surface") is None:
+            continue
+        _channel(
+            "channel-reply",
+            run_id,
+            runs,
+            json.dumps({"completion": True, "reason": "verified by the attach journey"}),
+        )
+    raise AssertionError(f"the orchestrator never finished {run_id}")
+
+
+def test_monitor_until_settled_returns_on_a_graph_that_completed(
+    tmp_path: Path, onejudge_bin: str, reaped: list[Path]
 ) -> None:
-    runs = tmp_path / "runs"
-    _recorded_run(runs, RunId("already-done"), ok=True, state="complete", status="done")
+    """Attaching to a run that is already over returns at once, saying so.
 
-    settled = _monitor(runs, "already-done", "--until-settled", "--format", "jsonl")
-    assert settled.returncode == 0, settled.stderr
+    Every part of this run is the planner's own: `just orchestrate` launched it,
+    `just channel-next` and `just channel-reply` answered it, and it completed. The
+    attach is then asked about a run whose orchestrator has already written its
+    report — the *already settled* case — and must recognise the completed graph
+    rather than follow a stream nothing will add to, or call it abandoned.
+    """
+    runs = tmp_path / "runs"
+    launched = _orchestrate(
+        _plan(tmp_path, "completed"), runs, _base(tmp_path), onejudge_bin, "--detach"
+    )
+    assert launched.returncode == 0, launched.stderr
+    run_dir = _launched_run(runs)
+    reaped.append(run_dir)
+    _answer_until_the_run_is_over(run_dir.name, runs)
+
+    settled = _monitor(runs, run_dir.name, "--until-settled", "--format", "jsonl")
+    assert settled.returncode == 0, settled.stdout + settled.stderr
     last = json.loads(settled.stdout.splitlines()[-1])
     assert (last["state"], last["detail"]) == ("complete", "graph complete")
     assert last["settlement"] == "complete"
 
 
-def test_monitor_until_settled_returns_when_the_rounds_owner_is_gone(
-    tmp_path: Path,
+def test_monitor_until_settled_returns_when_a_stopped_run_leaves_nobody_driving(
+    tmp_path: Path, onejudge_bin: str, reaped: list[Path]
 ) -> None:
-    """A claimed round whose owner this host proved dead is settled, not in flight."""
-    runs = tmp_path / "runs"
-    run_dir = runs / "abandoned"
-    open_journal(run_dir, RunId("abandoned"), 1).append("node-started", node=NodeId("api"))
-    claimed = prepare_round(run_dir, {"tasks": [{"id": "api", "persona": "engineer", "task": "x"}]})
-    # A pid this host can prove is gone: a real child, reaped before the read.
-    corpse = subprocess.Popen([sys.executable, "-c", ""])
-    corpse.wait(timeout=e2e_timeout(30))
-    status = json.loads((claimed.directory / "status.json").read_text(encoding="utf-8"))
-    (claimed.directory / "status.json").write_text(
-        json.dumps({**status, "pid": corpse.pid}), encoding="utf-8"
-    )
+    """`just stop` is how a run really ends here, and this is what it leaves behind.
 
-    settled = _monitor(runs, "abandoned", "--until-settled", "--format", "jsonl")
-    assert settled.returncode == UNATTENDED_STATUS, settled.stderr
+    The graph is unfinished — its worker is still working when the stop lands — so
+    nothing about the ledger says the run is over. What says it is that nothing is
+    driving it any more, which is the settlement a follow would otherwise wait
+    through forever while reporting a round that is never going to finish.
+    """
+    runs = tmp_path / "runs"
+    witness = tmp_path / "slow-witness"
+    plan = tmp_path / "plan-stopped.json"
+    plan.write_text(
+        json.dumps(
+            {
+                "schema_version": 3,
+                "name": "stopped",
+                "tasks": [
+                    {"id": "worker", "persona": "engineer", "task": f"slow-branch {witness}"}
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    launched = _orchestrate(plan, runs, _base(tmp_path), onejudge_bin, "--detach")
+    assert launched.returncode == 0, launched.stderr
+    run_dir = _launched_run(runs)
+    reaped.append(run_dir)
+    wait = deadline(240)
+    while not (run_dir / "round-01" / "status.json").is_file():
+        assert time.monotonic() < wait, "the launched run never claimed its first round"
+        time.sleep(0.05)
+
+    stopped = subprocess.run(
+        ["just", "stop", run_dir.name, "--runs-dir", str(runs), "--force"],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(180),
+    )
+    assert stopped.returncode == 0, stopped.stdout + stopped.stderr
+
+    settled = _monitor(runs, run_dir.name, "--until-settled", "--format", "jsonl")
+    assert settled.returncode == UNATTENDED_STATUS, settled.stdout + settled.stderr
     last = json.loads(settled.stdout.splitlines()[-1])
     assert last["settlement"] == "unattended"
     assert "settled, nothing is driving this run" in last["detail"]
-
-
-def test_monitor_until_settled_keeps_following_a_surface_the_run_does_not_wait_on(
-    tmp_path: Path,
-) -> None:
-    """Only a *blocking* surface settles: the orchestrator continues past the others.
-
-    A heartbeat update is persisted the same way and reads the same to every view,
-    so an attach that returned on it would walk away from a run that is still
-    working. It keeps following, and then settles the moment a surface the run is
-    actually blocked on replaces it.
-    """
-    runs = tmp_path / "runs"
-    run_dir = _recorded_run(
-        runs, RunId("still-working"), ok=False, state="waiting", status="waiting"
-    )
-    pending = run_dir / "channel" / "planner-pending.json"
-    pending.parent.mkdir(parents=True, exist_ok=True)
-    pending.write_text(
-        json.dumps({"kind": "heartbeat", "message": "round one still running", "blocking": False}),
-        encoding="utf-8",
-    )
-    following = subprocess.Popen(
-        [
-            "just",
-            "monitor",
-            "still-working",
-            "--runs-dir",
-            str(runs),
-            "--until-settled",
-            "--format",
-            "jsonl",
-            "--heartbeat",
-            "0.01",
-            "--poll-interval",
-            "0.05",
-            "--max-poll-interval",
-            "0.05",
-        ],
-        cwd=REPO_ROOT,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-    try:
-        assert following.stdout is not None
-        beats = []
-        while len(beats) < 3:
-            record = json.loads(following.stdout.readline())
-            if record["type"] == "heartbeat":
-                beats.append(record)
-        assert all("settlement" not in beat for beat in beats), beats
-        assert following.poll() is None
-        # The same file, now blocking: the run is waiting on the planner and the
-        # attach hands it back.
-        pending.write_text(
-            json.dumps({"kind": "blocker", "message": "decide", "blocking": True}),
-            encoding="utf-8",
-        )
-        assert following.wait(timeout=e2e_timeout(60)) == 0
-        last = json.loads(following.stdout.read().strip().splitlines()[-1])
-        assert last["settlement"] == "awaiting-planner"
-        assert "settled, awaiting the planner" in last["detail"]
-    finally:
-        if following.poll() is None:
-            following.kill()
-        following.wait(timeout=e2e_timeout(30))
