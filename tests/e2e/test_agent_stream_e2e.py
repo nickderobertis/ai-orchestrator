@@ -26,21 +26,22 @@ import json
 import os
 import stat
 import subprocess
+import tempfile
 import time
+from collections.abc import Iterator
+from contextlib import ExitStack
 from pathlib import Path
 
+import pytest
 from mock_oneharness import main as _mock_oneharness_main
-from scratch_ownership import hold_owner_lock
 from waits import deadline, timeout
 
 from orchestrator import REPO_ROOT
 from orchestrator.journal import open_journal
 from orchestrator.runs import NodeId, RunId
+from orchestrator.scratch import AGENT_STATUS_DIR_NAME, owned_scratch_directory
 
 MOCK_ONEHARNESS = Path(_mock_oneharness_main.__globals__["__file__"]).resolve()
-#: Owner locks these journeys hold on behalf of the dispatcher they stand in for.
-#: They are released when the process ends, which is after every journey here.
-_HELD_LOCKS: list[int] = []
 #: How long the mocked harness waits between the lines of its transcript. Long
 #: enough that a poll can observe the turn while it is still running — which is the
 #: whole claim — and short enough that the journey stays a few seconds.
@@ -92,18 +93,26 @@ TRANSCRIPT = (
 )
 
 
-def _status_dir(root: Path, name: str) -> Path:
-    """Create a watchdog status directory, owned, as a live dispatch's own would be.
+@pytest.fixture
+def dispatch_scratch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[ExitStack]:
+    """Create dispatch scratch the way a dispatch does, under this test's own root.
 
-    `orchestrator.scratch.owned_scratch_directory` creates this tree for a real
-    dispatch and *holds* its owner lock for the dispatch's whole scope; the reader
-    believes nothing under the shared scratch root without that. This test process
-    stands in for the dispatcher and holds the lock until the test session ends.
+    `owned_scratch_directory` is the production path — `run_onejudge` enters it for
+    every dispatch, and it holds the directory's owner lock for that dispatch's whole
+    scope, which is the only evidence `orchestrator.activity` accepts. Pointing
+    `tempfile` at this test's root is what lets a journey both create it that way and
+    tell the `orchestrator-status` subprocess where to look.
     """
-    watchdog = root / f"orchestrator-watchdog-{name}"
-    status_dir = watchdog / "agent"
-    status_dir.mkdir(parents=True)
-    _HELD_LOCKS.append(hold_owner_lock(watchdog))
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path / "scratch"))
+    (tmp_path / "scratch").mkdir()
+    with ExitStack() as stack:
+        yield stack
+
+
+def _status_dir(stack: ExitStack) -> Path:
+    """One live dispatch's agent status directory, exactly as `run_onejudge` makes it."""
+    status_dir = stack.enter_context(owned_scratch_directory()) / AGENT_STATUS_DIR_NAME
+    status_dir.mkdir()
     return status_dir
 
 
@@ -155,7 +164,7 @@ def _read_activity(path: Path) -> dict[str, object] | None:
 
 
 def test_the_agent_side_streams_its_turn_over_the_real_fallback_chain(
-    tmp_path: Path, oneharness_bin: str
+    tmp_path: Path, oneharness_bin: str, dispatch_scratch: ExitStack
 ) -> None:
     """A live turn is visible while it runs, and the chain that survives a 429 is kept.
 
@@ -168,9 +177,7 @@ def test_the_agent_side_streams_its_turn_over_the_real_fallback_chain(
     * the selected candidate's events arrive *before* its turn ends;
     * onejudge's contract is untouched — stdout is still exactly one report.
     """
-    scratch = tmp_path / "scratch"
-    scratch.mkdir()
-    status_dir = _status_dir(scratch, "stream")
+    status_dir = _status_dir(dispatch_scratch)
     activity = status_dir / "agent.activity"
     environment = _wrapper_environment(
         tmp_path,
@@ -261,7 +268,7 @@ def test_the_agent_side_streams_its_turn_over_the_real_fallback_chain(
 
 
 def test_a_dispatch_that_cannot_stream_still_runs_and_records_its_transcript(
-    tmp_path: Path, oneharness_bin: str
+    tmp_path: Path, oneharness_bin: str, dispatch_scratch: ExitStack
 ) -> None:
     """`--events` is the degrade path, and reaching it is never a dispatch failure.
 
@@ -271,9 +278,7 @@ def test_a_dispatch_that_cannot_stream_still_runs_and_records_its_transcript(
     know the flag. The turn must run anyway, and must still carry the tool transcript
     the planner views render.
     """
-    scratch = tmp_path / "scratch"
-    scratch.mkdir()
-    status_dir = _status_dir(scratch, "buffered")
+    status_dir = _status_dir(dispatch_scratch)
     environment = _wrapper_environment(
         tmp_path,
         oneharness_bin,
@@ -313,7 +318,7 @@ def test_a_dispatch_that_cannot_stream_still_runs_and_records_its_transcript(
 
 
 def test_status_reports_what_a_node_is_doing_while_its_turn_is_still_running(
-    tmp_path: Path, oneharness_bin: str
+    tmp_path: Path, oneharness_bin: str, dispatch_scratch: ExitStack
 ) -> None:
     """The planner-visible view, mid-turn, against a real streaming dispatch.
 
@@ -324,9 +329,8 @@ def test_status_reports_what_a_node_is_doing_while_its_turn_is_still_running(
     rather than inferred from elapsed time.
     """
     scratch = tmp_path / "scratch"
-    scratch.mkdir()
     runs_dir = tmp_path / "runs"
-    status_dir = _status_dir(scratch, "view")
+    status_dir = _status_dir(dispatch_scratch)
     # The journal is this view's production input — the executor writes it through
     # this same append-only API and `just status` reads it — so writing the one
     # recorded transition is the input, not a shortcut past the entry point. Driving a
@@ -339,7 +343,7 @@ def test_status_reports_what_a_node_is_doing_while_its_turn_is_still_running(
     # A second dispatch's directory holding an unusable publication, beside the live
     # one. A reader that raised, or that stopped scanning, would take a working node's
     # visibility down with it — so the view must report the good one regardless.
-    torn = _status_dir(scratch, "torn") / "agent.activity"
+    torn = _status_dir(dispatch_scratch) / "agent.activity"
     torn.write_text('{"run_id": "live-run", "round": "1", "node": "gh', encoding="utf-8")
 
     environment = _wrapper_environment(
@@ -400,7 +404,7 @@ def test_status_reports_what_a_node_is_doing_while_its_turn_is_still_running(
     assert "event(s)," in shown.stdout
 
 
-def test_the_filter_forwards_output_it_does_not_recognize(tmp_path: Path) -> None:
+def test_the_filter_forwards_output_it_does_not_recognize(dispatch_scratch: ExitStack) -> None:
     """Whatever the child said reaches onejudge, even when this filter cannot read it.
 
     The filter sits between oneharness and onejudge on the one channel a turn's
@@ -409,7 +413,7 @@ def test_the_filter_forwards_output_it_does_not_recognize(tmp_path: Path) -> Non
     is driven here at its real interface, the one the wrapper gives it: the child's
     stdout on stdin, onejudge's stdin on stdout, and the two files it writes.
     """
-    status_dir = _status_dir(tmp_path / "scratch", "forwarded")
+    status_dir = _status_dir(dispatch_scratch)
     record = status_dir / "agent.stdout"
     record.touch()
     activity = status_dir / "agent.activity"
@@ -459,12 +463,12 @@ def test_the_filter_forwards_output_it_does_not_recognize(tmp_path: Path) -> Non
     assert json.loads(activity.read_text(encoding="utf-8"))["events"] == 1
 
 
-def test_the_filter_reports_a_record_it_cannot_keep(tmp_path: Path) -> None:
+def test_the_filter_reports_a_record_it_cannot_keep(dispatch_scratch: ExitStack) -> None:
     """`tee` failed the capture here before, and the wrapper still turns that into a
     failed turn — the one thing that must not happen is a turn whose transcript
     quietly went missing being reported as a turn nobody had anything to say about.
     """
-    status_dir = _status_dir(tmp_path / "scratch", "unwritable")
+    status_dir = _status_dir(dispatch_scratch)
     # A directory where the record goes is unopenable regardless of privilege.
     (status_dir / "agent.stdout").mkdir()
 

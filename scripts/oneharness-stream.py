@@ -117,7 +117,6 @@ def _locator(raw: str | None) -> Locator:
 
 
 def _collapse(value: str) -> str:
-    """Bound one harness-authored string to a single short line."""
     return " ".join(value.split())[:DETAIL_CHARS]
 
 
@@ -154,7 +153,8 @@ def _publish(activity_path: str, summary: Summary) -> None:
 
 
 def _forward(line: str) -> None:
-    """Hand one line to onejudge, flushed, because nothing else will."""
+    # Flushed per line: onejudge is reading a pipe, and a turn's answer sitting in
+    # this process's buffer is an answer that has not arrived.
     sys.stdout.write(line)
     sys.stdout.flush()
 
