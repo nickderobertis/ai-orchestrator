@@ -35,6 +35,7 @@ from waits import deadline, timeout
 from orchestrator import REPO_ROOT
 from orchestrator.journal import open_journal
 from orchestrator.runs import NodeId, RunId
+from orchestrator.scratch import OWNER_LOCK_NAME, _OwnerIdentity
 
 MOCK_ONEHARNESS = Path(_mock_oneharness_main.__globals__["__file__"]).resolve()
 #: How long the mocked harness waits between the lines of its transcript. Long
@@ -89,9 +90,19 @@ TRANSCRIPT = (
 
 
 def _status_dir(root: Path, name: str) -> Path:
-    """Create a watchdog-shaped status directory the wrapper and reader both accept."""
-    status_dir = root / f"orchestrator-watchdog-{name}" / "agent"
+    """Create a watchdog status directory, owned, as a live dispatch's own would be.
+
+    `orchestrator.scratch.owned_scratch_directory` creates this tree for a real
+    dispatch and records the owning dispatcher in it; the reader believes nothing
+    under the shared scratch root without that evidence. This test process stands in
+    for the dispatcher, and is live for as long as the journeys below need it to be.
+    """
+    watchdog = root / f"orchestrator-watchdog-{name}"
+    status_dir = watchdog / "agent"
     status_dir.mkdir(parents=True)
+    owner = _OwnerIdentity.current(os.getpid())
+    assert owner is not None, "this process has no readable start identity"
+    (watchdog / OWNER_LOCK_NAME).write_text(owner.render(), encoding="utf-8")
     return status_dir
 
 
@@ -502,6 +513,6 @@ def test_the_filter_refuses_to_write_outside_a_dispatch_status_directory(
     )
 
     assert completed.returncode == 2
-    assert "not inside a dispatch status directory" in completed.stderr
+    assert "in one dispatch status directory" in completed.stderr
     assert "invoke through orchestrator dispatch" in completed.stderr
     assert not stray.exists()

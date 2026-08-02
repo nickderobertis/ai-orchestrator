@@ -17,9 +17,14 @@ Three properties make it usable rather than decorative:
 * **It never blocks and never fails a view.** Every read degrades to "no activity
   known", which is exactly the picture a view had before streaming existed. The
   journal join stays the guarantee; this only ever adds to it.
-* **It is a trust boundary.** These files live under a world-writable scratch root
-  and are written by a subprocess, so every field is validated against its own
-  domain, bounded, and redacted before it can reach a planner's terminal.
+* **It is a trust boundary.** These files live under a shared scratch root and are
+  written by a subprocess, so a publication is believed only when a live dispatcher
+  still holds the owner lock on the directory it sits in, and every field is then
+  validated against its own domain, bounded, and redacted before it can reach a
+  planner's terminal. That lock is ownership evidence, not an access control: it
+  cannot stop a local user who sets one up deliberately, and nothing here is
+  security boundary for that. It does mean a summary is only ever reported for a
+  dispatch something is still running.
 * **It is scoped to one run.** A shared host runs several planners' dispatches at
   once, so a summary is matched to the run whose id it carries and ignored
   otherwise.
@@ -36,7 +41,12 @@ from pathlib import Path
 from typing import Any
 
 from .redaction import redact
-from .scratch import AGENT_ACTIVITY_NAME, AGENT_STATUS_DIR_NAME, WATCHDOG_PATTERN
+from .scratch import (
+    AGENT_ACTIVITY_NAME,
+    AGENT_STATUS_DIR_NAME,
+    WATCHDOG_PATTERN,
+    watchdog_has_a_live_owner,
+)
 
 #: How much of one summary field survives to a planner's terminal. The publisher
 #: already bounds what it writes; this is the reader's own bound on a value it did
@@ -153,6 +163,14 @@ def live_activity(
     except OSError:
         return latest
     for status_dir in candidates:
+        # A watchdog-shaped directory under a shared root is a shape, not a claim.
+        # The owner lock is: a live dispatcher holds it for the whole scope of its
+        # scratch tree, so requiring it is what separates a running dispatch's
+        # publication from a directory anything could have left there. It is also
+        # what keeps a *finished* dispatch's last summary from being reported as
+        # what a node is doing now, before the sweep reclaims it.
+        if not watchdog_has_a_live_owner(status_dir.parent):
+            continue
         path = status_dir / AGENT_ACTIVITY_NAME
         try:
             # Bounded because this is a foreign file under a shared root: a summary

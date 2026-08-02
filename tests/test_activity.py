@@ -11,6 +11,7 @@ that has moved on, or carrying a credential.
 from __future__ import annotations
 
 import json
+import os
 import re
 import tempfile
 import time
@@ -26,15 +27,35 @@ from orchestrator.activity import (
     NodeActivity,
     live_activity,
 )
+from orchestrator.dispatch import AGENT_STDOUT_NAME
 from orchestrator.labels import graph_labels, semantic_agent_labels
 from orchestrator.runs import NodeId, RunId, StepId
+from orchestrator.scratch import (
+    AGENT_ACTIVITY_NAME,
+    AGENT_STATUS_DIR_NAME,
+    OWNER_LOCK_NAME,
+    WATCHDOG_PATTERN,
+    WATCHDOG_PREFIX,
+    _OwnerIdentity,
+)
 
 NOW = 1_800_000_000.0
 
 
-def _publish(root: Path, name: str, payload: object) -> Path:
-    status_dir = root / f"orchestrator-watchdog-{name}" / "agent"
+def _publish(root: Path, name: str, payload: object, *, owned: bool = True) -> Path:
+    """Write one summary into a watchdog directory, with real ownership evidence.
+
+    ``owned`` records this live test process as the directory's owner, which is what
+    `orchestrator.scratch.owned_scratch_directory` records for a live dispatch and
+    what the reader requires before it believes anything under the shared root.
+    """
+    watchdog = root / f"orchestrator-watchdog-{name}"
+    status_dir = watchdog / "agent"
     status_dir.mkdir(parents=True, exist_ok=True)
+    if owned:
+        identity = _OwnerIdentity.current(os.getpid())
+        assert identity is not None, "this process has no readable start identity"
+        (watchdog / OWNER_LOCK_NAME).write_text(identity.render(), encoding="utf-8")
     path = status_dir / "agent.activity"
     path.write_text(payload if isinstance(payload, str) else json.dumps(payload), encoding="utf-8")
     return path
@@ -245,3 +266,46 @@ def test_an_oversized_file_is_rejected_rather_than_read_as_its_prefix(tmp_path: 
     _publish(tmp_path, "oversized", json.dumps(_summary()) + "\n" + json.dumps(padded))
 
     assert live_activity("live-run", root=tmp_path, now=NOW) == {}
+
+
+def test_a_publication_no_live_dispatcher_owns_is_not_believed(tmp_path: Path) -> None:
+    """A watchdog-shaped directory under a shared root is a shape, not a claim.
+
+    Anything on this host can create one, and a finished dispatch's own directory
+    survives until the sweep reclaims it. The owner lock is what separates a running
+    dispatch's publication from both — so a summary without one is not reported, and
+    that is the reader's answer for every uncertainty about the lock as well.
+    """
+    _publish(tmp_path, "unowned", _summary(node="nobodys"), owned=False)
+    _publish(tmp_path, "unreadable", _summary(node="torn-lock"))
+    (tmp_path / "orchestrator-watchdog-unreadable" / OWNER_LOCK_NAME).write_text(
+        "not an identity", encoding="utf-8"
+    )
+    _publish(tmp_path, "departed", _summary(node="gone"))
+    # A pid that cannot be running: the recorded owner is no longer live.
+    (tmp_path / "orchestrator-watchdog-departed" / OWNER_LOCK_NAME).write_text(
+        "2147483646 1", encoding="utf-8"
+    )
+
+    assert live_activity("live-run", root=tmp_path, now=NOW) == {}
+
+
+def test_the_filters_status_directory_contract_matches_the_one_scratch_declares() -> None:
+    """DRIFT-GATE the directory shape and file names the filter restates.
+
+    `scripts/oneharness-stream.py` is stdlib-only — the wrapper runs it with whatever
+    interpreter is available and it cannot import `orchestrator` — so it spells the
+    scratch contract itself. Renaming any part of it in `orchestrator.scratch` would
+    not break the filter loudly; it would make the filter refuse every path the
+    dispatch hands it, and every streamed turn would fail its capture.
+    """
+    source = (REPO_ROOT / "scripts" / "oneharness-stream.py").read_text(encoding="utf-8")
+    restated = dict(re.findall(r'^([A-Z_]+) = "([^"]+)"$', source, re.MULTILINE))
+
+    assert restated["WATCHDOG_PREFIX"] == WATCHDOG_PREFIX
+    assert restated["STATUS_DIR_NAME"] == AGENT_STATUS_DIR_NAME
+    assert restated["ACTIVITY_NAME"] == AGENT_ACTIVITY_NAME
+    assert restated["RECORD_NAME"] == AGENT_STDOUT_NAME
+    # And the pattern the reader globs with is that same prefix, so the two ends
+    # cannot agree on a name the scan would never reach.
+    assert f"{WATCHDOG_PREFIX}*" == WATCHDOG_PATTERN

@@ -56,11 +56,15 @@ LABEL_ENV = "ONEHARNESS_HISTORY_LABELS"
 #: The locator keys a planner view joins on. Everything else oneharness was told to
 #: stamp stays out: this file is read by a view, not by the history store.
 LOCATOR_KEYS = ("run_id", "round", "node", "step", "persona")
-#: The shape of the directory this process is allowed to write into — the same one
-#: `scripts/oneharness-agent.sh` requires of ``ORCHESTRATOR_AGENT_STATUS_DIR``, and
-#: the same one `orchestrator.scratch` creates and sweeps.
+#: The directory this process is allowed to write into, and the two files in it it
+#: is allowed to write. Every one of these is `orchestrator.scratch`'s and
+#: `orchestrator.dispatch`'s contract, restated because this script is stdlib-only
+#: and cannot import them; `tests/test_activity.py` drift-gates all four against
+#: those declarations.
 WATCHDOG_PREFIX = "orchestrator-watchdog-"
 STATUS_DIR_NAME = "agent"
+RECORD_NAME = "agent.stdout"
+ACTIVITY_NAME = "agent.activity"
 
 
 class Locator(TypedDict, total=False):
@@ -227,23 +231,31 @@ def _translate(record: Any, activity_path: str, locator: Locator) -> None:
                 _forward(line)
 
 
-def _in_status_directory(path: str) -> bool:
-    """Whether this path names a file inside one dispatch's own status directory.
+def _status_directory(path: str, expected_name: str) -> str | None:
+    """The dispatch status directory this path names a known file in, or ``None``.
 
-    Both arguments become writes — an append and an atomic replace — so they are
-    checked against the same shape `scripts/oneharness-agent.sh` checks
-    ``ORCHESTRATOR_AGENT_STATUS_DIR`` against before it writes a marker of its own.
-    The wrapper is the only caller, but a path is the one input this process takes,
-    and a filter that would append a turn's whole stdout wherever it was pointed is
-    not one to hand an unvalidated one.
+    Both arguments become writes — an append of a whole turn's stdout and an atomic
+    replace — so each is checked against the same shape `scripts/oneharness-agent.sh`
+    checks ``ORCHESTRATOR_AGENT_STATUS_DIR`` against before it writes a marker of its
+    own: ``<root>/orchestrator-watchdog-*/agent``. The wrapper is the only caller,
+    but a path is the one input this process takes, and a filter that would append a
+    turn's whole stdout wherever it was pointed is not one to hand an unvalidated one.
+
+    The name is pinned too, so a valid directory cannot be used to write some *other*
+    file in it, and the directory is resolved through its symlinks first — a shape
+    judged lexically says only what the path spells, not where writing it lands.
     """
-    parent = os.path.dirname(os.path.abspath(path))
+    if os.path.basename(path) != expected_name:
+        return None
+    parent = os.path.realpath(os.path.dirname(os.path.abspath(path)))
     grandparent, watchdog = os.path.split(os.path.dirname(parent))
-    return (
-        os.path.basename(parent) == STATUS_DIR_NAME
-        and watchdog.startswith(WATCHDOG_PREFIX)
-        and os.path.isabs(grandparent)
-    )
+    if (
+        os.path.basename(parent) != STATUS_DIR_NAME
+        or not watchdog.startswith(WATCHDOG_PREFIX)
+        or not os.path.isabs(grandparent)
+    ):
+        return None
+    return parent
 
 
 def main(argv: list[str]) -> int:
@@ -251,14 +263,17 @@ def main(argv: list[str]) -> int:
         print("oneharness-stream: expected <stdout-record> <activity-file>", file=sys.stderr)
         return 2
     record_path, activity_path = argv
-    for path in (record_path, activity_path):
-        if not _in_status_directory(path):
-            print(
-                f"oneharness-stream: {path} is not inside a dispatch status directory; "
-                "invoke through orchestrator dispatch, which creates and owns it",
-                file=sys.stderr,
-            )
-            return 2
+    owner = _status_directory(record_path, RECORD_NAME)
+    # One directory for both, because they describe one turn: a record kept beside a
+    # different dispatch's activity would attribute this turn's work to that node.
+    if owner is None or owner != _status_directory(activity_path, ACTIVITY_NAME):
+        print(
+            f"oneharness-stream: {record_path} and {activity_path} are not {RECORD_NAME} "
+            f"and {ACTIVITY_NAME} in one dispatch status directory; invoke through "
+            "orchestrator dispatch, which creates and owns it",
+            file=sys.stderr,
+        )
+        return 2
     try:
         with open(record_path, "a", encoding="utf-8") as record:
             _translate(record, activity_path, _locator(os.environ.get(LABEL_ENV)))

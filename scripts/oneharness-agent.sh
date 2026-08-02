@@ -77,11 +77,11 @@ stream_filter="$script_dir/oneharness-stream.py"
 # against the same key before a dispatch starts, and this wrapper checks it again
 # at the variable's own boundary. A hand-rolled scanner would be a second answer to
 # the same question — one that could take an identity quoted inside a comment for a
-# configured one, or miss one a valid file wrote differently. The interpreter is
-# this repository's own where it exists, so both readers run the same tomllib.
+# configured one, or miss one a valid file wrote differently.
 
-# This repository's own interpreter where it exists, so every python helper here
-# runs the same one the rest of the harness does; a worktree with no virtualenv yet
+# The one interpreter every python helper here runs: this repository's own where it
+# exists, so both readers of that contract run the same tomllib and the stream filter
+# runs the same build the rest of the harness does. A worktree with no virtualenv yet
 # still resolves the system `python3`.
 repo_interpreter() {
     if [ -x "$repo_root/.venv/bin/python3" ]; then

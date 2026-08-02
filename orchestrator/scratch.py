@@ -287,6 +287,35 @@ def _legacy_watchdog_is_reclaimable(path: Path) -> bool:
     return process_start_identity(pid) is None
 
 
+def watchdog_has_a_live_owner(path: Path) -> bool:
+    """Whether a dispatcher demonstrably still holds this watchdog directory.
+
+    `_watchdog_is_reclaimable` below asks the same question for the sweeper, which
+    decides what it may *delete* — so every uncertainty there resolves toward "keep
+    it". This decides what a read-only view may *believe*, so every uncertainty here
+    resolves the other way: an absent, unreadable or unparseable lock, and a recorded
+    owner that is no longer live, all mean no. It is deliberately not the negation of
+    that function, and the two must not be collapsed into one. See
+    `orchestrator.activity`, whose publications this qualifies.
+    """
+    try:
+        fd = _open_lock_file(path / OWNER_LOCK_NAME, create=False)
+    except OSError:
+        return False
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            # Somebody holds it, which is the kernel's own answer and the strongest
+            # one available: a dispatcher keeps this lock for its whole scope.
+            return True
+        record = os.read(fd, OWNER_RECORD_LIMIT).decode("utf-8", "replace")
+    finally:
+        os.close(fd)
+    owner = _OwnerIdentity.parse(record)
+    return owner is not None and owner.is_live()
+
+
 def _watchdog_is_reclaimable(path: Path) -> bool:
     """Return whether no dispatcher can still be using this watchdog directory."""
     try:
