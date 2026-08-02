@@ -27,6 +27,7 @@ from orchestrator.dispatch import (
     _configured_turn_cap,
     _file_progress,
     _read_watchdog_pid,
+    agent_exit_status,
     agent_failure_reason,
     dispatch,
     incomplete_detail,
@@ -1299,3 +1300,58 @@ def test_an_unusable_turn_cap_is_read_as_no_cap_at_all() -> None:
     assert _configured_turn_cap({"user": {"max_turns": True}}) is None
     assert _configured_turn_cap({"user": {"max_turns": 0}}) is None
     assert _configured_turn_cap({"user": {"max_turns": "12"}}) is None
+
+
+@pytest.mark.parametrize(
+    ("recorded", "expected"),
+    [
+        ("1", 1),
+        ("0", 0),
+        ("128", 128),
+        ("137", 137),
+        ("143", 143),
+        ("", None),
+        ("   ", None),
+        ("-1", None),
+        ("1e3", None),
+        ("256", None),
+        ("9999", None),
+        ("not-a-number", None),
+    ],
+    ids=[
+        "ordinary-exit",
+        "zero",
+        "boundary",
+        "sigkill",
+        "sigterm",
+        "empty",
+        "blank",
+        "negative",
+        "scientific",
+        "above-wait-status",
+        "four-digits",
+        "prose",
+    ],
+)
+def test_agent_exit_status_repeats_back_only_a_plausible_wait_status(
+    tmp_path, recorded: str, expected: int | None
+) -> None:
+    """The wrapper is the only writer, but this marker crosses a process boundary.
+
+    Whatever cannot be read as a wait status answers ``None``, which the relaunch
+    decision treats as "not a launch failure" — the relaunch is positively earned,
+    so a marker nobody wrote can never buy one.
+    """
+    status = tmp_path / f"agent-status-{abs(hash(recorded))}"
+    status.mkdir()
+    (status / "agent.exit_code").write_text(recorded, encoding="utf-8")
+
+    assert agent_exit_status(status) == expected
+
+
+def test_agent_exit_status_is_absent_when_the_wrapper_recorded_nothing(tmp_path) -> None:
+    """No marker at all is the same answer as an unreadable one, and for one reason."""
+    status = tmp_path / "agent-status-unwritten"
+    status.mkdir()
+
+    assert agent_exit_status(status) is None

@@ -575,6 +575,9 @@ def _launch_death(persona: str) -> Report:
         "or stopped heartbeating: agent harness exited 1: HTTP 429 You have hit "
         "your session limit - resets 1pm",
         outcome="worker-died",
+        # The harness exited of its own accord rather than being signalled, which is
+        # what the wrapper records for a refusal to start.
+        agent_exit_status=1,
     )
 
 
@@ -675,6 +678,48 @@ def test_an_empty_death_after_committed_work_relaunches_onto_the_preserved_branc
     # and the work that finished afterwards reach the base together.
     assert _has_file(origin, "main", "partial.txt")
     assert _has_file(origin, "main", "finished.txt")
+
+
+@pytest.mark.parametrize(
+    ("exit_status", "relaunched"),
+    [(1, True), (137, False), (None, False)],
+    ids=["exited", "killed-by-signal", "unrecorded"],
+)
+def test_only_a_harness_that_exited_on_its_own_earns_a_relaunch(
+    tmp_path, bare_origin, exit_status: int | None, relaunched: bool
+) -> None:
+    """A worker terminated after it was running is not a launch that never happened.
+
+    The agent wrapper reads its child's wait status exactly this way — above 128 is
+    "killed by signal N", at or below is "exited N" — so a watchdog kill, a round
+    cancellation and an OOM are all signalled, while a harness refusing to start
+    exits of its own accord. An unrecorded status earns nothing: the relaunch is
+    positively earned, never assumed.
+    """
+    origin = bare_origin()
+    canonical = gitops.clone(origin, tmp_path / f"canonical-disposition-{exit_status}")
+    Registry().register(str(canonical), workflow="local", repo_type="single-owner")
+    launches: list[str] = []
+
+    def dying_with_recorded_disposition(persona: str, task: str, **_: object) -> Report:
+        launches.append(persona)
+        return replace(_launch_death(persona), agent_exit_status=exit_status)
+
+    result = run_repo_task(
+        str(canonical),
+        "## What\nTier the workspace.\n\n## Why\nThe suite reruns work it proved.\n",
+        "engineer",
+        workspace=Workspace(tmp_path / f"disposition-worktrees-{exit_status}"),
+        branch=f"feature/disposition-{exit_status}",
+        dispatch_fn=dying_with_recorded_disposition,
+        recorded_gate=["true"],
+        sleep=lambda _seconds: None,
+    )
+
+    assert result.outcome == "not-completed"
+    expected = 1 + MAX_EMPTY_DEATH_RELAUNCHES if relaunched else 1
+    assert len(launches) == expected, launches
+    assert ("just smoke" in result.detail) is relaunched, result.detail
 
 
 def test_launch_deaths_do_not_spend_the_budget_that_carries_work_forward(

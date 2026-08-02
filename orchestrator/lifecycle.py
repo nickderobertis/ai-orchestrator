@@ -1111,6 +1111,22 @@ MAX_EMPTY_DEATH_RELAUNCHES = 2
 RELAUNCH_BACKOFF_SECONDS = 2.0
 
 
+def _exited_rather_than_being_killed(report: Report) -> bool:
+    """Whether the harness ended itself, as opposed to being terminated.
+
+    The agent wrapper records its child's wait status and reads it exactly this way
+    — above 128 is "killed by signal N", at or below is "exited N". A harness that
+    refuses to start exits of its own accord with an ordinary non-zero code; a
+    worker terminated after it was running (the watchdog, an operator, the round's
+    cancellation, an OOM kill) is signalled. Only the first is a launch that never
+    happened, so only the first is relaunched.
+
+    An unrecorded status is not treated as a launch failure: the relaunch has to be
+    positively earned, and a marker nobody wrote proves nothing.
+    """
+    return report.agent_exit_status is not None and report.agent_exit_status <= 128
+
+
 def _await_relaunch(
     seconds: float, cancel: threading.Event | None, sleep: Callable[[float], None]
 ) -> None:
@@ -1244,6 +1260,7 @@ def _run_steps(
             if (
                 report.outcome == "worker-died"
                 and report.assistant_turns == 0
+                and _exited_rather_than_being_killed(report)
                 and not (gitops.is_dirty(worktree) or gitops.head_sha(worktree) != dispatch_head)
             ):
                 deaths_without_work.add(sid)

@@ -243,6 +243,11 @@ class Report:
     #: exhausts its turns and when it stops for any other reason, so without the
     #: cap an incomplete run cannot say which of the two it was.
     max_turns: int | None = None
+    #: The wait status the agent wrapper recorded for its child on a ``worker-died``
+    #: settlement. Above 128 it was killed by a signal — terminated after it was
+    #: running — and at or below it exited on its own, which is what a harness that
+    #: refused to start does. ``None`` when the wrapper recorded nothing usable.
+    agent_exit_status: int | None = None
 
     @property
     def telemetry(self) -> dict[str, Any] | None:
@@ -597,10 +602,26 @@ def _worker_death_detail(status_dir: Path, root_pid: ProcessId, condition: str) 
     """
     # The wrapper is the only writer, but this file crosses a process boundary, so
     # only a plausible wait status is repeated back; anything else is unknown.
-    recorded = _agent_status(status_dir, AGENT_EXIT_CODE_NAME) or ""
-    plausible = recorded.isascii() and recorded.isdigit() and len(recorded) <= 3
-    exit_status = recorded if plausible and int(recorded) <= 255 else "unknown"
+    recorded = agent_exit_status(status_dir)
+    exit_status = "unknown" if recorded is None else str(recorded)
     return f"worker-died (watchdog pid {root_pid}, agent exit status {exit_status}): {condition}"
+
+
+def agent_exit_status(status_dir: Path) -> int | None:
+    """The wait status the agent wrapper recorded for its child, or ``None``.
+
+    Above 128 the child was **killed by a signal**; at or below it exited of its own
+    accord. That is the wrapper's own distinction — it writes "agent harness killed
+    by signal N" or "agent harness exited N" from exactly this comparison — and it is
+    what separates a worker terminated after it was running from a harness that
+    refused to start. Only a plausible wait status is repeated back, because this
+    file crosses a process boundary.
+    """
+    recorded = _agent_status(status_dir, AGENT_EXIT_CODE_NAME) or ""
+    if not (recorded.isascii() and recorded.isdigit() and len(recorded) <= 3):
+        return None
+    value = int(recorded)
+    return value if value <= 255 else None
 
 
 def scoped_session(name: str, project_dir: str | Path) -> str:
@@ -927,6 +948,7 @@ def run_onejudge(
                         outcome="worker-died",
                         outcome_detail=signal.detail,
                         max_turns=turn_cap,
+                        agent_exit_status=agent_exit_status(agent_status_dir),
                     )
                 raise DispatchError(
                     f"dispatch stalled for {stall_timeout:g}s with no process-tree CPU/I/O "

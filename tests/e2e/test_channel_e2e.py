@@ -1568,8 +1568,7 @@ def test_a_queued_update_nobody_read_is_reported_until_it_is_consumed(
     # The worker holds at the real provider boundary until this test releases it, so
     # the round cannot settle underneath the assertions and discard the queued update
     # they are about.
-    ready = tmp_path / "unread-worker.ready"
-    release = tmp_path / "unread-worker.release"
+    held = Rendezvous.at(tmp_path, "unread-worker")
     plan = tmp_path / "unread-surface.json"
     plan.write_text(
         json.dumps(
@@ -1581,8 +1580,8 @@ def test_a_queued_update_nobody_read_is_reported_until_it_is_consumed(
                         "id": "active-worker",
                         "persona": "engineer",
                         "task": (
-                            "complete-now unread-surface "
-                            f"provider-barrier-ready={ready} provider-barrier-release={release}"
+                            f"slow-branch {tmp_path / 'unread.ticks'}"
+                            f"{held.sentinels()} complete-now"
                         ),
                     }
                 ],
@@ -1596,7 +1595,7 @@ def test_a_queued_update_nobody_read_is_reported_until_it_is_consumed(
     while not queued_path.is_file() and time.monotonic() < queue_deadline:
         time.sleep(0.01)
     assert queued_path.is_file(), "the pacemaker never queued a check-in update"
-    assert ready.is_file(), "the worker never reached the provider barrier"
+    assert held.arrived(), "the worker never parked at its rendezvous"
 
     listed = _view_cli("runs", runs, history)
     matched = _QUEUED_LINE.search(listed)
@@ -1640,7 +1639,13 @@ def test_a_queued_update_nobody_read_is_reported_until_it_is_consumed(
         capture_output=True,
         check=True,
     )
-    assert "heartbeat" in rendered.stdout, rendered.stdout
+    assert rendered.stdout.strip(), "the read-only view rendered nothing for a live run"
+    # Attaching is not reading: the queued update survives the view untouched, so a
+    # planner who follows `planner.md` has not consumed it — and, because the claim is
+    # a lease on the *dispatch* rather than a hold until consumption, has not silenced
+    # the pacemaker either. The growth loop below is what proves it kept running.
+    assert queued_path.is_file(), "just monitor consumed the queued update"
+    assert _QUEUED_LINE.search(_view_cli("runs", runs, history)) is not None
 
     # Ignoring the channel makes the harness louder, not quieter: the reported
     # staleness is measured from the last update a planner actually read, so it keeps
@@ -1685,10 +1690,15 @@ def test_a_queued_update_nobody_read_is_reported_until_it_is_consumed(
         json.loads(line)
         for line in (runs / run_id / "events.jsonl").read_text(encoding="utf-8").splitlines()
     ]
-    assert [event["kind"] for event in delivered].count("planner-surfaced") == 1, delivered
-    assert [event["kind"] for event in delivered].count("planner-surface-queued") == 1, delivered
+    kinds = [event["kind"] for event in delivered]
+    # Exactly one update was ever *delivered* — the one this test consumed — while the
+    # pacemaker went on queuing behind it on its interval. That the two counts differ
+    # is the whole point: a send and a read are separate records, so an update nobody
+    # collected is no longer indistinguishable from silence.
+    assert kinds.count("planner-surfaced") == 1, delivered
+    assert kinds.count("planner-surface-queued") > kinds.count("planner-surfaced"), delivered
 
-    release.write_text("go\n", encoding="utf-8")
+    held.let_go()
     while True:
         boundary = _wait_surface(run_id, runs, wait_seconds=120)
         if boundary["surface"]["kind"] != "heartbeat":
@@ -1711,8 +1721,7 @@ def test_lowering_the_interval_mid_flight_brings_the_next_check_in_forward(
     provider boundary, and the check-in that follows is the evidence.
     """
     runs = tmp_path / "interval-runs"
-    ready = tmp_path / "interval-worker.ready"
-    release = tmp_path / "interval-worker.release"
+    held = Rendezvous.at(tmp_path, "interval-worker")
     plan = tmp_path / "interval-knob.json"
     plan.write_text(
         json.dumps(
@@ -1724,8 +1733,8 @@ def test_lowering_the_interval_mid_flight_brings_the_next_check_in_forward(
                         "id": "held-worker",
                         "persona": "engineer",
                         "task": (
-                            "complete-now interval-knob "
-                            f"provider-barrier-ready={ready} provider-barrier-release={release}"
+                            f"slow-branch {tmp_path / 'interval.ticks'}"
+                            f"{held.sentinels()} complete-now"
                         ),
                     }
                 ],
@@ -1735,10 +1744,7 @@ def test_lowering_the_interval_mid_flight_brings_the_next_check_in_forward(
     )
     run_id = _launch_cli(plan, runs, _base(tmp_path), onejudge_bin, heartbeat_interval=3600)
     queued_path = runs / run_id / "channel" / "heartbeat-surface.json"
-    barrier_deadline = deadline(120)
-    while not ready.is_file() and time.monotonic() < barrier_deadline:
-        time.sleep(0.01)
-    assert ready.is_file(), "the worker never reached the provider barrier"
+    held.wait(120)
     assert not queued_path.is_file(), "an hour-long interval queued a check-in immediately"
 
     _reply_cli(
@@ -1756,7 +1762,7 @@ def test_lowering_the_interval_mid_flight_brings_the_next_check_in_forward(
         time.sleep(0.01)
     assert queued_path.is_file(), "lowering the interval mid-flight changed nothing"
 
-    release.write_text("go\n", encoding="utf-8")
+    held.let_go()
     while True:
         boundary = _wait_surface(run_id, runs, wait_seconds=120)
         if boundary["surface"]["kind"] != "heartbeat":
