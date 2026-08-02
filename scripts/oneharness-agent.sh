@@ -49,6 +49,74 @@ ensure_codex_alt_home oneharness-agent || exit $?
 alternate_harness=claude-code:alternate
 agent_config="$repo_root/oneharness.toml"
 
+# Emit the identities a config's `harnesses` chain names, in order, one per line;
+# emit nothing when it declares none, and fail non-zero when the file cannot be
+# read, cannot be parsed, or declares a chain that is not a list of identities. A
+# malformed chain is refused rather than filtered down to its usable members: the
+# selection it would authorize is not the one the file was trying to declare.
+#
+# Read with tomllib rather than by scanning the file here, because this is the
+# second reader of one contract: orchestrator/harnesses.py validates a selection
+# against the same key before a dispatch starts, and this wrapper checks it again
+# at the variable's own boundary. A hand-rolled scanner would be a second answer to
+# the same question — one that could take an identity quoted inside a comment for a
+# configured one, or miss one a valid file wrote differently. The interpreter is
+# this repository's own where it exists, so both readers run the same tomllib.
+config_harness_chain() {
+    local interpreter=python3
+    [ -x "$repo_root/.venv/bin/python3" ] && interpreter="$repo_root/.venv/bin/python3"
+    "$interpreter" -c '
+import sys, tomllib
+
+try:
+    with open(sys.argv[1], "rb") as config:
+        chain = tomllib.load(config).get("harnesses")
+except (OSError, tomllib.TOMLDecodeError) as error:
+    sys.exit(f"oneharness-agent: cannot read {sys.argv[1]}: {error}")
+if chain is None:
+    sys.exit(0)
+if not isinstance(chain, list) or not all(
+    isinstance(identity, str) and identity for identity in chain
+):
+    sys.exit(f"oneharness-agent: {sys.argv[1]} declares a malformed harnesses chain: {chain!r}")
+for identity in chain:
+    print(identity)
+' "$1"
+}
+
+# Apply one side's selection to this process only, after checking it against the
+# config that side is about to run from. The dispatch layer validates the same way
+# before anything starts (orchestrator/harnesses.py), but this is the boundary a
+# hand-set variable arrives at, and a selection nobody can honor must stop the turn
+# rather than reach oneharness as a chain it will run something else for.
+# $1 names the variable for diagnostics, $2 is its value, $3 the config to check.
+apply_side_selection() {
+    local variable=$1 value=$2 config=$3 selectable candidate
+    local -a requested
+    if ! selectable=$(config_harness_chain "$config" | tr '\n' ' '); then
+        echo "oneharness-agent: cannot read the harness chain $variable is selected from; correct $config, or unset $variable to use its chain in order, then retry" >&2
+        return 2
+    fi
+    if [ -z "${selectable// /}" ]; then
+        echo "oneharness-agent: $config declares no 'harnesses' chain to select from; restore it from the repository, then retry" >&2
+        return 2
+    fi
+    # Split on commas alone: an unquoted expansion would also glob, so a value
+    # containing `*` could silently become whatever the cwd happens to hold.
+    IFS=',' read -r -a requested <<<"$value"
+    # Space-delimited on both sides so one identity cannot match another by prefix.
+    for candidate in "${requested[@]}"; do
+        case " $selectable" in
+            *" $candidate "*) ;;
+            *)
+                echo "oneharness-agent: $variable '$value': '$candidate' is not a harness $config configures; select from ${selectable% }" >&2
+                return 2
+                ;;
+        esac
+    done
+    export ONEHARNESS_HARNESSES="$value"
+}
+
 if [ "${1-}" != "run" ]; then
     echo "oneharness-agent: expected the 'run' subcommand; invoke through onejudge dispatch or retry as 'scripts/oneharness-agent.sh run ...'" >&2
     exit 2
@@ -103,9 +171,11 @@ if [[ $caller_config == true ]]; then
     fi
     # This is the judge / simulated-user side, so only its own override applies —
     # and it applies over whatever ONEHARNESS_HARNESSES the parent exported, which
-    # is what keeps a worker-side selection from reaching this conversation.
+    # is what keeps a worker-side selection from reaching this conversation. It is
+    # checked against the caller's own config, the one this turn will run from.
     if [ -n "${ORCHESTRATOR_JUDGE_HARNESSES-}" ]; then
-        export ONEHARNESS_HARNESSES="$ORCHESTRATOR_JUDGE_HARNESSES"
+        apply_side_selection ORCHESTRATOR_JUDGE_HARNESSES \
+            "$ORCHESTRATOR_JUDGE_HARNESSES" "$caller_config_path" || exit $?
     fi
     # Keep the portable indirection available while oneharness resolves config.
     # The judge's explicit primary variant does not consume it and masks
@@ -126,7 +196,8 @@ if [ -n "${ORCHESTRATOR_WORKER_HARNESSES-}" ]; then
     # Taken verbatim: the filtering below narrows a chain nobody chose, whereas
     # dropping an identity an operator named would run a provider they did not ask
     # for. An unauthenticated one fails at the provider instead, loudly.
-    export ONEHARNESS_HARNESSES="$ORCHESTRATOR_WORKER_HARNESSES"
+    apply_side_selection ORCHESTRATOR_WORKER_HARNESSES \
+        "$ORCHESTRATOR_WORKER_HARNESSES" "$agent_config" || exit $?
 elif [ -z "${ONEHARNESS_HARNESSES-}" ]; then
     # An alternate Claude subscription whose config directory does not exist is a
     # candidate this host has never set up. claude-code would still start, create
@@ -146,28 +217,21 @@ elif [ -z "${ONEHARNESS_HARNESSES-}" ]; then
     [ -e "$alternate2_config_dir" ] || absent_alternates="${absent_alternates}claude-code:alternate2 "
     if [ "$absent_alternates" != " " ]; then
         substituted=
-        while read -r candidate; do
-            case "$absent_alternates" in
-                *" $candidate "*) continue ;;
-            esac
-            substituted="${substituted:+$substituted,}$candidate"
-        done < <(
-            # `harnesses = [...]` spans lines, so read from the key to the closing
-            # bracket and emit every quoted element in order.
-            awk '
-                /^harnesses[[:space:]]*=/ { collecting = 1 }
-                collecting {
-                    rest = $0
-                    while (match(rest, /"[^"]*"/)) {
-                        print substr(rest, RSTART + 1, RLENGTH - 2)
-                        rest = substr(rest, RSTART + RLENGTH)
-                    }
-                    if (index($0, "]")) { exit }
-                }
-            ' "$agent_config"
-        )
-        # An empty result means the config was not in the expected shape; leave the
-        # selection alone rather than narrowing the chain on a guess.
+        # Read the chain into a variable first: inside a process substitution the
+        # reader's own failure would be invisible here, and a config it could not
+        # parse would look exactly like one that named nothing to drop.
+        if configured_chain=$(config_harness_chain "$agent_config"); then
+            while read -r candidate; do
+                case "$absent_alternates" in
+                    *" $candidate "*) continue ;;
+                esac
+                substituted="${substituted:+$substituted,}$candidate"
+            done <<<"$configured_chain"
+        else
+            echo "oneharness-agent: could not read the configured harness chain from $agent_config; leaving the selection to oneharness" >&2
+        fi
+        # An empty result means the config declared no chain to narrow; leave the
+        # selection alone rather than narrowing it on a guess.
         if [ -n "$substituted" ]; then
             export ONEHARNESS_HARNESSES="$substituted"
         fi

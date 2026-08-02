@@ -38,11 +38,11 @@ config, `oneharness.orchestrator.toml`, forced by
 `scripts/oneharness-orchestrator.sh`.
 
 Edit those files (or use oneharness's `ONEHARNESS_*` env overrides) to change
-the harness or model on a side for every run on this host; pass
-`--worker-harness` / `--judge-harness` to change it for one dispatch, which is
-the only way to give the two sides *different* providers (see [Choosing a harness
-per side](#choosing-a-harness-per-side)). `config/onejudge.base.yaml` carries only
-the loop's own concerns (persona defaults, session), never harness/model selection.
+the harness or model on a side for every run on this host. One dispatch changes
+it for itself with `--worker-harness` / `--judge-harness`, the only way to give
+the two sides *different* providers; that pair is specified under Harnesses and
+the live path below. `config/onejudge.base.yaml` carries only the loop's own
+concerns (persona defaults, session), never harness/model selection.
 
 ## Provider wiring
 

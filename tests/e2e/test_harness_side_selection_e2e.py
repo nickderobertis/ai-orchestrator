@@ -1,17 +1,24 @@
 """Which provider each side of one dispatch actually ran on.
 
-These journeys drive the real `orchestrator-dispatch` console script, the real
-onejudge CLI, the real `scripts/oneharness-agent.sh`, and the real oneharness —
-every party that decides a selection. Only the paid providers are replaced, at
-oneharness's own boundary: a fake `codex` and a fake `claude` on PATH, each
-speaking its harness's native protocol and recording the turn it was handed. What
-a test reads back is therefore the process oneharness chose and spawned, not a
-flag that parsed.
+These journeys drive the real `orchestrator-dispatch` and `orchestrator-run-plan`
+console scripts, the real onejudge CLI, the real `scripts/oneharness-agent.sh`,
+and the real oneharness — every party that decides a selection, plus real git for
+the lifecycle node.
 
-The judge fake answers with a JSON object because that is what onejudge requires
-of a supervisor turn; a bare sentence is rejected with "judge did not return a
-JSON object".
+The one thing they replace is the paid provider itself, this repository's
+designated external seam: a fake `codex` and a fake `claude` earlier on PATH than
+the real ones, each speaking its harness's native protocol and recording the turn
+it was handed. oneharness still selects the identity, resolves its variant
+environment, spawns that binary by name, and parses its stream — which is what
+makes "the worker ran codex" a fact about the real selection rather than about a
+stub standing in for it. The fakes answer a supervisor turn with a JSON object
+because that is what onejudge requires of one ("judge did not return a JSON
+object"), and either fake may be selected for either side.
 """
+
+# llmlint: ignore-file[e2e_not_mocked] only the paid provider binaries are replaced,
+# at oneharness's own spawn boundary — the seam AGENTS.md designates — while
+# onejudge, the wrapper, oneharness, git, and the lifecycle all run for real.
 
 from __future__ import annotations
 
@@ -26,7 +33,7 @@ from typing import Any
 import pytest
 from waits import timeout as e2e_timeout
 
-from orchestrator import REPO_ROOT
+from orchestrator import BASE_CONFIG, REPO_ROOT, gitops
 from orchestrator.harnesses import JUDGE_HARNESS_ENV, WORKER_HARNESS_ENV
 
 #: onejudge's own framing of a supervisor turn — how a recorded turn says which
@@ -50,10 +57,17 @@ with open(os.environ["SELECTION_RECORD"], "a") as record:
         "judge_override": os.environ.get({judge_env!r}),
         "argv": sys.argv[1:],
     }}) + "\\n")
+JUDGING = {judge_marker!r} in " ".join(sys.argv[1:])
+if not JUDGING:
+    # A worker turn does real work in its own cwd, which for a lifecycle node is the
+    # isolated worktree: a step that changed nothing settles as `no-changes` and
+    # never reaches the gate or the merge this journey drives.
+    with open("worked-on-by-{name}.txt", "a") as change:
+        change.write("worked\\n")
 REPLY = (
     json.dumps({{"message": "looks good", "stop": True, "value": True,
                 "done": True, "reason": "ok"}})
-    if {judge_marker!r} in " ".join(sys.argv[1:])
+    if JUDGING
     else "I finished the subtask."
 )
 """
@@ -91,6 +105,58 @@ def _fake_providers(bin_dir: Path) -> None:
 
 def _provider_path(bin_dir: Path, oneharness_bin: str) -> str:
     return f"{bin_dir}{os.pathsep}{Path(oneharness_bin).parent}{os.pathsep}{os.environ['PATH']}"
+
+
+def _provider_environment(tmp_path: Path, oneharness_bin: str) -> tuple[Path, dict[str, str]]:
+    """The record file and the environment a command under test is run with."""
+    bin_dir = tmp_path / "bin"
+    _fake_providers(bin_dir)
+    record = tmp_path / "selection.jsonl"
+    record.touch()
+    environment = {
+        **os.environ,
+        "PATH": _provider_path(bin_dir, oneharness_bin),
+        "SELECTION_RECORD": str(record),
+        # Pinned rather than derived from the real $HOME: an authenticated
+        # alternate subscription on this host would otherwise change which
+        # candidate the default chain reaches.
+        "ORCHESTRATOR_CLAUDE_ALT_CONFIG_DIR": str(tmp_path / "absent-alternate"),
+        "ORCHESTRATOR_CLAUDE_ALT2_CONFIG_DIR": str(tmp_path / "absent-alternate2"),
+        "ORCHESTRATOR_CODEX_ALT_HOME": str(tmp_path / "codex-alternate"),
+        "ONEHARNESS_HISTORY": "false",
+        "XDG_STATE_HOME": str(tmp_path / "state"),
+    }
+    environment.pop("ORCHESTRATOR_AGENT_STATUS_DIR", None)
+    return record, environment
+
+
+def _registered_local_checkout(tmp_path: Path, origin: Path, onejudge_bin: str) -> Path:
+    """Clone the origin and register it the way an operator would, gate and all."""
+    checkout = gitops.clone(origin, tmp_path / "checkout")
+    subprocess.run(
+        [
+            str(Path(onejudge_bin).with_name("orchestrator-register-repo")),
+            str(checkout),
+            "--workflow",
+            "local",
+            "--repo-type",
+            "single-owner",
+            "--gate",
+            "true",
+        ],
+        cwd=REPO_ROOT,
+        env=os.environ,
+        text=True,
+        capture_output=True,
+        check=True,
+        timeout=e2e_timeout(60),
+    )
+    return checkout
+
+
+def _recorded_turns(record: Path, process: subprocess.CompletedProcess[str]) -> Dispatched:
+    turns = [json.loads(line) for line in record.read_text(encoding="utf-8").splitlines()]
+    return Dispatched(process, turns)
 
 
 @dataclass(frozen=True)
@@ -188,14 +254,12 @@ def test_each_side_runs_the_provider_it_was_given_over_a_process_wide_selection(
     judge_turns = dispatched.side(JUDGE_MARKER)
     assert worker_turns, dispatched.turns
     assert judge_turns, dispatched.turns
-    # The worker ran codex — its own binary, spawned by oneharness.
     assert {turn["bin"] for turn in worker_turns} == {"codex"}
     assert {turn["harnesses"] for turn in worker_turns} == {"codex"}
-    # The judge ran claude-code's primary identity: claude's binary with
-    # CLAUDE_CONFIG_DIR masked off, which is what makes it the primary account
-    # rather than the alternate2 one the ambient value named.
     assert {turn["bin"] for turn in judge_turns} == {"claude"}
     assert {turn["harnesses"] for turn in judge_turns} == {"claude-code:primary"}
+    # A masked CLAUDE_CONFIG_DIR is what distinguishes the primary account from the
+    # alternate2 one the ambient value named; both run the same binary.
     assert {turn["claude_config_dir"] for turn in judge_turns} == {None}
 
 
@@ -275,6 +339,136 @@ def test_an_unconfigured_identity_refuses_the_dispatch_before_it_starts(
     assert "codex:alternate" in stderr
     # Nothing was spawned: the refusal happens before any provider is selected.
     assert dispatched.turns == []
+
+
+def test_run_plan_carries_the_selection_into_direct_and_lifecycle_nodes(
+    tmp_path: Path,
+    bare_origin,
+    onejudge_bin: str,
+    oneharness_bin: str,
+) -> None:
+    """One round, both node kinds, the providers each side was told to use.
+
+    `just run-plan` builds its own runners for direct agents and for lifecycle
+    workstreams, so a selection that reached only one of them would leave half a
+    graph supervised by a provider nobody chose. This drives the real recorded
+    executor over a real git checkout: the direct node dispatches, the lifecycle
+    node clones, works in its worktree, passes its gate and merges — every turn of
+    both through the real wrapper and the real oneharness.
+    """
+    origin = bare_origin()
+    checkout = _registered_local_checkout(tmp_path, origin, onejudge_bin)
+    record, environment = _provider_environment(tmp_path, oneharness_bin)
+    target = tmp_path / "target"
+    target.mkdir()
+
+    plan = tmp_path / "plan.json"
+    plan.write_text(
+        json.dumps(
+            {
+                "schema_version": 3,
+                "tasks": [
+                    {
+                        "id": "direct",
+                        "persona": "engineer",
+                        "task": "record which provider ran this direct node",
+                        "project_dir": str(target),
+                        "max_turns": 1,
+                    },
+                    {
+                        "id": "workstream",
+                        "repo": str(checkout),
+                        "persona": "engineer",
+                        "task": "record which provider ran this lifecycle node",
+                        "recorded_gate": ["true"],
+                        "max_turns": 1,
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    process = subprocess.run(
+        [
+            str(Path(onejudge_bin).with_name("orchestrator-run-plan")),
+            str(plan),
+            "--no-record",
+            "--base",
+            str(BASE_CONFIG),
+            "--workspace",
+            str(tmp_path / "worktrees"),
+            "--worker-harness",
+            "codex",
+            "--judge-harness",
+            "claude-code:primary",
+            "--format",
+            "json",
+        ],
+        cwd=REPO_ROOT,
+        env=environment,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(300),
+    )
+    dispatched = _recorded_turns(record, process)
+    payload = json.loads(process.stdout)
+
+    assert process.returncode == 0, process.stderr
+    assert payload["results"]["workstream"]["outcome"] == "merged"
+    # Both node kinds dispatched, and every side of every one of them ran the
+    # provider the round was given.
+    assert len(dispatched.side(WORKER_MARKER)) >= 2
+    assert {turn["bin"] for turn in dispatched.side(WORKER_MARKER)} == {"codex"}
+    assert {turn["bin"] for turn in dispatched.side(JUDGE_MARKER)} == {"claude"}
+    assert {turn["harnesses"] for turn in dispatched.side(JUDGE_MARKER)} == {"claude-code:primary"}
+
+
+def test_repo_task_runs_a_whole_workstream_on_the_providers_it_was_given(
+    tmp_path: Path, bare_origin, onejudge_bin: str, oneharness_bin: str
+) -> None:
+    """The lifecycle entry point an operator reaches for one change, end to end.
+
+    `just repo-task` clones, works in an isolated worktree, verifies with the
+    identity's own gate and merges — several dispatches on one branch. All of them
+    have to run the pair this command was given, and the merge is what proves the
+    selection did not just parse but carried a real workstream through.
+    """
+    origin = bare_origin()
+    checkout = _registered_local_checkout(tmp_path, origin, onejudge_bin)
+    record, environment = _provider_environment(tmp_path, oneharness_bin)
+
+    process = subprocess.run(
+        [
+            str(Path(onejudge_bin).with_name("orchestrator-repo-task")),
+            str(checkout),
+            "engineer",
+            "record which provider ran this workstream",
+            "--workspace",
+            str(tmp_path / "worktrees"),
+            "--max-turns",
+            "1",
+            "--worker-harness",
+            "codex",
+            "--judge-harness",
+            "claude-code:primary",
+            "--format",
+            "json",
+        ],
+        cwd=REPO_ROOT,
+        env=environment,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(300),
+    )
+    dispatched = _recorded_turns(record, process)
+
+    assert process.returncode == 0, process.stderr
+    assert json.loads(process.stdout)["outcome"] == "merged"
+    assert dispatched.side(WORKER_MARKER), dispatched.turns
+    assert {turn["bin"] for turn in dispatched.side(WORKER_MARKER)} == {"codex"}
+    assert {turn["bin"] for turn in dispatched.side(JUDGE_MARKER)} == {"claude"}
+    assert {turn["harnesses"] for turn in dispatched.side(JUDGE_MARKER)} == {"claude-code:primary"}
 
 
 def test_the_orchestrator_role_is_outside_this_seam(tmp_path: Path, oneharness_bin: str) -> None:

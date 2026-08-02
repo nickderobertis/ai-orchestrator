@@ -18,6 +18,8 @@ import tomllib
 from collections.abc import Mapping
 from pathlib import Path
 
+import pytest
+
 from orchestrator import REPO_ROOT
 from orchestrator.dispatch import AGENT_STATUS_NAMES, agent_failure_reason
 from orchestrator.harnesses import JUDGE_HARNESS_ENV, WORKER_HARNESS_ENV
@@ -394,10 +396,13 @@ def test_agent_side_rejects_unsearchable_alternate_config_directory(tmp_path: Pa
     assert argv == []
 
 
-def _judge_argv(tmp_path: Path) -> list[str]:
+def _judge_argv(
+    tmp_path: Path, chain: tuple[str, ...] = ("codex", "claude-code:primary")
+) -> list[str]:
     """The argv shape onejudge gives the judge turn: its own --config, chosen already."""
     judge_config = tmp_path / "oneharness.judge.toml"
-    judge_config.write_text('harnesses = ["codex"]\n', encoding="utf-8")
+    rendered = ", ".join(f'"{identity}"' for identity in chain)
+    judge_config.write_text(f"harnesses = [{rendered}]\n", encoding="utf-8")
     return ["run", "--compact", "--prompt-file", "-", "--config", str(judge_config)]
 
 
@@ -478,6 +483,112 @@ def test_a_side_without_its_own_selection_resolves_exactly_as_before(tmp_path: P
     judge, _ = _run_wrapper(tmp_path, _judge_argv(tmp_path), env={WORKER_HARNESS_ENV: "codex"})
     assert judge.returncode == 0, judge.stderr
     assert _selection(tmp_path) == ""
+
+
+def test_a_selection_the_side_cannot_honor_stops_the_turn_here(tmp_path: Path) -> None:
+    """The variables are the boundary a hand-set value arrives at, so check them.
+
+    The dispatch layer validates the same way before anything starts, but nothing
+    stops a caller exporting one of these directly — and oneharness would take an
+    identity its config does not configure and run something else for it.
+    """
+    agent, argv = _run_wrapper(
+        tmp_path,
+        ["run", "--compact", "--prompt", "probe"],
+        env={WORKER_HARNESS_ENV: "codex,opencode"},
+    )
+    assert agent.returncode == 2
+    assert "'opencode' is not a harness" in agent.stderr
+    assert f"{REPO_ROOT}/oneharness.toml configures" in agent.stderr
+    # The chain it could have named, so the value is correctable from the message.
+    assert "claude-code:alternate" in agent.stderr
+    assert argv == []
+
+    judge, argv = _run_wrapper(
+        tmp_path, _judge_argv(tmp_path), env={JUDGE_HARNESS_ENV: "claude-code:alternate2"}
+    )
+    assert judge.returncode == 2
+    # Judged against the caller's own config, which is the one this turn would run
+    # from — not the agent chain, which does name that identity.
+    assert "'claude-code:alternate2' is not a harness" in judge.stderr
+    assert "select from codex claude-code:primary" in judge.stderr
+    assert argv == []
+
+
+@pytest.mark.parametrize(
+    "rendered",
+    [
+        'harnesses = ["codex", "claude-code:primary"]',
+        # The committed shape: one identity per line, with a trailing comma.
+        'harnesses = [\n    "codex",\n    "claude-code:primary",\n]',
+        # TOML's other quote style, which a regenerated config could well use.
+        "harnesses = ['codex', 'claude-code:primary']",
+        'harnesses  =  [ "codex","claude-code:primary" ]\nhistory = true\n',
+        # A comment naming an identity in quotes — text a file scanner would take
+        # for a configured one, authorizing a selection the config never made.
+        'harnesses = ["codex", "claude-code:primary"] # not "opencode"\n',
+        # ...and the same trap on the line the chain opens on.
+        'harnesses = [ # never "opencode"\n    "codex",\n    "claude-code:primary",\n]',
+    ],
+)
+def test_the_wrappers_chain_reader_agrees_with_the_toml_parser(
+    tmp_path: Path, rendered: str
+) -> None:
+    """One contract, two readers, held to the same answer.
+
+    `orchestrator.harnesses` validates a selection with tomllib before dispatch and
+    this wrapper validates it again at the variable's own boundary. Both read the
+    key with tomllib for exactly this reason, and these shapes are the gate on that
+    staying true: a scanner reintroduced here would understand a narrower TOML than
+    the parser does — refusing a value the dispatch layer accepted, or accepting an
+    identity that appears in the file only inside a comment.
+    """
+    config = tmp_path / "oneharness.judge.toml"
+    config.write_text(rendered, encoding="utf-8")
+    chain = tomllib.loads(rendered)["harnesses"]
+    argv = ["run", "--compact", "--prompt-file", "-", "--config", str(config)]
+
+    accepted, _ = _run_wrapper(tmp_path, argv, env={JUDGE_HARNESS_ENV: ",".join(chain)})
+    assert accepted.returncode == 0, accepted.stderr
+    assert _selection(tmp_path) == ",".join(chain)
+
+    # Clear what the accepted run recorded, so "nothing reached oneharness" below is
+    # about the refused run rather than about a file that was never rewritten.
+    (tmp_path / "oneharness-argv").unlink()
+    refused, recorded = _run_wrapper(tmp_path, argv, env={JUDGE_HARNESS_ENV: "codex:alternate"})
+    assert refused.returncode == 2
+    assert "is not a harness" in refused.stderr
+    assert recorded == []
+
+
+def test_a_malformed_chain_is_refused_rather_than_filtered_to_its_usable_members(
+    tmp_path: Path,
+) -> None:
+    """Half of a broken declaration is not the selection the file meant to make."""
+    config = tmp_path / "oneharness.judge.toml"
+    config.write_text('harnesses = ["codex", 3]\n', encoding="utf-8")
+
+    proc, argv = _run_wrapper(
+        tmp_path,
+        ["run", "--compact", "--prompt-file", "-", "--config", str(config)],
+        env={JUDGE_HARNESS_ENV: "codex"},
+    )
+
+    assert proc.returncode == 2
+    assert "malformed harnesses chain" in proc.stderr
+    assert argv == []
+
+
+def test_a_config_without_a_chain_cannot_honor_a_selection_either(tmp_path: Path) -> None:
+    proc, argv = _run_wrapper(
+        tmp_path,
+        _judge_argv(tmp_path, chain=()),
+        env={JUDGE_HARNESS_ENV: "codex"},
+    )
+
+    assert proc.returncode == 2
+    assert "declares no 'harnesses' chain" in proc.stderr
+    assert argv == []
 
 
 def test_an_ambient_selection_still_reaches_a_side_that_was_given_none(tmp_path: Path) -> None:
