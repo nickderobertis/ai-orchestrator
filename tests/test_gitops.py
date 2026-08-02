@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import sys
+
 import pytest
 
 from orchestrator import gitops
@@ -215,3 +217,36 @@ def test_branch_name_validation_rejects_nonliteral_refs(branch: str) -> None:
 @pytest.mark.parametrize("branch", ["main", "feature/team-workflow", "stack-base/123"])
 def test_branch_name_validation_accepts_literal_refs(branch: str) -> None:
     assert gitops.is_valid_branch_name(branch)
+
+
+def test_configured_bounds_are_read_per_operation_class() -> None:
+    assert gitops.timeout_seconds(env={}) == gitops.DEFAULT_TIMEOUT_SECONDS
+    assert gitops.timeout_seconds(hooks=True, env={}) == gitops.DEFAULT_HOOK_TIMEOUT_SECONDS
+    ordinary = {gitops.GIT_TIMEOUT_ENV: "12", gitops.GIT_HOOK_TIMEOUT_ENV: "34"}
+    assert gitops.timeout_seconds(env=ordinary) == 12
+    assert gitops.timeout_seconds(hooks=True, env=ordinary) == 34
+
+
+def test_a_git_command_that_never_returns_is_bounded_and_diagnosed(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The timeout path, driven through a real transport that answers nothing.
+
+    A remote whose helper never speaks is the cheapest faithful stand-in for the
+    wedged fetch this bound exists for: real git, a real child holding git's own
+    pipes, and no answer coming.
+    """
+    checkout = tmp_path / "waiting"
+    gitops._git(["init", "-q", "-b", "main", str(checkout)])
+    gitops._git(["remote", "add", "origin", "ssh://nowhere.invalid/repo.git"], cwd=checkout)
+    transport = tmp_path / "stalling-ssh.py"
+    transport.write_text(f"#!{sys.executable}\nimport time\ntime.sleep(3600)\n", encoding="utf-8")
+    transport.chmod(0o755)
+    monkeypatch.setenv("GIT_SSH_COMMAND", str(transport))
+    monkeypatch.setenv(gitops.GIT_TIMEOUT_ENV, "0.5")
+
+    with pytest.raises(gitops.GitError) as raised:
+        gitops.fetch(checkout)
+
+    assert "git fetch origin --prune timed out after" in str(raised.value)
+    assert f"raise it with {gitops.GIT_TIMEOUT_ENV}" in str(raised.value)

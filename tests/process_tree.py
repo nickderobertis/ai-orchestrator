@@ -120,6 +120,35 @@ def write_launching_tree(directory: Path) -> Path:
     return script
 
 
+#: The end state both shapes above reach, reproduced directly: a process init has
+#: already adopted. Nothing above it survives, so parentage can say nothing about
+#: whose it is — which is exactly the condition the scratch sweep's environment stamp
+#: has to answer under. The intermediate exits immediately, so no sampler could have
+#: claimed the survivor on its way there either.
+_REPARENTED_SOURCE = '''\
+"""A process that gets itself adopted by init before it starts waiting."""
+
+import os
+import sys
+import time
+
+marker = sys.argv[1]
+if os.fork() != 0:
+    raise SystemExit(0)
+os.setsid()
+with open(marker, "w", encoding="utf-8") as handle:
+    handle.write(str(os.getpid()))
+time.sleep(600)
+'''
+
+
+def write_reparented_leaving(directory: Path) -> Path:
+    """Write the already-orphaned-process script into ``directory``; return its path."""
+    script = directory / "reparented_leaving.py"
+    script.write_text(_REPARENTED_SOURCE, encoding="utf-8")
+    return script
+
+
 def await_recorded_pids(path: Path, *, timeout: float = 30.0) -> tuple[int, ...]:
     """Wait for a launch to record its own pid and its worker's, and return both."""
     deadline = time.monotonic() + timeout

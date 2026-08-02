@@ -564,6 +564,29 @@ retention, so pytest keeps
 the newest three runs per root, a run whose `.lock` names a live session, and
 whatever `pytest-current` points at.
 
+The same sweep reclaims processes, not only directories. A dispatch whose
+dispatcher dies leaves its tree adopted by init, and every walk this harness
+terminates trees with — `terminate_tree`, `terminate_processes`,
+`terminate_process_group` — starts from a parent that no longer exists, so such a
+survivor is outside all of them. Two were found resident on this host at two days
+twenty hours and two days, from dispatches long finished, with nothing left to say
+whose they were. What does survive reparenting is the environment: the kernel fixes
+`/proc/<pid>/environ` at `exec`, and every dispatch exports
+`ORCHESTRATOR_AGENT_STATUS_DIR` naming a directory inside its own
+`orchestrator-watchdog-*` scratch tree. That stamp is the ownership evidence, read
+as a whole NUL-delimited entry and required to name a direct child of the swept
+root carrying the watchdog prefix — a name nothing but `owned_scratch_directory`
+produces. Whether the dispatch behind it is *over* is the same question the
+watchdog family already answers: an absent directory means its whole scope exited,
+and a present one is judged by the ownership lock. Anything else — a stamp for a
+live dispatch, no stamp at all, a directory under some other root, the sweeping
+process and its own ancestry — is left running and reported as such. The
+`dispatch-orphans` family appears in the swept/skipped lists like any other, and a
+destructive run reports `reaped N process(es) left running by a finished dispatch`
+with their pids. Reaping happens *before* the reference proof is taken, so a
+directory whose last claimant was one of these leavings is reclaimed in the same
+pass rather than protected by the process the sweep just ended.
+
 Every sweep names the families it examined and, separately, the families it could
 not — `swept families: watchdog, nx-install, …` and `skipped families: third-party
 (lifecycle dispatch active)`. Each family appears in exactly one of the two lists,

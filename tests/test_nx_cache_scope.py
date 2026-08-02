@@ -16,11 +16,17 @@ requirement. Only a handful of tests assert on this repository's prose, and the
 two costliest read neither prose nor orchestrator code — they drive `just` recipes
 and shell scripts. `test-docs` runs the prose contracts and keeps the
 whole-workspace key; `test-recipes` runs the recipe journeys under the narrow key
-those journeys actually read; `test` runs the remainder, keyed on the workspace
-minus its prose and minus the front-end projects no Python test opens. What keeps
-the narrowed keys honest is not this file — a static scan cannot see every read —
-but `tests/conftest.py`, which fails a test the moment it opens something its own
-tier's key does not carry.
+those journeys actually read; `test` and `test-serial` run the remainder, keyed on
+the workspace minus its prose and minus the front-end projects no Python test
+opens. Those last two are one scope split into two tasks, not a fourth key: the
+`single_threaded` tests need a process with no execnet thread in it and read
+exactly what the bulk reads. What keeps the narrowed keys honest is not this file
+— a static scan cannot see every read — but `tests/conftest.py`, which fails a
+test the moment it opens something its own tier's key does not carry.
+
+`coverage` is the one target here with nothing to keep honest, and deliberately:
+it combines what the measuring tiers wrote and compares that total to the declared
+floor, so it is uncached and there is no memo to be wrong about.
 """
 
 from __future__ import annotations
@@ -31,7 +37,18 @@ import re
 import subprocess
 
 from conftest import READS_DOCS_MARKER, READS_RECIPES_MARKER
-from nx_inputs import CODE_WORKSPACE, NX_CACHE_CHECK, RECIPE_WORKSPACE, covers, named_input_globs
+from nx_inputs import (
+    CODE_SCOPED,
+    CODE_WORKSPACE,
+    COVERAGE_SCOPED,
+    DOCS_SCOPED,
+    NX_CACHE_CHECK,
+    RECIPE_SCOPED,
+    RECIPE_WORKSPACE,
+    SERIAL_SCOPED,
+    covers,
+    named_input_globs,
+)
 
 from orchestrator import REPO_ROOT
 
@@ -40,11 +57,12 @@ WHOLE_WORKSPACE = "wholeWorkspace"
 #: Every one of these runs from the workspace root against the whole tree — ruff
 #: over `.`, shellcheck over `scripts/`, persona validation over `personas/`, and
 #: the prose-contract tests, which exist to read documentation.
-WORKSPACE_SCOPED = ("lint", "typecheck", "format-check", "test-docs")
-#: The tier keyed on less than the whole workspace, and the exact globs that earn
+WORKSPACE_SCOPED = ("lint", "typecheck", "format-check", DOCS_SCOPED)
+#: The tiers keyed on less than the whole workspace, and the exact globs that earn
 #: it: the workspace with its documentation and its front-end projects removed,
-#: and nothing else.
-CODE_SCOPED = "test"
+#: and nothing else. Both halves of the Python code suite share it — they read the
+#: same tree and differ only in the process shape their tests need.
+CODE_KEYED = (CODE_SCOPED, SERIAL_SCOPED)
 CODE_WORKSPACE_GLOBS = [
     "{workspaceRoot}/**/*",
     "!{workspaceRoot}/docs/**/*",
@@ -52,9 +70,6 @@ CODE_WORKSPACE_GLOBS = [
     "!{workspaceRoot}/apps/**/*",
     "!{workspaceRoot}/packages/**/*",
 ]
-#: The tier keyed on less again: the recipe journeys read `just` recipes, shell
-#: scripts, and their fixtures, and nothing else of this repository.
-RECIPE_SCOPED = "test-recipes"
 #: The front-end project roots the code key drops. No Python test reads them; the
 #: whole-workspace tier covers the DAG contract checks that do.
 FRONT_END_ROOTS = ("apps/", "packages/")
@@ -155,16 +170,21 @@ def test_the_marker_that_routes_a_test_to_its_tier_means_the_same_thing_everywhe
     targets = json.loads((REPO_ROOT / "orchestrator/project.json").read_text(encoding="utf-8"))[
         "targets"
     ]
-    # The code tier runs in more than one invocation — the parallel bulk and the
-    # serial `single_threaded` remainder — so every one of its selectors has to
-    # exclude both narrower tiers, not merely the first one written down.
-    code_selectors = re.findall(r"-m '([^']+)'", targets[CODE_SCOPED]["command"])
-    assert code_selectors, targets[CODE_SCOPED]["command"]
+    # The code suite runs in more than one invocation — the parallel bulk and the
+    # serial `single_threaded` remainder, now separate targets — so every one of
+    # their selectors has to exclude both narrower tiers, not merely the first one
+    # written down.
+    code_selectors = [
+        selector
+        for target in CODE_KEYED
+        for selector in re.findall(r"-m '([^']+)'", targets[target]["command"])
+    ]
+    assert len(code_selectors) == len(CODE_KEYED), code_selectors
     excluded = f"not {READS_DOCS_MARKER} and not {READS_RECIPES_MARKER}"
     assert all(selector.startswith(excluded) for selector in code_selectors), code_selectors
 
     # And the selectors have to partition: a test is in exactly one tier.
-    for marker, target in ((READS_DOCS_MARKER, "test-docs"), (READS_RECIPES_MARKER, RECIPE_SCOPED)):
+    for marker, target in ((READS_DOCS_MARKER, DOCS_SCOPED), (READS_RECIPES_MARKER, RECIPE_SCOPED)):
         assert f"-m {marker}" in targets[target]["command"]
         marked = re.search(r"-m '?(not )?(\w+)'?", targets[target]["command"])
         assert marked is not None and marked.group(1) is None
@@ -176,7 +196,7 @@ def test_the_marker_that_routes_a_test_to_its_tier_means_the_same_thing_everywhe
 #: would stop being evidence for the tier the gate actually runs.
 PARALLEL_SITES = (
     ("orchestrator/project.json", CODE_SCOPED),
-    ("orchestrator/project.json", "test-docs"),
+    ("orchestrator/project.json", DOCS_SCOPED),
     ("orchestrator/project.json", RECIPE_SCOPED),
     ("justfile", "test-e2e"),
 )
@@ -234,21 +254,26 @@ def _collected(selector: str) -> set[str]:
 
 
 def test_the_code_tiers_parallel_and_serial_invocations_partition_it() -> None:
-    """The tier runs in two invocations, so neither may drop a test on the floor.
+    """The code suite runs in two tiers, so neither may drop a test on the floor.
 
-    `single_threaded` splits the code tier because those tests need a process with
+    `single_threaded` splits the code suite because those tests need a process with
     no execnet thread in it, and everything else runs across xdist workers. Two
     commands selecting on one marker is exactly the shape that loses a test in
     silence: a typo in either expression leaves tests that no invocation collects,
     and a suite that runs fewer tests reports the same green as one that runs them
-    all. So the partition is derived from the real target and checked against real
-    collections rather than read off the JSON.
+    all. Separate targets make that easier to get wrong, not harder — nothing
+    chains them any more — so the partition is derived from the real targets and
+    checked against real collections rather than read off the JSON.
     """
-    command = json.loads((REPO_ROOT / "orchestrator/project.json").read_text(encoding="utf-8"))[
+    targets = json.loads((REPO_ROOT / "orchestrator/project.json").read_text(encoding="utf-8"))[
         "targets"
-    ][CODE_SCOPED]["command"]
-    selectors = re.findall(r"-m '([^']+)'", command)
-    assert len(selectors) == 2, f"the code tier no longer runs two invocations: {command}"
+    ]
+    selectors = [
+        selector
+        for target in CODE_KEYED
+        for selector in re.findall(r"-m '([^']+)'", targets[target]["command"])
+    ]
+    assert len(selectors) == 2, f"the code suite no longer runs two invocations: {selectors}"
 
     parts = [_collected(selector) for selector in selectors]
     assert not parts[0] & parts[1], (
@@ -256,7 +281,7 @@ def test_the_code_tiers_parallel_and_serial_invocations_partition_it() -> None:
     )
     whole = _collected(f"not {READS_DOCS_MARKER} and not {READS_RECIPES_MARKER}")
     assert parts[0] | parts[1] == whole, (
-        "the code tier's invocations no longer cover it: "
+        "the code suite's tiers no longer cover it: "
         f"{sorted(whole - (parts[0] | parts[1]))[:5]} is collected by neither"
     )
     # Both halves have to be non-empty, or the split is silently doing nothing and
@@ -273,7 +298,11 @@ def test_the_code_only_test_key_drops_prose_and_the_front_end_and_nothing_else()
     )
 
     project = json.loads((REPO_ROOT / "orchestrator/project.json").read_text(encoding="utf-8"))
-    assert project["targets"][CODE_SCOPED]["inputs"] == [CODE_WORKSPACE]
+    for target in CODE_KEYED:
+        assert project["targets"][target]["inputs"] == [CODE_WORKSPACE], (
+            f"orchestrator:{target} runs part of the Python code suite, so it must be "
+            "keyed on everything that suite reads"
+        )
 
     globs = _effective_inputs("orchestrator", CODE_SCOPED)
     missed = sorted(path for path in _tracked() if not covers(globs, path))
@@ -284,7 +313,42 @@ def test_the_code_only_test_key_drops_prose_and_the_front_end_and_nothing_else()
     assert any(_is_documentation(path) for path in missed)
     assert any(_is_front_end(path) for path in missed)
     # The whole-workspace tier is what covers the rest, so it must actually exist.
-    assert "test-docs" in project["targets"]
+    assert DOCS_SCOPED in project["targets"]
+
+
+def test_the_coverage_tier_is_unmemoized_and_waits_for_every_measuring_tier() -> None:
+    """The floor is enforced once, on data no tier can be missing from.
+
+    Splitting the code suite into two targets split its coverage data with it, so
+    the enforced total is now assembled by a third target rather than by appending
+    inside one command. Two things make that sound, and both are declarations
+    rather than conventions: the tier waits on every measuring tier, so it can
+    never report on a subset; and it is uncached, so a replayed test verdict still
+    pays for a fresh combine and a fresh comparison against the floor.
+    """
+    project = json.loads((REPO_ROOT / "orchestrator/project.json").read_text(encoding="utf-8"))
+    coverage = project["targets"][COVERAGE_SCOPED]
+
+    assert sorted(coverage["dependsOn"]) == sorted(CODE_KEYED), (
+        "the coverage tier must wait on every tier that measures, or the floor is "
+        f"evaluated against part of the suite: {coverage['dependsOn']}"
+    )
+    assert _nx_config()["targetDefaults"][COVERAGE_SCOPED] == {"cache": False}, (
+        "a memoized floor could be replayed for a tree it never measured; this tier "
+        "is seconds of work and is deliberately re-run every time"
+    )
+    # And every measuring tier has to actually write the data it combines, under a
+    # name of its own — one shared file is how the two invocations were chained.
+    written = {
+        project["targets"][target]["outputs"][0].removeprefix("{workspaceRoot}/")
+        for target in CODE_KEYED
+    }
+    assert len(written) == len(CODE_KEYED), f"the measuring tiers share a data file: {written}"
+    for data_file in written:
+        assert data_file in coverage["command"], (
+            f"{data_file} is measured but never combined, so its lines do not count "
+            f"towards the enforced floor: {coverage['command']}"
+        )
 
 
 def test_every_repository_path_the_suite_reads_is_part_of_a_test_key() -> None:

@@ -344,8 +344,9 @@ def _same_branch_lifecycle_process(
     os.environ["AI_ORCHESTRATOR_HOME"] = state_root
     result = run_repo_task(
         origin,
-        "complete-now write-unique-change: the same branch name from two runs at once"
-        f"{hold.sentinels()}",
+        # The first line is what names the change when no commit does, so the
+        # rendezvous paths go on their own line rather than overrunning a subject.
+        f"complete-now write-unique-change: one branch name, two runs\n{hold.sentinels()}",
         "engineer",
         workspace=Workspace(root, resolver=lambda _spec: Path(canonical), workflow="local"),
         branch=branch,

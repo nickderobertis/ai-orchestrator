@@ -115,6 +115,44 @@ The families a dispatch produces itself are exempt from that lock and swept whil
 it runs, because they only accumulate while dispatches run; their safety comes from
 proven non-reference rather than quiescence.
 
+### Every git command is bounded
+
+`gitops._git` bounds every call and, on expiry, raises `GitError` naming the
+command and the elapsed time — the shape `github.py`'s `gh` boundary has always
+had. An unbounded git turns a transient network problem or an unreleasable
+`index.lock` into a run that looks exactly like one still working, and from outside
+the only way to tell the two apart was reading `/proc` by hand.
+
+There are two bounds because the two populations differ by orders of magnitude,
+and both are measured rather than guessed:
+
+- `ORCHESTRATOR_GIT_TIMEOUT` (default **600s**) covers a command that runs no
+  repository hook. A full `git clone` of *this* repository over the network takes
+  about 2.3 seconds for an 11 MB tree, so the default sits more than two orders of
+  magnitude above the largest ordinary operation the lifecycle performs against a
+  repository this size.
+- `ORCHESTRATOR_GIT_HOOK_TIMEOUT` (default **5400s**) covers a command that runs
+  the repository's own hooks. This repository's `pre-push` hook runs `just gate`,
+  about fourteen minutes, so the default leaves it roughly six times its measured
+  cost: room for a gate slowed by everything else on the host, without letting a
+  genuinely hung push sit forever. Bounding these at the ordinary value would abort
+  every publication the harness exists to perform.
+
+Hook-running commands: `git clone`, `git checkout`, `git commit`, `git merge`, `git push`, `git rebase`, `git worktree add`.
+
+`gitops.HOOK_RUNNING_COMMANDS` is that list's one source and `_git` classifies each
+call from its own argv, so a new hook-running operation cannot silently inherit the
+ordinary bound; `tests/test_documented_environment.py` fails if the line above and
+that constant drift apart. A non-numeric, zero, negative, or infinite value is
+refused at the boundary rather than silently reverting to unbounded.
+
+When a bound fires, the whole git process *tree* is terminated before its output is
+collected. That is not a courtesy: a hook's children inherit git's pipes and outlive
+the shell that started them, so reading those pipes after killing git alone blocks
+on exactly the processes the bound stopped waiting for. It is also what stops a
+fired bound from manufacturing the reparented leavings the scratch sweep then has to
+recognise days later.
+
 ## Repository identity, checkout roles, and isolation
 
 `Workspace` (`orchestrator/workspace.py`) resolves two independent decisions through
@@ -521,9 +559,13 @@ split at those seams rather than at convenient ones:
   `scripts/**`, the root manifests, the fixtures, and the modules that define and
   collect those tests. They read no prose and no `orchestrator/` at all, and most
   commits here touch nothing else, so most commits replay them.
-- **`orchestrator:test`** runs everything else, with the coverage floor, keyed on
-  `codeWorkspace` — the whole workspace with `docs/**`, `**/*.md`, and the
-  `apps/**` and `packages/**` no Python test opens removed.
+- **`orchestrator:test`** runs everything else that can share a process with
+  execnet's receiver thread, keyed on `codeWorkspace` — the whole workspace with
+  `docs/**`, `**/*.md`, and the `apps/**` and `packages/**` no Python test opens
+  removed.
+- **`orchestrator:test-serial`** runs the `single_threaded` remainder under the
+  same `codeWorkspace` key. Same tree, same reads; a different process shape is
+  not a different scope, so this is a task boundary rather than a key boundary.
 
 `workspace:check-nx-cache` is narrowed on the same principle rather than by tier:
 it builds two linked worktrees out of `tests/fixtures/nx-cache/` and drives the
@@ -586,7 +628,7 @@ the other, which is not the shape anything here actually uses: `just test` runs
 them concurrently through Nx, and forcing both fresh with `--skip-nx-cache`
 measured 311s against the roughly seventeen-minute median the tier cost before.
 
-The tier therefore runs in **two invocations**, and the second is not an
+The code suite therefore runs in **two invocations**, and the second is not an
 optimization but a correctness requirement.
 `tests/test_runs.py::test_a_signalled_round_records_its_abandonment_and_stops_being_live`
 blocks SIGTERM on its own thread and then calls a handler that re-raises that
@@ -597,15 +639,66 @@ disposition the handler just restored. It fails at `-n 1` too: the constraint is
 the process, not the load. So it is marked `single_threaded` and scheduled into a
 serial invocation rather than rewritten to survive a worker.
 
-Coverage still combines across that split, and the floor stays in one place. The
-serial invocation measures under `coverage run`, which writes `.coverage` and
-enforces nothing; the parallel one appends to it and reports. Only the second
-invocation evaluates `[tool.coverage.report] fail_under`, against the combined
-total, so no `--cov-fail-under` appears anywhere and `pyproject.toml` remains the
-floor's single source. `tests/test_nx_cache_scope.py` holds the two invocations to
-a real partition — collecting each selector for real and requiring their union to
-equal the tier — because two commands selecting on one marker is exactly the shape
-that drops tests in silence.
+#### Two invocations, two tasks, one floor
+
+Those two invocations were chained inside one Nx target by `&&`, which bought
+three costs for one line: the four workers idled through the serial run, one
+change invalidated both halves, and a serial failure meant the parallel half never
+reported at all. They are now `orchestrator:test` and `orchestrator:test-serial` —
+separate tasks, neither depending on the other, keyed identically because they
+read one tree.
+
+The `&&` was not really about ordering, though; it was about `--cov-append`. The
+serial run wrote `.coverage` and the parallel one appended to it, and only the
+second reported, which is what kept `[tool.coverage.report] fail_under` evaluated
+once against a combined total. Splitting the tasks splits that data, so each tier
+now **measures and judges nothing**: `orchestrator:test-serial` measures under
+`coverage run` into `.coverage.serial`, `orchestrator:test` measures under
+pytest-cov — which is what carries coverage into the xdist workers — into
+`.coverage.parallel`, and the uncached `orchestrator:coverage` waits on both,
+combines them into `.coverage`, and reports.
+
+`coverage report` is what compares the total to the declared floor, so the floor
+still has exactly one source and is still evaluated exactly once. The parallel
+tier carries a `--cov-fail-under=0` because pytest-cov otherwise adopts
+`fail_under` from the config and would fail every run on its own share; that zero
+is the tier declining to judge, not a second floor, and
+`tests/test_coverage_gate.py` holds every target to it — no target may name a
+non-zero floor, and none but `coverage` may report. That module also drives the
+whole shape for real, over a generated package whose total lands in the rounding
+band the floor once forgave, and proves the combined total exceeds what either
+tier measured alone.
+
+Two more things follow from the split, and both are declarations rather than
+conventions. The combine names each tier's data file, so a tier whose data never
+arrived fails the command instead of quietly lowering the total the floor is
+judged against. And `orchestrator:coverage` is **uncached**: its inputs are two
+files on disk rather than the tree, it costs seconds, and a floor that always runs
+is one no replay can skip.
+
+`tests/test_nx_cache_scope.py` holds the two tiers to a real partition —
+collecting each selector for real and requiring their union to equal the suite —
+because two commands selecting on one marker is exactly the shape that drops tests
+in silence, and separate targets make that easier to get wrong rather than harder.
+
+**The wall clock is a wash, and the measurement says so.** Three interleaved
+samples of each shape on this host: chained 191.8s / 163.1s / 119.0s, split
+126.8s / 130.8s / 117.1s. The medians look like a 36s win, but the spread inside
+one shape is larger than the gap between them — this box also runs live
+dispatches — and the structural difference cannot be that big. Head-of-line
+blocking is bounded by the serial invocation's own runtime, and that tier is a
+single test: 0.9s. The parallel tier stops rendering its own terminal report and
+`orchestrator:coverage` renders it instead, measured at 0.9s. Those cancel.
+
+So the split is not a speed-up, and the third cost the `&&` carried is the one
+worth having. Chained, a serial-tier failure meant the parallel half never ran, so
+a cycle reported one failure where the suite had several; and re-running the
+one-second serial test meant re-running three minutes of parallel suite with it.
+Split, both halves report in one cycle and
+`nx run orchestrator:test-serial --skip-nx-cache` re-runs a second's work alone.
+The two still share `codeWorkspace`, so an edit still invalidates both — that is
+correct, because both read the same tree — but they are separate cache entries and
+either can be forced on its own.
 
 ## Merge strategies (where the change lands)
 
@@ -699,9 +792,11 @@ dependency failed is skipped. Cross-repository dependencies only schedule. A
 successful same-identity dependency not landed on the root base becomes a stack
 prerequisite:
 
-The default PR title is derived from Conventional Commit subjects on the branch,
-with a non-releasing `chore:` fallback when none is usable. An explicit `title`
-must itself be a Conventional Commit subject of at most 72 characters.
+The default PR title is derived from the most significant Conventional Commit
+subject on the branch, with a non-releasing `chore:` fallback when none is usable
+— see [A subject names the change, whole](#a-subject-names-the-change-whole). An
+explicit `title` must itself be a Conventional Commit subject of at most 72
+characters.
 
 All explicit task, base, anchor, and recovery branch names pass Git's literal
 branch validator before any Git command; a plan that explicitly combines
@@ -1019,6 +1114,55 @@ it and reports `already-merged` from finding no content to add rather than from
 ancestry; and a base advanced during the candidate's gate run is `not-ready` rather
 than silently reconciled, because the tree that would land is no longer the tree
 the gate judged.
+
+### A subject names the change, whole
+
+Publication squashes a branch, so one subject reaches the base branch for all of
+its commits. That subject **names the change**: the most significant commit (the
+breaking ones first, then by type priority) supplies the description, and the
+branch's own history keeps the remaining steps. Its type and breaking marker still
+describe the whole branch — they are its release semantics — and its scope is kept
+only when every usable commit shares one, since a narrower scope would misdescribe
+what landed.
+
+Synthesizing the subject by joining every description and cutting the result to 72
+characters is what published `feat: make orchestration-run ownership visible and
+enforced; read the r…` onto `main`. A cut description names nothing, breaks
+mid-word, and reads as corruption, so **a description is published whole or not at
+all**. One that does not fit is not shortened; the next candidate is offered
+instead:
+
+1. the most significant commit's description;
+2. the first line of task prose that carries content — the planner's own one-line
+   name for the whole change, which describes the branch at least as well as any
+   commit on it.
+
+There is no third candidate. **A subject that cannot be formed is refused**: the
+run settles as an `error` whose detail names the limit and the two ways out —
+shorten a commit subject on the branch, or publish with an explicit `title`. A
+generic `chore: orchestrated change` was the tempting alternative and is the same
+defect in a different costume, because the base branch's history is the durable
+record and a subject naming no change makes it a worse record than a refusal does.
+Task prose that carries no content line is that same non-name, so it is not offered
+as a candidate either. A task's first content line is therefore load-bearing: keep
+the `## What` line within the limit — or hand the node an explicit `title` — and a
+branch whose commits name nothing still publishes.
+
+Nothing is dropped to buy room. The type, an optional scope, and the breaking
+marker are published exactly as the branch's commits carry them, so a branch whose
+`feat:` description overflows still publishes a releasing `feat:`, and a valid
+common scope survives a fall-through instead of being traded for a description that
+fits without it.
+
+`repo-recover` refuses the same way and reports it as `repo-recover: no description
+fits …`. It refuses before it attests anything, so the preserved branch keeps its
+unattested marker and the base is untouched; the recovery runs again unchanged once
+the branch carries a subject that fits.
+
+The one commit exempt from all of this is the `(incomplete step)` marker, which
+keeps its suffix through a generic fall-through. It is branch state that no
+publication carries, and preserving partial work must never fail on long task
+prose; a marker missing its trailer is still recognized by that text.
 
 ### Complete branch after publication failure
 

@@ -415,7 +415,15 @@ past a short age that only covers the gap
 between creating a directory and first naming it. Mappings are not optional there:
 a `dlopen`ed native binary leaves no descriptor, so for a running `nx` the mapping
 is the only place its cache appears. Names too generic to sweep on are
-identified by shape, and each family honors its producer's own retention. Every
+identified by shape, and each family honors its producer's own retention. The sweep
+also reaps *processes* a finished dispatch left running. Once a dispatcher dies its
+tree is adopted by init, so every walk this harness terminates trees with starts
+from a parent that no longer exists; what survives that is the environment the
+kernel fixed at `exec`, and `ORCHESTRATOR_AGENT_STATUS_DIR` names the dispatch's own
+watchdog scratch directory. A stamp for a dispatch that is over — its directory gone,
+or its ownership lock free — is proof; a live dispatch's worker, an unstamped
+process, one stamped for another root, and the sweeping process's own ancestry are
+left running. Every
 sweep names the families it examined and the families it could not, so `reclaimed
 0 bytes` never hides an unswept one. See
 [`orchestrator.scratch.UNREFERENCED_FAMILIES`](orchestrator/scratch.py).
@@ -497,9 +505,13 @@ narrowings that earn their keep answer at the scope their tests read:
 `orchestrator:test-docs` runs the handful that assert on this repository's prose
 and keeps the whole-workspace key; `orchestrator:test-recipes` runs the journeys
 that drive `just` recipes and shell scripts under `recipeWorkspace`, exactly what
-they drive; `orchestrator:test` runs the rest under `codeWorkspace` — the workspace
+they drive; `orchestrator:test` and `orchestrator:test-serial` run the rest under
+`codeWorkspace` — the workspace
 minus `docs/**`, `**/*.md`, and the `apps/**` and `packages/**` no Python test
-opens. `workspace:check-nx-cache` is narrowed the same way, onto the fixture and
+opens. Those two share one key because they read one tree; they are separate tasks
+so each half reports its own failures and the one-second serial tier can be forced
+to re-run without the three-minute bulk.
+`workspace:check-nx-cache` is narrowed the same way, onto the fixture and
 scripts it builds its two worktrees from. A documentation edit stops charging eight
 minutes. No split may go stale silently: an undeclared test that opens this
 checkout's own documentation fails in `tests/conftest.py` and is told to carry
@@ -573,10 +585,13 @@ How this polyglot monorepo was built up from the create-repo reference pieces:
   `pyproject.toml` is the floor's one source — `fail_under` sets it and
   `precision` decides it, because pytest-cov compares the total *after* rounding
   at that precision. `tests/test_coverage_gate.py` holds that combination to one
-  that can actually fail the build. The tier runs in two invocations — a serial
-  one under `coverage run` for the `single_threaded` tests and the parallel bulk
-  appending to it — and only the second reports, so the floor is still evaluated
-  once against the combined total and no `--cov-fail-under` overrides it.
+  that can actually fail the build. Two tiers measure and neither judges —
+  `orchestrator:test-serial` under `coverage run` for the `single_threaded` tests
+  and `orchestrator:test` across the workers for the rest, each writing its own
+  data file — and the uncached `orchestrator:coverage` combines them and compares
+  that one total to the declared floor. Nothing else may name a floor, and a
+  measuring tier that did not write its data fails the combine rather than
+  lowering the total silently.
 - **The suite runs across four xdist workers** (`-n 4 --dist load`), chosen from
   measurement rather than from `auto`: it is latency-bound, its floor is its
   longest single test, and the curve is flat past four while this host also runs
