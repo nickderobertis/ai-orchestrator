@@ -85,7 +85,8 @@ DEFAULT_HOOK_TIMEOUT_SECONDS = 5400.0
 #: The one source for which git operations run a repository's hooks, as leading argv
 #: words. Classifying inside `_git` rather than at each call site is what stops a new
 #: hook-running operation from silently inheriting the ordinary bound and aborting a
-#: gate mid-run; `tests/test_docs.py` holds the documented list to this set.
+#: gate mid-run; `tests/test_documented_environment.py` holds the documented list to
+#: this set.
 HOOK_RUNNING_COMMANDS: frozenset[tuple[str, ...]] = frozenset(
     {
         ("clone",),
