@@ -270,15 +270,13 @@ def claim_heartbeat(channel_dir: Path, *, now: float | None = None) -> bool:
     """Atomically claim one due agent check-in, reclaiming a dead holder's lease.
 
     The claim is a **lease on dispatching a check-in**, not a lock held until a
-    planner reads the result: it is taken here and handed back by
-    `finish_heartbeat_attempt` when the dispatch settles either way. That is the
-    whole distinction the pacemaker turns on. Held to delivery, one unread update
-    silenced the pacemaker for the rest of the run, and no interval change or
-    read-only view could reach it — the wedge was the claim, not the clock.
+    planner reads the result: `finish_heartbeat_attempt` hands it back when the
+    dispatch settles either way. Held to delivery instead, one unread update
+    silenced the pacemaker for the rest of the run.
 
-    A lease still has to survive its holder dying mid-dispatch, so it records the pid
-    and host that took it and a later tick reclaims one whose holder is provably
-    gone. `process_may_be_live` is the same probe the abandoned-round path uses.
+    A lease has to survive its holder dying mid-dispatch, so it records the pid and
+    host that took it and a later tick reclaims one whose holder is provably gone.
+    `process_may_be_live` is the same probe the abandoned-round path uses.
     """
     with advisory_lock(f"channel-heartbeat:{channel_dir.resolve()}"):
         state = _load_heartbeat(channel_dir)
@@ -1215,11 +1213,9 @@ class ProposalPump:
                 state = heartbeat_state(self._channel_dir)
             except (ChannelError, ConfigError, OSError):
                 return
-            # A queued update no longer gates the next check-in. Exactly one stays
-            # pending — the fresh one replaces it — so the invariant holds while the
-            # reporting keeps moving: an ignored planner gets a current update every
-            # interval rather than one three-hour-old snapshot and silence. The lease
-            # `claim_heartbeat` takes is what keeps two from being dispatched at once.
+            # A queued update does not gate the next check-in; the fresh one replaces
+            # it, so exactly one stays pending and an ignored planner still gets a
+            # current snapshot. The lease is what keeps two dispatches from racing.
             if (
                 state is not None
                 and state["enabled"]

@@ -1538,8 +1538,7 @@ def test_a_queued_update_nobody_read_is_reported_until_it_is_consumed(
     assert f"{run_id}: 1 planner update waiting" in reported, reported
     assert f"just channel-next {run_id} --runs-dir {runs}" in reported, reported
 
-    # The journal half of the same failure: sent and delivered are now two records,
-    # and only one of them has happened.
+    # Sent and delivered are two records, and only one of them has happened.
     # llmlint: ignore[tests_mirror_real_usage] The acceptance contract is about the
     # journal a planner reads directly; no CLI renders these two kinds apart.
     events = [

@@ -57,12 +57,10 @@ def executed_plan(run_dir: Path, round_number: int, launch_plan: dict[str, Any])
     """The graph a round actually ran, folded from its authoritative journal.
 
     ``launch_plan`` is what the round was *asked* to do — `round-NN/plan.json`, which
-    the reconciler never rewrites. It is returned unchanged when the journal cannot
-    be folded strictly, which covers a ledger recorded before this contract and a
-    stream a reader must not silently reinterpret. That fallback is safe rather than
-    silent: a round with no committed edit projects to the same tasks anyway, and one
-    with edits it could not replay is a run whose journal is already refusing to
-    project for `run-plan --recover`, which reports it.
+    the reconciler never rewrites. It is returned unchanged when the journal cannot be
+    folded strictly. That fallback loses nothing a reader would not already be told
+    about: a round with no committed edit projects to the same tasks, and one whose
+    edits cannot be replayed has a journal that already refuses `run-plan --recover`.
     """
     from .journal import JOURNAL_NAME
     from .projection import ProjectionError, project_run

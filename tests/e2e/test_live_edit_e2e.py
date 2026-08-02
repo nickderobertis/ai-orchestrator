@@ -925,20 +925,15 @@ def test_planner_context_attached_mid_round_reaches_the_next_round_dispatch(
 def test_edits_committed_during_a_round_are_what_the_next_round_is_derived_from(
     tmp_path: Path, onejudge_bin: str
 ) -> None:
-    """The transition used to restore the file the round was launched with.
+    """A transition derived from `round-NN/plan.json` discarded every live edit.
 
-    `round-NN/plan.json` is the launch record and the reconciler never rewrites it,
-    so deriving the next round from it discarded every live edit the planner had
-    committed — and `channel-reply` had already told the planner they were applied.
-    Two consequences were observed twice each on real runs: a retry's replacement id
-    never reached the next round, so the *merged* replacement stopped being
-    recognised as done and its superseded original was carried forward and dispatched
-    again; and a retry pinned to a preserved branch was re-cut fresh from the base.
+    The launch record is never rewritten, so a retry's replacement id, its branch
+    pin, and its amended controls all evaporated at the boundary — after
+    `channel-reply` had told the planner they were applied.
 
-    This journey is the operator's own throughout: `just orchestrate` launches, the
+    The journey is the operator's own throughout: `just orchestrate` launches, the
     edits go through `just channel-reply` while nodes run, and the assertion is on
-    the plan the orchestrator's own transition wrote plus the prompt the agent side
-    received from it.
+    the plan the orchestrator's own transition wrote.
     """
     runs = tmp_path / "runs"
     base = yaml.safe_load(BASE_CONFIG.read_text(encoding="utf-8"))

@@ -47,10 +47,10 @@ from orchestrator.graph import graph_payload, parse_graph, run_graph
 from orchestrator.journal import NodeJournal, NodeSink, open_journal
 from orchestrator.lifecycle import (
     AI_ORCHESTRATOR_IDENTITY,
-    LAUNCH_RELAUNCH_BACKOFF_SECONDS,
     MAX_AUTOMATIC_STEP_RESUMES,
-    MAX_LAUNCH_RELAUNCHES,
+    MAX_EMPTY_DEATH_RELAUNCHES,
     MAX_MERGE_CONFLICT_RESOLUTIONS,
+    RELAUNCH_BACKOFF_SECONDS,
     RepoPlan,
     RepoPlanNode,
     Resume,
@@ -608,7 +608,7 @@ def test_a_dispatch_that_died_before_its_work_is_relaunched_and_publishes(
     assert result.outcome == "merged", result.detail
     assert launches == ["engineer", "engineer"]
     # The relaunch waited rather than asking the same refusing provider at once.
-    assert waits == [LAUNCH_RELAUNCH_BACKOFF_SECONDS]
+    assert waits == [RELAUNCH_BACKOFF_SECONDS]
     assert _has_file(origin, "main", "cost-report.txt")
 
 
@@ -689,12 +689,10 @@ def test_a_workstream_whose_relaunches_all_die_names_the_launch_path(tmp_path, b
     )
 
     assert result.outcome == "not-completed"
-    assert len(launches) == 1 + MAX_LAUNCH_RELAUNCHES, launches
+    assert len(launches) == 1 + MAX_EMPTY_DEATH_RELAUNCHES, launches
     # Each relaunch waits longer than the last, rather than at a flat cadence.
-    assert waits == [
-        LAUNCH_RELAUNCH_BACKOFF_SECONDS * n for n in range(1, MAX_LAUNCH_RELAUNCHES + 1)
-    ]
-    assert "died before producing any work" in result.detail
+    assert waits == [RELAUNCH_BACKOFF_SECONDS * n for n in range(1, MAX_EMPTY_DEATH_RELAUNCHES + 1)]
+    assert "died leaving no work behind" in result.detail
     assert "just smoke" in result.detail
 
 
@@ -733,7 +731,7 @@ def test_a_cancelled_round_does_not_wait_out_a_relaunch_backoff(tmp_path, bare_o
 
     assert result.outcome == "not-completed", result.detail
     # Woken, not expired: the full backoff was never spent.
-    assert elapsed < LAUNCH_RELAUNCH_BACKOFF_SECONDS, elapsed
+    assert elapsed < RELAUNCH_BACKOFF_SECONDS, elapsed
     # And the cancelled round did not launch one more dispatch on the way out.
     assert launches == ["engineer"]
     # The round decided this stop, so it is reported as the cancellation it was —
