@@ -390,6 +390,66 @@ def test_a_transition_frees_a_check_in_its_round_left_unreadable(
     assert json.loads(read.stdout)["surface"]["message"] == "round two is dispatching"
 
 
+def test_a_transition_survives_a_journal_it_cannot_fold(
+    tmp_path: Path, command_base, onejudge_bin: str
+) -> None:
+    """The executed graph is folded from the journal, so an unfoldable one must not
+    take the transition down with it.
+
+    Deriving the next round from the journal made `next-round` depend on a file it
+    previously never read, and a ledger written before that contract — or one whose
+    stream the strict reader refuses — would otherwise fail the transition outright.
+    It falls back to the round's launch record, which is what a round carrying no
+    committed edit projects to anyway.
+    """
+    runs = tmp_path / "runs"
+    plan = tmp_path / "unfoldable.json"
+    plan.write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "tasks": [
+                    {"id": "settle", "persona": "engineer", "task": "complete-now: settle."},
+                    {
+                        "id": "iterate",
+                        "persona": "engineer",
+                        "task": "should-fail",
+                        "max_turns": 1,
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    common = (
+        "--runs-dir",
+        str(runs),
+        "--base",
+        str(command_base()),
+        "--onejudge-bin",
+        onejudge_bin,
+        "--format",
+        "json",
+    )
+    ran = _just("run-plan", str(plan), "--run", "unfoldable", *common)
+    assert ran.returncode == 1, ran.stderr
+
+    # A stream the strict reader will not fold: the ledger and the launch record are
+    # both intact, so only the journal-derived half of the transition is in question.
+    journal = runs / "unfoldable" / "events.jsonl"
+    assert journal.is_file()
+    journal.write_text('{"not": "an event"}\n', encoding="utf-8")
+
+    resumed = _just("next-round", "unfoldable", "--plan-only", *common)
+    assert resumed.returncode == 0, resumed.stderr
+    carried = json.loads(
+        (runs / "unfoldable" / "round-02" / "plan.json").read_text(encoding="utf-8")
+    )
+    # The launch record's own carry-forward: the failed node retries, the done one is
+    # carried out. Degraded rather than lost, and never a failed transition.
+    assert [task["id"] for task in carried["tasks"]] == ["iterate"], carried
+
+
 def test_direct_human_pause_attestation_and_release_use_real_onejudge(
     tmp_path: Path, command_base, onejudge_bin: str
 ) -> None:
