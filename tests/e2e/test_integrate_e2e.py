@@ -831,14 +831,13 @@ def test_repo_recover_cli_requires_registration(tmp_path, bare_origin, capsys) -
     assert "not registered" in capsys.readouterr().err
 
 
-def test_repo_recover_refuses_a_branch_with_no_publishable_subject(
-    tmp_path, bare_origin, capsys
-) -> None:
+def test_repo_recover_refuses_a_branch_with_no_publishable_subject(tmp_path, bare_origin) -> None:
     """No commit and no recovery prose fits the subject limit, so nothing is published.
 
-    The refusal reaches the operator as the command's own error, and it lands before the
-    attestation: the marker stays unattested and the base branch is untouched, so the
-    recovery runs again unchanged once the branch carries a subject that fits.
+    The refusal reaches the operator through the installed command — exit status and
+    stderr, as they read it — and it lands before the attestation: the marker stays
+    unattested and the base branch is untouched, so the recovery runs again unchanged
+    once the branch carries a subject that fits.
     """
     origin = bare_origin()
     repo = _clone(tmp_path, origin)
@@ -859,24 +858,11 @@ def test_repo_recover_refuses_a_branch_with_no_publishable_subject(
     _git(repo, "checkout", "main")
     before = _git(origin, "rev-parse", "main")
 
-    assert (
-        recover_main(
-            [
-                branch,
-                "--repo",
-                str(repo),
-                "--gate",
-                "true",
-                "--workspace",
-                str(tmp_path / "refused-recovery-worktrees"),
-            ]
-        )
-        == 2
-    )
+    refused = _recover_cli(repo, branch, tmp_path / "refused-recovery-worktrees")
 
-    stderr = capsys.readouterr().err
-    assert "repo-recover: no description fits" in stderr
-    assert "shorten a commit subject" in stderr and "explicit title" in stderr
+    assert refused.returncode == 2, refused.stdout
+    assert "repo-recover: no description fits" in refused.stderr
+    assert "shorten a commit subject" in refused.stderr and "explicit title" in refused.stderr
     assert unattested_incomplete(repo, "main", branch)
     assert _git(origin, "rev-parse", "main") == before
 
