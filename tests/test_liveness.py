@@ -3,7 +3,9 @@
 The real journey — `just runs` and `just status` against live processes with and
 without a live child — is `tests/e2e/test_liveness_e2e.py`. These cover the
 reader boundaries that journey cannot force: an unreadable ``/proc``, a corrupt
-heartbeat or round record, and a run that has recorded nothing at all.
+heartbeat or round record, a run that has recorded nothing at all, and the one
+process state a journey can only reach through a whole wedged launch — a child
+that has exited and been left uncollected.
 """
 
 from __future__ import annotations
@@ -11,6 +13,8 @@ from __future__ import annotations
 import json
 import os
 import socket
+import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -49,6 +53,56 @@ def test_an_unreadable_proc_resolves_toward_still_working(tmp_path: Path, monkey
     monkeypatch.setattr("orchestrator.liveness._PROC", tmp_path / "absent-proc")
     assert has_live_descendant(frozenset({os.getpid()})) is True
     assert has_live_descendant(frozenset()) is False
+
+
+#: A process holding one grandchild in the state named on its command line, and
+#: announcing only once that state is an established fact. ``WNOWAIT`` is what makes
+#: the zombie one: it waits for the exit and deliberately does not collect it, which
+#: is exactly what a wedged orchestrator does to the provider it was mid-turn with.
+_TREE = (
+    "import os, sys, time\n"
+    "child = os.fork()\n"
+    "if child == 0:\n"
+    "    if sys.argv[1] == 'live':\n"
+    "        time.sleep(300)\n"
+    "    os._exit(0)\n"
+    "if sys.argv[1] == 'zombie':\n"
+    "    os.waitid(os.P_PID, child, os.WEXITED | os.WNOWAIT)\n"
+    "open(sys.argv[2], 'w').write('ready\\n')\n"
+    "time.sleep(300)\n"
+)
+
+
+def _parent_of(grandchild: str, marker: Path) -> subprocess.Popen[bytes]:
+    """Start a real process whose one grandchild is left ``live`` or ``zombie``.
+
+    Both sides are real processes rather than a ``/proc`` fixture, because the
+    distinction under test is one only the kernel makes.
+    """
+    process = subprocess.Popen([sys.executable, "-c", _TREE, grandchild, str(marker)])
+    guard = time.monotonic() + 30
+    while not marker.is_file():
+        assert time.monotonic() < guard, f"the {grandchild} tree never announced itself"
+        time.sleep(0.01)
+    return process
+
+
+def test_an_unreaped_child_is_an_exit_rather_than_work_in_flight(tmp_path: Path) -> None:
+    """A zombie under a launch is the parked launch itself, not evidence against it.
+
+    A wedged orchestrator leaves exactly this: the provider it was mid-turn with has
+    exited, and the process that would collect it never will. Counting that entry as
+    a live descendant is what kept the parked decision from ever firing on a real
+    launch — the live grandchild here is the control that says a working one still
+    reads as working.
+    """
+    for grandchild, expected in (("live", True), ("zombie", False)):
+        process = _parent_of(grandchild, tmp_path / f"{grandchild}.ready")
+        try:
+            assert has_live_descendant(frozenset({process.pid})) is expected
+        finally:
+            process.kill()
+            process.wait(timeout=30)
 
 
 def test_a_launch_with_no_timed_evidence_is_not_parked(tmp_path: Path, monkeypatch) -> None:

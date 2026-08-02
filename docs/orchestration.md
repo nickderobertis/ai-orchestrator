@@ -760,7 +760,10 @@ status`, `just monitor`, and `just orchestrate` — one flag, one meaning, and o
 refusal wherever a planner types it. Every unreadable input resolves toward "still working", so a busy
 orchestrator is never misreported as parked: one live descendant of the launch or
 of its round owner, one fresh surface, or one journal, plan, status, or result
-write is enough to keep it reported as running. A persisted `last_surface_at` that
+write is enough to keep it reported as running. A descendant that has already
+exited and been left uncollected is not one of them — that dangling entry is the
+wedged launch's own signature, so counting it would make the state unreportable on
+the very run it describes. A persisted `last_surface_at` that
 is not a finite number is discarded rather than timed, since a non-finite stamp
 would otherwise make the run look eternally fresh or eternally silent.
 

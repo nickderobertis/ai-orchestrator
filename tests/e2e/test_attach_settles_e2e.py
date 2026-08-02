@@ -14,11 +14,11 @@ channel-next` and `just channel-reply` answer, `just stop` ends. No run state he
 is manufactured — every ledger, journal, and channel record these journeys read was
 written by the run itself.
 
-Parked is the one settlement no journey here can reach through `just orchestrate`,
-and not for want of trying: the run it attaches to is the one it just created, and
-a live launch always has either a live descendant or a written report. It is
-proven against a real parked launch through the same `--until-settled` code in
-tests/e2e/test_liveness_e2e.py.
+Parked is reached the way a run really parks, which this command can only do to the
+run it just launched: its provider wedges the real orchestrator, so the launch keeps
+its pid and its `running` claim while collecting nothing, spawning nothing, and
+recording nothing. `just monitor --until-settled` is held to the same answer for the
+same state in tests/e2e/test_liveness_e2e.py.
 """
 
 # llmlint: ignore-file[e2e_not_mocked] Only the paid model is a double — the deterministic
@@ -35,13 +35,16 @@ import sys
 import time
 from contextlib import suppress
 from pathlib import Path
+from typing import NamedTuple
 
 import pytest
 import yaml
+from rendezvous import Rendezvous
 from waits import deadline
 from waits import timeout as e2e_timeout
 
 from orchestrator import BASE_CONFIG, REPO_ROOT
+from orchestrator.liveness import has_live_descendant
 from orchestrator.monitor import HEADER, SETTLED_UNATTENDED, SETTLEMENTS
 
 FAKE_BACKEND = REPO_ROOT / "tests" / "e2e" / "fake_backend.py"
@@ -62,14 +65,14 @@ def _base(tmp_path: Path) -> Path:
     return path
 
 
-def _plan(tmp_path: Path, name: str) -> Path:
+def _plan(tmp_path: Path, name: str, *, task: str = "complete-now attach") -> Path:
     path = tmp_path / f"plan-{name}.json"
     path.write_text(
         json.dumps(
             {
                 "schema_version": 3,
                 "name": name,
-                "tasks": [{"id": "worker", "persona": "engineer", "task": "complete-now attach"}],
+                "tasks": [{"id": "worker", "persona": "engineer", "task": task}],
             }
         ),
         encoding="utf-8",
@@ -107,10 +110,118 @@ def _orchestrate(
     )
 
 
+class Attached(NamedTuple):
+    """One foreground `just orchestrate` still attached, and the streams it writes.
+
+    Its output goes to files rather than pipes for the reason a planner's terminal
+    does: the stream is written for the whole life of the attachment, and a journey
+    that acted on the run while draining a pipe would be racing its own reader.
+    """
+
+    process: subprocess.Popen[str]
+    out: Path
+    err: Path
+
+    def settled(self, seconds: float) -> tuple[int, str, str]:
+        """Wait for the attachment to hand the run back, with everything it printed."""
+        status = self.process.wait(timeout=e2e_timeout(seconds))
+        return status, self.out.read_text(encoding="utf-8"), self.err.read_text(encoding="utf-8")
+
+
+@pytest.fixture
+def attachments() -> list[subprocess.Popen[str]]:
+    """Kill any attachment a journey left running, so no assertion failure hangs."""
+    started: list[subprocess.Popen[str]] = []
+    yield started
+    for process in started:
+        if process.poll() is None:
+            process.kill()
+        process.wait(timeout=e2e_timeout(30))
+
+
+def _orchestrate_attached(
+    plan: Path,
+    runs: Path,
+    base: Path,
+    onejudge_bin: str,
+    *extra: str,
+    logs: Path,
+    attachments: list[subprocess.Popen[str]],
+    skill: list[str] | None = None,
+) -> Attached:
+    """Start the same foreground launch `_orchestrate` runs, without waiting for it.
+
+    The journeys that act on a run *while* it is attached need the command still
+    running to act on, which `subprocess.run` cannot give them. Everything else is
+    identical, so what these prove is the same command a planner types.
+    """
+    logs.mkdir(parents=True, exist_ok=True)
+    out, err = logs / "stdout.txt", logs / "stderr.txt"
+    with out.open("w", encoding="utf-8") as stdout, err.open("w", encoding="utf-8") as stderr:
+        process = subprocess.Popen(
+            [
+                "just",
+                "orchestrate",
+                str(plan),
+                "--runs-dir",
+                str(runs),
+                "--base",
+                str(base),
+                "--onejudge-bin",
+                onejudge_bin,
+                *extra,
+                "--skill-command",
+                *(skill or [sys.executable, str(FAKE_BACKEND)]),
+            ],
+            cwd=REPO_ROOT,
+            text=True,
+            stdout=stdout,
+            stderr=stderr,
+        )
+    attachments.append(process)
+    return Attached(process, out, err)
+
+
 def _launched_run(runs: Path) -> Path:
     directories = [entry for entry in runs.iterdir() if entry.is_dir()]
     assert len(directories) == 1, directories
     return directories[0]
+
+
+def _await_launched_run(runs: Path) -> Path:
+    """The run directory the attached launch created, once it exists."""
+    wait = deadline(120)
+    while time.monotonic() < wait:
+        if runs.is_dir() and any(entry.is_dir() for entry in runs.iterdir()):
+            return _launched_run(runs)
+        time.sleep(0.005)
+    raise AssertionError(f"the attached launch never created a run under {runs}")
+
+
+#: A provider that wedges the real orchestrator instead of answering it. The fork
+#: is orphaned onto init the moment the provider exits, so it is not this run's
+#: work and never becomes it — it simply never lets go of the protocol stream
+#: onejudge is reading. Real onejudge then does what a wedged harness does: it
+#: waits on a read that will never complete, collecting nothing, spawning nothing,
+#: recording nothing, with its pid and its `running` claim intact.
+WEDGED_PROVIDER = """\
+import os
+import time
+
+if os.fork() == 0:
+    time.sleep(3600)
+os._exit(0)
+"""
+
+
+def _await_wedged(run_dir: Path, owner: int) -> None:
+    """Wait until the launch has nothing running under it, the parked precondition."""
+    wait = deadline(120)
+    while time.monotonic() < wait:
+        if not has_live_descendant(frozenset({owner})):
+            return
+        time.sleep(0.05)
+    raise AssertionError(f"the launched orchestrator {owner} never went quiet: {run_dir}")
 
 
 def _owner_pid(run_dir: Path) -> int:
@@ -246,6 +357,107 @@ def test_the_foreground_launch_returns_when_nothing_is_left_driving_the_run(
     _, _, followed = attached.stdout.partition(f"{HEADER}\n")
     assert "settled, nothing is driving this run" in followed.splitlines()[-1]
     assert not _alive(_owner_pid(run_dir))
+
+
+#: The journey's own parked threshold, deliberately unscaled: it is the deadline
+#: under test rather than a hang guard, and the run it is applied to has been
+#: frozen, so nothing it measures can be slowed by load.
+PARKED_AFTER = 5.0
+
+
+def test_the_foreground_launch_returns_when_its_own_orchestrator_parks(
+    tmp_path: Path, onejudge_bin: str, reaped: list[Path], attachments: list[subprocess.Popen[str]]
+) -> None:
+    """A launch that goes quiet while staying alive is handed back, not waited on.
+
+    This is the state the attach mode exists for and the one it could most easily
+    get wrong: a parked orchestrator keeps its pid and its ``running`` record, so
+    every check the follow makes says the run is fine and the planner waits on
+    something that will never finish. `just monitor --until-settled` already
+    refuses to (tests/e2e/test_liveness_e2e.py); this is the same refusal on the
+    command a planner is actually sitting in front of, with the same status and the
+    same line.
+
+    Nothing here is staged around the run: `just orchestrate` launches it, real
+    onejudge drives it, and it parks because its provider wedges it — which is what
+    a parked launch is. The one process this journey writes is that provider, and
+    it is the double this suite already has.
+    """
+    runs = tmp_path / "runs"
+    wedged = tmp_path / "wedged-provider.py"
+    wedged.write_text(WEDGED_PROVIDER, encoding="utf-8")
+    attached = _orchestrate_attached(
+        _plan(tmp_path, "parked"),
+        runs,
+        _base(tmp_path),
+        onejudge_bin,
+        "--parked-after",
+        f"{PARKED_AFTER:g}",
+        logs=tmp_path / "parked-log",
+        attachments=attachments,
+        skill=[sys.executable, str(wedged)],
+    )
+    run_dir = _await_launched_run(runs)
+    reaped.append(run_dir)
+    owner = _owner_pid(run_dir)
+
+    # The two facts the settlement turns on, established before it is asserted:
+    # nothing is running underneath the launch, and no round it could have been
+    # abandoned mid-way through was ever claimed. Without both, "nothing is driving
+    # this run" would be true for a reason that is not parked.
+    _await_wedged(run_dir, owner)
+    assert not (run_dir / "round-01").exists(), "the wedged launch claimed a round"
+
+    status, out, err = attached.settled(180)
+    assert status == UNATTENDED_STATUS, out + err
+    _, _, followed = out.partition(f"{HEADER}\n")
+    last = followed.splitlines()[-1]
+    assert "settled, nothing is driving this run" in last, out
+    assert "PARKED (alive with no child process" in last, out
+    # It is still there, which is the whole difference from the launch that died:
+    # the planner is being handed a run to intervene in, not told one is over.
+    assert _alive(owner)
+
+
+def test_the_foreground_launch_returns_when_the_run_it_is_watching_is_stopped(
+    tmp_path: Path, onejudge_bin: str, reaped: list[Path], attachments: list[subprocess.Popen[str]]
+) -> None:
+    """A run that dies underneath a working attachment settles it too.
+
+    The launch that never started is the easy half of "nothing is driving this
+    run"; this is the other. The round is genuinely in flight — its worker is held
+    at a rendezvous — so the attachment has been following real work for as long as
+    it takes to stop it, and what it must notice is a transition rather than the
+    state of its first poll. `just stop` is how a run really ends here, exactly as
+    in the `monitor` journey that asserts the same settlement.
+    """
+    runs = tmp_path / "runs"
+    held = Rendezvous.at(tmp_path, "attached-stop")
+    attached = _orchestrate_attached(
+        _plan(tmp_path, "stopped-attached", task=f"complete-now attach{held.sentinels()}"),
+        runs,
+        _base(tmp_path),
+        onejudge_bin,
+        logs=tmp_path / "stopped-log",
+        attachments=attachments,
+    )
+    run_dir = _await_launched_run(runs)
+    reaped.append(run_dir)
+    held.wait(240)
+
+    stopped = subprocess.run(
+        ["just", "stop", run_dir.name, "--runs-dir", str(runs), "--force"],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        timeout=e2e_timeout(180),
+    )
+    assert stopped.returncode == 0, stopped.stdout + stopped.stderr
+
+    status, out, err = attached.settled(240)
+    assert status == UNATTENDED_STATUS, out + err
+    _, _, followed = out.partition(f"{HEADER}\n")
+    assert "settled, nothing is driving this run" in followed.splitlines()[-1], out
 
 
 def _channel(recipe: str, run_id: str, runs: Path, payload: str | None = None) -> str:
