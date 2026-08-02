@@ -75,22 +75,28 @@ __all__ = [
 
 GIT_TIMEOUT_ENV = "ORCHESTRATOR_GIT_TIMEOUT"
 GIT_HOOK_TIMEOUT_ENV = "ORCHESTRATOR_GIT_HOOK_TIMEOUT"
-#: The bound on an ordinary git command — one that runs no repository hook, so its
-#: whole cost is git's own work plus whatever network a remote operation needs.
-#: Sized from the operation this lifecycle actually pays most for, measured rather
-#: than guessed: a full `git clone` of *this* repository over the network completes
-#: in about 2.3 seconds for an 11 MB working tree. Ten minutes is more than two
-#: orders of magnitude above that, so a repository many times this size, on a loaded
-#: host, over a slow link, is still nowhere near the bound — while a fetch wedged on
-#: an unreachable remote or a `.git/index.lock` nobody will release now fails with a
-#: diagnostic instead of hanging the run forever.
+#: Bound on a command that runs no repository hook. See
+#: [Every git command is bounded](../docs/repo-lifecycle.md#every-git-command-is-bounded)
+#: for how both defaults were measured.
 DEFAULT_TIMEOUT_SECONDS = 600.0
-#: The bound on a git command that runs the repository's *own* hooks, which is a
-#: different order of cost entirely: this repository's `pre-push` hook runs `just
-#: gate`, roughly fourteen minutes. Ninety minutes leaves that about six times its
-#: measured cost, which covers a gate slowed by everything else this host runs
-#: concurrently without letting a genuinely hung push sit unbounded.
+#: Bound on a command that runs the repository's own hooks, whose cost is that
+#: repository's gate rather than git's own work.
 DEFAULT_HOOK_TIMEOUT_SECONDS = 5400.0
+#: The one source for which git operations run a repository's hooks, as leading argv
+#: words. Classifying inside `_git` rather than at each call site is what stops a new
+#: hook-running operation from silently inheriting the ordinary bound and aborting a
+#: gate mid-run; `tests/test_docs.py` holds the documented list to this set.
+HOOK_RUNNING_COMMANDS: frozenset[tuple[str, ...]] = frozenset(
+    {
+        ("clone",),
+        ("checkout",),
+        ("commit",),
+        ("merge",),
+        ("push",),
+        ("rebase",),
+        ("worktree", "add"),
+    }
+)
 #: How long the timeout path waits for git's pipes after terminating its tree. Only
 #: a descendant this process could not signal can hold them past that, and hanging
 #: there would defeat the bound that just fired.
@@ -190,8 +196,18 @@ def _drain_after_timeout(proc: subprocess.Popen[str]) -> None:
     terminate_tree(ProcessId(proc.pid))
     try:
         proc.communicate(timeout=_DRAIN_SECONDS)
+    # A descendant this process is not permitted to signal is the only thing that can
+    # still hold these pipes, and no test on this host can create one: every process
+    # a journey starts is its own. Reached only there, so it stays a last resort
+    # rather than a path with coverage behind it.
+    # llmlint: ignore[changed_behavior_has_e2e] needs a descendant this user cannot signal
     except subprocess.TimeoutExpired:  # pragma: no cover - unsignalable descendant
         proc.kill()
+
+
+def _runs_repository_hooks(args: list[str]) -> bool:
+    """Whether this git command will run the repository's own hooks."""
+    return any(tuple(args[: len(command)]) == command for command in HOOK_RUNNING_COMMANDS)
 
 
 def _git(
@@ -200,8 +216,8 @@ def _git(
     cwd: str | Path | None = None,
     check: bool = True,
     env: dict[str, str] | None = None,
-    hooks: bool = False,
 ) -> subprocess.CompletedProcess[str]:
+    hooks = _runs_repository_hooks(args)
     bound = timeout_seconds(hooks=hooks)
     started = time.monotonic()
     with subprocess.Popen(
@@ -251,7 +267,7 @@ def clone(url: str, dest: str | Path, *, depth: int | None = None) -> Path:
     if depth is not None:
         args += ["--depth", str(depth)]
     args += [url, str(dest)]
-    _git(args, hooks=True)
+    _git(args)
     return Path(dest)
 
 
@@ -268,7 +284,7 @@ def clone_sharing(source: str | Path, dest: str | Path, *, origin: str, base: st
     its remote HEAD recorded, so the fetch that follows sees the same origin every
     other checkout does rather than the local repo it was seeded from.
     """
-    _git(["clone", "--shared", "--no-checkout", str(source), str(dest)], hooks=True)
+    _git(["clone", "--shared", "--no-checkout", str(source), str(dest)])
     _git(["remote", "set-url", "origin", origin], cwd=dest)
     _git(["symbolic-ref", "refs/remotes/origin/HEAD", f"refs/remotes/origin/{base}"], cwd=dest)
     return Path(dest)
@@ -432,19 +448,19 @@ def worktree_add(
     same branch starts clean instead of failing on an existing branch.
     """
     flag = "-B" if reset else "-b"
-    _git(["worktree", "add", flag, branch, str(path), base], cwd=cwd, hooks=True)
+    _git(["worktree", "add", flag, branch, str(path), base], cwd=cwd)
     return Path(path)
 
 
 def worktree_add_existing(cwd: str | Path, path: str | Path, branch: str) -> Path:
     """Check out an existing local ``branch`` in a new worktree."""
-    _git(["worktree", "add", str(path), branch], cwd=cwd, hooks=True)
+    _git(["worktree", "add", str(path), branch], cwd=cwd)
     return Path(path)
 
 
 def worktree_add_detached(cwd: str | Path, path: str | Path, ref: str) -> Path:
     """Check out ``ref`` detached in a new scratch worktree."""
-    _git(["worktree", "add", "--detach", str(path), ref], cwd=cwd, hooks=True)
+    _git(["worktree", "add", "--detach", str(path), ref], cwd=cwd)
     return Path(path)
 
 
@@ -472,13 +488,13 @@ def is_dirty(cwd: str | Path) -> bool:
 
 def commit(cwd: str | Path, message: str) -> str:
     """Commit staged changes with ``message``; return the new HEAD sha."""
-    _git(["commit", "-m", message], cwd=cwd, hooks=True)
+    _git(["commit", "-m", message], cwd=cwd)
     return head_sha(cwd)
 
 
 def commit_empty(cwd: str | Path, message: str) -> str:
     """Create an explicit metadata-only commit and return its SHA."""
-    _git(["commit", "--allow-empty", "-m", message], cwd=cwd, hooks=True)
+    _git(["commit", "--allow-empty", "-m", message], cwd=cwd)
     return head_sha(cwd)
 
 
@@ -505,7 +521,7 @@ def drop_empty_commit(cwd: str | Path, sha: str) -> None:
         branch = current_branch(cwd)
         if branch == "HEAD":
             raise GitError(f"refusing to rewrite detached HEAD while dropping {sha}")
-        _git(["rebase", "--onto", parents[1], sha, branch], cwd=cwd, hooks=True)
+        _git(["rebase", "--onto", parents[1], sha, branch], cwd=cwd)
 
 
 def head_sha(cwd: str | Path) -> str:
@@ -728,7 +744,7 @@ def push(
     if force:
         args.append("--force-with-lease")
     args += [remote, branch]
-    return combined_output(_git(args, cwd=cwd, env=env, hooks=True))
+    return combined_output(_git(args, cwd=cwd, env=env))
 
 
 def remotes(cwd: str | Path) -> list[str]:
@@ -752,7 +768,7 @@ def is_repo(cwd: str | Path) -> bool:
 
 def checkout(cwd: str | Path, ref: str) -> None:
     """Check out ``ref`` (a branch/commit) in the working tree at ``cwd``."""
-    _git(["checkout", ref], cwd=cwd, hooks=True)
+    _git(["checkout", ref], cwd=cwd)
 
 
 def reset_hard(cwd: str | Path, ref: str) -> None:
@@ -770,24 +786,24 @@ def merge(cwd: str | Path, ref: str, *, message: str, no_ff: bool = True) -> str
     if no_ff:
         args.append("--no-ff")
     args.append(ref)
-    _git(args, cwd=cwd, hooks=True)
+    _git(args, cwd=cwd)
     return head_sha(cwd)
 
 
 def merge_squash(cwd: str | Path, ref: str, *, message: str) -> str:
     """Squash-merge ``ref``, commit ``message``, and return the new HEAD sha."""
-    _git(["merge", "--squash", ref], cwd=cwd, hooks=True)
+    _git(["merge", "--squash", ref], cwd=cwd)
     if not is_dirty(cwd):
         raise NothingToCommit(
             f"squash merge of {ref!r} produced no tree change; its content is already present"
         )
-    _git(["commit", "-m", message], cwd=cwd, hooks=True)
+    _git(["commit", "-m", message], cwd=cwd)
     return head_sha(cwd)
 
 
 def merge_ff_only(cwd: str | Path, ref: str) -> str:
     """Fast-forward the current branch to ``ref`` or raise `GitError`."""
-    _git(["merge", "--ff-only", ref], cwd=cwd, hooks=True)
+    _git(["merge", "--ff-only", ref], cwd=cwd)
     return head_sha(cwd)
 
 

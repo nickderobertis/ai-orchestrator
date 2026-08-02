@@ -5,13 +5,17 @@ from __future__ import annotations
 import fcntl
 import json
 import os
+import subprocess
+import sys
 import tempfile
 import time
 import tomllib
 from collections.abc import Sequence
+from contextlib import suppress
 from pathlib import Path
 
 import pytest
+from process_tree import await_orphaned, await_reaped, await_recorded_pid, write_reparented_leaving
 
 import orchestrator.scratch as scratch
 from orchestrator import REPO_ROOT
@@ -847,7 +851,10 @@ def test_only_a_stamp_naming_a_finished_dispatch_claims_a_reparented_process(
     # A name under the swept root that no `owned_scratch_directory` could have made.
     _fabricate_stamped_process(proc_root, 4247, root / "someone-elses-tree" / "agent")
     # The prefix alone is not a directory this harness created.
-    _fabricate_stamped_process(proc_root, 4248, root / "orchestrator-watchdog-")
+    _fabricate_stamped_process(proc_root, 4248, root / "orchestrator-watchdog-" / "agent")
+    # Neither is a path that merely lands somewhere inside a watchdog tree.
+    _fabricate_stamped_process(proc_root, 4251, finished / "agent" / "deeper")
+    _fabricate_stamped_process(proc_root, 4252, finished)
     # A lock reachable only through a symlink never authorizes anything.
     _fabricate_stamped_process(proc_root, 4249, linked / "agent")
     # The stamp is read as a whole entry, so a value that merely contains its name is not it.
@@ -922,3 +929,37 @@ def test_the_orphan_family_is_reported_swept_or_skipped_with_its_reason(
     assert main(["--root", str(root)]) == 0
     skipped = capsys.readouterr().out.partition("; skipped families: ")[2]
     assert f"{ORPHAN_FAMILY} (no usable procfs" in skipped
+
+
+def test_a_finished_dispatchs_leaving_is_terminated_where_no_parentage_remains(
+    tmp_path: Path,
+) -> None:
+    """The reap itself, against a process init has already adopted.
+
+    Real procfs and a real process rather than a fabricated root: the point of the
+    whole mechanism is that it acts on something the kernel actually reports, and a
+    fabricated pid number is one this host may have handed to a stranger.
+    """
+    root = tmp_path / "scratch"
+    root.mkdir()
+    finished = root / "orchestrator-watchdog-finished"
+    (finished / "agent").mkdir(parents=True)
+    (finished / OWNER_LOCK_NAME).write_text("999999999 1", encoding="utf-8")
+    marker = tmp_path / "leaving.pid"
+    intermediate = subprocess.Popen(
+        [sys.executable, str(write_reparented_leaving(tmp_path)), str(marker)],
+        env={**os.environ, AGENT_STATUS_DIR_ENV: os.fspath(finished / "agent")},
+    )
+    assert intermediate.wait(timeout=60) == 0
+    leaving = await_recorded_pid(marker)
+    assert await_orphaned(leaving)
+
+    try:
+        result = sweep_scratch(root)
+    finally:
+        with suppress(ProcessLookupError):
+            os.kill(leaving, 9)
+
+    assert result.reaped_processes == (leaving,)
+    assert ORPHAN_FAMILY in result.swept_families
+    assert await_reaped(leaving)

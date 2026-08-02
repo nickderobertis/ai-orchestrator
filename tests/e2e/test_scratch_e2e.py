@@ -18,6 +18,13 @@ from pathlib import Path
 
 import pytest
 from conftest import install_pre_push_hook
+from process_tree import (
+    await_orphaned,
+    await_reaped,
+    await_recorded_pid,
+    is_running,
+    write_reparented_leaving,
+)
 from rendezvous import Rendezvous
 from waits import timeout as e2e_timeout
 
@@ -100,55 +107,20 @@ assert named
 """
 
 
-#: A process that gets itself adopted by init before it starts waiting — exactly the
-#: shape the harness's own leavings had when they were found resident for two days
-#: with nothing above them to prove whose they were. The intermediate exits at once,
-#: so the survivor's ancestry is gone before anything can sample it; what it keeps is
-#: the environment the kernel fixed when python `exec`ed.
-_REPARENTED_LEAVING = """
-import os
-import sys
-import time
-from pathlib import Path
+def _spawn_reparented_leaving(script: Path, marker: Path, status_dir: Path | None) -> int:
+    """Start a real init-adopted process stamped for ``status_dir``; return its pid.
 
-marker = Path(sys.argv[1])
-if os.fork() != 0:
-    raise SystemExit(0)
-os.setsid()
-marker.write_text(str(os.getpid()), encoding="utf-8")
-time.sleep(3600)
-"""
-
-
-def _spawn_reparented_leaving(marker: Path, status_dir: Path | None) -> int:
-    """Start a real init-adopted process stamped for ``status_dir``; return its pid."""
+    The stamp is set the only way it reaches a process in production: in the
+    environment it is `exec`ed with, which is what the kernel then fixes for good.
+    """
     environment = {key: value for key, value in os.environ.items() if key != AGENT_STATUS_DIR_ENV}
     if status_dir is not None:
         environment[AGENT_STATUS_DIR_ENV] = os.fspath(status_dir)
-    intermediate = subprocess.Popen(
-        [sys.executable, "-c", _REPARENTED_LEAVING, str(marker)], env=environment
-    )
+    intermediate = subprocess.Popen([sys.executable, str(script), str(marker)], env=environment)
     assert intermediate.wait(timeout=e2e_timeout(60)) == 0
-    _wait_for_path(marker)
-    pid = int(marker.read_text(encoding="utf-8"))
-    guard = time.monotonic() + e2e_timeout(30)
-    while _parent_of(pid) != 1:
-        assert time.monotonic() < guard, f"pid {pid} was never reparented to init"
-        time.sleep(0.01)
+    pid = await_recorded_pid(marker, timeout=e2e_timeout(30))
+    assert await_orphaned(pid, timeout=e2e_timeout(30)), f"pid {pid} was never reparented to init"
     return pid
-
-
-def _parent_of(pid: int) -> int:
-    raw = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
-    return int(raw[raw.rfind(")") + 2 :].split()[1])
-
-
-def _is_running(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    return True
 
 
 def _write_nx_install(path: Path, *, dependencies: dict[str, str]) -> Path:
@@ -376,12 +348,16 @@ def test_sweep_recipe_reaps_a_finished_dispatchs_reparented_leavings(tmp_path: P
     elsewhere = tmp_path / "beyond" / "orchestrator-watchdog-other-root"
     (elsewhere / "agent").mkdir(parents=True)
 
+    script = write_reparented_leaving(tmp_path)
     leavings = {
-        "finished": _spawn_reparented_leaving(tmp_path / "m-finished", finished / "agent"),
-        "vanished": _spawn_reparented_leaving(tmp_path / "m-vanished", vanished / "agent"),
-        "working": _spawn_reparented_leaving(tmp_path / "m-working", working / "agent"),
-        "unstamped": _spawn_reparented_leaving(tmp_path / "m-unstamped", None),
-        "elsewhere": _spawn_reparented_leaving(tmp_path / "m-elsewhere", elsewhere / "agent"),
+        name: _spawn_reparented_leaving(script, tmp_path / f"m-{name}", status_dir)
+        for name, status_dir in (
+            ("finished", finished / "agent"),
+            ("vanished", vanished / "agent"),
+            ("working", working / "agent"),
+            ("unstamped", None),
+            ("elsewhere", elsewhere / "agent"),
+        )
     }
     reapable = (leavings["finished"], leavings["vanished"])
     try:
@@ -392,23 +368,8 @@ def test_sweep_recipe_reaps_a_finished_dispatchs_reparented_leavings(tmp_path: P
             capture_output=True,
             check=True,
         )
-        assert all(_is_running(pid) for pid in leavings.values())
+        assert all(is_running(pid) for pid in leavings.values())
 
-        swept = sweep_scratch(tmp_path)
-
-        assert swept.reaped_processes == tuple(sorted(reapable))
-        for name in ("finished", "vanished"):
-            _await_reaped(leavings[name], f"the {name} dispatch's leaving")
-        # Ownership the sweep cannot prove is ownership it never acts on: a live
-        # dispatch's worker, a process carrying no stamp at all, and one stamped for a
-        # directory outside the root being swept are all still running.
-        for name in ("working", "unstamped", "elsewhere"):
-            assert _is_running(leavings[name]), f"the {name} process was reaped unproven"
-
-        # The same reclamation over the recipe an operator and every round transition
-        # actually run, against a leaving of the dispatch this pass has already closed.
-        again = _spawn_reparented_leaving(tmp_path / "m-again", finished / "agent")
-        leavings["again"] = again
         result = subprocess.run(
             ["just", "sweep-scratch", "--root", str(tmp_path)],
             cwd=REPO_ROOT,
@@ -416,7 +377,16 @@ def test_sweep_recipe_reaps_a_finished_dispatchs_reparented_leavings(tmp_path: P
             capture_output=True,
             check=True,
         )
-        _await_reaped(again, "the leaving found by the recipe")
+
+        for name in ("finished", "vanished"):
+            assert await_reaped(leavings[name], timeout=e2e_timeout(60)), (
+                f"the {name} dispatch's leaving was never reaped"
+            )
+        # Ownership the sweep cannot prove is ownership it never acts on: a live
+        # dispatch's worker, a process carrying no stamp at all, and one stamped for a
+        # directory outside the root being swept are all still running.
+        for name in ("working", "unstamped", "elsewhere"):
+            assert is_running(leavings[name]), f"the {name} process was reaped unproven"
     finally:
         for pid in leavings.values():
             with suppress(ProcessLookupError):
@@ -424,8 +394,8 @@ def test_sweep_recipe_reaps_a_finished_dispatchs_reparented_leavings(tmp_path: P
 
     assert "would reap 2 process(es) left running by a finished dispatch" in inspected.stdout
     assert all(str(pid) in inspected.stdout for pid in reapable)
-    assert "reaped 1 process(es) left running by a finished dispatch" in result.stdout
-    assert str(again) in result.stdout
+    assert "reaped 2 process(es) left running by a finished dispatch" in result.stdout
+    assert all(str(pid) in result.stdout for pid in reapable)
     assert ORPHAN_FAMILY in result.stdout.partition("swept families:")[2]
 
 

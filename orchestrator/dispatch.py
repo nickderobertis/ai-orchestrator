@@ -71,7 +71,7 @@ from .launch import (
 from .personas import persona_path
 from .redaction import redact
 from .runs import ArtifactPaths, resolve_run_dir, slugify
-from .scratch import AGENT_STATUS_DIR_ENV, owned_scratch_directory
+from .scratch import AGENT_STATUS_DIR_ENV, AGENT_STATUS_DIR_NAME, owned_scratch_directory
 from .watchdog import (
     OWN_PROCESS_GROUP_FLAG,
     ProcessId,
@@ -688,7 +688,7 @@ def run_onejudge(
     async def execute() -> RunResult | Report | None:
         with owned_scratch_directory() as directory:
             pid_file = directory / "pid"
-            agent_status_dir = directory / "agent"
+            agent_status_dir = directory / AGENT_STATUS_DIR_NAME
             agent_status_dir.mkdir()
             process_env[AGENT_STATUS_DIR_ENV] = os.fspath(agent_status_dir)
             runner = OneJudge(

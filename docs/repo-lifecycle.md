@@ -101,15 +101,19 @@ and both are measured rather than guessed:
   magnitude above the largest ordinary operation the lifecycle performs against a
   repository this size.
 - `ORCHESTRATOR_GIT_HOOK_TIMEOUT` (default **5400s**) covers a command that runs
-  the repository's *own* hooks — `push`, `commit`, `merge`, `checkout`, `clone`,
-  `worktree add`, `rebase`. This repository's `pre-push` hook runs `just gate`, about
-  fourteen minutes, so the default leaves it roughly six times its measured cost:
-  room for a gate slowed by everything else on the host, without letting a genuinely
-  hung push sit forever. Bounding these at the ordinary value would abort every
-  publication the harness exists to perform.
+  the repository's own hooks. This repository's `pre-push` hook runs `just gate`,
+  about fourteen minutes, so the default leaves it roughly six times its measured
+  cost: room for a gate slowed by everything else on the host, without letting a
+  genuinely hung push sit forever. Bounding these at the ordinary value would abort
+  every publication the harness exists to perform.
 
-A non-numeric, zero, negative, or infinite value is refused at the boundary rather
-than silently reverting to unbounded.
+Hook-running commands: `git clone`, `git checkout`, `git commit`, `git merge`, `git push`, `git rebase`, `git worktree add`.
+
+`gitops.HOOK_RUNNING_COMMANDS` is that list's one source and `_git` classifies each
+call from its own argv, so a new hook-running operation cannot silently inherit the
+ordinary bound; `tests/test_documented_environment.py` fails if the line above and
+that constant drift apart. A non-numeric, zero, negative, or infinite value is
+refused at the boundary rather than silently reverting to unbounded.
 
 When a bound fires, the whole git process *tree* is terminated before its output is
 collected. That is not a courtesy: a hook's children inherit git's pipes and outlive

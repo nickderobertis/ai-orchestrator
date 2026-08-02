@@ -30,6 +30,11 @@ WATCHDOG_PATTERN = f"{WATCHDOG_PREFIX}*"
 #: the harness's own leavings look like once their dispatcher is gone. `dispatch.py`
 #: writes it; the sweep below reads it back out of ``/proc/<pid>/environ``.
 AGENT_STATUS_DIR_ENV = "ORCHESTRATOR_AGENT_STATUS_DIR"
+#: The one directory a dispatch stamps that variable with, inside its watchdog tree.
+#: The sweep requires the stamp to name exactly this child of exactly one watchdog
+#: directory, so a value that merely lands somewhere under the swept root proves
+#: nothing and claims nothing.
+AGENT_STATUS_DIR_NAME = "agent"
 OWNER_LOCK_NAME = "owner.lock"
 OWNER_RECORD_LIMIT = 128
 THIRD_PARTY_PATTERNS = (
@@ -318,10 +323,11 @@ def _stamped_watchdog_directory(environ: bytes, scratch_root: Path) -> Path | No
     """The watchdog scratch directory a process's inherited environment names.
 
     Read as whole NUL-delimited entries rather than as a substring, so a value that
-    merely contains the variable's name cannot be mistaken for the variable. The path
-    has to resolve to a direct child of *this* scratch root carrying the watchdog
-    prefix — a name only `owned_scratch_directory` produces — which is what keeps the
-    claim to a process this harness demonstrably started.
+    merely contains the variable's name cannot be mistaken for the variable. The value
+    then has to be the exact path a dispatch writes — ``<root>/<watchdog dir>/agent``,
+    a shape only `owned_scratch_directory` and `run_onejudge` between them produce.
+    Anything else under the swept root is somebody's, but there is no evidence it is
+    this harness's, and evidence is the whole basis for acting on it.
     """
     stamp = AGENT_STATUS_DIR_ENV.encode("utf-8") + b"="
     for entry in environ.split(b"\0"):
@@ -333,7 +339,9 @@ def _stamped_watchdog_directory(environ: bytes, scratch_root: Path) -> Path | No
         except ValueError:
             continue
         parts = relative.parts
-        if parts and parts[0].startswith(WATCHDOG_PREFIX) and parts[0] != WATCHDOG_PREFIX:
+        if len(parts) != 2 or parts[1] != AGENT_STATUS_DIR_NAME:
+            continue
+        if parts[0].startswith(WATCHDOG_PREFIX) and parts[0] != WATCHDOG_PREFIX:
             return scratch_root / parts[0]
     return None
 
