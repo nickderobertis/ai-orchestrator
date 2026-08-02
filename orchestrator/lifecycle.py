@@ -1235,9 +1235,16 @@ def _run_steps(
                 else incomplete_detail(report)
             )
             # Asked before anything below commits, which is the only point at which
-            # "the worktree is as this dispatch found it" is still answerable.
-            if report.outcome == "worker-died" and not (
-                gitops.is_dirty(worktree) or gitops.head_sha(worktree) != dispatch_head
+            # "the worktree is as this dispatch found it" is still answerable. Turns
+            # count too: a death that reports turns reached its work, whatever the
+            # tree shows — a worker can spend a segment re-deriving what is already
+            # committed and leave nothing new behind, and that is a work stop rather
+            # than a launch that never happened. `dispatch` reports no turns for a
+            # worker the watchdog killed, which is the case this is for.
+            if (
+                report.outcome == "worker-died"
+                and report.assistant_turns == 0
+                and not (gitops.is_dirty(worktree) or gitops.head_sha(worktree) != dispatch_head)
             ):
                 deaths_without_work.add(sid)
             preserved = False
