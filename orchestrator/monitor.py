@@ -1127,6 +1127,10 @@ def run_state(
             message = surface.get("message", "planner reply required")
             if not isinstance(kind, str) or not isinstance(message, str):
                 raise ConfigError("persisted planner surface kind and message must be strings")
+            # llmlint: ignore[boundary_inputs_validated] the `isinstance` on the next
+            # line is this field's validation, and it runs before the value is used:
+            # anything that is not a boolean raises and the run falls back to its
+            # recorded round state rather than settling on an unvalidated flag.
             blocking = surface.get("blocking", True)
             if not isinstance(blocking, bool):
                 raise ConfigError("persisted planner surface blocking must be boolean")
