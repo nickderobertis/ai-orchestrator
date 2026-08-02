@@ -929,7 +929,10 @@ def test_edits_committed_during_a_round_are_what_the_next_round_is_derived_from(
 
     The launch record is never rewritten, so a retry's replacement id, its branch
     pin, and its amended controls all evaporated at the boundary — after
-    `channel-reply` had told the planner they were applied.
+    `channel-reply` had told the planner they were applied. All four are asserted on
+    the plan the transition wrote, because they are carried by one mechanism: the
+    next round is derived from the node the executed graph holds, whatever keys the
+    planner put on it.
 
     The journey is the operator's own throughout: `just orchestrate` launches, the
     edits go through `just channel-reply` while nodes run, and the assertion is on
@@ -1022,6 +1025,12 @@ def test_edits_committed_during_a_round_are_what_the_next_round_is_derived_from(
                     "task": f"{amended}\n\nshould-fail record-task={retried_prompts}",
                     "done_when": "the corrected fixture is exercised and the gate is green",
                     "max_turns": 2,
+                    # The pin is the edit with the worst failure mode: lost at the
+                    # boundary, the retry cuts a fresh branch from the base and the
+                    # verified work on the preserved one is orphaned. It is carried
+                    # here as one more key on the node the transition derives from,
+                    # which is why proving it beside the others is the whole test.
+                    "branch": "ai-orchestrator/engineer/preserved-sweep",
                 },
             },
             {
@@ -1088,6 +1097,7 @@ def test_edits_committed_during_a_round_are_what_the_next_round_is_derived_from(
     assert by_id["sweep-corrected"]["done_when"].startswith("the corrected fixture")
     assert by_id["sweep-corrected"]["max_turns"] == 2
     assert amended in by_id["sweep-corrected"]["task"]
+    assert by_id["sweep-corrected"]["branch"] == "ai-orchestrator/engineer/preserved-sweep"
     # The node it replaced is gone rather than carried forward beside it, and the
     # replacement that finished its work is carried *out* rather than redone.
     assert "sweep" not in by_id, sorted(by_id)
