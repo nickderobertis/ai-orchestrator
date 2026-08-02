@@ -37,6 +37,7 @@ from orchestrator.registry import (
     validate_identity_key,
 )
 from orchestrator.verify import NOOP_GATE
+from orchestrator.workspace import normalize_repo
 
 
 def _clone(origin: Path, path: Path) -> Path:
@@ -1087,6 +1088,33 @@ def test_documented_registry_schema_version_tracks_contract() -> None:
         encoding="utf-8"
     )
     assert NOOP_GATE in (root / "docs" / "repo-lifecycle.md").read_text(encoding="utf-8")
+
+
+def test_a_registration_alias_is_not_a_spec_that_resolves_back_to_its_checkout() -> None:
+    """The gotcha `docs/host-setup.md` warns an operator about, pinned.
+
+    A path registration produces the alias `local/<name>`, but feeding that alias
+    back in is parsed as a GitHub `owner/name` — a different repository identity
+    that registration would go and clone. The document's warning is only true while
+    these two resolutions differ, so pin both rather than the prose alone.
+    """
+    from_path = normalize_repo("~/projects/ai-orchestrator")
+    assert from_path.local
+    assert from_path.slug == "local/ai-orchestrator"
+    assert from_path.url == str(Path("~/projects/ai-orchestrator").expanduser())
+
+    from_alias = normalize_repo("local/ai-orchestrator")
+    assert not from_alias.local
+    assert from_alias.url == "https://github.com/local/ai-orchestrator.git"
+    assert from_alias.url != from_path.url
+
+
+@pytest.mark.reads_docs
+def test_host_setup_warns_against_registering_the_alias_form() -> None:
+    document = (Path(__file__).parents[1] / "docs" / "host-setup.md").read_text(encoding="utf-8")
+
+    assert "~/projects/ai-orchestrator" in document
+    assert normalize_repo("local/ai-orchestrator").url in document
 
 
 def test_merge_gate_coverage_reports_hook_checks_and_unknown(

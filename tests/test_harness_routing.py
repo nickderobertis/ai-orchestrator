@@ -18,6 +18,7 @@ may differ per role.
 
 from __future__ import annotations
 
+import re
 import tomllib
 from pathlib import Path
 from typing import Any
@@ -208,3 +209,61 @@ def test_orchestrator_runs_fallback_and_records_agent_side_history() -> None:
     # `role` is the conversation side, not the persona: telemetry and the DAG UI
     # read the orchestrator's own session as an agent-side one.
     assert orchestrator["history_labels"] == {"role": "agent"}
+
+
+#: Every `ORCHESTRATOR_*` indirection named in prose, ignoring `AI_ORCHESTRATOR_HOME`
+#: and any other name this one is only a suffix of.
+_INDIRECTION_PATTERN = re.compile(r"(?<![A-Z_])ORCHESTRATOR_[A-Z0-9_]+")
+HOST_SETUP_DOC = REPO_ROOT / "docs" / "host-setup.md"
+
+
+def _env_from_sources(config: Path) -> set[str]:
+    """The parent variables this role's variants map into a child's environment."""
+    return {
+        source
+        for harness in _config(config).get("harness", {}).values()
+        for variant in harness.get("variant", {}).values()
+        for source in variant.get("env_from", {}).values()
+    }
+
+
+@pytest.mark.reads_docs
+def test_host_setup_names_exactly_the_indirections_the_configs_source() -> None:
+    """DRIFT-GATE the documented variables against the configs that name them.
+
+    `docs/host-setup.md` tells an operator which variables the probe wrapper must
+    export, and oneharness refuses to start when a selected variant's `env_from`
+    source is unset — so a renamed or added indirection that the document missed
+    would leave the operator exporting a name nothing reads.
+    """
+    documented = set(_INDIRECTION_PATTERN.findall(HOST_SETUP_DOC.read_text(encoding="utf-8")))
+    sourced: set[str] = set()
+    for config in ROLE_CONFIGS:
+        sourced |= _env_from_sources(config)
+
+    assert sourced, "no role config maps an env_from source; the gate would prove nothing"
+    assert documented == sourced
+
+
+#: An inline-code span holding exactly a harness id, e.g. `` `claude-code:alternate2` ``.
+_IDENTITY_PATTERN = re.compile(r"`((?:claude-code|codex)(?::[a-z0-9]+)?)`")
+
+
+@pytest.mark.reads_docs
+def test_host_setup_names_exactly_the_identities_the_roles_select() -> None:
+    """DRIFT-GATE the documented login list against the committed chains.
+
+    The document tells an operator to authenticate five accounts, and its whole
+    point is that an identity nobody logged into is quota the role loses. A sixth
+    identity added to the chains — or one renamed — has to reach that list, so take
+    the roster from the configs rather than trusting the prose to have kept up.
+    """
+    documented = set(_IDENTITY_PATTERN.findall(HOST_SETUP_DOC.read_text(encoding="utf-8")))
+    selected: set[str] = set()
+    for config in ROLE_CONFIGS:
+        selected |= set(_config(config)["harnesses"])
+
+    assert documented == selected, (
+        "docs/host-setup.md must name every identity the role configs select, and no "
+        "other; write a harness id there only as the login list's own entry"
+    )
