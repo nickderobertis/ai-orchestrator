@@ -13,10 +13,15 @@ collide in a single clone's worktree registry. See `workspace.py`.
 
 from __future__ import annotations
 
+import math
 import os
 import subprocess
+import time
+from collections.abc import Mapping
 from pathlib import Path
 from typing import NamedTuple
+
+from .watchdog import ProcessId, terminate_tree
 
 __all__ = [
     "Commit",
@@ -66,6 +71,37 @@ __all__ = [
     "worktrees",
     "worktree_remove",
 ]
+
+
+GIT_TIMEOUT_ENV = "ORCHESTRATOR_GIT_TIMEOUT"
+GIT_HOOK_TIMEOUT_ENV = "ORCHESTRATOR_GIT_HOOK_TIMEOUT"
+#: Bound on a command that runs no repository hook. See
+#: [Every git command is bounded](../docs/repo-lifecycle.md#every-git-command-is-bounded)
+#: for how both defaults were measured.
+DEFAULT_TIMEOUT_SECONDS = 600.0
+#: Bound on a command that runs the repository's own hooks, whose cost is that
+#: repository's gate rather than git's own work.
+DEFAULT_HOOK_TIMEOUT_SECONDS = 5400.0
+#: The one source for which git operations run a repository's hooks, as leading argv
+#: words. Classifying inside `_git` rather than at each call site is what stops a new
+#: hook-running operation from silently inheriting the ordinary bound and aborting a
+#: gate mid-run; `tests/test_documented_environment.py` holds the documented list to
+#: this set.
+HOOK_RUNNING_COMMANDS: frozenset[tuple[str, ...]] = frozenset(
+    {
+        ("clone",),
+        ("checkout",),
+        ("commit",),
+        ("merge",),
+        ("push",),
+        ("rebase",),
+        ("worktree", "add"),
+    }
+)
+#: How long the timeout path waits for git's pipes after terminating its tree. Only
+#: a descendant this process could not signal can hold them past that, and hanging
+#: there would defeat the bound that just fired.
+_DRAIN_SECONDS = 30.0
 
 
 class GitError(Exception):
@@ -126,6 +162,55 @@ def hooks_dir(cwd: str | Path) -> Path:
     return value.resolve()
 
 
+def timeout_seconds(*, hooks: bool = False, env: Mapping[str, str] | None = None) -> float:
+    """Return the configured bound for one git command, hook-running or not.
+
+    Two bounds rather than one because the two populations differ by orders of
+    magnitude: a `push` whose pre-push hook runs a complete gate is doing the work,
+    and bounding it at anything an ordinary fetch would need would abort every
+    publication this harness exists to perform.
+    """
+    name = GIT_HOOK_TIMEOUT_ENV if hooks else GIT_TIMEOUT_ENV
+    default = DEFAULT_HOOK_TIMEOUT_SECONDS if hooks else DEFAULT_TIMEOUT_SECONDS
+    raw = (os.environ if env is None else env).get(name)
+    if raw is None:
+        return default
+    try:
+        value = float(raw)
+    except ValueError as exc:
+        raise GitError(f"{name} must be a number of seconds") from exc
+    if not math.isfinite(value) or value <= 0:
+        raise GitError(f"{name} must be a finite number of seconds above zero")
+    return value
+
+
+def _drain_after_timeout(proc: subprocess.Popen[str]) -> None:
+    """Collect what a timed-out git wrote, once nothing can still be writing it.
+
+    `subprocess.run` would kill git and then read its pipes to EOF — but a hook's
+    own children inherit those pipes and outlive the shell that started them, so
+    that read blocks on processes the bound was meant to stop waiting for. Killing
+    the whole tree first is therefore not a courtesy: it is what makes the timeout
+    path terminate at all, and it is also what stops a fired bound from leaving the
+    orphaned gate run behind that this harness then has to recognise days later.
+    """
+    terminate_tree(ProcessId(proc.pid))
+    try:
+        proc.communicate(timeout=_DRAIN_SECONDS)
+    # A descendant this process is not permitted to signal is the only thing that can
+    # still hold these pipes, and no test on this host can create one: every process
+    # a journey starts is its own. Reached only there, so it stays a last resort
+    # rather than a path with coverage behind it.
+    # llmlint: ignore[changed_behavior_has_e2e] needs a descendant this user cannot signal
+    except subprocess.TimeoutExpired:  # pragma: no cover - unsignalable descendant
+        proc.kill()
+
+
+def _runs_repository_hooks(args: list[str]) -> bool:
+    """Whether this git command will run the repository's own hooks."""
+    return any(tuple(args[: len(command)]) == command for command in HOOK_RUNNING_COMMANDS)
+
+
 def _git(
     args: list[str],
     *,
@@ -133,13 +218,31 @@ def _git(
     check: bool = True,
     env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
-    proc = subprocess.run(
+    hooks = _runs_repository_hooks(args)
+    bound = timeout_seconds(hooks=hooks)
+    started = time.monotonic()
+    with subprocess.Popen(
         ["git", *args],
         cwd=str(cwd) if cwd is not None else None,
         text=True,
-        capture_output=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         env={**os.environ, **env} if env is not None else None,
-    )
+    ) as process:
+        try:
+            stdout, stderr = process.communicate(timeout=bound)
+        except subprocess.TimeoutExpired as exc:
+            _drain_after_timeout(process)
+            elapsed = time.monotonic() - started
+            raise GitError(
+                f"git {' '.join(args)} timed out after {elapsed:g}s "
+                f"(bound {bound:g}s; raise it with "
+                f"{GIT_HOOK_TIMEOUT_ENV if hooks else GIT_TIMEOUT_ENV})"
+            ) from exc
+        status = process.returncode
+        proc = subprocess.CompletedProcess(
+            process.args, 0 if status is None else status, stdout, stderr
+        )
     if check and proc.returncode != 0:
         raise GitError(
             f"git {' '.join(args)} failed (exit {proc.returncode}): "

@@ -84,6 +84,44 @@ The families a dispatch produces itself are exempt from that lock and swept whil
 it runs, because they only accumulate while dispatches run; their safety comes from
 proven non-reference rather than quiescence.
 
+### Every git command is bounded
+
+`gitops._git` bounds every call and, on expiry, raises `GitError` naming the
+command and the elapsed time — the shape `github.py`'s `gh` boundary has always
+had. An unbounded git turns a transient network problem or an unreleasable
+`index.lock` into a run that looks exactly like one still working, and from outside
+the only way to tell the two apart was reading `/proc` by hand.
+
+There are two bounds because the two populations differ by orders of magnitude,
+and both are measured rather than guessed:
+
+- `ORCHESTRATOR_GIT_TIMEOUT` (default **600s**) covers a command that runs no
+  repository hook. A full `git clone` of *this* repository over the network takes
+  about 2.3 seconds for an 11 MB tree, so the default sits more than two orders of
+  magnitude above the largest ordinary operation the lifecycle performs against a
+  repository this size.
+- `ORCHESTRATOR_GIT_HOOK_TIMEOUT` (default **5400s**) covers a command that runs
+  the repository's own hooks. This repository's `pre-push` hook runs `just gate`,
+  about fourteen minutes, so the default leaves it roughly six times its measured
+  cost: room for a gate slowed by everything else on the host, without letting a
+  genuinely hung push sit forever. Bounding these at the ordinary value would abort
+  every publication the harness exists to perform.
+
+Hook-running commands: `git clone`, `git checkout`, `git commit`, `git merge`, `git push`, `git rebase`, `git worktree add`.
+
+`gitops.HOOK_RUNNING_COMMANDS` is that list's one source and `_git` classifies each
+call from its own argv, so a new hook-running operation cannot silently inherit the
+ordinary bound; `tests/test_documented_environment.py` fails if the line above and
+that constant drift apart. A non-numeric, zero, negative, or infinite value is
+refused at the boundary rather than silently reverting to unbounded.
+
+When a bound fires, the whole git process *tree* is terminated before its output is
+collected. That is not a courtesy: a hook's children inherit git's pipes and outlive
+the shell that started them, so reading those pipes after killing git alone blocks
+on exactly the processes the bound stopped waiting for. It is also what stops a
+fired bound from manufacturing the reparented leavings the scratch sweep then has to
+recognise days later.
+
 ## Repository identity, checkout roles, and isolation
 
 `Workspace` (`orchestrator/workspace.py`) resolves two independent decisions through

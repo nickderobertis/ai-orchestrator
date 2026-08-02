@@ -19,6 +19,7 @@ from typing import cast
 from . import REPO_ROOT
 from .history import HistoryError, HistorySession, SessionId, all_sessions, session_records
 from .labels import format_labels
+from .scratch import AGENT_STATUS_DIR_ENV
 from .telemetry import HistoryRecord, history_session_launch_failure
 
 TASK = "Reply with exactly: smoke-ok"
@@ -62,7 +63,7 @@ def _run_wrapper(
         **os.environ,
         "ONEHARNESS_HISTORY_DIR": str(history_dir),
         "ONEHARNESS_HISTORY_LABELS": format_labels({"role": "agent", "smoke": smoke_id}),
-        "ORCHESTRATOR_AGENT_STATUS_DIR": str(status_dir),
+        AGENT_STATUS_DIR_ENV: str(status_dir),
     }
     process = subprocess.Popen(
         [
